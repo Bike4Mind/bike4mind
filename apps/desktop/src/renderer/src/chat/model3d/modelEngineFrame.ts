@@ -8,16 +8,21 @@ const ENGINE_ORIGIN = 'b4m-model://engine';
 
 /**
  * The sandboxed b4m-model: engine iframe that runs `.model.js` builds. It runs one build at a time:
- * starting another supersedes the one in flight, whose caller gets null. Mounted on first use.
+ * starting another supersedes the one in flight, whose caller gets null. Mounted on first use, or
+ * ahead of it by warm(), which also boots the frame's first worker so that build skips the cold start.
  */
 export class ModelEngineFrame {
   private mounted: { frame: HTMLIFrameElement; ready: Promise<void> } | null = null;
   private requestId = 0;
   private pending: ((outcome: ModelBuildOutcome | null) => void) | null = null;
 
-  async build(source: string, params: Record<string, number>, print: boolean): Promise<ModelBuildOutcome | null> {
+  warm(): this {
     this.mounted ??= mount();
-    const { frame, ready } = this.mounted;
+    return this;
+  }
+
+  async build(source: string, params: Record<string, number>, print: boolean): Promise<ModelBuildOutcome | null> {
+    const { frame, ready } = (this.mounted ??= mount());
     await ready;
     this.requestId += 1;
     const id = this.requestId;

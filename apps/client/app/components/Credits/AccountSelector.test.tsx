@@ -87,3 +87,29 @@ describe('AccountSelector — active Team context survives reload', () => {
     });
   });
 });
+
+describe('AccountSelector - team seats', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useSelectedAccount.setState({ selectedAccount: null });
+    mockUseUser.mockReturnValue({ currentUser: { id: 'user-1', name: 'Owner', currentCredits: 10000 } });
+  });
+
+  it('carries the org seat count onto the selected account and follows later changes', async () => {
+    const orgs = (seats: number) => ({
+      data: [{ id: 'o1', name: 'Acme', currentCredits: 500, seats }],
+      isSuccess: true,
+      refetch: vi.fn(),
+    });
+    useSelectedAccount.setState({
+      selectedAccount: { id: 'o1', name: 'Acme', personal: false, credits: 500 },
+    });
+    mockUseGetUserOrgs.mockReturnValue(orgs(3));
+    const { rerender } = render(<AccountSelector />);
+    await waitFor(() => expect(useSelectedAccount.getState().selectedAccount?.seats).toBe(3));
+
+    mockUseGetUserOrgs.mockReturnValue(orgs(5));
+    rerender(<AccountSelector />);
+    await waitFor(() => expect(useSelectedAccount.getState().selectedAccount?.seats).toBe(5));
+  });
+});

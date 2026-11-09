@@ -36,13 +36,13 @@ If your computer has no secure storage available, Desktop keeps the credential o
 
 ## Pick a setup
 
-| Setup | Address you enter | Credentials |
-|-------|-------------------|-------------|
-| Tailscale with HTTPS | `https://gpu.tailnet-name.ts.net` | Optional |
-| Caddy in front of Ollama | `https://ollama.example.com` | Bearer token |
-| Connect with: SSH | `user@gpu.example.com` or a `Host` alias | Your SSH keys |
-| SSH local port forward | `http://127.0.0.1:21434` | None needed |
-| Plain LAN | `http://192.168.1.20:11434` | None, shown as Unencrypted |
+| Setup                    | Address you enter                        | Credentials                |
+| ------------------------ | ---------------------------------------- | -------------------------- |
+| Tailscale with HTTPS     | `https://gpu.tailnet-name.ts.net`        | Optional                   |
+| Caddy in front of Ollama | `https://ollama.example.com`             | Bearer token               |
+| Connect with: SSH        | `user@gpu.example.com` or a `Host` alias | Your SSH keys              |
+| SSH local port forward   | `http://127.0.0.1:21434`                 | None needed                |
+| Plain LAN                | `http://192.168.1.20:11434`              | None, shown as Unencrypted |
 
 ## Prepare the server
 
@@ -76,10 +76,10 @@ Use this when the server has a public name. Caddy gets a certificate for the nam
 
 Ollama has no per-user access control, so the Chat only setting is enforced only on your device: anyone who holds the credential can still pull and delete models by calling the server directly. To enforce it on the server, give the proxy two tokens and let only the second one reach the management paths:
 
-| Token | Allowed paths | Use it for |
-|-------|---------------|------------|
-| Chat token | `/api/version`, `/api/tags`, `/api/show`, `/api/ps`, `/api/chat` | Servers set to Chat only |
-| Manage token | The chat paths, plus `/api/pull` and `/api/delete` | Servers set to Chat and manage |
+| Token        | Allowed paths                                                    | Use it for                     |
+| ------------ | ---------------------------------------------------------------- | ------------------------------ |
+| Chat token   | `/api/version`, `/api/tags`, `/api/show`, `/api/ps`, `/api/chat` | Servers set to Chat only       |
+| Manage token | The chat paths, plus `/api/pull` and `/api/delete`               | Servers set to Chat and manage |
 
 These are the Ollama paths Desktop calls on a saved server, and the CLI's `b4m models` commands use the same ones except `/api/chat`: `/api/version` and `/api/tags` for the connection test and the model list, `/api/show` for each model's context size and capabilities, `/api/ps` for the models loaded in memory, and `/api/chat` for replies. Downloads use `/api/pull` and removals use `/api/delete`.
 
@@ -292,6 +292,7 @@ The `b4m` CLI lists and uses the SSH servers you save in Desktop, through your `
 
 If an SSH server does not work, read the message under Test or on the server in Settings:
 
+- No saved SSH destination, or a saved destination or port that cannot be used: remove the server and add it again. Access, Kind, Credentials and Hardware stay disabled on this row; Check and Remove remain available.
 - Connect once from a terminal: run `ssh <destination>` in a terminal, accept the host key, then select Check now.
 - Refused the SSH login: run `ssh <destination>` in a terminal. If it asks for a password or passphrase, set up a key, or load your key with `ssh-add`.
 - Does not allow SSH port forwarding: set `AllowTcpForwarding` to `yes` or `local` in the server's `sshd_config` and restart its SSH daemon.

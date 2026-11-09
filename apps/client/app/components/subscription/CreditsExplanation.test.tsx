@@ -18,6 +18,7 @@ vi.mock('@client/app/hooks/data/settings', () => ({
     data: [{ settingName: 'signupGrantInitialCredits', settingValue: state.signupGrantCredits }],
   }),
 }));
+vi.mock('./SignupGrantStatus', () => ({ default: () => <div data-testid="signup-grant-status" /> }));
 vi.mock('@client/app/hooks/useEffectiveCredits', () => ({ useEffectiveCredits: () => 1000 }));
 vi.mock('@client/app/hooks/data/useModelInfo', () => ({
   useModelInfo: () => ({
@@ -78,5 +79,16 @@ describe('CreditsExplanation', () => {
     expect(screen.getByText(/Free starting credits require no card/)).toBeInTheDocument();
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  it('shows the personal signup-grant status on the personal account', () => {
+    renderModal();
+    expect(screen.getByTestId('signup-grant-status')).toBeInTheDocument();
+  });
+
+  it('hides the personal signup-grant status while a team is the payer', () => {
+    state.organizationId = 'org-1';
+    renderModal();
+    expect(screen.queryByTestId('signup-grant-status')).not.toBeInTheDocument();
   });
 });
