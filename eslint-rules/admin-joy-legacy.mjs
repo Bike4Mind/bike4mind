@@ -26,7 +26,6 @@ const componentsByFile = {
   'DlqReplayTab.tsx': ['Card', 'Modal', 'Table'],
   'DocumentationTab/components/DocSection.tsx': ['Card'],
   'DocumentationTab/index.tsx': ['Card'],
-  'EmailVerificationTab.tsx': ['Card', 'Modal'],
   'EmbedKeysTab.tsx': ['Modal', 'Table'],
   'EventMetrics/components/CurationBreakdownTab.tsx': ['Card'],
   'EventMetrics/components/OverviewTab.tsx': ['Card'],
