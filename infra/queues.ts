@@ -1697,7 +1697,8 @@ const bobRunQueueSubscription = bobRunQueue.subscribe(
     timeout: '5 minutes',
     memory: '1024 MB',
     vpc: lambdaVpc,
-    link: [...allSecrets, websocketApi],
+    // appFilesBucket: a run's first-screen screenshots are stored under bob-screenshots/<runId>/.
+    link: [...allSecrets, websocketApi, appFilesBucket],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
