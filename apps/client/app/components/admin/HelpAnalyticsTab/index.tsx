@@ -1,4 +1,4 @@
-import React, { useState, type ReactNode } from 'react';
+import React, { useMemo, useState, type ReactNode } from 'react';
 import { Box, Button, Input, Link, Sheet, Stack, Tab, TabList, TabPanel, Tabs, Tooltip, Typography } from '@mui/joy';
 import type { SxProps } from '@mui/joy/styles/types';
 import RefreshIcon from '@mui/icons-material/Refresh';
@@ -241,6 +241,9 @@ const PanelDescription: React.FC<{ children: ReactNode }> = ({ children }) => (
   </Typography>
 );
 
+const orderRange = ({ dateFrom, dateTo }: HelpAnalyticsFilters): HelpAnalyticsFilters =>
+  dateFrom && dateTo && dateFrom > dateTo ? { dateFrom: dateTo, dateTo: dateFrom } : { dateFrom, dateTo };
+
 const HelpAnalyticsTab: React.FC = () => {
   const [range, setRange] = useState<DateRange>('week');
   const {
@@ -249,7 +252,8 @@ const HelpAnalyticsTab: React.FC = () => {
     setValue: setFilters,
     setValueImmediately: applyFilters,
   } = useDebounceValue<HelpAnalyticsFilters>(getPresetRange('week'), SEARCH_TERM_URL_DEBOUNCE_MS);
-  const { data, isLoading, isError, isFetching, refetch } = useHelpAnalyticsData(appliedFilters);
+  const orderedFilters = useMemo(() => orderRange(appliedFilters), [appliedFilters]);
+  const { data, isLoading, isError, isFetching, refetch } = useHelpAnalyticsData(orderedFilters);
   const [chatDetailItem, setChatDetailItem] = useState<HelpAnalyticsChatFeedback | null>(null);
   const [activeTab, setActiveTab] = useState(0);
 
@@ -258,6 +262,9 @@ const HelpAnalyticsTab: React.FC = () => {
     if (next !== 'custom') applyFilters(getPresetRange(next));
   };
   const refresh = () => void refetch();
+  const errorState = isError && (
+    <ErrorState message="Help analytics failed to load." onRetry={refresh} retrying={isFetching} />
+  );
 
   const emptyState = (title: string) =>
     range === 'all' ? (
@@ -287,12 +294,12 @@ const HelpAnalyticsTab: React.FC = () => {
   // and refetches under the UpdatingBar.
   let body: ReactNode;
   if (isLoading) body = <LoadingState label="Loading help analytics" />;
-  else if (isError && !data)
-    body = <ErrorState message="Help analytics failed to load." onRetry={refresh} retrying={isFetching} />;
+  else if (isError && !data) body = errorState;
   else
     body = (
       <>
         <UpdatingBar active={isFetching} testId="help-analytics-updating" />
+        {errorState}
         {overview && (
           <StatStrip aria-label="Help usage totals">
             <StatTile label="Total views" value={overview.totalViews} />

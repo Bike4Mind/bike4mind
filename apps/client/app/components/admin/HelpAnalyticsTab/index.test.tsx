@@ -158,6 +158,22 @@ describe('HelpAnalyticsTab date range', () => {
     }
   });
 
+  it('applies a From later than To as an ordered range', () => {
+    vi.useFakeTimers();
+    try {
+      renderTab();
+      fireEvent.click(screen.getByTestId('admin-filter-help-range'));
+      fireEvent.click(screen.getByTestId('admin-filter-help-range-custom'));
+      fireEvent.change(screen.getByTestId('help-analytics-date-from'), { target: { value: '2026-10-31' } });
+      fireEvent.change(screen.getByTestId('help-analytics-date-to'), { target: { value: '2026-10-01' } });
+      act(() => vi.advanceTimersByTime(SEARCH_TERM_URL_DEBOUNCE_MS));
+      expect(lastFilters()).toEqual({ dateFrom: '2026-10-01', dateTo: '2026-10-31' });
+      expect(screen.getByTestId('help-analytics-date-from')).toHaveValue('2026-10-31');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps the totals and tables on screen under an updating bar while a new range loads', async () => {
     useHelpAnalyticsData.mockImplementation((filters?: HelpAnalyticsFilters) =>
       // What placeholder data gives: the previous numbers stay while the new range is fetched.
@@ -209,6 +225,15 @@ describe('HelpAnalyticsTab tables and states', () => {
     useHelpAnalyticsData.mockReturnValue(queryResult({ data: undefined, isError: true }));
     renderTab();
     expect(screen.getByTestId('admin-error-state')).toHaveTextContent('Help analytics failed to load.');
+    fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the error state above the stale totals when a refetch fails', () => {
+    useHelpAnalyticsData.mockReturnValue(queryResult({ isError: true }));
+    renderTab();
+    expect(screen.getByTestId('admin-error-state')).toHaveTextContent('Help analytics failed to load.');
+    expect(screen.getByText('Total views')).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
     expect(refetch).toHaveBeenCalledTimes(1);
   });

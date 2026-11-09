@@ -220,6 +220,25 @@ describe('EventMetricsTab filters', () => {
     expect(screen.getByTestId('event-metrics-date-from')).toHaveAttribute('type', 'date');
   });
 
+  it('applies a From later than To as an ordered range', async () => {
+    await renderTab('/admin?tab=event-metrics');
+    fireEvent.click(await screen.findByTestId('admin-filter-event-range'));
+    fireEvent.click(await screen.findByTestId('admin-filter-event-range-custom'));
+    await act(() => new Promise(resolve => setTimeout(resolve, SEARCH_TERM_URL_DEBOUNCE_MS + 50)));
+    vi.useFakeTimers();
+    try {
+      fireEvent.change(screen.getByTestId('event-metrics-date-from'), { target: { value: '2026-10-31' } });
+      fireEvent.change(screen.getByTestId('event-metrics-date-to'), { target: { value: '2026-10-01' } });
+      act(() => vi.advanceTimersByTime(SEARCH_TERM_URL_DEBOUNCE_MS));
+      expect(lastFilters()).toMatchObject({
+        dateFrom: dayjs('2026-10-01').startOf('day').toISOString(),
+        dateTo: dayjs('2026-10-31').endOf('day').toISOString(),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps every other preset in the Range chip and applies its dates, with no segment selected', async () => {
     await renderTab('/admin?tab=event-metrics');
     fireEvent.click(await screen.findByTestId('admin-filter-event-range'));

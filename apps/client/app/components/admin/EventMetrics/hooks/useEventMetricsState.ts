@@ -8,6 +8,11 @@ import type { MetricsFilters } from './useEventMetrics';
 export type DateRangePreset =
   'all' | 'today' | 'yesterday' | 'last7days' | 'last30days' | 'last90days' | 'thisMonth' | 'lastMonth' | 'custom';
 
+const orderRange = (dateFrom?: string, dateTo?: string) =>
+  dateFrom && dateTo && dateFrom > dateTo
+    ? { dateFrom: dayjs(dateTo).startOf('day').toISOString(), dateTo: dayjs(dateFrom).endOf('day').toISOString() }
+    : { dateFrom, dateTo };
+
 /**
  * Applies the picked filters once they have settled for SEARCH_TERM_URL_DEBOUNCE_MS: a filter takes
  * effect without an Apply button, and typing a date does not fetch on every keystroke.
@@ -18,8 +23,7 @@ export const useApplyPickedFilters = (filters: MetricsFilters, apply: (filters: 
     const timer = setTimeout(
       () =>
         apply({
-          dateFrom: dateFrom || undefined,
-          dateTo: dateTo || undefined,
+          ...orderRange(dateFrom || undefined, dateTo || undefined),
           userFilter: userFilter || undefined,
           eventFilter: eventFilter || undefined,
           eventCategoryFilter: eventCategoryFilter || undefined,
