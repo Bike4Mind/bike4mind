@@ -1,6 +1,7 @@
 import { IFabFileRepository, IProjectRepository, IUserDocument } from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
+import { canonicalId } from '../utils/objectIds';
 
 const toggleSystemPromptSchema = z.object({
   projectId: z.string(),
@@ -31,7 +32,7 @@ export const toggleSystemPrompt = async (
   const project = await db.projects.shareable.findUpdateAccessById(user, projectId);
   if (!project) throw new NotFoundError('Project not found');
 
-  const promptIndex = project.systemPrompts.findIndex(prompt => prompt.fileId === fileId);
+  const promptIndex = project.systemPrompts.findIndex(prompt => canonicalId(prompt.fileId) === canonicalId(fileId));
   // Not a bare Error: a caller naming a file that is not a prompt is routine, not a 500.
   if (promptIndex === -1) throw new NotFoundError('System prompt not found');
 

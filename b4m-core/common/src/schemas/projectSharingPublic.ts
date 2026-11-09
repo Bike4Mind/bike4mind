@@ -91,7 +91,7 @@ export const ProjectInviteSchema = z.object({
   description: z.string().nullable().describe('The message sent with the invite.'),
   link_only: z.boolean().describe('True for a share link that names nobody and anyone holding it can redeem.'),
   uses_remaining: z.number().int().describe('How many more times the invite can be accepted.'),
-  expires_at: z.string().nullable().describe('ISO 8601 timestamp, or null for no expiry.'),
+  expires_at: z.string().nullable().describe('ISO 8601 timestamp; invites always expire.'),
   created_at: z.string().nullable().describe('ISO 8601 timestamp.'),
 });
 export type ProjectInvite = z.infer<typeof ProjectInviteSchema>;

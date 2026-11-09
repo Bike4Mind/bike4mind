@@ -94,7 +94,7 @@ export const listProjectInvitesContract = defineEndpoint({
   summary: "List a project's invites",
   description:
     'Lists the invites sent for a project you can share. Recipient addresses you did not type ' +
-    'yourself are withheld (see `recipients`). Share links are never returned here. ' +
+    'yourself are withheld, except for platform admins (see `recipients`). Share links are never returned here. ' +
     'Cursor-paginated (see the pagination convention): pass `next_cursor` back as `cursor` until it ' +
     'is `null`.',
   tags: ['Projects'],

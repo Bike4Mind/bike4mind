@@ -1449,7 +1449,7 @@ export interface paths {
     };
     /**
      * List a project's invites
-     * @description Lists the invites sent for a project you can share. Recipient addresses you did not type yourself are withheld (see `recipients`). Share links are never returned here. Cursor-paginated (see the pagination convention): pass `next_cursor` back as `cursor` until it is `null`.
+     * @description Lists the invites sent for a project you can share. Recipient addresses you did not type yourself are withheld, except for platform admins (see `recipients`). Share links are never returned here. Cursor-paginated (see the pagination convention): pass `next_cursor` back as `cursor` until it is `null`.
      */
     get: operations['listProjectInvites'];
     put?: never;
@@ -7099,7 +7099,7 @@ export interface components {
         link_only: boolean;
         /** @description How many more times the invite can be accepted. */
         uses_remaining: number;
-        /** @description ISO 8601 timestamp, or null for no expiry. */
+        /** @description ISO 8601 timestamp; invites always expire. */
         expires_at: string | null;
         /** @description ISO 8601 timestamp. */
         created_at: string | null;
@@ -7129,7 +7129,7 @@ export interface components {
       link_only: boolean;
       /** @description How many more times the invite can be accepted. */
       uses_remaining: number;
-      /** @description ISO 8601 timestamp, or null for no expiry. */
+      /** @description ISO 8601 timestamp; invites always expire. */
       expires_at: string | null;
       /** @description ISO 8601 timestamp. */
       created_at: string | null;

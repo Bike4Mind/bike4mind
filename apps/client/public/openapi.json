@@ -14002,7 +14002,7 @@
                     "string",
                     "null"
                   ],
-                  "description": "ISO 8601 timestamp, or null for no expiry."
+                  "description": "ISO 8601 timestamp; invites always expire."
                 },
                 "created_at": {
                   "type": [
@@ -14127,7 +14127,7 @@
               "string",
               "null"
             ],
-            "description": "ISO 8601 timestamp, or null for no expiry."
+            "description": "ISO 8601 timestamp; invites always expire."
           },
           "created_at": {
             "type": [
@@ -50655,7 +50655,7 @@
       "get": {
         "operationId": "listProjectInvites",
         "summary": "List a project's invites",
-        "description": "Lists the invites sent for a project you can share. Recipient addresses you did not type yourself are withheld (see `recipients`). Share links are never returned here. Cursor-paginated (see the pagination convention): pass `next_cursor` back as `cursor` until it is `null`.",
+        "description": "Lists the invites sent for a project you can share. Recipient addresses you did not type yourself are withheld, except for platform admins (see `recipients`). Share links are never returned here. Cursor-paginated (see the pagination convention): pass `next_cursor` back as `cursor` until it is `null`.",
         "tags": [
           "Projects"
         ],

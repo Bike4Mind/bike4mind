@@ -60,4 +60,17 @@ describe('toggleSystemPrompt', () => {
     await expect(run({ fileId: 'file-2', enabled: false })).rejects.toThrow(NotFoundError);
     expect(projectUpdate).not.toHaveBeenCalled();
   });
+
+  it('matches a case-variant id instead of answering not found', async () => {
+    const upper = 'ABCDEF0123456789ABCDEF01';
+    const { projectUpdate, run } = setup(true);
+    const project = await run({ fileId: 'file-1' });
+    expect(project.systemPrompts[0].enabled).toBe(false);
+    project.systemPrompts[0].fileId = upper;
+
+    const again = await run({ fileId: upper.toLowerCase() });
+
+    expect(again.systemPrompts[0].enabled).toBe(true);
+    expect(projectUpdate).toHaveBeenCalledTimes(2);
+  });
 });
