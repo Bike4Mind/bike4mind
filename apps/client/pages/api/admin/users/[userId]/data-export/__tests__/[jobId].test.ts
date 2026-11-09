@@ -27,7 +27,7 @@ vi.mock('@server/dataSubject/adminDataExports', () => ({
   findDataExportTarget: h.findTarget,
   readAdminDataExportBuiltAt: h.builtAt,
 }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.record }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.record }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({ getSignedUrl: h.sign }) }));
 
 import { ApiKeyScope } from '@bike4mind/common';

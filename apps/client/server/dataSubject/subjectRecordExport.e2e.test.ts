@@ -50,7 +50,10 @@ const registry: DataHolderRegistry = {
   },
   DsTestNote: {
     kind: 'holder',
-    references: [{ path: 'ownerId', matchBy: 'userId', action: 'deleteDocument', where: { organizationId: null } }],
+    references: [
+      { path: 'ownerId', matchBy: 'userId', action: 'deleteDocument', scope: 'personal' },
+      { path: 'ownerId', matchBy: 'userId', action: 'anonymize' },
+    ],
     secretPaths: ['shareToken'],
   },
   DsTestTeam: {
@@ -142,8 +145,12 @@ describe('SubjectRecordExport', () => {
     const other = await Person.create({ email: 'them@example.com', password: 'hash2', invitedBy: subject._id });
     const orgId = new mongoose.Types.ObjectId();
 
+    const workspace = new mongoose.Types.ObjectId();
+    await mongoose.model('Organization').collection.insertOne({ _id: workspace, userId: subject._id, personal: true });
+
     const myNote = await Note.create({ ownerId: subject._id, body: 'mine', shareToken: 'tok' });
-    await Note.create({ ownerId: subject._id, organizationId: orgId, body: 'org-owned' });
+    const orgNote = await Note.create({ ownerId: subject._id, organizationId: orgId, body: 'org-owned' });
+    const workspaceNote = await Note.create({ ownerId: subject._id, organizationId: workspace, body: 'workspace' });
     const theirNote = await Note.create({ ownerId: other._id, body: 'theirs' });
     const team = await Team.create({
       name: 'secret team name',
@@ -171,13 +178,17 @@ describe('SubjectRecordExport', () => {
     expect(records.DsTestPerson).toEqual([
       { _id: subject.id, email: 'me@example.com', profile: { bio: 'hi' }, __v: 0 },
     ]);
-    expect(records.DsTestNote).toEqual([{ _id: myNote.id, ownerId: subject.id, body: 'mine', __v: 0 }]);
+    expect(records.DsTestNote).toEqual([
+      { _id: myNote.id, ownerId: subject.id, body: 'mine', __v: 0 },
+      { _id: orgNote.id, ownerId: subject.id },
+      { _id: workspaceNote.id, ownerId: subject.id, organizationId: String(workspace), body: 'workspace', __v: 0 },
+    ]);
     expect(records.DsTestTeam).toEqual([
       { _id: team.id, users: [{ userId: subject.id, role: 'member' }], inviteEmails: ['me@example.com'] },
     ]);
-    expect(records.DsTestNoteComment.map((record: ExportedRecord) => record._id).sort()).toEqual(
-      [onMyNote.id, myCommentElsewhere.id].sort()
-    );
+    expect(records.DsTestNoteComment).toHaveLength(2);
+    expect(records.DsTestNoteComment).toContainEqual({ _id: onMyNote.id, noteId: myNote.id, text: 'on mine', __v: 0 });
+    expect(records.DsTestNoteComment).toContainEqual({ _id: myCommentElsewhere.id, authorId: subject.id });
     expect(records.DsTestAccess).toEqual([{ _id: access.id, viewerId: subject.id }]);
     expect(records.DsTestAccessQuery).toEqual([{ _id: query.id, text: 'what I searched', __v: 0 }]);
   });
@@ -217,7 +228,7 @@ describe('SubjectRecordExport', () => {
       amount: 5,
       __v: 0,
     });
-    expect(byId(shared._id)).toEqual({ _id: shared.id, partyIds: [me.toString()], amount: 7, __v: 0 });
+    expect(byId(shared._id)).toEqual({ _id: shared.id, partyIds: [me.toString()] });
     expect(byId(actedOn._id)).toEqual({
       _id: actedOn.id,
       adminId: me.toString(),

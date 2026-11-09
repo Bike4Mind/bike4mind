@@ -34,16 +34,20 @@
  * What an export includes for a document (`exportScope.ts` implements this):
  * - A `deleteDocument` or `retain` match on a scalar path (`userId`, `metadata.actorId`) marks the
  *   document as the person's own record: the whole document minus `secretPaths`, plus its
- *   `viaParent` children.
+ *   `viaParent` children. A `retain` with `exportScope: 'reference'` is the exception: the person is
+ *   only the actor on a record about someone else.
  * - Any other match exports only the matched paths and the document id. That is every `anonymize`
  *   (the document belongs to someone else and only records this person: a referrer's export carries
  *   the `referredByUserId` of each account they referred, not those accounts), with its `alsoRedact`
- *   fields because they repeat this person's identity; and every match through an array (an array of
+ *   fields because they repeat this person's identity; every `exportScope: 'reference'` match, with
+ *   its `identifies` fields for the same reason; and every match through an array (an array of
  *   ids such as `userIds`, or a key inside an array of subdocuments such as `versions.createdBy`),
  *   whatever the action, where only the matching elements are exported. The other elements name
  *   other people (co-members of a fraud cluster, other editors of a page).
  * When a document matches several references and one of them is an own-record match, the whole
- * document is exported.
+ * document is exported, less every other person on it: a reference that names someone else goes
+ * with its `alsoRedact` and `identifies` fields, and an array a reference reads through keeps only
+ * this person's elements.
  */
 
 /** What erasure does with a document (or field) that references the erased person. */
@@ -95,11 +99,8 @@ export type UserReference = ErasureAction & {
    * lowercase on write and keeps no previous addresses, so a later change of address is not matched.
    */
   matchBy: 'userId' | 'email';
-  /**
-   * Extra equality filter, e.g. `{ ownerType: 'User' }` when `ownerId` may also hold an
-   * organization id. `null` matches a field that is absent or null.
-   */
-  where?: Readonly<Record<string, string | null>>;
+  /** Extra equality filter, e.g. `{ ownerType: 'User' }` when `ownerId` may also hold an organization id. */
+  where?: Readonly<Record<string, string>>;
   /**
    * `personal` limits the reference to the person's own content, not their organization's. It is not
    * a literal filter: personal rows store `organizationId` as null, absent or `''`, or name one of
@@ -109,11 +110,17 @@ export type UserReference = ErasureAction & {
    */
   scope?: 'personal';
   /**
-   * Fields beside `path` that describe the person it names (a cached name, email, request IP). An
-   * export to anyone else leaves them out. Erasure does not read this; it clears `alsoRedact`.
+   * Fields beside `path` that describe the person it names (a cached name, email, request IP), for
+   * a reference that does not clear them on erasure (a `retain`). They travel with this person's
+   * matched paths and are withheld from anyone else's export of the document. Erasure does not read
+   * this; it clears `alsoRedact`.
    */
   identifies?: readonly string[];
-  /** See the export rules above: the person is only the actor here, not a party to the record. */
+  /**
+   * `reference` marks a `retain` whose person is only the actor on a record about someone else (the
+   * admin who wrote a note or an audit entry): their export carries the matched paths, not the
+   * record, as for an `anonymize`.
+   */
   exportScope?: 'reference';
 };
 

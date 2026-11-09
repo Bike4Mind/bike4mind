@@ -6,7 +6,7 @@ import { requireStepUp } from '@server/auth/stepUp';
 import { findDataExportTarget, listAdminDataExports } from '@server/dataSubject/adminDataExports';
 import { adminApi } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
-import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 /**
  * Data subject exports (access/portability requests) of one user. POST queues one on the self-serve
