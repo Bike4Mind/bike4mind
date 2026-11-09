@@ -327,6 +327,19 @@ describe('OrchestratorStage', () => {
       expect(query('orchestrator-peek-drawer')).not.toBeNull();
     });
 
+    it('preserves the selected drawer when Escape is pressed while settled', async () => {
+      const agents = [agentFixture('n', 'needs-you')];
+      await renderSettled(agents, false);
+      act(() => el('orchestrator-needs-you-pill').click());
+      expect(query('orchestrator-peek-drawer')).not.toBeNull();
+
+      await renderSettled(agents, true);
+      await pressEscape();
+      await renderSettled(agents, false);
+      expect(query('orchestrator-peek-drawer-region')).not.toBeNull();
+      expect(query('orchestrator-peek-drawer')).not.toBeNull();
+    });
+
     it('points at the conversation when the Innkeeper himself is waiting', async () => {
       await renderSettled([agentFixture('w', 'working')], true, 'needs-action');
       expect(el('orchestrator-needs-you-card').textContent).toContain('The Innkeeper needs you');

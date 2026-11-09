@@ -119,6 +119,9 @@ describe('assignCharacters', () => {
     const roster = Array.from({ length: CHARACTER_COUNT }, (_, index) => subject(`s-${index}`, index, 'Scribe'));
     const characters = assignCharacters(roster);
     expect(new Set(characters.values()).size).toBe(CHARACTER_COUNT);
+    expect(new Set([...characters.values()].map(character => characterSprite(character, 'idle'))).size).toBe(
+      CHARACTER_COUNT
+    );
     for (const character of characters.values()) expect(characterSprite(character, 'idle')).toBeTruthy();
   });
 });

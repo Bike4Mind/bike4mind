@@ -1,5 +1,5 @@
+import { byAge, hashOf, type Epithet } from '@shared/agentPersona';
 import type { AgentState, AgentView } from '../roster';
-import type { Epithet } from '@shared/agentPersona';
 import { CHARACTER_COUNT, characterCraft, type CharacterId, type Pose } from './tavernArt';
 
 export type TavernZone = 'workbench' | 'bar' | 'hearth' | 'benches' | 'door';
@@ -95,15 +95,6 @@ export function poseFor(state: AgentState): Pose {
 
 /** What a character is chosen from: the agent's id, its age (oldest choose first) and its kind of work. */
 export type CastSubject = { id: string; createdAt: string; epithet?: Epithet };
-
-function hashOf(text: string): number {
-  let hash = 0;
-  for (let index = 0; index < text.length; index++) hash = (hash * 31 + text.charCodeAt(index)) >>> 0;
-  return hash;
-}
-
-const byAge = (a: CastSubject, b: CastSubject) =>
-  a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 
 /**
  * Gives every agent a character sheet, a pure function of the roster so it survives reloads. Oldest

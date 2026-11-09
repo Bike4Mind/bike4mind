@@ -109,13 +109,13 @@ export function epithetFor(title: string, seedPrompt: string): Epithet {
   return matchEpithet(title) ?? matchEpithet(seedPrompt) ?? 'Wanderer';
 }
 
-function hashOf(text: string): number {
+export function hashOf(text: string): number {
   let hash = 0;
   for (let index = 0; index < text.length; index++) hash = (hash * 31 + text.charCodeAt(index)) >>> 0;
   return hash;
 }
 
-const byAge = (a: PersonaSubject, b: PersonaSubject) =>
+export const byAge = <T extends { id: string; createdAt: string }>(a: T, b: T) =>
   a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 
 /**
