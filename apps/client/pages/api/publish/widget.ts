@@ -184,7 +184,7 @@ const WIDGET_JS = String.raw`(function () {
   // closed / 15s open) and the list's cache staleness, or a comment would be dropped
   // while it is still legitimately waiting to show up.
   var PENDING_TTL_MS = 300000;
-  var state = { comments: [], mineIds: [], canComment: false, open: false, pinMode: false, pendingAnchor: null, draft: '', justPosted: [] };
+  var state = { comments: [], mineIds: [], canComment: false, open: false, pinMode: false, pendingAnchor: null, draft: '', justPosted: [], justEdited: [], justDeleted: [] };
 
   /**
    * Latched once a request has 401ed with a FRESH token AND the gate-proof cookie attached -
@@ -448,7 +448,12 @@ const WIDGET_JS = String.raw`(function () {
             if (body === null || !body.trim()) return;
             authedFetch(API + '/' + encodeURIComponent(c.id), { method: 'PATCH', body: JSON.stringify({ body: body.trim() }) })
               .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-              .then(function (updated) { c.body = updated.body; render(); })
+              .then(function (updated) {
+                state.comments.forEach(function (item) { if (item.id === c.id) item.body = updated.body; });
+                state.justEdited = state.justEdited.filter(function (e) { return e.id !== c.id; });
+                state.justEdited.push({ id: c.id, body: updated.body, at: Date.now() });
+                render();
+              })
               .catch(function () { alert('Could not edit comment'); });
           });
           var remove = el('button', null, 'Delete');
@@ -459,6 +464,7 @@ const WIDGET_JS = String.raw`(function () {
                 if (!r.ok) throw new Error('HTTP ' + r.status);
                 state.comments = state.comments.filter(function (item) { return item.id !== c.id; });
                 state.justPosted = state.justPosted.filter(function (p) { return p.id !== c.id; });
+                state.justDeleted.push({ id: c.id, at: Date.now() });
                 state.mineIds = state.mineIds.filter(function (id) { return id !== c.id; });
                 render();
               })
@@ -679,12 +685,12 @@ const WIDGET_JS = String.raw`(function () {
       .then(function (data) {
         if (!data) return;
         var incoming = data.annotations || [];
+        var now = Date.now();
         // Don't let a poll whose fetch predated your just-posted comments drop them
         // from the list (it self-heals next cycle, but the blink is avoidable). Keep
         // the local copies until the server's list reflects them. Only protects YOUR
         // fresh posts — never resurrects others' deletes.
         if (state.justPosted.length) {
-          var now = Date.now();
           // Retire an entry once the server list carries it, or once it ages out.
           state.justPosted = state.justPosted.filter(function (p) {
             return now - p.at < PENDING_TTL_MS && !incoming.some(function (c) { return c.id === p.id; });
@@ -694,6 +700,24 @@ const WIDGET_JS = String.raw`(function () {
           });
           if (pending.length) incoming = incoming.concat(pending);
         }
+        // The list can be cached for a few seconds, so a poll soon after your own edit or delete
+        // may still carry the old state. Re-apply both until the server list catches up.
+        state.justDeleted = state.justDeleted.filter(function (d) {
+          return now - d.at < PENDING_TTL_MS && incoming.some(function (c) { return c.id === d.id; });
+        });
+        state.justEdited = state.justEdited.filter(function (e) {
+          return now - e.at < PENDING_TTL_MS && incoming.some(function (c) { return c.id === e.id && c.body !== e.body; });
+        });
+        incoming = incoming
+          .filter(function (c) { return !state.justDeleted.some(function (d) { return d.id === c.id; }); })
+          .map(function (c) {
+            var e = state.justEdited.filter(function (x) { return x.id === c.id; })[0];
+            if (!e) return c;
+            var copy = {};
+            for (var k in c) copy[k] = c[k];
+            copy.body = e.body;
+            return copy;
+          });
         // Compare against what is actually on screen rather than a remembered
         // signature: an optimistic local copy can diverge from the last server
         // response, and a remembered signature would then early-return forever and
