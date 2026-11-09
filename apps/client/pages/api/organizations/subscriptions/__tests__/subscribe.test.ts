@@ -586,9 +586,12 @@ describe('POST /api/organizations/subscriptions/subscribe - request-shape and id
     expect(mockVerifyOrgOwner).toHaveBeenCalledWith(req.user, CANONICAL.toUpperCase());
     expect(mockFindNonTerminalSubscriptionsByOwner).toHaveBeenCalledWith(SubscriptionOwnerType.Organization, CANONICAL);
     const args = mockSessionsCreate.mock.calls[0][0] as {
+      customer: string;
       subscription_data: { metadata: Record<string, unknown> };
     };
+    expect(args.customer).toBe('cus_org');
     expect(args.subscription_data.metadata.organizationId).toBe(CANONICAL);
+    expect(args.subscription_data.metadata).not.toHaveProperty('newOrganizationName');
     expect(res.statusCode).toBe(200);
   });
 
@@ -627,32 +630,29 @@ describe('POST /api/organizations/subscriptions/subscribe - request-shape and id
     expect(mockSessionsCreate).not.toHaveBeenCalled();
   });
 
-  // Both fields together parse (the refine wants at least one, not exactly one). The id branch
-  // wins for the gate and the customer while the metadata keys off organizationData - so the
-  // invoice webhook runs its create-a-new-org path against THIS org's Stripe customer. Pinned as
-  // the behaviour that exists, not the behaviour that is wanted; tracked separately as a
-  // billing-attribution bug. If a fix lands, this test is the one to change.
-  it('gates on the id but still tags the metadata as a new org when both fields are sent', async () => {
-    mockVerifyOrgOwner.mockResolvedValue({
-      id: 'org_1',
-      name: 'Org One',
-      billingContact: 'billing@example.com',
-      users: [{ userId: 'user_1' }],
-    });
-    const { req, res } = makeBody({ organizationId: 'org_1', organizationData: { name: 'Brand New Org' } });
+  it.each([{ organizationId: 'org_1', organizationData: { name: 'Brand New Org' } }, {}])(
+    'rejects invalid organization selectors before lookups or Stripe side effects: %j',
+    async body => {
+      const { req, res } = makeBody(body);
 
-    await (handler as HandlerFn)(req, res);
+      await expect((handler as HandlerFn)(req, res)).rejects.toMatchObject({
+        issues: expect.arrayContaining([
+          expect.objectContaining({
+            path: ['organizationId'],
+            message: 'Exactly one of organizationId or organizationData must be provided',
+          }),
+        ]),
+      });
 
-    expect(mockVerifyOrgOwner).toHaveBeenCalledWith(req.user, 'org_1');
-    expect(mockAttachOrgStripeCustomer).toHaveBeenCalledTimes(1);
-    const args = mockSessionsCreate.mock.calls[0][0] as {
-      customer: string;
-      subscription_data: { metadata: Record<string, unknown> };
-    };
-    expect(args.customer).toBe('cus_org');
-    expect(args.subscription_data.metadata).toMatchObject({ newOrganizationName: 'Brand New Org' });
-    expect(args.subscription_data.metadata).not.toHaveProperty('organizationId');
-  });
+      expect(mockGetSettingsValue).not.toHaveBeenCalled();
+      expect(mockVerifyOrgOwner).not.toHaveBeenCalled();
+      expect(mockFindNonTerminalSubscriptionsByOwner).not.toHaveBeenCalled();
+      expect(mockAssertCheckoutAllowed).not.toHaveBeenCalled();
+      expect(mockCreateCustomer).not.toHaveBeenCalled();
+      expect(mockAttachOrgStripeCustomer).not.toHaveBeenCalled();
+      expect(mockSessionsCreate).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe('POST /api/organizations/subscriptions/subscribe - acquisition attribution', () => {

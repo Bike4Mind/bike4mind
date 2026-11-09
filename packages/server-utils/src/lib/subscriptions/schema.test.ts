@@ -9,6 +9,39 @@ const baseRequest = {
   organizationId: 'org_test',
 };
 
+describe('OrgSubscriptionSubscribeSchema.organization', () => {
+  it.each([{ organizationId: 'org_test' }, { organizationData: { name: 'New Team' } }])(
+    'accepts one organization selector: %j',
+    selector => {
+      expect(
+        OrgSubscriptionSubscribeSchema.safeParse({
+          ...baseRequest,
+          organizationId: undefined,
+          quantity: ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
+          ...selector,
+        }).success
+      ).toBe(true);
+    }
+  );
+
+  it.each([
+    {},
+    { organizationId: 'org_test', organizationData: { name: 'New Team' } },
+    { organizationId: '' },
+    { organizationId: '', organizationData: { name: 'New Team' } },
+    { organizationId: null, organizationData: { name: 'New Team' } },
+  ])('rejects ambiguous or absent organization selectors: %j', selector => {
+    expect(
+      OrgSubscriptionSubscribeSchema.safeParse({
+        ...baseRequest,
+        organizationId: undefined,
+        quantity: ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
+        ...selector,
+      }).success
+    ).toBe(false);
+  });
+});
+
 describe('OrgSubscriptionSubscribeSchema.quantity', () => {
   it('accepts an in-range integer seat count', () => {
     const result = OrgSubscriptionSubscribeSchema.safeParse({

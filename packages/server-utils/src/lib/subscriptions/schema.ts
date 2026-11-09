@@ -45,11 +45,7 @@ export const OrgSubscriptionSubscribeSchema = z
     /**
      * The organization that is subscribing. If not provided, a new organization will be created.
      *
-     * `min(1)` is load-bearing, not cosmetic: the refine below only asks that the key be present,
-     * so `""` used to satisfy it, then read as falsy in the handler - skipping BOTH the owner gate
-     * and the duplicate-subscription guard, and creating a Stripe customer plus a checkout session
-     * carrying `metadata.organizationId === ''`. Reject it here instead. A well-formed-looking but
-     * non-ObjectId value still reaches the gate, which answers 400.
+     * Empty ids must not select the new-organization branch after satisfying the presence check.
      */
     organizationId: z.string().min(1).optional(),
 
@@ -76,9 +72,9 @@ export const OrgSubscriptionSubscribeSchema = z
     /** Which UI started the checkout; see checkoutSurfaceSchema. */
     surface: checkoutSurfaceSchema.optional(),
   })
-  .refine(data => data.organizationId !== undefined || data.organizationData !== undefined, {
+  .refine(data => (data.organizationId !== undefined) !== (data.organizationData !== undefined), {
     path: ['organizationId'], // path of error
-    error: 'Either organizationId or organizationData must be provided',
+    error: 'Exactly one of organizationId or organizationData must be provided',
   });
 
 export type OrgSubscriptionSubscribeRequest = z.infer<typeof OrgSubscriptionSubscribeSchema>;
