@@ -176,7 +176,7 @@ describe('FeedbackTab', () => {
       await userEvent.click(screen.getByTestId('admin-filter-feedback-subject'));
 
       const options = within(screen.getByTestId('admin-filter-feedback-subject-menu'))
-        .getAllByRole('menuitemcheckbox')
+        .getAllByRole('menuitemradio')
         .map(option => option.textContent);
       expect(options).toEqual(['Conversation turn', 'Conversation', 'Product', 'Help']);
     });
