@@ -8,6 +8,7 @@ import {
 } from '../../../../packages/database/src/__test__/createMongoServer';
 import {
   AdminAuditLogModel,
+  ApiKeyUsageLog,
   CreditTransaction,
   Session,
   UserApiKeyAuditLog,
@@ -40,7 +41,7 @@ beforeAll(async () => {
   server = await createMongoServer();
   await mongoose.connect(server.getUri(), { autoIndex: false });
   await settleAutoIndexBuilds(mongoose);
-  await Promise.all([CreditTransaction.createIndexes(), Session.createIndexes()]);
+  await Promise.all([CreditTransaction.createIndexes(), Session.createIndexes(), ApiKeyUsageLog.createIndexes()]);
 });
 
 afterAll(async () => {
@@ -50,8 +51,8 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await Promise.all(
-    [AdminAuditLogModel, CreditTransaction, Session, UserApiKeyAuditLog, UserAuthAuditLogModel].map(model =>
-      model.collection.deleteMany({})
+    [AdminAuditLogModel, ApiKeyUsageLog, CreditTransaction, Session, UserApiKeyAuditLog, UserAuthAuditLogModel].map(
+      model => model.collection.deleteMany({})
     )
   );
 
@@ -284,5 +285,35 @@ describe('listUserTimeline against a real database', () => {
     // Scoped to the winning plan so a rejected plan using the index cannot satisfy it.
     const { queryPlanner } = (Array.isArray(plan) ? plan[0] : plan) as { queryPlanner: { winningPlan: unknown } };
     expect(JSON.stringify(queryPlanner.winningPlan)).toContain('credit_tx_owner_balance_events');
+  });
+
+  it('pages API requests on timestamp/id ties and isolates both user and key', async () => {
+    const keyId = 'a'.repeat(24);
+    const anotherKey = 'b'.repeat(24);
+    const rows = [
+      { _id: idAt(20, '00000000000000e1'), userId: USER_ID, keyId, timestamp: T(40) },
+      { _id: idAt(20, '00000000000000e2'), userId: USER_ID, keyId, timestamp: T(40) },
+      { _id: idAt(20, '00000000000000e3'), userId: USER_ID, keyId: anotherKey, timestamp: T(45) },
+      { _id: idAt(20, '00000000000000e4'), userId: OTHER_USER_ID, keyId, timestamp: T(50) },
+    ];
+    await ApiKeyUsageLog.collection.insertMany(
+      rows.map(row => ({
+        ...row,
+        endpoint: '/api/v1/me?private=hidden',
+        method: 'GET',
+        statusCode: 200,
+        responseTime: 12,
+        ipAddress: '203.0.113.1',
+        createdAt: T(10),
+      }))
+    );
+    const options = { types: ['api_request'] as const, limit: 1, range: { from: T(35), to: T(45) }, apiKeyId: keyId };
+    const first = await listUserTimeline(subject, options);
+    expect(first.entries.map(entry => entry.id)).toEqual([rows[1]._id.toString()]);
+    expect(first.entries[0].summary).toBe('GET /api/v1/me - 200');
+    const second = await listUserTimeline(subject, { ...options, cursor: first.nextCursor ?? undefined });
+    expect(second.entries.map(entry => entry.id)).toEqual([rows[0]._id.toString()]);
+    expect(second.nextCursor).toBeNull();
+    expect((await listUserTimeline(subject, { ...options, range: { from: T(41) } })).entries).toEqual([]);
   });
 });

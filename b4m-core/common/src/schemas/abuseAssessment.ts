@@ -19,7 +19,7 @@ import { SHADOW_DETECTION_VERDICTS, SHADOW_DETECTORS } from './shadowDetection';
  */
 
 /** Bump when the question, its choices or the summary's meaning changes; cached results key on it. */
-export const ABUSE_ASSESSMENT_POLICY_VERSION = 2;
+export const ABUSE_ASSESSMENT_POLICY_VERSION = 3;
 
 /** What the model may answer. */
 export const ABUSE_ASSESSMENT_JUDGMENTS = ['abuse', 'legitimate_automation', 'insufficient_evidence'] as const;
@@ -87,6 +87,25 @@ export const abuseAssessmentAccountEvidenceSchema = z.strictObject({
 });
 export type AbuseAssessmentAccountEvidence = z.infer<typeof abuseAssessmentAccountEvidenceSchema>;
 
+export const abuseAssessmentRequestActivitySchema = z.discriminatedUnion('status', [
+  z.strictObject({
+    status: z.literal('observed'),
+    coverage: z.literal('partial_api_key_log'),
+    windowDays: z.number().int().positive(),
+    sampleCount: z.number().int().nonnegative(),
+    truncated: z.boolean(),
+    successful: z.number().int().nonnegative(),
+    unauthorized: z.number().int().nonnegative(),
+    forbidden: z.number().int().nonnegative(),
+    rateLimited: z.number().int().nonnegative(),
+    serverErrors: z.number().int().nonnegative(),
+    successfulIdentityChecks: z.number().int().nonnegative(),
+    adminRequests: z.number().int().nonnegative(),
+  }),
+  z.strictObject({ status: z.literal('failed') }),
+]);
+export type AbuseAssessmentRequestActivity = z.infer<typeof abuseAssessmentRequestActivitySchema>;
+
 export const abuseAssessmentAccountSchema = z.strictObject({
   /** Pseudonymous and per assessment: acct_1 here says nothing about acct_1 elsewhere. */
   ref: accountRefSchema,
@@ -94,6 +113,7 @@ export const abuseAssessmentAccountSchema = z.strictObject({
   /** Hours between the evidence being computed and the detection; null with no evidence. */
   evidenceAgeHours: z.number().int().nullable(),
   evidence: abuseAssessmentAccountEvidenceSchema.nullable(),
+  requests: abuseAssessmentRequestActivitySchema.optional(),
 });
 export type AbuseAssessmentAccount = z.infer<typeof abuseAssessmentAccountSchema>;
 

@@ -16,6 +16,15 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@client/app/hooks/data/userApiKeys', () => ({ useAdminGetUserApiKeys: mocks.keys }));
+vi.mock('@client/app/hooks/data/adminUserTimeline', () => ({
+  useUserTimeline: () => ({
+    data: { pages: [{ entries: [], nextCursor: null }] },
+    isLoading: false,
+    isError: false,
+    refetch: vi.fn(),
+    hasNextPage: false,
+  }),
+}));
 vi.mock('@client/app/hooks/data/adminUserCredits', () => {
   const mutation = (fn: (...args: unknown[]) => unknown) => () => ({ mutateAsync: fn, isPending: false });
   return {
@@ -68,6 +77,16 @@ const renderTab = () => render(<ApiKeysTab user={buildProfile()} />, { wrapper: 
 const row = (id: string) => screen.getByTestId(`user-keys-row-${id}`);
 
 describe('ApiKeysTab', () => {
+  it('resets request filters when switching to another cached user', () => {
+    respond();
+    const view = renderTab();
+    const fromDate = () =>
+      within(screen.getByTestId('user-api-requests-from')).getByLabelText('Requests from UTC date');
+    fireEvent.change(fromDate(), { target: { value: '2026-11-01' } });
+    expect(fromDate()).toHaveValue('2026-11-01');
+    view.rerender(<ApiKeysTab user={buildProfile({ id: 'another-user' })} />);
+    expect(fromDate()).toHaveValue('');
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     respond();

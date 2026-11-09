@@ -5,6 +5,7 @@ import {
   USER_TIMELINE_CATEGORIES,
   USER_TIMELINE_CATEGORY_LABELS,
   USER_TIMELINE_TYPES,
+  API_REQUEST_LOG_COVERAGE,
   type AuditEntry,
 } from '@bike4mind/common';
 import { useUserTimeline } from '@client/app/hooks/data/adminUserTimeline';
@@ -19,7 +20,7 @@ import {
   type ActivitySearch,
 } from '../activitySearch';
 import { TimelineList, TimelineSkeleton } from './TimelineList';
-import { timelineItem } from './timelineItems';
+import { timelineItems } from './timelineItems';
 
 export const CATEGORY_OPTIONS = USER_TIMELINE_CATEGORIES.map(category => ({
   value: category,
@@ -31,6 +32,7 @@ type ActivityTimelineProps = {
   filters: ActivityFilters;
   onFiltersChange: (filters: ActivityFilters) => void;
   onOpenCredits?: () => void;
+  onOpenApiRequests?: () => void;
 };
 
 const isFiltered = (filters: ActivityFilters) =>
@@ -42,15 +44,18 @@ export const ActivityTimeline: React.FC<ActivityTimelineProps> = ({
   filters,
   onFiltersChange,
   onOpenCredits,
+  onOpenApiRequests,
 }) => {
   const timeline = useUserTimeline(userId, filters);
   const [selected, setSelected] = useState<AuditEntry | null>(null);
   const items = useMemo(
     () =>
-      (timeline.data?.pages.flatMap(page => page.entries) ?? []).map(entry =>
-        timelineItem(entry, { onOpenAudit: setSelected, onOpenCredits })
-      ),
-    [timeline.data, onOpenCredits]
+      timelineItems(timeline.data?.pages.flatMap(page => page.entries) ?? [], {
+        onOpenAudit: setSelected,
+        onOpenCredits,
+        onOpenApiRequests,
+      }),
+    [timeline.data, onOpenCredits, onOpenApiRequests]
   );
   const clear = () => onFiltersChange({ types: [...USER_TIMELINE_TYPES] });
 
@@ -72,7 +77,7 @@ export const ActivityTimeline: React.FC<ActivityTimelineProps> = ({
       ) : (
         <EmptyState
           title="No activity yet"
-          description="Spend, limits, sign-ins, payments and admin changes appear here."
+          description="API requests, spend, limits, sign-ins, payments and admin changes appear here."
           action={null}
         />
       );
@@ -138,6 +143,15 @@ export const ActivityTimeline: React.FC<ActivityTimelineProps> = ({
           )}
         </Stack>
         {body()}
+        {filters.types.includes('api_request') && (
+          <Typography
+            level="body-xs"
+            sx={{ px: 2, py: 1.5, color: 'admin.inkMuted' }}
+            data-testid="user-timeline-api-coverage"
+          >
+            {API_REQUEST_LOG_COVERAGE}
+          </Typography>
+        )}
         {timeline.hasNextPage && (
           <Box sx={{ p: 2, borderTop: '1px solid', borderColor: 'admin.border' }}>
             <Button
@@ -167,6 +181,17 @@ export const ActivityTab: React.FC<{ userId: string; onOpenCredits?: () => void 
   const setFilters = (next: ActivityFilters) =>
     void navigate({ search: previous => ({ ...previous, ...activitySearchFromFilters(next) }), replace: true });
   return (
-    <ActivityTimeline userId={userId} filters={filters} onFiltersChange={setFilters} onOpenCredits={onOpenCredits} />
+    <ActivityTimeline
+      userId={userId}
+      filters={filters}
+      onFiltersChange={setFilters}
+      onOpenCredits={onOpenCredits}
+      onOpenApiRequests={() =>
+        void navigate({
+          search: previous => ({ ...previous, tab: 'keys', types: undefined, from: undefined, to: undefined }),
+          replace: true,
+        })
+      }
+    />
   );
 };

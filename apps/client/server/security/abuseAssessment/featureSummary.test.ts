@@ -254,6 +254,17 @@ describe('buildFeatureSummary', () => {
 });
 
 describe('evidenceHash', () => {
+  it('invalidates a cached assessment when request outcomes change', () => {
+    const source = accounts();
+    const original = buildFeatureSummary({ detection: detection(), accounts: source, group: null });
+    const changed = buildFeatureSummary({
+      detection: detection(),
+      accounts: source.map(account => ({ ...account, requests: { status: 'failed' as const } })),
+      group: null,
+    });
+    expect(evidenceHash(changed)).not.toBe(evidenceHash(original));
+    expect(changed.accounts[0].requests).toEqual({ status: 'failed' });
+  });
   it('reassesses when a campaign gains a different relationship or membership', () => {
     const hashForGroup = (group: AccountCampaignGroup) =>
       evidenceHash(

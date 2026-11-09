@@ -109,15 +109,33 @@ The page has six tabs. The selected tab is kept in the URL, for example `?tab=ac
 | Tab | Contents |
 |-----|----------|
 | **Overview** | Account details, access, subscription, recent activity, and internal notes |
-| **Activity** | The user's recent activity |
+| **Activity** | The user's recent activity, including recorded API requests |
 | **Credits** | Credit ledger and spending |
-| **API keys** | The user's API keys |
+| **API keys** | The user's API keys and recent recorded requests |
 | **Sign-ins** | Sign-in history and sessions |
 | **Admin log** | Administrative actions recorded for the user |
 
 Use **More** for role, product-access, subscription, compliance, restriction, and deletion actions (see [Admin Actions](#admin-actions-ban-moderate-delete)).
 
 Old links of the form `/admin?userId=<userId>` redirect to the user's profile page. An unknown or malformed user id shows **User not found**; any other loading error shows a retry button.
+
+### Recorded API requests
+
+Open **API keys > Recent API requests** to inspect each recorded call's time, method,
+endpoint, response status, latency, IP and key. Filter by key and UTC date range, use
+**Load more requests** for older records, or **Refresh** to check for new activity.
+**All keys** also includes retained requests from deleted keys. Endpoint query strings
+and fragments are omitted from this view.
+
+The **API** filter in **Activity** shows these same requests alongside the other
+timeline sources. Adjacent matching calls within a minute are grouped; the count
+covers loaded activity. Click a request to open **API keys** for individual records.
+A failed response is marked for attention; it does not establish abuse.
+
+Records are retained for 90 days and cover only recorded API-key requests. An empty
+result does not establish that no requests were attempted. If a read fails, use the
+retry action rather than treating the error as inactivity. Check the selected key,
+UTC date range and retention window when a request is missing.
 
 ## Risk flags
 

@@ -22,13 +22,20 @@ import {
   type AbuseAssessmentAccountEvidence,
   type AbuseAssessmentFeatureSummary,
   type AbuseAssessmentGroupEvidence,
+  type AbuseAssessmentRequestActivity,
+  abuseAssessmentRequestActivitySchema,
   type DecisionModelId,
   type RiskEvidenceFacts,
   type RiskEvidenceSummary,
   type ShadowDetectionItem,
 } from '@bike4mind/common';
 
-export type AssessedAccountSource = { id: string; createdAt: Date | null; summary: RiskEvidenceSummary | null };
+export type AssessedAccountSource = {
+  id: string;
+  createdAt: Date | null;
+  summary: RiskEvidenceSummary | null;
+  requests?: AbuseAssessmentRequestActivity;
+};
 
 const HOUR_MS = 60 * 60 * 1000;
 const SIGNAL_KEY = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
@@ -84,6 +91,7 @@ const projectAccount = (
     accountAgeHours: source?.createdAt ? Math.max(0, hoursBetween(source.createdAt, detectedAt)) : null,
     evidenceAgeHours: summary ? hoursBetween(detectedAt, summary.computedAt) : null,
     evidence: summary ? projectEvidence(summary.facts) : null,
+    ...(source?.requests ? { requests: abuseAssessmentRequestActivitySchema.parse(source.requests) } : {}),
   };
 };
 

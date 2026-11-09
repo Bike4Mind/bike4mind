@@ -72,6 +72,34 @@ beforeEach(() => {
 });
 
 describe('ActivityTab', () => {
+  it('shows API requests with the actual outcome and a coverage explanation', async () => {
+    mocks.get.mockResolvedValue({
+      data: {
+        entries: [
+          {
+            type: 'api_request',
+            id: 'r1',
+            at: '2026-11-01T12:00:00Z',
+            summary: 'GET /api/v1/me - 200',
+            detail: '12 ms',
+            request: {
+              keyId: 'k',
+              endpoint: '/api/v1/me',
+              method: 'GET',
+              statusCode: 200,
+              responseTimeMs: 12,
+              ip: '203.0.113.1',
+            },
+          },
+        ],
+        nextCursor: null,
+      },
+    });
+    renderTab({ types: 'api_request' });
+    expect(await screen.findByTestId('user-timeline-row')).toHaveTextContent('GET /api/v1/me - 200');
+    expect(screen.getByTestId('user-timeline-api-coverage')).toHaveTextContent('no rows does not mean no attempts');
+    expect(lastParams().types).toBe('api_request');
+  });
   it('renders the merged timeline in server order with plain-language rows', async () => {
     mocks.get.mockResolvedValue({
       data: { entries: [usage('Quarterly plan', '2026-10-21T09:00:00.000Z'), adminRow, credit], nextCursor: null },
@@ -95,7 +123,7 @@ describe('ActivityTab', () => {
 
     await screen.findByText('No activity yet');
     expect(mocks.get).toHaveBeenCalledWith(`/api/admin/users/${USER_ID}/timeline`, {
-      params: { types: 'admin,credit,key,limit,moderation,payment,signin,signup,spend,usage', limit: '30' },
+      params: { types: 'admin,api_request,credit,key,limit,moderation,payment,signin,signup,spend,usage', limit: '30' },
     });
   });
 
