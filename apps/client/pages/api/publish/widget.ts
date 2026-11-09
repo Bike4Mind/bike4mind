@@ -662,7 +662,7 @@ const WIDGET_JS = String.raw`(function () {
   // keeping the launcher badge fresh). Re-renders only when the comment set
   // actually changed, and the draft + pending pin survive the re-render (above).
   function sig(list) {
-    return list.length + ':' + list.map(function (c) { return c.id + (c.resolvedAt ? 'R' : ''); }).join(',');
+    return JSON.stringify(list.map(function (c) { return [c.id, c.body, c.resolvedAt]; }));
   }
   var lastCanComment = null;
   function poll() {
