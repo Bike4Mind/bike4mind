@@ -13,7 +13,9 @@ const Person = mongoose.model(
 );
 const Note = mongoose.model(
   'DsTestNote',
-  new Schema({ ownerId: ObjectId, organizationId: ObjectId, body: String, shareToken: String })
+  // `organizationId` is a String, as on every real personal-scoped model: the purge's personal
+  // predicate (shared with the export) matches workspace ids as strings.
+  new Schema({ ownerId: ObjectId, organizationId: String, body: String, shareToken: String })
 );
 const Team = mongoose.model(
   'DsTestTeam',
@@ -141,7 +143,12 @@ describe('SubjectRecordExport', () => {
   });
 
   it('exports only what names the subject, minus secrets, following each action', async () => {
-    const subject = await Person.create({ email: 'me@example.com', password: 'hash', profile: { bio: 'hi' } });
+    const subject = await Person.create({
+      email: 'me@example.com',
+      password: 'hash',
+      invitedBy: new mongoose.Types.ObjectId(),
+      profile: { bio: 'hi' },
+    });
     const other = await Person.create({ email: 'them@example.com', password: 'hash2', invitedBy: subject._id });
     const orgId = new mongoose.Types.ObjectId();
 
@@ -149,8 +156,12 @@ describe('SubjectRecordExport', () => {
     await mongoose.model('Organization').collection.insertOne({ _id: workspace, userId: subject._id, personal: true });
 
     const myNote = await Note.create({ ownerId: subject._id, body: 'mine', shareToken: 'tok' });
-    const orgNote = await Note.create({ ownerId: subject._id, organizationId: orgId, body: 'org-owned' });
-    const workspaceNote = await Note.create({ ownerId: subject._id, organizationId: workspace, body: 'workspace' });
+    const orgNote = await Note.create({ ownerId: subject._id, organizationId: String(orgId), body: 'org-owned' });
+    const workspaceNote = await Note.create({
+      ownerId: subject._id,
+      organizationId: String(workspace),
+      body: 'workspace',
+    });
     const theirNote = await Note.create({ ownerId: other._id, body: 'theirs' });
     const team = await Team.create({
       name: 'secret team name',

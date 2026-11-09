@@ -521,12 +521,18 @@ records/           Admin data subject export only: every stored record that name
                    "omitted" value of time_limit or error means that collection is not included.
 `;
 
+// An admin export is handed to the person it is about, so the body below still addresses them.
+const ADMIN_PREAMBLE = `
+Made by an administrator in answer to this person's data access or portability request. "You" and
+"your" below mean the person the export is about.
+`;
+
 const readme = (
   exportedAt: Date,
   includesRecords: boolean
 ) => `${includesRecords ? 'Data subject export' : 'Your account data export'}
 Created: ${exportedAt.toISOString()}
-
+${includesRecords ? ADMIN_PREAMBLE : ''}
 profile.json       Your profile: name, username, email, photo, and when the account was created.
 notebooks/         One JSON file per notebook: its messages, and the knowledge files, artifacts,
                    tools and agents attached to it.
@@ -697,7 +703,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   const user = await userRepository.findById(userId);
   // An admin export is fetched from the admin profile, so it does not need an address to deliver to.
   if (!user || (!forAdmin && !user.email)) {
-    logger.warn('Account data export skipped: the account is gone or has no email to deliver to');
+    logger.warn(
+      forAdmin
+        ? 'Account data export skipped: the account is gone'
+        : 'Account data export skipped: the account is gone or has no email to deliver to'
+    );
     await removeSkippedExport();
     return;
   }

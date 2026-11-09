@@ -8,6 +8,7 @@ const h = vi.hoisted(() => ({
   record: vi.fn(),
   requireStepUp: vi.fn(),
   findTarget: vi.fn(),
+  denySelf: vi.fn(),
   builtAt: vi.fn(),
   sign: vi.fn(),
 }));
@@ -25,6 +26,7 @@ vi.mock('@server/middlewares/adminApi', () => ({
 vi.mock('@server/auth/stepUp', () => ({ requireStepUp: h.requireStepUp }));
 vi.mock('@server/dataSubject/adminDataExports', () => ({
   findDataExportTarget: h.findTarget,
+  denySelfDataExport: h.denySelf,
   readAdminDataExportBuiltAt: h.builtAt,
 }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.record }));
@@ -48,6 +50,7 @@ beforeEach(() => {
   h.calls = [];
   h.requireStepUp.mockReset().mockResolvedValue(undefined);
   h.findTarget.mockReset().mockResolvedValue({ user: { id: USER_ID }, auditTarget: TARGET });
+  h.denySelf.mockReset().mockResolvedValue(undefined);
   h.builtAt.mockReset().mockResolvedValue(new Date(Date.now() - 60_000));
   h.record.mockReset().mockImplementation(async () => void h.calls.push('audit'));
   h.sign.mockReset().mockImplementation(async () => {
@@ -85,6 +88,19 @@ describe('admin data subject export download', () => {
     );
     expect(res._getJSONData()).toMatchObject({ url: 'https://signed.example/export.zip' });
     expect(res.getHeader('Cache-Control')).toBe('no-store');
+  });
+
+  it("signs nothing for the admin's own account", async () => {
+    h.denySelf.mockRejectedValue(new Error('Admins cannot perform this action on their own account.'));
+
+    await expect(run()).rejects.toThrow('own account');
+    expect(h.denySelf).toHaveBeenCalledWith(
+      expect.anything(),
+      { user: { id: USER_ID }, auditTarget: TARGET },
+      'user.data_export.downloaded'
+    );
+    expect(h.record).not.toHaveBeenCalled();
+    expect(h.sign).not.toHaveBeenCalled();
   });
 
   it('signs nothing when the download cannot be audited', async () => {

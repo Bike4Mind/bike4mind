@@ -5,7 +5,7 @@ export type AdminDataExportStatus =
   | { state: 'building' }
   | { state: 'ready'; builtAt: string; expiresAt: string }
   | { state: 'expired'; builtAt: string }
-  /** Not built long after the request: the worker gave up and the request should be made again. */
+  /** Never queued, or not built long after the request: the request should be made again. */
   | { state: 'failed' };
 
 export type AdminDataExportSummary = {
@@ -20,3 +20,5 @@ export type AdminDataExportDownload = { url: string; filename: string; expiresAt
 
 export const ADMIN_DATA_EXPORT_REQUESTED_ACTION = 'user.data_export.requested' satisfies AdminAuditAction;
 export const ADMIN_DATA_EXPORT_DOWNLOADED_ACTION = 'user.data_export.downloaded' satisfies AdminAuditAction;
+export const ADMIN_DATA_EXPORT_FAILED_ACTION = 'user.data_export.failed' satisfies AdminAuditAction;
+export const ADMIN_DATA_EXPORT_DENIED_ACTION = 'user.data_export.denied' satisfies AdminAuditAction;

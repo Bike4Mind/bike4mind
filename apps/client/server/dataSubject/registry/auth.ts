@@ -317,6 +317,8 @@ export const authHolders = {
       'resetPasswordToken',
       'emailVerificationToken',
       'pendingEmailToken',
+      // The stored abuse-scoring result, withheld for the same reason as `PendingOtcToken.codes.riskSignals`.
+      'signupGrantAssessment',
     ],
   },
   UserActivityCounter: {

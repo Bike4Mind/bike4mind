@@ -691,6 +691,7 @@ describe('account data export worker', () => {
         ],
       });
       expect(entries.get('README.txt')).toContain('records/');
+      expect(entries.get('README.txt')).toContain('Made by an administrator');
       expect(entries.has('profile.json')).toBe(true);
       expect(h.publish).not.toHaveBeenCalled();
       expect(h.leaseRelease).toHaveBeenCalled();
@@ -702,6 +703,7 @@ describe('account data export worker', () => {
       const entries = await unzip(h.uploaded!);
       expect([...entries.keys()].some(name => name.startsWith('records/'))).toBe(false);
       expect(entries.get('README.txt')).not.toContain('records/');
+      expect(entries.get('README.txt')).not.toContain('Made by an administrator');
       expect(h.exportSubject).not.toHaveBeenCalled();
     });
 
