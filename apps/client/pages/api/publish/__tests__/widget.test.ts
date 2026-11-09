@@ -169,6 +169,8 @@ function installFetch(opts: {
   canComment: boolean;
   serverDateMs?: number;
   onPost?: () => Comment;
+  mineIds?: string[];
+  onMutation?: (method: string, body?: string) => StubResponse;
 }): void {
   vi.stubGlobal(
     'fetch',
@@ -181,7 +183,11 @@ function installFetch(opts: {
         return Promise.resolve(jsonRes({ accessToken: 'test.access.token' }));
       }
       if (u.endsWith('/can-comment')) {
-        return Promise.resolve(jsonRes({ commentPolicy: 'open', canComment: opts.canComment }));
+        const capability = { commentPolicy: 'open', canComment: opts.canComment, mineIds: opts.mineIds || [] };
+        return Promise.resolve(jsonRes(capability));
+      }
+      if (init?.method === 'PATCH' || init?.method === 'DELETE') {
+        return Promise.resolve(opts.onMutation!(init.method, (init as { body?: string }).body));
       }
       if (init?.method === 'POST') return Promise.resolve(jsonRes(opts.onPost!(), 201));
       return Promise.resolve(jsonRes({ annotations: opts.list(), commentPolicy: 'open' }, 200, opts.serverDateMs));
@@ -212,6 +218,49 @@ describe('publish comment widget - rendered behaviour', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it('shows edit/delete only for owned comments and updates them through the mutation routes', async () => {
+    vi.setSystemTime(Date.parse('2026-01-01T00:00:00.000Z'));
+    const comments = [
+      { id: 'mine', authorDisplayName: 'Me', body: 'old', createdAt: new Date().toISOString(), resolvedAt: null },
+      {
+        id: 'other',
+        authorDisplayName: 'Other',
+        body: 'other body',
+        createdAt: new Date().toISOString(),
+        resolvedAt: null,
+      },
+    ];
+    const mutation = vi.fn((method: string, body?: string) =>
+      method === 'PATCH' ? jsonRes({ ...comments[0], body: JSON.parse(body!).body }) : jsonRes(null, 204)
+    );
+    installFetch({ list: () => comments, canComment: true, mineIds: ['mine'], onMutation: mutation });
+    vi.stubGlobal(
+      'prompt',
+      vi.fn(() => 'new text')
+    );
+    vi.stubGlobal(
+      'confirm',
+      vi.fn(() => true)
+    );
+
+    runWidget();
+    await flush();
+    click('b4m-launch');
+    await flush();
+
+    expect(document.querySelectorAll('.own-actions')).toHaveLength(1);
+    (document.querySelector('.own-actions button') as HTMLButtonElement).click();
+    await flush();
+    expect(mutation).toHaveBeenCalledWith('PATCH', JSON.stringify({ body: 'new text' }));
+    expect(listText()).toContain('new text');
+
+    (document.querySelector('.own-actions button:last-child') as HTMLButtonElement).click();
+    await flush();
+    expect(mutation).toHaveBeenCalledWith('DELETE', undefined);
+    expect(listText()).not.toContain('new text');
+    expect(listText()).toContain('other body');
   });
 
   it('keeps every just-posted comment when a poll returns a list that predates them', async () => {
