@@ -7,8 +7,10 @@ import { createMocks } from 'node-mocks-http';
  * These pin the shared host guard on that save path (mirrors blog/publish + presign).
  */
 
+type Handler = (req: unknown, res: unknown) => unknown;
 const mockRefs = vi.hoisted(() => ({
-  post: null as null | ((req: any, res: any) => unknown),
+  get: null as null | Handler,
+  post: null as null | Handler,
 }));
 
 // The pinned client forwards to global fetch so these cases can stub the upstream.
@@ -21,10 +23,13 @@ vi.mock('@bike4mind/fab-pipeline/ssrf', async importOriginal => ({
 }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
-    const chain: any = {
+    const chain = {
       use: () => chain,
-      get: () => chain,
-      post: (fn: any) => {
+      get: (fn: Handler) => {
+        mockRefs.get = fn;
+        return chain;
+      },
+      post: (fn: Handler) => {
         mockRefs.post = fn;
         return chain;
       },
@@ -34,8 +39,8 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-const update = vi.hoisted(() => vi.fn());
-vi.mock('@bike4mind/database', () => ({ userRepository: { findById: vi.fn(), update } }));
+const { update, findById } = vi.hoisted(() => ({ update: vi.fn(), findById: vi.fn() }));
+vi.mock('@bike4mind/database', () => ({ userRepository: { findById, update } }));
 vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   encryptToken: (v: string) => `enc:${v}`,
   decryptToken: (v: string) => `dec:${v}`,
@@ -53,9 +58,24 @@ import '../index';
 
 function request(body: unknown) {
   const { req, res } = createMocks({ method: 'POST', body });
-  (req as any).user = { id: 'u1' };
+  Object.assign(req, { user: { id: 'u1' } });
   return { req, res };
 }
+
+describe('GET /api/blog-integration', () => {
+  it('returns only the last four characters of the decrypted key', async () => {
+    findById.mockResolvedValue({ blogIntegration: { apiKey: 'prefix-1234abcd', baseUrl: 'https://blog.example.com' } });
+    const { req, res } = createMocks({ method: 'GET' });
+    Object.assign(req, { user: { id: 'u1' } });
+
+    await mockRefs.get!(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    const body = res._getJSONData();
+    expect(body.settings.apiKeyPreview).toBe('...abcd');
+    expect(JSON.stringify(body)).not.toContain('prefix');
+  });
+});
 
 describe('POST /api/blog-integration', () => {
   const originalFetch = global.fetch;

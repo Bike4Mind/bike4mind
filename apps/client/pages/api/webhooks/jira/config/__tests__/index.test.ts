@@ -91,7 +91,7 @@ describe('PUT /api/webhooks/jira/config without rotateSecret', () => {
   });
 });
 
-describe('GET /api/webhooks/jira/config with revealSecret', () => {
+describe('GET /api/webhooks/jira/config', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.getValidTokens.mockResolvedValue({ cloudId: 'cloud-1' });
@@ -99,28 +99,21 @@ describe('GET /api/webhooks/jira/config with revealSecret', () => {
     h.countByWebhookConfig.mockResolvedValue(0);
   });
 
-  const get = async (user: { id: string; isAdmin?: boolean }) => {
+  const get = async (user: { id: string; isAdmin?: boolean }, query: Record<string, string>) => {
     const res = makeRes();
-    await h.handlers.get({ user, query: { revealSecret: 'true' } }, res);
+    await h.handlers.get({ user, query }, res);
     return res.json.mock.calls[0][0] as { secret?: string; secretMasked?: string };
   };
 
-  it('reveals the secret to the config creator or an admin only', async () => {
-    expect((await get({ id: 'user-1' })).secret).toBe('old-secret');
-    expect((await get({ id: 'admin-1', isAdmin: true })).secret).toBe('old-secret');
-
-    const other = await get({ id: 'user-2' });
-    expect(other.secret).toBeUndefined();
-    expect(other.secretMasked).toBeDefined();
-    expect(other.secretMasked).not.toContain('old-secret');
-  });
-
-  it('returns only the masked secret to the creator on a plain GET', async () => {
-    const res = makeRes();
-    await h.handlers.get({ user: { id: 'user-1' }, query: {} }, res);
-    const body = res.json.mock.calls[0][0] as { secret?: string; secretMasked?: string };
-    expect(body.secret).toBeUndefined();
-    expect(body.secretMasked).toBeDefined();
+  it('returns only a masked secret regardless of caller or query', async () => {
+    for (const user of [{ id: 'user-1' }, { id: 'admin-1', isAdmin: true }, { id: 'user-2' }]) {
+      for (const query of [{}, { revealSecret: 'true' }, { secret: 'true' }]) {
+        const body = await get(user, query);
+        expect(body.secret).toBeUndefined();
+        expect(body.secretMasked).toMatch(/^\*+cret$/);
+        expect(JSON.stringify(body)).not.toContain('old-secret');
+      }
+    }
   });
 });
 

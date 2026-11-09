@@ -65,23 +65,39 @@ describe('JiraNotificationsForm secret controls', () => {
     vi.clearAllMocks();
   });
 
-  it('shows reveal and copy controls only to the config creator or an admin', () => {
+  it('does not offer repeatable reveal or copy controls on a fetched config', () => {
     h.currentUser = { id: 'user-2', isAdmin: false };
     const other = renderForm();
     expect(screen.queryByTestId('toggle-jira-secret-visibility')).toBeNull();
     expect(screen.queryByTestId('copy-jira-secret')).toBeNull();
     expect(screen.getByDisplayValue('abcd****')).toBeTruthy();
+    expect(screen.queryByTestId('rotate-jira-secret')).toBeNull();
     other.unmount();
 
     h.currentUser = { id: 'user-1', isAdmin: false };
     const creator = renderForm();
-    expect(screen.getByTestId('toggle-jira-secret-visibility')).toBeTruthy();
-    expect(screen.getByTestId('copy-jira-secret')).toBeTruthy();
+    expect(screen.queryByTestId('toggle-jira-secret-visibility')).toBeNull();
+    expect(screen.queryByTestId('copy-jira-secret')).toBeNull();
+    expect(screen.getByTestId('rotate-jira-secret')).toBeTruthy();
     creator.unmount();
 
     h.currentUser = { id: 'admin-1', isAdmin: true };
     renderForm();
-    expect(screen.getByTestId('toggle-jira-secret-visibility')).toBeTruthy();
+    expect(screen.queryByTestId('toggle-jira-secret-visibility')).toBeNull();
+    expect(screen.getByTestId('rotate-jira-secret')).toBeTruthy();
+  });
+
+  it('displays the new secret from rotation without fetching it again', async () => {
+    h.currentUser = { id: 'user-1', isAdmin: false };
+    mutation.mutateAsync.mockResolvedValue({ id: 'jcfg-1', secret: 'new-secret' });
+    renderForm();
+
+    fireEvent.click(screen.getByTestId('rotate-jira-secret'));
+
+    await waitFor(() => expect(screen.getByTestId('jira-one-time-secret')).toBeTruthy());
+    expect(screen.getByDisplayValue('new-secret')).toBeTruthy();
+    expect(mutation.mutateAsync).toHaveBeenCalledWith({ rotateSecret: true });
+    expect(screen.getByTestId('copy-jira-secret')).toBeTruthy();
   });
 
   it('shows Enable, Disable and Delete only to the config creator or an admin', () => {

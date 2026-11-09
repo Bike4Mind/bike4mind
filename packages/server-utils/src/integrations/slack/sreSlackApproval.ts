@@ -23,6 +23,7 @@ import {
 } from '@bike4mind/common';
 import type { KnownBlock } from '@slack/web-api';
 import { WebClient } from '@slack/web-api';
+import { decryptToken } from '../../security/tokenEncryption';
 
 const logger = new Logger();
 
@@ -57,7 +58,7 @@ async function resolveWorkspace(
     return null;
   }
 
-  return { client: new WebClient(workspace.slackBotToken), channelId: slackConfig.channelId };
+  return { client: new WebClient(decryptToken(workspace.slackBotToken)!), channelId: slackConfig.channelId };
 }
 
 /** Post blocks to Slack, logging errors without throwing */
