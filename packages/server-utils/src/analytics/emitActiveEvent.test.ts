@@ -382,12 +382,12 @@ describe('emitProductEvent', () => {
       productId: 'widgets',
       event: 'report_generated',
       userId: 'user-1',
-      metadata: { status: 'ok' },
+      metadata: { method: 'google' },
     });
 
     expect(mockFetch).toHaveBeenCalledOnce();
     expect(headerKey()).toBe(WIDGETS_KEY);
-    expect(sent()).toMatchObject({ productId: 'widgets', event: 'report_generated', metadata: { status: 'ok' } });
+    expect(sent()).toMatchObject({ productId: 'widgets', event: 'report_generated', metadata: { method: 'google' } });
   });
 
   it('pseudonymizes the user id with the shared salt, so one person is one user across products', async () => {
@@ -413,10 +413,40 @@ describe('emitProductEvent', () => {
       event: 'active',
       userId: 'u',
       userType: 'free',
-      metadata: { runs: 2 },
+      metadata: { method: 'otc' },
     });
 
-    expect(sent().metadata).toEqual({ runs: 2, userType: 'free' });
+    expect(sent().metadata).toEqual({ method: 'otc', userType: 'free' });
+  });
+
+  it('sends only approved metadata fields, never an email or arbitrary text', async () => {
+    resetConfig();
+    await emitProductEvent({
+      productId: 'widgets',
+      event: 'signup',
+      metadata: { method: 'google', lane: 'synthetic', email: 'someone@example.com', name: 'Someone', ip: '192.0.2.1' },
+    });
+
+    expect(sent().metadata).toEqual({ method: 'google', lane: 'synthetic' });
+    expect(JSON.stringify(sent())).not.toContain('someone@example.com');
+  });
+
+  it('does not emit metadata when an approved field contains free text', async () => {
+    resetConfig();
+    await emitProductEvent({
+      productId: 'widgets',
+      event: 'signup',
+      metadata: { method: 'someone@example.com', lane: 'synthetic' },
+    });
+
+    expect(sent().metadata).toEqual({ lane: 'synthetic' });
+  });
+
+  it.each(['facebook', 'okta', 'saml', 'link'])('keeps the existing %s signup method', async method => {
+    resetConfig();
+    await emitProductEvent({ productId: 'widgets', event: 'signup', metadata: { method } });
+
+    expect(sent().metadata).toEqual({ method });
   });
 
   it('is a no-op for a product with no key, and for a malformed key map', async () => {
