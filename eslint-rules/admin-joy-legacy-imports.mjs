@@ -73,7 +73,6 @@ export default {
   'RegistrationInvites/components/InviteTable.tsx': [[2, '2bd2942848ed1c85']],
   'ReleaseNotes/AdminReleaseNotesTab.tsx': [[2, '37f59f20a15291e4']],
   'ReleaseNotes/ReleaseNoteEditDialog.tsx': [[2, '6d20bb54ca3d32c4']],
-  'RetrievalRateTab.tsx': [[6, '130f229ebde1eb16']],
   'ScopedOverridesByScope.tsx': [[9, '3599e2aac9a178b8']],
   'SecopsTriageTab.tsx': [[10, '50bebb0fffebdd6d']],
   'SecretsRotationTab.tsx': [[2, '643a8ed5e319a1fa']],

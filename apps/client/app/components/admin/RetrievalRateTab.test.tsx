@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -68,8 +68,112 @@ const response = (over: Record<string, unknown> = {}) => ({
   },
 });
 
+const emptyWindow = () =>
+  response({
+    turnsScanned: 0,
+    summary: summary({
+      offeredTurns: 0,
+      retrievedTurns: 0,
+      rate: null,
+      forcedSuppressed: {
+        turns: 0,
+        retrievedTurns: 0,
+        rate: null,
+        byReason: { attached_files: 0, personal_corpus: 0, no_lake_scope: 0 },
+      },
+      forcedTurns: 0,
+      unclassifiedTurns: 0,
+    }),
+  });
+
 beforeEach(() => {
   mockGet.mockReset().mockResolvedValue(response());
+});
+
+describe('RetrievalRateTab page frame', () => {
+  it('opens with the Retrieval page header, then one toolbar row of filters, and no raw cards', async () => {
+    const { container } = renderTab();
+    await screen.findByText('25.0%');
+    const root = screen.getByTestId('admin-retrieval-rate-tab');
+    const header = screen.getByTestId('admin-page-header');
+
+    expect(root.firstElementChild).toBe(header);
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    expect(within(header).getByRole('heading', { level: 1 })).toHaveTextContent(/^Retrieval$/);
+    expect(within(header).getByTestId('retrieval-rate-refresh-btn')).toBeInTheDocument();
+
+    const filters = screen.getByTestId('retrieval-rate-filter-bar');
+    expect(root.children[1]).toBe(filters);
+    expect(within(filters).getByLabelText('Start date')).toHaveAttribute('type', 'date');
+    expect(within(filters).getByLabelText('End date')).toHaveAttribute('type', 'date');
+    expect(within(filters).getByLabelText('Answerable cutoff')).toHaveAttribute('type', 'number');
+    expect(container.querySelector('.MuiCard-root')).toBeNull();
+  });
+
+  it('puts each group of numbers in one stat strip of tiles', async () => {
+    renderTab();
+    await screen.findByText('25.0%');
+    const strips = screen.getAllByTestId('admin-stat-strip');
+    expect(strips.map(strip => strip.getAttribute('aria-label'))).toEqual([
+      'Retrieval rate',
+      'Answerability split',
+      'Guidance arms',
+      'Suppression reasons',
+    ]);
+    const tiles = within(strips[0])
+      .getAllByTestId('admin-stat-tile')
+      .map(tile => tile.textContent);
+    expect(tiles).toEqual([
+      'Optional-path retrieval rate25.0%10 of 40 offered turns',
+      'After a forced-retrieval skip50.0%4 of 8 suppressed turns',
+      'Forced turns12Forced retrieval enabled, nothing suppressed it',
+      'Unclassified7No mode recorded - pre-deploy turns, agent-mode runs, or a tool-only write',
+    ]);
+    // The grouped numbers are titled regions, not cards around a strip.
+    const answerability = screen.getByTestId('retrieval-rate-answerability');
+    expect(within(answerability).getByRole('heading', { level: 2 })).toHaveTextContent(
+      'Could the corpus have answered?'
+    );
+    expect(answerability.closest('.MuiSheet-variantOutlined')).toBeNull();
+  });
+
+  it('swaps a failed first load for an error state with a retry, and a failed refresh for a banner', async () => {
+    mockGet.mockRejectedValueOnce(new Error('boom'));
+    renderTab();
+    const failed = await screen.findByTestId('admin-error-state');
+    expect(failed).toHaveTextContent('Could not load the retrieval rate: boom');
+    expect(screen.queryByTestId('admin-stat-strip')).toBeNull();
+
+    fireEvent.click(within(failed).getByTestId('admin-error-retry-btn'));
+    expect(await screen.findByText('25.0%')).toBeTruthy();
+    expect(screen.queryByTestId('retrieval-rate-error')).toBeNull();
+
+    mockGet.mockRejectedValueOnce(new Error('refresh failed'));
+    fireEvent.click(screen.getByTestId('retrieval-rate-refresh-btn'));
+    const banner = await screen.findByTestId('retrieval-rate-error');
+    expect(banner).toHaveClass('MuiAlert-colorDanger');
+    expect(banner).toHaveTextContent('refresh failed');
+    expect(screen.queryByTestId('admin-error-state')).toBeNull();
+    expect(screen.getByText('25.0%')).toBeTruthy();
+  });
+
+  it('shows an empty state for a window with no turns, with a way to clear applied dates', async () => {
+    mockGet.mockResolvedValue(emptyWindow());
+    renderTab();
+    const empty = await screen.findByTestId('admin-empty-state');
+    expect(empty).toHaveTextContent('No turns in this window');
+    expect(screen.queryByTestId('retrieval-rate-clear-dates-btn')).toBeNull();
+    expect(screen.queryByTestId('admin-stat-strip')).toBeNull();
+
+    const startInput = screen.getByLabelText('Start date');
+    fireEvent.change(startInput, { target: { value: '2026-08-01' } });
+    fireEvent.click(screen.getByTestId('retrieval-rate-apply-btn'));
+    await waitFor(() => expect(mockGet).toHaveBeenLastCalledWith('/api/admin/retrieval-rate?startDate=2026-08-01'));
+
+    fireEvent.click(await screen.findByTestId('retrieval-rate-clear-dates-btn'));
+    await waitFor(() => expect(screen.queryByTestId('retrieval-rate-clear-dates-btn')).toBeNull());
+    expect(startInput).toHaveValue('');
+  });
 });
 
 describe('RetrievalRateTab', () => {

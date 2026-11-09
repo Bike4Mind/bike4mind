@@ -72,7 +72,6 @@ const componentsByFile = {
   'RegistrationInvites/components/InviteTable.tsx': ['Card'],
   'ReleaseNotes/AdminReleaseNotesTab.tsx': ['Card'],
   'ReleaseNotes/ReleaseNoteEditDialog.tsx': ['Modal'],
-  'RetrievalRateTab.tsx': ['Card'],
   'ScopedOverridesByScope.tsx': ['Card'],
   'SecopsTriageTab.tsx': ['Card'],
   'SecretsRotationTab.tsx': ['Table', 'Modal'],
