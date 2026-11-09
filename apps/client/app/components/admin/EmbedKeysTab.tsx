@@ -14,28 +14,27 @@ import {
   Button,
   Chip,
   ChipDelete,
-  CircularProgress,
+  DialogContent,
+  Dropdown,
   FormControl,
   FormLabel,
   IconButton,
   Input,
-  Modal,
-  ModalDialog,
+  ListDivider,
+  Menu,
+  MenuButton,
+  MenuItem,
   Option,
   Select,
   Stack,
   Switch,
-  Table,
   Tooltip,
   Typography,
 } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
-import BlockIcon from '@mui/icons-material/Block';
 import CopyIcon from '@mui/icons-material/ContentCopy';
-import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
+import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import RotateLeftIcon from '@mui/icons-material/RotateLeft';
-import SettingsIcon from '@mui/icons-material/Settings';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import WarningIcon from '@mui/icons-material/Warning';
@@ -61,16 +60,34 @@ import { useGetAgents } from '@client/app/hooks/data/agents';
 import { useGetOrganization, useSearchOrganizations } from '@client/app/hooks/data/organizations';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
-import { tableHeaderSx } from '@client/app/components/ProfileModal/settingsStyles';
 import { isRevoked, revocationTooltip } from '@client/app/utils/apiKeyRevocation';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
+import { AdminDialog, AdminPageHeader, DataTable, EmptyState, StatusChip, type DataColumn } from './shared';
+import { ADMIN_REGION_GAP, adminFocus } from './shared/adminStyles';
 
 dayjs.extend(relativeTime);
 
 const isEmbedKey = (key: IUserApiKeyDocument) => key.scopes.includes(ApiKeyScope.EMBED_CHAT);
+
+const maskedPrefix = (prefix: string) => `${prefix}\u2022\u2022\u2022`;
+
+/** The button row under a dialog's content, the commit button last. */
+function DialogFooter({ children }: { children: ReactNode }) {
+  return (
+    <Stack
+      direction="row"
+      justifyContent="flex-end"
+      flexWrap="wrap"
+      gap={1}
+      sx={{ pt: 2, mt: 1, borderTop: '1px solid', borderColor: 'admin.border' }}
+    >
+      {children}
+    </Stack>
+  );
+}
 
 /**
  * Controlled origin allow-list editor for an embed key. Unlike
@@ -475,45 +492,47 @@ function NewEmbedKeyModal({
     });
 
   return (
-    <Modal open={open} onClose={handleClose}>
-      <ModalDialog size="lg" sx={{ width: '600px', maxWidth: '95vw', maxHeight: '90vh', overflow: 'auto' }}>
-        <Typography level="h4">Create Embed Key</Typography>
-        <Typography level="body-sm" sx={{ color: 'text.tertiary', mt: 0.5, mb: 2 }}>
+    <AdminDialog
+      open={open}
+      onClose={handleClose}
+      title="Create embed key"
+      width={600}
+      data-testid="embed-key-create-dialog"
+    >
+      <DialogContent sx={{ gap: 2.5 }}>
+        <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
           A scoped, revocable credential that lets external sites chat with one bound agent.
         </Typography>
 
-        <Stack spacing={2.5}>
-          <FormControl required>
-            <FormLabel>Name</FormLabel>
-            <Input
-              autoFocus
-              placeholder="e.g., Acme marketing site"
-              value={name}
-              onChange={e => setName(e.target.value)}
-              data-testid="embed-key-name-input"
-            />
-          </FormControl>
+        <FormControl required>
+          <FormLabel>Name</FormLabel>
+          <Input
+            autoFocus
+            placeholder="e.g., Acme marketing site"
+            value={name}
+            onChange={e => setName(e.target.value)}
+            data-testid="embed-key-name-input"
+          />
+        </FormControl>
 
-          <EmbedKeyOrganizationField value={organizationId} onChange={setOrganizationId} />
+        <EmbedKeyOrganizationField value={organizationId} onChange={setOrganizationId} />
 
-          <EmbedKeyFormFields form={form} onChange={setForm} ownerHasWhitelabel={ownerHasWhitelabel} />
-
-          <Stack direction="row" spacing={2} justifyContent="flex-end">
-            <Button variant="outlined" onClick={handleClose}>
-              Cancel
-            </Button>
-            <Button
-              onClick={handleSubmit}
-              loading={createMutation.isPending}
-              disabled={!name.trim() || !form.agentId || !organizationId}
-              data-testid="embed-key-create-btn"
-            >
-              Create Embed Key
-            </Button>
-          </Stack>
-        </Stack>
-      </ModalDialog>
-    </Modal>
+        <EmbedKeyFormFields form={form} onChange={setForm} ownerHasWhitelabel={ownerHasWhitelabel} />
+      </DialogContent>
+      <DialogFooter>
+        <Button variant="plain" color="neutral" onClick={handleClose} data-testid="embed-key-create-cancel-btn">
+          Cancel
+        </Button>
+        <Button
+          onClick={handleSubmit}
+          loading={createMutation.isPending}
+          disabled={!name.trim() || !form.agentId || !organizationId}
+          data-testid="embed-key-create-btn"
+        >
+          Create embed key
+        </Button>
+      </DialogFooter>
+    </AdminDialog>
   );
 }
 
@@ -558,36 +577,32 @@ function ConfigureEmbedKeyModal({ embedKey, onClose }: { embedKey: IUserApiKeyDo
   };
 
   return (
-    <Modal open onClose={onClose}>
-      <ModalDialog size="lg" sx={{ width: '600px', maxWidth: '95vw', maxHeight: '90vh', overflow: 'auto' }}>
-        <Typography level="h4">Configure Embed Key</Typography>
-        <Typography level="body-sm" sx={{ color: 'text.tertiary', mt: 0.5, mb: 2 }}>
-          {embedKey.name} · <code>{embedKey.keyPrefix}•••</code>
+    <AdminDialog onClose={onClose} title="Configure embed key" width={600} data-testid="embed-key-configure-dialog">
+      <DialogContent sx={{ gap: 2.5 }}>
+        <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }} data-testid="embed-key-configure-subject">
+          {embedKey.name}
+          {' \u00b7 '}
+          <Typography component="code" sx={{ fontFamily: 'code' }}>
+            {maskedPrefix(embedKey.keyPrefix)}
+          </Typography>
         </Typography>
 
-        <Stack spacing={2.5}>
-          <EmbedKeyFormFields
-            form={form}
-            onChange={setForm}
-            ownerHasWhitelabel={embedKey.ownerHasWhitelabel ?? false}
-          />
-
-          <Stack direction="row" spacing={2} justifyContent="flex-end">
-            <Button variant="outlined" onClick={onClose}>
-              Cancel
-            </Button>
-            <Button
-              onClick={handleSubmit}
-              loading={updateMutation.isPending}
-              disabled={!form.agentId}
-              data-testid="embed-key-save-btn"
-            >
-              Save Changes
-            </Button>
-          </Stack>
-        </Stack>
-      </ModalDialog>
-    </Modal>
+        <EmbedKeyFormFields form={form} onChange={setForm} ownerHasWhitelabel={embedKey.ownerHasWhitelabel ?? false} />
+      </DialogContent>
+      <DialogFooter>
+        <Button variant="plain" color="neutral" onClick={onClose} data-testid="embed-key-configure-cancel-btn">
+          Cancel
+        </Button>
+        <Button
+          onClick={handleSubmit}
+          loading={updateMutation.isPending}
+          disabled={!form.agentId}
+          data-testid="embed-key-save-btn"
+        >
+          Save changes
+        </Button>
+      </DialogFooter>
+    </AdminDialog>
   );
 }
 
@@ -596,37 +611,45 @@ function EmbedKeyCreatedModal({ apiKey, onClose }: { apiKey: string; onClose: ()
   const [showKey, setShowKey] = useState(false);
 
   return (
-    <Modal open onClose={onClose}>
-      <ModalDialog size="lg" sx={{ width: '600px', maxWidth: '95vw' }}>
-        <Typography level="h4">Embed Key Created</Typography>
-        <Alert color="warning" startDecorator={<WarningIcon />} sx={{ my: 1.5 }}>
-          <Typography level="body-sm">
-            This is the only time the full key is shown. Copy it now and store it securely.
-          </Typography>
+    <AdminDialog onClose={onClose} title="Embed key created" width={600} data-testid="embed-key-created-dialog">
+      <DialogContent sx={{ gap: 2 }}>
+        <Alert color="warning" data-testid="embed-key-created-warning">
+          This is the only time the full key is shown. Copy it now and store it securely.
         </Alert>
         <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
           <Input
-            value={showKey ? apiKey : apiKey.replace(/./g, '•')}
+            value={showKey ? apiKey : apiKey.replace(/./g, '\u2022')}
             readOnly
-            sx={{ flex: 1, fontFamily: 'monospace', fontSize: '13px' }}
-            slotProps={{ input: { 'data-testid': 'embed-key-plaintext' } }}
+            sx={{ flex: 1, minWidth: 0, fontFamily: 'code', fontSize: '13px' }}
+            slotProps={{ input: { 'data-testid': 'embed-key-plaintext', 'aria-label': 'Embed key' } }}
           />
           <Tooltip title={showKey ? 'Hide key' : 'Show key'}>
-            <IconButton variant="outlined" onClick={() => setShowKey(v => !v)}>
+            <IconButton
+              variant="outlined"
+              aria-label={showKey ? 'Hide key' : 'Show key'}
+              onClick={() => setShowKey(v => !v)}
+            >
               {showKey ? <VisibilityOffIcon /> : <VisibilityIcon />}
             </IconButton>
           </Tooltip>
           <Tooltip title={copied ? 'Copied!' : 'Copy key'}>
-            <IconButton variant="outlined" onClick={() => handleCopyToClipboard(apiKey)} data-testid="embed-key-copy">
+            <IconButton
+              variant="outlined"
+              aria-label="Copy key"
+              onClick={() => handleCopyToClipboard(apiKey)}
+              data-testid="embed-key-copy"
+            >
               <CopyIcon />
             </IconButton>
           </Tooltip>
         </Box>
-        <Stack direction="row" justifyContent="flex-end" mt={2}>
-          <Button onClick={onClose}>Done</Button>
-        </Stack>
-      </ModalDialog>
-    </Modal>
+      </DialogContent>
+      <DialogFooter>
+        <Button onClick={onClose} data-testid="embed-key-created-done-btn">
+          Done
+        </Button>
+      </DialogFooter>
+    </AdminDialog>
   );
 }
 
@@ -643,6 +666,7 @@ export default function EmbedKeysTab() {
   const [showNewKeyModal, setShowNewKeyModal] = useState(false);
   const [newlyCreatedKey, setNewlyCreatedKey] = useState('');
   const [configuringKey, setConfiguringKey] = useState<IUserApiKeyDocument | null>(null);
+  const [revokingKey, setRevokingKey] = useState<IUserApiKeyDocument | null>(null);
 
   const rotateMutation = useRotateUserApiKey({
     onSuccess: result => setNewlyCreatedKey(result.key),
@@ -653,185 +677,168 @@ export default function EmbedKeysTab() {
 
   const embedKeys = (data ?? []).filter(isEmbedKey);
 
-  return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-      <Box display="flex" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={1.5}>
-        <Box>
-          <Typography level="title-md" sx={{ color: 'text.primary' }}>
-            Embed Keys
+  const columns: DataColumn<IUserApiKeyDocument>[] = [
+    {
+      id: 'name',
+      label: 'Name',
+      render: key => (
+        <Typography level="title-sm" noWrap sx={{ color: 'admin.ink', maxWidth: '16rem' }}>
+          {key.name}
+        </Typography>
+      ),
+      sortValue: key => key.name,
+    },
+    {
+      id: 'agent',
+      label: 'Agent',
+      render: key => {
+        const boundAgent = key.agentId ? agentById.get(key.agentId) : undefined;
+        return (
+          <Stack direction="row" alignItems="center" gap={1}>
+            <Typography level="body-sm" noWrap sx={{ color: 'admin.ink', maxWidth: '12rem' }}>
+              {boundAgent?.name ?? key.agentId ?? 'Unbound'}
+            </Typography>
+            {isModellessAgent(boundAgent) && (
+              <Tooltip title={MODELLESS_AGENT_WARNING}>
+                <span>
+                  <StatusChip tone="warn" label="No model" data-testid={`embed-key-row-model-warning-${key.id}`} />
+                </span>
+              </Tooltip>
+            )}
+          </Stack>
+        );
+      },
+    },
+    {
+      id: 'keyPrefix',
+      label: 'Key prefix',
+      render: key => (
+        <Typography level="body-sm" noWrap sx={{ fontFamily: 'code', color: 'admin.inkMuted' }}>
+          {maskedPrefix(key.keyPrefix)}
+        </Typography>
+      ),
+    },
+    {
+      id: 'origins',
+      label: 'Allowed origins',
+      render: key =>
+        key.allowedOrigins?.length ? (
+          <Stack direction="row" gap={0.5}>
+            {key.allowedOrigins.slice(0, 2).map(origin => (
+              <StatusChip key={origin} tone="neutral" label={origin.replace(/^https:\/\//, '')} />
+            ))}
+            {key.allowedOrigins.length > 2 && <StatusChip tone="neutral" label={`+${key.allowedOrigins.length - 2}`} />}
+          </Stack>
+        ) : (
+          <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
+            None
           </Typography>
-          <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
-            Scoped credentials that let external sites embed a chat widget for one agent.
-          </Typography>
-        </Box>
-        <Box display="flex" gap={1} flexShrink={0}>
-          <Tooltip title="Refresh">
-            <IconButton onClick={() => refetch()} variant="outlined">
-              <RefreshIcon />
-            </IconButton>
-          </Tooltip>
-          <Button
-            startDecorator={<AddIcon />}
-            onClick={() => setShowNewKeyModal(true)}
-            variant="solid"
-            data-testid="embed-key-new-btn"
-          >
-            Create Embed Key
-          </Button>
-        </Box>
-      </Box>
+        ),
+    },
+    {
+      id: 'status',
+      label: 'Status',
+      render: key => (
+        <Tooltip title={revocationTooltip(key) ?? ''}>
+          <span>
+            <StatusChip
+              tone={isRevoked(key) ? 'neutral' : 'good'}
+              label={isRevoked(key) ? 'Revoked' : 'Active'}
+              data-testid={`embed-key-status-${key.id}`}
+            />
+          </span>
+        </Tooltip>
+      ),
+      sortValue: key => (isRevoked(key) ? 1 : 0),
+    },
+    {
+      id: 'created',
+      label: 'Created',
+      render: key => (
+        <Typography level="body-sm" noWrap>
+          {dayjs(key.createdAt).format('MMM D, YYYY')}
+        </Typography>
+      ),
+      sortValue: key => dayjs(key.createdAt).valueOf(),
+    },
+    {
+      id: 'lastUsed',
+      label: 'Last used',
+      render: key => (
+        <Typography level="body-sm" noWrap sx={{ color: 'admin.inkMuted' }}>
+          {key.lastUsedAt ? dayjs(key.lastUsedAt).fromNow() : 'Never'}
+        </Typography>
+      ),
+    },
+  ];
 
-      {isLoading ? (
-        <Box display="flex" justifyContent="center" alignItems="center" minHeight="200px">
-          <CircularProgress />
-        </Box>
-      ) : error ? (
-        <Box p={2}>
-          <Typography color="danger">Error loading embed keys</Typography>
-          <Button onClick={() => refetch()} variant="soft" sx={{ mt: 2 }}>
-            Retry
-          </Button>
-        </Box>
-      ) : embedKeys.length === 0 ? (
-        <Alert color="neutral" startDecorator={<InfoOutlinedIcon />}>
-          <Typography>No embed keys yet. Create one to let an external site chat with one of your agents.</Typography>
-        </Alert>
-      ) : (
-        <Box sx={{ overflowX: 'auto' }}>
-          <Table
-            stickyHeader
-            hoverRow
-            sx={{
-              minWidth: 860,
-              tableLayout: 'auto',
-              '& th, & td': { whiteSpace: 'nowrap' },
-              '& thead th': tableHeaderSx,
-            }}
-          >
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Agent</th>
-                <th>Key Prefix</th>
-                <th>Allowed Origins</th>
-                <th>Status</th>
-                <th>Created</th>
-                <th>Last Used</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {embedKeys.map(key => {
-                const revoked = isRevoked(key);
-                const boundAgent = key.agentId ? agentById.get(key.agentId) : undefined;
-                return (
-                  <tr key={key.id} data-testid={`embed-key-row-${key.id}`}>
-                    <td>
-                      <Typography fontWeight="lg">{key.name}</Typography>
-                    </td>
-                    <td>
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                        <Chip size="sm" variant="soft" color="primary">
-                          {boundAgent?.name ?? key.agentId ?? 'Unbound'}
-                        </Chip>
-                        {isModellessAgent(boundAgent) && (
-                          <Tooltip title={MODELLESS_AGENT_WARNING}>
-                            <WarningIcon
-                              color="warning"
-                              fontSize="small"
-                              aria-label={MODELLESS_AGENT_WARNING}
-                              data-testid={`embed-key-row-model-warning-${key.id}`}
-                            />
-                          </Tooltip>
-                        )}
-                      </Box>
-                    </td>
-                    <td>
-                      <Typography fontFamily="monospace" fontSize="sm">
-                        {key.keyPrefix}•••
-                      </Typography>
-                    </td>
-                    <td>
-                      {key.allowedOrigins?.length ? (
-                        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-                          {key.allowedOrigins.slice(0, 2).map(origin => (
-                            <Chip key={origin} size="sm" variant="soft">
-                              {origin.replace(/^https:\/\//, '')}
-                            </Chip>
-                          ))}
-                          {key.allowedOrigins.length > 2 && (
-                            <Chip size="sm" variant="soft" color="neutral">
-                              +{key.allowedOrigins.length - 2}
-                            </Chip>
-                          )}
-                        </Box>
-                      ) : (
-                        <Typography level="body-xs" color="neutral">
-                          None
-                        </Typography>
-                      )}
-                    </td>
-                    <td>
-                      <Tooltip title={revocationTooltip(key) ?? ''} data-testid={`embed-key-status-${key.id}`}>
-                        <Chip variant="soft" color={revoked ? 'danger' : 'success'}>
-                          {revoked ? 'Revoked' : 'Active'}
-                        </Chip>
-                      </Tooltip>
-                    </td>
-                    <td>
-                      <Typography level="body-xs">{dayjs(key.createdAt).format('MMM D, YYYY')}</Typography>
-                    </td>
-                    <td>
-                      <Typography level="body-xs" color="neutral">
-                        {key.lastUsedAt ? dayjs(key.lastUsedAt).fromNow() : 'Never'}
-                      </Typography>
-                    </td>
-                    <td>
-                      <Box display="flex" gap={1}>
-                        <Tooltip title="Configure">
-                          <IconButton
-                            size="sm"
-                            variant="outlined"
-                            onClick={() => setConfiguringKey(key)}
-                            disabled={revoked}
-                            data-testid={`embed-key-configure-${key.id}`}
-                          >
-                            <SettingsIcon />
-                          </IconButton>
-                        </Tooltip>
-                        <Tooltip title="Rotate key">
-                          <IconButton
-                            size="sm"
-                            variant="outlined"
-                            onClick={() => rotateMutation.mutate(key.id)}
-                            loading={rotateMutation.isPending}
-                            disabled={revoked}
-                          >
-                            <RotateLeftIcon />
-                          </IconButton>
-                        </Tooltip>
-                        <Tooltip title="Revoke key">
-                          <IconButton
-                            size="sm"
-                            variant="outlined"
-                            color="danger"
-                            onClick={() => revokeMutation.mutate({ keyId: key.id, reason: 'Revoked by admin' })}
-                            loading={revokeMutation.isPending}
-                            disabled={revoked}
-                            data-testid={`embed-key-revoke-${key.id}`}
-                          >
-                            <BlockIcon />
-                          </IconButton>
-                        </Tooltip>
-                      </Box>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </Table>
-        </Box>
-      )}
+  return (
+    <Stack gap={ADMIN_REGION_GAP} sx={{ minWidth: 0 }} data-testid="embed-keys-tab">
+      <AdminPageHeader
+        title="Embed keys"
+        description="Scoped credentials that let external sites embed a chat widget for one agent."
+        actions={
+          <>
+            <Button
+              size="sm"
+              variant="outlined"
+              startDecorator={<RefreshIcon />}
+              onClick={() => refetch()}
+              data-testid="embed-key-refresh-btn"
+            >
+              Refresh
+            </Button>
+            <Button
+              size="sm"
+              startDecorator={<AddIcon />}
+              onClick={() => setShowNewKeyModal(true)}
+              data-testid="embed-key-new-btn"
+            >
+              Create embed key
+            </Button>
+          </>
+        }
+      />
+
+      <DataTable
+        label="Embed keys"
+        rows={embedKeys}
+        columns={columns}
+        getRowId={key => key.id}
+        rowTestId={key => `embed-key-row-${key.id}`}
+        loading={isLoading}
+        error={error ? 'Could not load embed keys.' : undefined}
+        onRetry={() => void refetch()}
+        empty={
+          <EmptyState
+            title="No embed keys yet"
+            description="Create one to let an external site chat with one of your agents."
+            action={
+              <Button
+                size="sm"
+                variant="outlined"
+                startDecorator={<AddIcon />}
+                onClick={() => setShowNewKeyModal(true)}
+                data-testid="embed-key-empty-create-btn"
+              >
+                Create embed key
+              </Button>
+            }
+          />
+        }
+        rowActions={key => (
+          <EmbedKeyRowMenu
+            embedKey={key}
+            rotating={rotateMutation.isPending}
+            onConfigure={() => setConfiguringKey(key)}
+            onRotate={() => rotateMutation.mutate(key.id)}
+            onRevoke={() => setRevokingKey(key)}
+          />
+        )}
+        testId="embed-key-table"
+        // Wide enough that every column keeps one line; below it the table scrolls inside its frame.
+        minWidth="56rem"
+      />
 
       <NewEmbedKeyModal
         open={showNewKeyModal}
@@ -845,6 +852,94 @@ export default function EmbedKeysTab() {
         onClose={() => setConfiguringKey(null)}
       />
       {newlyCreatedKey && <EmbedKeyCreatedModal apiKey={newlyCreatedKey} onClose={() => setNewlyCreatedKey('')} />}
-    </Box>
+      <AdminDialog
+        open={revokingKey !== null}
+        // Esc, the X and the backdrop wait for an in-flight revoke, like the disabled Cancel.
+        onClose={() => {
+          if (!revokeMutation.isPending) setRevokingKey(null);
+        }}
+        title="Revoke embed key"
+        role="alertdialog"
+        data-testid="embed-key-revoke-dialog"
+      >
+        <DialogContent>
+          <Typography level="body-sm" component="div">
+            Sites using <strong>{revokingKey?.name}</strong> stop working right away. A revoked key cannot be restored.
+          </Typography>
+        </DialogContent>
+        <DialogFooter>
+          <Button
+            variant="plain"
+            color="neutral"
+            onClick={() => setRevokingKey(null)}
+            disabled={revokeMutation.isPending}
+            data-testid="embed-key-revoke-cancel-btn"
+          >
+            Cancel
+          </Button>
+          <Button
+            color="danger"
+            loading={revokeMutation.isPending}
+            onClick={() => {
+              if (!revokingKey) return;
+              revokeMutation.mutate(
+                { keyId: revokingKey.id, reason: 'Revoked by admin' },
+                { onSuccess: () => setRevokingKey(null) }
+              );
+            }}
+            data-testid="embed-key-revoke-confirm-btn"
+          >
+            Revoke key
+          </Button>
+        </DialogFooter>
+      </AdminDialog>
+    </Stack>
+  );
+}
+
+/** The row's "..." menu. A revoked key has nothing left to change, so its menu is disabled. */
+function EmbedKeyRowMenu({
+  embedKey,
+  rotating,
+  onConfigure,
+  onRotate,
+  onRevoke,
+}: {
+  embedKey: IUserApiKeyDocument;
+  rotating: boolean;
+  onConfigure: () => void;
+  onRotate: () => void;
+  onRevoke: () => void;
+}) {
+  return (
+    <Dropdown>
+      <MenuButton
+        slots={{ root: IconButton }}
+        slotProps={{
+          root: {
+            size: 'sm',
+            variant: 'plain',
+            'aria-label': `Actions for ${embedKey.name}`,
+            sx: { ...adminFocus, color: 'admin.inkMuted' },
+          },
+        }}
+        disabled={isRevoked(embedKey)}
+        data-testid={`embed-key-row-actions-${embedKey.id}`}
+      >
+        <MoreHorizIcon sx={{ fontSize: 18 }} />
+      </MenuButton>
+      <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
+        <MenuItem onClick={onConfigure} data-testid={`embed-key-configure-${embedKey.id}`}>
+          Configure
+        </MenuItem>
+        <MenuItem onClick={onRotate} disabled={rotating} data-testid={`embed-key-rotate-${embedKey.id}`}>
+          Rotate key
+        </MenuItem>
+        <ListDivider />
+        <MenuItem color="danger" onClick={onRevoke} data-testid={`embed-key-revoke-${embedKey.id}`}>
+          Revoke key
+        </MenuItem>
+      </Menu>
+    </Dropdown>
   );
 }

@@ -27,7 +27,6 @@ export default {
   'DocumentationTab/components/DocSection.tsx': [[2, '3a7dde35da9fc670']],
   'DocumentationTab/index.tsx': [[2, '21a4c9a0e4056fb7']],
   'EmailVerificationTab.tsx': [[2, 'def9b5c49c1ced23']],
-  'EmbedKeysTab.tsx': [[10, '5606976cb6f3ed67']],
   'EventMetrics/components/CurationBreakdownTab.tsx': [[2, 'e2ae0a0feb2b939a']],
   'EventMetrics/components/OverviewTab.tsx': [[2, 'e2ae0a0feb2b939a']],
   'EventMetrics/components/RawDataTab.tsx': [[2, '3cb357bfb4fea47c']],
