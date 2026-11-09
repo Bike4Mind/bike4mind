@@ -42,7 +42,6 @@ export default {
   'FilesTab/index.tsx': [[4, 'bb9b66251f6b8489']],
   'GitHubConnectionTab.tsx': [[8, '1fd7087d06a0ddbe']],
   'HelpAnalyticsTab/index.tsx': [[2, '10fc50c397d94954']],
-  'IdentityProvidersTab.tsx': [[2, '073759fd26afa7fa']],
   'IntegrationDemandTab.tsx': [[3, '33c84625c2e68e9d']],
   'IntegrationHealth/components/IntegrationDetailPanel.tsx': [[2, 'b7900285fffe06e6']],
   'LLMDashboardTab.tsx': [[2, '65861918e5079b93']],
