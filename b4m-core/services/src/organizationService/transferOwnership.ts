@@ -87,11 +87,11 @@ export async function transferOwnership(
   }
   const adminUserIds = (organization.adminUserIds ?? []).filter(id => String(id) !== newOwnerId);
 
+  const previousOwnerEmail = previousOwner?.email?.trim().toLowerCase();
+  const newOwnerEmail = newOwner.email?.trim().toLowerCase();
   const billingContactChanged =
-    !!previousOwner?.email &&
-    !!newOwner.email &&
-    organization.billingContact?.trim().toLowerCase() === previousOwner.email.trim().toLowerCase();
-  const billingContact = billingContactChanged ? newOwner.email! : (organization.billingContact ?? null);
+    !!previousOwnerEmail && !!newOwnerEmail && organization.billingContact?.trim().toLowerCase() === previousOwnerEmail;
+  const billingContact = billingContactChanged && newOwnerEmail ? newOwnerEmail : (organization.billingContact ?? null);
 
   await db.organizations.update({
     id: organization.id,
