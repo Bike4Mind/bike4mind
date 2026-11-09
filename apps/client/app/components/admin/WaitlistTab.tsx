@@ -20,7 +20,7 @@ import {
   MenuItem,
   IconButton,
 } from '@mui/joy';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { GRANT_PACKAGES_QUERY_KEY } from '@client/app/utils/grantPackageAPICalls';
 import PersonAddIcon from '@mui/icons-material/PersonAdd';
@@ -61,6 +61,7 @@ const useGetSubscribers = (params: { page?: number; limit?: number; search?: str
   return useQuery({
     queryKey: ['subscribers', params],
     queryFn: () => fetchSubscribers(params),
+    placeholderData: keepPreviousData,
   });
 };
 
@@ -253,6 +254,12 @@ const WaitlistSection = () => {
   const { value: search, debouncedValue: debouncedSearch, setValue: setSearch } = useDebounceValue('');
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(25);
+  // Back to page 1 when the debounced term changes, before the query keys on it.
+  const [pageSearch, setPageSearch] = useState(debouncedSearch);
+  if (pageSearch !== debouncedSearch) {
+    setPageSearch(debouncedSearch);
+    setCurrentPage(1);
+  }
   const [selectedSubscriber, setSelectedSubscriber] = useState<ISubscriberDocument | null>(null);
   const [inviteModalOpen, setInviteModalOpen] = useState(false);
 
@@ -267,7 +274,9 @@ const WaitlistSection = () => {
     if (window.confirm('Remove this person from the waitlist?')) {
       try {
         await deleteSubscriber(id);
-        subscribers.refetch();
+        // Removing a page's only row would otherwise land on an empty page.
+        if (currentPage > 1 && subscribers.data?.data.length === 1) setCurrentPage(currentPage - 1);
+        else subscribers.refetch();
       } catch (error) {
         console.error('Error deleting subscriber:', error);
       }
@@ -380,10 +389,7 @@ const WaitlistSection = () => {
         <Stack direction="row" flexWrap="wrap" alignItems="center" gap={1}>
           <AdminSearchInput
             value={search}
-            onChange={value => {
-              setSearch(value);
-              setCurrentPage(1);
-            }}
+            onChange={setSearch}
             label="Search the waitlist"
             data-testid="waitlist-search-input"
           />
@@ -424,7 +430,6 @@ const WaitlistSection = () => {
           />
         }
         rowActions={rowActions}
-        pageResetKey={debouncedSearch}
         minWidth="56rem"
         maxHeight="none"
         pagination={{

@@ -210,6 +210,7 @@ export const InviteTable: React.FC<InviteTableProps & { empty?: ReactNode; label
       columns={columns}
       getRowId={invite => invite.id}
       rowTestId={() => 'invite-code-card'}
+      // Never reached: rows are in memory and the load error is rendered by the page.
       onRetry={() => undefined}
       empty={empty}
       selection={{ mode: 'explicit', ids: selected }}

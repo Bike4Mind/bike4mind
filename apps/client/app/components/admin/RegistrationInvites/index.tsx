@@ -1,5 +1,5 @@
 import React, { useMemo, useEffect, useState } from 'react';
-import { Box, Button, CircularProgress, IconButton, Stack, Tooltip } from '@mui/joy';
+import { Button, CircularProgress, IconButton, Stack, Tooltip } from '@mui/joy';
 import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutline';
 import CircleIcon from '@mui/icons-material/Circle';
 import CloseFullscreenIcon from '@mui/icons-material/CloseFullscreen';
@@ -19,7 +19,9 @@ import {
 import { useRegistrationInvitesStore } from './store';
 import { RegInviteData, CreateInviteFormData } from './types';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
+import { BulkActionBar } from '../shared/BulkActionBar';
 import { EmptyState } from '../shared/EmptyState';
+import { ErrorState } from '../shared/ErrorState';
 import { LoadingState } from '../shared/LoadingState';
 import { ViewTabs } from '../shared/ViewTabs';
 import { ADMIN_REGION_GAP } from '../shared/adminStyles';
@@ -27,57 +29,20 @@ import { InviteTable } from './components/InviteTable';
 import { CreateInviteModal } from './components/CreateInviteModal';
 import { DeleteConfirmModal } from './components/DeleteConfirmModal';
 
+const BULK_STATUS_ACTIONS = [
+  { status: RegInviteStatusType.open, label: 'Set Multiple Open', icon: <CircleIcon /> },
+  { status: RegInviteStatusType.waiting, label: 'Set Multiple Waiting', icon: <HourglassBottomIcon /> },
+  { status: RegInviteStatusType.used, label: 'Set Multiple Used', icon: <CloseFullscreenIcon /> },
+];
+
 const ActionControls: React.FC<{
-  multiSelected: string[];
-  onUpdate: (ids: string[], status: RegInviteStatusType) => void;
-  operating: boolean;
-  onOpenDeleteWarning: () => void;
   onRefetch: () => void;
   isFetching: boolean;
   onOpenCreate: () => void;
-}> = ({ multiSelected, onUpdate, operating, onOpenDeleteWarning, onRefetch, isFetching, onOpenCreate }) => {
+}> = ({ onRefetch, isFetching, onOpenCreate }) => {
   const isMobile = useIsMobile();
   return (
     <Stack direction="row" spacing={1} alignItems="center">
-      {multiSelected.length > 0 && (
-        <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: '5px' }}>
-          <Tooltip color="primary" title="Set Multiple Open">
-            <IconButton
-              onClick={() => onUpdate(multiSelected, RegInviteStatusType.open)}
-              color="primary"
-              disabled={operating}
-              size="sm"
-            >
-              <CircleIcon />
-            </IconButton>
-          </Tooltip>
-          <Tooltip color="warning" title="Set Multiple Waiting">
-            <IconButton
-              onClick={() => onUpdate(multiSelected, RegInviteStatusType.waiting)}
-              color="warning"
-              disabled={operating}
-              size="sm"
-            >
-              <HourglassBottomIcon />
-            </IconButton>
-          </Tooltip>
-          <Tooltip color="success" title="Set Multiple Used">
-            <IconButton
-              onClick={() => onUpdate(multiSelected, RegInviteStatusType.used)}
-              color="success"
-              disabled={operating}
-              size="sm"
-            >
-              <CloseFullscreenIcon />
-            </IconButton>
-          </Tooltip>
-          <Tooltip color="danger" title="Delete Multiple">
-            <IconButton color="danger" size="sm" onClick={onOpenDeleteWarning}>
-              {operating ? <CircularProgress size="sm" /> : <DeleteForeverIcon />}
-            </IconButton>
-          </Tooltip>
-        </Box>
-      )}
       <ContextHelpButton helpId="admin/invite-codes" tooltipText="Invite Codes Help" />
       {isMobile ? (
         <>
@@ -97,8 +62,8 @@ const ActionControls: React.FC<{
             <IconButton
               data-testid="invite-create-btn"
               size="sm"
-              variant="solid"
-              color="success"
+              variant="outlined"
+              color="neutral"
               onClick={onOpenCreate}
             >
               <AddCircleOutlineIcon />
@@ -110,6 +75,8 @@ const ActionControls: React.FC<{
           <Button
             data-testid="invite-codes-refresh-btn"
             size="sm"
+            variant="outlined"
+            color="neutral"
             startDecorator={<RefreshIcon />}
             onClick={onRefetch}
             disabled={isFetching}
@@ -119,7 +86,8 @@ const ActionControls: React.FC<{
           </Button>
           <Button
             data-testid="invite-create-btn"
-            color="success"
+            variant="outlined"
+            color="neutral"
             size="sm"
             startDecorator={<AddCircleOutlineIcon />}
             onClick={onOpenCreate}
@@ -303,10 +271,6 @@ const RegistrationInvitesTab: React.FC = () => {
 
   const actionControls = (
     <ActionControls
-      multiSelected={multiSelected}
-      onUpdate={handleUpdate}
-      operating={operating}
-      onOpenDeleteWarning={() => setOpenDeleteWarning(true)}
       onRefetch={() => query.refetch()}
       isFetching={query.isFetching}
       onOpenCreate={() => setOpenCreate(true)}
@@ -318,6 +282,8 @@ const RegistrationInvitesTab: React.FC = () => {
     </Button>
   );
   const isAvailableTab = activeTab === 'available';
+  const tabInvites = isAvailableTab ? sortedInvites.unused : sortedInvites.used;
+  const setTabSelected = isAvailableTab ? setUnusedSelected : setUsedSelected;
   const tableProps = {
     copyToClipboard,
     handleUpdate,
@@ -331,7 +297,15 @@ const RegistrationInvitesTab: React.FC = () => {
     <Stack gap={ADMIN_REGION_GAP} sx={{ width: '100%' }}>
       {query.isLoading && <LoadingState label="Loading invites" />}
 
-      {!query.isLoading && !hasInvites && (
+      {!query.isLoading && query.isError && !query.data && (
+        <ErrorState
+          message="Could not load registration invites."
+          onRetry={() => void query.refetch()}
+          retrying={query.isFetching}
+        />
+      )}
+
+      {!query.isLoading && !query.isError && !hasInvites && (
         <>
           <Stack direction="row" justifyContent="flex-end">
             {actionControls}
@@ -365,13 +339,47 @@ const RegistrationInvitesTab: React.FC = () => {
             {actionControls}
           </Stack>
 
+          <BulkActionBar
+            selection={{ mode: 'explicit', ids: multiSelected }}
+            totalMatching={tabInvites.length}
+            onSelectAllMatching={() => setTabSelected(tabInvites.map(i => i.id))}
+            onClear={() => setTabSelected([])}
+          >
+            {BULK_STATUS_ACTIONS.map(({ status, label, icon }) => (
+              <Tooltip key={status} title={label}>
+                <IconButton
+                  aria-label={label}
+                  variant="outlined"
+                  color="neutral"
+                  size="sm"
+                  disabled={operating}
+                  onClick={() => handleUpdate(multiSelected, status)}
+                >
+                  {icon}
+                </IconButton>
+              </Tooltip>
+            ))}
+            <Tooltip title="Delete Multiple">
+              <IconButton
+                aria-label="Delete Multiple"
+                variant="outlined"
+                color="neutral"
+                size="sm"
+                data-testid="invite-bulk-delete-btn"
+                onClick={() => setOpenDeleteWarning(true)}
+              >
+                {operating ? <CircularProgress size="sm" /> : <DeleteForeverIcon />}
+              </IconButton>
+            </Tooltip>
+          </BulkActionBar>
+
           <InviteTable
             key={activeTab}
             {...tableProps}
             label={isAvailableTab ? 'Available registration invites' : 'Used registration invites'}
-            allInvites={isAvailableTab ? sortedInvites.unused : sortedInvites.used}
+            allInvites={tabInvites}
             selected={isAvailableTab ? unusedSelected : usedSelected}
-            setSelected={isAvailableTab ? setUnusedSelected : setUsedSelected}
+            setSelected={setTabSelected}
             sortDirection={isAvailableTab ? unusedSortDirection : usedSortDirection}
             toggleSortDirection={isAvailableTab ? toggleUnusedSortDirection : toggleUsedSortDirection}
             empty={
