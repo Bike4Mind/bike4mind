@@ -29,7 +29,6 @@ const componentsByFile = {
   'Feedback/FocusedFeedbackCard.tsx': ['Card'],
   'FilesTab/EditTagModal.tsx': ['Modal'],
   'FilesTab/index.tsx': ['Table'],
-  'GitHubConnectionTab.tsx': ['Card', 'Modal'],
   'IntegrationDemandTab.tsx': ['Table'],
   'IntegrationHealth/components/IntegrationDetailPanel.tsx': ['Card', 'Table'],
   'MigrateUsersTab.tsx': ['Card', 'Modal'],

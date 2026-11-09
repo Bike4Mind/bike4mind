@@ -97,6 +97,7 @@ describe('SIDEBAR_SECTIONS', () => {
     const labelOf = (tab: AdminTab) => allItems.find(i => i.tab === tab)?.label;
     expect(labelOf(AdminTab.WebhookAuditLogs)).toBe('Webhook audit logs');
     expect(labelOf(AdminTab.SlackWorkspaces)).toBe('Slack workspaces');
+    expect(labelOf(AdminTab.GitHubConnection)).toBe('GitHub connection');
   });
 
   });

@@ -30,7 +30,6 @@ export default {
   'Feedback/FocusedFeedbackCard.tsx': [[1, '5ba6a9b295238192']],
   'FilesTab/EditTagModal.tsx': [[3, 'e29b446aa5957de4']],
   'FilesTab/index.tsx': [[4, 'bb9b66251f6b8489']],
-  'GitHubConnectionTab.tsx': [[8, '1fd7087d06a0ddbe']],
   'IntegrationDemandTab.tsx': [[3, '33c84625c2e68e9d']],
   'IntegrationHealth/components/IntegrationDetailPanel.tsx': [[2, 'b7900285fffe06e6']],
   'MigrateUsersTab.tsx': [[4, '655b890fff77d8be']],
