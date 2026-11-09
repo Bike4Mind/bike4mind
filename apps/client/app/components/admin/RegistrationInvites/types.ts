@@ -16,9 +16,7 @@ export interface RegInviteData {
 }
 
 export interface InviteTableProps {
-  invites: RegInviteData[];
   allInvites: RegInviteData[];
-  borderColor: string;
   selected: string[];
   setSelected: (selected: string[] | ((prev: string[]) => string[])) => void;
   sortDirection: 'asc' | 'desc';
@@ -56,10 +54,6 @@ export interface RegistrationInvitesState {
   // Tab state
   activeTab: 'available' | 'used';
 
-  // Pagination state
-  currentPage: number;
-  itemsPerPage: number;
-
   // Selection states
   unusedSelected: string[];
   usedSelected: string[];
@@ -78,8 +72,6 @@ export interface RegistrationInvitesState {
   setCopied: (copied: boolean) => void;
   setOperating: (operating: boolean) => void;
   setActiveTab: (tab: 'available' | 'used') => void;
-  setCurrentPage: (page: number) => void;
-  setItemsPerPage: (items: number) => void;
   setUnusedSelected: (selected: string[] | ((prev: string[]) => string[])) => void;
   setUsedSelected: (selected: string[] | ((prev: string[]) => string[])) => void;
   setMultiSelected: (selected: string[]) => void;

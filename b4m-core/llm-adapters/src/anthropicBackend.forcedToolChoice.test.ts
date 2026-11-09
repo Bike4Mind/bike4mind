@@ -325,7 +325,7 @@ describe('AnthropicBackend json_schema on models without forced tool use', () =>
     expect(captured[0].thinking).toEqual({ type: 'adaptive' });
     expect(captured[0].output_config).toEqual({
       format: { type: 'json_schema', schema: SCHEMA },
-      effort: 'high',
+      effort: 'medium',
     });
   });
 

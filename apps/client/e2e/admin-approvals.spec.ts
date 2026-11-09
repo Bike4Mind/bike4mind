@@ -1,10 +1,9 @@
-import type { APIRequestContext, BrowserContext, Page } from '@playwright/test';
+import type { APIRequestContext, Page } from '@playwright/test';
 import { randomUUID } from 'crypto';
 import { Resource } from 'sst';
-import { test, expect } from './fixtures';
+import { test, expect, openPageAs } from './fixtures';
 import { TIMEOUTS } from './constants';
 import { apiCreateTestUser, apiCreateThrowawayUser, apiUpdateAdminSetting } from './helpers/api';
-import { seedAuthOnPage } from './helpers/auth-seed';
 import { getE2ETestId, getTestRunId, getTestUsers } from './helpers/test-users';
 import { AdminPage } from './pages/AdminPage';
 
@@ -89,18 +88,24 @@ test.describe('Admin approvals - a second admin decides bulk suspends', () => {
   let adminA: Admin;
   let adminB: Admin;
   let targets: string[];
-  // One context for B: its refresh token rotates on first use, and replaying it revokes the session.
-  let contextB: BrowserContext;
+  // B gets a page of its own via openPageAs: a fresh context would show the cookie consent bar
+  // over the account menu, so the fixture setup (consent pre-decided, gotos through /auth/success)
+  // is what makes the second admin's UI drivable.
   let pageB: Page;
+  let closeB: () => Promise<void>;
 
   test.beforeAll(async ({ request, browser }) => {
     const core = getTestUsers().admin;
     adminA = { ...core };
     const e2eId = getE2ETestId();
     const suffix = e2eId ? `${e2eId}-${getTestRunId()}` : getTestRunId();
+    // Retry and repeat indexes keep the identity unique: createUser rejects a duplicate username
+    // or email, which would otherwise kill every retry of this group in beforeAll.
+    const { retry, repeatEachIndex } = test.info();
+    const slug = `setup-approver${retry}r${repeatEachIndex}`;
     const created = await apiCreateTestUser(request, {
-      username: `setup-approver-${suffix}`,
-      email: `setup-approver-${suffix}-e2e@test.com`,
+      username: `${slug}-${suffix}`,
+      email: `${slug}-${suffix}-e2e@test.com`,
       name: `Setup approver ${suffix}`,
       password: PASSWORD,
       isAdmin: true,
@@ -121,13 +126,11 @@ test.describe('Admin approvals - a second admin decides bulk suspends', () => {
     await stepUp(request, adminA);
     await stepUp(request, adminB);
 
-    contextB = await browser.newContext({ baseURL, storageState: { cookies: [], origins: [] } });
-    pageB = await contextB.newPage();
-    await seedAuthOnPage(pageB, adminB);
+    ({ page: pageB, close: closeB } = await openPageAs(browser, baseURL, adminB));
   });
 
   test.afterAll(async ({ request }) => {
-    await contextB?.close();
+    await closeB?.();
     await apiUpdateAdminSetting(request, adminA.accessToken, 'AdminApprovalsEnabled', false);
     await apiUpdateAdminSetting(request, adminA.accessToken, 'AdminApprovalBulkUserThreshold', 25);
   });

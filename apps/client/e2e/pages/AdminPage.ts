@@ -308,14 +308,14 @@ export class AdminPage extends BasePage {
   async getAvailableCount(): Promise<number> {
     const tab = this.page.getByTestId('invite-available-tab');
     const text = await tab.innerText();
-    return parseInt(text.match(/\d+/)?.[0] || '0');
+    return parseInt(text.replace(/,/g, '').match(/\d+/)?.[0] || '0');
   }
 
   /** Parse the count from the "Used (N)" tab text */
   async getUsedCount(): Promise<number> {
     const tab = this.page.getByTestId('invite-used-tab');
     const text = await tab.innerText();
-    return parseInt(text.match(/\d+/)?.[0] || '0');
+    return parseInt(text.replace(/,/g, '').match(/\d+/)?.[0] || '0');
   }
 
   /** Poll until Available count equals the expected value */
@@ -325,7 +325,7 @@ export class AdminPage extends BasePage {
       .poll(
         async () => {
           const text = await tab.innerText();
-          return parseInt(text.match(/\d+/)?.[0] || '0');
+          return parseInt(text.replace(/,/g, '').match(/\d+/)?.[0] || '0');
         },
         { timeout: TIMEOUTS.ACTION, message: `Expected Available count to be ${expected}` }
       )
@@ -339,7 +339,7 @@ export class AdminPage extends BasePage {
       .poll(
         async () => {
           const text = await tab.innerText();
-          return parseInt(text.match(/\d+/)?.[0] || '0');
+          return parseInt(text.replace(/,/g, '').match(/\d+/)?.[0] || '0');
         },
         { timeout: TIMEOUTS.ACTION, message: `Expected Used count to be ${expected}` }
       )

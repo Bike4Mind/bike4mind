@@ -324,7 +324,7 @@ export const SignupRiskReviewTab: React.FC = () => {
   return (
     <Stack
       spacing={2}
-      sx={{ bgcolor: 'admin.canvas', color: 'admin.ink', p: 2, borderRadius: 'md' }}
+      sx={{ bgcolor: 'admin.canvas', color: 'admin.ink', borderRadius: 'md' }}
       data-testid="admin-signup-risk-review-tab"
     >
       <AdminPageHeader

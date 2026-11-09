@@ -61,13 +61,10 @@ describe('useFeedbackFilters', () => {
   });
 
   /**
-   * Load-bearing: with no status checked the key is OMITTED, and an absent `status` is the
-   * server's "any status". So this state cannot be sent as a query - it would invert the UI's
-   * "nothing checked means nothing shown" into "show everything". useFeedbackOperations is what
-   * holds that line, by disabling the list query while `status` is empty; this test pins the
-   * fact that gate exists to cover.
+   * Load-bearing: an absent `status` is the server's "any status", so an empty status set must never
+   * reach the query as one. It has no URL form, so it reads back as the default instead.
    */
-  it('omits status entirely when nothing is checked', () => {
+  it('queries the default New status when nothing is checked, rather than omitting status', () => {
     const { result } = setup();
 
     act(() => {
@@ -78,7 +75,15 @@ describe('useFeedbackFilters', () => {
       });
     });
 
-    expect(result.current.filterParams).not.toHaveProperty('status');
+    expect(result.current.filterParams.status).toEqual([FeedbackStatus.New]);
+  });
+
+  it('reads an old feedbackStatus=none link as the default New status', () => {
+    act(() => fakeAdminRouter.reset({ tab: 'feedback', feedbackStatus: 'none' }));
+    const { result } = setup();
+
+    expect(fakeAdminRouter.search).not.toHaveProperty('feedbackStatus');
+    expect(result.current.filterParams.status).toEqual([FeedbackStatus.New]);
   });
 
   /**

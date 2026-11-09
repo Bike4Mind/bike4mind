@@ -129,4 +129,15 @@ describe('GET /api/admin/users/[userId]/timeline', () => {
     const body = res._getJSONData() as { nextCursor: string };
     expect(decodeAuditCursor(body.nextCursor)).toEqual(next);
   });
+
+  it('validates and forwards the API-key filter without changing the target user', async () => {
+    await expect(call({ types: 'api_request', apiKeyId: 'bad' }).promise).rejects.toMatchObject({ statusCode: 400 });
+    expect(mocks.listUserTimeline).not.toHaveBeenCalled();
+    const apiKeyId = 'd'.repeat(24);
+    await call({ types: 'api_request', apiKeyId: apiKeyId.toUpperCase() }).promise;
+    expect(mocks.listUserTimeline).toHaveBeenCalledWith(
+      expect.objectContaining({ id: USER_ID }),
+      expect.objectContaining({ types: ['api_request'], apiKeyId })
+    );
+  });
 });

@@ -60,7 +60,7 @@ const ContainSchema = new Schema<StripeDisputeContain & { snapshot: unknown }>(
   { _id: false, minimize: false }
 );
 
-export const StripeDisputeSchema = new Schema<IStripeDisputeDocument>(
+export const StripeDisputeSchema: Schema<IStripeDisputeDocument> = new Schema<IStripeDisputeDocument>(
   {
     stripeDisputeId: { type: String, required: true, unique: true },
     chargeId: { type: String, default: null },

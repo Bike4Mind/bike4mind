@@ -119,7 +119,8 @@ export const createInvite = async (
       // the FabFile arm above. A caller with no share access gets the same generic "Document not
       // found" as a nonexistent project, since findShareAccessById returns null for both.
       doc = await db.projects.shareable.findShareAccessById(user, id);
-      name = doc?.name;
+      if (!doc) throw new NotFoundError('Project not found');
+      name = doc.name;
       break;
     default:
       break;

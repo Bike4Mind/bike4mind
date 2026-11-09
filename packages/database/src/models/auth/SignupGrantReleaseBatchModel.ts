@@ -33,7 +33,7 @@ const batchSchema = new Schema<SignupGrantReleaseBatch>(
 
 batchSchema.index({ createdAt: -1 });
 
-export const SignupGrantReleaseBatchModel =
+export const SignupGrantReleaseBatchModel: mongoose.Model<SignupGrantReleaseBatch> =
   (mongoose.models.SignupGrantReleaseBatch as mongoose.Model<SignupGrantReleaseBatch>) ??
   mongoose.model('SignupGrantReleaseBatch', batchSchema);
 

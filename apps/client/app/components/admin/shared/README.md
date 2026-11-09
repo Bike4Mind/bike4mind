@@ -67,7 +67,10 @@ facts; use separate settings components for forms.
 `SectionCard`. `SaveBar` is sticky and accepts a dirty count, save/discard callbacks,
 pending state and validation/error text. It owns Cmd+S and Ctrl+S and removes its
 listener when unmounted. `UnsavedChangesGuard` protects router navigation and page
-unload; its caller defines which route changes leave the form.
+unload; its caller defines which route changes leave the form. An admin settings tab
+passes `leavesAdminSettingsPage` from `adminTabSwitches.ts` and calls
+`useRouteAdminTabSwitches(dirty)`, which sends sidebar tab switches through the
+router so the guard can block them.
 
 Admin Settings uses `SettingsDraftProvider` to retain drafts while filtering or
 switching sections. It saves through each editor's existing mutation, removes only

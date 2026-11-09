@@ -59,6 +59,7 @@ Turbo gives cached, topologically-ordered builds; the `pnpm` commands still work
 
 - **Avoid `any`.** Use it only as a last resort and **document why** in a comment.
 - Prefer `unknown` (forces narrowing), generics (`<T extends …>`), union types, or `Record<string, unknown>` over `any`.
+- `no-explicit-any` is an error; legacy uses are baselined per file in `eslint-suppressions.json`. After removing one, run `pnpm lint --prune-suppressions`.
 - ✅ `const data: unknown = await fetch(); if (typeof data === 'object') { … }`
 - ⚠️ `const legacy: any = …; // any: third-party lib ships no types`
 

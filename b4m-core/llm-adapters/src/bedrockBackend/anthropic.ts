@@ -1130,6 +1130,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
           ? Math.min(Math.floor(maxTokens * 0.25), 4096)
           : (options.thinking?.budget_tokens ?? 16000);
         const effort = resolveAnthropicEffort({
+          model,
           questMaster: isQuestMaster,
           anthropicEffort: options.anthropicEffort,
           reasoningEffort: options.reasoningEffort,

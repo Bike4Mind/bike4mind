@@ -47,7 +47,7 @@ const handler = nextRouteForContract(generateImageContract).post(async (req, res
     promptResolution: body.prompt_resolution ?? 'auto',
   });
 
-  assertReferenceImagesSupported(body.model, body.referenceImageFabFileIds, 'generate');
+  assertReferenceImagesSupported(body.model, body.referenceImageFabFileIds, 'generate', body.fabFileIds);
 
   // Loud rejection before any session or billing work: the schemas strip unknown keys, so a
   // billing-org-shaped stray would otherwise vanish and bill the caller's home org.

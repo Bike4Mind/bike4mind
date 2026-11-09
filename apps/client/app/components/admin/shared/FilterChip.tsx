@@ -78,6 +78,8 @@ export function FilterChip(
           {options.map(option => (
             <MenuItem
               key={option.value}
+              role={choice.multiple ? 'menuitemcheckbox' : 'menuitemradio'}
+              aria-checked={values.includes(option.value)}
               selected={values.includes(option.value)}
               data-testid={`admin-filter-${id}-${option.value}`}
               onClick={() => pick(option.value)}

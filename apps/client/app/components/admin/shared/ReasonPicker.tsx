@@ -71,7 +71,13 @@ export const ReasonPicker: React.FC<ReasonPickerProps> = ({
         minRows={2}
         maxRows={4}
         autoFocus={autoFocus}
-        placeholder={value.preset ? 'Add a note (optional)' : 'Why are you doing this? Recorded in the audit log.'}
+        placeholder={
+          value.preset
+            ? 'Add a note (optional)'
+            : audited
+              ? 'Why are you doing this? Recorded in the audit log.'
+              : 'Why are you doing this?'
+        }
         value={value.note}
         onChange={event => onChange({ ...value, note: event.target.value })}
         slotProps={{

@@ -22,6 +22,15 @@ const MODELS_PER_ACCOUNT = 3;
 const RESULT_ROW_LIMIT = 500;
 /** Well inside the relay's 60-second timeout; a typical hour of lines answers in a few seconds. */
 const QUERY_DEADLINE_MS = 25_000;
+/**
+ * The metric filter can count a line that Logs Insights does not return yet, so a call settled seconds
+ * before the state change may be missing from the first read. One re-read after this pause catches up.
+ */
+const CATCH_UP_DELAY_MS = 10_000;
+/** The re-read only starts when it can finish inside this, leaving the relay's 60-second timeout room for StopQuery cleanup, the mention read and the Slack post. */
+const SECTION_BUDGET_MS = 40_000;
+/** Half a cent: the query sums the same lines the metric does, so only rounding may separate them. */
+const COVERAGE_TOLERANCE_USD = 0.005;
 /** Slack caps a section's text at 3000 characters. */
 const SECTION_TEXT_MAX = 2_900;
 
@@ -84,6 +93,22 @@ export function alarmWindow(alarm: CloudWatchAlarmPayload): SpendWindow | undefi
   if (!end || span <= 0) return undefined;
   return { start: new Date(end.getTime() - span * 1000), end };
 }
+
+/**
+ * The USD the alarm measured, when its window is one datapoint; a multi-datapoint window spans
+ * overlapping periods, so no single value equals the window's total.
+ */
+export function measuredWindowUsd(alarm: CloudWatchAlarmPayload): number | undefined {
+  const parsed = parseReason(alarm);
+  if (parsed.kind !== 'threshold' || parsed.earliestStart !== parsed.latestStart) return undefined;
+  const value = Number(parsed.value);
+  return Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+const totalUsd = (spenders: YoungAccountSpender[]) => spenders.reduce((sum, spender) => sum + spender.usd, 0);
+
+const fallsShort = (spenders: YoungAccountSpender[], measuredUsd: number | undefined) =>
+  measuredUsd !== undefined && totalUsd(spenders) < measuredUsd - COVERAGE_TOLERANCE_USD;
 
 /** Sums the per-(account, model) rows into accounts, highest spend first. */
 export function aggregateSpenders(rows: ResultField[][]): YoungAccountSpender[] {
@@ -162,10 +187,17 @@ export function formatSpenderLine(
 /** One mrkdwn section listing the top accounts; capped by count and by Slack's section size. */
 export function formatYoungAccountSpenders(
   spenders: YoungAccountSpender[],
-  options: { windowEnd: Date; appUrl?: string; limit?: number; truncated?: boolean }
+  options: { windowEnd: Date; appUrl?: string; limit?: number; truncated?: boolean; measuredUsd?: number }
 ): string {
+  const coverage =
+    !options.truncated && fallsShort(spenders, options.measuredUsd)
+      ? `Named lines add up to ${formatUsd(totalUsd(spenders))} of the ${formatUsd(options.measuredUsd as number)} USD measured; ` +
+        'the remaining spend is not represented in this lookup, so a top account may be missing or understated.'
+      : undefined;
   if (spenders.length === 0) {
-    return `${SECTION_TITLE}\nNo account is named on the spend lines for this window.`;
+    return [SECTION_TITLE, 'No account is named on the spend lines for this window.', coverage]
+      .filter(Boolean)
+      .join('\n');
   }
   const limit = options.limit ?? TOP_ACCOUNT_LIMIT;
   const lines = spenders.slice(0, limit).map((s, i) => formatSpenderLine(s, i + 1, options.windowEnd, options.appUrl));
@@ -178,7 +210,7 @@ export function formatYoungAccountSpenders(
       : rest > 0
         ? `and ${rest} more ${noun}`
         : undefined;
-    return [SECTION_TITLE, ...lines, footer].filter(Boolean).join('\n');
+    return [SECTION_TITLE, ...lines, footer, coverage].filter(Boolean).join('\n');
   };
   let text = assemble();
   while (text.length > SECTION_TEXT_MAX && lines.length > 1) {
@@ -196,17 +228,42 @@ const fallback = (reason: string) => `${SECTION_TITLE}\n${escapeMrkdwn(reason)}`
  */
 export async function youngAccountSpendSection(
   alarm: CloudWatchAlarmPayload,
-  options: { appUrl?: string; logGroups?: string[]; fetch?: typeof fetchYoungAccountSpenders } = {}
+  options: {
+    appUrl?: string;
+    logGroups?: string[];
+    fetch?: typeof fetchYoungAccountSpenders;
+    sleep?: (ms: number) => Promise<void>;
+    now?: () => number;
+  } = {}
 ): Promise<string> {
+  const now = options.now ?? Date.now;
+  const started = now();
   const logGroups = (options.logGroups ?? (process.env[LLM_SPEND_LOG_GROUPS_ENV] ?? '').split(','))
     .map(name => name.trim())
     .filter(Boolean);
   if (logGroups.length === 0) return fallback('Not available: the alarm relay has no spend log group configured.');
   const window = alarmWindow(alarm);
   if (!window) return fallback('Not available: the alarm did not say which window breached.');
+  const fetchSpenders = options.fetch ?? fetchYoungAccountSpenders;
+  const measuredUsd = measuredWindowUsd(alarm);
   try {
-    const { spenders, truncated } = await (options.fetch ?? fetchYoungAccountSpenders)(window, { logGroups });
-    return formatYoungAccountSpenders(spenders, { windowEnd: window.end, appUrl: options.appUrl, truncated });
+    let result = await fetchSpenders(window, { logGroups });
+    const canReread = now() - started + CATCH_UP_DELAY_MS + QUERY_DEADLINE_MS <= SECTION_BUDGET_MS;
+    if (!result.truncated && fallsShort(result.spenders, measuredUsd) && canReread) {
+      await (options.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms))))(CATCH_UP_DELAY_MS);
+      // A failed re-read keeps the first answer: partial accounts beat none.
+      try {
+        result = await fetchSpenders(window, { logGroups });
+      } catch {
+        console.warn('[youngAccountSpendDetail] catch-up lookup failed; retaining the first result');
+      }
+    }
+    return formatYoungAccountSpenders(result.spenders, {
+      windowEnd: window.end,
+      appUrl: options.appUrl,
+      truncated: result.truncated,
+      measuredUsd,
+    });
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     console.warn(`[youngAccountSpendDetail] could not list accounts for ${alarm.AlarmName}: ${reason}`);

@@ -5,29 +5,27 @@ import {
   Button,
   Checkbox,
   Chip,
-  Divider,
+  DialogContent,
+  Dropdown,
   FormControl,
   FormHelperText,
   FormLabel,
   IconButton,
   Input,
-  LinearProgress,
-  Modal,
-  ModalClose,
-  ModalDialog,
+  Menu,
+  MenuButton,
+  MenuItem,
   Option,
   Select,
   Sheet,
   Stack,
   Switch,
-  Table,
   Textarea,
   Tooltip,
   Typography,
 } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
-import EditIcon from '@mui/icons-material/Edit';
-import KeyIcon from '@mui/icons-material/VpnKey';
+import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import CopyIcon from '@mui/icons-material/ContentCopy';
 import CheckIcon from '@mui/icons-material/Check';
 import WarningRoundedIcon from '@mui/icons-material/WarningRounded';
@@ -53,6 +51,16 @@ import {
 import { isAxiosError } from 'axios';
 import { getErrorMessage } from '@client/app/utils/error';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
+import {
+  ADMIN_REASON_PRESETS,
+  ActionDialog,
+  AdminDialog,
+  AdminPageHeader,
+  DataTable,
+  EmptyState,
+  type DataColumn,
+} from './shared';
+import { ADMIN_REGION_GAP, adminFocus } from './shared/adminStyles';
 
 const QUERY_KEY = 'admin-oauth-clients';
 
@@ -256,35 +264,104 @@ function SecretModal({
   onClose: () => void;
 }) {
   return (
-    <Modal
-      open
-      onClose={(_event, reason) => {
+    <AdminDialog
+      title={rotated ? 'Client secret rotated' : 'OAuth client registered'}
+      width={640}
+      // AdminDialog hands Joy's close reason through. The secret is shown once, so Esc and a backdrop
+      // click must not dismiss it. The close button (reason closeClick) and Done close it; Esc and
+      // backdrop are pinned in OAuthClientsTab.test.tsx.
+      onClose={(_event?: unknown, reason?: string) => {
         if (reason === 'backdropClick' || reason === 'escapeKeyDown') return;
         onClose();
       }}
+      data-testid="oauth-client-secret-modal"
     >
-      <ModalDialog size="lg" sx={{ width: 640, maxWidth: '95vw' }} data-testid="oauth-client-secret-modal">
-        <Typography level="h4">{rotated ? 'Client secret rotated' : 'OAuth client registered'}</Typography>
-        <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
-          {result.client.name}
+      <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
+        {result.client.name}
+      </Typography>
+      <Alert color="warning" startDecorator={<WarningRoundedIcon />} sx={{ my: 1.5 }}>
+        <Typography level="body-sm" data-testid="oauth-client-secret-notice">
+          The client secret will not be shown again. Copy it now and store it in the app&apos;s secret manager.
+          {rotated && ' The previous secret has stopped working.'}
         </Typography>
-        <Alert color="warning" startDecorator={<WarningRoundedIcon />} sx={{ my: 1.5 }}>
-          <Typography level="body-sm" data-testid="oauth-client-secret-notice">
-            The client secret will not be shown again. Copy it now and store it in the app&apos;s secret manager.
-            {rotated && ' The previous secret has stopped working.'}
-          </Typography>
-        </Alert>
-        <Stack spacing={1.5}>
-          <CopyField label="Client ID" value={result.client.clientId} testid="oauth-client-secret-modal-client-id" />
-          <CopyField label="Client secret" value={result.clientSecret} testid="oauth-client-secret-modal-secret" />
-        </Stack>
-        <Stack direction="row" justifyContent="flex-end" mt={2}>
-          <Button onClick={onClose} data-testid="oauth-client-secret-done-btn">
-            Done
-          </Button>
-        </Stack>
-      </ModalDialog>
-    </Modal>
+      </Alert>
+      <Stack spacing={1.5}>
+        <CopyField label="Client ID" value={result.client.clientId} testid="oauth-client-secret-modal-client-id" />
+        <CopyField label="Client secret" value={result.clientSecret} testid="oauth-client-secret-modal-secret" />
+      </Stack>
+      <Stack direction="row" justifyContent="flex-end" mt={2}>
+        <Button onClick={onClose} data-testid="oauth-client-secret-done-btn">
+          Done
+        </Button>
+      </Stack>
+    </AdminDialog>
+  );
+}
+
+/** DataTable hides `[data-row-actions]` until the row is hovered or focused, so the copy button appears on hover. */
+function ClientIdCell({ clientId }: { clientId: string }) {
+  const { copied, handleCopyToClipboard } = useCopyToClipboard();
+  return (
+    <Stack direction="row" alignItems="center" gap={0.5} sx={{ minWidth: 0 }}>
+      <Typography level="body-xs" noWrap title={clientId} sx={{ fontFamily: 'monospace', minWidth: 0 }}>
+        {clientId}
+      </Typography>
+      <Box data-row-actions sx={{ display: 'inline-flex', flexShrink: 0 }}>
+        <Tooltip title={copied ? 'Copied' : 'Copy client ID'}>
+          <IconButton
+            size="sm"
+            variant="plain"
+            aria-label="Copy client ID"
+            onClick={() => handleCopyToClipboard(clientId)}
+            data-testid={`oauth-client-copy-id-${clientId}`}
+            sx={{ '--IconButton-size': '22px', minHeight: 22, minWidth: 22, color: 'admin.inkMuted' }}
+          >
+            {copied ? <CheckIcon sx={{ fontSize: 14 }} /> : <CopyIcon sx={{ fontSize: 13 }} />}
+          </IconButton>
+        </Tooltip>
+      </Box>
+    </Stack>
+  );
+}
+
+const isConfidential = (client: OAuthClientView) => client.tokenEndpointAuthMethod === 'client_secret_post';
+
+function ClientRowMenu({
+  client,
+  onEdit,
+  onRotate,
+}: {
+  client: OAuthClientView;
+  onEdit: () => void;
+  onRotate: () => void;
+}) {
+  return (
+    <Dropdown>
+      <MenuButton
+        slots={{ root: IconButton }}
+        slotProps={{
+          root: {
+            size: 'sm',
+            variant: 'plain',
+            'aria-label': `Actions for ${client.name}`,
+            sx: { ...adminFocus, color: 'admin.inkMuted' },
+          },
+        }}
+        data-testid={`oauth-client-actions-${client.clientId}`}
+      >
+        <MoreHorizIcon sx={{ fontSize: 18 }} />
+      </MenuButton>
+      <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
+        <MenuItem onClick={onEdit} data-testid={`oauth-client-edit-${client.clientId}`}>
+          Edit client
+        </MenuItem>
+        {isConfidential(client) && (
+          <MenuItem onClick={onRotate} data-testid={`oauth-client-rotate-${client.clientId}`}>
+            Rotate secret
+          </MenuItem>
+        )}
+      </Menu>
+    </Dropdown>
   );
 }
 
@@ -310,6 +387,7 @@ export default function OAuthClientsTab() {
     isPending,
     isError,
     error: listError,
+    refetch,
   } = useQuery({ queryKey: [QUERY_KEY], queryFn: fetchOAuthClients });
   const invalidate = () => queryClient.invalidateQueries({ queryKey: [QUERY_KEY] });
 
@@ -409,176 +487,180 @@ export default function OAuthClientsTab() {
     editMutation.mutate({ client: editTarget, payload });
   };
 
-  return (
-    <Box data-testid="oauth-clients-tab">
-      <Stack direction="row" justifyContent="space-between" alignItems="flex-start" sx={{ mb: 2 }} gap={2}>
-        <Box>
-          <Typography level="h4">OAuth Clients</Typography>
-          <Typography level="body-sm" sx={{ color: 'text.tertiary', maxWidth: 620 }}>
-            Apps registered to use &quot;Sign in with Bike4Mind&quot;. Each client authenticates at the token endpoint
-            with its secret, and may only redirect to its registered URIs (exact match).
+  const columns: DataColumn<OAuthClientView>[] = [
+    {
+      id: 'name',
+      label: 'Name',
+      width: '10rem',
+      render: client => (
+        <Stack gap={0.5} alignItems="flex-start" sx={{ minWidth: 0 }}>
+          <Typography
+            level="body-sm"
+            fontWeight="lg"
+            textColor="text.primary"
+            noWrap
+            title={client.name}
+            sx={{ maxWidth: '100%' }}
+            data-testid={`oauth-client-name-${client.clientId}`}
+          >
+            {client.name}
           </Typography>
-        </Box>
-        <Button startDecorator={<AddIcon />} onClick={openCreate} data-testid="oauth-client-add-btn">
-          Register client
-        </Button>
-      </Stack>
+          {client.federatedIdp && (
+            <Chip size="sm" variant="soft" color="neutral">
+              federated
+            </Chip>
+          )}
+        </Stack>
+      ),
+    },
+    {
+      id: 'clientId',
+      label: 'Client ID',
+      width: '14rem',
+      render: client => <ClientIdCell clientId={client.clientId} />,
+    },
+    {
+      id: 'type',
+      label: 'Type',
+      width: '8rem',
+      render: client => (
+        <Stack gap={0.25} alignItems="flex-start">
+          <Chip size="sm" variant="soft" color="neutral">
+            {client.clientType}
+          </Chip>
+          {!isConfidential(client) && (
+            <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+              public (PKCE)
+            </Typography>
+          )}
+        </Stack>
+      ),
+    },
+    {
+      id: 'redirectUris',
+      label: 'Redirect URIs',
+      render: client => (
+        <Stack spacing={0.25} sx={{ minWidth: 0 }}>
+          {client.redirectUris.map(uri => (
+            <Typography key={uri} level="body-xs" noWrap title={uri} sx={{ fontFamily: 'monospace', maxWidth: '100%' }}>
+              {uri}
+            </Typography>
+          ))}
+        </Stack>
+      ),
+    },
+    {
+      id: 'scopes',
+      label: 'Scopes',
+      width: '12rem',
+      render: client => (
+        <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+          {client.allowedScopes.map(scope => (
+            <Chip key={scope} size="sm" variant="outlined">
+              {scope}
+            </Chip>
+          ))}
+        </Stack>
+      ),
+    },
+    {
+      id: 'active',
+      label: 'Active',
+      width: '5rem',
+      render: client => (
+        <Switch
+          size="sm"
+          checked={client.isActive}
+          disabled={activeMutation.isPending && activeMutation.variables?.client.id === client.id}
+          onChange={() =>
+            client.isActive ? setDeactivateTarget(client) : activeMutation.mutate({ client, isActive: true })
+          }
+          slotProps={{ input: { 'data-testid': `oauth-client-toggle-${client.clientId}` } }}
+        />
+      ),
+    },
+    {
+      id: 'createdAt',
+      label: 'Created',
+      width: '7rem',
+      render: client => (
+        <Typography level="body-xs" noWrap sx={client.createdAt ? undefined : { color: 'admin.inkMuted' }}>
+          {client.createdAt ? new Date(client.createdAt).toLocaleDateString() : '-'}
+        </Typography>
+      ),
+    },
+  ];
 
-      {isPending && <LinearProgress sx={{ mb: 1 }} />}
+  return (
+    <Stack sx={{ gap: ADMIN_REGION_GAP, minWidth: 0 }} data-testid="oauth-clients-tab">
+      <AdminPageHeader
+        title="OAuth clients"
+        count={isPending || (isError && clients.length === 0) ? undefined : clients.length}
+        description={
+          'Apps registered to use "Sign in with Bike4Mind". Each client authenticates at the token endpoint with its secret, and may only redirect to its registered URIs (exact match).'
+        }
+        actions={
+          <Button size="sm" startDecorator={<AddIcon />} onClick={openCreate} data-testid="oauth-client-add-btn">
+            Register client
+          </Button>
+        }
+      />
 
       {isError && clients.length > 0 && (
-        <Alert color="warning" variant="soft" sx={{ mb: 1 }} data-testid="oauth-clients-refresh-error">
+        <Alert color="warning" variant="soft" data-testid="oauth-clients-refresh-error">
           {`Could not refresh OAuth clients, showing the last loaded list: ${getErrorMessage(listError)}`}
         </Alert>
       )}
 
-      {isError && clients.length === 0 ? (
-        <Alert color="danger" variant="soft" data-testid="oauth-clients-load-error">
-          {`Could not load OAuth clients: ${getErrorMessage(listError)}`}
-        </Alert>
-      ) : !isPending && clients.length === 0 ? (
-        <Sheet variant="soft" sx={{ borderRadius: 'md', py: 6, px: 3, textAlign: 'center' }}>
-          <Typography level="title-md" data-testid="oauth-clients-empty">
-            No OAuth clients registered yet
-          </Typography>
-        </Sheet>
-      ) : (
-        <Sheet variant="outlined" sx={{ borderRadius: 'sm', overflow: 'auto' }}>
-          <Table stickyHeader hoverRow sx={{ '--TableCell-headBackground': 'var(--joy-palette-background-level1)' }}>
-            <thead>
-              <tr>
-                <th style={{ width: 160 }}>Name</th>
-                <th style={{ width: 240 }}>Client ID</th>
-                <th style={{ width: 120 }}>Type</th>
-                <th>Redirect URIs</th>
-                <th style={{ width: 200 }}>Scopes</th>
-                <th style={{ width: 80, textAlign: 'center' }}>Active</th>
-                <th style={{ width: 110 }}>Created</th>
-                <th style={{ width: 100, textAlign: 'right' }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {clients.map(client => {
-                const isConfidential = client.tokenEndpointAuthMethod === 'client_secret_post';
-                return (
-                  <tr
-                    key={client.id}
-                    data-testid={`oauth-client-row-${client.clientId}`}
-                    style={{ opacity: client.isActive ? 1 : 0.55 }}
-                  >
-                    <td>
-                      <Typography level="body-sm" fontWeight="lg" textColor="text.primary">
-                        {client.name}
-                      </Typography>
-                      {client.federatedIdp && (
-                        <Chip size="sm" variant="soft" color="warning">
-                          federated
-                        </Chip>
-                      )}
-                    </td>
-                    <td>
-                      <Typography level="body-xs" sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
-                        {client.clientId}
-                      </Typography>
-                    </td>
-                    <td>
-                      <Chip
-                        size="sm"
-                        variant="soft"
-                        color={client.clientType === 'first-party' ? 'primary' : 'neutral'}
-                      >
-                        {client.clientType}
-                      </Chip>
-                      {!isConfidential && (
-                        <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-                          public (PKCE)
-                        </Typography>
-                      )}
-                    </td>
-                    <td>
-                      <Stack spacing={0.25}>
-                        {client.redirectUris.map(uri => (
-                          <Typography
-                            key={uri}
-                            level="body-xs"
-                            sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}
-                          >
-                            {uri}
-                          </Typography>
-                        ))}
-                      </Stack>
-                    </td>
-                    <td>
-                      <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
-                        {client.allowedScopes.map(scope => (
-                          <Chip key={scope} size="sm" variant="outlined">
-                            {scope}
-                          </Chip>
-                        ))}
-                      </Stack>
-                    </td>
-                    <td style={{ textAlign: 'center' }}>
-                      <Switch
-                        size="sm"
-                        color={client.isActive ? 'success' : 'neutral'}
-                        checked={client.isActive}
-                        disabled={activeMutation.isPending && activeMutation.variables?.client.id === client.id}
-                        onChange={() =>
-                          client.isActive
-                            ? setDeactivateTarget(client)
-                            : activeMutation.mutate({ client, isActive: true })
-                        }
-                        slotProps={{ input: { 'data-testid': `oauth-client-toggle-${client.clientId}` } }}
-                      />
-                    </td>
-                    <td>
-                      <Typography level="body-xs">
-                        {client.createdAt ? new Date(client.createdAt).toLocaleDateString() : '-'}
-                      </Typography>
-                    </td>
-                    <td style={{ textAlign: 'right' }}>
-                      <Stack direction="row" spacing={0.5} justifyContent="flex-end">
-                        <Tooltip title="Edit client">
-                          <IconButton
-                            size="sm"
-                            variant="plain"
-                            onClick={() => openEdit(client)}
-                            data-testid={`oauth-client-edit-${client.clientId}`}
-                          >
-                            <EditIcon />
-                          </IconButton>
-                        </Tooltip>
-                        {isConfidential && (
-                          <Tooltip title="Rotate secret">
-                            <IconButton
-                              size="sm"
-                              variant="plain"
-                              color="warning"
-                              onClick={() => setRotateTarget(client)}
-                              data-testid={`oauth-client-rotate-${client.clientId}`}
-                            >
-                              <KeyIcon />
-                            </IconButton>
-                          </Tooltip>
-                        )}
-                      </Stack>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </Table>
-        </Sheet>
-      )}
+      <DataTable
+        label="OAuth clients"
+        testId="oauth-clients-table"
+        rows={clients}
+        columns={columns}
+        getRowId={client => client.id}
+        rowTestId={client => `oauth-client-row-${client.clientId}`}
+        loading={isPending}
+        error={
+          isError && clients.length === 0 ? `Could not load OAuth clients: ${getErrorMessage(listError)}` : undefined
+        }
+        onRetry={() => void refetch()}
+        empty={
+          <Box data-testid="oauth-clients-empty">
+            <EmptyState
+              title="No OAuth clients registered yet"
+              description="Register an app to let it offer Sign in with Bike4Mind."
+              action={
+                <Button
+                  size="sm"
+                  variant="outlined"
+                  startDecorator={<AddIcon />}
+                  onClick={openCreate}
+                  data-testid="oauth-clients-empty-add-btn"
+                >
+                  Register client
+                </Button>
+              }
+            />
+          </Box>
+        }
+        rowActions={client => (
+          <ClientRowMenu client={client} onEdit={() => openEdit(client)} onRotate={() => setRotateTarget(client)} />
+        )}
+        // Fixed columns total 59.5rem; redirect URIs take the rest and truncate. Below 68rem the table
+        // scrolls sideways inside its frame.
+        minWidth="68rem"
+        maxHeight="none"
+        pagination={false}
+      />
 
-      <Modal open={createOpen} onClose={() => setCreateOpen(false)}>
-        <ModalDialog
-          sx={{ minWidth: 460, maxWidth: 560, maxHeight: '90vh', overflowY: 'auto' }}
-          data-testid="oauth-client-create-modal"
-        >
-          <ModalClose />
-          <Typography level="h4">Register OAuth client</Typography>
-          <Divider sx={{ my: 1 }} />
+      <AdminDialog
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        title="Register OAuth client"
+        width={560}
+        data-testid="oauth-client-create-modal"
+      >
+        <DialogContent>
           <Stack spacing={1.5}>
             <FormControl required>
               <FormLabel>Name</FormLabel>
@@ -654,21 +736,24 @@ export default function OAuthClientsTab() {
                 loading={createMutation.isPending}
                 data-testid="oauth-client-create-submit-btn"
               >
-                Register
+                Register client
               </Button>
             </Stack>
           </Stack>
-        </ModalDialog>
-      </Modal>
+        </DialogContent>
+      </AdminDialog>
 
-      <Modal open={!!editTarget} onClose={() => setEditTarget(null)}>
-        <ModalDialog sx={{ minWidth: 460, maxWidth: 560, overflow: 'auto' }} data-testid="oauth-client-edit-modal">
-          <ModalClose />
-          <Typography level="h4">Edit OAuth client</Typography>
+      <AdminDialog
+        open={!!editTarget}
+        onClose={() => setEditTarget(null)}
+        title="Edit OAuth client"
+        width={560}
+        data-testid="oauth-client-edit-modal"
+      >
+        <DialogContent>
           <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
             {editTarget?.name}
           </Typography>
-          <Divider sx={{ my: 1 }} />
           {editTarget && editForm && (
             <Stack spacing={2}>
               <FormControl required>
@@ -746,21 +831,23 @@ export default function OAuthClientsTab() {
               Cancel
             </Button>
             <Button loading={editMutation.isPending} onClick={saveEdit} data-testid="oauth-client-edit-save-btn">
-              Save
+              Save changes
             </Button>
           </Stack>
-        </ModalDialog>
-      </Modal>
+        </DialogContent>
+      </AdminDialog>
 
-      <Modal open={!!narrowing} onClose={() => setNarrowing(null)}>
-        <ModalDialog role="alertdialog" variant="outlined" data-testid="oauth-client-edit-narrow-modal">
-          <Typography level="h4" startDecorator={<WarningRoundedIcon sx={{ color: 'warning.500' }} />}>
-            {narrowing?.removed.length ? 'Remove scopes' : 'Turn off federation'}
-          </Typography>
-          <Divider sx={{ my: 1 }} />
+      <AdminDialog
+        open={!!narrowing}
+        onClose={() => setNarrowing(null)}
+        role="alertdialog"
+        title={narrowing?.removed.length ? 'Remove scopes' : 'Turn off federation'}
+        data-testid="oauth-client-edit-narrow-modal"
+      >
+        <DialogContent>
           <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap' }}>
             {narrowing?.removed.map(scope => (
-              <Chip key={scope} size="sm" variant="soft" color="warning">
+              <Chip key={scope} size="sm" variant="soft" color="neutral">
                 {scope}
               </Chip>
             ))}
@@ -782,7 +869,6 @@ export default function OAuthClientsTab() {
               Cancel
             </Button>
             <Button
-              color="warning"
               loading={editMutation.isPending}
               onClick={() =>
                 editTarget && narrowing && editMutation.mutate({ client: editTarget, payload: narrowing.payload })
@@ -792,64 +878,57 @@ export default function OAuthClientsTab() {
               {narrowing?.removed.length ? 'Remove scopes' : 'Turn off federation'}
             </Button>
           </Stack>
-        </ModalDialog>
-      </Modal>
+        </DialogContent>
+      </AdminDialog>
 
-      <Modal open={!!rotateTarget} onClose={() => setRotateTarget(null)}>
-        <ModalDialog role="alertdialog" variant="outlined" data-testid="oauth-client-rotate-modal">
-          <Typography level="h4" startDecorator={<WarningRoundedIcon sx={{ color: 'warning.500' }} />}>
-            Rotate client secret
-          </Typography>
-          <Divider sx={{ my: 1 }} />
-          <Typography level="body-sm">
+      {/* Both endpoints are audited but take no reason, so the dialogs collect one without sending it. */}
+      <ActionDialog
+        open={!!rotateTarget}
+        onClose={() => setRotateTarget(null)}
+        title="Rotate client secret"
+        description={
+          <>
             Generate a new secret for <b>{rotateTarget?.name}</b>? The current secret stops working immediately, so the
             app cannot sign users in until it is updated with the new one.
-          </Typography>
-          <Stack direction="row" justifyContent="flex-end" spacing={1} sx={{ mt: 2 }}>
-            <Button variant="plain" color="neutral" onClick={() => setRotateTarget(null)}>
-              Cancel
-            </Button>
-            <Button
-              color="warning"
-              loading={rotateMutation.isPending}
-              onClick={() => rotateTarget && rotateMutation.mutate(rotateTarget)}
-              data-testid="oauth-client-rotate-confirm-btn"
-            >
-              Rotate secret
-            </Button>
-          </Stack>
-        </ModalDialog>
-      </Modal>
+          </>
+        }
+        reasonPresets={ADMIN_REASON_PRESETS.oauthClientRotate}
+        reasonAudited={false}
+        tone="danger"
+        confirmLabel="Rotate secret"
+        pending={rotateMutation.isPending}
+        onConfirm={() => {
+          if (rotateTarget) rotateMutation.mutate(rotateTarget);
+        }}
+        data-testid="oauth-client-rotate-modal"
+        testIds={{ confirm: 'oauth-client-rotate-confirm-btn' }}
+      />
 
-      <Modal open={!!deactivateTarget} onClose={() => setDeactivateTarget(null)}>
-        <ModalDialog role="alertdialog" variant="outlined" data-testid="oauth-client-deactivate-modal">
-          <Typography level="h4" startDecorator={<WarningRoundedIcon sx={{ color: 'danger.500' }} />}>
-            Deactivate client
-          </Typography>
-          <Divider sx={{ my: 1 }} />
-          <Typography level="body-sm">
+      <ActionDialog
+        open={!!deactivateTarget}
+        onClose={() => setDeactivateTarget(null)}
+        title="Deactivate client"
+        description={
+          <>
             Deactivate <b>{deactivateTarget?.name}</b>? It can no longer start sign-ins or exchange codes for tokens
             until it is reactivated.{' '}
             {deactivateTarget?.clientType === 'first-party'
               ? 'Sessions it already created are not ended.'
               : 'Access tokens it already issued stay valid until they expire.'}{' '}
             Nothing is deleted.
-          </Typography>
-          <Stack direction="row" justifyContent="flex-end" spacing={1} sx={{ mt: 2 }}>
-            <Button variant="plain" color="neutral" onClick={() => setDeactivateTarget(null)}>
-              Cancel
-            </Button>
-            <Button
-              color="danger"
-              loading={activeMutation.isPending}
-              onClick={() => deactivateTarget && activeMutation.mutate({ client: deactivateTarget, isActive: false })}
-              data-testid="oauth-client-deactivate-confirm-btn"
-            >
-              Deactivate
-            </Button>
-          </Stack>
-        </ModalDialog>
-      </Modal>
+          </>
+        }
+        reasonPresets={ADMIN_REASON_PRESETS.oauthClientDeactivate}
+        reasonAudited={false}
+        tone="danger"
+        confirmLabel="Deactivate client"
+        pending={activeMutation.isPending}
+        onConfirm={() => {
+          if (deactivateTarget) activeMutation.mutate({ client: deactivateTarget, isActive: false });
+        }}
+        data-testid="oauth-client-deactivate-modal"
+        testIds={{ confirm: 'oauth-client-deactivate-confirm-btn' }}
+      />
 
       {secretResult && (
         <SecretModal
@@ -862,6 +941,6 @@ export default function OAuthClientsTab() {
           }}
         />
       )}
-    </Box>
+    </Stack>
   );
 }

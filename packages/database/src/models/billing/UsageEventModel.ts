@@ -33,6 +33,7 @@ import {
   IUsageSpendWithTokens,
   IUserMargin,
   USAGE_EVENT_FEATURES,
+  USAGE_EVENT_OPERATIONS,
   USAGE_EVENT_STATUSES,
   USAGE_FUNDING_SOURCES,
   USAGE_PRICE_SOURCES,
@@ -139,6 +140,34 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
           purchased: { type: Number, required: true },
           subscription: { type: Number, required: true },
           unknown: { type: Number, required: true },
+        },
+        { _id: false }
+      ),
+      required: false,
+    },
+    // Mirrors UsageEventRequestMeta: metadata only, never content.
+    requestMeta: {
+      type: new Schema(
+        {
+          stopReason: { type: String, required: false },
+          maxOutputTokens: { type: Number, required: false },
+          creditCapOutputTokens: { type: Number, required: false },
+          stoppedForCredits: { type: Boolean, required: false },
+          reasoningEffort: { type: String, required: false },
+          thinkingBudgetTokens: { type: Number, required: false },
+          toolCalls: {
+            type: [
+              new Schema(
+                { name: { type: String, required: true }, count: { type: Number, required: true } },
+                { _id: false }
+              ),
+            ],
+            required: false,
+            default: undefined,
+          },
+          attachmentCount: { type: Number, required: false },
+          attachmentBytes: { type: Number, required: false },
+          operation: { type: String, required: false, enum: [...USAGE_EVENT_OPERATIONS] },
         },
         { _id: false }
       ),

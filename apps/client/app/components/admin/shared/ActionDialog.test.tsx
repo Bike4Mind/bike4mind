@@ -100,6 +100,9 @@ describe('ActionDialog', () => {
     const confirm = openDialog({ onConfirm, typedConfirm: { expected: 'ada@example.com', noun: 'email address' } });
 
     expect(screen.getByTestId('adjust-dialog-typed-expected')).toHaveTextContent('ada@example.com');
+    // the sentence sits in one inline span so the spaces around the name survive the label's flex row
+    expect(screen.getByTestId('adjust-dialog-typed-expected').parentElement?.tagName).toBe('SPAN');
+    expect(screen.getByTestId('adjust-dialog-typed-expected')).toHaveStyle({ display: 'inline' });
     expect(screen.getByText(/This cannot be undone/)).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('adjust-dialog-reason-input-preset-0'));
     expect(confirm).toBeDisabled();
@@ -138,11 +141,36 @@ describe('ActionDialog', () => {
     await waitFor(() => expect(screen.getByTestId('adjust-dialog-cancel-btn')).toBeEnabled());
   });
 
+  it('keeps the required star on the typed-confirm sentence instead of a line of its own', () => {
+    openDialog({ typedConfirm: { expected: 'a-very-long-address-that-wraps@example.com', noun: 'email address' } });
+
+    const star = screen.getByTestId('adjust-dialog-typed-required');
+    // same inline span as the name, joined by a non-breaking space, so a wrap never strands the star
+    expect(star.parentElement).toBe(screen.getByTestId('adjust-dialog-typed-expected').parentElement);
+    expect(star).toHaveTextContent('*');
+    expect(star.textContent?.charCodeAt(0)).toBe(0xa0);
+    expect(star).toHaveAttribute('aria-hidden', 'true');
+    // Joy's own star, a separate flex item, is hidden
+    const joyStar = star.closest('label')?.querySelector('.MuiFormLabel-asterisk');
+    expect(joyStar).not.toBeNull();
+    expect(joyStar).toHaveStyle({ display: 'none' });
+    expect(screen.getByTestId('adjust-dialog-typed-input')).toBeRequired();
+  });
+
   it('reserves solid danger for the final confirm only', () => {
     const confirm = openDialog({ tone: 'danger' });
 
     expect(confirm.className).toContain('MuiButton-colorDanger');
+    expect(confirm).toHaveAttribute('data-tone', 'danger');
     expect(screen.getByTestId('adjust-dialog-cancel-btn').className).not.toContain('MuiButton-colorDanger');
+  });
+
+  // Callers assert the tone through `data-tone`, so it has to follow the color the confirm renders.
+  it('marks the confirm neutral, and not danger-colored, by default', () => {
+    const confirm = openDialog();
+
+    expect(confirm).toHaveAttribute('data-tone', 'neutral');
+    expect(confirm.className).not.toContain('MuiButton-colorDanger');
   });
 
   it('commits on Enter from an input inside the dialog', async () => {

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient } from '@tanstack/react-query';
+import { useUser } from '@client/app/contexts/UserContext';
 import { UserProfileView } from './UserProfileView';
 import { USER_PROFILE_TABS, type UserProfileTab } from './userProfileSearch';
 import { ProfileTestWrapper, buildProfile } from './profileTestUtils';
@@ -134,6 +135,8 @@ describe('UserProfileView', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.update.mockResolvedValue(undefined);
+    // A delegate rather than a full admin keeps full-admin-only extras, like entity search, out of these tests.
+    useUser.setState({ currentUser: { id: 'admin1', isAdmin: false, adminPermissions: ['users:delete'] } as never });
   });
 
   describe('shortcuts', () => {
@@ -419,6 +422,13 @@ describe('UserProfileView', () => {
       expect(banner).toHaveTextContent('Deletion scheduled for Nov 20, 2026 (UTC).');
       expect(banner).toHaveTextContent(`Source: ${label}.`);
       expect(banner).toHaveTextContent('Requested Oct 1, 2026 (UTC).');
+    });
+
+    it('leaves Cancel deletion out for a delegate without users:delete', () => {
+      useUser.setState({ currentUser: { id: 'd1', isAdmin: false, adminPermissions: ['support:read'] } as never });
+      setup(buildProfile({ deletion: deletion() }));
+      expect(screen.getByTestId('user-profile-deletion-banner')).toBeInTheDocument();
+      expect(screen.queryByTestId('user-profile-cancel-deletion-btn')).not.toBeInTheDocument();
     });
 
     it('Cancel deletion opens the cancel dialog', () => {

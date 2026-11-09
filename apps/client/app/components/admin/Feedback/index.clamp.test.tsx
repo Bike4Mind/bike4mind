@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
@@ -14,7 +14,6 @@ const mocks = vi.hoisted(() => ({
   deleteFeedbackFromServer: vi.fn(),
 }));
 
-vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsMobile: () => false }));
 vi.mock('@client/app/utils/feedbackAPICalls', () => ({
   getFeedbackFromServer: mocks.getFeedbackFromServer,
   deleteFeedbackFromServer: mocks.deleteFeedbackFromServer,
@@ -72,20 +71,22 @@ describe('FeedbackTab page clamp after the last page empties', () => {
     mocks.getFeedbackFromServer.mockImplementation((params: { includeOrganizations?: boolean }) => {
       if (params.includeOrganizations) return Promise.resolve({ items: [], total: 0, organizations: [] });
       listCalls += 1;
-      if (listCalls === 1) return Promise.resolve({ items: [makeFeedbackItem()], total: 41 });
+      if (listCalls === 1) return Promise.resolve({ items: [makeFeedbackItem()], total: 51 });
       return new Promise(resolve => (resolveRefetch = resolve));
     });
     mocks.deleteFeedbackFromServer.mockResolvedValue(true);
 
     renderFeedbackTab();
-    await userEvent.click(await screen.findByRole('button', { name: 'Delete' }));
-    await userEvent.click(await screen.findByTestId('confirm-modal-confirm-btn'));
+    fireEvent.click(await screen.findByTestId('feedback-row-actions-fb-1'));
+    fireEvent.click(await screen.findByTestId('feedback-row-delete-fb-1'));
+    await userEvent.click(await screen.findByTestId('feedback-delete-dialog-reason-input-preset-0'));
+    await userEvent.click(screen.getByTestId('feedback-delete-dialog-confirm-btn'));
 
     await waitFor(() => expect(listCalls).toBe(2));
     expect(fakeAdminRouter.search).toMatchObject({ feedbackPage: 3 });
     expect(fakeAdminRouter.navigate).not.toHaveBeenCalled();
 
-    await act(async () => resolveRefetch({ items: [], total: 40 }));
+    await act(async () => resolveRefetch({ items: [], total: 50 }));
 
     await waitFor(() => expect(fakeAdminRouter.search).toMatchObject({ feedbackPage: 2 }));
     expect(fakeAdminRouter.navigate).toHaveBeenCalledTimes(1);

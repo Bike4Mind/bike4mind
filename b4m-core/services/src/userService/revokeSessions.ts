@@ -45,8 +45,8 @@ interface AdminRevokeSessionsAdapters {
 }
 
 /**
- * Admin-initiated force-logout of another user. Mirrors adminDeleteUser's authz shape:
- * the caller's admin flag is checked in the service layer (not the route). Throws
+ * Admin-initiated force-logout of another user. The caller's full-admin flag is checked in
+ * the service layer (not the route), unlike adminDeleteUser, which takes users:delete. Throws
  * UnauthorizedError for a non-admin caller and NotFoundError for an unknown target.
  */
 export const adminRevokeUserSessions = async (

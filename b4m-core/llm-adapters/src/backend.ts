@@ -257,8 +257,9 @@ export interface ICompletionOptions {
   /**
    * Explicit effort for an Anthropic turn, in Anthropic's own five-level vocabulary
    * (`output_config.effort`). Takes precedence over `reasoningEffort`, which is mapped
-   * into that vocabulary when this is unset; unset both and the turn runs at the backend
-   * default (see resolveAnthropicEffort). This exists alongside `reasoningEffort` rather
+   * into that vocabulary when this is unset. Read only on a turn with thinking enabled (or a
+   * QuestMaster turn), where unsetting both sends resolveAnthropicEffort's per-model default;
+   * a turn without thinking ignores this field. This exists alongside `reasoningEffort` rather
    * than replacing it because Anthropic's 'max' has no OpenAI counterpart and
    * `ReasoningEffort` is forwarded to OpenAI's `reasoning_effort` verbatim.
    */
