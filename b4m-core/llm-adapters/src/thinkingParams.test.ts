@@ -744,6 +744,58 @@ describe('resolveAnthropicEffort', () => {
       expect(resolveAnthropicEffort({ questMaster: true, reasoningEffort: 'xhigh' })).toBe('xhigh');
     });
   });
+
+  describe('the unstated default is per model', () => {
+    const MEDIUM = [
+      ChatModels.CLAUDE_5_5_OPUS,
+      ChatModels.CLAUDE_5_5_OPUS_BEDROCK,
+      ChatModels.CLAUDE_5_5_HAIKU,
+      ChatModels.CLAUDE_5_5_HAIKU_BEDROCK,
+    ];
+    const HIGH = [
+      ChatModels.CLAUDE_5_OPUS,
+      ChatModels.CLAUDE_5_OPUS_BEDROCK,
+      ChatModels.CLAUDE_5_5_SONNET_BEDROCK,
+      ChatModels.CLAUDE_4_7_OPUS,
+      ChatModels.CLAUDE_4_7_OPUS_BEDROCK,
+    ];
+
+    it.each(MEDIUM)('is medium for %s', model => {
+      expect(resolveAnthropicEffort({ model })).toBe('medium');
+    });
+
+    it.each(HIGH)('is high for %s', model => {
+      expect(resolveAnthropicEffort({ model })).toBe('high');
+    });
+
+    it.each([
+      'claude-opus-5-5-20270101',
+      'us.anthropic.claude-opus-5-5',
+      'eu.anthropic.claude-haiku-5-5-v1:0',
+      'apac.anthropic.claude-opus-5-5-20270101-v1:0',
+      'claude-opus-5-5[1m]',
+    ])('is medium for %s, another spelling of a medium model', model => {
+      expect(resolveAnthropicEffort({ model })).toBe('medium');
+    });
+
+    it.each(['claude-sonnet-5-5', 'us.anthropic.claude-sonnet-5-5-v1:0', 'claude-opus-5-5-1', 'gpt-5', 'opus-5-5'])(
+      'is high for %s',
+      model => {
+        expect(resolveAnthropicEffort({ model })).toBe('high');
+      }
+    );
+
+    it.each(MEDIUM)('lets a stated effort override the default on %s', model => {
+      expect(resolveAnthropicEffort({ model, anthropicEffort: 'high' })).toBe('high');
+      expect(resolveAnthropicEffort({ model, anthropicEffort: 'xhigh' })).toBe('xhigh');
+      expect(resolveAnthropicEffort({ model, reasoningEffort: 'low' })).toBe('low');
+      expect(resolveAnthropicEffort({ model, reasoningEffort: 'high' })).toBe('high');
+    });
+
+    it('keeps QuestMaster at medium on a high-default model', () => {
+      expect(resolveAnthropicEffort({ model: ChatModels.CLAUDE_5_OPUS, questMaster: true })).toBe('medium');
+    });
+  });
 });
 
 describe('planReasoningEffort', () => {

@@ -306,3 +306,113 @@ export type SessionQuest = z.infer<typeof SessionQuestSchema>;
 export const ListSessionQuestsResponseSchema = paginatedResponseSchema(SessionQuestSchema);
 
 export type ListSessionQuestsResponse = z.infer<typeof ListSessionQuestsResponseSchema>;
+
+/** Path parameters for /api/v1/sessions/{id}/messages/{messageId}. */
+export const SessionMessageParamSchema = z.object({
+  id: z.string().min(1),
+  messageId: z.string().min(1),
+});
+
+/**
+ * Request for PUT /api/v1/sessions/{id}/messages/{messageId}. The same field allowlist the handler
+ * applies to the stored message; any other key is ignored.
+ */
+export const SessionMessageUpdateRequestSchema = z.object({
+  reply: z.string().optional().describe('Replaces the stored reply text.'),
+  replies: z.array(z.string()).optional().describe('Replaces the stored list of alternative replies.'),
+  pinned: z.boolean().optional().describe('Pins or unpins the message.'),
+  selectedChoiceIndex: z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe(
+      'Index of the suggested choice that was picked. Only the pick is writable, only once, and only ' +
+        'when it is inside the options the server stored; otherwise it is ignored.'
+    ),
+});
+
+export type SessionMessageUpdateRequest = z.infer<typeof SessionMessageUpdateRequestSchema>;
+
+/** Response for DELETE /api/v1/sessions/{id}/messages/{messageId}. */
+export const SessionMessageDeleteResponseSchema = z.object({
+  msg: z.string().describe('Confirmation text.'),
+});
+
+/**
+ * Request for POST /api/v1/sessions/semantic-search. Defaults are declared here so the published
+ * spec shows them.
+ */
+export const SessionSemanticSearchRequestSchema = z.object({
+  query: z
+    .string()
+    .min(1)
+    .regex(/\S/, 'query must contain a non-whitespace character')
+    .describe('What to look for in the content of your sessions.'),
+  minSimilarity: z
+    .number()
+    .min(0)
+    .max(1)
+    .default(0.3)
+    .describe('Lowest cosine similarity a message needs to count as a match.'),
+  topK: z.number().int().min(1).max(200).default(50).describe('Most sessions to return.'),
+  hybridMode: z
+    .boolean()
+    .default(true)
+    .describe('Require a keyword match before semantic ranking. `false` ranks every message by similarity alone.'),
+  useReRanking: z
+    .boolean()
+    .default(false)
+    .describe('Verify the best candidates with a language model and drop the ones it judges irrelevant.'),
+});
+
+export type SessionSemanticSearchRequest = z.infer<typeof SessionSemanticSearchRequestSchema>;
+
+const SessionSemanticSearchScoreSchema = z.object({
+  sessionId: z.string(),
+  sessionName: z.string().optional(),
+  maxSimilarity: z.number().describe('Cosine similarity of the best matching message.'),
+  matchingMessages: z.number().int().describe('Messages in the session at or above `minSimilarity`.'),
+  bestMatch: z
+    .object({
+      similarity: z.number(),
+      snippet: z.string().describe('Opening of the best matching message, with its prompt and reply.'),
+    })
+    .optional(),
+});
+
+export const SessionSemanticSearchResponseSchema = z.object({
+  sessionIds: z.array(z.string()).describe('Matching sessions, best first.'),
+  count: z.number().int(),
+  scores: z
+    .array(SessionSemanticSearchScoreSchema)
+    .optional()
+    .describe('Per-session scores in the same order as `sessionIds`. Omitted when you have no sessions.'),
+  partial: z
+    .boolean()
+    .optional()
+    .describe('`true` when some messages were skipped because too many needed a fresh embedding.'),
+  suggestSpider: z.boolean().optional().describe('`true` when many messages were skipped for that reason.'),
+  debug: z
+    .object({
+      query: z.string(),
+      correctedQuery: z.string().optional(),
+      queryExpansionTimeMs: z.number().optional(),
+      minSimilarity: z.number(),
+      hybridMode: z.boolean(),
+      keywords: z.array(z.string()),
+      keywordMatchCount: z.number().int().nullable(),
+      messagesWithEmbedding: z.number().int(),
+      messagesGenerated: z.number().int(),
+      messagesSkipped: z.number().int(),
+      maxOnTheFlyEmbeddings: z.number().int(),
+      reRankingUsed: z.boolean(),
+      reRankingTimeMs: z.number().optional(),
+      candidatesReRanked: z.number().int().optional(),
+      candidatesFiltered: z.number().int().optional(),
+    })
+    .optional()
+    .describe('How the search ran. Omitted when you have no sessions.'),
+});
+
+export type SessionSemanticSearchResponse = z.infer<typeof SessionSemanticSearchResponseSchema>;

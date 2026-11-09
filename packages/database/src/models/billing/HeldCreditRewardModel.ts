@@ -41,7 +41,7 @@ heldCreditRewardSchema.index({ status: 1, heldAt: 1, _id: 1 });
 // pauseForUser / resumeForUser filter on one user's rows by status.
 heldCreditRewardSchema.index({ userId: 1, status: 1 });
 
-export const HeldCreditRewardModel =
+export const HeldCreditRewardModel: mongoose.Model<HeldCreditRewardDoc> =
   (mongoose.models.HeldCreditReward as mongoose.Model<HeldCreditRewardDoc>) ??
   mongoose.model('HeldCreditReward', heldCreditRewardSchema);
 

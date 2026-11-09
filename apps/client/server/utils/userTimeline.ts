@@ -35,6 +35,7 @@ import {
 } from './userTimelineAccount';
 import { fetchLimitEntries } from './userTimelineLimits';
 import { listSpendGroups, loadSpendLookups, spendGroupToEntry } from './userTimelineSpend';
+import { apiRequestToEntry, readApiRequests } from './userApiRequests';
 
 const QUERY_MAX_TIME_MS = 15_000;
 
@@ -43,7 +44,7 @@ export type TimelineSubject = ActivitySubject & { account: TimelineAccount };
 
 export type TimelineRange = { from?: Date; to?: Date };
 
-type TimelinePageOptions = { limit: number; cursor?: AuditLogCursor; range: TimelineRange };
+type TimelinePageOptions = { limit: number; cursor?: AuditLogCursor; range: TimelineRange; apiKeyId?: string };
 
 /** One source's slice: its newest rows after the cursor, and whether it holds more beyond them. */
 type SourcePage = { entries: UserTimelineEntry[]; hasMore: boolean };
@@ -253,7 +254,7 @@ export const notebookIdClauses = (cursor: AuditLogCursor | undefined, range: Tim
   return clauses;
 };
 
-type NotebookRow = { _id: Types.ObjectId; name?: string; origin?: { channel?: SessionOriginChannel } };
+type NotebookRow = { _id: Types.ObjectId; origin?: { channel?: SessionOriginChannel } };
 
 const CHANNEL_LABELS: Readonly<Record<SessionOriginChannel, string>> = {
   web: 'Web app',
@@ -264,14 +265,14 @@ const CHANNEL_LABELS: Readonly<Record<SessionOriginChannel, string>> = {
   agent: 'Agent',
 };
 
-const notebookSummary = (row: NotebookRow): string => {
-  const name = row.name?.trim() || 'Untitled';
-  return row.origin?.channel === 'agent' ? `Agent run started "${name}"` : `Started notebook "${name}"`;
-};
+// Notebook titles are generated from the user's first message, so the feed never shows them: an admin
+// gets the notebook id, never content.
+const notebookSummary = (row: NotebookRow): string =>
+  row.origin?.channel === 'agent' ? 'Started an agent run' : 'Started a notebook';
 
 const fetchUsageEntries = async (subject: ActivitySubject, page: TimelinePageOptions): Promise<SourcePage> => {
   const rows = await Session.find({ $and: [{ userId: subject.id }, ...notebookIdClauses(page.cursor, page.range)] })
-    .select('_id name origin')
+    .select('_id origin')
     .sort({ _id: -1 })
     .limit(page.limit + 1)
     .maxTimeMS(QUERY_MAX_TIME_MS)
@@ -281,7 +282,12 @@ const fetchUsageEntries = async (subject: ActivitySubject, page: TimelinePageOpt
     id: row._id.toString(),
     at: row._id.getTimestamp(),
     summary: notebookSummary(row),
-    detail: row.origin?.channel ? `Via ${CHANNEL_LABELS[row.origin.channel]}` : undefined,
+    detail: [
+      `Notebook ${row._id.toString()}`,
+      row.origin?.channel ? `via ${CHANNEL_LABELS[row.origin.channel]}` : undefined,
+    ]
+      .filter(Boolean)
+      .join(' \u00b7 '),
     notebookId: row._id.toString(),
   }));
 };
@@ -303,6 +309,10 @@ const SOURCES: Readonly<
   signup: (subject, page) => fetchSignupEntries(subject.id, subject.account, page),
   signin: fetchSignInEntries,
   key: fetchKeyEntries,
+  api_request: async (subject, page) => {
+    const rows = await readApiRequests(subject.id, page);
+    return fetchedPage(rows, page.limit, apiRequestToEntry);
+  },
   usage: fetchUsageEntries,
   spend: fetchSpendEntries,
   limit: (subject, page) => fetchLimitEntries(subject.id, page.limit, page),
@@ -343,7 +353,13 @@ export const mergeTimelinePages = (
  */
 export const listUserTimeline = async (
   subject: TimelineSubject,
-  options: { types: readonly UserTimelineType[]; limit: number; cursor?: AuditLogCursor; range: TimelineRange }
+  options: {
+    types: readonly UserTimelineType[];
+    limit: number;
+    cursor?: AuditLogCursor;
+    range: TimelineRange;
+    apiKeyId?: string;
+  }
 ) => {
   const { types, ...page } = options;
   const pages = await Promise.all(types.map(type => SOURCES[type](subject, page)));

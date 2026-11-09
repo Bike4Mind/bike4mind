@@ -96,7 +96,7 @@ const VerdictEntrySchema = new Schema<ShadowDetectionVerdictEntry>(
   { _id: false }
 );
 
-export const ShadowDetectionSchema = new Schema<IShadowDetectionDocument>(
+export const ShadowDetectionSchema: Schema<IShadowDetectionDocument> = new Schema<IShadowDetectionDocument>(
   {
     detector: { type: String, enum: SHADOW_DETECTORS, required: true },
     policyVersion: { type: Number, required: true },

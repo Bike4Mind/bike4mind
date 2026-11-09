@@ -86,6 +86,16 @@ describe('OverviewTab recent activity', () => {
     expect(screen.getByTestId('risk-evidence-card-stub')).toHaveTextContent(buildProfile().id);
   });
 
+  it('leaves api requests out of the first request by default', async () => {
+    mocks.get.mockResolvedValue({ data: { entries: [adminRow], nextCursor: null } });
+    renderTab();
+
+    await screen.findAllByTestId('user-profile-recent-activity-row');
+    const types = String(mocks.get.mock.calls[0][1].params.types).split(',');
+    expect(types).not.toContain('api_request');
+    expect(types).toContain('admin');
+  });
+
   it('opens the audit drawer for an admin row and the Credits tab for a credit row', async () => {
     mocks.get.mockResolvedValue({ data: { entries: [adminRow, creditRow], nextCursor: null } });
     const { onViewActivity, onViewCredits } = renderTab();

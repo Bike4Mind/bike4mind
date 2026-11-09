@@ -13,6 +13,7 @@ export { synthesizeSpeechContract } from './contracts/tts.contract';
 export { generateMusicContract } from './contracts/music.contract';
 export { generateSoundEffectContract } from './contracts/soundEffects.contract';
 export { getMeContract } from './contracts/me.contract';
+export { getClientConfigContract } from './contracts/clientConfig.contract';
 export { registerPushTokenContract, unregisterPushTokenContract } from './contracts/pushTokens.contract';
 export { getCreditBalanceContract } from './contracts/credits.contract';
 export { listModelsContract } from './contracts/models.contract';
@@ -50,6 +51,13 @@ export { createTranscriptionUploadContract, createTranscriptionContract } from '
 export { createSessionContract } from './contracts/sessionCreate.contract';
 export { listSessionsContract } from './contracts/sessionList.contract';
 export { listSessionQuestsContract } from './contracts/sessionQuests.contract';
+export { listSessionFilesContract } from './contracts/sessionFiles.contract';
+export { searchSessionsContract } from './contracts/sessionSemanticSearch.contract';
+export {
+  getSessionMessageContract,
+  updateSessionMessageContract,
+  deleteSessionMessageContract,
+} from './contracts/sessionMessages.contract';
 export { listCreditTransactionsContract } from './contracts/creditTransactions.contract';
 export { getWhatsNewMediaContract, listWhatsNewContract } from './contracts/whatsNew.contract';
 export {
@@ -90,6 +98,14 @@ export {
   addProjectSessionsContract,
   removeProjectSessionContract,
 } from './contracts/projectContent.contract';
+export {
+  removeProjectMemberContract,
+  listProjectInvitesContract,
+  createProjectInviteContract,
+  addProjectSystemPromptsContract,
+  updateProjectSystemPromptContract,
+  removeProjectSystemPromptContract,
+} from './contracts/projectSharing.contract';
 export {
   listAgentsContract,
   getAgentContract,

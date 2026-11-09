@@ -27,6 +27,8 @@ const mocks = vi.hoisted(() => ({
   acquireLease: vi.fn(),
 }));
 
+vi.mock('./requestActivity', () => ({ collectRequestActivity: vi.fn() }));
+
 vi.mock('@bike4mind/utils', async importActual => ({
   ...(await importActual<typeof import('@bike4mind/utils')>()),
   getSettingsMap: vi.fn(async () => ({})),
@@ -66,6 +68,7 @@ vi.mock('@bike4mind/server-utils/decisions/providers', () => ({
 }));
 
 import { assessShadowDetection, replayAbuseAssessments, sweepAbuseAssessments } from './abuseAssessment';
+import { collectRequestActivity } from './requestActivity';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never;
 const DETECTION_ID = '65f000000000000000000001';
@@ -102,6 +105,7 @@ beforeEach(() => {
   mocks.platformKey.mockResolvedValue('platform-key');
   mocks.findDetection.mockResolvedValue(detection);
   mocks.findSummaries.mockResolvedValue([]);
+  vi.mocked(collectRequestActivity).mockResolvedValue({ status: 'failed' });
   mocks.findByCacheKey.mockResolvedValue(null);
   mocks.callCap.mockResolvedValue({ success: true, count: 1, expiresAt: new Date() });
   mocks.spend.mockResolvedValue({ success: true, count: 1, expiresAt: new Date() });
@@ -114,6 +118,13 @@ beforeEach(() => {
 });
 
 describe('assessShadowDetection', () => {
+  it('collects request evidence for the target accounts and forwards it to the provider summary', async () => {
+    await assessShadowDetection({ detectionId: DETECTION_ID, trigger: 'admin', requestedBy: 'admin-1', logger });
+    expect(collectRequestActivity).toHaveBeenCalledWith(detection.userIds[0], detection.detectedAt, logger);
+    const saved = mocks.save.mock.calls[0][0];
+    expect(saved.featureSummary.accounts[0].requests).toEqual({ status: 'failed' });
+    expect(JSON.stringify(mocks.providerDecide.mock.calls)).toContain('"requests":{"status":"failed"}');
+  });
   it('records a typed judgment with its versions, paid by the platform and not the assessed user', async () => {
     const outcome = await run();
 

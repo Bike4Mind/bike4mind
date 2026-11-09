@@ -1,3 +1,4 @@
+import type { RolePolicy, TaskAction } from '@shared/orchestration';
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { AttentionNotice, AttentionOpenEvent } from '@shared/attention';
 import type { AccountPage, AuthState, EnvironmentSelection } from '@shared/auth';
@@ -194,6 +195,10 @@ const api: DesktopApi = {
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionPinned, sessionId, pinned),
     setSessionOrchestrate: (sessionId: string, orchestrate: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionOrchestrate, sessionId, orchestrate),
+    getRolePolicy: () => ipcRenderer.invoke(IPC_CHANNELS.chatGetRolePolicy),
+    setRolePolicy: (policy: RolePolicy) => ipcRenderer.invoke(IPC_CHANNELS.chatSetRolePolicy, policy),
+    taskAction: (sessionId: string, action: TaskAction) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatTaskAction, sessionId, action),
     setApprovalMode: (sessionId: string, mode: ChatApprovalMode) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetApprovalMode, sessionId, mode),
     setSessionArchived: (sessionId: string, archived: boolean) =>

@@ -11,6 +11,7 @@ import { synthesizeSpeechContract } from './tts.contract';
 import { generateMusicContract } from './music.contract';
 import { generateSoundEffectContract } from './soundEffects.contract';
 import { getMeContract } from './me.contract';
+import { getClientConfigContract } from './clientConfig.contract';
 import { registerPushTokenContract, unregisterPushTokenContract } from './pushTokens.contract';
 import { getCreditBalanceContract } from './credits.contract';
 import { listModelsContract } from './models.contract';
@@ -48,6 +49,13 @@ import { createTranscriptionUploadContract, createTranscriptionContract } from '
 import { createSessionContract } from './sessionCreate.contract';
 import { listSessionsContract } from './sessionList.contract';
 import { listSessionQuestsContract } from './sessionQuests.contract';
+import { listSessionFilesContract } from './sessionFiles.contract';
+import { searchSessionsContract } from './sessionSemanticSearch.contract';
+import {
+  getSessionMessageContract,
+  updateSessionMessageContract,
+  deleteSessionMessageContract,
+} from './sessionMessages.contract';
 import { listCreditTransactionsContract } from './creditTransactions.contract';
 import { getWhatsNewMediaContract, listWhatsNewContract } from './whatsNew.contract';
 import {
@@ -88,6 +96,14 @@ import {
   addProjectSessionsContract,
   removeProjectSessionContract,
 } from './projectContent.contract';
+import {
+  removeProjectMemberContract,
+  listProjectInvitesContract,
+  createProjectInviteContract,
+  addProjectSystemPromptsContract,
+  updateProjectSystemPromptContract,
+  removeProjectSystemPromptContract,
+} from './projectSharing.contract';
 import {
   listAgentsContract,
   getAgentContract,
@@ -136,6 +152,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   generateMusicContract,
   generateSoundEffectContract,
   getMeContract,
+  getClientConfigContract,
   registerPushTokenContract,
   unregisterPushTokenContract,
   getCreditBalanceContract,
@@ -161,6 +178,11 @@ export const CONTRACTS: readonly EndpointContract[] = [
   createSessionContract,
   listSessionsContract,
   listSessionQuestsContract,
+  listSessionFilesContract,
+  searchSessionsContract,
+  getSessionMessageContract,
+  updateSessionMessageContract,
+  deleteSessionMessageContract,
   listCreditTransactionsContract,
   listDataLakesContract,
   getDataLakeContract,
@@ -206,6 +228,12 @@ export const CONTRACTS: readonly EndpointContract[] = [
   listProjectSessionsContract,
   addProjectSessionsContract,
   removeProjectSessionContract,
+  removeProjectMemberContract,
+  listProjectInvitesContract,
+  createProjectInviteContract,
+  addProjectSystemPromptsContract,
+  updateProjectSystemPromptContract,
+  removeProjectSystemPromptContract,
   listAgentsContract,
   getAgentContract,
   createAgentContract,

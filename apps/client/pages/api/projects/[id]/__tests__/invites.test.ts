@@ -42,7 +42,9 @@ vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit }));
 
 vi.mock('@bike4mind/database', () => ({
   cacheRepository: { tryAddWithinLimitFixedWindow, decrementCounter },
-  projectRepository: {},
+  projectRepository: {
+    shareable: { findShareAccessById: vi.fn(async (_user: unknown, id: string) => ({ id: id.toLowerCase() })) },
+  },
   inviteRepository: {},
   userRepository: {},
   fabFileRepository: {},

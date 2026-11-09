@@ -54,7 +54,7 @@ const ProbabilitySchema = new Schema(
   { _id: false }
 );
 
-export const AbuseAssessmentSchema = new Schema<IAbuseAssessmentDocument>(
+export const AbuseAssessmentSchema: Schema<IAbuseAssessmentDocument> = new Schema<IAbuseAssessmentDocument>(
   {
     cacheKey: { type: String, required: true, unique: true },
     detectionId: { type: String, required: true },

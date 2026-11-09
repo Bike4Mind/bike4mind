@@ -7,6 +7,8 @@ import {
   type AdminLedgerPage,
   type AdminRevokeAllApiKeysResponse,
   type AdminRotateApiKeyResponse,
+  type AdminUsageReceipt,
+  type AdminUsageReceiptQuery,
 } from '@bike4mind/common';
 
 const userPath = (userId: string) => `/api/admin/users/${encodeURIComponent(userId)}`;
@@ -125,3 +127,17 @@ export const useAdminRevokeAllApiKeys = (userId: string) => {
     onSettled: invalidate,
   });
 };
+
+/** The content-free usage receipt for one request; idle while `target` is null. */
+export const useAdminUsageReceipt = (userId: string, target: AdminUsageReceiptQuery | null) =>
+  useQuery({
+    queryKey: ['admin', 'users', userId, 'usage-receipt', target?.requestId, target?.at],
+    queryFn: async (): Promise<AdminUsageReceipt> => {
+      const response = await api.get<AdminUsageReceipt>(`${userPath(userId)}/usage-receipt`, {
+        params: target ?? undefined,
+      });
+      return response.data;
+    },
+    enabled: target !== null,
+    staleTime: 1000 * 60,
+  });

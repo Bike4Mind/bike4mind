@@ -312,6 +312,75 @@ describe('youngAccountSpendSection', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  const logGroups = ['/sst/chat'];
+  // The measured 2.592969 minus u1's 1.5153 on gpt-5.6-sol: that line was not searchable on the first read.
+  const partialRows = rows.slice(1);
+
+  it('re-reads once after a pause when the named lines fall short of the measured value', async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce({ spenders: aggregateSpenders(partialRows), truncated: false })
+      .mockResolvedValueOnce({ spenders: aggregateSpenders(rows), truncated: false });
+    const sleep = vi.fn(async () => {});
+    const text = await youngAccountSpendSection(hourly, { logGroups, fetch, sleep });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledWith(10_000);
+    expect(text.split('\n')[1]).toMatch(/^1\. `u1` 1\.55 USD/);
+    expect(text).not.toContain('Named lines add up');
+  });
+
+  it('says the list is short of the measured value when the re-read still is', async () => {
+    const fetch = vi.fn(async () => ({ spenders: aggregateSpenders(partialRows), truncated: false }));
+    const text = await youngAccountSpendSection(hourly, { logGroups, fetch, sleep: async () => {} });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(text.split('\n').pop()).toBe(
+      'Named lines add up to 1.08 of the 2.59 USD measured; the remaining spend is not represented in this lookup, so a top account may be missing or understated.'
+    );
+  });
+
+  it('keeps the first read when the re-read fails', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce({ spenders: aggregateSpenders(partialRows), truncated: false })
+      .mockRejectedValueOnce(new Error('throttled'));
+    const text = await youngAccountSpendSection(hourly, { logGroups, fetch, sleep: async () => {} });
+    expect(text).toContain('`u2`');
+    expect(text).toContain('Named lines add up to 1.08');
+    expect(warn).toHaveBeenCalledWith('[youngAccountSpendDetail] catch-up lookup failed; retaining the first result');
+  });
+
+  it('re-reads when the first read leaves room inside the budget', async () => {
+    const fetch = vi.fn(async () => ({ spenders: aggregateSpenders(partialRows), truncated: false }));
+    const clock = [0, 5_000];
+    const sleep = vi.fn(async () => {});
+    await youngAccountSpendSection(hourly, { logGroups, fetch, sleep, now: () => clock.shift() ?? 0 });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledWith(10_000);
+  });
+
+  it('skips the re-read when it could not finish inside the relay budget', async () => {
+    const fetch = vi.fn(async () => ({ spenders: aggregateSpenders(partialRows), truncated: false }));
+    const clock = [0, 20_000];
+    const sleep = vi.fn(async () => {});
+    const text = await youngAccountSpendSection(hourly, { logGroups, fetch, sleep, now: () => clock.shift() ?? 0 });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+    expect(text).toContain('Named lines add up to 1.08');
+  });
+
+  it('does not compare a multi-datapoint window against one datapoint', async () => {
+    const fetch = vi.fn(async () => ({ spenders: aggregateSpenders(partialRows), truncated: false }));
+    const twoPoints = {
+      ...hourly,
+      NewStateReason:
+        'Threshold Crossed: 2 datapoints [2.59 (31/10/26 00:17:00), 2.4 (31/10/26 00:12:00)] were greater than or equal to the threshold (2.0).',
+    };
+    const text = await youngAccountSpendSection(twoPoints, { logGroups, fetch, sleep: async () => {} });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(text).not.toContain('Named lines add up');
+  });
+
   it('degrades to a note, and logs, when the query fails', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const fetch = vi.fn(async () => {

@@ -1406,6 +1406,7 @@ export class AnthropicBackend implements ICompletionBackend {
           ? Math.min(Math.floor((options.maxTokens ?? 8192) * 0.25), 4096)
           : (thinkingOptions.thinking?.budget_tokens ?? 16000);
         const effort = resolveAnthropicEffort({
+          model,
           questMaster: isQuestMaster,
           anthropicEffort: options.anthropicEffort,
           reasoningEffort: options.reasoningEffort,

@@ -1,3 +1,4 @@
+import type { RootPolicy, ModelSelection, WorkerTask } from './orchestration';
 /**
  * The chat vocabulary that crosses the contextBridge.
  *
@@ -1282,6 +1283,9 @@ export interface ChatSessionOrigin {
 }
 
 interface ChatSessionMeta {
+  orchestrationPolicy?: RootPolicy;
+  workerSelection?: ModelSelection;
+  workerTask?: WorkerTask;
   id: string;
   /**
    * What the sidebar row says. Provisionally a truncation of the first prompt, replaced moments
@@ -1869,7 +1873,7 @@ export function branchHolder(
  * child's worktree is unusable or already taken. Told apart so the model reports it back rather
  * than retrying, since nothing it can do changes the answer.
  */
-export type SpawnRefusal = 'depth' | 'concurrency' | 'no-project' | 'empty-prompt' | 'branch';
+export type SpawnRefusal = 'depth' | 'concurrency' | 'no-project' | 'empty-prompt' | 'branch' | 'model-policy';
 
 /**
  * A task the model proposed handing to a new session, waiting on the user.

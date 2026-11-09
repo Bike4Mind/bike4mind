@@ -41,6 +41,7 @@ import {
   maxWeeklyRequests,
   requestCounts,
 } from './apiKeysModel';
+import { ApiRequestsSection } from './ApiRequestsSection';
 
 const DASH = '-';
 const VISIBLE_SCOPES = 1;
@@ -382,6 +383,8 @@ export const ApiKeysTab: React.FC<{ user: AdminUserProfile }> = ({ user }) => {
           Request counts come from the usage log, which keeps 90 days.
         </Typography>
       </SectionCard>
+
+      <ApiRequestsSection key={user.id} userId={user.id} apiKeys={apiKeys} />
 
       <ActionDialog
         open={rotating !== null}

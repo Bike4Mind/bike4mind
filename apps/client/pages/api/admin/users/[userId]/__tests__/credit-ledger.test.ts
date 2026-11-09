@@ -28,6 +28,10 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (fn: (req: unknown, res: unknown) => unknown) => fn,
 }));
+vi.mock('@server/utils/ledgerWriteOffs', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/utils/ledgerWriteOffs')>()),
+  loadLedgerWriteOffs: async () => ({ byTransactionId: new Map(), all: [] }),
+}));
 vi.mock('@bike4mind/database', () => ({
   creditTransactionRepository: { findLedgerPage: h.findLedgerPage, sumSignedCreditsNewerThan: h.sumNewer },
   userRepository: { findById: h.findUser },

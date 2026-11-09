@@ -757,7 +757,16 @@ export function useConversation(
       // chips have to stop saying it is on its way.
       setSession(current =>
         current
-          ? { ...current, title: summary.title, project: summary.project, historyEnabled: summary.historyEnabled }
+          ? {
+              ...current,
+              title: summary.title,
+              project: summary.project,
+              historyEnabled: summary.historyEnabled,
+              model: summary.model,
+              orchestrationPolicy: summary.orchestrationPolicy,
+              workerSelection: summary.workerSelection,
+              workerTask: summary.workerTask,
+            }
           : current
       );
     });
@@ -1375,8 +1384,12 @@ export function useConversation(
       // The reply can land after a switch to another conversation, which must keep its own flag.
       setSession(current => {
         if (current?.id !== sessionId) return current;
-        const { orchestrate: _previous, ...rest } = current;
-        return updated.orchestrate ? { ...rest, orchestrate: true } : rest;
+        const { orchestrate: _previous, orchestrationPolicy: _policy, ...rest } = current;
+        return {
+          ...rest,
+          ...(updated.orchestrate ? { orchestrate: true } : {}),
+          ...(updated.orchestrationPolicy ? { orchestrationPolicy: updated.orchestrationPolicy } : {}),
+        };
       });
       onSummaryChanged(updated);
     },

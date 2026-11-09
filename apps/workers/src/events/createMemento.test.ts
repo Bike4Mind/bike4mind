@@ -86,6 +86,7 @@ describe('createMemento evaluation usage', () => {
       modelId: 'chat-model',
       modelInfo,
       completionInfo,
+      operation: 'memento',
       startTime: 123,
       logger,
     });

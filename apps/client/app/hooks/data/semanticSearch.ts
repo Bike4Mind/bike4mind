@@ -34,7 +34,7 @@ interface SemanticSearchResponse {
   sessionIds: string[];
   count: number;
   // scores/debug are omitted on the API's zero-session early return (200), so both
-  // are optional - see pages/api/sessions/semantic-search.ts.
+  // are optional - see pages/api/v1/sessions/semantic-search.ts.
   scores?: SessionScore[];
   debug?: {
     query: string;

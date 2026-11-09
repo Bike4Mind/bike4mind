@@ -32,6 +32,7 @@ const user = { id: 'u1' } as never;
 const run = (completionInfo: object) =>
   recordSessionOperationalUsage({
     user,
+    operation: 'notebook_tagging',
     sessionId: 's1',
     modelId: 'tiered-model',
     modelInfo,
@@ -90,6 +91,7 @@ describe('recordSessionOperationalUsage', () => {
     const runWith = (model: ModelInfo, completionInfo: object) =>
       recordSessionOperationalUsage({
         user,
+        operation: 'notebook_tagging',
         sessionId: 's1',
         modelId: 'tiered-model',
         modelInfo: model,

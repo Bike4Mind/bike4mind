@@ -98,8 +98,13 @@ export const adminLedgerRowSchema = z.object({
   type: z.string(),
   kind: z.enum(ADMIN_LEDGER_KINDS),
   createdAt: z.string(),
-  /** Signed: positive adds credits, negative spends or removes them. */
+  /**
+   * Signed: positive adds credits, negative spends or removes them. On a usage row whose shortfall
+   * was written off, this is what was charged, not the full cost.
+   */
   credits: z.number(),
+  /** Credits of this row's cost written off because the balance could not cover them; cost = |credits| + this. */
+  writtenOffCredits: z.number().optional(),
   /**
    * Balance right after this row. Present on a contiguous view (see isContiguousLedgerFilter; rebuilt
    * back from the current balance) and on admin adjustments (recorded at write time); absent otherwise.
@@ -155,7 +160,10 @@ export type AdminSpendBucket = z.infer<typeof adminSpendBucketSchema>;
 /** GET /api/admin/users/[userId]/credit-summary. Spend counts AI usage rows (kinds usage and api). */
 export const adminCreditSummarySchema = z.object({
   balance: z.number(),
+  /** Credits charged: a written-off shortfall is not spend, and is counted in writtenOff instead. */
   spent: z.object({ last24h: z.number(), last7d: z.number(), last30d: z.number() }),
+  /** Cost of capped turns that the balance could not cover and that was never charged. */
+  writtenOff: z.object({ last24h: z.number(), last7d: z.number(), last30d: z.number() }),
   topModel30d: z.object({ model: z.string(), credits: z.number() }).nullable(),
   lastTopUp: z.object({ at: z.string(), credits: z.number(), type: z.enum(['purchase', 'subscription']) }).nullable(),
   /** One entry per UTC day, oldest first, zero-filled, covering the last 90 days including today. */
