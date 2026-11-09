@@ -195,6 +195,7 @@ describe('synchronized API observation storage', () => {
     });
     expect(await ApiKeyUsageLog.countDocuments()).toBe(0);
     expect(await apiKeyUsageLogRepository.beginCompletionObservation(startInput())).toBeNull();
+    expect(await ApiKeyUsageLog.countDocuments()).toBe(0);
   });
   it('removes a new start inserted concurrently with a participant purge marker', async () => {
     const original = ApiKeyUsageLog.updateOne.bind(ApiKeyUsageLog);

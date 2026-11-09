@@ -93,7 +93,6 @@ export class ApiKeyUsageLogRepository extends BaseRepository<IApiKeyUsageLogDocu
   ): Promise<string | null> {
     const available = () =>
       User.exists({ _id: input.userId, deletedAt: null, 'deletion.purgeStartedAt': null }).maxTimeMS(2_000);
-    if (!(await available())) return null;
     const id = new mongoose.Types.ObjectId();
     await this.model.updateOne(
       { _id: id },
@@ -164,8 +163,9 @@ export class ApiKeyUsageLogRepository extends BaseRepository<IApiKeyUsageLogDocu
       .exec();
 
     const totalRequests = logs.length;
+    const timedLogs = logs.filter(log => log.statusCode !== 0);
     const avgResponseTime =
-      totalRequests > 0 ? logs.reduce((sum, log) => sum + log.responseTime, 0) / totalRequests : 0;
+      timedLogs.length > 0 ? timedLogs.reduce((sum, log) => sum + log.responseTime, 0) / timedLogs.length : 0;
     const uniqueIPs = Array.from(new Set(logs.map(log => log.ipAddress)));
     const timeRangeMinutes = (endDate.getTime() - startDate.getTime()) / (1000 * 60);
     const requestsPerMinute = timeRangeMinutes > 0 ? totalRequests / timeRangeMinutes : 0;
@@ -302,9 +302,15 @@ export class ApiKeyUsageLogRepository extends BaseRepository<IApiKeyUsageLogDocu
               $group: {
                 _id: { endpoint: '$endpoint', method: '$method' },
                 requests: { $sum: 1 },
-                totalResponseTime: { $sum: '$responseTime' },
+                totalResponseTime: { $sum: { $cond: [{ $gt: ['$statusCode', 0] }, '$responseTime', 0] } },
+                timedRequests: { $sum: { $cond: [{ $gt: ['$statusCode', 0] }, 1, 0] } },
                 errors: { $sum: { $cond: [{ $gte: ['$statusCode', 400] }, 1, 0] } },
-                responseTimes: { $push: '$responseTime' },
+                responseTimes: { $push: { $cond: [{ $gt: ['$statusCode', 0] }, '$responseTime', null] } },
+              },
+            },
+            {
+              $addFields: {
+                responseTimes: { $filter: { input: '$responseTimes', cond: { $ne: ['$$this', null] } } },
               },
             },
             {
@@ -326,10 +332,10 @@ export class ApiKeyUsageLogRepository extends BaseRepository<IApiKeyUsageLogDocu
                 method: '$_id.method',
                 requests: 1,
                 avgResponseTimeMs: {
-                  $cond: [{ $gt: ['$requests', 0] }, { $divide: ['$totalResponseTime', '$requests'] }, 0],
+                  $cond: [{ $gt: ['$timedRequests', 0] }, { $divide: ['$totalResponseTime', '$timedRequests'] }, 0],
                 },
                 p95ResponseTimeMs: {
-                  $arrayElemAt: [{ $sortArray: { input: '$responseTimes', sortBy: 1 } }, '$p95Index'],
+                  $ifNull: [{ $arrayElemAt: [{ $sortArray: { input: '$responseTimes', sortBy: 1 } }, '$p95Index'] }, 0],
                 },
                 errorRate: { $cond: [{ $gt: ['$requests', 0] }, { $divide: ['$errors', '$requests'] }, 0] },
               },
