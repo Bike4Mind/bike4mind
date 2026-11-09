@@ -1314,7 +1314,7 @@ const SlackWorkspacesTab: React.FC = () => {
                       {asyncJob.currentStep}
                       {asyncJob.processedMessages !== undefined && asyncJob.processedMessages > 0 && (
                         <>
-                          {' • '}
+                          {' \u2022 '}
                           {asyncJob.processedMessages.toLocaleString()} messages
                         </>
                       )}
@@ -1328,7 +1328,7 @@ const SlackWorkspacesTab: React.FC = () => {
                       {asyncJob.processedMessages?.toLocaleString()} messages exported
                       {asyncJob.fileSize && (
                         <>
-                          {' • '}
+                          {' \u2022 '}
                           {(asyncJob.fileSize / 1024).toFixed(1)} KB
                         </>
                       )}

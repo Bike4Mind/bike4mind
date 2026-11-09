@@ -1001,7 +1001,7 @@ const GitHubConnectionTab: React.FC = () => {
               slotProps={{ input: { 'data-testid': 'github-installation-id-input' } }}
             />
             <Typography level="body-xs" sx={{ mt: 0.5, color: 'admin.inkMuted' }}>
-              Found in Settings {'→'} Installations {'→'} Configure {'→'} URL contains installation ID
+              Found in Settings {'\u2192'} Installations {'\u2192'} Configure {'\u2192'} URL contains installation ID
             </Typography>
           </FormControl>
 
@@ -1024,7 +1024,7 @@ const GitHubConnectionTab: React.FC = () => {
               }}
             />
             <Typography level="body-xs" sx={{ mt: 0.5, color: 'admin.inkMuted' }}>
-              Generate in your GitHub App settings {'→'} Private keys
+              Generate in your GitHub App settings {'\u2192'} Private keys
             </Typography>
           </FormControl>
         </Stack>
