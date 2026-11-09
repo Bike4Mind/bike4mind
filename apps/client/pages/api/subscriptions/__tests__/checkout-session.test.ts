@@ -24,6 +24,11 @@ vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   },
 }));
 
+const mockPlanCreditsPerCycle = vi.fn();
+vi.mock('@bike4mind/server-utils/lib/userSubscriptions/planCreditsPerCycle', () => ({
+  planCreditsPerCycle: (...args: unknown[]) => mockPlanCreditsPerCycle(...args),
+}));
+
 import handler from '../checkout-session';
 
 type HandlerFn = (req: unknown, res: unknown) => Promise<unknown>;
@@ -56,6 +61,10 @@ function call(sessionId: string | undefined, userId = OWNER_ID) {
 describe('GET /api/subscriptions/checkout-session', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockPlanCreditsPerCycle.mockImplementation(
+      async ({ ownerType, priceId, quantity }: { ownerType: string; priceId?: string; quantity: number }) =>
+        ownerType === 'Organization' ? quantity * 1000 : priceId === 'price_pro' ? 50000 : null
+    );
   });
 
   it('returns the purchase facts in major currency units', async () => {
@@ -71,7 +80,34 @@ describe('GET /api/subscriptions/checkout-session', () => {
       priceId: 'price_pro',
       planName: 'Professional',
       quantity: 1,
+      credits: 50000,
     });
+  });
+
+  it("returns a team checkout's per-seat credits for the seats bought", async () => {
+    mockSessionsRetrieve.mockResolvedValue(
+      paidSession({
+        subscription: { metadata: { userId: OWNER_ID, ownerType: 'Organization' } },
+        line_items: { data: [{ price: { id: 'price_team' }, description: 'Team', quantity: 3 }] },
+      })
+    );
+
+    const { promise, res } = call('cs_test_1');
+    await promise;
+
+    expect(res._getJSONData()).toMatchObject({ planName: 'Team', quantity: 3, credits: 3000 });
+  });
+
+  it('still returns the conversion facts when the credits lookup fails', async () => {
+    mockSessionsRetrieve.mockResolvedValue(paidSession());
+    mockPlanCreditsPerCycle.mockRejectedValue(new Error('settings read failed'));
+
+    const { promise, res } = call('cs_test_1');
+    await promise;
+
+    const data = res._getJSONData();
+    expect(data).toMatchObject({ transactionId: 'cs_test_1', value: 30 });
+    expect(data.credits).toBeUndefined();
   });
 
   it('retrieves the caller-supplied session with the expansions authorization needs', async () => {
