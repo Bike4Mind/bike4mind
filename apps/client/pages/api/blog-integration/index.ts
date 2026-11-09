@@ -39,7 +39,7 @@ const handler = baseApi()
         connected: true,
         settings: {
           ...settings,
-          apiKeyPreview: `...${apiKey.slice(-4)}`,
+          apiKeyPreview: apiKey.length > 4 ? `...${apiKey.slice(-4)}` : '****',
         },
       });
     } catch (error) {

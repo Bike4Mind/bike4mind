@@ -43,7 +43,7 @@ const { update, findById } = vi.hoisted(() => ({ update: vi.fn(), findById: vi.f
 vi.mock('@bike4mind/database', () => ({ userRepository: { findById, update } }));
 vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   encryptToken: (v: string) => `enc:${v}`,
-  decryptToken: (v: string) => `dec:${v}`,
+  decryptToken: (v: string) => v.replace(/^enc:/, ''),
 }));
 
 // The SSRF gate resolves DNS; stub it so blog.example.com is public and *.nip.io is loopback.
@@ -74,6 +74,16 @@ describe('GET /api/blog-integration', () => {
     const body = res._getJSONData();
     expect(body.settings.apiKeyPreview).toBe('...abcd');
     expect(JSON.stringify(body)).not.toContain('prefix');
+  });
+
+  it('does not expose a key shorter than the preview length', async () => {
+    findById.mockResolvedValue({ blogIntegration: { apiKey: 'abc' } });
+    const { req, res } = createMocks({ method: 'GET' });
+    Object.assign(req, { user: { id: 'u1' } });
+
+    await mockRefs.get!(req, res);
+
+    expect(res._getJSONData().settings.apiKeyPreview).toBe('****');
   });
 });
 
