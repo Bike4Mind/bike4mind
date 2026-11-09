@@ -69,8 +69,6 @@ const componentsByFile = {
   'SlackMetrics/SlackMetricsTab.tsx': ['Card'],
   'SlackWorkspacesTab.tsx': ['Card', 'Modal', 'Table'],
   'SreAgentTab.tsx': ['Card', 'Modal', 'Table'],
-  'SystemPromptEditor.tsx': ['Modal', 'Table'],
-  'SystemPromptsManager.tsx': ['Card', 'Modal'],
   'Team/index.tsx': ['Card', 'Modal'],
   'ToolDefinitionsTab.tsx': ['Card', 'Modal', 'Table'],
   'Users/BulkAbuseResponseModal.tsx': ['Modal'],

@@ -1,26 +1,23 @@
 import React, { useState, useMemo } from 'react';
 import {
+  Alert,
   Box,
-  Typography,
-  Card,
-  Chip,
-  CircularProgress,
   Button,
-  IconButton,
-  Input,
-  Stack,
-  Tooltip,
-  Modal,
-  ModalDialog,
-  ModalClose,
-  DialogTitle,
   DialogContent,
-  List,
-  ListItem,
+  Dropdown,
   FormControl,
   FormLabel,
-  Divider,
-  Alert,
+  IconButton,
+  Input,
+  List,
+  ListDivider,
+  ListItem,
+  Menu,
+  MenuButton,
+  MenuItem,
+  Stack,
+  Tooltip,
+  Typography,
 } from '@mui/joy';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
@@ -28,16 +25,13 @@ import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
 import { useUpdateSettings } from '@client/app/hooks/data/settings';
 import { toast } from 'sonner';
 import AddIcon from '@mui/icons-material/Add';
-import DeleteIcon from '@mui/icons-material/Delete';
-import VisibilityIcon from '@mui/icons-material/Visibility';
-import PublicIcon from '@mui/icons-material/Public';
+import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import SearchIcon from '@mui/icons-material/Search';
-import InfoIcon from '@mui/icons-material/Info';
-import DescriptionIcon from '@mui/icons-material/Description';
 import { useKnowledgeModal } from '../Knowledge/KnowledgeModal';
 import { useGetFabFiles } from '@client/app/hooks/data/fabFiles';
 import debounce from 'lodash/debounce';
-import WarningIcon from '@mui/icons-material/Warning';
+import { AdminDialog, DataTable, EmptyState, LoadingState, StatusChip, type DataColumn } from './shared';
+import { adminFocus } from './shared/adminStyles';
 
 interface SystemFile {
   id: string;
@@ -54,6 +48,68 @@ interface SystemFileWithStatus {
   id: string;
   file?: SystemFile;
   status: 'loaded' | 'missing';
+}
+
+const dash = (
+  <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
+    -
+  </Typography>
+);
+
+/** One line that truncates with an ellipsis, the full text on hover. */
+const TruncatedText = ({ text, mono, testId }: { text: string; mono?: boolean; testId?: string }) => (
+  <Tooltip title={text} placement="top-start">
+    <Typography
+      level="body-sm"
+      noWrap
+      data-testid={testId}
+      sx={{ color: 'admin.ink', minWidth: 0, ...(mono && { fontFamily: 'code' }) }}
+    >
+      {text}
+    </Typography>
+  </Tooltip>
+);
+
+function FileRowMenu({
+  item,
+  onView,
+  onRemove,
+}: {
+  item: SystemFileWithStatus;
+  onView: (fileId: string) => void;
+  onRemove: (fileId: string) => void;
+}) {
+  return (
+    <Dropdown>
+      <MenuButton
+        slots={{ root: IconButton }}
+        slotProps={{
+          root: {
+            size: 'sm',
+            variant: 'plain',
+            'aria-label': `Actions for ${item.file?.fileName ?? item.id}`,
+            sx: { ...adminFocus, color: 'admin.inkMuted' },
+          },
+        }}
+        data-testid={`system-files-row-actions-${item.id}`}
+      >
+        <MoreHorizIcon sx={{ fontSize: 18 }} />
+      </MenuButton>
+      <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
+        {item.status === 'loaded' && (
+          <>
+            <MenuItem onClick={() => onView(item.id)} data-testid={`system-files-row-view-${item.id}`}>
+              View file
+            </MenuItem>
+            <ListDivider />
+          </>
+        )}
+        <MenuItem onClick={() => onRemove(item.id)} data-testid={`system-files-row-remove-${item.id}`}>
+          Remove from list
+        </MenuItem>
+      </Menu>
+    </Dropdown>
+  );
 }
 
 export const SystemPromptsManager: React.FC = () => {
@@ -78,6 +134,7 @@ export const SystemPromptsManager: React.FC = () => {
     data: systemFilesWithStatus = [],
     isLoading: filesLoading,
     error: filesError,
+    refetch: refetchFiles,
   } = useQuery({
     queryKey: ['system-files', systemFileIds],
     queryFn: async () => {
@@ -212,7 +269,6 @@ export const SystemPromptsManager: React.FC = () => {
     setKnowledgeModalOpen(true);
   };
 
-  const configuredCount = systemFileIds.length;
   const missingCount = systemFilesWithStatus.filter((f: SystemFileWithStatus) => f.status === 'missing').length;
 
   const formatFileSize = (bytes: number): string => {
@@ -223,248 +279,244 @@ export const SystemPromptsManager: React.FC = () => {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
-  return (
-    <Card variant="outlined" sx={{ p: 3 }}>
-      <Stack spacing={3}>
-        {/* Header */}
-        <Stack direction={{ xs: 'column', sm: 'row' }} alignItems={{ xs: 'flex-start', sm: 'center' }} spacing={2}>
-          <Stack direction="row" alignItems="center" spacing={2} sx={{ flex: 1 }}>
-            <PublicIcon sx={{ fontSize: 28 }} />
-            <Typography level="h3">Global System Prompts</Typography>
-          </Stack>
-          <Button
-            variant="soft"
-            color="primary"
-            size="sm"
-            startDecorator={<AddIcon />}
-            onClick={() => setShowFilePicker(true)}
-            sx={{ width: { xs: '100%', sm: 'auto' } }}
-          >
-            Add System File
-          </Button>
-        </Stack>
+  // Files still loading after an optimistic add have no `file` yet and wait for the refetch.
+  const listedFiles = [
+    ...systemFilesWithStatus.filter(item => item.status === 'loaded' && item.file !== undefined),
+    ...systemFilesWithStatus.filter(item => item.status === 'missing'),
+  ];
 
-        <Alert variant="soft" color="neutral" sx={{ mb: 3 }} startDecorator={<InfoIcon />}>
-          <Typography level="body-sm">
-            Global system prompts are automatically included in all AI conversations for all users. Use them for
-            universal instructions, grammar rules, or company-wide guidelines.
-          </Typography>
-        </Alert>
-
-        <Typography level="title-md" sx={{ mb: 2 }}>
-          System Files Configuration ({configuredCount} total)
-        </Typography>
-
-        {filesLoading ? (
-          <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
-            <CircularProgress />
-          </Box>
-        ) : filesError ? (
-          <Alert color="danger" sx={{ mb: 2 }}>
-            <WarningIcon />
-            Failed to load system files: {(filesError as any).message || 'Unknown error'}
-          </Alert>
+  const fileColumns: DataColumn<SystemFileWithStatus>[] = [
+    {
+      id: 'name',
+      label: 'File',
+      render: item =>
+        item.file ? (
+          <TruncatedText text={item.file.fileName} testId={`system-files-name-${item.id}`} />
         ) : (
-          <>
-            {missingCount > 0 && (
-              <Alert color="warning" sx={{ mb: 2 }} startDecorator={<WarningIcon />}>
-                <Typography level="body-sm">
-                  {missingCount} system file{missingCount > 1 ? 's' : ''} could not be found (404). You can remove them
-                  below.
-                </Typography>
-              </Alert>
-            )}
+          <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
+            File not found
+          </Typography>
+        ),
+    },
+    {
+      id: 'id',
+      label: 'ID',
+      width: '14rem',
+      render: item => <TruncatedText text={item.id} mono />,
+    },
+    {
+      id: 'type',
+      label: 'Type',
+      width: '10rem',
+      render: item => {
+        const type = item.file?.fileType || item.file?.mimeType;
+        return type ? <TruncatedText text={type} /> : dash;
+      },
+    },
+    {
+      id: 'size',
+      label: 'Size',
+      width: '6rem',
+      numeric: true,
+      render: item => (item.file ? formatFileSize(item.file.fileSize || 0) : dash),
+    },
+    {
+      id: 'updated',
+      label: 'Updated',
+      width: '7.5rem',
+      render: item => (item.file?.updatedAt ? new Date(item.file.updatedAt).toLocaleDateString() : dash),
+    },
+    {
+      id: 'status',
+      label: 'Status',
+      width: '6.5rem',
+      render: item =>
+        item.status === 'missing' ? (
+          <StatusChip tone="bad" label="Missing" data-testid={`system-files-status-${item.id}`} />
+        ) : (
+          <StatusChip tone="good" label="Available" data-testid={`system-files-status-${item.id}`} />
+        ),
+    },
+  ];
 
-            {systemFilesWithStatus.length === 0 ? (
-              <Card variant="outlined" sx={{ p: 3, textAlign: 'center', backgroundColor: 'background.level1' }}>
-                <Typography level="body-lg" sx={{ color: 'text.secondary' }}>
-                  No global system files configured. Add files to provide universal AI instructions.
-                </Typography>
-              </Card>
+  return (
+    <Stack component="section" gap={1.5} sx={{ minWidth: 0 }} data-testid="system-files-section">
+      <Stack direction="row" flexWrap="wrap" alignItems="flex-start" justifyContent="space-between" gap={1}>
+        <Box sx={{ minWidth: 0 }}>
+          <Typography level="title-md" component="h2" sx={{ color: 'admin.ink' }} data-testid="system-files-title">
+            Global knowledge files
+          </Typography>
+          <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
+            Included in every AI conversation for every user: universal instructions, grammar rules or company-wide
+            guidelines.
+          </Typography>
+        </Box>
+        <Button
+          variant="outlined"
+          size="sm"
+          startDecorator={<AddIcon sx={{ fontSize: 16 }} />}
+          onClick={() => setShowFilePicker(true)}
+          data-testid="system-files-add-btn"
+          sx={adminFocus}
+        >
+          Add files
+        </Button>
+      </Stack>
+
+      {missingCount > 0 && (
+        <Alert color="warning" variant="soft" data-testid="system-files-missing-banner">
+          {missingCount} system file{missingCount > 1 ? 's' : ''} could not be found (404). Remove{' '}
+          {missingCount > 1 ? 'them' : 'it'} from the list with the row menu.
+        </Alert>
+      )}
+
+      <DataTable
+        label="Global knowledge files"
+        testId="system-files-table"
+        rows={listedFiles}
+        columns={fileColumns}
+        getRowId={item => item.id}
+        rowTestId={item => `system-files-row-${item.id}`}
+        loading={filesLoading}
+        error={filesError ? 'Could not load the knowledge files.' : undefined}
+        onRetry={() => void refetchFiles()}
+        empty={
+          <EmptyState
+            title="No knowledge files yet"
+            description="Add files to provide universal AI instructions."
+            action={
+              <Button
+                variant="outlined"
+                onClick={() => setShowFilePicker(true)}
+                data-testid="system-files-empty-add-btn"
+              >
+                Add files
+              </Button>
+            }
+          />
+        }
+        rowActions={item => (
+          <FileRowMenu item={item} onView={handleViewFile} onRemove={fileId => void handleRemoveFile(fileId)} />
+        )}
+        pagination={false}
+        // Wide enough that every column keeps one line; below it the table scrolls inside its frame.
+        minWidth="60rem"
+        maxHeight="none"
+      />
+
+      <AdminDialog
+        open={showFilePicker}
+        onClose={() => setShowFilePicker(false)}
+        title="Add system files"
+        width={600}
+        data-testid="system-files-add-dialog"
+      >
+        <DialogContent sx={{ gap: 2 }}>
+          <FormControl>
+            <FormLabel>Search files</FormLabel>
+            <Input
+              placeholder="Search by file name..."
+              startDecorator={<SearchIcon />}
+              onChange={e => handleSearch()}
+            />
+          </FormControl>
+
+          {/* The padding keeps the focus rings of the pick buttons inside this scroll box. */}
+          <Box sx={{ maxHeight: '400px', overflowY: 'auto', p: 0.5 }}>
+            {searchLoading ? (
+              <LoadingState label="Loading files" />
             ) : (
-              <Stack spacing={2}>
-                {/* Show loaded files first */}
-                {systemFilesWithStatus
-                  .filter(
-                    (item): item is SystemFileWithStatus & { status: 'loaded'; file: SystemFile } =>
-                      item.status === 'loaded' && item.file !== undefined
-                  )
-                  .map((item: SystemFileWithStatus & { status: 'loaded'; file: SystemFile }, index: number) => {
-                    const file = item.file;
-                    return (
-                      <Card key={item.id} variant="outlined" sx={{ p: 2 }}>
-                        <Stack direction="row" alignItems="center" spacing={2}>
-                          <Chip size="sm" variant="soft" color="primary">
-                            #{index + 1}
-                          </Chip>
-                          <DescriptionIcon sx={{ color: 'text.secondary' }} />
-                          <Box sx={{ flex: 1 }}>
-                            <Typography level="title-sm">{file.fileName}</Typography>
-                            <Stack direction="row" spacing={2}>
-                              <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-                                ID: {item.id}
-                              </Typography>
-                              <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-                                {file.fileType || file.mimeType} • {formatFileSize(file.fileSize || 0)}
-                              </Typography>
-                              {file.updatedAt && (
-                                <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-                                  Updated: {new Date(file.updatedAt).toLocaleDateString()}
-                                </Typography>
-                              )}
-                            </Stack>
-                          </Box>
-                          <IconButton size="sm" variant="plain" color="neutral" onClick={() => handleViewFile(item.id)}>
-                            <VisibilityIcon />
-                          </IconButton>
-                          <IconButton
-                            size="sm"
-                            variant="plain"
-                            color="danger"
-                            onClick={() => handleRemoveFile(item.id)}
-                          >
-                            <DeleteIcon />
-                          </IconButton>
-                        </Stack>
-                      </Card>
-                    );
-                  })}
+              <List>
+                {availableFiles.map(file => {
+                  const isAlreadySystem = systemFileIds.includes(file.id);
+                  const isSelected = selectedFiles.includes(file.id);
 
-                {/* Show missing files */}
-                {systemFilesWithStatus
-                  .filter((item: SystemFileWithStatus) => item.status === 'missing')
-                  .map((item: SystemFileWithStatus) => (
-                    <Card key={item.id} variant="outlined" sx={{ p: 2, backgroundColor: 'danger.softBg' }}>
-                      <Stack direction="row" alignItems="center" spacing={2}>
-                        <Chip size="sm" variant="soft" color="danger">
-                          Missing
-                        </Chip>
-                        <WarningIcon sx={{ color: 'danger.plainColor' }} />
-                        <Box sx={{ flex: 1 }}>
-                          <Typography level="title-sm" sx={{ color: 'danger.plainColor' }}>
-                            File Not Found
+                  return (
+                    <ListItem key={file.id}>
+                      <Box
+                        sx={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          gap: 1,
+                          width: '100%',
+                        }}
+                      >
+                        <Box sx={{ minWidth: 0 }}>
+                          <Typography level="body-sm" noWrap sx={{ color: 'admin.ink' }}>
+                            {file.fileName}
                           </Typography>
-                          <Typography level="body-xs" sx={{ color: 'danger.plainColor' }}>
-                            ID: {item.id}
+                          <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+                            {file.mimeType} {'\u2022'} {formatFileSize(file.fileSize)}
                           </Typography>
                         </Box>
-                        <Tooltip title="Remove this missing file reference">
-                          <IconButton
+                        {isAlreadySystem ? (
+                          <StatusChip
+                            tone="neutral"
+                            label="Already added"
+                            data-testid={`system-files-already-added-${file.id}`}
+                          />
+                        ) : (
+                          <Button
                             size="sm"
-                            variant="solid"
-                            color="danger"
-                            onClick={() => handleRemoveFile(item.id)}
+                            variant={isSelected ? 'soft' : 'outlined'}
+                            color="neutral"
+                            aria-pressed={isSelected}
+                            onClick={() => {
+                              if (isSelected) {
+                                setSelectedFiles(prev => prev.filter((id: string) => id !== file.id));
+                              } else {
+                                setSelectedFiles(prev => [...prev, file.id]);
+                              }
+                            }}
+                            data-testid={`system-files-pick-${file.id}`}
                           >
-                            <DeleteIcon />
-                          </IconButton>
-                        </Tooltip>
-                      </Stack>
-                    </Card>
-                  ))}
-              </Stack>
+                            {isSelected ? 'Selected' : 'Select'}
+                          </Button>
+                        )}
+                      </Box>
+                    </ListItem>
+                  );
+                })}
+              </List>
             )}
-          </>
-        )}
+          </Box>
+        </DialogContent>
 
-        {/* File Picker Modal */}
-        <Modal open={showFilePicker} onClose={() => setShowFilePicker(false)}>
-          <ModalDialog size="lg" sx={{ maxWidth: '600px' }}>
-            <DialogTitle>
-              <Typography level="h4">Add System Files</Typography>
-              <ModalClose />
-            </DialogTitle>
-            <DialogContent>
-              <Stack spacing={2}>
-                <FormControl>
-                  <FormLabel>Search Files</FormLabel>
-                  <Input
-                    placeholder="Search by file name..."
-                    startDecorator={<SearchIcon />}
-                    onChange={e => handleSearch()}
-                  />
-                </FormControl>
-
-                <Box sx={{ maxHeight: '400px', overflowY: 'auto' }}>
-                  {searchLoading ? (
-                    <Box sx={{ textAlign: 'center', p: 3 }}>
-                      <CircularProgress size="sm" />
-                    </Box>
-                  ) : (
-                    <List>
-                      {availableFiles.map(file => {
-                        const isAlreadySystem = systemFileIds.includes(file.id);
-                        const isSelected = selectedFiles.includes(file.id);
-
-                        return (
-                          <ListItem key={file.id}>
-                            <Box
-                              sx={{
-                                display: 'flex',
-                                justifyContent: 'space-between',
-                                alignItems: 'center',
-                                width: '100%',
-                                opacity: isAlreadySystem ? 0.5 : 1,
-                              }}
-                            >
-                              <Box>
-                                <Typography>{file.fileName}</Typography>
-                                <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-                                  {file.mimeType} • {formatFileSize(file.fileSize)}
-                                </Typography>
-                              </Box>
-                              {isAlreadySystem ? (
-                                <Chip size="sm" color="success" variant="soft">
-                                  Already Added
-                                </Chip>
-                              ) : (
-                                <Button
-                                  size="sm"
-                                  variant={isSelected ? 'solid' : 'outlined'}
-                                  color={isSelected ? 'success' : 'neutral'}
-                                  onClick={() => {
-                                    if (isSelected) {
-                                      setSelectedFiles(prev => prev.filter((id: string) => id !== file.id));
-                                    } else {
-                                      setSelectedFiles(prev => [...prev, file.id]);
-                                    }
-                                  }}
-                                >
-                                  {isSelected ? 'Selected' : 'Select'}
-                                </Button>
-                              )}
-                            </Box>
-                          </ListItem>
-                        );
-                      })}
-                    </List>
-                  )}
-                </Box>
-
-                <Divider />
-
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <Typography level="body-sm">{selectedFiles.length} file(s) selected</Typography>
-                  <Stack direction="row" spacing={1}>
-                    <Button
-                      variant="plain"
-                      color="neutral"
-                      onClick={() => {
-                        setShowFilePicker(false);
-                        setSelectedFiles([]);
-                      }}
-                    >
-                      Cancel
-                    </Button>
-                    <Button startDecorator={<AddIcon />} disabled={selectedFiles.length === 0} onClick={handleAddFiles}>
-                      Add Selected Files
-                    </Button>
-                  </Stack>
-                </Box>
-              </Stack>
-            </DialogContent>
-          </ModalDialog>
-        </Modal>
-      </Stack>
-    </Card>
+        <Stack
+          direction="row"
+          alignItems="center"
+          justifyContent="space-between"
+          flexWrap="wrap"
+          gap={1}
+          sx={{ pt: 2, mt: 1, borderTop: '1px solid', borderColor: 'admin.border' }}
+        >
+          <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }} data-testid="system-files-selected-count">
+            {selectedFiles.length} file(s) selected
+          </Typography>
+          <Stack direction="row" gap={1}>
+            <Button
+              variant="plain"
+              color="neutral"
+              onClick={() => {
+                setShowFilePicker(false);
+                setSelectedFiles([]);
+              }}
+              data-testid="system-files-add-cancel-btn"
+            >
+              Cancel
+            </Button>
+            <Button
+              startDecorator={<AddIcon />}
+              disabled={selectedFiles.length === 0}
+              onClick={handleAddFiles}
+              data-testid="system-files-add-confirm-btn"
+            >
+              Add selected files
+            </Button>
+          </Stack>
+        </Stack>
+      </AdminDialog>
+    </Stack>
   );
 };

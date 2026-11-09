@@ -70,8 +70,6 @@ export default {
   'SlackMetrics/SlackMetricsTab.tsx': [[2, 'e2ae0a0feb2b939a']],
   'SlackWorkspacesTab.tsx': [[2, '533bd942dfb864f5']],
   'SreAgentTab.tsx': [[11, '5feea0e0c55f7cf4']],
-  'SystemPromptEditor.tsx': [[2, 'd7fd73474f2153cb']],
-  'SystemPromptsManager.tsx': [[2, '98c62168033635be']],
   'Team/index.tsx': [[1, '78a3901c08799aeb']],
   'ToolDefinitionsTab.tsx': [[2, '562c6807618929aa']],
   'Users/BulkAbuseResponseModal.tsx': [[22, 'c70df252992eb367']],
