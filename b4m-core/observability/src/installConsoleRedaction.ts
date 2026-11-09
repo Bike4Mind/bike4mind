@@ -31,7 +31,9 @@ export function installConsoleRedaction(target: ConsoleLike = console): void {
     let redacting = false;
     target[method] = (...args: unknown[]) => {
       if (redacting) {
-        original(...args.map(arg => (typeof arg === 'string' ? redactLogValue(arg) : '[Unserializable]')));
+        original(
+          ...args.map(arg => (typeof arg === 'object' && arg !== null ? '[Unserializable]' : redactLogValue(arg)))
+        );
         return;
       }
       redacting = true;

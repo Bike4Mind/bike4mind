@@ -48,12 +48,12 @@ describe('installConsoleRedaction', () => {
     installConsoleRedaction(target);
     const noisy = {
       toJSON() {
-        target.warn('nested for jane@example.com', { otc: '123456' });
+        target.warn('nested for jane@example.com', 7, { otc: '123456' });
         return { ok: true };
       },
     };
     target.warn(noisy);
-    expect(original).toHaveBeenNthCalledWith(1, 'nested for ***@example.com', '[Unserializable]');
+    expect(original).toHaveBeenNthCalledWith(1, 'nested for ***@example.com', 7, '[Unserializable]');
     expect(original).toHaveBeenNthCalledWith(2, { ok: true });
   });
 });
