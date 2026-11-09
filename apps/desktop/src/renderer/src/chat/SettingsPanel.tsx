@@ -17,6 +17,7 @@ import type { AuthState } from '@shared/auth';
 import type { PermissionsState } from '@shared/permissions';
 import { updateAttention, updateSummary } from '@shared/update';
 import { EnvironmentPicker } from '../auth/EnvironmentPicker';
+import { BillingSettings } from '../profile/BillingSettings';
 import type { ClaudeImportState } from '@shared/claudeImport';
 import { ClaudeImportSettings, claudeImportSummary, useClaudeImport } from './ClaudeImportSettings';
 import type { LocalContextFit, LocalContextSetting } from '@shared/localContextSetting';
@@ -41,6 +42,7 @@ import {
   SoundIcon,
   SparkIcon,
   SubSessionsIcon,
+  UserIcon,
 } from './icons';
 import { nestedSessionsSummary, useNestedSessions } from './nestedSessions';
 import { useOrchestratorSound } from './orchestrator/chime';
@@ -368,7 +370,7 @@ function modelServersEntry(
 }
 
 /** The pages of Settings, in the order the side nav lists them. */
-export const SETTINGS_SECTIONS = ['general', 'servers', 'permissions', 'import', 'worktrees'] as const;
+export const SETTINGS_SECTIONS = ['general', 'billing', 'servers', 'permissions', 'import', 'worktrees'] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
 export function isSettingsSection(value: unknown): value is SettingsSection {
@@ -380,6 +382,7 @@ const SETTINGS_NAV_WIDTH = 200;
 
 const SECTION_LABEL: Record<SettingsSection, string> = {
   general: 'General',
+  billing: 'Billing',
   servers: 'Model servers',
   permissions: 'Permissions',
   import: 'Import',
@@ -388,6 +391,7 @@ const SECTION_LABEL: Record<SettingsSection, string> = {
 
 const SECTION_ICON: Record<SettingsSection, ReactNode> = {
   general: <SlidersIcon />,
+  billing: <UserIcon />,
   servers: <ServerIcon />,
   permissions: <ShieldIcon />,
   import: <FolderIcon />,
@@ -449,6 +453,7 @@ function useSettingsEntries(auth: AuthState | null): Record<SettingsSection, Con
       ...(auth ? [serverEntry(auth)] : []),
       updatesEntry(update),
     ],
+    billing: [],
     servers: [modelServersEntry(modelServers, setModelServers, modelServersError)],
     permissions: [permissionsEntry(permissions, setPermissions, permissionsError, retryPermissions)],
     import: [claudeImportEntry(claudeImport, setClaudeImport, importError, retryImport)],
@@ -566,7 +571,11 @@ export function SettingsScreen({
 
         <Box sx={{ flex: 1, minWidth: 0, overflowY: 'auto', scrollbarGutter: 'stable', ...thinScrollbarSx }}>
           <Box sx={{ ...contentColumnSx, py: 3 }} data-testid={`settings-page-${section}`}>
-            <SectionPage section={section} entries={entries[section]} />
+            {section === 'billing' ? (
+              <BillingSettings key={`${auth?.environment.url}:${auth?.user?.id}:${auth?.status}`} auth={auth} />
+            ) : (
+              <SectionPage section={section} entries={entries[section]} />
+            )}
           </Box>
         </Box>
       </Stack>

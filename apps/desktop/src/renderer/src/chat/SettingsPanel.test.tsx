@@ -64,7 +64,7 @@ describe('the Settings screen', () => {
   it('only takes known page names from the route', () => {
     expect(isSettingsSection('worktrees')).toBe(true);
     expect(isSettingsSection('import')).toBe(true);
-    expect(isSettingsSection('billing')).toBe(false);
+    expect(isSettingsSection('billing')).toBe(true);
     expect(isSettingsSection(undefined)).toBe(false);
   });
 
@@ -72,6 +72,13 @@ describe('the Settings screen', () => {
     for (const mode of ['system', 'light', 'dark']) {
       expect(html).toContain(`settings-appearance-${mode}-btn`);
     }
+  });
+
+  it('gives Billing a page with signed-out gating', () => {
+    const billing = markup(<SettingsScreen auth={null} section="billing" onClose={() => {}} />);
+    expect(billing).toContain('data-testid="settings-page-billing"');
+    expect(billing).not.toContain('data-entry="appearance"');
+    expect(page('billing')).toContain('billing-loading');
   });
 
   it('offers the suggested next prompt preference', () => {
