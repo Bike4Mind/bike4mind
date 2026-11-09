@@ -323,6 +323,19 @@ describe('POST /api/sessions/semantic-search metering', () => {
     );
   });
 
+  it('aborts with the free-tier daily cap 429 when a later input cannot be reserved', async () => {
+    m.reserveEmbedding.mockResolvedValueOnce({ refund: m.refundEmbedding });
+    m.reserveEmbedding.mockRejectedValueOnce(
+      new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
+        errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+        retryAfter: 3600,
+      })
+    );
+
+    await expect(call(100, undefined, undefined, false)).rejects.toMatchObject({ statusCode: 429 });
+    expect(testLogger.error).not.toHaveBeenCalled();
+  });
+
   it('refunds an embedding hold when its provider fails', async () => {
     m.embed.mockRejectedValue(new Error('embedding unavailable'));
 
