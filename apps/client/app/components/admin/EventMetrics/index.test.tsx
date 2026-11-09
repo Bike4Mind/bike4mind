@@ -245,7 +245,7 @@ describe('EventMetricsTab filters', () => {
     const menu = await screen.findByTestId('admin-filter-event-range-menu');
     expect(
       within(menu)
-        .getAllByRole('menuitem')
+        .getAllByRole('menuitemradio')
         .map(item => item.textContent)
     ).toEqual(['Today', 'Yesterday', 'This month', 'Last month', 'Custom']);
     fireEvent.click(within(menu).getByTestId('admin-filter-event-range-thisMonth'));

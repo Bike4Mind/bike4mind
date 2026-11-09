@@ -1,6 +1,34 @@
 import { describe, it, expect } from 'vitest';
-import { FEEDBACK_SUBJECTS } from '@bike4mind/common';
-import { FEEDBACK_SUBJECT_ANY, FEEDBACK_SUBJECT_LABELS, toSubjectFilter } from './constants';
+import { FEEDBACK_LIST_MAX_LIMIT, FEEDBACK_SUBJECTS, FeedbackStatus } from '@bike4mind/common';
+import {
+  FEEDBACK_DEFAULT_PAGE_SIZE,
+  FEEDBACK_PAGE_SIZE_OPTIONS,
+  FEEDBACK_STATUS_LABELS,
+  FEEDBACK_STATUS_ORDER,
+  FEEDBACK_SUBJECT_LABELS,
+  toSubjectFilter,
+} from './constants';
+import { ADMIN_PAGE_SIZES } from '../shared/adminStyles';
+
+// The list's URL parser accepts only these sizes, so they must be the ones the footer select offers.
+describe('FEEDBACK_PAGE_SIZE_OPTIONS', () => {
+  it('matches the table pager and stays within the server cap', () => {
+    expect(FEEDBACK_PAGE_SIZE_OPTIONS).toEqual([...ADMIN_PAGE_SIZES]);
+    expect(Math.max(...FEEDBACK_PAGE_SIZE_OPTIONS)).toBeLessThanOrEqual(FEEDBACK_LIST_MAX_LIMIT);
+    expect(FEEDBACK_DEFAULT_PAGE_SIZE).toBe(25);
+  });
+});
+
+describe('FEEDBACK_STATUS_LABELS', () => {
+  it('labels every status in triage order, in sentence case', () => {
+    expect(FEEDBACK_STATUS_ORDER.map(status => FEEDBACK_STATUS_LABELS[status])).toEqual([
+      'New',
+      'In progress',
+      'Closed',
+    ]);
+    expect(FEEDBACK_STATUS_ORDER).toHaveLength(Object.values(FeedbackStatus).length);
+  });
+});
 
 describe('FEEDBACK_SUBJECT_LABELS', () => {
   // The filter menu maps over FEEDBACK_SUBJECTS and reads a label per entry. TypeScript already
@@ -16,12 +44,6 @@ describe('FEEDBACK_SUBJECT_LABELS', () => {
     const labels = FEEDBACK_SUBJECTS.map(subject => FEEDBACK_SUBJECT_LABELS[subject]);
     expect(new Set(labels).size).toBe(labels.length);
   });
-
-  // The "all" entry shares the Select's value space with the real subjects, so a subject named
-  // 'all' would make the clear-the-filter option indistinguishable from a filter on it.
-  it('keeps the clear-the-filter sentinel out of the subject space', () => {
-    expect(FEEDBACK_SUBJECTS).not.toContain(FEEDBACK_SUBJECT_ANY);
-  });
 });
 
 describe('toSubjectFilter', () => {
@@ -30,10 +52,10 @@ describe('toSubjectFilter', () => {
     expect(toSubjectFilter('product')).toBe('product');
   });
 
-  // Both of these have to clear the filter rather than reach the query: 'all' is not a subject the
-  // server knows, so sending it would return nothing instead of everything.
-  it('clears the filter for the sentinel and for a null selection', () => {
-    expect(toSubjectFilter(FEEDBACK_SUBJECT_ANY)).toBeUndefined();
-    expect(toSubjectFilter(null)).toBeUndefined();
+  // Both of these have to clear the filter rather than reach the query: a value the server does not
+  // know as a subject would return nothing instead of everything.
+  it('clears the filter for a cleared chip and for an unknown value', () => {
+    expect(toSubjectFilter(undefined)).toBeUndefined();
+    expect(toSubjectFilter('all')).toBeUndefined();
   });
 });

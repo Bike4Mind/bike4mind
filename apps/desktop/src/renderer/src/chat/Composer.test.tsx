@@ -205,19 +205,39 @@ function highlighted(): string | null {
 }
 
 describe('the composer command menu', () => {
+  it('fills /loop from the keyboard and dispatches its nested skill unchanged', () => {
+    const run = vi.fn();
+    const send = vi.fn();
+    mount({ onRunCommand: run, onSend: send });
+    type('/loo');
+    press('Enter');
+    expect(input().value).toBe('/loop ');
+    expect(run).not.toHaveBeenCalled();
+    type('/loop 5m /review src/index.ts');
+    press('Enter');
+    expect(run).toHaveBeenCalledWith('loop', '5m /review src/index.ts');
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it('opens on a slash in an empty composer and lists every command', () => {
     mount({ onRunCommand: () => {}, sessionMode: 'code' });
     expect(rows()).toHaveLength(0);
 
     type('/');
-    expect(rows().map(row => row.getAttribute('data-command-name'))).toEqual(['clear', 'compact', 'pr', 'add-dir']);
+    expect(rows().map(row => row.getAttribute('data-command-name'))).toEqual([
+      'clear',
+      'compact',
+      'pr',
+      'add-dir',
+      'loop',
+    ]);
     expect(rows()[3].textContent).toContain('[path]');
   });
 
   it('leaves the Code-only commands out of a Chat conversation', () => {
     mount({ onRunCommand: () => {}, sessionMode: 'chat' });
     type('/');
-    expect(rows().map(row => row.getAttribute('data-command-name'))).toEqual(['clear', 'compact', 'add-dir']);
+    expect(rows().map(row => row.getAttribute('data-command-name'))).toEqual(['clear', 'compact', 'add-dir', 'loop']);
   });
 
   it('filters as the name is typed', () => {

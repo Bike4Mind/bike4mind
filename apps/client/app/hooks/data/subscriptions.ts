@@ -101,13 +101,18 @@ export const useChangeSubscription = () => {
   });
 };
 
-export const useGetSubscriptionsByOwner = (ownerType: SubscriptionOwnerType, ownerId: string) => {
+export const useGetSubscriptionsByOwner = (
+  ownerType: SubscriptionOwnerType,
+  ownerId: string,
+  { enabled = true }: { enabled?: boolean } = {}
+) => {
   return useQuery({
     queryKey: ['subscriptions', ownerType, ownerId],
     queryFn: async () => {
       const response = await api.get<ISubscription[]>(`/api/subscriptions/${ownerType}/${ownerId}`);
       return response.data;
     },
+    enabled,
   });
 };
 

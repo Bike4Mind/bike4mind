@@ -276,6 +276,15 @@ describe('DataTable', () => {
     expect(screen.getByTestId('admin-table-row-1')).toHaveFocus();
   });
 
+  it('caps the footer range at the total while the previous page is still on screen', () => {
+    // keepPreviousData keeps 25 old rows mounted while page 2 of 38 loads.
+    renderTable({
+      rows: rows.slice(0, 25),
+      pagination: { page: 2, pageSize: 25, total: 38, onPageChange: vi.fn(), onPageSizeChange: vi.fn() },
+    });
+    expect(screen.getByTestId('admin-table-range')).toHaveTextContent('26 to 38 of 38');
+  });
+
   it('delegates paging and sorting to the server when controlled', () => {
     const onPageChange = vi.fn();
     const onPageSizeChange = vi.fn();

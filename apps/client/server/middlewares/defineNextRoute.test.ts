@@ -16,10 +16,16 @@ import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 import { z } from 'zod';
 
-const { mockValidate, mockFindById, mockApiKeyRateLimit } = vi.hoisted(() => ({
+const { mockValidate, mockFindById, mockApiKeyRateLimit, mockCheckClientVersion } = vi.hoisted(() => ({
   mockValidate: vi.fn(),
   mockFindById: vi.fn(),
   mockApiKeyRateLimit: vi.fn(),
+  mockCheckClientVersion: vi.fn(),
+}));
+
+// The gate's own logic is covered in server-utils; here only its place in the prelude matters.
+vi.mock('@bike4mind/server-utils/middlewares/clientVersionGate', () => ({
+  checkClientVersion: mockCheckClientVersion,
 }));
 
 vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async orig => ({
@@ -85,7 +91,13 @@ vi.mock('@server/auth/auth', async orig => {
   return { ...actual, auth: authRouter };
 });
 
-import { ApiKeyScope, ScopeForbiddenErrorSchema, defineEndpoint, sessionCloneContract } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  ScopeForbiddenErrorSchema,
+  UpgradeRequiredError,
+  defineEndpoint,
+  sessionCloneContract,
+} from '@bike4mind/common';
 import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { baseApi, methodNotAllowedHandler } from './baseApi';
 import { nextRouteForContract } from './defineNextRoute';
@@ -112,6 +124,7 @@ function fire({
   jwt = false,
   body = { message: 'hi' } as unknown,
   query = {} as Record<string, string>,
+  headers = {} as Record<string, string>,
 }) {
   const payload = JSON.stringify(body);
   const { req, res } = createMocks(
@@ -124,6 +137,7 @@ function fire({
         'content-length': String(Buffer.byteLength(payload)),
         ...(apiKey ? { 'x-api-key': apiKey } : {}),
         ...(jwt ? { authorization: 'Bearer header.payload.sig' } : {}),
+        ...headers,
       },
       body,
     },
@@ -148,6 +162,7 @@ describe('nextRouteForContract', () => {
     vi.clearAllMocks();
     mockFindById.mockResolvedValue({ id: 'user-1', _id: 'user-1', isBanned: false, disputePending: false });
     mockApiKeyRateLimit.mockResolvedValue({ allowed: true, headers: {} });
+    mockCheckClientVersion.mockResolvedValue(undefined);
   });
 
   describe('auth: jwtOnly', () => {
@@ -435,6 +450,39 @@ describe('nextRouteForContract', () => {
       const { req, res } = fire({ apiKey: 'b4m_live_x' });
       await route(req, res);
       expect(res.getHeader('Deprecation')).toBeUndefined();
+    });
+  });
+
+  describe('client-version gate', () => {
+    const clientHeaders = { 'x-client-name': 'b4m-sdk-ts', 'x-client-version': '2.0.0' };
+
+    it('answers 426 with the envelope before the rate limit option or validation runs', async () => {
+      validKey([ApiKeyScope.AI_CHAT]);
+      mockCheckClientVersion.mockResolvedValue(new UpgradeRequiredError('b4m-sdk-ts', '2.0.0', '2.1.0'));
+      const limiter = vi.fn();
+      const handler = vi.fn();
+      // any: the fixture limiter isn't typed as the adapter's ValidatedReq handler.
+      const route = nextRouteForContract(makeContract(), { rateLimit: limiter as any }).post(handler);
+      const { req, res } = fire({ apiKey: 'b4m_live_x', body: { message: 1 }, headers: clientHeaders });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(426);
+      expect(res._getJSONData()).toMatchObject({
+        error: 'b4m-sdk-ts 2.0.0 is no longer supported. Upgrade to 2.1.0 or later.',
+        errorCode: 'upgrade_required',
+        client_name: 'b4m-sdk-ts',
+        minimum_version: '2.1.0',
+      });
+      expect(mockCheckClientVersion).toHaveBeenCalledWith(expect.objectContaining(clientHeaders), expect.anything());
+      expect(limiter).not.toHaveBeenCalled();
+      expect(handler).not.toHaveBeenCalled();
+    });
+
+    it('lets the request through when the gate does not object', async () => {
+      validKey([ApiKeyScope.AI_CHAT]);
+      const route = nextRouteForContract(makeContract()).post((_req, res) => res.json({ ok: true }));
+      const { req, res } = fire({ apiKey: 'b4m_live_x', headers: clientHeaders });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(200);
     });
   });
 

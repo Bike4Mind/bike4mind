@@ -1,54 +1,109 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { ControlPanel } from './ControlPanel';
+vi.mock('@client/app/contexts/ApiContext', () => ({
+  api: { get: vi.fn(async (url: string) => ({ data: { username: `name-of-${url.split('/').pop()}` } })) },
+}));
 
-vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsMobile: () => false }));
+import { ControlPanel } from './ControlPanel';
+import { MODEL_METRICS_SEARCH_KEYS } from '../modelMetricsSearch';
+import type { ModelMetric } from '../types';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: React.ReactNode }) => (
-  <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
+  <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+    <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
+  </QueryClientProvider>
 );
 
-const noop = () => {};
-const renderPanel = (dateFrom: string, dateTo: string) =>
-  render(
-    <ControlPanel
-      metrics={[]}
-      filteredMetrics={[]}
-      modelInfos={[]}
-      dateFrom={dateFrom}
-      dateTo={dateTo}
-      userFilter=""
-      modelFilter=""
-      statusFilter=""
-      simplifiedNames={false}
-      setDateFrom={noop}
-      setDateTo={noop}
-      setUserFilter={noop}
-      setModelFilter={noop}
-      setStatusFilter={noop}
-      setSimplifiedNames={noop}
-      onRefresh={noop}
-      onExportCSV={noop}
-      onClearFilters={noop}
-      onSetDateRange={noop}
-      onApplyFilters={noop}
-    />,
-    { wrapper: TestWrapper }
-  );
+const metric = (model: string, userId: string) => ({ model: { name: model }, session: { userId } }) as ModelMetric;
 
-// The range check calls a dayjs plugin that ControlPanel must register for itself.
-describe('ControlPanel date range', () => {
-  it('accepts a range whose start is before its end', () => {
-    renderPanel('2026-10-01T00:00:00.000Z', '2026-10-02T00:00:00.000Z');
-    expect(screen.queryByText(/From date must be before or equal to To date/)).not.toBeInTheDocument();
+const renderPanel = (overrides: Partial<React.ComponentProps<typeof ControlPanel>> = {}) => {
+  const props = {
+    metrics: [metric('model-a', 'user-1'), metric('model-b', 'user-2')],
+    modelInfos: [],
+    state: { query: '', view: '', filters: { period: '', model: '', status: '' } },
+    onChange: vi.fn(),
+    userFilter: '',
+    onUserChange: vi.fn(),
+    simplifiedNames: true,
+    onSimplifiedNamesChange: vi.fn(),
+    ...overrides,
+  };
+  render(<ControlPanel {...props} />, { wrapper: TestWrapper });
+  return props;
+};
+
+describe('ControlPanel', () => {
+  it('labels the user options by username, not id', async () => {
+    renderPanel();
+    fireEvent.click(screen.getByTestId('admin-filter-user'));
+    expect(await screen.findByText('name-of-user-1')).toBeInTheDocument();
+    expect(screen.queryByText('user-1')).not.toBeInTheDocument();
   });
 
-  it('flags a range whose start is after its end', () => {
-    renderPanel('2026-10-02T00:00:00.000Z', '2026-10-01T00:00:00.000Z');
-    expect(screen.getByText(/From date must be before or equal to To date/)).toBeInTheDocument();
+  it('renders one filter row with a chip per filter and no apply or date inputs', () => {
+    renderPanel();
+    expect(screen.getByTestId('admin-filter-bar')).toBeInTheDocument();
+    for (const id of ['period', 'model', 'user', 'status']) {
+      expect(screen.getByTestId(`admin-filter-${id}`)).toBeInTheDocument();
+    }
+    expect(screen.queryByRole('button', { name: /apply/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /clear all/i })).not.toBeInTheDocument();
+    expect(document.querySelector('input[type="datetime-local"]')).toBeNull();
+  });
+
+  it('applies a status pick at once through onChange without clearing the chosen user', () => {
+    const { onChange, onUserChange } = renderPanel({ userFilter: 'user-1' });
+    fireEvent.click(screen.getByTestId('admin-filter-status'));
+    fireEvent.click(screen.getByTestId('admin-filter-status-error'));
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ filters: expect.objectContaining({ status: 'error' }) })
+    );
+    expect(onUserChange).not.toHaveBeenCalledWith('');
+  });
+
+  it('reports the user pick separately and has no user key in the URL', () => {
+    expect(MODEL_METRICS_SEARCH_KEYS.filters).not.toHaveProperty('user');
+    const { onUserChange } = renderPanel();
+    fireEvent.click(screen.getByTestId('admin-filter-user'));
+    fireEvent.click(screen.getByTestId('admin-filter-user-user-2'));
+    expect(onUserChange).toHaveBeenCalledWith('user-2');
+  });
+
+  it('keeps earlier model and user options once the server narrows the rows', () => {
+    const props = {
+      modelInfos: [],
+      state: { query: '', view: '', filters: { period: '', model: '', status: '' } },
+      onChange: vi.fn(),
+      userFilter: '',
+      onUserChange: vi.fn(),
+      simplifiedNames: false,
+      onSimplifiedNamesChange: vi.fn(),
+    };
+    const { rerender } = render(
+      <ControlPanel {...props} metrics={[metric('model-a', 'user-1'), metric('model-b', 'user-2')]} />,
+      { wrapper: TestWrapper }
+    );
+    rerender(
+      <ControlPanel
+        {...props}
+        state={{ ...props.state, filters: { ...props.state.filters, model: 'model-a' } }}
+        metrics={[metric('model-a', 'user-1')]}
+      />
+    );
+    fireEvent.click(screen.getByTestId('admin-filter-model'));
+    expect(screen.getByTestId('admin-filter-model-model-b')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('admin-filter-user'));
+    expect(screen.getByTestId('admin-filter-user-user-2')).toBeInTheDocument();
+  });
+
+  it('toggles short and full names', () => {
+    const { onSimplifiedNamesChange } = renderPanel();
+    fireEvent.click(screen.getByTestId('model-metrics-names-full'));
+    expect(onSimplifiedNamesChange).toHaveBeenCalledWith(false);
   });
 });
