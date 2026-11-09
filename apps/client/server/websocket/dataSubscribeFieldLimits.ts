@@ -29,11 +29,9 @@ import {
  *
  * organizations: the subscription streams raw org documents, so it has to reproduce what
  * `toSafeOrganization` applies on every REST path - it reads the same two field lists so the
- * transports cannot drift. `stripeCustomerId` is dropped for everyone. `billingContact` is kept
- * only for a platform admin, NOT for an org owner as the REST serializer does: a Mongo projection
- * is per-query, not per-document, so an owner-keyed keep would also hand over the billing contact
- * of every co-member org the same subscription happens to match. An owner's own billing contact
- * still reaches them through the access-gated REST GET.
+ * transports cannot drift. A Mongo projection is per-query, not per-document: billingContact
+ * is kept only for a platform admin; member credit details are also kept for owners/managers
+ * when the query is pinned to their verified org. Broader subscriptions exclude both.
  *
  * invites: the subscription matches both invites addressed to the caller and every invite on a
  * project the caller may share, so a raw document carries co-recipients' addresses and addresses
@@ -56,8 +54,10 @@ export type FieldLimitOptions = {
   inviteCollectionName: string;
   /** The subscribed session belongs to the caller (see the quests note above). */
   isQuestOwner?: boolean;
-  /** Caller is a platform admin, the only viewer a per-query projection can safely privilege. */
+  /** Caller is a platform admin. */
   isPlatformAdmin?: boolean;
+  /** The query is pinned to a verified org owned or managed by the caller. */
+  isPrivilegedOrgSubscriber?: boolean;
 };
 
 export function resolveFieldLimits(
@@ -68,6 +68,7 @@ export function resolveFieldLimits(
     inviteCollectionName,
     isQuestOwner = false,
     isPlatformAdmin = false,
+    isPrivilegedOrgSubscriber = false,
   }: FieldLimitOptions
 ): Record<string, boolean> | undefined {
   if (collectionName === 'users') {
@@ -95,7 +96,13 @@ export function resolveFieldLimits(
     return Object.fromEntries(excluded.map(path => [path, false]));
   }
   if (collectionName === organizationCollectionName) {
-    const excluded = [...ORGANIZATION_SECRET_FIELDS, ...(isPlatformAdmin ? [] : ORGANIZATION_OWNER_ONLY_FIELDS)];
+    const excluded = [
+      ...ORGANIZATION_SECRET_FIELDS,
+      ...(isPlatformAdmin ? [] : ['billingContact']),
+      ...(isPlatformAdmin || isPrivilegedOrgSubscriber
+        ? []
+        : ORGANIZATION_OWNER_ONLY_FIELDS.filter(field => field !== 'billingContact')),
+    ];
     return Object.fromEntries(excluded.map(field => [field, false]));
   }
   if (collectionName === inviteCollectionName) {

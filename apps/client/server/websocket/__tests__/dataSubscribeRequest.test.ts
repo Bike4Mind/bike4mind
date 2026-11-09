@@ -61,8 +61,8 @@ vi.mock('@bike4mind/database', () => ({
   findModelByCollectionName: (...args: unknown[]) => mockFindModelByCollectionName(...args),
   Inbox: { collection: { collectionName: 'inboxes' } },
   Invite: { collection: { collectionName: 'invites' } },
-  mongoose: {},
-  Organization: { collection: { collectionName: 'organizations' } },
+  mongoose: { isValidObjectId: (id: unknown) => typeof id === 'string' && /^[a-f0-9]{24}$/.test(id) },
+  Organization: { collection: { collectionName: 'organizations' }, findById: vi.fn() },
   Project: { collection: { collectionName: 'projects' } },
   Quest: { collection: { collectionName: 'quests' } },
   QuestMasterPlan: { collection: { collectionName: 'questMasterPlans' } },
@@ -135,7 +135,7 @@ vi.mock('sst', () => ({
 }));
 
 import { func } from '../dataSubscribeRequest';
-import { Project, User } from '@bike4mind/database';
+import { Organization, Project, User } from '@bike4mind/database';
 import { accessibleBy } from '@casl/mongoose';
 import { adminSettingsSubscriptionScope, inviteSubscriptionScope } from '@server/websocket/subscriptionScopes';
 import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
@@ -270,6 +270,85 @@ describe('dataSubscribeRequest WS handler - quest field scoping', () => {
   });
 });
 
+describe('dataSubscribeRequest WS handler - organization field scoping', () => {
+  const orgId = '650000000000000000000abc';
+  const organizationEvent = (query: Record<string, unknown>) => ({
+    requestContext: { connectionId: 'conn-1' },
+    body: JSON.stringify({
+      action: 'subscribe_query',
+      accessToken: 'token-123',
+      subscriptionId: 'sub-1',
+      collectionName: 'organizations',
+      query,
+      fields: {},
+      fetchInitialData: false,
+    }),
+  });
+  const find = vi.fn().mockReturnValue({ setOptions: vi.fn().mockReturnValue({ getQuery: () => ({}) }) });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    connectionRow = { userId: 'caller-1' };
+    mockFindByKeyName.mockResolvedValue(null);
+    mockVerifyToken.mockReturnValue({ id: 'caller-1' });
+    (User.findById as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'caller-1', tokenVersion: undefined });
+    (Organization.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
+      userId: 'owner-1',
+      adminUserIds: ['manager-1', 'former-manager'],
+      users: [{ userId: 'manager-1' }, { userId: 'caller-1' }],
+    });
+    mockFindModelByCollectionName.mockReturnValue({ find });
+    mockUpsertSubscriber.mockResolvedValue({ id: 'sub-doc-1' });
+  });
+
+  it.each([
+    ['plain member', 'caller-1', false, true],
+    ['owner', 'owner-1', false, false],
+    ['current manager', 'manager-1', false, false],
+    ['former manager', 'former-manager', false, true],
+    ['platform admin', 'admin-1', true, false],
+  ])('scopes a %s subscription to the appropriate credit fields', async (_role, id, isAdmin, withheld) => {
+    connectionRow = { userId: id };
+    (User.findById as ReturnType<typeof vi.fn>).mockResolvedValue({ id, _id: id, isAdmin });
+    await func(
+      organizationEvent({ _id: orgId }) as Parameters<typeof func>[0],
+      {} as Parameters<typeof func>[1],
+      noopLogger as Parameters<typeof func>[2]
+    );
+    expect(Organization.findById).toHaveBeenCalledWith(orgId);
+    const fields = find.mock.calls[0][1] as Record<string, boolean>;
+    expect(fields['userDetails.usedCredits']).toBe(withheld ? false : undefined);
+    expect(fields['userDetails.maxCredits']).toBe(withheld ? false : undefined);
+    expect(fields['userDetails.lastCreditUsedAt']).toBe(withheld ? false : undefined);
+    expect(fields['userDetails.periodStart']).toBe(withheld ? false : undefined);
+    expect(fields.billingContact).toBe(isAdmin ? undefined : false);
+  });
+
+  it('excludes member credit details on a broad subscription even for an owner', async () => {
+    connectionRow = { userId: 'owner-1' };
+    (User.findById as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'owner-1', _id: 'owner-1' });
+    await func(
+      organizationEvent({}) as Parameters<typeof func>[0],
+      {} as Parameters<typeof func>[1],
+      noopLogger as Parameters<typeof func>[2]
+    );
+    expect(Organization.findById).not.toHaveBeenCalled();
+    expect(find.mock.calls[0][1]['userDetails.usedCredits']).toBe(false);
+  });
+
+  it('does not privilege a compound query that includes an owned organization', async () => {
+    connectionRow = { userId: 'owner-1' };
+    (User.findById as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'owner-1', _id: 'owner-1' });
+    await func(
+      organizationEvent({ _id: orgId, $or: [{ name: 'Other team' }] }) as Parameters<typeof func>[0],
+      {} as Parameters<typeof func>[1],
+      noopLogger as Parameters<typeof func>[2]
+    );
+    expect(Organization.findById).not.toHaveBeenCalled();
+    expect(find.mock.calls[0][1]['userDetails.usedCredits']).toBe(false);
+  });
+});
+
 describe('dataSubscribeRequest WS handler - account state', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -314,6 +393,7 @@ describe('dataSubscribeRequest WS handler - filters on withheld fields', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    connectionRow = { userId: 'caller-1' };
     mockFindByKeyName.mockResolvedValue(null);
     mockIsWithinGraceWindow.mockReturnValue(false);
     mockVerifyToken.mockReturnValue({ id: 'caller-1' });
