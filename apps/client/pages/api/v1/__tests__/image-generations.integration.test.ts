@@ -353,6 +353,34 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
       expect(mockInvoke).not.toHaveBeenCalled();
     });
 
+    const refIds = (count: number) => Array.from({ length: count }, (_, index) => `ref-${index}`);
+
+    it('forwards 10 FLUX 3 references in the caller order (200)', async () => {
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      const refs = refIds(10).reverse();
+      const { req, res } = fire({
+        body: { prompt: 'a red bicycle', model: 'flux-3-image', referenceImageFabFileIds: refs },
+      });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockInvoke).toHaveBeenCalledWith(
+        expect.objectContaining({ body: expect.objectContaining({ referenceImageFabFileIds: refs }) })
+      );
+    });
+
+    it.each([
+      ['an 11th FLUX 3 reference', { referenceImageFabFileIds: refIds(11) }],
+      ['a primary plus 10 FLUX 3 references', { fabFileIds: ['primary'], referenceImageFabFileIds: refIds(10) }],
+    ])('rejects %s before enqueuing (400)', async (_label, extra) => {
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      const { req, res } = fire({ body: { prompt: 'a red bicycle', model: 'flux-3-image', ...extra } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(400);
+      expect(res._getJSONData().error).toMatch(/at most 10 images/);
+      expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
     it('rejects reference images for a non-gpt-image model (400) before creating a session or enqueuing', async () => {
       validateWithScopes([ApiKeyScope.AI_GENERATE]);
       const { req, res } = fire({
