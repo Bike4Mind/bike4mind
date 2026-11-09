@@ -271,6 +271,9 @@ export interface IModelDayMargin {
   day: string; // YYYY-MM-DD (UTC)
   provider: string;
   model: string;
+  // Equal to provider/model unless the request was served by a substitute model.
+  executedProvider?: string;
+  executedModel?: string;
   requests: number;
   cogsUsd: number;
   creditsCharged: number;

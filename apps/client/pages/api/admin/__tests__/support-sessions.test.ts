@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { ApiKeyScope } from '@bike4mind/common';
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
@@ -39,15 +40,19 @@ const SUPPORT_CASE = 'ZD-4821';
 
 type Handler = (req: unknown, res: unknown) => Promise<unknown>;
 
-function call(handler: unknown, options: { isAdmin?: boolean; hasUser?: boolean; query?: object; headers?: object }) {
+function call(
+  handler: unknown,
+  options: { isAdmin?: boolean; adminPermissions?: string[]; hasUser?: boolean; query?: object; headers?: object }
+) {
   const { req, res } = createMocks({
     method: 'GET',
     query: options.query ?? { id: SESSION, supportCase: SUPPORT_CASE },
     headers: options.headers ?? {},
   });
   if (options.hasUser !== false) {
-    (req as unknown as { user: { isAdmin: boolean; id: string } }).user = {
+    (req as unknown as { user: { isAdmin: boolean; adminPermissions?: string[]; id: string } }).user = {
       isAdmin: options.isAdmin ?? false,
+      adminPermissions: options.adminPermissions,
       id: 'admin-1',
     };
   }
@@ -117,9 +122,22 @@ beforeEach(() => {
 describe('GET /api/admin/sessions/[id] - support read gate', () => {
   it('rejects a non-admin before touching the session', async () => {
     const { run } = call(sessionHandler, { isAdmin: false });
-    await expect(run()).rejects.toThrow(/[Aa]dmin/);
+    await expect(run()).rejects.toThrow('Missing permission: support:read');
     expect(mockFindSessionById).not.toHaveBeenCalled();
     expect(mockRecordAudit).not.toHaveBeenCalled();
+  });
+
+  it('rejects a delegate holding a different permission', async () => {
+    const { run } = call(sessionHandler, { isAdmin: false, adminPermissions: ['settings:manage'] });
+    await expect(run()).rejects.toThrow('Missing permission: support:read');
+    expect(mockFindSessionById).not.toHaveBeenCalled();
+  });
+
+  it('serves a support:read delegate and audits the read', async () => {
+    const { res, run } = call(sessionHandler, { isAdmin: false, adminPermissions: ['support:read'] });
+    await run();
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockRecordAudit).toHaveBeenCalledOnce();
   });
 
   it('rejects an unauthenticated caller', async () => {
@@ -211,7 +229,10 @@ describe('GET /api/admin/sessions/[id] - support read gate', () => {
 
   it('records the API key when the read is made with one', async () => {
     const { req, run } = call(sessionHandler, { isAdmin: true });
-    (req as unknown as { apiKeyInfo: { keyId: string } }).apiKeyInfo = { keyId: 'key-abc' };
+    (req as unknown as { apiKeyInfo: { keyId: string; scopes: string[] } }).apiKeyInfo = {
+      keyId: 'key-abc',
+      scopes: [ApiKeyScope.ADMIN],
+    };
     await run();
     expect(mockRecordAudit).toHaveBeenCalledWith(expect.objectContaining({ actorApiKeyId: 'key-abc' }));
   });
@@ -287,7 +308,7 @@ describe('GET /api/admin/sessions/[id] - support read gate', () => {
 describe('GET /api/admin/sessions/[id]/quests - conversation read', () => {
   it('rejects a non-admin', async () => {
     const { run } = call(questsHandler, { isAdmin: false });
-    await expect(run()).rejects.toThrow(/[Aa]dmin/);
+    await expect(run()).rejects.toThrow('Missing permission: support:read');
     expect(mockFindPageBySessionId).not.toHaveBeenCalled();
   });
 

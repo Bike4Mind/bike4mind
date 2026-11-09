@@ -280,6 +280,36 @@ describe('MarginDashboard search and filter', () => {
     const monthTable = screen.getByTestId('margin-provider-month-table');
     expect(within(monthTable).queryByText('anthropic')).not.toBeInTheDocument();
   });
+
+  it('shows the executed model for substituted rows and filters on the executed provider', async () => {
+    const base = { day: '2026-07-14', requests: 1, cogsUsd: 1, creditsCharged: 1200 };
+    setResponses({
+      'view=model-day': {
+        targetCreditsPerUsd: 1200,
+        rows: [
+          { ...base, provider: 'anthropic', model: 'claude-x', executedProvider: 'openai', executedModel: 'gpt-mini' },
+          {
+            ...base,
+            provider: 'anthropic',
+            model: 'claude-y',
+            executedProvider: 'anthropic',
+            executedModel: 'claude-y',
+          },
+        ],
+      },
+    });
+    renderDashboard();
+    const table = await screen.findByTestId('margin-model-day-table');
+    expect(within(table).getByText('openai / gpt-mini')).toBeInTheDocument();
+    const cells = within(table).getAllByTestId('margin-executed-model-cell');
+    expect(cells.map(c => c.textContent)).toEqual(['openai / gpt-mini', '-']);
+
+    fireEvent.change(screen.getByTestId('margin-provider-filter').querySelector('input')!, {
+      target: { value: 'openai' },
+    });
+    expect(within(table).getByText('claude-x')).toBeInTheDocument();
+    expect(within(table).queryByText('claude-y')).not.toBeInTheDocument();
+  });
 });
 
 describe('MarginDashboard settlement basis section', () => {

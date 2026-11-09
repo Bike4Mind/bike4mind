@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
-import { FEEDBACK_LIST_DEFAULT_LIMIT } from '@bike4mind/common';
 
 vi.mock('@tanstack/react-router', async () => (await import('../../../__tests__/fakeAdminRouter')).fakeRouterModule);
 
 import { fakeAdminRouter } from '../../../__tests__/fakeAdminRouter';
 import { useFeedbackPagination } from '../useFeedbackPagination';
+import { FEEDBACK_DEFAULT_PAGE_SIZE } from '../../constants';
 
 describe('useFeedbackPagination', () => {
   beforeEach(() => {
@@ -15,7 +15,7 @@ describe('useFeedbackPagination', () => {
   it('starts on page 1 at the default page size, with nothing in the URL', () => {
     const { result } = renderHook(() => useFeedbackPagination());
 
-    expect(result.current).toMatchObject({ currentPage: 1, itemsPerPage: FEEDBACK_LIST_DEFAULT_LIMIT });
+    expect(result.current).toMatchObject({ currentPage: 1, itemsPerPage: FEEDBACK_DEFAULT_PAGE_SIZE });
     expect(fakeAdminRouter.search).toEqual({ tab: 'feedback' });
   });
 
