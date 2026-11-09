@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from 'sonner';
 import { getThemeConfig } from '@client/app/utils/themes';
 
@@ -59,6 +59,8 @@ const openRowAction = async (idpId: string, action: 'edit' | 'sp-metadata' | 'de
 };
 
 describe('IdentityProvidersTab', () => {
+  afterEach(() => vi.restoreAllMocks());
+
   beforeEach(() => {
     for (const fn of [...Object.values(api), toast.success, toast.error]) vi.mocked(fn).mockReset();
     api.get.mockResolvedValue({ data: [samlIdp, oktaIdp] });
@@ -190,7 +192,6 @@ describe('IdentityProvidersTab', () => {
 
     await openRowAction('idp-okta', 'delete');
     await waitFor(() => expect(api.delete).toHaveBeenCalledWith('/api/admin/identity-providers/idp-okta'));
-    confirm.mockRestore();
   });
 
   it('shows an empty state in place of the table whose action opens the add dialog', async () => {
