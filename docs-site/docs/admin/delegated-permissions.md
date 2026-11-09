@@ -22,18 +22,24 @@ Full administrators (the legacy `isAdmin` flag) have every permission implicitly
 | `keys:revoke` | Revoke a user's API keys |
 | `users:delete` | Permanently delete a user account |
 | `settings:manage` | Edit admin settings, manage tags, configure Slack workspaces, and manage partner signup rules |
+| `models:curate` | Publish curated model catalog versions |
+
+Not every permission has a route that declares it yet. `users:delete`, `models:curate`, and the core admin tab permissions (`support:read`, `credits:adjust`, `users:moderate`, `settings:manage`) are enforced by `adminApi` middleware on their routes. `users:impersonate` and `keys:revoke` are defined in the permission list but not yet declared on an `adminApi` route; those flows still require the legacy full-admin flag.
 
 A permission grants only the actions listed. For example, `credits:adjust` lets you change a credit balance but not ban the user; that requires `users:moderate`.
 
 ## Granting permissions
 
-Open a user's profile, then **More > Edit admin access**. Select the permissions to grant and save. The rules are:
+The code defines the grant rules in `assertCanGrantAdminAccess`, but the grant UI and endpoint are not wired up yet. Today, only the full-admin flag (Super Admin) can be toggled from a user's profile. Until the grant flow lands:
+
+- A full administrator can set or remove the Super Admin flag.
+- Delegated permissions are assigned directly in the database.
+
+Once the grant endpoint is available, the intended constraints are:
 
 - A full administrator can grant any combination of permissions, including the full-admin flag.
 - A delegated admin with `settings:manage` can grant permissions, but only the ones they already hold. They cannot grant the full-admin flag.
 - A delegated admin cannot change the permissions of another user who has admin access (full or delegated). Only a full administrator can edit, demote, or remove an admin account.
-
-These constraints prevent privilege escalation: a delegate cannot hand out access they do not have, and cannot strip admin access from a peer.
 
 ## Full administrators
 
@@ -42,15 +48,15 @@ A full administrator is a user whose `isAdmin` flag is set. This is the legacy a
 - Has every permission implicitly without being listed in `adminPermissions`.
 - Can act on any user, including other admins.
 - Can grant or revoke the full-admin flag.
-- Is the only role that can remove the last full administrator. The platform refuses to remove full-admin access when doing so would leave zero full administrators.
+- The platform refuses to demote the last Super Admin, whoever asks. When the target is the sole `isAdmin: true` user, the request returns an error regardless of the caller's role.
 
-Holding every explicit permission is not the same as being a full admin. A user with all seven permissions is still a delegated admin and is still subject to the restrictions above.
+Holding every explicit permission is not the same as being a full admin. A user with all eight permissions is still a delegated admin and is still subject to the restrictions above.
 
 ## Acting on admin accounts
 
 Delegated admins cannot perform actions on users who themselves have admin access. For example, a delegated admin with `users:moderate` can ban a regular user but cannot ban another admin. The error message is: "Only full administrators can [action] users with admin access."
 
-This applies to any action: banning, moderating, deleting, adjusting credits, revoking keys, or impersonating. A full administrator is not subject to this restriction.
+Routes that call `assertCanActOnAdminTarget` enforce this guard today, including deletion scheduling, tag changes, and signup grant actions. A full administrator is not subject to this restriction.
 
 ## Declaring a permission on an admin route
 
