@@ -128,6 +128,7 @@ async function acquire(lockPath: string, nonce: string, opts: LockDirOptions): P
   const deadline = performance.now() + opts.waitMs;
   await fs.mkdir(path.dirname(lockPath), { recursive: true });
   await sweepOrphans(lockPath, opts.staleMs);
+  let retriedPastDeadline = false;
   for (;;) {
     let retryNow = false;
     const attemptAt = performance.now();
@@ -154,8 +155,12 @@ async function acquire(lockPath: string, nonce: string, opts: LockDirOptions): P
       if (!held) throw error;
       retryNow = await breakIfStale(lockPath, opts.staleMs);
     }
-    // A lock just broken gets its retry even past the deadline: the break itself can outlast a short wait.
-    if (retryNow) continue;
+    // A lock just broken gets one retry past the deadline: the break itself can outlast a short wait. Only one, so
+    // locks that keep reappearing stale (a skewed mtime clock) cannot hold the caller past its wait.
+    if (retryNow && (performance.now() < deadline || !retriedPastDeadline)) {
+      retriedPastDeadline ||= performance.now() >= deadline;
+      continue;
+    }
     if (performance.now() >= deadline) throw new Error(`${opts.heldMessage} (${lockPath} is held)`);
     await pause(opts.pollMs);
   }
