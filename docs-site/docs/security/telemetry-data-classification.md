@@ -591,3 +591,42 @@ message. You use these records to identify broken model references and review
 lifecycle changes. Metrics follow CloudWatch retention, and logs follow the
 deployment's configured log retention. This operational monitoring does not send
 product usage events to third-party analytics services.
+
+## Credit hold monitoring
+
+Credit reservations write structured operational logs with the billing owner id
+and type, feature label, lifecycle (`request` or `completion`), outcome, and
+transaction duration in milliseconds. The duration includes transaction retries,
+not provider work or preflight checks. Failed reservation transactions are also
+recorded; requests that reserve no credits do not emit a latency sample.
+
+Hosted logs publish `HoldLatency` (milliseconds) and `SettlementsAfterSweep`
+(count) through CloudWatch embedded metrics in `Lumina5/CreditHolds`, with only
+`Stage` and `Lifecycle` dimensions. Owner ids and hold ids stay in logs, not metric
+dimensions. Self-host installations write the same observations without embedded
+CloudWatch metrics. Metrics follow CloudWatch retention; logs follow the
+deployment's configured log retention. No prompts, responses, credentials, or
+third-party analytics events are included.
+
+`SettlementsAfterSweep` counts settlement attempts whose pending hold and completed
+receipt are both absent. This is a missing-hold signal, not proof that the sweep
+removed it: an earlier explicit refund or an expired settlement receipt can also
+cause it. Completed receipt retries do not increment it. Repeated late settlement
+calls each increment the count; use distinct hold ids to count affected holds,
+and correlate them with the sweep's refund logs to confirm sweep attribution.
+
+To find per-owner p99 reservation latency, select the relevant runtime log groups
+and time range in CloudWatch Logs Insights:
+
+```text
+filter event = "creditHoldTelemetry" and ispresent(HoldLatency)
+| stats count(*) as samples, pct(HoldLatency, 99) as p99Ms by Stage, ownerType, ownerId, lifecycle, outcome
+| sort p99Ms desc
+```
+
+To count late settlement attempts and affected holds:
+
+```text
+filter event = "creditHoldTelemetry" and SettlementsAfterSweep = 1
+| stats sum(SettlementsAfterSweep) as attempts, count_distinct(holdId) as holds by Stage, lifecycle
+```
