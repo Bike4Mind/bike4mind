@@ -30,8 +30,8 @@ export const SELF_REPORT_CONFIDENCE_REMINDER =
 const OPEN = '<confidence';
 const CLOSE = '</confidence>';
 const CLOSING_TAG = /<\/confidence\s*>/gi;
-// Models given this prompt open a turn with an empty reasoning block before the tag. It carries
-// nothing, and left in it surfaces as a literal "<think></think>" thought.
+// Models often open a turn with an empty reasoning block, before the confidence tag when one is asked
+// for. It carries nothing, and left in it surfaces as a literal "<think></think>" thought.
 const EMPTY_THINK = '<think></think>';
 const EMPTY_THINK_BLOCKS = /<think>\s*<\/think>/gi;
 // A confidence tag the model never closed (or a stray closing tag). Only the tag itself goes; the text
