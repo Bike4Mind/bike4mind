@@ -6,9 +6,11 @@ import {
   MAX_HEADER_NAME_CHARS,
   MAX_SECRET_CHARS,
   readSpecs,
+  unusableServer,
   type ModelServerRecord,
   type StoredAuth,
   type StoredServer,
+  type UnusableServerRecord,
 } from '@bike4mind/local-models/servers';
 import type {
   ModelServerAccess,
@@ -22,7 +24,7 @@ import type { SecretCipher, StoreFile, StoreLogger } from '../chat/mcp/McpServer
 import { loopbackLaunchPort } from './loopbackPort';
 
 export { credentialHeaders, MAX_HEADER_NAME_CHARS, MAX_SECRET_CHARS };
-export type { ModelServerRecord, StoredAuth };
+export type { ModelServerRecord, StoredAuth, UnusableServerRecord };
 
 interface StoreDocument extends Record<string, unknown> {
   version: 1;
@@ -102,6 +104,15 @@ export class ModelServerStore {
     const document = await this.load();
     return document.servers.flatMap(server => {
       const record = isStored(server) ? hydrate(server) : null;
+      return record ? [record] : [];
+    });
+  }
+
+  /** Saved SSH servers whose destination or port cannot be used: shown so they can be removed, never connected to. */
+  async unusable(): Promise<UnusableServerRecord[]> {
+    const document = await this.load();
+    return document.servers.flatMap(server => {
+      const record = isStored(server) ? unusableServer(server) : null;
       return record ? [record] : [];
     });
   }
