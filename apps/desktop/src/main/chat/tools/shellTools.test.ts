@@ -10,7 +10,7 @@ import { UNNAMED_DISTRO } from './shellScan';
 import * as sessionScripts from './sessionScripts';
 import { forgetSessionWrites, recordSessionWrite } from './sessionScripts';
 import { bashExecute, bashExecuteRunOptions, doubleWrapRefusal, mainCheckoutOf, shellApproval } from './shellTools';
-import type { ToolContext } from './types';
+import { MAX_TOOL_OUTPUT_CHARS, type ToolContext } from './types';
 import { resolveUserPath } from './userPath';
 
 vi.mock('./userPath', async importOriginal => ({
@@ -43,6 +43,20 @@ describe('bash_execute', () => {
     expect(result).toContain('[stderr]');
     expect(result).toContain('nope');
     expect(result).toContain('[exit 3]');
+  });
+
+  it('keeps the end of long output on both streams, so a closing PR URL reaches the model', async () => {
+    const url = 'https://github.com/example-org/widgets/pull/611';
+    const result = await bashExecute.run(
+      {
+        command: `head -c 200000 /dev/zero | tr '\\0' a; head -c 100000 /dev/zero | tr '\\0' b >&2; echo; echo ${url}`,
+      },
+      context
+    );
+    expect(result).toContain(`a\n${url}`);
+    expect(result).toContain('omitted from the middle');
+    expect(result.endsWith('[exit 0]')).toBe(true);
+    expect(result.length).toBeLessThanOrEqual(MAX_TOOL_OUTPUT_CHARS);
   });
 
   it('writes inside a granted root', async () => {
