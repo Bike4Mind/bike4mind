@@ -22,7 +22,11 @@ export const ImageJobRequestSchema = z.strictObject({
   model: z.enum(ImageModels),
   mode: z.enum(IMAGE_MODES),
   prompt: z.string().trim().min(1).max(IMAGE_JOB_PROMPT_MAX_CHARS),
-  inputs: z.array(ImageJobInputSchema).max(IMAGE_JOB_INPUTS_MAX).optional(),
+  inputs: z
+    .array(ImageJobInputSchema)
+    .max(IMAGE_JOB_INPUTS_MAX)
+    .refine(inputs => new Set(inputs.map(input => input.fileId)).size === inputs.length, 'each file may be used once')
+    .optional(),
   size: z.string().min(1).optional(),
   aspectRatio: z.string().min(1).optional(),
   quality: OpenAIImageQualitySchema.optional(),

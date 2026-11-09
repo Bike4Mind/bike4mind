@@ -6,9 +6,8 @@ import { estimateImageUsd } from '../imageCost';
  * job and chat price the same request the same way.
  */
 export const estimateImageJobUsd = (request: StoredImageRequest): number => {
-  // The same file twice is one input image, as the chat path counts it.
-  const billedFileIds = imageJobInputs(request).flatMap(input => (input.role === 'mask' ? [] : [input.fileId]));
-  const inputImageCount = new Set(billedFileIds).size;
+  // The request schema refuses a repeated file, so each non-mask input is one image sent and billed.
+  const inputImageCount = imageJobInputs(request).filter(input => input.role !== 'mask').length;
   return estimateImageUsd(request.model, 1, {
     model: request.model,
     quality: request.quality,

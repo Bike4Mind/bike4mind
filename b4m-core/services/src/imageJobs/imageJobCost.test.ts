@@ -15,17 +15,6 @@ const request = (inputs: NonNullable<StoredImageRequest['inputs']>): StoredImage
 });
 
 describe('estimateImageJobUsd', () => {
-  it('prices the same reference file listed twice as one input image', () => {
-    const once = estimateImageJobUsd(request([{ role: 'reference', fileId: FIRST_FILE_ID }]));
-    const twice = estimateImageJobUsd(
-      request([
-        { role: 'reference', fileId: FIRST_FILE_ID },
-        { role: 'reference', fileId: FIRST_FILE_ID },
-      ])
-    );
-    expect(twice).toBe(once);
-  });
-
   it('prices distinct files as separate input images', () => {
     const once = estimateImageJobUsd(request([{ role: 'reference', fileId: FIRST_FILE_ID }]));
     const two = estimateImageJobUsd(

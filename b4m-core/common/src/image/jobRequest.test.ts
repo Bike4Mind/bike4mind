@@ -16,7 +16,7 @@ describe('ImageJobRequestSchema', () => {
       mode: 'edit',
       inputs: [
         { role: 'edit_source', fileId: FILE_ID },
-        { role: 'mask', fileId: FILE_ID },
+        { role: 'mask', fileId: 'b'.repeat(24) },
       ],
       size: '1024x1024',
       aspectRatio: '1:1',
@@ -43,6 +43,15 @@ describe('ImageJobRequestSchema', () => {
     ['an uppercase file id', { inputs: [{ role: 'reference', fileId: 'A'.repeat(24) }] }],
     ['an unknown input role', { inputs: [{ role: 'style', fileId: FILE_ID }] }],
     ['an unknown key on an input', { inputs: [{ role: 'reference', fileId: FILE_ID, url: 'https://x.test' }] }],
+    [
+      'the same file twice',
+      {
+        inputs: [
+          { role: 'reference', fileId: FILE_ID },
+          { role: 'edit_source', fileId: FILE_ID },
+        ],
+      },
+    ],
     ['a negative seed', { seed: -1 }],
     ['a fractional seed', { seed: 1.5 }],
     [
@@ -54,7 +63,10 @@ describe('ImageJobRequestSchema', () => {
   });
 
   it('accepts the maximum number of inputs and a prompt at the limit', () => {
-    const inputs = Array.from({ length: IMAGE_JOB_INPUTS_MAX }, () => ({ role: 'reference', fileId: FILE_ID }));
+    const inputs = Array.from({ length: IMAGE_JOB_INPUTS_MAX }, (_, i) => ({
+      role: 'reference',
+      fileId: i.toString(16).padStart(24, '0'),
+    }));
     const prompt = 'x'.repeat(IMAGE_JOB_PROMPT_MAX_CHARS);
     expect(ImageJobRequestSchema.safeParse({ ...valid, inputs, prompt }).success).toBe(true);
   });
