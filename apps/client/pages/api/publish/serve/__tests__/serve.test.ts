@@ -110,6 +110,7 @@ type RunOpts = {
   sign?: boolean;
   fetchDest?: string;
   fetchMode?: string;
+  accept?: string;
 };
 const run = (
   segments: string[],
@@ -129,6 +130,7 @@ const run = (
     sign,
     fetchDest,
     fetchMode,
+    accept,
   }: RunOpts = {}
 ) => {
   const query: Record<string, unknown> = { path: segments };
@@ -147,6 +149,7 @@ const run = (
   if (userAgent) headers['user-agent'] = userAgent;
   if (fetchDest) headers['sec-fetch-dest'] = fetchDest;
   if (fetchMode) headers['sec-fetch-mode'] = fetchMode;
+  if (accept) headers.accept = accept;
   const { req, res } = createMocks({ method: 'GET', query, headers });
   if (user) (req as Record<string, unknown>).user = user;
   return { res, promise: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res) };
@@ -1794,6 +1797,46 @@ describe('GET /api/publish/serve - /a/<shareToken> no-sign-in links', () => {
 
     expect(res._getStatusCode()).toBe(404);
     expect(mockDownload).not.toHaveBeenCalled();
+  });
+
+  describe('not-found page for a browser', () => {
+    const BROWSER_ACCEPT = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8';
+    const notFoundBody = async (segments: string[], accept?: string) => {
+      const { res, promise } = run(segments, { accept });
+      await promise;
+      return res;
+    };
+
+    it('renders the same HTML 404 for an unknown or revoked token, a malformed token and a removed owner', async () => {
+      mockArtifactFindOne.mockReturnValue(null);
+      const unknown = await notFoundBody(['a', 'gone'], BROWSER_ACCEPT);
+      const malformed = await notFoundBody(['a', ':path*'], BROWSER_ACCEPT);
+      mockArtifactFindOne.mockReturnValue(bundle({ shareToken: 'tok' }));
+      mockUserFindById.mockReturnValueOnce(null);
+      const ownerGone = await notFoundBody(['a', 'tok'], BROWSER_ACCEPT);
+
+      for (const res of [unknown, malformed, ownerGone]) {
+        expect(res._getStatusCode()).toBe(404);
+        expect(res.getHeader('Content-Type')).toBe('text/html; charset=utf-8');
+        expect(res.getHeader('Cache-Control')).toBe('no-store');
+        expect(res.getHeader('Referrer-Policy')).toBe('no-referrer');
+        expect(res.getHeader('X-Robots-Tag')).toBe('noindex, nofollow');
+        expect(res.getHeader('Vary')).toBe('Accept');
+        expect(res._getData()).toContain('This link is no longer available');
+      }
+      // Byte-identical, so the page never hints which case it was.
+      expect(malformed._getData()).toBe(unknown._getData());
+      expect(ownerGone._getData()).toBe(unknown._getData());
+      expect(unknown._getData()).not.toMatch(/revoked|expired|gone/i);
+    });
+
+    it.each([undefined, '*/*', 'application/json'])('keeps the JSON body for Accept %j', async accept => {
+      mockArtifactFindOne.mockReturnValue(null);
+      const res = await notFoundBody(['a', 'gone'], accept);
+      expect(res._getStatusCode()).toBe(404);
+      expect(res._getJSONData()).toEqual({ error: 'Not found' });
+      expect(res.getHeader('Vary')).toBe('Accept');
+    });
   });
 
   it('serves a bundle asset through the token path with no-store + noindex', async () => {
