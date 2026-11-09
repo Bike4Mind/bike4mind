@@ -204,7 +204,7 @@ export const ADMIN_EVAL_CASES: readonly AdminEvalCase[] = [
     expectTools: ['admin_get_usage_signals'],
     // The seeded user has none stored, so the tool answers not_found.
     // Order-free: the seeded email contains a dot, so no pattern may span a sentence.
-    expect: ['\\bsignals?\\b', "(?:\\b(?:no|none|nothing|not)\\b|n['\\u2019]t\\b)"],
+    expect: ['\\b(?:signals?|patterns?)\\b', "(?:\\b(?:no|none|nothing|not|zero)\\b|n['\\u2019]t\\b)"],
     needsTarget: true,
   },
   {

@@ -151,6 +151,8 @@ describe('gradeAdminCase', () => {
     "I couldn't find any usage signals for this user.",
     "There aren't any signals for this user.",
     'Usage signals for a-run42-1-e2e@test.com: none.',
+    'There are zero usage signals for this user.',
+    'No unusual usage patterns for this user.',
   ])('accepts the no-signals reply %s', reply => {
     const calls = [{ name: 'admin_get_usage_signals', success: true }];
     expect(gradeAdminCase(row('data-usage-signals'), { reply, functionCalls: calls }).passed).toBe(true);

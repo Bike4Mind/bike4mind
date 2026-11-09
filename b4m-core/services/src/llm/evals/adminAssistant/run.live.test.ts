@@ -24,8 +24,8 @@ if (enabled && (!Number.isInteger(samples) || samples < 1)) {
   throw new Error(`ADMIN_EVAL_SAMPLES must be a positive integer, got: ${process.env.ADMIN_EVAL_SAMPLES}`);
 }
 
-// Per turn: the poll is capped at the driver's default, and session create and the chat POST can each spend one
-// full 429 backoff budget.
+// Per turn: the poll is capped at the driver's default, and three calls can each spend one full 429 backoff budget:
+// session create, the chat POST, and the final poll GET (which can overrun the poll cap by one budget).
 const PER_TURN_MS = DEFAULT_TURN_TIMEOUT_MS + 3 * MAX_429_WAIT_MS;
 const expectedTurns = ADMIN_EVAL_CASES.length * samples;
 const TIMEOUT_MS = expectedTurns * PER_TURN_MS;
