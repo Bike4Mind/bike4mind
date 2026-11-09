@@ -2,8 +2,8 @@
 /**
  * /api/v1/projects/{id}/(members|invites|system-prompts) through the REAL baseApi chain (apiKeyAuth and
  * the error handler included), so each contract's scopes reach the gate and its statuses map as
- * documented. The shared write helpers are stubbed; their behavior is covered through the SPA routes'
- * tests (pages/api/projects/[id]/__tests__) and the services' own tests.
+ * documented. Most cases stub shared mutations; the permission regressions below use the real
+ * mutations and services, replacing only persistence and cleanup I/O.
  * Same harness shape as projectContent.scopes.integration.test.ts.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -17,6 +17,9 @@ const {
   mockRateLimit,
   mockFindShareAccessById,
   mockFindInvites,
+  mockFindAccessibleById,
+  mockFindUpdateAccessById,
+  mockUpdateProject,
   mockOutboundGate,
   mockRemoveMember,
   mockAddPrompts,
@@ -29,6 +32,9 @@ const {
   mockRateLimit: vi.fn(),
   mockFindShareAccessById: vi.fn(),
   mockFindInvites: vi.fn(),
+  mockFindAccessibleById: vi.fn(),
+  mockFindUpdateAccessById: vi.fn(),
+  mockUpdateProject: vi.fn(),
   mockOutboundGate: vi.fn(),
   mockRemoveMember: vi.fn(),
   mockAddPrompts: vi.fn(),
@@ -58,6 +64,11 @@ vi.mock('@server/auth/assertOutboundActionAllowed', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   assertOutboundActionAllowed: (...a: unknown[]) => mockOutboundGate(...a),
 }));
+vi.mock('@server/sharing/revokedFileReferences', () => ({
+  projectRevokeCleanupTargets: vi.fn().mockResolvedValue([]),
+  cleanUpRevokedFileReferences: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock('@server/projects/projectSharingMutations', () => ({
   removeProjectMember: (...a: unknown[]) => mockRemoveMember(...a),
   addProjectSystemPrompts: (...a: unknown[]) => mockAddPrompts(...a),
@@ -86,9 +97,16 @@ vi.mock('@bike4mind/database', async orig => {
     User: Object.assign(Object.create(RealUser), { findById: (...a: unknown[]) => mockFindUser(...a) }),
     userRepository: { findById: (...a: unknown[]) => mockFindUser(...a) },
     projectRepository: {
-      shareable: { findShareAccessById: (...a: unknown[]) => mockFindShareAccessById(...a) },
+      shareable: {
+        findShareAccessById: (...a: unknown[]) => mockFindShareAccessById(...a),
+        findAccessibleById: (...a: unknown[]) => mockFindAccessibleById(...a),
+        findUpdateAccessById: (...a: unknown[]) => mockFindUpdateAccessById(...a),
+      },
+      update: mockUpdateProject,
+      updateWithUpdateAccess: mockUpdateProject,
     },
-    inviteRepository: { findAllByDocumentId: (...a: unknown[]) => mockFindInvites(...a) },
+    inviteRepository: { findPageByDocumentId: (...a: unknown[]) => mockFindInvites(...a) },
+    withTransaction: async <T>(operation: () => Promise<T>): Promise<T> => operation(),
   };
 });
 
@@ -103,7 +121,7 @@ import memberHandler from '../members/[user_id]';
 import invitesHandler from '../invites';
 import promptsHandler from '../system-prompts/index';
 import promptHandler from '../system-prompts/[file_id]';
-import { decodeCursor } from '@server/utils/cursorPagination';
+import { decodeCursor, encodeCursor } from '@server/utils/cursorPagination';
 
 const ME = 'user-1';
 const PROJECT_ID = '65a000000000000000000001';
@@ -258,6 +276,30 @@ describe('DELETE /api/v1/projects/{id}/members/{user_id}', () => {
     );
   });
 
+  it('canonicalizes an uppercase member id before removal', async () => {
+    expect((await calls.removeMember(OTHER_USER.toUpperCase()))._getStatusCode()).toBe(204);
+    expect(mockRemoveMember).toHaveBeenCalledWith(expect.anything(), PROJECT_ID, OTHER_USER);
+  });
+
+  it('recognizes an uppercase self id as leaving rather than removing another member', async () => {
+    mockValidate.mockResolvedValue({
+      isValid: true,
+      keyId: 'k1',
+      userId: OTHER_USER,
+      scopes: [ApiKeyScope.WRITE_PROJECTS],
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    });
+    mockFindUser.mockResolvedValue({
+      id: OTHER_USER,
+      _id: OTHER_USER,
+      groups: [],
+      isBanned: false,
+      disputePending: false,
+    });
+    expect((await calls.removeMember(OTHER_USER.toUpperCase()))._getStatusCode()).toBe(204);
+    expect(mockRemoveMember).toHaveBeenCalledWith(expect.anything(), PROJECT_ID, undefined);
+  });
+
   it('leaves the project when the caller names themselves', async () => {
     expect((await calls.removeMember(ME))._getStatusCode()).toBe(204);
     expect(mockRemoveMember).toHaveBeenCalledWith(expect.anything(), PROJECT_ID, undefined);
@@ -290,23 +332,44 @@ describe('/api/v1/projects/{id}/invites', () => {
     expect(JSON.stringify(body)).not.toMatch(/secret-token|typedRecipients|inviterId/);
   });
 
-  it('pages by id and filters by recipient status', async () => {
-    mockFindInvites.mockResolvedValue([
-      invite('65d000000000000000000002'),
-      invite('65d000000000000000000001'),
-      invite('65d000000000000000000003', { recipients: { pending: [], accepted: ['a@example.com'], refused: [] } }),
-      invite('65d000000000000000000004', { type: 'Session' }),
-    ]);
+  it('requests bounded keyset pages with the recipient status filter', async () => {
+    const firstId = '65d000000000000000000001';
+    const secondId = '65d000000000000000000002';
+    mockFindInvites.mockResolvedValueOnce([invite(firstId), invite(secondId)]);
 
     const first = (await calls.listInvites({ limit: '1', status: 'pending' }))._getJSONData();
-    expect(first.data.map((i: { id: string }) => i.id)).toEqual(['65d000000000000000000001']);
-    expect(decodeCursor(first.next_cursor, 'v1.projects.invites')).toBe('65d000000000000000000001');
+    expect(first.data.map((item: { id: string }) => item.id)).toEqual([firstId]);
+    expect(decodeCursor(first.next_cursor, 'v1.projects.invites')).toBe(firstId);
+    expect(mockFindInvites).toHaveBeenLastCalledWith(PROJECT_ID, {
+      type: 'Project',
+      status: 'pending',
+      afterId: undefined,
+      limit: 2,
+    });
 
+    mockFindInvites.mockResolvedValueOnce([invite(secondId)]);
     const second = (
       await calls.listInvites({ limit: '1', status: 'pending', cursor: first.next_cursor })
     )._getJSONData();
-    expect(second.data.map((i: { id: string }) => i.id)).toEqual(['65d000000000000000000002']);
+    expect(second.data.map((item: { id: string }) => item.id)).toEqual([secondId]);
     expect(second.next_cursor).toBeNull();
+    expect(mockFindInvites).toHaveBeenLastCalledWith(PROJECT_ID, {
+      type: 'Project',
+      status: 'pending',
+      afterId: firstId,
+      limit: 2,
+    });
+  });
+
+  it('rejects malformed cursor ids before querying invites', async () => {
+    const cursor = encodeCursor('v1.projects.invites', 'not-an-object-id');
+    expect((await calls.listInvites({ cursor }))._getStatusCode()).toBe(422);
+    expect(mockFindInvites).not.toHaveBeenCalled();
+  });
+
+  it('reports a failed invite query as an error rather than an empty page', async () => {
+    mockFindInvites.mockRejectedValueOnce(new Error('Invite lookup unavailable'));
+    expect((await calls.listInvites())._getStatusCode()).toBe(500);
   });
 
   it('answers 404 for a project the caller cannot share, and 422 for an unknown status', async () => {
@@ -392,5 +455,40 @@ describe('/api/v1/projects/{id}/system-prompts', () => {
     expect((await calls.updatePrompt({}))._getStatusCode()).toBe(422);
     expect(mockAddPrompts).not.toHaveBeenCalled();
     expect(mockSetPrompt).not.toHaveBeenCalled();
+  });
+});
+
+// Keep the real shared mutations and services here: a write scope does not grant project ownership
+// or update access. Only persistence and cleanup I/O are substituted.
+describe('project permissions through the real mutation and service gates', () => {
+  beforeEach(() => {
+    withScopes([ApiKeyScope.WRITE_PROJECTS]);
+    mockUpdateProject.mockReset();
+    mockFindAccessibleById.mockReset();
+    mockFindUpdateAccessById.mockReset();
+  });
+
+  it('rejects a non-owner removing another member with 403', async () => {
+    const mutations = await vi.importActual<typeof import('@server/projects/projectSharingMutations')>(
+      '@server/projects/projectSharingMutations'
+    );
+    mockRemoveMember.mockImplementationOnce(mutations.removeProjectMember);
+    mockFindAccessibleById.mockResolvedValue({ ...PROJECT, userId: OTHER_USER, users: [{ userId: ME }] });
+
+    expect((await calls.removeMember())._getStatusCode()).toBe(403);
+    expect(mockFindAccessibleById).toHaveBeenCalledWith(expect.objectContaining({ id: ME }), PROJECT_ID);
+    expect(mockUpdateProject).not.toHaveBeenCalled();
+  });
+
+  it('rejects a read-only sharee setting a prompt with 404 and no write', async () => {
+    const mutations = await vi.importActual<typeof import('@server/projects/projectSharingMutations')>(
+      '@server/projects/projectSharingMutations'
+    );
+    mockSetPrompt.mockImplementationOnce(mutations.setProjectSystemPrompt);
+    mockFindUpdateAccessById.mockResolvedValue(null);
+
+    expect((await calls.updatePrompt({ enabled: false }))._getStatusCode()).toBe(404);
+    expect(mockFindUpdateAccessById).toHaveBeenCalledWith(expect.objectContaining({ id: ME }), PROJECT_ID);
+    expect(mockUpdateProject).not.toHaveBeenCalled();
   });
 });

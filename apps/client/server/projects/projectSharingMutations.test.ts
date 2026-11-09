@@ -19,7 +19,7 @@ vi.mock('@bike4mind/database', () => ({
   sessionRepository: {},
   userRepository: {},
   Group: {},
-  Project: {},
+  Project: { findById: vi.fn().mockResolvedValue(null) },
   withTransaction: async (operation: () => Promise<unknown>) => operation(),
 }));
 vi.mock('@bike4mind/services', () => ({ projectService: {}, sharingService: { createInvite } }));
@@ -36,6 +36,8 @@ vi.mock('@server/utils/inviteSendLimits', () => ({
   reserveInviteSendBudget: reserveBudget,
 }));
 
+import { toSharerInviteViews } from '@server/managers/inviteManager';
+import { Project } from '@bike4mind/database';
 import { createProjectInvite } from './projectSharingMutations';
 
 const user = { id: 'caller', groups: [] } as unknown as IUserDocument;
@@ -71,5 +73,20 @@ describe('createProjectInvite project access', () => {
     await expect(createProjectInvite({ user }, projectId, input)).rejects.toBe(failure);
     expect(reserveBudget).not.toHaveBeenCalled();
     expect(createInvite).not.toHaveBeenCalled();
+  });
+});
+
+describe('createProjectInvite resolved project id', () => {
+  it('persists the canonical project id for an uppercase request', async () => {
+    findShareAccessById.mockResolvedValue({ id: projectId });
+    reserveBudget.mockResolvedValue({ release: vi.fn() });
+    createInvite.mockResolvedValue({ id: 'invite-1', recipients: { pending: [] } });
+    vi.mocked(Project.findById).mockResolvedValue(null);
+    vi.mocked(toSharerInviteViews).mockResolvedValue([{}]);
+
+    await createProjectInvite({ user }, projectId.toUpperCase(), input);
+
+    expect(findShareAccessById).toHaveBeenCalledWith(user, projectId.toUpperCase());
+    expect(createInvite).toHaveBeenCalledWith(user, expect.objectContaining({ id: projectId }), expect.anything());
   });
 });

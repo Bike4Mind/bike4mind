@@ -20,7 +20,7 @@ import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { createProjectInvite } from '@server/projects/projectSharingMutations';
 import { toPublicProjectInvite } from '@server/projects/toPublicProjectInvite';
-import { paginateById } from '@server/utils/cursorPagination';
+import { decodeCursor, encodeCursor } from '@server/utils/cursorPagination';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
 
@@ -37,14 +37,21 @@ const listRoute = nextRouteForContract(listProjectInvitesContract, {
   const project = await projectRepository.shareable.findShareAccessById(req.user, id);
   if (!project) throw new NotFoundError('Project not found');
 
-  const invites = (await inviteRepository.findAllByDocumentId(project.id))
-    .filter(invite => invite.type === InviteType.Project)
-    .filter(invite => !status || (invite.recipients?.[status]?.length ?? 0) > 0)
-    .map(invite => ({ ...invite, id: String(invite.id) }));
-  const page = paginateById(invites, { limit, cursor, scope: CURSOR_SCOPE });
-  const views = await toSharerInviteViews(page.items, req.user);
+  const afterId = cursor === undefined ? undefined : decodeCursor(cursor, CURSOR_SCOPE);
+  if (afterId !== undefined && !/^[0-9a-f]{24}$/.test(afterId)) {
+    throw new UnprocessableEntityError('Invalid cursor');
+  }
+  const invites = await inviteRepository.findPageByDocumentId(project.id, {
+    type: InviteType.Project,
+    status,
+    afterId,
+    limit: limit + 1,
+  });
+  const page = invites.slice(0, limit);
+  const views = await toSharerInviteViews(page, req.user);
+  const nextCursor = invites.length > limit ? encodeCursor(CURSOR_SCOPE, String(page[page.length - 1].id)) : null;
 
-  return res.json({ data: views.map(toPublicProjectInvite), next_cursor: page.nextCursor });
+  return res.json({ data: views.map(toPublicProjectInvite), next_cursor: nextCursor });
 });
 
 const createRoute = nextRouteForContract(createProjectInviteContract, {

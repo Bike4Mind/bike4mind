@@ -17,6 +17,7 @@ import { ActivityType } from '@bike4mind/server-utils/config/activityType';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import { generateInviteLink } from '@server/managers/createDocumentInvite';
 import { toSharerInviteViews } from '@server/managers/inviteManager';
 import { cleanUpRevokedFileReferences, projectRevokeCleanupTargets } from '@server/sharing/revokedFileReferences';
 import { getInviteTypeName } from '@server/utils/mailer/inviteNotificationEmail';
@@ -153,13 +154,15 @@ export type CreateProjectInviteInput = {
  * Creates a project invite and notifies its recipients. Returns the sharer view of the invite (see
  * toSharerInviteViews) and its share link. The caller gates outbound actions first.
  */
-export async function createProjectInvite(ctx: Ctx, projectId: string, input: CreateProjectInviteInput) {
+export async function createProjectInvite(ctx: Ctx, requestedProjectId: string, input: CreateProjectInviteInput) {
   const { user, ability, logger } = ctx;
   // An id that is not an ObjectId names no project, so answer the 404 here rather than letting the
   // lookup cast and raise a CastError.
-  if (!isValidObjectId(projectId)) throw new NotFoundError('Project not found');
-  const shareableProject = await projectRepository.shareable.findShareAccessById(user, projectId);
+  if (!isValidObjectId(requestedProjectId)) throw new NotFoundError('Project not found');
+  const shareableProject = await projectRepository.shareable.findShareAccessById(user, requestedProjectId);
   if (!shareableProject) throw new NotFoundError('Project not found');
+  // Invite.documentId is a string: store the resolved id so hex casing cannot hide it from lists.
+  const projectId = shareableProject.id;
 
   const { expiresAt, ...rest } = input;
   const budget = await reserveInviteSendBudget(user.id, rest.recipients, { chargeTypedAddresses: true });
@@ -216,8 +219,7 @@ export async function createProjectInvite(ctx: Ctx, projectId: string, input: Cr
     );
   }
 
-  // Token, not `_id` - see generateInviteLink in pages/api/[type]/[id]/invites/index.ts for why.
-  const link = `${process.env.APP_URL}/share/${created.token ?? created.id}`;
+  const link = generateInviteLink(created);
 
   // Same notification the generic invite route sends; without it an invitee only learns of the
   // invite from the in-app inbox. Not awaited, so a mail failure never fails the invite.

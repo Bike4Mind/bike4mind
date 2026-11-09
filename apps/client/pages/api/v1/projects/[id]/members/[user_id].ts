@@ -9,13 +9,14 @@ import { ForbiddenError, NotFoundError, UnauthorizedError, removeProjectMemberCo
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
-import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import { isValidObjectId, toObjectIdString } from '@bike4mind/server-utils/utils/objectId';
 import { removeProjectMember } from '@server/projects/projectSharingMutations';
 
 const removeRoute = nextRouteForContract(removeProjectMemberContract, {
   rateLimit: perUserRateLimit('DELETE /api/v1/projects/[id]/members/[user_id]'),
 }).delete(async (req, res) => {
-  const { id, user_id: userId } = req.validatedParams;
+  const { id, user_id: requestedUserId } = req.validatedParams;
+  const userId = toObjectIdString(requestedUserId) ?? requestedUserId;
   if (!isValidObjectId(id)) throw new NotFoundError('Project not found');
 
   const isSelf = userId === req.user.id;
