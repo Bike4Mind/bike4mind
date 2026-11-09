@@ -1,5 +1,7 @@
 import {
   inheritancePolicy,
+  MAX_RESOLVED_DECISIONS,
+  MAX_TASK_ATTEMPTS,
   rolePolicySchema,
   rootPolicySchema,
   modelSelectionSchema,
@@ -451,12 +453,11 @@ export class SessionStore implements SessionWritesStore {
     try {
       return rolePolicySchema.parse(JSON.parse(await readFile(join(directory, '.role-policy'), 'utf8')));
     } catch (error) {
-      if (
-        (error as NodeJS.ErrnoException).code === 'ENOENT' ||
-        error instanceof SyntaxError ||
-        error instanceof z.ZodError
-      )
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return inheritancePolicy();
+      if (error instanceof SyntaxError || error instanceof z.ZodError) {
+        console.warn('Ignoring unreadable role policy; using inheritance defaults.');
         return inheritancePolicy();
+      }
       throw error;
     }
   }
@@ -527,8 +528,11 @@ export class SessionStore implements SessionWritesStore {
         if (!session.workerTask) return null;
         const changed = change(session.workerTask);
         const attempts =
-          changed.attempts.length > 32 ? [changed.attempts[0], ...changed.attempts.slice(-31)] : changed.attempts;
-        session.workerTask = workerTaskSchema.parse({ ...changed, attempts });
+          changed.attempts.length > MAX_TASK_ATTEMPTS
+            ? [changed.attempts[0], ...changed.attempts.slice(1 - MAX_TASK_ATTEMPTS)]
+            : changed.attempts;
+        const resolvedDecisions = changed.resolvedDecisions.slice(-MAX_RESOLVED_DECISIONS);
+        session.workerTask = workerTaskSchema.parse({ ...changed, attempts, resolvedDecisions });
         if (model && session.workerSelection) {
           session.model = model;
           session.workerSelection = { ...session.workerSelection, effectiveModel: model, source: 'escalation' };
@@ -1325,6 +1329,17 @@ export class SessionStore implements SessionWritesStore {
     const orchestrationPolicy = rootPolicySchema.safeParse(parsed.orchestrationPolicy);
     const workerSelection = modelSelectionSchema.safeParse(parsed.workerSelection);
     const workerTask = workerTaskSchema.safeParse(parsed.workerTask);
+    for (const [field, result] of [
+      ['orchestrationPolicy', orchestrationPolicy],
+      ['workerSelection', workerSelection],
+      ['workerTask', workerTask],
+    ] as const) {
+      if (!result.success && parsed[field] !== undefined)
+        console.warn(`Dropping unreadable ${field} from session ${parsed.id ?? id}.`);
+    }
+    // A root's snapshot is only reused while its orchestrate flag is; workers keep theirs.
+    const orchestrateExpired =
+      parsed.orchestrate === true && (parsed as StoredSession).orchestrateLaunch !== this.launchId;
     // Absolute only: a relative entry would resolve against wherever the app was launched from.
     const grantedDirectories = Array.isArray(parsed.grantedDirectories)
       ? parsed.grantedDirectories.filter((entry): entry is string => typeof entry === 'string' && isAbsolute(entry))
@@ -1360,7 +1375,9 @@ export class SessionStore implements SessionWritesStore {
         : {}),
       ...(parsed.archived ? { archived: true } : {}),
       ...(parsed.historyEnabled ? { historyEnabled: true } : {}),
-      ...(orchestrationPolicy.success ? { orchestrationPolicy: orchestrationPolicy.data } : {}),
+      ...(orchestrationPolicy.success && !(orchestrateExpired && !origin)
+        ? { orchestrationPolicy: orchestrationPolicy.data }
+        : {}),
       ...(workerSelection.success ? { workerSelection: workerSelection.data } : {}),
       ...(workerTask.success ? { workerTask: workerTask.data } : {}),
       ...(origin ? { origin } : {}),

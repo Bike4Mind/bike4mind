@@ -1,7 +1,7 @@
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { inheritancePolicy } from '@shared/orchestration';
 import { SessionStore } from './SessionStore';
 import type { SessionScope } from './sessionScope';
@@ -165,4 +165,72 @@ it.each(['{', '{"version":99}'])('falls back to inheritance for malformed saved 
   await store.setRolePolicy(inheritancePolicy());
   await writeFile(join(directory, '.role-policy'), contents);
   expect(await store.getRolePolicy()).toEqual(inheritancePolicy());
+});
+
+it('drops a root policy snapshot when orchestrate expires on restart, keeping a worker policy', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'b4m-policy-reseed-'));
+  const first = new SessionStore(directory, 'planner', 'launch-one');
+  const policy = inheritancePolicy();
+  const root = await first.create('planner', {
+    orchestrationPolicy: { rootSessionId: 'root', rootRunId: 'run-one', policy },
+  });
+  await first.setOrchestrate(root.id, true);
+  const child = await first.create('worker', {
+    origin: { parentSessionId: root.id, depth: 1, seedPrompt: 'Brief' },
+    orchestrationPolicy: { rootSessionId: root.id, rootRunId: 'run-one', policy },
+  });
+  const same = new SessionStore(directory, 'planner', 'launch-one');
+  expect((await same.get(root.id))?.orchestrationPolicy?.rootRunId).toBe('run-one');
+  const restarted = new SessionStore(directory, 'planner', 'launch-two');
+  const reloaded = await restarted.get(root.id);
+  expect(reloaded?.orchestrate).toBeUndefined();
+  expect(reloaded?.orchestrationPolicy).toBeUndefined();
+  expect((await restarted.get(child.id))?.orchestrationPolicy?.rootRunId).toBe('run-one');
+});
+
+it('warns without stored values for a malformed workerTask and stays silent for a valid session', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'b4m-parse-warn-'));
+  const store = new SessionStore(directory, 'worker');
+  const child = await store.create();
+  const session = await store.get(child.id);
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  try {
+    await new SessionStore(directory, 'worker').get(child.id);
+    expect(warn).not.toHaveBeenCalled();
+    await writeFile(
+      join(directory, `${child.id}.json`),
+      JSON.stringify({ ...session, workerTask: { version: 99, secret: 'stored-value' } })
+    );
+    await new SessionStore(directory, 'worker').get(child.id);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain('workerTask');
+    expect(warn.mock.calls[0][0]).toContain(child.id);
+    expect(warn.mock.calls[0][0]).not.toContain('stored-value');
+  } finally {
+    warn.mockRestore();
+  }
+});
+
+it.each([32, 31])('keeps the newest resolved decision when a task holding %i takes one more', async held => {
+  const directory = await mkdtemp(join(tmpdir(), 'b4m-task-decisions-'));
+  const store = new SessionStore(directory, 'worker');
+  const resolvedDecisions = Array.from({ length: held }, (_, index) => `decision-${index}`);
+  const child = await store.create('worker', {
+    workerTask: {
+      version: 1,
+      contract,
+      automaticUpgrades: 0,
+      resolvedDecisions,
+      attempts: [{ id: 'attempt-0', model: 'worker', startedAt: '2026-11-07', trigger: 'initial' as const }],
+      state: { status: 'queued' },
+    },
+  });
+  const updated = await store.updateWorkerTask(child.id, task => ({
+    ...task,
+    resolvedDecisions: [...task.resolvedDecisions, 'decision-new'],
+  }));
+  const kept = updated?.workerTask?.resolvedDecisions;
+  expect(kept).toHaveLength(32);
+  expect(kept?.at(-1)).toBe('decision-new');
+  expect(kept?.includes('decision-0')).toBe(held === 31);
 });

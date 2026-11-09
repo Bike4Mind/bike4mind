@@ -194,6 +194,8 @@ const taskStateSchema = z.discriminatedUnion('status', [
   z.strictObject({ status: z.literal('canceled'), reason: text }),
   z.strictObject({ status: z.literal('budget-paused'), reason: text }),
 ]);
+export const MAX_TASK_ATTEMPTS = 32;
+export const MAX_RESOLVED_DECISIONS = 32;
 export const workerTaskSchema = z.strictObject({
   version: z.literal(1),
   contract: taskContractSchema,
@@ -207,9 +209,9 @@ export const workerTaskSchema = z.strictObject({
       })
     )
     .min(1)
-    .max(32),
+    .max(MAX_TASK_ATTEMPTS),
   automaticUpgrades: z.number().int().min(0).max(1),
-  resolvedDecisions: z.array(z.string().min(1).max(100)).max(32),
+  resolvedDecisions: z.array(z.string().min(1).max(100)).max(MAX_RESOLVED_DECISIONS),
   state: taskStateSchema,
 });
 export type WorkerTask = z.infer<typeof workerTaskSchema>;
