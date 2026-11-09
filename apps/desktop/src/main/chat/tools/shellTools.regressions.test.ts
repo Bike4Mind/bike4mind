@@ -50,8 +50,8 @@ const PROGRAMS = [
 
 const REPLACEMENT = String.fromCharCode(0xfffd);
 
-/** Commands that ran unasked on main and must still run as the mode allows, in a repository with a large node_modules. */
-describe('commands main ran unasked', () => {
+/** Commands in a repository with a large node_modules: those that run as the mode allows, and those that ask. */
+describe('shell approval in a project with a large node_modules', () => {
   let base: string;
   let proj: string;
   let userData: string;
@@ -287,7 +287,7 @@ describe('commands main ran unasked', () => {
   };
 
   const unasked = { auto: true, full: true, allowed: true };
-  // On main the rules floor already refused any command naming `.claude`; only auto and full ran it.
+  // The rules floor refuses any command naming `.claude`; auto and full run it.
   const unaskedNamingClaude = { auto: true, full: true, allowed: false };
   const asks = { auto: false, full: false };
 
@@ -389,7 +389,7 @@ describe('commands main ran unasked', () => {
     ['cp a .claude/commands/y.md', '', unaskedNamingClaude],
     ['git stash', 'crepo', unasked],
     ['git reset --hard', 'crepo', unasked],
-  ])('decides %s (in proj/%s) as main did', async (command, folder, expected) => {
+  ])('decides %s (in proj/%s) as the mode allows', async (command, folder, expected) => {
     expect(await judge(command, folder)).toEqual(expected);
   });
 
@@ -552,7 +552,7 @@ describe('commands main ran unasked', () => {
     'cp a {x}a,.claude/settings.json}',
     // tar reads its first word as an old-style cluster whatever bash makes of the braces, and `T` names a file list.
     'tar cvfT{1..3..1} list',
-  ])('asks for %s, which main ran unasked', async command => {
+  ])('asks in every mode for %s', async command => {
     expect(await judge(command)).toMatchObject(asks);
   });
 
