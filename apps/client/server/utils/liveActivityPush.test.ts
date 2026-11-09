@@ -10,7 +10,7 @@ vi.mock('@bike4mind/server-utils/utils/pushDelivery', () => ({
   isPushDeliveryConfigured: () => pushDelivery.configured,
 }));
 
-import { createLiveActivityThrottle, publishLiveActivityUpdate } from './liveActivityPush';
+import { createLiveActivityThrottle, endAgentRunLiveActivity, publishLiveActivityUpdate } from './liveActivityPush';
 
 const update = (questId: string, status: string, extra: Partial<LiveActivityPushEvent['contentState']> = {}) =>
   ({
@@ -63,6 +63,35 @@ describe('publishLiveActivityUpdate', () => {
     await expect(publishLiveActivityUpdate(invalid, { warn })).resolves.toBeUndefined();
     expect(h.publish).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalled();
+  });
+});
+
+describe('endAgentRunLiveActivity', () => {
+  beforeEach(() => {
+    h.publish.mockReset();
+    pushDelivery.configured = true;
+  });
+
+  it('publishes an end for a top-level run with a linked quest', async () => {
+    await endAgentRunLiveActivity({ userId: 'u1', linkedQuestId: 'q1' }, { status: 'stopped' }, { warn: vi.fn() });
+    expect(h.publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'u1',
+        questId: 'q1',
+        event: 'end',
+        contentState: { status: 'stopped' },
+      })
+    );
+  });
+
+  it.each([
+    { userId: 'u1' },
+    { userId: 'u1', linkedQuestId: 'q1', parentExecutionId: 'parent' },
+    { userId: 'u1', linkedQuestId: 'q1', spawnedByExecutionId: 'parent' },
+    { userId: 'u1', linkedQuestId: 'q1', dagNodeId: 'node' },
+  ])('skips runs without their own activity: %j', async execution => {
+    await endAgentRunLiveActivity(execution, { status: 'completed' }, { warn: vi.fn() });
+    expect(h.publish).not.toHaveBeenCalled();
   });
 });
 
@@ -163,6 +192,31 @@ describe('createLiveActivityThrottle', () => {
 
     await vi.advanceTimersByTimeAsync(60_000);
     expect(publish).toHaveBeenCalledTimes(3);
+  });
+
+  it('flush waits for a publish already started by the trailing timer', async () => {
+    const throttle = createLiveActivityThrottle(publish, 15_000);
+    await throttle.emit(update('q1', 'running', { stageLabel: 'a' }));
+    let resolvePublish!: () => void;
+    publish.mockImplementationOnce(
+      () =>
+        new Promise<void>(resolve => {
+          resolvePublish = resolve;
+        })
+    );
+    await throttle.emit(update('q1', 'running', { stageLabel: 'b' }));
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(publish).toHaveBeenCalledTimes(2);
+
+    let flushed = false;
+    const done = throttle.flush().then(() => {
+      flushed = true;
+    });
+    await Promise.resolve();
+    expect(flushed).toBe(false);
+    resolvePublish();
+    await done;
+    expect(flushed).toBe(true);
   });
 
   it('flush skips a pending frame equal to what was last sent', async () => {

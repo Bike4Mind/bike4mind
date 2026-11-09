@@ -637,7 +637,9 @@ describe('deliverLiveActivityPush', () => {
           return true;
         }),
         removeLiveActivityByQuest: vi.fn(async () => tokens.length),
+        removeBySids: vi.fn(async () => 1),
       },
+      sessions: { findLiveSids: vi.fn(async sids => new Set(sids)) },
       loadRecipient: vi.fn(async () => recipient),
       transport: {
         send: vi.fn(async (request: ApnsRequest) => {
@@ -663,6 +665,42 @@ describe('deliverLiveActivityPush', () => {
     expect(deps.transport.send).not.toHaveBeenCalled();
     expect(deps.tokens.removeLiveActivityByQuest).not.toHaveBeenCalled();
     expect(deps.loadRecipient).not.toHaveBeenCalled();
+  });
+
+  it('skips and prunes an ended-session token while delivering to live sessions', async () => {
+    const { deps, sent } = makeActivityDeps([
+      { token: 'ended', environment: 'production' },
+      { token: 'live', environment: 'production' },
+    ]);
+    vi.mocked(deps.tokens.findLiveActivityByQuest).mockResolvedValue([
+      { token: 'ended', environment: 'production', sid: 'sid-ended' },
+      { token: 'live', environment: 'production', sid: 'sid-live' },
+    ]);
+    vi.mocked(deps.sessions.findLiveSids).mockResolvedValue(new Set(['sid-live']));
+
+    await deliverLiveActivityPush(UPDATE, deps, logger, NOW_SECONDS);
+
+    expect(sent.map(request => request.deviceToken)).toEqual(['live']);
+    expect(deps.sessions.findLiveSids).toHaveBeenCalledWith(['sid-ended', 'sid-live']);
+    expect(deps.tokens.removeBySids).toHaveBeenCalledWith(['sid-ended']);
+  });
+
+  it.each([
+    ['end', END],
+    ['update', UPDATE],
+  ] as const)('retries partial transient failure only for an %s frame', async (_label, event) => {
+    const { deps } = makeActivityDeps(
+      [
+        { token: 'ok', environment: 'production' },
+        { token: 'busy', environment: 'production' },
+      ],
+      request => (request.deviceToken === 'ok' ? { status: 200 } : { status: 503 })
+    );
+
+    const delivery = deliverLiveActivityPush(event, deps, logger, NOW_SECONDS);
+    if (event.event === 'end') await expect(delivery).rejects.toThrow(/transiently/);
+    else await expect(delivery).resolves.toMatchObject({ delivered: 1, failed: 1 });
+    expect(deps.tokens.removeLiveActivityByQuest).not.toHaveBeenCalled();
   });
 
   it('drops the frame when the recipient user no longer exists', async () => {

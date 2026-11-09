@@ -30,6 +30,31 @@ export async function publishLiveActivityUpdate(
   }
 }
 
+export async function endAgentRunLiveActivity(
+  execution: {
+    userId: string;
+    linkedQuestId?: string;
+    parentExecutionId?: unknown;
+    spawnedByExecutionId?: unknown;
+    dagNodeId?: string;
+  },
+  contentState: LiveActivityPushEvent['contentState'],
+  logger: Pick<Logger, 'warn'>
+): Promise<void> {
+  if (
+    !execution.linkedQuestId ||
+    execution.parentExecutionId ||
+    execution.spawnedByExecutionId ||
+    execution.dagNodeId
+  ) {
+    return;
+  }
+  await publishLiveActivityUpdate(
+    { userId: execution.userId, questId: execution.linkedQuestId, event: 'end', contentState },
+    logger
+  );
+}
+
 /** APNs budgets live activity updates, and a lock screen gains nothing from more than a few a minute. */
 export const LIVE_ACTIVITY_UPDATE_INTERVAL_MS = 15_000;
 
@@ -63,6 +88,7 @@ export function createLiveActivityThrottle(
   type QuestWindow = {
     lastSentAtMs: number;
     lastSentKey: string;
+    inFlight?: Promise<void>;
     pending?: LiveActivityPushEvent;
     timer?: ReturnType<typeof setTimeout>;
   };
@@ -73,7 +99,8 @@ export function createLiveActivityThrottle(
   const sendUpdate = async (window: QuestWindow, event: LiveActivityPushEvent) => {
     window.lastSentAtMs = Date.now();
     window.lastSentKey = keyOf(event);
-    await publish(event);
+    window.inFlight = publish(event);
+    await window.inFlight;
   };
 
   const clearPending = (window: QuestWindow) => {
@@ -136,7 +163,7 @@ export function createLiveActivityThrottle(
         const latest = takePending(window);
         return latest ? [sendUpdate(window, latest)] : [];
       });
-      await Promise.all(due);
+      await Promise.all([...due, ...[...windows.values()].map(window => window.inFlight)]);
     },
   };
 }

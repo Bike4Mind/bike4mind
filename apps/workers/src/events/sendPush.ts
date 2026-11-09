@@ -169,7 +169,11 @@ export type SendLiveActivityDeps = {
       questId: string
     ): Promise<ReadonlyArray<{ token: string; sid: string; environment: PushTokenEnvironment }>>;
     removeByToken(token: string, options: { sid: string }): Promise<boolean>;
+    removeBySids(sids: readonly string[]): Promise<number>;
     removeLiveActivityByQuest(userId: string, questId: string): Promise<number>;
+  };
+  sessions: {
+    findLiveSids(sids: readonly string[]): Promise<ReadonlySet<string>>;
   };
   /** Same source as deliverPush: the active organization's `redactPushContent` covers activity frames too. */
   loadRecipient(userId: string): Promise<PushRecipient | null>;
@@ -212,7 +216,8 @@ export async function deliverLiveActivityPush(
   logger: Pick<Logger, 'info' | 'warn' | 'error'>,
   nowSeconds: number = Math.floor(Date.now() / 1000)
 ): Promise<LiveActivityDeliveryResult> {
-  const tokens = await deps.tokens.findLiveActivityByQuest(event.userId, event.questId);
+  const storedTokens = await deps.tokens.findLiveActivityByQuest(event.userId, event.questId);
+  const { tokens } = await dropTokensOfEndedSessions(storedTokens, deps, logger);
   if (tokens.length === 0) {
     logger.info('[LiveActivity] no activity tokens for the quest; nothing to send', { event: event.event });
     return { status: 'skipped', reason: 'no_tokens' };
@@ -245,8 +250,8 @@ export async function deliverLiveActivityPush(
 
   const outcome = await sendToTokens(tokens, headers, payload, deps, logger);
   logger.info('[LiveActivity] delivery finished', { event: event.event, ...outcome });
-  // Same rule as deliverPush: a transient failure is retried even next to tokens that failed for good.
-  if (outcome.delivered === 0 && outcome.retryable > 0) {
+  // Retry every transient end failure before deleting the activity tokens.
+  if (outcome.retryable > 0 && (outcome.delivered === 0 || ending)) {
     throw new Error(
       `APNs live activity delivery failed transiently for ${outcome.retryable} of ${outcome.failed} token(s)`
     );
@@ -346,7 +351,7 @@ async function sendToTokens(
  */
 async function dropTokensOfEndedSessions<T extends { sid: string }>(
   tokens: ReadonlyArray<T>,
-  deps: Pick<SendPushDeps, 'tokens' | 'sessions'>,
+  deps: { tokens: Pick<SendPushDeps['tokens'], 'removeBySids'>; sessions: SendPushDeps['sessions'] },
   logger: Pick<Logger, 'info' | 'warn'>
 ): Promise<{ tokens: T[]; pruned: number }> {
   if (tokens.length === 0) return { tokens: [], pruned: 0 };
@@ -442,7 +447,13 @@ const handleWithContext = withEventContext(async (event, logger) => {
     logger.updateMetadata({ handler: 'sendPush', userId: payload.userId, questId: payload.questId });
     await deliverLiveActivityPush(
       payload,
-      { tokens: pushTokenRepository, loadRecipient: loadPushRecipient, transport, topic: config.topic },
+      {
+        tokens: pushTokenRepository,
+        sessions: authSessionRepository,
+        loadRecipient: loadPushRecipient,
+        transport,
+        topic: config.topic,
+      },
       logger
     );
     return;
