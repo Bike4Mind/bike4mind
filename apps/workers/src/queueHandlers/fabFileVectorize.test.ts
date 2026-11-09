@@ -237,9 +237,13 @@ const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(),
 import { fabFileChunkRepository, User } from '@bike4mind/database';
 import { FabFileSourceType } from '@bike4mind/common';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
-import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@bike4mind/server-utils/utils/sqsDelivery';
+import {
+  FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT,
+  FAB_FILE_VECTORIZE_RATE_DENIAL_MIN_REDELIVERY_SEC,
+  FAB_FILE_VECTORIZE_VISIBILITY_TIMEOUT_SEC,
+} from '@bike4mind/server-utils/utils/sqsDelivery';
 import { embeddingBackendForModel } from '@bike4mind/utils/embeddingProviders';
-import { dispatch } from './fabFileVectorize';
+import { dispatch, rateDenialRedeliveryDelaySeconds } from './fabFileVectorize';
 
 const makeEvent = (body: Record<string, unknown>) => ({ Records: [{ body: JSON.stringify(body) }] }) as never;
 // Fully-vectorized file -> idempotency early-return right after the batchId metadata attach.
@@ -629,10 +633,23 @@ describe('fabFileVectorize handler - spend gate', () => {
     expect(h.deferFailureIfRetryable).toHaveBeenCalled();
     expect(h.returnRecordForRedelivery).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ delaySeconds: 43, jitterSeconds: 60 })
+      expect.objectContaining({ delaySeconds: FAB_FILE_VECTORIZE_RATE_DENIAL_MIN_REDELIVERY_SEC, jitterSeconds: 60 })
     );
     expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
     expect((mockLogger as { error: ReturnType<typeof vi.fn> }).error).not.toHaveBeenCalled();
+  });
+
+  it('floors the redelivery delay so the delivery budget spans what a thrown failure spanned', () => {
+    // A thrown failure waits out the visibility timeout (pinned to infra/queues.ts by
+    // sqsDelivery.test.ts); a near-reset window must not bring the message back sooner, or the
+    // deliveries burn out in a couple of minutes.
+    expect(FAB_FILE_VECTORIZE_RATE_DENIAL_MIN_REDELIVERY_SEC).toBeGreaterThanOrEqual(
+      FAB_FILE_VECTORIZE_VISIBILITY_TIMEOUT_SEC
+    );
+    expect(rateDenialRedeliveryDelaySeconds(1)).toBe(FAB_FILE_VECTORIZE_RATE_DENIAL_MIN_REDELIVERY_SEC);
+    expect(rateDenialRedeliveryDelaySeconds(undefined)).toBe(FAB_FILE_VECTORIZE_RATE_DENIAL_MIN_REDELIVERY_SEC);
+    // A reset beyond the floor is still honoured (rounded up to whole seconds).
+    expect(rateDenialRedeliveryDelaySeconds(400_100)).toBe(401);
   });
 
   it('a retryable denial on the final attempt marks the file failed and throws to the DLQ', async () => {

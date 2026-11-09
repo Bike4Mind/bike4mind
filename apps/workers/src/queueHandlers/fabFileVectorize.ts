@@ -59,7 +59,10 @@ import {
   deferFailureIfRetryable,
 } from '@bike4mind/server-utils/dataLakes/dataLakeBatchProgress';
 import { notifySlackIndexingComplete } from '@workers/queueHandlers/notifySlackIndexingComplete';
-import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@bike4mind/server-utils/utils/sqsDelivery';
+import {
+  FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT,
+  FAB_FILE_VECTORIZE_RATE_DENIAL_MIN_REDELIVERY_SEC,
+} from '@bike4mind/server-utils/utils/sqsDelivery';
 import { returnRecordForRedelivery } from '@bike4mind/server-utils/utils/sqsRedelivery';
 import {
   dispatchWithLogger,
@@ -93,6 +96,16 @@ const RATE_DENIAL_FALLBACK_DELAY_MS = 60_000;
  * together and saturating it again.
  */
 const RATE_DENIAL_JITTER_SECONDS = 60;
+
+/**
+ * Seconds before a rate-denied delivery comes back: the window's reset, but never sooner than
+ * FAB_FILE_VECTORIZE_RATE_DENIAL_MIN_REDELIVERY_SEC, so the queue's few deliveries still span as
+ * many rate windows as a thrown failure's did. Jitter is added on top by returnRecordForRedelivery.
+ */
+export function rateDenialRedeliveryDelaySeconds(retryAfterMs: number | undefined): number {
+  const windowResetSeconds = Math.ceil((retryAfterMs ?? RATE_DENIAL_FALLBACK_DELAY_MS) / 1000);
+  return Math.max(FAB_FILE_VECTORIZE_RATE_DENIAL_MIN_REDELIVERY_SEC, windowResetSeconds);
+}
 
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   const body = event.Records[0].body;
@@ -817,13 +830,13 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         logger,
       }))
     ) {
-      // A saturated rate window drains within the minute: hand the message back with a short,
-      // jittered delay instead of throwing, so expected back-pressure retries quietly (the warn
-      // above) rather than paging. The final attempt still falls through to the failure
+      // A saturated rate window is expected back-pressure: hand the message back with a floored,
+      // jittered delay instead of throwing, so it retries quietly (the warn above) rather than
+      // paging, without spending the delivery budget any faster than a throw did. The final attempt still falls through to the failure
       // accounting below, so a file that never gets a slot lands visibly failed, not stuck.
       if (err instanceof dataLakeService.EmbeddingSpendDeniedError && err.retryable) {
         return returnRecordForRedelivery(event, {
-          delaySeconds: Math.ceil((err.retryAfterMs ?? RATE_DENIAL_FALLBACK_DELAY_MS) / 1000),
+          delaySeconds: rateDenialRedeliveryDelaySeconds(err.retryAfterMs),
           jitterSeconds: RATE_DENIAL_JITTER_SECONDS,
           logger,
         });
