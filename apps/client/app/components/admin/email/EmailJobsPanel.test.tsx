@@ -8,7 +8,6 @@ const mocks = vi.hoisted(() => ({
     data: undefined as unknown,
     isLoading: false,
     isError: false,
-    isFetching: false,
     refetch: vi.fn(),
   },
   lastParams: undefined as unknown,
@@ -56,7 +55,7 @@ const setStartDate = (value: string) => {
 
 describe('EmailJobsPanel', () => {
   beforeEach(() => {
-    Object.assign(mocks.jobs, { data: { data: [] }, isLoading: false, isError: false, isFetching: false });
+    Object.assign(mocks.jobs, { data: { data: [] }, isLoading: false, isError: false });
     mocks.jobs.refetch.mockClear();
   });
 

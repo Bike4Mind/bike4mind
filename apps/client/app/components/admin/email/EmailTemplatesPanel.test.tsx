@@ -9,7 +9,6 @@ const mocks = vi.hoisted(() => ({
     data: undefined as unknown,
     isLoading: false,
     isError: false,
-    isFetching: false,
     refetch: vi.fn(),
   },
 }));
@@ -47,7 +46,7 @@ const template = {
 
 describe('EmailTemplatesPanel', () => {
   beforeEach(() => {
-    Object.assign(mocks.templates, { data: { data: [] }, isLoading: false, isError: false, isFetching: false });
+    Object.assign(mocks.templates, { data: { data: [] }, isLoading: false, isError: false });
     mocks.templates.refetch.mockClear();
   });
 

@@ -39,7 +39,7 @@ const CATEGORY_LABELS: Record<EmailCategory, string> = {
 };
 
 export default function EmailTemplatesPanel() {
-  const { data: templates, isLoading, isError, isFetching, refetch } = useEmailTemplates({ limit: 100 });
+  const { data: templates, isLoading, isError, refetch } = useEmailTemplates({ limit: 100 });
   const { data: jobs } = useEmailJobs({ limit: 1000 });
   const deleteMutation = useDeleteEmailTemplate();
   const cloneMutation = useCloneEmailTemplate();
@@ -126,7 +126,7 @@ export default function EmailTemplatesPanel() {
       {isLoading ? (
         <LoadingState label="Loading templates" testId="email-templates-loading" />
       ) : isError && !templates ? (
-        <ErrorState message="Could not load templates." onRetry={() => void refetch()} retrying={isFetching} />
+        <ErrorState message="Could not load templates." onRetry={() => void refetch()} />
       ) : (
         <Sheet variant="outlined" sx={{ borderRadius: 'sm', overflow: 'auto' }}>
           <Table stickyHeader>

@@ -39,7 +39,6 @@ export default function EmailJobsPanel() {
     data: jobs,
     isLoading,
     isError,
-    isFetching,
     refetch,
   } = useEmailJobs({
     excludeTest,
@@ -156,7 +155,7 @@ export default function EmailJobsPanel() {
       {isLoading ? (
         <LoadingState label="Loading campaigns" testId="email-campaigns-loading" />
       ) : isError && !jobs ? (
-        <ErrorState message="Could not load campaigns." onRetry={() => void refetch()} retrying={isFetching} />
+        <ErrorState message="Could not load campaigns." onRetry={() => void refetch()} />
       ) : (
         <Sheet variant="outlined" sx={{ borderRadius: 'sm', overflow: 'auto' }}>
           <Table stickyHeader>

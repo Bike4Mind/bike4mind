@@ -36,7 +36,7 @@ import { AdminPageHeader, EmptyState, ErrorState, LoadingState } from '../shared
 import { ADMIN_REGION_GAP } from '../shared/adminStyles';
 
 const Team: React.FC = () => {
-  const { data: teamMembers, isLoading, error, isFetching, refetch } = useGetTeamMembers();
+  const { data: teamMembers, isLoading, error, refetch } = useGetTeamMembers();
   const deleteMember = useDeleteTeamMember();
   const [isCreateModalOpen, setCreateModalOpen] = useState(false);
   const [editingMember, setEditingMember] = useState<IInternalTeamMemberDocument | null>(null);
@@ -94,7 +94,7 @@ const Team: React.FC = () => {
       {isLoading ? (
         <LoadingState label="Loading team members" testId="team-loading" />
       ) : error && !teamMembers ? (
-        <ErrorState message="Could not load team members." onRetry={() => void refetch()} retrying={isFetching} />
+        <ErrorState message="Could not load team members." onRetry={() => void refetch()} />
       ) : sortedMembers.length === 0 ? (
         <EmptyState
           title="No team members yet"

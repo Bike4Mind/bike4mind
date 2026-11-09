@@ -7,7 +7,6 @@ const mocks = vi.hoisted(() => ({
   team: {
     data: undefined as unknown,
     isLoading: false,
-    isFetching: false,
     error: null as Error | null,
     refetch: vi.fn(),
   },
@@ -40,7 +39,7 @@ const members = [
 
 describe('Team', () => {
   beforeEach(() => {
-    Object.assign(mocks.team, { data: members, isLoading: false, isFetching: false, error: null });
+    Object.assign(mocks.team, { data: members, isLoading: false, error: null });
     mocks.team.refetch.mockClear();
   });
 
