@@ -31,7 +31,7 @@ describe('credit hold telemetry', () => {
     expect(event._aws.CloudWatchMetrics).toEqual([
       {
         Namespace: 'Lumina5/CreditHolds',
-        Dimensions: [['Stage', 'Lifecycle']],
+        Dimensions: [['Stage', 'Lifecycle', 'Outcome']],
         Metrics: [{ Name: 'HoldLatency', Unit: 'Milliseconds' }],
       },
     ]);
@@ -44,7 +44,10 @@ describe('credit hold telemetry', () => {
         throw error;
       })
     ).rejects.toBe(error);
-    expect(JSON.parse(vi.mocked(console.info).mock.calls[0][0])).toMatchObject({ outcome: 'error' });
+    expect(JSON.parse(vi.mocked(console.info).mock.calls[0][0])).toMatchObject({
+      outcome: 'error',
+      Outcome: 'error',
+    });
   });
 
   it('emits a count and a hold id for missing-hold settlement attempts', () => {
@@ -55,6 +58,9 @@ describe('credit hold telemetry', () => {
       SettlementsAfterSweep: 1,
       outcome: 'missing_hold',
     });
+    const event = JSON.parse(vi.mocked(console.info).mock.calls[0][0]);
+    expect(event._aws.CloudWatchMetrics[0].Dimensions).toEqual([['Stage', 'Lifecycle']]);
+    expect(event).not.toHaveProperty('Outcome');
   });
 
   it('does not serialize extra hold fields passed by a caller', () => {

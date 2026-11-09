@@ -14,6 +14,7 @@ function emitHoldMetric(
 ): void {
   try {
     const Stage = resolveStage();
+    const isLatency = metric === 'HoldLatency';
     // Owner ids remain log fields, never high-cardinality CloudWatch dimensions.
     console.info(
       JSON.stringify({
@@ -25,6 +26,7 @@ function emitHoldMetric(
         ...details,
         Stage,
         Lifecycle: context.lifecycle,
+        ...(isLatency ? { Outcome: details.outcome } : {}),
         [metric]: value,
         ...(process.env.B4M_SELF_HOST === 'true'
           ? {}
@@ -34,8 +36,8 @@ function emitHoldMetric(
                 CloudWatchMetrics: [
                   {
                     Namespace: 'Lumina5/CreditHolds',
-                    Dimensions: [['Stage', 'Lifecycle']],
-                    Metrics: [{ Name: metric, Unit: metric === 'HoldLatency' ? 'Milliseconds' : 'Count' }],
+                    Dimensions: [isLatency ? ['Stage', 'Lifecycle', 'Outcome'] : ['Stage', 'Lifecycle']],
+                    Metrics: [{ Name: metric, Unit: isLatency ? 'Milliseconds' : 'Count' }],
                   },
                 ],
               },
