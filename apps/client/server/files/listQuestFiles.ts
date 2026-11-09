@@ -28,9 +28,12 @@ export async function listQuestFiles(userId: string, questId: string) {
         adminSettings: adminSettingsRepository,
       },
       storage: {
-        ...(process.env.S3_PRESIGN_ENDPOINT?.trim() && { signedUrlCache: 'bypass' as const }),
-        generateSignedUrl: async (path: string, expireInSeconds: number) =>
-          getFilesStorage().getSignedUrl(path, 'get', { expiresIn: expireInSeconds, audience: 'browser' }),
+        generateSignedUrl: async (path: string, expireInSeconds: number, options?: { signingDate?: Date }) =>
+          getFilesStorage().getSignedUrl(path, 'get', {
+            expiresIn: expireInSeconds,
+            audience: 'browser',
+            signingDate: options?.signingDate,
+          }),
       },
     }
   );

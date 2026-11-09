@@ -27,9 +27,6 @@ export type FabFileAccessRequest = Omit<EntitlementRequest, 'apiKeyInfo'> & {
 
 /** Storage and repository adapter shared by the file read doors. */
 export function buildFabFileAdapter(req: FabFileAccessRequest) {
-  // Browser URLs only differ from private ones when S3_PRESIGN_ENDPOINT is set (see S3Storage), and only
-  // then must they stay out of the shared URL cache. Without it the cached URL is valid for every reader.
-  const browserSigningIsDistinct = Boolean(process.env.S3_PRESIGN_ENDPOINT?.trim());
   return {
     db: {
       fabFiles: fabFileRepository,
@@ -37,10 +34,13 @@ export function buildFabFileAdapter(req: FabFileAccessRequest) {
       adminSettings: adminSettingsRepository,
     },
     storage: {
-      ...(browserSigningIsDistinct && { signedUrlCache: 'bypass' as const }),
-      generateSignedUrl: async (path: string, expireInSeconds: number) => {
+      generateSignedUrl: async (path: string, expireInSeconds: number, options?: { signingDate?: Date }) => {
         try {
-          return await getFilesStorage().getSignedUrl(path, 'get', { expiresIn: expireInSeconds, audience: 'browser' });
+          return await getFilesStorage().getSignedUrl(path, 'get', {
+            expiresIn: expireInSeconds,
+            audience: 'browser',
+            signingDate: options?.signingDate,
+          });
         } catch (error) {
           req.logger.error('Error generating signed URL:', { error, path });
           throw error;

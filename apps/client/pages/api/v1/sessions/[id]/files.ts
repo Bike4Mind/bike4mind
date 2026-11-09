@@ -34,10 +34,10 @@ const handler = nextRouteForContract(listSessionFilesContract, {
         adminSettings: adminSettingsRepository,
       },
       storage: {
-        ...(process.env.S3_PRESIGN_ENDPOINT?.trim() && { signedUrlCache: 'bypass' as const }),
-        generateSignedUrl: async (path: string, expireInSeconds: number) => {
+        generateSignedUrl: async (path: string, expireInSeconds: number, options?: { signingDate?: Date }) => {
           return await getFilesStorage().getSignedUrl(path, 'get', {
             expiresIn: expireInSeconds,
+            signingDate: options?.signingDate,
             audience: 'browser',
           });
         },

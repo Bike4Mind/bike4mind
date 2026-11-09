@@ -25,9 +25,12 @@ export async function listFilesByIds(req: Request, ids: string[]) {
   const adapter = {
     db: { fabFiles: fabFileRepository, users: userRepository, adminSettings: adminSettingsRepository },
     storage: {
-      ...(process.env.S3_PRESIGN_ENDPOINT?.trim() && { signedUrlCache: 'bypass' as const }),
-      generateSignedUrl: async (path: string, expireInSeconds: number) => {
-        return await getFilesStorage().getSignedUrl(path, 'get', { expiresIn: expireInSeconds, audience: 'browser' });
+      generateSignedUrl: async (path: string, expireInSeconds: number, options?: { signingDate?: Date }) => {
+        return await getFilesStorage().getSignedUrl(path, 'get', {
+          expiresIn: expireInSeconds,
+          audience: 'browser',
+          signingDate: options?.signingDate,
+        });
       },
     },
   };

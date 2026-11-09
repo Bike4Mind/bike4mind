@@ -18,6 +18,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   organizationRepository: {},
+  fabFileRepository: {},
   adminSettingsRepository: { getSettingsValue: vi.fn() },
   scopedSettingsRepository: { findOverrides: vi.fn().mockResolvedValue([]) },
   dataLakeRepository: { findByDatalakeTag: vi.fn(), find: vi.fn().mockResolvedValue([]) },

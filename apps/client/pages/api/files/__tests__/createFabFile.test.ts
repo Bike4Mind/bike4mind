@@ -589,10 +589,11 @@ describe('POST /api/files/createFabFile - signing boundaries', () => {
     );
   });
 
-  it('persists a private GET URL for inline content and returns a separate browser GET', async () => {
+  it('returns a browser GET for inline content without persisting any URL', async () => {
     const { res, json } = makeRes();
     await run(body({ content: 'owned text' }), res);
-    expect(h.fabFileCreate.mock.calls[0][0].fileUrl).toBe('https://private.test/get');
+    expect(h.fabFileCreate.mock.calls[0][0]).not.toHaveProperty('fileUrl');
+    expect(h.fabFileCreate.mock.calls[0][0]).not.toHaveProperty('fileUrlExpireAt');
     expect(json.mock.calls[0][0].fileUrl).toBe('https://public.test/get');
     expect(h.signUrl.mock.calls[0][1]).toBe('get');
   });
@@ -613,6 +614,7 @@ describe('POST /api/files/createFabFile - signing boundaries', () => {
     await run(body(), res);
     expect(json.mock.calls[0][0].presignedUrl).toBe('https://private.test/put');
     expect(json.mock.calls[0][0].fileUrl).toBeUndefined();
+    expect(h.fabFileCreate.mock.calls[0][0]).not.toHaveProperty('presignedUrl');
     expect(h.signUrl).toHaveBeenCalledTimes(1);
     expect(h.signUrl.mock.calls[0][1]).toBe('put');
     // Bound to the declared fileSize, so S3 refuses a PUT of any other length.

@@ -101,11 +101,9 @@ describe('queryDataLakeArticles scope plumbing', () => {
       await queryDataLakeArticles(req, [DYNAMIC_LAKE], {});
       const adapter = h.search.mock.calls[0][2] as {
         storage: {
-          signedUrlCache?: string;
           generateSignedUrl: (path: string, expiry: number) => Promise<string | null>;
         };
       };
-      expect(adapter.storage.signedUrlCache).toBe(endpoint?.trim() ? 'bypass' : undefined);
       await adapter.storage.generateSignedUrl('owned/report.txt', 600);
       expect(browserSigner).toHaveBeenLastCalledWith('owned/report.txt', 'get', {
         expiresIn: 600,
@@ -318,7 +316,7 @@ it.each(
   [undefined, '', '   ', 'https://objects.example.invalid'].flatMap(endpoint =>
     (['clean', 'pending'] as const).map(moderationStatus => ({ endpoint, moderationStatus }))
   )
-)('signs authorized deep links without sharing cache state: %s', async ({ endpoint, moderationStatus }) => {
+)('signs authorized deep links fresh without writing the row: %s', async ({ endpoint, moderationStatus }) => {
   vi.stubEnv('S3_PRESIGN_ENDPOINT', endpoint);
   const original = {
     id: 'f1',
@@ -344,7 +342,7 @@ it.each(
   expect(returned.vector).toBeUndefined();
   expect(result.grantedLakeIds).toEqual(['opti-knowledge']);
   expect(browserSigner).toHaveBeenCalledTimes(moderationStatus === 'clean' ? 1 : 0);
-  expect(update).toHaveBeenCalledTimes(moderationStatus === 'clean' && !endpoint?.trim() ? 1 : 0);
+  expect(update).not.toHaveBeenCalled();
   expect(original).toEqual(before);
 });
 

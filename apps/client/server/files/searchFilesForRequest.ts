@@ -58,11 +58,11 @@ export async function searchFilesForRequest<Params, ResBody, ReqBody, Query>(
         adminSettings: adminSettingsRepository,
       },
       storage: {
-        ...(process.env.S3_PRESIGN_ENDPOINT?.trim() && { signedUrlCache: 'bypass' as const }),
-        generateSignedUrl: async (path: string, expireInSeconds: number) => {
+        generateSignedUrl: async (path: string, expireInSeconds: number, options?: { signingDate?: Date }) => {
           try {
             return await getFilesStorage().getSignedUrl(path, 'get', {
               expiresIn: expireInSeconds,
+              signingDate: options?.signingDate,
               audience: 'browser',
             });
           } catch (e) {

@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { IFabFileDocument } from '@bike4mind/common';
 import { S3Storage } from '../../../../b4m-core/fab-pipeline/src/storage/S3Storage';
-import { fabFilesService } from '@bike4mind/services';
 
 const h = vi.hoisted(() => ({ signUrl: vi.fn<S3Storage['getSignedUrl']>(), update: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
@@ -31,7 +30,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it('signs the browser response with the SDK without reading or updating a private cache', async () => {
+it('signs the browser response with the SDK, ignoring a stored URL, without writing the row', async () => {
   const input = {
     id: 'owned',
     moderationStatus: 'clean',
@@ -53,14 +52,6 @@ it('signs the browser response with the SDK without reading or updating a privat
   expect(response).not.toBe(input);
   expect(fetch).not.toHaveBeenCalled();
   expect(h.update).not.toHaveBeenCalled();
-
-  const server = await fabFilesService.generateSignedUrl(input, {
-    db: { fabFiles: { update: h.update }, users: {}, adminSettings: {} },
-    storage: { generateSignedUrl: vi.fn() },
-  } as unknown as Parameters<typeof fabFilesService.generateSignedUrl>[1]);
-  expect(server.fileUrl).toBe(original.fileUrl);
-  expect(fetch).not.toHaveBeenCalled();
-  expect(h.update).not.toHaveBeenCalled();
 });
 
 it('preserves URL-less upload metadata without minting a GET', async () => {
@@ -76,7 +67,7 @@ it('preserves URL-less upload metadata without minting a GET', async () => {
   expect(h.update).not.toHaveBeenCalled();
 });
 
-it('withholds a cached URL when the clean file has no persisted path', async () => {
+it('withholds a stored legacy URL when the clean file has no persisted path', async () => {
   const input = {
     id: 'pathless',
     moderationStatus: 'clean',
@@ -146,7 +137,7 @@ it('preserves hydrated clean fields while signing only the response', async () =
 });
 
 it.each([undefined, '', '   ', 'https://objects.example.invalid:9443'])(
-  'refreshes the shared URL cache only when browser signing is not distinct: %s',
+  'always signs fresh and never writes the row: %s',
   async endpoint => {
     vi.stubEnv('S3_PRESIGN_ENDPOINT', endpoint);
     const storage = new S3Storage('files-bucket');
@@ -162,7 +153,20 @@ it.each([undefined, '', '   ', 'https://objects.example.invalid:9443'])(
     const original = { ...input };
     const response = await signBrowserFileResponse(input);
     expect(new URL(response.fileUrl!).origin).toBe(endpoint?.trim() || 'http://minio.internal:9000');
-    expect(h.update).toHaveBeenCalledTimes(endpoint?.trim() ? 0 : 1);
+    expect(response.fileUrl).not.toBe(original.fileUrl);
+    expect(h.update).not.toHaveBeenCalled();
     expect(input).toEqual(original);
   }
 );
+
+it('signs repeated reads inside one window to the identical URL', async () => {
+  const input = {
+    id: 'a',
+    mimeType: 'text/plain',
+    moderationStatus: 'clean',
+    filePath: 'owned/report.txt',
+  } as IFabFileDocument;
+  const first = await signBrowserFileResponse(input);
+  const second = await signBrowserFileResponse(input);
+  expect(second.fileUrl).toBe(first.fileUrl);
+});

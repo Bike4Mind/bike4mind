@@ -82,7 +82,7 @@ describe('projectService - listFiles', () => {
     expect(mockFabFileRepo.update).not.toHaveBeenCalled();
   });
 
-  it('generates and persists a real URL for a clean image', async () => {
+  it('signs a windowed URL for a clean image without persisting it', async () => {
     (mockFabFileRepo.findAllByIds as Mock).mockResolvedValue([
       {
         id: 'file-clean-image',
@@ -95,13 +95,14 @@ describe('projectService - listFiles', () => {
     const result = await listFiles(userId, { projectId }, adapters());
 
     expect(result[0].fileUrl).toBe('https://signed.example.com/fresh-url');
-    expect(mockStorage.getSignedUrl).toHaveBeenCalledWith('fab-files/clean.png', 'get', { expiresIn: 3600 });
-    expect(mockFabFileRepo.update).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'file-clean-image', fileUrl: 'https://signed.example.com/fresh-url' })
-    );
+    expect(mockStorage.getSignedUrl).toHaveBeenCalledWith('fab-files/clean.png', 'get', {
+      expiresIn: 3600,
+      signingDate: expect.any(Date),
+    });
+    expect(mockFabFileRepo.update).not.toHaveBeenCalled();
   });
 
-  it('persists the expiry the signer granted, not the requested hour, for a clamped SigV4 URL', async () => {
+  it('returns the expiry the signer granted, not the requested hour, for a clamped SigV4 URL', async () => {
     const signedAt = new Date();
     const amzDate = signedAt.toISOString().replace(/[-:]|\.\d{3}/g, '');
     const clampedUrl = `https://bucket.example.invalid/doc.pdf?X-Amz-Date=${amzDate}&X-Amz-Expires=600`;
@@ -114,9 +115,7 @@ describe('projectService - listFiles', () => {
 
     const expectedExpiry = new Date(Math.floor(signedAt.getTime() / 1000) * 1000 + 600 * 1000);
     expect(result[0].fileUrlExpireAt).toEqual(expectedExpiry);
-    expect(mockFabFileRepo.update).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'file-doc', fileUrl: clampedUrl, fileUrlExpireAt: expectedExpiry })
-    );
+    expect(mockFabFileRepo.update).not.toHaveBeenCalled();
   });
 
   // isImageServeable gates on moderationStatus alone now (no mimeType
@@ -152,15 +151,13 @@ describe('projectService - listFiles', () => {
     const result = await listFiles(userId, { projectId }, adapters());
 
     expect(result[0].fileUrl).toBe('https://signed.example.com/fresh-url');
-    expect(mockStorage.getSignedUrl).toHaveBeenCalledWith('fab-files/doc.pdf', 'get', { expiresIn: 3600 });
+    expect(mockStorage.getSignedUrl).toHaveBeenCalledWith('fab-files/doc.pdf', 'get', {
+      expiresIn: 3600,
+      signingDate: expect.any(Date),
+    });
   });
 
-  // Same refresh margin as fabFileService/get.ts (hasUsableCachedUrl): 6 min out is reused,
-  // 4 min out is re-signed, which pins the 5-minute margin from both sides.
-  it.each([
-    ['reuses a cached URL outside the refresh margin', 6, false],
-    ['re-signs a cached URL inside the refresh margin', 4, true],
-  ])('%s', async (_label, minutesToExpiry, reSigned) => {
+  it('ignores a stored URL and always signs', async () => {
     (mockFabFileRepo.findAllByIds as Mock).mockResolvedValue([
       {
         id: 'file-clean-image',
@@ -168,16 +165,14 @@ describe('projectService - listFiles', () => {
         mimeType: 'image/png',
         moderationStatus: 'clean',
         fileUrl: 'https://cached.example.com/url',
-        fileUrlExpireAt: new Date(Date.now() + minutesToExpiry * 60 * 1000),
+        fileUrlExpireAt: new Date(Date.now() + 60 * 60 * 1000),
       },
     ]);
 
     const result = await listFiles(userId, { projectId }, adapters());
 
-    expect(result[0].fileUrl).toBe(
-      reSigned ? 'https://signed.example.com/fresh-url' : 'https://cached.example.com/url'
-    );
-    expect(mockStorage.getSignedUrl).toHaveBeenCalledTimes(reSigned ? 1 : 0);
-    expect(mockFabFileRepo.update).toHaveBeenCalledTimes(reSigned ? 1 : 0);
+    expect(result[0].fileUrl).toBe('https://signed.example.com/fresh-url');
+    expect(mockStorage.getSignedUrl).toHaveBeenCalledTimes(1);
+    expect(mockFabFileRepo.update).not.toHaveBeenCalled();
   });
 });

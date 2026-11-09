@@ -8,14 +8,15 @@ export async function signBrowserFileResponse(file: IFabFileDocument): Promise<I
     typeof (file as { toJSON?: unknown }).toJSON === 'function'
       ? (file as unknown as { toJSON: () => IFabFileDocument }).toJSON()
       : file;
-  if (!plainFile.fileUrl) return { ...plainFile };
-
   return fabFilesService.generateSignedUrl(plainFile, {
     db: { fabFiles: fabFileRepository, users: userRepository, adminSettings: adminSettingsRepository },
     storage: {
-      ...(process.env.S3_PRESIGN_ENDPOINT?.trim() && { signedUrlCache: 'bypass' as const }),
-      generateSignedUrl: (path, expiresIn) =>
-        getFilesStorage().getSignedUrl(path, 'get', { expiresIn, audience: 'browser' }),
+      generateSignedUrl: (path, expiresIn, options) =>
+        getFilesStorage().getSignedUrl(path, 'get', {
+          expiresIn,
+          audience: 'browser',
+          signingDate: options?.signingDate,
+        }),
     },
   });
 }

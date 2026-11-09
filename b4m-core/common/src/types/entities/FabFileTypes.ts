@@ -551,8 +551,8 @@ export interface IFabFile {
   error?: string | null;
 
   /**
-   * Cache the URL of the file for a certain amount of time.
-   * to avoid generating new URLs every request.
+   * Response-only: signed on read and never stored. Legacy rows may still carry them until the
+   * unset migration has run, so readers must not trust a stored value.
    */
   fileUrl?: string;
   presignedUrl?: string;

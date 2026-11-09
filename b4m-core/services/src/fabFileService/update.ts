@@ -134,6 +134,7 @@ export const updateFabFile = async (
   ) as IFabFileDocument;
 
   const contentChanges: Partial<IFabFileDocument> = {};
+  let freshFileUrl: string | undefined;
   // Measured up front so a joining tag write can be quota-gated against the bytes this rewrite will
   // charge, before anything is uploaded or persisted. Refreshed from storage metadata after upload.
   const rewrite =
@@ -206,8 +207,7 @@ export const updateFabFile = async (
       Logger.globalInstance.warn(`Content rewrite of FabFile ${fabFile.id} matched no live row; storage not charged`);
     }
 
-    contentChanges.fileUrl = await storage.generateSignedUrl(filePath, EXPIRE_IN_SECONDS);
-    contentChanges.fileUrlExpireAt = signedUrlExpiresAt(contentChanges.fileUrl, EXPIRE_IN_SECONDS);
+    freshFileUrl = await storage.generateSignedUrl(filePath, EXPIRE_IN_SECONDS);
 
     // The bytes just changed, so any cached extracted length now describes the previous content, and a
     // stale count leaves the pre-send attachment warning silent about a file that no longer fits.
@@ -226,7 +226,14 @@ export const updateFabFile = async (
     systemPriority: params.system && params.systemPriority === undefined ? 999 : params.systemPriority,
     updatedAt: new Date(),
   };
-  const updatedFabFile: IFabFileDocument = { ...fabFile, ...changes };
+  const updatedFabFile: IFabFileDocument = {
+    ...fabFile,
+    ...changes,
+    ...(freshFileUrl && {
+      fileUrl: freshFileUrl,
+      fileUrlExpireAt: signedUrlExpiresAt(freshFileUrl, EXPIRE_IN_SECONDS),
+    }),
+  };
 
   // An edit (rename/tag/notes/etc.) must not echo back a working GET url for an image
   // that isn't clean (pending scan) or was quarantined (blocked) by upload moderation.

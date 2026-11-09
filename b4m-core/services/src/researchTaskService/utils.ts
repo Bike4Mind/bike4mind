@@ -81,7 +81,7 @@ export async function findOrUpdateExistingResearchData(
   },
   logger?: Pick<ILogger, 'info'> & Partial<Pick<ILogger, 'warn'>>
 ): Promise<{ file: IFabFileDocument; researchData: IResearchData; storageLimitReached: boolean } | null> {
-  const DEFAULT_EXPIRE_IN_SECONDS = 3600 * 24 * 5; // 5 days
+  const DEFAULT_EXPIRE_IN_SECONDS = 3600;
 
   // Find existing research data using the standardized lookup
   const existingResearchData = await findExistingResearchData(url, researchTask, user, adapters.db.researchDatas);
@@ -125,6 +125,8 @@ export async function findOrUpdateExistingResearchData(
       // ALL mime types (not just images), so a still-pending or legacy (pre-backfill) non-image
       // is withheld too; research content resolves to 'clean' on upload, so in steady state this
       // re-mints as before.
+      existingFile.fileUrl = undefined;
+      existingFile.fileUrlExpireAt = undefined;
       if (isImageServeable(existingFile)) {
         existingFile.fileUrl = await adapters.storage.generateSignedUrl(
           existingFile.filePath,
@@ -132,17 +134,11 @@ export async function findOrUpdateExistingResearchData(
           'get'
         );
         existingFile.fileUrlExpireAt = signedUrlExpiresAt(existingFile.fileUrl, DEFAULT_EXPIRE_IN_SECONDS);
-        existingFile.updatedAt = new Date();
-        await adapters.db.fabFiles.update({
-          id: existingFile.id,
-          fileUrl: existingFile.fileUrl,
-          fileUrlExpireAt: existingFile.fileUrlExpireAt,
-          updatedAt: existingFile.updatedAt,
-        });
+      }
+      existingFile.updatedAt = new Date();
+      if (existingFile.fileUrl) {
+        await adapters.db.fabFiles.update({ id: existingFile.id, updatedAt: existingFile.updatedAt });
       } else {
-        existingFile.fileUrl = undefined;
-        existingFile.fileUrlExpireAt = undefined;
-        existingFile.updatedAt = new Date();
         await adapters.db.fabFiles.update(
           { id: existingFile.id, updatedAt: existingFile.updatedAt },
           { unset: ['fileUrl', 'fileUrlExpireAt'] }

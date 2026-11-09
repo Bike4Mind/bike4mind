@@ -1,8 +1,14 @@
 import { Logger } from '@bike4mind/observability';
 import { IFabFileRepository, IProjectRepository, IUserRepository, isImageServeable } from '@bike4mind/common';
-import { NotFoundError, secureParameters, BaseStorage } from '@bike4mind/utils';
+import {
+  NotFoundError,
+  secureParameters,
+  BaseStorage,
+  fileUrlSigningDate,
+  FILE_URL_TTL_SECONDS,
+} from '@bike4mind/utils';
 import { z } from 'zod';
-import { hasUsableCachedUrl, signedUrlExpiresAt } from '../fabFileService/get';
+import { signedUrlExpiresAt } from '../fabFileService/get';
 
 const listProjectFilesSchema = z.object({
   projectId: z.string(),
@@ -34,11 +40,11 @@ export const listFiles = async (
 
   const files = await adapters.db.files.findAllByIds(project.fileIds);
 
-  // Generate presigned URLs for files that need them
+  // Sign on read: URLs are response-only and never stored
   if (adapters.storage) {
     const filesWithUrls = await Promise.all(
       files.map(async file => {
-        // never mint/persist a GET URL for an image that's still held (pending
+        // never mint a GET URL for an image that's still held (pending
         // scan) or was quarantined (blocked) by upload moderation. Mirrors generateSignedUrl
         // in fabFileService/get.ts - withhold the URL but return the record (moderationStatus
         // intact) so the client can render a "Scanning..."/blocked placeholder instead of the
@@ -49,18 +55,15 @@ export const listFiles = async (
           return file;
         }
 
-        // Only generate URL if filePath exists and the cached one is missing or near expiry
-        if (file.filePath && !hasUsableCachedUrl(file)) {
+        file.fileUrl = undefined;
+        file.fileUrlExpireAt = undefined;
+        if (file.filePath) {
           try {
-            const expiresIn = 3600; // 1 hour
-            file.fileUrl = await adapters.storage!.getSignedUrl(file.filePath, 'get', { expiresIn });
-            file.fileUrlExpireAt = signedUrlExpiresAt(file.fileUrl, expiresIn);
-
-            await adapters.db.files.update({
-              id: file.id,
-              fileUrl: file.fileUrl,
-              fileUrlExpireAt: file.fileUrlExpireAt,
+            file.fileUrl = await adapters.storage!.getSignedUrl(file.filePath, 'get', {
+              expiresIn: FILE_URL_TTL_SECONDS,
+              signingDate: fileUrlSigningDate(),
             });
+            file.fileUrlExpireAt = signedUrlExpiresAt(file.fileUrl, FILE_URL_TTL_SECONDS);
           } catch (error) {
             Logger.globalInstance.error(`Failed to generate presigned URL for file ${file.id}:`, error);
             // Continue without URL rather than failing the entire request

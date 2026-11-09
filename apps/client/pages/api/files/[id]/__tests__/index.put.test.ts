@@ -456,7 +456,11 @@ it('returns a browser URL after an authorized edit without updating the private 
   expect(saved.fileUrl).toBe('http://private.test/notes');
   expect(h.update).toHaveBeenCalledTimes(1);
   expect(h.update.mock.calls[0][0].fileUrl).toBeUndefined();
-  expect(h.signUrl).toHaveBeenCalledWith('owned/notes.txt', 'get', { expiresIn: 3600, audience: 'browser' });
+  expect(h.signUrl).toHaveBeenCalledWith('owned/notes.txt', 'get', {
+    expiresIn: 3600,
+    audience: 'browser',
+    signingDate: expect.any(Date),
+  });
 });
 
 afterEach(() => vi.unstubAllEnvs());
@@ -511,7 +515,11 @@ describe('PUT response file-read scope', () => {
       expect(h.update).toHaveBeenCalled();
       expect(logEventSafe).toHaveBeenCalled();
       expect(json.mock.calls[0][0].fileUrl).toBe('https://public.test/notes');
-      expect(h.signUrl).toHaveBeenCalledWith('owned/notes.txt', 'get', { expiresIn: 3600, audience: 'browser' });
+      expect(h.signUrl).toHaveBeenCalledWith('owned/notes.txt', 'get', {
+        expiresIn: 3600,
+        audience: 'browser',
+        signingDate: expect.any(Date),
+      });
     }
   );
 
@@ -541,7 +549,11 @@ describe('PUT response file-read scope', () => {
     expect(h.update).toHaveBeenCalled();
     expect(logEventSafe).toHaveBeenCalled();
     expect(json.mock.calls[0][0].fileUrl).toBe('https://public.test/notes');
-    expect(h.signUrl).toHaveBeenCalledWith('owned/notes.txt', 'get', { expiresIn: 3600, audience: 'browser' });
+    expect(h.signUrl).toHaveBeenCalledWith('owned/notes.txt', 'get', {
+      expiresIn: 3600,
+      audience: 'browser',
+      signingDate: expect.any(Date),
+    });
   });
 
   it('keeps the update-access gate ahead of signing for a read/write key', async () => {
