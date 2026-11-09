@@ -1,6 +1,16 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { ChatModels, ImageModels, ModelBackend, toModelRecord } from '@bike4mind/common';
-import type { IModelCatalogRow, ModelInfo } from '@bike4mind/common';
+import {
+  ChatModels,
+  ImageModels,
+  ModelBackend,
+  REFUSAL_FALLBACK_MODELS,
+  resolveApiSurface,
+  seedApiSurface,
+  toModelRecord,
+} from '@bike4mind/common';
+import type { ApiSurface, IModelCatalogRow, ModelInfo } from '@bike4mind/common';
+import { AnthropicBackend } from './anthropicBackend';
+import AnthropicBedrockBackend from './bedrockBackend/anthropic';
 import { getAvailableModels, setModelCatalogProvider, setModelPriceRowsProvider } from './index';
 import { mergeCatalog, mergeCatalogWithDrops, resolveCatalogRecords } from './mergeCatalog';
 import { catalogLifecycles } from './deprecationHorizon';
@@ -1305,5 +1315,156 @@ describe('mergeCatalog: a discovery introduction under a curated record', () => 
     );
 
     expect(merged.disabled).toBeFalsy();
+  });
+});
+
+describe('mergeCatalog: the apiSurface group', () => {
+  const ANTHROPIC_KEY: BackendGateContext = {
+    apiKeys: { anthropic: 'key' },
+    isSelfHost: false,
+    bedrockReachable: true,
+  };
+  const fable52 = {
+    id: 'claude-fable-5-2',
+    vendor: 'anthropic',
+    backend: ModelBackend.Anthropic,
+    type: 'text',
+    name: 'Claude Fable 5.2',
+    contextWindow: 1_000_000,
+    adapterFamily: 'anthropic-messages',
+    dispatchProfile: { maxTokensParam: 'max_tokens', toolTransport: 'native' },
+    lifecycle: { status: 'active' },
+    reasoning: { supported: true, style: 'anthropic-adaptive' },
+  };
+  // What discovery writes for it: copied from claude-fable-5-1's seed-table verdict.
+  const inherited: ApiSurface = {
+    forcedToolChoice: false,
+    assistantPrefill: false,
+    toolSearch: true,
+    toolChanges: true,
+    deferredToolAddition: true,
+    refusalFallback: false,
+  };
+  const discoveryRow = (apiSurface: Partial<ApiSurface> | null) =>
+    row({
+      modelId: fable52.id,
+      source: 'discovery',
+      ownedGroups: ['identity', 'limits', 'dispatch', 'lifecycle', 'reasoning', ...(apiSurface ? ['apiSurface'] : [])],
+      patch: { ...fable52, ...apiSurface },
+      contributors: apiSurface ? [{ group: 'apiSurface', source: 'sibling:claude-fable-5-1' }] : [],
+    }) as IModelCatalogRow;
+  const operatorRow = (patch: Record<string, unknown>) =>
+    row({
+      modelId: fable52.id,
+      source: 'operator',
+      ownedGroups: ['apiSurface'],
+      patch: { id: fable52.id, ...patch },
+      effectiveFrom: new Date('2026-02-01T00:00:00Z'),
+    });
+
+  it('serves a catalog-only Fable 5.2 with no forced tool_choice, no prefill and tool search on', () => {
+    const { models, dropped } = mergeCatalogWithDrops([], [discoveryRow(inherited)], ANTHROPIC_KEY);
+
+    expect(dropped).toEqual([]);
+    expect(models[0]).toMatchObject({ id: fable52.id, thinkingStyle: 'adaptive', ...inherited });
+    expect(resolveApiSurface(models[0])).toEqual(inherited);
+  });
+
+  it('falls back to the conservative default when no row states the flags', () => {
+    const { models } = mergeCatalogWithDrops([], [discoveryRow(null)], ANTHROPIC_KEY);
+
+    expect(models[0]).not.toHaveProperty('forcedToolChoice');
+    expect(resolveApiSurface(models[0])).toMatchObject({
+      forcedToolChoice: false,
+      assistantPrefill: false,
+      toolSearch: false,
+    });
+  });
+
+  it('lets an operator row override one inherited flag and keeps the others and the routing fields', () => {
+    const { models, dropped } = mergeCatalogWithDrops(
+      [],
+      [discoveryRow(inherited), operatorRow({ toolSearch: false })],
+      ANTHROPIC_KEY
+    );
+
+    expect(dropped).toEqual([]);
+    expect(models[0]).toMatchObject({ adapterFamily: 'anthropic-messages', dispatchProfile: fable52.dispatchProfile });
+    expect(resolveApiSurface(models[0])).toEqual({ ...inherited, toolSearch: false });
+  });
+
+  it('keeps the operator value over a later discovery row', () => {
+    const later = { ...discoveryRow(inherited), effectiveFrom: new Date('2026-03-01T00:00:00Z') };
+    const [merged] = mergeCatalog([], [operatorRow({ refusalFallback: true }), later], ANTHROPIC_KEY);
+
+    expect(merged.refusalFallback).toBe(true);
+    expect(merged.toolSearch).toBe(true);
+  });
+
+  it('lets an operator row override the seed tables for a seeded model', () => {
+    const seeded = seedModel({ id: ChatModels.CLAUDE_5_5_OPUS, backend: ModelBackend.Anthropic });
+    const [merged] = mergeCatalog(
+      [seeded],
+      [
+        row({
+          modelId: seeded.id,
+          source: 'operator',
+          ownedGroups: ['apiSurface'],
+          patch: { id: seeded.id, forcedToolChoice: true },
+        }),
+      ],
+      NO_KEYS
+    );
+
+    expect(resolveApiSurface(merged)).toMatchObject({
+      forcedToolChoice: true,
+      assistantPrefill: false,
+      toolSearch: true,
+    });
+  });
+
+  describe('with an empty catalog', () => {
+    const staticModels = async () => [
+      ...(await new AnthropicBackend('test-key').getModelInfo()),
+      ...(await new AnthropicBedrockBackend().getModelInfo()),
+    ];
+    // What the id tables answered for a model they do not name, before the catalog carried these flags.
+    const LEGACY_UNNAMED: ApiSurface = {
+      forcedToolChoice: true,
+      assistantPrefill: true,
+      toolSearch: false,
+      toolChanges: false,
+      deferredToolAddition: false,
+      refusalFallback: false,
+    };
+
+    it('resolves every static Claude model exactly as the id tables did', async () => {
+      const models = await staticModels();
+      const merged = mergeCatalog(models, [], NO_KEYS);
+
+      expect(merged).toBe(models);
+      for (const model of merged) {
+        expect(resolveApiSurface(model), model.id).toEqual(seedApiSurface(model) ?? LEGACY_UNNAMED);
+      }
+    });
+
+    it('keeps the listed models on their listed verdicts', async () => {
+      const byId = new Map((await staticModels()).map(model => [String(model.id), resolveApiSurface(model)]));
+
+      for (const id of [
+        ChatModels.CLAUDE_5_5_OPUS,
+        ChatModels.CLAUDE_5_5_OPUS_BEDROCK,
+        ChatModels.CLAUDE_5_5_SONNET_BEDROCK,
+        ChatModels.CLAUDE_FABLE_5_1_BEDROCK,
+      ]) {
+        expect(byId.get(id)?.forcedToolChoice, id).toBe(false);
+      }
+      for (const id of [ChatModels.CLAUDE_5_5_HAIKU, ChatModels.CLAUDE_FABLE_5, ChatModels.CLAUDE_4_8_OPUS]) {
+        expect(byId.get(id)?.forcedToolChoice, id).toBe(true);
+      }
+      for (const [id, surface] of byId) {
+        expect(surface.refusalFallback, id).toBe(REFUSAL_FALLBACK_MODELS.has(id));
+      }
+    });
   });
 });

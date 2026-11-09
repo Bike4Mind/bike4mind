@@ -9,7 +9,7 @@ import {
   MessageContentText,
   ModelBackend,
   NO_TEMPERATURE_MODELS,
-  REFUSAL_FALLBACK_MODELS,
+  refusalFallsBack,
   TOOL_SEARCH_BLOCK_TYPES,
   type ModelInfo,
   type ProviderBlock,
@@ -346,6 +346,14 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
    */
   private modelRecordFor(model: string): ModelInfo | undefined {
     return this.getModelInfoList().find(m => m.id === model) ?? this._dispatch.for(model);
+  }
+
+  /** Catalog record first: an operator row's refusalFallback must win over the table (see resolveApiSurface). */
+  private refusalFallsBack(model: string): boolean {
+    return refusalFallsBack(
+      this._dispatch.for(model) ??
+        this.getModelInfoList().find(m => m.id === model) ?? { id: model, backend: ModelBackend.Bedrock }
+    );
   }
 
   /**
@@ -1354,7 +1362,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       }
 
       const stopReason = (response as { stop_reason?: string }).stop_reason;
-      if (stopReason === 'refusal' && REFUSAL_FALLBACK_MODELS.has(model)) {
+      if (stopReason === 'refusal' && this.refusalFallsBack(model)) {
         throw safetyRefusalError(model);
       }
 
@@ -1551,7 +1559,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
           providerBlocks.push({ providerBlock: anthropicBlock(serverBlock), textOffset: 0 });
         }
       } else if (isMessageDelta(chunk)) {
-        refused = chunk.delta?.stop_reason === 'refusal' && REFUSAL_FALLBACK_MODELS.has(model);
+        refused = chunk.delta?.stop_reason === 'refusal' && this.refusalFallsBack(model);
         // Anthropic's native vocabulary is the canonical one, so it passes through unchanged. base.ts
         // forwards it to CompletionInfo.stopReason; without it a max_tokens cut-off is silent. pause_turn
         // additionally tells the caller to re-send and resume a paused server tool loop.

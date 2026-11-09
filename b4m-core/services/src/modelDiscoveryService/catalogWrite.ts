@@ -10,6 +10,11 @@ import {
   groupsTouchedByPatch,
   isDiscoveryVerdict,
   lifecycleStatusRank,
+  parseClaudeModelId,
+  seedApiSurface,
+  statedApiSurface,
+  type AdapterFamily,
+  type ApiSurface,
   type FieldGroup,
   type ICatalogContributor,
   type IModelCatalogRowInput,
@@ -103,6 +108,9 @@ export function datedSnapshotAliases(heldModelIds: Iterable<string>): Set<string
 
 /** Provenance for a dispatch field the resolver derived rather than a feed reporting it. */
 export const DISPATCH_SEED_CONTRIBUTOR = 'seed';
+
+/** Contributor for an apiSurface group copied from a sibling model: `sibling:<modelId>`. */
+export const SIBLING_CONTRIBUTOR_PREFIX = 'sibling:';
 
 export interface CatalogWriteInput {
   /**
@@ -728,13 +736,22 @@ function planOne(
     }
   }
 
+  const credited = new Map<FieldGroup, string>();
+  // Same window as the promotion decision: introduced, or not yet promoted.
+  const inherited = decides ? inheritedApiSurface(record, input) : undefined;
+  if (inherited) {
+    record = { ...record, ...inherited.values };
+    ownedGroups.add('apiSurface');
+    credited.set('apiSurface', `${SIBLING_CONTRIBUTOR_PREFIX}${inherited.siblingId}`);
+  }
+
   if (ownedGroups.size === 0) return { unchanged: true };
 
   const owned = claimedGroups(record, ownedGroups, input.priorDiscoveryGroups?.get(candidate.modelId)).filter(
     group => !(presentationElsewhere && group === 'presentation')
   );
   const priorContributors = input.priorContributors?.get(candidate.modelId);
-  const contributors = contributorsFor(candidate, contributed, owned, priorContributors, derivedGroups);
+  const contributors = contributorsFor(candidate, contributed, owned, priorContributors, derivedGroups, credited);
   const changedKeys = changedWithinGroups(base, record, owned);
   // Availability provenance changes what the read path serves: a provider's disable stands,
   // while discovery's own verdict yields to curation. A clearance followed by the same promotion
@@ -954,6 +971,63 @@ function withholdsOpenAiTools(
   return introducing || base.supportsTools === false;
 }
 
+/**
+ * The apiSurface flags a model that states none copies from its newest active sibling: same vendor, same
+ * adapterFamily and, for a Claude id, the same product line. A sibling's flags are what its rows state over
+ * what the seed tables say for it, never the read-time default. Skipped for a model the static or seed
+ * tables already describe, where a copied discovery value would outrank the seed tier. An operator row
+ * still overrides each flag (PER_KEY_GROUPS in llm-adapters mergeCatalog.ts).
+ */
+function inheritedApiSurface(
+  record: ModelRecord,
+  input: CatalogWriteInput
+): { values: Partial<ApiSurface>; siblingId: string } | undefined {
+  if (Object.keys(statedApiSurface(record)).length > 0) return undefined;
+  if (input.staticModelIds?.has(record.id)) return undefined;
+  const family = adapterFamilyOf(record, input);
+  if (!family || seedApiSurface({ id: record.id, backend: record.backend, adapterFamily: family })) return undefined;
+  const line = parseClaudeModelId(record.id)?.family;
+
+  let newest: { id: string; releaseDate?: string; values: Partial<ApiSurface> } | undefined;
+  for (const [id, resolved] of input.base) {
+    const sibling = resolved.record;
+    if (id === record.id || sibling.vendor !== record.vendor || statusOf(sibling) !== 'active') continue;
+    if (parseClaudeModelId(id)?.family !== line) continue;
+    if (adapterFamilyOf(sibling, input) !== family) continue;
+    const seeded =
+      typeof sibling.backend === 'string'
+        ? seedApiSurface({ id, backend: sibling.backend as ModelRecord['backend'], adapterFamily: family })
+        : undefined;
+    const values = { ...seeded, ...statedApiSurface(sibling) };
+    if (Object.keys(values).length === 0) continue;
+    const releaseDate = typeof sibling.releaseDate === 'string' ? sibling.releaseDate : undefined;
+    const contender = { id, releaseDate, values };
+    if (!newest || newerModel(contender, newest) < 0) newest = contender;
+  }
+  return newest && { values: newest.values, siblingId: newest.id };
+}
+
+/** The record's adapterFamily, or the one the resolver would give it (seed rows carry none). */
+function adapterFamilyOf(record: Record<string, unknown>, input: CatalogWriteInput): AdapterFamily | undefined {
+  if (typeof record.adapterFamily === 'string') return record.adapterFamily as AdapterFamily;
+  if (typeof record.id !== 'string' || typeof record.backend !== 'string') return undefined;
+  return input.resolveDispatch?.(record as unknown as ModelRecord)?.adapterFamily;
+}
+
+/** Sort order, newest first: the Claude version when both ids carry one, then releaseDate, then id. */
+function newerModel(a: { id: string; releaseDate?: string }, b: { id: string; releaseDate?: string }): number {
+  const versionA = parseClaudeModelId(a.id);
+  const versionB = parseClaudeModelId(b.id);
+  if (versionA && versionB) {
+    if (versionA.major !== versionB.major) return versionB.major - versionA.major;
+    const minorA = versionA.minor ?? 0;
+    const minorB = versionB.minor ?? 0;
+    if (minorA !== minorB) return minorB - minorA;
+  }
+  const released = (b.releaseDate ?? '').localeCompare(a.releaseDate ?? '');
+  return released !== 0 ? released : a.id.localeCompare(b.id);
+}
+
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
@@ -986,7 +1060,9 @@ function contributorsFor(
   prior: readonly ICatalogContributor[] | undefined,
   // Groups this module computed a value for rather than took from a feed. Crediting the feed for a
   // number we invented would make the row claim the provider reported it.
-  derived?: ReadonlySet<FieldGroup>
+  derived?: ReadonlySet<FieldGroup>,
+  // Groups this run filled from a named origin (an inherited apiSurface names its sibling).
+  credited?: ReadonlyMap<FieldGroup, string>
 ): ICatalogContributor[] {
   const bySource = new Map<FieldGroup, string>();
   for (const key of contributed.keys()) {
@@ -999,6 +1075,8 @@ function contributorsFor(
   // supersedes; crediting discovery would erase which feed the data came from.
   const carried = new Map((prior ?? []).map(entry => [entry.group, entry.source] as const));
   return owned.flatMap(group => {
+    const origin = credited?.get(group);
+    if (origin) return [{ group, source: origin }];
     if (derived?.has(group)) return [{ group, source: DISCOVERY_CONTRIBUTOR }];
     const source = bySource.get(group) ?? carried.get(group);
     if (source) return [{ group, source }];

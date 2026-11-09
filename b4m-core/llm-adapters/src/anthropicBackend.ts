@@ -17,10 +17,10 @@ import {
   ModelBackend,
   NO_TEMPERATURE_MODELS,
   PermissionDeniedError,
-  REFUSAL_FALLBACK_MODELS,
   estimateStreamedOutputTokens,
-  supportsForcedToolChoice,
+  resolveApiSurface,
   TOOL_SEARCH_BLOCK_TYPES,
+  type ApiSurface,
   type ModelInfo,
   type ToolSearchServerTool,
   type TurnUsage,
@@ -802,7 +802,7 @@ export class AnthropicBackend implements ICompletionBackend {
         // behind Fable/Mythos access this deployment's key lacked; access has since
         // been granted, so the model is now selectable. Its safety classifiers can return
         // stop_reason: 'refusal' on benign requests - those are routed to Opus 5 via the
-        // existing fallback machinery (see REFUSAL_FALLBACK_MODELS + the refusal throw below).
+        // existing fallback machinery (its seeded refusalFallback + the refusal throw below).
       },
       {
         id: ChatModels.CLAUDE_5_OPUS,
@@ -914,6 +914,17 @@ export class AnthropicBackend implements ICompletionBackend {
     }
   }
 
+  /**
+   * The model's request features. Catalog record first, unlike modelRecordFor: for a tabled model the
+   * merged record equals the table unless an operator row overrode a flag, and that override must win.
+   */
+  private apiSurfaceFor(model: string): ApiSurface {
+    return resolveApiSurface(
+      this._dispatch.for(model) ??
+        this.getModelInfoList().find(m => m.id === model) ?? { id: model, backend: ModelBackend.Anthropic }
+    );
+  }
+
   /** True when only the catalog knows this model - the adapter table does not list it. */
   private isCatalogOnly(model: string): boolean {
     return !this.getModelInfoList().some(m => m.id === model) && this._dispatch.for(model) !== undefined;
@@ -960,7 +971,7 @@ export class AnthropicBackend implements ICompletionBackend {
 
     // Forced tool_choice ('any'/'tool') returns 400 on these models, so a caller's forced choice
     // becomes auto + strict + an instruction, held fixed for every recursive turn of this request.
-    const forcedToolChoiceSupported = supportsForcedToolChoice(model);
+    const forcedToolChoiceSupported = this.apiSurfaceFor(model).forcedToolChoice;
     const downgradedToolChoice = forcedToolChoiceSupported
       ? undefined
       : (options._internal?.downgradedToolChoice ??
@@ -2191,10 +2202,10 @@ export class AnthropicBackend implements ICompletionBackend {
               // decline a request - which can false-positive on benign adjacent work. Rather than
               // surfacing a hard refusal, throw a recognized error so the completion loop's
               // existing fallback machinery (shouldTriggerFallback -> getLlmWithFallback) continues
-              // on Opus 4.8. Scoped to REFUSAL_FALLBACK_MODELS so a *genuine* refusal from any
-              // other model still surfaces unchanged; any partial output here is discarded by the
-              // retry (the loop resets streaming state before re-running).
-              if (stopReason === 'refusal' && REFUSAL_FALLBACK_MODELS.has(model)) {
+              // on Opus 4.8. Scoped to models whose refusalFallback resolves true so a *genuine*
+              // refusal from any other model still surfaces unchanged; any partial output here is
+              // discarded by the retry (the loop resets streaming state before re-running).
+              if (stopReason === 'refusal' && this.apiSurfaceFor(model).refusalFallback) {
                 this.logger.warn(
                   '[AnthropicBackend] Safety classifier refusal — falling back to an alternative model',
                   {
@@ -2839,13 +2850,13 @@ export class AnthropicBackend implements ICompletionBackend {
         }
 
         // Safety-classifier refusal on the non-streaming path (mirrors the streaming branch
-        // above). A stream=false request for a REFUSAL_FALLBACK_MODELS model - reachable when a
+        // above). A stream=false request for a refusalFallback model - reachable when a
         // caller sets stream:false even for Fable 5 - returns HTTP 200 with stop_reason:'refusal'
         // and empty content; without this the caller would see a silently-empty completion and no
         // fallback. Throw the same recognized error so the completion loop continues on Opus 4.8.
         const nonStreamStopReason =
           'stop_reason' in response ? (response as { stop_reason?: string }).stop_reason : undefined;
-        if (nonStreamStopReason === 'refusal' && REFUSAL_FALLBACK_MODELS.has(model)) {
+        if (nonStreamStopReason === 'refusal' && this.apiSurfaceFor(model).refusalFallback) {
           this.logger.warn('[AnthropicBackend] Safety classifier refusal (non-streaming) — falling back', { model });
           throw new Error(`Anthropic safety classifier refusal for ${model} — falling back to an alternative model`);
         }

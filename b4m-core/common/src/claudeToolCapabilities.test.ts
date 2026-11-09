@@ -3,9 +3,14 @@ import {
   chatSupportsDeferredToolAddition,
   completionsSupportsToolChanges,
   completionsSupportsToolSearch,
+  refusalFallsBack,
+  resolveApiSurface,
+  seedApiSurface,
   supportsAssistantPrefill,
+  supportsForcedToolChoice,
   supportsToolChanges,
   supportsToolSearch,
+  type ApiSurfaceModel,
 } from './claudeToolCapabilities';
 import { CHAT_MODELS, ChatModels, isClaudeModelId, ModelBackend } from './models';
 
@@ -265,5 +270,67 @@ describe('completionsSupportsToolChanges', () => {
       false
     );
     expect(completionsSupportsToolChanges({ id: ChatModels.GPT4o, backend: ModelBackend.OpenAI })).toBe(false);
+  });
+});
+
+describe('resolveApiSurface', () => {
+  // A model only the catalog knows, as toModelInfo renders a discovery row for it.
+  const fable52: ApiSurfaceModel = {
+    id: 'claude-fable-5-2',
+    backend: ModelBackend.Anthropic,
+    adapterFamily: 'anthropic-messages',
+    thinkingStyle: 'adaptive',
+  };
+
+  it('gives an unknown adaptive-thinking model no forced tool_choice, no prefill and no optional features', () => {
+    expect(seedApiSurface(fable52)).toBeUndefined();
+    expect(resolveApiSurface(fable52)).toEqual({
+      forcedToolChoice: false,
+      assistantPrefill: false,
+      toolSearch: false,
+      toolChanges: false,
+      deferredToolAddition: false,
+      refusalFallback: false,
+    });
+  });
+
+  it('keeps the permissive answer for an unknown model without adaptive thinking', () => {
+    const model: ApiSurfaceModel = { id: 'gpt-9', backend: ModelBackend.OpenAI };
+    expect(supportsForcedToolChoice(model)).toBe(true);
+    expect(supportsAssistantPrefill(model)).toBe(true);
+    expect(supportsToolSearch({ ...model, backend: ModelBackend.OpenAI })).toBe(false);
+  });
+
+  it('reads the flags a catalog row states for a catalog-only Fable 5.2', () => {
+    const inherited = { ...fable52, ...seedApiSurface({ id: 'claude-fable-5-1', backend: ModelBackend.Anthropic }) };
+
+    expect(supportsForcedToolChoice(inherited)).toBe(false);
+    expect(supportsAssistantPrefill(inherited)).toBe(false);
+    expect(supportsToolSearch(inherited)).toBe(true);
+    expect(completionsSupportsToolSearch(inherited)).toBe(true);
+    expect(supportsToolChanges(inherited)).toBe(true);
+    expect(chatSupportsDeferredToolAddition(inherited)).toBe(true);
+    expect(refusalFallsBack(inherited)).toBe(false);
+  });
+
+  it('lets a stated flag beat the seed tables, one key at a time', () => {
+    const opus55 = { id: ChatModels.CLAUDE_5_5_OPUS, backend: ModelBackend.Anthropic };
+    expect(supportsForcedToolChoice(opus55)).toBe(false);
+    expect(supportsToolSearch(opus55)).toBe(true);
+
+    const overridden = { ...opus55, forcedToolChoice: true, toolSearch: false };
+    expect(supportsForcedToolChoice(overridden)).toBe(true);
+    expect(supportsToolSearch(overridden)).toBe(false);
+    expect(supportsToolChanges(overridden)).toBe(true);
+    expect(supportsAssistantPrefill(overridden)).toBe(false);
+  });
+
+  it('seeds refusalFallback from REFUSAL_FALLBACK_MODELS only', () => {
+    expect(refusalFallsBack({ id: ChatModels.CLAUDE_FABLE_5, backend: ModelBackend.Anthropic })).toBe(true);
+    expect(refusalFallsBack({ id: ChatModels.CLAUDE_FABLE_5_1_BEDROCK, backend: ModelBackend.Bedrock })).toBe(true);
+    expect(refusalFallsBack({ id: ChatModels.CLAUDE_4_8_OPUS, backend: ModelBackend.Anthropic })).toBe(false);
+    expect(
+      refusalFallsBack({ id: ChatModels.CLAUDE_FABLE_5, backend: ModelBackend.Anthropic, refusalFallback: false })
+    ).toBe(false);
   });
 });
