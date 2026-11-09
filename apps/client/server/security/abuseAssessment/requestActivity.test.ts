@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Types } from 'mongoose';
-import { abuseAssessmentRequestActivitySchema } from '@bike4mind/common';
+import { abuseAssessmentRequestActivitySchema, RISK_EVIDENCE_WINDOW_DAYS } from '@bike4mind/common';
 import type { ApiRequestRow } from '@server/utils/userApiRequests';
 
 const mocks = vi.hoisted(() => ({ read: vi.fn() }));
@@ -69,14 +69,18 @@ describe('API request evidence', () => {
   it('bounds the source query and marks a failed read unknown with a diagnostic', async () => {
     const logger = { warn: vi.fn() };
     mocks.read.mockRejectedValue(new Error('private diagnostic'));
-    expect(await collectRequestActivity('u', logger as never)).toEqual({ status: 'failed' });
-    expect(mocks.read).toHaveBeenCalledWith(
-      'u',
-      expect.objectContaining({
-        limit: REQUEST_ACTIVITY_SCAN_LIMIT,
-        range: { from: expect.any(Date), to: expect.any(Date) },
-      })
-    );
+    const detectedAt = new Date('2026-11-01T12:00:00Z');
+    expect(await collectRequestActivity('u', detectedAt, logger as never)).toEqual({ status: 'failed' });
+    expect(mocks.read).toHaveBeenCalledWith('u', expect.objectContaining({ limit: REQUEST_ACTIVITY_SCAN_LIMIT }));
     expect(logger.warn).toHaveBeenCalledWith(expect.any(String), { userId: 'u', errorName: 'Error' });
+  });
+
+  it('anchors the evidence window to the detection time, not the current time', async () => {
+    mocks.read.mockResolvedValue([]);
+    const detectedAt = new Date('2026-11-01T12:00:00Z');
+    await collectRequestActivity('u', detectedAt, { warn: vi.fn() } as never);
+    const { range } = mocks.read.mock.calls[0][1];
+    expect(range.to).toEqual(detectedAt);
+    expect(range.from).toEqual(new Date(detectedAt.getTime() - RISK_EVIDENCE_WINDOW_DAYS * 86_400_000));
   });
 });

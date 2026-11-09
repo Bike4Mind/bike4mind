@@ -167,7 +167,9 @@ const RecentActivityCard: React.FC<{ userId: string; onViewAll: () => void; onOp
   onViewAll,
   onOpenCredits,
 }) => {
-  const [categories, setCategories] = useState<UserTimelineCategory[]>([...USER_TIMELINE_CATEGORIES]);
+  const [categories, setCategories] = useState<UserTimelineCategory[]>(
+    USER_TIMELINE_CATEGORIES.filter(category => category !== 'api')
+  );
   const timeline = useUserTimeline(
     userId,
     { types: typesOfCategories(categories) },

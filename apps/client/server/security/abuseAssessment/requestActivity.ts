@@ -27,12 +27,15 @@ export function summarizeRequestRows(rows: ApiRequestRow[]): AbuseAssessmentRequ
   };
 }
 
-export async function collectRequestActivity(userId: string, logger: Logger): Promise<AbuseAssessmentRequestActivity> {
-  const now = new Date();
+export async function collectRequestActivity(
+  userId: string,
+  detectedAt: Date,
+  logger: Logger
+): Promise<AbuseAssessmentRequestActivity> {
   try {
     const rows = await readApiRequests(userId, {
       limit: REQUEST_ACTIVITY_SCAN_LIMIT,
-      range: { from: new Date(now.getTime() - RISK_EVIDENCE_WINDOW_DAYS * 86_400_000), to: now },
+      range: { from: new Date(detectedAt.getTime() - RISK_EVIDENCE_WINDOW_DAYS * 86_400_000), to: detectedAt },
     });
     return summarizeRequestRows(rows);
   } catch (error) {

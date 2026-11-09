@@ -236,7 +236,7 @@ export async function summarizeDetection(
   const accounts: AssessedAccountSource[] = await Promise.all(
     detection.userIds.slice(0, ABUSE_ASSESSMENT_MAX_ACCOUNTS).map(async id => ({
       ...(byId.get(id) ?? { id, createdAt: null, summary: null }),
-      requests: await collectRequestActivity(id, logger),
+      requests: await collectRequestActivity(id, detection.detectedAt, logger),
     }))
   );
   const refs = buildFeatureSummary({ detection, accounts, group: null }).accounts.map(account => account.ref);

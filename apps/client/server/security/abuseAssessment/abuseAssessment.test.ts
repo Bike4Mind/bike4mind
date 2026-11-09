@@ -120,7 +120,7 @@ beforeEach(() => {
 describe('assessShadowDetection', () => {
   it('collects request evidence for the target accounts and forwards it to the provider summary', async () => {
     await assessShadowDetection({ detectionId: DETECTION_ID, trigger: 'admin', requestedBy: 'admin-1', logger });
-    expect(collectRequestActivity).toHaveBeenCalledWith(detection.userIds[0], logger);
+    expect(collectRequestActivity).toHaveBeenCalledWith(detection.userIds[0], detection.detectedAt, logger);
     const saved = mocks.save.mock.calls[0][0];
     expect(saved.featureSummary.accounts[0].requests).toEqual({ status: 'failed' });
     expect(JSON.stringify(mocks.providerDecide.mock.calls)).toContain('"requests":{"status":"failed"}');
