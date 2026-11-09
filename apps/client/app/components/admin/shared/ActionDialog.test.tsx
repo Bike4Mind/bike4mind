@@ -100,6 +100,8 @@ describe('ActionDialog', () => {
     const confirm = openDialog({ onConfirm, typedConfirm: { expected: 'ada@example.com', noun: 'email address' } });
 
     expect(screen.getByTestId('adjust-dialog-typed-expected')).toHaveTextContent('ada@example.com');
+    // the sentence sits in one inline span so the spaces around the name survive the label's flex row
+    expect(screen.getByTestId('adjust-dialog-typed-expected').parentElement?.tagName).toBe('SPAN');
     expect(screen.getByText(/This cannot be undone/)).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('adjust-dialog-reason-input-preset-0'));
     expect(confirm).toBeDisabled();

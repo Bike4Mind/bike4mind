@@ -131,11 +131,14 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
         {typedConfirm && (
           <FormControl required>
             <FormLabel htmlFor={typedInputId}>
-              This cannot be undone. Type{' '}
-              <Typography component="code" fontFamily="code" data-testid={`${testId}-typed-expected`}>
-                {typedConfirm.expected}
-              </Typography>{' '}
-              to confirm.
+              {/* One inline span: FormLabel is a flex row, which drops bare space text nodes around the code. */}
+              <span>
+                This cannot be undone. Type{' '}
+                <Typography component="code" fontFamily="code" data-testid={`${testId}-typed-expected`}>
+                  {typedConfirm.expected}
+                </Typography>{' '}
+                to confirm.
+              </span>
             </FormLabel>
             <Input
               value={typedValue}

@@ -48,6 +48,7 @@ describe('admin layout primitives', () => {
       />
     );
     expect(screen.getByTestId('admin-page-header-actions')).toHaveStyle({ flexShrink: '0' });
+    expect(screen.getByTestId('admin-page-header-actions')).toHaveStyle({ alignItems: 'flex-start' });
   });
 
   it('renders the page title as the h1 and a nested sub-view title as an h2', () => {
