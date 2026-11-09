@@ -795,6 +795,7 @@ export function registerChat(
       }
     },
     summaryChanged: (summary: ChatSessionSummary) => send(IPC_CHANNELS.chatSessionSummary, summary),
+    loopChanged: (sessionId, state) => send(IPC_CHANNELS.chatLoopChanged, { sessionId, state }),
     sessionClosed: hooks.sessionClosed,
     releaseSessionTerminals: hooks.releaseSessionTerminals,
   });
@@ -1143,6 +1144,10 @@ export function registerChat(
     service.send(request.sessionId, request.text, request.attachments)
   );
   ipcMain.handle(IPC_CHANNELS.chatStopReply, (_event, sessionId: string) => service.stop(sessionId));
+  ipcMain.handle(IPC_CHANNELS.chatLoopCommand, (_event, sessionId: string, args: string) =>
+    service.loopCommand(sessionId, args)
+  );
+  ipcMain.handle(IPC_CHANNELS.chatGetLoop, (_event, sessionId: string) => service.getLoop(sessionId));
   ipcMain.handle(IPC_CHANNELS.chatContinueReply, (_event, sessionId: string) => service.continueReply(sessionId));
   ipcMain.handle(IPC_CHANNELS.chatClearContext, (_event, sessionId: string) => service.clearContext(sessionId));
   ipcMain.handle(IPC_CHANNELS.chatCompactContext, (_event, sessionId: string, focus?: string) =>

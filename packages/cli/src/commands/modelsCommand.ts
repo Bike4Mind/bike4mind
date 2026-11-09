@@ -58,7 +58,6 @@ import { createCliCuratedList, type CuratedOrigin } from '../models/curatedList.
 import {
   defaultOn,
   findModelServer,
-  findUnusableServer,
   loadModelServers,
   loginHint,
   serverAddressLabel,
@@ -1110,8 +1109,7 @@ export async function loginServer(name: string, deps: ModelsDeps, opts: { tokenS
 export async function logoutServer(name: string, deps: ModelsDeps): Promise<number> {
   const ctx = requireServers(deps);
   const loaded = await abortable(ctx.load(), deps.signal);
-  // An unusable server is still listed with its credential, so its name must be able to remove it.
-  const known = findModelServer(loaded.servers, name) ?? findUnusableServer(loaded, name);
+  const known = findModelServer(loaded.servers, name) ?? findModelServer(loaded.unusable ?? [], name);
   // A server removed in Desktop leaves its credential behind under the old id; that id removes it.
   const id = known?.id ?? (ctx.secret(name) !== undefined ? name : null);
   if (id === null) throw noSuchServer(loaded, name);

@@ -1,13 +1,40 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render } from '@testing-library/react';
+import { render, waitFor } from '@testing-library/react';
 
-vi.mock('sonner', () => ({ toast: { success: vi.fn() } }));
+const { mockToastSuccess, mockGet, mockTrackPurchaseConversion, mockBootstrapSession, tokenState } = vi.hoisted(() => ({
+  mockToastSuccess: vi.fn(),
+  mockGet: vi.fn(),
+  mockTrackPurchaseConversion: vi.fn(),
+  mockBootstrapSession: vi.fn(),
+  tokenState: { accessToken: 'token' as string | null },
+}));
+
+vi.mock('sonner', () => ({ toast: { success: mockToastSuccess } }));
 vi.mock('@tanstack/react-query', () => ({ useQueryClient: () => ({ invalidateQueries: vi.fn() }) }));
-vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: vi.fn() } }));
-vi.mock('@client/app/utils/purchaseConversion', () => ({ trackPurchaseConversion: vi.fn() }));
+vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: mockGet } }));
+vi.mock('@client/app/utils/purchaseConversion', () => ({ trackPurchaseConversion: mockTrackPurchaseConversion }));
+vi.mock('@client/app/utils/sessionBootstrap', () => ({ bootstrapSession: mockBootstrapSession }));
+vi.mock('@client/app/hooks/useAccessToken', () => ({ useAccessToken: { getState: () => tokenState } }));
 
 import { consumeBillingCheckoutReturn } from '@client/app/utils/billingCheckoutReturn';
-import StripeCheckoutSuccessHandler from './StripeCheckoutSuccessHandler';
+import StripeCheckoutSuccessHandler, { checkoutConfirmation } from './StripeCheckoutSuccessHandler';
+
+const SUMMARY = {
+  transactionId: 'cs_test_1',
+  value: 30,
+  currency: 'USD',
+  priceId: 'price_pro',
+  planName: 'Professional',
+  quantity: 1,
+  credits: 50000,
+};
+
+const GENERIC = 'Subscription completed successfully!';
+
+/** Lets every pending promise chain run, not just the next microtask. */
+const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+
+const CHECKOUT_RETURN = '?subscription_success=true&checkout_session_id=cs_test_1';
 
 function returnTo(search: string) {
   window.history.replaceState({}, '', `/${search}`);
@@ -16,7 +43,12 @@ function returnTo(search: string) {
 
 describe('StripeCheckoutSuccessHandler', () => {
   beforeEach(() => {
+    vi.clearAllMocks();
+    window.sessionStorage.clear();
     consumeBillingCheckoutReturn();
+    tokenState.accessToken = 'token';
+    mockBootstrapSession.mockResolvedValue(undefined);
+    mockGet.mockResolvedValue({ data: SUMMARY });
   });
 
   it('marks the return when it lands on an open Billing modal', () => {
@@ -35,5 +67,82 @@ describe('StripeCheckoutSuccessHandler', () => {
     returnTo('?billing=plans');
 
     expect(consumeBillingCheckoutReturn()).toBe(false);
+  });
+
+  it('confirms at once but waits for the cold-load session bootstrap before the lookup', async () => {
+    let finishBootstrap!: () => void;
+    mockBootstrapSession.mockReturnValue(new Promise<void>(resolve => (finishBootstrap = resolve)));
+    returnTo(CHECKOUT_RETURN);
+
+    expect(mockToastSuccess).toHaveBeenCalledExactlyOnceWith(GENERIC, { id: 'cs_test_1' });
+    await settle();
+    expect(mockGet).not.toHaveBeenCalled();
+
+    finishBootstrap();
+    await waitFor(() =>
+      expect(mockGet).toHaveBeenCalledExactlyOnceWith('/api/subscriptions/checkout-session', {
+        params: { id: 'cs_test_1' },
+      })
+    );
+  });
+
+  it('upgrades the confirmation with the plan and credits, and reports the conversion', async () => {
+    returnTo(CHECKOUT_RETURN);
+
+    await waitFor(() =>
+      expect(mockToastSuccess).toHaveBeenLastCalledWith("You're on Professional - 50,000 credits included", {
+        id: 'cs_test_1',
+      })
+    );
+    expect(mockTrackPurchaseConversion).toHaveBeenCalledExactlyOnceWith(SUMMARY);
+    expect(window.location.search).toBe('');
+  });
+
+  it('confirms again but reports once when the return URL is loaded again', async () => {
+    returnTo(CHECKOUT_RETURN).unmount();
+    await waitFor(() => expect(mockTrackPurchaseConversion).toHaveBeenCalledOnce());
+
+    returnTo(CHECKOUT_RETURN);
+    await waitFor(() => expect(mockGet).toHaveBeenCalledTimes(2));
+    await settle();
+    expect(mockToastSuccess).toHaveBeenCalledTimes(4);
+    expect(mockTrackPurchaseConversion).toHaveBeenCalledOnce();
+  });
+
+  it('skips the lookup and keeps the generic confirmation when no session was restored', async () => {
+    tokenState.accessToken = null;
+    returnTo(CHECKOUT_RETURN);
+
+    await settle();
+    expect(mockGet).not.toHaveBeenCalled();
+    expect(mockToastSuccess).toHaveBeenCalledExactlyOnceWith(GENERIC, { id: 'cs_test_1' });
+    expect(window.sessionStorage.getItem('b4m-reported-checkout-sessions')).toBe('[]');
+  });
+
+  it('keeps the generic confirmation and releases the claim when the lookup fails', async () => {
+    mockGet.mockRejectedValueOnce(new Error('400'));
+    returnTo(CHECKOUT_RETURN);
+
+    await waitFor(() => expect(window.sessionStorage.getItem('b4m-reported-checkout-sessions')).toBe('[]'));
+    expect(mockToastSuccess).toHaveBeenCalledExactlyOnceWith(GENERIC, { id: 'cs_test_1' });
+    expect(mockTrackPurchaseConversion).not.toHaveBeenCalled();
+  });
+
+  it('confirms an admin-initiated conversion without a lookup', () => {
+    returnTo('?subscription_success=true');
+
+    expect(mockToastSuccess).toHaveBeenCalledExactlyOnceWith(GENERIC);
+    expect(mockBootstrapSession).not.toHaveBeenCalled();
+    expect(mockGet).not.toHaveBeenCalled();
+  });
+});
+
+describe('checkoutConfirmation', () => {
+  it('names the plan without credits when the allotment is unknown', () => {
+    expect(checkoutConfirmation({ planName: 'Team' })).toBe("You're on Team");
+  });
+
+  it('falls back to the generic message without a plan name', () => {
+    expect(checkoutConfirmation({ credits: 100 })).toBe('Subscription completed successfully!');
   });
 });

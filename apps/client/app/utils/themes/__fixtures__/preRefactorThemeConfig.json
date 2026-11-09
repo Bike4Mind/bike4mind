@@ -1,0 +1,867 @@
+{
+  "colorSchemes": {
+    "dark": {
+      "palette": {
+        "divider": "#2C3135",
+        "text": {
+          "navLinks": "#2AC6F9",
+          "icon": "rgba(209, 228, 244, 0.5)",
+          "primary": "#D1E4F4",
+          "primary50": "rgba(209, 228, 244, 0.7)",
+          "primary70": "rgba(209, 228, 244, 0.8)",
+          "secondary": "rgba(209, 228, 244, 0.8)",
+          "tertiary": "rgba(209, 228, 244, 0.7)"
+        },
+        "border": {
+          "light": "rgba(209, 228, 244, 0.15)",
+          "solid": "#2C3135",
+          "input": "#2C3135",
+          "muted": "rgba(190, 209, 223, 0.2)",
+          "soft": "rgba(209, 228, 244, 0.08)"
+        },
+        "background": {
+          "sidebarItem": "rgba(42, 44, 56, 0.3)",
+          "body": "#0E1214",
+          "scrollbar": "#0A3D50",
+          "scrollbarTrack": "#0E1214",
+          "surface": "#0E1214",
+          "surface2": "#13181C",
+          "panel": "#13181C",
+          "panel2": "#13181C"
+        },
+        "primary": {
+          "softBg": "#13181C",
+          "softActiveBg": "#2A4159",
+          "softHoverBg": "rgba(42, 44, 56, 0.7)",
+          "softHoverColor": "#E3EFFB",
+          "solidDisabledBg": "#636B74",
+          "solidDisabledColor": "#32383E",
+          "softColor": "#D3DFE8"
+        },
+        "success": {
+          "solidBg": "#1E7A20",
+          "outlinedColor": "#34d399",
+          "outlinedBorder": "#34d399",
+          "mainChannel": "#D3DFE8",
+          "softBg": "rgba(52, 211, 153, 0.15)",
+          "softHoverBg": "rgba(52, 211, 153, 0.22)",
+          "softActiveBg": "rgba(52, 211, 153, 0.28)",
+          "softColor": "#34d399"
+        },
+        "danger": {
+          "solidBg": "#DA3131",
+          "solidHoverBg": "#C41C1C",
+          "solidActiveBg": "#C41C1C",
+          "outlinedColor": "#ef4444",
+          "outlinedBorder": "#ef4444",
+          "softBg": "rgba(239, 68, 68, 0.15)",
+          "softHoverBg": "rgba(239, 68, 68, 0.22)",
+          "softActiveBg": "rgba(239, 68, 68, 0.28)",
+          "softColor": "#f87171",
+          "mainChannel": "#ef4444"
+        },
+        "warning": {
+          "solidBg": "#FFA500",
+          "solidColor": "#000000",
+          "solidHoverBg": "#FFAC58",
+          "softBg": "rgba(255, 165, 0, 0.15)",
+          "softHoverBg": "rgba(255, 165, 0, 0.22)",
+          "softActiveBg": "rgba(255, 165, 0, 0.28)",
+          "softColor": "#FFA500",
+          "outlinedColor": "#FFA500",
+          "outlinedBorder": "#FFA500"
+        },
+        "feedback": {
+          "background": "#13181C",
+          "border": "1px solid #2C3135",
+          "bug": "#E64A4A",
+          "feedback": "#4A90E2",
+          "positive": "#4CAF50",
+          "thumbsDown": "#FFA726"
+        },
+        "neutral": {
+          "solidBg": "#13181C",
+          "solidColor": "#D3DFE8",
+          "softColor": "#D3DFE8",
+          "outlinedBorder": "#2C3135",
+          "outlinedHoverBg": "rgba(42, 44, 56, 0.7)",
+          "plainActiveBg": "#2A4159"
+        },
+        "sidenav": {
+          "blueBack": "#0066C1",
+          "ctaSubscribe": "rgba(30, 122, 32, 0.05)",
+          "navItemText": "#D3DFE8",
+          "navItemIcon": "#D1E4F4",
+          "chipText": "#D1E4F4",
+          "chipIcon": "rgba(209, 228, 244, 0.5)",
+          "chipIconConnected": "#1FB84B",
+          "filterActiveBg": "rgba(209, 228, 244, 0.05)",
+          "pinnedBackdrop": "#13181C"
+        },
+        "aiSettings": {
+          "background": "#101111",
+          "cardBackground": "#0E1214",
+          "cardBorderColor": "rgba(209, 228, 244, 0.15)",
+          "tooltipArrowBorder": "#2C3135 #2C3135 transparent transparent",
+          "modelCard": {
+            "background": "#13181C",
+            "border": "1px solid rgba(209, 228, 244, 0.15)",
+            "activeBorder": "1px solid rgba(31, 184, 75, 0.5)",
+            "activeBackground": "rgba(31, 184, 75, 0.04)",
+            "hoverBackground": "rgba(42, 44, 56, 0.5)",
+            "hoverBorder": "1px solid rgba(209, 228, 244, 0.15)"
+          },
+          "modal": {
+            "borderColor": "rgba(190, 209, 223, 0.3)"
+          }
+        },
+        "inbox": {
+          "border": {
+            "light": "#30363A",
+            "cancelButton": "#737B82"
+          },
+          "text": {
+            "disabledTab": "rgba(209, 228, 244, 0.7)",
+            "placeholder": "#30363A"
+          },
+          "backgroundColor": {
+            "textInput": "#0E1214",
+            "inviteIcon": "#0E1214"
+          }
+        },
+        "chatbox": {
+          "replyBg": "#2A4159",
+          "messageInputDivider": "rgba(211, 223, 232, 0.2)",
+          "messageInputColor": "#D3DFE8"
+        },
+        "reading": {
+          "surface": "#13181C",
+          "surface2": "#141B23",
+          "cardBase": "#13181C",
+          "cardTintTop": "rgba(59, 130, 246, 0.05)",
+          "cardTintBottom": "rgba(59, 130, 246, 0.02)",
+          "cardLine": "rgba(59, 130, 246, 0.18)",
+          "line": "rgba(209, 228, 244, 0.08)",
+          "line2": "rgba(209, 228, 244, 0.15)",
+          "ink": "#D1E4F4",
+          "ink2": "rgba(209, 228, 244, 0.85)",
+          "ink3": "rgba(209, 228, 244, 0.7)",
+          "accent": "#61afef",
+          "accentSoft": "rgba(97, 175, 239, 0.11)",
+          "accentLine": "rgba(97, 175, 239, 0.34)",
+          "warnSoft": "rgba(234, 154, 61, 0.1)"
+        },
+        "admin": {
+          "canvas": "#141416",
+          "surface": "#1E1E22",
+          "surfaceSubtle": "#232328",
+          "hover": "#2A2A30",
+          "border": "#2E2E34",
+          "borderStrong": "#45454D",
+          "ink": "#FAFAFA",
+          "inkSecondary": "#D4D4D8",
+          "inkMuted": "#B4B4BE",
+          "accent": "#A5B4FC",
+          "link": "#A5B4FC",
+          "selection": {
+            "background": "#26244A",
+            "border": "#4B47A8",
+            "foreground": "#C7C4F7"
+          },
+          "danger": "#FCA5A5",
+          "status": {
+            "good": {
+              "foreground": "#BBF7D0",
+              "background": "#14532D"
+            },
+            "info": {
+              "foreground": "#C7D2FE",
+              "background": "#312E81"
+            },
+            "warn": {
+              "foreground": "#FED7AA",
+              "background": "#7C2D12"
+            },
+            "bad": {
+              "foreground": "#FECACA",
+              "background": "#7F1D1D"
+            },
+            "neutral": {
+              "foreground": "#E4E4E7",
+              "background": "#3F3F46"
+            }
+          }
+        },
+        "common": {
+          "black": "#000",
+          "white": "#fff",
+          "toggleButton": {
+            "activeHoverBackground": "#2A4159",
+            "inactiveBackground": "rgba(42, 44, 56, 0.3)",
+            "inactiveBorder": "#2C3135"
+          },
+          "switchToggleGroup": {
+            "hoverColor": "#FFFFFF"
+          },
+          "switchSelector": {
+            "background": "background.level1",
+            "lightTextColor": "rgba(209, 228, 244, 0.75)"
+          },
+          "userCard": {
+            "borderColor": "rgba(209, 228, 244, 0.15)"
+          },
+          "overlay": {
+            "subtleBackground": "rgba(255, 255, 255, 0.05)",
+            "subtleBorder": "rgba(255, 255, 255, 0.1)"
+          },
+          "imageActions": {
+            "backgroundColor": "#040506"
+          },
+          "slideToggle": {
+            "backgroundOff": "#1e1e1e",
+            "backgroundOn": "#1a3a1f",
+            "thumbOff": "#6b7280",
+            "thumbOn": "#4CAF50"
+          }
+        },
+        "credits": {
+          "accountSelector": {
+            "backgroundColor": "#14191D",
+            "listboxBackground": "#0E1214"
+          },
+          "accountOption": {
+            "backgroundColor": "#14191D",
+            "borderColor": "rgba(209, 228, 244, 0.15)",
+            "selectedBackground": "linear-gradient(rgba(31, 184, 75, 0.06), rgba(31, 184, 75, 0.04)), #13181C"
+          },
+          "creditsChip": {
+            "backgroundColor": "#13181C",
+            "borderColor": "rgba(209, 228, 244, 0.2)"
+          }
+        },
+        "searchbar": {
+          "background": "#0E1214",
+          "color": "rgba(255, 255, 255, 0.5)"
+        },
+        "fileBrowser": {
+          "surface": "#0E1214",
+          "borderColor": "rgba(209, 228, 244, 0.15)",
+          "fileIconColor": "rgba(211, 223, 232, 0.5)",
+          "fileSizeColor": "rgba(209, 228, 244, 0.5)",
+          "lightTextColor": "rgba(209, 228, 244, 0.75)",
+          "buttons": {
+            "activeBackgroundColor": "rgba(11, 107, 203, 0.1)",
+            "activeHoverBackgroundColor": "rgba(209, 228, 244, 0.25)",
+            "hoverBackgroundColor": "#2C3135",
+            "mainBlueBorderColor": "#0B6BCB"
+          },
+          "list": {
+            "activeHoverBackgroundColor": "rgba(31, 184, 75, 0.05)"
+          },
+          "bottomBar": {
+            "background": "#0E1214",
+            "borderTop": "#2C3135"
+          },
+          "selectAll": {
+            "borderColor": "#737B82"
+          },
+          "bottomAddDisabled": {
+            "color": "rgba(209, 228, 244, 0.35)",
+            "backgroundColor": "#636B74",
+            "borderColor": "rgba(48, 54, 58, 0.5)"
+          },
+          "bottomDelete": {
+            "textColor": "#FFFFFF"
+          },
+          "instructionChip": {
+            "dangerColor": "#D1E4F4"
+          },
+          "statusChip": {
+            "backgroundColor": "rgba(209, 228, 244, 0.05)",
+            "textColor": "rgba(209, 228, 244, 0.8)",
+            "borderColor": "rgba(209, 228, 244, 0.5)"
+          },
+          "fileGrid": {
+            "background": "#13181C",
+            "hover": "rgba(42, 44, 56, 0.5)",
+            "checkbox": {
+              "checked": {
+                "background": "rgba(22, 114, 48, 0.2)",
+                "border": "rgba(31, 184, 75, 0.5)",
+                "hover": "rgba(22, 114, 48, 0.4)",
+                "icon": "#1E7A20"
+              }
+            }
+          },
+          "item": {
+            "background": "#13181C"
+          },
+          "tagList": {
+            "itemBackground": "transparent",
+            "inactiveItemBorderColor": "rgba(209, 228, 244, 0.15)",
+            "deleteIconColor": "#F09898"
+          },
+          "storage": {
+            "backgroundColor": "#13181C",
+            "dangerColor": "#DA3131",
+            "progressColor": "#1FB84B",
+            "textColor": "#D1E4F4",
+            "textColorDanger": "#040506",
+            "warningColor": "#FFAC58"
+          },
+          "createTag": {
+            "secondaryText": "rgba(209, 228, 244, 0.5)",
+            "iconColor": "#0B6BCB",
+            "backgroundColor": "#0E1214",
+            "previewBorderColor": "rgba(209, 228, 244, 0.15)",
+            "previewBackgroundColor": "#13181C",
+            "previewTextSecondaryColor": "rgba(209, 228, 244, 0.5)"
+          }
+        },
+        "session": {
+          "filesBannerBg": "rgba(16, 17, 17, 0.5)",
+          "boxShadow": "-5px -10px 30px 0px rgba(44, 49, 53, 0.08), 5px 10px 30px 0px rgba(44, 49, 53, 0.08)",
+          "dividerBg": "rgba(44, 49, 53, 0.5)",
+          "iconFill": "#FFFFFF",
+          "collapseIndicator": "#D3DFE8",
+          "cardBorder": "rgba(209, 228, 244, 0.15)",
+          "activityBorder": "rgba(209, 228, 244, 0.15)",
+          "hoverBackground": "rgba(42, 44, 56, 0.6)",
+          "cardHoverBackground": "rgba(42, 44, 56, 0.7)",
+          "announcementBackground": "rgba(11, 107, 203, 0.2)",
+          "shadowLight": "0px 8px 24px rgba(0, 0, 0, 0.18)",
+          "overlayBackground": "rgba(42, 44, 56, 0.3)",
+          "shadowSoft": "0px 4px 16px rgba(0, 0, 0, 0.12)"
+        },
+        "notebooklist": {
+          "hoverBg": "rgba(42, 44, 56, 0.7)",
+          "focusedBackground": "rgba(42, 44, 56, 0.7)"
+        },
+        "subscription": {
+          "creditsModal": {
+            "subtitleColor": "#D1E4F4",
+            "dividerBackground": "rgba(209, 228, 244, 0.08)",
+            "iconFill": "rgba(209, 228, 244, 0.5)"
+          }
+        },
+        "profile": {
+          "border": "1px solid rgba(209, 228, 244, 0.12)"
+        },
+        "project": {
+          "border": "rgba(209, 228, 244, 0.15)",
+          "fileIconColor": "rgba(209, 228, 244, 0.3)",
+          "projectCard": {
+            "shadowColor": "rgba(209, 228, 244, 0.04)",
+            "descriptionColor": "rgba(209, 228, 244, 0.5)"
+          },
+          "systemPromptModal": {
+            "backgroundColor": "rgba(209, 228, 244, 0.15)"
+          }
+        },
+        "quickActions": {
+          "notebook": {
+            "color": "#0066C1"
+          },
+          "project": {
+            "color": "#3A9D60"
+          },
+          "agent": {
+            "color": "#9857B1"
+          },
+          "file": {
+            "color": "#E8845A"
+          }
+        },
+        "promptEnhancement": {
+          "background": "rgba(11, 107, 203, 0.2)",
+          "backgroundHover": "rgba(11, 107, 203, 0.1)",
+          "border": "rgba(11, 107, 203, 0.2)",
+          "iconColor": "#D1E4F4",
+          "textColor": "#D1E4F4",
+          "chipBackground": "#2C3135",
+          "chipColor": "#D1E4F4",
+          "chipBorder": "#2C3135",
+          "enhancedPromptBackground": "rgba(92, 184, 166, 0.05)",
+          "enhancedPromptBorder": "rgba(11, 107, 203, 0.25)"
+        },
+        "creditsModal": {
+          "border": "rgba(209, 228, 244, 0.08)",
+          "gradient": "linear-gradient(rgba(11, 107, 203, 0.05), rgba(11, 107, 203, 0.1)), #14191D"
+        },
+        "subscriptionModal": {
+          "background": "neutral.800",
+          "border": "rgba(209, 228, 244, 0.08)",
+          "linkColor": "neutral.100",
+          "tabsBorderColor": "neutral.700",
+          "tabsBackgroundColor": "neutral.800"
+        },
+        "shareModal": {
+          "sharedUsersBorder": "#0D0F10"
+        },
+        "loginRegister": {
+          "inputFieldBg": "#0E1214",
+          "termsAndPrivacy": {
+            "hoverBg": "rgba(42, 44, 56, 0.3)",
+            "buttonBg": "#13181C",
+            "border": "1px solid rgba(209, 228, 244, 0.2)"
+          }
+        },
+        "voiceModal": {
+          "statusColors": {
+            "connecting": "#fbbf24",
+            "connected": "#34d399",
+            "disconnected": "#f87171",
+            "unknown": "#6b7280"
+          },
+          "dialog": {
+            "background": "linear-gradient(135deg, #1f2937 0%, #111827 100%)",
+            "border": "#374151",
+            "boxShadow": "rgba(0, 0, 0, 0.5)"
+          },
+          "statusContainer": {
+            "backgroundColor": "rgba(55, 65, 81, 0.3)",
+            "border": "rgba(55, 65, 81, 0.5)"
+          },
+          "micButton": {
+            "backgroundColor": "rgba(255, 255, 255, 0.1)"
+          },
+          "audioVisualization": {
+            "user": "#4ade80",
+            "assistant": "#3b82f6"
+          }
+        }
+      }
+    },
+    "light": {
+      "palette": {
+        "text": {
+          "navLinks": "#0A3D50",
+          "icon": "rgba(51, 95, 112, 0.7)",
+          "primary": "#335F70",
+          "primary50": "rgba(51, 95, 112, 0.9)",
+          "primary70": "rgba(51, 95, 112, 0.95)",
+          "secondary": "rgba(51, 95, 112, 0.95)",
+          "tertiary": "rgba(51, 95, 112, 0.9)"
+        },
+        "border": {
+          "light": "#BED1DF",
+          "solid": "#BED1DF",
+          "input": "#D1E4F4",
+          "muted": "rgba(190, 209, 223, 0.2)",
+          "soft": "rgba(209, 228, 244, 0.5)"
+        },
+        "divider": "#D3DFE8",
+        "background": {
+          "sidebarItem": "neutral.200",
+          "body": "#FBFCFE",
+          "scrollbar": "#AEBFC7",
+          "scrollbarTrack": "#F4F7F9",
+          "surface": "#F4F7F9",
+          "surface2": "#F4F7F9",
+          "panel": "#FBFCFE",
+          "panel2": "#FFFFFF"
+        },
+        "primary": {
+          "solidBg": "#0066C1",
+          "solidColor": "#FFFFFF",
+          "softBg": "#FFFFFF",
+          "softActiveBg": "#D1E4F4",
+          "softActiveColor": "#2A4159",
+          "softHoverBg": "rgba(209, 228, 244, 0.3)",
+          "softHoverColor": "#2A4159",
+          "softColor": "#0A3D50"
+        },
+        "success": {
+          "solidBg": "#1FB84B",
+          "outlinedColor": "#0A3D50",
+          "mainChannel": "#0A3D50"
+        },
+        "danger": {
+          "solidBg": "#DA3131",
+          "solidHoverBg": "#C41C1C",
+          "solidActiveBg": "#C41C1C",
+          "outlinedColor": "#DA3131",
+          "outlinedBorder": "#DA3131",
+          "softBg": "#ffebee",
+          "softColor": "#DA3131",
+          "mainChannel": "#DA3131"
+        },
+        "warning": {
+          "solidBg": "#FFA500",
+          "solidColor": "#000000",
+          "solidHoverBg": "#FFAC58",
+          "softBg": "rgba(255, 165, 0, 0.22)",
+          "softHoverBg": "rgba(255, 165, 0, 0.22)",
+          "softActiveBg": "rgba(255, 165, 0, 0.28)",
+          "softColor": "#FFA500",
+          "outlinedColor": "#FFA500",
+          "outlinedBorder": "#FFA500"
+        },
+        "neutral": {
+          "solidBg": "#FFFFFF",
+          "solidBorder": "2px solid #0A3D50 !important",
+          "solidColor": "#0A3D50",
+          "softColor": "#0A3D50",
+          "plainActiveBg": "#D1E4F4"
+        },
+        "feedback": {
+          "background": "#F4F7F9",
+          "border": "1px solid #D3DFE8",
+          "bug": "#E64A4A",
+          "feedback": "#4A90E2",
+          "positive": "#4CAF50",
+          "thumbsDown": "#FFA726"
+        },
+        "sidenav": {
+          "blueBack": "#ADD8E6",
+          "ctaSubscribe": "#4CBB17",
+          "textColor": "#0A3D50",
+          "navItemText": "#0A3D50",
+          "navItemIcon": "#335F70",
+          "chipText": "#0A3D50",
+          "chipIcon": "rgba(51, 95, 112, 0.5)",
+          "chipIconConnected": "#1FB84B",
+          "filterActiveBg": "rgba(11, 107, 203, 0.08)",
+          "pinnedBackdrop": "#F4F7F9"
+        },
+        "aiSettings": {
+          "background": "#FFFFFF",
+          "cardBackground": "#FFFFFF",
+          "cardBorderColor": "rgba(190, 209, 223, 0.5)",
+          "tooltipArrowBorder": "#DDE7EE #DDE7EE transparent transparent",
+          "modelCard": {
+            "background": "#FFFFFF",
+            "border": "1px solid rgba(190, 209, 223, 0.5)",
+            "activeBorder": "1px solid rgba(31, 184, 75, 0.5)",
+            "activeBackground": "rgba(31, 184, 75, 0.04)",
+            "hoverBackground": "rgba(209, 228, 244, 0.25)",
+            "hoverBorder": "1px solid rgba(190, 209, 223, 0.5)"
+          },
+          "modal": {
+            "borderColor": "rgba(190, 209, 223, 0.5)"
+          }
+        },
+        "inbox": {
+          "border": {
+            "light": "rgba(190, 209, 223, 0.5)",
+            "cancelButton": "#335F70"
+          },
+          "text": {
+            "disabledTab": "rgba(51, 95, 112, 0.5)",
+            "placeholder": "rgba(51, 95, 112, 0.25)"
+          },
+          "backgroundColor": {
+            "textInput": "#FFFFFF",
+            "inviteIcon": "#FBFCFE"
+          }
+        },
+        "chatbox": {
+          "replyBg": "#E2ECF4",
+          "messageInputDivider": "#BED1DF",
+          "messageInputColor": "#0A3D50"
+        },
+        "reading": {
+          "surface": "#FFFFFF",
+          "surface2": "#EEF3F9",
+          "cardBase": "#FFFFFF",
+          "cardTintTop": "rgba(11, 107, 203, 0.08)",
+          "cardTintBottom": "rgba(11, 107, 203, 0.05)",
+          "cardLine": "rgba(11, 107, 203, 0.2)",
+          "line": "rgba(16, 38, 56, 0.11)",
+          "line2": "rgba(16, 38, 56, 0.22)",
+          "ink": "#0A2230",
+          "ink2": "rgba(10, 34, 48, 0.85)",
+          "ink3": "rgba(10, 34, 48, 0.7)",
+          "accent": "#0B6BCB",
+          "accentSoft": "rgba(11, 107, 203, 0.07)",
+          "accentLine": "rgba(11, 107, 203, 0.32)",
+          "warnSoft": "rgba(234, 154, 61, 0.14)"
+        },
+        "admin": {
+          "canvas": "#F6F6F4",
+          "surface": "#FFFFFF",
+          "surfaceSubtle": "#FAFAF8",
+          "hover": "#ECECE8",
+          "border": "#E4E4DF",
+          "borderStrong": "#D9D9D4",
+          "ink": "#18181B",
+          "inkSecondary": "#3F3F46",
+          "inkMuted": "#62626B",
+          "accent": "#4F46E5",
+          "link": "#3F3BC9",
+          "selection": {
+            "background": "#F3F2FE",
+            "border": "#C7C4F7",
+            "foreground": "#2B27A3"
+          },
+          "danger": "#B42318",
+          "status": {
+            "good": {
+              "foreground": "#166534",
+              "background": "#E7F5EC"
+            },
+            "info": {
+              "foreground": "#3730A3",
+              "background": "#E8EEFF"
+            },
+            "warn": {
+              "foreground": "#8A4B00",
+              "background": "#FFF1DE"
+            },
+            "bad": {
+              "foreground": "#9F1C12",
+              "background": "#FDECEA"
+            },
+            "neutral": {
+              "foreground": "#52525B",
+              "background": "#F1F1EE"
+            }
+          }
+        },
+        "common": {
+          "black": "#000",
+          "white": "#fff",
+          "toggleButton": {
+            "activeHoverBackground": "#E2ECF4",
+            "inactiveBackground": "rgba(224, 224, 224, 0.12)",
+            "inactiveBorder": "transparent"
+          },
+          "switchToggleGroup": {
+            "hoverColor": "#335F70"
+          },
+          "switchSelector": {
+            "background": "#FFFFFF",
+            "lightTextColor": "rgba(51, 95, 112, 0.5)"
+          },
+          "userCard": {
+            "borderColor": "rgba(190, 209, 223, 0.8)"
+          },
+          "overlay": {
+            "subtleBackground": "rgba(0, 0, 0, 0.05)",
+            "subtleBorder": "rgba(0, 0, 0, 0.1)"
+          },
+          "imageActions": {
+            "backgroundColor": "rgba(255, 255, 255, 0.8)"
+          },
+          "slideToggle": {
+            "backgroundOff": "#F0F3F5",
+            "backgroundOn": "rgba(31, 184, 75, 0.2)",
+            "thumbOff": "#C9CBCD",
+            "thumbOn": "#1FB84B"
+          }
+        },
+        "credits": {
+          "accountSelector": {
+            "backgroundColor": "transparent",
+            "listboxBackground": "transparent"
+          },
+          "accountOption": {
+            "backgroundColor": "#FFFFFF",
+            "borderColor": "rgba(190, 209, 223, 0.5)",
+            "selectedBackground": "linear-gradient(rgba(31, 184, 75, 0.08), rgba(31, 184, 75, 0.06)), #FFFFFF"
+          },
+          "creditsChip": {
+            "backgroundColor": "#FFFFFF",
+            "borderColor": "#D1E4F4"
+          }
+        },
+        "searchbar": {
+          "background": "#FFFFFF",
+          "color": "#A0A0A0"
+        },
+        "fileBrowser": {
+          "surface": "#FFFFFF",
+          "borderColor": "#D3DFE8",
+          "fileIconColor": "rgba(51, 95, 112, 0.5)",
+          "fileSizeColor": "rgba(51, 95, 112, 0.5)",
+          "lightTextColor": "rgba(51, 95, 112, 0.5)",
+          "buttons": {
+            "activeBackgroundColor": "rgba(11, 107, 203, 0.1)",
+            "activeHoverBackgroundColor": "rgba(209, 228, 244, 0.25)",
+            "hoverBackgroundColor": "#D3DFE8",
+            "mainBlueBorderColor": "#0B6BCB"
+          },
+          "list": {
+            "activeHoverBackgroundColor": "rgba(31, 184, 75, 0.1)"
+          },
+          "bottomBar": {
+            "background": "#FFFFFF",
+            "borderTop": "#BED1DF"
+          },
+          "selectAll": {
+            "borderColor": "#737B82"
+          },
+          "bottomAddDisabled": {
+            "color": "rgba(51, 95, 112, 0.35)",
+            "backgroundColor": "#F0F3F5",
+            "borderColor": "#C9CBCD"
+          },
+          "bottomDelete": {
+            "textColor": "#DA3131"
+          },
+          "instructionChip": {
+            "dangerColor": "var(--joy-palette-danger-500, #C41C1C)"
+          },
+          "statusChip": {
+            "backgroundColor": "rgba(51, 95, 112, 0.08)",
+            "textColor": "#335F70",
+            "borderColor": "rgba(51, 95, 112, 0.5)"
+          },
+          "fileGrid": {
+            "background": "#FFFFFF",
+            "hover": "rgba(209, 228, 244, 0.25)",
+            "checkbox": {
+              "checked": {
+                "background": "rgba(31, 184, 75, 0.08)",
+                "border": "rgba(31, 184, 75, 0.5)",
+                "hover": "rgba(31, 184, 75, 0.2)",
+                "icon": "#1FB84B"
+              }
+            }
+          },
+          "item": {
+            "background": "#FFFFFF"
+          },
+          "tagList": {
+            "itemBackground": "#FFFFFF",
+            "inactiveItemBorderColor": "rgba(190, 209, 223, 0.8)",
+            "deleteIconColor": "#C41C1C"
+          },
+          "storage": {
+            "backgroundColor": "rgba(190, 209, 223, 0.1)",
+            "dangerColor": "#DA3131",
+            "progressColor": "#1FB84B",
+            "textColor": "#0A3D50",
+            "textColorDanger": "#FFFFFF",
+            "warningColor": "#FFAC58"
+          },
+          "createTag": {
+            "secondaryText": "rgba(51, 95, 112, 0.5)",
+            "iconColor": "rgba(11, 107, 203, 0.5)",
+            "backgroundColor": "#FFFFFF",
+            "previewBorderColor": "#5CB8A6",
+            "previewBackgroundColor": "rgba(92, 184, 166, 0.05)",
+            "previewTextSecondaryColor": "rgba(51, 95, 112, 0.5)"
+          }
+        },
+        "session": {
+          "filesBannerBg": "#F5FAFF80",
+          "boxShadow": "0px -1px 25px 0px rgba(10, 61, 80, 0.04), 0px 1px 25px 0px rgba(10, 61, 80, 0.04)",
+          "dividerBg": "rgba(190, 209, 223, 0.5)",
+          "iconFill": "#335F70",
+          "collapseIndicator": "#0A3D50",
+          "cardBorder": "rgba(190, 209, 223, 0.3)",
+          "activityBorder": "#BED1DF",
+          "hoverBackground": "rgba(211, 223, 232, 0.6)",
+          "cardHoverBackground": "rgba(209, 228, 244, 0.2)",
+          "announcementBackground": "rgba(11, 107, 203, 0.1)",
+          "shadowLight": "0px 8px 24px rgba(0, 0, 0, 0.08)",
+          "overlayBackground": "rgba(190, 209, 223, 0.3)",
+          "shadowSoft": "0px 4px 16px rgba(0, 0, 0, 0.06)"
+        },
+        "notebooklist": {
+          "hoverBg": "rgba(209, 228, 244, 0.3)",
+          "focusedBackground": "rgba(209, 228, 244, 0.5)"
+        },
+        "subscription": {
+          "creditsModal": {
+            "subtitleColor": "rgba(51, 95, 112, 0.5)",
+            "dividerBackground": "transparent",
+            "iconFill": "rgba(51, 95, 112, 0.5)"
+          }
+        },
+        "profile": {
+          "border": "1px solid rgba(209, 228, 244, 0.5)"
+        },
+        "project": {
+          "border": "rgba(190, 209, 223, 0.8)",
+          "fileIconColor": "rgba(51, 95, 112, 0.3)",
+          "projectCard": {
+            "shadowColor": "rgba(51, 95, 112, 0.07)",
+            "descriptionColor": "rgba(51, 95, 112, 0.6)"
+          },
+          "systemPromptModal": {
+            "backgroundColor": "rgba(190, 209, 223, 0.8)"
+          }
+        },
+        "quickActions": {
+          "notebook": {
+            "color": "#0066C1"
+          },
+          "project": {
+            "color": "#3A9D60"
+          },
+          "agent": {
+            "color": "#9857B1"
+          },
+          "file": {
+            "color": "#E8845A"
+          }
+        },
+        "promptEnhancement": {
+          "background": "#F5FAFF",
+          "backgroundHover": "rgba(209, 228, 244, 0.2)",
+          "border": "#D1E4F4",
+          "iconColor": "#0A3D50",
+          "textColor": "#0A3D50",
+          "chipBackground": "rgba(209, 228, 244, 0.5)",
+          "chipColor": "#0A3D50",
+          "chipBorder": "#BED1DF",
+          "enhancedPromptBackground": "rgba(209, 228, 244, 0.12)",
+          "enhancedPromptBorder": "#BED1DF"
+        },
+        "creditsModal": {
+          "border": "rgba(190, 209, 223, 0.3)",
+          "gradient": "linear-gradient(rgba(11, 107, 203, 0.01), rgba(11, 107, 203, 0.02)), #FFFFFF"
+        },
+        "subscriptionModal": {
+          "background": "#FFFFFF",
+          "border": "rgba(190, 209, 223, 0.5)",
+          "linkColor": "#335F70",
+          "tabsBorderColor": "rgba(201, 203, 205, 0.5)",
+          "tabsBackgroundColor": "#F0F3F5"
+        },
+        "shareModal": {
+          "sharedUsersBorder": "#D3DFE8"
+        },
+        "loginRegister": {
+          "inputFieldBg": "#FFFFFF",
+          "termsAndPrivacy": {
+            "hoverBg": "rgba(209, 228, 244, 0.12)",
+            "buttonBg": "#FFFFFF",
+            "border": "1px solid rgba(190, 209, 223, 0.5)"
+          }
+        },
+        "voiceModal": {
+          "statusColors": {
+            "connecting": "#d97706",
+            "connected": "#059669",
+            "disconnected": "#dc2626",
+            "unknown": "#9ca3af"
+          },
+          "dialog": {
+            "background": "linear-gradient(135deg, #FFFFFF 0%, #f8fafc 100%)",
+            "border": "#e2e8f0",
+            "boxShadow": "rgba(0, 0, 0, 0.15)"
+          },
+          "statusContainer": {
+            "backgroundColor": "rgba(0, 0, 0, 0.03)",
+            "border": "rgba(0, 0, 0, 0.06)"
+          },
+          "micButton": {
+            "backgroundColor": "rgba(0, 0, 0, 0.1)"
+          },
+          "audioVisualization": {
+            "user": "#16a34a",
+            "assistant": "#2563eb"
+          }
+        }
+      }
+    }
+  },
+  "fontFamily": {
+    "body": "\"Libre Franklin\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif",
+    "display": "\"Libre Franklin\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif"
+  },
+  "borderRadius": 8
+}

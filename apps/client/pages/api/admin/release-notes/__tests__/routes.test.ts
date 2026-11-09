@@ -99,6 +99,7 @@ async function call(
   opts: {
     method: string;
     isAdmin?: boolean;
+    adminPermissions?: string[];
     withheldAdmin?: boolean;
     query?: Record<string, string>;
     body?: unknown;
@@ -110,7 +111,7 @@ async function call(
     query: opts.query ?? {},
     body: opts.body as object,
   });
-  const user = { id: 'admin-1', isAdmin: opts.isAdmin ?? true };
+  const user = { id: 'admin-1', isAdmin: opts.isAdmin ?? true, adminPermissions: opts.adminPermissions };
   Object.assign(req, { user: opts.withheldAdmin ? withholdAdminRole(user) : user, logger: { warn: vi.fn() } });
   if (opts.keyScopes) Object.assign(req, { apiKeyInfo: { scopes: opts.keyScopes } });
   const error = await (handler as Handler)(req, res).then(
@@ -141,6 +142,27 @@ describe('admin guard', () => {
     const { error } = await call(handler, { method, isAdmin: false, query: { id: ID }, body });
     expect(error?.statusCode).toBe(403);
     for (const fn of [m.adminList, m.edit, m.hide, m.upsert]) expect(fn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['list', listHandler, 'GET', undefined],
+    ['edit', editHandler, 'PATCH', { headline: 'x' }],
+  ])('%s refuses a delegate without settings:manage', async (_name, handler, method, body) => {
+    const { error } = await call(handler, {
+      method,
+      isAdmin: false,
+      adminPermissions: ['support:read'],
+      query: { id: ID },
+      body,
+    });
+    expect(error?.message).toBe('Missing permission: settings:manage');
+  });
+
+  it('serves the list to a settings:manage delegate', async () => {
+    m.adminList.mockResolvedValue({ items: [], hasMore: false });
+    const { error } = await call(listHandler, { method: 'GET', isAdmin: false, adminPermissions: ['settings:manage'] });
+    expect(error).toBeUndefined();
+    expect(m.adminList).toHaveBeenCalledOnce();
   });
 });
 

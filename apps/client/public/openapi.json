@@ -8776,6 +8776,7 @@
             "chunkRebuildRequestedAt": {},
             "chunkStallReason": {},
             "noExtractableTextAt": {},
+            "extractionRefusalReason": {},
             "chunkPolicyConflict": {},
             "isVectorizing": {},
             "vectorized": {},
@@ -25179,6 +25180,60 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeRequiredResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
                 }
               }
             }
@@ -55987,6 +56042,60 @@
               }
             }
           },
+          "426": {
+            "description": "The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeRequiredResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
           "429": {
             "description": "Per-user rate limit exceeded.",
             "content": {
@@ -56336,6 +56445,60 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeRequiredResponse"
                 }
               }
             },
@@ -56810,6 +56973,60 @@
               }
             }
           },
+          "426": {
+            "description": "The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeRequiredResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
           "429": {
             "description": "Per-user rate limit exceeded, or the invitation email budget is used up.",
             "content": {
@@ -57189,6 +57406,60 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeRequiredResponse"
                 }
               }
             },
@@ -57673,6 +57944,60 @@
               }
             }
           },
+          "426": {
+            "description": "The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeRequiredResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
           "429": {
             "description": "Per-user rate limit exceeded.",
             "content": {
@@ -57988,6 +58313,60 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeRequiredResponse"
                 }
               }
             },

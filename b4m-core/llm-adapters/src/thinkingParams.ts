@@ -13,6 +13,7 @@ import {
   type ReasoningEffort,
   MAX_THINKING_BUDGET_TOKENS,
 } from '@bike4mind/common';
+import { isKimiThinkingAlwaysOn } from './kimiParams';
 
 /**
  * Thinking parameter shapes for the Anthropic Messages API.
@@ -598,6 +599,18 @@ export function planReasoningEffort(
     thinking: { type: 'enabled', budget_tokens: budgetTokens },
     temperature: NO_TEMPERATURE_MODELS.has(model) ? 'delete' : 1,
   };
+}
+
+/**
+ * Whether no request can turn thinking off for `model`: an adaptive Claude id with no entry in
+ * ADAPTIVE_THINKING_OFF_SWITCH (planReasoningEffort runs those at the lowest effort instead),
+ * or a Kimi id that only accepts thinking enabled.
+ */
+export function thinkingCannotBeDisabled(model: string, modelInfo: ModelInfo): boolean {
+  if (isKimiThinkingAlwaysOn(model)) return true;
+  return (
+    modelInfo.can_think === true && modelInfo.thinkingStyle === 'adaptive' && !ADAPTIVE_THINKING_OFF_SWITCH.has(model)
+  );
 }
 
 /** Whether `model` thinks adaptively, at the provider default effort, on a request that names no thinking. */

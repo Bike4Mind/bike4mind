@@ -355,6 +355,30 @@ describe('the Plan section', () => {
 });
 
 describe('the Background tasks section', () => {
+  it('shows a loop as the only background task, with cadence and a stop control', async () => {
+    const stop = vi.fn();
+    vi.stubGlobal('b4m', { ...window.b4m, chat: { ...window.b4m.chat, loopCommand: stop } });
+    await show({
+      background: {
+        loop: {
+          sessionId: 's',
+          prompt: 'Check the build',
+          intervalMs: 30_000,
+          phase: 'scheduled',
+          nextRunAt: Date.now() + 30_000,
+        },
+      },
+    });
+    expect(get('session-panel-section-background').contains(get('loop-status'))).toBe(true);
+    expect(get('loop-status').textContent).toContain('30s after completion');
+    await act(async () => get('loop-stop-btn').click());
+    expect(stop).toHaveBeenCalledWith('s', 'stop');
+    await act(async () => get('session-panel-background-toggle-btn').click());
+    expect(get('session-panel-background-toggle-btn').textContent).toContain('Loop scheduled');
+    await show();
+    expect(find('session-panel-section-background')).toBeNull();
+  });
+
   it('lists running commands and spawned sessions with a stop each, and folds the finished ones', async () => {
     const onStopProcess = vi.fn();
     const onStopSession = vi.fn();

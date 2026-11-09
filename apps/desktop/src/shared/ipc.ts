@@ -1,5 +1,6 @@
 import type { RolePolicy, TaskAction } from './orchestration';
 import type { AppWorktree, WorktreeRemoval, WorktreeSweepItem } from './worktreeRemoval';
+import type { LoopResult, LoopState } from './loop';
 import type { PromptCacheTtl } from '@bike4mind/common';
 import type { AttentionNotice, AttentionOpenEvent } from './attention';
 import type { AccountCredits, AccountProfile } from './account';
@@ -218,6 +219,9 @@ export const IPC_CHANNELS = {
   chatRemoveWorktrees: 'chat:remove-worktrees',
   chatRevealWorktree: 'chat:reveal-worktree',
   chatSendMessage: 'chat:send-message',
+  chatLoopCommand: 'chat:loop-command',
+  chatGetLoop: 'chat:get-loop',
+  chatLoopChanged: 'chat:loop-changed',
   chatStopReply: 'chat:stop-reply',
   chatContinueReply: 'chat:continue-reply',
   /**
@@ -877,6 +881,9 @@ export interface DesktopApi {
     revealWorktree(directory: string, path: string): Promise<boolean>;
     /** Resolves when the turn is accepted; the reply arrives via onStreamEvent. */
     sendMessage(request: SendMessageRequest): Promise<SendMessageResult>;
+    loopCommand(sessionId: string, args: string): Promise<LoopResult>;
+    getLoop(sessionId: string): Promise<LoopState | null>;
+    onLoopChanged(listener: (event: { sessionId: string; state: LoopState | null }) => void): () => void;
     /** Stop an in-flight reply, keeping what has streamed so far. No-op if none is running. */
     stopReply(sessionId: string): Promise<void>;
     /**

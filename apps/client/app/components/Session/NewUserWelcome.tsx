@@ -50,6 +50,7 @@ const NewUserWelcome = () => {
   const initialGrantCredits = useSignupGrantCredits();
   const schedule = useSignupGrantSchedule();
   const minActiveSeconds = useGetSettingsValue('signupGrantActivityMinActiveSeconds');
+  const paymentHoldHours = useGetSettingsValue('signupUnlockPaymentHoldHours');
   const dailyDripCredits = advertisedDripCredits({
     dailyCredits: schedule.dailyCredits,
     dripCap: schedule.dripCap,
@@ -123,6 +124,7 @@ const NewUserWelcome = () => {
     pendingGrantIsMaximum: !!currentUser?.signupGrant,
     dailyDripCredits,
     minActiveSeconds,
+    paymentHoldHours,
   });
   // Same credits the line above quotes: the pending grant before verification, else the displayed balance.
   const estimateCredits = awaitingVerification

@@ -41,11 +41,12 @@ import handler from '../session-usage';
 const ORG = '6650000000000000000000aa';
 const SESSION = 'sess-1';
 
-function call(options: { isAdmin?: boolean; hasUser?: boolean; query?: object }) {
+function call(options: { isAdmin?: boolean; adminPermissions?: string[]; hasUser?: boolean; query?: object }) {
   const { req, res } = createMocks({ method: 'GET', query: options.query ?? { sessionId: SESSION } });
   if (options.hasUser !== false) {
-    (req as unknown as { user: { isAdmin: boolean; id: string } }).user = {
+    (req as unknown as { user: { isAdmin: boolean; adminPermissions?: string[]; id: string } }).user = {
       isAdmin: options.isAdmin ?? false,
+      adminPermissions: options.adminPermissions,
       id: 'user-1',
     };
   }
@@ -85,8 +86,19 @@ describe('GET /api/admin/session-usage — access', () => {
 
   it('rejects a non-admin who omits the organization', async () => {
     const { run } = call({ isAdmin: false });
-    await expect(run()).rejects.toThrow(/[Aa]dmin/);
+    await expect(run()).rejects.toThrow('Missing permission: support:read');
     expect(mockSessionUsageSummary).not.toHaveBeenCalled();
+  });
+
+  it('lets a support:read delegate read the whole session cross-org, like an admin', async () => {
+    const { run } = call({
+      isAdmin: false,
+      adminPermissions: ['support:read'],
+      query: { sessionId: SESSION, organizationId: ORG },
+    });
+    await run();
+    expect(mockVerifyOrgOwner).not.toHaveBeenCalled();
+    expect(mockSessionUsageSummary).toHaveBeenCalledWith(SESSION, undefined);
   });
 
   it('scopes an org owner to their org slice of the session (no cross-owner leak)', async () => {

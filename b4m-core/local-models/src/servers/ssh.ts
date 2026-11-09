@@ -3,7 +3,7 @@ import { chmod, mkdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { Duplex } from 'node:stream';
-import { trackChild } from '../processTree';
+import { signalTree, trackChild } from '../processTree';
 import type { FetchLike } from '../types';
 import { createServerFetch, ServerTransportError } from './serverFetch';
 
@@ -294,6 +294,12 @@ export const CONFIG_TIMEOUT_MS = 5_000;
 const defaultSpawn: Spawn = (command, args, options) =>
   spawnChild(command, args, { ...options, stdio: ['pipe', 'pipe', 'pipe'] });
 
+/** One `ssh -G` run: `done` gives its output, or null when it fails or is ended; `end` kills it at once. */
+interface ConfigRead {
+  done: Promise<string | null>;
+  end(): void;
+}
+
 // chmod as well: mkdir leaves the mode of an existing directory alone.
 async function makePrivateDir(dir: string): Promise<void> {
   await mkdir(dir, { recursive: true, mode: 0o700 });
@@ -433,6 +439,8 @@ export function createSshFetch(endpoint: SshEndpoint, deps: SshDeps = {}): Fetch
   const usable = destination !== null && port !== null;
   let args: string[] = usable ? sshArgs(destination, null, platform, port) : [];
   let prepared: Promise<void> | null = null;
+  let configRead: ConfigRead | null = null;
+  let waiting = 0;
 
   const spawnFailed = (error: NodeJS.ErrnoException) =>
     error.code === 'ENOENT'
@@ -443,7 +451,10 @@ export function createSshFetch(endpoint: SshEndpoint, deps: SshDeps = {}): Fetch
     if (!usable) return;
     const shared = sharedControlPath(deps.home ?? accountHome(), platform);
     if (!shared) return;
-    const config = await effectiveConfig(destination);
+    const read = effectiveConfig(destination);
+    configRead = read;
+    const config = await read.done;
+    if (configRead === read) configRead = null;
     if (config === null || setsControlPath(config)) return;
     try {
       await (deps.makeDir ?? makePrivateDir)(shared.dir);
@@ -454,52 +465,47 @@ export function createSshFetch(endpoint: SshEndpoint, deps: SshDeps = {}): Fetch
   };
 
   // `ssh -G` prints the configuration ssh would use, without connecting.
-  const effectiveConfig = (target: string) =>
-    new Promise<string | null>(settle => {
-      let settled = false;
-      const resolve = (value: string | null) => {
-        if (settled) return;
-        settled = true;
-        settle(value);
-      };
-      let child: ChildProcess;
-      const group = platform !== 'win32';
-      try {
-        child = spawn(command, ['-G', '--', target], { env, windowsHide: true, detached: group });
-      } catch {
-        return resolve(null);
-      }
-      trackChild(child);
-      let out = '';
-      // A `Match exec` grandchild can outlive ssh and hold the pipes open, so end its whole group and our pipe ends.
-      const timer = setTimeout(() => {
-        if (group && child.pid) {
-          try {
-            process.kill(-child.pid, 'SIGKILL');
-          } catch {
-            // Already gone.
-          }
-        }
-        child.kill('SIGKILL');
-        child.stdout?.destroy();
-        child.stderr?.destroy();
-        resolve(null);
-      }, CONFIG_TIMEOUT_MS);
-      child.stdout?.on('data', (chunk: Buffer) => {
-        if (out.length < CONFIG_LIMIT) out += chunk.toString('utf8');
-      });
-      child.stderr?.resume();
-      child.stdout?.on('error', () => undefined);
-      child.stderr?.on('error', () => undefined);
-      child.once('error', () => {
-        clearTimeout(timer);
-        resolve(null);
-      });
-      child.once('close', code => {
-        clearTimeout(timer);
-        resolve(code === 0 ? out : null);
-      });
+  const effectiveConfig = (target: string): ConfigRead => {
+    let settle!: (value: string | null) => void;
+    const done = new Promise<string | null>(resolve => {
+      settle = resolve;
     });
+    let child: ChildProcess;
+    const group = platform !== 'win32';
+    try {
+      child = spawn(command, ['-G', '--', target], { env, windowsHide: true, detached: group });
+    } catch {
+      settle(null);
+      return { done, end: () => undefined };
+    }
+    trackChild(child);
+    let settled = false;
+    const resolve = (value: string | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      settle(value);
+    };
+    // A `Match exec` grandchild can outlive ssh and hold the pipes open, so end its whole group and our pipe ends.
+    const end = () => {
+      if (settled) return;
+      signalTree(child, 'SIGKILL');
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      resolve(null);
+    };
+    const timer = setTimeout(end, CONFIG_TIMEOUT_MS);
+    let out = '';
+    child.stdout?.on('data', (chunk: Buffer) => {
+      if (out.length < CONFIG_LIMIT) out += chunk.toString('utf8');
+    });
+    child.stderr?.resume();
+    child.stdout?.on('error', () => undefined);
+    child.stderr?.on('error', () => undefined);
+    child.once('error', () => resolve(null));
+    child.once('close', code => resolve(code === 0 ? out : null));
+    return { done, end };
+  };
 
   const inner = createServerFetch({
     // As URL spells it, so port 80 (dropped from an origin) still matches.
@@ -531,20 +537,30 @@ export function createSshFetch(endpoint: SshEndpoint, deps: SshDeps = {}): Fetch
     // An aborted request would still spawn ssh (-G, then -W) before http notices the signal.
     const signal = init?.signal;
     signal?.throwIfAborted();
-    prepared ??= prepare().catch(() => undefined);
-    if (signal) {
-      let onAbort!: () => void;
-      const aborted = new Promise<never>((_resolve, reject) => {
-        onAbort = () => reject(signal.reason);
-        signal.addEventListener('abort', onAbort, { once: true });
-      });
-      try {
-        await Promise.race([prepared, aborted]);
-      } finally {
-        signal.removeEventListener('abort', onAbort);
+    const current = (prepared ??= prepare().catch(() => undefined));
+    waiting++;
+    try {
+      if (signal) {
+        let onAbort!: () => void;
+        const aborted = new Promise<never>((_resolve, reject) => {
+          onAbort = () => reject(signal.reason);
+          signal.addEventListener('abort', onAbort, { once: true });
+        });
+        try {
+          await Promise.race([current, aborted]);
+        } finally {
+          signal.removeEventListener('abort', onAbort);
+        }
+      } else {
+        await current;
       }
-    } else {
-      await prepared;
+    } finally {
+      waiting--;
+      // Every request waiting on ssh -G was aborted: end it, and let the next request read the config again.
+      if (waiting === 0 && configRead && prepared === current) {
+        configRead.end();
+        prepared = null;
+      }
     }
     signal?.throwIfAborted();
     return inner(input, init);

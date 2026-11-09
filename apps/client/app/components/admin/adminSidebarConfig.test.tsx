@@ -80,6 +80,11 @@ describe('SIDEBAR_SECTIONS', () => {
     expect(allItems.find(i => i.tab === AdminTab.Waitlist)?.label).toBe('Invite Center');
   });
 
+  it('labels the secrets items with their page titles', () => {
+    expect(allItems.find(i => i.tab === AdminTab.SystemSecrets)?.label).toBe('System secrets');
+    expect(allItems.find(i => i.tab === AdminTab.SecretsRotation)?.label).toBe('Secrets rotation');
+  });
+
   it('names the event, Slack and help metrics items like their page titles', () => {
     const labelOf = (tab: AdminTab) => allItems.find(i => i.tab === tab)?.label;
     expect(labelOf(AdminTab.EventMetrics)).toBe('Event metrics');

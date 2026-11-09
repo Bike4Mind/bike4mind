@@ -1,7 +1,7 @@
 import { internalTeamMemberRepository } from '@bike4mind/database';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { definedKeys, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
-import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import {
   ApiKeyScope,
   InternalTeamMemberSchema,
@@ -19,16 +19,16 @@ const TeamMemberUpdateSchema = TeamMemberCreateSchema.partial().extend({
   id: z.string().min(1, 'Team member id is required'),
 });
 
-const ensureAdmin = (isAdmin?: boolean | null) => {
-  if (!isAdmin) {
-    throw new ForbiddenError('Unauthorized. Admin access required.');
-  }
-};
-
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  requiredScopes: [ApiKeyScope.ADMIN],
+  adminPermissions: {
+    GET: 'settings:manage',
+    POST: 'settings:manage',
+    PUT: 'settings:manage',
+    DELETE: 'settings:manage',
+  },
+})
   .get(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
-
     const includeInactive = req.query.includeInactive === 'true';
 
     const members = includeInactive
@@ -38,8 +38,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     return respond(res, internalTeamMemberListResponseSchema, members);
   })
   .post(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
-
     const parsed = TeamMemberCreateSchema.safeParse(req.body);
 
     if (!parsed.success) {
@@ -70,8 +68,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     return respond(res, internalTeamMemberResponseSchema, created, 201);
   })
   .put(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
-
     const parsed = TeamMemberUpdateSchema.safeParse(req.body);
 
     if (!parsed.success) {
@@ -98,8 +94,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     return respond(res, internalTeamMemberResponseSchema, updated);
   })
   .delete(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
-
     const id = req.query.id;
 
     if (!id || typeof id !== 'string') {
