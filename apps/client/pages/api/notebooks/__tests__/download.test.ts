@@ -1,3 +1,4 @@
+import { randomBytes } from 'crypto';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
@@ -145,6 +146,34 @@ describe('POST /api/notebooks/download', () => {
     expect(key).toMatch(new RegExp(`^exports/curated-notebooks/${USER_ID}/batches/${UUID}\\.zip$`));
     expect(storage.getSignedUrl).toHaveBeenCalledWith(key, 'get', expect.objectContaining({ expiresIn: 3600 }));
     expect(res._getJSONData().data).toMatchObject({ downloadUrl: `https://example.invalid/${key}`, fileCount: 2 });
+  });
+
+  it('zips notebooks larger than the stream buffer', async () => {
+    storage.download.mockResolvedValue(randomBytes(512 * 1024));
+
+    const res = await run({ sessionIds: [SESSION_A, SESSION_B], format: 'markdown', downloadAsZip: true });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect((storage.upload.mock.calls[0][0] as Buffer).length).toBeGreaterThan(1024 * 1024);
+  });
+
+  it('returns 500 without writing a copy when single-file conversion fails', async () => {
+    convert.mockRejectedValue(new Error('boom'));
+
+    const res = await run({ sessionIds: [SESSION_A], format: 'html' });
+
+    expect(res._getStatusCode()).toBe(500);
+    expect(storage.upload).not.toHaveBeenCalled();
+    expect(storage.getSignedUrl).not.toHaveBeenCalled();
+  });
+
+  it('returns 500 without writing a zip when conversion fails inside the batch', async () => {
+    convert.mockRejectedValue(new Error('boom'));
+
+    const res = await run({ sessionIds: [SESSION_A, SESSION_B], format: 'html', downloadAsZip: true });
+
+    expect(res._getStatusCode()).toBe(500);
+    expect(storage.upload).not.toHaveBeenCalled();
   });
 
   it('signs the durable curated key without writing a copy when no conversion is needed', async () => {

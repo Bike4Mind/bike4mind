@@ -151,15 +151,16 @@ const handler = baseApi().post(
             archive.append(file.content, { name: file.name });
           });
 
-          await archive.finalize();
-
+          // Consume output before finalize() so a large archive cannot stall on backpressure.
           const chunks: Buffer[] = [];
           archive.on('data', (chunk: Buffer) => chunks.push(chunk));
-
-          await new Promise<void>((resolve, reject) => {
+          const archiveEnded = new Promise<void>((resolve, reject) => {
             archive.on('end', resolve);
             archive.on('error', reject);
           });
+
+          await archive.finalize();
+          await archiveEnded;
 
           const zipBuffer = Buffer.concat(chunks);
 
