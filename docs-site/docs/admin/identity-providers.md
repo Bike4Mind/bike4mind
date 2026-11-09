@@ -16,17 +16,18 @@ The main view displays a table of all configured identity providers:
 | Column | Description |
 |--------|-------------|
 | **Name** | The display name of the provider (e.g., "My Company SSO") |
-| **Email Domain** | The email domain mapped to this provider (e.g., `company.com`) |
-| **Type** | SAML (primary chip) or OKTA (success chip) |
+| **Email domain** | The email domain mapped to this provider (e.g., `company.com`) |
+| **Type** | SAML or OKTA |
 | **Status** | Active (green) or Inactive (neutral) |
 | **Created** | The date the provider was created |
-| **Actions** | SP Metadata (SAML only), Edit, and Delete buttons |
 
-When no providers are configured, a message prompts the administrator to add the first one.
+Each row has a **...** actions menu with **View SP metadata** (SAML only), **Edit provider** and **Delete provider**.
+
+When no providers are configured, the page shows an empty state with an **Add identity provider** button.
 
 ## Adding a Provider
 
-Click the "Add Identity Provider" button to open the configuration dialog. The form includes common fields and type-specific configuration sections.
+Click the "Add identity provider" button to open the configuration dialog. The form includes common fields and type-specific configuration sections.
 
 ### Common Fields
 
@@ -70,15 +71,21 @@ When the type is set to Okta, the following fields are displayed:
 
 ## Editing a Provider
 
-Click the Edit icon on any row to reopen the configuration dialog pre-populated with the existing values. All fields can be modified. Click "Update" to save changes.
+Open the row's actions menu and choose **Edit provider** to reopen the configuration dialog pre-populated with the existing values. All fields can be modified. Click "Save changes" to save them.
 
 ## Deleting a Provider
 
-Click the Delete icon on any row. A browser confirmation dialog appears. Confirming the action permanently removes the provider.
+Open the row's actions menu and choose **Delete provider**. A **Delete identity provider** dialog names the provider and warns that users whose email domain matches it lose single sign-on. To delete it:
+
+1. Pick a reason or write one of at least 5 characters. The reason is not stored yet; the admin audit log records the deletion without it.
+2. Type the provider's name exactly as shown.
+3. Click **Delete provider**.
+
+The deletion cannot be undone. If it fails, an error message appears and the dialog stays open so you can try again. To stop a provider without losing its configuration, open **Edit provider** and turn **Active** off instead.
 
 ## Service Provider (SP) Metadata
 
-For SAML providers, click the Info icon in the Actions column to view the Service Provider metadata. This dialog provides the values needed to configure the Identity Provider side of the integration:
+For SAML providers, open the row's actions menu and choose **View SP metadata** to view the Service Provider metadata. This dialog provides the values needed to configure the Identity Provider side of the integration:
 
 | Field | Value | Description |
 |-------|-------|-------------|
