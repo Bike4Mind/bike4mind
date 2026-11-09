@@ -234,8 +234,6 @@ export interface SkillSubmittedVersion {
   reviewStatus: SkillReviewStatus | string;
   riskTier?: SkillRiskTier;
   reviewNote?: string;
-  /** The listing's author approved it themselves. */
-  selfApproved?: boolean;
   findings: { severity: string; message: string }[];
 }
 

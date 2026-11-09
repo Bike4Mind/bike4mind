@@ -503,21 +503,16 @@ function submitted(data: unknown): SkillSubmitResult {
   const listing = toMyListing(body?.listing);
   const version = asRecord(body?.version);
   if (!listing || typeof version?.version !== 'number') return { ok: false, error: 'The server returned no listing.' };
-  return { ok: true, listing, version: toSubmittedVersion(version, asRecord(body?.listing)?.authorUserId) };
+  return { ok: true, listing, version: toSubmittedVersion(version) };
 }
 
-function toSubmittedVersion(version: Record<string, unknown>, authorUserId: unknown): SkillSubmittedVersion {
+function toSubmittedVersion(version: Record<string, unknown>): SkillSubmittedVersion {
   return {
     version: typeof version.version === 'number' ? version.version : 0,
     scanStatus: typeof version.scanStatus === 'string' ? version.scanStatus : '',
     reviewStatus: typeof version.reviewStatus === 'string' ? version.reviewStatus : '',
     ...(isRiskTier(version.riskTier) ? { riskTier: version.riskTier } : {}),
     ...(typeof version.reviewNote === 'string' ? { reviewNote: version.reviewNote } : {}),
-    ...(version.reviewStatus === 'approved' &&
-    typeof version.reviewerUserId === 'string' &&
-    version.reviewerUserId === authorUserId
-      ? { selfApproved: true }
-      : {}),
     findings: asArray(version.scanFindings).flatMap(row => {
       const finding = asRecord(row);
       return typeof finding?.message === 'string'

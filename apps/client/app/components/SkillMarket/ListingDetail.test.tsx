@@ -194,12 +194,12 @@ describe('ListingDetail review chip', () => {
   it('says a person reviewed a version approved by someone else', () => {
     renderListing(reviewed(false));
     expect(screen.getByText('Reviewed by a person')).toBeInTheDocument();
-    expect(screen.queryByText('Self-approved by an org admin')).not.toBeInTheDocument();
+    expect(screen.queryByText('Self-approved by the author')).not.toBeInTheDocument();
   });
 
   it('says self-approved when the author approved their own version', () => {
     renderListing(reviewed(true));
-    expect(screen.getByText('Self-approved by an org admin')).toBeInTheDocument();
+    expect(screen.getByText('Self-approved by the author')).toBeInTheDocument();
     expect(screen.queryByText('Reviewed by a person')).not.toBeInTheDocument();
   });
 });

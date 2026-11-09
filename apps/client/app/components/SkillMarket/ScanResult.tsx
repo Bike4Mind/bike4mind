@@ -7,8 +7,9 @@ import ReplayIcon from '@mui/icons-material/Replay';
 import type { ISkillListingVersion, SkillListingVisibility } from '@bike4mind/common';
 import { FindingsList, HonestSummaryPanel, MismatchAlert, TierChip } from './parts';
 
+export const SELF_APPROVED_LABEL = 'Self-approved by the author';
+
 /** Plain-language outcome of a version's scan + review state. */
-export const SELF_APPROVED_LABEL = 'Self-approved by an org admin';
 
 /** Pass the listing's `authorUserId` so a self-approval is not described as a second person's review. */
 export function versionOutcome(v: ISkillListingVersion, visibility: SkillListingVisibility, authorUserId?: string) {

@@ -379,12 +379,47 @@ describe('legacy auto-approved review-tier outcomes', () => {
   });
 });
 
-describe('approved outcome', () => {
-  it('names a self-approval and keeps the reviewer wording otherwise', () => {
-    const approved = { ...published.version, reviewStatus: 'approved' };
-    expect(versionOutcome({ ...approved, selfApproved: true }, 'organization').title).toBe(
-      'Self-approved by an org admin'
-    );
-    expect(versionOutcome(approved, 'organization').title).toBe('Approved by a reviewer');
+describe('Escape handling', () => {
+  afterEach(() => {
+    act(() => root.unmount());
+    document.body.replaceChildren();
+  });
+
+  const escape = () =>
+    act(() => {
+      (document.activeElement ?? document.body).dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })
+      );
+    });
+
+  const openPublishStep = async () => {
+    market.saveSkill.mockResolvedValueOnce({ ok: true, skill: { id: 's1', name: 'tester-guide' } });
+    const onClose = vi.fn();
+    render(<SkillUploadDialog preview={preview()} onClose={onClose} />);
+    await click('skill-upload-publish-btn');
+    await click('skill-publish-visibility-organization');
+    return onClose;
+  };
+
+  it('closes only the open organization dropdown, then the dialog on a second Escape', async () => {
+    const onClose = await openPublishStep();
+    const select = $('skill-publish-org')!;
+    await act(async () => {
+      select.click();
+    });
+    expect(select.getAttribute('aria-expanded')).toBe('true');
+
+    escape();
+    expect(select.getAttribute('aria-expanded')).toBe('false');
+    expect(onClose).not.toHaveBeenCalled();
+
+    escape();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes the dialog on Escape when no dropdown is open', async () => {
+    const onClose = await openPublishStep();
+    escape();
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

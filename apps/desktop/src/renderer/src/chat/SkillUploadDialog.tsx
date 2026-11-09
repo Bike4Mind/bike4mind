@@ -114,11 +114,7 @@ export function versionOutcome(
             : 'Passed the automated safety scan and is live now.',
       };
     case 'approved':
-      return {
-        color: 'success',
-        title: version.selfApproved ? 'Self-approved by an org admin' : 'Approved by a reviewer',
-        body: 'This version is live.',
-      };
+      return { color: 'success', title: 'Approved by a reviewer', body: 'This version is live.' };
     case 'pending':
       return {
         color: 'warning',
@@ -281,6 +277,12 @@ type Step =
  * optionally publish it or submit it as a new version of an existing listing (`listing`).
  * Every request runs from a button here; another author's export asks first.
  */
+/** An open Select listbox keeps focus on its button and bubbles Escape to the Modal, which must not treat it as a close. */
+const isEscapeFromOpenListbox = (event: unknown): boolean => {
+  const target = (event as { target?: unknown } | null)?.target;
+  return target instanceof Element && !!target.closest('[aria-expanded="true"], [role="listbox"]');
+};
+
 export function SkillUploadDialog({
   preview,
   listing,
@@ -695,7 +697,13 @@ export function SkillUploadDialog({
 
   return (
     <>
-      <Modal open onClose={onClose}>
+      <Modal
+        open
+        onClose={(event, reason) => {
+          if (reason === 'escapeKeyDown' && isEscapeFromOpenListbox(event)) return;
+          onClose();
+        }}
+      >
         <ModalDialog
           sx={{ width: 620, maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto' }}
           data-testid="skill-upload-dialog"
