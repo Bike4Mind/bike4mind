@@ -189,6 +189,27 @@ describe('AgentExecutionsTab', () => {
     expect(mocks.post).toHaveBeenCalledTimes(1);
   });
 
+  it('blocks release when the last refresh failed', async () => {
+    renderTab();
+    await screen.findByTestId('stuck-execution-row-exec-1');
+    selectRow('exec-1');
+
+    mocks.get.mockRejectedValueOnce(new Error('network down'));
+    fireEvent.click(screen.getByTestId('stuck-agent-executions-refresh-btn'));
+    await screen.findByTestId('stuck-agent-executions-refresh-error');
+
+    fireEvent.click(screen.getByTestId('stuck-agent-executions-cleanup-btn'));
+    const dialog = await screen.findByTestId('stuck-agent-executions-release-dialog');
+    fireEvent.change(within(dialog).getByTestId('stuck-agent-executions-release-dialog-reason-input'), {
+      target: { value: 'Abandoned by a user who left' },
+    });
+    expect(dialog).toHaveTextContent('The list could not be refreshed. Refresh it before releasing executions.');
+    const confirm = within(dialog).getByTestId('stuck-agent-executions-release-dialog-confirm-btn');
+    expect(confirm).toBeDisabled();
+    fireEvent.click(confirm);
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
   it('drops the selection when a filter changes, so hidden rows are never released', async () => {
     renderTab();
     await screen.findByTestId('stuck-execution-row-exec-1');
@@ -197,7 +218,9 @@ describe('AgentExecutionsTab', () => {
     expect(screen.getByTestId('admin-bulk-action-bar')).toBeInTheDocument();
     fireEvent.change(screen.getByTestId('stuck-agent-executions-minutes'), { target: { value: '30' } });
 
-    await waitFor(() => expect(screen.queryByTestId('admin-bulk-action-bar')).toBeNull());
+    await waitFor(() => expect(lastGetParams()).toEqual({ minutes: 30, limit: 200 }));
+    await screen.findByTestId('stuck-execution-row-exec-1');
+    expect(screen.queryByTestId('admin-bulk-action-bar')).toBeNull();
   });
 
   it('does not offer the previous filter rows for release while the next request is pending', async () => {

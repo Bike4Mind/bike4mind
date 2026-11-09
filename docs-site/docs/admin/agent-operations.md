@@ -70,7 +70,7 @@ The **Generation settings** section at the bottom of the page holds these fields
 | Setting | Description | Range |
 |---------|-------------|-------|
 | Model | The AI model used to generate agent system prompts | Dropdown of supported models |
-| Rate limit (seconds) | Minimum seconds between system prompt generations per agent | 0-3600 |
+| Rate limit (seconds) | Minimum seconds between system prompt generations per agent | 1-3600 |
 | Enable system prompt generation | Master toggle for the generation service | On/Off |
 
 Changes are not saved as you type. A save bar appears at the bottom of the page with the number of unsaved changes, **Discard** and **Save**. If you leave the page with unsaved changes, you are asked to confirm before they are discarded.

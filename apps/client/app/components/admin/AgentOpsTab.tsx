@@ -98,7 +98,7 @@ Provide only the final system prompt text (do not include additional explanation
 /** The fields PUT /api/admin/agent-ops-settings takes. */
 type SettingsForm = Pick<AgentOpsSettings, 'generationLlmModel' | 'rateLimitSeconds' | 'isEnabled'>;
 type SettingsDraft = Omit<SettingsForm, 'rateLimitSeconds'> & { rateLimitSeconds: number | '' };
-const rateLimitSchema = z.number().int().min(0).max(3600);
+const rateLimitSchema = z.number().int().min(1).max(3600);
 
 const SectionTitle = ({ children }: { children: React.ReactNode }) => (
   <Typography level="title-md" component="h2" sx={{ color: 'admin.ink' }}>
@@ -124,7 +124,7 @@ function GenerationSettings({
     blocked: draft =>
       rateLimitSchema.safeParse(draft.rateLimitSeconds).success
         ? undefined
-        : 'Rate limit must be an integer between 0 and 3600 seconds',
+        : 'Rate limit must be an integer between 1 and 3600 seconds',
   });
   const set = (patch: Partial<SettingsDraft>) => setValue(previous => ({ ...previous, ...patch }));
 
@@ -161,7 +161,7 @@ function GenerationSettings({
             type="number"
             value={form.rateLimitSeconds}
             onChange={e => set({ rateLimitSeconds: e.target.value === '' ? '' : Number(e.target.value) })}
-            slotProps={{ input: { min: 0, max: 3600, 'data-testid': 'agent-ops-rate-limit-input' } }}
+            slotProps={{ input: { min: 1, max: 3600, 'data-testid': 'agent-ops-rate-limit-input' } }}
           />
           <FormHelperText>Minimum seconds between system prompt generations per agent.</FormHelperText>
         </FormControl>

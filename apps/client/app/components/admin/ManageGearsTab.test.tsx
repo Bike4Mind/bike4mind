@@ -207,10 +207,17 @@ describe('ManageGearsTab', () => {
     fireEvent.change(await startEditing('files'), { target: { value: '10' } });
     openRowMenu('files');
     fireEvent.click(await screen.findByTestId('manage-gear-reset-files'));
+    expect(mocks.del).not.toHaveBeenCalled();
+    const dialog = await screen.findByTestId('manage-gear-reset-dialog-files');
+    fireEvent.change(within(dialog).getByTestId('manage-gear-reset-dialog-files-reason-input'), {
+      target: { value: 'Restore the code defaults' },
+    });
+    fireEvent.click(within(dialog).getByTestId('manage-gear-reset-dialog-files-confirm-btn'));
     await waitFor(() => expect(mocks.del).toHaveBeenCalledTimes(1));
     expect(screen.getByTestId('admin-save-confirm-btn')).toBeDisabled();
     fireEvent.keyDown(window, { key: 's', ctrlKey: true });
-    await waitFor(() => expect(screen.getByTestId('admin-save-bar')).toHaveTextContent('Wait for the gear reset'));
+    expect(within(dialog).getByTestId('manage-gear-reset-dialog-files-confirm-btn')).toBeDisabled();
+    expect(screen.getByTestId('admin-save-bar')).toHaveTextContent('1 unsaved change');
     expect(mocks.put).not.toHaveBeenCalled();
     await act(async () => {
       request.resolve({ data: { ok: true } });
@@ -275,6 +282,12 @@ describe('ManageGearsTab', () => {
 
     openRowMenu('files');
     fireEvent.click(await screen.findByTestId('manage-gear-reset-files'));
+    expect(mocks.del).not.toHaveBeenCalled();
+    const dialog = await screen.findByTestId('manage-gear-reset-dialog-files');
+    fireEvent.change(within(dialog).getByTestId('manage-gear-reset-dialog-files-reason-input'), {
+      target: { value: 'Restore the code defaults' },
+    });
+    fireEvent.click(within(dialog).getByTestId('manage-gear-reset-dialog-files-confirm-btn'));
 
     await waitFor(() => expect(mocks.del).toHaveBeenCalledTimes(1));
     expect(mocks.del).toHaveBeenCalledWith('/api/admin/gears/files');
@@ -287,6 +300,12 @@ describe('ManageGearsTab', () => {
     mocks.get.mockRejectedValueOnce(new Error('network down'));
     openRowMenu('files');
     fireEvent.click(await screen.findByTestId('manage-gear-reset-files'));
+    expect(mocks.del).not.toHaveBeenCalled();
+    const dialog = await screen.findByTestId('manage-gear-reset-dialog-files');
+    fireEvent.change(within(dialog).getByTestId('manage-gear-reset-dialog-files-reason-input'), {
+      target: { value: 'Restore the code defaults' },
+    });
+    fireEvent.click(within(dialog).getByTestId('manage-gear-reset-dialog-files-confirm-btn'));
     await screen.findByTestId('manage-gears-refresh-error');
     expect(screen.queryByTestId('manage-gear-overridden-files')).toBeNull();
     expect(await startEditing('files')).toHaveValue('500');
@@ -355,6 +374,12 @@ describe('ManageGearsTab', () => {
     expect(screen.getByTestId('admin-save-bar')).toBeInTheDocument();
     openRowMenu('files');
     fireEvent.click(await screen.findByTestId('manage-gear-reset-files'));
+    expect(mocks.del).not.toHaveBeenCalled();
+    const dialog = await screen.findByTestId('manage-gear-reset-dialog-files');
+    fireEvent.change(within(dialog).getByTestId('manage-gear-reset-dialog-files-reason-input'), {
+      target: { value: 'Restore the code defaults' },
+    });
+    fireEvent.click(within(dialog).getByTestId('manage-gear-reset-dialog-files-confirm-btn'));
 
     await waitFor(() => expect(mocks.del).toHaveBeenCalledWith('/api/admin/gears/files'));
     await waitFor(() => expect(screen.queryByTestId('admin-save-bar')).toBeNull());

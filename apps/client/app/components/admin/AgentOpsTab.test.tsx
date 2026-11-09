@@ -226,7 +226,7 @@ describe('AgentOpsTab', () => {
     expect(mocks.useBlocker.mock.lastCall?.[0].enableBeforeUnload).toBe(false);
   });
 
-  it.each([0, 3600])('saves and displays the valid rate limit boundary %s', async rateLimitSeconds => {
+  it.each([1, 3600])('saves and displays the valid rate limit boundary %s', async rateLimitSeconds => {
     mocks.put.mockImplementation(async (_url: string, body: Record<string, unknown>) => {
       settingsResponse = { ...SETTINGS, ...body };
       return { data: {} };
@@ -246,11 +246,11 @@ describe('AgentOpsTab', () => {
     expect(screen.getByTestId('admin-stat-strip')).toHaveTextContent(`Rate limit${rateLimitSeconds}s`);
   });
 
-  it.each(['', '-1', '1.5', '3601'])('blocks an invalid rate limit %j without writing', async rateLimitSeconds => {
+  it.each(['', '0', '-1', '1.5', '3601'])('blocks an invalid rate limit %j without writing', async rateLimitSeconds => {
     renderTab();
     fireEvent.change(await screen.findByTestId('agent-ops-rate-limit-input'), { target: { value: rateLimitSeconds } });
     expect(screen.getByTestId('admin-save-bar')).toHaveTextContent(
-      'Rate limit must be an integer between 0 and 3600 seconds'
+      'Rate limit must be an integer between 1 and 3600 seconds'
     );
     expect(screen.getByTestId('admin-save-confirm-btn')).toBeDisabled();
     expect(mocks.put).not.toHaveBeenCalled();

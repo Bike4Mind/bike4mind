@@ -341,7 +341,13 @@ const AgentExecutionsTab: React.FC = () => {
         reasonAudited={false}
         confirmLabel={`Mark ${selectedIds.length.toLocaleString()} abandoned`}
         // The poll can drop every selected row while the dialog is open; say so instead of a silent no-op.
-        blockedReason={selectedIds.length === 0 ? 'The selected executions are no longer listed.' : null}
+        blockedReason={
+          isError
+            ? 'The list could not be refreshed. Refresh it before releasing executions.'
+            : selectedIds.length === 0
+              ? 'The selected executions are no longer listed.'
+              : null
+        }
         tone="danger"
         pending={cleanup.isPending}
         onConfirm={() => handleCleanup()}

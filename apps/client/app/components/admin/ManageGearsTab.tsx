@@ -20,7 +20,15 @@ import { toast } from 'sonner';
 import { z } from 'zod';
 import { api } from '@client/app/contexts/ApiContext';
 import { SettingsDraftProvider, useSettingsDraft } from './SettingsDraftProvider';
-import { AdminPageHeader, DataTable, EmptyState, StatusChip, UpdatingBar, type DataColumn } from './shared';
+import {
+  ActionDialog,
+  AdminPageHeader,
+  DataTable,
+  EmptyState,
+  StatusChip,
+  UpdatingBar,
+  type DataColumn,
+} from './shared';
 import { ADMIN_REGION_GAP, adminFocus } from './shared/adminStyles';
 
 /**
@@ -230,53 +238,75 @@ function GearRowMenu({
 }: CellProps & { onEdit(): void; onStopEditing(): void; onReset(): Promise<boolean> }) {
   const { setValue, pending } = useGearDraft(gear, save);
   const discard = () => setValue(draftOf(gear));
+  const [resetOpen, setResetOpen] = useState(false);
   return (
-    <Dropdown>
-      <MenuButton
-        slots={{ root: IconButton }}
-        slotProps={{
-          root: {
-            size: 'sm',
-            variant: 'plain',
-            disabled: busy || pending,
-            'aria-label': `Actions for ${gear.key}`,
-            sx: { ...adminFocus, color: 'admin.inkMuted' },
-          },
+    <>
+      <Dropdown>
+        <MenuButton
+          slots={{ root: IconButton }}
+          slotProps={{
+            root: {
+              size: 'sm',
+              variant: 'plain',
+              disabled: busy || pending,
+              'aria-label': `Actions for ${gear.key}`,
+              sx: { ...adminFocus, color: 'admin.inkMuted' },
+            },
+          }}
+          data-testid={`manage-gear-actions-${gear.key}`}
+        >
+          <MoreHorizIcon sx={{ fontSize: 18 }} />
+        </MenuButton>
+        <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
+          {editing ? (
+            <MenuItem
+              disabled={busy || pending}
+              onClick={() => {
+                discard();
+                onStopEditing();
+              }}
+              data-testid={`manage-gear-cancel-${gear.key}`}
+            >
+              Cancel editing
+            </MenuItem>
+          ) : (
+            <MenuItem disabled={busy || pending} onClick={onEdit} data-testid={`manage-gear-edit-${gear.key}`}>
+              Edit gear
+            </MenuItem>
+          )}
+          {gear.override !== null && (
+            <MenuItem
+              color="danger"
+              disabled={busy || pending}
+              onClick={() => setResetOpen(true)}
+              data-testid={`manage-gear-reset-${gear.key}`}
+            >
+              Reset to code defaults
+            </MenuItem>
+          )}
+        </Menu>
+      </Dropdown>
+      <ActionDialog
+        open={resetOpen}
+        onClose={() => setResetOpen(false)}
+        title="Reset gear to code defaults"
+        description="The saved override for this gear is deleted and the code defaults go live."
+        tone="danger"
+        reasonPresets={[]}
+        reasonAudited={false}
+        pending={busy}
+        confirmLabel="Reset"
+        onConfirm={async () => {
+          try {
+            // Clear the draft using the baseline from before the reset refresh.
+            await onReset().then(reset => reset && discard());
+          } finally {
+            setResetOpen(false);
+          }
         }}
-        data-testid={`manage-gear-actions-${gear.key}`}
-      >
-        <MoreHorizIcon sx={{ fontSize: 18 }} />
-      </MenuButton>
-      <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
-        {editing ? (
-          <MenuItem
-            disabled={busy || pending}
-            onClick={() => {
-              discard();
-              onStopEditing();
-            }}
-            data-testid={`manage-gear-cancel-${gear.key}`}
-          >
-            Cancel editing
-          </MenuItem>
-        ) : (
-          <MenuItem disabled={busy || pending} onClick={onEdit} data-testid={`manage-gear-edit-${gear.key}`}>
-            Edit gear
-          </MenuItem>
-        )}
-        {gear.override !== null && (
-          <MenuItem
-            color="danger"
-            disabled={busy || pending}
-            // discard() writes the baseline this render closed over, so it clears the draft whatever the refetch loaded.
-            onClick={() => void onReset().then(reset => reset && discard())}
-            data-testid={`manage-gear-reset-${gear.key}`}
-          >
-            Reset to code defaults
-          </MenuItem>
-        )}
-      </Menu>
-    </Dropdown>
+        data-testid={`manage-gear-reset-dialog-${gear.key}`}
+      />
+    </>
   );
 }
 
