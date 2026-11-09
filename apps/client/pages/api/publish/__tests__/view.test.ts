@@ -188,6 +188,20 @@ describe('POST /api/publish/view - whose view counts', () => {
     expect(mocks.updateOne).toHaveBeenCalledWith({ publicId: 'pub1' }, { $inc: { externalViewCount: 1 } });
   });
 
+  // shareTokenFilter excludes revoked and expired entries (pinned against real Mongo in
+  // PublishedArtifactModel.shareToken.test.ts), so an expired link resolves no row.
+  it('404s an expired share link without counting a view', async () => {
+    mocks.parse.mockReturnValue({ kind: 'share', shareToken: 'tok123', assetPath: null });
+    mocks.lean.mockReturnValue(null);
+
+    const { res, promise } = run({ path: '/a/tok123' }, { id: 'friend' });
+    await promise;
+
+    expect(mocks.findOne).toHaveBeenCalledWith({ __shareFilterFor: 'tok123', deletedAt: null });
+    expect(res._getStatusCode()).toBe(404);
+    expect(mocks.updateOne).not.toHaveBeenCalled();
+  });
+
   it('does not count a share-link viewer the share grant refuses', async () => {
     mocks.parse.mockReturnValue({ kind: 'share', shareToken: 'tok123', assetPath: null });
     published({ visibility: 'private', accessGate: { kind: 'domain', allowedDomains: ['example.com'] } });

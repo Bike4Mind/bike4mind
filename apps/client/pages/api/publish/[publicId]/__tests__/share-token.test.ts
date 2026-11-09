@@ -752,6 +752,7 @@ describe('share-link expiry', () => {
 
   it.each([
     ['in the past', new Date(Date.now() - 60_000).toISOString()],
+    ['less than an hour away', new Date(Date.now() + 59 * 60_000).toISOString()],
     ['more than 365 days away', new Date(Date.now() + 366 * DAY_MS).toISOString()],
     ['an empty string', ''],
     ['a number', Date.now() + DAY_MS],

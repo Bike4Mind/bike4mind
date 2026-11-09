@@ -226,8 +226,9 @@ const handler = baseApi()
     // act on. Unscoped, a stored inconsistency holds title/description/tags hostage.
     const touchesGateSurface = parsed.data.accessGate !== undefined || parsed.data.visibility !== undefined;
     // Reads the ARRAY, not the legacy scalar (#3255 step 3): with several links per artifact
-    // the enforcing surface is "at least one LIVE link", and liveShareTokens() still folds in
-    // a pre-backfill scalar-only link.
+    // the enforcing surface is "at least one LIVE link" (not revoked, not expired), and
+    // liveShareTokens() still folds in a pre-backfill scalar-only link. When the last link
+    // expires, this refuses gate/visibility edits until the gate is cleared or made public.
     if (
       touchesGateSurface &&
       artifact.accessGate &&

@@ -1791,6 +1791,45 @@ describe('GET /api/publish/serve - /a/<shareToken> no-sign-in links', () => {
     expect(data).not.toContain('b4m-frame'); // no loader shell on the share path
   });
 
+  describe('link expiry', () => {
+    const HOUR_MS = 60 * 60 * 1000;
+    const entryId = 'entry-tok123';
+    // Stands in for shareTokenFilter's Mongo semantics (pinned against real Mongo in
+    // PublishedArtifactModel.shareToken.test.ts): the row resolves only while the entry is live.
+    function serveIfLive(expiresAt: Date | null | undefined) {
+      const artifact = bundle({
+        shareTokens: [{ _id: entryId, token: 'tok123', createdAt: new Date(), revokedAt: null, expiresAt }],
+      });
+      mockArtifactFindOne.mockImplementation(() => {
+        const entry = artifact.shareTokens[0];
+        return !entry.expiresAt || entry.expiresAt > new Date() ? artifact : null;
+      });
+      mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Hi</h1></body></html>'));
+    }
+
+    it('404s an expired link', async () => {
+      serveIfLive(new Date(Date.now() - HOUR_MS));
+      const { res, promise } = run(['a', 'tok123']);
+      await promise;
+      expect(res._getStatusCode()).toBe(404);
+    });
+
+    it.each([
+      ['an unexpired', new Date(Date.now() + HOUR_MS)],
+      ['a no-expiry', null],
+    ])('serves %s link and counts the view against its entry', async (_label, expiresAt) => {
+      serveIfLive(expiresAt);
+      const { res, promise } = run(['a', 'tok123']);
+      await promise;
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockUpdateOne).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ arrayFilters: [{ 'entry._id': entryId }] })
+      );
+    });
+  });
+
   it('404s an unknown/revoked token (never 401/403, no enumeration signal)', async () => {
     mockArtifactFindOne.mockReturnValue(null);
 

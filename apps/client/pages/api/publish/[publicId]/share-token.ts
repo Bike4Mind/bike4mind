@@ -19,15 +19,18 @@ const shareTokenBodySchema = z.object({
 });
 
 const MAX_SHARE_LINK_LIFETIME_MS = 365 * 24 * 60 * 60 * 1000;
+// A link that expires almost at once stops counting toward MAX_LIVE_SHARE_LINKS, so without a floor
+// `additional: true` could append entries as fast as it is called.
+const MIN_SHARE_LINK_LIFETIME_MS = 60 * 60 * 1000;
 const isoDateTime = z.iso.datetime({ offset: true });
 
-/** The requested expiry: absent -> null (never expires); otherwise a future ISO datetime within a year. */
+/** The requested expiry: absent -> null (never expires); otherwise an ISO datetime 1 hour to 365 days away. */
 function parseShareLinkExpiry(raw: unknown, now: Date): Date | null | 'invalid' {
   if (raw === undefined) return null;
   if (!isoDateTime.safeParse(raw).success) return 'invalid';
   const expiresAt = new Date(raw as string);
   const ms = expiresAt.getTime() - now.getTime();
-  return ms > 0 && ms <= MAX_SHARE_LINK_LIFETIME_MS ? expiresAt : 'invalid';
+  return ms >= MIN_SHARE_LINK_LIFETIME_MS && ms <= MAX_SHARE_LINK_LIFETIME_MS ? expiresAt : 'invalid';
 }
 
 /**
@@ -193,7 +196,7 @@ const handler = baseApi()
     const expiresAt = parseShareLinkExpiry(parsed.expiresAt, now);
     if (expiresAt === 'invalid') {
       return res.status(400).json({
-        error: 'expiresAt must be an ISO 8601 datetime in the future and at most 365 days away',
+        error: 'expiresAt must be an ISO 8601 datetime at least 1 hour and at most 365 days away',
         code: 'INVALID_SHARE_LINK_EXPIRY',
       });
     }
@@ -342,6 +345,9 @@ const handler = baseApi()
     // owner decide, rather than silently dropping a gate they set. Revoking one of several is
     // fine: the survivors keep enforcing it. (See GATE_REQUIRES_ENFORCING_SURFACE in
     // `artifacts/[id].ts` - these two must stay in sync.)
+    // An expiring link reaches that state without passing here: once the last live link lapses,
+    // the gate fails closed and PATCH refuses gate/visibility edits until the gate is cleared or
+    // the artifact made public.
     const gateNeedsALink = Boolean(artifact.accessGate) && artifact.visibility !== 'public';
     if (live.length && survivors === 0 && gateNeedsALink) {
       return res.status(400).json({

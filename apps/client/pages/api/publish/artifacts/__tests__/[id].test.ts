@@ -536,6 +536,37 @@ describe('PATCH /api/publish/artifacts/[id] - a gate needs an ENFORCING surface,
     expect(artifact.save).not.toHaveBeenCalled();
   });
 
+  it('REJECTS a passphrase gate on a private artifact whose only array link has expired', async () => {
+    const { res, artifact } = await patchBody(
+      { accessGate: { kind: 'passphrase', passphrase: 'a-long-passphrase' } },
+      arrayOnlyShared({ expiresAt: new Date(Date.now() - 60_000) })
+    );
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData().code).toBe('GATE_REQUIRES_ENFORCING_SURFACE');
+    expect(artifact.save).not.toHaveBeenCalled();
+  });
+
+  describe('a gated private artifact whose only link expired', () => {
+    function expiredGated() {
+      const a = arrayOnlyShared({ expiresAt: new Date(Date.now() - 60_000) });
+      (a as unknown as { accessGate: unknown }).accessGate = { kind: 'passphrase', passphraseHash: 'hash' };
+      return a;
+    }
+
+    it('refuses a visibility PATCH that keeps the artifact non-public', async () => {
+      const { res, artifact } = await patchBody({ visibility: 'private' }, expiredGated());
+      expect(res._getStatusCode()).toBe(400);
+      expect(res._getJSONData().code).toBe('GATE_REQUIRES_ENFORCING_SURFACE');
+      expect(artifact.save).not.toHaveBeenCalled();
+    });
+
+    it('still lets the owner clear the gate', async () => {
+      const { res, artifact } = await patchBody({ accessGate: null }, expiredGated());
+      expect(res._getStatusCode()).toBe(200);
+      expect(artifact.save).toHaveBeenCalled();
+    });
+  });
+
   it('ACCEPTS a passphrase gate on a private artifact that has a share token', async () => {
     const { res, artifact } = await patchBody(
       { accessGate: { kind: 'passphrase', passphrase: 'a-long-passphrase' } },

@@ -168,7 +168,8 @@ const PublishedArtifactSchema = new Schema(
 
     /** Every share link ever minted for this artifact, revoked ones included (an entry is
      *  retained after revocation so its token can never be re-minted and its view count
-     *  survives). Live links are the `revokedAt: null` entries - see `liveShareTokens()`.
+     *  survives). Live links are the `revokedAt: null` entries whose `expiresAt` is null or in the
+     *  future - see `liveShareTokens()`.
      *  Each entry's `_id` is the opaque handle the owner UI revokes by, so unlike the other
      *  subdocuments here this schema keeps its `_id`.
      *
