@@ -231,6 +231,13 @@ const api: DesktopApi = {
     revealWorktree: (directory: string, path: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatRevealWorktree, directory, path),
     sendMessage: (request: SendMessageRequest) => ipcRenderer.invoke(IPC_CHANNELS.chatSendMessage, request),
+    loopCommand: (sessionId, args) => ipcRenderer.invoke(IPC_CHANNELS.chatLoopCommand, sessionId, args),
+    getLoop: sessionId => ipcRenderer.invoke(IPC_CHANNELS.chatGetLoop, sessionId),
+    onLoopChanged: listener => {
+      const handler = (_event: unknown, event: Parameters<typeof listener>[0]) => listener(event);
+      ipcRenderer.on(IPC_CHANNELS.chatLoopChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.chatLoopChanged, handler);
+    },
     stopReply: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatStopReply, sessionId),
     continueReply: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatContinueReply, sessionId),
     clearContext: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatClearContext, sessionId),

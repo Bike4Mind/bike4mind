@@ -1187,6 +1187,21 @@ export function useConversation(
         if (!bound.ok) setSendError(bound.error);
         return;
       }
+      if (name === 'loop') {
+        const result = await window.b4m.chat.loopCommand(sessionId, args);
+        if (activeSessionId.current !== sessionId) return;
+        if (!result.ok) setSendError(result.error);
+        else
+          setNotice(
+            result.notice ??
+              (result.state
+                ? args.trim() === 'list'
+                  ? `Loop ${result.state.phase}: ${result.state.prompt}`
+                  : null
+                : 'No active loop in this session.')
+          );
+        return;
+      }
       if (name === 'add-dir') {
         await shareDirectory(addDirPath(args), true);
         return;
