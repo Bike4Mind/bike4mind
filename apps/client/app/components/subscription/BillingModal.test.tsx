@@ -16,7 +16,12 @@ const state = vi.hoisted(() => ({
   reducedMotion: false,
   refetch: vi.fn(),
   credits: 5000,
-  account: undefined as { personal: boolean } | undefined,
+  account: undefined as { id?: string; personal: boolean; seats?: number } | undefined,
+  teamSubscriptions: [] as unknown[],
+  teamSubscriptionsPending: false,
+  teamSubscriptionsError: false,
+  teamRefetch: vi.fn(),
+  teamQueryOwner: undefined as { ownerId: string; enabled?: boolean } | undefined,
 }));
 const logEvent = vi.hoisted(() => vi.fn());
 
@@ -34,6 +39,16 @@ vi.mock('@client/app/hooks/data/subscriptions', () => ({
     isFetching: false,
     refetch: state.refetch,
   }),
+  useGetSubscriptionsByOwner: (_ownerType: string, ownerId: string, options?: { enabled?: boolean }) => {
+    state.teamQueryOwner = { ownerId, enabled: options?.enabled };
+    return {
+      data: state.teamSubscriptionsError ? undefined : state.teamSubscriptions,
+      isPending: state.teamSubscriptionsPending,
+      isError: state.teamSubscriptionsError,
+      isFetching: false,
+      refetch: state.teamRefetch,
+    };
+  },
 }));
 vi.mock('@client/app/hooks/data/stripe', () => ({
   useGetSubscriptionPlans: () =>
@@ -128,6 +143,11 @@ describe('BillingModal', () => {
     })) as unknown as typeof window.matchMedia;
     state.credits = 5000;
     state.account = undefined;
+    state.teamSubscriptions = [];
+    state.teamSubscriptionsPending = false;
+    state.teamSubscriptionsError = false;
+    state.teamRefetch.mockClear();
+    state.teamQueryOwner = undefined;
     logEvent.mockClear();
   });
 
@@ -359,6 +379,55 @@ describe('BillingModal', () => {
     renderModal();
     expect(screen.getByTestId('billing-low-balance')).toHaveTextContent('An organization admin can add credits');
     expect(screen.queryByTestId('billing-low-balance-action')).not.toBeInTheDocument();
+  });
+
+  describe('with a team account active', () => {
+    beforeEach(() => {
+      state.account = { id: 'org-1', personal: false, seats: 5 };
+      // The personal plan must not leak into the header while the team is the payer.
+      state.subscriptions = [subRow({ priceId: 'price_personal' })];
+    });
+
+    it("shows the team's plan, renewal and seats instead of the personal plan", () => {
+      state.teamSubscriptions = [subRow({ subscriptionId: 'sub_team' })];
+      renderModal();
+      expect(state.teamQueryOwner).toEqual({ ownerId: 'org-1', enabled: true });
+      expect(screen.getByTestId('billing-current-plan-name')).toHaveTextContent('Team');
+      expect(screen.getByTestId('billing-current-plan-detail')).toHaveTextContent('subscriptions.renews_on');
+      expect(screen.getByTestId('billing-current-plan-seats')).toBeInTheDocument();
+    });
+
+    it('flags a failed team payment', () => {
+      state.teamSubscriptions = [subRow({ subscriptionId: 'sub_team', status: 'past_due' })];
+      renderModal();
+      expect(screen.getByTestId('billing-current-plan-detail')).toHaveTextContent('Payment failed');
+    });
+
+    it('says the team has no plan rather than showing the personal one', () => {
+      renderModal();
+      expect(screen.getByTestId('billing-current-plan-name')).toHaveTextContent('No team plan');
+      expect(screen.queryByTestId('billing-current-plan-seats')).not.toBeInTheDocument();
+    });
+
+    it('waits for the team plan instead of showing a stale or personal one', () => {
+      state.teamSubscriptionsPending = true;
+      renderModal();
+      expect(screen.queryByTestId('billing-current-plan-name')).not.toBeInTheDocument();
+    });
+
+    it('retries the team read, not the personal one, when it fails', () => {
+      state.teamSubscriptionsError = true;
+      renderModal();
+      fireEvent.click(screen.getByTestId('billing-current-plan-retry'));
+      expect(state.teamRefetch).toHaveBeenCalledTimes(1);
+      expect(state.refetch).not.toHaveBeenCalled();
+    });
+  });
+
+  it('does not read a team plan for the personal account', () => {
+    renderModal();
+    expect(state.teamQueryOwner?.enabled).toBe(false);
+    expect(screen.queryByTestId('billing-current-plan-seats')).not.toBeInTheDocument();
   });
 
   it('shows no low-balance banner when the balance is healthy', () => {

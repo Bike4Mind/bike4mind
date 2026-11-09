@@ -113,7 +113,8 @@
     "search": "Search teams...",
     "no_organizations": "No teams found",
     "view_details": "View Details",
-    "x_seats": "{{count}} seats",
+    "x_seats_one": "{{count}} seat",
+    "x_seats_other": "{{count}} seats",
     "active_subscription": "Active Subscription",
     "no_subscription": "No Subscription",
     "payment_issue": "Payment Issue",
@@ -395,6 +396,9 @@
     "renews_on": "Renews on {{ date }}",
     "payment_issue": "Payment failed - update your payment method to keep this plan."
   },
+  "account": {
+    "team_suffix": "(Team)"
+  },
   "billing": {
     "title": "Billing",
     "balance": "Balance",
@@ -419,6 +423,9 @@
     "plans_upgrade_sub": "Get a monthly credit allowance instead of topping up by hand.",
     "retry": "Retry",
     "see_plans": "See plans",
+    "team_no_plan": "No team plan",
+    "team_no_plan_detail": "Credits are added by a team admin",
+    "team_plan": "Team",
     "top_up": "Top up"
   },
   "credits": {
