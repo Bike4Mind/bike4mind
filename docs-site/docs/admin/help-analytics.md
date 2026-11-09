@@ -13,7 +13,7 @@ The Help Center Analytics dashboard gives administrators visibility into how the
 
 At the top of the dashboard, pick **Last week** (the default), **Last month**, **Last year** or **All time** to narrow all data to that period. For other dates, open the **Range** chip, pick **Custom**, and set the **From** and **To** dates. Events are automatically expired after 90 days.
 
-## Overview Cards
+## Key numbers
 
 One row of six numbers displays at the top:
 
@@ -28,7 +28,7 @@ One row of six numbers displays at the top:
 
 ## Tabs
 
-Each tab includes a summary description explaining its purpose. Long text in any table cell can be hovered to reveal the full content in a tooltip.
+Each tab includes a summary description explaining its purpose. Long text in any table cell can be hovered to reveal the full content in a tooltip. When a tab has no rows, it says **Nothing was recorded in this date range.** with a **Clear date range** button that switches to All time; on All time it shows a **Refresh** button instead.
 
 ### Popular Articles
 

@@ -28,6 +28,7 @@ import {
   StatStrip,
   StatTile,
   StatusChip,
+  UpdatingBar,
   type DataColumn,
   type SegmentedOption,
 } from '../shared';
@@ -282,6 +283,8 @@ const HelpAnalyticsTab: React.FC = () => {
 
   const overview = data?.overview;
 
+  // LoadingState only on a first load: a range change keeps the previous numbers (placeholder data)
+  // and refetches under the UpdatingBar.
   let body: ReactNode;
   if (isLoading) body = <LoadingState label="Loading help analytics" />;
   else if (isError && !data)
@@ -289,6 +292,7 @@ const HelpAnalyticsTab: React.FC = () => {
   else
     body = (
       <>
+        <UpdatingBar active={isFetching} testId="help-analytics-updating" />
         {overview && (
           <StatStrip aria-label="Help usage totals">
             <StatTile label="Total views" value={overview.totalViews} />

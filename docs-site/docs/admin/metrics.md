@@ -96,7 +96,7 @@ The Event Metrics tab tracks system-wide events across the platform, providing v
 | **Date Range** | Quick ranges **7d**, **30d**, **90d** and **All time**, plus a **Range** chip with Today, Yesterday, This month, Last month and Custom (whole From and To days) |
 | **User** | Filter by specific user |
 | **Event** | Filter by event type |
-| **Event Category** | Filter by event category (e.g., Slack, System, User) |
+| **Category** | Filter by event category (e.g., Slack, System, User) |
 
 Unlike Model Metrics, there is no Apply button: a filter applies as soon as you pick it. **Clear filters** resets the range to All time and removes the other filters.
 
@@ -107,7 +107,9 @@ Event Metrics is organized into two sub-tabs:
 | Tab | Description |
 |-----|-------------|
 | **Overview** | Summary visualizations and charts for the filtered event data |
-| **Curation Breakdown** | Detailed breakdown of events by curation category, showing distribution patterns |
+| **Curation breakdown** | Detailed breakdown of events by curation category, showing distribution patterns |
+
+When no curation events were recorded, the **Curation breakdown** tab says **No curation events yet** with a **Refresh metrics** button. When a range or filter is set, it says **No curation events in this range** with a **Clear filters** button instead.
 
 ### Key numbers
 
@@ -160,7 +162,7 @@ If the metrics data fails to load, an error message is shown with a **Try again*
 - Set filters before switching between sub-tabs -- the filtered dataset persists across tabs within each metrics view.
 - Use the CSV export in Model Metrics to perform offline analysis or share data with stakeholders.
 - Monitor the Slack Metrics export success rate to identify integration reliability issues.
-- Check the Event Metrics Curation Breakdown to understand content categorization patterns.
+- Check the Event Metrics Curation breakdown to understand content categorization patterns.
 
 ---
 

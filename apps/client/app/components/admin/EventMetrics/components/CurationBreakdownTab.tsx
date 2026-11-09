@@ -25,7 +25,7 @@ const [MARKDOWN_COLOR, TXT_COLOR, HTML_COLOR] = adminChartSeries(3);
 export const CurationBreakdownTab: React.FC<CurationBreakdownTabProps> = ({ chartData, filtered, emptyAction }) => {
   if (!chartData.curationBreakdown || chartData.curationBreakdown.length === 0) {
     return filtered ? (
-      <EmptyState title="No events match these filters" action={emptyAction} />
+      <EmptyState title="No curation events in this range" action={emptyAction} />
     ) : (
       <EmptyState
         title="No curation events yet"

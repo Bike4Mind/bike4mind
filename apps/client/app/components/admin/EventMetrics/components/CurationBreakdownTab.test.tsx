@@ -46,7 +46,7 @@ describe('CurationBreakdownTab', () => {
         <CurationBreakdownTab chartData={chartData([])} filtered emptyAction={null} />
       </CssVarsProvider>
     );
-    expect(screen.getByTestId('admin-empty-state')).toHaveTextContent('No events match these filters');
+    expect(screen.getByTestId('admin-empty-state')).toHaveTextContent('No curation events in this range');
     expect(screen.getByTestId('admin-empty-state')).not.toHaveTextContent('No curation events yet');
   });
 

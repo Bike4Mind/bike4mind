@@ -2,7 +2,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
-import type { HelpAnalyticsData } from '@client/app/hooks/data/helpAnalytics';
+import type { HelpAnalyticsData, HelpAnalyticsFilters } from '@client/app/hooks/data/helpAnalytics';
 import { SEARCH_TERM_URL_DEBOUNCE_MS } from '../shared';
 
 const { useHelpAnalyticsData, refetch } = vi.hoisted(() => ({ useHelpAnalyticsData: vi.fn(), refetch: vi.fn() }));
@@ -156,6 +156,22 @@ describe('HelpAnalyticsTab date range', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('keeps the totals and tables on screen under an updating bar while a new range loads', async () => {
+    useHelpAnalyticsData.mockImplementation((filters?: HelpAnalyticsFilters) =>
+      // What placeholder data gives: the previous numbers stay while the new range is fetched.
+      queryResult(filters?.dateFrom ? {} : { isFetching: true })
+    );
+    renderTab();
+    expect(screen.getByTestId('admin-stat-strip')).toBeInTheDocument();
+    expect(screen.queryByTestId('help-analytics-updating')).toBeNull();
+    fireEvent.click(screen.getByTestId('help-analytics-range-all'));
+    const bar = await screen.findByTestId('help-analytics-updating');
+    expect(bar).toBeVisible();
+    expect(bar.compareDocumentPosition(screen.getByTestId('admin-stat-strip'))).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(screen.getByRole('tab', { name: 'Popular articles' })).toBeInTheDocument();
+    expect(screen.queryByTestId('admin-loading-state')).toBeNull();
   });
 });
 

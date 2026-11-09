@@ -19,17 +19,20 @@ const renderPage = () =>
     </CssVarsProvider>
   );
 
+const queryResult = (overrides: Record<string, unknown> = {}) => ({
+  data: [],
+  isLoading: false,
+  isFetching: false,
+  isError: false,
+  error: null,
+  forceRefresh,
+  ...overrides,
+});
+
 beforeEach(() => {
   forceRefresh.mockReset();
   useEventMetrics.mockReset();
-  useEventMetrics.mockReturnValue({
-    data: [],
-    isLoading: false,
-    isFetching: false,
-    isError: false,
-    error: null,
-    forceRefresh,
-  });
+  useEventMetrics.mockReturnValue(queryResult());
 });
 
 describe('SlackMetricsPage', () => {
@@ -55,6 +58,21 @@ describe('SlackMetricsPage', () => {
         dateFrom: dayjs().subtract(30, 'days').startOf('day').toISOString(),
       })
     );
+  });
+
+  it('keeps the stat strip on screen under an updating bar while a new range loads', async () => {
+    useEventMetrics.mockImplementation((filters: { dateFrom?: string } | undefined) =>
+      // What placeholder data gives: the previous metrics stay while the new range is fetched.
+      queryResult(filters?.dateFrom ? { isFetching: true } : {})
+    );
+    renderPage();
+    expect(screen.getByTestId('admin-stat-strip')).toBeInTheDocument();
+    expect(screen.queryByTestId('slack-metrics-updating')).toBeNull();
+    fireEvent.click(screen.getByTestId('event-metrics-range-last30days'));
+    const bar = await screen.findByTestId('slack-metrics-updating');
+    expect(bar).toBeVisible();
+    expect(bar.compareDocumentPosition(screen.getByTestId('admin-stat-strip'))).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(screen.queryByTestId('admin-loading-state')).toBeNull();
   });
 
   it('shows an empty state with a refresh action when no Slack events loaded', () => {

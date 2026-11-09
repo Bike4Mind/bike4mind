@@ -306,7 +306,7 @@ describe('EventMetricsTab states', () => {
     fireEvent.click(await screen.findByTestId('event-metrics-range-last90days'));
     fireEvent.click(screen.getByRole('tab', { name: 'Curation breakdown' }));
     const empty = await screen.findByTestId('admin-empty-state');
-    expect(empty).toHaveTextContent('No events match these filters');
+    expect(empty).toHaveTextContent('No curation events in this range');
     expect(within(empty).queryByTestId('event-metrics-curation-refresh-btn')).toBeNull();
     fireEvent.click(within(empty).getByTestId('event-metrics-empty-clear-filters-btn'));
     expect(screen.getByTestId('event-metrics-range-all')).toHaveAttribute('aria-pressed', 'true');
