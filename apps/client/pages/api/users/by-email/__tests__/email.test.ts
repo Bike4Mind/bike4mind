@@ -50,7 +50,7 @@ describe('GET /api/users/by-email/[email]', () => {
 
   it('is rate limited on a stable bucket, not per email', () => {
     expect(h.middlewares).toContain('rate-limit-middleware');
-    expect(h.rateLimitOptions).toMatchObject({ bucket: 'users-by-email' });
+    expect(h.rateLimitOptions).toEqual({ limit: 60, windowMs: 60 * 1000, bucket: 'users-by-email' });
   });
 
   it('returns null for an unknown email', async () => {

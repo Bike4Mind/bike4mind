@@ -32,6 +32,6 @@ import '../index';
 describe('POST /api/friends', () => {
   it('is rate limited per user on a stable bucket', () => {
     expect(h.middlewares).toContain('rate-limit-middleware');
-    expect(h.rateLimitOptions).toMatchObject({ bucket: 'friends-request' });
+    expect(h.rateLimitOptions).toEqual({ limit: 20, windowMs: 60 * 1000, bucket: 'friends-request' });
   });
 });

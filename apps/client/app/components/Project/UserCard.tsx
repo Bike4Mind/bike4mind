@@ -37,9 +37,9 @@ const UserCard: FC<{
   const avatarUrl = user.photoUrl ? getAppFileUrl({ key: user.photoUrl }) : '';
   const confirm = useConfirmation();
   const userByEmail = useGetUserByEmail(user.email || '', {
-    enabled: inviteStatus === 'pending',
+    enabled: inviteStatus === 'pending' && !!user.email,
   }).data;
-  // The lookup returns only id (and name when in a shared workspace), so layer it over the invite row.
+  // The lookup returns only id and name, so layer it over the invite row rather than replacing it.
   const userData = useMemo(() => (userByEmail ? { ...user, ...userByEmail } : user), [user, userByEmail]);
 
   const dropdownOptions = useMemo(() => {
