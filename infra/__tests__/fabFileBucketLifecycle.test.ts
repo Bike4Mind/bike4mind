@@ -111,6 +111,22 @@ describe('fab-file bucket notebook export lifecycle', () => {
     expect(ACCOUNT_DATA_EXPORT_TTL_MS).toBeLessThanOrEqual(2 * 86400000);
   });
 
+  // The download route's zip and converted copies are never deleted by the app either.
+  it('keeps notebook download copies under the reserved exports prefix, signed for less than the rule', () => {
+    const downloadSource = read('apps/client/pages/api/notebooks/download.ts');
+    const prefixTemplate = downloadSource.match(/const DOWNLOAD_KEY_PREFIX = `([^`]+)`/)?.[1];
+    const keyTemplates = [...downloadSource.matchAll(/const \w+FilePath = `([^`]+)`/g)].map(m => m[1]);
+    const uploadCount = downloadSource.match(/getFilesStorage\(\)\.upload\(/g)?.length ?? 0;
+    const signedSeconds = [...downloadSource.matchAll(/expiresIn:\s*(\d+)/g)].map(m => Number(m[1]));
+
+    expect(prefixTemplate?.startsWith('${fabFilesService.RESERVED_FAB_FILE_KEY_PREFIX}')).toBe(true);
+    expect(keyTemplates).toHaveLength(uploadCount);
+    expect(uploadCount).toBeGreaterThan(0);
+    for (const key of keyTemplates) expect(key.startsWith('${DOWNLOAD_KEY_PREFIX}/')).toBe(true);
+    expect(signedSeconds.length).toBeGreaterThan(0);
+    for (const seconds of signedSeconds) expect(seconds).toBeLessThan(ruleDays * 86400);
+  });
+
   // Audit exports hold actor emails and IPs, so they must land somewhere this rule reaps.
   it('keeps the admin audit export prefix under the expiring exports prefix', () => {
     const auditExportSource = read('apps/client/server/utils/adminAuditExportStorage.ts');

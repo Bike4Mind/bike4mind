@@ -4,10 +4,14 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { NotebookDownloadRequestSchema } from '../../../types/api';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { stampGear } from '@bike4mind/server-utils/services/gears/stampGear';
-import { notebookCurationService } from '@bike4mind/services';
+import { fabFilesService, notebookCurationService } from '@bike4mind/services';
 import { buildContentDisposition } from '@bike4mind/utils/contentDisposition';
 import { z } from 'zod';
 import archiver from 'archiver';
+
+// Generated downloads are throwaway copies, so they live under the namespace the 1-day exports
+// lifecycle rule reaps (infra/buckets.ts, compose.selfhost.yaml); the curated source stays put.
+const DOWNLOAD_KEY_PREFIX = `${fabFilesService.RESERVED_FAB_FILE_KEY_PREFIX}curated-notebooks`;
 
 const handler = baseApi().post(
   asyncHandler(async (req, res) => {
@@ -157,7 +161,7 @@ const handler = baseApi().post(
           const zipBuffer = Buffer.concat(chunks);
 
           const zipFileName = `curated-notebooks-${Date.now()}.zip`;
-          const zipFilePath = `curated-notebooks/${userId}/batches/${zipFileName}`;
+          const zipFilePath = `${DOWNLOAD_KEY_PREFIX}/${userId}/batches/${zipFileName}`;
 
           await getFilesStorage().upload(zipBuffer, zipFilePath, {
             ContentType: 'application/zip',
@@ -265,7 +269,7 @@ const handler = baseApi().post(
           // strip existing extension before appending the converted one
           const baseFileName = fabFile.fileName.replace(/\.(md|txt|html)$/, '');
           const convertedFileName = `${baseFileName}${converted.extension}`;
-          const convertedFilePath = `curated-notebooks/${userId}/${sessionId}/${convertedFileName}`;
+          const convertedFilePath = `${DOWNLOAD_KEY_PREFIX}/${userId}/${sessionId}/${convertedFileName}`;
 
           await getFilesStorage().upload(converted.content, convertedFilePath, {
             ContentType: converted.mimeType,
