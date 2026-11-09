@@ -268,7 +268,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
             </TabPanel>
           )}
           <TabPanel value={AdminTab.ModelLogs}>{activeTab === AdminTab.ModelLogs && <ModelLogsTab />}</TabPanel>
-          <TabPanel value={AdminTab.ModelMetrics} {...selfFramed}>
+          <TabPanel value={AdminTab.ModelMetrics}>
             {activeTab === AdminTab.ModelMetrics && <ModelMetricsTab />}
           </TabPanel>
           <TabPanel value={AdminTab.ModelLifecycle}>

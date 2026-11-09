@@ -47,7 +47,6 @@ const componentsByFile = {
   'MigrateUsersTab.tsx': ['Card', 'Modal'],
   'ModelLifecycleTab.tsx': ['Modal', 'Table'],
   'ModelLogsTab.tsx': ['Card'],
-  'ModelMetrics/components/ControlPanel.tsx': ['Card'],
   'ModelMetrics/components/MetricsInfoModal.tsx': ['Modal'],
   'ModelMetrics/components/RawDataTab.tsx': ['Table', 'Card'],
   'ModelMetrics/components/SpendTab.tsx': ['Table'],
