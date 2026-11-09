@@ -163,7 +163,10 @@ export const MarginDashboard: React.FC = () => {
   const providerNeedle = providerFilter.trim().toLowerCase();
   const userNeedle = userSearch.trim().toLowerCase();
   const modelDayRows = (modelDay?.rows ?? []).filter(
-    r => !providerNeedle || r.provider.toLowerCase().includes(providerNeedle)
+    r =>
+      !providerNeedle ||
+      r.provider.toLowerCase().includes(providerNeedle) ||
+      (r.executedProvider ?? '').toLowerCase().includes(providerNeedle)
   );
   const userRows = (byUser?.rows ?? []).filter(
     r =>
@@ -268,6 +271,7 @@ export const MarginDashboard: React.FC = () => {
                     <th>Day</th>
                     <th>Provider</th>
                     <th>Model</th>
+                    <th>Executed model</th>
                     <th style={{ textAlign: 'right' }}>Requests</th>
                     <th style={{ textAlign: 'right' }}>COGS (USD)</th>
                     <th style={{ textAlign: 'right' }}>Credits</th>
@@ -275,22 +279,36 @@ export const MarginDashboard: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {modelDayRows.map(row => (
-                    <tr key={`${row.day}-${row.provider}-${row.model}`}>
-                      <td>{row.day}</td>
-                      <td>{row.provider}</td>
-                      <td>{row.model}</td>
-                      <td style={{ textAlign: 'right', ...numberCell }}>{row.requests.toLocaleString()}</td>
-                      <td style={{ textAlign: 'right', ...numberCell }}>${row.cogsUsd.toFixed(4)}</td>
-                      <td style={{ textAlign: 'right', ...numberCell }}>{row.creditsCharged.toLocaleString()}</td>
-                      <td>
-                        <RatioChip credits={row.creditsCharged} cogsUsd={row.cogsUsd} target={target} />
-                      </td>
-                    </tr>
-                  ))}
+                  {modelDayRows.map(row => {
+                    const executedProvider = row.executedProvider ?? row.provider;
+                    const executedModel = row.executedModel ?? row.model;
+                    const substituted = executedProvider !== row.provider || executedModel !== row.model;
+                    return (
+                      <tr key={`${row.day}-${row.provider}-${row.model}-${executedProvider}-${executedModel}`}>
+                        <td>{row.day}</td>
+                        <td>{row.provider}</td>
+                        <td>{row.model}</td>
+                        <td data-testid="margin-executed-model-cell">
+                          {substituted ? (
+                            `${executedProvider} / ${executedModel}`
+                          ) : (
+                            <Typography level="body-sm" color="neutral">
+                              -
+                            </Typography>
+                          )}
+                        </td>
+                        <td style={{ textAlign: 'right', ...numberCell }}>{row.requests.toLocaleString()}</td>
+                        <td style={{ textAlign: 'right', ...numberCell }}>${row.cogsUsd.toFixed(4)}</td>
+                        <td style={{ textAlign: 'right', ...numberCell }}>{row.creditsCharged.toLocaleString()}</td>
+                        <td>
+                          <RatioChip credits={row.creditsCharged} cogsUsd={row.cogsUsd} target={target} />
+                        </td>
+                      </tr>
+                    );
+                  })}
                   {modelDayRows.length === 0 && (
                     <tr>
-                      <td colSpan={7}>
+                      <td colSpan={8}>
                         <Typography level="body-sm" color="neutral">
                           No usage events yet.
                         </Typography>
