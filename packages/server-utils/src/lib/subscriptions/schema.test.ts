@@ -28,6 +28,7 @@ describe('OrgSubscriptionSubscribeSchema.organization', () => {
     {},
     { organizationId: 'org_test', organizationData: { name: 'New Team' } },
     { organizationData: { name: '' } },
+    { organizationData: { name: '   ' } },
     { organizationId: '' },
     { organizationId: '', organizationData: { name: 'New Team' } },
     { organizationId: null, organizationData: { name: 'New Team' } },
@@ -40,6 +41,17 @@ describe('OrgSubscriptionSubscribeSchema.organization', () => {
         ...selector,
       }).success
     ).toBe(false);
+  });
+
+  it('trims surrounding whitespace from the team name', () => {
+    const result = OrgSubscriptionSubscribeSchema.safeParse({
+      ...baseRequest,
+      organizationId: undefined,
+      quantity: ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
+      organizationData: { name: '  Acme  ' },
+    });
+    expect(result.success).toBe(true);
+    expect(result.data?.organizationData?.name).toBe('Acme');
   });
 });
 
