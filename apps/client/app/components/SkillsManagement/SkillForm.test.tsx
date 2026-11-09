@@ -4,6 +4,7 @@ import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { toSkillMd } from '@bike4mind/common/utils/skillMd';
 import { getThemeConfig } from '@client/app/utils/themes';
+import JSZip from 'jszip';
 import { SkillForm } from './SkillForm';
 
 vi.mock('@client/app/hooks/data/skills', () => ({}));
@@ -206,7 +207,11 @@ describe('SkillForm SKILL.md import', () => {
   });
 
   it.each([
-    ['a .zip upload', () => upload('PK\u0003\u0004\u0000\u0000\u0008\u0000skills/x/SKILL.md'), 'binary or .zip'],
+    [
+      'a .zip upload',
+      () => upload('PK\u0003\u0004\u0000\u0000\u0008\u0000skills/x/SKILL.md'),
+      'This is a zip file, not a SKILL.md.',
+    ],
     ['pasted text with no frontmatter', () => paste('Just some instructions.'), 'No frontmatter found'],
   ])('rejects %s and leaves the fields untouched', async (_label, importIt, message) => {
     renderForm();
@@ -333,5 +338,113 @@ describe('SkillForm SKILL.md import', () => {
   it('hides the import strip unless enabled (edit mode)', () => {
     renderForm(false);
     expect(screen.queryByTestId('skill-form-import-skillmd')).not.toBeInTheDocument();
+  });
+
+  describe('friendlier errors, drop and zip', () => {
+    const SKILL = '---\nname: dropped\ndescription: From a drop\n---\nBody';
+
+    const makeZip = async (entries: Record<string, string>, name = 'skill.zip') => {
+      const zip = new JSZip();
+      for (const [path, content] of Object.entries(entries)) zip.file(path, content);
+      return new File([await zip.generateAsync({ type: 'uint8array' })], name, { type: 'application/zip' });
+    };
+
+    const drop = (files: File[]) =>
+      fireEvent.drop(screen.getByTestId('skill-form-import-skillmd'), { dataTransfer: { files, items: [] } });
+
+    it('mentions drop and zip in the limitations text', () => {
+      renderForm();
+      expect(screen.getByTestId('skill-form-import-file-limitations')).toHaveTextContent('drop a SKILL.md');
+    });
+
+    it('fills the form from a dropped SKILL.md', async () => {
+      renderForm();
+      drop([new File([SKILL], 'SKILL.md', { type: 'text/markdown' })]);
+      await waitFor(() => expect(value('skill-name-input')).toBe('dropped'));
+      expect(value('skill-description-input')).toBe('From a drop');
+    });
+
+    it('asks for one SKILL.md or folder when several unrelated files are dropped', async () => {
+      renderForm();
+      drop([new File(['a'], 'a.txt'), new File(['b'], 'b.txt')]);
+      await waitFor(() =>
+        expect(screen.getByTestId('skill-form-import-error')).toHaveTextContent(
+          'Drop one SKILL.md or one skill folder.'
+        )
+      );
+    });
+
+    it('imports a zip made by compressing a folder, ignoring macOS junk', async () => {
+      const onSubmit = vi.fn();
+      render(
+        <CssVarsProvider theme={appTheme}>
+          <SkillForm submitLabel="Create" onSubmit={onSubmit} onCancel={vi.fn()} enableSkillMdImport />
+        </CssVarsProvider>
+      );
+      const zip = await makeZip({
+        'my-skill/SKILL.md': SKILL,
+        'my-skill/scripts/a.sh': 'echo hi',
+        'my-skill/README.md': 'readme',
+        '__MACOSX/my-skill/._SKILL.md': 'junk',
+        'my-skill/.DS_Store': 'junk',
+      });
+      drop([zip]);
+      await waitFor(() => expect(value('skill-name-input')).toBe('dropped'));
+      expect(screen.getByTestId('skill-form-files')).toHaveTextContent('scripts/a.sh');
+      fireEvent.change(screen.getByTestId('skill-body-input'), { target: { value: 'Body' } });
+      fireEvent.submit(screen.getByTestId('skill-form'));
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({ files: [{ path: 'scripts/a.sh', content: 'echo hi' }] })
+      );
+    });
+
+    it('imports a zip chosen with Choose file', async () => {
+      renderForm();
+      const zip = await makeZip({ 'SKILL.md': SKILL });
+      fireEvent.change(screen.getByTestId('skill-form-import-file'), { target: { files: [zip] } });
+      await waitFor(() => expect(value('skill-name-input')).toBe('dropped'));
+    });
+
+    it('explains a zip with no SKILL.md', async () => {
+      renderForm();
+      drop([await makeZip({ 'a/readme.md': 'x', 'b/other.md': 'y' })]);
+      await waitFor(() =>
+        expect(screen.getByTestId('skill-form-import-error')).toHaveTextContent(
+          'The zip has no SKILL.md at its top level or in a single top-level folder.'
+        )
+      );
+    });
+
+    it('explains a zip that cannot be read', async () => {
+      renderForm();
+      drop([new File(['not a zip'], 'broken.zip')]);
+      await waitFor(() =>
+        expect(screen.getByTestId('skill-form-import-error')).toHaveTextContent("The zip couldn't be unzipped.")
+      );
+    });
+
+    it('warns when the imported description is over 500 characters but still applies it', async () => {
+      renderForm();
+      upload(`---\nname: long\ndescription: ${'a'.repeat(501)}\n---\nBody`);
+      await waitFor(() =>
+        expect(screen.getByTestId('skill-form-import-description-length')).toHaveTextContent(
+          'The description is 501 characters; skills allow 500. Shorten it before saving.'
+        )
+      );
+      expect(value('skill-name-input')).toBe('long');
+      fireEvent.change(screen.getByTestId('skill-description-input'), { target: { value: 'short' } });
+      expect(screen.queryByTestId('skill-form-import-description-length')).not.toBeInTheDocument();
+    });
+
+    it('shows the raw YAML message behind a Details toggle', async () => {
+      renderForm();
+      upload("---\nname: a\ndescription: Applies the team's rules: TikTok-safe\n---\nBody");
+      await waitFor(() =>
+        expect(screen.getByTestId('skill-form-import-error')).toHaveTextContent('Line 3 (`description`)')
+      );
+      expect(screen.queryByTestId('skill-form-import-error-details')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByTestId('skill-form-import-error-details-toggle'));
+      expect(screen.getByTestId('skill-form-import-error-details')).toHaveTextContent('Nested mappings');
+    });
   });
 });

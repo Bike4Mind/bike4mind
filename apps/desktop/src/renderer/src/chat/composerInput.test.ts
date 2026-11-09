@@ -190,7 +190,13 @@ describe('composerPlaceholder', () => {
 describe('the `/` menu', () => {
   it('opens on a slash typed into an empty composer', () => {
     expect(skillQuery('/')?.query).toBe('');
-    expect(matchCommands('', 'code').map(command => command.name)).toEqual(['clear', 'compact', 'pr', 'add-dir']);
+    expect(matchCommands('', 'code').map(command => command.name)).toEqual([
+      'clear',
+      'compact',
+      'pr',
+      'add-dir',
+      'loop',
+    ]);
   });
 
   // A path is a path, and a command only runs as the whole draft: one picked mid-sentence would
@@ -203,7 +209,7 @@ describe('the `/` menu', () => {
   });
 
   it('offers /pr only in a Code session, and treats it as text elsewhere', () => {
-    expect(matchCommands('', 'chat').map(command => command.name)).toEqual(['clear', 'compact', 'add-dir']);
+    expect(matchCommands('', 'chat').map(command => command.name)).toEqual(['clear', 'compact', 'add-dir', 'loop']);
     expect(composerSubmitAction('/pr https://github.com/example-org/widgets/pull/611', 'chat')).toEqual({
       kind: 'send',
     });

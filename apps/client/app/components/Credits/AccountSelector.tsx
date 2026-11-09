@@ -16,6 +16,8 @@ type Account = {
   name: string;
   personal: boolean;
   credits: number;
+  /** Team accounts only. */
+  seats?: number;
 };
 
 // Strip only the trailing " (Personal)" suffix this component appends - anchored so a real
@@ -84,6 +86,7 @@ export const useAccounts = () => {
           name: org.name,
           personal: false,
           credits: org.currentCredits || 0,
+          seats: org.seats,
         });
       });
     }
@@ -133,7 +136,9 @@ export const useAccounts = () => {
       const updatedAccount = accounts.find(account => account.id === selectedAccount.id);
       if (
         updatedAccount &&
-        (updatedAccount.credits !== selectedAccount.credits || updatedAccount.name !== selectedAccount.name)
+        (updatedAccount.credits !== selectedAccount.credits ||
+          updatedAccount.name !== selectedAccount.name ||
+          updatedAccount.seats !== selectedAccount.seats)
       ) {
         setSelectedAccount(updatedAccount);
       }

@@ -49,6 +49,13 @@ export const COMPOSER_COMMANDS: readonly ComposerCommand[] = [
     description: 'Share another folder with this conversation. Bare, it opens the folder picker.',
     argumentHint: '[path]',
   },
+  {
+    name: 'loop',
+    description:
+      'Run a prompt or /skill repeatedly. Omit the interval for model-selected pacing. /loop help for details.',
+    argumentHint: '[30s-1d] <prompt> | list | stop | help',
+    requiresArgument: true,
+  },
 ];
 
 function commandsFor(mode: ChatSessionMode): ComposerCommand[] {
