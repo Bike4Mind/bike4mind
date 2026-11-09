@@ -13,7 +13,7 @@ import {
   type AdminSubscriptionDetail,
   type AdminSubscriptionSeats,
 } from '@client/app/utils/adminSubscriptionDetail';
-import { SUBSCRIPTION_PLANS_MAP } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
+import { planCreditsPerCycle } from '@bike4mind/server-utils/lib/userSubscriptions/planCreditsPerCycle';
 import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import { toAdminSubscriptionRows, type SubscriptionDoc } from '../subscriptionsList/listAdminSubscriptions';
 import { subscriptionPlanCatalog } from '../subscriptionsList/adminSubscriptionsQuery';
@@ -35,10 +35,8 @@ type OwnerRecord = {
   users?: unknown[] | null;
 };
 
-const defaultCreditsPerCycle = async (doc: DetailDoc): Promise<number | null> => {
-  if (doc.ownerType === 'User') return SUBSCRIPTION_PLANS_MAP[doc.priceId ?? '']?.credits ?? null;
-  return doc.quantity * (await getTeamPlanSettings()).creditsPerSeat;
-};
+const defaultCreditsPerCycle = (doc: DetailDoc): Promise<number | null> =>
+  planCreditsPerCycle({ ownerType: doc.ownerType, priceId: doc.priceId, quantity: doc.quantity });
 
 // Ledger rows carry no subscription id, so these are the owner's latest subscription grants across all its plans.
 const recentGrantsOf = async (doc: DetailDoc): Promise<AdminSubscriptionCreditGrant[]> => {

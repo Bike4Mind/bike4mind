@@ -124,6 +124,8 @@ b4m-core/**/*dist
 packages/premium/**/dist
 # @bike4mind/database builds with tsdown like the b4m-core packages.
 packages/database/dist
+# @bike4mind/design-tokens builds with tsdown like the b4m-core packages.
+packages/design-tokens/dist
 
 # Old b4m-core submodule artifacts (no longer needed)
 b4m-core/.envrc

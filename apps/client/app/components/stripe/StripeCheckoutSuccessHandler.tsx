@@ -2,7 +2,10 @@ import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { api } from '@client/app/contexts/ApiContext';
-import { trackPurchaseConversion } from '@client/app/utils/purchaseConversion';
+import { type PurchaseConversion, trackPurchaseConversion } from '@client/app/utils/purchaseConversion';
+import { bootstrapSession } from '@client/app/utils/sessionBootstrap';
+import { useAccessToken } from '@client/app/hooks/useAccessToken';
+import { formatCreditAmount } from '@client/app/utils/formatCredits';
 import { BILLING_SEARCH_PARAM } from '@client/app/utils/billingDeepLink';
 import { markBillingCheckoutReturn } from '@client/app/utils/billingCheckoutReturn';
 
@@ -53,6 +56,52 @@ export function releaseSessionClaim(sessionId: string): void {
   }
 }
 
+const GENERIC_CONFIRMATION = 'Subscription completed successfully!';
+
+export type CheckoutSessionSummary = PurchaseConversion & { credits?: number };
+
+export function checkoutConfirmation({
+  planName,
+  credits,
+}: Pick<CheckoutSessionSummary, 'planName' | 'credits'>): string {
+  if (!planName) return GENERIC_CONFIRMATION;
+  const onPlan = `You're on ${planName}`;
+  // The plan's allotment, not a ledger read: the grant lands via webhook and can be skipped.
+  return credits ? `${onPlan} - ${formatCreditAmount(credits)} credits included` : onPlan;
+}
+
+/**
+ * Confirms the purchase at once, then upgrades the toast in place with the plan Stripe vouches for.
+ * The return from Stripe is a full page load and the access token is memory-only, so the lookup
+ * waits for the cold-load refresh; sent earlier it carries no credential and 401s. The amount is
+ * read server-side (api/subscriptions/checkout-session.ts) so the reported conversion cannot be
+ * forged. A failed lookup releases the claim so a reload can report it.
+ */
+async function confirmCheckout(sessionId: string): Promise<void> {
+  toast.success(GENERIC_CONFIRMATION, { id: sessionId });
+  const claimed = claimSessionForReporting(sessionId);
+
+  await bootstrapSession();
+  if (!useAccessToken.getState().accessToken) {
+    if (claimed) releaseSessionClaim(sessionId);
+    return;
+  }
+
+  let summary: CheckoutSessionSummary;
+  try {
+    const response = await api.get<CheckoutSessionSummary>('/api/subscriptions/checkout-session', {
+      params: { id: sessionId },
+    });
+    summary = response.data;
+  } catch {
+    if (claimed) releaseSessionClaim(sessionId);
+    return;
+  }
+
+  toast.success(checkoutConfirmation(summary), { id: sessionId });
+  if (claimed) trackPurchaseConversion(summary);
+}
+
 const StripeCheckoutSuccessHandler = () => {
   const queryClient = useQueryClient();
 
@@ -66,20 +115,12 @@ const StripeCheckoutSuccessHandler = () => {
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
       queryClient.invalidateQueries({ queryKey: ['subscriptions'] });
 
-      toast.success('Subscription completed successfully!');
-
-      // Report revenue before the URL is rewritten. The amount is read server-side
-      // from Stripe rather than passed through the browser, so it cannot be forged
-      // - see api/subscriptions/checkout-session.ts. Admin-initiated conversions
-      // redirect without a session id and are intentionally not reported: they are
-      // not customer-attributable acquisitions.
-      if (checkoutSessionId && checkoutSessionId.startsWith('cs_') && claimSessionForReporting(checkoutSessionId)) {
-        // Deliberately not awaited and never surfaced: analytics must not delay or
-        // interrupt the customer's first authenticated moment after paying.
-        api
-          .get('/api/subscriptions/checkout-session', { params: { id: checkoutSessionId } })
-          .then(response => trackPurchaseConversion(response.data))
-          .catch(() => {});
+      // Admin-initiated conversions redirect without a session id: nothing to look up, and not
+      // reported, since they are not customer-attributable acquisitions.
+      if (checkoutSessionId && checkoutSessionId.startsWith('cs_')) {
+        void confirmCheckout(checkoutSessionId);
+      } else {
+        toast.success(GENERIC_CONFIRMATION);
       }
 
       // Clean up URL without triggering a refresh. Strip only OUR two params and
