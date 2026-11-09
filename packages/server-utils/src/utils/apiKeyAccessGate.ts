@@ -101,7 +101,7 @@ async function hasPaidApiKeyAccess(
 
 /**
  * Admins, developers and trusted admin-provisioned keys bypass the switch. Paid mode admits paid
- * standing (`@server/entitlements/paidStanding`) or a key billed to an org on a paid plan. Read
+ * standing (`entitlements/paidStanding.ts`) or a key billed to an org on a paid plan. Read
  * failures propagate so clients get a retryable 5xx.
  */
 export async function isApiKeyAccessAllowed(

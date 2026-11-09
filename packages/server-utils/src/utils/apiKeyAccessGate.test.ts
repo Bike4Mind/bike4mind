@@ -16,7 +16,6 @@ const { getSettingsMapMock, findActiveUserSubscriptions, findActiveSubscriptions
     };
   });
 
-vi.unmock('./apiKeyAccessGate');
 const { findBySidMock } = vi.hoisted(() => ({ findBySidMock: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},

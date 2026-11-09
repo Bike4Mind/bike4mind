@@ -14,8 +14,6 @@ import { resolveUserRateTier } from '../utils/userRateTier';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
-// vitest.setup.ts allows every key by default; this suite is about the real gate.
-vi.unmock('../utils/apiKeyAccessGate');
 // Plan price ids come from per-stage env vars, so the plan map is a fixture.
 vi.mock('../lib/userSubscriptions/constants', () => ({
   SUBSCRIPTION_PLANS: [],
