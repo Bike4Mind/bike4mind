@@ -38,7 +38,6 @@ export default {
   'GitHubConnectionTab.tsx': [[8, '1fd7087d06a0ddbe']],
   'IntegrationDemandTab.tsx': [[3, '33c84625c2e68e9d']],
   'IntegrationHealth/components/IntegrationDetailPanel.tsx': [[2, 'b7900285fffe06e6']],
-  'ManageGearsTab.tsx': [[2, 'fc13e803eaa10e1d']],
   'MigrateUsersTab.tsx': [[4, '655b890fff77d8be']],
   'ModelLifecycleTab.tsx': [[2, '6753494454310b67']],
   'ModelLogsTab.tsx': [[2, '9e6b044a23acfa7f']],

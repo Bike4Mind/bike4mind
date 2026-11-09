@@ -1,23 +1,25 @@
 import { useState } from 'react';
 import {
-  Box,
+  Alert,
   Button,
-  Chip,
+  Dropdown,
   IconButton,
   Input,
-  Sheet,
+  Menu,
+  MenuButton,
+  MenuItem,
   Stack,
   Switch,
-  Table,
   Textarea,
-  Tooltip,
   Typography,
 } from '@mui/joy';
-import RestartAltIcon from '@mui/icons-material/RestartAlt';
-import SaveOutlinedIcon from '@mui/icons-material/SaveOutlined';
+import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
+import { SettingsDraftProvider, useSettingsDraft } from './SettingsDraftProvider';
+import { AdminPageHeader, DataTable, EmptyState, StatusChip, UpdatingBar, type DataColumn } from './shared';
+import { ADMIN_REGION_GAP, adminFocus } from './shared/adminStyles';
 
 /**
  * Manage Gears - the ops override surface for the Gears progression system
@@ -72,65 +74,237 @@ const effective = (g: AdminGear) => ({
   ctaAction: g.override?.ctaAction ?? g.defaults.ctaAction,
 });
 
+const draftOf = (g: AdminGear): Draft => {
+  const e = effective(g);
+  return {
+    enabled: e.enabled,
+    credits: String(e.credits),
+    title: e.title,
+    tagline: e.tagline,
+    intro: e.intro,
+    cta: e.cta,
+    ctaAction: e.ctaAction,
+  };
+};
+
+const creditsBlocked = (draft: Draft) => {
+  const credits = Number(draft.credits);
+  return Number.isInteger(credits) && credits >= 0 ? undefined : 'Credits must be a non-negative integer';
+};
+
+type SaveGear = (g: AdminGear, draft: Draft) => Promise<void>;
+
+/**
+ * One gear's staged edit. Every cell of the row calls this with the same id, so they share the
+ * draft the page's SaveBar saves (SettingsDraftProvider).
+ */
+const useGearDraft = (gear: AdminGear, save: SaveGear) =>
+  useSettingsDraft<Draft>(`gear:${gear.key}`, draftOf(gear), {
+    name: gear.key,
+    save: draft => save(gear, draft),
+    blocked: creditsBlocked,
+  });
+
+type CellProps = { gear: AdminGear; editing: boolean; busy: boolean; save: SaveGear };
+
+function GearEnabledCell({ gear, editing, busy, save }: CellProps) {
+  const { value, setValue } = useGearDraft(gear, save);
+  return (
+    <Switch
+      checked={value.enabled}
+      disabled={!editing || busy}
+      onChange={ev => setValue(previous => ({ ...previous, enabled: ev.target.checked }))}
+      slotProps={{ input: { 'aria-label': `${gear.key} enabled` } }}
+      data-testid={`manage-gear-enabled-${gear.key}`}
+    />
+  );
+}
+
+function GearCreditsCell({ gear, editing, save }: CellProps) {
+  const { value, setValue } = useGearDraft(gear, save);
+  if (!editing) return <>{Number(value.credits).toLocaleString()}</>;
+  return (
+    <Input
+      size="sm"
+      value={value.credits}
+      onChange={ev => setValue(previous => ({ ...previous, credits: ev.target.value }))}
+      slotProps={{ input: { inputMode: 'numeric', 'data-testid': `manage-gear-credits-${gear.key}` } }}
+    />
+  );
+}
+
+function GearCopyCell({ gear, editing, save }: CellProps) {
+  const { value, setValue } = useGearDraft(gear, save);
+  if (!editing) {
+    return (
+      <Stack gap={0.25} sx={{ minWidth: 0 }}>
+        <Typography level="body-sm">
+          <b>{value.title}</b> / {value.tagline}
+        </Typography>
+        <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+          {value.intro}
+        </Typography>
+      </Stack>
+    );
+  }
+  return (
+    <Stack gap={0.5}>
+      <Input
+        size="sm"
+        value={value.title}
+        onChange={ev => setValue(previous => ({ ...previous, title: ev.target.value }))}
+        placeholder="Title"
+        slotProps={{ input: { 'data-testid': `manage-gear-title-${gear.key}` } }}
+      />
+      <Input
+        size="sm"
+        value={value.tagline}
+        onChange={ev => setValue(previous => ({ ...previous, tagline: ev.target.value }))}
+        placeholder="Tagline"
+      />
+      <Textarea
+        size="sm"
+        minRows={2}
+        value={value.intro}
+        onChange={ev => setValue(previous => ({ ...previous, intro: ev.target.value }))}
+        placeholder="Intro"
+      />
+    </Stack>
+  );
+}
+
+function GearCtaCell({ gear, editing, save }: CellProps) {
+  const { value, setValue } = useGearDraft(gear, save);
+  if (!editing) {
+    return (
+      <Stack gap={0.25} sx={{ minWidth: 0 }}>
+        <Typography level="body-sm">{value.cta}</Typography>
+        <Typography
+          level="body-xs"
+          noWrap
+          title={value.ctaAction}
+          sx={{ fontFamily: 'monospace', color: 'admin.inkMuted' }}
+        >
+          {value.ctaAction}
+        </Typography>
+      </Stack>
+    );
+  }
+  return (
+    <Stack gap={0.5}>
+      <Input
+        size="sm"
+        value={value.cta}
+        onChange={ev => setValue(previous => ({ ...previous, cta: ev.target.value }))}
+        placeholder="CTA label"
+      />
+      <Input
+        size="sm"
+        value={value.ctaAction}
+        onChange={ev => setValue(previous => ({ ...previous, ctaAction: ev.target.value }))}
+        placeholder="navigate:/path | external:https://... | files"
+        sx={{ fontFamily: 'monospace' }}
+      />
+    </Stack>
+  );
+}
+
+function GearRowMenu({
+  gear,
+  editing,
+  busy,
+  save,
+  onEdit,
+  onStopEditing,
+  onReset,
+}: CellProps & { onEdit(): void; onStopEditing(): void; onReset(): Promise<boolean> }) {
+  const { setValue } = useGearDraft(gear, save);
+  const discard = () => setValue(draftOf(gear));
+  return (
+    <Dropdown>
+      <MenuButton
+        slots={{ root: IconButton }}
+        slotProps={{
+          root: {
+            size: 'sm',
+            variant: 'plain',
+            disabled: busy,
+            'aria-label': `Actions for ${gear.key}`,
+            sx: { ...adminFocus, color: 'admin.inkMuted' },
+          },
+        }}
+        data-testid={`manage-gear-actions-${gear.key}`}
+      >
+        <MoreHorizIcon sx={{ fontSize: 18 }} />
+      </MenuButton>
+      <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
+        {editing ? (
+          <MenuItem
+            onClick={() => {
+              discard();
+              onStopEditing();
+            }}
+            data-testid={`manage-gear-cancel-${gear.key}`}
+          >
+            Cancel editing
+          </MenuItem>
+        ) : (
+          <MenuItem onClick={onEdit} data-testid={`manage-gear-edit-${gear.key}`}>
+            Edit gear
+          </MenuItem>
+        )}
+        {gear.override !== null && (
+          <MenuItem
+            color="danger"
+            onClick={() => void onReset().then(reset => reset && discard())}
+            data-testid={`manage-gear-reset-${gear.key}`}
+          >
+            Reset to code defaults
+          </MenuItem>
+        )}
+      </Menu>
+    </Dropdown>
+  );
+}
+
 const ManageGearsTab = () => {
   const queryClient = useQueryClient();
-  const { data, isPending } = useQuery<{ gears: AdminGear[] }>({
+  const { data, isPending, isError, isFetching, refetch } = useQuery<{ gears: AdminGear[] }>({
     queryKey: ['admin', 'gears'],
     queryFn: async () => (await api.get<{ gears: AdminGear[] }>('/api/admin/gears')).data,
   });
-  // Row being edited (one at a time) + its draft values.
-  const [editingKey, setEditingKey] = useState<string | null>(null);
-  const [draft, setDraft] = useState<Draft | null>(null);
+  // Rows showing their inputs; their edits are staged for the page's one SaveBar.
+  const [editing, setEditing] = useState<ReadonlySet<string>>(new Set());
   const [busy, setBusy] = useState(false);
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['admin', 'gears'] });
-
-  const startEdit = (g: AdminGear) => {
-    const e = effective(g);
-    setEditingKey(g.key);
-    setDraft({
-      enabled: e.enabled,
-      credits: String(e.credits),
-      title: e.title,
-      tagline: e.tagline,
-      intro: e.intro,
-      cta: e.cta,
-      ctaAction: e.ctaAction,
+  const setRowEditing = (key: string, on: boolean) =>
+    setEditing(previous => {
+      const next = new Set(previous);
+      if (on) next.add(key);
+      else next.delete(key);
+      return next;
     });
-  };
 
-  const save = async (g: AdminGear) => {
-    if (!draft) return;
+  const save: SaveGear = async (g, draft) => {
     const credits = Number(draft.credits);
-    if (!Number.isInteger(credits) || credits < 0) {
-      toast.error('Credits must be a non-negative integer');
-      return;
-    }
-    setBusy(true);
-    try {
-      // Sparse patch: only ship fields that differ from the code default, and
-      // null out fields returned to it - keeps the override row honest about
-      // what the admin actually changed.
-      const d = g.defaults;
-      await api.put('/api/admin/gears', {
-        key: g.key,
-        enabled: draft.enabled === d.enabled ? null : draft.enabled,
-        credits: credits === d.credits ? null : credits,
-        title: draft.title === d.title ? null : draft.title,
-        tagline: draft.tagline === d.tagline ? null : draft.tagline,
-        intro: draft.intro === d.intro ? null : draft.intro,
-        cta: draft.cta === d.cta ? null : draft.cta,
-        ctaAction: draft.ctaAction === d.ctaAction ? null : draft.ctaAction,
-      });
-      toast.success(`Saved override for "${g.key}" - live now`);
-      setEditingKey(null);
-      setDraft(null);
-      await refresh();
-    } catch {
-      toast.error('Failed to save override');
-    } finally {
-      setBusy(false);
-    }
+    // Sparse patch: only ship fields that differ from the code default, and
+    // null out fields returned to it - keeps the override row honest about
+    // what the admin actually changed.
+    const d = g.defaults;
+    await api.put('/api/admin/gears', {
+      key: g.key,
+      enabled: draft.enabled === d.enabled ? null : draft.enabled,
+      credits: credits === d.credits ? null : credits,
+      title: draft.title === d.title ? null : draft.title,
+      tagline: draft.tagline === d.tagline ? null : draft.tagline,
+      intro: draft.intro === d.intro ? null : draft.intro,
+      cta: draft.cta === d.cta ? null : draft.cta,
+      ctaAction: draft.ctaAction === d.ctaAction ? null : draft.ctaAction,
+    });
+    toast.success(`Saved override for "${g.key}" - live now`);
+    setRowEditing(g.key, false);
+    await refresh();
   };
 
   const reset = async (g: AdminGear) => {
@@ -138,197 +312,102 @@ const ManageGearsTab = () => {
     try {
       await api.delete(`/api/admin/gears/${encodeURIComponent(g.key)}`);
       toast.success(`"${g.key}" reset to code defaults`);
-      if (editingKey === g.key) {
-        setEditingKey(null);
-        setDraft(null);
-      }
+      setRowEditing(g.key, false);
       await refresh();
+      return true;
     } catch {
       toast.error('Failed to reset override');
+      return false;
     } finally {
       setBusy(false);
     }
   };
 
+  const cell = (g: AdminGear) => ({ gear: g, editing: editing.has(g.key), busy, save });
+  const columns: DataColumn<AdminGear>[] = [
+    {
+      id: 'gear',
+      label: 'Gear',
+      width: '12rem',
+      render: g => (
+        <Stack gap={0.5} alignItems="flex-start" sx={{ minWidth: 0 }}>
+          <Typography
+            level="title-sm"
+            noWrap
+            title={g.key}
+            sx={{ fontFamily: 'monospace', maxWidth: '100%' }}
+            data-testid={`manage-gear-key-${g.key}`}
+          >
+            {g.key}
+          </Typography>
+          <Stack direction="row" gap={0.5} flexWrap="wrap">
+            <StatusChip tone="neutral" label={g.kind} data-testid={`manage-gear-kind-${g.key}`} />
+            {g.override !== null && (
+              <StatusChip tone="warn" label="overridden" data-testid={`manage-gear-overridden-${g.key}`} />
+            )}
+          </Stack>
+        </Stack>
+      ),
+    },
+    { id: 'enabled', label: 'On', width: '5rem', render: g => <GearEnabledCell {...cell(g)} /> },
+    { id: 'credits', label: 'Credits', width: '8rem', numeric: true, render: g => <GearCreditsCell {...cell(g)} /> },
+    { id: 'copy', label: 'Copy (title / tagline / intro)', render: g => <GearCopyCell {...cell(g)} /> },
+    { id: 'cta', label: 'CTA (label / action)', width: '16rem', render: g => <GearCtaCell {...cell(g)} /> },
+  ];
+
   return (
-    <Box data-testid="manage-gears-tab">
-      <Typography level="h3" sx={{ mb: 0.5 }}>
-        Manage Gears
-      </Typography>
-      <Typography level="body-sm" sx={{ mb: 2, opacity: 0.8 }}>
-        Code ships the defaults; anything you save here overrides them live - no deploy. Kill a runaway reward by
-        disabling a gear or setting its credits to 0.
-      </Typography>
-      {isPending ? (
-        <Typography level="body-sm">Loading gears...</Typography>
-      ) : (
-        <Sheet variant="outlined" sx={{ borderRadius: 'sm', overflow: 'auto' }}>
-          <Table size="sm" stickyHeader sx={{ minWidth: 900, '& td': { verticalAlign: 'top' } }}>
-            <thead>
-              <tr>
-                <th style={{ width: 140 }}>Gear</th>
-                <th style={{ width: 70 }}>On</th>
-                <th style={{ width: 90 }}>Credits</th>
-                <th>Copy (title / tagline / intro)</th>
-                <th style={{ width: 220 }}>CTA (label / action)</th>
-                <th style={{ width: 110 }} aria-label="actions" />
-              </tr>
-            </thead>
-            <tbody>
-              {(data?.gears ?? []).map(g => {
-                const e = effective(g);
-                const isEditing = editingKey === g.key && draft;
-                const overridden = g.override !== null;
-                return (
-                  <tr key={g.key} data-testid={`manage-gear-row-${g.key}`}>
-                    <td>
-                      <Stack gap={0.5} alignItems="flex-start">
-                        <Typography level="title-sm" sx={{ fontFamily: 'monospace' }}>
-                          {g.key}
-                        </Typography>
-                        <Stack direction="row" gap={0.5}>
-                          <Chip size="sm" variant="soft" color={g.kind === 'destination' ? 'primary' : 'neutral'}>
-                            {g.kind}
-                          </Chip>
-                          {overridden && (
-                            <Chip size="sm" variant="soft" color="warning">
-                              overridden
-                            </Chip>
-                          )}
-                        </Stack>
-                      </Stack>
-                    </td>
-                    <td>
-                      <Switch
-                        checked={isEditing ? draft.enabled : e.enabled}
-                        disabled={!isEditing || busy}
-                        onChange={ev => draft && setDraft({ ...draft, enabled: ev.target.checked })}
-                        data-testid={`manage-gear-enabled-${g.key}`}
-                      />
-                    </td>
-                    <td>
-                      {isEditing ? (
-                        <Input
-                          size="sm"
-                          value={draft.credits}
-                          onChange={ev => setDraft({ ...draft, credits: ev.target.value })}
-                          slotProps={{ input: { inputMode: 'numeric', 'data-testid': `manage-gear-credits-${g.key}` } }}
-                        />
-                      ) : (
-                        <Typography level="body-sm" sx={{ fontVariantNumeric: 'tabular-nums' }}>
-                          {e.credits.toLocaleString()}
-                        </Typography>
-                      )}
-                    </td>
-                    <td>
-                      {isEditing ? (
-                        <Stack gap={0.5}>
-                          <Input
-                            size="sm"
-                            value={draft.title}
-                            onChange={ev => setDraft({ ...draft, title: ev.target.value })}
-                            placeholder="Title"
-                          />
-                          <Input
-                            size="sm"
-                            value={draft.tagline}
-                            onChange={ev => setDraft({ ...draft, tagline: ev.target.value })}
-                            placeholder="Tagline"
-                          />
-                          <Textarea
-                            size="sm"
-                            minRows={2}
-                            value={draft.intro}
-                            onChange={ev => setDraft({ ...draft, intro: ev.target.value })}
-                            placeholder="Intro"
-                          />
-                        </Stack>
-                      ) : (
-                        <Stack gap={0.25}>
-                          <Typography level="body-sm">
-                            <b>{e.title}</b> / {e.tagline}
-                          </Typography>
-                          <Typography level="body-xs" sx={{ opacity: 0.7 }}>
-                            {e.intro}
-                          </Typography>
-                        </Stack>
-                      )}
-                    </td>
-                    <td>
-                      {isEditing ? (
-                        <Stack gap={0.5}>
-                          <Input
-                            size="sm"
-                            value={draft.cta}
-                            onChange={ev => setDraft({ ...draft, cta: ev.target.value })}
-                            placeholder="CTA label"
-                          />
-                          <Input
-                            size="sm"
-                            value={draft.ctaAction}
-                            onChange={ev => setDraft({ ...draft, ctaAction: ev.target.value })}
-                            placeholder="navigate:/path | external:https://... | files"
-                            sx={{ fontFamily: 'monospace' }}
-                          />
-                        </Stack>
-                      ) : (
-                        <Stack gap={0.25}>
-                          <Typography level="body-sm">{e.cta}</Typography>
-                          <Typography level="body-xs" sx={{ fontFamily: 'monospace', opacity: 0.7 }}>
-                            {e.ctaAction}
-                          </Typography>
-                        </Stack>
-                      )}
-                    </td>
-                    <td>
-                      {isEditing ? (
-                        <Stack direction="row" gap={0.5}>
-                          <Tooltip title="Save - takes effect immediately">
-                            <IconButton
-                              size="sm"
-                              color="primary"
-                              variant="solid"
-                              disabled={busy}
-                              onClick={() => void save(g)}
-                              data-testid={`manage-gear-save-${g.key}`}
-                            >
-                              <SaveOutlinedIcon />
-                            </IconButton>
-                          </Tooltip>
-                          <Button size="sm" variant="plain" disabled={busy} onClick={() => setEditingKey(null)}>
-                            Cancel
-                          </Button>
-                        </Stack>
-                      ) : (
-                        <Stack direction="row" gap={0.5}>
-                          <Button size="sm" variant="outlined" disabled={busy} onClick={() => startEdit(g)}>
-                            Edit
-                          </Button>
-                          {overridden && (
-                            <Tooltip title="Reset to code defaults">
-                              <IconButton
-                                size="sm"
-                                variant="plain"
-                                color="danger"
-                                disabled={busy}
-                                onClick={() => void reset(g)}
-                                data-testid={`manage-gear-reset-${g.key}`}
-                              >
-                                <RestartAltIcon />
-                              </IconButton>
-                            </Tooltip>
-                          )}
-                        </Stack>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </Table>
-        </Sheet>
+    <Stack sx={{ gap: ADMIN_REGION_GAP, minWidth: 0 }} data-testid="manage-gears-tab">
+      <AdminPageHeader
+        title="Gears"
+        description="Code ships the defaults; a saved override applies live, with no deploy. Stop a runaway reward by turning its gear off or setting its credits to 0."
+      />
+
+      {isError && data && (
+        <Alert color="warning" variant="soft" data-testid="manage-gears-refresh-error">
+          Could not refresh gears. Showing the last loaded list.
+        </Alert>
       )}
-    </Box>
+
+      <SettingsDraftProvider>
+        <Stack gap={1}>
+          <UpdatingBar active={isFetching && !isPending} testId="manage-gears-updating" />
+          <DataTable
+            label="Gears"
+            testId="manage-gears-table"
+            rows={data?.gears ?? []}
+            columns={columns}
+            getRowId={g => g.key}
+            rowTestId={g => `manage-gear-row-${g.key}`}
+            loading={isPending}
+            error={isError && !data ? 'Could not load gears.' : undefined}
+            onRetry={() => void refetch()}
+            rowActions={g => (
+              <GearRowMenu
+                {...cell(g)}
+                onEdit={() => setRowEditing(g.key, true)}
+                onStopEditing={() => setRowEditing(g.key, false)}
+                onReset={() => reset(g)}
+              />
+            )}
+            // Fixed columns total 44.5rem with the actions column; the copy column takes the rest.
+            minWidth="62rem"
+            maxHeight="none"
+            pagination={false}
+            empty={
+              <EmptyState
+                title="No gears to show"
+                description="Gears are defined in code, so this list is never empty on a healthy deploy."
+                action={
+                  <Button variant="outlined" onClick={() => void refetch()} data-testid="manage-gears-refresh-btn">
+                    Refresh gears
+                  </Button>
+                }
+              />
+            }
+          />
+        </Stack>
+      </SettingsDraftProvider>
+    </Stack>
   );
 };
 

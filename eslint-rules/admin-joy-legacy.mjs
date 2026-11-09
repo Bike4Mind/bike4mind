@@ -37,7 +37,6 @@ const componentsByFile = {
   'GitHubConnectionTab.tsx': ['Card', 'Modal'],
   'IntegrationDemandTab.tsx': ['Table'],
   'IntegrationHealth/components/IntegrationDetailPanel.tsx': ['Card', 'Table'],
-  'ManageGearsTab.tsx': ['Table'],
   'MigrateUsersTab.tsx': ['Card', 'Modal'],
   'ModelLifecycleTab.tsx': ['Modal', 'Table'],
   'ModelLogsTab.tsx': ['Card'],
