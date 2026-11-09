@@ -82,14 +82,14 @@ export const SuccessorCostPanel: React.FC<SuccessorCostProps> = ({ modelId, succ
   const delta = successorCostDelta(modelId, successorId, rates);
 
   return (
-    <Box sx={{ mt: 1, p: 1, borderRadius: 'sm', bgcolor: 'background.level1' }} data-testid="successor-cost-panel">
+    <Box sx={{ mt: 1, p: 1, borderRadius: 'md', bgcolor: 'admin.surfaceSubtle' }} data-testid="successor-cost-panel">
       <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.5 }}>
         <StatusChip
           tone={VERDICT_TONE[delta.verdict]}
           label={VERDICT_LABEL[delta.verdict]}
           data-testid="successor-cost-panel-verdict"
         />
-        <Typography level="body-xs" color="neutral">
+        <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
           {modelId} to {successorId}
         </Typography>
       </Stack>
@@ -99,7 +99,7 @@ export const SuccessorCostPanel: React.FC<SuccessorCostProps> = ({ modelId, succ
           <RateRow label="Output" change={delta.output} />
         </Stack>
       ) : (
-        <Typography level="body-xs" color="neutral">
+        <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
           One of the two models has no price row in force, so the cost effect of this mapping cannot be checked.
         </Typography>
       )}
