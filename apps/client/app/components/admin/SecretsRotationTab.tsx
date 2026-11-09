@@ -1,33 +1,137 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  Box,
-  CircularProgress,
-  Sheet,
-  Table,
-  Typography,
   Button,
-  Chip,
-  Tooltip,
-  IconButton,
-  Modal,
-  ModalDialog,
+  DialogContent,
+  Dropdown,
   FormControl,
+  FormHelperText,
   FormLabel,
+  IconButton,
   Input,
+  Menu,
+  MenuButton,
+  MenuItem,
   Stack,
+  Tooltip,
+  Typography,
 } from '@mui/joy';
-import SecurityIcon from '@mui/icons-material/Security';
+import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import EditIcon from '@mui/icons-material/Edit';
-import SaveIcon from '@mui/icons-material/Save';
 import { api } from '@client/app/contexts/ApiContext';
+import { getErrorMessage } from '@client/app/utils/error';
+import { toast } from 'sonner';
+import { z } from 'zod';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
+import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import { useState } from 'react';
-import { SafeSecretRotation } from '@client/lib/secretRotation/utils';
+import { useState, type ReactNode } from 'react';
+import type { SafeSecretRotation } from '@client/lib/secretRotation/utils';
+import {
+  AdminDialog,
+  AdminPageHeader,
+  DataTable,
+  EmptyState,
+  StatusChip,
+  UpdatingBar,
+  type DataColumn,
+} from './shared';
+import { ADMIN_REGION_GAP, adminFocus } from './shared/adminStyles';
 
 dayjs.extend(relativeTime);
+
+const rotationIntervalSchema = z.number().int().min(1).max(365);
+
+/** An inactive record is not expected to rotate, so it never reads as overdue. */
+function rotationStatus(secret: SafeSecretRotation): { tone: AdminStatusTone; label: string } {
+  if (!secret.isActive) return { tone: 'neutral', label: 'Inactive' };
+  if (dayjs(secret.nextRotation).isBefore(dayjs())) return { tone: 'warn', label: 'Overdue' };
+  return { tone: 'good', label: 'Active' };
+}
+
+const muted = { color: 'admin.inkMuted' };
+const dash = (
+  <Typography level="body-sm" sx={muted}>
+    -
+  </Typography>
+);
+
+/** One line that truncates with an ellipsis, the full text on hover. */
+const TruncatedText = ({ text, mono, testId }: { text: string; mono?: boolean; testId?: string }) => (
+  <Tooltip title={text} placement="top-start">
+    <Typography
+      level="body-sm"
+      noWrap
+      data-testid={testId}
+      sx={{ color: 'admin.ink', minWidth: 0, ...(mono && { fontFamily: 'code' }) }}
+    >
+      {text}
+    </Typography>
+  </Tooltip>
+);
+
+/** The absolute date, with the relative time as a description so it does not replace the date's name. */
+const DateCell = ({ value, testId }: { value: Date; testId: string }) => (
+  <Tooltip title={dayjs(value).fromNow()} describeChild>
+    <Typography level="body-sm" noWrap data-testid={testId}>
+      {dayjs(value).format('MMM D, YYYY')}
+    </Typography>
+  </Tooltip>
+);
+
+const DialogFooter = ({ children }: { children: ReactNode }) => (
+  <Stack
+    direction="row"
+    justifyContent="flex-end"
+    gap={1}
+    sx={{ pt: 2, mt: 1, borderTop: '1px solid', borderColor: 'admin.border' }}
+  >
+    {children}
+  </Stack>
+);
+
+const KeyName = ({ children }: { children: ReactNode }) => (
+  <Typography component="code" fontFamily="code" sx={{ color: 'admin.ink' }}>
+    {children}
+  </Typography>
+);
+
+function RotationRowMenu({
+  secret,
+  onRenew,
+  onEdit,
+}: {
+  secret: SafeSecretRotation;
+  onRenew: (secret: SafeSecretRotation) => void;
+  onEdit: (secret: SafeSecretRotation) => void;
+}) {
+  return (
+    <Dropdown>
+      <MenuButton
+        slots={{ root: IconButton }}
+        slotProps={{
+          root: {
+            size: 'sm',
+            variant: 'plain',
+            'aria-label': `Actions for ${secret.keyName}`,
+            sx: { ...adminFocus, color: 'admin.inkMuted' },
+          },
+        }}
+        data-testid={`secrets-rotation-row-actions-${secret.id}`}
+      >
+        <MoreHorizIcon sx={{ fontSize: 18 }} />
+      </MenuButton>
+      <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
+        <MenuItem onClick={() => onRenew(secret)} data-testid={`secrets-rotation-row-renew-${secret.id}`}>
+          Mark renewed
+        </MenuItem>
+        <MenuItem onClick={() => onEdit(secret)} data-testid={`secrets-rotation-row-edit-${secret.id}`}>
+          Edit rotation
+        </MenuItem>
+      </Menu>
+    </Dropdown>
+  );
+}
 
 export default function SecretsRotationTab() {
   const queryClient = useQueryClient();
@@ -39,7 +143,7 @@ export default function SecretsRotationTab() {
     description: '',
   });
 
-  const { data, isLoading, error, refetch } = useQuery<SafeSecretRotation[]>({
+  const { data, isLoading, isFetching, error, refetch } = useQuery<SafeSecretRotation[]>({
     queryKey: ['secrets-rotation'],
     queryFn: async () => {
       const response = await api.get('/api/secret-rotations');
@@ -55,6 +159,7 @@ export default function SecretsRotationTab() {
       queryClient.invalidateQueries({ queryKey: ['secrets-rotation'] });
       setOpenEditModal(false);
     },
+    onError: (error: unknown) => toast.error(getErrorMessage(error)),
   });
 
   const renewMutation = useMutation({
@@ -63,6 +168,7 @@ export default function SecretsRotationTab() {
       queryClient.invalidateQueries({ queryKey: ['secrets-rotation'] });
       setOpenRenewModal(false);
     },
+    onError: (error: unknown) => toast.error(getErrorMessage(error)),
   });
 
   const handleRenew = (secret: SafeSecretRotation) => {
@@ -70,204 +176,236 @@ export default function SecretsRotationTab() {
     setOpenRenewModal(true);
   };
 
+  const handleEdit = (secret: SafeSecretRotation) => {
+    setCurrentSecret(secret);
+    setEditFormData({
+      rotationIntervalDays: secret.rotationIntervalDays,
+      description: secret.description || '',
+    });
+    setOpenEditModal(true);
+  };
+
   const handleRefresh = () => {
     refetch();
   };
 
-  const getStatusColor = (active: boolean, nextRotation: Date) => {
-    if (!active) return 'danger';
-    if (dayjs(nextRotation).isBefore(dayjs())) return 'warning';
-    return 'success';
+  const closeEditModal = () => {
+    if (editMutation.isPending) return;
+    setOpenEditModal(false);
   };
 
-  if (isLoading) {
-    return (
-      <Box display="flex" justifyContent="center" alignItems="center" minHeight="200px">
-        <CircularProgress />
-      </Box>
-    );
-  }
+  const closeRenewModal = () => {
+    if (renewMutation.isPending) return;
+    setOpenRenewModal(false);
+  };
 
-  if (error) {
-    return (
-      <Box>
-        <Typography color="danger">Error loading secrets rotation data</Typography>
-        <Button onClick={handleRefresh} variant="soft" sx={{ mt: 2 }}>
-          Retry
-        </Button>
-      </Box>
-    );
-  }
+  const validRotationInterval = rotationIntervalSchema.safeParse(editFormData.rotationIntervalDays).success;
+
+  const columns: readonly DataColumn<SafeSecretRotation>[] = [
+    {
+      id: 'keyName',
+      label: 'Secret',
+      width: '12rem',
+      render: secret => <TruncatedText text={secret.keyName} mono testId={`secrets-rotation-key-${secret.id}`} />,
+    },
+    {
+      id: 'description',
+      label: 'Description',
+      render: secret => (secret.description ? <TruncatedText text={secret.description} /> : dash),
+    },
+    {
+      id: 'interval',
+      label: 'Interval (days)',
+      numeric: true,
+      width: '7rem',
+      render: secret => secret.rotationIntervalDays,
+    },
+    {
+      id: 'rotatedAt',
+      label: 'Last renewed',
+      width: '8rem',
+      render: secret => <DateCell value={secret.rotatedAt} testId={`secrets-rotation-rotated-at-${secret.id}`} />,
+    },
+    {
+      id: 'lastRotatedBy',
+      label: 'Last renewed by',
+      width: '9rem',
+      render: secret => (secret.lastRotatedByName ? <TruncatedText text={secret.lastRotatedByName} /> : dash),
+    },
+    {
+      id: 'nextRotation',
+      label: 'Next rotation',
+      width: '8rem',
+      render: secret => <DateCell value={secret.nextRotation} testId={`secrets-rotation-next-rotation-${secret.id}`} />,
+    },
+    {
+      id: 'status',
+      label: 'Status',
+      width: '6.5rem',
+      render: secret => {
+        const { tone, label } = rotationStatus(secret);
+        return <StatusChip tone={tone} label={label} data-testid={`secrets-rotation-status-${secret.id}`} />;
+      },
+    },
+  ];
 
   return (
-    <Sheet sx={{ height: '100%', overflow: 'auto' }}>
-      <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
-        <Stack direction="row" alignItems="center" spacing={1}>
-          <Typography level="h3" startDecorator={<SecurityIcon />}>
-            Secrets Rotation
-          </Typography>
-          <ContextHelpButton helpId="admin/secrets-management" tooltipText="Secrets Management Help" />
-        </Stack>
-        <Box display="flex" gap={1}>
-          <Tooltip title="Refresh data">
-            <IconButton onClick={handleRefresh} variant="outlined">
-              <RefreshIcon />
-            </IconButton>
-          </Tooltip>
-        </Box>
-      </Box>
-
-      <Modal open={openEditModal} onClose={() => setOpenEditModal(false)}>
-        <ModalDialog>
-          <Typography level="h4" mb={2}>
-            Edit Secret Rotation: {currentSecret?.keyName}
-          </Typography>
-          <Stack spacing={2}>
-            <FormControl>
-              <FormLabel>Description</FormLabel>
-              <Input
-                name="description"
-                value={editFormData.description}
-                onChange={e => setEditFormData({ ...editFormData, description: e.target.value })}
-              />
-            </FormControl>
-            <FormControl>
-              <FormLabel>Rotation Interval (days)</FormLabel>
-              <Input
-                name="rotationIntervalDays"
-                value={editFormData.rotationIntervalDays}
-                onChange={e => setEditFormData({ ...editFormData, rotationIntervalDays: Number(e.target.value) })}
-                type="number"
-                slotProps={{
-                  input: {
-                    min: 1,
-                    max: 365,
-                  },
-                }}
-              />
-            </FormControl>
+    <Stack gap={ADMIN_REGION_GAP} sx={{ minWidth: 0 }} data-testid="admin-secrets-rotation-tab">
+      <AdminPageHeader
+        title="Secrets rotation"
+        count={data?.length}
+        description="Rotation schedules for platform secrets, and who renewed each one last."
+        actions={
+          <>
+            <ContextHelpButton helpId="admin/secrets-management" tooltipText="Secrets rotation help" />
             <Button
-              onClick={() => {
-                if (currentSecret) {
-                  editMutation.mutate({
-                    id: currentSecret.id,
-                    ...editFormData,
-                  });
-                }
-              }}
-              loading={editMutation.isPending}
+              variant="outlined"
+              size="sm"
+              startDecorator={<RefreshIcon sx={{ fontSize: 16 }} />}
+              disabled={isFetching}
+              onClick={handleRefresh}
+              data-testid="secrets-rotation-refresh-btn"
+              sx={adminFocus}
             >
-              Save Changes
+              Refresh
             </Button>
-          </Stack>
-        </ModalDialog>
-      </Modal>
+          </>
+        }
+      />
 
-      <Modal open={openRenewModal} onClose={() => setOpenRenewModal(false)}>
-        <ModalDialog>
-          <Typography level="h4" mb={2} textAlign="center">
-            Set Secret as Renewed
+      <Stack gap={1} sx={{ minWidth: 0 }}>
+        <UpdatingBar active={isFetching && !isLoading} testId="secrets-rotation-updating-bar" />
+        <DataTable
+          label="Secrets rotation"
+          testId="secrets-rotation-table"
+          rows={data ?? []}
+          columns={columns}
+          getRowId={secret => secret.id}
+          rowTestId={secret => `secrets-rotation-row-${secret.id}`}
+          loading={isLoading}
+          error={error ? 'Could not load the rotation schedules.' : undefined}
+          onRetry={handleRefresh}
+          empty={
+            <EmptyState
+              title="No secrets are tracked for rotation"
+              description="Secrets appear here once they are registered for rotation."
+              action={
+                <Button variant="outlined" onClick={handleRefresh} data-testid="secrets-rotation-empty-refresh-btn">
+                  Refresh
+                </Button>
+              }
+            />
+          }
+          rowActions={secret => <RotationRowMenu secret={secret} onRenew={handleRenew} onEdit={handleEdit} />}
+          pagination={false}
+          // Wide enough that every column keeps one line; below it the table scrolls inside its frame.
+          minWidth="64rem"
+          maxHeight="none"
+        />
+      </Stack>
+
+      <AdminDialog
+        open={openEditModal}
+        onClose={closeEditModal}
+        title="Edit rotation"
+        data-testid="secrets-rotation-edit-dialog"
+      >
+        <DialogContent sx={{ gap: 2 }}>
+          <Typography level="body-sm" component="div">
+            Changes the description and rotation interval of <KeyName>{currentSecret?.keyName}</KeyName>.
           </Typography>
-          <Typography level="h3" textAlign="center">
-            {currentSecret?.keyName}
-          </Typography>
-          <Stack spacing={2}>
-            <Button
-              onClick={() => {
-                if (currentSecret) {
-                  renewMutation.mutate({
-                    id: currentSecret.id,
-                  });
-                }
+          <FormControl>
+            <FormLabel>Description</FormLabel>
+            <Input
+              name="description"
+              value={editFormData.description}
+              onChange={e => setEditFormData({ ...editFormData, description: e.target.value })}
+              slotProps={{ input: { 'data-testid': 'secrets-rotation-edit-description-input' } }}
+            />
+          </FormControl>
+          <FormControl error={!validRotationInterval}>
+            <FormLabel>Rotation interval (days)</FormLabel>
+            <Input
+              name="rotationIntervalDays"
+              value={editFormData.rotationIntervalDays}
+              onChange={e => setEditFormData({ ...editFormData, rotationIntervalDays: Number(e.target.value) })}
+              type="number"
+              slotProps={{
+                input: {
+                  min: 1,
+                  max: 365,
+                  'data-testid': 'secrets-rotation-edit-interval-input',
+                },
               }}
-              loading={renewMutation.isPending}
-              startDecorator={<SaveIcon />}
-            >
-              Confirm
-            </Button>
-          </Stack>
-        </ModalDialog>
-      </Modal>
+            />
+            {!validRotationInterval && <FormHelperText>Enter a whole number from 1 to 365.</FormHelperText>}
+          </FormControl>
+        </DialogContent>
+        <DialogFooter>
+          <Button
+            variant="plain"
+            color="neutral"
+            onClick={closeEditModal}
+            disabled={editMutation.isPending}
+            data-testid="secrets-rotation-edit-cancel-btn"
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={() => {
+              if (currentSecret && validRotationInterval) {
+                editMutation.mutate({
+                  id: currentSecret.id,
+                  ...editFormData,
+                });
+              }
+            }}
+            loading={editMutation.isPending}
+            disabled={!validRotationInterval}
+            data-testid="secrets-rotation-edit-save-btn"
+          >
+            Save changes
+          </Button>
+        </DialogFooter>
+      </AdminDialog>
 
-      <Box sx={{ overflowX: { xs: 'auto', sm: 'visible' } }}>
-        <Table stickyHeader hoverRow sx={{ minWidth: { xs: '900px', sm: 'auto' } }}>
-          <thead>
-            <tr>
-              <th style={{ width: '20%', wordBreak: 'break-all' }}>Secret Key Name</th>
-              <th>Description</th>
-              <th>Last Rotation</th>
-              <th>Next Rotation</th>
-              <th>Interval (days)</th>
-              <th style={{ width: '8%' }}>Status</th>
-              <th>Last Renewed By</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data?.map(secret => (
-              <tr key={secret.id}>
-                <td style={{ wordBreak: 'break-all' }}>
-                  <Typography fontWeight="lg">{secret.keyName}</Typography>
-                </td>
-                <td>{secret.description}</td>
-                <td>
-                  <Box>
-                    {dayjs(secret.rotatedAt).format('MMM D, YYYY')}
-                    <Typography level="body-xs" color="neutral">
-                      {dayjs(secret.rotatedAt).fromNow()}
-                    </Typography>
-                  </Box>
-                </td>
-                <td>
-                  <Box>
-                    {dayjs(secret.nextRotation).format('MMM D, YYYY')}
-                    <Typography
-                      level="body-xs"
-                      color={dayjs(secret.nextRotation).isBefore(dayjs()) ? 'danger' : 'neutral'}
-                    >
-                      {dayjs(secret.nextRotation).fromNow()}
-                    </Typography>
-                  </Box>
-                </td>
-                <td>{secret.rotationIntervalDays}</td>
-                <td>
-                  <Chip variant="soft" color={getStatusColor(secret.isActive, secret.nextRotation)}>
-                    {secret.isActive ? 'active' : 'inactive'}
-                  </Chip>
-                </td>
-                <td>{secret.lastRotatedByName}</td>
-                <td>
-                  <Box display="flex" gap={1}>
-                    <Button
-                      size="sm"
-                      variant="outlined"
-                      onClick={() => handleRenew(secret)}
-                      startDecorator={<RefreshIcon />}
-                    >
-                      Renew
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="plain"
-                      onClick={() => {
-                        setCurrentSecret(secret);
-                        setEditFormData({
-                          rotationIntervalDays: secret.rotationIntervalDays,
-                          description: secret.description || '',
-                        });
-                        setOpenEditModal(true);
-                      }}
-                      startDecorator={<EditIcon />}
-                    >
-                      Edit
-                    </Button>
-                  </Box>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </Table>
-      </Box>
-    </Sheet>
+      <AdminDialog
+        open={openRenewModal}
+        onClose={closeRenewModal}
+        title="Mark secret as renewed"
+        data-testid="secrets-rotation-renew-dialog"
+      >
+        <DialogContent>
+          <Typography level="body-sm" component="div">
+            Records <KeyName>{currentSecret?.keyName}</KeyName> as renewed now, by you, and schedules its next rotation
+            in {currentSecret?.rotationIntervalDays} days.
+          </Typography>
+        </DialogContent>
+        <DialogFooter>
+          <Button
+            variant="plain"
+            color="neutral"
+            onClick={closeRenewModal}
+            disabled={renewMutation.isPending}
+            data-testid="secrets-rotation-renew-cancel-btn"
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={() => {
+              if (currentSecret) {
+                renewMutation.mutate({
+                  id: currentSecret.id,
+                });
+              }
+            }}
+            loading={renewMutation.isPending}
+            data-testid="secrets-rotation-renew-confirm-btn"
+          >
+            Mark renewed
+          </Button>
+        </DialogFooter>
+      </AdminDialog>
+    </Stack>
   );
 }
