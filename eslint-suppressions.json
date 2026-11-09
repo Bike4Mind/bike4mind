@@ -3145,11 +3145,6 @@
       "count": 10
     }
   },
-  "apps/client/server/middlewares/defineNextRoute.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 11
-    }
-  },
   "apps/client/server/middlewares/errorHandler.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 2
