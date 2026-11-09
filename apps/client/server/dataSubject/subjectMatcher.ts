@@ -1,4 +1,6 @@
-import { mongoose } from '@bike4mind/database';
+import { FabFile, mongoose } from '@bike4mind/database';
+import { findPersonalOrganizationIds, personalFilter } from '../users/purgeAccountContent';
+import { findOrganizationFileIds } from '@bike4mind/server-utils/users/purgeAccountFiles';
 import { findUnclassifiedModels } from './registry';
 import { valuesAt } from './documentPaths';
 import type { DataHolder, DataHolderRegistry, UserReference } from './types';
@@ -17,6 +19,20 @@ export type LeanDocument = Record<string, unknown> & { _id?: unknown };
 export const QUERY_MAX_TIME_MS = 60_000;
 // Parent keys per `$in` batch when collecting `viaParent` children.
 export const PARENT_KEY_BATCH = 500;
+// Documents matched together, so the organization-file check reads its lakes and workspaces once per batch.
+export const MATCH_BATCH = 200;
+
+const MAX_TIME_MS_EXPIRED = 50;
+
+/**
+ * A query the server stopped for running past `maxTimeMS`. Anything else (a network failure, a
+ * replica set election) fails the walk, so the job is retried rather than finished incomplete.
+ */
+export const isServerQueryFailure = (error: unknown): boolean =>
+  error instanceof mongoose.mongo.MongoServerError && error.code === MAX_TIME_MS_EXPIRED;
+
+/** Per `scope: 'personal'` reference, the ids of the documents it may match on this model. */
+export type PersonalScope = ReadonlyMap<UserReference, ReadonlySet<string>>;
 
 /** A model registered in this process that the registry does not classify fails the walk loudly. */
 export function assertEveryModelClassified(modelNames: readonly string[]): void {
@@ -27,6 +43,8 @@ export function assertEveryModelClassified(modelNames: readonly string[]): void 
 }
 
 export class SubjectMatcher {
+  private personalOrganizationIds: Promise<string[]> | undefined;
+
   constructor(readonly subject: DataSubject) {}
 
   expectedValue(reference: UserReference): string | null {
@@ -65,7 +83,93 @@ export class SubjectMatcher {
     }
     return value => String(value) === expected;
   }
+
+  /**
+   * Ids of the documents each `scope: 'personal'` reference may match, selected with the account
+   * purge's own predicate so the export, the erasure plan and the purge agree on what is the person's.
+   * A server-stopped query is passed to `onQueryFailure` and leaves that reference with no ids (none
+   * at all is safer than unknown ones); without the callback, and for any other error, it throws.
+   */
+  async personalDocumentIds(
+    model: string,
+    references: readonly UserReference[],
+    onQueryFailure?: (path: string, error: unknown) => void
+  ): Promise<PersonalScope> {
+    const personal = new Map<UserReference, Set<string>>();
+    for (const reference of references) {
+      if (reference.scope !== 'personal') continue;
+      const ids = new Set<string>();
+      personal.set(reference, ids);
+      const filter = this.filterFor(reference);
+      if (!filter) continue;
+      this.personalOrganizationIds ??= findPersonalOrganizationIds(this.subject.userId);
+      const scoped = {
+        ...filter,
+        ...personalFilter(this.subject.userId, await this.personalOrganizationIds, reference.path),
+      };
+      // The raw collection, as the purge runs it: Mongoose would cast its `''` organization id.
+      const cursor = mongoose
+        .model(model)
+        .collection.find(scoped, { projection: { _id: 1 } })
+        .maxTimeMS(QUERY_MAX_TIME_MS);
+      try {
+        for await (const document of cursor) ids.add(String(document._id));
+      } catch (error) {
+        if (!onQueryFailure || !isServerQueryFailure(error)) throw error;
+        ids.clear();
+        onQueryFailure(reference.path, error);
+      }
+    }
+    return personal;
+  }
+
+  /** Of the documents a personal reference matches, the FabFiles an organization keeps. */
+  async organizationFileIds(
+    model: string,
+    documents: readonly LeanDocument[],
+    references: readonly UserReference[],
+    personal: PersonalScope
+  ): Promise<ReadonlySet<string>> {
+    if (model !== FabFile.modelName) return new Set();
+    const candidates = documents.filter(document =>
+      references.some(
+        reference =>
+          reference.scope === 'personal' &&
+          personal.get(reference)?.has(String(document._id)) &&
+          this.matches(document, reference)
+      )
+    );
+    if (candidates.length === 0) return new Set();
+    return findOrganizationFileIds(
+      candidates.map(document => FabFile.hydrate(document)),
+      this.subject.userId
+    );
+  }
+
+  /**
+   * The references that verifiably name this person on the document, whatever the query matched. A
+   * `scope: 'personal'` reference matches only a document in `personal` and not in
+   * `organizationFiles` (`organizationFileIds`); read the document whole when `readsWholeDocument`
+   * says that check needs it.
+   */
+  matchingReferences(
+    document: LeanDocument,
+    references: readonly UserReference[],
+    personal: PersonalScope = new Map(),
+    organizationFiles: ReadonlySet<string> = new Set()
+  ): UserReference[] {
+    const id = String(document._id);
+    return references.filter(
+      reference =>
+        this.matches(document, reference) &&
+        (reference.scope !== 'personal' || (personal.get(reference)?.has(id) === true && !organizationFiles.has(id)))
+    );
+  }
 }
+
+/** A file's personal check reads its lake membership, so a projected read would misjudge it. */
+export const readsWholeDocument = (model: string, references: readonly UserReference[]): boolean =>
+  model === FabFile.modelName && references.some(reference => reference.scope === 'personal');
 
 /**
  * Lean read through the model, so values are cast to the schema. `strictQuery: 'throw'` makes a path

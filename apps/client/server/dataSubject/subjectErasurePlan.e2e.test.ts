@@ -9,7 +9,7 @@ import type { DataHolderRegistry } from './types';
 const ObjectId = Schema.Types.ObjectId;
 
 const Person = mongoose.model('DsErasePerson', new Schema({ email: String, invitedBy: ObjectId }));
-const Note = mongoose.model('DsEraseNote', new Schema({ ownerId: ObjectId, organizationId: ObjectId, slug: String }));
+const Note = mongoose.model('DsEraseNote', new Schema({ ownerId: ObjectId, organizationId: String, slug: String }));
 const NoteComment = mongoose.model('DsEraseNoteComment', new Schema({ noteId: ObjectId, authorId: ObjectId }));
 const NoteView = mongoose.model('DsEraseNoteView', new Schema({ noteSlug: String }));
 const Team = mongoose.model('DsEraseTeam', new Schema({ users: [{ userId: ObjectId, _id: false }] }));
@@ -33,7 +33,11 @@ const registry: DataHolderRegistry = {
   },
   DsEraseNote: {
     kind: 'holder',
-    references: [{ path: 'ownerId', matchBy: 'userId', action: 'deleteDocument', where: { organizationId: null } }],
+    // A personal note goes; an organization's stays with its owner cleared, as on the real registry.
+    references: [
+      { path: 'ownerId', matchBy: 'userId', action: 'deleteDocument', scope: 'personal' },
+      { path: 'ownerId', matchBy: 'userId', action: 'anonymize' },
+    ],
   },
   DsEraseNoteComment: {
     kind: 'viaParent',
@@ -100,7 +104,10 @@ describe('SubjectErasurePlan', () => {
     const other = await Person.create({ email: 'them@example.com', invitedBy: me._id });
 
     const mine = await Note.create({ ownerId: me._id, slug: 'mine' });
-    await Note.create({ ownerId: me._id, organizationId: new mongoose.Types.ObjectId(), slug: 'org' });
+    await Note.create({ ownerId: me._id, organizationId: String(new mongoose.Types.ObjectId()), slug: 'org' });
+    const workspace = new mongoose.Types.ObjectId();
+    await mongoose.model('Organization').collection.insertOne({ _id: workspace, userId: me._id, personal: true });
+    await Note.create({ ownerId: me._id, organizationId: String(workspace), slug: 'workspace' });
     const theirs = await Note.create({ ownerId: other._id, slug: 'theirs' });
     await NoteComment.create({ noteId: mine._id, authorId: other._id });
     await NoteComment.create({ noteId: theirs._id, authorId: me._id });
@@ -120,7 +127,8 @@ describe('SubjectErasurePlan', () => {
     expect(counts).toEqual({
       // Their own row is deleted; their reference on the other person's row is anonymized.
       DsErasePerson: { ...none, deleted: 1, anonymized: 1 },
-      DsEraseNote: { ...none, deleted: 1 },
+      // Their personal and personal-workspace notes go; the organization's note keeps, owner cleared.
+      DsEraseNote: { ...none, deleted: 2, anonymized: 1 },
       // The comment on their deleted note goes with it; their comment on another's note is anonymized.
       DsEraseNoteComment: { ...none, deleted: 1, anonymized: 1 },
       DsEraseNoteView: { ...none, deleted: 1 },

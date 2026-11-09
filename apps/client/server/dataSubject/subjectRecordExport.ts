@@ -1,18 +1,18 @@
-import { FabFile, mongoose } from '@bike4mind/database';
-import { findPersonalOrganizationIds, personalFilter } from '../users/purgeAccountContent';
-import { findOrganizationFileIds } from '@bike4mind/server-utils/users/purgeAccountFiles';
+import { mongoose } from '@bike4mind/database';
 import { holderExportScope, viaParentExportScope, type ExportScope, type ReferenceMatch } from './exportScope';
 import { DATA_HOLDER_REGISTRY } from './registry';
 import { cloneContainers, matchingArrayElements, omitPath, setPath, valuesAt } from './documentPaths';
 import {
+  MATCH_BATCH,
   PARENT_KEY_BATCH,
-  QUERY_MAX_TIME_MS,
   SubjectMatcher,
+  isServerQueryFailure,
   orderParentsFirst,
   parentKeyPaths,
   readDocuments,
   type DataSubject,
   type LeanDocument,
+  type PersonalScope,
 } from './subjectMatcher';
 import type { DataHolder, DataHolderRegistry, UserReference } from './types';
 
@@ -26,8 +26,6 @@ import type { DataHolder, DataHolderRegistry, UserReference } from './types';
 export { assertEveryModelClassified, type DataSubject } from './subjectMatcher';
 export type ExportedRecord = Record<string, unknown>;
 
-// Documents matched together, so the organization-file check reads its lakes and workspaces once per batch.
-const MATCH_BATCH = 200;
 // Sizing only orders the walk, so a collection that cannot be sized quickly is just walked last in its tier.
 const SIZE_MAX_TIME_MS = 2_000;
 const SIZE_CONCURRENCY = 8;
@@ -91,7 +89,6 @@ export class SubjectRecordExport {
   private readonly parentScopes = new Map<string, ParentScopes>();
   private readonly completed = new Set<string>();
   private readonly failures = new Map<string, FailedReference[]>();
-  private personalOrganizationIds: Promise<string[]> | undefined;
 
   constructor(
     subject: DataSubject,
@@ -164,7 +161,9 @@ export class SubjectRecordExport {
   }
 
   private async *holderRecords(model: string, references: readonly UserReference[]): AsyncGenerator<ExportedRecord> {
-    const personal = await this.personalDocumentIds(model, references);
+    const personal = await this.matcher.personalDocumentIds(model, references, (path, error) =>
+      this.recordFailure(model, path, error)
+    );
     let batch: LeanDocument[] = [];
     for await (const document of this.referenceMatches(model, references)) {
       batch.push(document);
@@ -179,9 +178,9 @@ export class SubjectRecordExport {
     model: string,
     documents: readonly LeanDocument[],
     references: readonly UserReference[],
-    personal: PersonalIds
+    personal: PersonalScope
   ): AsyncGenerator<ExportedRecord> {
-    const organizationFiles = await this.organizationFileIds(model, documents, references, personal);
+    const organizationFiles = await this.matcher.organizationFileIds(model, documents, references, personal);
     for (const document of documents) {
       const matches = this.matchesOn(document, references, personal, organizationFiles);
       const record = this.recordFor(model, document, holderExportScope(matches), matches, references);
@@ -224,29 +223,6 @@ export class SubjectRecordExport {
     const failures = this.failures.get(model) ?? [];
     if (!failures.some(failure => failure.path === path)) failures.push({ path, error });
     this.failures.set(model, failures);
-  }
-
-  /** Of the documents a personal reference matches, the FabFiles an organization keeps. */
-  private async organizationFileIds(
-    model: string,
-    documents: readonly LeanDocument[],
-    references: readonly UserReference[],
-    personal: PersonalIds
-  ): Promise<ReadonlySet<string>> {
-    if (model !== FabFile.modelName) return new Set();
-    const candidates = documents.filter(document =>
-      references.some(
-        reference =>
-          reference.scope === 'personal' &&
-          personal.get(reference)?.has(String(document._id)) &&
-          this.matcher.matches(document, reference)
-      )
-    );
-    if (candidates.length === 0) return new Set();
-    return findOrganizationFileIds(
-      candidates.map(document => FabFile.hydrate(document)),
-      this.matcher.subject.userId
-    );
   }
 
   private async *childRecords(
@@ -295,59 +271,19 @@ export class SubjectRecordExport {
     }
   }
 
-  /**
-   * Ids of the documents each `scope: 'personal'` reference may match, selected with the account
-   * purge's own predicate so the export and the purge agree on what is the person's.
-   */
-  private async personalDocumentIds(model: string, references: readonly UserReference[]): Promise<PersonalIds> {
-    const personal = new Map<UserReference, Set<string>>();
-    for (const reference of references) {
-      if (reference.scope !== 'personal') continue;
-      const ids = new Set<string>();
-      personal.set(reference, ids);
-      const filter = this.matcher.filterFor(reference);
-      if (!filter) continue;
-      this.personalOrganizationIds ??= findPersonalOrganizationIds(this.matcher.subject.userId);
-      const scoped = {
-        ...filter,
-        ...personalFilter(this.matcher.subject.userId, await this.personalOrganizationIds, reference.path),
-      };
-      // The raw collection, as the purge runs it: Mongoose would cast its `''` organization id.
-      const cursor = mongoose
-        .model(model)
-        .collection.find(scoped, { projection: { _id: 1 } })
-        .maxTimeMS(QUERY_MAX_TIME_MS);
-      try {
-        for await (const document of cursor) ids.add(String(document._id));
-      } catch (error) {
-        if (!isServerQueryFailure(error)) throw error;
-        // Unknown ids would let none of this reference's matches count as personal; none at all is safer.
-        ids.clear();
-        this.recordFailure(model, reference.path, error);
-      }
-    }
-    return personal;
-  }
-
   /** The references that verifiably name this person on the document, whatever the query matched. */
   private matchesOn(
     document: LeanDocument,
     references: readonly UserReference[],
-    personal: PersonalIds = new Map(),
-    organizationFiles: ReadonlySet<string> = new Set()
+    personal?: PersonalScope,
+    organizationFiles?: ReadonlySet<string>
   ): ReferenceMatch[] {
-    const matches: ReferenceMatch[] = [];
-    for (const reference of references) {
-      if (!this.matcher.matches(document, reference)) continue;
-      const id = String(document._id);
-      if (reference.scope === 'personal' && (!personal.get(reference)?.has(id) || organizationFiles.has(id))) {
-        continue;
-      }
-      const isSubject = this.matcher.isSubject(reference);
-      // A path that reaches an array in the stored document is matched element by element.
-      matches.push({ reference, throughArray: matchingArrayElements(document, reference.path, isSubject) !== null });
-    }
-    return matches;
+    const matched = this.matcher.matchingReferences(document, references, personal, organizationFiles);
+    // A path that reaches an array in the stored document is matched element by element.
+    return matched.map(reference => ({
+      reference,
+      throughArray: matchingArrayElements(document, reference.path, this.matcher.isSubject(reference)) !== null,
+    }));
   }
 
   /** Whether the reference holds a value and none of it is this person. */
@@ -497,14 +433,3 @@ export class SubjectRecordExport {
     }
   }
 }
-
-type PersonalIds = ReadonlyMap<UserReference, ReadonlySet<string>>;
-
-const MAX_TIME_MS_EXPIRED = 50;
-
-/**
- * A query the server stopped for running past `maxTimeMS`. Anything else (a network failure, a
- * replica set election) fails the model, so the job is retried rather than exported incomplete.
- */
-const isServerQueryFailure = (error: unknown): boolean =>
-  error instanceof mongoose.mongo.MongoServerError && error.code === MAX_TIME_MS_EXPIRED;

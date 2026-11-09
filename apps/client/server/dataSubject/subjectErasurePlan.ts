@@ -5,14 +5,17 @@ import '@server/models/UserSubscription';
 import { DATA_HOLDER_REGISTRY } from './registry';
 import { valuesAt } from './documentPaths';
 import {
+  MATCH_BATCH,
   PARENT_KEY_BATCH,
   SubjectMatcher,
   orderParentsFirst,
   parentKeyPaths,
   readDocuments,
+  readsWholeDocument,
   referencePathsOf,
   type DataSubject,
   type LeanDocument,
+  type PersonalScope,
 } from './subjectMatcher';
 import type { DataHolder, DataHolderRegistry, UserReference } from './types';
 
@@ -110,18 +113,36 @@ export class SubjectErasurePlan {
     const clauses = references.flatMap(reference => this.matcher.filterFor(reference) ?? []);
     if (clauses.length === 0) return [];
     const decisions: Decision[] = [];
-    const projection = [...references.flatMap(referencePathsOf), ...this.parentKeyPathsOf(model)];
+    const personal = await this.matcher.personalDocumentIds(model, references);
+    const projection = readsWholeDocument(model, references)
+      ? undefined
+      : [...references.flatMap(referencePathsOf), ...this.parentKeyPathsOf(model)];
+    let batch: LeanDocument[] = [];
+    const decideBatch = async () => {
+      const organizationFiles = await this.matcher.organizationFileIds(model, batch, references, personal);
+      for (const document of batch) {
+        const decision = this.decideDocument(document, references, personal, organizationFiles);
+        if (decision) decisions.push(this.keyed(model, document, decision));
+      }
+      batch = [];
+    };
     for await (const document of readDocuments(model, { $or: clauses }, projection)) {
       if (!include(document)) continue;
-      const decision = this.decideDocument(document, references);
-      if (decision) decisions.push(this.keyed(model, document, decision));
+      batch.push(document);
+      if (batch.length >= MATCH_BATCH) await decideBatch();
     }
+    await decideBatch();
     return decisions;
   }
 
   /** The precedence in `types.ts`: retain, then deleteDocument, then pull and anonymize. */
-  private decideDocument(document: LeanDocument, references: readonly UserReference[]): Decision | null {
-    const matched = references.filter(reference => this.matcher.matches(document, reference));
+  private decideDocument(
+    document: LeanDocument,
+    references: readonly UserReference[],
+    personal?: PersonalScope,
+    organizationFiles?: ReadonlySet<string>
+  ): Decision | null {
+    const matched = this.matcher.matchingReferences(document, references, personal, organizationFiles);
     if (matched.length === 0) return null;
     const retains = matched.flatMap(reference => (reference.action === 'retain' ? [reference] : []));
     if (retains.length > 0) {
