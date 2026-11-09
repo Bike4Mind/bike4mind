@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { isAdminAssistantToolName } from '@bike4mind/common';
+import { ADMIN_EVAL_CASES } from '../../../../b4m-core/services/src/llm/evals/adminAssistant/cases';
 import type { ToolDefinition } from '@bike4mind/services/llm/tools';
 import { adminAssistantToolDefinitions } from './index';
 
@@ -17,6 +18,12 @@ describe('adminAssistantToolDefinitions', () => {
   it('every registered key is an admin assistant tool name', () => {
     const keys = Object.keys(adminAssistantToolDefinitions({ isAdmin: true }));
     expect(keys.every(isAdminAssistantToolName)).toBe(true);
+  });
+
+  it('has an eval row for every registered tool', () => {
+    const covered = new Set(ADMIN_EVAL_CASES.flatMap(c => c.expectTools ?? []));
+    const missing = Object.keys(adminAssistantToolDefinitions({ isAdmin: true })).filter(n => !covered.has(n));
+    expect(missing).toEqual([]);
   });
 
   it('keeps the serialized tool schemas within the per-turn budget', () => {

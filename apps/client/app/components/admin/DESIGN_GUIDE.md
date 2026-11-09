@@ -2,7 +2,7 @@
 
 One set of rules for every admin page: users, organizations, credits, API keys, security, settings and audit. If two admin pages solve the same problem differently, one of them is wrong.
 
-This guide is the target. Pages that predate it are being moved onto it tab by tab (see [Rollout](#8-rollout)); new admin UI follows it from day one. Every value below is meant to be implementable as written: if a rule leaves you guessing, fix the rule in the same PR.
+This guide is the target. Pages that predate it are being moved onto it tab by tab (see [Rollout](#9-rollout)); new admin UI follows it from day one. Every value below is meant to be implementable as written: if a rule leaves you guessing, fix the rule in the same PR.
 
 ## 1. Principles
 
@@ -318,7 +318,11 @@ Shortcuts:
 | `s` | Suspend (user profile) |
 | Cmd+S | Save (settings forms) |
 
-## 8. Rollout
+## 8. Admin assistant eval
+
+A new admin tab or admin tool adds at least one question to `b4m-core/services/src/llm/evals/adminAssistant/cases.ts`, so the admin assistant is measured on it. See that directory's README for the "Adding its question" step.
+
+## 9. Rollout
 
 1. **Tokens and toolkit.** Done: admin tokens in the Joy theme, the admin skin, and the components above in `components/admin/shared` with tests.
 2. **Users first.** Done: the users list and user profile run on the toolkit and are the reference implementation.
