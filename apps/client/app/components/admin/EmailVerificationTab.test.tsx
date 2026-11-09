@@ -308,6 +308,32 @@ describe('EmailVerificationTab', () => {
     fireEvent.click(await screen.findByTestId(`email-verification-row-resend-${UNVERIFIED_ID}`));
 
     await waitFor(() => expect(m.toastError).toHaveBeenCalledWith('Verification link was sent too recently'));
+
+    await openRowMenu(UNVERIFIED_ID);
+    const retry = await screen.findByTestId(`email-verification-row-resend-${UNVERIFIED_ID}`);
+    expect(retry).not.toHaveAttribute('aria-disabled', 'true');
+    expect(retry).toHaveTextContent('Resend verification email');
+  });
+
+  it('reports a failed unverify, closes the dialog and refetches the list', async () => {
+    m.post.mockRejectedValue(
+      Object.assign(new Error('Request failed'), {
+        isAxiosError: true,
+        response: { status: 400, data: { error: 'Nope', message: 'Bad Request' } },
+      })
+    );
+    renderTab();
+
+    await openRowMenu(VERIFIED_ID);
+    fireEvent.click(await screen.findByTestId(`email-verification-row-unverify-${VERIFIED_ID}`));
+    fireEvent.click(await screen.findByTestId('email-unverify-dialog-reason-input-preset-0'));
+    const getsBefore = m.get.mock.calls.length;
+    fireEvent.click(screen.getByTestId('email-unverify-dialog-confirm-btn'));
+
+    await waitFor(() => expect(m.toastError).toHaveBeenCalledWith('Nope'));
+    await waitFor(() => expect(screen.queryByTestId('email-unverify-dialog')).toBeNull());
+    expect(m.toastSuccess).not.toHaveBeenCalled();
+    await waitFor(() => expect(m.get.mock.calls.length).toBeGreaterThan(getsBefore));
   });
 
   it('shows a retry in place of the rows when the list fails', async () => {
