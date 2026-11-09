@@ -98,11 +98,33 @@ describe('VoiceSettingsTab', () => {
     expect(screen.getByTestId('voice-settings-list').querySelector('.MuiCard-root')).toBeNull();
   });
 
+  it('puts download, edit and delete in one row menu', async () => {
+    renderTab();
+
+    const row = await screen.findByTestId('voice-settings-row-agent-1');
+    const trigger = within(row).getByTestId('voice-settings-row-actions-agent-1');
+    expect(trigger).toHaveAccessibleName('Actions for Concierge');
+
+    fireEvent.click(trigger);
+    expect(screen.getAllByRole('menuitem').map(item => item.textContent)).toEqual([
+      'Download ElevenLabs config',
+      'Edit voice agent',
+      'Delete voice agent',
+    ]);
+
+    fireEvent.click(screen.getByTestId('voice-settings-edit-agent-1'));
+    expect(screen.getByTestId('voice-settings-editor-modal')).toBeTruthy();
+  });
+
   it('confirms a delete in a dialog that names the consequence', async () => {
     const confirmSpy = vi.spyOn(window, 'confirm');
     renderTab();
 
-    fireEvent.click(await screen.findByTestId('voice-settings-delete-agent-1'));
+    const row = await screen.findByTestId('voice-settings-row-agent-1');
+    fireEvent.click(within(row).getByTestId('voice-settings-row-actions-agent-1'));
+    fireEvent.click(screen.getByTestId('voice-settings-delete-agent-1'));
+    // Picking from the menu must not also activate the row, which opens the editor.
+    expect(screen.queryByTestId('voice-settings-editor-modal')).toBeNull();
     const dialog = screen.getByTestId('voice-settings-delete-dialog');
     expect(dialog.textContent).toContain('removed here and in ElevenLabs');
 

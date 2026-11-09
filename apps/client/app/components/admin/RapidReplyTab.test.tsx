@@ -237,7 +237,13 @@ describe('RapidReplyTab', () => {
     const confirmSpy = vi.spyOn(window, 'confirm');
     renderTab();
 
-    fireEvent.click(await screen.findByTestId('rapid-reply-delete-mapping-mapping-1'));
+    const row = await screen.findByTestId('admin-table-row-mapping-1');
+    // One menu trigger per row, so the actions fit the table's actions column.
+    expect(within(row).getAllByRole('button')).toHaveLength(1);
+    fireEvent.click(within(row).getByTestId('rapid-reply-mapping-actions-mapping-1'));
+    fireEvent.click(screen.getByTestId('rapid-reply-delete-mapping-mapping-1'));
+    // Picking from the menu must not also activate the row, which opens the editor.
+    expect(screen.queryByTestId('rapid-reply-mapping-dialog')).toBeNull();
     const dialog = screen.getByTestId('rapid-reply-delete-dialog');
     expect(dialog.textContent).toContain('This cannot be undone.');
 

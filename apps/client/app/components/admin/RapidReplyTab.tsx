@@ -3,11 +3,15 @@ import {
   Box,
   Button,
   DialogContent,
+  Dropdown,
   FormControl,
   FormHelperText,
   FormLabel,
   IconButton,
   Input,
+  Menu,
+  MenuButton,
+  MenuItem,
   Option,
   Select,
   Stack,
@@ -20,8 +24,7 @@ import {
   Typography,
 } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
-import DeleteIcon from '@mui/icons-material/DeleteOutline';
-import EditIcon from '@mui/icons-material/EditOutlined';
+import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import { useQuery } from '@tanstack/react-query';
 import { useExperimentalFeatureSettings, useUpdateSettings } from '@client/app/hooks/data/settings';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
@@ -52,7 +55,7 @@ import {
   StatusChip,
   type DataColumn,
 } from './shared';
-import { ADMIN_DETAIL_MAX_WIDTH, ADMIN_REGION_GAP, adminTabStrip } from './shared/adminStyles';
+import { ADMIN_DETAIL_MAX_WIDTH, ADMIN_REGION_GAP, adminFocus, adminTabStrip } from './shared/adminStyles';
 
 const defaultPrompt = `IMPORTANT: DO NOT ANSWER THE QUESTION. You are providing a quick, friendly acknowledgment that shows you understand the topic while the full response is being prepared. Keep it to ONE sentence only and reference the subject matter.
 
@@ -321,6 +324,38 @@ const MappingDialog: React.FC<{
   );
 };
 
+/** One "..." menu per row, so the actions fit the table's actions column and Delete is not a button on every row. */
+const MappingRowActions: React.FC<{ mapping: IRapidReplyMapping; onEdit: () => void; onDelete: () => void }> = ({
+  mapping,
+  onEdit,
+  onDelete,
+}) => (
+  <Dropdown>
+    <MenuButton
+      slots={{ root: IconButton }}
+      slotProps={{
+        root: {
+          size: 'sm',
+          variant: 'plain',
+          'aria-label': `Actions for the ${mapping.mainModelId} mapping`,
+          sx: { ...adminFocus, color: 'admin.inkMuted' },
+        },
+      }}
+      data-testid={`rapid-reply-mapping-actions-${mapping.id}`}
+    >
+      <MoreHorizIcon sx={{ fontSize: 18 }} />
+    </MenuButton>
+    <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
+      <MenuItem onClick={onEdit} data-testid={`rapid-reply-edit-mapping-${mapping.id}`}>
+        Edit mapping
+      </MenuItem>
+      <MenuItem color="danger" onClick={onDelete} data-testid={`rapid-reply-delete-mapping-${mapping.id}`}>
+        Delete mapping
+      </MenuItem>
+    </Menu>
+  </Dropdown>
+);
+
 const DeleteMappingDialog: React.FC<{ mapping: IRapidReplyMapping; onClose: () => void }> = ({ mapping, onClose }) => {
   const deleteMapping = useDeleteMapping();
   return (
@@ -574,26 +609,11 @@ const RapidReplyPage: React.FC = () => {
                 }
                 onRowActivate={row => setDialog({ kind: 'edit', mapping: row })}
                 rowActions={row => (
-                  <>
-                    <IconButton
-                      size="sm"
-                      variant="plain"
-                      aria-label={`Edit mapping for ${row.mainModelId}`}
-                      onClick={() => setDialog({ kind: 'edit', mapping: row })}
-                      data-testid={`rapid-reply-edit-mapping-${row.id}`}
-                    >
-                      <EditIcon />
-                    </IconButton>
-                    <IconButton
-                      size="sm"
-                      variant="plain"
-                      aria-label={`Delete mapping for ${row.mainModelId}`}
-                      onClick={() => setDialog({ kind: 'delete', mapping: row })}
-                      data-testid={`rapid-reply-delete-mapping-${row.id}`}
-                    >
-                      <DeleteIcon />
-                    </IconButton>
-                  </>
+                  <MappingRowActions
+                    mapping={row}
+                    onEdit={() => setDialog({ kind: 'edit', mapping: row })}
+                    onDelete={() => setDialog({ kind: 'delete', mapping: row })}
+                  />
                 )}
                 pagination={false}
                 minWidth="52rem"
