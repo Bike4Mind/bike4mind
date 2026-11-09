@@ -173,7 +173,7 @@ describe('ModelMetricsTab - page frame', () => {
     metricsState.data = [];
     metricsState.isError = true;
     render(<ModelMetricsTab />, { wrapper: TestWrapper });
-    expect(screen.queryByText('0')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(/^Model metrics$/);
   });
 
   it('does not render the empty state in the Spend panel, and Refresh there busts spend', () => {
@@ -188,8 +188,7 @@ describe('ModelMetricsTab - page frame', () => {
   it('omits the header count at the server row cap', () => {
     metricsState.data = Array.from({ length: 500 }, (_, i) => ({ id: `m${i}` }));
     render(<ModelMetricsTab />, { wrapper: TestWrapper });
-    expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument();
-    expect(screen.queryByText('500')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(/^Model metrics$/);
   });
 
   it('disables Export CSV while the rows are placeholder data', () => {
