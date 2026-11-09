@@ -41,6 +41,7 @@ export interface SkillFormProps {
 }
 
 const SKILL_NAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+const MAX_DESCRIPTION_LENGTH = 500;
 
 /** A picked skill folder (`webkitRelativePath` is `<folder>/...`), read by the Choose folder path. */
 export const readSkillFolder = (picked: File[]) => readSkillEntries(entriesFromPickedFolder(picked));
@@ -228,8 +229,8 @@ export const SkillForm: FC<SkillFormProps> = ({
   const descriptionError =
     description.trim().length === 0
       ? 'Description is required'
-      : description.length > 500
-        ? 'Description must be 500 characters or fewer'
+      : description.length > MAX_DESCRIPTION_LENGTH
+        ? `Description must be ${MAX_DESCRIPTION_LENGTH} characters or fewer`
         : null;
 
   const bodyError =
@@ -392,10 +393,12 @@ export const SkillForm: FC<SkillFormProps> = ({
                 </span>
               </Alert>
             ) : null}
-            {importResult?.ok && (importResult.fields.description?.length ?? 0) > 500 ? (
+            {importResult?.ok &&
+            (importResult.fields.description?.length ?? 0) > MAX_DESCRIPTION_LENGTH &&
+            description.length > MAX_DESCRIPTION_LENGTH ? (
               <Alert color="warning" variant="soft" data-testid="skill-form-import-description-length">
-                The description is {importResult.fields.description?.length} characters; skills allow 500. Shorten it
-                before saving.
+                The description is {importResult.fields.description?.length} characters; skills allow{' '}
+                {MAX_DESCRIPTION_LENGTH}. Shorten it before saving.
               </Alert>
             ) : null}
             {importResult?.ok && importResult.dropped.length ? (

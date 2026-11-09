@@ -10,11 +10,12 @@ export const MAX_ZIP_UNCOMPRESSED_BYTES = 5_000_000;
 const MAX_DROPPED_ENTRIES = 2_000;
 
 export const ZIP_UNSUPPORTED_ERROR =
-  "Zip files aren't supported. Unzip it and choose the folder, or choose its SKILL.md.";
+  'This is a zip file, not a SKILL.md. Choose or drop the .zip itself, or unzip it and choose the folder.';
 export const BINARY_FILE_ERROR = 'This is not a text file. Choose the SKILL.md text file inside the skill.';
 export const DROP_AMBIGUOUS_ERROR = 'Drop one SKILL.md or one skill folder.';
 export const ZIP_NO_SKILL_MD_ERROR = 'The zip has no SKILL.md at its top level or in a single top-level folder.';
-export const ZIP_UNREADABLE_ERROR = ZIP_UNSUPPORTED_ERROR;
+export const ZIP_UNREADABLE_ERROR =
+  "The zip couldn't be unzipped. Unzip it yourself and choose the folder, or choose its SKILL.md.";
 
 /** A file of a skill folder, with its path relative to the skill folder root. */
 export interface SkillEntry {

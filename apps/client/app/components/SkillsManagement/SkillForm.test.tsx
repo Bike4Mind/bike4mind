@@ -210,7 +210,7 @@ describe('SkillForm SKILL.md import', () => {
     [
       'a .zip upload',
       () => upload('PK\u0003\u0004\u0000\u0000\u0008\u0000skills/x/SKILL.md'),
-      "Zip files aren't supported",
+      'This is a zip file, not a SKILL.md.',
     ],
     ['pasted text with no frontmatter', () => paste('Just some instructions.'), 'No frontmatter found'],
   ])('rejects %s and leaves the fields untouched', async (_label, importIt, message) => {
@@ -419,7 +419,7 @@ describe('SkillForm SKILL.md import', () => {
       renderForm();
       drop([new File(['not a zip'], 'broken.zip')]);
       await waitFor(() =>
-        expect(screen.getByTestId('skill-form-import-error')).toHaveTextContent("Zip files aren't supported.")
+        expect(screen.getByTestId('skill-form-import-error')).toHaveTextContent("The zip couldn't be unzipped.")
       );
     });
 
@@ -432,6 +432,8 @@ describe('SkillForm SKILL.md import', () => {
         )
       );
       expect(value('skill-name-input')).toBe('long');
+      fireEvent.change(screen.getByTestId('skill-description-input'), { target: { value: 'short' } });
+      expect(screen.queryByTestId('skill-form-import-description-length')).not.toBeInTheDocument();
     });
 
     it('shows the raw YAML message behind a Details toggle', async () => {
