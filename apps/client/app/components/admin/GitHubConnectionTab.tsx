@@ -1017,7 +1017,7 @@ const GitHubConnectionTab: React.FC = () => {
               onChange={e => setPrivateKey(e.target.value)}
               disabled={connecting}
               minRows={10}
-              maxRows={8}
+              maxRows={20}
               slotProps={{
                 textarea: {
                   'data-testid': 'github-private-key-input',
@@ -1191,7 +1191,7 @@ const GitHubConnectionTab: React.FC = () => {
             onChange={e => setNewPrivateKey(e.target.value)}
             disabled={rotatingKey}
             minRows={10}
-            maxRows={8}
+            maxRows={20}
             slotProps={{
               textarea: {
                 'data-testid': 'github-new-private-key-input',
