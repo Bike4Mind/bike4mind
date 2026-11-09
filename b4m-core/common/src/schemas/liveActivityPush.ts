@@ -10,7 +10,7 @@ import { z } from 'zod';
  * keys in sync with the client's ContentState type.
  */
 export const LiveActivityContentStateSchema = z.object({
-  /** Run phase: `running`, `paused`, `approval_needed`, `completed` or `failed`. */
+  /** Run phase: `running`, `paused`, `approval_needed`, `completed`, `failed` or `stopped`. */
   status: z.string().min(1),
   /** Short human label for the current stage, e.g. the agent's latest status line. */
   stageLabel: z.string().optional(),
@@ -31,6 +31,12 @@ export const LiveActivityPushEventSchema = z.object({
   staleDate: z.number().int().positive().optional(),
   /** Unix seconds at which an ended activity leaves the lock screen (APNs `dismissal-date`). */
   dismissalDate: z.number().int().positive().optional(),
+  /**
+   * Unix seconds at which the frame was published, sent as APNs `timestamp` so the device discards a
+   * frame older than one it already shows (a retried or late delivery). Stamped by
+   * publishLiveActivityUpdate; optional only so events published before it existed still parse.
+   */
+  timestamp: z.number().int().positive().optional(),
 });
 
 export type LiveActivityPushEvent = z.infer<typeof LiveActivityPushEventSchema>;

@@ -8,14 +8,19 @@ import { NotificationEvents } from '@bike4mind/server-utils/utils/eventBus';
  * Like the other push publishers, these sit on seams of unrelated work, so nothing here may throw.
  */
 
-/** Validates and publishes; a failure is logged at warn and swallowed. A no-op while push is unconfigured. */
+/**
+ * Validates, stamps the publish time (APNs `timestamp`, see LiveActivityPushEventSchema) and publishes;
+ * a failure is logged at warn and swallowed. A no-op while push is unconfigured.
+ */
 export async function publishLiveActivityUpdate(
   event: LiveActivityPushEvent,
-  logger: Pick<Logger, 'warn'>
+  logger: Pick<Logger, 'warn'>,
+  nowMs: number = Date.now()
 ): Promise<void> {
   if (!isPushDeliveryConfigured()) return;
   try {
-    await NotificationEvents.LiveActivity.publish(LiveActivityPushEventSchema.parse(event));
+    const stamped = { ...event, timestamp: event.timestamp ?? Math.floor(nowMs / 1000) };
+    await NotificationEvents.LiveActivity.publish(LiveActivityPushEventSchema.parse(stamped));
   } catch (error) {
     logger.warn('[LiveActivity] failed to publish live activity update', {
       questId: event.questId,
@@ -28,6 +33,9 @@ export async function publishLiveActivityUpdate(
 /** APNs budgets live activity updates, and a lock screen gains nothing from more than a few a minute. */
 export const LIVE_ACTIVITY_UPDATE_INTERVAL_MS = 15_000;
 
+/** Longest stage label either producer (chat turn, agent run) puts on the lock screen. */
+export const LIVE_ACTIVITY_STAGE_LABEL_MAX = 60;
+
 export type LiveActivityThrottle = {
   /**
    * Sends now when the quest's window is open; otherwise keeps only the latest state and flushes it
@@ -36,6 +44,11 @@ export type LiveActivityThrottle = {
    * the invocation may exit on (paused, awaiting approval) before a trailing flush could fire.
    */
   emit(event: LiveActivityPushEvent, options?: { immediate?: boolean }): Promise<void>;
+  /**
+   * Publishes every pending trailing frame now and cancels its timer. Await it before the invocation
+   * ends: an unawaited timer is lost when the invocation exits, or fires stale in a thawed container.
+   */
+  flush(): Promise<void>;
 };
 
 /**
@@ -67,6 +80,13 @@ export function createLiveActivityThrottle(
     if (window.timer) clearTimeout(window.timer);
     window.timer = undefined;
     window.pending = undefined;
+  };
+
+  /** Clears the window's pending frame, returning it when it differs from what was last sent. */
+  const takePending = (window: QuestWindow) => {
+    const latest = window.pending;
+    clearPending(window);
+    return latest && keyOf(latest) !== window.lastSentKey ? latest : undefined;
   };
 
   return {
@@ -103,15 +123,20 @@ export function createLiveActivityThrottle(
       if (existing.timer) return;
       existing.timer = setTimeout(
         () => {
-          const latest = existing.pending;
-          existing.timer = undefined;
-          existing.pending = undefined;
-          if (latest && keyOf(latest) !== existing.lastSentKey) void sendUpdate(existing, latest);
+          const latest = takePending(existing);
+          if (latest) void sendUpdate(existing, latest);
         },
         Math.max(waitMs, 0)
       );
-      // A pending flush must not hold the process open once the run is over.
+      // A pending flush must not hold the process open once the run is over; flush() covers the exit.
       existing.timer.unref?.();
+    },
+    async flush() {
+      const due = [...windows.values()].flatMap(window => {
+        const latest = takePending(window);
+        return latest ? [sendUpdate(window, latest)] : [];
+      });
+      await Promise.all(due);
     },
   };
 }

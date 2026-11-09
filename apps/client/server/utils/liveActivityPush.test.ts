@@ -41,10 +41,10 @@ describe('publishLiveActivityUpdate', () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it('validates and publishes', async () => {
+  it('validates and publishes, stamped with the publish time in unix seconds', async () => {
     h.publish.mockResolvedValue(undefined);
-    await publishLiveActivityUpdate(update('q1', 'running'), { warn: vi.fn() });
-    expect(h.publish).toHaveBeenCalledWith(update('q1', 'running'));
+    await publishLiveActivityUpdate(update('q1', 'running'), { warn: vi.fn() }, 1_800_000_000_999);
+    expect(h.publish).toHaveBeenCalledWith({ ...update('q1', 'running'), timestamp: 1_800_000_000 });
   });
 
   it('logs and swallows a publish failure', async () => {
@@ -145,6 +145,31 @@ describe('createLiveActivityThrottle', () => {
   it('sends end even as the first frame', async () => {
     const throttle = createLiveActivityThrottle(publish, 15_000);
     await throttle.emit(end('q1'));
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
+  it('flush publishes the pending trailing frame now and cancels its timer', async () => {
+    const throttle = createLiveActivityThrottle(publish, 15_000);
+    await throttle.emit(update('q1', 'running', { stageLabel: 'a' }));
+    await throttle.emit(update('q1', 'running', { stageLabel: 'b' }));
+    await throttle.emit(update('q2', 'running', { stageLabel: 'a' }));
+
+    await throttle.flush();
+    expect(publish.mock.calls.map(([e]) => [e.questId, e.contentState.stageLabel])).toEqual([
+      ['q1', 'a'],
+      ['q2', 'a'],
+      ['q1', 'b'],
+    ]);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(publish).toHaveBeenCalledTimes(3);
+  });
+
+  it('flush skips a pending frame equal to what was last sent', async () => {
+    const throttle = createLiveActivityThrottle(publish, 15_000);
+    await throttle.emit(update('q1', 'running', { stageLabel: 'a' }));
+    await throttle.emit(update('q1', 'running', { stageLabel: 'a' }));
+    await throttle.flush();
     expect(publish).toHaveBeenCalledTimes(1);
   });
 

@@ -35,13 +35,15 @@ describe('withAgentTerminalPush', () => {
     pushDelivery.configured = true;
   });
 
-  it('returns the sender unwrapped while push delivery is unconfigured', async () => {
+  it('only forwards frames while push delivery is unconfigured', async () => {
     pushDelivery.configured = false;
     const deps = makeDeps();
     const raw = vi.fn(async () => undefined);
     const sendWs = withAgentTerminalPush(raw, deps, logger);
 
-    expect(sendWs).toBe(raw);
+    await sendWs('completed', { executionId: 'exec-1' });
+    await expect(sendWs.flush()).resolves.toBeUndefined();
+    expect(raw).toHaveBeenCalledWith('completed', { executionId: 'exec-1' });
     await publishAgentTerminalPush({ executionId: 'exec-1', outcome: 'completed' }, deps, logger);
     expect(deps.findExecution).not.toHaveBeenCalled();
     expect(deps.publish).not.toHaveBeenCalled();
@@ -253,6 +255,24 @@ describe('withAgentTerminalPush live activity', () => {
 
       await vi.advanceTimersByTimeAsync(15_000);
       expect(sentEvents(deps).map(e => e.contentState.stageLabel)).toEqual(['one', 'three']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('flush publishes the pending stage when the invocation exits without a terminal frame', async () => {
+    vi.useFakeTimers();
+    try {
+      const deps = makeLiveDeps();
+      const sendWs = withAgentTerminalPush(async () => undefined, deps, logger);
+      await sendWs('progress', { executionId: 'exec-1', status: 'one' });
+      await sendWs('progress', { executionId: 'exec-1', status: 'two' });
+
+      await sendWs.flush();
+      expect(sentEvents(deps).map(e => e.contentState.stageLabel)).toEqual(['one', 'two']);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(deps.publishLiveActivity).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
     }

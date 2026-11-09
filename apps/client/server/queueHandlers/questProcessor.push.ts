@@ -1,6 +1,6 @@
 import type { LiveActivityPushEvent, PushNotificationEvent } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
-import { createLiveActivityThrottle } from '@server/utils/liveActivityPush';
+import { createLiveActivityThrottle, LIVE_ACTIVITY_STAGE_LABEL_MAX } from '@server/utils/liveActivityPush';
 import {
   type ConnectionLookup,
   hasLiveConnection,
@@ -98,8 +98,6 @@ export type ChatLiveActivity = {
   end(outcome?: 'failed'): Promise<void>;
 };
 
-const MAX_STAGE_LABEL_LENGTH = 60;
-
 /**
  * The live activity of one chat turn (quest). API-key turns have no activity, and neither does any turn
  * while push delivery is unconfigured: `end` then resolves at once with no quest read and no publish.
@@ -122,7 +120,10 @@ export function createChatLiveActivity(
           userId: turn.userId,
           questId: turn.questId,
           event: 'update',
-          contentState: { status: 'running', stageLabel: truncateForPush(status.trim(), MAX_STAGE_LABEL_LENGTH) },
+          contentState: {
+            status: 'running',
+            stageLabel: truncateForPush(status.trim(), LIVE_ACTIVITY_STAGE_LABEL_MAX),
+          },
         })
         .catch(error =>
           logger.warn('[LiveActivity] chat status update failed', {

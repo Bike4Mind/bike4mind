@@ -64,7 +64,9 @@ import {
   deliverPush,
   handler,
   loadPushRecipient,
+  REDACTED_LIVE_ACTIVITY_STAGE_LABELS,
   REDACTED_PUSH_COPY,
+  type PushRecipient,
   type SendLiveActivityDeps,
   type SendPushDeps,
 } from './sendPush';
@@ -620,7 +622,11 @@ describe('deliverLiveActivityPush', () => {
   };
   const NOW_SECONDS = 1_800_000_000;
 
-  function makeActivityDeps(tokens: Token[], respond?: (request: ApnsRequest) => ApnsResponse) {
+  function makeActivityDeps(
+    tokens: Token[],
+    respond?: (request: ApnsRequest) => ApnsResponse,
+    recipient: PushRecipient | null = { preferences: undefined, redactContent: false }
+  ) {
     const sent: ApnsRequest[] = [];
     const removed: string[] = [];
     const deps: SendLiveActivityDeps = {
@@ -632,6 +638,7 @@ describe('deliverLiveActivityPush', () => {
         }),
         removeLiveActivityByQuest: vi.fn(async () => tokens.length),
       },
+      loadRecipient: vi.fn(async () => recipient),
       transport: {
         send: vi.fn(async (request: ApnsRequest) => {
           sent.push(request);
@@ -655,6 +662,59 @@ describe('deliverLiveActivityPush', () => {
     expect(deps.tokens.findLiveActivityByQuest).toHaveBeenCalledWith(USER_ID, 'quest-1');
     expect(deps.transport.send).not.toHaveBeenCalled();
     expect(deps.tokens.removeLiveActivityByQuest).not.toHaveBeenCalled();
+    expect(deps.loadRecipient).not.toHaveBeenCalled();
+  });
+
+  it('drops the frame when the recipient user no longer exists', async () => {
+    const { deps } = makeActivityDeps([{ token: 'act-a', environment: 'production' }], undefined, null);
+    await expect(deliverLiveActivityPush(UPDATE, deps, logger, NOW_SECONDS)).resolves.toEqual({
+      status: 'skipped',
+      reason: 'no_recipient',
+    });
+    expect(deps.transport.send).not.toHaveBeenCalled();
+  });
+
+  it("replaces the stage label with a fixed one per status when the recipient's organization redacts", async () => {
+    const { deps, sent } = makeActivityDeps([{ token: 'act-a', environment: 'production' }], undefined, {
+      preferences: undefined,
+      redactContent: true,
+    });
+
+    await deliverLiveActivityPush(
+      { ...UPDATE, contentState: { status: 'running', stageLabel: 'Searching "q3 layoffs plan"', progress: 0.4 } },
+      deps,
+      logger,
+      NOW_SECONDS
+    );
+    await deliverLiveActivityPush(
+      { ...UPDATE, contentState: { status: 'approval_needed', stageLabel: 'Waiting for your approval' } },
+      deps,
+      logger,
+      NOW_SECONDS
+    );
+    await deliverLiveActivityPush(
+      { ...UPDATE, contentState: { status: 'some_future_status', stageLabel: 'secret.pdf' } },
+      deps,
+      logger,
+      NOW_SECONDS
+    );
+    await deliverLiveActivityPush(END, deps, logger, NOW_SECONDS);
+
+    expect(deps.loadRecipient).toHaveBeenCalledWith(USER_ID);
+    expect(sent.map(request => payloadOf(request).aps['content-state'])).toEqual([
+      { status: 'running', stageLabel: REDACTED_LIVE_ACTIVITY_STAGE_LABELS.running, progress: 0.4 },
+      { status: 'approval_needed', stageLabel: REDACTED_LIVE_ACTIVITY_STAGE_LABELS.approval_needed },
+      { status: 'some_future_status' },
+      { status: 'completed' },
+    ]);
+  });
+
+  it("sends the frame's publish timestamp so a late or retried frame cannot overwrite a newer one", async () => {
+    const { deps, sent } = makeActivityDeps([{ token: 'act-a', environment: 'production' }]);
+
+    await deliverLiveActivityPush({ ...UPDATE, timestamp: NOW_SECONDS - 40 }, deps, logger, NOW_SECONDS);
+
+    expect(payloadOf(sent[0]).aps.timestamp).toBe(NOW_SECONDS - 40);
   });
 
   it('sends an update with the liveactivity push type, topic suffix, priority 5 and the content state', async () => {

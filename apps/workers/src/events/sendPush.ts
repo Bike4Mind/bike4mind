@@ -1,6 +1,7 @@
 import type { EventBridgeEvent } from 'aws-lambda';
 import {
   isPushCategoryEnabled,
+  type LiveActivityContentState,
   type LiveActivityPushEvent,
   type PushNotificationCategory,
   type PushNotificationEvent,
@@ -170,19 +171,40 @@ export type SendLiveActivityDeps = {
     removeByToken(token: string, options: { sid: string }): Promise<boolean>;
     removeLiveActivityByQuest(userId: string, questId: string): Promise<number>;
   };
+  /** Same source as deliverPush: the active organization's `redactPushContent` covers activity frames too. */
+  loadRecipient(userId: string): Promise<PushRecipient | null>;
   transport: ApnsTransport;
   /** The client's bundle id; live activity pushes go to `${topic}.push-type.liveactivity`. */
   topic: string;
 };
 
 export type LiveActivityDeliveryResult =
-  { status: 'skipped'; reason: 'no_tokens' } | { status: 'sent'; delivered: number; pruned: number; failed: number };
+  | { status: 'skipped'; reason: 'no_tokens' | 'no_recipient' }
+  | { status: 'sent'; delivered: number; pruned: number; failed: number };
+
+/**
+ * Stage labels sent instead of the producer's when the recipient's organization redacts push content.
+ * A producer's label can carry user content (a search query, a file name, reply text), so a redacting
+ * organization gets one fixed label per status; a status not listed here goes without a label.
+ */
+export const REDACTED_LIVE_ACTIVITY_STAGE_LABELS: Readonly<Record<string, string>> = {
+  running: 'Working',
+  paused: 'Waiting for your input',
+  approval_needed: 'Waiting for your approval',
+};
+
+function redactContentState(contentState: LiveActivityContentState): LiveActivityContentState {
+  const { stageLabel, ...rest } = contentState;
+  const redactedLabel = REDACTED_LIVE_ACTIVITY_STAGE_LABELS[contentState.status];
+  return stageLabel !== undefined && redactedLabel !== undefined ? { ...rest, stageLabel: redactedLabel } : rest;
+}
 
 /**
  * Delivers one live activity frame to the activity tokens registered for the quest. No user
- * preference, redaction or collapse-id applies: the frame is the activity's own state, not a
- * notification. An `end` frame also deletes the quest's tokens once it has been sent, since the
- * activity is over and its tokens will not be used again.
+ * preference or collapse-id applies: the frame is the activity's own state, not a notification.
+ * The organization's `redactPushContent` does apply (redactContentState), since the frame reaches the
+ * lock screen like an alert. An `end` frame also deletes the quest's tokens once it has been sent,
+ * since the activity is over and its tokens will not be used again.
  */
 export async function deliverLiveActivityPush(
   event: LiveActivityPushEvent,
@@ -196,6 +218,12 @@ export async function deliverLiveActivityPush(
     return { status: 'skipped', reason: 'no_tokens' };
   }
 
+  const recipient = await deps.loadRecipient(event.userId);
+  if (!recipient) {
+    logger.warn('[LiveActivity] recipient user not found; dropping', { event: event.event });
+    return { status: 'skipped', reason: 'no_recipient' };
+  }
+
   const ending = event.event === 'end';
   const headers = {
     'apns-topic': `${deps.topic}.push-type.liveactivity`,
@@ -205,9 +233,11 @@ export async function deliverLiveActivityPush(
   };
   const payload = JSON.stringify({
     aps: {
-      timestamp: nowSeconds,
+      // The publish time, so the device discards a frame older than one it already shows; delivery time
+      // only for events published before producers stamped it.
+      timestamp: event.timestamp ?? nowSeconds,
       event: event.event,
-      'content-state': event.contentState,
+      'content-state': recipient.redactContent ? redactContentState(event.contentState) : event.contentState,
       ...(event.staleDate !== undefined && { 'stale-date': event.staleDate }),
       ...(event.dismissalDate !== undefined && { 'dismissal-date': event.dismissalDate }),
     },
@@ -410,7 +440,11 @@ const handleWithContext = withEventContext(async (event, logger) => {
   if (event.event === LIVE_ACTIVITY_DETAIL_TYPE) {
     const payload = NotificationEvents.LiveActivity.schema.parse(event.properties);
     logger.updateMetadata({ handler: 'sendPush', userId: payload.userId, questId: payload.questId });
-    await deliverLiveActivityPush(payload, { tokens: pushTokenRepository, transport, topic: config.topic }, logger);
+    await deliverLiveActivityPush(
+      payload,
+      { tokens: pushTokenRepository, loadRecipient: loadPushRecipient, transport, topic: config.topic },
+      logger
+    );
     return;
   }
 

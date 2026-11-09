@@ -3,6 +3,7 @@ import { agentExecutionRepository, sessionRepository } from '@bike4mind/database
 import type { Logger } from '@bike4mind/observability';
 import {
   createLiveActivityThrottle,
+  LIVE_ACTIVITY_STAGE_LABEL_MAX,
   publishLiveActivityUpdate,
   type LiveActivityThrottle,
 } from '@server/utils/liveActivityPush';
@@ -22,6 +23,9 @@ import {
  */
 
 type SendWs = (action: string, payload?: Record<string, unknown>) => Promise<void>;
+
+/** The wrapped sender, plus `flush`, which the invocation awaits before it exits. Never throws. */
+export type AgentPushSender = SendWs & { flush(): Promise<void> };
 
 export type AgentPushDeps = {
   findExecution(executionId: string): Promise<{
@@ -91,8 +95,6 @@ export async function publishAgentTerminalPush(
   }
 }
 
-const MAX_STAGE_LABEL_LENGTH = 60;
-
 type LiveActivityTarget = { userId: string; questId: string };
 
 /** Only a top-level run with a real Quest has a live activity; children report through the parent. */
@@ -141,7 +143,10 @@ function liveActivityFrameFor(
       }
       return {
         event: 'update',
-        contentState: { status: 'running', stageLabel: truncateForPush(payload.status.trim(), MAX_STAGE_LABEL_LENGTH) },
+        contentState: {
+          status: 'running',
+          stageLabel: truncateForPush(payload.status.trim(), LIVE_ACTIVITY_STAGE_LABEL_MAX),
+        },
       };
     }
     case 'iteration_step': {
@@ -155,7 +160,10 @@ function liveActivityFrameFor(
         lastToolName.current = toolName;
         return {
           event: 'update',
-          contentState: { status: 'running', stageLabel: truncateForPush(`Using ${toolName}`, MAX_STAGE_LABEL_LENGTH) },
+          contentState: {
+            status: 'running',
+            stageLabel: truncateForPush(`Using ${toolName}`, LIVE_ACTIVITY_STAGE_LABEL_MAX),
+          },
         };
       }
       if (step.type === 'observation' && lastToolName.current) {
@@ -163,7 +171,7 @@ function liveActivityFrameFor(
           event: 'update',
           contentState: {
             status: 'running',
-            stageLabel: truncateForPush(`Finished ${lastToolName.current}`, MAX_STAGE_LABEL_LENGTH),
+            stageLabel: truncateForPush(`Finished ${lastToolName.current}`, LIVE_ACTIVITY_STAGE_LABEL_MAX),
           },
         };
       }
@@ -181,11 +189,20 @@ function liveActivityFrameFor(
  *
  * With `deps.publishLiveActivity`, the same frames also feed the run's live activity: status lines,
  * tool steps, an approval or confidence-gate pause and the terminal frame become throttled updates and
- * a final `end`. The throttle lives as long as the wrapper, i.e. one invocation of the run.
- * With push unconfigured the sender is returned as-is: no lookups, no publishes, no added latency.
+ * a final `end`. The throttle lives as long as the wrapper, i.e. one invocation of the run, so the
+ * invocation awaits `flush()` before it exits (a checkpoint self-dispatch leaves no terminal frame) to
+ * publish the latest pending stage rather than drop it or leave a timer behind in a frozen container.
+ * With push unconfigured the sender is forwarded as-is: no lookups, no publishes, no added latency.
  */
-export function withAgentTerminalPush(sendWs: SendWs, deps: AgentPushDeps, logger: Pick<Logger, 'warn'>): SendWs {
-  if (!isPushDeliveryConfigured()) return sendWs;
+export function withAgentTerminalPush(
+  sendWs: SendWs,
+  deps: AgentPushDeps,
+  logger: Pick<Logger, 'warn'>
+): AgentPushSender {
+  if (!isPushDeliveryConfigured())
+    return Object.assign((action: string, payload?: Record<string, unknown>) => sendWs(action, payload), {
+      flush: async () => undefined,
+    });
   const throttle: LiveActivityThrottle | undefined = deps.publishLiveActivity
     ? createLiveActivityThrottle(deps.publishLiveActivity)
     : undefined;
@@ -213,7 +230,7 @@ export function withAgentTerminalPush(sendWs: SendWs, deps: AgentPushDeps, logge
     }
   };
 
-  return async (action, payload = {}) => {
+  const send: SendWs = async (action, payload = {}) => {
     await sendWs(action, payload);
     await emitLiveActivity(action, payload);
     if (action !== 'completed' && action !== 'failed') return;
@@ -224,6 +241,18 @@ export function withAgentTerminalPush(sendWs: SendWs, deps: AgentPushDeps, logge
       logger
     );
   };
+
+  const flush = async () => {
+    try {
+      await throttle?.flush();
+    } catch (error) {
+      logger.warn('[LiveActivity] flushing pending agent frames failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
+  return Object.assign(send, { flush });
 }
 
 /** Ends the live activity of a run whose terminal frame bypassed the wrapped sender. Never throws. */

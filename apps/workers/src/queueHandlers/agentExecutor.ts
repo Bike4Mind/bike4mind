@@ -273,6 +273,7 @@ import {
   withAgentTerminalPush,
   publishAgentTerminalPush,
   endAgentLiveActivity,
+  type AgentPushSender,
 } from './agentExecutor.push';
 import { publishPushNotification, sessionDeepLink } from '@server/utils/pushNotifications';
 import { createAgentToolEchoMarker, persistedExecutionSteps } from '@bike4mind/server-utils/utils/markAgentToolEchoes';
@@ -993,7 +994,34 @@ async function processExecution(
   // Every terminal frame of a top-level run also publishes its push, and progress frames feed its live
   // activity (agentExecutor.push.ts).
   const sendWs = withAgentTerminalPush(createWsSender(connectionId, logger), createAgentPushDeps(logger), logger);
+  try {
+    await runExecution(
+      sendWs,
+      executionId,
+      connectionId,
+      isNewExecution,
+      startPayload,
+      context,
+      logger,
+      checkpointDepth
+    );
+  } finally {
+    // An invocation can exit without a terminal frame (checkpoint self-dispatch); its last throttled
+    // live activity stage must be published before the container freezes.
+    await sendWs.flush();
+  }
+}
 
+async function runExecution(
+  sendWs: AgentPushSender,
+  executionId: string,
+  connectionId: string,
+  isNewExecution: boolean,
+  startPayload: StartExecutionPayload | undefined,
+  context: Context,
+  logger: Logger,
+  checkpointDepth: number
+): Promise<void> {
   // Depth guard: refuse to process if this execution has self-dispatched too many times.
   // A runaway agent (infinite tool loop, stuck abort signal) would otherwise chain Lambdas
   // indefinitely. Must stay above the DB load below - terminating before any DB work is the
