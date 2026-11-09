@@ -67,8 +67,11 @@ export type ArenaServiceDeps = {
   >;
   loadUser: (userId: string) => Promise<ArenaUser | null>;
   loadSettings: () => Promise<PreferenceArenaSettings>;
-  /** Credits the ledger already holds under this transaction id, or null when it has no such row. */
-  findPaidCredits: (transactionId: string) => Promise<number | null>;
+  /**
+   * Credits owed under this transaction id: a ledger row, or a queued or paused reward that can still pay.
+   * Null when there is neither (a voided reward is not owed).
+   */
+  findOwedCredits: (transactionId: string) => Promise<number | null>;
   /** creditService.payCreditReward: draws from the trickle pool and queues the reward when it is dry. */
   payReward: (reward: HeldCreditRewardInput) => Promise<PayCreditRewardOutcome>;
   logger: Pick<Logger, 'error' | 'warn'>;
@@ -136,10 +139,10 @@ export function createArenaService(deps: ArenaServiceDeps) {
     return null;
   }
 
-  // A claimed row may belong to a crashed submit that already paid; deleting it would erase that
-  // proof from the caps, and keeping it 'served' would hold the one-outstanding lock forever, so settle it.
+  // A claimed row may belong to a crashed submit that already paid or queued its reward; deleting it would erase
+  // that from the caps, and keeping it 'served' would hold the one-outstanding lock forever, so settle it.
   async function dropRetiredRow(row: IArenaVoteDocument, goldChoice?: ArenaChoice): Promise<void> {
-    const paid = row.claimedAt ? await deps.findPaidCredits(arenaVoteTransactionId(row.id)) : null;
+    const paid = row.claimedAt ? await deps.findOwedCredits(arenaVoteTransactionId(row.id)) : null;
     if (row.claimedAt && paid !== null) {
       const choice = row.choice ?? 'tie';
       await votes.recordVote(row.userId, row.pairId, row.claimedAt, {
@@ -239,10 +242,14 @@ export function createArenaService(deps: ArenaServiceDeps) {
       return { creditsAwarded: settled?.status === 'voted' ? settled.creditsAwarded : 0 };
     }
 
-    // A crashed or failed submit may have paid before dying; honor the ledger instead of judging again.
-    const paid = await deps.findPaidCredits(arenaVoteTransactionId(row.id));
+    // A crashed or failed submit may have paid or queued its reward before dying; honor it instead of judging again.
+    const paid = await deps.findOwedCredits(arenaVoteTransactionId(row.id));
     if (paid !== null) {
-      logger.warn('[preference-arena] claim won after the ledger already paid', { userId, voteId: row.id, paid });
+      logger.warn('[preference-arena] claim won after the reward was already paid or queued', {
+        userId,
+        voteId: row.id,
+        paid,
+      });
       const paidChoice = claimed.choice ?? requestedChoice;
       const recorded = await votes.recordVote(userId, pairId, votedAt, {
         choice: paidChoice,
@@ -291,11 +298,13 @@ export function createArenaService(deps: ArenaServiceDeps) {
       }
       // A queued reward is owed, so it counts against the daily and lifetime caps like a paid one:
       // a dry pool must not let a rater keep voting past them.
-      queued = paid.outcome === 'queued';
+      // A block can still leave a paused reward that pays on unblock; that one counts as queued.
+      const owed = paid.outcome === 'blocked' ? await deps.findOwedCredits(arenaVoteTransactionId(row.id)) : null;
+      queued = paid.outcome === 'queued' || owed !== null;
       outcome =
-        paid.outcome === 'blocked'
+        paid.outcome === 'blocked' && owed === null
           ? { credited: false, rejectReason: 'reward_blocked' }
-          : { credited: true, creditsAwarded: judgement.credits };
+          : { credited: true, creditsAwarded: owed ?? judgement.credits };
     }
 
     const recorded = await votes.recordVote(userId, pairId, votedAt, {

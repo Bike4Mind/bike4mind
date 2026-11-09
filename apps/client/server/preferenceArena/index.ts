@@ -4,6 +4,7 @@ import {
   arenaPairRepository,
   arenaVoteRepository,
   creditTransactionRepository,
+  heldCreditRewardRepository,
   User,
 } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
@@ -44,14 +45,21 @@ export async function loadArenaUser(userId: string): Promise<ArenaUser | null> {
   return user ?? null;
 }
 
+/** The ledger's credits, else a queued or paused reward's (both can still pay); a voided reward owes nothing. */
+export async function findOwedArenaCredits(transactionId: string): Promise<number | null> {
+  const paid = await creditTransactionRepository.findOne({ transactionId });
+  if (paid) return paid.credits;
+  const [held] = await heldCreditRewardRepository.findByTransactionIds([transactionId]);
+  return held && (held.status === 'held' || held.status === 'paused') ? held.credits : null;
+}
+
 export function getArenaService(logger: Pick<Logger, 'error' | 'warn'>) {
   return createArenaService({
     pairs: arenaPairRepository,
     votes: arenaVoteRepository,
     loadUser: loadArenaUser,
     loadSettings: loadArenaSettings,
-    findPaidCredits: async transactionId =>
-      (await creditTransactionRepository.findOne({ transactionId }))?.credits ?? null,
+    findOwedCredits: findOwedArenaCredits,
     payReward: reward => creditService.payCreditReward(reward, buildCreditRewardAdapters()),
     logger,
   });

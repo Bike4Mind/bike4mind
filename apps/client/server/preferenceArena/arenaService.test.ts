@@ -79,19 +79,19 @@ function build(over: { user?: ArenaUser | null; settings?: Partial<PreferenceAre
   };
   const payReward = vi.fn().mockResolvedValue({ outcome: 'paid', creditTransactionId: 'tx1' });
   const logger = { error: vi.fn(), warn: vi.fn() };
-  const findPaidCredits = vi.fn().mockResolvedValue(null);
+  const findOwedCredits = vi.fn().mockResolvedValue(null);
   const deps: ArenaServiceDeps = {
     pairs,
     votes,
     loadUser: async () => (over.user === undefined ? verifiedUser : over.user),
     loadSettings: async () => ({ ...settings, ...over.settings }),
-    findPaidCredits,
+    findOwedCredits,
     payReward,
     logger,
     now: () => new Date('2026-01-01T00:00:10Z'),
     random: () => over.random ?? 0.9,
   };
-  return { service: createArenaService(deps), votes, pairs, payReward, logger, findPaidCredits };
+  return { service: createArenaService(deps), votes, pairs, payReward, logger, findOwedCredits };
 }
 
 const vote = { pairId: 'AAAAAAAAAAAAAAAAAAAAAAAA', choice: 'a' as const };
@@ -169,12 +169,12 @@ describe('serveNextPair', () => {
   });
 
   it('settles a retired pair claimed row its crashed submit already paid, then serves a fresh one', async () => {
-    const { service, votes, pairs, findPaidCredits } = build();
+    const { service, votes, pairs, findOwedCredits } = build();
     const claimedAt = new Date('2025-12-31T00:00:00Z');
     votes.findOutstanding.mockResolvedValue(servedRow({ claimedAt, choice: 'b' }));
     pairs.findById.mockResolvedValue(pair({ active: false, goldChoice: 'b' }));
     pairs.sampleUnseen.mockResolvedValue(pair({ id: 'bbbbbbbbbbbbbbbbbbbbbbbb' }));
-    findPaidCredits.mockResolvedValue(2);
+    findOwedCredits.mockResolvedValue(2);
     expect(await service.serveNextPair('u1')).toMatchObject({
       status: 'ready',
       pair: { pairId: 'bbbbbbbbbbbbbbbbbbbbbbbb' },
@@ -284,11 +284,11 @@ describe('submitVote', () => {
   });
 
   it('settles a paid claimed row of a retired pair instead of leaving it served', async () => {
-    const { service, votes, pairs, findPaidCredits, payReward } = build();
+    const { service, votes, pairs, findOwedCredits, payReward } = build();
     const claimedAt = new Date('2025-12-31T00:00:00Z');
     votes.findForPair.mockResolvedValue(servedRow({ claimedAt }));
     pairs.findById.mockResolvedValue(pair({ active: false }));
-    findPaidCredits.mockResolvedValue(2);
+    findOwedCredits.mockResolvedValue(2);
     await expect(service.submitVote('u1', vote)).rejects.toBeInstanceOf(NotFoundError);
     expect(votes.deleteUnclaimedServed).not.toHaveBeenCalled();
     expect(votes.recordVote).toHaveBeenCalledWith(
@@ -408,6 +408,19 @@ describe('submitVote', () => {
     expect(votes.releaseClaim).not.toHaveBeenCalled();
   });
 
+  it('counts a refused reward that left a paused row as queued, since unblock pays it', async () => {
+    const { service, votes, payReward, findOwedCredits } = build();
+    payReward.mockResolvedValue({ outcome: 'blocked' });
+    findOwedCredits.mockResolvedValueOnce(null).mockResolvedValueOnce(2);
+    expect(await service.submitVote('u1', vote)).toEqual({ creditsAwarded: 2, queued: true });
+    expect(votes.recordVote).toHaveBeenCalledWith(
+      'u1',
+      'aaaaaaaaaaaaaaaaaaaaaaaa',
+      new Date('2026-01-01T00:00:10Z'),
+      expect.objectContaining({ credited: true, creditsAwarded: 2 })
+    );
+  });
+
   it('refuses a rater who forfeited the signup unlock before paying anything', async () => {
     const user = { ...verifiedUser, signupGrant: { unlockForfeited: { cause: 'refund' as const, at: new Date(0) } } };
     const { service, payReward, votes } = build({ user });
@@ -425,11 +438,11 @@ describe('submitVote', () => {
   });
 
   it('honors credits the ledger already paid when taking over a stale claim', async () => {
-    const { service, votes, payReward, logger, findPaidCredits } = build();
+    const { service, votes, payReward, logger, findOwedCredits } = build();
     votes.findForPair.mockResolvedValue(servedRow({ claimedAt: new Date('2025-12-31T00:00:00Z') }));
-    findPaidCredits.mockResolvedValue(2);
+    findOwedCredits.mockResolvedValue(2);
     expect(await service.submitVote('u1', vote)).toEqual({ creditsAwarded: 2 });
-    expect(findPaidCredits).toHaveBeenCalledWith(expect.stringContaining('vote1'));
+    expect(findOwedCredits).toHaveBeenCalledWith(expect.stringContaining('vote1'));
     expect(payReward).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalled();
     expect(votes.recordVote).toHaveBeenCalledWith(
@@ -441,16 +454,16 @@ describe('submitVote', () => {
   });
 
   it('honors the ledger on a fresh claim after a released grant failure', async () => {
-    const { service, votes, payReward, findPaidCredits } = build();
-    findPaidCredits.mockResolvedValue(2);
+    const { service, votes, payReward, findOwedCredits } = build();
+    findOwedCredits.mockResolvedValue(2);
     expect(await service.submitVote('u1', vote)).toEqual({ creditsAwarded: 2 });
     expect(payReward).not.toHaveBeenCalled();
     expect(votes.goldRecord).not.toHaveBeenCalled();
   });
 
   it('keeps the first stored choice when a retry finds the ledger already paid', async () => {
-    const { service, votes, findPaidCredits } = build();
-    findPaidCredits.mockResolvedValue(2);
+    const { service, votes, findOwedCredits } = build();
+    findOwedCredits.mockResolvedValue(2);
     votes.claim.mockImplementation(async (_u, _p, claimedAt) => servedRow({ claimedAt, choice: 'b' }));
     await service.submitVote('u1', { ...vote, choice: 'a' });
     expect(votes.claim).toHaveBeenCalledWith('u1', expect.any(String), expect.any(Date), expect.any(Date), 'a');
