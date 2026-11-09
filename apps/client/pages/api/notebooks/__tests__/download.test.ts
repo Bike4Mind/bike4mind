@@ -58,6 +58,7 @@ import handler from '../download';
 const USER_ID = 'user-1';
 const SESSION_A = 'a'.repeat(24);
 const SESSION_B = 'b'.repeat(24);
+const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 const logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() };
 
 const run = async (body: Record<string, unknown>) => {
@@ -107,8 +108,12 @@ describe('POST /api/notebooks/download', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(storage.upload).toHaveBeenCalledTimes(1);
     const key = storage.upload.mock.calls[0][1] as string;
-    expect(key).toBe(`exports/curated-notebooks/${USER_ID}/${SESSION_A}/a.html`);
-    expect(storage.getSignedUrl).toHaveBeenCalledWith(key, 'get', expect.objectContaining({ expiresIn: 3600 }));
+    expect(key).toMatch(new RegExp(`^exports/curated-notebooks/${USER_ID}/${SESSION_A}/${UUID}\\.html$`));
+    expect(storage.getSignedUrl).toHaveBeenCalledWith(
+      key,
+      'get',
+      expect.objectContaining({ expiresIn: 3600, ResponseContentDisposition: expect.stringContaining('a.html') })
+    );
     expect(res._getJSONData().data.downloadUrl).toBe(`https://example.invalid/${key}`);
   });
 
@@ -118,8 +123,20 @@ describe('POST /api/notebooks/download', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(storage.upload).toHaveBeenCalledTimes(1);
     const key = storage.upload.mock.calls[0][1] as string;
-    expect(key.startsWith(`exports/curated-notebooks/${USER_ID}/batches/`)).toBe(true);
-    expect(key.endsWith('.zip')).toBe(true);
+    expect(key).toMatch(new RegExp(`^exports/curated-notebooks/${USER_ID}/batches/${UUID}\\.zip$`));
+    expect(convert).not.toHaveBeenCalled();
+    expect(res._getJSONData().data).toMatchObject({ downloadUrl: `https://example.invalid/${key}`, fileCount: 2 });
+  });
+
+  it('converts each notebook into a zip written under the expiring exports namespace', async () => {
+    const res = await run({ sessionIds: [SESSION_A, SESSION_B], format: 'html', downloadAsZip: true });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(convert).toHaveBeenCalledTimes(2);
+    expect(storage.upload).toHaveBeenCalledTimes(1);
+    const key = storage.upload.mock.calls[0][1] as string;
+    expect(key).toMatch(new RegExp(`^exports/curated-notebooks/${USER_ID}/batches/${UUID}\\.zip$`));
+    expect(storage.getSignedUrl).toHaveBeenCalledWith(key, 'get', expect.objectContaining({ expiresIn: 3600 }));
     expect(res._getJSONData().data).toMatchObject({ downloadUrl: `https://example.invalid/${key}`, fileCount: 2 });
   });
 

@@ -189,6 +189,10 @@ export async function purgeAccountFiles(userId: string, options: PurgeOptions): 
   await purgeKnowledgeFiles(userId, options);
   await purgeAppFiles(userId, options.assertLease);
   await purgeImportArchives(userId, options.assertLease);
-  await options.assertLease();
-  await getFilesStorage().deletePrefixPermanently(`exports/account-data/${encodeURIComponent(userId)}/`);
+  // Notebook download copies (pages/api/notebooks/download.ts): the current exports/ location plus
+  // the pre-exports one, which no lifecycle rule reaps. Durable curated files never sit under a user id.
+  for (const prefix of ['exports/account-data', 'exports/curated-notebooks', 'curated-notebooks']) {
+    await options.assertLease();
+    await getFilesStorage().deletePrefixPermanently(`${prefix}/${encodeURIComponent(userId)}/`);
+  }
 }

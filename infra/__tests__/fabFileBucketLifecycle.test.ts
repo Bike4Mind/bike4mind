@@ -117,13 +117,17 @@ describe('fab-file bucket notebook export lifecycle', () => {
     const prefixTemplate = downloadSource.match(/const DOWNLOAD_KEY_PREFIX = `([^`]+)`/)?.[1];
     const keyTemplates = [...downloadSource.matchAll(/const \w+FilePath = `([^`]+)`/g)].map(m => m[1]);
     const uploadCount = downloadSource.match(/getFilesStorage\(\)\.upload\(/g)?.length ?? 0;
-    const signedSeconds = [...downloadSource.matchAll(/expiresIn:\s*(\d+)/g)].map(m => Number(m[1]));
+    const signCount = downloadSource.match(/getSignedUrl\(/g)?.length ?? 0;
+    const signedSeconds = [...downloadSource.matchAll(/getSignedUrl\(\w+, 'get', \{\s*expiresIn:\s*(\d+)/g)].map(m =>
+      Number(m[1])
+    );
 
     expect(prefixTemplate?.startsWith('${fabFilesService.RESERVED_FAB_FILE_KEY_PREFIX}')).toBe(true);
     expect(keyTemplates).toHaveLength(uploadCount);
     expect(uploadCount).toBeGreaterThan(0);
     for (const key of keyTemplates) expect(key.startsWith('${DOWNLOAD_KEY_PREFIX}/')).toBe(true);
-    expect(signedSeconds.length).toBeGreaterThan(0);
+    expect(signCount).toBeGreaterThan(0);
+    expect(signedSeconds).toHaveLength(signCount);
     for (const seconds of signedSeconds) expect(seconds).toBeLessThan(ruleDays * 86400);
   });
 

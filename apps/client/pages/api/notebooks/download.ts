@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { sessionRepository, fabFileRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -11,6 +12,8 @@ import archiver from 'archiver';
 
 // Generated downloads are throwaway copies, so they live under the namespace the 1-day exports
 // lifecycle rule reaps (infra/buckets.ts, compose.selfhost.yaml); the curated source stays put.
+// Keys get a random name (the friendly name rides on Content-Disposition) and are purged with the
+// account (server/users/purgeAccountFiles.ts).
 const DOWNLOAD_KEY_PREFIX = `${fabFilesService.RESERVED_FAB_FILE_KEY_PREFIX}curated-notebooks`;
 
 const handler = baseApi().post(
@@ -161,7 +164,7 @@ const handler = baseApi().post(
           const zipBuffer = Buffer.concat(chunks);
 
           const zipFileName = `curated-notebooks-${Date.now()}.zip`;
-          const zipFilePath = `${DOWNLOAD_KEY_PREFIX}/${userId}/batches/${zipFileName}`;
+          const zipFilePath = `${DOWNLOAD_KEY_PREFIX}/${userId}/batches/${randomUUID()}.zip`;
 
           await getFilesStorage().upload(zipBuffer, zipFilePath, {
             ContentType: 'application/zip',
@@ -269,7 +272,7 @@ const handler = baseApi().post(
           // strip existing extension before appending the converted one
           const baseFileName = fabFile.fileName.replace(/\.(md|txt|html)$/, '');
           const convertedFileName = `${baseFileName}${converted.extension}`;
-          const convertedFilePath = `${DOWNLOAD_KEY_PREFIX}/${userId}/${sessionId}/${convertedFileName}`;
+          const convertedFilePath = `${DOWNLOAD_KEY_PREFIX}/${userId}/${sessionId}/${randomUUID()}${converted.extension}`;
 
           await getFilesStorage().upload(converted.content, convertedFilePath, {
             ContentType: converted.mimeType,
