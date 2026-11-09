@@ -15,12 +15,16 @@ type BlockerOptions = {
 };
 const mocks = vi.hoisted(() => ({
   store: {} as Record<string, unknown>,
+  // What useSettingsFromServer reports; a test overrides it for the loading and error states.
+  server: { data: [] as unknown[] | undefined, isLoading: false, isError: false, isFetching: false },
+  refetch: vi.fn(),
   mutateAsync: vi.fn(),
   useBlocker: vi.fn<(options: BlockerOptions) => { status: string }>(() => ({ status: 'idle' })),
 }));
 
 vi.mock('@client/app/hooks/data/settings', () => ({
   useGetSettingsValue: (key: string) => mocks.store[key],
+  useSettingsFromServer: () => ({ ...mocks.server, refetch: mocks.refetch }),
   useUpdateSettings: () => ({ mutate: vi.fn(), mutateAsync: mocks.mutateAsync, isPending: false }),
 }));
 vi.mock('@tanstack/react-router', async () => ({
@@ -47,6 +51,8 @@ const lastBlocker = () => mocks.useBlocker.mock.lastCall?.[0];
 
 beforeEach(() => {
   mocks.mutateAsync.mockReset().mockResolvedValue({});
+  mocks.refetch.mockReset();
+  mocks.server = { data: [], isLoading: false, isError: false, isFetching: false };
   mocks.useBlocker.mockClear();
   mocks.store.prReportRepo = 'acme/widgets';
   mocks.store.prReportWebhookUrl = '';
@@ -69,6 +75,35 @@ describe('PrReportTab', () => {
     expect(tab).toHaveStyle({ maxWidth: '1280px' });
     expect(tab).not.toHaveStyle({ marginLeft: 'auto' });
     expect(tab.closest('.MuiCard-root')).toBeNull();
+  });
+
+  it('keeps the header to one short description line and the Generate digest label on one line', () => {
+    renderTab();
+
+    const header = screen.getByTestId('admin-page-header');
+    const description = within(header).getByText(/^Drafts a Slack digest/);
+    expect(description.textContent?.length).toBeLessThanOrEqual(75);
+    expect(screen.getByTestId('admin-pr-report-open-btn')).toHaveStyle({ whiteSpace: 'nowrap' });
+  });
+
+  it('shows the toolkit loading state, not an empty form, while the settings load', () => {
+    mocks.server = { data: undefined, isLoading: true, isError: false, isFetching: true };
+    renderTab();
+
+    expect(screen.getByTestId('admin-pr-report-loading')).toBeInTheDocument();
+    expect(screen.queryByTestId('pr-report-repo-input')).toBeNull();
+    expect(screen.getByTestId('admin-page-header')).toBeInTheDocument();
+  });
+
+  it('shows the toolkit error state with a retry when the settings fail to load', async () => {
+    mocks.server = { data: undefined, isLoading: false, isError: true, isFetching: false };
+    const user = userEvent.setup();
+    renderTab();
+
+    const error = screen.getByTestId('admin-error-state');
+    expect(screen.queryByTestId('pr-report-repo-input')).toBeNull();
+    await user.click(within(error).getByTestId('admin-error-retry-btn'));
+    expect(mocks.refetch).toHaveBeenCalledTimes(1);
   });
 
   it('keeps Generate digest disabled until a repository is saved, then opens the dialog', async () => {

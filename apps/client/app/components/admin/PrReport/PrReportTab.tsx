@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import { Box, Button, Stack, Tooltip } from '@mui/joy';
 
-import { useGetSettingsValue } from '@client/app/hooks/data/settings';
+import { useGetSettingsValue, useSettingsFromServer } from '@client/app/hooks/data/settings';
 import { SettingsDraftProvider } from '../SettingsDraftProvider';
-import { AdminPageHeader } from '../shared';
+import { AdminPageHeader, ErrorState, LoadingState } from '../shared';
 import { ADMIN_DETAIL_MAX_WIDTH, ADMIN_REGION_GAP } from '../shared/adminStyles';
 import { PrReportDialog } from './PrReportDialog';
 import { PrReportSettings } from './PrReportSettings';
@@ -19,6 +19,9 @@ import { PrReportSettings } from './PrReportSettings';
  */
 export function PrReportTab() {
   const [open, setOpen] = useState(false);
+  // useGetSettingsValue answers schema defaults while the settings load or after they fail, which
+  // would show an unconfigured form; the fields wait for the real values instead.
+  const { data, isLoading, isError, isFetching, refetch } = useSettingsFromServer();
   const repo = useGetSettingsValue('prReportRepo');
   const repoConfigured = typeof repo === 'string' && repo.trim().length > 0;
 
@@ -26,11 +29,16 @@ export function PrReportTab() {
     <Stack sx={{ gap: ADMIN_REGION_GAP, maxWidth: ADMIN_DETAIL_MAX_WIDTH }} data-testid="admin-pr-report-tab">
       <AdminPageHeader
         title="PR digest"
-        description="Drafts a Slack digest of open pull requests that tags whoever owes the next move. Nothing posts until you review and send it."
+        description="Drafts a Slack digest of open pull requests for you to review and send."
         actions={
           <Tooltip title={repoConfigured ? '' : 'Save a repository below first.'} disableHoverListener={repoConfigured}>
             <Box component="span">
-              <Button onClick={() => setOpen(true)} disabled={!repoConfigured} data-testid="admin-pr-report-open-btn">
+              <Button
+                onClick={() => setOpen(true)}
+                disabled={!repoConfigured}
+                sx={{ whiteSpace: 'nowrap' }}
+                data-testid="admin-pr-report-open-btn"
+              >
                 Generate digest
               </Button>
             </Box>
@@ -38,10 +46,20 @@ export function PrReportTab() {
         }
       />
 
-      {/* Each field stages its edit for the provider's one SaveBar and leave-page guard. */}
-      <SettingsDraftProvider>
-        <PrReportSettings />
-      </SettingsDraftProvider>
+      {isLoading ? (
+        <LoadingState label="Loading PR digest settings" testId="admin-pr-report-loading" />
+      ) : isError && !data ? (
+        <ErrorState
+          message="PR digest settings could not be loaded."
+          onRetry={() => void refetch()}
+          retrying={isFetching}
+        />
+      ) : (
+        // Each field stages its edit for the provider's one SaveBar and leave-page guard.
+        <SettingsDraftProvider>
+          <PrReportSettings />
+        </SettingsDraftProvider>
+      )}
 
       {/* Mounted only while open so each run starts from a fresh draft and a fresh
           idempotency key, rather than reusing the previous attempt's send state. */}

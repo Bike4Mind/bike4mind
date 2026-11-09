@@ -185,7 +185,9 @@ describe('PrReportSettings', () => {
     store.prReportEgressAllowlist = { hosts: [] };
     renderSettings();
 
-    expect(screen.getByTestId('pr-report-egress-empty')).toHaveTextContent(/every send is blocked/i);
+    const empty = screen.getByTestId('pr-report-egress-empty');
+    expect(empty).toHaveTextContent(/every send is blocked/i);
+    expect(empty).toHaveAttribute('data-tone', 'bad');
   });
 
   it('marks required fields on the label and says optional in the help, with no status chips', () => {
@@ -217,7 +219,7 @@ describe('PrReportSettings', () => {
     renderSettings();
 
     for (const [id, title] of [
-      ['pr-report-section-repository', 'Repository'],
+      ['pr-report-section-repository', 'Source'],
       ['pr-report-section-slack', 'Slack delivery'],
     ]) {
       const section = screen.getByTestId(id);

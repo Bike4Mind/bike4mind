@@ -352,7 +352,7 @@ export function PrReportSettings() {
     <Stack sx={{ gap: 2 }}>
       <SettingsSection component="section" sx={{ mb: 0 }} data-testid="pr-report-section-repository">
         <SectionHeading
-          title="Repository"
+          title="Source"
           description="Every digest reports on this repository. Settings on this page apply to the whole deployment."
         />
         <StringSettingField
