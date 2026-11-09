@@ -6,12 +6,14 @@ import {
   type RequestBodyOf,
   REQUEST_ID_HEADER,
   LEGACY_REQUEST_ID_HEADER,
+  parseClientIdentity,
   resolveRequestId,
 } from '@bike4mind/common';
 import { connectDB, mongoose } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { createMethodGuard } from '@bike4mind/server-utils/utils/allowedMethods';
+import { checkClientVersion } from '@bike4mind/server-utils/middlewares/clientVersionGate';
 import { resolveContractAuth, type ContractAuthResult } from '@server/cli/resolveContractAuth';
 import { authInfraFailureHeaders, isAuthInfraFailure } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 
@@ -147,6 +149,22 @@ export function defineLambdaRoute<C extends EndpointContract>(
           request_id: requestId,
         });
       }
+    }
+
+    // Client-version gate (CONVENTIONS.md section 9), after auth and ahead of rate limit and
+    // validation, as in nextRouteForContract. A public contract skipped the connect above, and
+    // only a declared client reads the setting.
+    const headers = event.headers ?? {};
+    if (parseClientIdentity(headers) && mongoose.connection.readyState !== 1) {
+      await connectDB(Config.MONGODB_URI.replace('%STAGE%', Config.STAGE), new Logger({ metadata: { requestId } }));
+    }
+    const upgradeRequired = await checkClientVersion(headers, new Logger({ metadata: { requestId } }));
+    if (upgradeRequired) {
+      return json(upgradeRequired.statusCode, {
+        error: upgradeRequired.message,
+        request_id: requestId,
+        ...upgradeRequired.additionalInfo,
+      });
     }
 
     // Rate limit AFTER auth (needs the caller identity) but BEFORE validation, so a

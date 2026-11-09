@@ -8,6 +8,7 @@ import {
   MAX_REQUEST_ID_LENGTH,
   NotFoundError,
   UnauthorizedError,
+  UpgradeRequiredError,
 } from '@bike4mind/common';
 
 // The adapter connects to the DB and authenticates before validating; mock those
@@ -26,6 +27,11 @@ vi.mock('@bike4mind/observability', () => ({
     warn() {}
     error() {}
   },
+}));
+const mockCheckClientVersion = vi.fn();
+// The gate's own logic is covered in server-utils; here only its place in the order matters.
+vi.mock('@bike4mind/server-utils/middlewares/clientVersionGate', () => ({
+  checkClientVersion: (...args: unknown[]) => mockCheckClientVersion(...args),
 }));
 const mockResolveAuth = vi.fn();
 vi.mock('@server/cli/resolveContractAuth', () => ({
@@ -54,12 +60,28 @@ describe('defineLambdaRoute + chatContract', () => {
 
   beforeEach(() => {
     mockResolveAuth.mockReset().mockResolvedValue({ method: 'jwt', userId: 'u1', user: {} });
+    mockCheckClientVersion.mockReset().mockResolvedValue(undefined);
   });
 
   it('authenticates, validates, and passes the typed body + caller through', async () => {
     const res = asResult(await route(makeEvent({ message: 'hello' })));
     expect(res.statusCode).toBe(200);
     expect(JSON.parse(res.body as string)).toMatchObject({ status: 'queued', echoed: 'hello', user: 'u1' });
+  });
+
+  it('answers 426 with the envelope for a client below its minimum, before validation', async () => {
+    mockCheckClientVersion.mockResolvedValueOnce(new UpgradeRequiredError('b4m-sdk-ts', '2.0.0', '2.1.0'));
+    const event = {
+      headers: { authorization: 'Bearer x', 'x-client-name': 'b4m-sdk-ts', 'x-client-version': '2.0.0' },
+      body: JSON.stringify({ notMessage: 1 }),
+    } as unknown as APIGatewayProxyEventV2;
+    const res = asResult(await route(event));
+    expect(res.statusCode).toBe(426);
+    expect(JSON.parse(res.body as string)).toMatchObject({
+      errorCode: 'upgrade_required',
+      client_name: 'b4m-sdk-ts',
+      minimum_version: '2.1.0',
+    });
   });
 
   it('rejects a body that fails contract validation with 422', async () => {
