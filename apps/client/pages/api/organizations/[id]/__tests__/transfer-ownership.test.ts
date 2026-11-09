@@ -118,8 +118,25 @@ describe('POST /api/organizations/[id]/transfer-ownership', () => {
     await run();
 
     expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toEqual({ organizationId: 'org1', ownerId: 'admin1' });
     expect(req.logger.warn).toHaveBeenCalledOnce();
+    expect(req.logger.warn).toHaveBeenCalledWith(expect.any(String), { error: 'stripe down' });
     expect(recordAdminActionFromRequest).toHaveBeenCalled();
+  });
+
+  it('logs a non-Error Stripe rejection as a string and still succeeds', async () => {
+    customersUpdate.mockRejectedValue('plain rejection');
+    const { req, res, run } = post();
+    await run();
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(req.logger.warn).toHaveBeenCalledWith(expect.any(String), { error: 'plain rejection' });
+  });
+
+  it('fails the request and skips the Stripe mirror when the audit write fails', async () => {
+    vi.mocked(recordAdminActionFromRequest).mockRejectedValueOnce(new Error('audit down'));
+    await expect(post().run()).rejects.toThrow('audit down');
+    expect(customersUpdate).not.toHaveBeenCalled();
   });
 
   it('rejects a body without newOwnerId before calling the service', async () => {
