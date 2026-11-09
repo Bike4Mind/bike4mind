@@ -64,4 +64,15 @@ describe('SlackMetricsPage', () => {
     fireEvent.click(within(empty).getByTestId('slack-metrics-empty-refresh-btn'));
     expect(forceRefresh).toHaveBeenCalledTimes(1);
   });
+
+  it('offers Clear filters when a picked range may be why nothing loaded', () => {
+    renderPage();
+    fireEvent.click(screen.getByTestId('event-metrics-range-last7days'));
+    const empty = screen.getByTestId('admin-empty-state');
+    expect(empty).toHaveTextContent('No events match these filters');
+    fireEvent.click(within(empty).getByTestId('slack-metrics-empty-clear-filters-btn'));
+    expect(screen.getByTestId('event-metrics-range-all')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('admin-empty-state')).toHaveTextContent('No Slack events yet');
+    expect(forceRefresh).not.toHaveBeenCalled();
+  });
 });

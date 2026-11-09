@@ -22,6 +22,8 @@ interface ControlPanelProps {
   setEventCategoryFilter: (value: string) => void;
   onClearFilters: () => void;
   onSetDateRange: (preset: DateRangePreset) => void;
+  /** Any range or filter is set; shows Clear filters. */
+  hasFilters: boolean;
   hideCategoryFilter?: boolean;
 }
 
@@ -46,7 +48,8 @@ const isChipRange = (range: DateRangePreset) => RANGE_CHIP_OPTIONS.some(option =
 
 const CATEGORY_OPTIONS = EVENT_CATEGORIES.map(category => ({ value: category, label: category }));
 
-// Native date inputs accept 5- and 6-digit years, which dayjs cannot turn into an ISO instant.
+// Native date inputs accept 5- and 6-digit years; these bounds and DAY_PATTERN keep the picker to
+// four-digit years.
 const MIN_DAY = '2000-01-01';
 const MAX_DAY = '9999-12-31';
 const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -61,10 +64,10 @@ const dayToIso = (day: string, edge: 'start' | 'end') => {
 };
 
 /**
- * The event filters as one row that wraps as a whole (DESIGN_GUIDE "FilterBar"): the quick ranges,
- * the Range chip with the other presets, the From and To days when its Custom is picked, then one
- * chip per filter. A pick applies on its own; the page applies the filter state, so there is no
- * Apply button.
+ * The event filters as one row that wraps as a whole: the quick ranges, the Range chip with the
+ * other presets, then one chip per filter. Custom shows two native date inputs in the row, because
+ * the admin toolkit has no date picker yet. A pick applies on its own; the page applies the filter
+ * state, so there is no Apply button.
  */
 export const ControlPanel: React.FC<ControlPanelProps> = ({
   metrics,
@@ -81,6 +84,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   setEventCategoryFilter,
   onClearFilters,
   onSetDateRange,
+  hasFilters,
   hideCategoryFilter,
 }) => {
   const eventOptions = React.useMemo(
@@ -96,9 +100,6 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     metrics.forEach(m => users.set(m.user.userId, m.user.userName));
     return Array.from(users, ([value, label]) => ({ value, label })).sort((a, b) => a.label.localeCompare(b.label));
   }, [metrics]);
-
-  const hasFilters =
-    dateRange !== 'all' || !!userFilter || !!eventFilter || (!hideCategoryFilter && !!eventCategoryFilter);
 
   return (
     <Stack

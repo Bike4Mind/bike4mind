@@ -26,6 +26,7 @@ import {
   chartAxisProps,
   chartGridProps,
   chartLegendProps,
+  chartLineDotProps,
   chartPieProps,
   chartTooltipProps,
 } from '../utils/chartTheme';
@@ -76,7 +77,13 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                   <YAxis {...chartAxisProps} />
                   <Tooltip {...chartTooltipProps} />
                   <Legend {...chartLegendProps} />
-                  <Line type="monotone" dataKey="count" stroke={CHART_ACCENT} name="Event Count" />
+                  <Line
+                    type="monotone"
+                    dataKey="count"
+                    stroke={CHART_ACCENT}
+                    name="Event Count"
+                    {...chartLineDotProps}
+                  />
                 </LineChart>
               </ResponsiveContainer>
             </CardContent>

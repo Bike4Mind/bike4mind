@@ -119,7 +119,8 @@ export const UsageBySourceCard: React.FC = () => {
             </Box>
 
             <Box sx={{ flex: 1, minWidth: 0, width: '100%', overflowX: 'auto' }} data-testid="usage-by-source-table">
-              <Table size="sm" stripe="odd" sx={{ '& th:first-of-type': { width: '35%' } }}>
+              {/* Below this the table scrolls inside its box instead of crushing its four columns. */}
+              <Table size="sm" stripe="odd" sx={{ minWidth: '28rem', '& th:first-of-type': { width: '35%' } }}>
                 <thead>
                   <tr>
                     <th>Source</th>

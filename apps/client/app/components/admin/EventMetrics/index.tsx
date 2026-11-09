@@ -10,7 +10,14 @@ import { EventMetricsStats } from './components/EventMetricsStats';
 import { OverviewTab } from './components/OverviewTab';
 import { CurationBreakdownTab } from './components/CurationBreakdownTab';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
-import { AdminPageHeader, ErrorState, LoadingState, SegmentedControl, useAdminListUrlState } from '../shared';
+import {
+  AdminPageHeader,
+  ErrorState,
+  LoadingState,
+  SegmentedControl,
+  UpdatingBar,
+  useAdminListUrlState,
+} from '../shared';
 import { ADMIN_REGION_GAP, adminTabStrip } from '../shared/adminStyles';
 import { EVENTS_SEARCH_KEYS, EVENTS_VIEW_BY_USER } from './eventsTabSearch';
 import { UserActivityView } from './UserActivity';
@@ -49,6 +56,7 @@ const EventMetricsPanel: React.FC<{ viewSwitch: ReactNode }> = ({ viewSwitch }) 
     activeTab,
     setActiveTab,
     filteredAndSortedMetrics,
+    hasFilters,
     clearFilters,
     setDateRange,
   } = useEventMetricsState(metrics);
@@ -68,12 +76,25 @@ const EventMetricsPanel: React.FC<{ viewSwitch: ReactNode }> = ({ viewSwitch }) 
     />
   );
 
+  const emptyAction = hasFilters ? (
+    <Button variant="outlined" onClick={clearFilters} data-testid="event-metrics-empty-clear-filters-btn">
+      Clear filters
+    </Button>
+  ) : (
+    <Button variant="outlined" onClick={handleRefresh} data-testid="event-metrics-curation-refresh-btn">
+      Refresh metrics
+    </Button>
+  );
+
+  // LoadingState only on a first load: a filter change keeps the previous metrics (placeholder data)
+  // and refetches under the UpdatingBar.
   let body: ReactNode;
   if (isLoading) body = <LoadingState label="Loading event metrics" />;
   else if (isError && metrics.length === 0) body = errorState;
   else
     body = (
       <>
+        <UpdatingBar active={isFetching} testId="event-metrics-updating" />
         {errorState}
         <EventMetricsStats metrics={metrics} filteredMetrics={filteredAndSortedMetrics} />
         <Tabs value={activeTab} onChange={(_, value) => setActiveTab(value as string)}>
@@ -89,14 +110,7 @@ const EventMetricsPanel: React.FC<{ viewSwitch: ReactNode }> = ({ viewSwitch }) 
             <OverviewTab chartData={chartData} />
           </TabPanel>
           <TabPanel value="curation" sx={{ p: 0, pt: 2 }}>
-            <CurationBreakdownTab
-              chartData={chartData}
-              emptyAction={
-                <Button variant="outlined" onClick={handleRefresh} data-testid="event-metrics-curation-refresh-btn">
-                  Refresh metrics
-                </Button>
-              }
-            />
+            <CurationBreakdownTab chartData={chartData} filtered={hasFilters} emptyAction={emptyAction} />
           </TabPanel>
         </Tabs>
       </>
@@ -135,6 +149,7 @@ const EventMetricsPanel: React.FC<{ viewSwitch: ReactNode }> = ({ viewSwitch }) 
         setEventCategoryFilter={setEventCategoryFilter}
         onClearFilters={clearFilters}
         onSetDateRange={setDateRange}
+        hasFilters={hasFilters}
       />
       {body}
     </Stack>

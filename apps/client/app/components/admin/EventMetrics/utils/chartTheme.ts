@@ -1,8 +1,9 @@
 import { ACCENT, AXIS_TICK, BAD, BORDER, GOOD, INK, INK_MUTED } from '../../Revenue/chartParts';
 
 // recharts paints SVG attributes and inline styles, so colors are the admin CSS variables (shared with
-// Revenue/chartParts.tsx) rather than sx tokens. Every recharts default that would paint a hex color
-// (grid, axes, tooltip, cursor, slice edges) is overridden here.
+// Revenue/chartParts.tsx) rather than sx tokens. The presets below replace every recharts default that
+// paints a hex color on these charts: grid, axes, tooltip, cursor, slice edges and line dots. (The
+// legend's inactive color never shows: no series can be hidden.)
 const SURFACE = 'var(--joy-palette-admin-surface)';
 const HOVER = 'var(--joy-palette-admin-hover)';
 /** The faintest categorical step, as a share of `accent`. */
@@ -42,5 +43,7 @@ export const chartTooltipProps = {
 export const chartLegendProps = { wrapperStyle: { fontSize: 12 }, labelStyle: { color: INK_MUTED } };
 /** Slice edges in the card color, so slices part without a white outline in dark mode. */
 export const chartPieProps = { stroke: SURFACE };
+/** Line dots in the accent; the hovered dot's ring takes the card color instead of white. */
+export const chartLineDotProps = { dot: { fill: ACCENT, stroke: ACCENT }, activeDot: { stroke: SURFACE } };
 /** Pie slice labels in `inkMuted`, so a faint slice color never sets the text color. */
 export const CHART_LABEL_FILL = INK_MUTED;

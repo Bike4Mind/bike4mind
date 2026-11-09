@@ -27,7 +27,7 @@ const chartData = (exportStatus: { success: number; failed: number }): ChartData
 const renderTab = (data: ChartData) =>
   render(
     <CssVarsProvider>
-      <SlackMetricsTab chartData={data} emptyAction={null} />
+      <SlackMetricsTab chartData={data} filtered={false} emptyAction={null} />
     </CssVarsProvider>
   ).container;
 

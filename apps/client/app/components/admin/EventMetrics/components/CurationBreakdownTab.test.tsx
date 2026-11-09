@@ -31,6 +31,7 @@ describe('CurationBreakdownTab', () => {
               exportFormat: { markdown: 1, txt: 1, html: 1 },
             },
           ])}
+          filtered={false}
           emptyAction={null}
         />
       </CssVarsProvider>
@@ -39,12 +40,23 @@ describe('CurationBreakdownTab', () => {
     expect(chartFills(container, 'Bar')).toEqual([...adminChartSeries(2), ...adminChartSeries(3)]);
   });
 
+  it('says the filters may be why when the page has filters set', () => {
+    render(
+      <CssVarsProvider>
+        <CurationBreakdownTab chartData={chartData([])} filtered emptyAction={null} />
+      </CssVarsProvider>
+    );
+    expect(screen.getByTestId('admin-empty-state')).toHaveTextContent('No events match these filters');
+    expect(screen.getByTestId('admin-empty-state')).not.toHaveTextContent('No curation events yet');
+  });
+
   it('shows an empty state with the given next step when nothing was curated', () => {
     const onRefresh = vi.fn();
     render(
       <CssVarsProvider>
         <CurationBreakdownTab
           chartData={chartData([])}
+          filtered={false}
           emptyAction={
             <button type="button" data-testid="curation-refresh-btn" onClick={onRefresh}>
               Refresh metrics

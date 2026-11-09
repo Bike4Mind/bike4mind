@@ -13,16 +13,20 @@ import { EmptyState } from '../../shared';
 
 interface CurationBreakdownTabProps {
   chartData: ChartData;
-  /** The empty state's next step, e.g. a refresh. */
+  /** The page's range or filters are set, so an empty breakdown may be down to them. */
+  filtered: boolean;
+  /** The empty state's next step: Clear filters when `filtered`, else a refresh. */
   emptyAction: ReactNode;
 }
 
 const [TRANSCRIPT_COLOR, SUMMARY_COLOR] = adminChartSeries(2);
 const [MARKDOWN_COLOR, TXT_COLOR, HTML_COLOR] = adminChartSeries(3);
 
-export const CurationBreakdownTab: React.FC<CurationBreakdownTabProps> = ({ chartData, emptyAction }) => {
+export const CurationBreakdownTab: React.FC<CurationBreakdownTabProps> = ({ chartData, filtered, emptyAction }) => {
   if (!chartData.curationBreakdown || chartData.curationBreakdown.length === 0) {
-    return (
+    return filtered ? (
+      <EmptyState title="No events match these filters" action={emptyAction} />
+    ) : (
       <EmptyState
         title="No curation events yet"
         description="Curation events with file type metadata appear here once tracked."

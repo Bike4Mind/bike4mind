@@ -115,9 +115,10 @@ describe('UsageBySourceCard colors and width', () => {
     expect(screen.getByTestId('usage-by-source-swatch-web')).toHaveStyle({ backgroundColor: CHART_ACCENT });
   });
 
-  it('lets the table fit its card instead of forcing a 600 px minimum width', () => {
+  it('scrolls the table inside its own box below 28rem instead of crushing its columns', () => {
     renderCard();
-    const table = within(screen.getByTestId('usage-by-source-table')).getByRole('table');
-    expect(getComputedStyle(table).minWidth).not.toBe('600px');
+    const container = screen.getByTestId('usage-by-source-table');
+    expect(container).toHaveStyle({ overflowX: 'auto' });
+    expect(within(container).getByRole('table')).toHaveStyle({ minWidth: '28rem' });
   });
 });

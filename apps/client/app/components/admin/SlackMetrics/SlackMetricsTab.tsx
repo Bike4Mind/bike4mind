@@ -29,11 +29,13 @@ import { EmptyState } from '../shared';
 
 interface SlackMetricsTabProps {
   chartData: ChartData;
-  /** The empty state's next step, e.g. a refresh. */
+  /** The page's range or filters are set, so an empty view may be down to them. */
+  filtered: boolean;
+  /** The empty state's next step: Clear filters when `filtered`, else a refresh. */
   emptyAction: ReactNode;
 }
 
-export const SlackMetricsTab: React.FC<SlackMetricsTabProps> = ({ chartData, emptyAction }) => {
+export const SlackMetricsTab: React.FC<SlackMetricsTabProps> = ({ chartData, filtered, emptyAction }) => {
   const { slackMetrics } = chartData;
 
   const typeData = React.useMemo(
@@ -70,7 +72,9 @@ export const SlackMetricsTab: React.FC<SlackMetricsTabProps> = ({ chartData, emp
   );
 
   if (!slackMetrics) {
-    return (
+    return filtered ? (
+      <EmptyState title="No events match these filters" action={emptyAction} />
+    ) : (
       <EmptyState
         title="No Slack events yet"
         description="Slack integration events appear here once tracked."

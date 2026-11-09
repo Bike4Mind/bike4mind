@@ -157,16 +157,35 @@ describe('EventMetricsTab page anatomy', () => {
 });
 
 describe('EventMetricsTab filters', () => {
-  it('applies a quick range when it is picked', async () => {
+  it('applies a quick range when it is picked, as one fetch for the whole range', async () => {
     await renderTab('/admin?tab=event-metrics');
-    fireEvent.click(await screen.findByTestId('event-metrics-range-last7days'));
+    await act(() => new Promise(resolve => setTimeout(resolve, SEARCH_TERM_URL_DEBOUNCE_MS + 50)));
+    const callsBefore = useEventMetrics.mock.calls.length;
+    fireEvent.click(screen.getByTestId('event-metrics-range-last7days'));
     expect(screen.getByTestId('event-metrics-range-last7days')).toHaveAttribute('aria-pressed', 'true');
-    await waitFor(() =>
-      expect(lastFilters()).toMatchObject({
-        dateFrom: dayjs().subtract(7, 'days').startOf('day').toISOString(),
-        dateTo: dayjs().endOf('day').toISOString(),
-      })
+    const picked = {
+      dateFrom: dayjs().subtract(7, 'days').startOf('day').toISOString(),
+      dateTo: dayjs().endOf('day').toISOString(),
+    };
+    await waitFor(() => expect(lastFilters()).toMatchObject(picked));
+    await act(() => new Promise(resolve => setTimeout(resolve, SEARCH_TERM_URL_DEBOUNCE_MS + 50)));
+    const fetched = new Set(useEventMetrics.mock.calls.slice(callsBefore).map(([filters]) => JSON.stringify(filters)));
+    expect([...fetched]).toEqual([JSON.stringify({}), JSON.stringify(picked)]);
+  });
+
+  it('keeps the stat strip and charts on screen with an updating bar while a new range loads', async () => {
+    useEventMetrics.mockImplementation((filters: { dateFrom?: string } | undefined) =>
+      // What placeholder data gives: the previous metrics stay while the new range is fetched.
+      queryResult(filters?.dateFrom ? { isFetching: true } : {})
     );
+    await renderTab('/admin?tab=event-metrics');
+    expect(await screen.findByTestId('admin-stat-strip')).toBeInTheDocument();
+    expect(screen.queryByTestId('event-metrics-updating')).toBeNull();
+    fireEvent.click(screen.getByTestId('event-metrics-range-last30days'));
+    expect(await screen.findByTestId('event-metrics-updating')).toBeVisible();
+    expect(screen.getByTestId('admin-stat-strip')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Overview' })).toBeInTheDocument();
+    expect(screen.queryByTestId('admin-loading-state')).toBeNull();
   });
 
   it('offers a 90 day range', async () => {
@@ -280,5 +299,17 @@ describe('EventMetricsTab states', () => {
     expect(empty).toHaveTextContent('No curation events yet');
     fireEvent.click(within(empty).getByTestId('event-metrics-curation-refresh-btn'));
     expect(forceRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers Clear filters instead when the empty curation view may be down to the filters', async () => {
+    await renderTab('/admin?tab=event-metrics');
+    fireEvent.click(await screen.findByTestId('event-metrics-range-last90days'));
+    fireEvent.click(screen.getByRole('tab', { name: 'Curation breakdown' }));
+    const empty = await screen.findByTestId('admin-empty-state');
+    expect(empty).toHaveTextContent('No events match these filters');
+    expect(within(empty).queryByTestId('event-metrics-curation-refresh-btn')).toBeNull();
+    fireEvent.click(within(empty).getByTestId('event-metrics-empty-clear-filters-btn'));
+    expect(screen.getByTestId('event-metrics-range-all')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('admin-empty-state')).toHaveTextContent('No curation events yet');
   });
 });

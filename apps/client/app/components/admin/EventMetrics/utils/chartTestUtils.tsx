@@ -12,6 +12,8 @@ const COLOR_PROPS = [
   'tickLine',
   'axisLine',
   'wrapperStyle',
+  'dot',
+  'activeDot',
 ] as const;
 
 // Per chart part, the color props whose recharts default is a hex value.
@@ -23,7 +25,7 @@ const REQUIRED_COLOR_PROPS: Record<string, readonly string[]> = {
   Pie: ['stroke'],
   Cell: ['fill'],
   Bar: ['fill'],
-  Line: ['stroke'],
+  Line: ['stroke', 'dot', 'activeDot'],
 };
 
 const PARTS = [

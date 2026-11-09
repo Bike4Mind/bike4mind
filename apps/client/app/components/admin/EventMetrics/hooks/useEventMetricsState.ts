@@ -98,6 +98,8 @@ export const useEventMetricsState = (metrics: EventMetric[]) => {
     }
   };
 
+  const hasFilters = dateRange !== 'all' || !!userFilter || !!eventFilter || !!eventCategoryFilter;
+
   const clearFilters = () => {
     setDateRangePreset('all');
     setDateFrom('');
@@ -169,6 +171,7 @@ export const useEventMetricsState = (metrics: EventMetric[]) => {
     sortDirection,
     // Computed data
     filteredAndSortedMetrics,
+    hasFilters,
     // Helper functions
     handleSort,
     clearFilters,

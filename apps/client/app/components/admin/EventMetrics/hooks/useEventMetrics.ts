@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient, hashKey } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useMutation, useQueryClient, hashKey } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import type { EventMetric } from '../types';
 
@@ -39,6 +39,9 @@ export const useEventMetrics = (filters?: MetricsFilters) => {
     queryKey,
     queryFn: () => fetchEventMetrics(filters),
     staleTime: 1000 * 60 * 1, // 1 minute for filtered data
+    // A new filter set keeps the last metrics on screen until it loads, so a filter pick refetches
+    // under the data instead of blanking the page.
+    placeholderData: keepPreviousData,
   });
 
   // The recache response carries the rebuilt metrics, so it seeds the query cache instead of

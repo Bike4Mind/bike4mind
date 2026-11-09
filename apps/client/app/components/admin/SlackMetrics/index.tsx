@@ -8,7 +8,7 @@ import { processChartData } from '../EventMetrics/utils/chartDataProcessor';
 import { ControlPanel } from '../EventMetrics/components/ControlPanel';
 import { EventMetricsStats } from '../EventMetrics/components/EventMetricsStats';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
-import { AdminPageHeader, ErrorState, LoadingState } from '../shared';
+import { AdminPageHeader, ErrorState, LoadingState, UpdatingBar } from '../shared';
 import { ADMIN_REGION_GAP } from '../shared/adminStyles';
 import { SlackMetricsTab } from './SlackMetricsTab';
 
@@ -32,6 +32,7 @@ const SlackMetricsPage: React.FC = () => {
     setEventFilter,
     setEventCategoryFilter,
     filteredAndSortedMetrics,
+    hasFilters,
     clearFilters,
     setDateRange,
   } = useEventMetricsState(metrics);
@@ -54,22 +55,28 @@ const SlackMetricsPage: React.FC = () => {
     />
   );
 
+  const emptyAction = hasFilters ? (
+    <Button variant="outlined" onClick={clearFilters} data-testid="slack-metrics-empty-clear-filters-btn">
+      Clear filters
+    </Button>
+  ) : (
+    <Button variant="outlined" onClick={handleRefresh} data-testid="slack-metrics-empty-refresh-btn">
+      Refresh metrics
+    </Button>
+  );
+
+  // LoadingState only on a first load: a filter change keeps the previous metrics (placeholder data)
+  // and refetches under the UpdatingBar.
   let body: ReactNode;
   if (isLoading) body = <LoadingState label="Loading Slack metrics" />;
   else if (isError && metrics.length === 0) body = errorState;
   else
     body = (
       <>
+        <UpdatingBar active={isFetching} testId="slack-metrics-updating" />
         {errorState}
         <EventMetricsStats metrics={metrics} filteredMetrics={filteredAndSortedMetrics} />
-        <SlackMetricsTab
-          chartData={chartData}
-          emptyAction={
-            <Button variant="outlined" onClick={handleRefresh} data-testid="slack-metrics-empty-refresh-btn">
-              Refresh metrics
-            </Button>
-          }
-        />
+        <SlackMetricsTab chartData={chartData} filtered={hasFilters} emptyAction={emptyAction} />
       </>
     );
 
@@ -110,6 +117,7 @@ const SlackMetricsPage: React.FC = () => {
         setEventCategoryFilter={setEventCategoryFilter}
         onClearFilters={clearFilters}
         onSetDateRange={setDateRange}
+        hasFilters={hasFilters}
         hideCategoryFilter
       />
       {body}

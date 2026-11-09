@@ -133,7 +133,8 @@ const RANGE_SEGMENTS: readonly SegmentedOption<DateRange>[] = [
 ];
 const RANGE_CHIP_OPTIONS = [{ value: 'custom', label: 'Custom' }] as const;
 
-// Native date inputs accept 5- and 6-digit years, which the server's date check rejects.
+// Native date inputs accept 5- and 6-digit years, for which the server finds no data; these bounds
+// keep the picker to four-digit years.
 const MIN_DAY = '2000-01-01';
 const MAX_DAY = '9999-12-31';
 

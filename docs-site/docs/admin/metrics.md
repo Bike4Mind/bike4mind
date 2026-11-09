@@ -93,12 +93,12 @@ The Event Metrics tab tracks system-wide events across the platform, providing v
 
 | Filter | Description |
 |--------|-------------|
-| **Date Range** | Start and end dates with preset shortcuts |
+| **Date Range** | Quick ranges **7d**, **30d**, **90d** and **All time**, plus a **Range** chip with Today, Yesterday, This month, Last month and Custom (whole From and To days) |
 | **User** | Filter by specific user |
 | **Event** | Filter by event type |
 | **Event Category** | Filter by event category (e.g., Slack, System, User) |
 
-Like Model Metrics, filters are applied explicitly with an Apply button.
+Unlike Model Metrics, there is no Apply button: a filter applies as soon as you pick it. **Clear filters** resets the range to All time and removes the other filters.
 
 ### Tabs
 
@@ -109,9 +109,9 @@ Event Metrics is organized into two sub-tabs:
 | **Overview** | Summary visualizations and charts for the filtered event data |
 | **Curation Breakdown** | Detailed breakdown of events by curation category, showing distribution patterns |
 
-### Record Count
+### Key numbers
 
-A counter displays "Showing X of Y events" for the current filter state.
+A row of key numbers above the tabs shows Total events, Filtered, Unique events and Unique users for the current filters.
 
 ### By user
 
@@ -132,7 +132,7 @@ The Slack Metrics tab provides focused analytics for Slack integration usage. It
 
 | Filter | Description |
 |--------|-------------|
-| **Date Range** | Start and end dates with preset shortcuts |
+| **Date Range** | Quick ranges **7d**, **30d**, **90d** and **All time**, plus a **Range** chip with Today, Yesterday, This month, Last month and Custom (whole From and To days) |
 | **User** | Filter by specific user |
 | **Event** | Filter by specific Slack event type |
 
@@ -148,16 +148,16 @@ The Slack Metrics tab displays several chart panels:
 | **Export Formats** | Donut/pie chart showing which export formats (JSON, CSV, Markdown) are used |
 | **Export Success Rate** | Pie chart showing the ratio of successful to failed exports |
 
-When no Slack data is available, a placeholder message indicates that events will appear once Slack integration activity is tracked.
+When no Slack data is available, the tab says **No Slack events yet** with a **Refresh metrics** button. When a range or filter is set, it says **No events match these filters** with a **Clear filters** button instead.
 
 ### Error Handling
 
-If the metrics data fails to load, an error alert is displayed with a **Retry** button to re-fetch the data.
+If the metrics data fails to load, an error message is shown with a **Try again** button that loads the data again.
 
 ## Best Practices
 
 - Use date range filters to scope queries to relevant time periods, which improves load times and chart readability.
-- Apply filters before switching between sub-tabs -- the filtered dataset persists across tabs within each metrics view.
+- Set filters before switching between sub-tabs -- the filtered dataset persists across tabs within each metrics view.
 - Use the CSV export in Model Metrics to perform offline analysis or share data with stakeholders.
 - Monitor the Slack Metrics export success rate to identify integration reliability issues.
 - Check the Event Metrics Curation Breakdown to understand content categorization patterns.
