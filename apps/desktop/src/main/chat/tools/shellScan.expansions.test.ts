@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -19,7 +20,7 @@ describe('shell expansions reaching a protected location', () => {
     await writeFile(join(project, 'safe', 'value'), 'value');
     await writeFile(join(protectedFolder, 'value'), 'value');
     await symlink(protectedFolder, join(project, 'link'));
-    for (const name of ['-01', '-02', '000', '001', '002']) {
+    for (const name of ['-01', '-02', '000', '001', '002', '-2', '-1', '0', '1', '2']) {
       await symlink(protectedFolder, join(project, 'safe', name));
     }
   });
@@ -27,6 +28,22 @@ describe('shell expansions reaching a protected location', () => {
   afterAll(async () => {
     await rm(base, { recursive: true, force: true });
   });
+
+  const expectAsks = async (command: string): Promise<void> => {
+    const approval = await shellApproval(
+      'bash_execute',
+      { command, cwd: project },
+      {
+        roots: [project],
+        workingDirectory: project,
+        signal: new AbortController().signal,
+        protectedPaths: [protectedFolder],
+        uncoverablePaths: [protectedFolder],
+      }
+    );
+    expect(approval.askInAuto).toBe(true);
+    expect(approval.askInFull).toBe(true);
+  };
 
   it.each([
     'li?k',
@@ -41,51 +58,90 @@ describe('shell expansions reaching a protected location', () => {
     '{safe,../protected}',
     '{../protected,safe}',
     '{safe,{safe,../protected}}',
-    './safe/{-01..-02}',
-    './safe/{-02..-01}',
-    './safe/{-01..002}',
+    './safe/{-1..-2}',
+    './safe/{-2..1}',
+    './safe/{2..0}',
   ])('asks in every mode before reading or writing %s', async operand => {
     for (const command of [`cat ${operand}/value`, `cp safe/value ${operand}/value`]) {
       const scan = await scanShell(command, project, [project]);
       expect(scan?.paths).toContain(join(protectedFolder, 'value'));
-      const approval = await shellApproval(
-        'bash_execute',
-        { command, cwd: project },
-        {
-          roots: [project],
-          workingDirectory: project,
-          signal: new AbortController().signal,
-          protectedPaths: [protectedFolder],
-          uncoverablePaths: [protectedFolder],
-        }
-      );
-      expect(approval.askInAuto).toBe(true);
-      expect(approval.askInFull).toBe(true);
+      await expectAsks(command);
     }
   });
 
   it.each([
-    ['{-01..-02}', ['-01', '-02']],
-    ['{-02..-01}', ['-02', '-01']],
-    ['{-01..02}', ['-01', '000', '001', '002']],
-    ['{01..-2}', ['01', '00', '-1', '-2']],
-    ['{-003..-001..2}', ['-003', '-001']],
-    ['{00..-0}', ['00']],
-    ['{2..-2..2}', ['2', '0', '-2']],
+    // bash 3.2 (macOS) drops the padding and leaves a step as written, where 5.x reads `-01` and `-02`.
+    './safe/{-01..-02}',
+    './safe/{-02..-01}',
+    './safe/{-01..002}',
+    './safe/{-2..1..1}',
+    // bash pairs the `{` with the `}` after the comma: `x}a/value` and `../protected/value`.
+    '{x}a,../protected}',
+  ])('asks in every mode, reading nothing, before reading or writing %s', async operand => {
+    for (const command of [`cat ${operand}/value`, `cp safe/value ${operand}/value`]) {
+      expect((await scanShell(command, project, [project]))?.unread).toBe(true);
+      await expectAsks(command);
+    }
+  });
+
+  it.each([
+    ['{-1..-2}', ['-1', '-2']],
+    ['{-2..1}', ['-2', '-1', '0', '1']],
+    ['{1..-1}', ['1', '0', '-1']],
+    ['{-0..1}', ['0', '1']],
+    ['{3..3}', ['3']],
     ['{a..c}', ['a', 'b', 'c']],
-  ] as const)('records every path in the signed or stepped range %s', async (range, expected) => {
+    ['{c..a}', ['c', 'b', 'a']],
+    ['{2147483646..2147483647}', ['2147483646', '2147483647']],
+    ['{-2147483647..-2147483648}', ['-2147483647', '-2147483648']],
+    ['{x,{1..2}}', ['x', '1', '2']],
+    ['{1..2}{a,b}', ['1a', '1b', '2a', '2b']],
+    ['{a..b,c}', ['a..b', 'c']],
+    ['{x}{a,b}', ['{x}a', '{x}b']],
+    ['{x{a,b}}', ['{xa}', '{xb}']],
+    ['{}', ['{}']],
+  ] as const)('records every path in %s as each bash expands it', async (range, expected) => {
     const scan = await scanShell(`cat range/${range}/value`, project, [project]);
     expect(scan?.paths?.filter(path => path.startsWith(join(project, 'range')))).toEqual(
       expected.map(name => join(project, 'range', name, 'value'))
     );
+    // The host's bash: 5.x on Linux, 3.2 as macOS `/bin/bash`.
+    const printed = execFileSync('bash', ['-c', `printf '%s\\n' ${range}`], { encoding: 'utf8' });
+    expect(printed.split('\n').slice(0, -1)).toEqual(expected);
   });
 
-  it.each(['{9007199254740992..9007199254740993}', '{-9007199254740991..9007199254740991..9007199254740991}'])(
-    'leaves the numeric range %s outside exact arithmetic unread',
-    async range => {
-      expect((await scanShell(`cat range/${range}/value`, project, [project]))?.unread).toBe(true);
-    }
-  );
+  it.each([
+    // Past 32 bits, which bash 3.2 truncates.
+    '{2147483647..2147483648}',
+    '{-2147483649..-2147483648}',
+    '{9007199254740992..9007199254740993}',
+    // Zero padding, which bash 3.2 drops.
+    '{01..3}',
+    '{1..03}',
+    '{-01..2}',
+    '{00..-0}',
+    // A step, which bash 3.2 leaves as written.
+    '{1..3..1}',
+    '{2..-2..2}',
+    '{a..e..2}',
+    '{-9007199254740991..9007199254740991..9007199254740991}',
+    // A sign, or a `..` that makes no plain sequence, which bash versions skip or keep differently.
+    '{+1..3}',
+    '{1..+3}',
+    '{1..x}',
+    '{1..{2,3}}',
+    '{a..}',
+    '{1..3.}',
+    // More words than the scan reads.
+    '{1..100}',
+    // Braces that do not balance around a comma, where bash pairs the `{` with the `}` after it.
+    '{x}a,b}',
+    '{a,b}c}',
+    '}{a,b}',
+    '{{a,b}',
+  ])('leaves %s unread', async range => {
+    expect((await scanShell(`cat range/${range}/value`, project, [project]))?.unread).toBe(true);
+  });
 });
 
 describe('conservative POSIX bracket matching', () => {

@@ -538,69 +538,91 @@ const BRACE_LIMIT = 64;
 const BRACE_PIECES = 1024;
 
 /**
- * The words a `{a..e}` or `{1..9..2}` sequence makes, null when it is no sequence, or 'many' past the limit or when
- * the scan cannot tell them. With `portable`, a step or zero padding is 'many': bash 3.2 (macOS `/bin/bash`) leaves
- * `{1..9..2}` as written and drops the padding of `{01..3}`, so only plain sequences mean the same in every bash.
+ * The words a plain `{a..e}` or `{-1..3}` sequence makes, or null for any other amble. Only plain sequences mean the
+ * same in every bash: 3.2 (macOS `/bin/bash`) leaves `{1..9..2}` as written, drops the padding of `{01..3}` and
+ * truncates a bound past 32 bits.
  */
-function braceSequence(inner: readonly WordPiece[], portable: boolean): WordPiece[][] | null | 'many' {
+function braceSequence(inner: readonly WordPiece[]): WordPiece[][] | null {
   if (!inner.every(piece => 'char' in piece && piece.active)) return null;
   const text = inner.map(piece => ('char' in piece ? piece.char : '')).join('');
-  const numeric = /^(-?\d+)\.\.(-?\d+)(?:\.\.(-?\d+))?$/.exec(text);
-  const letters = /^([A-Za-z])\.\.([A-Za-z])(?:\.\.(-?\d+))?$/.exec(text);
+  const numeric = /^(-?(?:0|[1-9]\d*))\.\.(-?(?:0|[1-9]\d*))$/.exec(text);
+  const letters = /^([A-Za-z])\.\.([A-Za-z])$/.exec(text);
   const match = numeric ?? letters;
   if (!match) return null;
   const [from, to] = numeric
     ? [Number(match[1]), Number(match[2])]
     : [(match[1] as string).charCodeAt(0), (match[2] as string).charCodeAt(0)];
-  const step = Math.abs(Number(match[3] ?? 1)) || 1;
-  if (![from, to, step, to - from].every(Number.isSafeInteger)) return 'many';
+  if (![from, to].every(bound => bound >= -0x80000000 && bound <= 0x7fffffff)) return null;
   // Bash reads a `\` or backtick a letter range between `Z` and `a` makes as quoting, not as a letter.
-  if (letters && Math.min(from, to) <= 0x60 && Math.max(from, to) >= 0x5b) return 'many';
-  const count = Math.floor(Math.abs(to - from) / step) + 1;
-  if (count > BRACE_LIMIT) return 'many';
-  const padded = numeric && (/^-?0\d/.test(match[1] as string) || /^-?0\d/.test(match[2] as string));
-  if (portable && (padded || match[3] !== undefined)) return 'many';
-  const size = padded ? Math.max((match[1] as string).length, (match[2] as string).length) : 0;
+  if (letters && Math.min(from, to) <= 0x60 && Math.max(from, to) >= 0x5b) return null;
+  const count = Math.abs(to - from) + 1;
+  if (count > BRACE_LIMIT) return null;
   const words: WordPiece[][] = [];
   for (let index = 0; index < count; index++) {
-    const value = from + (to >= from ? 1 : -1) * index * step;
-    const digits = String(Math.abs(value)).padStart(value < 0 ? Math.max(0, size - 1) : size, '0');
-    const text = numeric ? `${value < 0 ? '-' : ''}${digits}` : String.fromCharCode(value);
+    const value = from + (to >= from ? index : -index);
+    const text = numeric ? String(value) : String.fromCharCode(value);
     words.push([...text].map(char => ({ char, active: false })));
   }
   return words;
 }
 
 /**
- * Bash's brace expansion, which runs before every other: null when it makes more than BRACE_LIMIT words, or with
- * `portable` when it holds a sequence bash versions expand differently (see braceSequence).
+ * Bash's brace expansion, which runs before every other. Null past BRACE_LIMIT words, for a `..` in braces that make
+ * no plain sequence (bash versions read those apart), or for a `,` or `..` among braces that do not balance: bash
+ * pairs a `{` with the first `}` past one at its own level.
  */
-function expandBraces(pieces: readonly WordPiece[], portable = false): WordPiece[][] | null {
-  if (pieces.length > BRACE_PIECES && pieces.some(piece => isActive(piece, '{'))) return null;
-  for (let open = 0; open < pieces.length; open++) {
-    if (!isActive(pieces[open], '{')) continue;
-    let depth = 0;
-    let close = -1;
-    const commas: number[] = [];
-    for (let at = open; at < pieces.length && close === -1; at++) {
-      if (isActive(pieces[at], '{')) depth++;
-      else if (isActive(pieces[at], '}') && --depth === 0) close = at;
-      else if (depth === 1 && isActive(pieces[at], ',')) commas.push(at);
+function expandBraces(pieces: readonly WordPiece[]): WordPiece[][] | null {
+  if (!pieces.some(piece => isActive(piece, '{'))) return [[...pieces]];
+  if (pieces.length > BRACE_PIECES) return null;
+  const dotsAt = (list: readonly WordPiece[], at: number): boolean =>
+    isActive(list[at], '.') && isActive(list[at + 1], '.');
+  const closes = new Map<number, number>();
+  const opens: number[] = [];
+  let balanced = true;
+  pieces.forEach((piece, at) => {
+    if (isActive(piece, '{')) opens.push(at);
+    else if (isActive(piece, '}')) {
+      const open = opens.pop();
+      if (open === undefined) balanced = false;
+      else closes.set(open, at);
     }
-    if (close === -1) continue;
-    const bounds = [open, ...commas, close];
+  });
+  if (!balanced || opens.length > 0) {
+    return pieces.some((piece, at) => isActive(piece, ',') || dotsAt(pieces, at)) ? null : [[...pieces]];
+  }
+  for (const [open, close] of [...closes].sort(([a], [b]) => a - b)) {
+    const inner = pieces.slice(open + 1, close);
+    const commas: number[] = [];
+    let dots = false;
+    let depth = 0;
+    inner.forEach((piece, at) => {
+      if (isActive(piece, '{')) depth++;
+      else if (isActive(piece, '}')) depth--;
+      else if (depth === 0 && isActive(piece, ',')) commas.push(at);
+      else if (depth === 0 && dotsAt(inner, at)) dots = true;
+    });
+    const bounds = [-1, ...commas, inner.length];
     const options =
       commas.length > 0
-        ? bounds.slice(1).map((end, index) => pieces.slice((bounds[index] as number) + 1, end))
-        : braceSequence(pieces.slice(open + 1, close), portable);
-    if (options === null) continue;
-    if (options === 'many') return null;
+        ? bounds.slice(1).map((end, index) => inner.slice((bounds[index] as number) + 1, end))
+        : braceSequence(inner);
+    if (options === null) {
+      if (dots) return null;
+      continue;
+    }
+    // As bash: the text before stays as written, and each option and the rest expand on their own.
+    const tails = expandBraces(pieces.slice(close + 1));
+    if (tails === null) return null;
     const words: WordPiece[][] = [];
     for (const option of options) {
-      const expanded = expandBraces([...pieces.slice(0, open), ...option, ...pieces.slice(close + 1)], portable);
-      if (expanded === null) return null;
-      words.push(...expanded);
-      if (words.length > BRACE_LIMIT) return null;
+      const middles = expandBraces(option);
+      if (middles === null) return null;
+      for (const middle of middles) {
+        for (const tail of tails) {
+          words.push([...pieces.slice(0, open), ...middle, ...tail]);
+          if (words.length > BRACE_LIMIT) return null;
+        }
+      }
     }
     return words;
   }
@@ -786,7 +808,7 @@ function resolveWord(pieces: readonly WordPiece[], scope: WordScope): OperandWor
   return { text, glob, active, expandAt };
 }
 
-/** Every word one shell word becomes after brace expansion; null when there are too many to read. */
+/** Every word one shell word becomes after brace expansion; null when expandBraces cannot read its braces. */
 function operandWords(raw: string, scope: WordScope): OperandWord[] | null {
   const bound = boundWords(raw, scope.bindings);
   if (bound) {
@@ -2965,7 +2987,7 @@ function shellExpands(raw: string): boolean {
   const live = pieces.some(piece => !('char' in piece) || (piece.active && '*?['.includes(piece.char)));
   if (live || expandsTilde(pieces)) return true;
   // A sequence such as `{1..1}` makes one word, but not the word as written.
-  const words = expandBraces(pieces, true);
+  const words = expandBraces(pieces);
   return words?.length !== 1 || textOf(words[0] as WordPiece[]) !== textOf(pieces);
 }
 
@@ -2984,7 +3006,7 @@ const textOf = (pieces: readonly WordPiece[]): string =>
 function pathspecValues(raw: string): { text: string; glob: boolean }[] | null {
   const pieces = wordPieces(raw);
   if (pieces.some(piece => !('char' in piece))) return null;
-  const words = expandBraces(pieces, true);
+  const words = expandBraces(pieces);
   if (words === null) return null;
   const values: { text: string; glob: boolean }[] = [];
   for (const word of words) {

@@ -516,6 +516,9 @@ describe('commands main ran unasked', () => {
     // bash 3.2 drops the padding, passing git the wider `*0*`.
     ["git diff --name-only -- '*'{00..0}'*' | xargs sed -i s/a/b/", 'srepo'],
     ['git diff --name-only x{1..1} -- | xargs sed -i s/a/b/', 'srepo'],
+    // bash pairs the `{` with the `}` after the comma, passing git `x}a` and `.c*/s*`.
+    ['git diff --name-only -- {x}a,.c*}/s* | xargs sed -i s/a/b/', 'srepo'],
+    ["git diff --name-only -- '*'{+1..1}'*' | xargs sed -i s/a/b/", 'srepo'],
     ['shopt -s nullglob; git diff --name-only -- src/*.ts | xargs sed -i s/a/b/', 'srepo'],
     // Under nullglob find gets no start point and walks `.`.
     ['shopt -s nullglob; find src/*.zz -delete', ''],
@@ -543,6 +546,11 @@ describe('commands main ran unasked', () => {
     'rg -l foo 2>>/dev/stdout | xargs sed -i s/a/b/',
     'echo "main --force" | xargs git branch -d',
     'pgrep --list-full node | xargs docker stop',
+    // bash pairs the `{` with the `}` after the comma, so each names `.claude`.
+    'rm -rf {x}a,.cl{a,a}ude}',
+    'cp a {x}a,.claude/settings.json}',
+    // tar reads its first word as an old-style cluster whatever bash makes of the braces, and `T` names a file list.
+    'tar cvfT{1..3..1} list',
   ])('asks for %s, which main ran unasked', async command => {
     expect(await judge(command)).toMatchObject(asks);
   });
