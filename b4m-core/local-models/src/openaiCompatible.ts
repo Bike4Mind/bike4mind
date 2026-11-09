@@ -45,6 +45,7 @@ export const openAIModelEntrySchema = z.object({
   id: z.string().min(1),
   owned_by: z.string().optional(),
   meta: z.object({ size: z.number().optional() }).nullable().optional(),
+  status: z.object({ value: z.string().optional() }).nullable().optional(),
   root: z.unknown().optional(),
   parent: z.unknown().optional(),
   max_model_len: z.unknown().optional(),
@@ -130,6 +131,7 @@ function listedModels(entries: OpenAIModelEntry[]): InstalledModel[] {
     const model: InstalledModel = {
       ...bareModel(entry.id, entry.meta?.size ?? null),
       ...(contextLength ? { contextLength } : {}),
+      ...(text(entry.status?.value) ? { loadState: text(entry.status?.value) } : {}),
       ...(parent ? { baseModel: base?.name ?? parent } : {}),
     };
     if (root && !parent) byRoot.set(root, model);

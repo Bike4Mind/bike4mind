@@ -49,6 +49,9 @@ export interface OpenAICompatibleServer {
    * levels, so the model list changed.
    */
   toolsChanged?: () => void;
+  /** False once the registry replaced or removed this server, so a late template probe does nothing. */
+  isCurrent?: () => boolean;
+  warn?: (message: string) => void;
   /** The models that replied with reasoning on an earlier run; see ModelServerStore.thinkers. */
   learnedThinkers?: {
     read(): Promise<readonly LearnedThinker[]>;
@@ -228,8 +231,20 @@ export function isEffortTemplate(template: string): boolean {
 }
 
 const PROPS_TIMEOUT_MS = 5_000;
-/** How long a listing waits to ask again for a template the server could not name; a reply asks at once. */
+/** Concurrent `/props` asks per server; over SSH each is its own login. */
+export const PROPS_CONCURRENCY = 2;
+/** How long to wait before asking again for a template the server could not name. */
 export const TEMPLATE_RETRY_MS = 5 * 60_000;
+
+/** A router lists each model's load state; only a loaded or sleeping one answers `/props` with autoload off. */
+const isProbeable = (state: string | undefined) => state === undefined || state === 'loaded' || state === 'sleeping';
+
+type PropsAnswer =
+  | { kind: 'template'; template: string; path: string | undefined }
+  | { kind: 'not-loaded' }
+  | { kind: 'no-props' }
+  | { kind: 'failed' }
+  | { kind: 'skipped' };
 
 /**
  * What the listing says about the weights behind a name (llama-server's file size, LM Studio's
@@ -303,12 +318,31 @@ export class OpenAICompatibleChat implements LocalChat {
   private recalled: Promise<void> | null = null;
   /** Served names, aliases included, of the gpt-oss models in the last listing. */
   private readonly effortModels = new Set<string>();
-  /** What llama-server's `/props` said of each listed model's template, with the identity of its weights then. */
-  private readonly templates = new Map<string, { effort: boolean; identity: string | undefined }>();
+  /** What llama-server's `/props` said of each listed model's template, with the weights it was read from. */
+  private readonly templates = new Map<
+    string,
+    { effort: boolean; identity: string | undefined; path: string | undefined }
+  >();
   /** Names whose template is being asked for. */
   private readonly askingTemplates = new Set<string>();
-  /** When each name's last ask got no template (Date.now()), as from a router that has not loaded the model. */
-  private readonly unansweredTemplates = new Map<string, number>();
+  /** Each name's last ask that got no template: when (performance.now()), and whether a router said it is not loaded. */
+  private readonly unansweredTemplates = new Map<string, { at: number; notLoaded: boolean }>();
+  /** Listed names whose own name already says gpt-oss, which no template overrides. */
+  private readonly namedEffort = new Set<string>();
+  /** Each listed name's weights in the previous listing, to tell when they changed. */
+  private readonly seenIdentities = new Map<string, string>();
+  /** Each listed name's router load state in the last listing. */
+  private readonly loadStates = new Map<string, string | undefined>();
+  /** The server answered 404 or 405 for `/props`, so nothing asks again until a listing follows a failed one. */
+  private noProps = false;
+  /** A listing failed since the last success, so the server may have restarted with another template. */
+  private listingFailed = false;
+  /** Bumped when every learned template is dropped, so an ask still out is discarded. */
+  private templateEpoch = 0;
+  /** Names to ask again though their template is known, because a router loaded them again. */
+  private readonly recheckTemplates = new Set<string>();
+  private propsInFlight = 0;
+  private readonly propsWaiting: (() => void)[] = [];
 
   constructor(private readonly server: OpenAICompatibleServer) {
     this.runtime = new OpenAICompatibleRuntime({
@@ -322,16 +356,20 @@ export class OpenAICompatibleChat implements LocalChat {
 
   /** Rejects when the server cannot be listed, so the caller can mark it down. */
   async listModels(): Promise<ChatModelOption[]> {
-    const [models] = await Promise.all([this.runtime.list(), this.recallThinkers()]);
+    const [models] = await Promise.all([this.runtime.list(), this.recallThinkers()]).catch((err: unknown) => {
+      this.listingFailed = true;
+      throw err;
+    });
     const before = this.smallKey();
     this.learnContexts(models);
     const chat = models.filter(model => isChatCapable(model.capabilities, 'openai-compatible'));
     this.listed = chat.map(model => model.name);
     this.smallChanged(before);
     this.learnIdentities(models);
+    if (this.listingFailed) this.forgetTemplates();
     this.keepTemplates(chat);
-    // Not awaited: a router answers only for loaded models; a template that takes levels relists via toolsChanged.
-    void this.learnTemplates(chat.map(model => model.name));
+    // Not awaited: a template that takes levels relists via toolsChanged.
+    this.askTemplates(chat.map(model => model.name));
     this.effortModels.clear();
     this.listedNames.clear();
     for (const model of chat) for (const alias of model.aliases ?? []) this.listedNames.set(alias, model.name);
@@ -522,7 +560,7 @@ export class OpenAICompatibleChat implements LocalChat {
       () => this.learnThinking(model)
     );
     // A router has the model loaded now, so it can name the template a listing could not.
-    void this.learnTemplates([this.listedNames.get(model) ?? model], true);
+    this.askTemplates([this.listedNames.get(model) ?? model], true);
   }
 
   /**
@@ -595,69 +633,149 @@ export class OpenAICompatibleChat implements LocalChat {
     return this.templates.get(name)?.effort === true;
   }
 
-  /** As learnIdentities does for thinkers: forgets a template whose name is gone or now serves other weights. */
+  /** The server may have restarted, perhaps with another template file, so nothing learned from it holds. */
+  private forgetTemplates(): void {
+    this.templates.clear();
+    this.unansweredTemplates.clear();
+    this.askingTemplates.clear();
+    this.recheckTemplates.clear();
+    this.noProps = false;
+    this.listingFailed = false;
+    this.templateEpoch++;
+  }
+
+  /**
+   * As learnIdentities does for thinkers: forgets a template, or the wait to ask again, for a name that is gone or
+   * now serves other weights. A model a router loaded again keeps its template until `/props` shows a different path.
+   */
   private keepTemplates(listed: readonly InstalledModel[]): void {
     const names = new Set(listed.map(model => model.name));
     for (const [name, learned] of this.templates) {
       const identity = this.identities.get(name);
-      const moved = learned.identity !== undefined && identity !== undefined && learned.identity !== identity;
-      if (!names.has(name) || moved) this.templates.delete(name);
-      else learned.identity ??= identity;
+      if (!names.has(name) || (identity !== undefined && learned.identity !== identity)) this.templates.delete(name);
     }
-    for (const name of this.unansweredTemplates.keys()) if (!names.has(name)) this.unansweredTemplates.delete(name);
+    for (const name of [...this.unansweredTemplates.keys()]) {
+      const identity = this.identities.get(name);
+      const seen = this.seenIdentities.get(name);
+      if (!names.has(name) || (seen !== undefined && identity !== undefined && seen !== identity)) {
+        this.unansweredTemplates.delete(name);
+      }
+    }
+    for (const name of [...this.recheckTemplates]) if (!this.templates.has(name)) this.recheckTemplates.delete(name);
+    const before = new Map(this.loadStates);
+    this.namedEffort.clear();
+    this.loadStates.clear();
+    for (const model of listed) {
+      if (takesReasoningEffort(model)) this.namedEffort.add(model.name);
+      this.loadStates.set(model.name, model.loadState);
+      const was = before.get(model.name);
+      if (this.templates.has(model.name) && was !== undefined && !isProbeable(was) && isProbeable(model.loadState)) {
+        this.recheckTemplates.add(model.name);
+      }
+    }
+    this.seenIdentities.clear();
+    for (const name of names) {
+      const identity = this.identities.get(name);
+      if (identity !== undefined) this.seenIdentities.set(name, identity);
+    }
+  }
+
+  private askTemplates(names: readonly string[], afterReply = false): void {
+    this.learnTemplates(names, afterReply).catch((err: unknown) =>
+      this.server.warn?.(`reading chat templates from ${this.server.label} failed: ${String(err)}`)
+    );
   }
 
   /**
-   * Asks llama-server for each template not yet known, and for one it could not name only after TEMPLATE_RETRY_MS
-   * unless `afterReply`; one that takes effort levels changes the listing.
+   * Asks llama-server for each template not yet known, skipping names that say gpt-oss and router models that are
+   * not loaded. One it could not name waits TEMPLATE_RETRY_MS, except that a reply asks at once after a router's
+   * not-loaded answer. One that takes effort levels changes the listing.
    */
   private async learnTemplates(names: readonly string[], afterReply = false): Promise<void> {
-    if (this.server.product !== 'llama-server') return;
-    const now = Date.now();
+    if (this.server.product !== 'llama-server' || this.noProps) return;
+    const now = performance.now();
     const asking = [...new Set(names)].filter(name => {
-      if (this.templates.has(name) || this.askingTemplates.has(name)) return false;
+      if (this.askingTemplates.has(name) || this.namedEffort.has(name) || takesReasoningEffort({ name })) return false;
+      if (this.templates.has(name) && !this.recheckTemplates.has(name)) return false;
+      if (!afterReply && !isProbeable(this.loadStates.get(name))) return false;
       const unanswered = this.unansweredTemplates.get(name);
-      return afterReply || unanswered === undefined || now - unanswered >= TEMPLATE_RETRY_MS;
+      if (!unanswered || (afterReply && unanswered.notLoaded)) return true;
+      return now - unanswered.at >= TEMPLATE_RETRY_MS;
     });
+    const epoch = this.templateEpoch;
     for (const name of asking) this.askingTemplates.add(name);
-    const found = await Promise.all(
+    const changed = await Promise.all(
       asking.map(async name => {
         const identity = this.identities.get(name);
-        const template = await this.servedTemplate(name);
+        const answer = await this.withPropsSlot(() => this.servedTemplate(name, epoch));
+        if (epoch !== this.templateEpoch) return false;
         this.askingTemplates.delete(name);
-        if (template === undefined) {
-          this.unansweredTemplates.set(name, Date.now());
-          return false;
+        const current = this.identities.get(name);
+        switch (answer.kind) {
+          case 'skipped':
+            return false;
+          case 'no-props':
+            return false;
+          case 'not-loaded':
+          case 'failed':
+            this.unansweredTemplates.set(name, { at: performance.now(), notLoaded: answer.kind === 'not-loaded' });
+            return false;
+          case 'template': {
+            if (identity !== undefined && current !== undefined && identity !== current) return false;
+            this.unansweredTemplates.delete(name);
+            this.recheckTemplates.delete(name);
+            const prior = this.templates.get(name);
+            if (prior && answer.path !== undefined && prior.path === answer.path) return false;
+            const effort = isEffortTemplate(answer.template);
+            this.templates.set(name, { effort, identity: current ?? identity, path: answer.path });
+            return effort !== (prior?.effort ?? false);
+          }
         }
-        this.unansweredTemplates.delete(name);
-        const effort = isEffortTemplate(template);
-        this.templates.set(name, { effort, identity });
-        return effort;
       })
     );
-    if (found.includes(true)) this.server.toolsChanged?.();
+    if (changed.includes(true) && this.server.isCurrent?.() !== false) this.server.toolsChanged?.();
+  }
+
+  /** Runs at most PROPS_CONCURRENCY asks at once; each is bounded by PROPS_TIMEOUT_MS. */
+  private async withPropsSlot<T>(run: () => Promise<T>): Promise<T> {
+    if (this.propsInFlight >= PROPS_CONCURRENCY) await new Promise<void>(resolve => this.propsWaiting.push(resolve));
+    else this.propsInFlight++;
+    try {
+      return await run();
+    } finally {
+      const next = this.propsWaiting.shift();
+      if (next) next();
+      else this.propsInFlight--;
+    }
   }
 
   /**
-   * The template `/props` names for the model, asked with autoload off so a router never loads a model to answer;
-   * undefined when it cannot say, as a router cannot for a model it has not loaded.
+   * What `/props` says of the model, asked with autoload off so a router never loads a model to answer. A router
+   * answers 400 for a model it has not loaded; a server with no `/props` answers 404 or 405.
    */
-  private async servedTemplate(name: string): Promise<string | undefined> {
+  private async servedTemplate(name: string, epoch: number): Promise<PropsAnswer> {
+    if (this.noProps || epoch !== this.templateEpoch || this.server.isCurrent?.() === false) return { kind: 'skipped' };
     try {
       const response = await this.server.fetch(
         `${this.server.baseUrl}/props?model=${encodeURIComponent(name)}&autoload=false`,
         { signal: AbortSignal.timeout(PROPS_TIMEOUT_MS) }
       );
-      if (!response.ok) {
+      if (response.status === 404 || response.status === 405) {
+        if (epoch === this.templateEpoch) this.noProps = true;
         await response.body?.cancel();
-        return undefined;
+        return { kind: 'no-props' };
+      }
+      if (!response.ok) {
+        const text = response.status === 400 ? await response.text() : await response.body?.cancel();
+        return typeof text === 'string' && /not loaded/i.test(text) ? { kind: 'not-loaded' } : { kind: 'failed' };
       }
       const body: unknown = await response.json();
-      const template =
-        body && typeof body === 'object' ? (body as { chat_template?: unknown }).chat_template : undefined;
-      return typeof template === 'string' ? template : undefined;
+      if (!body || typeof body !== 'object') return { kind: 'failed' };
+      const { chat_template: template, model_path: path } = body as { chat_template?: unknown; model_path?: unknown };
+      if (typeof template !== 'string') return { kind: 'failed' };
+      return { kind: 'template', template, path: typeof path === 'string' && path ? path : undefined };
     } catch {
-      return undefined;
+      return { kind: 'failed' };
     }
   }
 

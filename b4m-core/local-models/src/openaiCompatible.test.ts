@@ -96,6 +96,22 @@ describe('OpenAICompatibleRuntime', () => {
     );
   });
 
+  it('reads a llama-server router status.value as loadState, and leaves it off when there is none', async () => {
+    server = await startFakeServer({
+      'GET /v1/models': json({
+        data: [
+          { id: 'a', status: { value: 'unloaded' } },
+          { id: 'b', status: null },
+          { id: 'c', status: {} },
+          { id: 'd' },
+        ],
+      }),
+    });
+    const models = await new OpenAICompatibleRuntime({ baseUrl: server.baseUrl }).list();
+    expect(models.map(model => model.loadState)).toEqual(['unloaded', undefined, undefined, undefined]);
+    expect(models.map(model => Object.hasOwn(model, 'loadState'))).toEqual([true, false, false, false]);
+  });
+
   it('lists /v1/models ids, taking llama-server meta.size when present', async () => {
     server = await startFakeServer({ 'GET /v1/models': json(llamaServerModels) });
     const models = await new OpenAICompatibleRuntime({ baseUrl: server.baseUrl }).list();
