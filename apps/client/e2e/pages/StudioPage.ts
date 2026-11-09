@@ -17,6 +17,19 @@ const AUDIO_ENDPOINT: Record<AudioMode, RegExp> = {
 /** Audio generation is a synchronous provider call plus a save to Files; allow for a cold provider. */
 export const AUDIO_GENERATION_TIMEOUT = 90_000;
 
+/** Ledger type each endpoint settles with: deductTtsCredits.ts and pages/api/ai/sound-effects.ts. */
+export const AUDIO_USAGE_TRANSACTION_TYPE: Record<AudioMode, string> = {
+  speech: 'text_to_speech_usage',
+  'sound-effects': 'sound_effects_usage',
+};
+
+/** The number in an audio form's "~N credits estimated" line. */
+export const parseAudioEstimate = (text: string | null): number => {
+  const match = /~([\d,]+) credits? estimated/.exec(text ?? '');
+  if (!match) throw new Error(`no credit estimate in "${text}"`);
+  return Number(match[1].replace(/,/g, ''));
+};
+
 /**
  * Page object for Studio (`/studio/$modality`): the tab strip, each modality's form, and the
  * gallery of the user's generations with its media player.
@@ -92,6 +105,26 @@ export class StudioPage extends BasePage {
     );
     await this.audioSubmit(mode).click();
     return responsePromise;
+  }
+
+  /** The user's personal balance, from the endpoint the credits chip reads. */
+  async creditBalance(accessToken: string): Promise<number> {
+    const response = await this.page.request.get('/api/credits/balance', {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    expect(response.ok(), `GET /api/credits/balance answered ${response.status()}`).toBe(true);
+    const body = (await response.json()) as { currentCredits: number };
+    return body.currentCredits;
+  }
+
+  /** The user's deductions of `type` from the last day, newest first, as the credits page lists them. */
+  async usageTransactions(accessToken: string, type: string): Promise<Record<string, unknown>[]> {
+    const response = await this.page.request.get('/api/credits/transactions?days=1&type=deducted', {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    expect(response.ok(), `GET /api/credits/transactions answered ${response.status()}`).toBe(true);
+    const rows = (await response.json()) as Record<string, unknown>[];
+    return rows.filter(row => row.type === type);
   }
 
   /**

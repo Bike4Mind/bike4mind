@@ -1,10 +1,14 @@
 import { test, expect } from './fixtures';
 import { TIMEOUTS } from './constants';
-import { AUDIO_GENERATION_TIMEOUT, STUDIO_MODALITIES } from './pages/StudioPage';
-
-// In order, on one worker: every test boots from the same seeded refresh cookie, and parallel
-// tests refreshing it at the same moment intermittently got the session revoked (bounced to /login).
-test.describe.configure({ mode: 'default' });
+import { getTestUsers } from './helpers/test-users';
+import {
+  AUDIO_GENERATION_TIMEOUT,
+  AUDIO_USAGE_TRANSACTION_TYPE,
+  STUDIO_MODALITIES,
+  parseAudioEstimate,
+  type AudioMode,
+  type StudioPage,
+} from './pages/StudioPage';
 
 const parseCredits = (text: string | null): number => Number((text ?? '').replace(/[^0-9]/g, ''));
 
@@ -141,12 +145,74 @@ test.describe('Studio - video and music forms', () => {
   });
 });
 
+const studioAccessToken = (): string => getTestUsers().specUsers.studio.accessToken;
+
+/**
+ * Billing parity: the form's estimate is usdToCredits (ceil, floor 1) of the provider cost, and the
+ * server settles usdToCreditsStochastic of the same cost (floor, plus 1 with the fractional chance).
+ * So the charge is the estimate or one less, never more. Checked on the balance the user sees and on
+ * the ledger row the endpoint writes.
+ */
+async function expectChargeMatchesEstimate(
+  studioPage: StudioPage,
+  mode: AudioMode,
+  {
+    balanceBefore,
+    estimate,
+    ledgerIdsBefore,
+  }: { balanceBefore: number; estimate: number; ledgerIdsBefore: Set<string> }
+) {
+  const token = studioAccessToken();
+  const type = AUDIO_USAGE_TRANSACTION_TYPE[mode];
+
+  const newRows = async () =>
+    (await studioPage.usageTransactions(token, type)).filter(row => !ledgerIdsBefore.has(String(row._id ?? row.id)));
+  await expect
+    .poll(async () => (await newRows()).length, {
+      timeout: TIMEOUTS.ACTION,
+      message: `no new ${type} ledger row after generating`,
+    })
+    .toBe(1);
+  const [row] = await newRows();
+
+  const charged = await studioPage.creditBalance(token).then(after => balanceBefore - after);
+  const context = `${mode}: charged ${charged} for an estimate of ${estimate}`;
+  expect(charged, context).toBeLessThanOrEqual(estimate);
+  expect(charged, context).toBeGreaterThanOrEqual(estimate - 1);
+  // The ledger row is the charge itself (credits are negative on a deduction), billed to the user.
+  expect(row.credits, `${context}; ledger row ${JSON.stringify(row)}`).toBe(-charged);
+  expect(row.ownerType).toBe('User');
+}
+
+/** Balance, shown estimate and existing ledger rows, read right before Generate is clicked. */
+async function billingSnapshot(studioPage: StudioPage, mode: AudioMode) {
+  const token = studioAccessToken();
+  const rows = await studioPage.usageTransactions(token, AUDIO_USAGE_TRANSACTION_TYPE[mode]);
+  return {
+    balanceBefore: await studioPage.creditBalance(token),
+    estimate: parseAudioEstimate(await studioPage.audioEstimate(mode).textContent()),
+    ledgerIdsBefore: new Set(rows.map(row => String(row._id ?? row.id))),
+  };
+}
+
 // Real generations: cheap, short audio only. Each prompt carries a per-run marker so the card
 // lookup never matches a clip from an earlier attempt.
 test.describe('Studio - generated media', () => {
-  test('speech: generate a clip, play it, reuse its settings, download it', async ({ page, studioPage }) => {
+  // One at a time: both generations charge the same balance, and the parity check reads its drop.
+  test.describe.configure({ mode: 'serial' });
+
+  test('speech: generate a clip billed at its estimate, play it, reuse its settings, download it', async ({
+    page,
+    studioPage,
+  }) => {
     test.setTimeout(AUDIO_GENERATION_TIMEOUT + 3 * TIMEOUTS.TEST);
-    const prompt = `Studio check ${Date.now()}.`;
+    // Long enough (about 300 characters) that the estimate is several credits, so the parity check is
+    // not just the 1-credit minimum; still a fraction of a cent at provider prices.
+    const prompt =
+      `Studio check ${Date.now()}. ` +
+      'This short clip confirms that speech generation works end to end. The text is read aloud once, saved ' +
+      'to your files, listed in the gallery, and billed against the estimate shown before you pressed the ' +
+      'generate button. Nothing else happens, and the clip can be deleted at any time.';
 
     await studioPage.goto('speech');
 
@@ -158,9 +224,12 @@ test.describe('Studio - generated media', () => {
       await expect(studioPage.audioEstimate('speech')).toHaveText(/~\d+ credits? estimated/);
     });
 
-    await test.step('generate', async () => {
+    await test.step('generate, and the charge matches the estimate', async () => {
+      const snapshot = await billingSnapshot(studioPage, 'speech');
+      expect(snapshot.estimate).toBeGreaterThan(0);
       const response = await studioPage.generateAudio('speech', prompt);
       expect(response.status(), `TTS answered ${response.status()}`).toBe(200);
+      await expectChargeMatchesEstimate(studioPage, 'speech', snapshot);
     });
 
     const card = studioPage.audioCard(prompt);
@@ -198,7 +267,10 @@ test.describe('Studio - generated media', () => {
     });
   });
 
-  test('sound effects: generate a clip and play it from the gallery', async ({ page, studioPage }) => {
+  test('sound effects: generate a clip billed at its estimate and play it from the gallery', async ({
+    page,
+    studioPage,
+  }) => {
     test.setTimeout(AUDIO_GENERATION_TIMEOUT + 2 * TIMEOUTS.TEST);
     const prompt = `A single soft door knock ${Date.now()}`;
 
@@ -206,9 +278,13 @@ test.describe('Studio - generated media', () => {
     await expect(page.getByTestId('audio-gen-duration-slider')).toBeVisible();
     await expect(studioPage.audioEstimate('sound-effects')).toHaveText(/~\d+ credits? estimated/);
 
-    await test.step('generate', async () => {
+    await test.step('generate, and the charge matches the estimate', async () => {
+      await studioPage.audioTextInput('sound-effects').fill(prompt);
+      const snapshot = await billingSnapshot(studioPage, 'sound-effects');
+      expect(snapshot.estimate).toBeGreaterThan(0);
       const response = await studioPage.generateAudio('sound-effects', prompt);
       expect(response.status(), `sound effects answered ${response.status()}`).toBe(200);
+      await expectChargeMatchesEstimate(studioPage, 'sound-effects', snapshot);
     });
 
     const card = studioPage.audioCard(prompt);
