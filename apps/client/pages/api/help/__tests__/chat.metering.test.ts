@@ -12,6 +12,8 @@ vi.mock('@server/utils/untrustedCompletionQuota', () => ({
 import { createMocks } from 'node-mocks-http';
 import {
   CREDITS_PER_USD_COST,
+  DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+  TooManyRequestsError,
   getEmbeddingModelCost,
   getTextModelCost,
   insufficientCreditsError,
@@ -199,6 +201,23 @@ describe('POST /api/help/chat metering', () => {
 
     await expect(call()).rejects.toMatchObject({ statusCode: 422 });
     expect(m.search).not.toHaveBeenCalled();
+    expect(m.complete).not.toHaveBeenCalled();
+  });
+
+  it('surfaces the free-tier daily cap as its 429 without logging an error', async () => {
+    m.hold.mockRejectedValue(
+      new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
+        errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+        retryAfter: 3600,
+      })
+    );
+    const { req, res } = createMocks({ method: 'POST', body: { question: 'How do I share a notebook?' } });
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn() };
+    Object.assign(req, { user: { id: 'u1' }, logger });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the stubbed router's param type is loose
+    await expect((handler as any)(req, res)).rejects.toMatchObject({ statusCode: 429 });
+    expect(logger.error).not.toHaveBeenCalled();
     expect(m.complete).not.toHaveBeenCalled();
   });
 

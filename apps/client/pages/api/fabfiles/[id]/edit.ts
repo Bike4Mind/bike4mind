@@ -7,6 +7,7 @@ import {
   isImageServeable,
   FAB_FILE_CONTENT_REWRITE_PATCH,
   isStorageLimitError,
+  isTerminalCreditRefusal,
   type IMessage,
 } from '@bike4mind/common';
 import {
@@ -505,7 +506,7 @@ Return only the edited content without any markdown code blocks or explanations.
 
           return res.json(result);
         } catch (error) {
-          console.error('Edit file error:', error);
+          if (!isTerminalCreditRefusal(error)) console.error('Edit file error:', error);
           // The storage gate, a missing owner, model admission (403) and the credit reservation (422)
           // already carry their own status code; rethrow them instead of flattening every error to a 400.
           if (isStorageLimitError(error) || error instanceof HTTPError) throw error;

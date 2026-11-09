@@ -23,6 +23,7 @@ import {
   getTextModelCost,
   type IMessage,
   type ModelInfo,
+  isTerminalCreditRefusal,
 } from '@bike4mind/common';
 import { z } from 'zod';
 import { stripFabricatedLinks } from '@server/utils/sanitizeHelpLinks';
@@ -300,8 +301,14 @@ const handler = baseApi()
           relevantArticles,
         });
       } catch (error) {
-        // Model admission and the credit reservation keep their own 403 / 422.
-        if (error instanceof ForbiddenError || error instanceof UnprocessableEntityError) throw error;
+        // Model admission keeps its own 403; a credit refusal (422 out of credits, 429 free-tier daily cap) keeps its own status.
+        if (
+          error instanceof ForbiddenError ||
+          error instanceof UnprocessableEntityError ||
+          isTerminalCreditRefusal(error)
+        ) {
+          throw error;
+        }
         req.logger.error('[HelpChat] Error:', error);
         res.status(error instanceof BadRequestError ? 400 : 500).json({
           error: error instanceof Error ? error.message : 'An error occurred',
