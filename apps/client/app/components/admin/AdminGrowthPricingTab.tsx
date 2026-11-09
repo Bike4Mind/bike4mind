@@ -209,7 +209,8 @@ const AdminGrowthPricingTab = () => {
     return map;
   }, [data]);
 
-  // No data after loading means the read failed; the catalog says so rather than showing defaults.
+  // A failed read renders ErrorState below. No data and no error means the query is paused (offline) or
+  // disabled (no token yet); the catalog then shows the Team grant as unknown rather than defaults.
   const teamPlan = useMemo(
     () =>
       data
@@ -241,7 +242,7 @@ const AdminGrowthPricingTab = () => {
     <Stack sx={{ gap: ADMIN_REGION_GAP, maxWidth: ADMIN_DETAIL_MAX_WIDTH }} data-testid="admin-growth-pricing-tab">
       <AdminPageHeader
         title="Growth and pricing"
-        description="Signup, referral, credit and team-plan settings. Saved changes apply within a few minutes, without a deploy."
+        description="Signup, referral, credit, team-plan and preference arena settings. Saved changes apply within a few minutes, without a deploy."
       />
 
       {warnings.map(warning => (
@@ -332,6 +333,7 @@ const AdminGrowthPricingTab = () => {
                 {GROWTH_PRICING_LINKS.map(link => (
                   <Stack
                     key={link.id}
+                    component="section"
                     sx={{ gap: 0.5, alignItems: 'flex-start' }}
                     data-testid={`admin-growth-pricing-section-${link.id}`}
                   >

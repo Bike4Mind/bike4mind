@@ -123,11 +123,16 @@ describe('AdminGrowthPricingTab', () => {
     expect(tab).toHaveStyle({ maxWidth: '1280px' });
   });
 
-  it('renders each group as a section, never a card inside a card', () => {
+  it('renders each group as a section with no Card around it, leaving only the row cards', () => {
     renderTab();
 
     const tab = screen.getByTestId('admin-growth-pricing-tab');
-    for (const id of [...GROWTH_PRICING_SECTIONS.map(section => section.id), 'related']) {
+    const ids = [
+      ...GROWTH_PRICING_SECTIONS.map(section => section.id),
+      'related',
+      ...GROWTH_PRICING_LINKS.map(link => link.id),
+    ];
+    for (const id of ids) {
       const section = screen.getByTestId(`admin-growth-pricing-section-${id}`);
       expect(section.tagName).toBe('SECTION');
       expect(section.closest('.MuiCard-root')).toBeNull();
@@ -316,7 +321,7 @@ describe('AdminGrowthPricingTab', () => {
     }
   });
 
-  it('says the Team grant is unknown when settings could not be loaded', () => {
+  it('says the Team grant is unknown when the settings query has no data and no error', () => {
     serverSettings = undefined;
     renderTab();
 
@@ -329,7 +334,9 @@ describe('AdminGrowthPricingTab', () => {
     renderTab();
 
     for (const key of RATE_LIMIT_SETTING_KEYS) {
-      expect(screen.queryByTestId(`admin-setting-${key}-save-btn`)).toBeNull();
+      for (const part of ['input', 'switch', 'helper']) {
+        expect(screen.queryByTestId(`admin-setting-${key}-${part}`)).toBeNull();
+      }
     }
     const keys = GROWTH_PRICING_SECTIONS.flatMap(section => section.keys);
     expect(new Set(keys).size).toBe(keys.length);
@@ -394,7 +401,6 @@ describe('AdminGrowthPricingTab enforceCredits lock', () => {
     renderTab();
 
     expect((screen.getByTestId('admin-setting-enforceCredits-switch') as HTMLInputElement).disabled).toBe(true);
-    expect(screen.queryByTestId('admin-setting-enforceCredits-save-btn')).toBeNull();
     expect(screen.getByTestId('admin-setting-enforceCredits-helper').textContent).toBe(LOCKED_NOTE);
   });
 
