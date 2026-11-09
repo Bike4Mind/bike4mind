@@ -16,6 +16,11 @@ import { readFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { ACCOUNT_DATA_EXPORT_TTL_MS } from '../../packages/server-utils/src/utils/accountDataExport';
+import {
+  NOTEBOOK_DOWNLOAD_URL_TTL_SECONDS,
+  notebookConvertedDownloadKey,
+  notebookZipDownloadKey,
+} from '../../apps/client/server/notebooks/downloadCopyKeys';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const read = (file: string) => readFileSync(path.join(REPO_ROOT, file), 'utf8');
@@ -112,23 +117,13 @@ describe('fab-file bucket notebook export lifecycle', () => {
   });
 
   // The download route's zip and converted copies are never deleted by the app either.
-  it('keeps notebook download copies under the reserved exports prefix, signed for less than the rule', () => {
-    const downloadSource = read('apps/client/pages/api/notebooks/download.ts');
-    const prefixTemplate = downloadSource.match(/const DOWNLOAD_KEY_PREFIX = `([^`]+)`/)?.[1];
-    const keyTemplates = [...downloadSource.matchAll(/const \w+FilePath = `([^`]+)`/g)].map(m => m[1]);
-    const uploadCount = downloadSource.match(/getFilesStorage\(\)\.upload\(/g)?.length ?? 0;
-    const signCount = downloadSource.match(/getSignedUrl\(/g)?.length ?? 0;
-    const signedSeconds = [...downloadSource.matchAll(/getSignedUrl\(\w+, 'get', \{\s*expiresIn:\s*(\d+)/g)].map(m =>
-      Number(m[1])
-    );
+  it('keeps notebook download copies under the expiring exports prefix, signed for less than the rule', () => {
+    const keys = [notebookZipDownloadKey('u1', 'id'), notebookConvertedDownloadKey('u1', 's1', 'id', '.html')];
 
-    expect(prefixTemplate?.startsWith('${fabFilesService.RESERVED_FAB_FILE_KEY_PREFIX}')).toBe(true);
-    expect(keyTemplates).toHaveLength(uploadCount);
-    expect(uploadCount).toBeGreaterThan(0);
-    for (const key of keyTemplates) expect(key.startsWith('${DOWNLOAD_KEY_PREFIX}/')).toBe(true);
-    expect(signCount).toBeGreaterThan(0);
-    expect(signedSeconds).toHaveLength(signCount);
-    for (const seconds of signedSeconds) expect(seconds).toBeLessThan(ruleDays * 86400);
+    expect(rulePrefix).toBeDefined();
+    for (const key of keys) expect(key.startsWith(rulePrefix ?? '<missing>')).toBe(true);
+    expect(NOTEBOOK_DOWNLOAD_URL_TTL_SECONDS).toBeGreaterThan(0);
+    expect(NOTEBOOK_DOWNLOAD_URL_TTL_SECONDS).toBeLessThan(ruleDays * 86400);
   });
 
   // Audit exports hold actor emails and IPs, so they must land somewhere this rule reaps.

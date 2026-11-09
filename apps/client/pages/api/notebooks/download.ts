@@ -5,16 +5,15 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { NotebookDownloadRequestSchema } from '../../../types/api';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { stampGear } from '@bike4mind/server-utils/services/gears/stampGear';
-import { fabFilesService, notebookCurationService } from '@bike4mind/services';
+import { notebookCurationService } from '@bike4mind/services';
+import {
+  NOTEBOOK_DOWNLOAD_URL_TTL_SECONDS,
+  notebookConvertedDownloadKey,
+  notebookZipDownloadKey,
+} from '@server/notebooks/downloadCopyKeys';
 import { buildContentDisposition } from '@bike4mind/utils/contentDisposition';
 import { z } from 'zod';
 import archiver from 'archiver';
-
-// Generated downloads are throwaway copies, so they live under the namespace the 1-day exports
-// lifecycle rule reaps (infra/buckets.ts, compose.selfhost.yaml); the curated source stays put.
-// Keys get a random name (the friendly name rides on Content-Disposition) and are purged with the
-// account (server/users/purgeAccountFiles.ts).
-const DOWNLOAD_KEY_PREFIX = `${fabFilesService.RESERVED_FAB_FILE_KEY_PREFIX}curated-notebooks`;
 
 const handler = baseApi().post(
   asyncHandler(async (req, res) => {
@@ -159,20 +158,19 @@ const handler = baseApi().post(
             archive.on('error', reject);
           });
 
-          await archive.finalize();
-          await archiveEnded;
+          await Promise.all([archive.finalize(), archiveEnded]);
 
           const zipBuffer = Buffer.concat(chunks);
 
           const zipFileName = `curated-notebooks-${Date.now()}.zip`;
-          const zipFilePath = `${DOWNLOAD_KEY_PREFIX}/${encodeURIComponent(userId)}/batches/${randomUUID()}.zip`;
+          const zipFilePath = notebookZipDownloadKey(userId, randomUUID());
 
           await getFilesStorage().upload(zipBuffer, zipFilePath, {
             ContentType: 'application/zip',
           });
 
           const signedUrl = await getFilesStorage().getSignedUrl(zipFilePath, 'get', {
-            expiresIn: 3600,
+            expiresIn: NOTEBOOK_DOWNLOAD_URL_TTL_SECONDS,
             ResponseContentDisposition: `attachment; filename="${zipFileName}"`,
           });
 
@@ -193,7 +191,7 @@ const handler = baseApi().post(
               fileSize: zipBuffer.length,
               mimeType: 'application/zip',
               fileCount: filesToArchive.length,
-              expiresIn: 3600,
+              expiresIn: NOTEBOOK_DOWNLOAD_URL_TTL_SECONDS,
             },
           });
         } catch (error) {
@@ -273,7 +271,7 @@ const handler = baseApi().post(
           // strip existing extension before appending the converted one
           const baseFileName = fabFile.fileName.replace(/\.(md|txt|html)$/, '');
           const convertedFileName = `${baseFileName}${converted.extension}`;
-          const convertedFilePath = `${DOWNLOAD_KEY_PREFIX}/${encodeURIComponent(userId)}/${sessionId}/${randomUUID()}${converted.extension}`;
+          const convertedFilePath = notebookConvertedDownloadKey(userId, sessionId, randomUUID(), converted.extension);
 
           await getFilesStorage().upload(converted.content, convertedFilePath, {
             ContentType: converted.mimeType,
@@ -308,7 +306,7 @@ const handler = baseApi().post(
 
       // force download via Content-Disposition instead of rendering in-browser
       const signedUrl = await getFilesStorage().getSignedUrl(finalFilePath, 'get', {
-        expiresIn: 3600,
+        expiresIn: NOTEBOOK_DOWNLOAD_URL_TTL_SECONDS,
         ResponseContentDisposition: buildContentDisposition(fileName),
       });
 
@@ -330,7 +328,7 @@ const handler = baseApi().post(
           fileSize,
           mimeType,
           curatedAt: session.curatedAt,
-          expiresIn: 3600,
+          expiresIn: NOTEBOOK_DOWNLOAD_URL_TTL_SECONDS,
         },
       });
     } catch (error) {

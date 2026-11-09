@@ -31,9 +31,7 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (fn: (req: unknown, res: unknown) => unknown) => fn,
 }));
 
-// infra/__tests__/fabFileBucketLifecycle.test.ts pins this prefix to the real constant and rule.
 vi.mock('@bike4mind/services', () => ({
-  fabFilesService: { RESERVED_FAB_FILE_KEY_PREFIX: 'exports/' },
   notebookCurationService: {
     FormatConverter: class {
       convert = convert;
