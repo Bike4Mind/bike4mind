@@ -1,5 +1,5 @@
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
@@ -237,6 +237,18 @@ describe('FeedbackTab', () => {
         statusFilters(FeedbackStatus.New, FeedbackStatus.InProgress, FeedbackStatus.Closed)
       );
     });
+
+    it('checks every status when its last checked one is unpicked from the menu', async () => {
+      renderFeedbackTab();
+
+      await userEvent.click(screen.getByTestId('admin-filter-feedback-status'));
+      await userEvent.click(screen.getByTestId(`admin-filter-feedback-status-${FeedbackStatus.New}`));
+
+      expect(defaultFiltersReturn.setStatusFilters).toHaveBeenCalledTimes(1);
+      expect(defaultFiltersReturn.setStatusFilters).toHaveBeenCalledWith(
+        statusFilters(FeedbackStatus.New, FeedbackStatus.InProgress, FeedbackStatus.Closed)
+      );
+    });
   });
 
   describe('page frame', () => {
@@ -305,14 +317,14 @@ describe('FeedbackTab', () => {
   describe('row actions', () => {
     const item = makeFeedbackItem();
 
-    it('keeps delete out of the rows, with nothing danger-colored on the page', () => {
+    it('keeps delete out of the rows, with no danger confirm on the page', () => {
       mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([item]));
 
       renderFeedbackTab();
 
       expect(screen.queryAllByRole('button', { name: /delete/i, hidden: true })).toHaveLength(0);
-      // Joy's stable color utility class, the only DOM trace of color="danger".
-      expect(document.body.querySelector('[class*="colorDanger"]')).toBeNull();
+      // The danger tone belongs to the delete dialog's confirm, which only a row menu opens.
+      expect(document.body.querySelector('[data-tone="danger"]')).toBeNull();
     });
 
     it('offers delete from the row menu', async () => {
@@ -327,6 +339,59 @@ describe('FeedbackTab', () => {
       expect(operations.handleDeleteFeedbackClick).toHaveBeenCalledWith(item);
     });
 
+    describe('links in the row menu', () => {
+      const openRowMenu = () => fireEvent.click(screen.getByTestId('feedback-row-actions-fb-1'));
+      const clipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+
+      afterEach(() => {
+        if (clipboard) Object.defineProperty(navigator, 'clipboard', clipboard);
+        else Reflect.deleteProperty(navigator, 'clipboard');
+      });
+
+      it('copies an absolute link to the report', async () => {
+        const writeText = vi.fn().mockResolvedValue(undefined);
+        Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+        mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([item]));
+
+        renderFeedbackTab();
+        openRowMenu();
+        fireEvent.click(await screen.findByTestId('feedback-row-copy-link-fb-1'));
+
+        await waitFor(() =>
+          expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/admin?tab=feedback&feedbackId=fb-1`)
+        );
+        expect(mocks.toastSuccess).toHaveBeenCalledWith('Link to this report copied');
+      });
+
+      it.each([
+        ['a turn', { questId: 'quest-1' }, '/notebooks/sess-1?questId=quest-1', 'Open the conversation at this turn'],
+        ['a session', {}, '/notebooks/sess-1', 'Open the conversation'],
+      ])('opens the conversation a report on %s is about, in a new tab', async (_, questFields, href, label) => {
+        mocks.useFeedbackOperations.mockReturnValue(
+          makeOperationsReturn([makeFeedbackItem({ sessionId: 'sess-1', ...questFields })])
+        );
+
+        renderFeedbackTab();
+        openRowMenu();
+        const open = await screen.findByTestId('feedback-row-open-conversation-fb-1');
+
+        expect(open).toHaveAttribute('href', href);
+        expect(open).toHaveAttribute('target', '_blank');
+        expect(open).toHaveAttribute('rel', 'noopener noreferrer');
+        expect(open.textContent).toBe(label);
+      });
+
+      it('offers no conversation for a report with no session', async () => {
+        mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([item]));
+
+        renderFeedbackTab();
+        openRowMenu();
+
+        expect(await screen.findByTestId('feedback-row-copy-link-fb-1')).toBeInTheDocument();
+        expect(screen.queryByTestId('feedback-row-open-conversation-fb-1')).toBeNull();
+      });
+    });
+
     it('confirms a delete through the action dialog, which asks for a reason first', async () => {
       const operations = makeOperationsReturn([item], { openDeleteFeedbackModal: true, feedbackToDelete: 'fb-1' });
       mocks.useFeedbackOperations.mockReturnValue(operations);
@@ -335,7 +400,7 @@ describe('FeedbackTab', () => {
 
       expect(await screen.findByTestId('feedback-delete-dialog')).toHaveTextContent('reporter');
       expect(screen.getByTestId('feedback-delete-dialog-confirm-btn')).toBeDisabled();
-      expect(screen.getByTestId('feedback-delete-dialog-confirm-btn').className).toMatch(/colorDanger/);
+      expect(screen.getByTestId('feedback-delete-dialog-confirm-btn')).toHaveAttribute('data-tone', 'danger');
 
       fireEvent.click(screen.getByTestId('feedback-delete-dialog-reason-input-preset-0'));
       fireEvent.click(screen.getByTestId('feedback-delete-dialog-confirm-btn'));

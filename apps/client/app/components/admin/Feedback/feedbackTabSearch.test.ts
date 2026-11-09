@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { FeedbackStatus } from '@bike4mind/common';
-import { FEEDBACK_DEFAULT_PAGE_SIZE } from './constants';
+import { FEEDBACK_DEFAULT_PAGE_SIZE, FEEDBACK_PAGE_SIZE_OPTIONS } from './constants';
 import {
   DEFAULT_FEEDBACK_VIEW,
   FEEDBACK_SEARCH_PARSERS,
@@ -54,6 +54,32 @@ describe('the status param', () => {
 
     expect(search.feedbackStatus).toBeUndefined();
     expect(feedbackViewFromSearch(search).statusFilters).toEqual(DEFAULT_FEEDBACK_VIEW.statusFilters);
+  });
+});
+
+describe('the subject param', () => {
+  // `all` was the old subject menu's no-filter entry, never a subject the server knows.
+  it('reads all as every subject', () => {
+    expect(FEEDBACK_SEARCH_PARSERS.feedbackSubject('all')).toBeUndefined();
+    expect(feedbackViewFromSearch({ feedbackSubject: 'all' }).subject).toBeUndefined();
+  });
+});
+
+describe('the limit param', () => {
+  const parseLimit = FEEDBACK_SEARCH_PARSERS.feedbackLimit;
+
+  it('accepts every size the table footer offers', () => {
+    for (const size of FEEDBACK_PAGE_SIZE_OPTIONS) {
+      expect(parseLimit(size)).toBe(size);
+      expect(feedbackViewFromSearch({ feedbackLimit: String(size) }).limit).toBe(size);
+    }
+  });
+
+  // 10 and 20 were page sizes before the list moved onto the admin table, so older links carry them.
+  it.each([[10], [20], ['10'], ['20']])('reads the retired page size %j as the default of 25', value => {
+    expect(parseLimit(value)).toBeUndefined();
+    expect(feedbackViewFromSearch({ feedbackLimit: value }).limit).toBe(FEEDBACK_DEFAULT_PAGE_SIZE);
+    expect(FEEDBACK_DEFAULT_PAGE_SIZE).toBe(25);
   });
 });
 

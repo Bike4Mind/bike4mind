@@ -23,6 +23,7 @@ const appTheme = extendTheme({ ...getThemeConfig() });
 const VERIFIED_ID = '6900781a8c1b76a684f80001';
 const UNVERIFIED_ID = '6900781a8c1b76a684f80002';
 const CHANGING_ID = '6900781a8c1b76a684f80003';
+const SECOND_UNVERIFIED_ID = '6900781a8c1b76a684f80004';
 
 const user = (overrides: Record<string, unknown>) => ({
   username: 'someone',
@@ -72,6 +73,8 @@ const listLoaded = () => screen.findAllByText('verified-user');
 const openRowMenu = async (id: string) => {
   fireEvent.click(await screen.findByTestId(`email-verification-row-actions-${id}`));
 };
+
+const LIST_URL = '/api/admin/users/email-verification';
 
 describe('EmailVerificationTab', () => {
   beforeEach(() => {
@@ -137,14 +140,36 @@ describe('EmailVerificationTab', () => {
     );
   });
 
-  it('keeps unverify out of the rows, behind each row menu, with nothing danger-colored on the page', async () => {
+  // The status chip is single-select: picking the chosen status again keeps it, and its clear button is
+  // the way back to every status.
+  it('keeps a re-picked status, and returns to every status when the chip is cleared', async () => {
+    renderTab();
+    await listLoaded();
+    fireEvent.click(screen.getByTestId('admin-filter-status'));
+    fireEvent.click(await screen.findByTestId('admin-filter-status-pending'));
+    await waitFor(() =>
+      expect(m.get).toHaveBeenLastCalledWith(LIST_URL, { params: expect.objectContaining({ status: 'pending' }) })
+    );
+
+    fireEvent.click(screen.getByTestId('admin-filter-status'));
+    fireEvent.click(await screen.findByTestId('admin-filter-status-pending'));
+    expect(screen.getByTestId('admin-filter-status')).toHaveTextContent('Status: Pending verification');
+
+    fireEvent.click(screen.getByTestId('admin-filter-clear-status-btn'));
+    await waitFor(() =>
+      expect(m.get).toHaveBeenLastCalledWith(LIST_URL, { params: expect.objectContaining({ status: 'all', page: 1 }) })
+    );
+    expect(screen.getByTestId('admin-filter-status')).toHaveTextContent(/^Status$/);
+  });
+
+  it('keeps unverify out of the rows, behind each row menu, with no danger confirm on the page', async () => {
     renderTab();
     await listLoaded();
 
     // hidden: true also counts controls CSS hides, so no Unverify button can sit out of view in a row.
     expect(screen.queryAllByRole('button', { name: /unverify/i, hidden: true })).toHaveLength(0);
-    // Joy's stable color utility class, the only DOM trace of color="danger".
-    expect(document.body.querySelector('[class*="colorDanger"]')).toBeNull();
+    // The danger tone belongs to the unverify dialog's confirm, which only a row menu opens.
+    expect(document.body.querySelector('[data-tone="danger"]')).toBeNull();
     expect(screen.getByTestId(`email-verification-row-actions-${VERIFIED_ID}`)).toBeInTheDocument();
   });
 
@@ -190,8 +215,8 @@ describe('EmailVerificationTab', () => {
     expect(screen.getByTestId('email-unverify-dialog')).toHaveTextContent('Bounced or invalid address');
     const confirm = screen.getByTestId('email-unverify-dialog-confirm-btn');
     expect(confirm).toBeDisabled();
-    // Solid danger is reserved for this final confirm; Joy marks it with its color utility class.
-    expect(confirm.className).toMatch(/colorDanger/);
+    // Solid danger is reserved for this final confirm.
+    expect(confirm).toHaveAttribute('data-tone', 'danger');
     expect(m.post).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByTestId('email-unverify-dialog-reason-input-preset-1'));
@@ -216,7 +241,7 @@ describe('EmailVerificationTab', () => {
     expect(verifyDialog).not.toHaveTextContent('Bounced or invalid address');
     expect(verifyDialog).toHaveTextContent('Ownership confirmed by support');
     fireEvent.click(await screen.findByTestId('email-verify-dialog-reason-input-preset-0'));
-    expect(screen.getByTestId('email-verify-dialog-confirm-btn').className).not.toMatch(/colorDanger/);
+    expect(screen.getByTestId('email-verify-dialog-confirm-btn')).toHaveAttribute('data-tone', 'neutral');
     fireEvent.click(screen.getByTestId('email-verify-dialog-confirm-btn'));
 
     await waitFor(() =>
@@ -271,6 +296,56 @@ describe('EmailVerificationTab', () => {
 
     await act(async () => finishSend({ data: { success: true } }));
     await waitFor(() => expect(m.toastSuccess).toHaveBeenCalledWith(toast));
+  });
+
+  it('guards each row on its own while two rows resend at once', async () => {
+    m.get.mockResolvedValue(
+      listResponse([
+        ...USERS,
+        user({
+          _id: SECOND_UNVERIFIED_ID,
+          username: 'second-user',
+          email: 'second@example.com',
+          emailVerificationSentAt: '2026-10-03T00:00:00.000Z',
+          emailVerificationExpires: '2099-01-01T00:00:00.000Z',
+        }),
+      ])
+    );
+    const finishSend = new Map<string, (value: unknown) => void>();
+    m.post.mockImplementation((url: string) => new Promise(resolve => finishSend.set(url, resolve)));
+    const resendUrl = (id: string) => `/api/admin/users/${id}/resend-verification`;
+    const resendItem = (id: string) => `email-verification-row-resend-${id}`;
+    const toggleMenu = (id: string) => fireEvent.click(screen.getByTestId(`email-verification-row-actions-${id}`));
+    const expectResend = async (id: string, sending: boolean) => {
+      toggleMenu(id);
+      const item = await screen.findByTestId(resendItem(id));
+      expect(item.getAttribute('aria-disabled') === 'true', id).toBe(sending);
+      expect(item, id).toHaveTextContent(sending ? 'Sending verification email' : 'Resend verification email');
+      toggleMenu(id);
+      await waitFor(() => expect(screen.queryByTestId(resendItem(id))).toBeNull());
+    };
+    renderTab();
+    await listLoaded();
+
+    for (const id of [UNVERIFIED_ID, SECOND_UNVERIFIED_ID]) {
+      toggleMenu(id);
+      fireEvent.click(await screen.findByTestId(resendItem(id)));
+      await waitFor(() => expect(screen.queryByTestId(resendItem(id))).toBeNull());
+    }
+    expect(m.post.mock.calls.map(([url]) => url)).toEqual([resendUrl(UNVERIFIED_ID), resendUrl(SECOND_UNVERIFIED_ID)]);
+    await expectResend(UNVERIFIED_ID, true);
+    await expectResend(SECOND_UNVERIFIED_ID, true);
+
+    await act(async () => finishSend.get(resendUrl(UNVERIFIED_ID))?.({ data: { success: true } }));
+    await waitFor(() =>
+      expect(m.toastSuccess).toHaveBeenCalledWith('Verification email resent to unverified@example.com')
+    );
+    await expectResend(UNVERIFIED_ID, false);
+    await expectResend(SECOND_UNVERIFIED_ID, true);
+
+    await act(async () => finishSend.get(resendUrl(SECOND_UNVERIFIED_ID))?.({ data: { success: true } }));
+    await waitFor(() => expect(m.toastSuccess).toHaveBeenCalledWith('Verification email resent to second@example.com'));
+    await expectResend(SECOND_UNVERIFIED_ID, false);
   });
 
   it('searches through the filter bar and returns to the first page', async () => {
