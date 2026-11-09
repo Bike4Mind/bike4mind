@@ -11,14 +11,14 @@ The Slack Workspaces tab provides administrators with a centralized interface fo
 
 ## Workspace Table
 
-The main view displays a table of all connected workspaces. The page title shows the number of connected workspaces in parentheses. On a narrow screen the table keeps its columns and scrolls sideways inside its own frame.
+The main view displays a table of all connected workspaces. The page title shows the number of connected workspaces in parentheses, and the table lists every one of them on a single page. Click the **Workspace** column header to sort by name. On a narrow screen the table keeps its columns and scrolls sideways inside its own frame.
 
 | Column | Description |
 |--------|-------------|
 | **Workspace** | The workspace name |
 | **Team ID** | The Slack team identifier (monospace) |
 | **App ID** | The Slack application identifier (monospace) |
-| **Bot Name** | The name of the installed bot |
+| **Bot name** | The name of the installed bot |
 | **Installed** | The date the bot was installed, or a "Not installed" chip with an **Install** button |
 | **Status** | An "Active" (green) or "Inactive" (grey) status chip |
 | **Manifest** | Current manifest status with actionable indicators |
@@ -68,8 +68,8 @@ Open the **More actions** menu on any active, installed workspace and choose **E
 | Field | Description |
 |-------|-------------|
 | **Channel ID** | Required. The Slack channel ID to export (e.g., `C01234ABCDE`). A "Check" button validates the channel before export. |
-| **Export Format** | JSON (structured data), CSV (spreadsheet), or Markdown (readable) |
-| **Date Range** | Optional date filtering with preset shortcuts and custom date pickers |
+| **Export format** | JSON (structured data), CSV (spreadsheet), or Markdown (readable) |
+| **Date range** | Optional date filtering with preset shortcuts and custom date pickers |
 | **Include thread replies** | Checkbox to include threaded message replies (enabled by default) |
 | **Include user names** | Checkbox to resolve user IDs to display names (enabled by default) |
 | **Background export** | Toggle for asynchronous processing of large channels (up to 15 minutes) |
@@ -118,7 +118,7 @@ With Background export on, the export runs in the background with real-time prog
 | **Failed** | Export failed; error message is displayed |
 | **Cancelled** | Export was cancelled by the user |
 
-Progress is polled every 2 seconds. To stop an active background export, click **Cancel export**, pick or write a reason in the confirmation dialog, and confirm. The download link for completed exports has an expiration time (displayed in the UI).
+Progress is polled every 2 seconds. To stop an active background export, click **Cancel export**, pick or write a reason in the confirmation dialog, and confirm. The reason is not stored yet: the cancel request does not take one. The download link for completed exports has an expiration time (displayed in the UI).
 
 ### Export Error Handling
 
@@ -126,7 +126,7 @@ The system provides specific error messages and suggestions for common failure s
 
 ## Deactivating a Workspace
 
-Open the **More actions** menu on an active workspace and choose **Deactivate workspace**. A confirmation dialog asks you to pick or write a reason before you confirm. Deactivating a workspace stops the bot from responding to messages in that workspace. The workspace can be reconnected later by reinstalling via OAuth. Deactivation events are logged for audit purposes.
+Open the **More actions** menu on an active workspace and choose **Deactivate workspace**. A confirmation dialog asks you to pick or write a reason before you confirm. The reason is not stored yet: the deactivate request does not take one. Deactivating a workspace stops the bot from responding to messages in that workspace. The workspace can be reconnected later by reinstalling via OAuth. Deactivation events are logged for audit purposes.
 
 ## Best Practices
 
