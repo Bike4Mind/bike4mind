@@ -93,6 +93,7 @@ export const ADMIN_REASON_PRESETS = {
     'Suspicious usage',
     'Requested by the app owner',
   ],
+  identityProviderDelete: ['Replaced by another provider', 'Domain no longer uses single sign-on', 'Created in error'],
 } as const satisfies Record<string, readonly string[]>;
 
 export type AdminReasonPresetKey = keyof typeof ADMIN_REASON_PRESETS;

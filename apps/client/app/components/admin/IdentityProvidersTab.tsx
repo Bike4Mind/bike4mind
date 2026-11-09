@@ -31,7 +31,16 @@ import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import type { IdentityProviderSecretPresence } from '@bike4mind/common';
-import { AdminDialog, AdminPageHeader, DataTable, EmptyState, StatusChip, type DataColumn } from './shared';
+import {
+  ADMIN_REASON_PRESETS,
+  ActionDialog,
+  AdminDialog,
+  AdminPageHeader,
+  DataTable,
+  EmptyState,
+  StatusChip,
+  type DataColumn,
+} from './shared';
 import { ADMIN_REGION_GAP, adminFocus } from './shared/adminStyles';
 
 interface IdentityProvider {
@@ -128,6 +137,7 @@ const IdentityProvidersTab: React.FC = () => {
   const [editingIdp, setEditingIdp] = useState<IdentityProvider | null>(null);
   const [spMetadataOpen, setSpMetadataOpen] = useState(false);
   const [selectedIdp, setSelectedIdp] = useState<IdentityProvider | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<IdentityProvider | null>(null);
   const [showClientSecret, setShowClientSecret] = useState(false);
 
   // Form state
@@ -261,13 +271,10 @@ const IdentityProvidersTab: React.FC = () => {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this identity provider?')) {
-      return;
-    }
-
     try {
       await api.delete(`/api/admin/identity-providers/${id}`);
       toast.success('Identity provider deleted');
+      setDeleteTarget(null);
       fetchIdps();
     } catch (error: any) {
       console.error('Error deleting IDP:', error);
@@ -369,7 +376,7 @@ const IdentityProvidersTab: React.FC = () => {
               setSpMetadataOpen(true);
             }}
             onEdit={() => handleEdit(idp)}
-            onDelete={() => handleDelete(idp.id)}
+            onDelete={() => setDeleteTarget(idp)}
           />
         )}
         // Name and domain truncate; below 44rem the table scrolls sideways inside its frame.
@@ -707,13 +714,39 @@ const IdentityProvidersTab: React.FC = () => {
             </Box>
 
             <Stack direction="row" spacing={2} sx={{ justifyContent: 'flex-end' }}>
-              <Button variant="outlined" onClick={() => setSpMetadataOpen(false)}>
+              <Button
+                variant="outlined"
+                onClick={() => setSpMetadataOpen(false)}
+                data-testid="identity-provider-sp-metadata-close-btn"
+              >
                 Close
               </Button>
             </Stack>
           </Stack>
         </DialogContent>
       </AdminDialog>
+
+      {/* The delete endpoint is audited but takes no reason, so the dialog collects one without sending it. */}
+      <ActionDialog
+        open={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        title="Delete identity provider"
+        description={
+          <>
+            Deletes <b>{deleteTarget?.name}</b> and its configuration. Users whose email domain is{' '}
+            <b>{deleteTarget?.emailDomain}</b> lose single sign-on. To keep the configuration, turn the provider off
+            under Edit provider instead.
+          </>
+        }
+        reasonPresets={ADMIN_REASON_PRESETS.identityProviderDelete}
+        reasonAudited={false}
+        tone="danger"
+        // ActionDialog trims what the admin types, so the stored name is trimmed to match.
+        typedConfirm={deleteTarget ? { expected: deleteTarget.name.trim(), noun: 'provider name' } : undefined}
+        confirmLabel="Delete provider"
+        onConfirm={() => (deleteTarget ? handleDelete(deleteTarget.id) : undefined)}
+        data-testid="identity-provider-delete-dialog"
+      />
     </Stack>
   );
 };

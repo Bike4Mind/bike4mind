@@ -58,6 +58,16 @@ const openRowAction = async (idpId: string, action: 'edit' | 'sp-metadata' | 'de
   fireEvent.click(await screen.findByTestId(`identity-provider-${action}-${idpId}`));
 };
 
+const DELETE = 'identity-provider-delete-dialog';
+const openDelete = async (idpId = oktaIdp.id) => {
+  await openRowAction(idpId, 'delete');
+  return screen.findByTestId(DELETE);
+};
+const fillDelete = (typed: string) => {
+  fireEvent.click(screen.getByTestId(`${DELETE}-reason-input-preset-0`));
+  fireEvent.change(screen.getByTestId(`${DELETE}-typed-input`), { target: { value: typed } });
+};
+
 describe('IdentityProvidersTab', () => {
   afterEach(() => vi.restoreAllMocks());
 
@@ -87,7 +97,11 @@ describe('IdentityProvidersTab', () => {
     const tab = screen.getByTestId('admin-identity-providers-tab');
 
     expect(screen.getByTestId('identity-providers-table')).toHaveStyle({ minWidth: '44rem' });
-    expect(tab.querySelectorAll('.MuiCard-root')).toHaveLength(0);
+    expect(screen.getByTestId('identity-providers-table-frame').parentElement).toBe(tab);
+    expect(screen.getAllByRole('table')).toHaveLength(1);
+    expect(
+      within(screen.getByTestId('identity-providers-table')).getAllByTestId(/^identity-provider-row-/)
+    ).toHaveLength(2);
     const name = screen.getByTestId('identity-provider-name-idp-saml');
     expect(name).toHaveTextContent(samlIdp.name);
     expect(name).toHaveAttribute('title', samlIdp.name);
@@ -126,6 +140,15 @@ describe('IdentityProvidersTab', () => {
     expect(within(dialog).getByRole('heading', { level: 2 })).toHaveTextContent('Service provider metadata');
     expect(dialog).toHaveTextContent(`Use these values to configure ${samlIdp.name}`);
     expect(dialog).toHaveTextContent('idp=idp-saml');
+  });
+
+  it('closes the SP metadata dialog from its Close button', async () => {
+    renderTab();
+    await openRowAction('idp-saml', 'sp-metadata');
+    await screen.findByTestId('identity-provider-sp-metadata-dialog');
+
+    fireEvent.click(screen.getByTestId('identity-provider-sp-metadata-close-btn'));
+    await waitFor(() => expect(screen.queryByTestId('identity-provider-sp-metadata-dialog')).not.toBeInTheDocument());
   });
 
   it('offers no SP metadata item for an Okta row', async () => {
@@ -182,16 +205,103 @@ describe('IdentityProvidersTab', () => {
     expect(toast.success).toHaveBeenCalledWith('Identity provider created');
   });
 
-  it('deletes the chosen row only after the browser confirmation', async () => {
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
+  it('keeps the form open with the server error when saving fails', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    api.put.mockRejectedValue({ response: { data: { error: 'Email domain is already in use' } } });
     renderTab();
+    await openRowAction('idp-saml', 'edit');
+    await screen.findByTestId('identity-provider-form-dialog');
 
-    await openRowAction('idp-okta', 'delete');
-    expect(confirm).toHaveBeenCalledTimes(1);
-    expect(api.delete).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('identity-provider-form-submit-btn'));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Email domain is already in use'));
+    expect(screen.getByTestId('identity-provider-form-dialog')).toBeInTheDocument();
+    expect(screen.getByTestId('identity-provider-name-input')).toHaveValue(samlIdp.name);
+    expect(toast.success).not.toHaveBeenCalled();
+  });
 
-    await openRowAction('idp-okta', 'delete');
+  it('closes the form from Cancel without a request', async () => {
+    renderTab();
+    fireEvent.click(await screen.findByTestId('identity-provider-add-btn'));
+    await screen.findByTestId('identity-provider-form-dialog');
+    fireEvent.change(screen.getByTestId('identity-provider-name-input'), { target: { value: 'Draft SSO' } });
+
+    fireEvent.click(screen.getByTestId('identity-provider-form-cancel-btn'));
+    await waitFor(() => expect(screen.queryByTestId('identity-provider-form-dialog')).not.toBeInTheDocument());
+    expect(api.post).not.toHaveBeenCalled();
+    expect(api.put).not.toHaveBeenCalled();
+  });
+
+  it('confirms a delete in a dialog that names the provider, its domain and the loss of single sign-on', async () => {
+    renderTab();
+    const dialog = await openDelete();
+
+    expect(screen.getByRole('dialog', { name: 'Delete identity provider' })).toBe(dialog);
+    expect(dialog).toHaveTextContent(`Deletes ${oktaIdp.name} and its configuration.`);
+    expect(dialog).toHaveTextContent(`Users whose email domain is ${oktaIdp.emailDomain} lose single sign-on.`);
+    expect(dialog).toHaveTextContent('This cannot be undone.');
+    expect(screen.getByTestId(`${DELETE}-typed-expected`)).toHaveTextContent(oktaIdp.name);
+    expect(screen.getByTestId(`${DELETE}-reason-input-helper`)).toHaveTextContent('Not stored yet');
+    const confirm = screen.getByTestId(`${DELETE}-confirm-btn`);
+    expect(confirm).toHaveTextContent(/^Delete provider$/);
+    expect(confirm.className).toContain('MuiButton-colorDanger');
+  });
+
+  it('unlocks Delete provider only with a reason and the exact name, then sends the same DELETE', async () => {
+    api.get.mockResolvedValueOnce({ data: [samlIdp, oktaIdp] }).mockResolvedValueOnce({ data: [samlIdp] });
+    renderTab();
+    await openDelete();
+    const confirm = screen.getByTestId(`${DELETE}-confirm-btn`);
+    expect(confirm).toBeDisabled();
+
+    fillDelete('Example');
+    expect(confirm).toBeDisabled();
+    expect(screen.getByTestId(`${DELETE}-hint`)).toHaveTextContent('Type the provider name exactly to confirm.');
+    fireEvent.change(screen.getByTestId(`${DELETE}-typed-input`), { target: { value: oktaIdp.name } });
+    expect(confirm).toBeEnabled();
+    fireEvent.click(confirm);
+
     await waitFor(() => expect(api.delete).toHaveBeenCalledWith('/api/admin/identity-providers/idp-okta'));
+    expect(api.delete).toHaveBeenCalledTimes(1);
+    expect(toast.success).toHaveBeenCalledWith('Identity provider deleted');
+    await waitFor(() => expect(screen.queryByTestId(DELETE)).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByTestId('identity-provider-row-idp-okta')).not.toBeInTheDocument());
+    expect(screen.getByTestId('identity-provider-row-idp-saml')).toBeInTheDocument();
+  });
+
+  it('matches the typed name against the stored name without its stray whitespace', async () => {
+    api.get.mockResolvedValue({ data: [{ ...oktaIdp, name: '  Padded SSO ' }] });
+    renderTab();
+    await openDelete();
+
+    fillDelete('Padded SSO');
+    expect(screen.getByTestId(`${DELETE}-confirm-btn`)).toBeEnabled();
+  });
+
+  it('keeps the row and sends nothing when the delete is cancelled', async () => {
+    renderTab();
+    await openDelete();
+    fillDelete(oktaIdp.name);
+
+    fireEvent.click(screen.getByTestId(`${DELETE}-cancel-btn`));
+    await waitFor(() => expect(screen.queryByTestId(DELETE)).not.toBeInTheDocument());
+    expect(api.delete).not.toHaveBeenCalled();
+    expect(screen.getByTestId('identity-provider-row-idp-okta')).toBeInTheDocument();
+  });
+
+  it('keeps the delete dialog open with the server error when the delete fails', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    api.delete.mockRejectedValue({ response: { data: { error: 'Identity provider not found' } } });
+    renderTab();
+    await openDelete();
+    fillDelete(oktaIdp.name);
+
+    fireEvent.click(screen.getByTestId(`${DELETE}-confirm-btn`));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Identity provider not found'));
+    expect(screen.getByTestId(DELETE)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId(`${DELETE}-confirm-btn`)).toBeEnabled());
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(api.get).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('identity-provider-row-idp-okta')).toBeInTheDocument();
   });
 
   it('shows an empty state in place of the table whose action opens the add dialog', async () => {

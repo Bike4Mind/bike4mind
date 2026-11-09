@@ -75,7 +75,13 @@ Open the row's actions menu and choose **Edit provider** to reopen the configura
 
 ## Deleting a Provider
 
-Open the row's actions menu and choose **Delete provider**. A browser confirmation dialog appears. Confirming the action permanently removes the provider.
+Open the row's actions menu and choose **Delete provider**. A **Delete identity provider** dialog names the provider and warns that users whose email domain matches it lose single sign-on. To delete it:
+
+1. Pick a reason or write one of at least 5 characters. The reason is not stored yet; the admin audit log records the deletion without it.
+2. Type the provider's name exactly as shown.
+3. Click **Delete provider**.
+
+The deletion cannot be undone. If it fails, an error message appears and the dialog stays open so you can try again. To stop a provider without losing its configuration, open **Edit provider** and turn **Active** off instead.
 
 ## Service Provider (SP) Metadata
 
