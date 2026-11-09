@@ -374,7 +374,6 @@ export const SettingKeySchema = z.enum([
   'defaultTags',
   'EnableReferralToSlack',
   'EnableReferralToEmail',
-  'ReferralCreditsAmount',
   'ReferralFirstAnswerCredits',
   'ReferralFirstPaymentCredits',
   'ReferralSecondPaymentCredits',
@@ -4343,17 +4342,6 @@ export const settingsMap = {
     defaultValue: false,
     description: 'Sends a notification to Slack when a referral is sent.',
     category: 'Referrals',
-  }),
-  ReferralCreditsAmount: makeNumberSetting({
-    key: 'ReferralCreditsAmount',
-    name: 'Referral Credits Amount',
-    defaultValue: 10000,
-    description:
-      'Credits a user who signs up with a referral invite receives, as a floor: a larger amount on the invite wins. Other self-serve signups receive the signup grant schedule (Signup Grant Initial Credits) instead.',
-    category: 'Referrals',
-    // ReferralModal renders this for every non-admin sender - no secret, just the number
-    // displayed in the "invited person gets N credits" line.
-    userReadable: true,
   }),
   ReferralFirstAnswerCredits: makeNumberSetting({
     key: 'ReferralFirstAnswerCredits',

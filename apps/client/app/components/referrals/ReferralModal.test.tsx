@@ -116,7 +116,15 @@ it('decrements the local quota in userInvitation mode without going below zero',
 
 it('shows the inviter summary once the program is on', () => {
   useGetReferralSummary.mockReturnValue({
-    data: { enabled: true, invited: 4, active: 3, subscribed: 1, creditsEarned: 7000, recentRewards: [] },
+    data: {
+      enabled: true,
+      invited: 4,
+      active: 3,
+      subscribed: 1,
+      creditsEarned: 7000,
+      recentRewards: [],
+      rewards: { firstAnswer: 1000, firstPayment: 0, secondPayment: 2500 },
+    },
   });
   useReferralModal.setState({ isOpen: true });
   const queryClient = renderModal();
@@ -128,14 +136,45 @@ it('shows the inviter summary once the program is on', () => {
   queryClient.clear();
 });
 
+it("shows the inviter's non-zero rewards and no invitee credit amount", () => {
+  useGetReferralSummary.mockReturnValue({
+    data: {
+      enabled: true,
+      invited: 0,
+      active: 0,
+      subscribed: 0,
+      creditsEarned: 0,
+      recentRewards: [],
+      rewards: { firstAnswer: 1000, firstPayment: 0, secondPayment: 2500 },
+    },
+  });
+  useReferralModal.setState({ isOpen: true });
+  const queryClient = renderModal();
+
+  expect(screen.getByTestId('referral-modal-reward-first-answer')).toHaveTextContent('You earn 1,000 credits');
+  expect(screen.queryByTestId('referral-modal-reward-first-payment')).toBeNull();
+  expect(screen.getByTestId('referral-modal-reward-second-payment')).toHaveTextContent('You earn 2,500 credits');
+  expect(screen.queryByText(/Invited person gets/)).toBeNull();
+  queryClient.clear();
+});
+
 it('hides the inviter summary while the program is off', () => {
   useGetReferralSummary.mockReturnValue({
-    data: { enabled: false, invited: 0, active: 0, subscribed: 0, creditsEarned: 0, recentRewards: [] },
+    data: {
+      enabled: false,
+      invited: 0,
+      active: 0,
+      subscribed: 0,
+      creditsEarned: 0,
+      recentRewards: [],
+      rewards: { firstAnswer: 0, firstPayment: 0, secondPayment: 0 },
+    },
   });
   useReferralModal.setState({ isOpen: true });
   const queryClient = renderModal();
 
   expect(screen.queryByTestId('referral-summary')).toBeNull();
+  expect(screen.queryByTestId('referral-modal-rewards')).toBeNull();
   queryClient.clear();
 });
 

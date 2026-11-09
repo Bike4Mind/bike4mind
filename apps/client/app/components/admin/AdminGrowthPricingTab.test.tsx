@@ -92,7 +92,6 @@ describe('AdminGrowthPricingTab', () => {
     expect(keys).toEqual(
       expect.arrayContaining([
         'allowOpenRegistration',
-        'ReferralCreditsAmount',
         'enableTeamPlan',
         'enforceCredits',
         'billOperationalUsage',
@@ -247,7 +246,8 @@ describe('AdminGrowthPricingTab', () => {
     expect(screen.queryByTestId('admin-growth-pricing-current-defaultFreeCredits')).toBeNull();
     expect(screen.queryByTestId('admin-growth-pricing-derived-defaultFreeCredits')).toBeNull();
     expect(screen.queryByTestId('admin-growth-pricing-warning')).toBeNull();
-    expect(screen.getByTestId('admin-growth-pricing-current-ReferralCreditsAmount')).toBeTruthy();
+    expect(GROWTH_PRICING_SECTIONS.flatMap(section => section.keys)).not.toContain('ReferralCreditsAmount');
+    expect(screen.queryByTestId('admin-growth-pricing-current-ReferralCreditsAmount')).toBeNull();
   });
 
   it('shows no warnings at defaults', () => {
@@ -259,9 +259,9 @@ describe('AdminGrowthPricingTab', () => {
     renderTab();
 
     const floor = formatUsdPerCredit(MIN_PRICE_PER_CREDIT_USD);
-    // Referral is at its default (10,000).
-    expect(screen.getByTestId('admin-growth-pricing-derived-ReferralCreditsAmount').textContent).toBe(
-      `10,000 credits = ${formatUsdAmount(10000 * MIN_PRICE_PER_CREDIT_USD)} at the floor ${floor} per credit`
+    // The first-answer reward is at its default (0).
+    expect(screen.getByTestId('admin-growth-pricing-derived-ReferralFirstAnswerCredits').textContent).toBe(
+      `0 credits = ${formatUsdAmount(0)} at the floor ${floor} per credit`
     );
   });
 
@@ -274,8 +274,8 @@ describe('AdminGrowthPricingTab', () => {
 
   it('derives nothing for settings that are not money', () => {
     expect(describeDerivedValue('teamPlanMaxSeats', 100)).toBeNull();
-    expect(describeDerivedValue('ReferralCreditsAmount', 'abc')).toBeNull();
-    expect(describeDerivedValue('ReferralCreditsAmount', '')).toBeNull();
+    expect(describeDerivedValue('ReferralFirstAnswerCredits', 'abc')).toBeNull();
+    expect(describeDerivedValue('ReferralFirstAnswerCredits', '')).toBeNull();
     expect(describeDerivedValue('pricePerCredit', undefined)).toMatch(/^USD per credit - floor /);
   });
 

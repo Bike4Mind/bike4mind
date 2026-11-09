@@ -37,14 +37,14 @@ compute per-run and per-day USD caps) and settings that only toggle a feature.
 - **Changes customer price**: `yes` when changing the value changes what a customer is charged, or what they
   receive for money already paid. Free grants and limits are `no` even when they change platform cost.
 - **Proposed section**: where the key belongs in the five-section layout from the admin settings epic:
-  Signup and starter credits / Credit pricing and conversion / Model pricing / Plans, seats and packs /
+  Signup / Credit pricing and conversion / Model pricing / Plans, seats and packs /
   Usage limits.
 
 ## Settings
 
 | Key | Admin tab | Code readers | Changes customer price | Proposed section |
 |---|---|---|---|---|
-| `allowOpenRegistration` | Growth and Pricing > Signup and starter credits | Registration (`b4m-core/services/src/userService/register.ts`), the login and register pages through `/api/settings/serverConfigPublic`, OTP and OAuth sign-in through `isOpenRegistrationAllowed` (`apps/client/server/utils/auth/openRegistration.ts`), and the starter-credit amount (`getOpenSignupStarterCredits` in `apps/client/server/utils/starterCredits.ts`). | no. Decides who receives the signup grant (`signupGrantInitialCredits`), so it changes platform cost, not price. | Signup and starter credits |
+| `allowOpenRegistration` | Growth and Pricing > Signup | Registration (`b4m-core/services/src/userService/register.ts`), the login and register pages through `/api/settings/serverConfigPublic`, OTP and OAuth sign-in through `isOpenRegistrationAllowed` (`apps/client/server/utils/auth/openRegistration.ts`), and the starter-credit amount (`getOpenSignupStarterCredits` in `apps/client/server/utils/starterCredits.ts`). | no. Decides who receives the signup grant (`signupGrantInitialCredits`), so it changes platform cost, not price. | Signup and starter credits |
 | `signupGrantSignupPoolDaily` | Invite Center > Schedule | The per-pool budget reservation (`resolvePoolBudget` and `reserveSignupGrantBudget` in `b4m-core/services/src/userService/signupGrantBudget.ts`), drawn by the initial signup grant (`freeCredits.ts`, the first tranche in `stagedSignupGrant.ts`) and held-grant releases (`heldSignupGrants.ts`). Paid credits (purchases, plan credits, seat grants) and operator-issued invite grants never draw it. | no. Caps free signup credits per UTC day; 0 or a missing/invalid value pauses them (missing alerts admins) and overflow is held, then paid oldest first by the hourly release. | Signup and starter credits |
 | `signupGrantTricklePoolDaily` | Invite Center > Schedule | The same reservation with the trickle pool, drawn by the daily signup drip (`dripSignupGrant` in `stagedSignupGrant.ts`) and by gear and first-answer referral rewards (`payCreditReward` in `b4m-core/services/src/creditService/payCreditReward.ts`). | no. Caps free drip and reward credits per UTC day; 0 or a missing/invalid value pauses them (missing alerts admins). A drip past it is skipped for the day; a reward past it is queued and paid oldest first by the hourly release, and a drip waits while it would leave the pool unable to pay the oldest queued reward. It is independent of signup-pool holds. | Signup and starter credits |
 | `signupGrantActivityMinActiveSeconds` | Admin Settings > User Management > Credits System > Signup Activity Minimum Active Seconds | The server-accrued active time a UTC day needs before the drip pays (`resolveRequiredActiveSeconds` in `activityUnlock.ts`, `recordActiveSession.ts`) and the "about N minutes" unlock copy (`newUserWelcomeModel.ts`). Clamped to 60-7200, default 60. | no. Sets how long a free drip takes to earn. | Signup and starter credits |
@@ -57,7 +57,6 @@ compute per-run and per-day USD caps) and settings that only toggle a feature.
 | `freeTierDay1SpendCapCredits` | Invite Center > Schedule | The same gate during an account's first 24 hours. Default 500; 0 falls back to the steady-state cap. | no. A limit. | Usage limits |
 | `freeTierDays2To7SpendCapCredits` | Invite Center > Schedule | The same gate for accounts aged 24 hours to 7 days. Default 300; 0 falls back to the steady-state cap. | no. A limit. | Usage limits |
 | `gearRewardMinAccountAgeDays` | Invite Center > Rewards | The account age a verified account needs before Gears credit rewards pay (`apps/client/server/services/gears/catalog.ts`), quoted by the Gears page through `apps/client/pages/api/gears/status.ts`. Default 7. | no. A wait before a free grant. | Signup and starter credits |
-| `ReferralCreditsAmount` | Growth and Pricing > Signup and starter credits | The referred-user grant at registration (`register.ts`), the referral send route (`apps/client/pages/api/reg-invites/refer.ts`) and the "invited person gets N credits" line (`ReferralModal.tsx`). | no. A free grant. | Signup and starter credits |
 | `ReferralFirstAnswerCredits` | Invite Center > Rewards | The inviter payout when the invited friend has a first answer and a verified email (`packages/server-utils/src/referrals/firstAnswerReward.ts`). Only friends who signed up on or after the first-value launch date (`FIRST_VALUE_LAUNCH_AT` in `apps/client/server/analytics/funnel.ts`) qualify. Default 0 (off). | no. A free grant. | Signup and starter credits |
 | `preferenceArenaCreditsPerVote` | Growth and Pricing > Preference arena | The arena vote reward (`apps/client/server/preferenceArena/`), judged by `judgeArenaVote` in `b4m-core/common/src/preferenceArena.ts`. Default 0 (off). | no. A free grant. | Signup and starter credits |
 | `preferenceArenaDailyVoteCap` | Growth and Pricing > Preference arena | The same arena vote judge. Default 0 earns nothing. | no. A limit. | Usage limits |
@@ -144,16 +143,6 @@ files (`AdminGrowthPricingTab.tsx`, `AdminSettingsTab.tsx`, `settingHomes.ts`) a
 - `apps/client/server/utils/auth/openRegistration.ts`
 - `apps/client/server/utils/starterCredits.ts`
 - `b4m-core/services/src/userService/register.ts`
-
-</details>
-
-<details><summary><code>ReferralCreditsAmount</code> (5 files)</summary>
-
-- `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
-- `apps/client/app/components/referrals/ReferralModal.tsx`
-- `apps/client/pages/api/reg-invites/refer.ts`
-- `b4m-core/services/src/userService/register.ts`
-- `b4m-core/services/src/userService/registrationInvite.ts`
 
 </details>
 
