@@ -176,6 +176,25 @@ describe('SlackWorkspacesTab page anatomy and states', () => {
     expect(tone('manifest-status-missing-ws-token')).toBe('bad');
     expect(tone('manifest-status-error-ws-new')).toBe('neutral');
   });
+
+  it('lists every workspace with no pager, as the API returns them all at once', async () => {
+    const many = Array.from({ length: 26 }, (_, index) => workspace(`ws-${index}`, `Workspace ${index}`));
+    routeGets(many);
+    renderTab();
+    await loaded();
+    expect(screen.getAllByTestId(/^slack-workspace-row-/)).toHaveLength(26);
+    expect(screen.getByTestId('slack-workspace-row-ws-25')).toBeInTheDocument();
+    expect(screen.queryByTestId('admin-table-footer')).toBeNull();
+  });
+
+  it('sorts the workspaces by name from the Workspace header', async () => {
+    renderTab();
+    await loaded();
+    const names = () => screen.getAllByTestId(/^slack-workspace-row-/).map(row => row.firstElementChild?.textContent);
+    expect(names()).toEqual(['Acme', 'Beta', 'Gamma', 'Delta']);
+    fireEvent.click(screen.getByTestId('admin-table-sort-name-btn'));
+    expect(names()).toEqual(['Acme', 'Beta', 'Delta', 'Gamma']);
+  });
 });
 
 describe('SlackWorkspacesTab dialogs', () => {

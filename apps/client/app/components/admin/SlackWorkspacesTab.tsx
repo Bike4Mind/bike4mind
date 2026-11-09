@@ -1008,6 +1008,8 @@ const SlackWorkspacesTab: React.FC = () => {
             rowActions={rowActions}
             rowTestId={workspace => `slack-workspace-row-${workspace.id}`}
             testId="slack-workspaces-table"
+            // The API returns every workspace in one response, so the table lists them all.
+            pagination={false}
             // The fixed columns take 58.5rem, which leaves the workspace name 9.5rem.
             minWidth="68rem"
           />
