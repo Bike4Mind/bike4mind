@@ -217,12 +217,24 @@ export const DetectionLinkedAccountsCard: React.FC<{ userId: string }> = ({ user
             type="button"
             level="body-sm"
             onClick={() => void openProfile(account.id)}
-            sx={{ textAlign: 'left' }}
+            title={accountLabel(account)}
+            sx={{
+              display: 'block',
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              textAlign: 'left',
+            }}
             data-testid="detection-links-account-link"
           >
             {accountLabel(account)}
           </Link>
-          {account.blocked && <StatusChip tone="bad" label={account.isBanned ? 'Suspended' : 'Blocked'} />}
+          {account.blocked && (
+            <Box sx={{ flexShrink: 0 }}>
+              <StatusChip tone="bad" label={account.isBanned ? 'Suspended' : 'Blocked'} />
+            </Box>
+          )}
         </Stack>
       ),
     },
@@ -292,7 +304,7 @@ export const DetectionLinkedAccountsCard: React.FC<{ userId: string }> = ({ user
           onRetry={() => void links.refetch()}
           empty="No other account is named by these detections."
           pagination={false}
-          minWidth="560px"
+          minWidth="46rem"
           testId="detection-links-table"
           rowTestId={account => `detection-links-row-${account.id}`}
         />
