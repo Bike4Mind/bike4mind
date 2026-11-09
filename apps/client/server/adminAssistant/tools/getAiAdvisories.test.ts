@@ -69,7 +69,14 @@ describe('getAiAdvisoriesTool', () => {
     const result = await runTool();
 
     expect(result.data).toMatchObject({ status: 'off', reason: 'no_model' });
+    expect(result.data).not.toHaveProperty('advisories');
     expect(listAiAbuseAdvisories).not.toHaveBeenCalled();
+  });
+
+  it('reports disabled, not no_model, when both are off', async () => {
+    loadAbuseAssessmentSettings.mockResolvedValue({ enabled: false, config: { model: null } });
+
+    expect((await runTool()).data).toMatchObject({ status: 'off', reason: 'disabled' });
   });
 
   it('maps the summary to picked fields in order', async () => {
@@ -82,6 +89,8 @@ describe('getAiAdvisoriesTool', () => {
       advisoryCount: 2,
       countIsLowerBound: false,
       advisoriesTruncated: false,
+      networksTruncated: false,
+      mailDomainsTruncated: false,
       networks: [network(1)],
       mailDomains: [domain(1)],
     });
@@ -115,12 +124,33 @@ describe('getAiAdvisoriesTool', () => {
     const { data } = await runTool();
 
     expect(data.advisories).toHaveLength(25);
+    expect(data.advisories[0].userId).toBe('u0');
+    expect(data.advisories[24].userId).toBe('u24');
     expect(data.advisoriesTruncated).toBe(true);
     expect(data.advisoryCount).toBe(30);
     expect(data.networks).toHaveLength(10);
+    expect(data.networks.map((n: { ip: string }) => n.ip)).toEqual(many(10, i => `10.0.0.${i}`));
     expect(data.networksTruncated).toBe(true);
     expect(data.mailDomains).toHaveLength(10);
+    expect(data.mailDomains.map((d: { domain: string }) => d.domain)).toEqual(many(10, i => `d${i}.example`));
     expect(data.mailDomainsTruncated).toBe(true);
+  });
+
+  it('does not flag truncation when lists sit exactly at the caps', async () => {
+    listAiAbuseAdvisories.mockResolvedValue(
+      summary({ advisories: many(25, advisory), networks: many(10, network), mailDomains: many(10, domain) })
+    );
+
+    const { data } = await runTool();
+
+    expect(data.advisories).toHaveLength(25);
+    expect(data.networks).toHaveLength(10);
+    expect(data.mailDomains).toHaveLength(10);
+    expect(data).toMatchObject({
+      advisoriesTruncated: false,
+      networksTruncated: false,
+      mailDomainsTruncated: false,
+    });
   });
 
   it('flags a lower-bound count when the summary was truncated', async () => {
