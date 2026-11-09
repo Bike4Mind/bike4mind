@@ -1,80 +1,85 @@
 ---
 title: Delegated Admin Permissions
-description: How delegated admin permissions work, what each permission covers, and how to grant them
+description: How delegated admin permissions work, their current coverage, and full-admin rules
 sidebar_position: 3
 tags: [admin, permissions, security]
 ---
 
 # Delegated Admin Permissions
 
-A delegated admin holds one or more named permissions instead of full admin access. Each permission unlocks a specific set of admin features. A user with at least one permission can sign in to the admin panel and see the tabs their permissions allow; everything else is hidden.
+A delegated admin holds one or more named permissions instead of full admin access. API routes check the permission declared for each HTTP method. Console access is separate: a delegated admin can enter only when a tab supports one of their permissions. Currently, `settings:manage` opens the Modals tab; other tabs require full admin access.
 
-Full administrators (the legacy `isAdmin` flag) have every permission implicitly and are not subject to the restrictions below.
+Full administrators (the legacy `isAdmin` flag) have every permission implicitly. Account-action safeguards still apply, including the role-change rules below.
 
 ## Permissions
 
-| Permission | What it covers |
-|------------|----------------|
-| `support:read` | Read-only access to user profiles, activity, sign-in history, internal notes, and the admin log |
-| `credits:adjust` | View and adjust a user's credit balance and view the credit ledger |
-| `users:moderate` | Ban, restrict, and contain users; write and delete internal notes on user profiles |
-| `users:impersonate` | Sign in as another user for debugging (Login as User) |
-| `keys:revoke` | Revoke a user's API keys |
-| `users:delete` | Permanently delete a user account |
-| `settings:manage` | Edit admin settings, manage tags, configure Slack workspaces, and manage partner signup rules |
+The table gives examples of current route coverage. A permission does not automatically unlock every operation in its category.
+
+| Permission | Current coverage |
+|------------|------------------|
+| `support:read` | Read admin reporting routes and internal notes |
+| `credits:adjust` | Review, release, block, and unblock signup credit grants |
+| `users:moderate` | Write, edit, and delete internal notes; manage organization membership and moderation reviews |
+| `users:impersonate` | Defined permission; Login as User requires full admin access |
+| `keys:revoke` | Defined permission; revoking other users' API keys requires full admin access |
+| `users:delete` | Schedule or cancel account deletion |
+| `settings:manage` | Edit admin settings, manage tags and modals, configure Slack workspaces, and manage partner signup rules |
 | `models:curate` | Publish curated model catalog versions |
 
-Not every permission has a route that declares it yet. `users:delete`, `models:curate`, and the core admin tab permissions (`support:read`, `credits:adjust`, `users:moderate`, `settings:manage`) are enforced by `adminApi` middleware on their routes. `users:impersonate` and `keys:revoke` are defined in the permission list but not yet declared on an `adminApi` route; those flows still require the legacy full-admin flag.
+Permissions are enforced per route. `users:delete`, `models:curate`, `support:read`, `credits:adjust`, `users:moderate`, and `settings:manage` are enforced by `adminApi` middleware on their routes. `users:impersonate` and `keys:revoke` are defined in the permission list but not declared on an `adminApi` route; those flows require the legacy full-admin flag.
 
-A permission grants only the actions listed. For example, `credits:adjust` lets you change a credit balance but not ban the user; that requires `users:moderate`.
+Legacy user profile edits, balance adjustments, and bulk account actions require full admin access. Holding a named permission alone does not grant access to those flows.
 
 ## Granting permissions
 
-The code defines the grant rules in `assertCanGrantAdminAccess`, but the grant UI and endpoint are not wired up yet. Today, only the full-admin flag (Super Admin) can be toggled from a user's profile. Until the grant flow lands:
+There is no delegated-permission editor or grant endpoint in the admin panel. Delegated permissions are stored in the user's `adminPermissions` field and assigned directly in the database.
 
-- A full administrator can set or remove the Super Admin flag.
-- Delegated permissions are assigned directly in the database.
-
-Once the grant endpoint is available, the intended constraints are:
-
-- A full administrator can grant any combination of permissions, including the full-admin flag.
-- A delegated admin with `settings:manage` can grant permissions, but only the ones they already hold. They cannot grant the full-admin flag.
-- A delegated admin cannot change the permissions of another user who has admin access (full or delegated). Only a full administrator can edit, demote, or remove an admin account.
+To change full admin access, open the user's profile and choose **More > Change role** (also available from Overview). Select **Super Admin** to grant it, or another role to remove it, enter a reason, and confirm. Only a full administrator can make this change. You cannot change your own role or demote the last Super Admin.
 
 ## Full administrators
 
 A full administrator is a user whose `isAdmin` flag is set. This is the legacy admin model. A full admin:
 
 - Has every permission implicitly without being listed in `adminPermissions`.
-- Can act on any user, including other admins.
-- Can grant or revoke the full-admin flag.
-- The platform refuses to demote the last Super Admin, whoever asks. When the target is the sole `isAdmin: true` user, the request returns an error regardless of the caller's role.
+- Can act on other admins, subject to each action's safeguards.
+- Can grant or revoke another user's full-admin flag, subject to role-change safeguards.
 
-Holding every explicit permission is not the same as being a full admin. A user with all eight permissions is still a delegated admin and is still subject to the restrictions above.
+The platform refuses to demote the last Super Admin, whoever asks. When the target is the sole `isAdmin: true` user, the request returns an error regardless of the caller's role. Full admins also cannot change their own role.
+
+Holding every explicit permission is not the same as being a full admin. A user with every explicit permission is still a delegated admin.
 
 ## Acting on admin accounts
 
-Delegated admins cannot perform actions on users who themselves have admin access. For example, a delegated admin with `users:moderate` can ban a regular user but cannot ban another admin. The error message is: "Only full administrators can [action] users with admin access."
+On routes using `assertCanActOnAdminTarget`, delegated admins cannot act on users who themselves have admin access. For example, a delegated admin with `settings:manage` can change a regular user's free-form tags but cannot change another admin's tags. The error message is: "Only full administrators can [action] users with admin access".
 
-Routes that call `assertCanActOnAdminTarget` enforce this guard today: deletion scheduling and cancellation, tag changes, internal-mark changes, and signup grant actions. A full administrator is not subject to this restriction.
+Routes that call `assertCanActOnAdminTarget` enforce this guard: deletion scheduling and cancellation, tag changes, internal-mark changes, and signup grant actions. A full administrator is not subject to this particular restriction.
 
 ## Declaring a permission on an admin route
 
-Every admin API route declares which permission each HTTP method requires. The middleware checks the caller's permissions before the handler runs. A route that does not declare at least one permission is rejected at startup.
+A route using `adminApi` declares which permission each HTTP method requires. The middleware checks the caller's permissions before the handler runs. A route that does not declare at least one permission is rejected when initialized.
 
 ```ts
+import { adminApi } from '@server/middlewares/adminApi';
+
 export default adminApi({
   adminPermissions: {
     GET: 'support:read',
     PATCH: 'settings:manage',
   },
-  handler: async (req, res) => {
-    // ...
-  },
-});
+})
+  .get(async (_req, res) => {
+    res.status(200).json({ status: 'ok' });
+  })
+  .patch(async (_req, res) => {
+    res.status(204).end();
+  });
 ```
 
-A `HEAD` request uses the `GET` permission unless the route declares a separate `HEAD` entry. API keys must include the `admin` scope to call any admin route, regardless of the user's permissions.
+A `HEAD` request uses the `GET` permission unless the route declares a separate `HEAD` entry. API keys must include the `admin` scope to call an `adminApi` route, regardless of the user's permissions.
+
+## Troubleshooting
+
+If the admin entry or a tab is missing, check whether that tab supports your permissions; holding a permission does not by itself grant console access. An API response of `Missing permission: ...` names the permission required for that method. API keys also need the `admin` scope, and routes configured as session-only require a signed-in browser session.
 
 ## Existing references
 
