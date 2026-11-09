@@ -86,6 +86,13 @@ export const ADMIN_REASON_PRESETS = {
     'Known customer or integration',
     'Not enough data to decide',
   ],
+  oauthClientRotate: ['Compromised or leaked secret', 'Routine rotation', 'Requested by the app owner'],
+  oauthClientDeactivate: [
+    'App retired',
+    'Compromised or leaked secret',
+    'Suspicious usage',
+    'Requested by the app owner',
+  ],
 } as const satisfies Record<string, readonly string[]>;
 
 export type AdminReasonPresetKey = keyof typeof ADMIN_REASON_PRESETS;

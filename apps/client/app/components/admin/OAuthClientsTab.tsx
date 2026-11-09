@@ -51,7 +51,15 @@ import {
 import { isAxiosError } from 'axios';
 import { getErrorMessage } from '@client/app/utils/error';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
-import { AdminDialog, AdminPageHeader, DataTable, EmptyState, type DataColumn } from './shared';
+import {
+  ADMIN_REASON_PRESETS,
+  ActionDialog,
+  AdminDialog,
+  AdminPageHeader,
+  DataTable,
+  EmptyState,
+  type DataColumn,
+} from './shared';
 import { ADMIN_REGION_GAP, adminFocus } from './shared/adminStyles';
 
 const QUERY_KEY = 'admin-oauth-clients';
@@ -290,6 +298,32 @@ function SecretModal({
   );
 }
 
+/** DataTable hides `[data-row-actions]` until the row is hovered or focused, so the copy button appears on hover. */
+function ClientIdCell({ clientId }: { clientId: string }) {
+  const { copied, handleCopyToClipboard } = useCopyToClipboard();
+  return (
+    <Stack direction="row" alignItems="center" gap={0.5} sx={{ minWidth: 0 }}>
+      <Typography level="body-xs" noWrap title={clientId} sx={{ fontFamily: 'monospace', minWidth: 0 }}>
+        {clientId}
+      </Typography>
+      <Box data-row-actions sx={{ display: 'inline-flex', flexShrink: 0 }}>
+        <Tooltip title={copied ? 'Copied' : 'Copy client ID'}>
+          <IconButton
+            size="sm"
+            variant="plain"
+            aria-label="Copy client ID"
+            onClick={() => handleCopyToClipboard(clientId)}
+            data-testid={`oauth-client-copy-id-${clientId}`}
+            sx={{ '--IconButton-size': '22px', minHeight: 22, minWidth: 22, color: 'admin.inkMuted' }}
+          >
+            {copied ? <CheckIcon sx={{ fontSize: 14 }} /> : <CopyIcon sx={{ fontSize: 13 }} />}
+          </IconButton>
+        </Tooltip>
+      </Box>
+    </Stack>
+  );
+}
+
 const isConfidential = (client: OAuthClientView) => client.tokenEndpointAuthMethod === 'client_secret_post';
 
 function ClientRowMenu({
@@ -483,11 +517,7 @@ export default function OAuthClientsTab() {
       id: 'clientId',
       label: 'Client ID',
       width: '14rem',
-      render: client => (
-        <Typography level="body-xs" noWrap title={client.clientId} sx={{ fontFamily: 'monospace', maxWidth: '100%' }}>
-          {client.clientId}
-        </Typography>
-      ),
+      render: client => <ClientIdCell clientId={client.clientId} />,
     },
     {
       id: 'type',
@@ -851,65 +881,54 @@ export default function OAuthClientsTab() {
         </DialogContent>
       </AdminDialog>
 
-      <AdminDialog
+      {/* Both endpoints are audited but take no reason, so the dialogs collect one without sending it. */}
+      <ActionDialog
         open={!!rotateTarget}
         onClose={() => setRotateTarget(null)}
-        role="alertdialog"
         title="Rotate client secret"
-        data-testid="oauth-client-rotate-modal"
-      >
-        <DialogContent>
-          <Typography level="body-sm">
+        description={
+          <>
             Generate a new secret for <b>{rotateTarget?.name}</b>? The current secret stops working immediately, so the
             app cannot sign users in until it is updated with the new one.
-          </Typography>
-          <Stack direction="row" justifyContent="flex-end" spacing={1} sx={{ mt: 2 }}>
-            <Button variant="plain" color="neutral" onClick={() => setRotateTarget(null)}>
-              Cancel
-            </Button>
-            <Button
-              color="danger"
-              loading={rotateMutation.isPending}
-              onClick={() => rotateTarget && rotateMutation.mutate(rotateTarget)}
-              data-testid="oauth-client-rotate-confirm-btn"
-            >
-              Rotate secret
-            </Button>
-          </Stack>
-        </DialogContent>
-      </AdminDialog>
+          </>
+        }
+        reasonPresets={ADMIN_REASON_PRESETS.oauthClientRotate}
+        reasonAudited={false}
+        tone="danger"
+        confirmLabel="Rotate secret"
+        pending={rotateMutation.isPending}
+        onConfirm={() => {
+          if (rotateTarget) rotateMutation.mutate(rotateTarget);
+        }}
+        data-testid="oauth-client-rotate-modal"
+        testIds={{ confirm: 'oauth-client-rotate-confirm-btn' }}
+      />
 
-      <AdminDialog
+      <ActionDialog
         open={!!deactivateTarget}
         onClose={() => setDeactivateTarget(null)}
-        role="alertdialog"
         title="Deactivate client"
-        data-testid="oauth-client-deactivate-modal"
-      >
-        <DialogContent>
-          <Typography level="body-sm">
+        description={
+          <>
             Deactivate <b>{deactivateTarget?.name}</b>? It can no longer start sign-ins or exchange codes for tokens
             until it is reactivated.{' '}
             {deactivateTarget?.clientType === 'first-party'
               ? 'Sessions it already created are not ended.'
               : 'Access tokens it already issued stay valid until they expire.'}{' '}
             Nothing is deleted.
-          </Typography>
-          <Stack direction="row" justifyContent="flex-end" spacing={1} sx={{ mt: 2 }}>
-            <Button variant="plain" color="neutral" onClick={() => setDeactivateTarget(null)}>
-              Cancel
-            </Button>
-            <Button
-              color="danger"
-              loading={activeMutation.isPending}
-              onClick={() => deactivateTarget && activeMutation.mutate({ client: deactivateTarget, isActive: false })}
-              data-testid="oauth-client-deactivate-confirm-btn"
-            >
-              Deactivate client
-            </Button>
-          </Stack>
-        </DialogContent>
-      </AdminDialog>
+          </>
+        }
+        reasonPresets={ADMIN_REASON_PRESETS.oauthClientDeactivate}
+        reasonAudited={false}
+        tone="danger"
+        confirmLabel="Deactivate client"
+        pending={activeMutation.isPending}
+        onConfirm={() => {
+          if (deactivateTarget) activeMutation.mutate({ client: deactivateTarget, isActive: false });
+        }}
+        data-testid="oauth-client-deactivate-modal"
+        testIds={{ confirm: 'oauth-client-deactivate-confirm-btn' }}
+      />
 
       {secretResult && (
         <SecretModal
