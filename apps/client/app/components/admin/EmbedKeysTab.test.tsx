@@ -546,7 +546,7 @@ describe('EmbedKeysTab', () => {
       await waitFor(() => expect(revokeConfirm()).toBeEnabled());
     });
 
-    it('asks before rotating, with a reason that is not sent, and shows the commit loading while it runs', async () => {
+    it('asks before rotating, with a reason that is not sent', async () => {
       renderTab();
       openRowMenu('key-1');
       fireEvent.click(screen.getByTestId('embed-key-rotate-key-1'));

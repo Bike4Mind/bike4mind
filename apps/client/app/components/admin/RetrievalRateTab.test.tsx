@@ -173,9 +173,10 @@ describe('RetrievalRateTab page frame', () => {
       expect(mockGet).toHaveBeenLastCalledWith('/api/admin/retrieval-rate?startDate=2026-08-01&answerableMinScore=0.6')
     );
 
-    // Clearing the dates keeps the cutoff, and the reload asks for the default window at once.
+    // Clearing the dates keeps the cutoff and asks for the default window right away, without the
+    // typing pause, so the request is already out when the click returns.
     fireEvent.click(await screen.findByTestId('retrieval-rate-clear-dates-btn'));
-    await waitFor(() => expect(mockGet).toHaveBeenLastCalledWith('/api/admin/retrieval-rate?answerableMinScore=0.6'));
+    expect(mockGet).toHaveBeenLastCalledWith('/api/admin/retrieval-rate?answerableMinScore=0.6');
     await waitFor(() => expect(screen.queryByTestId('retrieval-rate-clear-dates-btn')).toBeNull());
     expect(startInput).toHaveValue('');
     expect(cutoffInput).toHaveValue(0.6);

@@ -476,7 +476,7 @@ describe('ContextInspectorTab alert settings', () => {
     expect(mocks.saveSettings).not.toHaveBeenCalled();
   });
 
-  it('writes the telemetry switch at once, outside the SaveBar, and says when the write fails', async () => {
+  it('writes the telemetry switch at once, outside the SaveBar', async () => {
     renderTab();
     await screen.findByTestId('context-inspector-entry-e1');
     fireEvent.click(screen.getByTestId('context-inspector-telemetry-toggle'));
