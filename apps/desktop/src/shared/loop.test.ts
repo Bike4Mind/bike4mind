@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { loopDecision, loopDuration, parseLoop } from './loop';
+import { formatLoopInterval, loopDecision, loopDuration, parseLoop } from './loop';
 
 describe('/loop grammar', () => {
   it('accepts supported bounded durations and keeps nested skills intact', () => {
@@ -33,7 +33,6 @@ describe('/loop grammar', () => {
     '1e3s task',
     '30s /loop task',
     '/loop stop',
-    'do /LOOP 5m task',
   ])('refuses unsafe or incomplete input: %s', text => {
     expect(parseLoop(text)).toHaveProperty('error');
   });
@@ -41,6 +40,20 @@ describe('/loop grammar', () => {
   it('recognizes management commands only as whole arguments', () => {
     for (const kind of ['stop', 'list', 'help']) expect(parseLoop(kind)).toEqual({ kind });
     expect(parseLoop('list the jobs')).toMatchObject({ kind: 'start' });
+  });
+
+  it.each(['2fa status', '-v check', 'explain what /loop does', 'do /LOOP 5m task'])(
+    'allows ordinary prompt text: %s',
+    prompt => {
+      expect(parseLoop(prompt)).toEqual({ kind: 'start', prompt, intervalMs: null });
+    }
+  );
+
+  it('formats cadence in the largest whole unit', () => {
+    expect(formatLoopInterval(86_400_000)).toBe('1d');
+    expect(formatLoopInterval(3_600_000)).toBe('1h');
+    expect(formatLoopInterval(300_000)).toBe('5m');
+    expect(formatLoopInterval(30_000)).toBe('30s');
   });
 
   it('requires an exact bounded scheduling decision at the end of a reply', () => {

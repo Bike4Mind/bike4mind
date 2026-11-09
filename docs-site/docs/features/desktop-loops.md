@@ -28,6 +28,8 @@ Without an interval, the model selects a delay after each run. Desktop asks it t
 
 The session side panel's **Background tasks** section shows the loop prompt, cadence, next run time, and any pause reason. Use the session panel button in the conversation header to open it on a narrow window. Use **Stop loop** in that section or `/loop stop` to cancel future runs without interrupting a turn already running. The ordinary Stop button also ends the loop and interrupts the current turn.
 
+When the panel is hidden or Background tasks is folded, a compact **Loop** status and **Stop** action remain visible in the conversation header. Select the status to open the loop details. Loop controls do not appear above the input.
+
 You can have one loop per conversation. Starting another replaces its schedule. A busy conversation waits for its current turn and queued messages; a loop never cancels your work. Permission cards remain open until you answer them. Errors, stopped-short replies, failed turns, and invalid pacing decisions pause the loop. Start `/loop` again explicitly to resume.
 
 Skills use the same discovery, trust, file expansion, and tool permissions as a skill you invoke directly. A loop cannot invoke another `/loop`. Changing the selected model, workspace, shared folders, or skill pauses future runs so you can confirm the new context by starting again.

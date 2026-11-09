@@ -1667,6 +1667,36 @@ export function ChatShell({
                   },
                 }}
               >
+                {loop && (!panelShown || panelPrefs.collapsed.has('background')) && (
+                  <Box
+                    role="status"
+                    data-testid="loop-header-status"
+                    sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}
+                  >
+                    <Button
+                      size="sm"
+                      variant="soft"
+                      color={loop.phase === 'paused' ? 'warning' : 'neutral'}
+                      onClick={() => {
+                        if (!panelShown) togglePanel();
+                        if (panelPrefs.collapsed.has('background')) panelPrefs.toggleSection('background');
+                      }}
+                      data-testid="loop-header-open-btn"
+                    >
+                      Loop {loop.phase}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="plain"
+                      color="neutral"
+                      aria-label="Stop loop"
+                      data-testid="loop-header-stop-btn"
+                      onClick={() => void window.b4m.chat.loopCommand(loop.sessionId, 'stop')}
+                    >
+                      Stop
+                    </Button>
+                  </Box>
+                )}
                 {panelAvailable && (
                   <Tooltip
                     size="sm"

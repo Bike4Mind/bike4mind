@@ -732,6 +732,7 @@ export class ChatService {
   }
 
   async loopCommand(sessionId: string, args: string): Promise<LoopResult> {
+    if (!isValidSessionId(sessionId)) return { ok: false, error: 'That conversation no longer exists.' };
     const action = parseLoop(args);
     if ('error' in action) return { ok: false, error: action.error };
     if (action.kind === 'stop') {

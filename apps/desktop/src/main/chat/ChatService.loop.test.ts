@@ -162,6 +162,14 @@ describe('ChatService /loop', () => {
     expect(post).not.toHaveBeenCalled();
   });
 
+  it.each(['../invalid', '', '/absolute'])('returns a friendly refusal for invalid session id %s', async sessionId => {
+    await expect(service.loopCommand(sessionId, '30s check')).resolves.toEqual({
+      ok: false,
+      error: 'That conversation no longer exists.',
+    });
+    expect(post).not.toHaveBeenCalled();
+  });
+
   it('refuses a skill that changes between validation and turn admission', async () => {
     const original = { name: 'check', body: 'Check', source: 'account', filePath: '/check' };
     getSkill

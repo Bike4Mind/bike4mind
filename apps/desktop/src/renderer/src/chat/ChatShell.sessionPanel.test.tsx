@@ -230,9 +230,30 @@ describe('the session panel in the shell', () => {
     const composer = get('chat-composer-input');
     await act(async () => get('chat-toggle-session-panel-btn').click());
     expect(find('loop-status')).toBeNull();
+    expect(get('loop-header-status').textContent).toContain('Loop scheduled');
+    expect(get('loop-header-stop-btn').tagName).toBe('BUTTON');
     expect(get('chat-composer-input')).toBe(composer);
     await act(async () => get('chat-toggle-session-panel-btn').click());
     expect(get('session-panel-section-background').contains(get('loop-stop-btn'))).toBe(true);
+    expect(find('loop-header-status')).toBeNull();
+  });
+
+  it('keeps a loop visible and stoppable on narrow panes and with Background tasks folded', async () => {
+    paneWidth(900);
+    loop = { sessionId: 'chatting', prompt: 'Check', intervalMs: 30_000, phase: 'waiting', nextRunAt: null };
+    const stop = vi.fn();
+    window.b4m.chat.loopCommand = stop;
+    await open('chatting', 'chat');
+    expect(find('session-panel')).toBeNull();
+    expect(get('loop-header-status').textContent).toContain('Loop waiting');
+    await act(async () => get('loop-header-stop-btn').click());
+    expect(stop).toHaveBeenCalledWith('chatting', 'stop');
+    await act(async () => get('loop-header-open-btn').click());
+    expect(get('session-panel-section-background').contains(get('loop-stop-btn'))).toBe(true);
+    await act(async () => get('session-panel-background-toggle-btn').click());
+    expect(get('loop-header-stop-btn')).not.toBeNull();
+    await act(async () => get('loop-header-open-btn').click());
+    expect(get('loop-status')).not.toBeNull();
   });
 
   it('reserves a rail beside the thread of a Code session with a folder', async () => {

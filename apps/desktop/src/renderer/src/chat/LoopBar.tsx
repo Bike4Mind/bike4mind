@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import Alert from '@mui/joy/Alert';
 import Button from '@mui/joy/Button';
 import Typography from '@mui/joy/Typography';
-import type { LoopState } from '@shared/loop';
+import { formatLoopInterval, type LoopState } from '@shared/loop';
 
 export function useLoop(sessionId: string | null) {
   const [state, setState] = useState<LoopState | null>(null);
@@ -31,7 +31,8 @@ export function useLoop(sessionId: string | null) {
 }
 
 export function LoopBar({ state }: { state: LoopState }) {
-  const cadence = state.intervalMs === null ? 'Model-paced' : `${state.intervalMs / 1000}s after completion`;
+  const cadence =
+    state.intervalMs === null ? 'Model-paced' : `${formatLoopInterval(state.intervalMs)} after completion`;
   const next = state.nextRunAt === null ? state.phase : `Next: ${new Date(state.nextRunAt).toLocaleTimeString()}`;
   return (
     <Alert

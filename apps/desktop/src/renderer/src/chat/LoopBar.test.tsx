@@ -59,7 +59,7 @@ describe('LoopBar', () => {
     );
     const status = host.querySelector('[data-testid="loop-status"]');
     expect(status?.textContent).toContain('/review');
-    expect(status?.textContent).toContain('300s after completion');
+    expect(status?.textContent).toContain('5m after completion');
     expect(status?.textContent).toContain('Next:');
     const button = host.querySelector<HTMLButtonElement>('[data-testid="loop-stop-btn"]');
     expect(button?.tagName).toBe('BUTTON');
