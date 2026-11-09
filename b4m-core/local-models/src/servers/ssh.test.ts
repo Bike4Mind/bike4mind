@@ -337,6 +337,8 @@ function fakeChild(): FakeChild {
     stdin: new PassThrough(),
     stdout: new PassThrough(),
     stderr: new PassThrough(),
+    // Outside the OS pid range, so signalTree falls back to the fake kill without signalling a real process.
+    pid: Number.MAX_SAFE_INTEGER,
     exitCode: null,
     signalCode: null,
   });
@@ -831,7 +833,7 @@ describe('the ssh config read', () => {
     });
 
     /** Starts one request whose ssh -G leaves a `sleep` grandchild running, and waits for that grandchild. */
-    async function start(signal?: AbortSignal) {
+    async function start(signal?: AbortSignal, fetchFor = createSshFetch) {
       dir = await mkdtemp(path.join(os.tmpdir(), 'b4m-ssh-g-'));
       const command = path.join(dir, 'ssh');
       // As a `Match exec` command that outlives ssh: a background child holding ssh's stdout and stderr.
@@ -846,7 +848,7 @@ describe('the ssh config read', () => {
         children.push(child);
         return child;
       };
-      const fetch = createSshFetch(
+      const fetch = fetchFor(
         { destination: 'me@gpu', label: 'gpu' },
         { command, spawn, platform: 'linux', home: '/home/me', makeDir: async () => undefined }
       );
@@ -884,15 +886,19 @@ describe('the ssh config read', () => {
       expect(children.map(child => child.spawnargs[1])).toEqual(['-G']);
     });
 
-    it('ends the grandchild when this process exits, and stops listening once ssh -G is done', async () => {
+    it('ends the grandchild when this process exits, and releases the tracked child', async () => {
+      vi.resetModules();
+      const { createSshFetch: isolatedFetch } = await import('./ssh');
+      const { trackedChildCount: isolatedCount } = await import('../processTree');
       const before = new Set(process.listeners('exit'));
-      const { response, grandchild } = await start();
+      const { response, grandchild } = await start(undefined, isolatedFetch);
       const added = process.listeners('exit').filter(listener => !before.has(listener));
       expect(added).toHaveLength(1);
       added[0].call(process, 0);
       await vi.waitFor(() => expect(alive(grandchild)).toBe(false), { timeout: 2_000 });
       await expect(response).rejects.toThrow();
-      expect(process.listeners('exit')).not.toContain(added[0]);
+      await vi.waitFor(() => expect(isolatedCount()).toBe(0));
+      process.off('exit', added[0]);
     });
   });
 });

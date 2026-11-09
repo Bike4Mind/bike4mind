@@ -2168,6 +2168,32 @@ describe('ModelServerRegistry SSH servers', () => {
     expect(saved.servers[0].transport).toEqual({ type: 'ssh', destination: 'me@gpu' });
   });
 
+  it('keeps this computer editable when a broken SSH record uses its reserved id', async () => {
+    const file = memoryFile();
+    await file.write(
+      JSON.stringify({
+        version: 1,
+        servers: [
+          {
+            id: 'local',
+            name: 'broken',
+            kind: 'ollama',
+            transport: { type: 'ssh' },
+            access: 'chat',
+            auth: { type: 'none' },
+            models: [],
+            addedAt: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+      })
+    );
+    const { registry: servers, store } = sshSetup(file);
+    const specs = { ramGiB: 64, gpuMemoryGiB: null, bandwidthGBps: null, unified: false };
+    expect((await servers.update('local', { specs }))[0].specs).toEqual(specs);
+    await expect(servers.update('local', { launch: { flashAttention: 'on' } })).resolves.toBeDefined();
+    expect(await store.localLaunch()).toMatchObject({ flashAttention: 'on' });
+  });
+
   it('shows an SSH server saved with a port or destination it cannot use as refused, and lets it be removed', async () => {
     const file = memoryFile();
     const saved = (id: string, name: string, transport: Record<string, unknown>) => ({

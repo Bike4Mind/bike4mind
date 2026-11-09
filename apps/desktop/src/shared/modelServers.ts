@@ -63,7 +63,7 @@ export interface ModelServerView {
   toolsHint?: string;
   /** Who runs the server and the settings it starts with. */
   launch: ModelServerLaunchView | null;
-  /** Saved with an SSH destination or port this version cannot use: shown as refused, and only Remove works on it. */
+  /** Unusable saved SSH address: disable settings while keeping Check and Remove available. */
   unusable?: true;
 }
 

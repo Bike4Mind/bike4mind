@@ -58,7 +58,6 @@ import { createCliCuratedList, type CuratedOrigin } from '../models/curatedList.
 import {
   defaultOn,
   findModelServer,
-  findUnusableServer,
   loadModelServers,
   loginHint,
   serverAddressLabel,

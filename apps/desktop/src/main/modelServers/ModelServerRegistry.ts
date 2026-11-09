@@ -639,7 +639,7 @@ export class ModelServerRegistry {
   async update(id: string, input: ModelServerUpdateInput): Promise<ModelServerView[]> {
     await this.load();
     const unusable = this.unusable.get(id);
-    if (unusable) throw new Error(unusableProblem(unusable));
+    if (unusable && id !== LOCAL_SERVER_ID) throw new Error(unusableProblem(unusable));
     if (input.launch) this.assertLaunchable(id, input.launch, input.kind);
     if (id === LOCAL_SERVER_ID) {
       if (input.specs === undefined && input.launch === undefined)
