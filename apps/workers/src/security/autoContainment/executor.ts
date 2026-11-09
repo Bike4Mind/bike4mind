@@ -17,7 +17,7 @@ import type { AdminUsersBulkResult } from '@bike4mind/server-utils/app/utils/adm
 import { usersBulkExecuteDepsFor, usersBulkResolveDeps } from '@server/admin/usersBulk/adapters';
 import { executeAdminUsersBulk } from '@server/admin/usersBulk/execute';
 import { cohortHashOf, resolveAdminUsersBulk } from '@server/admin/usersBulk/resolve';
-import { systemAuditWriter } from '@server/utils/systemAuditWriter';
+import { systemAuditWriter } from '@workers/utils/systemAuditWriter';
 import { decideContainment, type AutoContainmentSkipReason } from './policy';
 
 /**

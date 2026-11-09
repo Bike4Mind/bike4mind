@@ -27,7 +27,7 @@ vi.mock('@server/admin/usersBulk/resolve', async importOriginal => ({
   ...(await importOriginal<typeof import('@server/admin/usersBulk/resolve')>()),
   resolveAdminUsersBulk: h.resolve,
 }));
-vi.mock('@server/utils/systemAuditWriter', () => ({ systemAuditWriter: h.writer }));
+vi.mock('@workers/utils/systemAuditWriter', () => ({ systemAuditWriter: h.writer }));
 
 import { cohortHashOf } from '@server/admin/usersBulk/resolve';
 import {

@@ -1618,7 +1618,7 @@ export const AUTO_CONTAINMENT_MODES = ['off', 'shadow', 'enforce'] as const;
 export type AutoContainmentMode = (typeof AUTO_CONTAINMENT_MODES)[number];
 
 /**
- * Automated containment from abuse assessments (apps/client/server/security/autoContainment). Acts
+ * Automated containment from abuse assessments (apps/workers/src/security/autoContainment). Acts
  * only on an `abuse` judgment at or above minConfidence, through the admin bulk Contain path.
  */
 export const AutoContainmentConfigSchema = z.object({
@@ -1655,7 +1655,7 @@ export type AutoContainmentConfig = z.infer<typeof AutoContainmentConfigSchema>;
 
 /**
  * Operator limits for the advisory assessment of young-domain signup holds
- * (apps/client/server/security/signupDomainHoldAssessment). Every default spends nothing: no model and
+ * (apps/workers/src/security/signupDomainHoldAssessment). Every default spends nothing: no model and
  * a zero budget. `signupDomainHoldAssessmentEnabled` gates all provider egress on top of this.
  */
 export const SignupDomainHoldAssessmentConfigSchema = z.object({

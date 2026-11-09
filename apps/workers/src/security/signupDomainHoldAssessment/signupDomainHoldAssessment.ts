@@ -70,7 +70,11 @@ import {
   type SignupDomainHoldFeatureSummary,
   type SiteProbe,
 } from './featureSummary';
-import { type HeldSignupCreditRelease, listHeldSignupIds, releaseHeldSignupCredits } from './releaseHeldSignupCredits';
+import {
+  type HeldSignupCreditRelease,
+  listHeldSignupIds,
+  releaseHeldSignupCredits,
+} from '@server/security/signupDomainHoldAssessment/releaseHeldSignupCredits';
 
 // Namespaces this feature's budget, call cap and concurrency in the shared platform policy.
 const KEY_PREFIX = 'signupDomainHoldAssessment';

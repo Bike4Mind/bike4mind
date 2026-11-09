@@ -12,7 +12,7 @@
  * - A provider failure is stored as `unknown` with a diagnostic code, never as a judgment.
  * - Advisory only: nothing here writes to a user, an API key, credits, riskScore or reviewState. The
  *   sweep hands each judgment to an injected `afterAssessment` hook; automated containment
- *   (../autoContainment) is the one that may act on it.
+ *   (apps/workers/src/security/autoContainment) is the one that may act on it.
  */
 
 import {
