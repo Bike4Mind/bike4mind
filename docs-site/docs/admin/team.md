@@ -50,7 +50,7 @@ Validation requires that both Name and Phone are non-empty. If validation fails,
 
 ## Editing a Team Member
 
-Click the edit icon on any team member card to open the edit modal. The form is pre-populated with the member's current information. The same validation rules apply: Name and Phone are required. Changes are saved by clicking the **Update Team Member** button.
+Click the edit icon on any team member card to open the edit modal. The form is pre-populated with the member's current information. The same validation rules apply: Name and Phone are required. Changes are saved by clicking the **Update team member** button.
 
 ## Deleting a Team Member
 

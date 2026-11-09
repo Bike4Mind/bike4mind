@@ -290,7 +290,7 @@ const CreateTeamMemberModal: React.FC<CreateTeamMemberModalProps> = ({ open, onC
   return (
     <Modal open={open} onClose={handleClose}>
       <ModalDialog sx={{ width: 500 }}>
-        <DialogTitle>Create Team Member</DialogTitle>
+        <DialogTitle>Create team member</DialogTitle>
         <DialogContent>Fill in the details to add the teammate to the internal contact list.</DialogContent>
         <form onSubmit={handleSubmit}>
           <Stack spacing={2}>
@@ -361,7 +361,7 @@ const CreateTeamMemberModal: React.FC<CreateTeamMemberModalProps> = ({ open, onC
                 Cancel
               </Button>
               <Button type="submit" loading={createMember.isPending} data-testid="team-member-submit-btn">
-                {createMember.isPending ? 'Creating...' : 'Create Team Member'}
+                {createMember.isPending ? 'Creating...' : 'Create team member'}
               </Button>
             </DialogActions>
           </Stack>
@@ -435,7 +435,7 @@ const EditTeamMemberModal: React.FC<EditTeamMemberModalProps> = ({ open, onClose
   return (
     <Modal open={open} onClose={handleClose}>
       <ModalDialog sx={{ width: 500 }}>
-        <DialogTitle>Edit Team Member</DialogTitle>
+        <DialogTitle>Edit team member</DialogTitle>
         <DialogContent>Update the details for this team member.</DialogContent>
         <form onSubmit={handleSubmit}>
           <Stack spacing={2}>
@@ -506,7 +506,7 @@ const EditTeamMemberModal: React.FC<EditTeamMemberModalProps> = ({ open, onClose
                 Cancel
               </Button>
               <Button type="submit" loading={updateMember.isPending} data-testid="team-member-edit-submit-btn">
-                {updateMember.isPending ? 'Updating...' : 'Update Team Member'}
+                {updateMember.isPending ? 'Updating...' : 'Update team member'}
               </Button>
             </DialogActions>
           </Stack>

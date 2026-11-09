@@ -146,7 +146,7 @@ export default function EmailJobsPanel() {
             </FormControl>
             {hasFilters && (
               <Button size="sm" variant="plain" color="neutral" onClick={clearFilters} data-testid="clear-filters-btn">
-                Clear Filters
+                Clear filters
               </Button>
             )}
           </Stack>
