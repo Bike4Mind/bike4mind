@@ -46,7 +46,6 @@ export default {
   'MigrateUsersTab.tsx': [[4, '655b890fff77d8be']],
   'ModelLifecycleTab.tsx': [[2, '6753494454310b67']],
   'ModelLogsTab.tsx': [[2, '9e6b044a23acfa7f']],
-  'ModelMetrics/components/ControlPanel.tsx': [[2, '2bcb5f0df21f6db7']],
   'ModelMetrics/components/MetricsInfoModal.tsx': [[2, 'c6c6ac7ed5b077e5']],
   'ModelMetrics/components/RawDataTab.tsx': [[2, '75a9a9612e03580f']],
   'ModelMetrics/components/SpendTab.tsx': [[2, 'c909d4ea5a207560']],

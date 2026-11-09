@@ -15,33 +15,35 @@ The Model Metrics tab provides detailed analytics on AI model usage and performa
 
 ### Filters
 
-The control panel at the top of Model Metrics supports the following filters. Filters are applied explicitly by clicking an Apply button, allowing you to configure multiple filter criteria before fetching data.
+The filter bar at the top of Model Metrics applies each filter as you pick it. There is no Apply button. Period, Model and Status are kept in the page URL, so a filtered view can be bookmarked or shared; the User filter is not.
 
 | Filter | Description |
 |--------|-------------|
-| **Date Range** | Start and end dates with preset shortcuts |
-| **User** | Filter by specific user |
+| **Period** | One of Today, Last 24 hours, Last 7 days or Last 30 days. Overview, Raw data and the CSV export show at most the 500 most recent matching calls; Analytics runs its own query with a higher cap. |
 | **Model** | Filter by AI model |
-| **Status** | Filter by request status |
-| **Simplified Names** | Toggle to show simplified model names instead of full identifiers |
+| **User** | Filter by specific user |
+| **Status** | Done, Error or Pending |
+
+A **Short names** / **Full names** control next to the filters switches between simplified model names and full identifiers. When a filter matches nothing, use **Clear filters** to reset them all.
 
 ### Tabs
 
-Model Metrics is organized into three sub-tabs:
+Model Metrics is organized into four sub-tabs:
 
 | Tab | Description |
 |-----|-------------|
 | **Overview** | Summary cards and charts showing key metrics and distributions for the filtered dataset |
 | **Analytics** | Detailed chart visualizations with trend analysis based on the applied filters |
-| **Raw Data** | A sortable table of individual metric records with all fields visible. Supports column sorting and includes access to performance metrics documentation via an info modal. |
+| **Raw data** | A sortable table of individual metric records with all fields visible. Supports column sorting and includes access to performance metrics documentation via an info modal. |
+| **Spend** | Spend for the selected period, user and model |
 
 ### CSV Export
 
-Click the **Export CSV** button in the control panel to download the current filtered and sorted dataset as a CSV file. The filename includes a timestamp (e.g., `model-metrics-2026-02-15-14-30-00.csv`).
+Click the **Export CSV** button in the page header to download the current filtered and sorted dataset as a CSV file. The filename includes a timestamp (e.g., `model-metrics-2026-02-15-14-30-00.csv`).
 
 ### Performance Metrics Info
 
-The Raw Data tab includes an info modal that documents performance metrics fields, including streaming performance data (chunk count, total stream time) when available in the dataset.
+The Raw data tab includes an info modal that documents performance metrics fields, including streaming performance data (chunk count, total stream time) when available in the dataset.
 
 #### Time to First Visible Token (TTFVT)
 
@@ -50,7 +52,7 @@ text that actually renders: an extended-thinking model's hidden reasoning does n
 and neither do the tool-call arguments a model writes before answering.
 
 A turn that streamed but never rendered visible text -- reasoning-only, or one that errored before
-answering -- has **no** TTFVT rather than a fast-looking one. The Raw Data tab shows those as
+answering -- has **no** TTFVT rather than a fast-looking one. The Raw data tab shows those as
 `never rendered`, alongside the time the first chunk of any kind arrived, which tells you the model
 did respond while the user saw nothing.
 
@@ -63,9 +65,9 @@ changing, not the product getting slower, so do not compare across it.
 
 #### Troubleshooting: TTFVT looks better than users report
 
-- **`never rendered` rows in Raw Data.** These are frozen turns, and they are the ones users
+- **`never rendered` rows in Raw data.** These are frozen turns, and they are the ones users
   complain about. They are excluded from the First Token trend chart rather than averaged into it,
-  so the chart cannot show them -- scan the Raw Data tab instead, where they are flagged in
+  so the chart cannot show them -- scan the Raw data tab instead, where they are flagged in
   red. There is no TTFVT sort key, so scanning is the only way in. There is no dedicated filter or counter for them yet; more of them appearing is the signal,
   even while the chart looks flat.
 - **TTFVT far below Client First Token Time.** Both apply the same visibility rule, so ordinarily
@@ -83,7 +85,7 @@ changing, not the product getting slower, so do not compare across it.
 
 ### Record Count
 
-A counter displays "Showing X of Y records" to indicate how many records match the current filters out of the total dataset.
+The page header shows how many calls match the current filters. The count is hidden once a query reaches the 500-call cap, because it would then be a floor rather than a total.
 
 ## Event Metrics
 
@@ -98,7 +100,7 @@ The Event Metrics tab tracks system-wide events across the platform, providing v
 | **Event** | Filter by event type |
 | **Category** | Filter by event category (e.g., Slack, System, User) |
 
-Unlike Model Metrics, there is no Apply button: a filter applies as soon as you pick it. **Clear filters** resets the range to All time and removes the other filters.
+A filter applies as soon as you pick it. **Clear filters** resets the range to All time and removes the other filters.
 
 ### Tabs
 
