@@ -40,7 +40,7 @@ const seed = async () => {
     { settingName: 'signupGrantDailyBudget', settingValue: '0' },
     { settingName: 'stagedSignupGrantEnabled', settingValue: 'true', deletedAt: new Date() },
     { settingName: 'signupGrantDripCap', settingValue: '3000' },
-    { settingName: 'ReferralCreditsAmount', settingValue: '250' },
+    { settingName: 'ReferralFirstAnswerCredits', settingValue: '250' },
   ]);
 };
 
@@ -58,7 +58,7 @@ describe('drop-retired-grant-settings migration', () => {
     await seed();
     await migration.up();
 
-    expect(await rows()).toEqual({ signupGrantDripCap: '3000', ReferralCreditsAmount: '250' });
+    expect(await rows()).toEqual({ signupGrantDripCap: '3000', ReferralFirstAnswerCredits: '250' });
     expect((await backups()).map(b => b.settingName).sort()).toEqual([
       'defaultFreeCredits',
       'signupGrantDailyBudget',
@@ -72,7 +72,7 @@ describe('drop-retired-grant-settings migration', () => {
     await migration.up();
     await migration.up();
 
-    expect(await rows()).toEqual({ signupGrantDripCap: '3000', ReferralCreditsAmount: '250' });
+    expect(await rows()).toEqual({ signupGrantDripCap: '3000', ReferralFirstAnswerCredits: '250' });
     expect(await backups()).toHaveLength(4);
   });
 
