@@ -151,6 +151,8 @@ describe('exportDashboardCsv', () => {
 
     exportDashboardCsv(data);
     expect(capturedCsv).toContain('"not checked"');
+    expect(capturedCsv).toContain('"jira","not checked","\'--","\'--"');
+    expect(capturedCsv).not.toContain('"0.0%"');
     expect(capturedCsv).toContain('"never"');
     expect(capturedCsv).not.toContain('"down"');
   });

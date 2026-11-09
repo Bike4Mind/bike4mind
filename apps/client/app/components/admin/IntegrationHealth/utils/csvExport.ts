@@ -1,6 +1,6 @@
 import { toCsv } from '@client/app/utils/csv';
 import type { IntegrationDashboardResponse } from '../types';
-import { integrationStatusView } from './integrationStatus';
+import { integrationStatusView, lastCheckedTime } from './integrationStatus';
 
 export function exportDashboardCsv(data: IntegrationDashboardResponse): void {
   const rows: string[][] = [];
@@ -21,11 +21,12 @@ export function exportDashboardCsv(data: IntegrationDashboardResponse): void {
   ]);
 
   for (const entry of data.integrations) {
+    const checked = lastCheckedTime(entry.lastCheckedAt) !== null;
     rows.push([
       entry.name,
       integrationStatusView(entry).label.toLowerCase(),
-      String(entry.latencyMs),
-      `${(entry.successRate * 100).toFixed(1)}%`,
+      checked ? String(entry.latencyMs) : '--',
+      checked ? `${(entry.successRate * 100).toFixed(1)}%` : '--',
       String(entry.consecutiveFailures),
       entry.circuitBreaker.mode,
       String(entry.circuitBreaker.available),
