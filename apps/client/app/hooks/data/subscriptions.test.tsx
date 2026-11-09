@@ -3,7 +3,7 @@ import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import type { IUserSubscription } from '@bike4mind/server-utils/lib/userSubscriptions/types';
-import { useCancelSubscription, useSubscribePlan } from './subscriptions';
+import { useCancelSubscription, useGetSubscriptionsByOwner, useSubscribePlan } from './subscriptions';
 
 /**
  * The cancel route returns Stripe's own `status` so the cached row stops reading as a
@@ -13,8 +13,9 @@ import { useCancelSubscription, useSubscribePlan } from './subscriptions';
  */
 
 const apiPost = vi.fn();
+const apiGet = vi.fn();
 vi.mock('@client/app/contexts/ApiContext', () => ({
-  api: { post: (...args: unknown[]) => apiPost(...args), put: vi.fn(), get: vi.fn() },
+  api: { post: (...args: unknown[]) => apiPost(...args), put: vi.fn(), get: (...args: unknown[]) => apiGet(...args) },
 }));
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
@@ -129,5 +130,33 @@ describe('useSubscribePlan - attribution consent', () => {
       attributionConsent: expected,
     });
     queryClient.clear();
+  });
+});
+
+describe('useGetSubscriptionsByOwner', () => {
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      {children}
+    </QueryClientProvider>
+  );
+
+  beforeEach(() => {
+    apiGet.mockReset();
+    apiGet.mockResolvedValue({ data: [] });
+  });
+
+  it('fetches by default', async () => {
+    renderHook(() => useGetSubscriptionsByOwner('organization' as never, 'org-1'), { wrapper });
+    await waitFor(() => expect(apiGet).toHaveBeenCalledWith('/api/subscriptions/organization/org-1'));
+  });
+
+  it('makes no request while disabled', async () => {
+    const { result } = renderHook(
+      () => useGetSubscriptionsByOwner('organization' as never, 'org-1', { enabled: false }),
+      { wrapper }
+    );
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(apiGet).not.toHaveBeenCalled();
+    expect(result.current.fetchStatus).toBe('idle');
   });
 });
