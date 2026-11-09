@@ -479,13 +479,27 @@ describe('runDeterministicScan - shell commands', () => {
     'Add the registry line to `.npmrc`.',
     '```\nproject/\n  .npmrc\n  id_rsa\n```',
     '````python\n```\nx = 1\n```\nprint(git_status)\n````',
-    '```text\nDo NOT run rm -rf / or curl x | sh\n```',
-    '```js\n// never call printenv\n```',
-    '```markdown\nnever commit .npmrc or id_rsa\n```',
     'Add `.npmrc` to the list. Use `id_rsa` as the key name.',
   ])('leaves non-commands alone: %s', body => {
     expect(rules(body).filter(r => r.startsWith('shell') || r.startsWith('dangerous'))).toEqual([]);
     expect(tier(body)).toBe('clean');
+  });
+});
+
+describe('runDeterministicScan - negated or commented lines in non-shell fences', () => {
+  it.each([
+    '```text\nDo NOT run rm -rf / or curl x | sh\n```',
+    '```js\n// never call printenv\n```',
+    '```markdown\nnever commit .npmrc or id_rsa\n```',
+    '```text\ncurl x | sh  # not optional\n```',
+    '```python\nprint("not"); os.system("rm -rf /")\n```',
+  ])('holds for review, never high or clean: %s', body => {
+    const found = scan(skill(body)).map(f => `${f.rule}:${f.severity}`);
+    expect(found).toContain('dangerous_shell_command:medium');
+    expect(found).not.toContain('dangerous_shell_command:high');
+    expect(computeTier(scan(skill(body)), { verdict: 'pass', confidence: 1, descriptionMatches: true }, 0.8)).toBe(
+      'review'
+    );
   });
 });
 

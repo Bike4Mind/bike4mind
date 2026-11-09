@@ -659,7 +659,8 @@ const SHELL_COMMAND_HEAD =
 // A home-relative or absolute credential path is a read on its own; bare filenames need a command word.
 const CREDENTIAL_ABSOLUTE_PATH =
   /(?:^|[\s"'`=:(<])(?:~|\$\{?HOME\}?|\/[\w.@/-]*)\/(?:\.ssh\b|\.gnupg\b|\.aws\/credentials|\.netrc\b|\.npmrc\b|id_(?:rsa|ed25519|ecdsa)\b)/;
-// Text in a non-shell fence that forbids or comments out a command is not an instruction to run it.
+// A non-shell fence line with a comment marker or a negation is probably not an instruction, but the
+// marker is also trivial to add to a real one, so a match there is held for review, never High or clean.
 const NON_INSTRUCTION_LINE = /^(?:\/\/|#|\/\*|\*|--)|\b(?:not|never|don't|dont|avoid|without)\b/i;
 const CREDENTIAL_PATH =
   /(?:^|[\s"'=:])(?:~|\$HOME)?\/?\.(?:ssh|gnupg)(?:\/|\b)|\.aws\/credentials|\.netrc\b|\.npmrc\b|\bid_(?:rsa|ed25519|ecdsa)\b/;
@@ -751,6 +752,7 @@ const COMMAND_SEPARATOR = /&&|\|\||[;|]/;
 function scanShellCommands(text: string): ISkillScanFinding[] {
   const findings: ISkillScanFinding[] = [];
   const danger = new Map<string, string>();
+  const softDanger = new Map<string, string>();
   let routine: string | undefined;
   for (const candidate of extractShellCandidates(text)) {
     const segments = candidate.text.split(COMMAND_SEPARATOR).map(part => part.trim());
@@ -758,9 +760,9 @@ function scanShellCommands(text: string): ISkillScanFinding[] {
     const mention = candidate.inline && candidate.text === 'env' && !candidate.instructed;
     const forbidden = !candidate.shell && !candidate.inline && NON_INSTRUCTION_LINE.test(candidate.text);
     for (const { pattern, label, scope } of DANGEROUS_COMMANDS) {
-      if (danger.has(label) || mention || forbidden) continue;
+      if (danger.has(label) || mention) continue;
       if (scope === 'whole' ? pattern.test(candidate.text) : segments.some(part => pattern.test(part))) {
-        danger.set(label, candidate.text);
+        (forbidden ? softDanger : danger).set(label, candidate.text);
       }
     }
     if (routine === undefined && candidate.shell) {
@@ -774,6 +776,17 @@ function scanShellCommands(text: string): ISkillScanFinding[] {
         'dangerous_shell_command',
         'high',
         `Tells the agent to run a command that ${label}`,
+        example.slice(0, 120)
+      )
+    );
+  }
+  if (danger.size === 0 && softDanger.size > 0) {
+    const [label, example] = [...softDanger.entries()][0];
+    findings.push(
+      finding(
+        'dangerous_shell_command',
+        'medium',
+        `Mentions a command that ${label}, in a line that looks commented out or negated`,
         example.slice(0, 120)
       )
     );
