@@ -26,7 +26,7 @@ import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { SecopsTriageConfigSchema, type SecopsTriageConfig } from '@bike4mind/common';
 import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
-import { leavesAdminSettingsPage, useRouteAdminTabSwitches } from './SettingsDraftProvider';
+import { leavesAdminSettingsPage, useRouteAdminTabSwitches } from './shared/adminTabSwitches';
 import {
   AdminPageHeader,
   ErrorState,
