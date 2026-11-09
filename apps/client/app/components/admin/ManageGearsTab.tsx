@@ -256,6 +256,7 @@ function GearRowMenu({
         {gear.override !== null && (
           <MenuItem
             color="danger"
+            // discard() writes the baseline this render closed over, so it clears the draft whatever the refetch loaded.
             onClick={() => void onReset().then(reset => reset && discard())}
             data-testid={`manage-gear-reset-${gear.key}`}
           >

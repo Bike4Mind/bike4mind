@@ -231,4 +231,50 @@ describe('ManageGearsTab', () => {
     fireEvent.click(within(error).getByTestId('admin-error-retry-btn'));
     expect(await screen.findByTestId('manage-gear-row-websearch')).toBeInTheDocument();
   });
+
+  it('keeps a gear that failed to save in edit mode with its draft, after saving the ones before it', async () => {
+    mocks.put.mockResolvedValueOnce({ data: {} }).mockRejectedValueOnce(new Error('Invalid ctaAction'));
+    renderTab();
+    await screen.findByTestId('manage-gear-row-websearch');
+
+    fireEvent.change(await startEditing('websearch'), { target: { value: '100' } });
+    fireEvent.change(await startEditing('files'), { target: { value: '7' } });
+    fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+
+    await waitFor(() => expect(screen.getByTestId('admin-save-bar')).toHaveTextContent('files was not saved'));
+    expect(screen.getByTestId('admin-save-bar')).toHaveTextContent('Invalid ctaAction');
+    expect(screen.getByTestId('admin-save-bar')).toHaveTextContent('1 unsaved change');
+    expect(mocks.put).toHaveBeenCalledTimes(2);
+    expect(screen.queryByTestId('manage-gear-credits-websearch')).toBeNull();
+    expect(screen.getByTestId('manage-gear-credits-files')).toHaveValue('7');
+  });
+
+  it('drops the row draft on Cancel editing', async () => {
+    renderTab();
+    await screen.findByTestId('manage-gear-row-websearch');
+
+    fireEvent.change(await startEditing('websearch'), { target: { value: '42' } });
+    expect(screen.getByTestId('admin-save-bar')).toBeInTheDocument();
+    openRowMenu('websearch');
+    fireEvent.click(await screen.findByTestId('manage-gear-cancel-websearch'));
+
+    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
+    expect(screen.queryByTestId('manage-gear-credits-websearch')).toBeNull();
+    expect(screen.getByTestId('manage-gear-row-websearch')).toHaveTextContent('500');
+    expect(mocks.put).not.toHaveBeenCalled();
+  });
+
+  it('clears a staged edit on the gear it resets', async () => {
+    renderTab();
+    await screen.findByTestId('manage-gear-row-files');
+
+    fireEvent.change(await startEditing('files'), { target: { value: '9' } });
+    expect(screen.getByTestId('admin-save-bar')).toBeInTheDocument();
+    openRowMenu('files');
+    fireEvent.click(await screen.findByTestId('manage-gear-reset-files'));
+
+    await waitFor(() => expect(mocks.del).toHaveBeenCalledWith('/api/admin/gears/files'));
+    await waitFor(() => expect(screen.queryByTestId('admin-save-bar')).toBeNull());
+    expect(mocks.put).not.toHaveBeenCalled();
+  });
 });
