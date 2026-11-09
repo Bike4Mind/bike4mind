@@ -81,6 +81,11 @@ vi.mock('@bike4mind/services', async importOriginal => ({
 
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockAudit }));
 
+const mockBumpModelListRevision = vi.hoisted(() => vi.fn(async () => 'rev-1'));
+vi.mock('@bike4mind/server-utils/modelDiscovery/modelListRevision', () => ({
+  bumpModelListRevision: mockBumpModelListRevision,
+}));
+
 import handler from '../model-deprecation-status';
 
 const LIVE_MODEL = { id: 'gpt-live', name: 'Live', backend: 'openai' };
@@ -521,7 +526,43 @@ describe('POST /api/admin/model-deprecation-status', () => {
     await run();
     expect(mockResolveSuggestion).toHaveBeenCalledWith('gpt-sunset', 'dismissed');
     expect(mockAppend).not.toHaveBeenCalled();
+    expect(mockBumpModelListRevision).not.toHaveBeenCalled();
     expect(res._getJSONData().state).toMatchObject({ modelId: 'gpt-sunset' });
+  });
+
+  it('refreshes model lists once the accepted lifecycle row is in force', async () => {
+    const { run } = call({
+      method: 'POST',
+      body: { modelId: 'gpt-sunset', action: 'accept', note: 'provider deprecation notice' },
+    });
+    await run();
+
+    expect(mockBumpModelListRevision).toHaveBeenCalledTimes(1);
+    expect(mockAppend.mock.invocationCallOrder[0]).toBeLessThan(mockBumpModelListRevision.mock.invocationCallOrder[0]);
+  });
+
+  it('still settles the accept when the model-list refresh fails', async () => {
+    mockBumpModelListRevision.mockRejectedValueOnce(new Error('cache unreachable'));
+    const { res, run } = call({
+      method: 'POST',
+      body: { modelId: 'gpt-sunset', action: 'accept', note: 'provider deprecation notice' },
+    });
+    await run();
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockResolveSuggestion).toHaveBeenCalledWith('gpt-sunset', 'accepted');
+  });
+
+  it('does not refresh model lists for an accept that answers 409', async () => {
+    mockPriceRowsInForce.mockResolvedValue([]);
+    const { res, run } = call({
+      method: 'POST',
+      body: { modelId: 'gpt-sunset', action: 'accept', note: 'provider deprecation notice' },
+    });
+    await run();
+
+    expect(res._getStatusCode()).toBe(409);
+    expect(mockBumpModelListRevision).not.toHaveBeenCalled();
   });
 });
 

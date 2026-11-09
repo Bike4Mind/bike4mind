@@ -12,6 +12,8 @@ import {
 } from '@bike4mind/llm-adapters';
 import { modelDiscoveryService } from '@bike4mind/services';
 import { modelReferenceReport } from '@bike4mind/server-utils/modelDiscovery/modelReferenceReport';
+import { bumpModelListRevision } from '@bike4mind/server-utils/modelDiscovery/modelListRevision';
+import { Logger } from '@bike4mind/observability';
 import { ApiKeyScope, LIFECYCLE_STATUSES, toPerMTokRate, type IModelPrice, type PerMTokRate } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
@@ -30,6 +32,8 @@ import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
  * whose deprecation filter is precisely what hides these models - which is why
  * the old version of this endpoint could never show one.
  */
+
+const logger = new Logger({ metadata: { service: 'model-deprecation-status' } });
 
 /** Lifecycle statuses a row may carry; a suggestion outside them cannot be appended. */
 /** The catalog's date format. A docs parser can produce anything, and the append throws on it. */
@@ -231,6 +235,12 @@ const handler = adminApi({
       contributors: [{ group: 'lifecycle', source: req.user.id }],
       note: auditNote,
     });
+    // The row is already in force; a failed bump leaves model lists on their TTLs and must not fail the accept.
+    await bumpModelListRevision().catch((error: unknown) =>
+      logger.warn('[model-deprecation-status] model-list refresh failed', {
+        error: error instanceof Error ? error.message : String(error),
+      })
+    );
 
     const resolved = await modelDiscoveryStateRepository.resolveSuggestion(modelId, 'accepted');
     await recordResolution({

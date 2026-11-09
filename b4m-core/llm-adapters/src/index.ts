@@ -249,7 +249,10 @@ let _modelCache: {
   preFilterModels: ModelInfo[];
   failedListings: ModelBackend[];
   expiresAt: number;
+  /** The newest revision any caller had reported when the build started; see catalogRevision. */
+  revision: string | undefined;
 } | null = null;
+let _catalogRevision: string | undefined;
 
 /**
  * Optional versioned-price-catalog hook. This package cannot depend on the
@@ -359,6 +362,12 @@ export interface GetAvailableModelsOptions {
    * cached list replays its own), so a caller can tell "not served" from "could not ask".
    */
   onFailedListings?: (backends: readonly ModelBackend[]) => void;
+  /**
+   * The shared model-list revision the caller read (packages/server-utils/src/modelDiscovery/modelListRevision.ts).
+   * A revision this process has not seen yet rebuilds the module cache for every caller, including the ones that
+   * pass none. Not part of the cache key.
+   */
+  catalogRevision?: string;
 }
 
 /**
@@ -431,9 +440,18 @@ export const getAvailableModels = async (
   const gateCtx = resolveGateContext(apiKeys, options);
   const { isSelfHost, bedrockReachable } = gateCtx;
 
+  // Captured before the build: a build that started under an older revision must not be stored as current.
+  if (options.catalogRevision !== undefined) _catalogRevision = options.catalogRevision;
+  const revision = _catalogRevision;
+
   // Check module-level cache first
   const cacheKey = getModelCacheKey(apiKeys, { isSelfHost, bedrockReachable, perBackendTimeoutMs });
-  if (_modelCache && _modelCache.key === cacheKey && Date.now() < _modelCache.expiresAt) {
+  if (
+    _modelCache &&
+    _modelCache.key === cacheKey &&
+    _modelCache.revision === revision &&
+    Date.now() < _modelCache.expiresAt
+  ) {
     reportFailedListings(options, _modelCache.failedListings);
     return applyPrivateVisibility(_modelCache.models, includePrivate);
   }
@@ -558,6 +576,7 @@ export const getAvailableModels = async (
     preFilterModels: priced,
     failedListings,
     expiresAt: Date.now() + ttl,
+    revision,
   };
 
   reportFailedListings(options, failedListings);

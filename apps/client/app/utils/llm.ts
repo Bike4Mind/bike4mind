@@ -415,6 +415,8 @@ export type ModelCatalog = {
   supersededModels: SupersededModelInfo[];
   /** Paid-only models the picker shows a free account as locked; display only (see ModelInfo.access). */
   lockedModels: ModelInfo[];
+  /** The model-list revision the server built this list under; see hooks/data/modelListRevision.ts. */
+  modelListRevision: string | null;
 };
 
 export const getModelCatalog = async (): Promise<ModelCatalog> => {
@@ -426,6 +428,7 @@ export const getModelCatalog = async (): Promise<ModelCatalog> => {
       models: listed.filter(model => !model.access?.locked),
       supersededModels: response.data.supersededModels ?? [],
       lockedModels: response.data.lockedModels ?? [],
+      modelListRevision: response.data.modelListRevision ?? null,
     };
   } catch (error: unknown) {
     const axiosError = error as AxiosError;

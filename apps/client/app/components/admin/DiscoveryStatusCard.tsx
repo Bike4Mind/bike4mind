@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Alert, Box, Button, CircularProgress, Link, Stack, Tooltip, Typography } from '@mui/joy';
 import type { IDiscoverySkippedSource } from '@bike4mind/common';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import { api } from '@client/app/contexts/ApiContext';
+import { MODEL_CATALOG_QUERY_KEY } from '@client/app/hooks/data/useModelInfo';
 import { DiscoveryRunDetailModal } from './DiscoveryRunDetailModal';
 import { ErrorState, LoadingState, SectionCard, StatusChip } from './shared';
 
@@ -127,6 +129,7 @@ const giveUpMessage = (sawNewRun: boolean, enabled: boolean) => {
  * coverage) are plain text so they wrap instead of truncating at narrow widths.
  */
 export const DiscoveryStatusCard: React.FC = () => {
+  const queryClient = useQueryClient();
   const [status, setStatus] = useState<DiscoveryStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -189,6 +192,7 @@ export const DiscoveryStatusCard: React.FC = () => {
           if (!isAwaitedRun(latest.lastRun, baselineMs)) continue;
           sawNewRun = true;
           if (latest.lastRun?.finishedAt) {
+            void queryClient.invalidateQueries({ queryKey: MODEL_CATALOG_QUERY_KEY });
             if (!unmounted.current) setNotice(`Run finished: ${latest.lastRun.status}.`);
             return;
           }
@@ -198,7 +202,7 @@ export const DiscoveryStatusCard: React.FC = () => {
         if (!unmounted.current) setIsWaiting(false);
       }
     },
-    [load]
+    [load, queryClient]
   );
 
   const runNow = async () => {

@@ -26,6 +26,7 @@ import {
 } from '@bike4mind/llm-adapters';
 import { applyAbsence, planAbsence, type AbsencePlan } from './absence';
 import { limitConcurrency } from './concurrency';
+import { modelListChanges } from './modelListImpact';
 import { planCatalogWrites, summarizeDiff, type CatalogWritePlan } from './catalogWrite';
 import {
   detectListingShrink,
@@ -131,6 +132,7 @@ export const DEFAULT_PRICE_BAND_PCT = 50;
 const LOG_PREFIX = '[model-discovery]';
 
 const MAX_LOGGED_FROZEN_PROFILE_IDS = 20;
+const MAX_LOGGED_LIST_CHANGES = 20;
 
 /**
  * Dropped records kept on the run document. They are a trace, not a ledger, and
@@ -385,6 +387,7 @@ async function executeRun(
         await fetchAll(rejoining);
       }
 
+      const effectiveAt = new Date(startedAt.getTime() + pass - 1);
       const plan = await planPass({
         adapters,
         ctx,
@@ -397,14 +400,14 @@ async function executeRun(
         results,
         droppedDocsSources,
         unauthoritativeSources,
-        effectiveAt: new Date(startedAt.getTime() + pass - 1),
+        effectiveAt,
         statesBeforeRun: passes[0]?.plan.statesBeforeRun,
         priceRowsAtRunStart: passes[0]?.plan.priceRowsAtRunStart,
         catalogModelIdsAtRunStart: passes[0]?.plan.catalogModelIdsAtRunStart,
       });
 
-      let catalogWrites: AppendOutcome = { appended: 0, failed: 0 };
-      let priceWrites: AppendOutcome = { appended: 0, failed: 0 };
+      let catalogWrites: AppendOutcome = { appended: 0, failed: 0, landedModelIds: [] };
+      let priceWrites: AppendOutcome = { appended: 0, failed: 0, landedModelIds: [] };
       if (ctx.mode === 'write') {
         catalogWrites = await appendRows(plan.lifecycle.rows, adapters, logger);
         priceWrites = await appendPriceRows(plan.prices.rows, adapters, logger);
@@ -415,7 +418,14 @@ async function executeRun(
       }
       const appended = catalogWrites.appended;
       const pricesAppended = priceWrites.appended;
-      passes.push({ plan, appended, pricesAppended, failed: catalogWrites.failed + priceWrites.failed });
+      passes.push({
+        plan,
+        appended,
+        pricesAppended,
+        failed: catalogWrites.failed + priceWrites.failed,
+        landedModelIds: [...catalogWrites.landedModelIds, ...priceWrites.landedModelIds],
+        effectiveAt,
+      });
       if (pass > 1) {
         logger.info(
           `${LOG_PREFIX} convergence pass ${pass}: appended=${appended} priced=${pricesAppended} ` +
@@ -489,6 +499,10 @@ async function executeRun(
           : '')
     );
   }
+
+  // Before the run document is finalized: an admin waiting on a manual run refetches the model
+  // list once the run reports, and must find the caches already moved.
+  await notifyModelListChanges(adapters, passes, ctx);
 
   await db.discoveryRuns.update({
     id: runId,
@@ -759,6 +773,8 @@ interface PassInput {
 
 interface PassPlan {
   catalog: CatalogWritePlan;
+  /** Every model's merged record as the runtime saw it when this pass planned, operator rows included. */
+  resolvedInForce: ReadonlyMap<string, ResolvedCatalogRecord>;
   prices: PricePlan;
   lifecycle: LifecyclePlan;
   absence: AbsencePlan;
@@ -778,6 +794,9 @@ interface CompletedPass {
   pricesAppended: number;
   /** Appends that THREW. A unique-index skip is not one; see appendRows. */
   failed: number;
+  /** Models with a catalog or price row that landed in this pass. */
+  landedModelIds: string[];
+  effectiveAt: Date;
 }
 
 /**
@@ -914,6 +933,7 @@ async function planPass(input: PassInput): Promise<PassPlan> {
 
   return {
     catalog,
+    resolvedInForce,
     prices,
     lifecycle,
     absence,
@@ -1059,14 +1079,17 @@ async function appendRows(
 ): Promise<AppendOutcome> {
   let appended = 0;
   let failed = 0;
+  const landedModelIds: string[] = [];
   for (const row of rows) {
     try {
       // A null return is the unique-index race: another driver already wrote
       // this model for this run window, so it is a skip and not a failure. It is
       // logged all the same - the plan did not expect it, and a row this run
       // computed never landed.
-      if (await adapters.db.catalog.append(row)) appended += 1;
-      else {
+      if (await adapters.db.catalog.append(row)) {
+        appended += 1;
+        landedModelIds.push(row.modelId);
+      } else {
         logger.warn(`${LOG_PREFIX} append skipped for ${row.modelId}: a row already holds this run's timestamp`);
       }
     } catch (error) {
@@ -1074,13 +1097,14 @@ async function appendRows(
       logger.error(`${LOG_PREFIX} append failed for ${row.modelId}: ${describe(error)}`);
     }
   }
-  return { appended, failed };
+  return { appended, failed, landedModelIds };
 }
 
 /** Appends that landed against appends that THREW; a unique-index skip is neither. */
 interface AppendOutcome {
   appended: number;
   failed: number;
+  landedModelIds: string[];
   /** Of `appended`, the rows recorded from an adapter literal. Set by appendPriceRows only. */
   appendedLiteral?: number;
 }
@@ -1093,10 +1117,12 @@ async function appendPriceRows(
   let appended = 0;
   let appendedLiteral = 0;
   let failed = 0;
+  const landedModelIds: string[] = [];
   for (const row of rows) {
     try {
       if (await adapters.db.prices.append(row)) {
         appended += 1;
+        landedModelIds.push(row.modelId);
         if (isAdapterLiteralRow(row)) appendedLiteral += 1;
       }
     } catch (error) {
@@ -1108,7 +1134,54 @@ async function appendPriceRows(
       logger.error(`${LOG_PREFIX} price append failed for ${row.modelId}: ${describe(error)}`);
     }
   }
-  return { appended, failed, appendedLiteral };
+  return { appended, failed, appendedLiteral, landedModelIds };
+}
+
+/**
+ * Tell the driver when this run's writes changed what a model picker lists (see modelListImpact.ts).
+ * A run that landed nothing, which is most of them, returns before the catalog re-read.
+ */
+async function notifyModelListChanges(
+  adapters: ModelDiscoveryAdapters,
+  passes: readonly CompletedPass[],
+  ctx: RunContext
+): Promise<void> {
+  const { logger } = ctx;
+  const written = new Set(passes.flatMap(pass => pass.landedModelIds));
+  if (written.size === 0 || !adapters.onModelListChanged) return;
+
+  let changed: string[];
+  try {
+    const lastWriteAt = passes[passes.length - 1].effectiveAt.getTime();
+    const { rows } = await adapters.db.catalog.rowsInForceWithRejects(
+      new Date(Math.max(ctx.now().getTime(), lastWriteAt))
+    );
+    changed = modelListChanges({
+      writtenModelIds: written,
+      staticModelIds: await adapterModelIds(),
+      before: passes[0].plan.resolvedInForce,
+      after: resolveCatalogRecords(rows),
+    });
+  } catch (error) {
+    // Unknown counts as changed: a needless refetch is cheap, a model missing from the picker is not.
+    logger.warn(
+      `${LOG_PREFIX} catalog re-read failed; refreshing model lists for every written model: ${describe(error)}`
+    );
+    changed = [...written];
+  }
+  if (changed.length === 0) {
+    logger.info(`${LOG_PREFIX} wrote rows only for models no list shows; model lists left as they were`);
+    return;
+  }
+  try {
+    await adapters.onModelListChanged();
+    logger.info(
+      `${LOG_PREFIX} model lists refreshed for ${changed.length} model(s): ${changed.slice(0, MAX_LOGGED_LIST_CHANGES).join(', ')}` +
+        (changed.length > MAX_LOGGED_LIST_CHANGES ? ` (+${changed.length - MAX_LOGGED_LIST_CHANGES} more)` : '')
+    );
+  } catch (error) {
+    logger.error(`${LOG_PREFIX} model-list refresh failed: ${describe(error)}`);
+  }
 }
 
 const isDuplicateKey = (error: unknown): boolean =>

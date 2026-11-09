@@ -9,7 +9,8 @@ const { mocks } = vi.hoisted(() => ({
     loadFreeTierAllowedModels: vi.fn(),
     getUserEntitlements: vi.fn(),
     findAdminSetting: vi.fn(),
-    cacheFindOne: vi.fn(),
+    cacheFind: vi.fn(),
+    cacheCreateOrUpdate: vi.fn(),
   },
 }));
 
@@ -35,8 +36,8 @@ vi.mock('@bike4mind/database', () => ({
   apiKeyRepository: {},
   adminSettingsRepository: { findOne: (...a: unknown[]) => mocks.findAdminSetting(...a) },
   cacheRepository: {
-    findOne: (...a: unknown[]) => mocks.cacheFindOne(...a),
-    createOrUpdate: vi.fn(async () => undefined),
+    find: (...a: unknown[]) => mocks.cacheFind(...a),
+    createOrUpdate: (...a: unknown[]) => mocks.cacheCreateOrUpdate(...a),
   },
 }));
 // The real getSettingsValue, so the setting is parsed exactly as production parses it.
@@ -80,7 +81,8 @@ beforeEach(() => {
   mocks.loadFreeTierAllowedModels.mockResolvedValue(undefined);
   mocks.getUserEntitlements.mockResolvedValue(['base']);
   mocks.findAdminSetting.mockResolvedValue(null);
-  mocks.cacheFindOne.mockResolvedValue(null);
+  mocks.cacheFind.mockResolvedValue([]);
+  mocks.cacheCreateOrUpdate.mockResolvedValue(undefined);
 });
 
 describe('getCallerModelList unpriced text models', () => {
@@ -101,6 +103,76 @@ describe('getCallerModelList unpriced text models', () => {
     mocks.getSettingsMap.mockResolvedValue({ enforceCredits: 'false' });
 
     expect(await listedIds()).toEqual(['priced', 'unpriced', 'free']);
+  });
+});
+
+describe('getCallerModelList model-list revision', () => {
+  const ENTRY_KEY = 'model-list:user-1:credits-on';
+  const revisionRow = (revision: string) => ({ key: 'model-list-revision', result: { revision } });
+  const entry = (models: ModelInfo[], modelListRevision?: string | null) => ({
+    key: ENTRY_KEY,
+    result: { models, supersededModels: [], ...(modelListRevision === undefined ? {} : { modelListRevision }) },
+  });
+  const cachedOnly = textModel('cached-only');
+
+  it('reads the entry and the revision in one query', async () => {
+    await callerList(makeUser());
+
+    expect(mocks.cacheFind).toHaveBeenCalledTimes(1);
+    expect(mocks.cacheFind).toHaveBeenCalledWith({ key: { $in: [ENTRY_KEY, 'model-list-revision'] } });
+  });
+
+  it('serves an entry stamped with the current revision', async () => {
+    mocks.cacheFind.mockResolvedValue([entry([cachedOnly], 'rev-1'), revisionRow('rev-1')]);
+
+    const list = await callerList(makeUser());
+
+    expect(list.models.map(model => model.id)).toEqual(['cached-only']);
+    expect(list.modelListRevision).toBe('rev-1');
+    expect(mocks.getAvailableModels).not.toHaveBeenCalled();
+  });
+
+  it('rebuilds past an entry stamped with an older revision, forcing the process cache to rebuild too', async () => {
+    mocks.cacheFind.mockResolvedValue([entry([cachedOnly], 'rev-1'), revisionRow('rev-2')]);
+
+    const list = await callerList(makeUser());
+
+    expect(list.models.map(model => model.id)).toEqual(['priced', 'free']);
+    expect(list.modelListRevision).toBe('rev-2');
+    expect(mocks.getAvailableModels).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ catalogRevision: 'rev-2' })
+    );
+    expect(mocks.cacheCreateOrUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ key: ENTRY_KEY, result: expect.objectContaining({ modelListRevision: 'rev-2' }) })
+    );
+  });
+
+  it('rebuilds past an entry written before any revision once one exists', async () => {
+    mocks.cacheFind.mockResolvedValue([entry([cachedOnly]), revisionRow('rev-1')]);
+
+    await callerList(makeUser());
+
+    expect(mocks.getAvailableModels).toHaveBeenCalledTimes(1);
+  });
+
+  it('serves an entry written before any revision while none exists', async () => {
+    mocks.cacheFind.mockResolvedValue([entry([cachedOnly])]);
+
+    const list = await callerList(makeUser());
+
+    expect(list.models.map(model => model.id)).toEqual(['cached-only']);
+    expect(list.modelListRevision).toBeNull();
+    expect(mocks.getAvailableModels).not.toHaveBeenCalled();
+  });
+
+  it('passes no revision down while none exists', async () => {
+    await callerList(makeUser());
+
+    expect(mocks.getAvailableModels).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.not.objectContaining({ catalogRevision: expect.anything() })
+    );
   });
 });
 
@@ -144,7 +216,9 @@ describe('getCallerModelList free-tier gate', () => {
   });
 
   it('splits a cached list without lockedModels for a free user, without recomputing', async () => {
-    mocks.cacheFindOne.mockResolvedValue({ result: { models: [priced, free, image], supersededModels: [] } });
+    mocks.cacheFind.mockResolvedValue([
+      { key: 'model-list:user-1:credits-on', result: { models: [priced, free, image], supersededModels: [] } },
+    ]);
     mocks.getAvailableModels.mockClear();
 
     const list = await callerList(makeUser());

@@ -41,3 +41,19 @@ describe('getModelCatalog locked models', () => {
     expect((await getModelCatalog()).lockedModels).toEqual([]);
   });
 });
+
+describe('getModelCatalog model-list revision', () => {
+  beforeEach(() => get.mockReset());
+
+  it('keeps the revision the server built the list under', async () => {
+    get.mockResolvedValue({ data: { models: [model('free')], supersededModels: [], modelListRevision: 'rev-1' } });
+
+    expect((await getModelCatalog()).modelListRevision).toBe('rev-1');
+  });
+
+  it('reads a server that sends no revision as null', async () => {
+    get.mockResolvedValue({ data: { models: [model('free')] } });
+
+    expect((await getModelCatalog()).modelListRevision).toBeNull();
+  });
+});

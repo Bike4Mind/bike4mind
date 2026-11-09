@@ -82,6 +82,56 @@ describe('getAvailableModels model catalog provider', () => {
     expect(calls).toBe(1);
   });
 
+  describe('catalogRevision', () => {
+    const countingProvider = () => {
+      const calls = { count: 0 };
+      setModelCatalogProvider(async () => {
+        calls.count += 1;
+        return [row];
+      });
+      return calls;
+    };
+
+    it('rebuilds when a caller reports a revision this process has not seen', async () => {
+      const calls = countingProvider();
+
+      await getAvailableModels(null, { catalogRevision: 'rev-a' });
+      await getAvailableModels(null, { catalogRevision: 'rev-a' });
+      expect(calls.count).toBe(1);
+
+      await getAvailableModels(null, { catalogRevision: 'rev-b' });
+      expect(calls.count).toBe(2);
+    });
+
+    it('serves callers that pass no revision from the list built under the newest one', async () => {
+      const calls = countingProvider();
+
+      await getAvailableModels(null, { catalogRevision: 'rev-c' });
+      await getAvailableModels(null);
+      expect(calls.count).toBe(1);
+    });
+
+    it('does not keep a list whose build started before a newer revision was reported', async () => {
+      const pending: Array<() => void> = [];
+      setModelCatalogProvider(() => new Promise<IModelCatalogRow[]>(resolve => pending.push(() => resolve([row]))));
+
+      const older = getAvailableModels(null, { catalogRevision: 'rev-d' });
+      await vi.waitFor(() => expect(pending).toHaveLength(1));
+      const newer = getAvailableModels(null, { catalogRevision: 'rev-e' });
+      await vi.waitFor(() => expect(pending).toHaveLength(2));
+      pending[1]();
+      await newer;
+      // The older build lands last and overwrites the slot, stamped with the revision it started under.
+      pending[0]();
+      await older;
+
+      const next = getAvailableModels(null, { catalogRevision: 'rev-e' });
+      await vi.waitFor(() => expect(pending).toHaveLength(3));
+      pending[2]();
+      await next;
+    });
+  });
+
   it('caches a failed catalog fetch briefly, not for the full TTL (transient blip recovers in seconds)', async () => {
     vi.useFakeTimers();
     try {
