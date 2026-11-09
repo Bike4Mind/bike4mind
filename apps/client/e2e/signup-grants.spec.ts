@@ -125,6 +125,10 @@ function liveExpectations(current: Map<string, unknown>): Expected | string {
   return { signup: schedule.initialCredits, unlock: schedule.unlockCredits, drip, minActiveSeconds, dripSkipReason };
 }
 
+// Kept on test.com because /api/test/otc-code and the teardown sweep only accept -e2e@test.com addresses.
+// Staging currently holds test.com signups (signup domain hold), so the staging grant tests skip via
+// e2eDomainHold below until the email used for staging E2E signups is settled; no code change is needed
+// once the hold is released or test.com is added to Synthetic User Email Domains.
 const E2E_EMAIL_DOMAIN = 'test.com';
 
 /**
