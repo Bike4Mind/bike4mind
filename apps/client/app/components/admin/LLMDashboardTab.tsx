@@ -112,14 +112,7 @@ const isLeavingTab = (current: { pathname: string; search: object }, next: { pat
 
 const LLMDashboardTab: React.FC = () => {
   const router = useRouter();
-  const {
-    data: modelInfos,
-    isLoading: modelInfoLoading,
-    isPending: modelInfoPending,
-    error,
-    refetch: refetchModelInfo,
-    isFetching: modelInfoFetching,
-  } = useModelInfo();
+  const { data: modelInfos, isPending: modelInfoPending, error, refetch: refetchModelInfo } = useModelInfo();
   // Pass the query's own pending state: inferring it from missing data would report a failed
   // model-info fetch as loading forever and hide the error.
   const { data: models, isLoading: configLoading } = useLLMModelConfigurationsWithDefaults(
@@ -178,7 +171,9 @@ const LLMDashboardTab: React.FC = () => {
     }
   }, [models, initialized]);
 
-  const isLoading = modelInfoLoading || configLoading || usersLoading;
+  // Until the init effect above copies the models in, localModels is still empty: show loading, not
+  // an empty table and a 0/0/0/0 strip.
+  const isLoading = configLoading || usersLoading || (models.length > 0 && !initialized);
 
   const filteredModels = useMemo(() => {
     const search = debouncedSearchQuery.trim().toLowerCase();
@@ -261,7 +256,6 @@ const LLMDashboardTab: React.FC = () => {
 
   const handleSelectionChange = (selection: AdminSelection) => {
     if (selection.mode === 'explicit') setSelectedModelIds([...selection.ids]);
-    else handleSelectAllMatching();
   };
 
   // Writes through the same local state as the per-row switch, so the SaveBar persists a bulk
@@ -298,6 +292,7 @@ const LLMDashboardTab: React.FC = () => {
   const handleDiscard = () => {
     setLocalModels(saved.models);
     setModelDates(saved.dates);
+    setBulkNotice(null);
   };
 
   const clearFilters = () => {
@@ -403,6 +398,7 @@ const LLMDashboardTab: React.FC = () => {
             size="sm"
             slotProps={{ input: { min: 1, max: 100, step: 1, 'aria-label': `Rank for ${model.name}` } }}
             sx={{ width: '100%' }}
+            data-testid={`llm-dashboard-rank-${model.id}`}
           />
         </Tooltip>
       ),
@@ -419,6 +415,7 @@ const LLMDashboardTab: React.FC = () => {
           onChange={(_, value) => updateModel(model.id, current => ({ ...current, fallbackModel: value || '' }))}
           size="sm"
           sx={{ width: '100%' }}
+          data-testid={`llm-dashboard-fallback-${model.id}`}
         >
           <Option value="">None</Option>
           {getFallbackOptions(model).map(fallbackModel => (
@@ -520,11 +517,7 @@ const LLMDashboardTab: React.FC = () => {
     return (
       <Stack sx={rootSx} data-testid="llm-dashboard-root">
         {header}
-        <ErrorState
-          message={`Could not load models: ${error.message}`}
-          onRetry={() => void refetchModelInfo()}
-          retrying={modelInfoFetching}
-        />
+        <ErrorState message={`Could not load models: ${error.message}`} onRetry={() => void refetchModelInfo()} />
       </Stack>
     );
   }
@@ -569,15 +562,13 @@ const LLMDashboardTab: React.FC = () => {
           options={BACKEND_OPTIONS}
           onChange={setFilterBackend}
         />
-        <Box data-testid="llm-dashboard-status-filter" sx={{ display: 'contents' }}>
-          <FilterChip
-            id="status"
-            label="Status"
-            value={filterStatus}
-            options={STATUS_OPTIONS}
-            onChange={setFilterStatus}
-          />
-        </Box>
+        <FilterChip
+          id="status"
+          label="Status"
+          value={filterStatus}
+          options={STATUS_OPTIONS}
+          onChange={setFilterStatus}
+        />
       </Stack>
 
       {bulkNotice && (

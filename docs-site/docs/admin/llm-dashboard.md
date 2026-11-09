@@ -60,20 +60,22 @@ Admin users always have access to all enabled models regardless of tag or entitl
 
 The main table displays one row per model (speech-to-text models are excluded) with the following columns:
 
-| Column                         | Sortable | Description                                                                           |
-| ------------------------------ | -------- | ------------------------------------------------------------------------------------- |
-| Model                          | Yes      | Model display name                                                                    |
-| Type                           | Yes      | Text or Image                                                                         |
-| Backend                        | Yes      | Provider name (openai, anthropic, gemini, bfl, and others)                            |
-| Status                         | Yes      | Toggle switch to enable or disable the model                                          |
-| Rank                           | Yes      | Numeric priority (1-100, lower is higher priority). Leave empty for automatic ranking |
-| Fallback model                 | No       | Dropdown to select a fallback model of the same type when this model fails            |
-| Created                        | Yes      | Date the model configuration was created                                              |
-| Updated                        | Yes      | Date the model configuration was last modified                                        |
-| One column per user tag        | No       | Checkbox for tag-based access control, for example "Developer users"                  |
-| One column per entitlement key | No       | Checkbox for entitlement-based access control, for example "base"                     |
+| Column                         | Sortable | Description                                                                                   |
+| ------------------------------ | -------- | --------------------------------------------------------------------------------------------- |
+| Model                          | Yes      | Model display name                                                                            |
+| Type                           | Yes      | Text or Image                                                                                 |
+| Backend                        | Yes      | Provider name (openai, anthropic, gemini, bfl, and others)                                    |
+| Status                         | Yes      | Toggle switch to enable or disable the model                                                  |
+| Rank                           | Yes      | Numeric priority (1-100, lower is higher priority). Leave empty for automatic ranking         |
+| Fallback model                 | No       | Dropdown to select a fallback model of the same type when this model fails                    |
+| Created                        | Yes      | Placeholder date (see the note below the table)                                               |
+| Updated                        | Yes      | Placeholder date that moves to today when you change the model (see the note below the table) |
+| One column per user tag        | No       | Checkbox for tag-based access control, for example "Developer users"                          |
+| One column per entitlement key | No       | Checkbox for entitlement-based access control, for example "base"                             |
 
 The table keeps every column at full width. When it is wider than the page, it scrolls sideways inside its own frame, and its header row stays in view while you scroll down.
+
+The Created and Updated columns are shown, but these dates are not yet stored with the model configuration. The page fills them in with placeholder dates each time it loads, so they do not tell you when a model was really added or last changed.
 
 ### Sorting
 

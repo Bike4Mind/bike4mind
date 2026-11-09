@@ -17,6 +17,7 @@ const h = vi.hoisted(() => ({
   saveMutate: vi.fn(),
   refetch: vi.fn(),
   onSaved: undefined as (() => void) | undefined,
+  emptyStateTitles: [] as string[],
   useBlocker: vi.fn((_options: BlockerOptions) => ({ status: 'idle' })),
   modelInfo: {
     data: undefined as LLMModelConfig[] | undefined,
@@ -52,6 +53,18 @@ vi.mock('@bike4mind/server-utils/lib/entitlements/registry', () => ({ KNOWN_ENTI
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({
   default: ({ helpId }: { helpId: string }) => <button type="button" data-testid={`help-${helpId}`} />,
 }));
+
+// Records every EmptyState the tab renders, including one that only lives for a frame.
+vi.mock('./shared', async importOriginal => {
+  const actual = await importOriginal<typeof import('./shared')>();
+  return {
+    ...actual,
+    EmptyState: (props: React.ComponentProps<typeof actual.EmptyState>) => {
+      h.emptyStateTitles.push(props.title);
+      return <actual.EmptyState {...props} />;
+    },
+  };
+});
 
 vi.mock('@tanstack/react-router', async importOriginal => ({
   ...(await importOriginal<typeof import('@tanstack/react-router')>()),
@@ -122,6 +135,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.clearAllMocks();
   h.onSaved = undefined;
+  h.emptyStateTitles = [];
   h.modelInfo = { data: models, isPending: false, isLoading: false, isFetching: false, error: null };
 });
 afterEach(() => vi.useRealTimers());
@@ -141,7 +155,7 @@ describe('LLMDashboardTab page frame', () => {
     const banner = screen.getByTestId('llm-dashboard-access-banner');
     expect(root.children[1]).toBe(banner);
     expect(banner).toHaveTextContent('Model access control:');
-    expect(banner).toHaveClass('MuiAlert-colorNeutral', 'MuiAlert-variantSoft');
+    expect(banner).toHaveClass('MuiAlert-colorNeutral');
     expect(container.querySelector('.MuiCard-root')).toBeNull();
   });
 
@@ -161,15 +175,18 @@ describe('LLMDashboardTab page frame', () => {
   it('puts the models in a DataTable as wide as its columns, scrolling inside its own frame', () => {
     renderTab();
     const table = screen.getByTestId('llm-dashboard-table');
-    const headers = within(table)
-      .getAllByRole('columnheader')
-      .map(th => th.textContent);
+    const headers = within(table).getAllByRole('columnheader');
 
-    expect(headers).toEqual(
+    expect(headers.map(th => th.textContent)).toEqual(
       expect.arrayContaining(['Model', 'Developer users', 'Customer users', 'Beta users', 'base', 'pro:plan'])
     );
-    // 2.75 select + 73 fixed + Developer users 9 + Customer users 8.5 + Beta users 6.5 + base 5 + pro:plan 5.5
-    expect(table).toHaveStyle({ minWidth: '110.25rem' });
+    // minWidth covers every column, the checkbox column DataTable adds included, so none is squeezed.
+    const widths = headers.map(th => th.style.width);
+    expect(widths.every(width => width.endsWith('rem'))).toBe(true);
+    const totalRem = widths.reduce((sum, width) => sum + parseFloat(width), 0);
+    expect(table).toHaveStyle({ minWidth: `${totalRem}rem` });
+    // A header label never wraps, so an access column is sized from it: 15 characters at half a rem, plus padding.
+    expect(headers.find(th => th.textContent === 'Developer users')).toHaveStyle({ width: '9rem' });
     expect(table.closest('[role="region"]')).toHaveStyle({ overflowX: 'auto' });
     expect(screen.getByTestId('llm-dashboard-root')).toHaveStyle({ minWidth: '0' });
     // Type and backend are categories, so they read as plain text rather than colored chips.
@@ -274,13 +291,19 @@ describe('LLMDashboardTab save bar', () => {
     fireEvent.click(inputIn('llm-dashboard-toggle-gpt-5'));
     fireEvent.click(inputIn('llm-dashboard-tag-claude-opus-developer'));
     fireEvent.click(inputIn('llm-dashboard-entitlement-gpt-5-base'));
+    fireEvent.click(inputIn('admin-table-select-dall-e'));
+    fireEvent.click(screen.getByTestId('llm-dashboard-bulk-disable-btn'));
+    expect(screen.getByTestId('llm-dashboard-bulk-notice')).toHaveTextContent('Disabled 1 model.');
 
     fireEvent.click(screen.getByTestId('admin-save-discard-btn'));
 
     expect(saveBarText()).toBeNull();
     expect(inputIn('llm-dashboard-toggle-gpt-5')).toBeChecked();
+    expect(inputIn('llm-dashboard-toggle-dall-e')).toBeChecked();
     expect(inputIn('llm-dashboard-tag-claude-opus-developer')).not.toBeChecked();
     expect(inputIn('llm-dashboard-entitlement-gpt-5-base')).toBeChecked();
+    // The receipt for a discarded bulk change would describe models that are back as they were.
+    expect(screen.queryByTestId('llm-dashboard-bulk-notice')).toBeNull();
     expect(h.saveMutate).not.toHaveBeenCalled();
   });
 
@@ -311,6 +334,33 @@ describe('LLMDashboardTab save bar', () => {
     expect(saveBarText()).toContain('1 unsaved change');
   });
 
+  it('discards back to the last saved copy once a save succeeds, not to the first load', () => {
+    renderTab();
+    fireEvent.click(inputIn('llm-dashboard-toggle-flux-pro'));
+    fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+    act(() => h.onSaved?.());
+
+    fireEvent.click(inputIn('llm-dashboard-toggle-flux-pro'));
+    expect(saveBarText()).toContain('1 unsaved change');
+    fireEvent.click(screen.getByTestId('admin-save-discard-btn'));
+
+    expect(saveBarText()).toBeNull();
+    expect(inputIn('llm-dashboard-toggle-flux-pro')).toBeChecked();
+  });
+
+  it('keeps an edit made while the save is in flight as unsaved', () => {
+    renderTab();
+    fireEvent.click(inputIn('llm-dashboard-toggle-gpt-5'));
+    fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+    fireEvent.click(inputIn('llm-dashboard-toggle-claude-opus'));
+    act(() => h.onSaved?.());
+
+    const sent = h.saveMutate.mock.calls[0][0] as LLMModelConfig[];
+    expect(sent.find(model => model.name === 'Claude Opus')?.enabled).toBe(true);
+    expect(saveBarText()).toContain('1 unsaved change');
+    expect(inputIn('llm-dashboard-toggle-claude-opus')).not.toBeChecked();
+  });
+
   it('guards leaving the tab only while there are unsaved changes', () => {
     renderTab();
     const admin = (tab: string) => ({ pathname: '/admin', search: { tab } });
@@ -332,6 +382,13 @@ describe('LLMDashboardTab states', () => {
     expect(screen.getByTestId('llm-dashboard-root').firstElementChild).toBe(screen.getByTestId('admin-page-header'));
     expect(screen.getByTestId('llm-dashboard-loading')).toHaveTextContent('Loading models');
     expect(screen.queryByTestId('llm-dashboard-table')).toBeNull();
+  });
+
+  it('stays on the loading state until the models are copied in, so no empty table paints first', () => {
+    renderTab();
+
+    expect(visibleModelIds()).toEqual(['gpt-5', 'claude-opus', 'dall-e', 'flux-pro']);
+    expect(h.emptyStateTitles).toEqual([]);
   });
 
   it('shows the error with a retry when the model list fails to load', () => {

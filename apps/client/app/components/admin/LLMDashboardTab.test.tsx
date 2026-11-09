@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, render, screen, fireEvent, within } from '@testing-library/react';
+import { act, render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { ModelBackend, type LLMModelConfig } from '@bike4mind/common';
@@ -42,7 +42,7 @@ vi.mock('@client/app/hooks/data/user', () => ({
 
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
 
-// The SaveBar's leave-page guards need a router; these tests never navigate.
+// UnsavedChangesGuard calls useBlocker and the tab-switch guard calls useRouter; these tests never navigate.
 vi.mock('@tanstack/react-router', async importOriginal => ({
   ...(await importOriginal<typeof import('@tanstack/react-router')>()),
   useBlocker: () => ({ status: 'idle' }),
@@ -80,7 +80,7 @@ const search = (value: string) => {
 };
 
 const setStatusFilter = (value: string) => {
-  fireEvent.click(within(screen.getByTestId('llm-dashboard-status-filter')).getByTestId('admin-filter-status'));
+  fireEvent.click(screen.getByTestId('admin-filter-status'));
   fireEvent.click(screen.getByTestId(`admin-filter-status-${value}`));
 };
 
