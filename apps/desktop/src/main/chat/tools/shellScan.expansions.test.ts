@@ -29,7 +29,8 @@ describe('shell expansions reaching a protected location', () => {
     await rm(base, { recursive: true, force: true });
   });
 
-  const expectAsks = async (command: string): Promise<void> => {
+  /** Whether `command` runs unasked in auto and in full mode. */
+  const decide = async (command: string): Promise<{ auto: boolean; full: boolean }> => {
     const approval = await shellApproval(
       'bash_execute',
       { command, cwd: project },
@@ -41,8 +42,11 @@ describe('shell expansions reaching a protected location', () => {
         uncoverablePaths: [protectedFolder],
       }
     );
-    expect(approval.askInAuto).toBe(true);
-    expect(approval.askInFull).toBe(true);
+    return { auto: !approval.askInAuto, full: !approval.askInFull };
+  };
+
+  const expectAsks = async (command: string): Promise<void> => {
+    expect(await decide(command)).toEqual({ auto: false, full: false });
   };
 
   it.each([
@@ -140,7 +144,9 @@ describe('shell expansions reaching a protected location', () => {
     '}{a,b}',
     '{{a,b}',
   ])('leaves %s unread', async range => {
-    expect((await scanShell(`cat range/${range}/value`, project, [project]))?.unread).toBe(true);
+    const command = `cat range/${range}/value`;
+    expect((await scanShell(command, project, [project]))?.unread).toBe(true);
+    await expectAsks(command);
   });
 
   it.each([
@@ -163,6 +169,7 @@ describe('shell expansions reaching a protected location', () => {
     'unset "`echo "{a,b}"`"',
   ])('leaves %s unread, as bash brace-expands a word the scan reads as quoted', async command => {
     expect((await scanShell(command, project, [project]))?.unread).toBe(true);
+    await expectAsks(command);
   });
 
   it.each([
@@ -175,11 +182,18 @@ describe('shell expansions reaching a protected location', () => {
     'echo "$(cat <<\'EOF\'\nfix: {a, b} and "c"\nEOF\n)"',
     'echo ${HOME}/{a,b}',
     'echo "${x//,/ }"',
-    'echo ${x:-{a,b}}',
     'cat <(echo {a,b})',
     'x="`echo "{a,b}"`"',
-  ])('reads %s as each bash brace-expands it', async command => {
-    expect((await scanShell(command, project, [project]))?.unread).toBeUndefined();
+  ])('reads %s as each bash brace-expands it, running it unasked', async command => {
+    const scan = await scanShell(command, project, [project]);
+    expect(scan).not.toBeNull();
+    expect(scan?.unread).toBeUndefined();
+    expect(await decide(command)).toEqual({ auto: true, full: true });
+  });
+
+  it.each(['echo ${x:-{a,b}}'])('asks in every mode for %s, which the parser does not read', async command => {
+    expect(await scanShell(command, project, [project])).toBeNull();
+    await expectAsks(command);
   });
 
   it.each([
