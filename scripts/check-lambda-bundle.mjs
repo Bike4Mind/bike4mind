@@ -169,7 +169,7 @@ export function dedupeMessages(messages) {
 
 // One esbuild pass over every entry point. Returns the raw esbuild messages and
 // the resolved-module count; the caller decides what that means.
-export async function bundleEntryPoints({ root, files, external }) {
+export async function bundleEntryPoints({ root, files, external, inject = [] }) {
   const result = await esbuild
     .build({
       absWorkingDir: root,
@@ -185,6 +185,7 @@ export async function bundleEntryPoints({ root, files, external }) {
       mainFields: ['module', 'main'],
       keepNames: true,
       external,
+      inject,
       // Required for path computation under `splitting`; `write: false` means it
       // is never created. Under node_modules so a future `write: true` debug run
       // still cannot dirty the tree.
@@ -244,6 +245,8 @@ async function main() {
     root: repoRoot,
     files: entries.map(e => e.file),
     external,
+    // Mirrors the inject the sst.aws.Function transform in sst.config.ts adds to every Function.
+    inject: [path.join(repoRoot, 'packages/server-utils/src/bootstrap/lambdaConsoleRedaction.ts')],
   });
   const elapsed = ((Date.now() - started) / 1000).toFixed(1);
 

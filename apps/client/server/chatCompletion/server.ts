@@ -3,7 +3,7 @@ import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { connectDB, mongoose } from '@bike4mind/database';
 import { registerProcessErrorHandlers } from '@bike4mind/utils';
 import { hasModelCatalogProvider } from '@bike4mind/llm-adapters';
-import { Logger } from '@bike4mind/observability';
+import { installConsoleRedaction, Logger } from '@bike4mind/observability';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { registerInternalRoutes } from './internal/route';
 import { registerExternalRoutes } from './external/sseRoute';
@@ -148,6 +148,7 @@ export function checkModelCatalogWired(logger: Pick<Logger, 'error'>): boolean {
 }
 
 async function main() {
+  installConsoleRedaction();
   // Crash-safety for a long-running process: one request's mid-stream EPIPE / orphaned undici
   // rejection must NOT take Node's default uncaughtException path and kill the whole container
   // along with every other in-flight request. Registers global handlers that log + swallow the
