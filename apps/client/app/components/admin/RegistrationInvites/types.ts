@@ -16,9 +16,7 @@ export interface RegInviteData {
 }
 
 export interface InviteTableProps {
-  invites: RegInviteData[];
   allInvites: RegInviteData[];
-  borderColor: string;
   selected: string[];
   setSelected: (selected: string[] | ((prev: string[]) => string[])) => void;
   sortDirection: 'asc' | 'desc';

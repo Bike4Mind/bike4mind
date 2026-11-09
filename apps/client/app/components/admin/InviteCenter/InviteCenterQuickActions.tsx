@@ -1,4 +1,4 @@
-import { Box, Button, IconButton, Stack, Tooltip } from '@mui/joy';
+import { Button, IconButton, Tooltip } from '@mui/joy';
 import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import VpnKeyIcon from '@mui/icons-material/VpnKey';
 import ContentPasteIcon from '@mui/icons-material/ContentPaste';
@@ -13,31 +13,19 @@ interface InviteCenterQuickActionsProps {
 const InviteCenterQuickActions = ({ onQuickInvite, onGenerateCodes, onPasteCsv }: InviteCenterQuickActionsProps) => {
   const isMobile = useIsMobile();
   return (
-    <Box
-      sx={{
-        p: 1.5,
-        borderRadius: 'sm',
-        border: '1px solid',
-        borderColor: 'divider',
-        bgcolor: 'background.level1',
-        mb: 1,
-      }}
-    >
-      <Stack direction="row" spacing={1.5}>
+    <>
         {isMobile ? (
           <>
-            <Tooltip title="Quick Invite">
+            <Tooltip title="Quick invite">
               <IconButton
                 size="sm"
-                variant="outlined"
-                color="primary"
                 onClick={onQuickInvite}
                 data-testid="invite-center-quick-invite-btn"
               >
                 <PersonAddIcon />
               </IconButton>
             </Tooltip>
-            <Tooltip title="Generate Codes">
+            <Tooltip title="Generate codes">
               <IconButton
                 size="sm"
                 variant="outlined"
@@ -64,13 +52,11 @@ const InviteCenterQuickActions = ({ onQuickInvite, onGenerateCodes, onPasteCsv }
           <>
             <Button
               size="sm"
-              variant="outlined"
-              color="primary"
               startDecorator={<PersonAddIcon />}
               onClick={onQuickInvite}
               data-testid="invite-center-quick-invite-btn"
             >
-              + Quick Invite
+              Quick invite
             </Button>
             <Button
               size="sm"
@@ -80,7 +66,7 @@ const InviteCenterQuickActions = ({ onQuickInvite, onGenerateCodes, onPasteCsv }
               onClick={onGenerateCodes}
               data-testid="invite-center-generate-codes-btn"
             >
-              Generate Codes
+              Generate codes
             </Button>
             <Button
               size="sm"
@@ -94,8 +80,7 @@ const InviteCenterQuickActions = ({ onQuickInvite, onGenerateCodes, onPasteCsv }
             </Button>
           </>
         )}
-      </Stack>
-    </Box>
+    </>
   );
 };
 

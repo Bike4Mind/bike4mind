@@ -187,3 +187,47 @@ describe('WaitlistTab network and payload signals', () => {
     expect(screen.queryByTestId('waitlist-suspicious-chip')).toBeNull();
   });
 });
+
+describe('WaitlistTab list states', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.fetchGrantPackages.mockResolvedValue({ data: [], meta: { total: 0, page: 1, limit: 100, totalPages: 0 } });
+  });
+
+  it('renders one pager with 25/50/100 page sizes and no radio group', async () => {
+    mocks.fetchSubscribers.mockResolvedValue({ data: [SUBSCRIBER], meta: { total: 60 } });
+    render(<WaitlistTab />, { wrapper: Wrapper });
+
+    expect(await screen.findByText('ada@example.com')).toBeInTheDocument();
+    expect(screen.queryAllByRole('radio')).toHaveLength(0);
+    expect(screen.getAllByRole('button', { name: /next page/i })).toHaveLength(1);
+    expect(mocks.fetchSubscribers).toHaveBeenCalledWith(expect.objectContaining({ page: 1, limit: 25 }));
+  });
+
+  it('shows an empty state when nobody is waiting', async () => {
+    mocks.fetchSubscribers.mockResolvedValue({ data: [], meta: { total: 0 } });
+    render(<WaitlistTab />, { wrapper: Wrapper });
+
+    expect(await screen.findByText('The waitlist is empty')).toBeInTheDocument();
+  });
+
+  it('shows an error state that refetches on retry', async () => {
+    mocks.fetchSubscribers.mockRejectedValueOnce(new Error('boom'));
+    mocks.fetchSubscribers.mockResolvedValue({ data: [SUBSCRIBER], meta: { total: 1 } });
+    render(<WaitlistTab />, { wrapper: Wrapper });
+
+    fireEvent.click(await screen.findByRole('button', { name: /try again/i }));
+    expect(await screen.findByText('ada@example.com')).toBeInTheDocument();
+    expect(mocks.fetchSubscribers).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps removal in the row menu rather than a visible button', async () => {
+    mocks.fetchSubscribers.mockResolvedValue({ data: [SUBSCRIBER], meta: { total: 1 } });
+    render(<WaitlistTab />, { wrapper: Wrapper });
+
+    await screen.findByText('ada@example.com');
+    expect(screen.queryByTestId('waitlist-remove-sub-1')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('waitlist-row-actions-sub-1'));
+    expect(await screen.findByTestId('waitlist-remove-sub-1')).toBeInTheDocument();
+  });
+});
