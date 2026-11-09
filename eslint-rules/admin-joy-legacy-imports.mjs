@@ -43,7 +43,6 @@ export default {
   'IdentityProvidersTab.tsx': [[2, '073759fd26afa7fa']],
   'IntegrationDemandTab.tsx': [[3, '33c84625c2e68e9d']],
   'IntegrationHealth/components/IntegrationDetailPanel.tsx': [[2, 'b7900285fffe06e6']],
-  'LLMDashboardTab.tsx': [[2, '65861918e5079b93']],
   'ManageGearsTab.tsx': [[2, 'fc13e803eaa10e1d']],
   'MigrateUsersTab.tsx': [[4, '655b890fff77d8be']],
   'ModelLifecycleTab.tsx': [[2, '6753494454310b67']],
