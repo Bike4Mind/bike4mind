@@ -244,6 +244,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
     const trimmedEmail = email.trim();
     if (rateLimit.secondsLeft > 0) return;
     setEmailError(null);
+    setSuspendedCategory(null);
     if (!trimmedEmail) {
       setEmailError(t('auth.emailRequired'));
       return;
@@ -515,6 +516,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   };
 
   const handleBackToEmail = () => {
+    setSuspendedCategory(null);
     setCurrentStep('email');
     setEmail('');
     setOtcCode('');

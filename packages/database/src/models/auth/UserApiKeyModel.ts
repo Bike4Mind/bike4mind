@@ -140,9 +140,12 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
       .exec();
   }
 
-  // Capped: a prefix collision is rare, and this only runs on a request that already failed auth.
+  // Only keys disabled in bulk. Capped because this runs after auth fails and prefix collisions are rare.
   findDisabledByKeyPrefix(keyPrefix: string) {
-    return this.model.find({ keyPrefix, status: ApiKeyStatus.DISABLED }).limit(5).exec();
+    return this.model
+      .find({ keyPrefix, status: ApiKeyStatus.DISABLED, revokedBy: { $exists: false } })
+      .limit(5)
+      .exec();
   }
 
   // Bulk deactivation has no human actor, so it stamps revokedAt without revokedBy.

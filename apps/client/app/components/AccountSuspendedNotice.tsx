@@ -16,7 +16,8 @@ type AccountSuspendedNoticeProps = {
  * (buildSuspensionNotice), so it never names what flagged the account.
  */
 export const AccountSuspendedNotice: React.FC<AccountSuspendedNoticeProps> = ({ category, supportEmail }) => {
-  const notice = buildSuspensionNotice(category, { email: supportEmail });
+  const appealUrl = WEBSITE_URL ? getWebsiteUrl('support') : undefined;
+  const notice = buildSuspensionNotice(category, { email: supportEmail, url: appealUrl });
   return (
     <Alert
       color="danger"
@@ -51,6 +52,17 @@ export const AccountSuspendedNotice: React.FC<AccountSuspendedNoticeProps> = ({ 
               data-testid="account-suspended-notice-appeal-link"
             >
               Appeal by email
+            </Link>
+          )}
+          {!supportEmail && appealUrl && (
+            <Link
+              href={appealUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              level="body-sm"
+              data-testid="account-suspended-notice-appeal-link"
+            >
+              Appeal
             </Link>
           )}
         </Stack>
