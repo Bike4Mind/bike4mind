@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Context } from 'aws-lambda';
-const mocks = vi.hoisted(() => ({ load: vi.fn(), record: vi.fn(), settings: vi.fn() }));
+const mocks = vi.hoisted(() => ({ load: vi.fn(), record: vi.fn(), settings: vi.fn(), synchrony: vi.fn() }));
+vi.mock('./completionSynchronySweep', () => ({ sweepCompletionSynchrony: mocks.synchrony }));
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
@@ -29,6 +30,7 @@ beforeEach(() => {
   mocks.settings.mockResolvedValue({});
   mocks.load.mockResolvedValue({ events, rowsScanned: 6, accountsScanned: 3, truncated: false });
   mocks.record.mockResolvedValue('created');
+  mocks.synchrony.mockResolvedValue({ failed: 0 });
 });
 
 describe('completion sequence sweep', () => {
@@ -70,6 +72,22 @@ describe('completion sequence sweep', () => {
     mocks.load.mockResolvedValue({ events: events.slice(0, 3), rowsScanned: 3, accountsScanned: 3, truncated: false });
     expect(await sweepCompletionSequences({ now })).toMatchObject({ patterns: 0 });
     expect(mocks.record).not.toHaveBeenCalled();
+  });
+
+  it('still runs the synchrony sweep when the sequence sweep throws, then fails the run', async () => {
+    mocks.load.mockRejectedValue(new Error('Usage read timed out'));
+    await expect(handler({}, { awsRequestId: 'test', functionName: 'test' } as Context)).rejects.toThrow(
+      /Completion sequence sweep failed/
+    );
+    expect(mocks.synchrony).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails the run when the synchrony sweep fails to record', async () => {
+    mocks.synchrony.mockResolvedValue({ failed: 2 });
+    await expect(handler({}, { awsRequestId: 'test', functionName: 'test' } as Context)).rejects.toThrow(
+      /Synchrony sweep failed to record 2/
+    );
+    expect(mocks.record).toHaveBeenCalledTimes(1);
   });
 
   it('gates the scan before reading usage when shadow recording is disabled', async () => {

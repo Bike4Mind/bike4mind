@@ -99,16 +99,31 @@ export async function handler(_event: unknown, context: Context) {
     { skipCache: true, names: ['shadowDetectionRecordingEnabled'] }
   );
   if (!getSettingsValue('shadowDetectionRecordingEnabled', settings, true)) return;
-  const report = await sweepCompletionSequences({
-    now: new Date(),
-    onRecordError: error => logger.error('Completion sequence observation failed to record', { error: String(error) }),
-  });
-  logger.log('Completion sequence observation sweep finished', report);
-  const synchrony = await sweepCompletionSynchrony({
-    now: new Date(),
-    onRecordError: error => logger.error('Synchronized completion evidence operation failed', { error: String(error) }),
-  });
-  logger.log('Synchronized completion observation sweep finished', synchrony);
-  if (synchrony.failed > 0) throw new Error(`Synchrony sweep failed to record ${synchrony.failed} observation(s)`);
-  if (report.failed > 0) throw new Error(`Completion sequence sweep failed to record ${report.failed} observation(s)`);
+  const failures: string[] = [];
+  try {
+    const report = await sweepCompletionSequences({
+      now: new Date(),
+      onRecordError: error =>
+        logger.error('Completion sequence observation failed to record', { error: String(error) }),
+    });
+    logger.log('Completion sequence observation sweep finished', report);
+    if (report.failed > 0) failures.push(`Completion sequence sweep failed to record ${report.failed} observation(s)`);
+  } catch (error) {
+    logger.error('Completion sequence observation sweep failed', { error: String(error) });
+    failures.push(`Completion sequence sweep failed: ${String(error)}`);
+  }
+  // Independent detectors: one failing must not skip the other.
+  try {
+    const synchrony = await sweepCompletionSynchrony({
+      now: new Date(),
+      onRecordError: error =>
+        logger.error('Synchronized completion evidence operation failed', { error: String(error) }),
+    });
+    logger.log('Synchronized completion observation sweep finished', synchrony);
+    if (synchrony.failed > 0) failures.push(`Synchrony sweep failed to record ${synchrony.failed} observation(s)`);
+  } catch (error) {
+    logger.error('Synchronized completion observation sweep failed', { error: String(error) });
+    failures.push(`Synchrony sweep failed: ${String(error)}`);
+  }
+  if (failures.length) throw new Error(failures.join('; '));
 }
