@@ -562,7 +562,7 @@ describe('summarizeDetection', () => {
     const loadProfiles = vi.fn(async () => new Map([['65f0000000000000000000a1', profile]]));
     const summary = await summarizeDetection(detection, logger, { loadAccountProfiles: loadProfiles });
     expect(loadProfiles).toHaveBeenCalledWith(detection.userIds);
-    expect(collectRequestActivity).toHaveBeenCalledWith(detection.userIds[0], logger);
+    expect(collectRequestActivity).toHaveBeenCalledWith(detection.userIds[0], detection.detectedAt, logger);
     expect(summary.accounts[0].profile).toEqual(profile);
     expect(summary.accounts[0].requests).toEqual({ status: 'failed' });
   });
@@ -579,7 +579,7 @@ describe('summarizeDetection', () => {
     expect(loadProfiles).toHaveBeenCalledWith(keptIds);
     expect(mocks.findSummaries).toHaveBeenCalledWith(keptIds);
     expect(collectRequestActivity).toHaveBeenCalledTimes(ABUSE_ASSESSMENT_MAX_ACCOUNTS);
-    expect(collectRequestActivity).not.toHaveBeenCalledWith(userIds.at(-1), logger);
+    expect(collectRequestActivity).not.toHaveBeenCalledWith(userIds.at(-1), expect.anything(), logger);
     expect(summary.accounts).toHaveLength(ABUSE_ASSESSMENT_MAX_ACCOUNTS);
   });
 
