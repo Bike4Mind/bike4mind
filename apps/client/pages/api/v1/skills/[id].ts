@@ -11,6 +11,7 @@ import { filesFromMap, skillFieldsFromSkillMd } from '@server/skills/skillMdInpu
 import { applySkillUpdate } from '@server/skills/skillWrite';
 import { toPublicSkill } from '@server/skills/publicView';
 import { ShareableSkill, canAccessSkill, canEditSkill } from '@server/utils/skillAccess';
+import { validateSkillName } from '@server/utils/skillValidation';
 import { publicAppUrl } from '@server/utils/validators';
 
 /** A skill the caller cannot see answers 404 exactly like one that does not exist. */
@@ -32,6 +33,7 @@ const putRoute = nextRouteForContract(updateSkillContract).put(async (req, res) 
 
   const { skill_md, files, allow_rename } = req.validated;
   const { fields, dropped } = skillFieldsFromSkillMd(skill_md, { nameOptional: true });
+  if (fields.name !== undefined) validateSkillName(fields.name);
   if (fields.name !== undefined && fields.name.trim() !== skill.name && !allow_rename) {
     throw new ConflictError(
       `This SKILL.md renames the skill from "${skill.name}" to "${fields.name}". ` +

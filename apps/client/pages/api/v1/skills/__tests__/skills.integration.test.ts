@@ -352,6 +352,12 @@ describe('PUT /api/v1/skills/{id}', () => {
     expect(applied._getJSONData().name).toBe('new-name');
   });
 
+  it('answers 400 for an invalid name before the rename check', async () => {
+    const res = await update({ skill_md: '---\nname: Review-PR\ndescription: d\n---\n\nBody\n' });
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData().error).toMatch(/kebab-case/);
+  });
+
   it('answers 409 when the new name is taken', async () => {
     h.update.mockRejectedValue(Object.assign(new Error('E11000 duplicate key'), { code: 11000 }));
     const res = await update({ skill_md: '---\nname: taken\ndescription: d\n---\n\nBody\n', allow_rename: true });
