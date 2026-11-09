@@ -31,10 +31,21 @@ vi.mock('@server/middlewares/baseApi', () => {
 
 const transferOwnership = vi.hoisted(() => vi.fn());
 const customersUpdate = vi.hoisted(() => vi.fn());
+const tx = vi.hoisted(() => ({ active: false }));
+const withTransaction = vi.hoisted(() =>
+  vi.fn(async (fn: () => unknown) => {
+    tx.active = true;
+    try {
+      return await fn();
+    } finally {
+      tx.active = false;
+    }
+  })
+);
 vi.mock('@bike4mind/services', () => ({ organizationService: { transferOwnership } }));
 vi.mock('@bike4mind/database', () => ({
   userRepository: {},
-  withTransaction: (fn: () => unknown) => fn(),
+  withTransaction,
 }));
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: {} }));
 vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
@@ -98,6 +109,27 @@ describe('POST /api/organizations/[id]/transfer-ownership', () => {
     );
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ organizationId: 'org1', ownerId: 'admin1' });
+  });
+
+  it('runs the transfer and the audit write in one transaction and the Stripe mirror after it', async () => {
+    const inTx = { service: false, audit: false, stripe: false };
+    transferOwnership.mockImplementation(async () => {
+      inTx.service = tx.active;
+      return baseResult;
+    });
+    vi.mocked(recordAdminActionFromRequest).mockImplementation(async () => {
+      inTx.audit = tx.active;
+      return null;
+    });
+    customersUpdate.mockImplementation(async () => {
+      inTx.stripe = tx.active;
+      return {};
+    });
+
+    await post().run();
+
+    expect(withTransaction).toHaveBeenCalledTimes(1);
+    expect(inTx).toEqual({ service: true, audit: true, stripe: false });
   });
 
   it('does not touch Stripe when the billing contact did not change', async () => {
