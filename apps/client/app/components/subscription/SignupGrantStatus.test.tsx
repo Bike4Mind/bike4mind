@@ -9,12 +9,18 @@ const h = vi.hoisted(() => ({
   held: undefined as 'budget_exhausted' | undefined,
   daily: 1000 as number | string | undefined,
   minSeconds: undefined as number | undefined,
+  holdHours: undefined as number | undefined,
 }));
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ currentUser: { signupGrant: h.grant, signupGrantHeldReason: h.held } }),
 }));
 vi.mock('@client/app/hooks/data/settings', () => ({
-  useGetSettingsValue: (key: string) => (key === 'signupGrantActivityMinActiveSeconds' ? h.minSeconds : undefined),
+  useGetSettingsValue: (key: string) =>
+    key === 'signupGrantActivityMinActiveSeconds'
+      ? h.minSeconds
+      : key === 'signupUnlockPaymentHoldHours'
+        ? h.holdHours
+        : undefined,
   useSettingsFromServer: () => ({
     data: [
       { settingName: 'signupGrantDailyCredits', settingValue: h.daily },
@@ -36,6 +42,7 @@ describe('signup grant status', () => {
     h.daily = 1000;
     h.held = undefined;
     h.minSeconds = undefined;
+    h.holdHours = undefined;
     h.grant = {
       stage: 'signup',
       signupCredits: 1000,
@@ -57,7 +64,9 @@ describe('signup grant status', () => {
       'up to 1,000 credits for each day you have Bike4Mind open and in use for about 1 minute'
     );
     expect(paths).toHaveTextContent('when you subscribe');
-    expect(paths).toHaveTextContent('when you verify a card');
+    expect(paths).toHaveTextContent(
+      'when you subscribe or verify a card, once that payment settles (usually within 3 days)'
+    );
     expect(screen.getByTestId('signup-grant-status')).not.toHaveTextContent('eligibility');
   });
   it('states the invite bonus when one was paid', () => {
@@ -73,6 +82,13 @@ describe('signup grant status', () => {
     h.grant = { ...h.grant!, inviteBonusPaid: 0 };
     show();
     expect(screen.getAllByTestId('signup-grant-released')[1]).not.toHaveTextContent('invite bonus');
+  });
+  it('takes the settling wait from the payment hold setting, so it matches the held-unlock date', () => {
+    h.holdHours = 24;
+    show();
+    expect(screen.getByTestId('signup-grant-unlock-paths')).toHaveTextContent(
+      'once that payment settles (usually within 1 day)'
+    );
   });
   it('derives the minutes from the setting', () => {
     h.minSeconds = 1800;

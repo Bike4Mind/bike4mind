@@ -5157,6 +5157,7 @@ export const settingsMap = {
     min: 0,
     max: 720,
     int: true,
+    userReadable: true,
     description:
       'Hours a subscription, credit pack or card payment must settle before it releases the locked signup credits. A dispute, refund or early fraud warning in that window cancels the release. Zero releases them on payment.',
     group: API_SERVICE_GROUPS.CREDITS.id,

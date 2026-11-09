@@ -184,7 +184,7 @@ describe('NewUserWelcome', () => {
     };
     renderWelcome();
     expect(screen.getByTestId('new-user-welcome-credits')).toHaveTextContent(
-      'Verify your email to unlock up to 10,000 credits now. The rest unlocks all at once when you subscribe, or all at once when you verify a card.'
+      'Verify your email to unlock up to 10,000 credits now. The rest unlocks all at once when you subscribe or verify a card, once that payment settles (usually within 3 days).'
     );
     expect(screen.queryByTestId('new-user-welcome-answers-estimate')).not.toBeInTheDocument();
   });
