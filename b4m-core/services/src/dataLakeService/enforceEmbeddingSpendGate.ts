@@ -58,7 +58,8 @@ export class EmbeddingSpendDeniedError extends Error {
   /**
    * For a retryable denial, how long (ms) until the saturated window resets - the earliest a
    * redelivery can be granted. Lets a queue consumer size its back-off to the window instead of
-   * guessing. Undefined on a non-retryable denial.
+   * guessing. Undefined on a non-retryable denial. Rate windows are about a minute, so a consumer's
+   * floor currently dominates this value; it only matters if a window outlasts the floor.
    */
   readonly retryAfterMs?: number;
 

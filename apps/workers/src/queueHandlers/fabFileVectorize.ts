@@ -88,7 +88,11 @@ const VectorizePayload = z.object({
   ...provenancePayloadShape,
 });
 
-/** Redelivery delay for a rate-window denial that did not say when its window resets: one window. */
+/**
+ * Redelivery delay for a rate-window denial that did not say when its window resets: one window.
+ * The floor currently dominates (windows are about a minute, below it), so this only matters if a
+ * window ever outlasts the floor.
+ */
 const RATE_DENIAL_FALLBACK_DELAY_MS = 60_000;
 /**
  * Spread for that redelivery. The subscription runs up to its reserved concurrency in parallel, so
@@ -101,6 +105,8 @@ const RATE_DENIAL_JITTER_SECONDS = 60;
  * Seconds before a rate-denied delivery comes back: the window's reset, but never sooner than
  * FAB_FILE_VECTORIZE_RATE_DENIAL_MIN_REDELIVERY_SEC, so the queue's few deliveries still span as
  * many rate windows as a thrown failure's did. Jitter is added on top by returnRecordForRedelivery.
+ * The floor currently dominates (rate windows are about a minute, below it), so the window reset
+ * only matters if a window ever outlasts the floor.
  */
 export function rateDenialRedeliveryDelaySeconds(retryAfterMs: number | undefined): number {
   const windowResetSeconds = Math.ceil((retryAfterMs ?? RATE_DENIAL_FALLBACK_DELAY_MS) / 1000);
@@ -832,8 +838,9 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     ) {
       // A saturated rate window is expected back-pressure: hand the message back with a floored,
       // jittered delay instead of throwing, so it retries quietly (the warn above) rather than
-      // paging, without spending the delivery budget any faster than a throw did. The final attempt still falls through to the failure
-      // accounting below, so a file that never gets a slot lands visibly failed, not stuck.
+      // paging, without spending the delivery budget any faster than a throw did. The final
+      // attempt still falls through to the failure accounting below, so a file that never gets a
+      // slot lands visibly failed, not stuck.
       if (err instanceof dataLakeService.EmbeddingSpendDeniedError && err.retryable) {
         return returnRecordForRedelivery(event, {
           delaySeconds: rateDenialRedeliveryDelaySeconds(err.retryAfterMs),
