@@ -111,7 +111,7 @@ export function canUserReadArtifact(
     permissions?: { canRead?: string[]; isPublic?: boolean };
   }
 ): boolean {
-  return canUserAccessArtifact(userId, artifact, 'read');
+  return readAccess(userId, artifact) !== null;
 }
 
 /** Why `userId` may read the artifact, or null. A write-only grant on a private artifact is not a read. */
@@ -127,27 +127,4 @@ function readAccess(
   const granted = artifact.permissions?.canRead?.includes(userId) || artifact.permissions?.canWrite?.includes(userId);
   if (artifact.visibility === 'public' || artifact.permissions?.isPublic) return granted ? 'shared' : 'public';
   return artifact.permissions?.canRead?.includes(userId) ? 'shared' : null;
-}
-
-/**
- * Check if user can access artifact based on permissions and visibility
- */
-function canUserAccessArtifact(userId: string, artifact: any, accessType: 'read' | 'write' | 'delete'): boolean {
-  // Owner always has access
-  if (artifact.userId === userId) {
-    return true;
-  }
-
-  // Check if public
-  if (artifact.visibility === 'public' || artifact.permissions?.isPublic) {
-    return accessType === 'read'; // Public artifacts are read-only for non-owners
-  }
-
-  // Check explicit permissions
-  const permissionField = `can${accessType.charAt(0).toUpperCase() + accessType.slice(1)}`;
-  if (artifact.permissions?.[permissionField]?.includes(userId)) {
-    return true;
-  }
-
-  return false;
 }
