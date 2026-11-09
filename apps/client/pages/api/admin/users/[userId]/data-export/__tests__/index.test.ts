@@ -40,7 +40,7 @@ vi.mock('@server/dataSubject/adminDataExports', () => ({
   findDataExportTarget: h.findTarget,
   listAdminDataExports: h.list,
 }));
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: h.record,
   parseAdminActionReason: (value: unknown) => {
     if (typeof value !== 'string' || !value) throw new Error('A reason is required');

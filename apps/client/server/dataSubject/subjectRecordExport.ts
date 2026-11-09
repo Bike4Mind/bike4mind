@@ -1,4 +1,7 @@
-import { mongoose } from '@bike4mind/database';
+import { FabFile, mongoose } from '@bike4mind/database';
+import { findPersonalOrganizationIds, personalFilter } from '../users/purgeAccountContent';
+import { isOrganizationFile } from '../users/purgeAccountFiles';
+import { holderExportScope, viaParentExportScope, type ExportScope, type ReferenceMatch } from './exportScope';
 import { DATA_HOLDER_REGISTRY, findUnclassifiedModels } from './registry';
 import { matchingArrayElements, omitPath, setPath, valuesAt } from './documentPaths';
 import type { DataHolder, DataHolderRegistry, UserReference } from './types';
@@ -28,12 +31,12 @@ export function assertEveryModelClassified(modelNames: readonly string[]): void 
   }
 }
 
-/** Keys of exported parents, by the parent field the children match on. */
-type ParentKeys = { owned: Map<string, Map<string, unknown>>; anonymized: Map<string, Map<string, unknown>> };
+/** An exported parent's key value, by its string form, with the scope the parent was exported at. */
+type ParentKeys = Map<string, { value: unknown; scope: ExportScope }>;
+/** Exported parents' keys, by the parent field their children match on. */
+type ParentScopes = Map<string, ParentKeys>;
 
-/** The person is a party to the record (it is theirs, or kept about them), not only its actor. */
-const isParty = (reference: UserReference): boolean =>
-  reference.action === 'deleteDocument' || (reference.action === 'retain' && reference.exportScope !== 'reference');
+const NO_PARENT: ExportScope = { scope: 'none' };
 
 /** The reference and every field beside it that describes the person it names. */
 const personPathsOf = (reference: UserReference): readonly string[] => [
@@ -54,8 +57,9 @@ export class SubjectRecordExport {
   /** Exported models in an order that puts every `viaParent` child after its parent. */
   readonly models: readonly string[];
   private readonly keyPathsByParent = new Map<string, Set<string>>();
-  private readonly parentKeys = new Map<string, ParentKeys>();
+  private readonly parentScopes = new Map<string, ParentScopes>();
   private readonly completed = new Set<string>();
+  private personalOrganizationIds: Promise<string[]> | undefined;
 
   constructor(
     private readonly subject: DataSubject,
@@ -100,16 +104,10 @@ export class SubjectRecordExport {
   private async *holderRecords(model: string, references: readonly UserReference[]): AsyncGenerator<ExportedRecord> {
     const clauses = references.flatMap(reference => this.filterFor(reference) ?? []);
     if (clauses.length === 0) return;
+    const personal = await this.personalDocumentIds(model, references);
     for await (const document of this.query(model, { $or: clauses })) {
-      const matched = references.filter(reference => this.matches(document, reference));
-      if (matched.some(isParty)) {
-        const owns = matched.some(({ action }) => action === 'deleteDocument' || action === 'retain');
-        this.rememberParentKeys(model, document, owns);
-        yield this.withholdOthers(document, references);
-        continue;
-      }
-      if (matched.some(({ action }) => action !== 'pullFromArray')) this.rememberParentKeys(model, document, false);
-      const record = this.referenceRecord(document, matched);
+      const matches = await this.matchesOn(model, document, references, personal);
+      const record = this.recordFor(model, document, holderExportScope(matches), matches, references);
       if (record) yield record;
     }
   }
@@ -121,29 +119,43 @@ export class SubjectRecordExport {
     if (!this.completed.has(holder.parent)) {
       throw new Error(`"${model}" needs its parent "${holder.parent}" exported first`);
     }
-    const keyPath = holder.parentKey ?? '_id';
-    const keys = this.parentKeys.get(holder.parent);
-    const parentValues = [
-      ...(keys?.owned.get(keyPath)?.values() ?? []),
-      ...(holder.deleteWhenParentAnonymized ? (keys?.anonymized.get(keyPath)?.values() ?? []) : []),
-    ];
+    const attribution = holder.attribution ?? [];
+    const parents: ParentKeys = this.parentScopes.get(holder.parent)?.get(holder.parentKey ?? '_id') ?? new Map();
+    // Only parents that bring their children along on their own; the rest can only reach a child
+    // through its attribution, which the query below covers.
+    const parentValues = [...parents.values()]
+      .filter(({ scope }) => viaParentExportScope(holder, scope, []).scope !== 'none')
+      .map(({ value }) => value);
+    const parentScopeOf = (document: LeanDocument): ExportScope => {
+      const scopes = valuesAt(document, holder.foreignKey).map(value => parents.get(String(value))?.scope);
+      return (
+        scopes.find(scope => scope?.scope === 'wholeDocument') ?? scopes.find(scope => scope !== undefined) ?? NO_PARENT
+      );
+    };
     const seen = new Set<string>();
     for (let start = 0; start < parentValues.length; start += PARENT_KEY_BATCH) {
       const batch = parentValues.slice(start, start + PARENT_KEY_BATCH);
       for await (const document of this.query(model, { [holder.foreignKey]: { $in: batch } })) {
         seen.add(String(document._id));
-        this.rememberParentKeys(model, document, true);
-        yield this.withholdOthers(document, holder.attribution ?? []);
+        const matches = await this.matchesOn(model, document, attribution);
+        const scope = viaParentExportScope(holder, parentScopeOf(document), matches);
+        const record = this.recordFor(model, document, scope, matches, attribution);
+        if (record) yield record;
       }
     }
-    const attribution = holder.attribution ?? [];
     const clauses = attribution.flatMap(reference => this.filterFor(reference) ?? []);
     if (clauses.length === 0) return;
     for await (const document of this.query(model, { $or: clauses })) {
       if (seen.has(String(document._id))) continue;
-      if (!attribution.some(reference => this.matches(document, reference))) continue;
-      this.rememberParentKeys(model, document, false);
-      yield this.withholdOthers(document, attribution);
+      const matches = await this.matchesOn(model, document, attribution);
+      const record = this.recordFor(
+        model,
+        document,
+        viaParentExportScope(holder, NO_PARENT, matches),
+        matches,
+        attribution
+      );
+      if (record) yield record;
     }
   }
 
@@ -174,18 +186,87 @@ export class SubjectRecordExport {
     return { ...reference.where, [reference.path]: value };
   }
 
+  /**
+   * Ids of the documents each `scope: 'personal'` reference may match, selected with the account
+   * purge's own predicate so the export and the purge agree on what is the person's.
+   */
+  private async personalDocumentIds(
+    model: string,
+    references: readonly UserReference[]
+  ): Promise<Map<UserReference, Set<string>>> {
+    const personal = new Map<UserReference, Set<string>>();
+    for (const reference of references) {
+      if (reference.scope !== 'personal') continue;
+      const ids = new Set<string>();
+      personal.set(reference, ids);
+      const filter = this.filterFor(reference);
+      if (!filter) continue;
+      this.personalOrganizationIds ??= findPersonalOrganizationIds(this.subject.userId);
+      const scoped = {
+        ...filter,
+        ...personalFilter(this.subject.userId, await this.personalOrganizationIds, reference.path),
+      };
+      // The raw collection, as the purge runs it: Mongoose would cast its `''` organization id.
+      const cursor = mongoose
+        .model(model)
+        .collection.find(scoped, { projection: { _id: 1 } })
+        .maxTimeMS(QUERY_MAX_TIME_MS);
+      for await (const document of cursor) ids.add(String(document._id));
+    }
+    return personal;
+  }
+
+  /** The references that verifiably name this person on the document, whatever the query matched. */
+  private async matchesOn(
+    model: string,
+    document: LeanDocument,
+    references: readonly UserReference[],
+    personal: ReadonlyMap<UserReference, ReadonlySet<string>> = new Map()
+  ): Promise<ReferenceMatch[]> {
+    const matches: ReferenceMatch[] = [];
+    for (const reference of references) {
+      if (!this.matches(document, reference)) continue;
+      if (reference.scope === 'personal' && !(await this.isPersonal(model, document, personal.get(reference)))) {
+        continue;
+      }
+      const isSubject = this.isSubject(reference);
+      // A path that reaches an array in the stored document is matched element by element.
+      matches.push({ reference, throughArray: matchingArrayElements(document, reference.path, isSubject) !== null });
+    }
+    return matches;
+  }
+
+  private async isPersonal(model: string, document: LeanDocument, ids: ReadonlySet<string> | undefined) {
+    if (!ids?.has(String(document._id))) return false;
+    if (model !== FabFile.modelName) return true;
+    return !(await isOrganizationFile(FabFile.hydrate(document), this.subject.userId));
+  }
+
   private matches(document: LeanDocument, reference: UserReference): boolean {
     const expected = this.expectedValue(reference);
     if (!expected || !valuesAt(document, reference.path).some(value => String(value) === expected)) return false;
-    return Object.entries(reference.where ?? {}).every(([path, wanted]) => {
-      const values = valuesAt(document, path);
-      return wanted === null ? values.every(value => value == null) : values.some(value => String(value) === wanted);
-    });
+    return Object.entries(reference.where ?? {}).every(([path, wanted]) =>
+      valuesAt(document, path).some(value => String(value) === wanted)
+    );
   }
 
   private isSubject(reference: UserReference): (value: unknown) => boolean {
     const expected = this.expectedValue(reference);
     return value => expected !== null && String(value) === expected;
+  }
+
+  private recordFor(
+    model: string,
+    document: LeanDocument,
+    scope: ExportScope,
+    matches: readonly ReferenceMatch[],
+    references: readonly UserReference[]
+  ): ExportedRecord | null {
+    if (scope.scope === 'none') return null;
+    this.rememberParentScope(model, document, scope);
+    return scope.scope === 'wholeDocument'
+      ? this.withholdOthers(document, references)
+      : this.matchedPathsRecord(document, scope.paths, matches);
   }
 
   /**
@@ -220,38 +301,44 @@ export class SubjectRecordExport {
     return document;
   }
 
-  /** The document id and only what names this person: the matched fields, or their array elements. */
-  private referenceRecord(document: LeanDocument, matched: readonly UserReference[]): ExportedRecord | null {
+  /** The document id and `paths`; a path matched through an array keeps only this person's elements. */
+  private matchedPathsRecord(
+    document: LeanDocument,
+    paths: readonly string[],
+    matches: readonly ReferenceMatch[]
+  ): ExportedRecord {
     const record: ExportedRecord = { _id: document._id };
-    let found = false;
-    for (const reference of matched) {
-      const match = matchingArrayElements(document, reference.path, this.isSubject(reference));
-      if (match) {
-        if (match.elements.length === 0) continue;
-        const already = valuesAt(record, match.arrayPath);
-        setPath(record, match.arrayPath, [...already, ...match.elements.filter(element => !already.includes(element))]);
-        found = true;
-        continue;
-      }
-      for (const path of personPathsOf(reference)) {
+    for (const path of paths) {
+      const arrayMatches = matches.filter(({ reference, throughArray }) => throughArray && reference.path === path);
+      if (arrayMatches.length === 0) {
         const values = valuesAt(document, path);
         if (values.length > 0) setPath(record, path, values.length === 1 ? values[0] : values);
+        continue;
       }
-      found = true;
+      for (const { reference } of arrayMatches) {
+        const match = matchingArrayElements(document, path, this.isSubject(reference));
+        if (!match || match.elements.length === 0) continue;
+        const already = valuesAt(record, match.arrayPath);
+        setPath(record, match.arrayPath, [...already, ...match.elements.filter(element => !already.includes(element))]);
+      }
     }
-    return found ? record : null;
+    return record;
   }
 
-  private rememberParentKeys(model: string, document: LeanDocument, owns: boolean): void {
+  private rememberParentScope(model: string, document: LeanDocument, scope: ExportScope): void {
     const keyPaths = this.keyPathsByParent.get(model);
     if (!keyPaths) return;
-    const keys = this.parentKeys.get(model) ?? { owned: new Map(), anonymized: new Map() };
-    this.parentKeys.set(model, keys);
-    const bucket = owns ? keys.owned : keys.anonymized;
+    const byKeyPath: ParentScopes = this.parentScopes.get(model) ?? new Map();
+    this.parentScopes.set(model, byKeyPath);
     for (const keyPath of keyPaths) {
-      const values = bucket.get(keyPath) ?? new Map<string, unknown>();
-      for (const value of valuesAt(document, keyPath)) if (value != null) values.set(String(value), value);
-      bucket.set(keyPath, values);
+      const parents: ParentKeys = byKeyPath.get(keyPath) ?? new Map();
+      byKeyPath.set(keyPath, parents);
+      for (const value of valuesAt(document, keyPath)) {
+        if (value == null) continue;
+        const key = String(value);
+        if (parents.get(key)?.scope.scope === 'wholeDocument') continue;
+        parents.set(key, { value, scope });
+      }
     }
   }
 }

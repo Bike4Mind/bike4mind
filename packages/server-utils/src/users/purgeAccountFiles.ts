@@ -28,8 +28,11 @@ import { z } from 'zod';
 type PurgeOptions = { logger: Pick<Logger, 'info' | 'warn' | 'error'>; assertLease: () => Promise<void> };
 const BATCH_SIZE = 50;
 
-/** Preserve legacy org uploads which predate the organizationId ownership stamp. */
-async function isOrganizationFile(file: IFabFileDocument, userId: string): Promise<boolean> {
+/**
+ * Preserve legacy org uploads which predate the organizationId ownership stamp. Also decides what
+ * the data subject export treats as a personal file (`server/dataSubject/subjectRecordExport.ts`).
+ */
+export async function isOrganizationFile(file: IFabFileDocument, userId: string): Promise<boolean> {
   const lakes = file.organizationId
     ? []
     : await dataLakeService.findMemberLakesForFile(file, {

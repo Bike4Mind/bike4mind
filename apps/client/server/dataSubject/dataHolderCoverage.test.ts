@@ -224,6 +224,17 @@ describe('data holder registry', () => {
     expect(added).toEqual([]);
   });
 
+  it('sets exportScope and identifies only on retain references', () => {
+    // An `anonymize` already exports only its match, with `alsoRedact` repeating the person, and
+    // erasure clears those fields; the two export-only fields would silently mean nothing there.
+    const misplaced = classifiedModels.flatMap(name =>
+      referencesOf(DATA_HOLDER_REGISTRY[name])
+        .filter(reference => reference.action !== 'retain' && (reference.exportScope || reference.identifies))
+        .map(reference => `${name}.${reference.path}`)
+    );
+    expect(misplaced).toEqual([]);
+  });
+
   it.each(
     classifiedModels.flatMap(name =>
       referencesOf(DATA_HOLDER_REGISTRY[name]).flatMap(reference =>

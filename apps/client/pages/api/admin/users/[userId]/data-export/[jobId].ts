@@ -5,7 +5,7 @@ import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { requireStepUp } from '@server/auth/stepUp';
 import { findDataExportTarget, readAdminDataExportBuiltAt } from '@server/dataSubject/adminDataExports';
 import { adminApi } from '@server/middlewares/adminApi';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 const DOWNLOAD_LINK_SECONDS = 5 * 60;
 
