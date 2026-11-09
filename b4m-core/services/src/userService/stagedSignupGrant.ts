@@ -139,6 +139,21 @@ function ineligibleResult(
     : noGrant();
 }
 
+/**
+ * Every release after the first tranche waits while an unreviewed or abusive accountCampaign detection names
+ * the account; grading it legitimate lifts the hold for the next drip or held payment unlock. An admin
+ * release is itself a review, so it is never held. Grant sizes are untouched.
+ */
+async function isHeldForAccountCampaign(
+  userId: string,
+  expected: SignupGrant['stage'],
+  reason: SignupGrantUnlockReason | undefined,
+  db: GrantAdapters['db']
+): Promise<boolean> {
+  if (expected === 'pending_email' || reason === 'admin') return false;
+  return (await db.signupProtection?.hasOpenAccountCampaign?.(userId)) ?? false;
+}
+
 /** A refunded, disputed or fraud-warned payment closes every signup release except an admin's. */
 const isForfeitedRelease = (grant: SignupGrant, reason: SignupGrantUnlockReason | undefined) =>
   !!grant.unlockForfeited && reason !== 'admin';
@@ -185,6 +200,7 @@ async function releaseStage(
       if (expected === 'pending_email') throw new Error('Email verification required for signup grant');
       return noGrant();
     }
+    if (await isHeldForAccountCampaign(userId, expected, reason, db)) return { ...noGrant(), withheld: true };
     // Detection may notify reviewers; keep it outside the retried payout transaction.
     if (await protectSignupCredits(userId, db)) {
       if (expected === 'pending_email') await db.users.addTagsToUser(userId, [PENDING_FREE_CREDITS_TAG]);
@@ -538,7 +554,12 @@ export const unlockSignupGrant = (userId: string, reason: SignupGrantUnlockReaso
     return validator(user);
   };
   const unlock = async () => {
-    if (releaseAt || (await resolvePaymentUnlockHoldHours(adapters.db.adminSettings)) === 0)
+    // A campaign hold records a held unlock even with no settling window, so the held-release job pays it later.
+    if (
+      releaseAt ||
+      ((await resolvePaymentUnlockHoldHours(adapters.db.adminSettings)) === 0 &&
+        !(await isHeldForAccountCampaign(userId, 'signup', reason, adapters.db)))
+    )
       return releaseStage(userId, 'signup', reason, paymentValidator, adapters);
     return holdPaymentUnlock(userId, reason, paymentValidator, adapters);
   };

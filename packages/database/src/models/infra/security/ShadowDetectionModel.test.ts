@@ -121,6 +121,47 @@ describe('shadowDetectionRepository', () => {
     expect(await shadowDetectionRepository.countOpenForUser('u3')).toBe(0);
   });
 
+  it('counts open detections for a user from one detector only', async () => {
+    await shadowDetectionRepository.record(detection({ detector: 'signupNetworkBurst', userIds: ['u1'] }));
+    await shadowDetectionRepository.record(detection({ detector: 'accountCampaign', userIds: ['u1', 'u2'] }));
+    await grade(
+      await shadowDetectionRepository.record(detection({ detector: 'accountCampaign', userIds: ['u2'] })),
+      0,
+      'legitimate_human'
+    );
+
+    expect(await shadowDetectionRepository.countOpenForUser('u1', 'accountCampaign')).toBe(1);
+    expect(await shadowDetectionRepository.countOpenForUser('u2', 'accountCampaign')).toBe(1);
+    expect(await shadowDetectionRepository.countOpenForUser('u1', 'youngAccountSpend')).toBe(0);
+  });
+
+  it('lists full detections naming a user from the given detectors, newest first', async () => {
+    const older = await shadowDetectionRepository.record(
+      detection({ detector: 'accountCampaign', userIds: ['u1', 'u2'], detectedAt: new Date('2026-01-01') })
+    );
+    const newer = await shadowDetectionRepository.record(
+      detection({ detector: 'signupNetworkBurst', userIds: ['u1', 'u3'], detectedAt: new Date('2026-01-02') })
+    );
+    await shadowDetectionRepository.record(detection({ detector: 'youngAccountSpend', userIds: ['u1'] }));
+    await shadowDetectionRepository.record(detection({ detector: 'accountCampaign', userIds: ['u4'] }));
+
+    const listed = await shadowDetectionRepository.listForUser('u1', {
+      detectors: ['accountCampaign', 'signupNetworkBurst'],
+      limit: 10,
+    });
+    expect(listed).toMatchObject({ truncated: false });
+    expect(listed.data.map(item => [item.id, item.userIds])).toEqual([
+      [newer, ['u1', 'u3']],
+      [older, ['u1', 'u2']],
+    ]);
+
+    const capped = await shadowDetectionRepository.listForUser('u1', {
+      detectors: ['accountCampaign', 'signupNetworkBurst'],
+      limit: 1,
+    });
+    expect(capped).toMatchObject({ truncated: true, data: [{ id: newer }] });
+  });
+
   it('adds a verdict and bumps the revision', async () => {
     const id = await shadowDetectionRepository.record(detection());
 

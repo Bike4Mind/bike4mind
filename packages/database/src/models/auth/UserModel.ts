@@ -354,6 +354,7 @@ export type UserLinkState = {
   isBanned: boolean;
   disputePending: boolean;
   moderation: { status: UserModerationStatus } | null;
+  currentCredits: number;
 };
 
 // A held review tranche is paid only by the admin approve path, so automatic approval skips it.
@@ -858,7 +859,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     if (validIds.length === 0) return [];
     const docs = await this.model
       .find({ _id: { $in: convertIds(validIds) } })
-      .select('name email createdAt isBanned disputePending moderation.status')
+      .select('name email createdAt isBanned disputePending moderation.status currentCredits')
       .lean();
     return docs.map(d => ({
       id: String(d._id),
@@ -868,6 +869,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       isBanned: d.isBanned ?? false,
       disputePending: d.disputePending ?? false,
       moderation: d.moderation?.status ? { status: d.moderation.status } : null,
+      currentCredits: d.currentCredits ?? 0,
     }));
   }
 

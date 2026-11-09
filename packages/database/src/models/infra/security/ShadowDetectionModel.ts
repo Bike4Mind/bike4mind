@@ -404,12 +404,28 @@ class ShadowDetectionRepository {
     throw new Error(`Shadow detection ${doc._id.toString()} kept changing while removing a deleted user`);
   }
 
-  /** Detections naming this user that no reviewer has judged legitimate (unreviewed included). */
-  async countOpenForUser(userId: string): Promise<number> {
+  /**
+   * Detections naming this user that no reviewer has judged legitimate (unreviewed included),
+   * optionally from one detector only.
+   */
+  async countOpenForUser(userId: string, detector?: ShadowDetector): Promise<number> {
     return ShadowDetectionModel.countDocuments({
       userIds: userId,
+      ...(detector ? { detector } : {}),
       verdict: { $nin: ['legitimate_human', 'legitimate_automation'] },
     }).exec();
+  }
+
+  /** Full detections from these detectors naming this user, newest first, at most `limit`. */
+  async listForUser(
+    userId: string,
+    query: { detectors: readonly ShadowDetector[]; limit: number }
+  ): Promise<{ data: ShadowDetectionItem[]; truncated: boolean }> {
+    const docs = await ShadowDetectionModel.find({ userIds: userId, detector: { $in: [...query.detectors] } })
+      .sort({ detectedAt: -1, _id: -1 })
+      .limit(query.limit + 1)
+      .lean<LeanShadowDetection[]>();
+    return { data: docs.slice(0, query.limit).map(toItem), truncated: docs.length > query.limit };
   }
 
   /**

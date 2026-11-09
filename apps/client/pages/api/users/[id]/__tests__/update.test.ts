@@ -769,6 +769,20 @@ describe('PUT /api/users/:id/update - ends sessions on credential and account-st
     expect(mockPropagateAccountRisk).not.toHaveBeenCalled();
   });
 
+  it('defers linked-account propagation for a ban that is part of a bulk action, and still bans', async () => {
+    adminEdit(BEFORE, { ...BEFORE, isBanned: true });
+    const { res, promise } = run({
+      user: ADMIN,
+      userId: 'target',
+      body: { isBanned: true, statusChangeReason: 'Abuse / automated signups', deferLinkPropagation: true },
+    });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockPropagateAccountRisk).not.toHaveBeenCalled();
+    expect(res._getJSONData().ignoredFields).toBeUndefined();
+  });
+
   it('cancels the Stripe subscriptions of an account an admin bans, and audits what Stripe did', async () => {
     adminEdit(BEFORE, { ...BEFORE, isBanned: true });
     mockCancelAccountSubscriptions.mockResolvedValue({
