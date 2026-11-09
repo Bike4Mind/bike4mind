@@ -193,6 +193,41 @@ describe('shell expansions reaching a protected location', () => {
     expect(printed.split('\n').slice(0, -1)).toEqual(expected);
   });
 
+  it.each([
+    'cat $PWD{_,_}../protected/value',
+    'cat {$PWD,x}_../protected/value',
+    'cp safe/value $PWD{1..2}/value',
+    'cat $HOME{_,x}',
+    'cat $${a,b}',
+  ])('asks in every mode, reading nothing, for %s, as bash reads a `$name` on into its braces', async command => {
+    expect((await scanShell(command, project, [project]))?.unread).toBe(true);
+    await expectAsks(command);
+  });
+
+  it.each([
+    ['cat "$PWD"{_,x}', ['project_', 'projectx']],
+    ['cat ${PWD}{_,x}', ['project_', 'projectx']],
+    ['cat $PWD{/safe/value,.x}', ['project/safe/value', 'project.x']],
+  ])('records %s as bash expands it', async (command, expected) => {
+    const scan = await scanShell(command, project, [project]);
+    expect(scan?.unread).toBeUndefined();
+    expect(scan?.paths).toEqual(expect.arrayContaining(expected.map(path => join(base, path))));
+  });
+
+  it.each([
+    ['a$HOME{_,_}/x', ['a/x', 'a/x']],
+    ['a{$HOME,x}_/x', ['a/x', 'ax_/x']],
+    ['a$HOME{1..2}/x', ['a/x', 'a/x']],
+    ['"$HOME"{_,x}', [`${process.env.HOME}_`, `${process.env.HOME}x`]],
+  ])('expands %s in host bash before reading its variable', (word, expected) => {
+    const printed = execFileSync('bash', ['-c', `printf '%s\\n' ${word}`], { encoding: 'utf8' });
+    expect(printed.split('\n').slice(0, -1)).toEqual(expected);
+  });
+
+  it('expands no braces after `$$` in host bash', () => {
+    expect(execFileSync('bash', ['-c', "printf '%s\\n' $${a,b}"], { encoding: 'utf8' })).toMatch(/^\d+\{a,b\}\n$/);
+  });
+
   // The inner printf prints on fd 3, once per word bash makes of the quoted backtick.
   const counted = '"`printf \'%s\\n\' "{a,b}" >&3`"';
 

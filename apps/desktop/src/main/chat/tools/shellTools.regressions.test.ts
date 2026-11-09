@@ -652,6 +652,18 @@ describe('commands main ran unasked', () => {
   });
 
   it.each([
+    // bash expands the braces first, so each reads the empty `$PWD_` or `$HOME_` and names the path after it.
+    'cd src && cat $PWD{_,_}../../.config/Bike4Mind/value',
+    'cd src && cat {$PWD,x}_../../.config/Bike4Mind/value',
+    'rm -rf $PWD{_,_}.claude',
+    'rm -rf $HOME{_,_}.claude',
+    'npx prettier --write $PWD{_,_}.claude/settings.json',
+    'rm -rf $${a,b}',
+  ])('asks in every mode for %s, whose `$name` bash reads on into its braces', async command => {
+    expect(await judge(command)).toMatchObject(asks);
+  });
+
+  it.each([
     ['git clean -fdx $x', ''],
     ['git clean -fdx ${x:+}.claude', ''],
     ['git clean -fdx -- "$x"', ''],

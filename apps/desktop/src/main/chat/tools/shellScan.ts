@@ -447,8 +447,11 @@ function globPrefix(text: string): string | null {
   return match.index === 0 ? null : text.slice(0, match.index);
 }
 
-/** One character of a word with its quotes removed, `active` when unquoted so a glob or brace in it is live; or an expansion. */
-type WordPiece = { char: string; active: boolean } | { expansion: string };
+/**
+ * One character of a word with its quotes removed, `active` when unquoted so a glob or brace in it is live; or an
+ * expansion, `unquoted` when it stands outside double quotes.
+ */
+type WordPiece = { char: string; active: boolean } | { expansion: string; unquoted?: true };
 
 /** The index just past the `close` that balances the run starting at `from`, skipping escapes and single quotes. */
 function matchingEnd(word: string, from: number, open: string, close: string): number {
@@ -499,7 +502,7 @@ function wordPieces(word: string, unquotedAt?: number[]): WordPiece[] {
   const expansion = (at: number, quoted: boolean): number => {
     const end = expansionEnd(word, at, quoted);
     if (end === at + 1) push(word[at] as string, false);
-    else pieces.push({ expansion: word.slice(at, end) });
+    else pieces.push(quoted ? { expansion: word.slice(at, end) } : { expansion: word.slice(at, end), unquoted: true });
     return end - 1;
   };
   for (let at = 0; at < word.length; at++) {
@@ -654,14 +657,26 @@ function braceSequence(inner: readonly WordPiece[]): WordPiece[][] | null {
   return words;
 }
 
+const isUnquoted = (piece: WordPiece | undefined, expansion: RegExp): boolean =>
+  piece !== undefined && 'expansion' in piece && piece.unquoted === true && expansion.test(piece.expansion);
+
+/** An unquoted `$name` before a letter, digit or underscore, which bash reads as part of the name. */
+const extendsName = (word: readonly WordPiece[]): boolean =>
+  word.some((piece, at) => {
+    const next = word[at + 1];
+    return isUnquoted(piece, /^\$[A-Za-z_]\w*$/) && next !== undefined && 'char' in next && /\w/.test(next.char);
+  });
+
 /**
  * Bash's brace expansion, which runs before every other. Null past BRACE_LIMIT words, for a `..` in braces that make
- * no plain sequence (bash versions read those apart), or for a `,` or `..` among braces that do not balance: bash
- * pairs a `{` with the first `}` past one at its own level.
+ * no plain sequence (bash versions read those apart), for a `,` or `..` among braces that do not balance (bash
+ * pairs a `{` with the first `}` past one at its own level), or for a word whose `$name` an option extends.
  */
 function expandBraces(pieces: readonly WordPiece[]): WordPiece[][] | null {
   if (!pieces.some(piece => isActive(piece, '{'))) return [[...pieces]];
   if (pieces.length > BRACE_PIECES) return null;
+  // bash reads `$${` as `$` and a `${` it skips whole, expanding no braces inside.
+  if (pieces.some((piece, at) => isUnquoted(piece, /^\$\$$/) && isActive(pieces[at + 1], '{'))) return null;
   const dotsAt = (list: readonly WordPiece[], at: number): boolean =>
     isActive(list[at], '.') && isActive(list[at + 1], '.');
   const closes = new Map<number, number>();
@@ -707,7 +722,10 @@ function expandBraces(pieces: readonly WordPiece[]): WordPiece[][] | null {
       if (middles === null) return null;
       for (const middle of middles) {
         for (const tail of tails) {
-          words.push([...pieces.slice(0, open), ...middle, ...tail]);
+          const word = [...pieces.slice(0, open), ...middle, ...tail];
+          // `$PWD{_,x}` is `$PWD_` and `$PWDx` to bash, which expands braces before variables.
+          if (extendsName(word)) return null;
+          words.push(word);
           if (words.length > BRACE_LIMIT) return null;
         }
       }
