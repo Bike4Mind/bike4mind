@@ -317,11 +317,13 @@ describe('WebhookAuditLogsTab delivery list', () => {
     expect(parseFloat(getComputedStyle(table).minWidth) - fixedColumnsRem(table)).toBeGreaterThanOrEqual(12);
   });
 
-  it('loads the next page from below the table', () => {
+  it('loads the next page from below the table, which grows with the page instead of scrolling inside', () => {
     mocks.useWebhookAuditLogs.mockReturnValue(logsResult({ data: { pages: [{ logs: LOGS }] }, hasNextPage: true }));
     renderTab();
     const loadMore = screen.getByTestId('webhook-logs-load-more-btn');
-    expect(precedes(screen.getByTestId('webhook-logs-table-frame'), loadMore)).toBe(true);
+    const frame = screen.getByTestId('webhook-logs-table-frame');
+    expect(precedes(frame, loadMore)).toBe(true);
+    expect(['', 'none']).toContain(getComputedStyle(frame).maxHeight);
     fireEvent.click(loadMore);
     expect(mocks.fetchNextPage).toHaveBeenCalledTimes(1);
   });
@@ -331,6 +333,53 @@ describe('WebhookAuditLogsTab delivery list', () => {
     renderTab();
     expect(screen.getByTestId('webhook-logs-updating')).toBeInTheDocument();
     expect(screen.getByTestId('webhook-logs-row-d-completed')).toBeInTheDocument();
+  });
+
+  it('keeps the previous rows and totals under the updating bar while a filter loads, then swaps them', () => {
+    const NEW_LOGS = [delivery('d-new', 'failed')];
+    let filteredLoaded = false;
+    // A filtered request is in flight until filteredLoaded: the hooks hand back the previous data as
+    // placeholder, as keepPreviousData does in hooks/data/webhookAuditLogs.ts.
+    mocks.useWebhookAuditLogs.mockImplementation((filters: { status?: string }) => {
+      if (!filters.status) return logsResult({ data: { pages: [{ logs: LOGS }] }, hasNextPage: true });
+      return filteredLoaded
+        ? logsResult({ data: { pages: [{ logs: NEW_LOGS }] } })
+        : logsResult({
+            data: { pages: [{ logs: LOGS }] },
+            hasNextPage: true,
+            isFetching: true,
+            isPlaceholderData: true,
+          });
+    });
+    mocks.useWebhookAuditStats.mockImplementation((_range: unknown, filters: { status?: string }) => ({
+      data: filters.status && filteredLoaded ? { ...STATS, totalDeliveries: 7 } : STATS,
+      isLoading: false,
+      isFetching: Boolean(filters.status) && !filteredLoaded,
+      error: null,
+      isError: false,
+    }));
+    const { rerender } = renderTab();
+    expect(screen.queryByTestId('webhook-logs-updating')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('admin-filter-webhook-status'));
+    fireEvent.click(screen.getByTestId('admin-filter-webhook-status-failed'));
+    expect(screen.getByTestId('webhook-logs-updating')).toBeInTheDocument();
+    expect(screen.getByTestId('webhook-logs-row-d-completed')).toBeInTheDocument();
+    expect(screen.queryByTestId('admin-table-skeleton-row')).toBeNull();
+    expect(screen.queryByTestId('webhook-logs-stat-skeleton')).toBeNull();
+    expect(screen.getByTestId('admin-stat-strip')).toHaveTextContent('1,200');
+    expect(screen.queryByTestId('webhook-logs-load-more-btn')).toBeNull();
+
+    filteredLoaded = true;
+    rerender(
+      <CssVarsProvider theme={appTheme}>
+        <WebhookAuditLogsTab />
+      </CssVarsProvider>
+    );
+    expect(screen.queryByTestId('webhook-logs-updating')).toBeNull();
+    expect(screen.queryByTestId('webhook-logs-row-d-completed')).toBeNull();
+    expect(screen.getByTestId('webhook-logs-row-d-new')).toBeInTheDocument();
+    expect(screen.getByTestId('admin-stat-strip')).toHaveTextContent('Total deliveries7');
   });
 
   it('offers a refresh when nothing arrived and a clear when filters match nothing', () => {

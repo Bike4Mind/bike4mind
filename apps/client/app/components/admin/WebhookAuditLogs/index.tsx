@@ -330,6 +330,7 @@ const WebhookAuditLogsTab: React.FC = () => {
     refetch,
     error: logsError,
     isError: isLogsError,
+    isPlaceholderData,
   } = useWebhookAuditLogs(filters);
 
   // getDateRangePreset stamps a fresh Date() on each call, so an unmemoized range refetches forever.
@@ -520,10 +521,13 @@ const WebhookAuditLogsTab: React.FC = () => {
           testId="webhook-logs-table"
           // The server pages by cursor with no total, so the list grows through Load more below.
           pagination={false}
+          // The page scrolls instead of the frame, so Load more follows the last row.
+          maxHeight="none"
           // The fixed columns take 52.5rem, which leaves the repository 15.5rem.
           minWidth="68rem"
         />
-        {hasNextPage && (
+        {/* Hidden while the previous filter's rows stand in: they are not the list Load more would page. */}
+        {hasNextPage && !isPlaceholderData && (
           <Stack direction="row" justifyContent="center" sx={{ pt: 1 }}>
             <Button
               variant="outlined"
