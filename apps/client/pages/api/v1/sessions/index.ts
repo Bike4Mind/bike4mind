@@ -206,7 +206,10 @@ export const createSessionRouter = nextRouteForContract(createSessionContract).p
         (await import('@bike4mind/server-utils/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(req),
       // The attachment door's lake arms, so a supplied lake file passes the access check.
       resolveAttachmentLakeAccess: async () =>
-        (await import('@server/dataLakes/attachmentLakeAccess')).createAttachmentLakeAccess(req.user, req.logger)(),
+        (await import('@bike4mind/server-utils/dataLakes/attachmentLakeAccess')).createAttachmentLakeAccess(
+          req.user,
+          req.logger
+        )(),
       workspaceSessionSettings: premiumWorkspaceSessionSettings,
     },
     { origin: resolveSessionOrigin(req) }

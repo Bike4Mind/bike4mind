@@ -47,7 +47,7 @@ vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
   sendToQueue: (...args: unknown[]) => mockRefs.sendToQueue(...args),
 }));
 vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({ getSourceQueueUrl: () => 'queue-url' }));
-vi.mock('@server/billing/meterPlatformCompletion', () => ({
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
   assertOwnerCanAfford: (...args: unknown[]) => mockRefs.assertOwnerCanAfford(...args),
 }));
 

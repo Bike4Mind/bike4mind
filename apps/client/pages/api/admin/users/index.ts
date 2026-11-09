@@ -3,7 +3,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { ADMIN_USERS_LIST_MAX, AdminUsersQuerySchema } from '@bike4mind/server-utils/app/utils/adminUsersFilter';
-import { adminUsersDomainGroups, listAdminUsers } from '@server/admin/usersList/listAdminUsers';
+import { adminUsersDomainGroups, listAdminUsers } from '@bike4mind/server-utils/admin/usersList/listAdminUsers';
 import qs from 'qs';
 
 /**

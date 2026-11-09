@@ -3,8 +3,8 @@ import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { AnalyticsDaily, AnalyticsUserDay, UsageEvent, User, UserApiKey } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
-import { signupVerdictUserIds } from './realSignup';
-import { rollupDay } from './analyticsRollup';
+import { signupVerdictUserIds } from '@bike4mind/server-utils/analytics/realSignup';
+import { rollupDay } from '@bike4mind/server-utils/analytics/analyticsRollup';
 import { getAnalyticsOverview, loadLiveDay } from './analyticsOverview';
 import { UNCLASSIFIED_SOURCE } from '@bike4mind/common';
 

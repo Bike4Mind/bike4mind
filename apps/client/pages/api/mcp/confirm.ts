@@ -1,4 +1,4 @@
-import { initializeSlackPackage } from '@server/integrations/slack/slackPackageInit';
+import { initializeSlackPackage } from '@bike4mind/server-utils/integrations/slack/slackPackageInit';
 initializeSlackPackage();
 
 import { z } from 'zod';
@@ -12,7 +12,7 @@ import { invokeMcpHandler } from '@bike4mind/server-utils/utils/invokeMcpHandler
 import { claimPendingAction } from '@bike4mind/server-utils/utils/pendingActionExecutor';
 import { loadFabFileAttachment, resolvePendingActionTarget } from '@bike4mind/server-utils/utils/pendingActionTarget';
 import { assertCustomMcpEnabled } from '@bike4mind/server-utils/mcpConnections/customMcpAccess';
-import { customMcpToolHost, isCustomToolStillOffered } from '@server/mcpConnections/customMcpToolHost';
+import { customMcpToolHost, isCustomToolStillOffered } from '@bike4mind/server-utils/mcpConnections/customMcpToolHost';
 import { describeCustomCallFailure } from '@bike4mind/server-utils/mcpConnections/describeRemoteMcpError';
 import { downloadAttachmentUrl } from '@bike4mind/server-utils/utils/downloadAttachmentUrl';
 import { getSelectedRepositoriesForMcp } from '@bike4mind/server-utils/integrations/github/github-repo-helper';

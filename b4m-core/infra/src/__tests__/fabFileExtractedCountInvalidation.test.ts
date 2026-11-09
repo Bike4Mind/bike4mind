@@ -76,7 +76,7 @@ const NOT_A_REWRITE = new Set([
   'apps/client/server/utils/cacheExternalImage.ts',
   'apps/client/server/utils/generatedAudioDelivery.ts',
   'apps/client/server/utils/mailer/emailAttachments.ts',
-  'apps/client/server/generationJobs/wiring.ts',
+  'packages/server-utils/src/generationJobs/wiring.ts',
   // Posts a clip to Slack (SlackClient.uploadFile); it writes no FabFile bytes.
   'packages/server-utils/src/generationJobs/slackJobDelivery.ts',
   'apps/workers/src/queueHandlers/orgFeedbackSummary.ts',

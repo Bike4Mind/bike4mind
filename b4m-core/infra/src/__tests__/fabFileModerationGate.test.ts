@@ -143,7 +143,7 @@ const ALLOWLIST: Record<string, string> = {
   // reads) and never returns the bytes/URL to a client. ---
   'apps/workers/src/s3/objectCreated.ts':
     'the moderation scanner itself (objectCreated) — produces moderationStatus, does not consume it',
-  'apps/client/server/s3/moderationScan.ts':
+  'packages/server-utils/src/s3/moderationScan.ts':
     'the moderation scanner wiring shared by objectCreated and the on-demand scan route - downloads bytes to RUN the scan and PRODUCE moderationStatus, never returns them to a client; cannot gate on isImageServeable (circular - it is what sets that field)',
   'packages/server-utils/src/s3/knowledgeModerationDeps.ts':
     'the moderation scanner wiring - downloads bytes to RUN the scan and PRODUCE moderationStatus (its closures are handed to moderateImportedKnowledgeFiles / the rescue sweep), never returns them to a client; cannot gate on isImageServeable (circular - it is what sets that field)',
@@ -176,9 +176,9 @@ const ALLOWLIST: Record<string, string> = {
     'gated via generateSignedUrl choke (search -> get.ts) for reads; the other match is a delete-only storage.delete call',
   'apps/client/server/files/updateFileForUser.ts':
     'DI passthrough - generateSignedUrl closure consumed by fabFileService.updateFabFile (update.ts imports isImageServeable directly); shared by PUT /api/files/[id] and PATCH /api/v1/files/[id]',
-  'apps/client/server/dataLakes/index.ts':
+  'packages/server-utils/src/dataLakes/index.ts':
     'DI passthrough - search and authorized single-file reads both use the generateSignedUrl moderation gate in fabFileService/get.ts',
-  'apps/client/server/files/loadAccessibleFabFile.ts':
+  'packages/server-utils/src/files/loadAccessibleFabFile.ts':
     'DI passthrough - generateSignedUrl closure consumed by fabFileService.getFabFile and, on the data-lake fallback, fabFileService.generateSignedUrl directly; both return through the generateSignedUrl choke in fabFileService/get.ts',
   'apps/client/pages/api/data-lakes/[id]/articles.ts':
     'DI passthrough — generateSignedUrl closure consumed by fabFileService.search, gated via the generateSignedUrl choke in fabFileService/get.ts',

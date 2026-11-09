@@ -87,8 +87,8 @@ import { accessibleBy } from '@casl/mongoose';
 import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
 import { getUserEntitlements } from '@bike4mind/server-utils/entitlements/index';
 import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
-import { runDecisionTool } from '@server/decisions/runDecisionTool';
-import { executionTurnAuth } from '@server/auth/turnAuth';
+import { runDecisionTool } from '@bike4mind/server-utils/decisions/runDecisionTool';
+import { executionTurnAuth } from '@bike4mind/server-utils/auth/turnAuth';
 import { ownerWithheldUsers, withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import defineAbilitiesFor from '@bike4mind/server-utils/auth/ability';
 import { missionChatTools, MISSION_CHAT_TOOL_NAMES } from '@workers/deepAgent/missionChatTools';
@@ -132,7 +132,7 @@ import {
 } from '@bike4mind/services/llm';
 import { creditService, apiKeyService, estimateGeneratedMediaUsd, sessionService } from '@bike4mind/services';
 import { mergeRetrievalSummary, type RetrievalSummary } from '@bike4mind/services/llm';
-import { createAttachmentLakeAccess } from '@server/dataLakes/attachmentLakeAccess';
+import { createAttachmentLakeAccess } from '@bike4mind/server-utils/dataLakes/attachmentLakeAccess';
 // Lattice launch-gate. `resolveLatticeTools` owns the `enableLattice` flag
 // resolution and the Lattice tool contribution (names + `externalTools`
 // definitions); see that module's header for the Next-tracing split and the
@@ -257,7 +257,7 @@ import { enforceCheckpointDepth } from './agentExecutor.checkpointDepth';
 import { createInflightStepPersister } from './agentExecutor.inflightSteps';
 import { runIterationWithDeadlineGuard } from './agentExecutor.iterationDeadline';
 import { Config } from '@bike4mind/server-utils/utils/config';
-import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
+import { createModelAdmission } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { admitAgentDefinitions } from './agentExecutor.modelAdmission';
 import {
   executedModelFields,
@@ -286,7 +286,7 @@ import { resolveAndBuildMementosPreamble } from '@workers/utils/getFirstIteratio
 import { resolveExecutionMementoGates } from '@bike4mind/server-utils/utils/resolveExecutionMementoGates';
 import { getFirstIterationSkillsPreamble } from '@workers/utils/getFirstIterationSkillsPreamble';
 import { getMcpClientAdapter } from '@bike4mind/server-utils/utils/getMcpClientAdapter';
-import { customMcpToolHost } from '@server/mcpConnections/customMcpToolHost';
+import { customMcpToolHost } from '@bike4mind/server-utils/mcpConnections/customMcpToolHost';
 import { loadAgentMcpTools, withAutoApprovedCustomTools, type AgentMcpTools } from '@workers/utils/loadAgentMcpTools';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';

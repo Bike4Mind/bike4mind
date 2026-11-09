@@ -33,7 +33,7 @@ const DIRECT_CREDIT_ALLOWLIST: Record<string, string> = {
   'apps/client/server/admin/creditGrants/grantOrg.ts': 'admin grant',
   'apps/client/server/admin/creditGrants/grantSubscription.ts': 'admin grant',
   'apps/client/server/admin/creditGrants/topUpOrg.ts': 'admin grant',
-  'apps/client/server/admin/usersBulk/adapters.ts': 'admin bulk grant',
+  'packages/server-utils/src/admin/usersBulk/adapters.ts': 'admin bulk grant',
   'apps/client/server/subscriptions/grantIndividualAdminSubscription.ts': 'subscription allowance',
   'apps/workers/src/lib/userSubscriptions/serverUtils.ts': 'subscription allowance',
   'apps/client/pages/api/agents/[id]/transfer-credits.ts': 'agent credit transfer',

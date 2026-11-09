@@ -14,7 +14,7 @@
  *
  * Bounded like apps/client/server/security/abuseAssessment: settings gate everything (off, no model or
  * a zero budget means no provider call), and the shared platform policy
- * (apps/client/server/decisions/platformDecision.ts) meters this feature's own budget, call cap and
+ * (packages/server-utils/src/decisions/platformDecision.ts) meters this feature's own budget, call cap and
  * concurrency under its own key prefix. Runs from the triage cron
  * (apps/workers/src/cron/signupDomainHoldTriage.ts) after the disposable-list rule.
  */
@@ -51,7 +51,7 @@ import {
 import type { Logger } from '@bike4mind/observability';
 import { adminAuditService, userService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { executeDecision } from '@server/decisions/executeDecision';
+import { executeDecision } from '@bike4mind/server-utils/decisions/executeDecision';
 import {
   callablePlatformModel,
   decisionFailureCode,
@@ -61,7 +61,7 @@ import {
   withPlatformCallSlot,
   type PlatformDecisionFailureCode,
   type PlatformDecisionSkipReason,
-} from '@server/decisions/platformDecision';
+} from '@bike4mind/server-utils/decisions/platformDecision';
 import {
   buildSignupDomainHoldFeatureSummary,
   probeSite,

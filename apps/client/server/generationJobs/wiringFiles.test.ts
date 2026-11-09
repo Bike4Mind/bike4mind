@@ -31,7 +31,7 @@ vi.mock('@bike4mind/server-utils/utils/saveGeneratedAssetToFiles', () => ({
   saveGeneratedAssetToFiles: (...a: unknown[]) => mocks.saveGeneratedAssetToFiles(...a),
 }));
 
-import { loadInputImage, saveToFiles } from './wiring';
+import { loadInputImage, saveToFiles } from '@bike4mind/server-utils/generationJobs/wiring';
 
 const FILE_ID = '64b7f1c2a1b2c3d4e5f60718';
 const image = { id: FILE_ID, filePath: 'uploads/a.png', mimeType: 'image/png', moderationStatus: 'clean' };

@@ -94,7 +94,7 @@ vi.mock('@server/billing/billedWebTools', async orig => {
   };
 });
 // Billing has its own suite (billing.test.ts); here every call is free so the posture checks stay in focus.
-vi.mock('@server/billing/reserveRequestCredits', () => ({
+vi.mock('@bike4mind/server-utils/billing/reserveRequestCredits', () => ({
   reserveRequestCredits: async () => ({
     ownerId: 'user-1',
     ownerType: 'user',

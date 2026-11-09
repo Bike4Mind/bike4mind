@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
-import { getGenerationJobEngine } from '@server/generationJobs/wiring';
+import { getGenerationJobEngine } from '@bike4mind/server-utils/generationJobs/wiring';
 import { generationJobRepository } from '@bike4mind/database';
 import {
   appRootDeepLink,

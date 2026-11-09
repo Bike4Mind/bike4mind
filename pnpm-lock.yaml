@@ -2726,6 +2726,9 @@ importers:
       '@bike4mind/agents':
         specifier: workspace:*
         version: link:../../b4m-core/agents
+      '@bike4mind/auth':
+        specifier: workspace:*
+        version: link:../../b4m-core/auth
       '@bike4mind/common':
         specifier: workspace:*
         version: link:../../b4m-core/common
