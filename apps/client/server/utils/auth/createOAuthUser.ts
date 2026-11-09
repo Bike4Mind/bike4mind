@@ -78,10 +78,10 @@ export async function createUniqueOAuthUser(params: {
   signupMeta?: ISignupMeta;
   /**
    * A refer-flow invite the caller already resolved for this email. Marks the account invited and
-   * credits the inviter; with pendingFreeCredits, `grantCredits > 0` sizes the grant the way
-   * registerUser does for a referral. The caller redeems the invite once the create succeeds.
+   * credits the inviter; the invitee takes the default signup grant, as registerUser does for a
+   * referral. The caller redeems the invite once the create succeeds.
    */
-  referralInvite?: { inviteId: string; inviterId: string | null; grantCredits: number };
+  referralInvite?: { inviteId: string; inviterId: string | null };
 }) {
   const { name, baseUsername, email, oauthCredentials, pendingFreeCredits = false } = params;
   // `name` is a required field. Providers that send neither a displayName/name
@@ -91,12 +91,7 @@ export async function createUniqueOAuthUser(params: {
   // lockout this helper exists to prevent. baseUsername is guaranteed non-empty.
   const safeName = name || baseUsername;
   const { referralInvite } = params;
-  const signupGrant = pendingFreeCredits
-    ? await newSignupGrant(
-        adminSettingsRepository,
-        referralInvite && referralInvite.grantCredits > 0 ? referralInvite.grantCredits : undefined
-      )
-    : undefined;
+  const signupGrant = pendingFreeCredits ? await newSignupGrant(adminSettingsRepository) : undefined;
   const buildDoc = (username: string) => ({
     name: safeName,
     username,
