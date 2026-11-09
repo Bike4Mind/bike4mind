@@ -13,8 +13,9 @@ import { isOrgOwnerOrCurrentAdmin } from '../constants/organization';
  * - `stripeCustomerId` is dropped for EVERY caller -- no client consumer reads it;
  *   server-side billing uses the repository directly.
  * - `billingContact` is kept only for the org OWNER or a site admin.
- * - Member credit details are kept for owners, current managers and site admins.
- * - Everything else (name/description/seats/systemPrompt/userDetails/currentCredits/
+ * - Per-member credit fields in `userDetails` are kept for owners, current managers and site
+ *   admins; other viewers keep only their own row's credit fields.
+ * - Everything else (name/description/seats/systemPrompt/userDetails identity/currentCredits/
  *   model config/logo) is preserved: the single-org GET is access-gated to members
  *   and roster administrators, and the list routes scope non-admins to their own
  *   memberships or manager appointments, so those fields never cross a tenant boundary.
@@ -27,17 +28,14 @@ export const ORGANIZATION_SECRET_FIELDS = [
   'signupGrantUnlockCount',
   'signupInviteBonusCount',
 ] as const;
-export const ORGANIZATION_OWNER_ONLY_FIELDS = [
-  'billingContact',
+export const ORGANIZATION_OWNER_ONLY_FIELDS = ['billingContact'] as const;
+/** Per-member credit paths withheld from everyone but owners, current managers and site admins. */
+export const ORGANIZATION_MEMBER_CREDIT_FIELDS = [
   'userDetails.usedCredits',
   'userDetails.maxCredits',
   'userDetails.lastCreditUsedAt',
   'userDetails.periodStart',
 ] as const;
-
-const ORGANIZATION_MEMBER_CREDIT_FIELDS = ORGANIZATION_OWNER_ONLY_FIELDS.filter(field =>
-  field.startsWith('userDetails.')
-).map(field => field.slice('userDetails.'.length));
 
 export type OrgViewer = { userId?: string | null; isAdmin?: boolean | null };
 
@@ -69,8 +67,10 @@ export function toSafeOrganization(org: OrgLike, viewer: OrgViewer): Record<stri
       ));
   if (!canViewMemberCredits && Array.isArray(o.userDetails)) {
     o.userDetails = o.userDetails.map(details => {
+      // A member keeps their own row: the budget warning reads it from this response.
+      if (viewer?.userId != null && String(details.id) === viewer.userId) return details;
       const row = { ...details };
-      for (const field of ORGANIZATION_MEMBER_CREDIT_FIELDS) delete row[field];
+      for (const path of ORGANIZATION_MEMBER_CREDIT_FIELDS) delete row[path.slice('userDetails.'.length)];
       return row;
     });
   }

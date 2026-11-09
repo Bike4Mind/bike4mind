@@ -324,6 +324,21 @@ describe('dataSubscribeRequest WS handler - organization field scoping', () => {
     expect(fields.billingContact).toBe(isAdmin ? undefined : false);
   });
 
+  it.each([
+    ['a non-existent organization', orgId, null],
+    ['a malformed organization id', 'not-an-object-id', null],
+  ])('fails closed for %s', async (_case, id, found) => {
+    connectionRow = { userId: 'owner-1' };
+    (User.findById as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'owner-1', _id: 'owner-1' });
+    (Organization.findById as ReturnType<typeof vi.fn>).mockResolvedValue(found);
+    await func(
+      organizationEvent({ _id: id }) as Parameters<typeof func>[0],
+      {} as Parameters<typeof func>[1],
+      noopLogger as Parameters<typeof func>[2]
+    );
+    expect(find.mock.calls[0][1]['userDetails.usedCredits']).toBe(false);
+  });
+
   it('excludes member credit details on a broad subscription even for an owner', async () => {
     connectionRow = { userId: 'owner-1' };
     (User.findById as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'owner-1', _id: 'owner-1' });

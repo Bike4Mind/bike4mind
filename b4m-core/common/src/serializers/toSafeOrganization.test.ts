@@ -78,13 +78,13 @@ describe('toSafeOrganization', () => {
     expect(Array.isArray(safe.userDetails)).toBe(true);
   });
 
-  it('keeps member names and emails but removes credit details from every row for a plain member', () => {
+  it("removes credit details from co-member rows but keeps the viewer's own row for a plain member", () => {
     const safe = toSafeOrganization(fullOrg, { userId: 'member2', isAdmin: false })!;
     expect(safe.userDetails).toEqual([
       { id: 'owner1', email: 'owner@acme.com', name: 'Owner' },
-      { id: 'member2', email: 'member@acme.com', name: 'Member' },
+      fullOrg.userDetails[1],
     ]);
-    expect(JSON.stringify(safe)).not.toMatch(/usedCredits|maxCredits|lastCreditUsedAt|periodStart/);
+    expect(JSON.stringify(safe.userDetails![0])).not.toMatch(/usedCredits|maxCredits|lastCreditUsedAt|periodStart/);
     expect(fullOrg.userDetails[0].usedCredits).toBe(10);
   });
 

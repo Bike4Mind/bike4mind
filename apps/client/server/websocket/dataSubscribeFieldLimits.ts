@@ -1,5 +1,6 @@
 import {
   CHAT_MESSAGE_WITHHELD_FIELDS,
+  ORGANIZATION_MEMBER_CREDIT_FIELDS,
   ORGANIZATION_OWNER_ONLY_FIELDS,
   ORGANIZATION_SECRET_FIELDS,
   OWNER_ONLY_PROMPT_META_PROJECTION_PATHS,
@@ -98,10 +99,10 @@ export function resolveFieldLimits(
   if (collectionName === organizationCollectionName) {
     const excluded = [
       ...ORGANIZATION_SECRET_FIELDS,
-      ...(isPlatformAdmin ? [] : ['billingContact']),
-      ...(isPlatformAdmin || isPrivilegedOrgSubscriber
-        ? []
-        : ORGANIZATION_OWNER_ONLY_FIELDS.filter(field => field !== 'billingContact')),
+      ...(isPlatformAdmin ? [] : ORGANIZATION_OWNER_ONLY_FIELDS),
+      // A per-query projection cannot keep one row, so non-privileged subscribers lose the credit
+      // fields on every row (the budget notice reads its own row over REST).
+      ...(isPlatformAdmin || isPrivilegedOrgSubscriber ? [] : ORGANIZATION_MEMBER_CREDIT_FIELDS),
     ];
     return Object.fromEntries(excluded.map(field => [field, false]));
   }
