@@ -121,7 +121,7 @@ const TEXT_RULES: Rule[] = [
     severity: 'critical',
     message: 'Contains HTML/script markup or a javascript: URL',
     pattern:
-      /<\s*\/?\s*(?:script|iframe|object|embed|style|img|svg|link|meta|form|base)\b|javascript\s*:|\bon(?:error|load|click|mouseover)\s*=/i,
+      /<\s*\/?\s*(?:script|iframe|object|embed|style|img|svg|link|meta|form|base)(?=[\s/>])|javascript\s*:|\bon(?:error|load|click|mouseover)\s*=/i,
   },
   {
     rule: 'data_uri',
@@ -475,7 +475,7 @@ function scanMarkdownImages(text: string, allowlist: string[]): ISkillScanFindin
 
 // Claude Code tools that only read or plan. Everything else a SKILL.md declares (Bash, Write, Edit,
 // WebFetch, Task, an MCP tool, an unknown name) acts outside the conversation, so it is high-risk.
-const CLAUDE_CODE_READ_ONLY_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS', 'NotebookRead', 'TodoWrite']);
+export const CLAUDE_CODE_READ_ONLY_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS', 'NotebookRead', 'TodoWrite']);
 
 function scanTools(
   snapshot: ISkillSnapshot,
@@ -614,6 +614,8 @@ function scanText(raw: string, allowlist: string[]) {
   const image = scanMarkdownImages(text, allowlist);
   if (image) add(image);
 
+  scanShellCommands(text).forEach(add);
+
   const hosts = extractUrlHosts(text);
   const exfil = text.match(EXFIL_VERB_DATA);
   if (exfil?.index !== undefined && (hosts.length > 0 || EMAIL_PATTERN.test(text))) {
@@ -649,6 +651,87 @@ function scanText(raw: string, allowlist: string[]) {
   return { findings, text, folded };
 }
 
+const SHELL_FENCE_LANGS = new Set(['', 'sh', 'bash', 'shell', 'zsh', 'console', 'terminal', 'shellscript']);
+const ROUTINE_COMMAND =
+  /^(?:\$\s+)?(?:sudo\s+)?(?:git|gh|pnpm|npm|npx|yarn|ls|cat|head|tail|grep|rg|find|pwd|cd|mkdir|cp|mv|touch|echo|wc|diff|node)\s+\S/;
+const SHELL_COMMAND_HEAD =
+  /^(?:\$\s+)?(?:sudo\s+)?(?:git|gh|pnpm|npm|npx|yarn|ls|cat|head|tail|grep|rg|find|pwd|cd|mkdir|cp|mv|touch|echo|wc|diff|node|curl|wget|rm|printenv|env)(?:\s|$)/;
+const DANGEROUS_COMMANDS: { pattern: RegExp; label: string }[] = [
+  { pattern: /\b(?:curl|wget)\b[^|\n]*\|\s*(?:sudo\s+)?(?:ba|z|da|k)?sh\b/, label: 'pipes a download into a shell' },
+  {
+    pattern:
+      /\brm\s+(?:-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r|-r\s+-f|-f\s+-r|--recursive\s+--force|--force\s+--recursive)\b/i,
+    label: 'runs rm -rf',
+  },
+  { pattern: /\bgit\s+push\b[^\n]*?\s(?:--force(?:-with-lease)?\b|-[a-zA-Z]*f[a-zA-Z]*\b)/, label: 'force-pushes' },
+  {
+    pattern:
+      /(?:^|[\s"'=:])(?:~|\$HOME)?\/?\.(?:ssh|gnupg)(?:\/|\b)|\.aws\/credentials|(?<![\w-])\.env(?:\.(?!example|sample|template)[\w.-]+)?(?![\w-])|\.netrc\b|\.npmrc\b|\bid_(?:rsa|ed25519|ecdsa)\b/,
+    label: 'reads or writes credential files',
+  },
+  {
+    pattern: /\bprintenv\b|(?:^|[|;&]\s*)(?:\$\s+)?env\s*(?:$|[|>])|\bexport\s+-p\b/,
+    label: 'dumps environment variables',
+  },
+];
+
+/** Shell commands a skill tells the agent to run: fenced blocks, inline code and "run ..." lines. */
+function extractShellCandidates(text: string): string[] {
+  const candidates: string[] = [];
+  let fence: { lang: string } | undefined;
+  for (const line of text.split('\n')) {
+    const open = /^\s*(?:```|~~~)\s*([A-Za-z0-9_-]*)/.exec(line);
+    if (open) {
+      fence = fence ? undefined : { lang: open[1].toLowerCase() };
+      continue;
+    }
+    if (fence) {
+      if (SHELL_FENCE_LANGS.has(fence.lang)) candidates.push(line.trim());
+      continue;
+    }
+    for (const span of line.matchAll(/`([^`\n]+)`/g)) candidates.push(span[1].trim());
+    const run = /^\s*(?:[-*]\s+)?(?:run|execute)\s*:?\s+(.+)$/i.exec(line);
+    if (run && SHELL_COMMAND_HEAD.test(run[1].trim())) candidates.push(run[1].trim());
+  }
+  return candidates.filter(c => c.length > 0);
+}
+
+/**
+ * Deterministic shell-command risk: a dangerous pattern is high, any other routine command is
+ * medium. Prose such as "push the change" is never a candidate because only code spans, fenced
+ * shell blocks and "run <command>" lines are read.
+ */
+function scanShellCommands(text: string): ISkillScanFinding[] {
+  const findings: ISkillScanFinding[] = [];
+  const candidates = extractShellCandidates(text);
+  const danger = new Map<string, string>();
+  let routine: string | undefined;
+  for (const candidate of candidates) {
+    for (const { pattern, label } of DANGEROUS_COMMANDS) {
+      if (!danger.has(label) && pattern.test(candidate)) danger.set(label, candidate);
+    }
+    if (routine === undefined) {
+      const segment = candidate.split(/&&|\|\||[;|]/).find(part => ROUTINE_COMMAND.test(part.trim()));
+      if (segment) routine = segment.trim();
+    }
+  }
+  if (danger.size > 0) {
+    const [label, example] = [...danger.entries()][0];
+    findings.push(
+      finding(
+        'dangerous_shell_command',
+        'high',
+        `Tells the agent to run a command that ${label}`,
+        example.slice(0, 120)
+      )
+    );
+  }
+  if (routine !== undefined) {
+    findings.push(finding('shell_commands', 'medium', 'Tells the agent to run shell commands', routine.slice(0, 120)));
+  }
+  return findings;
+}
+
 /**
  * Lighter scan for user-written rating reviews and AI-written summaries shown to other users. Links
  * are refused unless every host is on `urlAllowlist` (reviews pass none, so any link is refused).
@@ -656,7 +739,7 @@ function scanText(raw: string, allowlist: string[]) {
 export function scanPublicText(text: string, urlAllowlist: string[] = []): ISkillScanFinding[] {
   const findings: ISkillScanFinding[] = [];
   if (HIDDEN_CHARS.test(text)) findings.push(finding('hidden_characters', 'critical', 'Contains invisible characters'));
-  if (/<\s*\/?\s*[a-z]+[^>]*>|javascript\s*:/i.test(text)) {
+  if (/<\s*\/?\s*[a-z][a-z0-9]*(?=[\s/>])[^>]*>|javascript\s*:/i.test(text)) {
     findings.push(finding('html_or_script', 'critical', 'Contains HTML or script markup'));
   }
   const allowlist = urlAllowlist.map(h => h.toLowerCase());

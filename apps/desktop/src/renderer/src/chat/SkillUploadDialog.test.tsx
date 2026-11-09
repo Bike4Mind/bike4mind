@@ -378,3 +378,25 @@ describe('legacy auto-approved review-tier outcomes', () => {
     });
   });
 });
+
+describe('held outcome names its cause', () => {
+  it('lists the high findings of a pending high-tier version', () => {
+    const outcome = versionOutcome(
+      {
+        ...published.version,
+        scanStatus: 'passed',
+        reviewStatus: 'pending',
+        riskTier: 'high',
+        findings: [
+          { severity: 'medium', message: 'Tells the agent to run shell commands' },
+          { severity: 'high', message: 'Tells the agent to run a command that pipes a download into a shell' },
+        ],
+      },
+      'organization'
+    );
+    expect(outcome.body).toBe(
+      'A reviewer must approve it first because of: Tells the agent to run a command that pipes a download into a shell.'
+    );
+    expect(outcome.body).not.toContain('declares tools');
+  });
+});
