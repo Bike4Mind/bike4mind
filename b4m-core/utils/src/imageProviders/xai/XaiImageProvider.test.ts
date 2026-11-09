@@ -88,9 +88,23 @@ describe('XaiImageProvider.generate', () => {
     await expect(pending).rejects.toThrow('lease ending');
   });
 
-  it('refuses an edit request, which the catalog never offers', async () => {
-    await expect(provider.generate(request({ mode: 'edit' }), {}, context())).rejects.toThrow(/edit mode/);
+  it('fails an edit request, which the catalog never offers, without calling xAI', async () => {
+    await expect(provider.generate(request({ mode: 'edit' }), {}, context())).resolves.toMatchObject({
+      status: 'failed',
+      retryable: false,
+      message: expect.stringMatching(/edit mode/),
+    });
     expect(imagesGenerate).not.toHaveBeenCalled();
+  });
+
+  it('turns off the SDK retries: each one would be another billed render', async () => {
+    let maxRetries: unknown;
+    imagesGenerate.mockImplementation(function (this: { _client: { maxRetries: number } }) {
+      maxRetries = this._client.maxRetries;
+      return Promise.resolve({ created: 0, data: [{ url: IMAGE_URL }] });
+    } as never);
+    await provider.generate(request(), {}, context());
+    expect(maxRetries).toBe(0);
   });
 });
 

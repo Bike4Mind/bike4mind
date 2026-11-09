@@ -25,7 +25,8 @@ export type StepResult<K extends GenerationJobKind = GenerationJobKind> =
 export type GenerationJobStepContext = { signal: AbortSignal };
 
 /**
- * `async`: submit creates a provider job that poll follows, and a cancel stops it at the provider.
+ * `async`: submit creates a provider job that poll follows. A cancel while it runs stops following it, and stops it at
+ * the provider too when the provider has a cancel (one without keeps rendering, and may still bill).
  * `sync`: submit makes the whole provider call and returns the outcome. The job reports running for the call's
  * duration, and since the provider bills from the moment it starts, a job is only cancellable before it.
  */

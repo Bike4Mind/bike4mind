@@ -20,12 +20,25 @@ function buildXAIModerationBlockedError(error: unknown): ImageModerationBlockedE
   );
 }
 
+/** OpenAI SDK client settings for the xAI endpoint; unset fields keep the SDK defaults. */
+export type XaiClientOptions = { maxRetries?: number; timeout?: number };
+
 export class XAIImageService extends AIImageService {
+  constructor(
+    apiKey: string,
+    logger: Logger,
+    imageProcessorLambdaName?: string,
+    private readonly clientOptions: XaiClientOptions = {}
+  ) {
+    super(apiKey, logger, imageProcessorLambdaName);
+  }
+
   async generate(prompt: string, options: AIImageGenerationOptions): Promise<string[]> {
     // XAI uses the same OpenAI SDK but with different base URL and endpoint
     const xai = new OpenAI({
       apiKey: this.apiKey,
       baseURL: 'https://api.x.ai/v1',
+      ...this.clientOptions,
     });
 
     Logger.log('Generating image with XAI/Grok... with these params: ', options);

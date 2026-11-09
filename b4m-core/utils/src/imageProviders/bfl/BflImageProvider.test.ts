@@ -113,6 +113,13 @@ describe('BflImageProvider.submit: request mapping', () => {
     expect(submittedBody()).toMatchObject({ image: b64('src'), mask: b64('msk') });
   });
 
+  it('sends no mask field when a Fill edit carries no mask', async () => {
+    const inputs: ImageInputs = { images: [image('edit_source', 'src')] };
+    await provider.submit(request({ model: ImageModels.FLUX_PRO_FILL, mode: 'edit' }), inputs, context());
+    expect(submittedBody()).toMatchObject({ image: b64('src') });
+    expect(submittedBody()).not.toHaveProperty('mask');
+  });
+
   it.each([ImageModels.FLUX_KONTEXT_PRO, ImageModels.FLUX_KONTEXT_MAX])(
     'edits with %s: the edit_source as input_image, with the aspect ratio',
     async model => {

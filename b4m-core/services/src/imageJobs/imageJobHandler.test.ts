@@ -444,6 +444,9 @@ describe('image job handler with an async (submit then poll) provider', () => {
     // A delivery URL carries no type: the bytes are sniffed.
     expect(t.deps.moderate).toHaveBeenCalledWith(expect.objectContaining({ mimeType: 'image/png' }));
     expect(done.payload.output).toMatchObject({ location: 'files', contentType: 'image/png' });
+    // The handle and delivery URL only drive the steps; the terminal payload drops them.
+    expect(done.payload).not.toHaveProperty('providerHandle');
+    expect(done.payload).not.toHaveProperty('providerOutput');
     expect(t.deps.saveToFiles).toHaveBeenCalledWith(
       expect.objectContaining({ generation: expect.objectContaining({ provider: 'bfl' }) })
     );
