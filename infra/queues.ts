@@ -7,7 +7,6 @@ import {
 } from './buckets';
 import {
   DEFAULT_LAMBDA_ENVIRONMENT,
-  PRODUCTION_STAGES,
   SINGLE_RECORD_BATCH,
   TEST_GENERATION_PROVIDER_ENVIRONMENT,
 } from './constants';
@@ -1510,56 +1509,9 @@ const overwatchAnalyticsQueue = new sst.aws.Queue('overwatchAnalyticsQueue', {
     retry: 3,
   },
   transform: {
-    // SSE-SQS (not SSE-KMS): alias/aws/sqs is an AWS-managed key whose key policy cannot
-    // be modified to allow cross-account access. SSE-SQS is transparent to cross-account
-    // producers — they need only sqs:SendMessage. DLQ retains KMS (intra-account only).
     queue: { sqsManagedSseEnabled: true },
   },
 });
-
-// Allow cross-account sqs:SendMessage from external producer accounts (e.g. VibesWire,
-// K2Kanji, StocksAndVibes). The account IDs are deployment-specific, so they come from
-// the OVERWATCH_ANALYTICS_CROSS_ACCOUNT_IDS env var (comma-separated 12-digit IDs) with
-// no brand fallback — when unset/all-invalid, no cross-account policy is created. Entries
-// are validated as exactly 12 digits so a typo can't mint a malformed principal ARN.
-const overwatchCrossAccountIds = (process.env.OVERWATCH_ANALYTICS_CROSS_ACCOUNT_IDS ?? '')
-  .split(',')
-  .map(id => id.trim())
-  .filter(id => /^\d{12}$/.test(id));
-// Loud guard: on a persistent stage, an empty list means this deploy will NOT create the
-// policy — and Pulumi will DESTROY any existing one, silently revoking cross-account
-// sqs:SendMessage (e.g. VibesWire). Warn at synth so a missing/renamed/mis-scoped var is
-// visible in the deploy log instead of quietly dropping access.
-if (overwatchCrossAccountIds.length === 0 && PRODUCTION_STAGES.includes($app.stage)) {
-  console.warn(
-    `⚠️  OVERWATCH_ANALYTICS_CROSS_ACCOUNT_IDS is empty on stage '${$app.stage}'. ` +
-      `overwatchAnalyticsQueuePolicy will not be created; any existing cross-account ` +
-      `sqs:SendMessage grant will be REMOVED on this deploy. Set the repo/org variable ` +
-      `if external producers should retain access.`
-  );
-}
-if (overwatchCrossAccountIds.length > 0) {
-  new aws.sqs.QueuePolicy('overwatchAnalyticsQueuePolicy', {
-    queueUrl: overwatchAnalyticsQueue.url,
-    policy: overwatchAnalyticsQueue.arn.apply(arn =>
-      JSON.stringify({
-        Version: '2012-10-17',
-        Statement: [
-          {
-            Sid: 'AllowCrossAccountSendMessage',
-            Effect: 'Allow',
-            Principal: {
-              AWS: overwatchCrossAccountIds.map(id => `arn:aws:iam::${id}:root`),
-            },
-            Action: 'sqs:SendMessage',
-            Resource: arn,
-            Condition: { Bool: { 'aws:SecureTransport': 'true' } },
-          },
-        ],
-      })
-    ),
-  });
-}
 
 const overwatchAnalyticsQueueSubscription = overwatchAnalyticsQueue.subscribe(
   {
