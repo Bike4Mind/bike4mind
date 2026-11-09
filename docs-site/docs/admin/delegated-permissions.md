@@ -56,7 +56,7 @@ Holding every explicit permission is not the same as being a full admin. A user 
 
 Delegated admins cannot perform actions on users who themselves have admin access. For example, a delegated admin with `users:moderate` can ban a regular user but cannot ban another admin. The error message is: "Only full administrators can [action] users with admin access."
 
-Routes that call `assertCanActOnAdminTarget` enforce this guard today, including deletion scheduling, tag changes, and signup grant actions. A full administrator is not subject to this restriction.
+Routes that call `assertCanActOnAdminTarget` enforce this guard today: deletion scheduling and cancellation, tag changes, internal-mark changes, and signup grant actions. A full administrator is not subject to this restriction.
 
 ## Declaring a permission on an admin route
 
