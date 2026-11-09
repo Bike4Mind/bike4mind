@@ -340,17 +340,8 @@ class AdminAuditLogRepository implements SubscriptionTimelineAuditLogRepository 
     const unreviewed = query.status === 'unreviewed';
     if (!unreviewed && !query.from) throw new Error('from is required for the all review queue');
 
-    // Unreviewed has no product date bound: an old entry nobody signed off is exactly what the queue is for.
-    // Everything before the rollout baseline is already reviewed, so that cutoff is a safe scan floor.
-    const baselineFloor = unreviewed ? await this.findBaselineFloor() : null;
     const match: FilterClause = unreviewed
-      ? {
-          severity: 'critical',
-          ...(baselineFloor ? { occurredAt: { $gte: baselineFloor } } : {}),
-          // Exact match, unlike auditReviewConflict: stored actor and target ids are lowercase ObjectId hex.
-          'actor.userId': { $ne: query.viewerUserId },
-          $nor: [{ 'target.kind': 'user', 'target.id': query.viewerUserId }],
-        }
+      ? await this.buildUnreviewedMatch(query.viewerUserId)
       : { severity: 'critical', occurredAt: { $gte: query.from } };
 
     const [facets] = await this.auditLogModel
@@ -388,6 +379,40 @@ class AdminAuditLogRepository implements SubscriptionTimelineAuditLogRepository 
       return { ...toAuditEntry(record), review: review ? toAuditReview(review) : null };
     });
     return { entries, nextCursor, total: readCount(facets?.total) };
+  }
+
+  async countUnreviewed(query: { viewerUserId: string }, options: { limit: number }): Promise<number> {
+    const match = await this.buildUnreviewedMatch(query.viewerUserId);
+    const rows = await this.auditLogModel
+      .aggregate<{ count: number }>([
+        { $match: match },
+        {
+          $lookup: {
+            from: AdminAuditReviewModel.collection.name,
+            localField: '_id',
+            foreignField: 'auditEntryId',
+            as: 'reviews',
+          },
+        },
+        { $match: { reviews: { $size: 0 } } },
+        { $limit: options.limit },
+        { $count: 'count' },
+      ])
+      .option({ maxTimeMS: LIST_QUERY_MAX_TIME_MS });
+    return readCount(rows);
+  }
+
+  private async buildUnreviewedMatch(viewerUserId: string): Promise<FilterClause> {
+    // Unreviewed has no product date bound: an old entry nobody signed off is exactly what the queue is for.
+    // Everything before the rollout baseline is already reviewed, so that cutoff is a safe scan floor.
+    const baselineFloor = await this.findBaselineFloor();
+    return {
+      severity: 'critical',
+      ...(baselineFloor ? { occurredAt: { $gte: baselineFloor } } : {}),
+      // Exact match, unlike auditReviewConflict: stored actor and target ids are lowercase ObjectId hex.
+      'actor.userId': { $ne: viewerUserId },
+      $nor: [{ 'target.kind': 'user', 'target.id': viewerUserId }],
+    };
   }
 
   /** A lower bound below the rollout baseline cutoff, with a day of slack for how long the migration ran. */
