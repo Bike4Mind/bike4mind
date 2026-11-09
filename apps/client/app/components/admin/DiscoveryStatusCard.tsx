@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Button, CircularProgress, Link, Stack, Tooltip, Typography } from '@mui/joy';
+import { Alert, Box, Button, CircularProgress, Link, Stack, Tooltip, Typography } from '@mui/joy';
 import type { IDiscoverySkippedSource } from '@bike4mind/common';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import { api } from '@client/app/contexts/ApiContext';
 import { DiscoveryRunDetailModal } from './DiscoveryRunDetailModal';
-import { SectionCard, StatusChip } from './shared';
+import { ErrorState, LoadingState, SectionCard, StatusChip } from './shared';
 
 /** Wire shapes of /api/admin/model-discovery (dates arrive as strings). */
 interface DiscoverySource {
@@ -67,6 +67,7 @@ const POLL_TIMEOUT_MS = 120_000;
 const MAX_CONSECUTIVE_POLL_FAILURES = 3;
 
 const DISABLED_HINT = 'Model discovery is turned off (enableModelDiscovery), so no run will start.';
+const LOAD_FAILED = 'Failed to load discovery status';
 
 const STATUS_TONE: Record<DiscoveryRunSummary['status'], AdminStatusTone> = {
   ok: 'good',
@@ -154,8 +155,13 @@ export const DiscoveryStatusCard: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    void load().catch(err => setError(apiErrorMessage(err, 'Failed to load discovery status')));
+    void load().catch(err => setError(apiErrorMessage(err, LOAD_FAILED)));
   }, [load]);
+
+  const retryLoad = () => {
+    setError(null);
+    void load().catch(err => setError(apiErrorMessage(err, LOAD_FAILED)));
+  };
 
   const awaitRun = useCallback(
     async (baselineStatus: DiscoveryStatus) => {
@@ -229,7 +235,14 @@ export const DiscoveryStatusCard: React.FC = () => {
       data-testid="discovery-status-card"
       action={
         <Stack direction="row" gap={1} alignItems="center">
-          {isWaiting && <CircularProgress size="sm" data-testid="discovery-status-waiting" />}
+          {isWaiting && (
+            <Stack direction="row" gap={0.75} alignItems="center" role="status" data-testid="discovery-status-waiting">
+              <CircularProgress size="sm" aria-hidden />
+              <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+                Waiting for the run
+              </Typography>
+            </Stack>
+          )}
           {/* A disabled Joy button emits no pointer events, so the tooltip needs the span. */}
           <Tooltip title={discoveryDisabled ? DISABLED_HINT : ''} variant="soft">
             <span>
@@ -252,7 +265,7 @@ export const DiscoveryStatusCard: React.FC = () => {
         <Stack direction="row" gap={0.75} alignItems="center" flexWrap="wrap" data-testid="discovery-status-chips">
           <StatusChip
             // 'report' calculates the diff and writes nothing: the safe mode.
-            tone={status?.mode === 'write' ? 'warn' : 'good'}
+            tone={status?.mode === 'write' ? 'warn' : 'neutral'}
             label={`mode: ${status?.mode ?? '...'}`}
             data-testid="discovery-status-mode-chip"
           />
@@ -273,7 +286,7 @@ export const DiscoveryStatusCard: React.FC = () => {
           </Alert>
         )}
 
-        {error && (
+        {error && status && (
           <Alert color="danger" size="sm" data-testid="discovery-status-error">
             {error}
           </Alert>
@@ -284,7 +297,15 @@ export const DiscoveryStatusCard: React.FC = () => {
           </Alert>
         )}
 
-        {lastRun ? (
+        {!status ? (
+          error ? (
+            <Box data-testid="discovery-status-error">
+              <ErrorState message={error} onRetry={retryLoad} />
+            </Box>
+          ) : (
+            <LoadingState label="Loading discovery status" testId="discovery-status-loading" />
+          )
+        ) : lastRun ? (
           <Stack gap={0.5}>
             <Stack direction="row" columnGap={0.75} rowGap={0.5} alignItems="center" flexWrap="wrap">
               <StatusChip

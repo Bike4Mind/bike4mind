@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import React from 'react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -565,6 +565,30 @@ describe('DiscoveryStatusCard load failure', () => {
     await waitFor(() => expect(screen.getByTestId('discovery-status-error')).toBeInTheDocument());
     expect(screen.getByTestId('discovery-status-error')).toHaveTextContent('500');
   });
+
+  it('says it is loading, not that discovery never ran, until the first status read returns', () => {
+    mockGet.mockReturnValue(new Promise(() => {}));
+    renderCard();
+
+    expect(screen.getByTestId('discovery-status-loading')).toHaveTextContent('Loading discovery status');
+    expect(screen.queryByTestId('discovery-status-never-run')).not.toBeInTheDocument();
+  });
+
+  it('shows a failed first read in place with Try again, which loads the status', async () => {
+    mockGet
+      .mockRejectedValueOnce({ message: 'Request failed with status code 500' })
+      .mockResolvedValue({ data: STATUS });
+    renderCard();
+
+    const error = await screen.findByTestId('discovery-status-error');
+    expect(within(error).getByTestId('admin-error-state')).toHaveTextContent('500');
+    expect(screen.queryByTestId('discovery-status-never-run')).not.toBeInTheDocument();
+
+    fireEvent.click(within(error).getByTestId('admin-error-retry-btn'));
+
+    expect(await screen.findByTestId('discovery-status-last-run')).toHaveTextContent('cron on hosted');
+    expect(screen.queryByTestId('discovery-status-error')).not.toBeInTheDocument();
+  });
 });
 
 describe('DiscoveryStatusCard layout', () => {
@@ -606,12 +630,30 @@ describe('DiscoveryStatusCard layout', () => {
     expect(screen.getByTestId('discovery-status-coverage-models.dev').closest('[data-tone]')).toBeNull();
   });
 
-  it('marks the safe report mode good and a failed run bad', async () => {
+  it('marks the safe report mode neutral and a failed run bad', async () => {
     mockGet.mockResolvedValue({ data: statusWith(runLike({ status: 'failed' })) });
     renderCard();
 
     await waitFor(() => expect(screen.getByTestId('discovery-status-mode-chip')).toHaveTextContent('report'));
-    expect(screen.getByTestId('discovery-status-mode-chip')).toHaveAttribute('data-tone', 'good');
+    expect(screen.getByTestId('discovery-status-mode-chip')).toHaveAttribute('data-tone', 'neutral');
     expect(screen.getByTestId('discovery-status-run-chip')).toHaveAttribute('data-tone', 'bad');
+  });
+
+  it('labels the wait for a dispatched run instead of showing a bare spinner', async () => {
+    vi.useFakeTimers();
+    try {
+      mockGet.mockResolvedValue({ data: STATUS });
+      mockPost.mockResolvedValue({ data: { dispatched: 'lambda' } });
+      renderCard();
+      await tick();
+      fireEvent.click(runNowButton());
+      await tick();
+
+      const waiting = screen.getByTestId('discovery-status-waiting');
+      expect(waiting).toHaveAttribute('role', 'status');
+      expect(waiting).toHaveTextContent('Waiting for the run');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
