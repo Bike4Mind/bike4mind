@@ -143,7 +143,7 @@ use to build a typed client). They are deliberately not repeated here, so the tw
 - Completions, embeddings, text refinement and tools: \`/api/ai/v1/*\`, \`/api/v1/embeddings\`, \`/api/v1/embedding-models\`,
   \`/api/v1/text-refinements\`
 - Decisions (typed questions answered with probabilities): \`/api/v1/decisions\`, \`/api/v1/decision-models\`
-- Account and models: \`/api/v1/me\`, \`/api/v1/credits\`, \`/api/v1/models\`
+- Account and models: \`/api/v1/me\`, \`/api/v1/client-config\`, \`/api/v1/credits\`, \`/api/v1/models\`
 - Skill Market as a Claude Code plugin marketplace: \`/api/v1/skills/market/claude-marketplace.json\`,
   \`/api/v1/skills/market/{id}/claude-plugin.zip\`
 - Skill Market listings: \`/api/v1/skills/market/listings\`, \`/api/v1/skills/market/listings/mine\`,

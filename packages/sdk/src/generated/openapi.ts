@@ -234,6 +234,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/client-config': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get client configuration
+     * @description Returns what a client needs to configure itself in one call: whether the deployment is live, which product features are switched on deployment-wide, upload and credit limits, the default and recommended model ids, and every model the caller can use right now (the same list `GET /api/v1/models` pages through, unpaginated here). A feature flag says whether the deployment offers the feature, not whether this caller has opted in. The caller's identity, plan and entitlements are not repeated here - read them from `GET /api/v1/me`. Responses are never cacheable. Authenticate with an API key (`b4m_live_`) carrying `me:read`, `ai:chat` or `ai:generate`, or a JWT.
+     */
+    get: operations['getClientConfig'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/push-tokens': {
     parameters: {
       query?: never;
@@ -3134,6 +3154,244 @@ export interface components {
         monthly_allowance?: number | null;
       };
       entitlements: string[];
+    };
+    /**
+     * @example {
+     *       "server": {
+     *         "status": "live",
+     *         "app_url": "https://app.example.com",
+     *         "support_email": "support@example.com"
+     *       },
+     *       "features": {
+     *         "agents": true,
+     *         "agent_mode": true,
+     *         "artifacts": true,
+     *         "data_lakes": false,
+     *         "deep_research": true,
+     *         "knowledge_base_search": true,
+     *         "mcp_server": false,
+     *         "custom_mcp_connectors": false,
+     *         "mementos": false,
+     *         "quest_master": true,
+     *         "rapid_reply": true,
+     *         "research_engine": true,
+     *         "team_plan": false,
+     *         "voice_sessions": false
+     *       },
+     *       "limits": {
+     *         "max_upload_size_mb": 30,
+     *         "credits_enforced": true,
+     *         "low_credits_threshold": 1000
+     *       },
+     *       "models": {
+     *         "default_id": "claude-sonnet-5",
+     *         "recommended_ids": [
+     *           "claude-sonnet-5"
+     *         ],
+     *         "available": [
+     *           {
+     *             "id": "claude-sonnet-5",
+     *             "name": "Claude Sonnet 5",
+     *             "type": "text",
+     *             "backend": "anthropic",
+     *             "description": null,
+     *             "context_window": 1000000,
+     *             "max_output_tokens": 128000,
+     *             "supports_streaming": true,
+     *             "supports_thinking": true,
+     *             "reasons_within_output_budget": true,
+     *             "reasoning_efforts": [
+     *               "none",
+     *               "minimal",
+     *               "low",
+     *               "medium",
+     *               "high",
+     *               "xhigh"
+     *             ],
+     *             "supports_tools": true,
+     *             "supports_tool_search": true,
+     *             "supports_tool_changes": false,
+     *             "supports_assistant_prefill": false,
+     *             "supports_vision": true,
+     *             "deprecation_date": null,
+     *             "replaced_by": null,
+     *             "image": null,
+     *             "credits_per_1m_tokens": {
+     *               "input": 4000,
+     *               "output": 20000,
+     *               "cached_input": 400
+     *             }
+     *           }
+     *         ]
+     *       }
+     *     }
+     */
+    getClientConfigResponse200: {
+      server: {
+        /** @enum {string} */
+        status: 'live' | 'maintenance' | 'offline';
+        app_url: string;
+        support_email: string | null;
+      };
+      features: {
+        agents: boolean;
+        agent_mode: boolean;
+        artifacts: boolean;
+        data_lakes: boolean;
+        deep_research: boolean;
+        knowledge_base_search: boolean;
+        mcp_server: boolean;
+        custom_mcp_connectors: boolean;
+        mementos: boolean;
+        quest_master: boolean;
+        rapid_reply: boolean;
+        research_engine: boolean;
+        team_plan: boolean;
+        voice_sessions: boolean;
+      };
+      limits: {
+        max_upload_size_mb: number;
+        credits_enforced: boolean;
+        low_credits_threshold: number;
+      };
+      models: {
+        default_id: string;
+        recommended_ids: string[];
+        available: {
+          /** @description Pass as `model` on the generation endpoints. */
+          id: string;
+          name: string;
+          /** @enum {string} */
+          type: 'text' | 'image' | 'speech-to-text' | 'video';
+          /**
+           * @description The provider that serves the model.
+           * @enum {string}
+           */
+          backend:
+            | 'openai'
+            | 'bedrock'
+            | 'anthropic'
+            | 'gemini'
+            | 'ollama'
+            | 'openai-compatible'
+            | 'bfl'
+            | 'xai'
+            | 'kimi'
+            | 'deepseek'
+            | 'voyageai'
+            | 'aws'
+            | 'local-image';
+          description: string | null;
+          /** @description Input context, in tokens. */
+          context_window: number;
+          max_output_tokens: number;
+          supports_streaming: boolean;
+          supports_thinking: boolean;
+          /** @description Whether reasoning tokens are spent inside `max_output_tokens` on every turn. When true, a small `max_tokens` can be used up by reasoning alone and return an empty reply, so leave room above the answer you expect. */
+          reasons_within_output_budget: boolean;
+          /** @description The `reasoningEffort` levels this model acts on, lowest first; empty when it ignores the option. `none` is listed only where it turns reasoning off. Each level is mapped to the nearest one the provider offers. A listed level can still be dropped on one request: some OpenAI models drop it on tool turns, and Claude models with a fixed thinking budget drop it when `max_tokens` leaves no room for the budget plus the answer. */
+          reasoning_efforts: ('none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh')[];
+          supports_tools: boolean;
+          /** @description Whether the model accepts the tool search server tool and `defer_loading: true` on tool definitions, so a large tool catalog is searched on demand instead of loaded into context up front. Describes the model: `/api/ai/v1/completions` honours it for every model with this flag set, whether its `backend` is `anthropic` or `bedrock`. */
+          supports_tool_search: boolean;
+          /** @description Whether a system-role message can carry `tool_addition` and `tool_removal` blocks, which add or remove a declared tool mid-conversation. Describes the model: `/api/ai/v1/completions` honours it only for models whose `backend` is `anthropic`; a `bedrock` model with this flag set is refused there with `errorCode: "tool_changes_unsupported"`. */
+          supports_tool_changes: boolean;
+          /** @description Whether `/api/ai/v1/completions` accepts a final assistant message for the model to continue. When false, a text prefill returns `400` with `errorCode: "assistant_prefill_unsupported"`; server-tool continuations are allowed. On Claude models that accept assistant prefill, it cannot be combined with `thinking`. */
+          supports_assistant_prefill: boolean;
+          supports_vision: boolean;
+          /** @description `YYYY-MM-DD`; null when no retirement is scheduled. */
+          deprecation_date: string | null;
+          /** @description The id of the recommended successor, when there is one. */
+          replaced_by: string | null;
+          /** @description Size rules and supported parameters. Present on image models only; null for every other type. */
+          image: {
+            sizing:
+              | {
+                  /** @enum {string} */
+                  kind: 'presets';
+                  /** @description Accepted `size` values, as `WxH`. */
+                  presets: string[];
+                  default_size: string;
+                }
+              | {
+                  /** @enum {string} */
+                  kind: 'constrained';
+                  /** @description Suggested `size` values; any `WxH` meeting `constraints` is accepted. */
+                  presets: string[];
+                  default_size: string;
+                  /** @description The `size` value that lets the provider choose. */
+                  auto_size: string;
+                  constraints: {
+                    max_edge: number;
+                    min_total_pixels: number;
+                    max_total_pixels: number;
+                    /** @description Both edges must be a multiple of this. */
+                    edge_multiple: number;
+                    /** @description Longest edge divided by shortest edge. */
+                    max_aspect_ratio: number;
+                  };
+                }
+              | {
+                  /** @enum {string} */
+                  kind: 'dimensions';
+                  presets: string[];
+                  default_size: string;
+                  min_width: number;
+                  max_width: number;
+                  min_height: number;
+                  max_height: number;
+                  /** @description `width` and `height` are rounded to the nearest multiple of this. */
+                  step: number;
+                }
+              | {
+                  /**
+                   * @description Takes an `aspect_ratio` such as `16:9`, not a `size`.
+                   * @enum {string}
+                   */
+                  kind: 'aspect_ratio';
+                }
+              | {
+                  /**
+                   * @description Sized by the input image; takes no `size`.
+                   * @enum {string}
+                   */
+                  kind: 'input_image';
+                  /** @description Whether an `aspect_ratio` override is honoured. */
+                  aspect_ratio: boolean;
+                }
+              | {
+                  /**
+                   * @description The provider takes no size at all.
+                   * @enum {string}
+                   */
+                  kind: 'fixed';
+                };
+            supports: {
+              /** @description `background: 'transparent'` yields real alpha. */
+              transparent_background: boolean;
+              seed: boolean;
+              /** @description Accepted `quality` tiers; empty when none is taken. */
+              qualities: ('standard' | 'hd' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'auto')[];
+              /** @description Most images one request may ask for via `n`. */
+              max_images: number;
+              /** @description Most `referenceImageFabFileIds` honoured on generation; 0 when the model takes none. FLUX.2 edits take one fewer, as the source uses a slot. */
+              max_reference_images: number;
+              /** @description Accepted by `POST /api/v1/image-edits`. */
+              edit: boolean;
+              requires_input_image: boolean;
+            };
+          } | null;
+          /** @description What a call is billed, in credits per 1M tokens, at the base context tier. Use it to compare models by cost. Null on non-text models and on any model with no published price; never 0 for an unpriced model. */
+          credits_per_1m_tokens: {
+            /** @description Credits per 1M input tokens. */
+            input: number;
+            /** @description Credits per 1M output tokens. */
+            output: number;
+            /** @description Credits per 1M input tokens served from the provider prompt cache. Null where cached tokens are not billed separately, so they cost the `input` rate. */
+            cached_input: number | null;
+          } | null;
+        }[];
+      };
     };
     /**
      * @example {
@@ -10402,6 +10660,98 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['getMeResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key does not hold any of the required scopes. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  getClientConfig: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The deployment status, feature switches, limits, and the models available to the caller. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['getClientConfigResponse200'];
         };
       };
       /** @description Missing or invalid credentials. */

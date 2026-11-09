@@ -185,6 +185,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/skills/market/{id}/claude-plugin.zip',
   },
+  getClientConfig: {
+    method: 'GET',
+    path: '/api/v1/client-config',
+  },
   getCreditBalance: {
     method: 'GET',
     path: '/api/v1/credits',
