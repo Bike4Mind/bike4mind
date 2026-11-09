@@ -16,7 +16,6 @@ import {
   Box,
   Button,
   Card,
-  CardContent,
   Checkbox,
   Chip,
   CircularProgress,
@@ -74,20 +73,30 @@ import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { TrackingDetailContent, STATUS_COLORS, formatDate } from './TrackingDetailDrawer';
+import {
+  AdminPageHeader,
+  EmptyState,
+  ErrorState,
+  LoadingState,
+  SegmentedControl,
+  SettingsSection,
+  StatStrip,
+  StatTile,
+} from './shared';
+import { ADMIN_REGION_GAP, adminSurface } from './shared/adminStyles';
 import type { ISreErrorTracking } from '@bike4mind/database/infra';
 
 // Config Section
 
+/** A titled group of fields. A heading, not a box: it renders inside a repository card. */
 function ConfigSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <Card variant="outlined" sx={{ mb: 2 }}>
-      <CardContent>
-        <Typography level="title-md" sx={{ mb: 2 }}>
-          {title}
-        </Typography>
-        {children}
-      </CardContent>
-    </Card>
+    <Stack component="section" gap={2}>
+      <Typography level="title-md" component="h3" sx={{ color: 'admin.ink' }}>
+        {title}
+      </Typography>
+      {children}
+    </Stack>
   );
 }
 
@@ -187,8 +196,8 @@ function RepoGateEditor({
   }) => void;
 }) {
   return (
-    <Card variant="soft" sx={{ mb: 1 }}>
-      <CardContent>
+    <Box sx={{ '& + &': { borderTop: '1px solid', borderColor: 'admin.border' } }}>
+      <Box sx={{ py: 1.5 }}>
         <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1 }}>
           <Typography level="title-sm">{label}</Typography>
           <Switch checked={gate.enabled} onChange={e => onChange({ ...gate, enabled: e.target.checked })} size="sm" />
@@ -233,8 +242,8 @@ function RepoGateEditor({
             </Stack>
           </Stack>
         )}
-      </CardContent>
-    </Card>
+      </Box>
+    </Box>
   );
 }
 
@@ -274,11 +283,10 @@ function RepoConfigCard({
   }, [repo, onChange]);
 
   return (
-    <Card variant="outlined" sx={{ mb: 2 }}>
-      <CardContent sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-        {/* Card header: repo name + delete button */}
-        <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
-          <Typography level="title-lg">
+    <SettingsSection sx={{ mb: 0 }}>
+      <Stack gap={2}>
+        <Stack direction="row" justifyContent="space-between" alignItems="center">
+          <Typography level="title-md" component="h3" sx={{ color: 'admin.ink' }}>
             {repo.owner && repo.repo ? `${repo.owner}/${repo.repo}` : `Repository #${index + 1}`}
           </Typography>
           <IconButton
@@ -299,7 +307,7 @@ function RepoConfigCard({
             <Stack direction="row" alignItems="center" justifyContent="space-between">
               <Box>
                 <Typography level="title-sm">Pipeline Enabled</Typography>
-                <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
+                <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
                   Master kill switch for the entire SRE Agent pipeline
                 </Typography>
               </Box>
@@ -313,7 +321,7 @@ function RepoConfigCard({
             <Stack direction="row" alignItems="center" justifyContent="space-between">
               <Box>
                 <Typography level="title-sm">Dry Run Mode</Typography>
-                <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
+                <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
                   Log actions without dispatching fixes
                 </Typography>
               </Box>
@@ -437,13 +445,12 @@ function RepoConfigCard({
         {/* Integrations */}
         <CollapsibleSection title="Integrations">
           <Stack spacing={2}>
-            {/* Slack sub-card */}
-            <Card variant="soft">
-              <CardContent>
+            <Box>
+              <Box>
                 <Typography level="title-sm" sx={{ mb: 0.5 }}>
                   Slack
                 </Typography>
-                <Typography level="body-xs" sx={{ color: 'text.secondary', mb: 1.5 }}>
+                <Typography level="body-xs" sx={{ color: 'admin.inkMuted', mb: 1.5 }}>
                   Used for approval messages when confidence falls in the &quot;ask&quot; band.
                 </Typography>
                 <Stack spacing={1.5}>
@@ -511,16 +518,17 @@ function RepoConfigCard({
                     </FormHelperText>
                   </FormControl>
                 </Stack>
-              </CardContent>
-            </Card>
+              </Box>
+            </Box>
 
-            {/* GitHub sub-card */}
-            <Card variant="soft">
-              <CardContent>
+            <Divider />
+
+            <Box>
+              <Box>
                 <Typography level="title-sm" sx={{ mb: 0.5 }}>
                   GitHub
                 </Typography>
-                <Typography level="body-xs" sx={{ color: 'text.secondary', mb: 1.5 }}>
+                <Typography level="body-xs" sx={{ color: 'admin.inkMuted', mb: 1.5 }}>
                   Target repository for issue intake, code analysis, and fix PRs. Uses the system default GitHub
                   connection.
                 </Typography>
@@ -560,7 +568,7 @@ function RepoConfigCard({
                     <FormHelperText>Comma-separated GitHub usernames to request as reviewers on fix PRs</FormHelperText>
                   </FormControl>
                   <Divider />
-                  <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
+                  <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
                     Workflow callback authentication — token is stored encrypted, URL is derived automatically.
                   </Typography>
                   <FormControl>
@@ -587,8 +595,8 @@ function RepoConfigCard({
                     </FormHelperText>
                   </FormControl>
                 </Stack>
-              </CardContent>
-            </Card>
+              </Box>
+            </Box>
           </Stack>
         </CollapsibleSection>
 
@@ -599,7 +607,7 @@ function RepoConfigCard({
             <Stack direction="row" alignItems="center" justifyContent="space-between">
               <Box>
                 <Typography level="title-sm">CloudWatch (Real-time)</Typography>
-                <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
+                <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
                   Ingest errors from CloudWatch log events via logToSlack handler
                 </Typography>
               </Box>
@@ -628,7 +636,7 @@ function RepoConfigCard({
             <Stack direction="row" alignItems="center" justifyContent="space-between">
               <Box>
                 <Typography level="title-sm">GitHub Issues (Webhook)</Typography>
-                <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
+                <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
                   Ingest errors from labeled GitHub issues via webhook handler
                 </Typography>
               </Box>
@@ -740,7 +748,7 @@ function RepoConfigCard({
 
         {/* Approval Gates */}
         <CollapsibleSection title="Approval Gates">
-          <Typography level="body-sm" sx={{ mb: 2, color: 'text.secondary' }}>
+          <Typography level="body-sm" sx={{ mb: 2, color: 'admin.inkMuted' }}>
             Confidence bands: auto (proceed silently), ask (Slack approval), stop (below ask threshold).
           </Typography>
           <RepoGateEditor
@@ -980,8 +988,8 @@ function RepoConfigCard({
             )}
           </Stack>
         </CollapsibleSection>
-      </CardContent>
-    </Card>
+      </Stack>
+    </SettingsSection>
   );
 }
 
@@ -1062,38 +1070,39 @@ function SreConfigPanel() {
     }
   }, [savedConfig]);
 
-  if (!config) return <Typography>Loading configuration...</Typography>;
+  if (!config) return <LoadingState label="Loading configuration" />;
 
   return (
     // pb clears the fixed "AI Chat" pill (bottom:20 + ~40px tall, zIndex 1300) the admin page
     // floats at the viewport's bottom-right, so the Save/Reset bar below isn't obscured by it.
     // See FloatingChatWindow.tsx.
-    <Box sx={{ pb: 10 }}>
-      {/* Multi-Repo Configuration */}
+    <Stack gap={ADMIN_REGION_GAP} sx={{ pb: 10 }}>
       <ConfigSection title="Repositories">
-        <Typography level="body-sm" sx={{ mb: 2, color: 'text.secondary' }}>
+        <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
           Each repository is fully self-contained with its own settings. Add a repository to enable the SRE pipeline for
           it.
         </Typography>
-        {config.repos.map((repo, idx) => (
-          <RepoConfigCard
-            key={`repo-${idx}`}
-            repo={repo}
-            index={idx}
-            onChange={updated => {
-              const repos = [...config.repos];
-              repos[idx] = updated;
-              setConfig({ ...config, repos });
-            }}
-            onRemove={() => {
-              const repos = config.repos.filter((_, i) => i !== idx);
-              setConfig({ ...config, repos });
-            }}
-            models={textModels}
-            modelsByProvider={modelsByProvider}
-            workspaces={slackWorkspaces}
-          />
-        ))}
+        <Stack gap={2}>
+          {config.repos.map((repo, idx) => (
+            <RepoConfigCard
+              key={`repo-${idx}`}
+              repo={repo}
+              index={idx}
+              onChange={updated => {
+                const repos = [...config.repos];
+                repos[idx] = updated;
+                setConfig({ ...config, repos });
+              }}
+              onRemove={() => {
+                const repos = config.repos.filter((_, i) => i !== idx);
+                setConfig({ ...config, repos });
+              }}
+              models={textModels}
+              modelsByProvider={modelsByProvider}
+              workspaces={slackWorkspaces}
+            />
+          ))}
+        </Stack>
         <Button
           variant="outlined"
           color="neutral"
@@ -1112,11 +1121,12 @@ function SreConfigPanel() {
             setConfig({ ...config, repos: [...config.repos, newRepo] });
           }}
           data-testid="sre-add-repo-btn"
+          sx={{ alignSelf: 'flex-start' }}
         >
-          Add Repository
+          Add repository
         </Button>
         {config.repos.length === 0 && (
-          <Alert size="sm" variant="soft" color="warning" sx={{ mt: 1 }}>
+          <Alert size="sm" variant="soft" color="warning">
             No repositories configured. Add at least one repository for the SRE pipeline to operate.
           </Alert>
         )}
@@ -1152,7 +1162,7 @@ function SreConfigPanel() {
           Save
         </Button>
       </Box>
-    </Box>
+    </Stack>
   );
 }
 
@@ -1367,13 +1377,13 @@ export function PipelineTrackingCard({ doc }: { doc: TrackingDocSummary }) {
   return (
     <Card variant="outlined" data-testid={`sre-tracking-card-${docId}`}>
       <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap', p: 1 }}>
-        <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+        <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
           Status:
         </Typography>
         <Chip size="sm" variant="soft" color={STATUS_COLORS[doc.status] || 'neutral'}>
           {doc.status}
         </Chip>
-        <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+        <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
           Source:
         </Typography>
         <Chip size="sm" variant="soft">
@@ -1381,7 +1391,7 @@ export function PipelineTrackingCard({ doc }: { doc: TrackingDocSummary }) {
         </Chip>
         {doc.repoSlug && (
           <>
-            <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+            <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
               Repo:
             </Typography>
             <Chip size="sm" variant="soft" color="primary">
@@ -1455,7 +1465,7 @@ export function PipelineTrackingCard({ doc }: { doc: TrackingDocSummary }) {
             {rerunMutation.isPending ? <CircularProgress size="sm" /> : <RestartAltIcon fontSize="small" />}
           </IconButton>
         )}
-        <Typography level="body-xs" sx={{ color: 'text.tertiary', whiteSpace: 'nowrap' }}>
+        <Typography level="body-xs" sx={{ color: 'admin.inkMuted', whiteSpace: 'nowrap' }}>
           Updated: {formatDate(doc.updatedAt)}
         </Typography>
       </Stack>
@@ -1602,74 +1612,72 @@ function ManualTriggerSection({ repoSlugs }: { repoSlugs: string[] }) {
   };
 
   return (
-    <Card variant="outlined" data-testid="sre-manual-trigger-section">
-      <CardContent>
-        <Typography level="title-md" sx={{ mb: 1 }}>
-          Manual Trigger
-        </Typography>
-        <form onSubmit={handleSubmit}>
-          <Stack spacing={1.5}>
-            {repoSlugs.length > 0 && (
-              <FormControl>
-                <FormLabel>Target Repository</FormLabel>
-                <Select
-                  size="sm"
-                  value={selectedRepo}
-                  onChange={(_, value) => setSelectedRepo(value ?? '')}
-                  data-testid="sre-manual-trigger-repo-select"
-                >
-                  {repoSlugs.map(slug => (
-                    <Option key={slug} value={slug}>
-                      {slug}
-                    </Option>
-                  ))}
-                </Select>
-              </FormControl>
-            )}
+    <SettingsSection data-testid="sre-manual-trigger-section" sx={{ mb: 0 }}>
+      <Typography level="title-md" component="h3" sx={{ mb: 1, color: 'admin.ink' }}>
+        Manual trigger
+      </Typography>
+      <form onSubmit={handleSubmit}>
+        <Stack spacing={1.5}>
+          {repoSlugs.length > 0 && (
             <FormControl>
-              <FormLabel>Issue Numbers</FormLabel>
-              <Stack direction="row" spacing={1}>
-                <Input
-                  placeholder="7346, 7339, 7327"
-                  value={input}
-                  onChange={e => setInput(e.target.value)}
-                  data-testid="sre-manual-trigger-input"
-                  sx={{ flex: 1 }}
-                />
-                <Button
-                  type="submit"
-                  loading={mutation.isPending}
-                  disabled={parsedNumbers.length === 0}
-                  data-testid="sre-manual-trigger-btn"
-                >
-                  Trigger
-                </Button>
-              </Stack>
-              <FormHelperText>
-                {parsedNumbers.length > 0
-                  ? `${parsedNumbers.length} issue${parsedNumbers.length > 1 ? 's' : ''} ready`
-                  : 'Comma-separated GitHub issue numbers (max 20)'}
-              </FormHelperText>
-            </FormControl>
-            {mutation.data && (
-              <Stack spacing={0.5} aria-live="polite" data-testid="sre-manual-trigger-results">
-                {mutation.data.map(r => (
-                  <Chip
-                    key={r.issueNumber}
-                    size="sm"
-                    variant="soft"
-                    color={TRIGGER_RESULT_COLORS[r.reason ?? 'dispatched'] ?? 'neutral'}
-                    data-testid={`sre-trigger-result-${r.issueNumber}`}
-                  >
-                    #{r.issueNumber}: {r.reason ?? 'dispatched'}
-                  </Chip>
+              <FormLabel>Target Repository</FormLabel>
+              <Select
+                size="sm"
+                value={selectedRepo}
+                onChange={(_, value) => setSelectedRepo(value ?? '')}
+                data-testid="sre-manual-trigger-repo-select"
+              >
+                {repoSlugs.map(slug => (
+                  <Option key={slug} value={slug}>
+                    {slug}
+                  </Option>
                 ))}
-              </Stack>
-            )}
-          </Stack>
-        </form>
-      </CardContent>
-    </Card>
+              </Select>
+            </FormControl>
+          )}
+          <FormControl>
+            <FormLabel>Issue Numbers</FormLabel>
+            <Stack direction="row" spacing={1}>
+              <Input
+                placeholder="7346, 7339, 7327"
+                value={input}
+                onChange={e => setInput(e.target.value)}
+                data-testid="sre-manual-trigger-input"
+                sx={{ flex: 1 }}
+              />
+              <Button
+                type="submit"
+                loading={mutation.isPending}
+                disabled={parsedNumbers.length === 0}
+                data-testid="sre-manual-trigger-btn"
+              >
+                Trigger
+              </Button>
+            </Stack>
+            <FormHelperText>
+              {parsedNumbers.length > 0
+                ? `${parsedNumbers.length} issue${parsedNumbers.length > 1 ? 's' : ''} ready`
+                : 'Comma-separated GitHub issue numbers (max 20)'}
+            </FormHelperText>
+          </FormControl>
+          {mutation.data && (
+            <Stack spacing={0.5} aria-live="polite" data-testid="sre-manual-trigger-results">
+              {mutation.data.map(r => (
+                <Chip
+                  key={r.issueNumber}
+                  size="sm"
+                  variant="soft"
+                  color={TRIGGER_RESULT_COLORS[r.reason ?? 'dispatched'] ?? 'neutral'}
+                  data-testid={`sre-trigger-result-${r.issueNumber}`}
+                >
+                  #{r.issueNumber}: {r.reason ?? 'dispatched'}
+                </Chip>
+              ))}
+            </Stack>
+          )}
+        </Stack>
+      </form>
+    </SettingsSection>
   );
 }
 
@@ -1889,58 +1897,58 @@ function ScanSection({ repoSlugs }: { repoSlugs: string[] }) {
 
   if (repoSlugs.length === 0) {
     return (
-      <Alert variant="soft" color="neutral" size="sm">
-        No repositories configured — add one in the Integrations section to enable scanning.
-      </Alert>
+      <EmptyState
+        title="No repositories to scan"
+        description="Add a repository on the Configuration tab to enable scanning."
+        action={null}
+      />
     );
   }
 
   return (
-    <Card variant="outlined" data-testid="sre-scan-section">
-      <CardContent>
-        <Typography level="title-md" sx={{ mb: 1 }}>
-          Scan GitHub Issues
-        </Typography>
-        <Typography level="body-sm" sx={{ mb: 1.5, color: 'text.tertiary' }}>
-          Find open issues matching the configured label filter that haven&apos;t been run through the pipeline, and
-          dispatch them now. Use this to catch issues created before the SRE system existed or missed due to webhook
-          failures. Scans up to 100 issues, dispatches up to 10 per run.
-        </Typography>
-        <Stack spacing={1.5}>
-          <FormControl>
-            <FormLabel>Repository</FormLabel>
-            <Select
-              size="sm"
-              value={selectedRepo}
-              onChange={(_, value) => setSelectedRepo(value ?? '')}
-              disabled={mutation.isPending}
-              data-testid="sre-scan-repo-select"
-            >
-              {repoSlugs.map(slug => (
-                <Option key={slug} value={slug}>
-                  {slug}
-                </Option>
-              ))}
-            </Select>
-          </FormControl>
-          <Button
+    <SettingsSection data-testid="sre-scan-section" sx={{ mb: 0 }}>
+      <Typography level="title-md" component="h3" sx={{ mb: 1, color: 'admin.ink' }}>
+        Scan GitHub issues
+      </Typography>
+      <Typography level="body-sm" sx={{ mb: 1.5, color: 'admin.inkMuted' }}>
+        Find open issues matching the configured label filter that haven&apos;t been run through the pipeline, and
+        dispatch them now. Use this to catch issues created before the SRE system existed or missed due to webhook
+        failures. Scans up to 100 issues, dispatches up to 10 per run.
+      </Typography>
+      <Stack spacing={1.5}>
+        <FormControl>
+          <FormLabel>Repository</FormLabel>
+          <Select
             size="sm"
-            loading={mutation.isPending}
-            disabled={!selectedRepo}
-            onClick={() => mutation.mutate(selectedRepo)}
-            data-testid="sre-scan-btn"
+            value={selectedRepo}
+            onChange={(_, value) => setSelectedRepo(value ?? '')}
+            disabled={mutation.isPending}
+            data-testid="sre-scan-repo-select"
           >
-            Scan GitHub Issues
-          </Button>
-          {mutation.isPending && (
-            <Typography level="body-xs" color="neutral">
-              Scanning… this may take a moment.
-            </Typography>
-          )}
-          {mutation.data && <ScanResults data={mutation.data} />}
-        </Stack>
-      </CardContent>
-    </Card>
+            {repoSlugs.map(slug => (
+              <Option key={slug} value={slug}>
+                {slug}
+              </Option>
+            ))}
+          </Select>
+        </FormControl>
+        <Button
+          size="sm"
+          loading={mutation.isPending}
+          disabled={!selectedRepo}
+          onClick={() => mutation.mutate(selectedRepo)}
+          data-testid="sre-scan-btn"
+        >
+          Scan GitHub issues
+        </Button>
+        {mutation.isPending && (
+          <Typography level="body-xs" color="neutral">
+            Scanning… this may take a moment.
+          </Typography>
+        )}
+        {mutation.data && <ScanResults data={mutation.data} />}
+      </Stack>
+    </SettingsSection>
   );
 }
 
@@ -1959,16 +1967,11 @@ function formatCompact(n: number): string {
   return `${(n / 1_000_000).toFixed(1)}M`;
 }
 
-/** Headline stat tile for a single metric. */
+const METRIC_WINDOW_OPTIONS = SRE_METRICS_WINDOWS.map(w => ({ value: w, label: METRIC_WINDOW_LABELS[w] }));
+
+/** A StatStrip tile; the test id sits on the value so it reads just the number. */
 function MetricTile({ label, value, testId }: { label: string; value: React.ReactNode; testId: string }) {
-  return (
-    <Card variant="soft" size="sm" sx={{ flex: '1 1 110px', minWidth: 110, gap: 0.25 }} data-testid={testId}>
-      <Typography level="body-xs" sx={{ color: 'text.tertiary' }} noWrap>
-        {label}
-      </Typography>
-      <Typography level="title-lg">{value}</Typography>
-    </Card>
-  );
+  return <StatTile label={label} value={<span data-testid={testId}>{value}</span>} />;
 }
 
 /**
@@ -1981,7 +1984,7 @@ function MetricTile({ label, value, testId }: { label: string; value: React.Reac
 export function SreMetricsWidget({ repoSlug }: { repoSlug: string }) {
   const [selectedWindow, setSelectedWindow] = useState<SreMetricsWindow>('7d');
 
-  const { data, isLoading, isError, error } = useQuery({
+  const { data, isLoading, isError, error, refetch, isRefetching } = useQuery({
     queryKey: ['sre-metrics', selectedWindow, repoSlug],
     queryFn: async () => {
       const params = new URLSearchParams({ window: selectedWindow });
@@ -2004,109 +2007,106 @@ export function SreMetricsWidget({ repoSlug }: { repoSlug: string }) {
   const statusEntries = useMemo(() => (data ? Object.entries(data.byStatus).sort((a, b) => b[1] - a[1]) : []), [data]);
 
   return (
-    <Card variant="outlined" data-testid="sre-metrics-widget">
-      <CardContent>
-        <Stack
-          direction="row"
-          alignItems="center"
-          justifyContent="space-between"
-          sx={{ mb: 1.5, flexWrap: 'wrap', gap: 1 }}
-        >
-          <Typography level="title-md">Activity</Typography>
-          <Stack direction="row" spacing={0.5}>
-            {SRE_METRICS_WINDOWS.map(w => (
-              <Button
-                key={w}
-                size="sm"
-                variant={selectedWindow === w ? 'solid' : 'outlined'}
-                color={selectedWindow === w ? 'primary' : 'neutral'}
-                onClick={() => setSelectedWindow(w)}
-                data-testid={`sre-metrics-window-${w}`}
-              >
-                {METRIC_WINDOW_LABELS[w]}
-              </Button>
-            ))}
-          </Stack>
-        </Stack>
+    <Stack component="section" gap={1.5} aria-labelledby="sre-metrics-heading" data-testid="sre-metrics-widget">
+      <Stack direction="row" alignItems="center" justifyContent="space-between" flexWrap="wrap" gap={1}>
+        <Typography id="sre-metrics-heading" level="title-md" component="h2" sx={{ color: 'admin.ink' }}>
+          Activity
+        </Typography>
+        <SegmentedControl
+          options={METRIC_WINDOW_OPTIONS}
+          value={selectedWindow}
+          onChange={setSelectedWindow}
+          aria-label="Time window"
+          data-testid="sre-metrics-window"
+        />
+      </Stack>
 
-        {isLoading ? (
-          <Box sx={{ display: 'flex', justifyContent: 'center', py: 3 }} data-testid="sre-metrics-loading">
-            <CircularProgress size="sm" />
-          </Box>
-        ) : isError ? (
-          <Alert variant="soft" color="danger" data-testid="sre-metrics-error">
-            Failed to load metrics{error instanceof Error ? `: ${error.message}` : ''}
-          </Alert>
-        ) : !data || !data.total ? (
-          <Alert variant="soft" color="neutral" data-testid="sre-metrics-empty">
-            No pipeline activity in the selected window.
-          </Alert>
-        ) : (
-          <Stack spacing={1.5}>
-            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-              <MetricTile label="Errors ingested" value={data.total.toLocaleString()} testId="sre-metric-total" />
-              <MetricTile label="Analyses run" value={data.analysesRun.toLocaleString()} testId="sre-metric-analyses" />
-              <MetricTile
-                label="Fixes dispatched"
-                value={data.fixesDispatched.toLocaleString()}
-                testId="sre-metric-dispatched"
-              />
-              <MetricTile
-                label="PRs created"
-                value={data.prsCreated.toLocaleString()}
-                testId="sre-metric-prs-created"
-              />
-              <MetricTile label="PRs merged" value={data.prsMerged.toLocaleString()} testId="sre-metric-prs-merged" />
-              <MetricTile
-                label="Tokens (in / out)"
-                value={
-                  <Typography level="body-md" sx={{ fontWeight: 'lg' }}>
-                    {formatCompact(data.tokens.input)} / {formatCompact(data.tokens.output)}
-                  </Typography>
-                }
-                testId="sre-metric-tokens"
-              />
-              {successRate != null && (
-                <MetricTile label="Success rate" value={`${successRate}%`} testId="sre-metric-success-rate" />
-              )}
-            </Box>
-
-            {/* Source breakdown */}
-            <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap" useFlexGap>
-              <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-                Source:
-              </Typography>
-              <Chip size="sm" variant="soft" data-testid="sre-metric-source-cloudwatch">
-                CloudWatch {data.bySource.CLOUDWATCH}
-              </Chip>
-              <Chip size="sm" variant="soft" data-testid="sre-metric-source-github">
-                GitHub {data.bySource.GITHUB_ISSUE}
-              </Chip>
-            </Stack>
-
-            {/* Status breakdown */}
-            {statusEntries.length > 0 && (
-              <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap" useFlexGap>
-                <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-                  Status:
-                </Typography>
-                {statusEntries.map(([status, count]) => (
-                  <Chip
-                    key={status}
-                    size="sm"
-                    variant="soft"
-                    color={STATUS_COLORS[status] || 'neutral'}
-                    data-testid={`sre-metric-status-${status}`}
-                  >
-                    {status} {count}
-                  </Chip>
-                ))}
-              </Stack>
+      {isLoading ? (
+        <LoadingState label="Loading activity" testId="sre-metrics-loading" />
+      ) : isError ? (
+        <Box data-testid="sre-metrics-error">
+          <ErrorState
+            message={`Failed to load metrics${error instanceof Error ? `: ${error.message}` : ''}`}
+            onRetry={() => void refetch()}
+            retrying={isRefetching}
+          />
+        </Box>
+      ) : !data || !data.total ? (
+        <Box data-testid="sre-metrics-empty">
+          <EmptyState
+            title="No pipeline activity in this window"
+            action={
+              selectedWindow !== '30d' ? (
+                <Button
+                  size="sm"
+                  variant="outlined"
+                  color="neutral"
+                  onClick={() => setSelectedWindow('30d')}
+                  data-testid="sre-metrics-show-30d-btn"
+                >
+                  Show the last 30 days
+                </Button>
+              ) : null
+            }
+          />
+        </Box>
+      ) : (
+        <>
+          <StatStrip aria-label="SRE pipeline activity">
+            <MetricTile label="Errors ingested" value={data.total.toLocaleString()} testId="sre-metric-total" />
+            <MetricTile label="Analyses run" value={data.analysesRun.toLocaleString()} testId="sre-metric-analyses" />
+            <MetricTile
+              label="Fixes dispatched"
+              value={data.fixesDispatched.toLocaleString()}
+              testId="sre-metric-dispatched"
+            />
+            <MetricTile label="PRs created" value={data.prsCreated.toLocaleString()} testId="sre-metric-prs-created" />
+            <MetricTile label="PRs merged" value={data.prsMerged.toLocaleString()} testId="sre-metric-prs-merged" />
+            <MetricTile
+              label="Tokens (in / out)"
+              value={`${formatCompact(data.tokens.input)} / ${formatCompact(data.tokens.output)}`}
+              testId="sre-metric-tokens"
+            />
+            {successRate != null && (
+              <MetricTile label="Success rate" value={`${successRate}%`} testId="sre-metric-success-rate" />
             )}
+          </StatStrip>
+
+          {/* Source breakdown */}
+          <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap" useFlexGap>
+            <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+              Source:
+            </Typography>
+            <Chip size="sm" variant="soft" data-testid="sre-metric-source-cloudwatch">
+              CloudWatch {data.bySource.CLOUDWATCH}
+            </Chip>
+            <Chip size="sm" variant="soft" data-testid="sre-metric-source-github">
+              GitHub {data.bySource.GITHUB_ISSUE}
+            </Chip>
           </Stack>
-        )}
-      </CardContent>
-    </Card>
+
+          {/* Status breakdown */}
+          {statusEntries.length > 0 && (
+            <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap" useFlexGap>
+              <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+                Status:
+              </Typography>
+              {statusEntries.map(([status, count]) => (
+                <Chip
+                  key={status}
+                  size="sm"
+                  variant="soft"
+                  color={STATUS_COLORS[status] || 'neutral'}
+                  data-testid={`sre-metric-status-${status}`}
+                >
+                  {status} {count}
+                </Chip>
+              ))}
+            </Stack>
+          )}
+        </>
+      )}
+    </Stack>
   );
 }
 
@@ -2114,7 +2114,13 @@ export function PipelineStatusPanel({ repoSlugs }: { repoSlugs: string[] }) {
   const [selectedRepo, setSelectedRepo] = useState<string>('');
   const [hideClosedIssues, setHideClosedIssues] = useHideClosedIssues();
 
-  const { data: trackingDocs, isLoading } = useQuery({
+  const {
+    data: trackingDocs,
+    isLoading,
+    isError,
+    refetch,
+    isRefetching,
+  } = useQuery({
     queryKey: ['sre-tracking-recent', selectedRepo],
     queryFn: async () => {
       const params = selectedRepo ? `?repoSlug=${encodeURIComponent(selectedRepo)}` : '';
@@ -2133,17 +2139,17 @@ export function PipelineStatusPanel({ repoSlugs }: { repoSlugs: string[] }) {
   const hiddenByFilterCount = (trackingDocs?.length ?? 0) - visibleDocs.length;
 
   return (
-    <Stack spacing={1.5}>
+    <Stack gap={ADMIN_REGION_GAP}>
       {repoSlugs.length > 0 && (
-        <FormControl>
-          <FormLabel>Filter by Repository</FormLabel>
+        <FormControl sx={{ maxWidth: 400 }}>
+          <FormLabel>Repository</FormLabel>
           <Select
             size="sm"
             value={selectedRepo}
             onChange={(_, value) => setSelectedRepo(value ?? '')}
             data-testid="sre-pipeline-repo-filter"
           >
-            <Option value="">All Repos</Option>
+            <Option value="">All repositories</Option>
             {repoSlugs.map(slug => (
               <Option key={slug} value={slug}>
                 {slug}
@@ -2153,42 +2159,70 @@ export function PipelineStatusPanel({ repoSlugs }: { repoSlugs: string[] }) {
         </FormControl>
       )}
       <SreMetricsWidget repoSlug={selectedRepo} />
-      <Checkbox
-        size="sm"
-        label="Hide tracking for closed GitHub issues"
-        checked={hideClosedIssues}
-        onChange={e => setHideClosedIssues(e.target.checked)}
-        data-testid="sre-pipeline-hide-closed-toggle"
-      />
-      <ManualTriggerSection repoSlugs={repoSlugs} />
-      <ScanSection repoSlugs={repoSlugs} />
-      {isLoading ? (
-        <Typography>Loading pipeline status...</Typography>
-      ) : !trackingDocs?.length ? (
-        <Alert variant="soft" color="neutral">
-          No tracked errors yet. The pipeline will populate this once errors are ingested.
-        </Alert>
-      ) : !visibleDocs.length ? (
-        <Alert variant="soft" color="neutral" data-testid="sre-pipeline-all-hidden">
-          {hiddenByFilterCount === 1
-            ? '1 tracked error is for a closed GitHub issue. Uncheck the filter above to see it.'
-            : `${hiddenByFilterCount} tracked errors are for closed GitHub issues. Uncheck the filter above to see them.`}
-        </Alert>
-      ) : (
-        <>
-          {hideClosedIssues && hiddenByFilterCount > 0 && (
-            <Typography level="body-xs" sx={{ color: 'text.tertiary' }} data-testid="sre-pipeline-hidden-count">
-              {hiddenByFilterCount === 1
-                ? '1 closed-issue doc hidden'
-                : `${hiddenByFilterCount} closed-issue docs hidden`}
-            </Typography>
-          )}
-          {visibleDocs.map(doc => {
-            const key = getDocId(doc) ?? doc.errorFingerprint;
-            return <PipelineTrackingCard key={key} doc={doc} />;
-          })}
-        </>
-      )}
+      <Stack gap={2}>
+        <ManualTriggerSection repoSlugs={repoSlugs} />
+        <ScanSection repoSlugs={repoSlugs} />
+      </Stack>
+      <Stack component="section" gap={2} aria-labelledby="sre-tracked-errors-heading">
+        <Stack direction="row" alignItems="center" justifyContent="space-between" flexWrap="wrap" gap={1}>
+          <Typography id="sre-tracked-errors-heading" level="title-md" component="h2" sx={{ color: 'admin.ink' }}>
+            Tracked errors
+          </Typography>
+          <Checkbox
+            size="sm"
+            label="Hide tracking for closed GitHub issues"
+            checked={hideClosedIssues}
+            onChange={e => setHideClosedIssues(e.target.checked)}
+            data-testid="sre-pipeline-hide-closed-toggle"
+          />
+        </Stack>
+        {isLoading ? (
+          <LoadingState label="Loading tracked errors" />
+        ) : isError ? (
+          <ErrorState message="Tracked errors failed to load." onRetry={() => void refetch()} retrying={isRefetching} />
+        ) : !trackingDocs?.length ? (
+          <EmptyState
+            title="No tracked errors yet"
+            description="The pipeline fills this list once errors are ingested."
+            action={null}
+          />
+        ) : !visibleDocs.length ? (
+          <Box data-testid="sre-pipeline-all-hidden">
+            <EmptyState
+              title={
+                hiddenByFilterCount === 1
+                  ? '1 tracked error is for a closed GitHub issue'
+                  : `${hiddenByFilterCount} tracked errors are for closed GitHub issues`
+              }
+              action={
+                <Button
+                  size="sm"
+                  variant="outlined"
+                  color="neutral"
+                  onClick={() => setHideClosedIssues(false)}
+                  data-testid="sre-pipeline-show-closed-btn"
+                >
+                  Show closed issues
+                </Button>
+              }
+            />
+          </Box>
+        ) : (
+          <>
+            {hideClosedIssues && hiddenByFilterCount > 0 && (
+              <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }} data-testid="sre-pipeline-hidden-count">
+                {hiddenByFilterCount === 1
+                  ? '1 closed-issue doc hidden'
+                  : `${hiddenByFilterCount} closed-issue docs hidden`}
+              </Typography>
+            )}
+            {visibleDocs.map(doc => {
+              const key = getDocId(doc) ?? doc.errorFingerprint;
+              return <PipelineTrackingCard key={key} doc={doc} />;
+            })}
+          </>
+        )}
+      </Stack>
     </Stack>
   );
 }
@@ -2301,7 +2335,7 @@ function PatternRow({ p, onPatched }: { p: PatternSummary; onPatched: () => void
         ) : (
           <Typography
             level="body-xs"
-            sx={{ cursor: 'pointer', textDecoration: 'underline dotted', color: 'text.secondary' }}
+            sx={{ cursor: 'pointer', textDecoration: 'underline dotted', color: 'admin.inkMuted' }}
             onClick={() => setEditIssue(true)}
             data-testid={`sre-pattern-issue-${p.id}`}
           >
@@ -2321,7 +2355,13 @@ function PatternRow({ p, onPatched }: { p: PatternSummary; onPatched: () => void
 function PatternLibraryPanel({ repoSlugs }: { repoSlugs: string[] }) {
   const [selectedRepo, setSelectedRepo] = useState<string>('');
   const queryClient = useQueryClient();
-  const { data: patterns, isLoading } = useQuery({
+  const {
+    data: patterns,
+    isLoading,
+    isError,
+    refetch,
+    isRefetching,
+  } = useQuery({
     queryKey: ['sre-patterns', selectedRepo],
     queryFn: async () => {
       const params = selectedRepo ? `?repoSlug=${encodeURIComponent(selectedRepo)}` : '';
@@ -2332,17 +2372,17 @@ function PatternLibraryPanel({ repoSlugs }: { repoSlugs: string[] }) {
   });
 
   return (
-    <Stack spacing={1.5}>
+    <Stack gap={ADMIN_REGION_GAP}>
       {repoSlugs.length > 0 && (
-        <FormControl>
-          <FormLabel>Filter by Repository</FormLabel>
+        <FormControl sx={{ maxWidth: 400 }}>
+          <FormLabel>Repository</FormLabel>
           <Select
             size="sm"
             value={selectedRepo}
             onChange={(_, value) => setSelectedRepo(value ?? '')}
             data-testid="sre-patterns-repo-filter"
           >
-            <Option value="">All Repos</Option>
+            <Option value="">All repositories</Option>
             {repoSlugs.map(slug => (
               <Option key={slug} value={slug}>
                 {slug}
@@ -2352,13 +2392,17 @@ function PatternLibraryPanel({ repoSlugs }: { repoSlugs: string[] }) {
         </FormControl>
       )}
       {isLoading ? (
-        <Typography>Loading patterns...</Typography>
+        <LoadingState label="Loading patterns" />
+      ) : isError ? (
+        <ErrorState message="Patterns failed to load." onRetry={() => void refetch()} retrying={isRefetching} />
       ) : !patterns?.length ? (
-        <Alert variant="soft" color="neutral">
-          No patterns yet. Patterns are created automatically when SRE fixes are successfully merged.
-        </Alert>
+        <EmptyState
+          title="No patterns yet"
+          description="A pattern is created when an SRE fix is merged."
+          action={null}
+        />
       ) : (
-        <Sheet variant="outlined" sx={{ borderRadius: 'sm', overflow: 'auto' }}>
+        <Sheet variant="outlined" sx={{ ...adminSurface, borderRadius: 'lg', overflow: 'auto' }}>
           <Table size="sm" stickyHeader>
             <thead>
               <tr>
@@ -2366,9 +2410,9 @@ function PatternLibraryPanel({ repoSlugs }: { repoSlugs: string[] }) {
                 <th style={{ width: 80 }}>Active</th>
                 <th style={{ width: 80 }}>Confidence</th>
                 <th style={{ width: 80 }}>Matches</th>
-                <th style={{ width: 100 }}>Success Rate</th>
-                <th style={{ width: 120 }}>Root Cause</th>
-                <th style={{ width: 140 }}>Last Match</th>
+                <th style={{ width: 100 }}>Success rate</th>
+                <th style={{ width: 120 }}>Root cause</th>
+                <th style={{ width: 140 }}>Last match</th>
               </tr>
             </thead>
             <tbody>
@@ -2402,32 +2446,33 @@ export default function SreAgentTab() {
     }
   }, [rawConfig]);
 
-  return (
-    <Box>
-      <Typography level="h4" sx={{ mb: 0.5 }}>
-        SRE Agent
-      </Typography>
-      <Typography level="body-sm" sx={{ mb: 2, color: 'text.secondary' }}>
-        Autonomous error detection, LLM diagnosis, and automated fix pipeline.
-      </Typography>
+  // Panels sit flush with the header; only the region gap separates them from the tab strip.
+  const panelSx = { p: 0, pt: ADMIN_REGION_GAP };
 
-      <Tabs defaultValue={0} sx={{ borderRadius: 'sm' }}>
+  return (
+    <Stack gap={ADMIN_REGION_GAP}>
+      <AdminPageHeader
+        title="SRE agent"
+        description="Autonomous error detection, LLM diagnosis and automated fix pipeline."
+      />
+
+      <Tabs defaultValue={0} sx={{ bgcolor: 'transparent' }}>
         <TabList>
-          <Tab data-testid="sre-tab-pipeline-status">Pipeline Status</Tab>
-          <Tab data-testid="sre-tab-pattern-library">Pattern Library</Tab>
+          <Tab data-testid="sre-tab-pipeline-status">Pipeline status</Tab>
+          <Tab data-testid="sre-tab-pattern-library">Pattern library</Tab>
           <Tab data-testid="sre-tab-configuration">Configuration</Tab>
         </TabList>
 
-        <TabPanel value={0} sx={{ p: 2 }}>
+        <TabPanel value={0} sx={panelSx}>
           <PipelineStatusPanel repoSlugs={repoSlugs} />
         </TabPanel>
-        <TabPanel value={1} sx={{ p: 2 }}>
+        <TabPanel value={1} sx={panelSx}>
           <PatternLibraryPanel repoSlugs={repoSlugs} />
         </TabPanel>
-        <TabPanel value={2} sx={{ p: 2 }}>
+        <TabPanel value={2} sx={panelSx}>
           <SreConfigPanel />
         </TabPanel>
       </Tabs>
-    </Box>
+    </Stack>
   );
 }
