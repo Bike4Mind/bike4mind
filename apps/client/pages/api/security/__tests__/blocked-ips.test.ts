@@ -1,39 +1,41 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
+type Handler = (req: { method?: string }, res: unknown, next?: () => void) => unknown;
+
 /**
  * Managing the IP blocklist is an administrative security control: every method is permission-gated,
  * every change is audited with a reason, and a block takes a validated target, scope and duration.
  */
 
 const mockRefs = vi.hoisted(() => ({
-  getHandler: null as null | ((req: any, res: any) => unknown),
-  postHandler: null as null | ((req: any, res: any) => unknown),
-  deleteHandler: null as null | ((req: any, res: any) => unknown),
+  getHandler: null as null | Handler,
+  postHandler: null as null | Handler,
+  deleteHandler: null as null | Handler,
 }));
 
 // The chain runs adminApi's real permission guard ahead of each handler.
 vi.mock('@server/middlewares/baseApi', () => {
-  let guard: any;
-  const gated = (method: string, fn: any) => async (req: any, res: any) => {
+  let guard: Handler;
+  const gated = (method: string, fn: Handler) => async (req: { method?: string }, res: unknown) => {
     req.method = method;
     guard(req, res, () => {});
     return fn(req, res);
   };
-  const chain: any = {
-    use: (fn: any) => {
+  const chain = {
+    use: (fn: Handler) => {
       guard = fn;
       return chain;
     },
-    get: (fn: any) => {
+    get: (fn: Handler) => {
       mockRefs.getHandler = gated('GET', fn);
       return chain;
     },
-    post: (fn: any) => {
+    post: (fn: Handler) => {
       mockRefs.postHandler = gated('POST', fn);
       return chain;
     },
-    delete: (fn: any) => {
+    delete: (fn: Handler) => {
       mockRefs.deleteHandler = gated('DELETE', fn);
       return chain;
     },
@@ -80,7 +82,7 @@ import '@pages/api/security/blocked-ips';
 
 function mocks(user: unknown, extra: Record<string, unknown> = {}) {
   const { req, res } = createMocks({ method: 'GET', ...extra });
-  (req as any).user = user;
+  Object.assign(req, { user });
   return { req, res };
 }
 

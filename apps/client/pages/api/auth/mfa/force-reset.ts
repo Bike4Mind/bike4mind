@@ -99,10 +99,12 @@ const handler = adminApi({ adminPermissions: { POST: 'users:moderate' } }).post(
       }
 
       resetBody = { success: result.success, user: redactUserSecretsForSelf(result.user) };
-    } catch (error: any) {
+    } catch (error: unknown) {
       if (auditWriteStarted || error instanceof ForbiddenError) throw error;
       console.error('Error force resetting MFA:', error);
-      return res.status(400).json({ error: error.message || 'Failed to reset MFA' });
+      return res
+        .status(400)
+        .json({ error: error instanceof Error && error.message ? error.message : 'Failed to reset MFA' });
     }
 
     // Outside the try so a response-boundary failure stays an opaque 500, not a 400.

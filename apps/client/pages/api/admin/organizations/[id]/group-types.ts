@@ -1,3 +1,4 @@
+import { ApiKeyScope } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
@@ -21,7 +22,7 @@ const bodySchema = z.object({
   allowedGroupTypes: z.array(z.string()).max(20),
 });
 
-const handler = adminApi({ adminPermissions: { PUT: 'settings:manage' } }).put(
+const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions: { PUT: 'settings:manage' } }).put(
   asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
     const organizationId = req.query.id;
     if (!organizationId) throw new BadRequestError('Organization id is required');

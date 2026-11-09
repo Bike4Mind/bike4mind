@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
+type Handler = (req: { method?: string }, res: unknown, next?: () => void) => unknown;
+
 /**
  * blocked-ips/evaluate writes to the IP blocklist (auto-blocking high-attempt
  * IPs), so like the rest of that control it needs settings:manage. Prove a
@@ -8,18 +10,18 @@ import { createMocks } from 'node-mocks-http';
  */
 
 const mockRefs = vi.hoisted(() => ({
-  postHandler: null as null | ((req: any, res: any) => unknown),
+  postHandler: null as null | Handler,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
-  let guard: any;
-  const chain: any = {
-    use: (fn: any) => {
+  let guard: Handler;
+  const chain = {
+    use: (fn: Handler) => {
       guard = fn;
       return chain;
     },
-    post: (fn: any) => {
-      mockRefs.postHandler = async (req: any, res: any) => {
+    post: (fn: Handler) => {
+      mockRefs.postHandler = async (req: { method?: string }, res: unknown) => {
         guard(req, res, () => {});
         return fn(req, res);
       };
@@ -56,7 +58,7 @@ import '@pages/api/security/blocked-ips/evaluate';
 
 function mocks(user: unknown) {
   const { req, res } = createMocks({ method: 'POST' });
-  (req as any).user = user;
+  Object.assign(req, { user });
   Object.assign(req, { logger: { warn: vi.fn(), error: vi.fn() } });
   return { req, res };
 }

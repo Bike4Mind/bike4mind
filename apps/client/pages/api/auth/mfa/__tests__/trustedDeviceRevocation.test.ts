@@ -8,10 +8,14 @@ import { createMocks } from 'node-mocks-http';
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
-    let guard: any;
-    const chain: any = {
-      use: (fn: any) => ((guard = fn), chain),
-      post: (fn: any) => async (req: any, res: any) => (guard(req, res, () => {}), fn(req, res)),
+    type Handler = (req: unknown, res: unknown, next?: () => void) => unknown;
+    let guard: Handler | undefined;
+    const chain = {
+      use: (fn: Handler) => ((guard = fn), chain),
+      post: (fn: Handler) => async (req: unknown, res: unknown) => {
+        guard?.(req, res, () => {});
+        return fn(req, res);
+      },
     };
     return chain;
   },

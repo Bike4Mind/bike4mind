@@ -1745,7 +1745,7 @@
   },
   "apps/client/pages/api/auth/mfa/__tests__/trustedDeviceRevocation.test.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 32
+      "count": 30
     }
   },
   "apps/client/pages/api/auth/mfa/__tests__/verify-setup.signIn.test.ts": {
@@ -1769,11 +1769,6 @@
     }
   },
   "apps/client/pages/api/auth/mfa/disable.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/auth/mfa/force-reset.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
     }
@@ -2570,11 +2565,6 @@
       "count": 13
     }
   },
-  "apps/client/pages/api/security/__tests__/blocked-ips.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 11
-    }
-  },
   "apps/client/pages/api/security/__tests__/user-recent.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 10
@@ -2583,11 +2573,6 @@
   "apps/client/pages/api/security/blocked-ips.ts": {
     "b4m/no-raw-entity-response": {
       "count": 3
-    }
-  },
-  "apps/client/pages/api/security/blocked-ips/__tests__/evaluate.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 5
     }
   },
   "apps/client/pages/api/sessions/[id]/__tests__/correction-pairs.test.ts": {
