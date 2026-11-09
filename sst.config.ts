@@ -74,7 +74,7 @@ export default $config({
     // SST rejects top-level imports in sst.config.ts, so load the helper at run() time.
     const { resolveDefaultLogging } = await import('@bike4mind/infra');
     // Runs ahead of every Function's handler module so raw console output is redacted like Logger output.
-    const CONSOLE_REDACTION_INJECT = `${process.cwd()}/packages/server-utils/src/bootstrap/lambdaConsoleRedaction.ts`;
+    const CONSOLE_REDACTION_INJECT = `${$cli.paths.root}/packages/server-utils/src/bootstrap/lambdaConsoleRedaction.ts`;
     $transform(sst.aws.Function, args => {
       args.nodejs = $output(args.nodejs).apply(nodejs => {
         const esbuild = { ...(nodejs?.esbuild ?? {}) };
