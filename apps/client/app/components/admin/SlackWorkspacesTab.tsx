@@ -386,8 +386,9 @@ const SlackWorkspacesTab: React.FC = () => {
   // Async export state
   const [useAsyncExport, setUseAsyncExport] = useState(false);
   const [asyncJob, setAsyncJob] = useState<AsyncExportJob | null>(null);
-  // The job whose cancel confirm is open.
+  // The job whose cancel confirm is open, and whether its cancel request is in flight.
   const [cancelJobId, setCancelJobId] = useState<string | null>(null);
+  const [cancellingExport, setCancellingExport] = useState(false);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const pollJobStatus = useCallback(async (jobId: string) => {
@@ -1018,7 +1019,9 @@ const SlackWorkspacesTab: React.FC = () => {
 
       <ActionDialog
         open={deactivateModalOpen}
-        onClose={closeDeactivateDialog}
+        onClose={() => {
+          if (!deactivating) closeDeactivateDialog();
+        }}
         title="Deactivate workspace"
         description={
           <>
@@ -1027,6 +1030,7 @@ const SlackWorkspacesTab: React.FC = () => {
           </>
         }
         reasonPresets={ADMIN_REASON_PRESETS.slackWorkspaceDeactivate}
+        // The route takes no reason yet, so the reason is collected but not sent.
         reasonAudited={false}
         confirmLabel="Deactivate workspace"
         tone="danger"
@@ -1388,15 +1392,24 @@ const SlackWorkspacesTab: React.FC = () => {
       {/* Keyed to the job it was opened for, so a later job never reopens it. */}
       <ActionDialog
         open={jobRunning && cancelJobId === asyncJob?.id}
-        onClose={() => setCancelJobId(null)}
+        onClose={() => {
+          if (!cancellingExport) setCancelJobId(null);
+        }}
         title="Cancel export"
         description="The background export stops now and its progress is lost. You can start a new export afterwards."
         reasonPresets={ADMIN_REASON_PRESETS.slackExportCancel}
+        // The route takes no reason yet, so the reason is collected but not sent.
         reasonAudited={false}
         confirmLabel="Cancel export"
         tone="danger"
+        pending={cancellingExport}
         onConfirm={async () => {
-          if (await cancelAsyncExport()) setCancelJobId(null);
+          setCancellingExport(true);
+          try {
+            if (await cancelAsyncExport()) setCancelJobId(null);
+          } finally {
+            setCancellingExport(false);
+          }
         }}
         data-testid="slack-export-cancel-job-dialog"
       />

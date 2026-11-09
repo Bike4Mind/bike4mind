@@ -92,6 +92,44 @@ const openExport = async (teamId: string) => {
 const pickReason = (dialogTestId: string) =>
   fireEvent.click(screen.getByTestId(`${dialogTestId}-reason-input-preset-0`));
 
+/** Tries Cancel, the close button and Esc on an ActionDialog; a busy dialog ignores all three. */
+const tryToClose = (dialogTestId: string) => {
+  fireEvent.click(screen.getByTestId(`${dialogTestId}-cancel-btn`));
+  fireEvent.click(screen.getByTestId(`${dialogTestId}-close-btn`));
+  fireEvent.keyDown(screen.getByTestId(dialogTestId), { key: 'Escape' });
+};
+
+/** Opens Deactivate on the Acme row, picks a reason and confirms. */
+const confirmDeactivate = async () => {
+  fireEvent.click(screen.getByTestId('slack-workspace-menu-btn-T1'));
+  fireEvent.click(await screen.findByTestId('slack-workspace-deactivate-btn-T1'));
+  await screen.findByTestId('slack-workspace-deactivate-dialog');
+  pickReason('slack-workspace-deactivate-dialog');
+  fireEvent.click(screen.getByTestId('slack-workspace-deactivate-confirm-btn'));
+};
+
+const listRequests = () => mocks.get.mock.calls.filter(([url]) => url === '/api/admin/slack-workspaces').length;
+
+/** Starts a background export of C0123 from the Acme row and waits for its progress banner. */
+const startBackgroundExport = async () => {
+  await openExport('T1');
+  await screen.findByTestId('slack-export-dialog');
+  fireEvent.click(within(screen.getByTestId('slack-export-async-toggle')).getByRole('switch'));
+  fireEvent.change(screen.getByTestId('slack-export-channel-id-input'), { target: { value: 'C0123' } });
+  fireEvent.click(screen.getByTestId('slack-export-confirm-btn'));
+  expect(await screen.findByTestId('slack-export-job-status')).toHaveTextContent('Exporting...');
+};
+
+const RUNNING_JOB = {
+  id: 'job-1',
+  channelId: 'C0123',
+  format: 'json',
+  status: 'processing',
+  progress: 40,
+  currentStep: 'Fetching messages',
+  createdAt: '2026-01-05T00:00:00.000Z',
+};
+
 beforeEach(() => {
   Object.values(mocks).forEach(mock => (typeof mock === 'function' ? mock.mockReset() : undefined));
   Object.values(mocks.toast).forEach(mock => mock.mockReset());
@@ -248,6 +286,34 @@ describe('SlackWorkspacesTab dialogs', () => {
     expect(screen.queryByTestId('slack-workspace-export-btn-ws-new')).toBeNull();
   });
 
+  it('holds the deactivate confirm open while its PATCH runs', async () => {
+    let resolvePatch: (value: unknown) => void = () => undefined;
+    mocks.patch.mockImplementation(() => new Promise(resolve => (resolvePatch = resolve)));
+    renderTab();
+    await loaded();
+    await confirmDeactivate();
+    await waitFor(() => expect(mocks.patch).toHaveBeenCalledTimes(1));
+
+    tryToClose('slack-workspace-deactivate-dialog');
+    expect(screen.getByTestId('slack-workspace-deactivate-dialog')).toBeInTheDocument();
+
+    await act(async () => resolvePatch({ data: {} }));
+    await waitFor(() => expect(screen.queryByTestId('slack-workspace-deactivate-dialog')).toBeNull());
+  });
+
+  it('keeps the deactivate confirm open with a toast and the list unchanged when the PATCH fails', async () => {
+    mocks.patch.mockRejectedValue(new Error('Server error'));
+    renderTab();
+    await loaded();
+    await confirmDeactivate();
+
+    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('Failed to deactivate workspace'));
+    expect(screen.getByTestId('slack-workspace-deactivate-dialog')).toBeInTheDocument();
+    expect(mocks.toast.success).not.toHaveBeenCalled();
+    expect(listRequests()).toBe(1);
+    expect(screen.getByTestId('slack-workspace-status-ws-ok')).toHaveTextContent('Active');
+  });
+
   it('cannot export from or deactivate a workspace that is already inactive', async () => {
     renderTab();
     await loaded();
@@ -304,6 +370,30 @@ describe('SlackWorkspacesTab dialogs', () => {
     fireEvent.click(confirm);
 
     await waitFor(() => expect(mocks.delete).toHaveBeenCalledWith('/api/slack/export/status/job-1'));
+    await waitFor(() => expect(screen.queryByTestId('slack-export-cancel-job-dialog')).toBeNull());
+    expect(screen.getByTestId('slack-export-job-status')).toHaveTextContent('Export cancelled');
+    unmount();
+  });
+
+  it('holds the cancel-export confirm open while its DELETE runs', async () => {
+    routeGets(WORKSPACES, RUNNING_JOB);
+    mocks.post.mockResolvedValue({ data: { jobId: 'job-1' } });
+    let resolveDelete: (value: unknown) => void = () => undefined;
+    mocks.delete.mockImplementation(() => new Promise(resolve => (resolveDelete = resolve)));
+    const { unmount } = renderTab();
+    await loaded();
+    await startBackgroundExport();
+
+    fireEvent.click(screen.getByTestId('slack-export-cancel-async-btn'));
+    await screen.findByTestId('slack-export-cancel-job-dialog');
+    pickReason('slack-export-cancel-job-dialog');
+    fireEvent.click(screen.getByTestId('slack-export-cancel-job-dialog-confirm-btn'));
+    await waitFor(() => expect(mocks.delete).toHaveBeenCalledTimes(1));
+
+    tryToClose('slack-export-cancel-job-dialog');
+    expect(screen.getByTestId('slack-export-cancel-job-dialog')).toBeInTheDocument();
+
+    await act(async () => resolveDelete({ data: {} }));
     await waitFor(() => expect(screen.queryByTestId('slack-export-cancel-job-dialog')).toBeNull());
     expect(screen.getByTestId('slack-export-job-status')).toHaveTextContent('Export cancelled');
     unmount();

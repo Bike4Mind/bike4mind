@@ -67,6 +67,22 @@ const header = () => screen.getByTestId('admin-page-header');
 const pickReason = (dialogTestId: string) =>
   fireEvent.click(screen.getByTestId(`${dialogTestId}-reason-input-preset-0`));
 
+/** Tries Cancel, the close button and Esc on an ActionDialog; a busy dialog ignores all three. */
+const tryToClose = (dialogTestId: string) => {
+  fireEvent.click(screen.getByTestId(`${dialogTestId}-cancel-btn`));
+  fireEvent.click(screen.getByTestId(`${dialogTestId}-close-btn`));
+  fireEvent.keyDown(screen.getByTestId(dialogTestId), { key: 'Escape' });
+};
+
+/** Opens Disconnect from the header, picks a reason and confirms. */
+const confirmDisconnect = async () => {
+  await screen.findByTestId('github-connection-details');
+  fireEvent.click(within(header()).getByTestId('github-disconnect-btn'));
+  await screen.findByTestId('github-disconnect-dialog');
+  pickReason('github-disconnect-dialog');
+  fireEvent.click(screen.getByTestId('github-disconnect-confirm-btn'));
+};
+
 beforeEach(() => {
   [mocks.get, mocks.post, mocks.put, mocks.delete, mocks.toast.success, mocks.toast.error].forEach(mock =>
     mock.mockReset()
@@ -237,6 +253,33 @@ describe('GitHubConnectionTab destructive dialogs', () => {
     expect(await screen.findByTestId('admin-empty-state')).toHaveTextContent('No GitHub connection');
   });
 
+  it('holds the Disconnect confirm open while its DELETE runs', async () => {
+    let resolveDelete: (value: unknown) => void = () => undefined;
+    mocks.delete.mockImplementation(() => new Promise(resolve => (resolveDelete = resolve)));
+    renderTab();
+    await confirmDisconnect();
+    await waitFor(() => expect(mocks.delete).toHaveBeenCalledTimes(1));
+
+    tryToClose('github-disconnect-dialog');
+    expect(screen.getByTestId('github-disconnect-dialog')).toBeInTheDocument();
+
+    await act(async () => resolveDelete({ data: {} }));
+    expect(await screen.findByTestId('admin-empty-state')).toHaveTextContent('No GitHub connection');
+    expect(screen.queryByTestId('github-disconnect-dialog')).toBeNull();
+  });
+
+  it('keeps the Disconnect confirm open with a toast and the connection on screen when the DELETE fails', async () => {
+    mocks.delete.mockRejectedValue(new Error('Server error'));
+    renderTab();
+    await confirmDisconnect();
+
+    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('Server error'));
+    expect(screen.getByTestId('github-disconnect-dialog')).toBeInTheDocument();
+    expect(mocks.toast.success).not.toHaveBeenCalled();
+    expect(screen.getByTestId('github-connection-details')).toBeInTheDocument();
+    expect(within(header()).getByTestId('github-disconnect-btn')).toBeInTheDocument();
+  });
+
   it('confirms a key rotation in a danger ActionDialog that waits for the new key, with the same payload', async () => {
     mocks.post.mockResolvedValue({ data: {} });
     renderTab();
@@ -287,5 +330,33 @@ describe('GitHubConnectionTab destructive dialogs', () => {
     await waitFor(() =>
       expect(mocks.put).toHaveBeenCalledWith('/api/admin/github/connection', { allowedRepositories: [] })
     );
+  });
+
+  it('holds the empty-whitelist confirm open while its PUT runs', async () => {
+    let resolvePut: (value: unknown) => void = () => undefined;
+    mocks.put.mockImplementation(() => new Promise(resolve => (resolvePut = resolve)));
+    mocks.useAdminGitHubRepositories.mockImplementation((enabled: boolean) => ({
+      data: enabled
+        ? { repositories: [{ id: 1, full_name: 'acme/widgets', private: true }], hasMore: false }
+        : undefined,
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    }));
+    renderTab();
+    await screen.findByTestId('github-connection-details');
+    fireEvent.click(screen.getByTestId('github-edit-repos-btn'));
+    fireEvent.click(within(await screen.findByTestId('github-repo-checkbox-1')).getByRole('checkbox'));
+    fireEvent.click(screen.getByTestId('github-save-repos-btn'));
+    await screen.findByTestId('github-empty-repos-dialog');
+    pickReason('github-empty-repos-dialog');
+    fireEvent.click(screen.getByTestId('github-empty-repos-dialog-confirm-btn'));
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(1));
+
+    tryToClose('github-empty-repos-dialog');
+    expect(screen.getByTestId('github-empty-repos-dialog')).toBeInTheDocument();
+
+    await act(async () => resolvePut({ data: {} }));
+    await waitFor(() => expect(screen.queryByTestId('github-empty-repos-dialog')).toBeNull());
   });
 });

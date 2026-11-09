@@ -1144,6 +1144,7 @@ const GitHubConnectionTab: React.FC = () => {
         title="Disconnect GitHub"
         description="System automation (LiveOps Triage, scheduled tasks) will no longer be able to access GitHub APIs until a new connection is configured."
         reasonPresets={ADMIN_REASON_PRESETS.githubDisconnect}
+        // The route takes no reason yet, so the reason is collected but not sent.
         reasonAudited={false}
         confirmLabel="Disconnect GitHub"
         tone="danger"
@@ -1164,6 +1165,7 @@ const GitHubConnectionTab: React.FC = () => {
         title="Rotate private key"
         description="Enter a new private key to replace the current one. The old key will be invalidated immediately."
         reasonPresets={ADMIN_REASON_PRESETS.githubKeyRotate}
+        // The route takes no reason yet, so the reason is collected but not sent.
         reasonAudited={false}
         confirmLabel="Rotate key"
         tone="danger"
@@ -1200,10 +1202,13 @@ const GitHubConnectionTab: React.FC = () => {
 
       <ActionDialog
         open={showEmptyWarningModal}
-        onClose={() => setShowEmptyWarningModal(false)}
+        onClose={() => {
+          if (!savingRepos) setShowEmptyWarningModal(false);
+        }}
         title="Save an empty repository whitelist"
         description="Saving an empty whitelist will block ALL GitHub repository access. LiveOps Triage and other GitHub features will not work until repositories are added."
         reasonPresets={ADMIN_REASON_PRESETS.githubRepoAccess}
+        // The route takes no reason yet, so the reason is collected but not sent.
         reasonAudited={false}
         confirmLabel="Save empty whitelist"
         tone="danger"
