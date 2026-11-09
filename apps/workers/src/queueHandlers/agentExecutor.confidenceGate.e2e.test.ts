@@ -9,6 +9,7 @@ import type { CompletionInfo, ICompletionOptions } from '@bike4mind/llm-adapters
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { LOW_CONFIDENCE_STREAK_TO_PAUSE } from './agentExecutorUtils/confidenceGate';
+import { LOW_CONFIDENCE_REOPEN_NUDGE } from '@bike4mind/server-utils/utils/reopenLowConfidenceAnswer';
 
 // Confidence gate pause -> resume -> complete over a real Mongo, with only the edges stubbed.
 // `confidenceOverrides` scripts one low entry per probe turn so the streak fires the gate.
@@ -22,6 +23,8 @@ const h = vi.hoisted(() => ({
   wsEvents: [] as Array<{ action: string; [key: string]: unknown }>,
   dispatched: [] as Array<Record<string, unknown>>,
   llmTurns: 0,
+  // Transcript the model saw on its most recent turn.
+  lastMessages: [] as IMessage[],
   // Turns that call the probe before the model answers; set by the test.
   probeTurns: 1,
   // Profile `lowConfidenceCompletion` the executor resolves; undefined keeps the executor default.
@@ -97,6 +100,7 @@ vi.mock('@bike4mind/llm-adapters', async () => {
         callback: (text: (string | null | undefined)[], info?: CompletionInfo) => Promise<void>
       ) => {
         const turn = h.llmTurns++;
+        h.lastMessages = structuredClone(_messages);
         const probeTurn = turn < h.probeTurns;
         await callback([probeTurn ? 'Calling the probe' : FINAL_ANSWER], {
           inputTokens: 10,
@@ -291,30 +295,141 @@ describe('confidence gate, end to end', () => {
       expect(actions().indexOf('low_confidence_completion')).toBeLessThan(actions().indexOf('completed'));
     });
 
-    it('block pauses the run, keeps the answer in the checkpoint, and Stop accepts it', async () => {
-      h.lowConfidenceMode = 'block';
-      const { executionId, userId, execution } = await runToAnswer(0.1);
-
-      expect(execution?.status).toBe('paused');
-      expect(execution?.pendingGate).toMatchObject({ confidence: 0.1 });
-      expect(execution?.lowConfidenceStreak).toBe(0);
-      // The score was scripted, so the pause stays out of the fire-rate counters like any scripted gate.
-      expect(execution?.confidenceTelemetry).toMatchObject({ evaluatedCount: 0, emittedCount: 0 });
-      expect(actions()).toEqual(expect.arrayContaining(['low_confidence_completion', 'confidence_gate']));
-      expect(actions()).not.toContain('completed');
-
+    const respond = async (executionId: string, userId: string, decision: 'stop' | 'continue') => {
       const { handleGateResponse } = await import('@server/websocket/agentExecute');
-      const { agentExecutionRepository } = await import('@bike4mind/database');
       await handleGateResponse(
-        { accessToken: 'unused', action: 'agent_execute', command: 'gate_response', executionId, decision: 'stop' },
+        { accessToken: 'unused', action: 'agent_execute', command: 'gate_response', executionId, decision },
         userId,
         'conn-1',
         'https://ws.test/stage',
         logger as never
       );
+    };
+    const finalAnswerSteps = (execution: { checkpoint?: unknown } | null | undefined) =>
+      ((execution?.checkpoint as { steps: Array<{ type: string }> } | undefined)?.steps ?? []).filter(
+        step => step.type === 'final_answer'
+      );
+
+    it('block pauses the run with the finished result held back, and Stop finalizes it in full', async () => {
+      h.lowConfidenceMode = 'block';
+      const { persistRunAsQuest } = await import('@server/utils/persistRunAsQuest');
+      vi.mocked(persistRunAsQuest).mockClear();
+      const { executionId, userId, execution } = await runToAnswer(0.1);
+
+      expect(execution?.status).toBe('paused');
+      expect(execution?.pendingGate).toMatchObject({ confidence: 0.1 });
+      expect(execution?.pendingCompletion).toMatchObject({
+        answer: FINAL_ANSWER,
+        replyText: FINAL_ANSWER,
+        lowConfidence: { confidence: 0.1 },
+      });
+      // A completion pause keeps the streak so a reconsidered answer with no better evidence is re-flagged.
+      expect(execution?.lowConfidenceStreak).toBe(1);
+      // The score was scripted, so the pause stays out of the fire-rate counters like any scripted gate.
+      expect(execution?.confidenceTelemetry).toMatchObject({ evaluatedCount: 0, emittedCount: 0 });
+      expect(actions()).toEqual(expect.arrayContaining(['low_confidence_completion', 'confidence_gate']));
+      expect(actions()).not.toContain('completed');
+      expect(persistRunAsQuest).not.toHaveBeenCalled();
+
+      await respond(executionId, userId, 'stop');
+
+      const { agentExecutionRepository } = await import('@bike4mind/database');
       const stopped = await agentExecutionRepository.findById(executionId);
       expect(stopped?.status).toBe('completed');
-      expect(stopped?.result).toMatchObject({ answer: FINAL_ANSWER, stoppedByGate: true });
+      expect(stopped?.pendingCompletion).toBeUndefined();
+      // Same result shape as a normal low-confidence completion: accepted, not stopped mid-run.
+      expect(stopped?.result).toMatchObject({ answer: FINAL_ANSWER, lowConfidence: { confidence: 0.1 } });
+      expect(stopped?.result).not.toHaveProperty('stoppedByGate');
+      expect(h.wsEvents).toContainEqual(
+        expect.objectContaining({ action: 'completed', executionId, answer: FINAL_ANSWER })
+      );
+      expect(persistRunAsQuest).toHaveBeenCalledWith(
+        executionId,
+        FINAL_ANSWER,
+        expect.anything(),
+        [],
+        execution?.pendingCompletion?.finishReason ?? undefined,
+        [],
+        undefined
+      );
+    });
+
+    it('Continue reopens the answer with a verify nudge and ends with one final answer', async () => {
+      // Admin default rather than the profile: a continuation does not re-resolve the profile.
+      const { AdminSettings } = await import('@bike4mind/database');
+      await AdminSettings.create({
+        settingName: 'orchestrationDefaults',
+        settingValue: { lowConfidenceCompletion: 'block' } as never,
+      });
+      try {
+        await continueThenStop();
+      } finally {
+        await AdminSettings.collection.deleteOne({ settingName: 'orchestrationDefaults' });
+      }
+    });
+
+    async function continueThenStop() {
+      const { executionId, userId, execution } = await runToAnswer(0.1);
+      expect(execution?.status).toBe('paused');
+
+      await respond(executionId, userId, 'continue');
+
+      const { agentExecutionRepository } = await import('@bike4mind/database');
+      const reopened = await agentExecutionRepository.findById(executionId);
+      expect(reopened?.status).toBe('continuing');
+      expect(reopened?.pendingGate).toBeUndefined();
+      expect(reopened?.pendingCompletion).toBeUndefined();
+      expect(finalAnswerSteps(reopened)).toHaveLength(0);
+      expect((reopened?.checkpoint as { steps: Array<{ type: string; content: string }> }).steps.slice(-2)).toEqual([
+        expect.objectContaining({ type: 'thought', content: FINAL_ANSWER }),
+        expect.objectContaining({ type: 'observation', content: LOW_CONFIDENCE_REOPEN_NUDGE }),
+      ]);
+
+      await (await import('./agentExecutor')).handler(h.dispatched[0] as never, lambdaContext);
+
+      expect(h.lastMessages.slice(-2)).toEqual([
+        expect.objectContaining({ role: 'assistant', content: FINAL_ANSWER }),
+        expect.objectContaining({ role: 'user', content: LOW_CONFIDENCE_REOPEN_NUDGE }),
+      ]);
+      // The new answer gathered no new evidence, so it is flagged and held again.
+      const repaused = await agentExecutionRepository.findById(executionId);
+      expect(repaused?.status).toBe('paused');
+      expect(finalAnswerSteps(repaused)).toHaveLength(1);
+
+      await respond(executionId, userId, 'stop');
+      const completed = await agentExecutionRepository.findById(executionId);
+      expect(completed?.status).toBe('completed');
+      expect(completed?.result).toMatchObject({ answer: FINAL_ANSWER });
+      expect(
+        (completed?.result as { steps: Array<{ type: string }> }).steps.filter(s => s.type === 'final_answer')
+      ).toHaveLength(1);
+    }
+
+    it('Continue accepts the held answer when no iteration is left to reconsider in', async () => {
+      h.lowConfidenceMode = 'block';
+      const { executionId, userId, execution } = await runToAnswer(0.1, 2);
+      expect(execution?.status).toBe('paused');
+
+      await respond(executionId, userId, 'continue');
+
+      const { agentExecutionRepository } = await import('@bike4mind/database');
+      const completed = await agentExecutionRepository.findById(executionId);
+      expect(h.dispatched).toEqual([]);
+      expect(completed?.status).toBe('completed');
+      expect(completed?.result).toMatchObject({ answer: FINAL_ANSWER, lowConfidence: { confidence: 0.1 } });
+      expect(finalAnswerSteps({ checkpoint: completed?.result })).toHaveLength(1);
+    });
+
+    it('a repeated Stop finalizes the held answer once', async () => {
+      h.lowConfidenceMode = 'block';
+      const { persistRunAsQuest } = await import('@server/utils/persistRunAsQuest');
+      vi.mocked(persistRunAsQuest).mockClear();
+      const { executionId, userId } = await runToAnswer(0.1);
+
+      await Promise.all([respond(executionId, userId, 'stop'), respond(executionId, userId, 'stop')]);
+
+      expect(persistRunAsQuest).toHaveBeenCalledTimes(1);
+      expect(actions().filter(action => action === 'completed')).toHaveLength(1);
     });
 
     it('takes the mode from admin orchestration defaults when the profile sets none', async () => {
