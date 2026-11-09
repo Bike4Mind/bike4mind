@@ -28,7 +28,7 @@ import {
   type DroppedFsEntry,
   type SkillFolderResult,
 } from './skillImport';
-import { MAX_DESCRIPTION_LENGTH, MAX_SKILL_NAME_LENGTH } from './skillImportRules';
+import { MAX_BODY_LENGTH, MAX_DESCRIPTION_LENGTH, MAX_SKILL_NAME_LENGTH } from './skillImportRules';
 import { SkillImportHelp } from './SkillImportHelp';
 import { SkillFormInput } from '@client/app/hooks/data/skills';
 
@@ -237,8 +237,8 @@ export const SkillForm: FC<SkillFormProps> = ({
   const bodyError =
     body.trim().length === 0
       ? 'Body is required'
-      : body.length > 50_000
-        ? 'Body must be 50000 characters or fewer'
+      : body.length > MAX_BODY_LENGTH
+        ? `Body must be ${MAX_BODY_LENGTH} characters or fewer`
         : null;
 
   const isValid = !nameError && !descriptionError && !bodyError;

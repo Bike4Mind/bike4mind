@@ -60,4 +60,11 @@ describe('SKILL_IMPORT_CLAUDE_CODE_PROMPT', () => {
     expect(SKILL_IMPORT_CLAUDE_CODE_PROMPT).toContain('scripts/ and references/');
     expect(SKILL_IMPORT_CLAUDE_CODE_PROMPT).toContain('starts and ends with a letter or digit');
   });
+
+  it('states the supporting-file, body and escaping limits', () => {
+    expect(SKILL_IMPORT_CLAUDE_CODE_PROMPT).toContain('20 supporting files');
+    expect(SKILL_IMPORT_CLAUDE_CODE_PROMPT).toContain('50000 characters or fewer');
+    expect(SKILL_IMPORT_CLAUDE_CODE_PROMPT).toContain('escape any backslashes and double quotes');
+    expect(SKILL_IMPORT_CLAUDE_CODE_PROMPT).toContain(String.raw`(as \\ and \").`);
+  });
 });
