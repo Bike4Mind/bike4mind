@@ -1,5 +1,11 @@
 import { z } from 'zod';
 import { DECISION_MODEL_IDS } from '../decisions/catalog';
+import {
+  ACCOUNT_CAMPAIGN_AXES,
+  ACCOUNT_CAMPAIGN_IGNORED_REASONS,
+  ACCOUNT_CAMPAIGN_MEMBERSHIPS,
+  ACCOUNT_CAMPAIGN_RELATIONSHIPS,
+} from './accountCampaign';
 import { RISK_EVIDENCE_MISSING_REASONS, RISK_EVIDENCE_VERSION, riskEvidenceFactValueSchemas } from './riskEvidence';
 import { SHADOW_DETECTION_VERDICTS, SHADOW_DETECTORS } from './shadowDetection';
 
@@ -13,7 +19,7 @@ import { SHADOW_DETECTION_VERDICTS, SHADOW_DETECTORS } from './shadowDetection';
  */
 
 /** Bump when the question, its choices or the summary's meaning changes; cached results key on it. */
-export const ABUSE_ASSESSMENT_POLICY_VERSION = 1;
+export const ABUSE_ASSESSMENT_POLICY_VERSION = 2;
 
 /** What the model may answer. */
 export const ABUSE_ASSESSMENT_JUDGMENTS = ['abuse', 'legitimate_automation', 'insufficient_evidence'] as const;
@@ -106,6 +112,38 @@ export const abuseAssessmentGroupEvidenceSchema = z.strictObject({
 });
 export type AbuseAssessmentGroupEvidence = z.infer<typeof abuseAssessmentGroupEvidenceSchema>;
 
+const assessmentCampaignSchema = z.strictObject({
+  members: z
+    .array(
+      z.strictObject({
+        ref: accountRefSchema,
+        membership: z.enum(ACCOUNT_CAMPAIGN_MEMBERSHIPS),
+      })
+    )
+    .max(ABUSE_ASSESSMENT_MAX_ACCOUNTS),
+  evidence: z
+    .array(
+      z.strictObject({
+        relationship: z.enum(ACCOUNT_CAMPAIGN_RELATIONSHIPS),
+        axis: z.enum(ACCOUNT_CAMPAIGN_AXES),
+        population: z.number().int().nonnegative(),
+        memberRefs: z.array(accountRefSchema).max(ABUSE_ASSESSMENT_MAX_ACCOUNTS),
+      })
+    )
+    .max(ABUSE_ASSESSMENT_MAX_SIGNALS),
+  ignored: z
+    .array(
+      z.strictObject({
+        relationship: z.enum(ACCOUNT_CAMPAIGN_RELATIONSHIPS),
+        reason: z.enum(ACCOUNT_CAMPAIGN_IGNORED_REASONS),
+        population: z.number().int().nonnegative(),
+        memberCount: z.number().int().nonnegative(),
+      })
+    )
+    .max(ABUSE_ASSESSMENT_MAX_SIGNALS),
+  truncated: z.boolean(),
+});
+
 /** Exactly what the provider receives. Strict, so a field added upstream never rides along. */
 export const abuseAssessmentFeatureSummarySchema = z.strictObject({
   evidenceVersion: z.literal(RISK_EVIDENCE_VERSION),
@@ -119,6 +157,8 @@ export const abuseAssessmentFeatureSummarySchema = z.strictObject({
         z.strictObject({ key: featureKeySchema, observed: finiteNumber.nullable(), threshold: finiteNumber.nullable() })
       )
       .max(ABUSE_ASSESSMENT_MAX_SIGNALS),
+    /** Optional so stored summaries from earlier policy versions remain readable. */
+    campaign: assessmentCampaignSchema.optional(),
   }),
   accounts: z.array(abuseAssessmentAccountSchema).max(ABUSE_ASSESSMENT_MAX_ACCOUNTS),
   /** Accounts on the detection beyond the cap. */
