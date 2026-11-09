@@ -627,6 +627,21 @@ describe('commands main ran unasked', () => {
   });
 
   it.each([
+    // Brace expansion ends the outer double quote at the inner `"`, so bash runs `rm -rf "x"` and `rm -rf ".claude"`.
+    'echo "`rm -rf "{x,.claude}"`"',
+    'echo "`rm -rf ".clau{d..d}e"`"',
+    // bash 3.2 does the same for a `$(` within double quotes.
+    'echo "$(rm -rf "{x,.claude}")"',
+    'npx prettier --write "${x:-"{x,.claude}"}"',
+    'for f in "`rm -rf "{x,.claude}"`"; do :; done',
+    'a=("`rm -rf "{x,.claude}"`")',
+    'export x="`rm -rf "{x,.claude}"`"',
+    'cat < "`rm -rf "{x,.claude}"`"',
+  ])('asks in every mode for %s, reading its braces by bash quote rules', async command => {
+    expect(await judge(command)).toMatchObject(asks);
+  });
+
+  it.each([
     'git diff --name-only \\--output=.claude/settings.json',
     'git diff --outp\\ut=.claude/settings.json HEAD~1',
     'git diff "--output"=.claude/settings.json HEAD~1',

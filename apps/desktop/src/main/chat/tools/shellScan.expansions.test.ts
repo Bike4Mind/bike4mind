@@ -142,6 +142,53 @@ describe('shell expansions reaching a protected location', () => {
   ])('leaves %s unread', async range => {
     expect((await scanShell(`cat range/${range}/value`, project, [project]))?.unread).toBe(true);
   });
+
+  it.each([
+    // Within double quotes brace expansion opens no quote at a backtick or `${`, so the inner `"` ends the quote.
+    'echo "`echo "{a,b}"`"',
+    'echo "`echo ".x{a..b}"`"',
+    'echo "${x:-"{a,b}"}"',
+    'echo "${x#"{a,b}"}"',
+    'echo "${x:-"}"}"{a,b}',
+    'echo a"$(echo ")")"{a,b}',
+    // bash 3.2 skips no `$(` within double quotes.
+    'echo "$(echo "{a,b}")"',
+    'echo "$(echo "a" "{a,b}")"',
+    'for f in "`echo "{a,b}"`"; do :; done',
+    'a=("`echo "{a,b}"`")',
+    'export x="`echo "{a,b}"`"',
+    'cat < "`echo "{a,b}"`"',
+  ])('leaves %s unread, as bash brace-expands a word the scan reads as quoted', async command => {
+    expect((await scanShell(command, project, [project]))?.unread).toBe(true);
+  });
+
+  it.each([
+    'echo {a,b}',
+    'echo "{a,b}"',
+    'echo "`echo {a,b}`"',
+    'echo `echo "{a,b}"`',
+    'echo $(echo "{a,b}")',
+    "echo \"$(printf '%s' '{x, y}')\"",
+    'echo "$(cat <<\'EOF\'\nfix: {a, b} and "c"\nEOF\n)"',
+    'echo ${HOME}/{a,b}',
+    'echo "${x//,/ }"',
+    'echo ${x:-{a,b}}',
+    'cat <(echo {a,b})',
+    'x="`echo "{a,b}"`"',
+  ])('reads %s as each bash brace-expands it', async command => {
+    expect((await scanShell(command, project, [project]))?.unread).toBeUndefined();
+  });
+
+  it.each([
+    ['"`printf %s "{a,b}"`"', ['a', 'b']],
+    ['"${x:-"{a,b}"}"', ['a', 'b']],
+    ['"${x:-"}"}"{a,b}', ['}a', '}b']],
+    ['a"$(printf %s ")")"{a,b}', ['a)a', 'a)b']],
+  ] as const)('expands %s in host bash as the scan expects', (word, expected) => {
+    // Whichever bash is first in PATH; each of these expands the same in 3.2 and 5.
+    const printed = execFileSync('bash', ['-c', `printf '%s\\n' ${word}`], { encoding: 'utf8' });
+    expect(printed.split('\n').slice(0, -1)).toEqual(expected);
+  });
 });
 
 describe('conservative POSIX bracket matching', () => {

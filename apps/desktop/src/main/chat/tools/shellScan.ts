@@ -487,8 +487,11 @@ function expansionEnd(word: string, at: number, quoted: boolean): number {
   return at + 1;
 }
 
-/** A word's characters as bash reads them: quotes removed, backslash escapes applied, and each expansion kept whole. */
-function wordPieces(word: string): WordPiece[] {
+/**
+ * A word's characters as bash reads them: quotes removed, backslash escapes applied, and each expansion kept whole.
+ * `unquotedAt` collects the offset in `word` of each active piece.
+ */
+function wordPieces(word: string, unquotedAt?: number[]): WordPiece[] {
   const pieces: WordPiece[] = [];
   const push = (char: string, active: boolean): void => {
     pieces.push({ char, active });
@@ -523,10 +526,95 @@ function wordPieces(word: string): WordPiece[] {
     } else if (char === '$' || char === '`') {
       at = expansion(at, false);
     } else {
+      unquotedAt?.push(at);
       push(char, true);
     }
   }
   return pieces;
+}
+
+/** A `$(`, `$((`, `<(` or `>(` substitution, or a `$'` string, the parser found in a word, and where it ends. */
+interface BraceScanSkip {
+  end: number;
+  kind: 'command' | 'process' | 'ansi';
+}
+
+/**
+ * The offsets of the `{`, `}`, `,` and `.` bash's brace expansion reads as unquoted in `word`, by its own quote
+ * rules (braces.c `brace_gobbler`): within double quotes a backtick or `${` opens no quote, so a `"` inside one
+ * ends the double quote. bash 5 skips a `$(` substitution in or out of double quotes, and a `<(` or `>(` one; bash
+ * 3.2 (macOS `/bin/bash`) skips only a `$(` outside them. Null when a `$'` string sits where that reading is quoted.
+ */
+function braceScanUnquoted(word: string, skips: ReadonlyMap<number, BraceScanSkip>, bash5: boolean): number[] | null {
+  const unquoted: number[] = [];
+  let quote = '';
+  // Depth inside an unquoted `${`, where no brace, comma or `..` counts.
+  let level = 0;
+  for (let at = 0; at < word.length; at++) {
+    const skip = skips.get(at);
+    // The parser turns a `$'` string into a single-quoted one before brace expansion reads the word.
+    if (skip?.kind === 'ansi' && quote !== '') return null;
+    if (
+      skip !== undefined &&
+      (quote === '' ? skip.kind !== 'process' || bash5 : quote === '"' && skip.kind === 'command' && bash5)
+    ) {
+      at = skip.end - 1;
+      continue;
+    }
+    const char = word[at] as string;
+    if (char === '\\' && quote !== "'") {
+      at++;
+    } else if (char === '$' && word[at + 1] === '{' && quote !== "'") {
+      at++;
+      if (quote === '') level++;
+    } else if (quote !== '') {
+      if (char === quote) quote = '';
+    } else if (char === '"' || char === "'" || char === '`') {
+      quote = char;
+    } else if (level > 0) {
+      if (char === '{') level++;
+      else if (char === '}') level--;
+    } else if ('{},.'.includes(char)) {
+      unquoted.push(at);
+    }
+  }
+  return unquoted;
+}
+
+/**
+ * Whether bash 3.2 or 5 may brace-expand a word around a `{`, `}`, `,` or `.` that wordPieces reads as quoted or
+ * inside an expansion: ``"`x "{a,b}"`"`` runs `x "a"` and `x "b"`.
+ */
+function braceScanDiffers(node: Node): boolean {
+  const word = node.text;
+  if (!word.includes('{') || !(word.includes(',') || word.includes('..'))) return false;
+  const skips = new Map<number, BraceScanSkip>();
+  const collect = (inner: Node): void => {
+    const kind =
+      inner.type === 'process_substitution'
+        ? 'process'
+        : inner.type === 'ansi_c_string'
+          ? 'ansi'
+          : /^(command_substitution|arithmetic_expansion)$/.test(inner.type) && inner.text.startsWith('$(')
+            ? 'command'
+            : null;
+    if (kind) skips.set(inner.startIndex - node.startIndex, { end: inner.endIndex - node.startIndex, kind });
+    for (const child of inner.children) if (child) collect(child);
+  };
+  collect(node);
+  const read: number[] = [];
+  wordPieces(word, read);
+  const scanned = new Set(read);
+  return [false, true].some(bash5 => {
+    const found = braceScanUnquoted(word, skips, bash5);
+    if (found === null) return true;
+    const unquoted = new Set(found);
+    const opens = found.some(at => word[at] === '{');
+    const splits = found.some(
+      at => word[at] === ',' || (word[at] === '.' && word[at + 1] === '.' && unquoted.has(at + 1))
+    );
+    return opens && splits && found.some(at => !scanned.has(at));
+  });
 }
 
 const isActive = (piece: WordPiece | undefined, char: string): boolean =>
@@ -4663,6 +4751,29 @@ export function words(node: Node): string[] {
   return out;
 }
 
+/**
+ * The words of `node` bash brace-expands: a command's, a declaration's (`local x=...` too), an array's, a for
+ * loop's list and a redirect target, but no plain assignment.
+ */
+function braceExpandedWords(node: Node): Node[] {
+  const named = node.namedChildren.filter((child): child is Node => child !== null && child.type !== 'comment');
+  switch (node.type) {
+    case 'command':
+      return named.filter(child => child.type !== 'variable_assignment' && !child.type.endsWith('redirect'));
+    case 'declaration_command':
+    case 'array':
+      return named;
+    case 'for_statement':
+      return node.childrenForFieldName('value').filter((child): child is Node => child !== null);
+    case 'file_redirect': {
+      const target = node.childForFieldName('destination');
+      return target ? [target] : [];
+    }
+    default:
+      return [];
+  }
+}
+
 /** Nodes whose assignments are already accounted for: a command's prefix, or a flagged declaration. */
 const ASSIGNMENT_OWNERS = new Set(['command', 'declaration_command', 'variable_assignments']);
 
@@ -6113,6 +6224,7 @@ export async function scanShell(
 
     const visit = async (node: Node): Promise<void> => {
       if (expired) return;
+      if (braceExpandedWords(node).some(braceScanDiffers)) unreadOperands++;
       // A loop or function body may run a git call again after a later one in it moved a ref.
       if (REPEATS.has(node.type) && /\bgit\b/.test(node.text)) gitScript.refsMoved = true;
       if (node.type === 'list') {
