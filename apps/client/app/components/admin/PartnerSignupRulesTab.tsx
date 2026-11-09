@@ -31,7 +31,6 @@ import type { GrantPackageRow } from '@client/app/utils/grantPackageAPICalls';
 import { grantPackageUsage, useGrantPackageOptions } from './InviteCenter/shared/GrantPackageSelect';
 import {
   ADMIN_REASON_PRESETS,
-  ADMIN_REGION_GAP,
   ActionDialog,
   AdminPageHeader,
   AdminSearchInput,
@@ -40,6 +39,7 @@ import {
   StatusChip,
   type DataColumn,
 } from './shared';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
 import PartnerSignupRuleFormDialog, { planLabelForPriceId } from './PartnerSignupRuleFormDialog';
 
 const QUERY_KEY = 'partner-signup-rules';
@@ -214,7 +214,8 @@ export default function PartnerSignupRulesTab() {
       label: 'Enabled',
       width: '9rem',
       render: rule => (
-        <Stack direction="row" alignItems="center" gap={1}>
+        // A disabled Switch ignores pointer events, so the click would reach the row and open a stale edit form.
+        <Stack direction="row" alignItems="center" gap={1} onClick={e => e.stopPropagation()}>
           <Tooltip title={rule.enabled ? 'Enabled - click to disable' : 'Disabled - click to enable'}>
             <Switch
               size="sm"
@@ -261,8 +262,8 @@ export default function PartnerSignupRulesTab() {
     </Dropdown>
   );
 
-  const addButton = (testId: string, label = 'Add rule') => (
-    <Button startDecorator={<AddIcon />} onClick={() => openForm(null)} data-testid={testId}>
+  const addButton = (testId: string, label = 'Add rule', variant: 'solid' | 'outlined' = 'solid') => (
+    <Button variant={variant} startDecorator={<AddIcon />} onClick={() => openForm(null)} data-testid={testId}>
       {label}
     </Button>
   );
@@ -308,7 +309,10 @@ export default function PartnerSignupRulesTab() {
                 <Button
                   variant="outlined"
                   color="neutral"
-                  onClick={() => setSearchInput('')}
+                  onClick={() => {
+                    setSearchInput('');
+                    setPage(1);
+                  }}
                   data-testid="partner-rule-clear-search-btn"
                 >
                   Clear search
@@ -319,7 +323,7 @@ export default function PartnerSignupRulesTab() {
             <EmptyState
               title="No partner signup rules yet"
               description="Create a rule to auto-grant entitlements and bonus credits to a partner's verified signups."
-              action={addButton('partner-rule-empty-add-btn', 'Add your first rule')}
+              action={addButton('partner-rule-empty-add-btn', 'Add your first rule', 'outlined')}
             />
           )
         }
@@ -361,7 +365,10 @@ export default function PartnerSignupRulesTab() {
         reasonAudited={false}
         confirmLabel="Delete rule"
         pending={deleteMutation.isPending}
-        onConfirm={() => deleteTarget && deleteMutation.mutateAsync(deleteTarget)}
+        onConfirm={async () => {
+          if (deleteTarget) await deleteMutation.mutateAsync(deleteTarget);
+        }}
+        typedConfirm={deleteTarget ? { expected: deleteTarget.domain, noun: 'domain' } : undefined}
         data-testid="partner-rule-delete-modal"
         testIds={{ confirm: 'partner-rule-delete-confirm-btn' }}
       />
@@ -387,7 +394,9 @@ export default function PartnerSignupRulesTab() {
               : null
         }
         pending={backfillMutation.isPending}
-        onConfirm={() => backfillTarget && backfillMutation.mutateAsync(backfillTarget)}
+        onConfirm={async () => {
+          if (backfillTarget) await backfillMutation.mutateAsync(backfillTarget);
+        }}
         data-testid="partner-rule-backfill-modal"
         testIds={{ confirm: 'partner-rule-backfill-confirm-btn' }}
       >

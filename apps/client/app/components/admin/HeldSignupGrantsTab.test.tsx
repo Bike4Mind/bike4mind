@@ -78,6 +78,22 @@ describe('HeldSignupGrantsTab', () => {
     expect(await screen.findByTestId('admin-empty-state')).toHaveTextContent('No signup grants are held');
     fireEvent.click(screen.getByTestId('held-signup-grants-empty-action'));
     await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
+    expect(getMock).toHaveBeenLastCalledWith('/api/admin/held-signup-grants', { params: {} });
+  });
+
+  it('clears the reason filter from the empty state', async () => {
+    renderTab();
+    await screen.findByTestId(`admin-table-select-${rows[0].id}`);
+    getMock.mockResolvedValue({ data: { data: [], nextCursor: null } });
+    fireEvent.click(await screen.findByTestId('admin-filter-reason'));
+    fireEvent.click(await screen.findByTestId('admin-filter-reason-budget_exhausted'));
+    await waitFor(() =>
+      expect(getMock).toHaveBeenLastCalledWith(expect.any(String), {
+        params: { reason: 'budget_exhausted' },
+      })
+    );
+    fireEvent.click(await screen.findByTestId('held-signup-grants-empty-action'));
+    await waitFor(() => expect(getMock).toHaveBeenLastCalledWith(expect.any(String), { params: {} }));
   });
 
   it('releases the selected grants, then revokes that batch', async () => {

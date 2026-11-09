@@ -32,7 +32,6 @@ import { api } from '@client/app/contexts/ApiContext';
 import { getErrorMessage } from '@client/app/utils/error';
 import {
   ADMIN_REASON_PRESETS,
-  ADMIN_REGION_GAP,
   ActionDialog,
   AdminPageHeader,
   DataTable,
@@ -42,6 +41,7 @@ import {
   ViewTabs,
   useAdminListUrlState,
 } from './shared';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import { SIGNUP_DOMAIN_HOLDS_SEARCH_KEYS } from './signupDomainHoldsSearch';
 
@@ -302,7 +302,7 @@ export default function SignupDomainHoldsTab() {
                     size="sm"
                     variant="outlined"
                     color="neutral"
-                    onClick={() => setFilters({ status: 'all' })}
+                    onClick={() => setFilters({ status: 'all', reason: '' })}
                     data-testid="signup-domain-holds-empty-action"
                   >
                     Show all holds
@@ -345,7 +345,14 @@ export default function SignupDomainHoldsTab() {
                 data-testid={`signup-domain-confirm-${review.domain}`}
                 onClick={() => setReviewing({ review, action: 'confirm' })}
               >
-                Confirm hold
+                <div>
+                  Confirm hold
+                  {review.status !== 'held_pending_review' && (
+                    <Typography level="body-xs" data-testid={`signup-domain-confirm-hint-${review.domain}`}>
+                      Only pending holds can be confirmed
+                    </Typography>
+                  )}
+                </div>
               </MenuItem>
             </Menu>
           </Dropdown>

@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
@@ -282,6 +282,8 @@ describe('PartnerSignupRulesTab admin frame', () => {
     expect(screen.getByTestId('partner-rule-delete-modal')).toBeInTheDocument();
     expect(api.deletePartnerSignupRule).not.toHaveBeenCalled();
     await userEvent.click(screen.getByTestId('partner-rule-delete-modal-reason-input-preset-0'));
+    expect(screen.getByTestId('partner-rule-delete-confirm-btn')).toBeDisabled();
+    await userEvent.type(screen.getByTestId('partner-rule-delete-modal-typed-input'), 'partner.com');
     await userEvent.click(screen.getByTestId('partner-rule-delete-confirm-btn'));
     await waitFor(() => expect(api.deletePartnerSignupRule).toHaveBeenCalledTimes(1));
     expect(api.deletePartnerSignupRule.mock.calls[0][0]).toBe('r1');
@@ -301,20 +303,41 @@ describe('PartnerSignupRulesTab admin frame', () => {
     await openRowMenu('partner.com');
     await userEvent.click(screen.getByTestId('partner-rule-backfill-partner.com'));
 
+    await userEvent.click(await screen.findByTestId('partner-rule-backfill-modal-reason-input-preset-0'));
     expect(await screen.findByTestId('partner-rule-backfill-modal-hint')).toHaveTextContent('No existing users match');
     expect(screen.getByTestId('partner-rule-backfill-confirm-btn')).toBeDisabled();
   });
 
   it('sends the chosen page size as the limit and returns to page 1', async () => {
-    api.fetchPartnerSignupRules.mockResolvedValue(listOf([makeRule()]));
+    api.fetchPartnerSignupRules.mockResolvedValue({
+      data: [makeRule()],
+      meta: { total: 60, page: 1, limit: 25, totalPages: 3 },
+    });
     renderTab();
 
     await screen.findByTestId('partner-rule-row-partner.com');
-    await userEvent.click(screen.getByRole('combobox'));
-    await userEvent.click(await screen.findByRole('option', { name: '50' }));
+    await userEvent.click(screen.getByTestId('admin-table-next-btn'));
+    await waitFor(() =>
+      expect(api.fetchPartnerSignupRules).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2 }))
+    );
+    await userEvent.click(screen.getByTestId('admin-table-page-size'));
+    await userEvent.click(await screen.findByTestId('admin-table-page-size-50'));
 
     await waitFor(() =>
       expect(api.fetchPartnerSignupRules).toHaveBeenLastCalledWith(expect.objectContaining({ limit: 50, page: 1 }))
     );
+  });
+
+  it('does not open the edit form when the disabled Enabled switch is clicked', async () => {
+    api.fetchPartnerSignupRules.mockResolvedValue(listOf([makeRule()]));
+    api.updatePartnerSignupRule.mockReturnValue(new Promise(() => {}));
+    renderTab();
+
+    const toggle = await screen.findByRole('switch', { name: 'Enable rule for partner.com' });
+    await userEvent.click(toggle);
+    await waitFor(() => expect(api.updatePartnerSignupRule).toHaveBeenCalledTimes(1));
+    // userEvent refuses pointer-events:none targets; a real click on the disabled switch lands on its ancestors.
+    fireEvent.click(screen.getByTestId('partner-rule-toggle-partner.com'));
+    expect(screen.queryByTestId('partner-rule-modal')).not.toBeInTheDocument();
   });
 });

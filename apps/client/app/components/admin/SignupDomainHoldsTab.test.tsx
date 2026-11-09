@@ -280,6 +280,21 @@ describe('SignupDomainHoldsTab', () => {
     await waitFor(() => expect(getMock).toHaveBeenLastCalledWith(endpoint, listParams({ status: 'all' })));
   });
 
+  it('clears the reason filter from the empty state action', async () => {
+    router.set({ holdStatus: 'all', holdReason: 'young-domain' });
+    getMock.mockResolvedValue({ data: { data: [], total: 0 } });
+    renderTab();
+    fireEvent.click(await screen.findByTestId('signup-domain-holds-empty-action'));
+    await waitFor(() => expect(getMock).toHaveBeenLastCalledWith(endpoint, listParams({ status: 'all' })));
+    expect(router.get().holdReason).toBeFalsy();
+  });
+
+  it('explains why Confirm hold is unavailable on a settled hold', async () => {
+    renderTab();
+    await openMenu('gamma.test');
+    expect(screen.getByTestId('signup-domain-confirm-hint-gamma.test')).toHaveTextContent('Only pending holds');
+  });
+
   it('refreshes pending exposure when a domain release fails after possible payouts', async () => {
     postMock.mockRejectedValue(new Error('Request interrupted'));
     const invalidate = renderTab();

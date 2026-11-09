@@ -7,7 +7,6 @@ import { api } from '@client/app/contexts/ApiContext';
 import { getErrorMessage } from '@client/app/utils/error';
 import {
   ADMIN_REASON_PRESETS,
-  ADMIN_REGION_GAP,
   ActionDialog,
   AdminPageHeader,
   BulkActionBar,
@@ -16,6 +15,7 @@ import {
   FilterChip,
   type AdminSelection,
 } from './shared';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
 
 const QUERY_KEY = ['held-signup-grants'];
 const ENDPOINT = '/api/admin/held-signup-grants';
