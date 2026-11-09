@@ -152,6 +152,9 @@ describe('commands main ran unasked', () => {
     });
     await mkdir(join(brepo, '.claude'));
     await writeFile(join(brepo, '.claude', 'settings.json'), '{}');
+    // An untracked folder holding its own settings, which `git clean` removes whole.
+    await mkdir(join(brepo, 'k', '.claude'), { recursive: true });
+    await writeFile(join(brepo, 'k', '.claude', 'settings.json'), '{}');
     // erepo has such a name changed in the work tree; mrepo changes its settings on a side branch.
     const erepo = await repository('erepo', { 'w/q .claude/settings.json': 'a', 'src/b.ts': 'b' });
     await mkdir(join(erepo, '.claude'));
@@ -682,6 +685,12 @@ describe('commands main ran unasked', () => {
     ["git clean -fdX -e'.clau*'", 'brepo'],
     ["git clean -fdX -e.cl''au*", 'brepo'],
     ['git clean -fdx', 'brepo'],
+    // A second `-f` removes the nested repositories too, each holding its own settings.
+    ['git clean -ffdx', ''],
+    ['git clean -f -f -dx', ''],
+    ['git clean -fdx --force', ''],
+    ['git clean -fd k', 'brepo'],
+    ['git clean -fdx k', 'brepo'],
   ])('asks in every mode for %s (in proj/%s), whose paths git removes or moves', async (command, folder) => {
     expect(await judge(command, folder)).toMatchObject(asks);
   });

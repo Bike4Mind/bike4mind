@@ -745,6 +745,8 @@ interface GitArgs {
   given: Map<string, string | true>;
   /** Every value of a valued option, in order, by long name or letter. */
   values: [string, string][];
+  /** Every flag, in order, by long name or letter, so `-ff` holds `f` twice. */
+  flags: string[];
   /** Words after `--`. */
   paths: string[];
   /** An option outside the grammar, which the scan cannot read. */
@@ -753,7 +755,7 @@ interface GitArgs {
 
 /** Reads `args` as git's parse-options does, taking a long option's unique abbreviation for it. */
 function gitArgs(args: readonly string[], grammar: GitGrammar): GitArgs {
-  const read: GitArgs = { positionals: [], given: new Map(), values: [], paths: [], unknown: false };
+  const read: GitArgs = { positionals: [], given: new Map(), values: [], flags: [], paths: [], unknown: false };
   const names = [...(grammar.flags ?? []), ...(grammar.long ?? [])];
   for (let index = 0; index < args.length; index++) {
     const arg = args[index] as string;
@@ -772,6 +774,7 @@ function gitArgs(args: readonly string[], grammar: GitGrammar): GitArgs {
       const taken = value ?? ((grammar.long ?? []).includes(name) ? (args[++index] ?? '') : true);
       read.given.set(name, taken);
       if (typeof taken === 'string') read.values.push([name, taken]);
+      else read.flags.push(name);
     } else if (arg.length > 1 && arg.startsWith('-')) {
       for (let at = 1; at < arg.length; at++) {
         const letter = arg[at] as string;
@@ -783,6 +786,7 @@ function gitArgs(args: readonly string[], grammar: GitGrammar): GitArgs {
         }
         if (!(grammar.letters ?? '').includes(letter)) read.unknown = true;
         read.given.set(letter, true);
+        read.flags.push(letter);
       }
     } else {
       read.positionals.push(arg);
@@ -1085,6 +1089,8 @@ function movesRefs(sub: string, args: readonly string[], restores: boolean): boo
 /** What a git call that writes the work tree writes: `.claude` files and symlinks; unread when the scan cannot tell. */
 interface TreeWrite {
   files: string[];
+  /** Folders removed whole, with whatever is in them. */
+  trees?: string[];
   links: boolean;
   unread: boolean;
 }
@@ -1559,9 +1565,12 @@ async function cleanWrites(read: GitArgs, cwd: string): Promise<TreeWrite> {
   const excludes = read.values.filter(([name]) => name === 'e' || name === 'exclude').map(([, value]) => value);
   // The dry run gets each word as written here, which a quote or backslash left inside it would change.
   if ([...excludes, ...read.positionals, ...read.paths].some(word => /['"\\]/.test(word))) return UNREAD_TREE;
+  // A second `-f` removes nested repositories too, which the dry run lists only when given it as well.
+  const forces = read.flags.filter(flag => flag === 'f' || flag === 'force').length;
   const listed = await gitQuery(cwd, [
     'clean',
     '-n',
+    ...(forces > 1 ? ['-f', '-f'] : []),
     ...options,
     ...excludes.map(pattern => `--exclude=${pattern}`),
     '--',
@@ -1570,12 +1579,14 @@ async function cleanWrites(read: GitArgs, cwd: string): Promise<TreeWrite> {
   ]);
   if (listed === null) return UNREAD_TREE;
   const files: string[] = [];
+  const trees: string[] = [];
   for (const line of listed.split('\n')) {
     const removed = /^Would remove (.+)$/.exec(line)?.[1];
-    if (removed) files.push(resolveOperand(cwd, removed.replace(/\/$/, '')));
+    if (removed?.endsWith('/')) trees.push(resolveOperand(cwd, removed.slice(0, -1)));
+    else if (removed) files.push(resolveOperand(cwd, removed));
     else if (line.trim() !== '' && !line.startsWith('Would skip')) return UNREAD_TREE;
   }
-  return { files, links: false, unread: false };
+  return { files, trees, links: false, unread: false };
 }
 
 /**
@@ -1927,7 +1938,7 @@ async function gitWrites(
   if (tree === null) return { writes: { files: [], trees: [] }, restores: false };
   const writes: InPlaceWrites = {
     files: tree.files,
-    trees: [],
+    trees: tree.trees ?? [],
     ...(tree.links ? { links: true } : {}),
     ...(tree.unread ? { unread: true } : {}),
   };
