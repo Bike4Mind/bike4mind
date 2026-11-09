@@ -14,6 +14,7 @@ import {
 } from './desktopModelSettings.js';
 
 const QWEN = 'local:ollama:qwen3:8b';
+const BOM = String.fromCharCode(0xfeff);
 const silent = { debug() {}, info() {}, warn() {}, error() {} } as never;
 
 const facts = (over: Partial<OllamaModelFacts> = {}): OllamaModelFacts => ({
@@ -114,6 +115,11 @@ describe('readDesktopModelSettings', () => {
     });
   });
 
+  it('reads a file saved as UTF-8 with a byte order mark, as Notepad can save a hand edit', async () => {
+    await writeFile(file, `${BOM}${JSON.stringify({ models: { [QWEN]: { keepAlive: 3600 } } })}`);
+    expect(await readDesktopModelSettings(at(file), QWEN)).toEqual({ keepAlive: 3600 });
+  });
+
   it('fails only the model whose entry is broken, naming the file, the model and the field', async () => {
     await writeSettings({ [QWEN]: { generation: { temperature: 'hot' } }, 'local:ollama:other': { keepAlive: -1 } });
     const failure = readDesktopModelSettings(at(file), QWEN);
@@ -133,6 +139,7 @@ describe('readDesktopModelSettings', () => {
 
   it.each([
     ['{"models": ', 'is not valid JSON'],
+    [` ${BOM}{"models": {}}`, 'is not valid JSON'],
     ['[]', 'does not hold model settings'],
     ['{"models": []}', 'does not hold model settings'],
   ])('rejects a file holding %s for every model', async (text, problem) => {

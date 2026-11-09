@@ -9,6 +9,7 @@ import {
   localModelId,
   MODEL_SETTINGS_FILE_NAME,
   parseModelSettingsFile,
+  parseModelSettingsJson,
   quotedForMessage,
   REASONING_EFFORT_SETTINGS,
   type GenerationField,
@@ -120,7 +121,7 @@ export async function readDesktopModelSettings(
   }
   let raw: unknown;
   try {
-    raw = JSON.parse(text);
+    raw = parseModelSettingsJson(text);
   } catch {
     throw fileProblem(file.path, 'is not valid JSON');
   }

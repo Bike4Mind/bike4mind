@@ -97,6 +97,31 @@ describe('ModelSettingsStore', () => {
     expect(await store.get(QWEN)).toEqual({ effort: 'low' });
   });
 
+  describe.each([
+    { name: 'plain UTF-8', prefix: '' },
+    { name: 'UTF-8 with a byte order mark', prefix: String.fromCharCode(0xfeff) },
+  ])('a hand-written file saved as $name', ({ prefix }) => {
+    const written = { models: { [QWEN]: { effort: 'low' }, [GEMMA]: { keepAlive: 300 } } };
+
+    it('reads every model', async () => {
+      const path = await fileIn();
+      await writeFile(path, `${prefix}${JSON.stringify(written, null, 2)}`, 'utf8');
+      const store = new ModelSettingsStore(path);
+      expect(await store.get(QWEN)).toEqual({ effort: 'low' });
+      expect(await store.get(GEMMA)).toEqual({ keepAlive: 300 });
+    });
+
+    it('keeps the other models when set() is the first call', async () => {
+      const path = await fileIn();
+      await writeFile(path, `${prefix}${JSON.stringify(written, null, 2)}`, 'utf8');
+      await new ModelSettingsStore(path).set(GEMMA, { keepAlive: 3600 });
+      expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({
+        models: { [QWEN]: { effort: 'low' }, [GEMMA]: { keepAlive: 3600 } },
+      });
+      expect(await new ModelSettingsStore(path).get(QWEN)).toEqual({ effort: 'low' });
+    });
+  });
+
   it('lets a retry succeed after a corrupt file is deleted by hand', async () => {
     const path = await fileIn();
     await writeFile(path, '[]', 'utf8');

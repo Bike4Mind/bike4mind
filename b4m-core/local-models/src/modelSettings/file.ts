@@ -216,6 +216,14 @@ function parseStoredEntry(
 }
 
 /**
+ * The file's text as JSON, throwing as JSON.parse does. A leading byte order mark is skipped: Notepad and
+ * PowerShell 5 can save a hand edit as UTF-8 with one, which JSON.parse refuses.
+ */
+export function parseModelSettingsJson(text: string): unknown {
+  return JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
+}
+
+/**
  * The file's settings by model, with each recognized model holding a known field of the wrong type in
  * `invalid`; null when it is not a settings file at all. Unknown fields and unrecognized keys are kept in `entries`.
  */

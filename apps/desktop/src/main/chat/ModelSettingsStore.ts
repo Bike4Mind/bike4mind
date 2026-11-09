@@ -4,6 +4,7 @@ import { dirname } from 'node:path';
 import {
   emptyStoredModelSettings,
   parseModelSettingsFile,
+  parseModelSettingsJson,
   changedJsonPath,
   quotedForMessage,
   storedModelEntry,
@@ -85,7 +86,7 @@ export class ModelSettingsStore {
         ({ stamp, text }) => {
           let raw: unknown;
           try {
-            raw = JSON.parse(text);
+            raw = parseModelSettingsJson(text);
           } catch {
             throw new ModelSettingsFileError(this.filePath, 'is not valid JSON');
           }

@@ -3,6 +3,7 @@ import {
   isModelSettingsId,
   parseModelSettingsFile,
   parseModelSettingsInput,
+  parseModelSettingsJson,
   changedJsonPath,
   quotedForMessage,
   storedModelEntry,
@@ -16,6 +17,23 @@ function settingsOf(raw: unknown): [string, ModelSettings][] {
   if (!parsed || parsed.invalid.size > 0) throw new Error(`not read: ${JSON.stringify(parsed?.invalid)}`);
   return [...parsed.settings];
 }
+
+describe('parseModelSettingsJson', () => {
+  const text = `{"models": {"${QWEN}": {"effort": "high"}}}`;
+  const BOM = String.fromCharCode(0xfeff);
+
+  it('reads the same settings with or without a leading byte order mark', () => {
+    expect(parseModelSettingsJson(text)).toEqual({ models: { [QWEN]: { effort: 'high' } } });
+    expect(parseModelSettingsJson(`${BOM}${text}`)).toEqual({ models: { [QWEN]: { effort: 'high' } } });
+  });
+
+  it('throws as JSON.parse does for text that is not JSON, a lone mark, or a mark past the start', () => {
+    expect(() => parseModelSettingsJson('{"models": {')).toThrow(SyntaxError);
+    expect(() => parseModelSettingsJson(BOM)).toThrow(SyntaxError);
+    expect(() => parseModelSettingsJson(`${BOM}${BOM}${text}`)).toThrow(SyntaxError);
+    expect(() => parseModelSettingsJson(` ${BOM}${text}`)).toThrow(SyntaxError);
+  });
+});
 
 describe('parseModelSettingsFile', () => {
   it('reads known fields, and keeps unknown fields and unrecognized ids as written without reading them', () => {
