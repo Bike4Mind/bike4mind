@@ -58,5 +58,6 @@ describe('SKILL_IMPORT_CLAUDE_CODE_PROMPT', () => {
     expect(SKILL_IMPORT_CLAUDE_CODE_PROMPT).toContain('wrap the description value in double quotes');
     expect(SKILL_IMPORT_CLAUDE_CODE_PROMPT).toContain('~/.claude/skills/<name>/');
     expect(SKILL_IMPORT_CLAUDE_CODE_PROMPT).toContain('scripts/ and references/');
+    expect(SKILL_IMPORT_CLAUDE_CODE_PROMPT).toContain('starts and ends with a letter or digit');
   });
 });
