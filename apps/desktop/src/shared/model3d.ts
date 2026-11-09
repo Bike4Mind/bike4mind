@@ -147,6 +147,12 @@ export const DEFAULT_MODEL_VIEWS: ModelView[] = ['front', 'right', 'top', 'iso']
 export const MODEL_POSES = ['rest', 'open'] as const;
 export type ModelPose = (typeof MODEL_POSES)[number];
 
+/** Main's broadcast of one conversation's open model; panes act only on their own session's. */
+export type ModelStateUpdate = { sessionId: string; state: ModelViewState };
+
+/** Main asking a window to render one conversation's model; answered with captureResult by id. */
+export type ModelCaptureRequestEvent = { sessionId: string } & ModelCaptureRequest;
+
 export const EMPTY_MODEL_STATE: ModelViewState = {
   path: null,
   kind: null,
