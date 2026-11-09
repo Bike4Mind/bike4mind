@@ -63,3 +63,25 @@ describe('Verdict column', () => {
     expect(screen.getByLabelText('None')).toBeTruthy();
   });
 });
+
+describe('Clients column', () => {
+  const renderClients = (row: Partial<AdminUsersListRow>) => {
+    const column = usersColumns({ now: new Date(), maxSpend: 0, verdict: { range: '7d', loading: false } }).find(
+      candidate => candidate.id === 'clients'
+    );
+    return render(<>{column?.render({ id: 'u1', ...row } as AdminUsersListRow)}</>, { wrapper: Wrapper });
+  };
+
+  it('names the clients seen, in a fixed order', () => {
+    const seen = { firstSeenAt: new Date(), lastSeenAt: new Date() };
+    const { container } = renderClients({
+      clientUsage: { cli: seen, web: seen, desktop: { ...seen, version: '1.4.2' } },
+    });
+    expect(container.textContent).toBe('Web \u00b7 Desktop \u00b7 CLI');
+  });
+
+  it('shows a dash when no client has been recorded', () => {
+    const { container } = renderClients({});
+    expect(container.textContent).toBe('\u2014');
+  });
+});

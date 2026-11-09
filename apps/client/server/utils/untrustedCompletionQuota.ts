@@ -8,8 +8,8 @@ import {
 } from '@bike4mind/common';
 import { adminSettingsRepository, cacheRepository, usageEventRepository, User } from '@bike4mind/database';
 import { userApiKeyService } from '@bike4mind/services';
-import type { ActiveSubscriptionsRequest } from '@server/entitlements/activeSubscriptions';
-import { resolveApiKeyTrust } from '@server/utils/apiKeyTrust';
+import type { ActiveSubscriptionsRequest } from '@bike4mind/server-utils/entitlements/activeSubscriptions';
+import { resolveApiKeyTrust } from '@bike4mind/server-utils/utils/apiKeyTrust';
 
 const TOKEN_WINDOW_MS = 60_000;
 // Backstop only: every exit path releases its slot, so this bounds a slot whose process died first.

@@ -30,14 +30,14 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: { findActiveUserSubscriptions: findSubscriptions },
 }));
-vi.mock('@server/auth/ability', () => ({ default: () => ({}) }));
+vi.mock('@bike4mind/server-utils/auth/ability', () => ({ default: () => ({}) }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@bike4mind/server-utils/managers/apiKeyUsageManager', () => ({
   ApiKeyUsageManager: { logUsage: vi.fn().mockResolvedValue(undefined) },
 }));
 
 import { apiKeyAuth } from './apiKeyAuth';
-import { getRequestActiveSubscriptions } from '@server/entitlements/activeSubscriptions';
+import { getRequestActiveSubscriptions } from '@bike4mind/server-utils/entitlements/activeSubscriptions';
 
 // Exercise the real trust assessment and request subscription memo together.
 describe('apiKeyAuth subscription trust', () => {

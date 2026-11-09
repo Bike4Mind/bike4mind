@@ -32,7 +32,7 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
   }),
 }));
 
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   LLMEvents: {
     SlackCompletionStart: { schema: { parse: (v: unknown) => v } },
     CompletionCompleted: { publish: vi.fn() },

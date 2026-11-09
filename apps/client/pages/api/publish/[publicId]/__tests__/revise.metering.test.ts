@@ -32,7 +32,7 @@ vi.mock('@server/utils/withRequestCompletionQuota', () => ({
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => ({ post: (...hs: Array<(req: unknown, res: unknown) => unknown>) => hs[hs.length - 1] }),
 }));
-vi.mock('@server/auth/assertAiAccessAllowed', () => ({ assertAiAccessAllowed: vi.fn() }));
+vi.mock('@bike4mind/server-utils/auth/assertAiAccessAllowed', () => ({ assertAiAccessAllowed: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getPublishedArtifactsStorage: () => ({
     download: async () => Buffer.from('<html><body>old page</body></html>'),

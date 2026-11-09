@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { heldCreditRewardRepository, userRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { adminApi } from '@server/middlewares/adminApi';
@@ -5,7 +6,7 @@ import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { readBulkSignupGrantAction } from '@server/credits/bulkSignupGrantAdminAction';
 import { signupGrantAuditTarget } from '@server/credits/signupGrantAdminAction';
 import { rerunDomainGrantAfterUnblock } from '@server/credits/rerunDomainGrantAfterUnblock';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 // Each re-run is a handful of reads and an idempotent grant, so a small fan-out keeps 100 ids from running serially.
 const RERUN_CONCURRENCY = 5;
@@ -23,6 +24,7 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:a
         await userService.previewSignupGrantAction({ action: 'unblock', userIds }, { users: userRepository })
       );
     }
+    const bulkId = randomUUID();
     const result = await userService.bulkSetSignupGrantBlock(
       { action: 'unblock', userIds },
       {
@@ -35,7 +37,7 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:a
             target: targets.get(userId) ?? signupGrantAuditTarget(userId),
             summary: 'unblocked signup grants and rewards',
             reason,
-            details: { bulk: true },
+            details: { bulk: true, bulkId },
           });
         },
       }

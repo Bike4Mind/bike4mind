@@ -57,8 +57,8 @@ vi.mock('@server/admin/subscriptionsList/listAdminSubscriptions', () => ({
 vi.mock('@server/admin/subscriptionsList/adminSubscriptionsQuery', () => ({ subscriptionPlanCatalog: () => ({}) }));
 
 const mockRecordAdminAction = vi.fn();
-vi.mock('@server/utils/adminAudit', async importOriginal => {
-  const actual = await importOriginal<typeof import('@server/utils/adminAudit')>();
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>();
   const { ForbiddenError } = await import('@bike4mind/common');
   return {
     ...actual,
@@ -79,7 +79,7 @@ vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
 }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoint' } } }));
 
-import { ADMIN_ACTION_REASON_MISSING_MESSAGE } from '@server/utils/adminAudit';
+import { ADMIN_ACTION_REASON_MISSING_MESSAGE } from '@bike4mind/server-utils/utils/adminAudit';
 import handler from '../comp';
 
 const ID = 'b'.repeat(24);

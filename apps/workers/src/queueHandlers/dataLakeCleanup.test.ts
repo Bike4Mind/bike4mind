@@ -63,7 +63,7 @@ vi.mock('@bike4mind/server-utils/integrations/google/drive/common', () => ({
 }));
 // The real module chains into @octokit (ESM), which this suite has no reason to load - mock it at
 // its own boundary like the Drive release above.
-vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({
+vi.mock('@bike4mind/server-utils/integrations/github/dataLake/githubLakeConnection', () => ({
   releaseGitHubLakeConnectionForLake: h.releaseGitHubLakeConnectionForLake,
 }));
 vi.mock('@bike4mind/server-utils/memory/ledgerMemoryStore', () => ({ shredPrincipalMemory: h.shredPrincipalMemory }));

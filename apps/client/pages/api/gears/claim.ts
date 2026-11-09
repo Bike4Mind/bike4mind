@@ -3,7 +3,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { z } from 'zod';
 import { creditService, userService } from '@bike4mind/services';
 import { withTransaction } from '@bike4mind/database';
-import { buildCreditRewardAdapters } from '@server/credits/creditRewardAdapters';
+import { buildCreditRewardAdapters } from '@bike4mind/server-utils/credits/creditRewardAdapters';
 import { GEAR_DEFAULTS, evaluateGears, gearTxId, type GearKey } from '@server/services/gears/catalog';
 
 /**

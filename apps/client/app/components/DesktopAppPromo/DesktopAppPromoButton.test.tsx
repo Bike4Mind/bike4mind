@@ -9,12 +9,21 @@ const state = vi.hoisted(() => ({
   enabled: true,
   isHydrated: true,
   dismissed: false,
+  usedDesktop: false,
   updatePreferences: vi.fn(),
   openInNewTab: vi.fn(),
 }));
 
 vi.mock('@client/app/hooks/useDesktopPromoEnabled', () => ({ useDesktopPromoEnabled: () => state.enabled }));
 vi.mock('@client/app/utils/externalLinks', () => ({ openInNewTab: state.openInNewTab }));
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: <T,>(selector: (s: { currentUser: unknown }) => T) =>
+    selector({
+      currentUser: {
+        clientUsage: state.usedDesktop ? { desktop: { firstSeenAt: new Date(), lastSeenAt: new Date() } } : {},
+      },
+    }),
+}));
 vi.mock('@client/app/contexts/UserSettingsContext', () => ({
   useUserSettings: () => ({
     settings: { desktopPromoDismissed: state.dismissed },
@@ -50,7 +59,7 @@ function setWideScreenWithMouse(matches: boolean) {
 }
 
 beforeEach(() => {
-  Object.assign(state, { enabled: true, isHydrated: true, dismissed: false });
+  Object.assign(state, { enabled: true, isHydrated: true, dismissed: false, usedDesktop: false });
   state.updatePreferences.mockReset();
   state.openInNewTab.mockReset();
   setWideScreenWithMouse(true);
@@ -92,6 +101,12 @@ describe('DesktopAppPromoButton', () => {
 
   it('stays hidden once the user dismissed it', () => {
     state.dismissed = true;
+    renderButton();
+    expect(screen.queryByTestId('desktop-promo')).not.toBeInTheDocument();
+  });
+
+  it('stays hidden for a user the server has seen in the desktop app', () => {
+    state.usedDesktop = true;
     renderButton();
     expect(screen.queryByTestId('desktop-promo')).not.toBeInTheDocument();
   });

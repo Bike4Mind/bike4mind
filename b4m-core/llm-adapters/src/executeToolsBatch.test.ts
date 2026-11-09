@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { PermissionDeniedError, insufficientCreditsError } from '@bike4mind/common';
+import { PermissionDeniedError, insufficientCreditsError, ExpectedToolError } from '@bike4mind/common';
 import {
   executeToolsBatch,
   DEFAULT_MAX_PARALLEL_TOOLS,
@@ -344,5 +344,15 @@ describe('toolFailureLogLevel', () => {
   it('logs any other tool failure at error', () => {
     expect(toolFailureLogLevel(new Error('provider down'))).toBe('error');
     expect(toolFailureLogLevel('string failure')).toBe('error');
+  });
+});
+
+describe('expected tool failures', () => {
+  it('warns for recoverable validation failures while preserving unexpected error severity', () => {
+    expect(toolFailureLogLevel(new ExpectedToolError('Invalid expression'))).toBe('warn');
+    expect(toolFailureLogLevel(new Error('Internal failure'))).toBe('error');
+    expect(toolFailureLogLevel(Object.assign(new Error('Invalid expression'), { name: 'ExpectedToolError' }))).toBe(
+      'warn'
+    );
   });
 });

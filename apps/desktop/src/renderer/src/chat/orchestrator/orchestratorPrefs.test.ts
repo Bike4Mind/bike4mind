@@ -9,11 +9,15 @@ import {
   readDockWidth,
   writeDockWidth,
   forgetSessionPrefs,
+  readAmbient,
+  readAmbientHintSeen,
   readDockOpen,
   readFinaleSeen,
   readIntroSeen,
   readSurface,
   readView,
+  writeAmbient,
+  writeAmbientHintSeen,
   writeDockOpen,
   writeFinaleSeen,
   writeIntroSeen,
@@ -107,6 +111,18 @@ describe('orchestratorPrefs', () => {
       throw new Error('blocked');
     });
     expect(() => forgetSessionPrefs('gone')).not.toThrow();
+  });
+
+  it('keeps the ambient Tavern on until turned off, and its hint shown once', () => {
+    expect(readAmbient()).toBe(true);
+    writeAmbient(false);
+    expect(readAmbient()).toBe(false);
+    writeAmbient(true);
+    expect(readAmbient()).toBe(true);
+
+    expect(readAmbientHintSeen()).toBe(false);
+    writeAmbientHintSeen();
+    expect(readAmbientHintSeen()).toBe(true);
   });
 
   describe('dock width', () => {

@@ -84,7 +84,6 @@ const PINNED_LAYOUT = { height: '100%', overflow: 'hidden' } as const;
 // A pinned header taller than the viewport leaves the inner-scrolling table 0px tall, so pin only where
 // ~250-300px of rows fit below the tallest measured chrome (655px at md, 513px at lg); elsewhere the tab scrolls.
 export const llmDashboardRootSx = (theme: Theme) => ({
-  p: 2,
   width: '100%',
   display: 'flex',
   flexDirection: 'column',
@@ -475,7 +474,7 @@ const LLMDashboardTab: React.FC = () => {
 
   if (isLoading) {
     return (
-      <Sheet sx={{ p: 2, width: '100%', overflow: 'auto' }}>
+      <Sheet sx={{ width: '100%', overflow: 'auto' }}>
         <Stack direction="row" justifyContent="center" alignItems="center" sx={{ height: '400px' }}>
           <Typography level="h4">Loading models...</Typography>
         </Stack>
@@ -485,7 +484,7 @@ const LLMDashboardTab: React.FC = () => {
 
   if (error) {
     return (
-      <Sheet sx={{ p: 2, width: '100%', overflow: 'auto' }}>
+      <Sheet sx={{ width: '100%', overflow: 'auto' }}>
         <Alert variant="soft" color="danger" sx={{ mb: 3 }}>
           <Typography level="body-sm">
             <strong>Error loading models:</strong> {error.message}

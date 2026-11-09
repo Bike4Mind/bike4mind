@@ -1,8 +1,9 @@
-import { userRepository, withTransaction } from '@bike4mind/database';
+import { erasureRecordRepository, userRepository, withTransaction } from '@bike4mind/database';
 import type { IUserDocument, IUserRepository } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { pseudonymizeUserId } from '@bike4mind/server-utils/analytics/pseudonymize';
-import { emitBillingEvent } from '@server/analytics/signupEvents';
+import { erasureIdHash, erasureKeyId, erasurePseudonym } from '@bike4mind/server-utils/privacy/erasureHash';
+import { emitBillingEvent } from '@bike4mind/server-utils/analytics/signupEvents';
 import { wholeDaysBetween } from '@server/analytics/billingEventDetails';
 import { resolveUserType } from '@server/analytics/resolveUserType';
 import {
@@ -26,12 +27,17 @@ export type HardDeleteContext = {
   /** Whose request this was, for the account_deleted analytics event. */
   initiatedBy: HardDeleteInitiator;
   logger: Pick<Logger, 'info' | 'warn' | 'error'>;
-  /** Runs inside the delete's transaction before the row goes; a throw aborts the delete. */
+  /**
+   * Runs inside the delete's transaction before the row goes; a throw aborts the delete. The admin path
+   * also runs it just before its subscription cancel, which cannot roll back.
+   */
   assertInTransaction?: () => Promise<void>;
   /** Runs inside the delete's transaction after the row goes, so an audit entry commits or rolls back with it. */
   recordInTransaction?: (target: IUserDocument | null, cancellation: AccountSubscriptionCancellation) => Promise<void>;
   /** The delete's transaction failed after the subscription cancel, which cannot roll back. */
   onDeleteFailed?: (target: IUserDocument | null, cancellation: AccountSubscriptionCancellation) => Promise<void>;
+  /** The delete's transaction committed; anything that throws after this ran post-commit work only. */
+  onDeleteCommitted?: () => void;
 };
 
 /**
@@ -65,10 +71,12 @@ async function emitAccountDeleted(account: IUserDocument | null, initiatedBy: Ha
  *
  * `commitDelete` runs the caller's own delete (its authorization and notifications) with a users
  * repository whose `delete` captures integration grants and billing references, then deletes the row
- * in a transaction with the context hooks. Admin subscription cancellation precedes the delete; a
- * cancellable self-serve purge defers cancellation until its guarded delete commits. The purge and the
- * account_deleted event run in a `finally`: a throw after the commit (a failed notification) must not
- * skip them, because a retry would find no row and nothing would run them again.
+ * in a transaction with the context hooks, writing the hash-only ErasureRecord in that same
+ * transaction (server/users/reapplyErasure.ts repeats the erasure from it after a restore). Admin
+ * subscription cancellation precedes the delete; a cancellable self-serve purge defers cancellation
+ * until its guarded delete commits. The purge and the account_deleted event run in a `finally`: a
+ * throw after the commit (a failed notification) must not skip them, because a retry would find no
+ * row and nothing would run them again.
  */
 export async function hardDeleteUser<T>(
   userId: string,
@@ -91,6 +99,7 @@ export async function hardDeleteUser<T>(
         // the transaction commits, so only the admin path may cancel subscriptions before it.
         const cancelAfterDelete = context.initiatedBy === 'self';
         const customerIds = cancelAfterDelete ? await readAccountSubscriptionCustomerIds(id) : undefined;
+        if (!cancelAfterDelete) await context.assertInTransaction?.();
         const cancellation = cancelAfterDelete
           ? NO_SUBSCRIPTIONS_CANCELED
           : await cancelAccountSubscriptions(
@@ -103,6 +112,14 @@ export async function hardDeleteUser<T>(
           result = await withTransaction(async () => {
             await context.assertInTransaction?.();
             const deleted = await userRepository.delete(id);
+            // A throw aborts the delete: an erasure with no record could not be repeated after a restore.
+            await erasureRecordRepository.record({
+              idHash: erasureIdHash(id),
+              keyId: erasureKeyId(),
+              pseudonym: erasurePseudonym(id),
+              erasedAt: new Date(),
+              initiatedBy: context.initiatedBy,
+            });
             await context.recordInTransaction?.(target, cancellation);
             return deleted;
           });
@@ -116,6 +133,7 @@ export async function hardDeleteUser<T>(
           throw error;
         }
         deleteCommitted = true;
+        context.onDeleteCommitted?.();
         if (cancelAfterDelete) {
           // Cancellation can win until the guarded delete commits. Do no external writes before
           // that point: a failed due-date guard must leave a restored account's subscriptions alone.

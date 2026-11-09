@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-vi.mock('@server/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn(async () => 'raw') }));
+vi.mock('@bike4mind/server-utils/utils/thinkingVisibility', () => ({
+  resolveThinkingVisibility: vi.fn(async () => 'raw'),
+}));
 
 const mocks = vi.hoisted(() => ({
   fetchAndConvertFabFiles: vi.fn(),
@@ -43,15 +45,6 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ delete: vi.fn(), upload: vi.fn(), getSignedUrl: vi.fn() }),
-}));
-
-vi.mock('@bike4mind/fab-pipeline', async importOriginal => ({
-  ...(await importOriginal<typeof import('@bike4mind/fab-pipeline')>()),
-  // The embedding stack is beside the point here; the extraction call is stubbed below anyway.
-  EmbeddingFactory: class {
-    constructor(public config: unknown) {}
-  },
-  resolveEmbeddingWithKeylessFallback: () => ({ config: {}, missing: null }),
 }));
 
 vi.mock('@bike4mind/database', async importOriginal => {
@@ -156,3 +149,9 @@ describe('materializeAttachmentsForRun stale-reference scrub', () => {
     expect(onKnowledgeIdsScrubbed).not.toHaveBeenCalled();
   });
 });
+
+vi.mock('@bike4mind/utils/embeddingProviders', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils/embeddingProviders')>()),
+  buildEmbeddingRegistry: vi.fn(() => ({})),
+  resolveEmbeddingWithKeylessFallback: (model: string) => ({ config: {}, missing: null, model }),
+}));

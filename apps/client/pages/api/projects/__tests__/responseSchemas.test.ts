@@ -37,7 +37,7 @@ vi.mock('@server/projects/projectScopes', () => ({
   PROJECTS_WRITE_SCOPES: [],
 }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn(async () => {}) }));
-vi.mock('@server/utils/eventBus', () => ({ SessionEvents: { Summarize: { publish: vi.fn() } } }));
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ SessionEvents: { Summarize: { publish: vi.fn() } } }));
 vi.mock('@server/utils/sessionOperationalCreditPreflight', () => ({
   filterSessionIdsByOperationalCredits: vi.fn(async () => new Set<string>()),
 }));
@@ -155,7 +155,8 @@ const cases: Case[] = [
     method: 'DELETE',
     load: () => import('@pages/api/projects/[id]/sessions'),
     service: 'removeSessions',
-    returns: project,
+    // The remove services report what they took out; the route answers with the project.
+    returns: { project, removedIds: ['x'] },
     query: { id: 'p1' },
     body: { sessionIds: ['s1'] },
   },
@@ -182,7 +183,8 @@ const cases: Case[] = [
     method: 'DELETE',
     load: () => import('@pages/api/projects/[id]/files'),
     service: 'removeFiles',
-    returns: project,
+    // The remove services report what they took out; the route answers with the project.
+    returns: { project, removedIds: ['x'] },
     query: { id: 'p1' },
     body: { fileIds: ['f1'] },
   },

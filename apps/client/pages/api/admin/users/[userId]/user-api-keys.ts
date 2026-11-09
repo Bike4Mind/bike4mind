@@ -12,7 +12,7 @@ import { respond } from '@server/utils/respond';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { getApiKeyRateLimitUsage, type RateLimitUsage } from '@server/utils/apiKeyRateLimitCheck';
+import { getApiKeyRateLimitUsage, type RateLimitUsage } from '@bike4mind/server-utils/utils/apiKeyRateLimitCheck';
 import { describeApiKeyAccess } from '@server/utils/apiKeyAccessGate';
 
 // Hydrated docs only emit schema paths (and drop the key hashes) through toJSON.

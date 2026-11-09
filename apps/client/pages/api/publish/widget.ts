@@ -10,7 +10,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
  * Four independent parts, in order:
  *  1. The PRINT binder - shows the wrapper's "Save as PDF" button and asks the artifact
  *     frame to print ITSELF (printing the wrapper captures only the frame's visible first
- *     screen). The in-frame half is server/services/publish/printBridge.ts. It runs for
+ *     screen). The in-frame half is packages/server-utils/src/services/publish/printBridge.ts. It runs for
  *     every wrapper, including artifacts with comments turned off.
  *  2. The signed-in-viewer gate drop - hides the sign-up gate in a frame marked
  *     `data-b4m-gate` and reveals the bar's "Try" link. The in-frame half is

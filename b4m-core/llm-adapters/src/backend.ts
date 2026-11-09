@@ -140,6 +140,7 @@ export interface ICompletionOptionTools {
     defer_loading?: boolean;
   };
   _isMcpTool?: boolean; // Flag to identify MCP tools (enables tool chaining for MCP only)
+  _isCustomMcpTool?: boolean; // Flag for user-added custom connector tools (their results are untrusted data)
   /**
    * The artifact MIME type this tool's results may carry, exactly as its `<artifact type="...">`
    * spells it. Set only from a trusted tool registration (services ToolDefinition), never by an

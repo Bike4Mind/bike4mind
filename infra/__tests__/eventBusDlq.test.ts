@@ -50,6 +50,7 @@ describe('every EventBridge subscription dead-letters its failures', () => {
         'email-send',
         'notebook-curation-complete-analytics',
         'notebook-curation-start',
+        'notification-push',
         'session-auto-name',
         'session-context-summarize',
         'session-summarize',

@@ -9,6 +9,7 @@
 
 import { createHash } from 'node:crypto';
 import {
+  ACCOUNT_CAMPAIGN_AXIS_OF,
   ABUSE_ASSESSMENT_MAX_ACCOUNTS,
   ABUSE_ASSESSMENT_MAX_SIGNALS,
   ABUSE_ASSESSMENT_MAX_SUMMARY_CHARS,
@@ -88,6 +89,39 @@ const projectAccount = (
 
 export const accountRef = (index: number) => `acct_${index + 1}`;
 
+function projectCampaign(detection: ShadowDetectionItem, kept: AbuseAssessmentAccount[]) {
+  if (detection.detector !== 'accountCampaign' || !detection.group) return undefined;
+  const group = detection.group;
+  const refs = new Map(detection.userIds.slice(0, kept.length).map((id, index) => [id, accountRef(index)]));
+  const memberRefs = (ids: string[]) => [...new Set(ids.flatMap(id => refs.get(id) ?? []))];
+  const evidence = group.evidence
+    .map(entry => ({
+      relationship: entry.relationship,
+      axis: ACCOUNT_CAMPAIGN_AXIS_OF[entry.relationship],
+      population: entry.population,
+      memberRefs: memberRefs(entry.userIds),
+    }))
+    .filter(entry => entry.memberRefs.length >= 2);
+  return {
+    members: group.members.flatMap(member => {
+      const ref = refs.get(member.userId);
+      return ref ? [{ ref, membership: member.membership }] : [];
+    }),
+    evidence: evidence.slice(0, ABUSE_ASSESSMENT_MAX_SIGNALS),
+    ignored: group.ignored.slice(0, ABUSE_ASSESSMENT_MAX_SIGNALS).map(entry => ({
+      relationship: entry.relationship,
+      reason: entry.reason,
+      population: entry.population,
+      memberCount: entry.memberCount,
+    })),
+    truncated:
+      group.truncated ||
+      group.members.length > refs.size ||
+      evidence.length > ABUSE_ASSESSMENT_MAX_SIGNALS ||
+      group.ignored.length > ABUSE_ASSESSMENT_MAX_SIGNALS,
+  };
+}
+
 /**
  * The summary for one detection. Accounts keep the detection's order and are referenced as
  * acct_1..N; past the account cap or the size cap, trailing accounts are dropped and counted.
@@ -115,6 +149,7 @@ export function buildFeatureSummary({
         detectorPolicyVersion: detection.policyVersion,
         windowMinutes: finiteOrNull(detection.windowMinutes),
         hostingNetwork: detection.network?.hosting ?? null,
+        campaign: projectCampaign(detection, kept),
         signals: detection.signals
           .filter(signal => SIGNAL_KEY.test(signal.key))
           .slice(0, ABUSE_ASSESSMENT_MAX_SIGNALS)

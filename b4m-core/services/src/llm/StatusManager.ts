@@ -196,7 +196,8 @@ export class StatusManager {
     // New quests can still carry select:false fields in memory. The full-payload
     // completion/recovery path must enforce the same boundary as REST and subscriptions.
     const publicQuestPayload = { ...questPayload };
-    for (const field of CHAT_MESSAGE_WITHHELD_FIELDS) delete publicQuestPayload[field];
+    // Record view: a withheld field may be retired from the typed payload yet still stored on old quests.
+    for (const field of CHAT_MESSAGE_WITHHELD_FIELDS) delete (publicQuestPayload as Record<string, unknown>)[field];
 
     return {
       action: 'streamed_chat_completion',

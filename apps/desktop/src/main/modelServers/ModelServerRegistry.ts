@@ -16,19 +16,23 @@ import {
   createServerFetch,
   createSshFetch,
   describeFailure,
+  discoverSshServers,
   DROP_CODES,
   errorCode,
   leastTrusted,
   parseServerAddress,
+  parseSshPort,
   probeServer,
   redactServerResponse,
   scopeOfIp,
   parseSshDestination,
   ServerRedirectError,
   ServerTransportError,
-  SSH_OLLAMA_URL,
+  SSH_DEFAULT_PORT,
   SSH_PROBE_TIMEOUT_MS,
   sshDestinationProblem,
+  SSH_PORT_PROBLEM,
+  sshServerUrl,
   suggestServerName,
   suggestSshName,
   transportVerdict,
@@ -36,8 +40,10 @@ import {
   type ParsedAddress,
   type ServerEndpoint,
   type SshEndpoint,
+  type SshFoundServer,
 } from '@bike4mind/local-models/servers';
 import { localBackend, localModelId, type ChatModelOption } from '@shared/chat';
+import { own } from '@shared/ownKeys';
 import {
   launchLockedMessage,
   launchSettingsProblem,
@@ -54,6 +60,8 @@ import {
   type LaunchOwner,
   type LaunchRuntime,
   type ModelServerAddInput,
+  type ModelServerCredentialInput,
+  type ModelServerFound,
   type ModelServerHealth,
   type ModelServerLaunchSettings,
   type ModelServerLaunchView,
@@ -73,7 +81,13 @@ import { ServerCredentialsError, ServerForbiddenError, ServerUnreachableError } 
 import { LocalServerSupervisor, type Launchers } from './LocalServerSupervisor';
 import { withLocalNetworkHint } from './localNetworkHint';
 import { loopbackLaunchPort, loopbackPortFree, loopbackPortListening } from './loopbackPort';
-import { credentialHeaders, type ModelServerRecord, type ModelServerStore } from './ModelServerStore';
+import {
+  credentialHeaders,
+  MAX_NAME_CHARS,
+  normalizeServerName,
+  type ModelServerRecord,
+  type ModelServerStore,
+} from './ModelServerStore';
 import { observedFlashAttention, observedKvCacheType, observedLaunchVars, observedPrefill } from './observedOllama';
 import { OpenAICompatibleChat } from './OpenAICompatibleChat';
 
@@ -109,7 +123,7 @@ interface ServerClient extends LocalChat {
 
 interface Entry {
   record: ModelServerRecord;
-  /** For an SSH server, the far end's loopback Ollama. */
+  /** For an SSH server, its port on the far end's loopback. */
   parsed: ParsedAddress;
   /** The SSH destination; null for a server reached by address. */
   ssh: string | null;
@@ -405,7 +419,7 @@ export class ModelServerRegistry {
 
   /** Tests an address or SSH destination without saving it. */
   async probe(input: ModelServerProbeInput): Promise<ModelServerProbeResult> {
-    if (input.transport === 'ssh') return this.probeSsh(input.address);
+    if (input.transport === 'ssh') return this.probeSsh(input);
     const parsed = parseServerAddress(input.address);
     if (!parsed) {
       return failed(
@@ -485,33 +499,84 @@ export class ModelServerRegistry {
     };
   }
 
-  /** An SSH server is always Ollama on the far end's loopback, so only the connection is in question. */
-  private async probeSsh(address: string): Promise<ModelServerProbeResult> {
-    const problem = sshDestinationProblem(address);
+  /**
+   * Finds the servers on the far end's loopback: at `input.port`, or on every usual port. A token goes only to a
+   * named port, so discovery never hands one to a server the user did not pick.
+   */
+  private async probeSsh(input: ModelServerProbeInput): Promise<ModelServerProbeResult> {
+    const problem = sshDestinationProblem(input.address);
     if (problem) return failed(problem);
-    const destination = address.trim();
+    const destination = input.address.trim();
     const base = { address: destination, suggestedName: suggestSshName(destination) };
-    const fetch = this.sshFetchFor({ destination, label: destination, app: 'Desktop' });
-    const outcome = await probeServer(fetch, SSH_OLLAMA_URL, destination, this.now, 'ollama', SSH_PROBE_TIMEOUT_MS);
-    if (outcome.kind !== 'ollama') {
-      return failed(outcome.error ?? `${destination} did not answer as Ollama at 127.0.0.1:11434.`, base);
+    const port = sshPortInput(input.port);
+    if (port === null) return failed(SSH_PORT_PROBLEM, base);
+    let headers: Record<string, string> | null;
+    try {
+      headers = sshCredentialHeaders(input.credential);
+    } catch (err) {
+      return failed(err instanceof Error ? err.message : String(err), base);
     }
-    return {
-      ok: true,
+    if (headers && port === undefined) {
+      return failed('Enter the port of the server this token is for, then test again.', base);
+    }
+    const discovery = await discoverSshServers({
+      destination,
+      port,
+      now: this.now,
+      fetchFor: farPort =>
+        this.sshFetchFor({
+          destination,
+          port: farPort,
+          label: destination,
+          app: 'Desktop',
+          credentialHeaders: () => headers,
+        }),
+    });
+    if (discovery.found.length === 0) return failed(discovery.error ?? `${destination} did not answer.`, base);
+    await this.load();
+    const saved = [LOCAL_SERVER_NAME, ...[...this.entries.values()].map(entry => entry.record.name)];
+    const found = foundServers(destination, discovery.found, saved);
+    const settled = { unencrypted: false, openToAnyone: false };
+    if (found.length > 1) {
+      return {
+        ok: true,
+        ...base,
+        ...settled,
+        found,
+        kind: null,
+        version: null,
+        latencyMs: null,
+        models: null,
+        needsCredentials: found.some(server => server.needsCredentials),
+        error: null,
+      };
+    }
+    const [only] = found;
+    const single = {
       ...base,
-      kind: 'ollama',
-      version: outcome.version,
-      latencyMs: outcome.latencyMs,
-      models: outcome.models,
-      needsCredentials: false,
-      unencrypted: false,
-      openToAnyone: false,
-      error: null,
+      ...settled,
+      suggestedName: only.suggestedName,
+      found,
+      port: only.port,
+      kind: only.kind,
+      version: only.version,
+      latencyMs: only.latencyMs,
+      models: only.models,
     };
+    if (only.needsCredentials) {
+      return failed(
+        headers
+          ? `The server at 127.0.0.1:${only.port} on ${destination} refused this token.`
+          : `The server at 127.0.0.1:${only.port} on ${destination} asks for an API key. Enter it as a token, then test again.`,
+        { ...single, needsCredentials: true }
+      );
+    }
+    return { ok: true, ...single, needsCredentials: false, error: null };
   }
 
   async add(input: ModelServerAddInput): Promise<ModelServerView[]> {
     await this.load();
+    if (input.transport === 'ssh') return this.addSsh(input);
     const probe = await this.probe(input);
     // Nothing answers yet at an address Desktop can start a server on.
     const launching = input.launch === true && probe.launchable === true;
@@ -519,16 +584,40 @@ export class ModelServerRegistry {
     if (probe.openToAnyone && !input.acceptOpen) {
       throw new Error('This server answers anyone on the internet. Confirm that before saving it.');
     }
-    const ssh = input.transport === 'ssh';
+    const record = await this.deps.store.add(
+      { name: input.name, kind: input.kind, transport: { type: 'http', baseUrl: probe.address }, access: input.access },
+      input.credential
+    );
+    return this.added(record);
+  }
+
+  /** Saves the server at `input.port`, 11434 when none is given, once it answers as `input.kind` can use. */
+  private async addSsh(input: ModelServerAddInput): Promise<ModelServerView[]> {
+    const typed = sshPortInput(input.port);
+    if (typed === null) throw new Error(SSH_PORT_PROBLEM);
+    const port = typed ?? SSH_DEFAULT_PORT;
+    if (input.kind === 'ollama' && input.credential.type !== 'none') throw new Error(SSH_OLLAMA_TOKEN);
+    const probe = await this.probe({ ...input, port });
+    if (!probe.ok || !probe.address) throw new Error(probe.error ?? 'The server did not answer.');
+    // Ollama also serves the OpenAI API, so only the other way round cannot work.
+    if (input.kind === 'ollama' && probe.kind !== 'ollama') {
+      throw new Error(
+        `${probe.address} answers at 127.0.0.1:${port} as an OpenAI-compatible server, not Ollama. Choose OpenAI-compatible, then save again.`
+      );
+    }
     const record = await this.deps.store.add(
       {
         name: input.name,
-        kind: ssh ? 'ollama' : input.kind,
-        transport: ssh ? { type: 'ssh', destination: probe.address } : { type: 'http', baseUrl: probe.address },
+        kind: input.kind,
+        transport: { type: 'ssh', destination: probe.address, port },
         access: input.access,
       },
-      ssh ? { type: 'none' } : input.credential
+      input.credential
     );
+    return this.added(record);
+  }
+
+  private async added(record: ModelServerRecord): Promise<ModelServerView[]> {
     const entry = this.build(record);
     this.entries.set(record.id, entry);
     this.deps.edited?.();
@@ -556,11 +645,10 @@ export class ModelServerRegistry {
     if (input.kind && input.kind !== entry.record.kind && (this.supervisor.owned(id) || this.supervisor.busy(id))) {
       throw new Error('Stop the server Desktop started here before changing its kind.');
     }
-    if (entry.ssh && input.kind && input.kind !== 'ollama') {
-      throw new Error('An SSH server reaches Ollama on that machine, so its kind stays Ollama.');
-    }
-    if (entry.ssh && input.credential && input.credential.type !== 'none') {
-      throw new Error('An SSH server signs in with your SSH keys and takes no token or header.');
+    if (entry.ssh) {
+      if (input.credential) sshCredentialHeaders(input.credential);
+      const auth = input.credential?.type ?? entry.record.auth.type;
+      if ((input.kind ?? entry.record.kind) === 'ollama' && auth !== 'none') throw new Error(SSH_OLLAMA_TOKEN);
     }
     if (input.credential) {
       const hasCredentials = !!credentialHeaders(input.credential);
@@ -841,7 +929,7 @@ export class ModelServerRegistry {
       name: record.name,
       management: serverManagement({ local: false, kind: record.kind, access: record.access }),
       runtime: {
-        baseUrl: entry.ssh ? `ssh://${entry.ssh}` : entry.parsed.baseUrl,
+        baseUrl: sshLabel(record) ?? entry.parsed.baseUrl,
         health: async () => {
           const health = (await this.check(id)).find(server => server.id === id)?.health;
           return health?.state === 'online'
@@ -1002,7 +1090,7 @@ export class ModelServerRegistry {
           ? null
           : owner === 'other' && target.port !== null && this.launchStates.get(id)?.portHeld
             ? portHeldMessage(target.port)
-            : (this.supervisor.problem(id) ?? settingsProblem),
+            : (this.supervisor.problem(id) ?? settingsProblem ?? this.supervisor.warning(id)),
       ...(missingOllama ? { programMissing: missingOllama } : {}),
       // At the cap no new look can start, so stop waiting and let the Models screen offer Install.
       ...(missingOllama === undefined &&
@@ -1242,18 +1330,26 @@ export class ModelServerRegistry {
   }
 
   private build(record: ModelServerRecord, previous?: Entry): Entry {
-    const ssh = record.transport.type === 'ssh' ? record.transport.destination : null;
+    const { transport } = record;
+    const ssh = transport.type === 'ssh' ? transport.destination : null;
     const parsed = parseServerAddress(
-      record.transport.type === 'ssh' ? SSH_OLLAMA_URL : record.transport.baseUrl
+      transport.type === 'ssh' ? sshServerUrl(transport.port) : transport.baseUrl
     ) as ParsedAddress;
-    const fetch = ssh
-      ? this.sshFetchFor({ destination: ssh, label: record.name, app: 'Desktop' })
-      : this.fetchFor({
-          origin: parsed.origin,
-          label: record.name,
-          app: 'Desktop',
-          credentialHeaders: () => this.supervisor.headers(record.id) ?? this.deps.store.headers(record),
-        });
+    const fetch =
+      transport.type === 'ssh'
+        ? this.sshFetchFor({
+            destination: transport.destination,
+            port: transport.port,
+            label: record.name,
+            app: 'Desktop',
+            credentialHeaders: () => (record.kind === 'ollama' ? null : this.deps.store.headers(record)),
+          })
+        : this.fetchFor({
+            origin: parsed.origin,
+            label: record.name,
+            app: 'Desktop',
+            credentialHeaders: () => this.supervisor.headers(record.id) ?? this.deps.store.headers(record),
+          });
     const runtimeId = serverRuntimeId(record.id);
     const hasCredentials = () => !!this.deps.store.headers(record);
     const product = previous?.record.kind === record.kind ? previous.product : null;
@@ -1320,6 +1416,7 @@ export class ModelServerRegistry {
       kind: record.kind,
       transport: record.transport.type,
       address: entry.ssh ?? entry.parsed.baseUrl,
+      ...(record.transport.type === 'ssh' ? { port: record.transport.port } : {}),
       access: record.access,
       auth:
         record.auth.type === 'header' ? { type: 'header', headerName: record.auth.name } : { type: record.auth.type },
@@ -1401,7 +1498,79 @@ const PRODUCT_NOUNS: Record<OpenAICompatibleProduct, string> = {
   'llama-server': 'llama-server',
   lmstudio: 'LM Studio server',
   vllm: 'vLLM server',
+  'llama-swap': 'llama-swap server',
 };
+
+const PRODUCT_LABELS: Record<OpenAICompatibleProduct, string> = {
+  'llama-server': 'llama-server',
+  lmstudio: 'LM Studio',
+  vllm: 'vLLM',
+  'llama-swap': 'llama-swap',
+};
+
+const SSH_OLLAMA_TOKEN =
+  'Ollama takes no token over SSH: ssh signs in with your keys. Remove the token, or choose OpenAI-compatible if the server asks for one.';
+
+/** Only undefined is no port, as in the CLI; anything else must be a port, or null. */
+function sshPortInput(value: number | string | undefined): number | null | undefined {
+  return value === undefined ? undefined : parseSshPort(value);
+}
+
+/** ssh signs in with the user's keys; the only credential is a server's own API key, as a bearer token. */
+function sshCredentialHeaders(credential: ModelServerCredentialInput): Record<string, string> | null {
+  if (credential.type === 'header') {
+    throw new Error('A server reached over SSH takes a bearer token or nothing: ssh signs in with your keys.');
+  }
+  return credentialHeaders(credential);
+}
+
+/** Where the Models screen says an SSH server is: the port only when it is not Ollama's. */
+function sshLabel(record: ModelServerRecord): string | null {
+  const { transport } = record;
+  if (transport.type !== 'ssh') return null;
+  const port = transport.port === SSH_DEFAULT_PORT ? '' : ` port ${transport.port}`;
+  return `ssh://${transport.destination}${port}`;
+}
+
+/**
+ * Names each server found so several from one machine stay apart: the host, then what runs there, then the port.
+ * A name already saved, or given to an earlier row, gets the port and then a number, as the store refuses repeats.
+ * A long host is cut to fit the store's length, never what follows it, so what is checked is what gets saved.
+ */
+export function foundServers(
+  destination: string,
+  servers: SshFoundServer[],
+  saved: string[],
+  maxChars = MAX_NAME_CHARS
+): ModelServerFound[] {
+  const host = suggestSshName(destination);
+  const labels = servers.map(server =>
+    server.kind === 'ollama'
+      ? 'Ollama'
+      : ((server.product && own(PRODUCT_LABELS, server.product)) ?? `port ${server.port}`)
+  );
+  const taken = new Set(saved.map(name => normalizeServerName(name).toLowerCase()));
+  return servers.map((server, index) => {
+    const label = labels[index];
+    const port = ` ${server.port}`;
+    const labelPart = servers.length === 1 ? '' : label;
+    const shared = label !== `port ${server.port}` && labels.filter(other => other === label).length > 1;
+    const suffix = shared ? port : '';
+    const named = (end: string) => {
+      const tail = `${labelPart ? ` ${labelPart}` : ''}${end}`;
+      return normalizeServerName(`${host.slice(0, Math.max(0, maxChars - tail.length))}${tail}`.slice(0, maxChars));
+    };
+    const ported = `${labelPart}${suffix}`.endsWith(port);
+    const numbered = ported ? suffix : `${suffix}${port}`;
+    let name = named(suffix);
+    // A suffix longer than the room left repeats the same cut name; the store then names the clash on save.
+    for (let n = ported ? 2 : 1; taken.has(name.toLowerCase()) && n <= taken.size + 2; n++) {
+      name = named(n === 1 ? numbered : `${numbered} ${n}`);
+    }
+    taken.add(name.toLowerCase());
+    return { ...server, suggestedName: name };
+  });
+}
 
 function nounOf(target: Pick<LaunchTarget, 'runtime' | 'product'>): string {
   if (target.runtime === 'ollama') return 'Ollama server';

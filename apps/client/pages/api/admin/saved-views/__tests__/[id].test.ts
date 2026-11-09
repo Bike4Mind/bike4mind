@@ -5,12 +5,19 @@ import { ApiKeyScope } from '@bike4mind/common';
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (config: unknown) => {
     const handlers: Record<string, (req: unknown, res: unknown) => unknown> = {};
-    const chain = Object.assign((req: { method?: string }, res: unknown) => handlers[req.method ?? 'GET']?.(req, res), {
-      use: () => chain,
-      patch: (fn: (req: unknown, res: unknown) => unknown) => ((handlers.PATCH = fn), chain),
-      delete: (fn: (req: unknown, res: unknown) => unknown) => ((handlers.DELETE = fn), chain),
-      _config: config,
-    });
+    const middlewares: ((req: unknown, res: unknown, next: () => void) => unknown)[] = [];
+    const chain = Object.assign(
+      async (req: { method?: string }, res: unknown) => {
+        for (const middleware of middlewares) await middleware(req, res, () => undefined);
+        return handlers[req.method ?? 'GET']?.(req, res);
+      },
+      {
+        use: (middleware: (typeof middlewares)[number]) => (middlewares.push(middleware), chain),
+        patch: (fn: (req: unknown, res: unknown) => unknown) => ((handlers.PATCH = fn), chain),
+        delete: (fn: (req: unknown, res: unknown) => unknown) => ((handlers.DELETE = fn), chain),
+        _config: config,
+      }
+    );
     return chain;
   },
 }));
@@ -50,9 +57,10 @@ describe('/api/admin/saved-views/[id]', () => {
     expect((handler as unknown as { _config: unknown })._config).toEqual({
       auth: 'jwtOnly',
       requiredScopes: [ApiKeyScope.ADMIN],
+      allowedMethods: ['PATCH', 'DELETE'],
     });
     await expect(call('DELETE', { id: VIEW_ID }, undefined, { ...ADMIN, isAdmin: false })).rejects.toThrow(
-      'Admin access required'
+      /missing permission/i
     );
     expect(mockDelete).not.toHaveBeenCalled();
   });

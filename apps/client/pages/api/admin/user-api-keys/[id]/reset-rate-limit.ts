@@ -5,8 +5,12 @@ import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
-import { evaluateCounterLockout, resetApiKeyRateLimit, resolveCounterLimit } from '@server/utils/apiKeyRateLimitCheck';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import {
+  evaluateCounterLockout,
+  resetApiKeyRateLimit,
+  resolveCounterLimit,
+} from '@bike4mind/server-utils/utils/apiKeyRateLimitCheck';
 import { ApiKeyScope, UserApiKeyEvents } from '@bike4mind/common';
 import { userApiKeyService } from '@bike4mind/services';
 

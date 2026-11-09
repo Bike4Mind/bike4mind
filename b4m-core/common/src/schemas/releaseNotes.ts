@@ -54,7 +54,7 @@ export const ReleaseNotesJobPrSchema = z.object({
 });
 export type ReleaseNotesJobPr = z.infer<typeof ReleaseNotesJobPrSchema>;
 
-/** SQS body sent by the release workflow; consumed by the workers releaseNotes queue handler. */
+/** SQS body sent by the release workflow; consumed by the workers whatsNewJob queue handler (kind 'release-notes'). */
 export const ReleaseNotesJobPayloadSchema = z.object({
   kind: z.literal('release-notes'),
   schemaVersion: z.number().int(),

@@ -23,7 +23,7 @@ import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { adjustOwnerStorageInSession } from '@bike4mind/server-utils/s3/storageCharge';
 import { storageOwnerOf } from '@bike4mind/common';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
-import { DataLakeAuditEvents, logAuditEvent } from '@server/utils/auditLog';
+import { DataLakeAuditEvents, logAuditEvent } from '@bike4mind/server-utils/utils/auditLog';
 import { resolveAuditPrincipal } from '@bike4mind/server-utils/dataLakes/resolveAuditPrincipal';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { recomputeStatsForLakeTags } from '@bike4mind/server-utils/dataLakes/recomputeStatsForLakeTags';

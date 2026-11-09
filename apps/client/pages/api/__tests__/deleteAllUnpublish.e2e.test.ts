@@ -10,7 +10,7 @@ import {
 import { KnowledgeType, Permission } from '@bike4mind/common';
 import { FabFile, PublishedArtifact, User } from '@bike4mind/database';
 import { Session } from '@bike4mind/database/auth';
-import defineAbilitiesFor from '@server/auth/ability';
+import defineAbilitiesFor from '@bike4mind/server-utils/auth/ability';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 

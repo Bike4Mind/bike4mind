@@ -6,7 +6,7 @@ import { RegInviteEvents } from '@bike4mind/common';
 import { ForbiddenError, parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { registrationInviteRepository, withTransaction } from '@bike4mind/database';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 const MAX_AUDITED_IDS = 100;
 

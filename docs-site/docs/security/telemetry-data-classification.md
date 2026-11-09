@@ -435,6 +435,15 @@ Every request to a `baseApi` route that authenticates with an API key writes one
 | Client IP      | `ipAddress`, resolved server-side | 90 days (TTL index) | Abuse and security investigation, anomaly alerts |
 | Key and owner  | `keyId` and `userId`              | 90 days (TTL index) | Attribute usage to a key and its owner           |
 
+## Client usage
+
+Every authenticated request to a `baseApi` route records which client the account used on the user record (`clientUsage`): the web app, the desktop app, the CLI, or the API (an API key or an OAuth token without a first-party client header). The desktop app and the CLI name themselves in their `User-Agent` and `X-B4M-Client` headers, so the value is a claim the caller makes, used only for statistics and for hiding the desktop app prompt, never for access decisions. A record is written at most once a day per client, or sooner when the client reports a new version. Impersonation sessions, sign-ins still waiting on MFA, system accounts and accounts pending deletion write nothing. The account owner and admins can see it, and it is deleted with the account.
+
+| Data           | Storage                                                         | Lifetime                                    | Purpose                                         |
+| -------------- | --------------------------------------------------------------- | ------------------------------------------- | ----------------------------------------------- |
+| Client seen    | `clientUsage.<web, desktop, cli or api>.firstSeenAt`, `lastSeenAt` | Account lifetime; deleted with the account | Usage statistics, hiding the desktop app prompt |
+| Client version | `clientUsage.<desktop or cli>.version`, at most 32 characters   | Account lifetime; deleted with the account | Usage statistics                                |
+
 ## Usage pattern signals
 
 A scheduled job, off by default behind the `usagePatternSignalsEnabled` admin setting, derives a usage profile for recently active free-tier accounts and stores the latest result per user in the `UserUsagePatternSignals` collection. It collects no new raw data: every input already exists in `UsageEvent`, `ApiKeyUsageLog` or `UserApiKey`. The result is for admin review only and triggers no automatic action on the account, its keys or its balance. Paid accounts get a marker with no signals.
@@ -483,6 +492,22 @@ The ASN, country and hosting flag are also copied to Stripe as `signup_asn`, `si
 `signupMeta.challengeVerified` records `true` only after a real server-verified challenge pass; skipped or unavailable checks remain null or absent. It shares the other non-IP signup metadata's admin-only access, account lifetime, and account-deletion behavior. Signed signup tokens carry this observation only to preserve it through verification; public test secrets and fail-open checks do not establish proof. On email sign-up the proof is single-use, because the signed token is consumed. On OAuth sign-up it is per-flow: the signed state is not consumed, so every callback that reuses the same state within its 5-minute lifetime records the same pass.
 
 Signup grant assessments also emit one of the `signup-grant-assessed-full`, `signup-grant-assessed-reduced`, or `signup-grant-assessed-review` log markers after commit. These markers contain only the outcome band, without account identifiers, policy weights, network observations, or challenge tokens. CloudWatch metric filters count them for monitoring and an optional review-volume alarm. The markers follow the server log group's retention; metric counts follow CloudWatch retention. Emission is best effort, so counts are operational monitoring rather than an exact grant ledger.
+
+`signupGrantAssessment.signals` stores the numeric and boolean values the signup risk collector observed (for example a datacenter flag and recent signup counts from the same network), recorded once at email verification so candidate policies can be replayed offline. It holds no IP address or other free text, is visible only to admins, and is kept for the account lifetime and deleted with the account. It is absent when no collector ran or the collector failed.
+
+## Waitlist signup network metadata
+
+A waitlist request (the public subscribe form, or a sign-up attempt while registration is closed) stores a smaller copy of the same network capture on the `Subscriber` row as `signupNetwork`. These people have no account yet, so the full IP is never stored: only its /24 (IPv4) or /48 (IPv6) prefix is kept. The daily `signupIpRetention` job clears the whole `signupNetwork` object once it is 90 days old. The waitlist row itself stays until an admin deletes it. The data is shown only to admins, in the network column of the Invite Center waitlist.
+
+| Field              | Stored as                                                                         | Retention | Purpose                                           |
+| ------------------ | --------------------------------------------------------------------------------- | --------- | ------------------------------------------------- |
+| IP prefix          | `signupNetwork.ipPrefix`, /24 or /48 only                                         | 90 days   | Attribute probing and repeat signups to a network |
+| User agent         | `signupNetwork.userAgent`, first 512 characters                                   | 90 days   | Abuse investigation                               |
+| Network and region | `asn`, operator for hosting ASNs, ISO country code, `isDatacenter`                | 90 days   | Spot signups from one network or a host           |
+| Edge signals       | `ja4` TLS fingerprint, WAF anonymous-IP and bot labels (null when not forwarded)  | 90 days   | Tie waitlist probes to other traffic              |
+| Challenge outcome  | `challengeVerified`: `true` after a server-verified Turnstile pass, otherwise null | 90 days   | Tell challenged signups from unchallenged ones    |
+
+A waitlist name that contains HTML or script markup, starts with a spreadsheet-formula character (`=`, `+`, `-`, `@`), or contains control characters is stored with `suspicious.reasons` listing which. Such a row gets the same response as any other signup and no Slack alert. The flag stays for the life of the row.
 
 ## Account behavioral evidence
 

@@ -6,7 +6,7 @@ import {
   isSelfOrImpersonator,
   parseAdminActionReason,
   recordAdminActionFromRequest,
-} from '@server/utils/adminAudit';
+} from '@bike4mind/server-utils/utils/adminAudit';
 import { clearAccountDeletion } from '@server/users/accountDeletion';
 
 /**

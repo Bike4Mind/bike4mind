@@ -1,8 +1,9 @@
 import { execFile } from 'node:child_process';
-import { readFile, statfs as nodeStatfs } from 'node:fs/promises';
+import { access, constants, readFile, statfs as nodeStatfs } from 'node:fs/promises';
 import nodeOs from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { parseWindowsGpus, scanLinuxGpus, windowsGpuCommand, type DetectedGpu, type GpuVendor } from './gpus';
+import { listLlamaServerDevices, VERSION_TIMEOUT_MS, type ListedDevice } from './llamaServer';
 
 export interface HardwareProfile {
   platform: string;
@@ -12,12 +13,16 @@ export interface HardwareProfile {
   /** RAM the OS sees; a firmware VRAM carve-out is not part of it. */
   totalMemoryBytes: number;
   /**
-   * Summed across one vendor's GPUs. On AMD unified memory, what ROCm can allocate; null on Apple and NVIDIA unified
-   * memory, where the GPU shares `totalMemoryBytes`, or when unknown.
+   * Summed across one vendor's GPUs. On AMD unified memory, what ROCm can allocate; on Intel integrated graphics under
+   * Windows, the shared-memory limit; null on other unified memory, where the GPU shares `totalMemoryBytes`, or when
+   * unknown.
    */
   gpuMemoryBytes: number | null;
   gpuName: string | null;
-  /** Usable discrete GPUs behind `gpuMemoryBytes`; integrated GPUs that Ollama skips are not counted. */
+  /**
+   * Usable discrete GPUs behind `gpuMemoryBytes`, or the one unified GPU; integrated GPUs a runtime skips beside a
+   * discrete one are not counted.
+   */
   gpuCount: number;
   /** Vendor of the GPUs behind `gpuMemoryBytes`; null without a usable GPU. */
   gpuVendor?: GpuVendor | 'apple' | null;
@@ -48,6 +53,18 @@ export interface HardwareProbeOptions {
   env?: Environment;
   /** Shares one nvidia-smi run and one sysfs scan between probes; see `gpuQueries`. */
   gpuQueries?: GpuQueries;
+  /**
+   * The llama-server whose `--list-devices` gives a Linux Intel card's VRAM, which sysfs does not expose; defaults to
+   * the first on PATH. Desktop passes the binary it launches.
+   */
+  llamaServer?: () => Promise<LlamaServerLocation | null>;
+  /** How old a reused device listing may be (ms); 0 lists again, as after a driver or settings change. */
+  llamaServerMaxAgeMs?: number;
+}
+
+export interface LlamaServerLocation {
+  path: string;
+  binaryArgs?: readonly string[];
 }
 
 export interface GpuQueries {
@@ -59,6 +76,7 @@ export interface GpuQueries {
 type Environment = Record<string, string | undefined>;
 
 const EXEC_TIMEOUT_MS = 5_000;
+const LISTING_TIMEOUT_MS = VERSION_TIMEOUT_MS + EXEC_TIMEOUT_MS;
 const MIB = 1024 * 1024;
 
 export const defaultExec: ExecLike = (command, args) =>
@@ -116,20 +134,114 @@ export async function withTimeout<T>(task: Promise<T>, ms: number): Promise<T | 
 }
 
 const NVIDIA_USAGE_ARGS = ['--query-gpu=name,memory.total,memory.used', '--format=csv,noheader,nounits'];
+// How old a device listing behind a VRAM-in-use figure may be (ms).
+const LISTED_USAGE_MAX_AGE_MS = 30_000;
 
 /** Runs each GPU query at most once, for probeHardware and probeMemoryUsage called with the same options. */
-export function gpuQueries(options: Pick<HardwareProbeOptions, 'exec' | 'rootDir' | 'env'> = {}): GpuQueries {
+export function gpuQueries(
+  options: Pick<HardwareProbeOptions, 'exec' | 'rootDir' | 'env' | 'llamaServer' | 'llamaServerMaxAgeMs'> = {}
+): GpuQueries {
   const exec = options.exec ?? defaultExec;
   let smi: Promise<string | null> | undefined;
   let scan: Promise<DetectedGpu[] | null> | undefined;
   return {
     nvidiaSmi: () =>
       (smi ??= attempt(() => exec('nvidia-smi', NVIDIA_USAGE_ARGS)).then(result => result?.stdout ?? null)),
-    linuxGpus: () =>
-      (scan ??= attempt(() =>
-        withTimeout(scanLinuxGpus(options.rootDir, options.env ?? process.env), EXEC_TIMEOUT_MS)
-      )),
+    linuxGpus: () => (scan ??= scanLinux(options, LISTED_USAGE_MAX_AGE_MS)),
   };
+}
+
+async function scanLinux(
+  options: Pick<HardwareProbeOptions, 'rootDir' | 'env' | 'llamaServer' | 'llamaServerMaxAgeMs'>,
+  maxAgeMs = Infinity
+): Promise<DetectedGpu[] | null> {
+  const env = options.env ?? process.env;
+  const scanned = await attempt(() => withTimeout(scanLinuxGpus(options.rootDir, env), EXEC_TIMEOUT_MS));
+  const locate = options.llamaServer ?? (() => llamaServerOnPath(env));
+  return scanned && withListedVram(scanned, locate, env, Math.min(maxAgeMs, options.llamaServerMaxAgeMs ?? Infinity));
+}
+
+async function llamaServerOnPath(env: Environment): Promise<LlamaServerLocation | null> {
+  for (const dir of (env.PATH ?? '').split(':')) {
+    if (!dir || !isAbsolute(dir)) continue;
+    const path = join(dir, 'llama-server');
+    if ((await attempt(() => access(path, constants.X_OK).then(() => true))) === true) return { path };
+  }
+  return null;
+}
+
+// Discrete Arc and Data Center names; integrated ones read `Arc(TM) Graphics`, `Arc(TM) 140V GPU` or `B390 GPU`.
+const INTEL_CARD_NAME_RE = /\bArc\(TM\) (?:Pro )?[AB]\d{2,3}[A-Z]? Graphics\b|\bData Center GPU\b/i;
+// SYCL on Linux names a card it has no marketing name for by its PCI id: `Intel(R) Graphics [0xe223]`.
+const LISTED_PCI_ID_RE = /\[0x([0-9a-f]{4})\]/i;
+
+const listedPciId = (device: ListedDevice) => LISTED_PCI_ID_RE.exec(device.description)?.[1].toLowerCase();
+
+/**
+ * The listed device behind each Linux Intel card, in the cards' order: from one backend's (SYCL or Vulkan) Intel
+ * devices, when they are exactly as many as the cards. With an integrated GPU, which is listed too, only a card's
+ * name or PCI id counts.
+ */
+function listedIntelCards(
+  cards: readonly DetectedGpu[],
+  devices: readonly ListedDevice[],
+  integrated: boolean
+): ListedDevice[] | null {
+  const ids = new Set(cards.map(card => card.pciDeviceId));
+  const backends = new Map<string, ListedDevice[]>();
+  for (const device of devices) {
+    if (!/\bIntel\b/i.test(device.description)) continue;
+    const id = listedPciId(device);
+    if (id ? !ids.has(id) : integrated && !INTEL_CARD_NAME_RE.test(device.description)) continue;
+    const backend = device.name.replace(/\d+$/, '');
+    backends.set(backend, [...(backends.get(backend) ?? []), device]);
+  }
+  const group = [...backends.values()].find(listed => listed.length === cards.length);
+  if (!group) return null;
+  if (group.every(listedPciId)) {
+    const left = [...group];
+    const matched: ListedDevice[] = [];
+    for (const card of cards) {
+      const index = left.findIndex(device => listedPciId(device) === card.pciDeviceId);
+      if (index < 0) return null;
+      matched.push(...left.splice(index, 1));
+    }
+    return matched;
+  }
+  // SYCL orders devices by compute units and sysfs by PCI address, so by position only identical cards line up.
+  return cards.every(card => card.pciDeviceId === cards[0].pciDeviceId) ? group : null;
+}
+
+/**
+ * Fills the VRAM of Linux Intel cards from llama-server's device list. Upstream xe and i915 expose no VRAM size in
+ * sysfs on any kernel (only the DRM memory-region ioctls do), so without a SYCL or Vulkan build it stays unknown.
+ */
+async function withListedVram(
+  scanned: DetectedGpu[],
+  locate: () => Promise<LlamaServerLocation | null>,
+  env: Environment,
+  maxAgeMs: number
+): Promise<DetectedGpu[]> {
+  const cards = scanned.filter(gpu => gpu.vendor === 'intel' && !gpu.sharedMemory);
+  if (!cards.some(card => card.memoryBytes === null)) return scanned;
+  // Bounded here too: a child stuck in a driver call, or a launcher's grandchild holding stdout, never reports back.
+  // The bound leaves room for locating the binary and for the listing's own timeout, as a first SYCL init is slow.
+  const devices = await attempt(() =>
+    withTimeout(
+      locate().then(binary => (binary ? listLlamaServerDevices({ ...binary, env, maxAgeMs }) : null)),
+      LISTING_TIMEOUT_MS
+    )
+  );
+  const integrated = scanned.some(gpu => gpu.vendor === 'intel' && gpu.sharedMemory === 'system');
+  const listed = devices && listedIntelCards(cards, devices, integrated);
+  if (!listed) return scanned;
+  return scanned.map(gpu => {
+    const device = listed[cards.indexOf(gpu)];
+    if (!device) return gpu;
+    // A backend that cannot read free memory reports it as the total.
+    const used = device.freeBytes < device.totalBytes ? { memoryUsedBytes: device.totalBytes - device.freeBytes } : {};
+    return { ...gpu, memoryBytes: device.totalBytes, ...used };
+  });
 }
 
 /** Drops the trailing memory.used column, leaving what parseNvidiaSmi reads. */
@@ -215,7 +327,7 @@ export async function probeHardware(options: HardwareProbeOptions = {}): Promise
   // Runs beside nvidia-smi too, to find a Strix Halo APU; on Windows only with an AMD CPU, sparing others PowerShell.
   const scanned =
     platform === 'linux'
-      ? await (queries?.linuxGpus() ?? attempt(() => withTimeout(scanLinuxGpus(options.rootDir, env), EXEC_TIMEOUT_MS)))
+      ? await (queries?.linuxGpus() ?? scanLinux(options))
       : platform === 'win32' && (nvidia.length === 0 || /AuthenticAMD/i.test(env.PROCESSOR_IDENTIFIER ?? ''))
         ? await attempt(() => windowsGpus(exec, env, !options.exec))
         : null;
@@ -233,6 +345,11 @@ export async function probeHardware(options: HardwareProbeOptions = {}): Promise
       : discreteFields(scanned && scanned.filter(gpu => !gpu.sharedMemory));
   const apu = scanned?.find(gpu => gpu.sharedMemory);
   if (!apu) return { ...base, ...discrete };
+  if (apu.sharedMemory === 'system') {
+    // llama.cpp adds an integrated GPU only when there is no discrete one (src/llama.cpp), so any dGPU wins.
+    if (discrete.gpuCount > 0) return { ...base, ...discrete };
+    return { ...base, ...intelIntegrated(apu, platform, totalMemoryBytes) };
+  }
 
   // Uncapped, since llama-server fits layers to what HIP reports; Ollama holds an integrated GPU to free RAM only when
   // placing and batching (server/sched.go), which the planner weighs against totalMemoryBytes.
@@ -340,8 +457,9 @@ export async function probeMemoryUsage(options: HardwareProbeOptions = {}): Prom
   const meminfo = await attempt(() => readFile(join(root, 'proc/meminfo'), 'utf8'));
   const availableMemoryBytes = meminfo ? parseMeminfo(meminfo).availableBytes : null;
   const scanned = await queries.linuxGpus();
+  // Intel integrated graphics use the RAM availableMemoryBytes reports; a card's use comes from llama-server, if any.
   const others: GpuUsage[] = (scanned ?? [])
-    .filter(gpu => gpu.vendor !== 'nvidia' || nvidia.length === 0)
+    .filter(gpu => (gpu.vendor !== 'nvidia' || nvidia.length === 0) && gpu.sharedMemory !== 'system')
     .map(gpu => ({
       vendor: gpu.vendor,
       name: gpu.name,
@@ -381,6 +499,22 @@ const NO_GPU = {
   gpuVendor: null,
   chip: null,
 } as const satisfies Omit<GpuFields, 'confidence'>;
+
+/**
+ * Intel integrated graphics share the RAM the OS sees. Windows caps a GPU's shared memory at half of it (WDDM's
+ * default; Intel's shared-memory override can raise it, which is not read here). Linux plans from the unified share.
+ */
+function intelIntegrated(gpu: DetectedGpu, platform: string, totalMemoryBytes: number): GpuFields {
+  return {
+    memoryKind: 'unified',
+    gpuMemoryBytes: platform === 'win32' && totalMemoryBytes > 0 ? Math.floor(totalMemoryBytes / 2) : null,
+    gpuName: gpu.name,
+    gpuCount: 1,
+    gpuVendor: 'intel',
+    chip: null,
+    confidence: totalMemoryBytes > 0 ? 'high' : 'low',
+  };
+}
 
 /** Discrete GPUs from a sysfs or Windows scan; null when the scan failed. */
 function discreteFields(scanned: DetectedGpu[] | null): GpuFields {

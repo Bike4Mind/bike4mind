@@ -234,7 +234,7 @@ const VoiceSettingsTab: FC = () => {
   const canSubmit = form.name.trim() && form.voiceId && form.systemPrompt.trim();
 
   return (
-    <Box sx={{ p: 3, display: 'flex', flexDirection: 'column', gap: 2 }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
       <Stack direction="row" justifyContent="space-between" alignItems="center">
         <Box>
           <Typography level="h3">Voice Settings</Typography>

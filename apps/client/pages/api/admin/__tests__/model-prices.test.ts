@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import type { IAdminAuditLogRepository } from '@bike4mind/common';
-import type { RecordAdminActionFromRequestInput } from '@server/utils/adminAudit';
+import type { RecordAdminActionFromRequestInput } from '@bike4mind/server-utils/utils/adminAudit';
 import { adminAuditService } from '@bike4mind/services';
 
 // Middleware stripped so the handler body runs directly (same pattern as
@@ -11,8 +11,15 @@ import { adminAuditService } from '@bike4mind/services';
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const handlers: Record<string, (req: unknown, res: unknown) => Promise<unknown>> = {};
-    const chain = async (req: { method: string }, res: unknown) => handlers[req.method](req, res);
-    chain.use = () => chain;
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => unknown> = [];
+    const chain = async (req: { method: string }, res: unknown) => {
+      for (const middleware of middlewares) await middleware(req, res, () => undefined);
+      return handlers[req.method](req, res);
+    };
+    chain.use = (fn: (typeof middlewares)[number]) => {
+      middlewares.push(fn);
+      return chain;
+    };
     chain.get = (fn: (typeof handlers)[string]) => {
       handlers.GET = fn;
       return chain;
@@ -40,7 +47,7 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
 const mockAudit = vi.hoisted(() => vi.fn(async () => null));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockAudit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockAudit }));
 
 import handler, {
   MANUAL_REPRICE_BAND_ERROR_CODE,
@@ -106,7 +113,7 @@ describe('GET /api/admin/model-prices', () => {
 
   it('rejects non-admin users', async () => {
     const { run } = call({ method: 'GET', isAdmin: false });
-    await expect(run()).rejects.toThrow(/[Aa]dmin/);
+    await expect(run()).rejects.toThrow(/missing permission/i);
     expect(mockRowsInForce).not.toHaveBeenCalled();
   });
 

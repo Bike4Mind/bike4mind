@@ -15,7 +15,10 @@ import {
   ORGANIZATION_SUBSCRIPTION_PRICE_ID,
   TEAM_PLAN_UNAVAILABLE_MESSAGE,
 } from '@bike4mind/server-utils/lib/subscriptions/constants';
-import { professionalPriceIdForStage, SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
+import {
+  professionalPriceIdForStage,
+  SUBSCRIPTION_PLANS,
+} from '@bike4mind/server-utils/lib/userSubscriptions/constants';
 import { SubscriptionPlanDetail } from '@bike4mind/server-utils/lib/userSubscriptions/types';
 import { Box, Button, Skeleton, Stack, Tab, tabClasses, TabList, Tabs, Tooltip, Typography } from '@mui/joy';
 import { useId, useMemo, useState } from 'react';

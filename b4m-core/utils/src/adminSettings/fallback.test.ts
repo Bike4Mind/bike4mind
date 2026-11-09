@@ -6,6 +6,8 @@ import {
   getLlmWithFallback,
   findFallbackForMissingModel,
   isSafetyRefusalError,
+  isOpenAiPolicyRefusalError,
+  isExpectedCompletionError,
   isProviderSpendLimitError,
   getHttpStatus,
 } from './fallback';
@@ -1088,5 +1090,27 @@ describe('fallback candidates must be able to serve the chat', () => {
   it('skips image models when substituting a missing model', () => {
     const result = findFallbackForMissingModel('retired-model', [geminiImage, geminiText], apiKeyTable, mockLogger);
     expect(result?.model.id).toBe('gemini-3.5-flash');
+  });
+});
+
+describe('expected completion outcomes', () => {
+  it.each(['cyber_policy', 'content_policy_violation', 'content_filter'])(
+    'recognizes the structured OpenAI policy code %s',
+    code => {
+      expect(isOpenAiPolicyRefusalError(Object.assign(new Error('refused'), { code }))).toBe(true);
+      expect(isOpenAiPolicyRefusalError(Object.assign(new Error('refused'), { error: { code } }))).toBe(true);
+    }
+  );
+
+  it('recognizes SDK text and typed request timeouts without masking other errors', () => {
+    expect(isExpectedCompletionError(new Error('400 cyber_policy: request refused'))).toBe(true);
+    expect(isExpectedCompletionError(new Error('Safety classifier refusal'))).toBe(true);
+    expect(isExpectedCompletionError(createAnthropicRequestTimeoutError(120000))).toBe(true);
+    expect(isExpectedCompletionError(Object.assign(new Error('bad credentials'), { code: 'invalid_api_key' }))).toBe(
+      false
+    );
+    expect(isExpectedCompletionError(new Error('unexpected failure'))).toBe(false);
+    expect(isExpectedCompletionError(null)).toBe(false);
+    expect(isOpenAiPolicyRefusalError(new Error('cyber_policy_configuration_error'))).toBe(false);
   });
 });

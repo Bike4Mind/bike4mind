@@ -1,3 +1,4 @@
+import { ApiKeyScope } from '@bike4mind/common';
 import { artifactService } from '@bike4mind/services';
 import { artifactRepository } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -15,7 +16,7 @@ const SearchArtifactsSchema = z.object({
   tags: z.array(z.string()).prefault([]),
 });
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.READ_NOTEBOOKS, ApiKeyScope.WRITE_NOTEBOOKS] })
   /**
    * GET /api/artifacts/search
    * Search artifacts by text
@@ -42,10 +43,12 @@ const handler = baseApi()
         },
         {
           db: {
-            artifacts: artifactRepository as any,          },
+            artifacts: artifactRepository as any,
+          },
         }
       );
 
+      res.setHeader('Cache-Control', 'private, no-store');
       return res.json(result);
     })
   );

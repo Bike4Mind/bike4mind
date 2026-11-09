@@ -5,6 +5,14 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/data-lakes/{id}/files/{file_id}',
   },
+  addProjectFiles: {
+    method: 'POST',
+    path: '/api/v1/projects/{id}/files',
+  },
+  addProjectSessions: {
+    method: 'POST',
+    path: '/api/v1/projects/{id}/sessions',
+  },
   bulkDeleteFiles: {
     method: 'POST',
     path: '/api/v1/files/bulk-delete',
@@ -32,6 +40,10 @@ export const operations = {
   createArtifact: {
     method: 'POST',
     path: '/api/v1/artifacts',
+  },
+  createArtifactVersion: {
+    method: 'POST',
+    path: '/api/v1/artifacts/{id}/versions',
   },
   createCompletion: {
     method: 'POST',
@@ -237,6 +249,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/agents',
   },
+  listArtifactTypes: {
+    method: 'GET',
+    path: '/api/v1/artifacts/types',
+  },
   listArtifactVersions: {
     method: 'GET',
     path: '/api/v1/artifacts/{id}/versions',
@@ -257,6 +273,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/decision-models',
   },
+  listEmbeddingModels: {
+    method: 'GET',
+    path: '/api/v1/embedding-models',
+  },
   listFiles: {
     method: 'GET',
     path: '/api/v1/files',
@@ -276,6 +296,14 @@ export const operations = {
   listMySkillMarketListings: {
     method: 'GET',
     path: '/api/v1/skills/market/listings/mine',
+  },
+  listProjectFiles: {
+    method: 'GET',
+    path: '/api/v1/projects/{id}/files',
+  },
+  listProjectSessions: {
+    method: 'GET',
+    path: '/api/v1/projects/{id}/sessions',
   },
   listProjects: {
     method: 'GET',
@@ -337,6 +365,14 @@ export const operations = {
     method: 'DELETE',
     path: '/api/v1/data-lakes/{id}/files/{file_id}',
   },
+  removeProjectFile: {
+    method: 'DELETE',
+    path: '/api/v1/projects/{id}/files/{file_id}',
+  },
+  removeProjectSession: {
+    method: 'DELETE',
+    path: '/api/v1/projects/{id}/sessions/{session_id}',
+  },
   rescanSkillMarketVersion: {
     method: 'POST',
     path: '/api/v1/skills/market/versions/{vid}/rescan',
@@ -344,6 +380,10 @@ export const operations = {
   reviewSkillMarketVersion: {
     method: 'POST',
     path: '/api/v1/skills/market/versions/{vid}/review',
+  },
+  searchArtifacts: {
+    method: 'GET',
+    path: '/api/v1/artifacts/search',
   },
   searchDataLake: {
     method: 'POST',

@@ -55,9 +55,12 @@ const SHORTCUT_HINT = isMac ? '\u2318\u21E7[ ]' : 'Ctrl+Shift+[ ]';
 export function ViewSwitcher({
   view,
   onViewChange,
+  ambient,
 }: {
   view: OrchestratorViewId;
   onViewChange(view: OrchestratorViewId): void;
+  /** The Tavern's quiet-when-idle switch; listed only while the Tavern is the view. */
+  ambient?: { on: boolean; onToggle(on: boolean): void };
 }) {
   const current = ORCHESTRATOR_VIEW_INFO[view];
 
@@ -120,6 +123,25 @@ export function ViewSwitcher({
             })}
           </Fragment>
         ))}
+        {ambient && view === 'tavern' && (
+          <>
+            <ListDivider />
+            <MenuItem
+              role="menuitemcheckbox"
+              aria-checked={ambient.on}
+              onClick={() => ambient.onToggle(!ambient.on)}
+              data-testid="orchestrator-ambient-toggle"
+            >
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Typography level="body-sm">Quiet when idle</Typography>
+                <Typography level="body-xs" textColor="text.tertiary">
+                  Hide the conversation and composer after a while
+                </Typography>
+              </Box>
+              {ambient.on && <CheckIcon />}
+            </MenuItem>
+          </>
+        )}
         <ListDivider />
         <Typography level="body-xs" textColor="text.tertiary" sx={{ px: 1.5, py: 0.5 }}>
           {`${SHORTCUT_HINT} to switch views`}

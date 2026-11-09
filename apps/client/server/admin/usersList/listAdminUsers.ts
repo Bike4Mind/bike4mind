@@ -20,7 +20,7 @@ import type {
 import { withSafeOrganization } from '@server/utils/toSafeOrganizationSubdocument';
 import { getDomainGroups, SIGNUP_SCAN_LIMIT } from '@server/users/signupAnomaly';
 import { funnelStepUserIds } from '@server/analytics/activationFunnel';
-import { signupVerdictUserIds } from '@server/analytics/signupCohort';
+import { signupVerdictUserIds } from '@server/analytics/realSignup';
 import { listAiAbuseAdvisories } from '@server/admin/aiAdvisory/aiAbuseAdvisories';
 import { LIVE_API_KEY_STATUS, adminUsersSort, buildAdminUsersMatch, organizationNamesOf } from './adminUsersQuery';
 
@@ -38,10 +38,13 @@ function cohortWindow(filter: AdminUsersFilter, key: 'verdict' | 'funnelStep') {
   return { start: new Date(filter.createdFrom), end: new Date(filter.createdTo) };
 }
 
-/** Users with a rolled-up day of AI activity in [fromDay, toDay], served by the { day, userId } index. */
+/**
+ * Users with a rolled-up day of first-party AI activity (the active flag) in [fromDay, toDay],
+ * served by the { day, active, userId } index.
+ */
 async function activeUserIds(fromDay: string, toDay: string): Promise<string[]> {
   const rows = await AnalyticsUserDay.aggregate<{ _id: string }>([
-    { $match: { day: { $gte: fromDay, $lte: toDay } } },
+    { $match: { day: { $gte: fromDay, $lte: toDay }, active: true } },
     { $group: { _id: '$userId' } },
     { $limit: ACTIVE_USERS_MAX + 1 },
   ]).option({ maxTimeMS: LIST_MAX_TIME_MS });

@@ -1,3 +1,9 @@
+import {
+  type BoundEmbeddingModel,
+  type EmbeddingRuntime,
+  bindEmbeddingModel,
+  embedOne,
+} from '../embeddingProviders/runtime';
 import { stripToolOutputMarker } from '../artifactParser';
 import { assemblyTokenBuffer, MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION } from './contextBudget';
 import {
@@ -31,14 +37,7 @@ import {
   MIN_REPLY_CHOICES,
   visibleReplyText,
 } from '@bike4mind/common';
-import {
-  BaseStorage,
-  EmbeddingFactory,
-  EmbeddingService,
-  detectURLs,
-  fetchAndParseURL,
-  hasURLs,
-} from '@bike4mind/fab-pipeline';
+import { BaseStorage, detectURLs, fetchAndParseURL, hasURLs } from '@bike4mind/fab-pipeline';
 import { getSettingsValue } from '../settings';
 import { Logger } from '@bike4mind/observability';
 import { ensureToolPairingIntegrity, isConverseBedrockModel } from '@bike4mind/llm-adapters';
@@ -400,10 +399,21 @@ function researchModeReplyText(results: IChatHistoryItem['researchModeResults'])
   return answers.map((answer, i) => `[Response ${i + 1} of ${answers.length}]\n${answer}`).join('\n\n');
 }
 
-/** The turn's text answer for history: the first non-thinking reply, else its Research Mode answers. */
+/**
+ * The turn's non-thinking reply slots, in order. Slots follow the provider's content blocks, so a
+ * turn that called tools holds the pre-tool preamble first and the final answer in a later slot.
+ */
+export function historyReplySlots(item: Pick<IChatHistoryItem, 'replies'>): string[] {
+  const slots = (item.replies ?? []).filter((r: string) => !r.trim().startsWith('<think>'));
+  // A lone slot passes through untouched so single-slot turns replay exactly as they always have.
+  return slots.length > 1 ? slots.filter(r => r.trim()) : slots;
+}
+
+export const REPLY_SLOT_SEPARATOR = '\n\n';
+
+/** The turn's text answer for history: every non-thinking reply slot, else its Research Mode answers. */
 function historyTextReply(item: Pick<IChatHistoryItem, 'replies' | 'researchModeResults'>): string {
-  const reply = item.replies?.find((r: string) => !r.trim().startsWith('<think>'));
-  return reply || researchModeReplyText(item.researchModeResults);
+  return historyReplySlots(item).join(REPLY_SLOT_SEPARATOR) || researchModeReplyText(item.researchModeResults);
 }
 
 /**
@@ -423,21 +433,15 @@ export function isStoppedBeforeReply(
 }
 
 /**
- * Whether the slot `historyTextReply` picks (the first non-`<think>` one) is also the turn's last
- * visible slot. On a multi-slot turn it is a pre-tool preamble, which must never carry the block.
+ * Whether the history text ends with the turn's last visible slot, the only place a choices block
+ * belongs. It does not when that slot opens with `<think>`, which `historyReplySlots` leaves out.
  */
-function isFinalVisibleReply(item: Pick<IChatHistoryItem, 'replies'>): boolean {
+function endsWithFinalVisibleReply(item: Pick<IChatHistoryItem, 'replies'>): boolean {
   const replies = item.replies ?? [];
-  const firstNonThinkIndex = replies.findIndex(r => !r.trim().startsWith('<think>'));
-  if (firstNonThinkIndex === -1) return false;
-  let lastVisibleIndex = -1;
   for (let i = replies.length - 1; i >= 0; i--) {
-    if (visibleReplyText(replies[i])) {
-      lastVisibleIndex = i;
-      break;
-    }
+    if (visibleReplyText(replies[i])) return !replies[i].trim().startsWith('<think>');
   }
-  return lastVisibleIndex !== -1 && firstNonThinkIndex === lastVisibleIndex;
+  return false;
 }
 
 /**
@@ -496,11 +500,11 @@ function replayableToolCalls(functionCalls: RecordedFunctionCall[] | undefined):
  * Chunks large text and returns averaged embedding vector
  */
 export async function generateSafeEmbedding(
-  embeddingService: EmbeddingService,
+  embeddingService: BoundEmbeddingModel,
   text: string,
   logger: Logger
 ): Promise<number[]> {
-  const modelInfo = embeddingService.getModelInfo();
+  const modelInfo = { contextWindow: embeddingService.maxInputTokens };
   const maxTokens = Math.min(modelInfo.contextWindow - 100, EMBEDDING_TOKEN_LIMITS.MAX_EMBEDDING_TOKENS);
 
   const estimatedTokens = estimateTokenLength(text);
@@ -513,8 +517,8 @@ export async function generateSafeEmbedding(
   });
 
   if (estimatedTokens <= maxTokens) {
-    logger.info(`Using embedder ${embeddingService.getModelInfo().model} `);
-    return await embeddingService.generateEmbedding(text);
+    logger.info(`Using embedder ${embeddingService.model} `);
+    return await embedOne(embeddingService, text);
   }
 
   // Text is too large - chunk it and average the embeddings
@@ -536,7 +540,7 @@ export async function generateSafeEmbedding(
   const chunkEmbeddings: number[][] = [];
   for (let i = 0; i < chunks.length; i++) {
     try {
-      const embedding = await embeddingService.generateEmbedding(chunks[i]);
+      const embedding = await embedOne(embeddingService, chunks[i]);
       chunkEmbeddings.push(embedding);
       logger.debug(`Generated embedding for chunk ${i + 1}/${chunks.length}`);
     } catch (error) {
@@ -873,8 +877,11 @@ export async function fetchAndProcessPreviousMessages(
     // this branch and Priority 3 are mutually exclusive, so entering here on result-less calls
     // replaces a genuine answer with a list of tool invocations and empty outcomes.
     else if (toolCalls.length > 0 && !disableToolReplay) {
-      // Get text reply (excluding thinking blocks)
-      const textReply = historyTextReply(cur);
+      // On a multi-slot turn the first slot is the pre-tool preamble and the rest came after the
+      // tool results, so the answer is replayed after them rather than ahead of the tool_use blocks.
+      const slots = historyReplySlots(cur);
+      const textReply = slots.length > 1 ? slots[0] : historyTextReply(cur);
+      const finalAnswer = slots.slice(1).join(REPLY_SLOT_SEPARATOR);
 
       // Build assistant message with text + tool_use blocks
       const assistantContent: MessageContentObject[] = [];
@@ -912,15 +919,19 @@ export async function fetchAndProcessPreviousMessages(
           is_error: fc.success === false,
         })),
       });
+
+      if (finalAnswer) {
+        const text = stripToolOutputMarker(finalAnswer);
+        const reattach = includeReplyChoices && endsWithFinalVisibleReply(cur);
+        acc.push({ role: 'assistant', content: reattach ? withStoredChoices(text, cur) : text });
+      }
     }
     // Priority 3: Legacy fallback - text-only replies
     else {
       const textReply = historyTextReply(cur);
       if (textReply) {
         const text = stripToolOutputMarker(textReply);
-        // Only re-attach when the picked slot is also the turn's final visible answer - see
-        // isFinalVisibleReply for why an earlier slot must never get the block.
-        const reattach = includeReplyChoices && isFinalVisibleReply(cur);
+        const reattach = includeReplyChoices && endsWithFinalVisibleReply(cur);
         acc.push({ role: 'assistant', content: reattach ? withStoredChoices(text, cur) : text });
       }
     }
@@ -1533,7 +1544,7 @@ async function noticeOversizedCanvas(
 }
 
 export async function processFabFilesServer(
-  embeddingFactory: EmbeddingFactory,
+  embeddingFactory: EmbeddingRuntime,
   fabFiles: IFabFileDocument[],
   userPrompt: string,
   /**
@@ -1620,7 +1631,7 @@ export async function processFabFilesServer(
   // Memoize the user prompt vectorization for each embedding model
   const embeddingStartTime = Date.now();
   const userVectorPrompt: { [embeddingModel: string]: number[] } = {};
-  const selectedEmbeddingModel = embeddingFactory.getDefaultEmbeddingModel();
+  const selectedEmbeddingModel = embeddingFactory.defaultModel;
 
   // Embedding the query powers semantic chunk selection over vectorized files, but it is an
   // OPTIMIZATION, not a prerequisite for answering. A failure here - provider down, key revoked or
@@ -1630,7 +1641,7 @@ export async function processFabFilesServer(
   // raw-content path below, so the attachment still reaches the model.
   try {
     userVectorPrompt[selectedEmbeddingModel] = await generateSafeEmbedding(
-      embeddingFactory.createEmbeddingService(selectedEmbeddingModel),
+      bindEmbeddingModel(embeddingFactory, selectedEmbeddingModel),
       userPrompt,
       logger
     );

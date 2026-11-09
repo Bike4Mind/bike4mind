@@ -410,7 +410,7 @@ export default function OAuthClientsTab() {
   };
 
   return (
-    <Box sx={{ p: 2 }} data-testid="oauth-clients-tab">
+    <Box data-testid="oauth-clients-tab">
       <Stack direction="row" justifyContent="space-between" alignItems="flex-start" sx={{ mb: 2 }} gap={2}>
         <Box>
           <Typography level="h4">OAuth Clients</Typography>

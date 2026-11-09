@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { AdminUserListItem } from './adminUserProjection';
-import type { EmailDomainGroup } from './signupAnomaly';
+import type { EmailDomainGroup } from '@bike4mind/server-utils/app/utils/signupAnomaly';
 import { USER_AI_VERDICT_FILTERS } from './aiAdvisory';
 
 /**
@@ -16,7 +16,7 @@ export const USER_SIGNUP_METHOD_FILTERS = ['email', 'google', 'github', 'faceboo
 export const USER_SIGNED_UP_FILTERS = ['hour', 'day', 'week', 'month'] as const;
 export const USER_RISK_FILTERS = ['high', 'medium', 'low'] as const;
 export const YES_NO_FILTERS = ['yes', 'no'] as const;
-/** The signup verdict the analytics charts split on; unclassified accounts are in neither. */
+/** The real-signup verdict the analytics charts split on: real (stored and filtered as `legit`) or suspected. */
 export const USER_VERDICT_FILTERS = ['suspected', 'legit'] as const;
 /** Activation funnel steps in order; a filter on one selects users who reached it and not the next. */
 export const USER_FUNNEL_STEP_FILTERS = ['signedUp', 'firstAction', 'cameBack', 'paid'] as const;

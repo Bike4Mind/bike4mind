@@ -7,6 +7,7 @@ import {
 import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import { WhatsNewHighlightsPayloadSchema } from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.types';
 import type {
+  WhatsNewHighlightsPayload,
   WhatsNewHighlightsConfig,
   HighlightsRunStatus,
 } from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.types';
@@ -92,14 +93,9 @@ async function postHighlightsNotice(
   }
 }
 
-/**
- * Queue handler for generating What's New weekly highlights and posting to Slack
- */
-export const dispatch = dispatchWithLogger(async (event, context, logger) => {
+/** Generates What's New weekly highlights and posts them to Slack. Rethrows so the queue retries into the DLQ. */
+export async function runHighlightsJob(payload: WhatsNewHighlightsPayload, logger: Logger): Promise<void> {
   const startTime = Date.now();
-  const body = event.Records[0].body;
-  const payload = WhatsNewHighlightsPayloadSchema.parse(JSON.parse(body));
-
   const { correlationId, environment, startDate, endDate, manualTrigger } = payload;
 
   // Add correlation ID to all logs
@@ -145,10 +141,16 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
     throw error; // Re-throw to trigger DLQ
   }
+}
+
+/** Entry point for the legacy highlights queue; removed once that queue is drained. */
+export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
+  const payload = WhatsNewHighlightsPayloadSchema.parse(JSON.parse(event.Records[0].body));
+  await runHighlightsJob(payload, logger);
 });
 
 async function processHighlightsGeneration(
-  payload: ReturnType<typeof WhatsNewHighlightsPayloadSchema.parse>,
+  payload: WhatsNewHighlightsPayload,
   logger: Logger,
   startTime: number
 ): Promise<void> {

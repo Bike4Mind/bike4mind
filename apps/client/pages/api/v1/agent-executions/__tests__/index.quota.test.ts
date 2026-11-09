@@ -38,7 +38,7 @@ vi.mock('@server/utils/callerModelList', () => ({
 }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsMap: async () => ({}), getSettingsValue: () => 'claude-opus-5' }));
 vi.mock('@bike4mind/database', () => ({ adminSettingsRepository: {} }));
-vi.mock('@server/auth/assertAiAccessAllowed', () => ({ assertAiAccessAllowed: vi.fn() }));
+vi.mock('@bike4mind/server-utils/auth/assertAiAccessAllowed', () => ({ assertAiAccessAllowed: vi.fn() }));
 vi.mock('@server/utils/startAgentExecution', () => ({
   startAgentExecution: (...a: unknown[]) => mockStartAgentExecution(...a),
 }));

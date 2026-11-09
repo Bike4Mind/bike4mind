@@ -1,5 +1,6 @@
 import type { Logger } from '@bike4mind/observability';
 import type { ToolBuilderCallbacks } from '@bike4mind/services/llm';
+import type { PushNotificationEvent } from '@bike4mind/common';
 
 type McpPendingAction = Parameters<NonNullable<ToolBuilderCallbacks['onPendingAction']>>[0];
 
@@ -24,9 +25,18 @@ export async function attachPendingActionToRunQuest(
   await quests.setPendingAction(questId, action);
 }
 
+/** Who to notify when a run parks on a Confirm card; the publisher must not throw (publishPushNotification). */
+export type ApprovalPushTarget = {
+  userId: string;
+  sessionId: string;
+  sessionDeepLink(sessionId: string): string;
+  publish(event: PushNotificationEvent): Promise<void>;
+};
+
 /**
  * Persists the pending action on the run's Quest, then pushes it to the client on a `progress` frame so the Confirm
  * card renders while the run is live (the agent path has no streamed quest, and the run quest is not refetched).
+ * With `approvalPush`, then publishes an `approval_needed` push, after the frame so it never delays the card.
  * The write still throws on failure; a failed send only logs.
  */
 export async function publishRunPendingAction({
@@ -36,6 +46,7 @@ export async function publishRunPendingAction({
   questRepository,
   sendWs,
   logger,
+  approvalPush,
 }: {
   executionId: string | undefined;
   questId: string | undefined;
@@ -43,10 +54,40 @@ export async function publishRunPendingAction({
   questRepository: { setPendingAction(questId: string, action: McpPendingAction): Promise<void> };
   sendWs: (action: string, payload: Record<string, unknown>) => Promise<void>;
   logger: Logger;
+  approvalPush?: ApprovalPushTarget;
 }): Promise<void> {
   await attachPendingActionToRunQuest(action, questId, questRepository, logger);
+  if (!questId) return;
+  // The frame goes first: the push is an EventBridge round trip and must not delay the card on the host.
+  await sendPendingActionFrame({ executionId, questId, action, sendWs, logger });
+  if (!approvalPush) return;
+  await approvalPush.publish({
+    userId: approvalPush.userId,
+    category: 'approval_needed',
+    title: 'Approval needed',
+    body: `An agent wants to run ${action.tool} and is waiting for your confirmation.`,
+    deepLink: approvalPush.sessionDeepLink(approvalPush.sessionId),
+    collapseId: `approval:${questId}`,
+    questId,
+    sessionId: approvalPush.sessionId,
+  });
+}
+
+async function sendPendingActionFrame({
+  executionId,
+  questId,
+  action,
+  sendWs,
+  logger,
+}: {
+  executionId: string | undefined;
+  questId: string;
+  action: McpPendingAction;
+  sendWs: (action: string, payload: Record<string, unknown>) => Promise<void>;
+  logger: Logger;
+}): Promise<void> {
   // The client keys frames by execution id, so a frame without one would match no run.
-  if (!questId || !executionId) return;
+  if (!executionId) return;
   try {
     await sendWs('progress', { executionId, questId, pendingAction: action });
   } catch (error) {

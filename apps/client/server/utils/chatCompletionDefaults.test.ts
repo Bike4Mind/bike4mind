@@ -124,6 +124,13 @@ describe('chatCompletionDefaults factory lazy contract', () => {
     const mod = await import('./chatCompletionDefaults');
     expect(typeof mod.getDefaultChatCompletionOptions().decide).toBe('function');
   }, 20000);
+
+  // Voice v2 and the admin rapid-reply test share these defaults and render no confirm card, so a
+  // custom write offered there would persist an action nobody can confirm. questProcessor owns it.
+  it('does not offer custom connector tools on the shared defaults', async () => {
+    const mod = await import('./chatCompletionDefaults');
+    expect(mod.getDefaultChatCompletionOptions().customMcp).toBeUndefined();
+  }, 20000);
 });
 
 const makeModel = (id: string, backend: ModelBackend, type: ModelInfo['type'] = 'text'): ModelInfo =>
@@ -361,7 +368,7 @@ describe('getDefaultChatCompletionOptions', () => {
 
   it('wires the shared operational billing adapter into tool execution', async () => {
     const { getDefaultChatCompletionOptions } = await import('./chatCompletionDefaults');
-    const { operationalBillingAdapters } = await import('@server/billing/operationalBilling');
+    const { operationalBillingAdapters } = await import('@bike4mind/server-utils/billing/operationalBilling');
 
     expect(getDefaultChatCompletionOptions().db.operationalBilling).toBe(operationalBillingAdapters);
   }, 20000);

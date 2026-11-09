@@ -1,6 +1,6 @@
 import { userApiKeyService } from '@bike4mind/services';
 import { userRepository } from '@bike4mind/database/auth';
-import mailer from './mailer';
+import mailer from '@bike4mind/server-utils/utils/mailer/index';
 
 /**
  * Thin wrapper that assembles the db/mailer adapters and calls the service-layer

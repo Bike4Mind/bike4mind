@@ -18,6 +18,7 @@ import type {
   ReasoningEffortSetting,
   SendMessageRequest,
   StartSpawnSuggestionRequest,
+  StartSideChatRequest,
   UpdateProjectRequest,
 } from '@shared/chat';
 import type { CookieImportRequest, CookieImportState } from '@shared/browserCookies';
@@ -51,6 +52,7 @@ import type { TerminalCreateRequest, TerminalDataEvent, TerminalsChangedEvent } 
 import type { UpdateState } from '@shared/update';
 import type { UsageWindowId } from '@shared/usage';
 import type { FleetState } from '@shared/fleet';
+import type { ModelBuildReport, ModelPose, ModelView, ModelViewState } from '@shared/model3d';
 import type { SimulatorFrame, SimulatorPaneInput, SimulatorViewState } from '@shared/simulator';
 
 // Written out one method per channel rather than a generic invoke(channel, ...args)
@@ -241,6 +243,7 @@ const api: DesktopApi = {
       ipcRenderer.invoke(IPC_CHANNELS.chatSendQueuedNow, sessionId, queuedId),
     startSpawnSuggestion: (request: StartSpawnSuggestionRequest) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatStartSpawnSuggestion, request),
+    startSideChat: (request: StartSideChatRequest) => ipcRenderer.invoke(IPC_CHANNELS.chatStartSideChat, request),
     dismissSpawnSuggestion: (sessionId: string, suggestionId: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatDismissSpawnSuggestion, sessionId, suggestionId),
     onQueueChanged: listener => {
@@ -325,6 +328,29 @@ const api: DesktopApi = {
     withdraw: listingId => ipcRenderer.invoke(IPC_CHANNELS.skillMarketWithdraw, listingId),
     copyShareLink: listingId => ipcRenderer.invoke(IPC_CHANNELS.skillMarketCopyShareLink, listingId),
     openSource: url => ipcRenderer.invoke(IPC_CHANNELS.skillMarketOpenSource, url),
+  },
+  model: {
+    getState: () => ipcRenderer.invoke(IPC_CHANNELS.modelGetState),
+    openDialog: () => ipcRenderer.invoke(IPC_CHANNELS.modelOpenDialog),
+    close: () => ipcRenderer.invoke(IPC_CHANNELS.modelClose),
+    readAsset: () => ipcRenderer.invoke(IPC_CHANNELS.modelReadAsset),
+    reportBuild: (report: ModelBuildReport) => ipcRenderer.invoke(IPC_CHANNELS.modelBuildReport, report),
+    writeGlb: request => ipcRenderer.invoke(IPC_CHANNELS.modelWriteGlb, request),
+    setParam: request => ipcRenderer.invoke(IPC_CHANNELS.modelSetParam, request),
+    saveExport: request => ipcRenderer.invoke(IPC_CHANNELS.modelSaveExport, request),
+    setRecording: active => ipcRenderer.invoke(IPC_CHANNELS.modelSetRecording, active),
+    captureResult: result => ipcRenderer.send(IPC_CHANNELS.modelCaptureResult, result),
+    onState: listener => {
+      const handler = (_event: unknown, state: ModelViewState) => listener(state);
+      ipcRenderer.on(IPC_CHANNELS.modelState, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.modelState, handler);
+    },
+    onCaptureRequest: listener => {
+      const handler = (_event: unknown, request: { id: string; views: ModelView[]; pose: ModelPose }) =>
+        listener(request);
+      ipcRenderer.on(IPC_CHANNELS.modelCaptureRequest, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.modelCaptureRequest, handler);
+    },
   },
   simulator: {
     getState: () => ipcRenderer.invoke(IPC_CHANNELS.simulatorGetState),
@@ -445,6 +471,8 @@ const api: DesktopApi = {
     syncCode: () => ipcRenderer.invoke(IPC_CHANNELS.claudeImportSyncCode),
     importChatExport: () => ipcRenderer.invoke(IPC_CHANNELS.claudeImportChatExport),
     setWatchFolder: (clear: boolean) => ipcRenderer.invoke(IPC_CHANNELS.claudeImportSetWatchFolder, clear),
+    setWebSettings: patch => ipcRenderer.invoke(IPC_CHANNELS.claudeImportSetWebSettings, patch),
+    syncWeb: () => ipcRenderer.invoke(IPC_CHANNELS.claudeImportSyncWeb),
     remove: kind => ipcRenderer.invoke(IPC_CHANNELS.claudeImportRemove, kind),
     onStateChanged: listener => {
       const handler = (_event: unknown, state: ClaudeImportState) => listener(state);

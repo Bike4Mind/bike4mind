@@ -1,5 +1,6 @@
 import {
   ABUSE_ASSESSMENT_MAX_ATTEMPTS,
+  ABUSE_ASSESSMENT_POLICY_VERSION,
   AbuseAssessmentConfigSchema,
   type AbuseAssessmentItem,
   SELF_ASSESSED_SHADOW_DETECTORS,
@@ -126,7 +127,7 @@ describe('assessShadowDetection', () => {
       detectionId: DETECTION_ID,
       result: 'abuse',
       failure: null,
-      policyVersion: 1,
+      policyVersion: ABUSE_ASSESSMENT_POLICY_VERSION,
       evidenceVersion: 1,
       modelVersion: 'gpt-6-luna',
       trigger: 'admin',

@@ -23,6 +23,13 @@ describe('toolsForRequest', () => {
     expect(names({ roots: [], media: false, host: false })).toEqual([]);
   });
 
+  // It reads from the server session's media and writes into the project, so it needs both.
+  it('offers save_generated_image only with a signed-in session AND a granted folder', () => {
+    expect(names({ roots: ['/tmp'], media: true, host: false })).toContain('save_generated_image');
+    expect(names({ roots: [], media: true, host: false })).not.toContain('save_generated_image');
+    expect(names({ roots: ['/tmp'], media: false, host: false })).not.toContain('save_generated_image');
+  });
+
   it('declares all four families together', () => {
     const declared = names({ roots: ['/tmp'], media: true, host: true, mcp: [mcpSchema] });
     expect(declared).toContain('bash_execute');

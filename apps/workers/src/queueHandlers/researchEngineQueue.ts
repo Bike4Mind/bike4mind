@@ -26,7 +26,7 @@ import { ResearchTaskStatus } from '@bike4mind/common';
 import { fileTagRepository } from '@bike4mind/database';
 import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import { Logger } from '@bike4mind/observability';
-import { researchTaskJobs } from '@server/utils/researchTasks';
+import { researchTaskJobs } from '@bike4mind/server-utils/utils/researchTasks';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { assertOwnerCanAfford, createCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import { isTerminalCreditRefusal, type IUserDocument } from '@bike4mind/common';

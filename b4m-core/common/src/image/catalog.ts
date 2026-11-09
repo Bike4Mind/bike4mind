@@ -6,6 +6,8 @@ import {
   getMaxReferenceImages,
   IMAGES_PER_EDIT_REQUEST,
   MAX_REFERENCE_IMAGES,
+  supportsBflOutputFormat,
+  supportsBflSeed,
 } from '../utils/modelHelpers';
 import type { AspectRatioCapability, ImageModeCapabilities, ImageModelCatalogEntry } from './types';
 
@@ -116,6 +118,23 @@ const flux2 = (model: ImageModels): ImageModelCatalogEntry =>
     },
     sizing: BFL_SIZING,
   });
+
+// FLUX 3 sends the same input-image list as one `images` array, sized by width/height like FLUX.2. flux-3-image
+// takes neither seed nor output_format (BFL picks the format); Klein takes both.
+const flux3 = (model: ImageModels): ImageModelCatalogEntry => ({
+  ...bfl({
+    modes: {
+      generate: {
+        inputs: { reference: { max: getMaxReferenceImages(model) } },
+        maxOutputs: MAX_IMAGES_PER_REQUEST,
+        aspectRatios: null,
+        outputFormats: supportsBflOutputFormat(model) ? PNG_JPEG : [],
+      },
+    },
+    sizing: BFL_SIZING,
+  }),
+  seed: supportsBflSeed(model),
+});
 
 // The gemini-*-image models are not served by the Imagen-style generateImages call GeminiImageService tries
 // first, so both modes land on generateContent with no imageConfig: no aspect ratio or format reaches Gemini.
@@ -230,6 +249,8 @@ export const IMAGE_MODEL_CATALOG: Record<ImageModels, ImageModelCatalogEntry> = 
   [ImageModels.FLUX_2_KLEIN_9B]: flux2(ImageModels.FLUX_2_KLEIN_9B),
   [ImageModels.FLUX_2_KLEIN_9B_PREVIEW]: flux2(ImageModels.FLUX_2_KLEIN_9B_PREVIEW),
   [ImageModels.FLUX_2_KLEIN_4B]: flux2(ImageModels.FLUX_2_KLEIN_4B),
+  [ImageModels.FLUX_3_IMAGE]: flux3(ImageModels.FLUX_3_IMAGE),
+  [ImageModels.FLUX_3_IMAGE_KLEIN]: flux3(ImageModels.FLUX_3_IMAGE_KLEIN),
   // xAI receives only the prompt and n; it takes no size, ratio or format and has no edit endpoint.
   [ImageModels.GROK_IMAGINE_IMAGE_QUALITY]: {
     provider: 'xai',

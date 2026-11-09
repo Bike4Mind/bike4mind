@@ -7,7 +7,7 @@ const h = vi.hoisted(() => ({
   setting: vi.fn(),
   limits: vi.fn(),
 }));
-vi.mock('@server/auth/signupProtection', () => ({ signupProtection: h.protection }));
+vi.mock('@bike4mind/server-utils/auth/signupProtection', () => ({ signupProtection: h.protection }));
 vi.mock('@bike4mind/services', () => ({ userService: { dripSignupGrant: h.drip, resolveDripLimits: h.limits } }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { findBySettingName: h.setting },
@@ -30,7 +30,7 @@ describe('activity signup drip evaluation', () => {
   beforeEach(() => {
     h.drip.mockReset();
     h.limits.mockResolvedValue({ dailyCredits: 1000, dripCap: 9000, dripCapSource: 'setting' });
-    settings({ signupGrantActivityEnabled: 'true' });
+    settings({});
   });
 
   it('drips for the current UTC day with the shared domain protection when the active time qualifies', async () => {
@@ -58,19 +58,11 @@ describe('activity signup drip evaluation', () => {
     expect(h.drip).not.toHaveBeenCalled();
   });
 
-  it('does not drip when the daily amount is 0, even with the retired activity flag on', async () => {
+  it('does not drip when the daily amount is 0', async () => {
     h.limits.mockResolvedValue({ dailyCredits: 0, dripCap: 9000, dripCapSource: 'setting' });
     h.findById.mockResolvedValue(grantedUser());
     await unlockSignupGrantFromActivity('user-1', NOW);
     expect(h.drip).not.toHaveBeenCalled();
-  });
-
-  it('still drips with the retired activity flag off when the daily amount is positive', async () => {
-    settings({ signupGrantActivityEnabled: 'false' });
-    h.findById.mockResolvedValue(grantedUser());
-    h.drip.mockResolvedValue({ creditsGranted: 1000, currentCredits: 1 });
-    await unlockSignupGrantFromActivity('user-1', NOW);
-    expect(h.drip).toHaveBeenCalled();
   });
 
   it.each([['0'], ['abc'], [undefined], ['59'], ['7201'], ['90.5']])(

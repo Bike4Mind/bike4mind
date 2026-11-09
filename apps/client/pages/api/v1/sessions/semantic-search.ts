@@ -31,7 +31,13 @@ import {
 } from '@bike4mind/database';
 import { Quest } from '@bike4mind/database/content';
 import { computeCosineSimilarity, getSettingsByNames } from '@bike4mind/utils';
-import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingWithKeylessFallback } from '@bike4mind/fab-pipeline';
+import {
+  buildEmbeddingRegistry,
+  bindEmbeddingModel,
+  embedOne,
+  embeddingBackendForModel,
+  resolveEmbeddingWithKeylessFallback,
+} from '@bike4mind/services/llm/embeddingProviders';
 import {
   getEmbeddingModelCost,
   ForbiddenError,
@@ -46,7 +52,7 @@ import { apiKeyService, assertOwnerHasCredits, creditService, meterCompletionBac
 import { ReRankService } from '@bike4mind/services/llm/reranker';
 import { SmallLLMService } from '@bike4mind/services/llm/SmallLLMService';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
-import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 
 interface MessageMatch {
   similarity: number;
@@ -229,7 +235,7 @@ const handler = nextRouteForContract(searchSessionsContract).post(
           `[sessions/semantic-search] no credential resolved for ${requestedEmbeddingModel}; embedding the query with keyless ${embeddingModel} instead`
         );
       }
-      const requiredProvider = getProviderFromModel(embeddingModel);
+      const requiredProvider = embeddingBackendForModel(embeddingModel);
       req.logger?.debug?.('Required provider for model:', requiredProvider);
       if (missing === 'openai') {
         req.logger?.error?.('OpenAI API key not configured');
@@ -256,8 +262,8 @@ const handler = nextRouteForContract(searchSessionsContract).post(
         hasOllamaBaseUrl: !!embeddingConfig.ollamaBaseUrl,
         model: embeddingModel,
       });
-      const embeddingFactory = new EmbeddingFactory(embeddingConfig);
-      const embeddingService = embeddingFactory.createEmbeddingService(embeddingModel);
+      const embeddingRuntime = buildEmbeddingRegistry(embeddingConfig);
+      const embeddingService = bindEmbeddingModel(embeddingRuntime, embeddingModel);
 
       const generateEmbedding = async (text: string) => {
         // A UTF-8 byte bounds the tokenizer input; settle the same local estimate as before.
@@ -268,7 +274,7 @@ const handler = nextRouteForContract(searchSessionsContract).post(
         );
         let vector: number[];
         try {
-          vector = await embeddingService.generateEmbedding(text);
+          vector = await embedOne(embeddingService, text);
         } catch (error) {
           await reservation.refund();
           throw error;

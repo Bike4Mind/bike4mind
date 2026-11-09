@@ -25,11 +25,14 @@ import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { ChatQueuedMessage, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
 import { AttachmentRow } from './Attachments';
+import { QuoteChip } from './QuoteChip';
 import { findCommand, matchCommands, type ComposerCommand } from './commands';
 import { ComposerHighlight, type HighlightToken } from './ComposerHighlight';
 import {
+  appendToDraft,
   attachShortcut,
   COMPOSER_BUTTON_LABELS,
+  type ComposerFill,
   composerButtonAction,
   composerEscapeAction,
   composerKeyAction,
@@ -108,6 +111,8 @@ export function Composer({
   fill,
   onFillConsumed,
   focusRequest,
+  quote,
+  onRemoveQuote,
   footer,
   leading,
   skills,
@@ -188,15 +193,22 @@ export function Composer({
   returned?: { id: number; messages: ChatQueuedMessage[] } | null;
   onReturnedConsumed?: () => void;
   /**
-   * Text to put in the box in place of the draft, focused with the caret at its end - a blank
-   * chat's suggestion. Taken once per id, like `returned`, so picking the same card twice works.
+   * Text to put in the box in place of the draft (or after it, with `append`), focused with the
+   * caret at its end - a blank chat's suggestion, or a part picked in the model pane. Taken once per
+   * id, like `returned`, so picking the same card twice works.
    */
-  fill?: { id: number; text: string } | null;
+  fill?: ComposerFill | null;
   onFillConsumed?: () => void;
   /** Bumped to move the keyboard into the box, caret at the end, without touching the draft. */
   focusRequest?: number;
-  /** Controls that belong to the next turn rather than to the app - the model picker. */
-  footer?: ReactNode;
+  /** The passage the next message replies to, shown above the box; see quotedMessage. */
+  quote?: string | null;
+  onRemoveQuote?: () => void;
+  /**
+   * Controls that belong to the next turn rather than to the app - the model picker. As a
+   * function it is handed the row's indicators (context and credits rings) to place itself.
+   */
+  footer?: ReactNode | ((indicators: ReactNode) => ReactNode);
   /**
    * Sits beside the attach button, on the left of the same row - the approval-mode pill. Its
    * place is load-bearing: a permission the user cannot see without opening something is a
@@ -282,6 +294,7 @@ export function Composer({
   const allowancePercent = shownUsage
     ? creditAllowancePercent(shownUsage.credits, shownUsage.monthlyAllowance ?? null)
     : null;
+  const creditsLow = ['warning', 'danger'].includes(allowanceColor(allowancePercent));
 
   // See composerInput.ts for what wins here and why.
   const shown = shownSuggestion({ disabled, text, suggestion });
@@ -341,7 +354,7 @@ export function Composer({
   useEffect(() => {
     if (!fill || consumedFill.current === fill.id) return;
     consumedFill.current = fill.id;
-    setText(fill.text);
+    setText(current => (fill.append ? appendToDraft(current, fill.text) : fill.text));
     setCaretRequest(request => request + 1);
     onFillConsumed?.();
   }, [fill, onFillConsumed]);
@@ -593,6 +606,48 @@ export function Composer({
     void toAttachmentInputs(files).then(inputs => attachments.add(inputs));
   };
 
+  // The row's indicators, handed to a footer that wants to keep them on one line with its own
+  // last control (see ChatShell: the model picker), so a narrow row never strands them.
+  const indicators = (
+    <>
+      {!disabled && !notReady && contextStatus}
+
+      {/* Only once the allowance runs low: otherwise the balance lives in the context ring's
+      tooltip, so the row keeps a single indicator. */}
+      {shownUsage && creditsLow && (
+        <Tooltip
+          title={usageDetail ?? ''}
+          placement="top"
+          variant="soft"
+          size="sm"
+          disableHoverListener={!usageDetail}
+          // Preserved so the tooltip keeps the one-fact-per-line shape it is built with.
+          sx={{ whiteSpace: 'pre-line', maxWidth: 360 }}
+        >
+          {/* A wrapper rather than the ring itself, so the hover target keeps its own box
+          and the tooltip has something to hold on to at any ring size. */}
+          <Box sx={{ display: 'inline-flex' }} data-testid="composer-status">
+            <CircularProgress
+              determinate
+              value={allowancePercent === null ? 0 : allowanceArc(allowancePercent)}
+              color={allowanceColor(allowancePercent)}
+              // Sized off the text rather than off Joy's own scale: this sits in a row of
+              // body-xs controls, and the smallest preset is half again as tall as they are.
+              sx={{
+                '--CircularProgress-size': '14px',
+                '--CircularProgress-trackThickness': '2px',
+                '--CircularProgress-progressThickness': '2px',
+                ...(allowancePercent === null ? { opacity: 0.5 } : {}),
+              }}
+              aria-label={usageText ?? 'Credits'}
+              data-testid="composer-status-ring"
+            />
+          </Box>
+        </Tooltip>
+      )}
+    </>
+  );
+
   return (
     <Box>
       {attachments.rejected.length > 0 && (
@@ -650,6 +705,12 @@ export function Composer({
         onSendNow={onSendQueuedNow}
         canSendNow={streaming}
       />
+
+      {quote && (
+        <Box sx={{ ...contentColumnSx, pt: 1.5 }}>
+          <QuoteChip quote={quote} onRemove={() => onRemoveQuote?.()} />
+        </Box>
+      )}
 
       {attachments.attachments.length > 0 && (
         <Box sx={{ ...contentColumnSx, pt: 1.5 }}>
@@ -781,7 +842,7 @@ export function Composer({
 
       {/* Attach on the left, what answers the turn on the right - the shape Claude Code uses.
           The window's last row, so a wider gap below than above. */}
-      <Stack direction="row" alignItems="center" sx={{ ...contentColumnSx, pt: 1, pb: 2, gap: 1 }}>
+      <Stack direction="row" alignItems="flex-start" sx={{ ...contentColumnSx, pt: 1, pb: 2, gap: 1 }}>
         {/* No correction of its own: its box goes on the content edge like every other control
             in the column, and the '+' rides inside it. Pulling the box left so the glyph alone
             sat on the line is what used to send its hover surface outside the column. */}
@@ -847,43 +908,25 @@ export function Composer({
 
         {leading}
 
-        <Box sx={{ flex: 1 }} />
-
-        {footer}
-
-        {!disabled && !notReady && contextStatus}
-
-        {shownUsage && (
-          <Tooltip
-            title={usageDetail ?? ''}
-            placement="top"
-            variant="soft"
-            size="sm"
-            disableHoverListener={!usageDetail}
-            // Preserved so the tooltip keeps the one-fact-per-line shape it is built with.
-            sx={{ whiteSpace: 'pre-line', maxWidth: 360 }}
-          >
-            {/* A wrapper rather than the ring itself, so the hover target keeps its own box
-                and the tooltip has something to hold on to at any ring size. */}
-            <Box sx={{ display: 'inline-flex' }} data-testid="composer-status">
-              <CircularProgress
-                determinate
-                value={allowancePercent === null ? 0 : allowanceArc(allowancePercent)}
-                color={allowanceColor(allowancePercent)}
-                // Sized off the text rather than off Joy's own scale: this sits in a row of
-                // body-xs controls, and the smallest preset is half again as tall as they are.
-                sx={{
-                  '--CircularProgress-size': '14px',
-                  '--CircularProgress-trackThickness': '2px',
-                  '--CircularProgress-progressThickness': '2px',
-                  ...(allowancePercent === null ? { opacity: 0.5 } : {}),
-                }}
-                aria-label={usageText ?? 'Credits'}
-                data-testid="composer-status-ring"
-              />
-            </Box>
-          </Tooltip>
-        )}
+        {/* Takes the rest of the row and wraps in reverse rather than squeezing: whatever does
+            not fit (the open tune tray first) drops below the line, so no label is ever cut and
+            the model and its ring stay on the row's own line. */}
+        <Stack
+          direction="row"
+          alignItems="center"
+          justifyContent="flex-end"
+          flexWrap="wrap-reverse"
+          sx={{ flex: '1 1 0', minWidth: 0, columnGap: 0.75, rowGap: 0.5 }}
+        >
+          {typeof footer === 'function' ? (
+            footer(indicators)
+          ) : (
+            <>
+              {footer}
+              {indicators}
+            </>
+          )}
+        </Stack>
       </Stack>
     </Box>
   );

@@ -10,7 +10,7 @@ import type {
   CookieImportResult,
   CookieImportState,
 } from './browserCookies';
-import type { ClaudeImportResult, ClaudeImportState, ClaudeRemoveResult } from './claudeImport';
+import type { ClaudeImportKind, ClaudeImportResult, ClaudeImportState, ClaudeRemoveResult } from './claudeImport';
 import type { CapabilityLedgerState } from './capabilities';
 import type { McpMutationResult, McpServerInput, McpServersState } from './mcp';
 import type {
@@ -58,6 +58,8 @@ import type {
   SendMessageResult,
   SpawnSuggestionResult,
   StartSpawnSuggestionRequest,
+  StartSideChatRequest,
+  StartSideChatResult,
   ToolAccessState,
   UpdateProjectRequest,
   UpdateProjectResult,
@@ -123,6 +125,7 @@ import type {
 } from './models';
 import type { AccountUsageResult, UsageWindowId } from './usage';
 import type { FleetState } from './fleet';
+import type { ModelBuildReport, ModelCaptureRequest, ModelExportFormat, ModelViewState } from './model3d';
 import type { SimulatorFrame, SimulatorPaneInput, SimulatorViewDevice, SimulatorViewState } from './simulator';
 import type { LocalHistoryResult, LocalHistoryState } from './history';
 
@@ -222,6 +225,7 @@ export const IPC_CHANNELS = {
   /** main -> renderer push; one session's queue of typed-ahead messages changed. */
   chatQueueChanged: 'chat:queue-changed',
   chatStartSpawnSuggestion: 'chat:start-spawn-suggestion',
+  chatStartSideChat: 'chat:start-side-chat',
   chatDismissSpawnSuggestion: 'chat:dismiss-spawn-suggestion',
   chatRespondToApproval: 'chat:respond-to-approval',
   chatPickAttachments: 'chat:pick-attachments',
@@ -325,6 +329,8 @@ export const IPC_CHANNELS = {
   claudeImportChatExport: 'claude:import-chat-export',
   claudeImportSetWatchFolder: 'claude:set-watch-folder',
   claudeImportRemove: 'claude:remove-imported',
+  claudeImportSetWebSettings: 'claude:set-web-import',
+  claudeImportSyncWeb: 'claude:sync-web',
   /** main -> renderer push of the import state. */
   claudeImportStateChanged: 'claude:import-state-changed',
   /** main -> renderer push, batched: imported sessions were added or changed, so re-list. */
@@ -421,6 +427,26 @@ export const IPC_CHANNELS = {
   simulatorState: 'simulator:state',
   /** main -> renderer push: one JPEG frame of the attached screen, at up to 10 a second. */
   simulatorFrame: 'simulator:frame',
+  /**
+   * The 3D model pane. Main owns the open file and every write (main/chat/model3d/ModelLiveView.ts);
+   * the renderer builds in the sandboxed b4m-model: engine and reports back. See @shared/model3d.
+   */
+  modelGetState: 'model:get-state',
+  /** Renderer -> main: the user picked a file to view (open dialog in main). */
+  modelOpenDialog: 'model:open-dialog',
+  modelClose: 'model:close',
+  modelReadAsset: 'model:read-asset',
+  modelBuildReport: 'model:build-report',
+  modelWriteGlb: 'model:write-glb',
+  modelSetParam: 'model:set-param',
+  /** Renderer -> main: save an export the user asked for (save dialog in main). */
+  modelSaveExport: 'model:save-export',
+  modelSetRecording: 'model:set-recording',
+  modelCaptureResult: 'model:capture-result',
+  /** main -> renderer push: the open model changed (opened, edited on disk, closed). */
+  modelState: 'model:state',
+  /** main -> renderer push: render these views of the current model and answer on modelCaptureResult. */
+  modelCaptureRequest: 'model:capture-request',
   /**
    * Importing the user's own Chrome cookies, per site. Renderer -> main, every one of them.
    *
@@ -903,6 +929,11 @@ export interface DesktopApi {
      */
     startSpawnSuggestion(request: StartSpawnSuggestionRequest): Promise<SpawnSuggestionResult>;
     dismissSpawnSuggestion(sessionId: string, suggestionId: string): Promise<SpawnSuggestionResult>;
+    /**
+     * Start a child conversation of `sessionId` about a passage the user highlighted, opening with
+     * that passage and an excerpt of the parent. Runs no turn: the user asks there.
+     */
+    startSideChat(request: StartSideChatRequest): Promise<StartSideChatResult>;
     /** Open the OS file picker and take in whatever is chosen. Resolves empty if the user cancels. */
     pickAttachments(sessionId: string): Promise<AddAttachmentsResult>;
     /** Take in dropped or pasted files. The bytes are written to disk before this resolves. */
@@ -1059,6 +1090,28 @@ export interface DesktopApi {
    * through its tools in main. What is here is the url bar: the one part of driving the page
    * that the user cannot do by clicking on it, because the page has no chrome of its own.
    */
+  /** The 3D model pane's bridge to main. */
+  model: {
+    getState(): Promise<ModelViewState>;
+    /** Opens a picked .glb/.stl/.model.js; resolves to the new state, or null when cancelled. */
+    openDialog(): Promise<ModelViewState | null>;
+    close(): Promise<void>;
+    readAsset(): Promise<Uint8Array | null>;
+    reportBuild(report: ModelBuildReport): Promise<void>;
+    writeGlb(request: { generation: number; bytes: Uint8Array }): Promise<string | null>;
+    /** False when the value could not be written back to the file. */
+    setParam(request: { key: string; value: number }): Promise<boolean>;
+    /** Resolves to the saved path, or null when cancelled. */
+    saveExport(request: { format: ModelExportFormat; bytes: Uint8Array }): Promise<string | null>;
+    /**
+     * Marks a turntable recording as running or done. While one runs the window keeps full-rate timers
+     * in the background, since the clip's frame times are wall-clock times.
+     */
+    setRecording(active: boolean): Promise<void>;
+    captureResult(result: { id: string; bytes?: Uint8Array; error?: string }): void;
+    onState(listener: (state: ModelViewState) => void): () => void;
+    onCaptureRequest(listener: (request: ModelCaptureRequest) => void): () => void;
+  };
   /** The live iOS Simulator view; `available` is false off macOS. */
   simulator: {
     getState(): Promise<SimulatorViewState>;
@@ -1193,7 +1246,9 @@ export interface DesktopApi {
     importChatExport(): Promise<ClaudeImportResult>;
     /** Opens a folder picker in main; `clear` stops watching instead. */
     setWatchFolder(clear: boolean): Promise<ClaudeImportState>;
-    remove(kind: 'claude-code' | 'claude-chat'): Promise<ClaudeRemoveResult>;
+    setWebSettings(patch: { enabled?: boolean }): Promise<ClaudeImportState>;
+    syncWeb(): Promise<ClaudeImportState>;
+    remove(kind: ClaudeImportKind): Promise<ClaudeRemoveResult>;
     onStateChanged(listener: (state: ClaudeImportState) => void): () => void;
     onSessionsChanged(listener: () => void): () => void;
   };

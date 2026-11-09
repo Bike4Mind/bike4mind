@@ -6,7 +6,22 @@ import { resolveSlackWebhookUrl } from '@bike4mind/server-utils/integrations/sla
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { getSecretRotationConfig } from '@bike4mind/server-utils/lib/secretRotation/constants';
 import { SECRET_ROTATION_GRACE_MS } from '@bike4mind/server-utils/auth/secretRotationGrace';
+import { isAccessReviewReminderDay } from '@bike4mind/server-utils/security/accessReview/accessReview';
+import { sendAccessReviewReminder } from '@bike4mind/server-utils/security/accessReview/accessReviewData';
 import { Resource } from 'sst';
+
+// Contained so a failed reminder neither blocks the secrets post nor makes a retry repost it.
+async function remindAccessReview(now: Date, slackWebhookUrl: string): Promise<string | undefined> {
+  try {
+    return await sendAccessReviewReminder(now, async text => {
+      const posted = await postMessageToSlack(slackWebhookUrl, text);
+      if (!posted) throw new Error('Access review reminder was not accepted by Slack');
+    });
+  } catch (error) {
+    console.error('Access review reminder failed:', error);
+    return undefined;
+  }
+}
 
 export async function handler() {
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', Resource.App.stage));
@@ -30,7 +45,10 @@ export async function handler() {
       return daysUntilExpiration <= warningThreshold;
     });
 
-    if (dueSecrets.length === 0) {
+    // The quarterly access review rides this daily run so its cadence needs no cron of its own.
+    const accessReviewDue = Resource.App.stage === 'production' && isAccessReviewReminderDay(now);
+
+    if (dueSecrets.length === 0 && !accessReviewDue) {
       console.log('No secrets due for rotation');
       return { status: 'OK', message: 'No secrets due for rotation' };
     }
@@ -61,9 +79,10 @@ export async function handler() {
       return { status: 'OK', notified: 0, skipped: true, reason: 'Slack webhook not configured' };
     }
 
-    await postMessageToSlack(slackWebhookUrl, message);
+    const accessReviewQuarter = accessReviewDue ? await remindAccessReview(now, slackWebhookUrl) : undefined;
+    if (dueSecrets.length > 0) await postMessageToSlack(slackWebhookUrl, message);
 
-    return { status: 'OK', notified: dueSecrets.length };
+    return { status: 'OK', notified: dueSecrets.length, ...(accessReviewQuarter && { accessReviewQuarter }) };
   } catch (error) {
     console.error('Error in secret rotation notifier:', error);
     throw error;

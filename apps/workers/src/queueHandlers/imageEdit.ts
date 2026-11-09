@@ -1,4 +1,7 @@
 import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
+import { Connection, questRepository } from '@bike4mind/database';
+import { publishPushNotification, sessionDeepLink } from '@server/utils/pushNotifications';
+import { publishImageQuestReadyPush } from './generationPush';
 import { dispatchQuestCallback } from '@bike4mind/server-utils/generationCallback/dispatchQuestCallback';
 import { getImageEdit } from '@server/imageGenerations/imageEdit';
 
@@ -15,4 +18,16 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // Also on a throw: process() may have written the terminal status before failing.
     await dispatchQuestCallback(body.questId, logger);
   }
+
+  await publishImageQuestReadyPush(
+    body,
+    'edit',
+    {
+      connections: Connection,
+      findQuest: questId => questRepository.findById(questId),
+      sessionDeepLink,
+      publish: event => publishPushNotification(event, logger),
+    },
+    logger
+  );
 });

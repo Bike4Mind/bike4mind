@@ -48,6 +48,7 @@ import { ReActAgent } from '@bike4mind/agents';
 import { ToolCatalog, type PermissionPromptKind, type PermissionPromptOptions } from './tools/gateway/index.js';
 import { buildSystemPrompt } from './core/prompts';
 import { getPlanModeFilePath } from './utils/planMode.js';
+import { whoamiReport } from './utils/whoami.js';
 import {
   PermissionManager,
   type AgentContext,
@@ -66,6 +67,7 @@ import {
   MODEL_SWITCH_BUSY_MESSAGE,
 } from './utils';
 import { getTokenCounter } from './utils/tokenCounter.js';
+import { reportCommandErrors } from './utils/reportCommandErrors.js';
 import { ConversationContext, reconstructTurnBlocks } from './context/ConversationContext.js';
 import { createReactiveCompactionHandler } from './utils/reactiveCompaction.js';
 import { buildWorkflowState } from './utils/workflowState.js';
@@ -190,6 +192,21 @@ import { createBuiltinModules } from './features/createBuiltinModules.js';
 import { PluginStore, type PluginDescriptor } from './plugins/PluginStore.js';
 import { bridgePresence } from './features/bridgePresence/index.js';
 import { buildLlmBackend, type BuildLlmBackendResult } from './bootstrap/buildLlmBackend.js';
+import {
+  LOCAL_SESSION_CONTINUES,
+  LOGGED_OUT_RESTART,
+  loginBlocked,
+  NoLocalModelsError,
+  SIGN_IN_DURING_TURN,
+  SIGN_IN_EXPIRED,
+  SIGNED_OUT_BANNER,
+  signedOutCommandMessage,
+  signedOutNoMatchMessage,
+  signInUncheckedLoginMessage,
+  signInUncheckedMessage,
+} from './bootstrap/signedOutLocal.js';
+import { checkSavedSignIn, settleSignInRefresh, startupMode } from './auth/savedSignIn.js';
+import { extractErrorMessage } from '@bike4mind/utils';
 import { buildSandbox } from './bootstrap/buildSandbox.js';
 import { buildSupportingStores } from './bootstrap/buildSupportingStores.js';
 import { buildAgent } from './bootstrap/buildAgent.js';
@@ -200,12 +217,20 @@ import {
   hostInertNotice,
   isHostLaunchWithQueuedPrompt,
   shouldPromptMcpApproval,
-  shouldShowEndpointPicker,
+  signInStart,
 } from './bootstrap/startupTrustGates.js';
 import { dispatch as dispatchCommand } from './commands/registry.js';
 import { handleSandboxNetworkCommand } from './commands/sandboxNetworkCommand.js';
 import { handleSandboxTrustDomainCommand } from './commands/sandboxTrustDomainCommand.js';
 import { runTurn } from './session/turnController.js';
+import { SESSION_RELEASE_TIMEOUT_MS, restartAfterSignIn } from './session/restartAfterSignIn.js';
+import { releaseSession, type SessionResources } from './session/releaseSession.js';
+import {
+  forgetBackgroundCompletions,
+  forgetReleasedAgents,
+  sessionBackgroundCallbacks,
+} from './session/backgroundCallbacks.js';
+import { settlePendingPrompts } from './session/pendingPrompts.js';
 import {
   createFreshSession,
   resumeSession,
@@ -283,6 +308,8 @@ interface CliState {
   additionalDirectories: string[]; // Additional directories for file access (from --add-dir or /add-dir)
   featureRegistry: FeatureModuleRegistry | null; // Opt-in feature module registry
   pluginDescriptors: PluginDescriptor[]; // Installed plugins discovered at bootstrap (installs need a restart)
+  /** This session started signed out and chats with local models only. */
+  signedOutLocal: boolean;
 }
 
 // Global state for exit handling (outside React for immediate response)
@@ -339,6 +366,7 @@ function CliApp() {
     additionalDirectories: [],
     featureRegistry: null,
     pluginDescriptors: [],
+    signedOutLocal: false,
   });
 
   const [isInitialized, setIsInitialized] = useState(false);
@@ -355,6 +383,7 @@ function CliApp() {
   const folderTrustResolvedRef = useRef(false);
   const mcpApprovalResolvedRef = useRef(false);
   const detectedOllamaRef = useRef<BuildLlmBackendResult['detectedOllama']>(null);
+  const initGenerationRef = useRef(0);
   const todoStoreRef = useRef(createTodoStore());
   const decisionStoreRef = useRef(createDecisionStore());
   const blockerStoreRef = useRef(createBlockerStore());
@@ -376,78 +405,38 @@ function CliApp() {
   const setShowMcpViewer = useCliStore(state => state.setShowMcpViewer);
   const setExitRequested = useCliStore(state => state.setExitRequested);
 
+  // Everything the running session holds. Shell sessions are SIGTERMed by process group so a `pnpm dev` or
+  // watcher is not orphaned; bridge presence is stopped so the tavern sprite despawns promptly.
+  const sessionResources = (reason: 'cli_exit' | 'sign_in'): SessionResources => {
+    // session is read fresh from the store, so it is intentionally not a dependency of the callers.
+    const session = useCliStore.getState().session;
+    return {
+      abortTurn: reason === 'sign_in' ? () => abortControllerRef.current?.abort() : null,
+      killShellSessions: () => {
+        const shells = getShellSessionManager();
+        const running = shells.runningCount();
+        shells.killAll();
+        return running;
+      },
+      killBangCommands: killRunningBangCommands,
+      commandHistory: state.commandHistoryStore,
+      saveSession: session ? () => state.sessionStore.save(session) : null,
+      mcpManager: state.mcpManager,
+      featureRegistry: state.featureRegistry,
+      wsManager: state.wsManager,
+      clearWebSocketToolExecutor: () => setWebSocketToolExecutor(null),
+      stopBridgePresence: () => bridgePresence.stop(reason),
+      agent: state.agent,
+      backgroundManager: state.backgroundManager,
+      // The image store outlives a sign-in restart: init() does not open a new one.
+      imageStore: reason === 'cli_exit' ? state.imageStore : null,
+    };
+  };
+
   // Cleanup function to close all handles and allow natural process exit
   const performCleanup = useCallback(async () => {
-    const cleanupTasks: Promise<void>[] = [];
-
-    // Reap background shell sessions (SIGTERM the whole process group) so we don't
-    // orphan a `pnpm dev` / watcher when the CLI exits. Synchronous, best-effort.
-    try {
-      getShellSessionManager().killAll();
-    } catch (err) {
-      logger.debug(`[CLEANUP] Shell session reap error: ${err}`);
-    }
-    killRunningBangCommands();
-
-    cleanupTasks.push(state.commandHistoryStore.whenIdle());
-
-    // Save session
-    const session = useCliStore.getState().session;
-    if (session) {
-      cleanupTasks.push(
-        state.sessionStore.save(session).catch(err => {
-          logger.debug(`[CLEANUP] Session save error: ${err.message}`);
-        })
-      );
-    }
-
-    // Disconnect MCP - this closes all open connections
-    if (state.mcpManager) {
-      cleanupTasks.push(
-        state.mcpManager.disconnect().catch(err => {
-          logger.debug(`[CLEANUP] MCP disconnect error: ${err.message}`);
-        })
-      );
-    }
-
-    // Dispose feature modules (unsubscribes WS handlers)
-    if (state.featureRegistry) {
-      state.featureRegistry.disposeAll();
-    }
-
-    // Disconnect WebSocket
-    if (state.wsManager) {
-      state.wsManager.disconnect();
-      setWebSocketToolExecutor(null);
-    }
-
-    // Tear down tavern presence - best-effort disconnect so the sprite
-    // despawns promptly rather than waiting for the bridge's WS sweep.
-    cleanupTasks.push(
-      bridgePresence.stop('cli_exit').catch(err => {
-        logger.debug(`[CLEANUP] Bridge presence stop error: ${err.message}`);
-      })
-    );
-
-    // Remove all event listeners from agent
-    if (state.agent) {
-      state.agent.removeAllListeners();
-    }
-
-    // Close image store database connection
-    if (state.imageStore) {
-      try {
-        state.imageStore.close();
-      } catch (err) {
-        logger.debug(`[CLEANUP] Image store close error: ${err}`);
-      }
-    }
-
-    // Wait for cleanup with timeout
-    await Promise.race([
-      Promise.all(cleanupTasks),
-      new Promise(resolve => setTimeout(resolve, 500)), // 500ms timeout
-    ]);
+    await releaseSession(sessionResources('cli_exit'), 500);
+    await settleSignInRefresh();
 
     // Force exit after a short delay if process hasn't exited naturally
     // This handles any remaining open handles we can't close
@@ -455,8 +444,6 @@ function CliApp() {
       process.exit(0);
     }, 100);
   }, [
-    // session is read fresh from the store (useCliStore.getState()), so it is
-    // intentionally not a dependency here.
     state.sessionStore,
     state.commandHistoryStore,
     state.mcpManager,
@@ -464,6 +451,7 @@ function CliApp() {
     state.imageStore,
     state.wsManager,
     state.featureRegistry,
+    state.backgroundManager,
   ]);
 
   // Mirror background shell-session lifecycle into the store so the UI can render
@@ -480,6 +468,8 @@ function CliApp() {
   useInput((input, key) => {
     // Check for ESC key - abort current operation or clear paste
     if (key.escape) {
+      // The sign-in screens handle their own Esc; this one must not also abort the turn or clear the paste.
+      if (state.showLoginFlow || state.showEnvironmentPicker) return;
       const store = useCliStore.getState();
       if (store.pastedContent) {
         store.clearPaste();
@@ -631,87 +621,13 @@ function CliApp() {
 
       // Validate authentication tokens on startup - auto-trigger login if needed
       const authTokens = await state.configStore.getAuthTokens();
-      const tokenExpired = authTokens ? new Date(authTokens.expiresAt) <= new Date() : false;
 
       // A signed-in install predating the marker has already chosen a backend.
       if (authTokens && !config.apiConfig?.endpointChosen) await state.configStore.markEndpointChosen();
 
-      if (!authTokens || tokenExpired) {
-        // The login flow needs an endpoint: let the user pick one on a fresh install or when
-        // none resolves (an unbranded fork), instead of dead-ending on an empty URL.
-        const endpoint = resolveApiEndpoint(config.apiConfig);
-        if (
-          endpoint.status === 'unconfigured' ||
-          shouldShowEndpointPicker({
-            endpointSource: endpoint.source,
-            endpointChosen: !!config.apiConfig?.endpointChosen,
-            hasAuthTokens: !!authTokens,
-          })
-        ) {
-          setState(prev => ({ ...prev, showEnvironmentPicker: true, config }));
-          return;
-        }
-
-        if (tokenExpired) {
-          // Returning user with expired token - auto-trigger re-authentication
-          console.log("\n🔐 Your session has expired. Let's re-authenticate.\n");
-          await state.configStore.clearAuthTokens();
-        } else {
-          // First-time user or logged out - auto-trigger login flow
-          console.log('\n🔐 Welcome to B4M CLI! Authentication is required to get started.\n');
-        }
-
-        // Make the target backend obvious before login - especially the
-        // source-mode default, which would otherwise silently point contributors
-        // at localhost when they might have expected production.
-        if (endpoint.source === 'dev-default') {
-          console.log(
-            `🔧 No endpoint configured; defaulting to the local dev server (${endpoint.url}).\n` +
-              '   Use `b4m --prod` or `b4m --api-url <url>` to target a different backend.\n'
-          );
-        }
-
-        setState(prev => ({ ...prev, showLoginFlow: true, config }));
-        return;
-      }
-
-      // Past the gate above, authTokens is present and unexpired.
-      const expiresAt = new Date(authTokens.expiresAt);
-      const daysUntilExpiry = Math.floor((expiresAt.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
-      startupLog.push(`✅ Authenticated (expires in ${daysUntilExpiry} day${daysUntilExpiry !== 1 ? 's' : ''})`);
-
-      // Create API client for server-side LLM calls. Past the login gate above
-      // the endpoint is guaranteed configured; requireApiUrl fails loud if not.
-      const apiBaseURL = requireApiUrl(config.apiConfig);
-      const envName = getEnvironmentName(config.apiConfig);
-
-      // Always surface the active API environment so it's obvious which
-      // backend (Production / Local Dev / Self-Hosted) the session is talking to.
-      startupLog.unshift(`🌍 API Environment: ${envName} (${apiBaseURL})`);
-
-      const apiClient = new ApiClient(apiBaseURL, state.configStore);
-
-      // Layer B4M-web skills on top of the local skill files already loaded
-      // above. Local files keep precedence - `mergeRemoteCommands()` only
-      // inserts remote entries whose names aren't already taken. Skipped when
-      // the user opts out via the `--no-remote-skills` flag or the
-      // `preferences.enableRemoteSkills: false` config option.
-      const remoteSkillsEnabled =
-        process.env.B4M_NO_REMOTE_SKILLS !== '1' && config.preferences.enableRemoteSkills !== false;
-      if (remoteSkillsEnabled) {
-        try {
-          state.customCommandStore.setRemoteSource(new RemoteSkillSource(apiClient));
-          await state.customCommandStore.mergeRemoteCommands();
-          const remoteCount = state.customCommandStore.getCommandsBySource('remote').length;
-          if (remoteCount > 0) {
-            startupLog.push(`☁️  Synced ${remoteCount} skill${remoteCount === 1 ? '' : 's'} from B4M web`);
-          }
-        } catch (error) {
-          // Remote skill sync is a productivity boost, not a critical path -
-          // a fetch failure here must never block startup.
-          console.warn('Failed to sync remote skills:', error instanceof Error ? error.message : String(error));
-        }
-      }
+      const signIn = await checkSavedSignIn(state.configStore, rejected =>
+        new ApiClient(requireApiUrl(config.apiConfig), state.configStore).refreshSession(rejected)
+      );
 
       // Token getter for the feature-event WebSocket auth
       const tokenGetter = async (): Promise<string | null> => {
@@ -725,19 +641,133 @@ function CliApp() {
       // carries feature events, never completions (see buildLlmBackend).
       // Saved model servers other than the default model's join the /model picker as they answer.
       const liveModels: { current: ModelInfo[] | null } = { current: null };
-      const { llm, wsManager, models, modelInfo, detectedOllama } = await buildLlmBackend({
+      // A server that answers after a later init (e.g. /login from a signed-out session) must not
+      // overwrite that init's model list.
+      const generation = ++initGenerationRef.current;
+      const sessionEnded = () => generation !== initGenerationRef.current;
+      const backendInput = {
         config,
-        apiClient,
         tokenGetter,
         startupLog,
         detectOllama: true,
         getSessionId: () => useCliStore.getState().session?.id,
-        onModelsAdded: next => {
+        onModelsAdded: (next: ModelInfo[]) => {
+          if (generation !== initGenerationRef.current) return;
           liveModels.current = next;
           setState((prev: CliState) => ({ ...prev, availableModels: next }));
         },
-      });
+      };
 
+      // Signed out, chat runs on local models with no Bike4Mind traffic; only when none can chat does the
+      // sign-in flow below take over.
+      let signedOutBackend: BuildLlmBackendResult | null = null;
+      let noLocalModelsReason: string | null = null;
+      const signedOutClient = signIn.status === 'signed-in' ? null : ApiClient.whileSignedOut(state.configStore);
+      if (signedOutClient) {
+        try {
+          signedOutBackend = await buildLlmBackend({ ...backendInput, apiClient: signedOutClient });
+        } catch (error) {
+          // Any failure here still leaves signing in, as before this mode existed.
+          noLocalModelsReason = error instanceof NoLocalModelsError ? error.reason : extractErrorMessage(error);
+        }
+      }
+
+      let apiClient: ApiClient;
+      let backend: BuildLlmBackendResult;
+      const mode = startupMode(signIn, signedOutBackend !== null);
+      if (mode === 'signed-in' && signIn.status === 'signed-in') {
+        const expiresAt = new Date(signIn.tokens.expiresAt);
+        const daysUntilExpiry = Math.floor((expiresAt.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+        startupLog.push(
+          `\u{2705} Authenticated (expires in ${daysUntilExpiry} day${daysUntilExpiry !== 1 ? 's' : ''})`
+        );
+
+        // Create API client for server-side LLM calls. A signed-in install has a
+        // configured endpoint; requireApiUrl fails loud if not.
+        const apiBaseURL = requireApiUrl(config.apiConfig);
+        const envName = getEnvironmentName(config.apiConfig);
+
+        // Always surface the active API environment so it's obvious which
+        // backend (Production / Local Dev / Self-Hosted) the session is talking to.
+        startupLog.unshift(`\u{1f30d} API Environment: ${envName} (${apiBaseURL})`);
+
+        apiClient = new ApiClient(apiBaseURL, state.configStore);
+
+        // Layer B4M-web skills on top of the local skill files already loaded
+        // above. Local files keep precedence - `mergeRemoteCommands()` only
+        // inserts remote entries whose names aren't already taken. Skipped when
+        // the user opts out via the `--no-remote-skills` flag or the
+        // `preferences.enableRemoteSkills: false` config option.
+        const remoteSkillsEnabled =
+          process.env.B4M_NO_REMOTE_SKILLS !== '1' && config.preferences.enableRemoteSkills !== false;
+        if (remoteSkillsEnabled) {
+          try {
+            state.customCommandStore.setRemoteSource(new RemoteSkillSource(apiClient));
+            await state.customCommandStore.mergeRemoteCommands();
+            const remoteCount = state.customCommandStore.getCommandsBySource('remote').length;
+            if (remoteCount > 0) {
+              startupLog.push(
+                `\u{2601}\u{fe0f}  Synced ${remoteCount} skill${remoteCount === 1 ? '' : 's'} from B4M web`
+              );
+            }
+          } catch (error) {
+            // Remote skill sync is a productivity boost, not a critical path -
+            // a fetch failure here must never block startup.
+            console.warn('Failed to sync remote skills:', error instanceof Error ? error.message : String(error));
+          }
+        }
+
+        backend = await buildLlmBackend({ ...backendInput, apiClient });
+      } else if (mode === 'local' && signedOutClient && signedOutBackend) {
+        apiClient = signedOutClient;
+        backend = signedOutBackend;
+        if (signIn.status === 'expired') startupLog.unshift(SIGN_IN_EXPIRED);
+        if (signIn.status === 'unchecked') startupLog.unshift(signInUncheckedMessage(signIn.reason));
+        startupLog.unshift(SIGNED_OUT_BANNER);
+        if (config.features?.tavern || config.features?.hearth) {
+          startupLog.push('Tavern and Hearth are Bike4Mind cloud features; they stay off while signed out.');
+        }
+      } else {
+        if (noLocalModelsReason) console.log(`\n${noLocalModelsReason}\n`);
+        // The login flow needs an endpoint: let the user pick one on a fresh install or when
+        // none resolves (an unbranded fork), instead of dead-ending on an empty URL.
+        const endpoint = resolveApiEndpoint(config.apiConfig);
+        if (
+          signInStart({
+            endpoint,
+            endpointChosen: !!config.apiConfig?.endpointChosen,
+            hasAuthTokens: !!authTokens,
+          }) === 'endpoint-picker'
+        ) {
+          setState(prev => ({ ...prev, showEnvironmentPicker: true, config }));
+          return;
+        }
+
+        if (signIn.status === 'expired') {
+          // Returning user with expired token - auto-trigger re-authentication
+          console.log("\n🔐 Your session has expired. Let's re-authenticate.\n");
+        } else if (signIn.status === 'unchecked') {
+          console.log(`\n${signInUncheckedLoginMessage(signIn.reason)}\n`);
+        } else {
+          // Signed out with nothing local to chat with - auto-trigger login flow
+          console.log('\n\u{1f510} Welcome to B4M CLI! Sign in to use Bike4Mind cloud models.\n');
+        }
+
+        // Make the target backend obvious before login - especially the
+        // source-mode default, which would otherwise silently point contributors
+        // at localhost when they might have expected production.
+        if (endpoint.status === 'configured' && endpoint.source === 'dev-default') {
+          console.log(
+            `🔧 No endpoint configured; defaulting to the local dev server (${endpoint.url}).\n` +
+              '   Use `b4m --prod` or `b4m --api-url <url>` to target a different backend.\n'
+          );
+        }
+
+        setState(prev => ({ ...prev, showLoginFlow: true, config }));
+        return;
+      }
+
+      const { llm, wsManager, models, modelInfo, detectedOllama } = backend;
       detectedOllamaRef.current = detectedOllama;
 
       // Create new session with the ACTUAL model being used.
@@ -833,11 +863,15 @@ function CliApp() {
         options?: PermissionPromptOptions
       ) => {
         return new Promise<{ action: PermissionResponse }>(resolve => {
+          if (sessionEnded()) {
+            resolve({ action: 'deny' });
+            return;
+          }
           // Process-hook (host action_required signal): an interactive permission
           // prompt is now blocking - fire Notification/permission_prompt (writes sentinel).
           void getProcessHooks()?.fireNotificationPermissionPrompt(toolName);
           const canBeTrusted = permissionManager.canBeTrusted(toolName);
-          const id = `perm-${++permissionPromptCounter}`;
+          const id = `perm-${generation}-${++permissionPromptCounter}`;
           const sessionScope = options?.sessionScope;
           const prompt = { id, toolName, args, preview, canBeTrusted, sessionScope, kind, resolve };
           setState(prev => ({
@@ -880,7 +914,11 @@ function CliApp() {
       let userQuestionCounter = 0;
       const userQuestionFn = (payload: UserQuestionPayload) => {
         return new Promise<UserQuestionResponse>(resolve => {
-          const id = `uq-${++userQuestionCounter}`;
+          if (sessionEnded()) {
+            resolve({ answers: [] });
+            return;
+          }
+          const id = `uq-${generation}-${++userQuestionCounter}`;
           enqueueUserQuestionPrompt({ id, payload, resolve });
           // Tavern: user-question payloads are richer than Allow/Deny so the
           // modal can't render an inline resolver yet - but the awaiting_input
@@ -903,6 +941,10 @@ function CliApp() {
         recommendation?: string;
       }) => {
         return new Promise<{ decision: 'approved' | 'rejected'; note?: string }>(resolve => {
+          if (sessionEnded()) {
+            resolve({ decision: 'rejected', note: 'The session that asked for this review has ended.' });
+            return;
+          }
           enqueueReviewGatePrompt({
             id: params.id,
             description: params.description,
@@ -953,21 +995,8 @@ function CliApp() {
         userQuestionFn,
         startupLog,
         silentLogger,
-        onBackgroundStatusChange: job => {
-          useCliStore.getState().upsertBackgroundAgent(job);
-        },
-        onGroupCompletion: (notification, groupDescription) => {
-          useCliStore.getState().addCompletedGroupNotification(notification, groupDescription);
-          // Always set the trigger - the useEffect will wait for isThinking to be false
-          useCliStore.getState().setPendingBackgroundTrigger(true);
-        },
-        onSubagentUsage: usage => {
-          useCliStore.getState().recordSubagentUsage({
-            agentName: usage.agentName,
-            tokens: usage.totalTokens,
-            credits: usage.totalCredits,
-          });
-        },
+        isCancelled: sessionEnded,
+        ...sessionBackgroundCallbacks(() => !sessionEnded()),
       });
 
       // Create agent_delegate tool (with background support)
@@ -1041,6 +1070,7 @@ function CliApp() {
         apiClient,
         sandboxOrchestrator: sandboxOrchestrator ?? undefined,
         allowedDirectories: additionalDirectories,
+        isCancelled: sessionEnded,
       };
 
       // Create skill tool for AI-driven skill invocation (unless disabled)
@@ -1051,7 +1081,7 @@ function CliApp() {
             subagentOrchestrator: orchestrator,
             sessionId: newSession.id,
             // Gate skill lifecycle hook shell commands through permission.
-            permission: { permissionManager, promptFn },
+            permission: { permissionManager, promptFn, isCancelled: sessionEnded },
             // Confine skill @file refs to the workspace (plus granted dirs).
             allowedDirectories: additionalDirectories,
           })
@@ -1060,9 +1090,10 @@ function CliApp() {
       // Persistent work tracking - outlives the session, unlike write_todos.
       // Off by default: six tool schemas in every completion is a real cost for
       // users who never touch the persistent store.
-      const workItemTools = config.preferences.enableWorkItemTools
-        ? createWorkItemTools(new WorkItemsClient(apiClient))
-        : [];
+      const workItemTools =
+        config.preferences.enableWorkItemTools && !apiClient.signedOut
+          ? createWorkItemTools(new WorkItemsClient(apiClient))
+          : [];
 
       // Combine the CLI-specific tools (B4M and MCP tools arrive already wrapped).
       // Assembled before the feature registry so their names can be reserved against
@@ -1195,7 +1226,7 @@ function CliApp() {
 
       // Wire the agent's step events to the UI store and tavern transcript,
       // and mirror them onto delegated subagents via the orchestrator callbacks.
-      wireAgentEvents({ agent, orchestrator });
+      wireAgentEvents({ agent, orchestrator, isCurrent: () => !sessionEnded() });
 
       setState((prev: CliState) => ({
         ...prev,
@@ -1214,6 +1245,7 @@ function CliApp() {
         additionalDirectories, // Store additional directories for file access
         featureRegistry, // Feature module registry for opt-in modules
         pluginDescriptors, // Reused by /config hot-reload and the config editor
+        signedOutLocal: apiClient.signedOut,
       }));
 
       // Sync initial session with Zustand store
@@ -1325,7 +1357,7 @@ function CliApp() {
   // bridge, so a stale `~/.b4m/cc-bridge.json` (left over from a past session
   // where the bridge ran) can't drive the announce-retry loop and spam
   // "[tavern] bridge announce failed" when the bridge process is down.
-  const tavernPresenceEnabled = state.config?.features?.tavern ?? false;
+  const tavernPresenceEnabled = (state.config?.features?.tavern ?? false) && !state.signedOutLocal;
   useEffect(() => {
     if (!isInitialized) return;
     if (!tavernPresenceEnabled) {
@@ -1378,6 +1410,9 @@ function CliApp() {
       console.error('❌ CLI failed to initialize. Try restarting b4m.\n');
       return;
     }
+    const generation = initGenerationRef.current;
+    // A sign-in restart replaced the session: nothing this command produces after that belongs in the new one.
+    const replaced = () => initGenerationRef.current !== generation;
 
     // Set thinking state to show loading indicator
     useCliStore.getState().setIsThinking(true);
@@ -1395,7 +1430,7 @@ function CliApp() {
     const stepHandler = (step: any) => {
       currentSteps.push(step);
       const currentSession = useCliStore.getState().session;
-      if (currentSession) {
+      if (currentSession && !replaced()) {
         const messages = [...currentSession.messages];
         const lastMessage = messages[messages.length - 1];
         if (lastMessage && lastMessage.role === 'assistant') {
@@ -1446,6 +1481,7 @@ function CliApp() {
         },
       };
 
+      if (replaced()) return;
       // Add both messages immediately
       const sessionWithMessages: Session = {
         ...session,
@@ -1502,7 +1538,7 @@ function CliApp() {
 
       // Get current session state (may have been updated by stepHandler)
       const currentSession = useCliStore.getState().session;
-      if (!currentSession) return;
+      if (!currentSession || replaced()) return;
 
       // Update the pending assistant message with the actual response
       const updatedMessages = [...currentSession.messages];
@@ -1563,7 +1599,7 @@ function CliApp() {
       // Clear thinking state
       useCliStore.getState().setIsThinking(false);
     } catch (error: any) {
-      useCliStore.getState().setIsThinking(false);
+      if (!replaced()) useCliStore.getState().setIsThinking(false);
 
       // Handle abort (user pressed ESC)
       if (error instanceof Error && error.name === 'AbortError') {
@@ -1571,7 +1607,7 @@ function CliApp() {
 
         // Update the assistant message with cancellation
         const currentSession = useCliStore.getState().session;
-        if (currentSession) {
+        if (currentSession && !replaced()) {
           const messages = [...currentSession.messages];
           const lastMessage = messages[messages.length - 1];
 
@@ -1602,7 +1638,7 @@ function CliApp() {
       if (error?.message?.includes('Permission denied')) {
         console.log('\n⚠️  Action blocked by permission settings');
         const currentSession = useCliStore.getState().session;
-        if (!currentSession) return;
+        if (!currentSession || replaced()) return;
 
         const sessionWithDenied = { ...currentSession };
         const messages = [...sessionWithDenied.messages];
@@ -1630,7 +1666,7 @@ function CliApp() {
 
       // Update the assistant message with error
       const currentSession = useCliStore.getState().session;
-      if (!currentSession) return;
+      if (!currentSession || replaced()) return;
 
       const sessionWithError = { ...currentSession };
       const messages = [...sessionWithError.messages];
@@ -1647,7 +1683,7 @@ function CliApp() {
       setStoreSession(sessionWithError);
     } finally {
       // Clean up abort controller and event handlers
-      setState(prev => ({ ...prev, abortController: null }));
+      setState(prev => (prev.abortController === abortController ? { ...prev, abortController: null } : prev));
       state.agent.off('thought', stepHandler);
       state.agent.off('action', stepHandler);
       releaseSession();
@@ -1682,6 +1718,7 @@ function CliApp() {
         reviewGateStore: reviewGateStoreRef.current,
       },
       setAbortController: controller => setState(prev => ({ ...prev, abortController: controller })),
+      sessionGeneration: () => initGenerationRef.current,
     });
   handleMessageRef.current = handleMessage;
 
@@ -1710,10 +1747,12 @@ function CliApp() {
    * without adding a user message to the conversation.
    */
   const handleBackgroundCompletion = async () => {
-    // Check authentication before allowing any AI operations
-    const authTokens = await state.configStore.getAuthTokens();
-    if (!authTokens || new Date(authTokens.expiresAt) <= new Date()) {
-      return;
+    // Check authentication before allowing any AI operations; a signed-out session only has local models.
+    if (!state.signedOutLocal) {
+      const authTokens = await state.configStore.getAuthTokens();
+      if (!authTokens || new Date(authTokens.expiresAt) <= new Date()) {
+        return;
+      }
     }
 
     // Snapshot and hold with no await in between, so nothing appends to the session unseen.
@@ -1721,6 +1760,11 @@ function CliApp() {
     if (!state.agent || !session) {
       return;
     }
+
+    // A sign-in restart while this turn runs replaces the session; the turn must then leave the new one alone.
+    const startedGeneration = initGenerationRef.current;
+    const stillThisSession = () =>
+      initGenerationRef.current === startedGeneration && useCliStore.getState().session?.id === session.id;
 
     // Set thinking state
     useCliStore.getState().setIsThinking(true);
@@ -1730,10 +1774,11 @@ function CliApp() {
     const abortController = new AbortController();
     setState(prev => ({ ...prev, abortController }));
 
+    const pendingId = uuidv4();
     try {
       // Create a pending assistant message (no user message added to conversation)
       const pendingAssistantMessage: Message = {
-        id: uuidv4(),
+        id: pendingId,
         role: 'assistant',
         content: PENDING_ASSISTANT_CONTENT,
         timestamp: new Date().toISOString(),
@@ -1769,7 +1814,7 @@ function CliApp() {
 
       // Get current session state
       const currentSession = useCliStore.getState().session;
-      if (!currentSession) return;
+      if (!currentSession || !stillThisSession()) return;
 
       // Create a continuation message (renders without header due to isContinuation flag)
       // This works with Ink's Static component which doesn't re-render existing items
@@ -1811,6 +1856,7 @@ function CliApp() {
       setStoreSession(updatedSession);
       await state.sessionStore.save(updatedSession);
     } catch (error: unknown) {
+      if (!stillThisSession()) return;
       useCliStore.getState().clearPendingMessages();
 
       if (error instanceof Error && error.name === 'AbortError') {
@@ -1818,8 +1864,14 @@ function CliApp() {
       }
       console.error('Error processing background results:', error);
     } finally {
-      setState(prev => ({ ...prev, abortController: null }));
-      useCliStore.getState().setIsThinking(false);
+      // This turn's controller and spinner are cleared even after a restart, or /login and Esc would see a reply running.
+      if (stillThisSession() || abortControllerRef.current === abortController) {
+        useCliStore.getState().setIsThinking(false);
+      }
+      setState(prev => (prev.abortController === abortController ? { ...prev, abortController: null } : prev));
+      if (!stillThisSession()) {
+        useCliStore.setState(prev => ({ pendingMessages: prev.pendingMessages.filter(m => m.id !== pendingId) }));
+      }
       releaseSession();
     }
   };
@@ -2250,7 +2302,7 @@ function CliApp() {
     console.log(fellBack ? '✅ Session saved with local fallback handoff' : '✅ Session saved with refreshed handoff');
   };
 
-  const handleCommand = async (command: string, args: string[]) => {
+  const runCommand = async (command: string, args: string[]) => {
     // Check if this is a custom command first. A reserved name (built-in or
     // feature command) must never be served from the custom store - a repo-planted
     // `.claude/commands/help.md` would otherwise hijack dispatch, since this lookup
@@ -2351,6 +2403,13 @@ function CliApp() {
       openConfigEditor: () => setShowConfigEditor(true),
     });
     if (handledByRegistry) return;
+
+    // Tokens saved by another b4m process do not sign this session in, so its cloud-only commands stay off.
+    const signedOutRefusal = state.signedOutLocal ? signedOutCommandMessage(command) : null;
+    if (signedOutRefusal) {
+      console.log(`\n${signedOutRefusal}\n`);
+      return;
+    }
 
     // Handle built-in commands
     switch (command) {
@@ -2469,10 +2528,8 @@ function CliApp() {
         }
         const { url } = result;
 
-        await state.configStore.setCustomApiUrl(url);
-
-        // Clear authentication when changing API URL
-        await state.configStore.clearAuthTokens();
+        // Clear authentication when changing API URL; under the refresh lock so no refresh lands in between.
+        await state.configStore.withRefreshLock(() => state.configStore.setCustomApiUrlSignedOut(url));
 
         console.log(`\n✅ API URL updated: ${url}`);
         console.log('🔓 Authentication cleared');
@@ -2482,10 +2539,8 @@ function CliApp() {
       }
 
       case 'reset-api': {
-        await state.configStore.setCustomApiUrl(null);
-
-        // Clear authentication when resetting API URL
-        await state.configStore.clearAuthTokens();
+        // Clear authentication when resetting API URL; under the refresh lock so no refresh lands in between.
+        await state.configStore.withRefreshLock(() => state.configStore.setCustomApiUrlSignedOut(null));
 
         const resetEndpoint = resolveApiEndpoint();
         console.log('\n✅ Custom API URL cleared');
@@ -2680,29 +2735,37 @@ function CliApp() {
         break;
       }
 
-      case 'login':
+      case 'login': {
+        const busy = useCliStore.getState();
+        if (loginBlocked({ ...busy, abortController: abortControllerRef.current })) {
+          console.log(SIGN_IN_DURING_TURN);
+          break;
+        }
         // Login flow will be handled by rendering LoginFlow component
-        setState(prev => ({ ...prev, showLoginFlow: true }) as any);
+        const loginConfig = await state.configStore.get();
+        const start = signInStart({
+          endpoint: resolveApiEndpoint(loginConfig.apiConfig),
+          endpointChosen: !!loginConfig.apiConfig?.endpointChosen,
+          hasAuthTokens: !!(await state.configStore.getAuthTokens()),
+        });
+        setState(prev => ({
+          ...prev,
+          config: loginConfig,
+          ...(start === 'endpoint-picker' ? { showEnvironmentPicker: true } : { showLoginFlow: true }),
+        }));
         break;
+      }
 
       case 'logout':
         usageCache = null; // Clear cached usage data to prevent data leakage
-        await state.configStore.clearAuthTokens();
+        await state.configStore.withRefreshLock(() => state.configStore.clearAuthTokens());
         console.log('✅ Successfully logged out');
+        if (!state.signedOutLocal) console.log(LOGGED_OUT_RESTART);
         break;
 
       case 'whoami': {
         const authTokens = await state.configStore.getAuthTokens();
-        if (!authTokens) {
-          console.log('Not authenticated. Run /login to authenticate.');
-          return;
-        }
-        const isExpired = new Date(authTokens.expiresAt) <= new Date();
-        console.log('\n👤 Current User:\n');
-        console.log(`User ID: ${authTokens.userId}`);
-        console.log(`Status: ${isExpired ? '⚠️  Token expired' : '✅ Authenticated'}`);
-        console.log(`Expires: ${new Date(authTokens.expiresAt).toLocaleString()}`);
-        console.log('');
+        console.log(whoamiReport(authTokens, { signedOutLocal: state.signedOutLocal }));
         break;
       }
 
@@ -3714,7 +3777,11 @@ function CliApp() {
             setState(prev => ({ ...prev, showModelPicker: true }));
             break;
           case 'no-match':
-            console.log(`No model matches "${result.query}". Run /model to browse available models.`);
+            console.log(
+              state.signedOutLocal
+                ? signedOutNoMatchMessage(result.query)
+                : `No model matches "${result.query}". Run /model to browse available models.`
+            );
             break;
           case 'ambiguous':
             console.log(`"${args.join(' ')}" matches ${result.models.length} models - be more specific:`);
@@ -3740,6 +3807,7 @@ function CliApp() {
       }
     }
   };
+  const handleCommand = reportCommandErrors(runCommand, message => console.error(message));
 
   /**
    * Handle saving config from the interactive editor
@@ -3769,7 +3837,9 @@ function CliApp() {
 
       // Create fresh registry with new config (same descriptors as bootstrap;
       // newly installed plugins appear after a restart)
-      const apiClient = new ApiClient(requireApiUrl(updatedConfig.apiConfig), state.configStore);
+      const apiClient = state.signedOutLocal
+        ? ApiClient.whileSignedOut(state.configStore)
+        : new ApiClient(requireApiUrl(updatedConfig.apiConfig), state.configStore);
       // The agent's non-feature tools (core + B4M + tool_search) are reserved so
       // a hot-reloaded plugin can't claim a name that would 400 completions.
       const oldFeatureToolNames = new Set(state.featureRegistry?.getAllToolNames() ?? []);
@@ -3968,6 +4038,10 @@ function CliApp() {
               } else {
                 console.log('\nℹ️  Project config stays inert this session. Use /trust folder to trust it later.\n');
               }
+            } catch (error) {
+              console.error(
+                `Could not trust this folder: ${error instanceof Error ? error.message : String(error)}. Use /trust folder to try again.`
+              );
             } finally {
               setState(prev => ({ ...prev, folderTrustPrompt: null }));
               init().catch(err => {
@@ -4078,6 +4152,15 @@ function CliApp() {
     );
   }
 
+  // A /login from a signed-out local session returns to that session when it does not complete.
+  const localSessionRunning = isInitialized && state.signedOutLocal;
+  const backToLocalSession = localSessionRunning
+    ? () => {
+        setState(prev => ({ ...prev, showLoginFlow: false, showEnvironmentPicker: false }));
+        console.log(`\n${LOCAL_SESSION_CONTINUES}\n`);
+      }
+    : undefined;
+
   // Backend picker, checked before the login flow since a backend must be chosen first.
   if (state.showEnvironmentPicker) {
     return (
@@ -4088,6 +4171,12 @@ function CliApp() {
             try {
               const result = await state.configStore.switchApiEnvironment(choice.target);
               console.log(`\n✅ Connecting to ${result.envName} (${result.url})\n`);
+              if (localSessionRunning) {
+                // init() would start on local models again, so /login goes straight to signing in.
+                const config = await state.configStore.get();
+                setState(prev => ({ ...prev, config, showLoginFlow: true }));
+                return;
+              }
               // Re-run init now that an endpoint is configured; it will proceed
               // into the login flow.
               init().catch(err => {
@@ -4096,10 +4185,12 @@ function CliApp() {
               });
             } catch (err) {
               console.error(`\n❌ Failed to save endpoint: ${err instanceof Error ? err.message : String(err)}\n`);
-              exit();
+              if (localSessionRunning) console.log(`${LOCAL_SESSION_CONTINUES}\n`);
+              else exit();
             }
           })();
         }}
+        onCancel={backToLocalSession}
       />
     );
   }
@@ -4125,9 +4216,23 @@ function CliApp() {
         configStore={state.configStore}
         onSuccess={() => {
           setState(prev => ({ ...prev, showLoginFlow: false }));
-          console.log('\n✅ Login successful! Initializing CLI...\n');
-          // Reinitialize after successful login
-          init().catch(err => {
+          // Holds input on the initializing screen so nothing typed during the restart reaches the old agent.
+          setIsInitialized(false);
+          restartAfterSignIn({
+            release: async () => {
+              // Retires this session's callbacks before its background agents are cancelled.
+              initGenerationRef.current++;
+              const jobIds = state.backgroundManager?.listJobs().map(job => job.id) ?? [];
+              const runIds = Object.keys(useCliStore.getState().liveSubagentUsage);
+              settlePendingPrompts();
+              const released = await releaseSession(sessionResources('sign_in'), SESSION_RELEASE_TIMEOUT_MS);
+              forgetBackgroundCompletions();
+              forgetReleasedAgents(jobIds, runIds);
+              return released;
+            },
+            restart: init,
+            print: line => console.log(`\n${line}\n`),
+          }).catch(err => {
             console.error('\n❌ Initialization failed:', err.message, '\n');
             exit();
           });
@@ -4135,9 +4240,14 @@ function CliApp() {
         onError={error => {
           setState(prev => ({ ...prev, showLoginFlow: false }));
           console.error(`\n❌ Login failed: ${error.message}`);
+          if (localSessionRunning) {
+            console.log(`${LOCAL_SESSION_CONTINUES}\n`);
+            return;
+          }
           console.log("Run b4m again when you're ready to authenticate.\n");
           exit();
         }}
+        onCancel={backToLocalSession}
       />
     );
   }

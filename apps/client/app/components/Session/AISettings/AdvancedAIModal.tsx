@@ -103,8 +103,12 @@ import { visuallyHidden } from '@client/app/utils/a11yStyles';
 import { ContextHelpButton, FieldTooltip, FIELD_TOOLTIPS } from '@client/app/components/help';
 import {
   ASPECT_RATIO_INERT_NOTE,
+  OUTPUT_FORMAT_INERT_NOTE,
   ignoresAspectRatio,
+  ignoresOutputFormat,
+  ignoresSeed,
   ignoresUpsamplingAndSeed,
+  seedInertNote,
   withInertNote,
 } from './inertImageSettings';
 import { imageSizeUpdate } from './imageSizeUpdate';
@@ -1794,8 +1798,8 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
         type: 'input' as const,
         value: seed?.toString() ?? '',
         onChange: (value: number | null) => setLLM({ seed: value }),
-        tooltip: withInertNote(FIELD_TOOLTIPS.imageSeed, ignoresUpsamplingAndSeed(shownModel)),
-        disabled: ignoresUpsamplingAndSeed(shownModel),
+        tooltip: withInertNote(FIELD_TOOLTIPS.imageSeed, ignoresSeed(shownModel), seedInertNote(shownModel)),
+        disabled: ignoresSeed(shownModel),
         inputProps: { type: 'number', placeholder: 'Random' },
       },
       // Width/Height are BFL-specific parameters; GPT Image models use the Image Size dropdown instead
@@ -1860,6 +1864,12 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
         type: 'select' as const,
         value: (output_format ?? 'png') as 'jpeg' | 'png',
         onChange: (value: 'jpeg' | 'png' | null) => value && setLLM({ output_format: value }),
+        tooltip: withInertNote(
+          FIELD_TOOLTIPS.imageOutputFormat,
+          ignoresOutputFormat(shownModel),
+          OUTPUT_FORMAT_INERT_NOTE
+        ),
+        disabled: ignoresOutputFormat(shownModel),
         options: [
           { value: 'jpeg', label: 'JPEG' },
           { value: 'png', label: 'PNG' },

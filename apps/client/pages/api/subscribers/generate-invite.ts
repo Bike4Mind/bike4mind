@@ -10,8 +10,8 @@ import {
 import { referService } from '@bike4mind/services';
 import { generateCode } from '@server/managers/regInviteManager';
 import { RegInviteStatusType, requireEnv } from '@bike4mind/common';
-import { EmailEvents } from '@server/utils/eventBus';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { getLogoUrl, buildEmailLogoImg, escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { z } from 'zod';
 

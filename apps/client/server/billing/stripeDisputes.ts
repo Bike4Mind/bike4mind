@@ -24,7 +24,7 @@ import {
 } from '@server/admin/usersBulk/ports';
 import type { BulkUser } from '@server/admin/usersBulk/resolve';
 import { revertUserSnapshot, type RevertDeps } from '@server/admin/usersBulk/undo';
-import { systemAuditActor } from '@server/utils/adminAudit';
+import { systemAuditActor } from '@bike4mind/server-utils/utils/adminAudit';
 
 /**
  * The lifecycle of a Stripe dispute on our side (record contract in

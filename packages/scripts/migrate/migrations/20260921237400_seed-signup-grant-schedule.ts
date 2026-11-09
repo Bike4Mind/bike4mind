@@ -1,11 +1,11 @@
+import { AdminSettings } from '@bike4mind/database';
+import type { MigrationFile } from './index';
 import {
   isStoredToggleOn,
   signupGrantScheduleFromValues,
   storedGrantCredits,
-  type SignupGrantCreditKey,
-} from '@bike4mind/common';
-import { AdminSettings } from '@bike4mind/database';
-import type { MigrationFile } from './index';
+  type LegacySignupGrantCreditKey as SignupGrantCreditKey,
+} from './legacySignupGrantSchedule';
 
 const LEGACY_KEYS: SignupGrantCreditKey[] = [
   'signupGrantCredits',
@@ -18,8 +18,8 @@ const LEGACY_KEYS: SignupGrantCreditKey[] = [
 /**
  * Seeds the signup grant schedule from the retired toggles so each environment keeps paying what it paid:
  * where staging was off the drip cap is 0 and the initial credits are the flat grant, and where the activity
- * drip was off the daily amount is 0. Values come from the same legacy fallback the runtime resolver uses
- * while the keys are unset (signupGrantScheduleFromValues in b4m-core/common/src/signupGrant.ts).
+ * drip was off the daily amount is 0. Values come from the pre-schedule fallback, frozen in
+ * legacySignupGrantSchedule.ts so later resolver changes cannot alter what this migration writes.
  */
 const migration: MigrationFile = {
   id: 20260921237400,

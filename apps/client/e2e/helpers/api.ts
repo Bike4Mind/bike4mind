@@ -831,7 +831,7 @@ export async function apiGrantTeam(
   return body.organizationId;
 }
 
-/** POST /api/organizations/:id/members - adds an accepted member directly, skipping the invite. */
+/** POST /api/organizations/:id/members - adds an accepted member directly, skipping the invite. Platform admins only. */
 export async function apiAddTeamMember(
   request: APIRequestContext,
   token: string,

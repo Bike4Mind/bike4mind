@@ -46,6 +46,8 @@ import type {
   SendMessageResult,
   SpawnSuggestionResult,
   StartSpawnSuggestionRequest,
+  StartSideChatRequest,
+  StartSideChatResult,
   UpdateProjectRequest,
   UpdateProjectResult,
   WorkspacePreparation,
@@ -57,6 +59,7 @@ import {
   defaultSpawnPlacement,
   findModelOption,
   isLocalBackend,
+  isAgentSession,
   isLocalModel,
   isResumableStop,
   isTurnBudgetStop,
@@ -150,6 +153,8 @@ import type { PdfPromptText } from './pdfText';
 import type { AttachmentStore } from './AttachmentStore';
 import type { SidebarSectionStore } from './SidebarSectionStore';
 import { childOutcomeDisplay, classifyChildOutcome } from './childOutcome';
+import { sideChatOpening } from './sideChat';
+import { summarizeSession } from '@shared/agentOutcome';
 import { createPhaseTracker, RESPONDING, THINKING, WAITING } from './modelPhase';
 import { createRoundProbe, startRoundTimer, type RoundPhases } from './turnTiming';
 import { devLog } from '../devlog/DevLogSink';
@@ -185,7 +190,8 @@ import { findStaleResults, historyRounds, sentHistory, toolResultContent } from 
 import { stalePlanReminder, unfinishedPlanReminder } from './planReminder';
 import { buildExploreContext, shouldOfferExplore } from './explore';
 import { MediaApiClient } from './media/MediaApiClient';
-import type { MediaStore } from './media/MediaStore';
+import { type MediaStore, parseMediaUrl } from './media/MediaStore';
+import { fitToolImage, MAX_TOOL_IMAGE_INPUT_BYTES, sniffImageType } from './tools/toolImages';
 import type { VideoJobScheduler } from './media/VideoJobScheduler';
 import type { MessageQueue } from './MessageQueue';
 import { resolveDefaultModel, type ModelCatalog } from './ModelCatalog';
@@ -210,6 +216,7 @@ import { SkillsPromptCache } from './skills/prompt';
 import { skillSource, type SkillCatalog } from './skills/SkillCatalog';
 import type { McpManager, McpToolBinding } from './mcp/McpManager';
 import { desktopAppGuidance, mcpGuidance, mcpServerLines } from './mcp/prompt';
+import { GENERATED_IMAGE_TOOL } from './tools/mediaTools';
 import { describeFlags, modelSafeRequest, planMcpServerRequest } from './tools/mcpTools';
 import type { AccessStore } from './tools/AccessStore';
 import { forgetSessionWrites } from './tools/sessionScripts';
@@ -260,6 +267,8 @@ import {
   type ImageContext,
   type ScreenCapturer,
   type ScreenContext,
+  type ModelContext,
+  type ModelViewPort,
   type SimulatorContext,
   type SimulatorDriver,
   type ToolContext,
@@ -537,6 +546,8 @@ export interface ChatServiceDeps {
    * The iOS Simulator and the user's live view of it. Wired on macOS only, so on any other
    * platform (and in tests that do not exercise it) the simulator tools are not declared.
    */
+  /** The 3D model pane's open file (main/chat/model3d/ModelLiveView.ts). Absent in tests that do not exercise it. */
+  model?: ModelViewPort;
   simulator?: {
     driver: SimulatorDriver;
     view: { attach(udid: string): Promise<unknown>; detach(): void; attachedUdid(): string | undefined };
@@ -550,6 +561,8 @@ export interface ChatServiceDeps {
   protectedPaths?: readonly string[];
   /** Protected folders not yet resolved; the file tools refuse every write while any is. */
   unresolvedProtectedPaths?: readonly string[];
+  /** Folders no permission allow rule covers; a shell command reaching one asks in auto mode too. */
+  uncoverablePaths?: readonly string[];
   /**
    * Where the user's own CLAUDE.md lives. Overridden only by tests, which must not read - or
    * depend on the contents of - the real ~/.claude of whoever runs them.
@@ -644,6 +657,34 @@ interface RawRound {
   timing: ChatRoundTiming;
   usage?: ChatUsage;
   sent: ChatSentRound;
+}
+
+/**
+ * The project a child conversation of a Code session works in: its own worktree when `worktree`
+ * names one, else the parent's checkout. Shared by spawns and side chats.
+ *
+ * Copied field by field rather than spread, so a field added to ChatProject later has to be
+ * considered here: this object IS the child's access to the filesystem.
+ */
+function childProject(project: ChatProject, worktree: { branch: string; base: string } | null): ChatProject {
+  return {
+    directory: project.directory,
+    name: project.name,
+    // With a worktree to cut this is its BASE, as a toggle session records one, and
+    // `workspaceBranch` is the branch the card showed: ensureWorkspace cuts that from this.
+    branch: worktree?.base ?? project.branch,
+    // Local placement carries the parent's flag across unchanged: a child sharing a parent
+    // that is itself in a worktree IS in a worktree, and the chip must not say otherwise.
+    workspace: worktree !== null || project.workspace,
+    // Its own worktree branch, or the parent's when it shares the parent's checkout.
+    // Without it a re-resolution would cut a second branch rather than find this one.
+    ...(worktree ? { workspaceBranch: worktree.branch } : {}),
+    ...(!worktree && project.workspaceBranch ? { workspaceBranch: project.workspaceBranch } : {}),
+    // The repository folder until the worktree exists, which is what awaitsWorktree reads
+    // as pending - and a pending session starts no turn, so nothing runs here meanwhile.
+    workingDirectory: worktree ? project.directory : project.workingDirectory,
+    contextDirectories: [...project.contextDirectories],
+  };
 }
 
 /**
@@ -2292,7 +2333,7 @@ export class ChatService {
     } else {
       this.attendedTurns.delete(sessionId);
       const parentSessionId = session.origin?.parentSessionId;
-      if (parentSessionId) this.spawnWatch.set(sessionId, { parentSessionId });
+      if (parentSessionId && isAgentSession(session)) this.spawnWatch.set(sessionId, { parentSessionId });
     }
     const replyId = this.startReply(session, api, historyScope, undefined, released?.relay?.hops ?? seedHops ?? 0);
     this.noteNotify(sessionId, released?.relay);
@@ -2939,6 +2980,12 @@ export class ChatService {
             detach: () => simulatorDeps.view.detach(),
           }
         : undefined;
+      // Code sessions only: the model file and the GLB written beside it live in the project.
+      const modelDeps = this.deps.model;
+      const model: ModelContext | undefined =
+        modelDeps && workingDirectory
+          ? { view: modelDeps, keepScreenshot: (bytes, caption) => this.keepScreenshot(sessionId, bytes, caption) }
+          : undefined;
       const offerExplore = shouldOfferExplore(catalog?.models ?? [], session.model);
       const exploreFor = (granted: readonly string[]): ExploreContext | undefined =>
         api && !localTurn && granted.length > 0 && offerExplore
@@ -2986,6 +3033,7 @@ export class ChatService {
               browser: !!browser,
               screen: !!screen,
               simulator: !!simulator,
+              model: !!model,
               memory: !!memory,
               skills: !!skills,
               web: !!web,
@@ -3052,6 +3100,7 @@ export class ChatService {
           ask,
           screen: !!screen,
           simulator: !!simulator,
+          model: !!model,
         }),
       });
       const schemaFor = (name: string): ToolSchema | undefined =>
@@ -3107,6 +3156,10 @@ export class ChatService {
         tools = requestTools();
       } else {
         wire = await toCompletionMessages(session, readAttachment);
+      }
+      if (!resume && images?.vision) {
+        // Replayed images exist only on this turn's wire, so next turn the cached prefix changes at this user message and the rest is re-written to the cache once (accepted).
+        prependToPrompt(wire, await this.previousReplyImages(session, images));
       }
       const systemMessage = () =>
         buildSystemMessage(
@@ -3464,6 +3517,7 @@ export class ChatService {
                 browser,
                 screen,
                 simulator,
+                model,
                 images,
                 memory,
                 skills,
@@ -4029,6 +4083,55 @@ export class ChatService {
     });
   }
 
+  /**
+   * Content blocks re-showing the images generate_image made in the reply just before this prompt.
+   * A tool's image turn is never replayed (see sentRounds), so without this the model cannot see
+   * the picture a "turn this into a 3D model" refers to. Only that one reply, to bound the cost.
+   */
+  private async previousReplyImages(session: ChatSession, images: ImageContext): Promise<unknown[]> {
+    const store = this.deps.media;
+    if (!store) return [];
+    const history = sentHistory(session.messages);
+    if (history.at(-1)?.role !== 'user') return [];
+    const reply: ChatMessage[] = [];
+    for (let index = history.length - 2; index >= 0 && history[index].role === 'assistant'; index--) {
+      reply.unshift(history[index]);
+    }
+    const generated = reply
+      .flatMap(message => message.toolCalls ?? [])
+      .filter(call => call.name === GENERATED_IMAGE_TOOL && call.status === 'done')
+      .flatMap(call => (call.media ?? []).filter(item => item.kind === 'image'));
+
+    const shown: { image: { mediaType: string; data: string } }[] = [];
+    for (const item of generated) {
+      const location = parseMediaUrl(item.url);
+      const stored = location ? await store.read(location.sessionId, location.name) : null;
+      const type = stored ? sniffImageType(stored.bytes) : null;
+      if (!stored || !type || stored.bytes.length > MAX_TOOL_IMAGE_INPUT_BYTES) {
+        this.deps.logger.warn(`CHAT: not re-showing generated image ${item.url}: missing or unreadable`);
+        continue;
+      }
+      const fitted = fitToolImage(images, stored.bytes, type);
+      if (!fitted.ok) {
+        this.deps.logger.warn(`CHAT: not re-showing generated image ${item.url}: ${fitted.reason}`);
+        continue;
+      }
+      shown.push({ image: { mediaType: fitted.mediaType, data: fitted.bytes.toString('base64') } });
+    }
+    const { kept } = withinImageBudget(shown);
+    if (kept.length === 0) return [];
+    return [
+      {
+        type: 'text',
+        text: `${kept.length === 1 ? 'Image' : 'Images'} ${GENERATED_IMAGE_TOOL} made in the previous reply, shown again because the user may be referring to ${kept.length === 1 ? 'it' : 'them'}.`,
+      },
+      ...kept.map(({ image }) => ({
+        type: 'image',
+        source: { type: 'base64', media_type: image.mediaType, data: image.data },
+      })),
+    ];
+  }
+
   /** Images a finished call asked to show the model, handed over once. */
   private takeImages(callId: string): { mediaType: string; data: string }[] {
     const images = this.pendingImages.get(callId) ?? [];
@@ -4059,6 +4162,7 @@ export class ChatService {
       browser: BrowserContext | undefined;
       screen: ScreenContext | undefined;
       simulator: SimulatorContext | undefined;
+      model: ModelContext | undefined;
       images: ImageContext | undefined;
       memory: MemoryStore | undefined;
       skills: SkillContext | undefined;
@@ -4094,6 +4198,7 @@ export class ChatService {
       browser,
       screen,
       simulator,
+      model,
       images,
       memory,
       skills,
@@ -4236,6 +4341,7 @@ export class ChatService {
           // Read first: once it is empty, protectedPaths holds every spelling.
           unresolvedProtectedPaths: this.deps.unresolvedProtectedPaths,
           protectedPaths: this.deps.protectedPaths,
+          uncoverablePaths: this.deps.uncoverablePaths,
           sessionId,
           callId: call.id,
           background: this.deps.background,
@@ -4246,6 +4352,7 @@ export class ChatService {
           ...(browser ? { browser } : {}),
           ...(screen ? { screen } : {}),
           ...(simulator ? { simulator } : {}),
+          ...(model ? { model } : {}),
           ...(images ? { images } : {}),
           ...(memory ? { memory } : {}),
           ...(skills ? { skills } : {}),
@@ -4622,6 +4729,62 @@ export class ChatService {
       marked();
       this.startingSuggestions.delete(key);
     }
+  }
+
+  /**
+   * Branch a side chat off a conversation, about a passage the user highlighted in it.
+   *
+   * A child session like a spawn (same `origin`, so it nests under the parent and counts against
+   * the same depth cap), but started by the user and run by the user: no turn starts, nothing
+   * reports back to the parent, and the parent's transcript is untouched. It opens with one
+   * app-written message carrying the passage and an excerpt of the parent (see sideChatOpening),
+   * so the model has the context the user's first question assumes.
+   *
+   * A Code parent's child shares its checkout rather than cutting a worktree: a side chat is for
+   * talking about the work, and asking a question should never create a branch.
+   */
+  async startSideChat(request: StartSideChatRequest): Promise<StartSideChatResult> {
+    const { sessionId } = request;
+    if (!isValidSessionId(sessionId)) return { ok: false, error: 'That conversation no longer exists.' };
+    const selection = typeof request.selection === 'string' ? request.selection.trim() : '';
+    if (!selection) return { ok: false, error: 'Highlight some text to start a side chat about it.' };
+
+    return this.withWorkspaceBindings(async (): Promise<StartSideChatResult> => {
+      const parent = await this.deps.store.get(sessionId);
+      if (!parent) return { ok: false, error: 'That conversation no longer exists.' };
+      const depth = (parent.origin?.depth ?? 0) + 1;
+      if (depth > MAX_SPAWN_DEPTH) {
+        return {
+          ok: false,
+          error: `Conversations nest at most ${MAX_SPAWN_DEPTH} deep, and this one is at the limit.`,
+        };
+      }
+      const project = parent.mode === 'code' ? parent.project : undefined;
+      if (project) {
+        const unusable = await this.workspaceBindingReason(project.workingDirectory);
+        if (unusable) return { ok: false, error: unusable };
+      }
+
+      const opening = sideChatOpening(parent, selection);
+      const child = await this.deps.store.create(parent.model, {
+        mode: parent.mode,
+        ...(project ? { project: childProject(project, null) } : {}),
+        ...(parent.grantedDirectories?.length ? { grantedDirectories: [...parent.grantedDirectories] } : {}),
+        origin: { parentSessionId: parent.id, depth, seedPrompt: opening.selection, kind: 'side-chat' },
+        // The same ceiling a spawn gets; see spawnSessionWithWorkspaceLease.
+        approvalMode: parent.approvalMode === 'full' ? 'auto' : parent.approvalMode,
+      });
+      const stored = await this.deps.store.appendMessage(child.id, {
+        id: randomUUID(),
+        role: 'user',
+        content: opening.content,
+        display: opening.display,
+        system: true,
+        sideChatOf: { sessionId: parent.id, title: parent.title },
+        createdAt: new Date().toISOString(),
+      });
+      return { ok: true, session: stored ? summarizeSession(stored) : child };
+    });
   }
 
   /** Put a card whose session could not start back as it was, as the user edited it, to try again. */
@@ -5079,7 +5242,7 @@ export class ChatService {
       grew = false;
       for (const entry of sessions) {
         const parent = entry.origin?.parentSessionId;
-        if (!parent || !parents.has(parent) || parents.has(entry.id)) continue;
+        if (!parent || !isAgentSession(entry) || !parents.has(parent) || parents.has(entry.id)) continue;
         parents.add(entry.id);
         agents.push(entry);
         grew = true;
@@ -5254,26 +5417,7 @@ export class ChatService {
       const named = title?.trim();
       const child = await this.deps.store.create(parent.model, {
         ...(named ? { title: named } : {}),
-        // Copied field by field rather than spread, so a field added to ChatProject later has
-        // to be considered here: this object IS the child access to the filesystem.
-        project: {
-          directory: project.directory,
-          name: project.name,
-          // With a worktree to cut this is its BASE, as a toggle session records one, and
-          // `workspaceBranch` is the branch the card showed: ensureWorkspace cuts that from this.
-          branch: worktree?.base ?? project.branch,
-          // Local placement carries the parent's flag across unchanged: a child sharing a parent
-          // that is itself in a worktree IS in a worktree, and the chip must not say otherwise.
-          workspace: worktree !== null || project.workspace,
-          // Its own worktree branch, or the parent's when it shares the parent's checkout.
-          // Without it a re-resolution would cut a second branch rather than find this one.
-          ...(worktree ? { workspaceBranch: worktree.branch } : {}),
-          ...(!worktree && project.workspaceBranch ? { workspaceBranch: project.workspaceBranch } : {}),
-          // The repository folder until the worktree exists, which is what awaitsWorktree reads
-          // as pending - and a pending session starts no turn, so nothing runs here meanwhile.
-          workingDirectory: worktree ? project.directory : project.workingDirectory,
-          contextDirectories: [...project.contextDirectories],
-        },
+        project: childProject(project, worktree),
         // Copied with the context directories, for the same reason: a child is the parent's work
         // continued, and never holds a folder the parent did not.
         ...(parent.grantedDirectories?.length ? { grantedDirectories: [...parent.grantedDirectories] } : {}),
@@ -5771,6 +5915,7 @@ export class ChatService {
     return sessions.some(
       entry =>
         entry.origin?.parentSessionId === parentId &&
+        isAgentSession(entry) &&
         (this.hasTurnInFlight(entry.id) || (this.deps.queue?.list(entry.id).length ?? 0) > 0)
     );
   }
@@ -7167,6 +7312,7 @@ export function buildToolStateText(state: {
   ask: boolean;
   screen: boolean;
   simulator?: boolean;
+  model?: boolean;
 }): string {
   const { roots, ask, mcpServers } = state;
   const mcp = mcpServers ? (ask ? 'manage' : 'read') : null;
@@ -7185,6 +7331,7 @@ export function buildToolStateText(state: {
     ...(state.browser ? BROWSER_GUIDANCE : []),
     ...(state.screen ? SCREEN_GUIDANCE : []),
     ...(state.simulator ? SIMULATOR_GUIDANCE : []),
+    ...(state.model ? MODEL_GUIDANCE : []),
     ...(state.media ? MEDIA_GUIDANCE : []),
     ...(state.host ? HOST_GUIDANCE : []),
     ...(state.memory ? MEMORY_GUIDANCE : []),
@@ -7300,6 +7447,16 @@ const SIMULATOR_GUIDANCE: readonly string[] = [
   'missing runtime or AXe) is for the user to run: tell them the exact fix and do not retry.',
 ];
 
+const MODEL_GUIDANCE: readonly string[] = [
+  'The model_* tools make 3D models as code. When the user asks for a 3D model or game asset, write',
+  'a short first version of a <name>.model.js file (contract in the model_view description) with the',
+  'file tools and, once that write returns, call model_view to open it in their live pane. Then add the',
+  'remaining parts in a few more saves, calling model_view after each one returns (never in the same',
+  'batch as the save) to fix any build error it reports. Check it',
+  'with model_screenshot from several angles before saying it is done. Each good build also writes',
+  '<name>.glb beside it, ready for three.js or Unity (via glTFast); wire it into their game if asked.',
+];
+
 const WEB_GUIDANCE: readonly string[] = [
   'web_search and web_fetch run on the Bike4Mind server: use them for quick lookups and for reading',
   'a page. Keep the browser for interactive pages, logins, local dev servers and screenshots.',
@@ -7317,8 +7474,9 @@ const MEDIA_GUIDANCE: readonly string[] = [
   'Each of these SPENDS THE USER CREDITS and each asks them to approve it first, so use one only',
   'when the user has asked for that thing - never to check whether it works, and never as a',
   'flourish alongside a text answer. If they decline, do not try a variation; ask what they want.',
-  'The result is shown or played to the USER and is never returned to you: you cannot see the',
-  'image or hear the audio. Never describe what a generated image depicts or how audio sounds.',
+  'The result is shown or played to the USER. A generated image is also attached for you to see',
+  'when your model reads images (its result says whether it was); audio never is. Never describe',
+  'an image you were not shown or how audio sounds.',
 ];
 
 /**
@@ -7560,6 +7718,30 @@ function describeRootChange(before: readonly string[], after: readonly string[])
     ...after.filter(root => !before.includes(root)).map(path => ({ path, shared: true })),
     ...before.filter(root => !after.includes(root)).map(path => ({ path, shared: false })),
   ];
+}
+
+/**
+ * Put blocks ahead of the new prompt's own content, the way an attachment's images go. Inside the
+ * prompt rather than a turn of their own, so roles still alternate and no tool_result turn is touched.
+ */
+function prependToPrompt(wire: CompletionMessage[], blocks: unknown[]): void {
+  // A deferred-tools turn ends with a system tool-change message after the prompt.
+  const prompt = wire.findLast(message => message.role !== 'system');
+  if (blocks.length === 0 || prompt?.role !== 'user') return;
+  const own = typeof prompt.content === 'string' ? [{ type: 'text', text: prompt.content }] : prompt.content;
+  if (!Array.isArray(own)) return;
+  prompt.content = [...blocks, ...own.filter(block => !isEmptyText(block))];
+}
+
+function isEmptyText(block: unknown): boolean {
+  return (
+    typeof block === 'object' &&
+    block !== null &&
+    'type' in block &&
+    block.type === 'text' &&
+    'text' in block &&
+    block.text === ''
+  );
 }
 
 /**

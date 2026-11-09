@@ -60,7 +60,7 @@ vi.mock('@server/services/publish/parsePublishPath', () => ({
   parsePublishPath: (...a: unknown[]) =>
     mocks.parse(...a) ?? { kind: 'bundle', tier: 'user', scopeId: 'scope', slug: 'slug', assetPath: null },
 }));
-vi.mock('@server/services/publish/publishGateToken', () => ({ setGateProofCookie: () => true }));
+vi.mock('@bike4mind/server-utils/services/publish/publishGateToken', () => ({ setGateProofCookie: () => true }));
 vi.mock('@server/services/publish/passphraseLockout', () => lockout);
 vi.mock('@server/services/publish/loadLiveOwner', () => ({ loadLiveOwner: mocks.loadLiveOwner }));
 vi.mock('bcryptjs', () => ({ default: { compare: () => Promise.resolve(true) } }));

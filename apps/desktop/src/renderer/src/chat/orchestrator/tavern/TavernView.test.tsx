@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { OrchestratorViewProps } from '../OrchestratorStage';
+import type { InnkeeperDesk, OrchestratorViewProps } from '../OrchestratorStage';
 import type { AgentView } from '../roster';
-import { agentFixture, createThemedMount, el, query } from '../testUtils';
+import { agentFixture, createThemedMount, el, query, typeInto } from '../testUtils';
 import { assignPersonas } from '@shared/agentPersona';
-import { DOOR_POINT, INNKEEPER_POINT, TAVERN_SLOTS } from './scene';
+import { BAR_COUNTER, DOOR_POINT, INNKEEPER_POINT, TAVERN_SLOTS, hiddenByCounter } from './scene';
 import { TavernView } from './TavernView';
 
 type SceneModule = typeof import('./scene');
@@ -302,6 +302,33 @@ describe('TavernView', () => {
       expect(sprites()).toHaveLength(1);
     });
 
+    it('is cut off at the counter top behind the bar, with no shadow on floor it does not stand on', async () => {
+      await renderTavern([], false, null, { parent: { status: 'done' } });
+      expect(innkeeper().hasAttribute('data-behind-counter')).toBe(true);
+      expect(el('orchestrator-tavern-innkeeper-art').style.clipPath).toMatch(
+        /^inset\(0(px)? 0(px)? [1-9][\d.]*% 0(px)?\)$/
+      );
+      const shadow = innkeeper().querySelector<HTMLElement>('[data-contact-shadow]');
+      expect(shadow).not.toBeNull();
+      expect(getComputedStyle(shadow!).opacity).toBe('0');
+    });
+
+    it('takes the pointer on its visible art only, so the counter hiding his legs is not clickable', async () => {
+      const onInnkeeperSelect = vi.fn();
+      await renderTavern([], false, null, { parent: { status: 'done' }, onInnkeeperSelect });
+      expect(getComputedStyle(innkeeper()).pointerEvents).toBe('none');
+      const art = el('orchestrator-tavern-innkeeper-art');
+      expect(getComputedStyle(art).pointerEvents).toBe('auto');
+      expect(getComputedStyle(art).cursor).toBe('pointer');
+      act(() => art.click());
+      expect(onInnkeeperSelect).toHaveBeenCalledTimes(1);
+    });
+
+    it('gives every agent a contact shadow under its feet', async () => {
+      await renderTavern([agentFixture('a', 'working'), agentFixture('b', 'done')]);
+      for (const sprite of sprites()) expect(sprite.querySelector('[data-contact-shadow]')).not.toBeNull();
+    });
+
     it("writes while posting quests, with the parent's activity in a bubble", async () => {
       await renderTavern([], false, null, {
         parent: { status: 'processing', activity: { kind: 'tool', tool: 'session_spawn', detail: '' } },
@@ -327,6 +354,11 @@ describe('TavernView', () => {
         const hearth = TAVERN_SLOTS.hearth[0];
         expect(Math.abs(parseFloat(innkeeper().style.left) - hearth.x)).toBeLessThanOrEqual(6);
         expect(innkeeper().style.top).toBe(`${hearth.y}%`);
+        // Out on the floor: whole, and grounded by its shadow.
+        expect(innkeeper().hasAttribute('data-behind-counter')).toBe(false);
+        expect(el('orchestrator-tavern-innkeeper-art').style.clipPath).toMatch(
+          /^inset\(0(px)?( 0(px)?)*\)$|^inset\(0(px)? 0(px)? 0% 0(px)?\)$/
+        );
 
         // The read returns at once; the walk still finishes before heading back.
         await renderTavern(agents, false, null, { parent: { status: 'processing' } });
@@ -339,6 +371,50 @@ describe('TavernView', () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    it('clips him by where he is mid-walk, not by where he is headed', async () => {
+      const agents = [agentFixture('a', 'working'), agentFixture('b', 'done')];
+      await renderTavern(agents, false, null, { parent: { status: 'processing' } });
+      const frames: FrameRequestCallback[] = [];
+      vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => frames.push(callback));
+      vi.stubGlobal('cancelAnimationFrame', () => {});
+      const SCENE = { left: 0, top: 0, width: 1000, height: 500 };
+      const box = (rect: { left: number; top: number; width: number; height: number }) =>
+        ({
+          ...rect,
+          right: rect.left + rect.width,
+          bottom: rect.top + rect.height,
+          x: rect.left,
+          y: rect.top,
+        }) as DOMRect;
+      let feet = { x: 60, y: BAR_COUNTER.front - 3 };
+      vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+        if (this === el('orchestrator-tavern')) return box(SCENE);
+        const width = 75;
+        const height = 75;
+        return box({
+          left: (feet.x / 100) * SCENE.width - width / 2,
+          top: (feet.y / 100) * SCENE.height - height,
+          width,
+          height,
+        });
+      });
+
+      await renderTavern(agents, false, null, { parent: sessionRead('b') });
+      const art = () => el('orchestrator-tavern-innkeeper-art');
+      const behind = hiddenByCounter(feet, 15);
+      expect(behind).toBeGreaterThan(0);
+      expect(art().style.clipPath).toBe(`inset(0 0 ${behind}% 0)`);
+
+      feet = { x: 60, y: BAR_COUNTER.front + 5 };
+      act(() => frames.splice(0).forEach(frame => frame(0)));
+      act(() => frames.splice(0).forEach(frame => frame(600)));
+      expect(art().style.clipPath).toMatch(/^inset\(0(px)?( 0(px)?)*\)$|^inset\(0(px)? 0(px)? 0% 0(px)?\)$/);
+
+      act(() => frames.splice(0).forEach(frame => frame(1300)));
+      expect(hiddenByCounter(TAVERN_SLOTS.hearth[0], 15)).toBe(0);
+      expect(art().style.clipPath).toBe('inset(0 0 0% 0)');
     });
 
     it('heads back to the bar, not the door, when the agent it is visiting is archived mid-visit', async () => {
@@ -398,5 +474,150 @@ describe('TavernView', () => {
       expect(el('orchestrator-tavern-agent-a').getAttribute('data-cheering')).toBeNull();
       expect(el('orchestrator-tavern-innkeeper').getAttribute('data-pose')).toBe('idle');
     });
+  });
+
+  describe('the order slip and reply bubble', () => {
+    const desk = (extra: Partial<InnkeeperDesk> = {}): InnkeeperDesk => ({
+      send: vi.fn(),
+      onReadReply: vi.fn(),
+      onOpenConversation: vi.fn(),
+      conversationHidden: true,
+      ...extra,
+    });
+    const slipInput = () => el('orchestrator-tavern-order-input') as HTMLTextAreaElement;
+    const keyOn = (target: HTMLElement, key: string, init: KeyboardEventInit = {}) =>
+      act(() => {
+        target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...init }));
+      });
+
+    it('opens the slip from the Innkeeper instead of the conversation, and sends from it', async () => {
+      const onInnkeeperSelect = vi.fn();
+      const front = desk();
+      await renderTavern([agentFixture('a')], false, null, { desk: front, onInnkeeperSelect });
+      act(() => el('orchestrator-tavern-innkeeper').click());
+      expect(onInnkeeperSelect).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe(slipInput());
+
+      await typeInto(slipInput(), '  how is it going?  ');
+      await keyOn(slipInput(), 'Enter');
+      expect(front.send).toHaveBeenCalledWith('how is it going?');
+      expect(query('orchestrator-tavern-order-slip')).toBeNull();
+    });
+
+    it('keeps Shift+Enter for a new line and claims Escape', async () => {
+      const front = desk();
+      await renderTavern([agentFixture('a')], false, null, { desk: front });
+      act(() => el('orchestrator-tavern-innkeeper').click());
+      await typeInto(slipInput(), 'two');
+      await keyOn(slipInput(), 'Enter', { shiftKey: true });
+      expect(front.send).not.toHaveBeenCalled();
+
+      const escape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+      act(() => void slipInput().dispatchEvent(escape));
+      expect(escape.defaultPrevented).toBe(true);
+      expect(query('orchestrator-tavern-order-slip')).toBeNull();
+    });
+
+    it('sends a status report in one click and starts a question as a draft', async () => {
+      const front = desk();
+      await renderTavern([agentFixture('a')], false, null, { desk: front });
+      act(() => el('orchestrator-tavern-innkeeper').click());
+      act(() => el('orchestrator-tavern-order-chip-ask-a-question').click());
+      expect(slipInput().value).toBe('Quick question: ');
+      expect(front.send).not.toHaveBeenCalled();
+      act(() => el('orchestrator-tavern-order-chip-status-report').click());
+      expect(front.send).toHaveBeenCalledWith(expect.stringContaining('status report'));
+    });
+
+    it('hands the whole conversation over from the slip', async () => {
+      const front = desk();
+      await renderTavern([agentFixture('a')], false, null, { desk: front });
+      act(() => el('orchestrator-tavern-innkeeper').click());
+      act(() => el('orchestrator-tavern-order-open-conversation-btn').click());
+      expect(front.onOpenConversation).toHaveBeenCalledTimes(1);
+      expect(query('orchestrator-tavern-order-slip')).toBeNull();
+    });
+
+    it('opens on a new request with its seed, and not again for one already handled', async () => {
+      await renderTavern([agentFixture('a')], false, null, { desk: desk({ openRequest: { seq: 1, seed: 'x' } }) });
+      expect(query('orchestrator-tavern-order-slip')).toBeNull();
+      await renderTavern([agentFixture('a')], false, null, { desk: desk({ openRequest: { seq: 2, seed: 'h' } }) });
+      expect(slipInput().value).toBe('h');
+    });
+
+    it('shows the latest reply while the conversation is hidden, until read or dismissed', async () => {
+      const reply = { id: 'm1', snippet: 'All three agents are done.' };
+      const front = desk({ reply });
+      await renderTavern([agentFixture('a')], false, null, { desk: front });
+      expect(el('orchestrator-tavern-reply-text').textContent).toBe(reply.snippet);
+
+      act(() => el('orchestrator-tavern-reply-read-btn').click());
+      expect(front.onReadReply).toHaveBeenCalledWith('m1');
+      expect(query('orchestrator-tavern-reply-bubble')).toBeNull();
+
+      await renderTavern([agentFixture('a')], false, null, {
+        desk: { ...front, reply: { id: 'm2', snippet: 'Next.' } },
+      });
+      expect(query('orchestrator-tavern-reply-bubble')).not.toBeNull();
+      act(() => el('orchestrator-tavern-reply-dismiss-btn').click());
+      expect(query('orchestrator-tavern-reply-bubble')).toBeNull();
+    });
+
+    it('keeps the reply to the dock while it is open, and gives way to what he is doing now', async () => {
+      const reply = { id: 'm1', snippet: 'Done.' };
+      await renderTavern([agentFixture('a')], false, null, { desk: desk({ reply, conversationHidden: false }) });
+      expect(query('orchestrator-tavern-reply-bubble')).toBeNull();
+
+      await renderTavern([agentFixture('a')], false, null, {
+        desk: desk({ reply }),
+        parent: { status: 'needs-action' },
+      });
+      expect(query('orchestrator-tavern-reply-bubble')).toBeNull();
+      expect(el('orchestrator-tavern-innkeeper-bubble').textContent).toBe('Needs you!');
+    });
+
+    it('greets a first-timer outright and everyone else on hover', async () => {
+      await renderTavern([], false, null, { desk: desk() });
+      expect(el('orchestrator-tavern-innkeeper-greeting').getAttribute('data-hover-bubble')).toBeNull();
+      await renderTavern([agentFixture('a')], false, null, { desk: desk() });
+      expect(el('orchestrator-tavern-innkeeper-greeting').getAttribute('data-hover-bubble')).toBe('true');
+    });
+
+    it('has no slip or greeting without a desk', async () => {
+      const onInnkeeperSelect = vi.fn();
+      await renderTavern([agentFixture('a')], false, null, { onInnkeeperSelect });
+      expect(query('orchestrator-tavern-innkeeper-greeting')).toBeNull();
+      act(() => el('orchestrator-tavern-innkeeper').click());
+      expect(onInnkeeperSelect).toHaveBeenCalledTimes(1);
+      expect(query('orchestrator-tavern-order-slip')).toBeNull();
+    });
+  });
+});
+
+describe('TavernView light and the quiet room', () => {
+  afterEach(() => themed.unmount());
+
+  it('lights the room for the theme, and burns low at last call once settled', async () => {
+    await renderTavern([agentFixture('a')]);
+    expect(el('orchestrator-tavern-light').getAttribute('data-mood')).toBe('day');
+    expect(el('orchestrator-tavern-frame').hasAttribute('data-settled')).toBe(false);
+
+    await renderTavern([agentFixture('a')], false, null, { settled: true });
+    expect(el('orchestrator-tavern-light').getAttribute('data-mood')).toBe('last-call');
+    expect(el('orchestrator-tavern-frame').hasAttribute('data-settled')).toBe(true);
+  });
+
+  it('keeps the light out of the way of clicks and screen readers', async () => {
+    await renderTavern([]);
+    const light = el('orchestrator-tavern-light');
+    expect(light.getAttribute('aria-hidden')).toBe('true');
+    expect(light.querySelectorAll('[data-light-glow="fire"]')).toHaveLength(1);
+  });
+
+  it("puts each agent's state on its nameplate, and none on the Innkeeper's", async () => {
+    await renderTavern([agentFixture('a', 'needs-you'), agentFixture('b', 'done')]);
+    expect(el('orchestrator-tavern-name-a').getAttribute('data-state')).toBe('needs-you');
+    expect(el('orchestrator-tavern-name-b').getAttribute('data-state')).toBe('done');
+    expect(el('orchestrator-tavern-innkeeper-name').hasAttribute('data-state')).toBe(false);
   });
 });

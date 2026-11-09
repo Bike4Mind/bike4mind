@@ -6,10 +6,12 @@ const mocks = vi.hoisted(() => ({
   getOperationsModel: vi.fn(),
   autoName: vi.fn(),
   recordUsage: vi.fn(),
+  payerCanFund: vi.fn(),
+  findAccessibleInIds: vi.fn(),
 }));
 
 vi.mock('@workers/utils/eventContext', () => ({ withEventContext: (handler: unknown) => handler }));
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   SessionEvents: { AutoName: { schema: { parse: (properties: unknown) => properties } } },
 }));
 vi.mock('@bike4mind/database', () => ({
@@ -17,12 +19,14 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: mocks.findUser },
   sessionRepository: {},
   questRepository: {},
+  fabFileRepository: { findAccessibleInIds: mocks.findAccessibleInIds },
 }));
 vi.mock('@bike4mind/services', () => ({ sessionService: { autoName: mocks.autoName } }));
 vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModel: mocks.getOperationsModel },
 }));
 vi.mock('@workers/events/recordSessionOperationalUsage', () => ({ recordSessionOperationalUsage: mocks.recordUsage }));
+vi.mock('@workers/events/sessionOperationalCreditGate', () => ({ payerCanFundSessionOperation: mocks.payerCanFund }));
 
 import { handler } from './sessionAutoNaming';
 
@@ -40,6 +44,7 @@ describe('session auto-naming AI access', () => {
     mocks.findUser.mockResolvedValue({ id: 'owner-1' });
     mocks.getOperationsModel.mockResolvedValue({ modelId: 'test-model', llm: {}, modelInfo: {} });
     mocks.autoName.mockResolvedValue({ name: 'Generated name' });
+    mocks.payerCanFund.mockResolvedValue(true);
   });
 
   it.each([null, { id: 'owner-1', riskScore: { reviewState: 'pending' } }, { id: 'owner-1', isModerated: true }])(
@@ -55,11 +60,51 @@ describe('session auto-naming AI access', () => {
   );
 
   it('uses the event actor when specified and resumes work after approval', async () => {
-    mocks.findUser.mockResolvedValue({ id: 'actor-1', riskScore: { reviewState: 'approved' } });
+    mocks.findUser.mockResolvedValue({ id: 'actor-1', groups: ['group-1'], riskScore: { reviewState: 'approved' } });
     await run('actor-1');
     expect(mocks.findUser).toHaveBeenCalledWith('actor-1');
     expect(mocks.autoName).toHaveBeenCalledTimes(1);
+    expect(mocks.autoName).toHaveBeenCalledWith(
+      { sessionId: 'session-1' },
+      expect.objectContaining({
+        db: expect.objectContaining({
+          files: { findAccessibleInIds: mocks.findAccessibleInIds },
+          fileAccess: { userId: 'actor-1', userGroups: ['group-1'] },
+        }),
+      })
+    );
     expect(mocks.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ userId: 'actor-1' }));
+  });
+
+  it('runs no model and records no usage when the payer cannot fund the operation', async () => {
+    mocks.payerCanFund.mockResolvedValue(false);
+    await run();
+    expect(mocks.payerCanFund).toHaveBeenCalledWith(expect.objectContaining({ payerId: 'owner-1' }));
+    expect(mocks.getOperationsModel).not.toHaveBeenCalled();
+    expect(mocks.autoName).not.toHaveBeenCalled();
+    expect(mocks.recordUsage).not.toHaveBeenCalled();
+  });
+
+  describe('recent-rename guard', () => {
+    const justUpdated = { id: 'session-1', userId: 'owner-1', name: 'API chat - 2026-01-01 00:00 UTC' };
+
+    it('skips a session whose real name changed in the last 10s', async () => {
+      mocks.findSession.mockResolvedValue({ ...justUpdated, updatedAt: new Date() });
+      await run();
+      expect(mocks.autoName).not.toHaveBeenCalled();
+    });
+
+    // A route-generated notebook name (POST /api/chat) is stamped as the placeholder, so a fast
+    // turn whose event lands inside the window is still named.
+    it('names a just-updated session still carrying its placeholder name', async () => {
+      mocks.findSession.mockResolvedValue({
+        ...justUpdated,
+        autoNamePlaceholder: justUpdated.name,
+        updatedAt: new Date(),
+      });
+      await run();
+      expect(mocks.autoName).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('runs no model when the account lookup fails', async () => {

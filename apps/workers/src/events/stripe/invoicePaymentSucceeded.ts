@@ -5,16 +5,16 @@ import {
   handleUserSubscriptionInvoice,
   handleOrganizationSubscriptionInvoice,
 } from '@workers/lib/userSubscriptions/serverUtils';
-import { StripeEvents } from '@server/utils/eventBus';
+import { StripeEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { withEventContext } from '@workers/utils/eventContext';
 import { postNewPaidSubscriptionToSlack } from '@server/integrations/slack/subscriptionLifecycle';
-import { emitPurchaseEvents } from '@server/analytics/signupEvents';
+import { emitPurchaseEvents } from '@bike4mind/server-utils/analytics/signupEvents';
 import { subscriptionCheckoutVisitId, subscriptionPeriodEnd } from '@server/analytics/billingEventDetails';
-import { recordSubscriptionPaymentReward } from '@server/referrals/subscriptionReward';
-import { unlockSignupGrantFromSubscription } from '@server/credits/subscriptionUnlock';
+import { recordSubscriptionPaymentReward } from '@bike4mind/server-utils/referrals/subscriptionReward';
+import { unlockSignupGrantFromSubscription } from '@bike4mind/server-utils/credits/subscriptionUnlock';
 
 export const handler = withEventContext(async (event, logger) => {
   const { invoiceId, subscriptionId } = StripeEvents.InvoicePaymentSucceeded.schema.parse(event.properties);

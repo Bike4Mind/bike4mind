@@ -26,7 +26,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/services', () => ({ userService: { cancelEmailChange: h.cancelEmailChange } }));
 // logAuditEvent writes a CounterLog row; an own email change must never reach it.
-vi.mock('@server/utils/auditLog', () => ({ logAuditEvent: h.logAuditEvent }));
+vi.mock('@bike4mind/server-utils/utils/auditLog', () => ({ logAuditEvent: h.logAuditEvent }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: h.logAuthAudit }));
 
 await import('../cancel-change');

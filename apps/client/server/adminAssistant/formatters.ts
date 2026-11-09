@@ -1,5 +1,5 @@
 import { resolveSubscriptionSource, type ISubscription } from '@bike4mind/server-utils/lib/subscriptions/types';
-import { SUBSCRIPTION_PLANS, TEAM_PLAN } from '@client/lib/userSubscriptions/constants';
+import { SUBSCRIPTION_PLANS, TEAM_PLAN } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
 
 export type OrgRole = 'owner' | 'admin' | 'member';
 

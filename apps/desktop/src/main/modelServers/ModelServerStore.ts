@@ -43,7 +43,7 @@ export interface LearnedThinker {
 }
 
 export const MAX_MODEL_SERVERS = 20;
-const MAX_NAME_CHARS = 80;
+export const MAX_NAME_CHARS = 80;
 const MAX_LISTED_MODELS = 200;
 
 export function newServerId(): string {

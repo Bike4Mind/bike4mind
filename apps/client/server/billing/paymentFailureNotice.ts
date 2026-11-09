@@ -6,7 +6,7 @@ import { ISubscription, SubscriptionOwnerType } from '@bike4mind/server-utils/li
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
-import { EmailEvents } from '@server/utils/eventBus';
+import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
 import {
   buildCanceledForNonPaymentEmail,
   buildPaymentFailedEmail,

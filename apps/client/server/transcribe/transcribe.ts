@@ -11,7 +11,7 @@ import {
   OperationsModelService,
 } from '@bike4mind/server-utils/services/operationsModelService';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
-import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 import { MIME_TO_EXTENSION, TRANSCRIBE_UPLOAD_PREFIX } from '@server/utils/transcribeConstants';
 import {
   assertTranscriptionCredits,

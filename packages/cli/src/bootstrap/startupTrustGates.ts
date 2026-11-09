@@ -80,6 +80,24 @@ export function shouldShowEndpointPicker({
   return endpointSource === 'baked-default' && !endpointChosen && !hasAuthTokens;
 }
 
+export type SignInStartInput = {
+  endpoint: ApiEndpoint;
+  endpointChosen: boolean;
+  hasAuthTokens: boolean;
+};
+
+/** Where a sign-in begins: the backend picker when no endpoint resolves or the first-run gate holds. */
+export function signInStart({
+  endpoint,
+  endpointChosen,
+  hasAuthTokens,
+}: SignInStartInput): 'endpoint-picker' | 'login' {
+  if (endpoint.status === 'unconfigured') return 'endpoint-picker';
+  return shouldShowEndpointPicker({ endpointSource: endpoint.source, endpointChosen, hasAuthTokens })
+    ? 'endpoint-picker'
+    : 'login';
+}
+
 export type McpApprovalGateInput = {
   alreadyResolved: boolean;
   pendingCount: number;

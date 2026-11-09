@@ -1,11 +1,11 @@
+import { AdminSettings } from '@bike4mind/database';
+import type { MigrationFile } from './index';
 import {
   isStoredToggleOn,
   signupGrantScheduleFromValues,
   storedGrantCredits,
-  type SignupGrantCreditKey,
-} from '@bike4mind/common';
-import { AdminSettings } from '@bike4mind/database';
-import type { MigrationFile } from './index';
+  type LegacySignupGrantCreditKey as SignupGrantCreditKey,
+} from './legacySignupGrantSchedule';
 
 const READ_KEYS: SignupGrantCreditKey[] = [
   'signupGrantInitialCredits',
@@ -17,10 +17,9 @@ const READ_KEYS: SignupGrantCreditKey[] = [
 ];
 
 /**
- * The runtime resolver stopped reading defaultFreeCredits and stagedSignupGrantEnabled
- * (runtimeSignupGrantSchedule in b4m-core/common/src/signupGrant.ts). Where the initial credits or drip cap
- * is still absent or empty, pin what the old fallback paid so the amount does not change. Stored values are
- * left alone.
+ * The runtime resolver stopped reading defaultFreeCredits and stagedSignupGrantEnabled. Where the initial
+ * credits or drip cap is still absent or empty, pin what the old fallback (frozen in
+ * legacySignupGrantSchedule.ts) paid so the amount does not change. Stored values are left alone.
  */
 const migration: MigrationFile = {
   id: 20260921237450,

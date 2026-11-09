@@ -53,9 +53,9 @@ describe('POST /api/organizations/[id]/addUser', () => {
     findById.mockResolvedValue({ id: 'org1', userId: 'owner1' });
   });
 
-  it('lets the billing owner add a user and delegates to addMember', async () => {
+  it('lets a platform admin add a user and delegates to addMember', async () => {
     const { req, res } = createMocks({ method: 'POST', query: { id: 'org1' }, body: { userId: 'u1' } });
-    (req as any).user = { id: 'owner1', isAdmin: false };
+    (req as any).user = { id: 'someone-else', isAdmin: true };
     await mockRefs.postHandler!(req, res);
 
     expect(addMember).toHaveBeenCalledWith(
@@ -66,14 +66,11 @@ describe('POST /api/organizations/[id]/addUser', () => {
     expect(res._getStatusCode()).toBe(200);
   });
 
-  it('lets an admin add a user', async () => {
-    const { req, res } = createMocks({ method: 'POST', query: { id: 'org1' }, body: { userId: 'u1' } });
-    (req as any).user = { id: 'someone-else', isAdmin: true };
-    await mockRefs.postHandler!(req, res);
-    expect(addMember).toHaveBeenCalledTimes(1);
-  });
-
-  it('lets an org manager add a user', async () => {
+  it.each([
+    ['the billing owner', 'owner1'],
+    ['an org manager', 'manager1'],
+    ['a stranger', 'intruder'],
+  ])('refuses %s before looking anything up: members join by invitation', async (_label, callerId) => {
     findById.mockResolvedValue({
       id: 'org1',
       userId: 'owner1',
@@ -81,35 +78,17 @@ describe('POST /api/organizations/[id]/addUser', () => {
       users: [{ userId: 'manager1', permissions: ['read'] }],
     });
     const { req, res } = createMocks({ method: 'POST', query: { id: 'org1' }, body: { userId: 'u1' } });
-    (req as any).user = { id: 'manager1', isAdmin: false };
-    await mockRefs.postHandler!(req, res);
-    expect(addMember).toHaveBeenCalledTimes(1);
-  });
+    (req as any).user = { id: callerId, isAdmin: false };
 
-  it('lets a rostered adminUserIds manager add a user', async () => {
-    findById.mockResolvedValue({
-      id: 'org1',
-      userId: 'owner1',
-      adminUserIds: ['appointed1'],
-      users: [{ userId: 'appointed1', permissions: ['read'] }],
-    });
-    const { req, res } = createMocks({ method: 'POST', query: { id: 'org1' }, body: { userId: 'u1' } });
-    (req as any).user = { id: 'appointed1', isAdmin: false };
-    await mockRefs.postHandler!(req, res);
-    expect(addMember).toHaveBeenCalledTimes(1);
-  });
-
-  it('rejects a non-owner, non-manager, non-admin before calling addMember', async () => {
-    const { req, res } = createMocks({ method: 'POST', query: { id: 'org1' }, body: { userId: 'u1' } });
-    (req as any).user = { id: 'intruder', isAdmin: false };
     await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(ForbiddenError);
+    expect(findById).not.toHaveBeenCalled();
     expect(addMember).not.toHaveBeenCalled();
   });
 
   it('rejects with NotFoundError when the organization does not exist', async () => {
     findById.mockResolvedValue(null);
     const { req, res } = createMocks({ method: 'POST', query: { id: 'ghost' }, body: { userId: 'u1' } });
-    (req as any).user = { id: 'owner1', isAdmin: false };
+    (req as any).user = { id: 'admin1', isAdmin: true };
     await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(NotFoundError);
     expect(addMember).not.toHaveBeenCalled();
   });

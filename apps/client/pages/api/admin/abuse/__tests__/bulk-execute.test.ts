@@ -34,8 +34,8 @@ vi.mock('@server/admin/bulkAbuse/addBlockedEmailDomain', () => ({
 }));
 
 // parseAdminActionReason and isSelfOrImpersonator stay real.
-vi.mock('@server/utils/adminAudit', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>()),
   recordAdminActionFromRequest: vi.fn(async () => null),
   denySelfAdminAction: vi.fn(async () => {
     throw Object.assign(new Error('self'), { statusCode: 403 });
@@ -43,7 +43,7 @@ vi.mock('@server/utils/adminAudit', async importOriginal => ({
 }));
 
 import { abuseService } from '@bike4mind/services';
-import { denySelfAdminAction, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { denySelfAdminAction, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { signBulkAbusePreviewToken } from '@server/admin/bulkAbuse/previewToken';
 import handler from '../bulk-execute';
 

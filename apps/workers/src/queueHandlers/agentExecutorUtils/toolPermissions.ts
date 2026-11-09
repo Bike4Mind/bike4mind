@@ -69,6 +69,60 @@ export function selectGatedToolCall(
 }
 
 /**
+ * Observation for a withheld call that exactly repeats a call the user approved and the
+ * resume just ran. Running it would need a second approval for a duplicate side effect.
+ */
+export const REPEATED_APPROVED_CALL_OBSERVATION =
+  'Not run: this exact call was approved and already ran in the previous step, and its result is above. ' +
+  'Do not repeat it. If the user explicitly wants it run a second time, ask them first.';
+
+function canonicalToolInput(input: unknown): string {
+  let value = input;
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return value as string;
+    }
+  }
+  const sortKeys = (node: unknown): unknown => {
+    if (Array.isArray(node)) return node.map(sortKeys);
+    if (node && typeof node === 'object') {
+      return Object.fromEntries(
+        Object.keys(node as Record<string, unknown>)
+          .sort()
+          .map(key => [key, sortKeys((node as Record<string, unknown>)[key])])
+      );
+    }
+    return node;
+  };
+  return JSON.stringify(sortKeys(value ?? {}));
+}
+
+const repeatKey = (call: GatedToolCall) => `${call.name}\u0000${canonicalToolInput(call.input)}`;
+
+/**
+ * Split withheld calls into exact repeats of a call the approval resume just replayed and
+ * the rest. Scoped to `guardedToolNames` (custom connector tools): a built-in tool such as a
+ * shell command can legitimately be re-run with identical arguments after something changed.
+ * The caller passes only the replays from the iteration directly before, so an identical
+ * call made later in the run still raises its own card.
+ */
+export function partitionRepeatedApprovedCalls(
+  withheld: GatedToolCall[],
+  justReplayed: readonly GatedToolCall[],
+  guardedToolNames: ReadonlySet<string>
+): { repeats: GatedToolCall[]; remaining: GatedToolCall[] } {
+  const replayed = new Set(justReplayed.filter(call => guardedToolNames.has(call.name)).map(repeatKey));
+  const repeats: GatedToolCall[] = [];
+  const remaining: GatedToolCall[] = [];
+  for (const call of withheld) {
+    (guardedToolNames.has(call.name) && replayed.has(repeatKey(call)) ? repeats : remaining).push(call);
+  }
+  return { repeats, remaining };
+}
+
+/**
  * Partition an iteration's withheld calls into the ones a permission response just
  * approved and the ones still awaiting a verdict - the pure decision behind the
  * approve -> replay resume block in `agentExecutor.ts`.
@@ -115,8 +169,10 @@ export async function resumeApprovedPause<TCheckpoint>(
     approvedToolCallId: string | undefined;
     approvedTools: string[];
     deniedTools: string[];
+    guardedToolNames: ReadonlySet<string>;
   },
   deps: {
+    answerRepeatedCall: (call: GatedToolCall) => void;
     executeGatedToolCall: (call: { id: string; name: string; input: unknown }) => Promise<unknown>;
     toCheckpoint: () => TCheckpoint;
     updatePermissionState: (executionId: string) => Promise<unknown>;
@@ -129,15 +185,26 @@ export async function resumeApprovedPause<TCheckpoint>(
     logger: { error: (msg: string, meta?: Record<string, unknown>) => void };
   }
 ): Promise<ResumeApprovedPauseOutcome> {
-  const { executionId, iterationIndex, withheld, approvedToolCallId, approvedTools, deniedTools } = params;
-  const { nowApproved, stillWithheld } = partitionApprovedPause(
+  const { executionId, iterationIndex, withheld, approvedToolCallId, approvedTools, deniedTools, guardedToolNames } =
+    params;
+  const { nowApproved, stillWithheld: withheldBeforeRepeatGuard } = partitionApprovedPause(
     withheld,
     approvedToolCallId,
     approvedTools,
     deniedTools
   );
 
+  const replayedGuardedKeys = new Set<string>();
   for (const call of nowApproved) {
+    // Two identical custom calls in one batch run once; the sibling gets the repeat observation.
+    if (guardedToolNames.has(call.name)) {
+      const key = repeatKey(call);
+      if (replayedGuardedKeys.has(key)) {
+        deps.answerRepeatedCall(call);
+        continue;
+      }
+      replayedGuardedKeys.add(key);
+    }
     try {
       await deps.executeGatedToolCall({ id: call.id, name: call.name, input: call.input });
     } catch (err) {
@@ -156,6 +223,13 @@ export async function resumeApprovedPause<TCheckpoint>(
       return { status: 'replay_error' };
     }
   }
+
+  const { repeats: withheldRepeats, remaining: stillWithheld } = partitionRepeatedApprovedCalls(
+    withheldBeforeRepeatGuard,
+    nowApproved,
+    guardedToolNames
+  );
+  for (const call of withheldRepeats) deps.answerRepeatedCall(call);
 
   const replayCheckpoint = deps.toCheckpoint();
   await deps.updatePermissionState(executionId);
@@ -299,8 +373,10 @@ export async function resumeApprovedPauseAndGateConfidence<TCheckpoint>(
     deniedTools: string[];
     confidenceGateThreshold: number;
     confidenceOverrides?: readonly number[];
+    guardedToolNames: ReadonlySet<string>;
   },
   deps: {
+    answerRepeatedCall: (call: GatedToolCall) => void;
     executeGatedToolCall: (call: { id: string; name: string; input: unknown }) => Promise<unknown>;
     toCheckpoint: () => TCheckpoint;
     updatePermissionState: (executionId: string) => Promise<unknown>;
@@ -337,6 +413,7 @@ export async function resumeApprovedPauseAndGateConfidence<TCheckpoint>(
       approvedToolCallId: params.approvedToolCallId,
       approvedTools: params.approvedTools,
       deniedTools: params.deniedTools,
+      guardedToolNames: params.guardedToolNames,
     },
     deps
   );

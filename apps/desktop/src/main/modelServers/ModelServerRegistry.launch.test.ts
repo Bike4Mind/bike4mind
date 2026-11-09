@@ -336,7 +336,7 @@ describe('ModelServerRegistry launching servers', () => {
   });
 
   it('saves an address nothing answers at yet, then runs a keyed llama-server router there', async () => {
-    const { registry, calls, launchers } = setup();
+    const { registry, calls, launchers, handles } = setup();
     const address = { address: 'http://127.0.0.1:8090', credential: none };
     const probe = await registry.probe(address);
     expect(probe).toMatchObject({ ok: false, launchable: true, address: 'http://127.0.0.1:8090' });
@@ -365,6 +365,13 @@ describe('ModelServerRegistry launching servers', () => {
     expect(keyed.length).toBeGreaterThan(0);
     expect(keyed.every(call => call.credentials?.authorization === `Bearer ${KEY}`)).toBe(true);
     expect(JSON.stringify(await registry.views())).not.toContain(KEY);
+    // A running server's warning shows as its problem, and goes with the server.
+    Object.assign(handles[0], { warning: 'runs on the CPU' });
+    const view = async () => (await registry.views()).find(server => server.id === added.id)?.launch;
+    expect(await view()).toMatchObject({ problem: 'runs on the CPU' });
+    (handles[0] as { running: boolean }).running = false;
+    expect(await view()).toMatchObject({ problem: null });
+    (handles[0] as { running: boolean }).running = true;
 
     await expect(registry.update(added.id, { kind: 'ollama' })).rejects.toThrow('Stop the server Desktop started');
     await expect(registry.update(added.id, { launch: { kvCacheType: 'q8_0' } })).rejects.toThrow(

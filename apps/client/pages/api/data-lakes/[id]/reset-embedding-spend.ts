@@ -4,7 +4,7 @@ import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featu
 import { dataLakeRepository, dataLakeSpendNotificationRepository, withTransaction } from '@bike4mind/database';
 import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { Request } from 'express';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 /**
  * Admin-only: zero a lake's lifetime embedding-spend meter (embeddingSpendMicroUsd).

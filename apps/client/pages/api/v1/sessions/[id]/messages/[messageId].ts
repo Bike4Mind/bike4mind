@@ -1,4 +1,4 @@
-import { questRepository, sessionRepository } from '@bike4mind/database';
+import { questRepository, sessionRepository, withTransaction } from '@bike4mind/database';
 import { sessionService } from '@bike4mind/services';
 import {
   canUpdateShareable,
@@ -91,7 +91,13 @@ const putHandler = nextRouteForContract(updateSessionMessageContract).put(async 
   const stillWritable = await sessionRepository.shareable.findUpdateAccessById(req.user, sessionId);
   if (!stillWritable) throw new ForbiddenError('Not authorized to update this session');
 
-  const updatedMessage = await questRepository.updateInSession(sessionId, { id: message.id, ...allowedUpdates });
+  const updatedMessage = await withTransaction(async () => {
+    const updated = await questRepository.updateInSession(sessionId, { id: message.id, ...allowedUpdates });
+    if (updated && (typeof allowedUpdates.reply === 'string' || allowedUpdates.replies !== undefined)) {
+      await sessionRepository.update({ id: sessionId, updatedAt: new Date() });
+    }
+    return updated;
+  });
 
   // Only reachable if the quest was deleted between the read above and this write.
   if (!updatedMessage) throw new NotFoundError('Message not found');
@@ -110,11 +116,14 @@ const putHandler = nextRouteForContract(updateSessionMessageContract).put(async 
 
 const deleteHandler = nextRouteForContract(deleteSessionMessageContract).delete(async (req, res) => {
   const { id: sessionId, messageId } = req.validatedParams;
-  await sessionService.deleteSessionMessage(
-    req.user.id,
-    { sessionId, messageId },
-    { db: { sessions: sessionRepository, chatHistories: questRepository } }
-  );
+  await withTransaction(async () => {
+    await sessionService.deleteSessionMessage(
+      req.user.id,
+      { sessionId, messageId },
+      { db: { sessions: sessionRepository, chatHistories: questRepository } }
+    );
+    await sessionRepository.update({ id: sessionId, updatedAt: new Date() });
+  });
   return res.json({ msg: 'Message deleted' });
 });
 

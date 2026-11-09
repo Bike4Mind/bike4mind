@@ -576,11 +576,28 @@ describe('ChatService untrusted content in a reply', () => {
 
     const cases: [string, string, [string, Record<string, unknown>]][] = [
       ['Bash(gh pr create:*)', 'gh pr create', ['bash_execute', { command: 'gh pr create --fill', cwd: '' }]],
-      ['Bash(git rebase:*)', 'git rebase', ['bash_execute', { command: 'git rebase origin/main', cwd: '' }]],
+      ['Bash(git rebase:*)', 'git rebase', ['bash_execute', { command: 'git rebase main', cwd: '' }]],
       ['WebFetch(domain:example.com)', 'a fetch', ['web_fetch', { url: 'https://example.com/other' }]],
     ];
 
     it.each(cases)('%s runs %s unasked in a tainted reply', async (rule, _label, [name, input]) => {
+      // A git write from a target is left to the rules only when git can diff that target and it adds no .claude path.
+      if (rule.startsWith('Bash(git')) {
+        execFileSync('git', ['-C', root, 'init', '-q', '-b', 'main']);
+        execFileSync('git', [
+          '-C',
+          root,
+          '-c',
+          'user.name=t',
+          '-c',
+          'user.email=t@t',
+          'commit',
+          '-q',
+          '--allow-empty',
+          '-m',
+          'x',
+        ]);
+      }
       rules = allowRules([rule]);
       const id = await session('auto');
       await reply(id, [fetch, [name, name === 'bash_execute' ? { ...input, cwd: root } : input]]);

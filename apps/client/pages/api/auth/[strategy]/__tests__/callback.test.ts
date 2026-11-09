@@ -73,7 +73,7 @@ vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn()
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn().mockResolvedValue(undefined) }));
 
 const mockEmitSignup = vi.fn().mockResolvedValue([]);
-vi.mock('@server/analytics/signupEvents', () => ({
+vi.mock('@bike4mind/server-utils/analytics/signupEvents', () => ({
   emitSignupForSourceProducts: (...a: unknown[]) => mockEmitSignup(...a),
 }));
 const mockRecordSignupAcquisition = vi.fn().mockResolvedValue({ isSynthetic: false });
@@ -89,7 +89,9 @@ vi.mock('@server/auth/networkMeta', () => ({
 }));
 
 const mockRefreshSignupRiskScore = vi.fn().mockResolvedValue(undefined);
-vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
+vi.mock('@bike4mind/server-utils/auth/riskEvidence', () => ({
+  requestRiskEvidenceRefresh: vi.fn(async () => 'queued'),
+}));
 vi.mock('@server/auth/signupRiskScore', () => ({
   refreshSignupRiskScore: (...a: unknown[]) => mockRefreshSignupRiskScore(...a),
 }));
@@ -293,6 +295,20 @@ describe('[strategy]/callback - err branch log level', () => {
     expect(warnSpy).toHaveBeenCalledWith('Passport Authenticate Error:', undefined, err);
     expect(errorSpy).not.toHaveBeenCalled();
     expect(res._getRedirectUrl()).toBe('/login?error=Authentication%20failed');
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  it.each([
+    Object.assign(new Error('Invalid Credentials'), { name: 'UserInfoError' }),
+    'account_link_email_mismatch',
+    'account_link_requires_verification',
+  ])('warns for an expected provider or account-link refusal: %s', async err => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await runCallback(err, undefined, undefined);
+    expect(warnSpy).toHaveBeenCalledWith('Passport Authenticate Error:', undefined, err);
+    expect(errorSpy).not.toHaveBeenCalled();
     errorSpy.mockRestore();
     warnSpy.mockRestore();
   });

@@ -153,7 +153,7 @@ export function openAICompatibleControls(
     temperature: control(TEMPERATURE),
     topP: control(OPENAI_TOP_P),
     presencePenalty: control(PRESENCE_PENALTY),
-    ...(product !== null ? { topK, repeatPenalty: control(REPEAT_PENALTY) } : {}),
+    ...(product !== null && product !== 'llama-swap' ? { topK, repeatPenalty: control(REPEAT_PENALTY) } : {}),
     ...(product === 'llama-server' || product === 'vllm' ? { minP: control(MIN_P) } : {}),
     ...(maxOutputTokens ? { maxOutputTokens } : {}),
     ...(facts.effortLevels ? { effort: { levels: [...OPENAI_COMPATIBLE_EFFORT_LEVELS], scope: 'request' } } : {}),

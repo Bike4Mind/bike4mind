@@ -59,6 +59,20 @@ describe('LocalServerSupervisor', () => {
     expect(changed).toHaveBeenCalledWith('a');
   });
 
+  it("shows and logs a started server's warning until it stops", async () => {
+    const warning = 'llama-server at /bin/x is a SYCL build but lists no GPU, so it runs on the CPU.';
+    const child = { ...handle(), warning };
+    const { instance, warn } = supervisor(async () => child);
+    await instance.start('r', { runtime: 'llama-server', port: 8090, settings: { modelsDir: '/m' } });
+    expect(instance.owned('r')).not.toBeNull();
+    expect(instance.warning('r')).toBe(warning);
+    expect(instance.problem('r')).toBeNull();
+    expect(warn).toHaveBeenCalledWith(`MODEL SERVERS: ${warning}`);
+    await instance.stop('r');
+    expect(instance.warning('r')).toBeNull();
+    expect(instance.problem('r')).toBeNull();
+  });
+
   it('gives the router key only while the router runs', async () => {
     const child = handle('k-zz');
     const { instance } = supervisor(async () => child);

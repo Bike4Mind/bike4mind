@@ -162,12 +162,7 @@ describe('hiddenAdminSettingKeys', () => {
 
   it.each(['production', 'dev'])('hides the deprecated drip settings on %s', async stage => {
     mockConfig.STAGE = stage;
-    expect([...(await callHandler())].sort()).toEqual([
-      'signupGrantActivityMinDays',
-      'signupGrantActivityMinMessages',
-      'signupGrantActivityPreviewTestMode',
-      'signupGrantDailyBudget',
-    ]);
+    expect([...(await callHandler())].sort()).toEqual(['signupGrantActivityPreviewTestMode']);
   });
 
   it.each(['pr6157', 'my-personal-stage'])('hides nothing on %s', async stage => {

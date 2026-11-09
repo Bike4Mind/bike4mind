@@ -2,7 +2,7 @@ import type {
   AdminSubscriptionOwnerAlert,
   AdminSubscriptionRow,
   SubscriptionStatusFilter,
-} from '@client/app/utils/adminSubscriptionsFilter';
+} from '@bike4mind/server-utils/app/utils/adminSubscriptionsFilter';
 import { isCompSubscription, isTerminalSubscriptionStatus } from '@client/app/utils/adminSubscriptionDetail';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 

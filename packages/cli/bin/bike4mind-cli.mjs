@@ -338,10 +338,14 @@ const argv = await yargs(hideBin(process.argv))
       .command(['ls', 'list'], 'List models installed on the local runtime', {}, async () => {
         // Handled by external command handler
       })
-      .command('servers [action] [name]', "List Desktop's saved model servers, or log in or out of one", (yargs) => {
+      .command('servers [action] [name]', "List Desktop's saved model servers, find the ones on a machine over SSH, or log in or out of one", (yargs) => {
         return yargs
-          .positional('action', { type: 'string', choices: ['login', 'logout'], describe: 'Keep or remove the CLI\'s credential for a server' })
-          .positional('name', { type: 'string', describe: 'Server name, as `b4m models servers` shows it' })
+          .positional('action', { type: 'string', choices: ['discover', 'login', 'logout'], describe: 'Find servers over SSH, or keep or remove the CLI\'s credential for a server' })
+          .positional('name', { type: 'string', describe: 'Server name, as `b4m models servers` shows it; for discover, an SSH destination' })
+          .option('port', {
+            type: 'string',
+            description: 'discover: look only at this port on that machine, instead of the usual ones',
+          })
           .option('check-tools', {
             type: 'boolean',
             description: 'servers: send each OpenAI-compatible server a one-token request to see whether it accepts tool calls',
@@ -353,6 +357,7 @@ const argv = await yargs(hideBin(process.argv))
             default: false,
           })
           .example('b4m models servers', 'List the servers with their status')
+          .example('b4m models servers discover me@gpu-box', 'Find Ollama, LM Studio, llama-server and vLLM on gpu-box over SSH')
           .example('b4m models servers login gpu-box', 'Enter the CLI\'s credential for gpu-box (hidden)');
       }, async () => {
         // Handled by external command handler

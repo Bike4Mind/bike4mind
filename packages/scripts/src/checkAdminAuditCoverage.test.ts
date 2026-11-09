@@ -73,10 +73,12 @@ describe('analyzeHandlerCoverage', () => {
 
   it('does not credit an audit that only records the denial', () => {
     const route = `
-      import { denySelfAdminAction } from '@server/utils/adminAudit';
+      import { denySelfAdminAction } from '@bike4mind/server-utils/utils/adminAudit';
       export default adminApi({}).post(async (req, res) => { await denySelfAdminAction(req, 'x'); await save(); });`;
     const adminAudit = `export const denySelfAdminAction = async (req) => recordAdminActionFromRequest(req, {});`;
-    expect(audited(coverageOf({ [ROUTE]: route, 'apps/client/server/utils/adminAudit.ts': adminAudit }))).toEqual({
+    expect(
+      audited(coverageOf({ [ROUTE]: route, 'packages/server-utils/src/utils/adminAudit.ts': adminAudit }))
+    ).toEqual({
       POST: false,
     });
   });

@@ -2,7 +2,7 @@ import { render } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { emptySignalCounts, type SignupTimeseries } from '@client/app/utils/signupSignals';
+import { emptySignalCounts, type SignupTimeseries } from '@bike4mind/server-utils/app/utils/signupSignals';
 
 const chart = vi.hoisted(() => ({ onClick: undefined as undefined | ((state: unknown) => void) }));
 // recharts needs a measured container; jsdom has none, so capture the chart's click handler instead.

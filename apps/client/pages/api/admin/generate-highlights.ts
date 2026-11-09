@@ -1,15 +1,14 @@
 import { Request, Response } from 'express';
 import { randomUUID } from 'crypto';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { AdminSettings } from '@bike4mind/database';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Resource } from 'sst';
-import type { WhatsNewHighlightsPayload } from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.types';
+import type { WhatsNewHighlightsJob } from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.types';
 import { Logger } from '@bike4mind/observability';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import {
   HIGHLIGHTS_NOTE_LIMIT,
   loadHighlightsReleaseNotes,
@@ -22,14 +21,9 @@ const ONE_MINUTE_MS = 60 * 1000;
 
 const SETTING_NAME = 'whatsNewHighlightsConfig';
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({ adminPermissions: { POST: 'settings:manage' }, requiredScopes: [ApiKeyScope.ADMIN] })
   .use(rateLimit({ limit: GENERATE_RATE_LIMIT, windowMs: ONE_MINUTE_MS }))
   .post(async (req: Request, res: Response) => {
-    // Check if user is admin
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     try {
       // Get configuration
       const setting = await AdminSettings.findOne({ settingName: SETTING_NAME });
@@ -118,7 +112,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         });
       }
 
-      const payload: WhatsNewHighlightsPayload = {
+      const payload: WhatsNewHighlightsJob = {
+        kind: 'highlights',
         correlationId,
         environment: Resource.App.stage === 'production' ? 'production' : 'dev',
         startDate: startDateStr,
@@ -131,9 +126,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       // Dispatch to queue
       // Type assertion needed: SST types are generated after first deploy
       const queueResource = (Resource as unknown as Record<string, { url: string } | undefined>)
-        .whatsNewHighlightsQueue;
+        .whatsNewGenerationQueue;
       if (!queueResource?.url) {
-        return res.status(500).json({ error: 'whatsNewHighlightsQueue not deployed — SQS queue URL unavailable' });
+        return res.status(500).json({ error: 'whatsNewGenerationQueue not deployed - SQS queue URL unavailable' });
       }
       await sendToQueue(queueResource.url, payload);
 

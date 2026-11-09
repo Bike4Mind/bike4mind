@@ -32,6 +32,19 @@ describe('curatedTier', () => {
     ['a CPU-only box', machine('cpu', 62), 'cpu', 0],
     ['a discrete box whose GPU memory is unknown', machine('discrete', 62), 'cpu', 0],
     ['two 8 GB cards, by their summed memory', { ...machine('discrete', 64, 15.9), gpuCount: 2 }, 'discrete', 16],
+    [
+      'Intel integrated graphics, which Ollama leaves to the CPU',
+      { ...machine('unified', 32), gpuVendor: 'intel' },
+      'cpu',
+      0,
+    ],
+    [
+      'Windows Intel integrated graphics with a shared-memory limit',
+      { ...machine('unified', 32, 16), platform: 'win32', gpuVendor: 'intel' },
+      'cpu',
+      0,
+    ],
+    ['an Intel Arc card by its VRAM', { ...machine('discrete', 32, 16), gpuVendor: 'intel' }, 'discrete', 16],
   ])('picks the largest tier %s reaches', (_label, hw, kind, minGiB) => {
     expect(curatedTier(TIERS, hw)).toMatchObject({ memoryKind: kind, minGiB });
   });

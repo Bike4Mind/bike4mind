@@ -165,6 +165,7 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
     temperature: { type: Number, min: 0, max: 2 },
     maxTokens: { type: Number, min: 1, max: 200000 },
     maxCreditsPerMember: { type: Number, required: false },
+    redactPushContent: { type: Boolean, default: false },
   },
   {
     virtuals: true,
@@ -208,6 +209,7 @@ OrganizationSchema.plugin(softDeletePlugin);
 // data-lake request - Mongo index-unions an `$or` only when EVERY branch is index-supported, so
 // without both the org-admin resolution would plan a full `organizations` collscan.
 OrganizationSchema.index({ userId: 1 });
+OrganizationSchema.index({ name: 1 }, { collation: { locale: 'en', strength: 2 }, name: 'organization_name_ci' });
 OrganizationSchema.index({ stripeCustomerId: 1 }, { name: 'organization_stripeCustomerId' });
 // Backs findMembershipOrgIds' reverse lookup (users[] ACL by member) - previously every
 // membership question collscanned. The owner arm rides the existing { userId: 1 } index.

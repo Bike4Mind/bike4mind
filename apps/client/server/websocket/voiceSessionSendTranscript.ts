@@ -2,7 +2,7 @@ import { Connection, questRepository, sessionRepository, userRepository } from '
 import { Session as SessionModel } from '@bike4mind/database/auth';
 import { ApiKeyScope, Permission, VoiceSessionSendTranscriptAction } from '@bike4mind/common';
 import { accessibleBy } from '@casl/mongoose';
-import ability from '@server/auth/ability';
+import ability from '@bike4mind/server-utils/auth/ability';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { connectionHoldsScope } from '@server/websocket/connectionScope';
 import { withWebSocketContext } from '@bike4mind/server-utils/websocket/utils';

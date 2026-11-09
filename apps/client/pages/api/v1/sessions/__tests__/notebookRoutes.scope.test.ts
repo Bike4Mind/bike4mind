@@ -17,9 +17,10 @@ import {
 } from '@bike4mind/common';
 import { decideScopeGate, parseStagedScopes } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 
-const { baseApiOptions, mockDeleteSessionMessage } = vi.hoisted(() => ({
+const { baseApiOptions, mockDeleteSessionMessage, mockSessionUpdate } = vi.hoisted(() => ({
   baseApiOptions: [] as Array<Record<string, unknown> | undefined>,
   mockDeleteSessionMessage: vi.fn(),
+  mockSessionUpdate: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -60,9 +61,10 @@ vi.mock('@bike4mind/database', () => ({
   newAccountSpendCapAdapters: {},
   organizationRepository: {},
   questRepository: {},
-  sessionRepository: {},
+  sessionRepository: { update: mockSessionUpdate },
   usageEventRepository: {},
   userRepository: {},
+  withTransaction: async (fn: () => Promise<unknown>) => fn(),
 }));
 vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: vi.fn() }));
 vi.mock('@bike4mind/database/content', () => ({ Quest: {} }));
@@ -159,6 +161,7 @@ describe('DELETE /api/v1/sessions/{id}/messages/{messageId}', () => {
       { sessionId: 'sess-1', messageId: 'quest-1' },
       expect.anything()
     );
+    expect(mockSessionUpdate).toHaveBeenCalledWith({ id: 'sess-1', updatedAt: expect.any(Date) });
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ msg: 'Message deleted' });
   });

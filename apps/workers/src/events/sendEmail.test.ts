@@ -2,8 +2,10 @@ import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({ send: vi.fn(), logger: { updateMetadata: vi.fn(), info: vi.fn(), error: vi.fn() } }));
 vi.mock('@workers/utils/eventContext', () => ({ withEventContext: (fn: unknown) => fn }));
-vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { schema: { parse: (value: unknown) => value } } } }));
-vi.mock('@server/utils/mailer', () => ({ default: { sendEmail: mocks.send } }));
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
+  EmailEvents: { Send: { schema: { parse: (value: unknown) => value } } },
+}));
+vi.mock('@bike4mind/server-utils/utils/mailer/index', () => ({ default: { sendEmail: mocks.send } }));
 import { handler } from './sendEmail';
 
 beforeEach(() => {

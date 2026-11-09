@@ -153,13 +153,31 @@ enabling or tuning a production policy:
 pnpm --filter @bike4mind/scripts exec tsx src/replaySignupRisk.ts /private/path/signup-risk.json
 ```
 
+The grant assessment records the collector's signal values as `signals`, including
+in shadow while the policy is disabled (bounded, and a failure records nothing), so
+signups assessed after that recording shipped can be replayed exactly. Build the
+input from them with the read-only labeler, run in the stage's SST shell:
+
+```bash
+pnpm --filter @bike4mind/scripts report:signup-risk-cohort --since <ISO UTC> --until <ISO UTC> \
+  --policy /private/path/candidate-policy.json --out /private/path/signup-risk.json
+```
+
+It labels each signup with `classifySignupOutcome`: legitimate when the email is
+verified, the account is not banned, moderated or held by signup review, and it
+made a successful AI request (operational and embedding spend excluded) within 7
+days of signup; everything else is suspected. Signups whose 7-day window is still
+open are skipped. It prints aggregate counts only and refuses to overwrite `--out`.
+
 The input has `policy` (an enabled `signupRiskPolicySchema` policy) and a `samples`
 array. Each sample has `cohort` (`suspected` or `legitimate`), `signupCredits` and
 `signals` (the observations understood by `evaluateSignupRisk`). Use observations
 available at grant time, anchor network windows at signup, and leave unavailable
 facts absent or null. Do not substitute zero for missing historical counts or
 infer a challenge pass from a successful signup. Keep labels independent of the
-candidate policy to avoid evaluating it against its own decisions.
+candidate policy to avoid evaluating it against its own decisions: once a policy is
+enabled, the labeler counts that policy's review holds as suspected, so compare a
+candidate on a window the enabled policy did not hold, or read those rows apart.
 
 The command performs no database writes and prints only aggregate band and
 missing-observation counts for each cohort. Keep input files, actual weights,

@@ -262,6 +262,7 @@ import NormalizeSubscriberEmails from './20260921236500_normalize-subscriber-ema
 import EnsurePaymentAttemptIndexes from './20260921236600_ensure-payment-attempt-indexes';
 import EnsurePaymentRiskLinkIndexes from './20260921236700_ensure-payment-risk-link-indexes';
 import EnsureUserHeldUnlockIndex from './20260921236800_ensure-user-held-unlock-index';
+import EnsureUserSignupGrantStageIndex from './20260921237495_ensure-user-signup-grant-stage-index';
 import EnsurePendingCreditHoldUserIndex from './20260921236900_ensure-pending-credit-hold-user-index';
 import EnsureFirstPartyNativeOAuthClient from './20260921236950_ensure-first-party-native-oauth-client';
 import EnsurePushTokenIndexes from './20260921236960_ensure-pushtoken-indexes';
@@ -293,13 +294,22 @@ import EnsureReferralInviterIndexes from './20260921239500_ensure-referral-invit
 import EnsureHeldCreditRewardUserStatusIndex from './20260921239600_ensure-heldcreditreward-user-status-index';
 import DropRetiredUnlockSettings from './20260921239700_drop-retired-unlock-settings';
 import EnsureFabFilePendingUploadIndex from './20260921239800_ensure-fabfile-pending-upload-index';
+import BackfillAnalyticsUserDayActive from './20260921239850_backfill-analytics-user-day-active';
 import EnsureOverwatchUserDayInternalIndex from './20260921239900_ensure-overwatch-user-day-internal-index';
 import EnsureUserDeletionScheduledForIndex from './20260921239970_ensure-user-deletion-scheduledfor-index';
 import EnsureBillingMismatchIndexes from './20260921239985_ensure-billing-mismatch-indexes';
 import EnsureStripeDisputeIndexes from './20260921239980_ensure-stripe-dispute-indexes';
+import EnsureAdminSearchIndexes from './20260921239987_ensure-admin-search-indexes';
 import ConvertLegacyQuestPlansToFiles from './20260921239990_convert-legacy-quest-plans-to-files';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import PinSignupGrantScheduleKeys from './20260921237480_pin-signup-grant-schedule-keys';
+// Id stays below SeedSignupGrantPools, whose test orders every signup migration before it.
+import DropQuestSignupActivity from './20260921237490_drop-quest-signup-activity';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import DropRetiredGrantSettings from './20260921239996_drop-retired-grant-settings';
 import EnsureUserLimitEventIndexes from './20260921240010_ensure-user-limit-event-indexes';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import EncryptOAuthProviderTokens from './20260921240020_encrypt-oauth-provider-tokens';
 import EnsureBillingEventIndexes from './20260921240030_ensure-billing-event-indexes';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
@@ -506,6 +516,8 @@ const coreMigrations: MigrationFile[] = [
   QueueHeldSignupGrantsForRiskReview,
   SeedSignupGrantSchedule,
   PinSignupGrantInitialAndCap,
+  PinSignupGrantScheduleKeys,
+  DropQuestSignupActivity,
   SeedSignupGrantPools,
   EnsureHeldCreditRewardIndexes,
   EnsureQuestSessionKeysetIndex,
@@ -520,14 +532,19 @@ const coreMigrations: MigrationFile[] = [
   EnsureHeldCreditRewardUserStatusIndex,
   DropRetiredUnlockSettings,
   EnsureFabFilePendingUploadIndex,
+  BackfillAnalyticsUserDayActive,
   EnsureOverwatchUserDayInternalIndex,
   EnsureAutoContainmentDecisionIndexes,
   EnsureUserDeletionScheduledForIndex,
   EnsureBillingMismatchIndexes,
   EnsureStripeDisputeIndexes,
   ConvertLegacyQuestPlansToFiles,
+  EnsureUserSignupGrantStageIndex,
+  DropRetiredGrantSettings,
   EnsureUserLimitEventIndexes,
+  EncryptOAuthProviderTokens,
   EnsureBillingEventIndexes,
+  EnsureAdminSearchIndexes,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
 ];

@@ -65,6 +65,7 @@ export function buildAnalyticsCsvFiles(
         'DAU (users)',
         'WAU (users)',
         'MAU (users)',
+        'External API users (not counted)',
         ...(compare ? ['MAU, previous period (users)'] : []),
       ],
       overview.activeUsers.days.map(day => ({
@@ -73,6 +74,7 @@ export function buildAnalyticsCsvFiles(
         'DAU (users)': day.dau,
         'WAU (users)': day.wau,
         'MAU (users)': day.mau,
+        'External API users (not counted)': day.apiDau,
         'MAU, previous period (users)': day.previousMau,
       }))
     ),
@@ -89,21 +91,13 @@ export function buildAnalyticsCsvFiles(
     ),
     csvFile(
       'signups.csv',
-      [
-        'Bucket start (UTC)',
-        'Bucket end, exclusive (UTC)',
-        'Partial bucket',
-        'Likely legit (signups)',
-        'Suspected (signups)',
-        'Unclassified (signups)',
-      ],
+      ['Bucket start (UTC)', 'Bucket end, exclusive (UTC)', 'Partial bucket', 'Real (signups)', 'Suspected (signups)'],
       overview.signups.buckets.map(bucket => ({
         'Bucket start (UTC)': bucket.start,
         'Bucket end, exclusive (UTC)': bucket.end,
         'Partial bucket': yesNo(bucket.partial),
-        'Likely legit (signups)': bucket.legit,
+        'Real (signups)': bucket.legit,
         'Suspected (signups)': bucket.suspected,
-        'Unclassified (signups)': bucket.unclassified,
       }))
     ),
     csvFile(

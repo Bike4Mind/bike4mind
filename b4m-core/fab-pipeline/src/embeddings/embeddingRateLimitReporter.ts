@@ -11,7 +11,7 @@
  */
 import { hasUsableLimits, parseEmbeddingRateLimitHeaders, type EmbeddingRateLimitSnapshot } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { EmbeddingModelProvider } from './EmbeddingService';
+import { EmbeddingModelProvider } from './embeddingModelInfo';
 
 /** A ceiling reading taken off a response the caller was already making. */
 export interface EmbeddingRateLimitObservation {

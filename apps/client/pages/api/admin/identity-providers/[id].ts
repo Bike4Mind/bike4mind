@@ -5,7 +5,7 @@ import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/er
 import { clearConfigurationCache } from '@server/auth/oktaOidcClient';
 import { ApiKeyScope, identityProviderResponseSchema, type AuditChange } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 const AUDITED_IDP_FIELDS = ['name', 'emailDomain', 'type', 'isActive'] as const;
 const AUDITED_SAML_FIELDS = ['entryPoint', 'issuer', 'callbackUrl', 'identifierFormat'] as const;

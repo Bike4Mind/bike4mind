@@ -21,6 +21,7 @@ export default defineConfig({
     'src/agentProactiveMessagingService/index.ts',
     'src/cliCompletions.ts',
     'src/llm/index.ts',
+    'src/llm/embeddingProviders.ts',
     'src/llm/StatusManager.ts',
     'src/llm/questStartBody.ts',
     'src/llm/toolFinishObserver.ts',

@@ -76,11 +76,18 @@ export function StatStrip({
     >
       <Box
         sx={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+          // Flex rather than an auto-fit grid: a wrapped last row stretches to the full width instead
+          // of leaving an empty cell beside an orphaned tile.
+          display: 'flex',
+          flexWrap: 'wrap',
           mr: '-1px',
           mb: '-1px',
-          '& > *': { borderRight: '1px solid', borderBottom: '1px solid', borderColor: 'admin.border' },
+          '& > *': {
+            flex: '1 1 180px',
+            borderRight: '1px solid',
+            borderBottom: '1px solid',
+            borderColor: 'admin.border',
+          },
         }}
       >
         {children}

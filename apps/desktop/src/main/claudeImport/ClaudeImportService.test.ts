@@ -435,6 +435,8 @@ describe('registerClaudeImport', () => {
         IPC_CHANNELS.claudeImportSyncCode,
         IPC_CHANNELS.claudeImportChatExport,
         IPC_CHANNELS.claudeImportSetWatchFolder,
+        IPC_CHANNELS.claudeImportSetWebSettings,
+        IPC_CHANNELS.claudeImportSyncWeb,
         IPC_CHANNELS.claudeImportRemove,
       ].sort()
     );
