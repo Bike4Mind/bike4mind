@@ -124,6 +124,13 @@ describe('POST /api/notebooks/download', () => {
     expect(storage.upload).toHaveBeenCalledTimes(1);
     const key = storage.upload.mock.calls[0][1] as string;
     expect(key).toMatch(new RegExp(`^exports/curated-notebooks/${USER_ID}/batches/${UUID}\\.zip$`));
+    expect(storage.getSignedUrl).toHaveBeenCalledWith(
+      key,
+      'get',
+      expect.objectContaining({
+        ResponseContentDisposition: expect.stringMatching(/filename="curated-notebooks-\d+\.zip"$/),
+      })
+    );
     expect(convert).not.toHaveBeenCalled();
     expect(res._getJSONData().data).toMatchObject({ downloadUrl: `https://example.invalid/${key}`, fileCount: 2 });
   });
