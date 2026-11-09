@@ -108,7 +108,7 @@ const errorHandler = (error: unknown, req: Request, res: Response) => {
 
     // 4xx = client error (expected in normal operation) -> warn
     // 5xx = server error (actual bug/outage) -> error (triggers LiveOps via CloudWatch filter)
-    const message = `${req.method} ${requestLogUrl((req.url ?? '').split('?')[0])} → ${statusCode}: ${errorObj.message || 'No message available'}`;
+    const message = `${req.method} ${requestLogUrl((req.url ?? '').split('?')[0])} \u2192 ${statusCode}: ${errorObj.message || 'No message available'}`;
     if (statusCode >= 500 && !(errorObj instanceof HTTPError && errorObj.expected)) {
       req.logger.error(message, error);
     } else {
@@ -135,7 +135,7 @@ const errorHandler = (error: unknown, req: Request, res: Response) => {
 
   // Unknown error shape - treat as server error
   req.logger.error(
-    `${req.method} ${requestLogUrl((req.url ?? '').split('?')[0])} → ${statusCode}: Unknown error`,
+    `${req.method} ${requestLogUrl((req.url ?? '').split('?')[0])} \u2192 ${statusCode}: Unknown error`,
     error
   );
   res.status(statusCode).json(buildErrorBody({ error: 'An unknown error occurred', requestId: req.requestId }));

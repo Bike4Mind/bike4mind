@@ -74,7 +74,7 @@ export function proxy(request: NextRequest) {
     BACKSLASH_PATTERN.test(pathname)
   ) {
     console.warn(
-      `[SECURITY] Blocked path traversal attempt: ${request.method} ${pathname} from ${logSourceIp(request)}`
+      `[SECURITY] Blocked path traversal attempt: ${request.method} ${redactShareTokenPath(pathname)} from ${logSourceIp(request)}`
     );
     return new NextResponse('Bad Request', { status: 400 });
   }
@@ -90,7 +90,7 @@ export function proxy(request: NextRequest) {
     decodeURIComponent(decoded);
   } catch {
     console.warn(
-      `[SECURITY] Blocked malformed URL encoding: ${request.method} ${pathname} from ${logSourceIp(request)}`
+      `[SECURITY] Blocked malformed URL encoding: ${request.method} ${redactShareTokenPath(pathname)} from ${logSourceIp(request)}`
     );
     return new NextResponse('Bad Request', { status: 400 });
   }

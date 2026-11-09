@@ -21,6 +21,14 @@ describe('share-link token paths', () => {
     [`/api/publish/serve/a/${token}/index.html`, '/api/publish/serve/a/[redacted]/index.html'],
     [`/a/${encodeURIComponent(`${token}/x`)}`, '/a/[redacted]'],
     [`//a//${token}/x`, '//a//[redacted]/x'],
+    [`/p/a/${token}`, '/p/a/[redacted]'],
+    [`/uc/a/${token}/index.html?__uc=1`, '/uc/a/[redacted]/index.html?__uc=1'],
+    [`/api/publish/serve/%61/${token}`, '/api/publish/serve/%61/[redacted]'],
+    [`/%61/${token}`, '/%61/[redacted]'],
+    [`/p/%61/${token}`, '/p/%61/[redacted]'],
+    [`/A/${token}`, '/A/[redacted]'],
+    [`/a/${token}%zz/x`, '/a/[redacted]/x'],
+    [`/a/${token}/..%2fx`, '/a/[redacted]/..%2fx'],
   ])('redacts the token in %s', (url, expected) => {
     expect(requestLogUrl(url)).toBe(expected);
     expect(redactShareTokenPath(url)).not.toContain(token);
@@ -36,6 +44,9 @@ describe('share-link token paths', () => {
     '/p/x',
     '/embed/x',
     '/api/a/x',
+    '/p/a',
+    '/p/x/a/y',
+    '/uc/ab/x',
   ])('leaves %s unchanged', url => {
     expect(requestLogUrl(url)).toBe(url);
   });
