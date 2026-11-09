@@ -10,6 +10,7 @@ export const TOKEN_RATE_LIMIT_EXCEEDED_ERROR_CODE = 'token_rate_limit_exceeded';
 export const CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE = 'concurrency_limit_exceeded';
 export const OUTPUT_BUDGET_EXHAUSTED_ERROR_CODE = 'output_budget_exhausted';
 export const DAILY_FREE_LIMIT_REACHED_ERROR_CODE = 'daily_free_limit_reached';
+export const UPGRADE_REQUIRED_ERROR_CODE = 'upgrade_required';
 
 /**
  * The one enumerated vocabulary for the `errorCode` field on a public error body
@@ -60,6 +61,8 @@ export const API_ERROR_CODES = [
   CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE,
   /** A reasoning model spent the caller's whole `max_tokens` thinking; remediation is raising it or omitting it. */
   OUTPUT_BUDGET_EXHAUSTED_ERROR_CODE,
+  /** A 426: the declared X-Client-Version is below the minimum set for that X-Client-Name; remediation is upgrading the client. */
+  UPGRADE_REQUIRED_ERROR_CODE,
   // Video generation (POST /api/v1/video-generations). Must stay in sync with VIDEO_GENERATION_API_ERROR_CODES.
   'unsupported_duration',
   'unsupported_aspect_ratio',
