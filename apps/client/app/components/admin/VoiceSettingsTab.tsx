@@ -1,19 +1,15 @@
 import { FC, useEffect, useRef, useState } from 'react';
 import {
-  Alert,
   Box,
   Button,
-  Card,
-  CircularProgress,
+  DialogContent,
   FormControl,
+  FormHelperText,
   FormLabel,
   IconButton,
   Input,
-  Modal,
-  ModalDialog,
   Option,
   Select,
-  Sheet,
   Stack,
   Switch,
   Textarea,
@@ -32,6 +28,16 @@ import { api } from '@client/app/contexts/ApiContext';
 import type { IAgent } from '@bike4mind/common';
 import { useElevenLabsVoices } from '@client/app/hooks/data/elevenLabsVoices';
 import { downloadData } from '@client/app/utils/download';
+import {
+  AdminDialog,
+  AdminPageHeader,
+  DataTable,
+  EmptyState,
+  ErrorState,
+  LoadingState,
+  type DataColumn,
+} from './shared';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
 
 interface VoiceAgentsListResponse {
   agents: IAgent[];
@@ -96,7 +102,9 @@ const VoiceSettingsTab: FC = () => {
   const {
     data: agentsData,
     isLoading,
-    error,
+    isError,
+    isFetching,
+    refetch,
   } = useQuery({
     queryKey: ADMIN_VOICE_AGENTS_KEY,
     queryFn: async (): Promise<IAgent[]> => {
@@ -232,255 +240,331 @@ const VoiceSettingsTab: FC = () => {
   });
 
   const canSubmit = form.name.trim() && form.voiceId && form.systemPrompt.trim();
+  const [deleting, setDeleting] = useState<IAgent | null>(null);
+
+  const columns: DataColumn<IAgent>[] = [
+    {
+      id: 'name',
+      label: 'Agent',
+      sortValue: agent => agent.name,
+      render: agent => (
+        <Box sx={{ minWidth: 0 }}>
+          <Typography level="body-md" sx={{ color: 'admin.ink', fontWeight: 500 }}>
+            {agent.name}
+          </Typography>
+          {agent.description && (
+            <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
+              {agent.description}
+            </Typography>
+          )}
+        </Box>
+      ),
+    },
+    {
+      id: 'elevenLabsAgentId',
+      label: 'ElevenLabs agent ID',
+      width: '16rem',
+      render: agent =>
+        agent.elevenLabsAgentId ? (
+          <Typography
+            component="span"
+            sx={{ fontFamily: 'code', fontSize: 12, color: 'admin.inkMuted', overflowWrap: 'anywhere' }}
+          >
+            {agent.elevenLabsAgentId}
+          </Typography>
+        ) : undefined,
+    },
+    {
+      id: 'default',
+      label: 'Default',
+      width: '7rem',
+      render: agent => (
+        <Tooltip title="Default voice assistant for users with no personal selection">
+          <Switch
+            checked={Boolean(agent.isDefaultVoiceAgent)}
+            disabled={defaultMutation.isPending}
+            onChange={e => defaultMutation.mutate({ id: agent.id, isDefault: e.target.checked })}
+            slotProps={{ input: { 'aria-label': `Make ${agent.name} the default voice agent` } }}
+            data-testid={`voice-settings-default-${agent.id}`}
+          />
+        </Tooltip>
+      ),
+    },
+  ];
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-      <Stack direction="row" justifyContent="space-between" alignItems="center">
-        <Box>
-          <Typography level="h3">Voice Settings</Typography>
-          <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
-            Create ElevenLabs Conversational AI agents and expose them to all users on the /agents page.
-          </Typography>
-        </Box>
-        <Button startDecorator={<AddIcon />} onClick={openCreate} data-testid="voice-settings-create-btn">
-          New voice agent
-        </Button>
-      </Stack>
+    <Stack sx={{ gap: ADMIN_REGION_GAP }} data-testid="admin-voice-settings-tab">
+      <AdminPageHeader
+        title="Voice"
+        count={agentsData?.length}
+        description="ElevenLabs voice agents offered to every user on the Agents page."
+        actions={
+          agentsData && agentsData.length > 0 ? (
+            <Button startDecorator={<AddIcon />} onClick={openCreate} data-testid="voice-settings-create-btn">
+              New voice agent
+            </Button>
+          ) : undefined
+        }
+      />
 
       {isLoading ? (
-        <Box display="flex" justifyContent="center" py={4}>
-          <CircularProgress />
-        </Box>
-      ) : error ? (
-        <Alert color="danger" variant="soft">
-          Failed to load voice agents. Confirm Voice v2 is enabled and the ElevenLabs server API key is configured under
-          Admin Settings.
-        </Alert>
+        <LoadingState label="Loading voice agents" />
+      ) : isError ? (
+        <ErrorState
+          message="Voice agents could not be loaded. Check that Voice v2 is on and the ElevenLabs server API key is set in Admin settings."
+          onRetry={() => void refetch()}
+          retrying={isFetching}
+        />
       ) : !agentsData || agentsData.length === 0 ? (
-        <Sheet variant="soft" sx={{ p: 3, textAlign: 'center', borderRadius: 'sm' }}>
-          <Typography level="body-md">
-            No voice agents yet. Click <em>New voice agent</em> to create one.
-          </Typography>
-        </Sheet>
+        <EmptyState
+          title="No voice agents yet"
+          description="Create one to offer it to users on the Agents page."
+          action={
+            <Button startDecorator={<AddIcon />} onClick={openCreate} data-testid="voice-settings-create-btn">
+              New voice agent
+            </Button>
+          }
+        />
       ) : (
-        <Stack spacing={1.5} data-testid="voice-settings-list">
-          {agentsData.map(agent => (
-            <Card
-              key={agent.id}
-              variant="outlined"
-              sx={{ flexDirection: 'row', alignItems: 'center', gap: 2, p: 2 }}
-              data-testid={`voice-settings-row-${agent.id}`}
-            >
-              <Box sx={{ flex: 1 }}>
-                <Typography level="title-md">{agent.name}</Typography>
-                {agent.description && (
-                  <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
-                    {agent.description}
-                  </Typography>
-                )}
-                <Typography level="body-xs" sx={{ color: 'text.tertiary', fontFamily: 'monospace', mt: 0.5 }}>
-                  ElevenLabs agent ID: {agent.elevenLabsAgentId ?? '—'}
-                </Typography>
-              </Box>
-              <Tooltip title="Default voice assistant for users with no personal selection">
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
-                    Default
-                  </Typography>
-                  <Switch
-                    checked={Boolean(agent.isDefaultVoiceAgent)}
-                    disabled={defaultMutation.isPending}
-                    onChange={e => defaultMutation.mutate({ id: agent.id, isDefault: e.target.checked })}
-                    data-testid={`voice-settings-default-${agent.id}`}
-                  />
-                </Box>
-              </Tooltip>
-              <Tooltip title="Download ElevenLabs agent config as JSON">
+        <Box data-testid="voice-settings-list">
+          <DataTable
+            rows={agentsData}
+            columns={columns}
+            getRowId={agent => agent.id}
+            label="Voice agents"
+            onRetry={() => void refetch()}
+            onRowActivate={openEdit}
+            rowTestId={agent => `voice-settings-row-${agent.id}`}
+            rowActions={agent => (
+              <>
+                <Tooltip title="Download ElevenLabs agent config as JSON">
+                  <IconButton
+                    size="sm"
+                    variant="plain"
+                    aria-label={`Download ${agent.name} config`}
+                    loading={downloadingId === agent.id}
+                    onClick={() => downloadConfig(agent)}
+                    data-testid={`voice-settings-download-${agent.id}`}
+                  >
+                    <DownloadIcon />
+                  </IconButton>
+                </Tooltip>
                 <IconButton
+                  size="sm"
                   variant="plain"
-                  color="neutral"
-                  loading={downloadingId === agent.id}
-                  onClick={() => downloadConfig(agent)}
-                  data-testid={`voice-settings-download-${agent.id}`}
+                  aria-label={`Edit ${agent.name}`}
+                  onClick={() => openEdit(agent)}
+                  data-testid={`voice-settings-edit-${agent.id}`}
                 >
-                  <DownloadIcon />
+                  <EditIcon />
                 </IconButton>
-              </Tooltip>
-              <IconButton
-                variant="plain"
-                color="neutral"
-                onClick={() => openEdit(agent)}
-                data-testid={`voice-settings-edit-${agent.id}`}
-              >
-                <EditIcon />
-              </IconButton>
-              <IconButton
-                variant="plain"
-                color="danger"
-                disabled={deleteMutation.isPending}
-                onClick={() => {
-                  if (confirm(`Delete voice agent "${agent.name}"? This also removes the ElevenLabs agent.`)) {
-                    deleteMutation.mutate(agent.id);
-                  }
-                }}
-                data-testid={`voice-settings-delete-${agent.id}`}
-              >
-                <DeleteIcon />
-              </IconButton>
-            </Card>
-          ))}
-        </Stack>
+                <IconButton
+                  size="sm"
+                  variant="plain"
+                  aria-label={`Delete ${agent.name}`}
+                  disabled={deleteMutation.isPending}
+                  onClick={() => setDeleting(agent)}
+                  data-testid={`voice-settings-delete-${agent.id}`}
+                >
+                  <DeleteIcon />
+                </IconButton>
+              </>
+            )}
+            pagination={false}
+            minWidth="44rem"
+            maxHeight="none"
+          />
+        </Box>
       )}
 
-      <Modal open={editorId !== null} onClose={closeEditor}>
-        <ModalDialog data-testid="voice-settings-editor-modal" sx={{ width: 520, maxWidth: '95vw' }}>
-          <Typography level="h4">{isEditing ? 'Edit voice agent' : 'New voice agent'}</Typography>
-          <Stack spacing={2} sx={{ mt: 1 }}>
-            <FormControl required>
-              <FormLabel>Name</FormLabel>
-              <Input
-                value={form.name}
-                onChange={e => setForm({ ...form, name: e.target.value })}
-                placeholder="e.g. British Concierge"
-                data-testid="voice-settings-form-name"
-              />
-            </FormControl>
-            <FormControl>
-              <FormLabel>Description</FormLabel>
-              <Input
-                value={form.description}
-                onChange={e => setForm({ ...form, description: e.target.value })}
-                placeholder="Optional — shown on the user-facing card"
-              />
-            </FormControl>
-            <FormControl>
-              <FormLabel>First message</FormLabel>
-              <Input
-                value={form.firstMessage}
-                onChange={e => setForm({ ...form, firstMessage: e.target.value })}
-                placeholder="Spoken greeting the agent opens with"
-                data-testid="voice-settings-form-first-message"
-              />
-            </FormControl>
-            <FormControl required>
-              <FormLabel>Voice</FormLabel>
-              <Select
-                value={form.voiceId || null}
-                onChange={(_, v) => setForm({ ...form, voiceId: v ?? '' })}
-                placeholder={voicesLoading ? 'Loading ElevenLabs voices…' : 'Pick a voice'}
-                data-testid="voice-settings-form-voice"
-              >
-                {voices.map(v => (
-                  <Option key={v.id} value={v.id}>
-                    <Box
-                      sx={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        gap: 1,
-                        width: '100%',
-                      }}
-                    >
-                      <span>
-                        {v.name}
-                        {v.labels.accent ? ` — ${v.labels.accent}` : ''}
-                      </span>
-                      {v.previewUrl && (
-                        <IconButton
-                          size="sm"
-                          variant="plain"
-                          color="neutral"
-                          aria-label={previewingVoiceId === v.id ? `Stop ${v.name} preview` : `Play ${v.name} preview`}
-                          // Stop the click/mousedown from selecting (and closing) the option.
-                          onMouseDown={e => e.stopPropagation()}
-                          onClick={e => {
-                            e.stopPropagation();
-                            e.preventDefault();
-                            togglePreview(v.id, v.previewUrl);
-                          }}
-                          data-testid={`voice-settings-preview-${v.id}`}
-                        >
-                          {previewingVoiceId === v.id ? (
-                            <StopIcon fontSize="small" />
-                          ) : (
-                            <PlayArrowIcon fontSize="small" />
-                          )}
-                        </IconButton>
-                      )}
-                    </Box>
-                  </Option>
-                ))}
-              </Select>
-            </FormControl>
-            <FormControl required>
-              <FormLabel>System prompt</FormLabel>
-              <Textarea
-                value={form.systemPrompt}
-                onChange={e => setForm({ ...form, systemPrompt: e.target.value })}
-                minRows={4}
-                maxRows={12}
-                placeholder="You are a helpful assistant…"
-                data-testid="voice-settings-form-prompt"
-                slotProps={{ textarea: { style: { overflow: 'auto' } } }}
-              />
-            </FormControl>
-            <FormControl>
-              <FormLabel>Turn eagerness</FormLabel>
-              <Select
-                value={form.turnEagerness}
-                onChange={(_, v) =>
-                  setForm({ ...form, turnEagerness: isTurnEagerness(v) ? v : DEFAULT_TURN_EAGERNESS })
-                }
-                data-testid="voice-settings-form-turn-eagerness"
-              >
-                {TURN_EAGERNESS_OPTIONS.map(o => (
-                  <Option key={o.value} value={o.value}>
-                    {o.label}
-                  </Option>
-                ))}
-              </Select>
-              <Typography level="body-xs" sx={{ color: 'text.tertiary', mt: 0.5 }}>
-                How readily the agent responds when the user pauses. Lower it if turns get cut off mid-sentence.
-              </Typography>
-            </FormControl>
-            <FormControl>
-              <FormLabel>Turn timeout (seconds)</FormLabel>
-              <Input
-                type="number"
-                value={form.turnTimeoutSeconds}
-                onChange={e => {
-                  const n = Number(e.target.value);
-                  setForm({
-                    ...form,
-                    turnTimeoutSeconds: Number.isFinite(n)
-                      ? Math.min(30, Math.max(1, Math.round(n)))
-                      : form.turnTimeoutSeconds,
-                  });
-                }}
-                slotProps={{ input: { min: 1, max: 30 } }}
-                data-testid="voice-settings-form-turn-timeout"
-              />
-              <Typography level="body-xs" sx={{ color: 'text.tertiary', mt: 0.5 }}>
-                Seconds of silence before the agent re-engages (1–30).
-              </Typography>
-            </FormControl>
-            <Stack direction="row" spacing={1} justifyContent="flex-end" sx={{ mt: 1 }}>
-              <Button variant="plain" onClick={closeEditor}>
-                Cancel
-              </Button>
-              <Button
-                disabled={!canSubmit || saveMutation.isPending}
-                loading={saveMutation.isPending}
-                onClick={() => saveMutation.mutate(form)}
-                data-testid="voice-settings-form-submit"
-              >
-                {isEditing ? 'Save changes' : 'Create'}
-              </Button>
-            </Stack>
+      {deleting && (
+        <AdminDialog
+          title="Delete voice agent"
+          role="alertdialog"
+          onClose={() => setDeleting(null)}
+          data-testid="voice-settings-delete-dialog"
+        >
+          <DialogContent>
+            <Typography>
+              {deleting.name} is removed here and in ElevenLabs, and users can no longer pick it. This cannot be undone.
+            </Typography>
+          </DialogContent>
+          <Stack direction="row" sx={{ gap: 1, justifyContent: 'flex-end' }}>
+            <Button
+              variant="plain"
+              color="neutral"
+              onClick={() => setDeleting(null)}
+              data-testid="voice-settings-delete-cancel-btn"
+            >
+              Cancel
+            </Button>
+            <Button
+              color="danger"
+              loading={deleteMutation.isPending}
+              onClick={() => deleteMutation.mutate(deleting.id, { onSuccess: () => setDeleting(null) })}
+              data-testid="voice-settings-delete-confirm-btn"
+            >
+              Delete voice agent
+            </Button>
           </Stack>
-        </ModalDialog>
-      </Modal>
-    </Box>
+        </AdminDialog>
+      )}
+
+      {editorId !== null && (
+        <AdminDialog
+          title={isEditing ? 'Edit voice agent' : 'New voice agent'}
+          onClose={closeEditor}
+          width={520}
+          data-testid="voice-settings-editor-modal"
+        >
+          <DialogContent>
+            <Stack spacing={2}>
+              <FormControl required>
+                <FormLabel>Name</FormLabel>
+                <Input
+                  value={form.name}
+                  onChange={e => setForm({ ...form, name: e.target.value })}
+                  placeholder="e.g. British Concierge"
+                  data-testid="voice-settings-form-name"
+                />
+              </FormControl>
+              <FormControl>
+                <FormLabel>Description</FormLabel>
+                <Input
+                  value={form.description}
+                  onChange={e => setForm({ ...form, description: e.target.value })}
+                  placeholder="Optional, shown on the user-facing card"
+                />
+              </FormControl>
+              <FormControl>
+                <FormLabel>First message</FormLabel>
+                <Input
+                  value={form.firstMessage}
+                  onChange={e => setForm({ ...form, firstMessage: e.target.value })}
+                  placeholder="Spoken greeting the agent opens with"
+                  data-testid="voice-settings-form-first-message"
+                />
+              </FormControl>
+              <FormControl required>
+                <FormLabel>Voice</FormLabel>
+                <Select
+                  value={form.voiceId || null}
+                  onChange={(_, v) => setForm({ ...form, voiceId: v ?? '' })}
+                  placeholder={voicesLoading ? 'Loading ElevenLabs voices...' : 'Pick a voice'}
+                  data-testid="voice-settings-form-voice"
+                >
+                  {voices.map(v => (
+                    <Option key={v.id} value={v.id}>
+                      <Box
+                        sx={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: 1,
+                          width: '100%',
+                        }}
+                      >
+                        <span>
+                          {v.name}
+                          {v.labels.accent ? ` - ${v.labels.accent}` : ''}
+                        </span>
+                        {v.previewUrl && (
+                          <IconButton
+                            size="sm"
+                            variant="plain"
+                            color="neutral"
+                            aria-label={
+                              previewingVoiceId === v.id ? `Stop ${v.name} preview` : `Play ${v.name} preview`
+                            }
+                            // Stop the click/mousedown from selecting (and closing) the option.
+                            onMouseDown={e => e.stopPropagation()}
+                            onClick={e => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              togglePreview(v.id, v.previewUrl);
+                            }}
+                            data-testid={`voice-settings-preview-${v.id}`}
+                          >
+                            {previewingVoiceId === v.id ? (
+                              <StopIcon fontSize="small" />
+                            ) : (
+                              <PlayArrowIcon fontSize="small" />
+                            )}
+                          </IconButton>
+                        )}
+                      </Box>
+                    </Option>
+                  ))}
+                </Select>
+              </FormControl>
+              <FormControl required>
+                <FormLabel>System prompt</FormLabel>
+                <Textarea
+                  value={form.systemPrompt}
+                  onChange={e => setForm({ ...form, systemPrompt: e.target.value })}
+                  minRows={4}
+                  maxRows={12}
+                  placeholder="You are a helpful assistant..."
+                  data-testid="voice-settings-form-prompt"
+                  slotProps={{ textarea: { style: { overflow: 'auto' } } }}
+                />
+              </FormControl>
+              <FormControl>
+                <FormLabel>Turn eagerness</FormLabel>
+                <Select
+                  value={form.turnEagerness}
+                  onChange={(_, v) =>
+                    setForm({ ...form, turnEagerness: isTurnEagerness(v) ? v : DEFAULT_TURN_EAGERNESS })
+                  }
+                  data-testid="voice-settings-form-turn-eagerness"
+                >
+                  {TURN_EAGERNESS_OPTIONS.map(o => (
+                    <Option key={o.value} value={o.value}>
+                      {o.label}
+                    </Option>
+                  ))}
+                </Select>
+                <FormHelperText>
+                  How readily the agent responds when the user pauses. Lower it if turns get cut off mid-sentence.
+                </FormHelperText>
+              </FormControl>
+              <FormControl>
+                <FormLabel>Turn timeout (seconds)</FormLabel>
+                <Input
+                  type="number"
+                  value={form.turnTimeoutSeconds}
+                  onChange={e => {
+                    const n = Number(e.target.value);
+                    setForm({
+                      ...form,
+                      turnTimeoutSeconds: Number.isFinite(n)
+                        ? Math.min(30, Math.max(1, Math.round(n)))
+                        : form.turnTimeoutSeconds,
+                    });
+                  }}
+                  slotProps={{ input: { min: 1, max: 30 } }}
+                  data-testid="voice-settings-form-turn-timeout"
+                />
+                <FormHelperText>Seconds of silence before the agent re-engages (1 to 30).</FormHelperText>
+              </FormControl>
+            </Stack>
+          </DialogContent>
+          <Stack direction="row" sx={{ gap: 1, justifyContent: 'flex-end' }}>
+            <Button variant="plain" color="neutral" onClick={closeEditor} data-testid="voice-settings-form-cancel-btn">
+              Cancel
+            </Button>
+            <Button
+              disabled={!canSubmit || saveMutation.isPending}
+              loading={saveMutation.isPending}
+              onClick={() => saveMutation.mutate(form)}
+              data-testid="voice-settings-form-submit"
+            >
+              {isEditing ? 'Save changes' : 'Create voice agent'}
+            </Button>
+          </Stack>
+        </AdminDialog>
+      )}
+    </Stack>
   );
 };
 
