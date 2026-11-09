@@ -128,6 +128,31 @@ campaign cookies, they are not readable by JavaScript.
 
 ## Cross-product signup reporting (self-reported)
 
+### Product-event metadata validation
+
+The shared `emitProductEvent` transport emits only fields with a declared Zod
+validator. Its default vocabulary covers the host's signup, funnel, billing and
+account events. Another product supplies `metadataFields` beside its event
+builders, using that event's own categorical enums, bounded identifiers and
+numeric validators. The product owns its vocabulary; the transport enforces it.
+An event's validators should reuse the product's existing schemas and constants,
+so a payload change and its validation can ship together.
+
+`metadataFields` is a map of synchronous **field** validators, not a whole-object
+schema: each present field is parsed independently. Unknown or invalid fields are
+omitted while valid siblings survive. The shared `userType`, `lane`, `internal`
+and `userAction` validators always take precedence over a product's declarations.
+A product schema cannot broaden those marks. Only flat string, number and boolean
+values are supported; personal information, secrets and arbitrary content must
+not be declared as metadata fields. Dropped-field diagnostics contain field names,
+the event name and product id, never the rejected values.
+
+Products need a transport integration test that sends their real builder payloads
+through `emitProductEvent`, asserting both preserved dimensions and rejection of
+invalid or unknown values. Mocking the emitter does not verify this boundary.
+
+### Reported events
+
 Account creation emits a `signup` event to each Overwatch product named by the
 consenting visitor's campaign touches, for products this deployment holds an
 ingest key for. The host product is excluded from `signup`, because it already

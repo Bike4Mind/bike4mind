@@ -173,11 +173,19 @@ export async function emitPageViewEvent(opts: PageViewEmitOptions): Promise<void
 }
 
 const productIdSchema = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
-const productMetadataSchema = z.object({
+// These marks have the same meaning for every product. A product-owned schema cannot redefine them.
+const sharedProductMetadataFields = {
   userType: z.enum(['subscriber', 'free']).optional(),
   lane: z.literal('synthetic').optional(),
   internal: z.literal(true).optional(),
   userAction: z.literal(false).optional(),
+};
+
+/** Field validators owned by a product. Each validator must return a flat metadata value. */
+export type ProductEventMetadataFields = Readonly<Record<string, z.ZodType<string | number | boolean | undefined>>>;
+
+const productMetadataSchema = z.object({
+  ...sharedProductMetadataFields,
   method: z.enum(['otc', 'google', 'facebook', 'github', 'apple', 'okta', 'saml', 'admin', 'link']).optional(),
   hopId: z
     .string()
@@ -245,6 +253,13 @@ export interface ProductEventOptions {
   /** Known categorical and numeric fields only; unknown or invalid fields are not emitted. */
   metadata?: Record<string, string | number | boolean>;
   /**
+   * Product-owned Zod field validators, defined beside that product's event builders. When supplied,
+   * these replace the host's field vocabulary; shared user/lane marks remain host-validated.
+   * Unknown and invalid fields are omitted individually, so one bad value never drops valid fields.
+   * Field validators are synchronous and return flat values; object-level refinements do not apply.
+   */
+  metadataFields?: ProductEventMetadataFields;
+  /**
    * A caller-chosen UUID for an event that may be sent more than once for one occurrence (a
    * retried webhook). The receiver de-duplicates on eventId. Random when omitted.
    */
@@ -261,15 +276,23 @@ export interface ProductEventOptions {
 export async function emitProductEvent(opts: ProductEventOptions): Promise<void> {
   if (!isAnalyticsConfigured(opts.productId)) return;
   const candidateMetadata = { ...opts.metadata, ...(opts.userType !== undefined && { userType: opts.userType }) };
-  const metadata: Record<string, string | number | boolean> = {};
-  const shape: Record<string, z.ZodType<string | number | boolean | undefined>> = productMetadataSchema.shape;
-  const dropped = Object.keys(candidateMetadata).filter(key => !(key in shape));
+  const entries: [string, string | number | boolean][] = [];
+  const shape: ProductEventMetadataFields = opts.metadataFields
+    ? { ...opts.metadataFields, ...sharedProductMetadataFields }
+    : productMetadataSchema.shape;
+  const dropped = Object.keys(candidateMetadata).filter(key => !Object.hasOwn(shape, key));
   for (const [key, schema] of Object.entries(shape)) {
     const value = candidateMetadata[key as keyof typeof candidateMetadata];
     if (value === undefined) continue;
-    const parsed = schema.safeParse(value);
-    if (parsed.success && parsed.data !== undefined) metadata[key] = parsed.data;
-    else dropped.push(key);
+    try {
+      const parsed = schema.safeParse(value);
+      if (parsed.success && parsed.data !== undefined) entries.push([key, parsed.data]);
+      else dropped.push(key);
+    } catch {
+      // Product refinements can throw (including an accidental async refinement). Keep telemetry
+      // best-effort and diagnose the rejected field through the same value-free warning below.
+      dropped.push(key);
+    }
   }
   if (dropped.length > 0) {
     console.warn('[b4m-analytics] product event metadata fields dropped', {
@@ -278,6 +301,7 @@ export async function emitProductEvent(opts: ProductEventOptions): Promise<void>
       keys: dropped,
     });
   }
+  const metadata = Object.fromEntries(entries);
   return postEvent(
     {
       userId: opts.userId ? pseudonymizeUserId(opts.userId) : OVERWATCH_ANONYMOUS_USER_ID,

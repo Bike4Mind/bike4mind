@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { z } from 'zod';
 
 // Config is module-scoped; mock it so tests can control analytics configuration state.
 vi.mock('../utils/config', () => ({
@@ -351,6 +352,95 @@ describe('emitProductEvent', () => {
     mockEmitMetric.mockReset().mockResolvedValue(undefined);
     vi.stubGlobal('fetch', mockFetch);
     mockFetch.mockResolvedValue({ status: 200 });
+  });
+
+  it('validates a product-owned vocabulary independently of host fields', async () => {
+    resetConfig();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await emitProductEvent({
+      productId: 'widgets',
+      event: 'report_generated',
+      metadataFields: { status: z.enum(['ok', 'failed']), kind: z.enum(['full', 'teaser']), count: z.number().int() },
+      metadata: { status: 'ok', kind: 'full', count: 0, method: 'google', email: 'person@example.com' },
+    });
+    expect(sent().metadata).toEqual({ status: 'ok', kind: 'full', count: 0 });
+  });
+
+  it('keeps valid product fields when a sibling field fails validation', async () => {
+    resetConfig();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await emitProductEvent({
+      productId: 'widgets',
+      event: 'report_generated',
+      metadataFields: { status: z.enum(['ok', 'failed']), count: z.number().int().nonnegative() },
+      metadata: { status: 'person@example.com', count: 0 },
+    });
+    expect(sent().metadata).toEqual({ count: 0 });
+  });
+
+  it('reports a throwing product validator and still emits valid sibling fields', async () => {
+    resetConfig();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await expect(
+      emitProductEvent({
+        productId: 'widgets',
+        event: 'report_generated',
+        metadataFields: {
+          status: z.string().refine(() => {
+            throw new Error('private validator details');
+          }),
+          count: z.number().int(),
+        },
+        metadata: { status: 'private value', count: 0 },
+      })
+    ).resolves.toBeUndefined();
+    expect(sent().metadata).toEqual({ count: 0 });
+    expect(warn).toHaveBeenCalledWith(expect.any(String), {
+      productId: 'widgets',
+      event: 'report_generated',
+      keys: ['status'],
+    });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('private');
+  });
+
+  it('preserves shared marks and prevents product validators from weakening them', async () => {
+    resetConfig();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await emitProductEvent({
+      productId: 'widgets',
+      event: 'report_generated',
+      userType: 'subscriber',
+      metadataFields: { userType: z.string(), lane: z.string(), internal: z.boolean(), userAction: z.boolean() },
+      metadata: { userType: 'person@example.com', lane: 'person@example.com', internal: false, userAction: true },
+    });
+    expect(sent().metadata).toEqual({ userType: 'subscriber' });
+    mockFetch.mockClear();
+    await emitProductEvent({
+      productId: 'widgets',
+      event: 'report_generated',
+      metadataFields: {},
+      metadata: { lane: 'synthetic', internal: true, userAction: false, userType: 'free' },
+    });
+    expect(sent().metadata).toEqual({ lane: 'synthetic', internal: true, userAction: false, userType: 'free' });
+  });
+
+  it('reports unknown prototype-named keys as dropped fields', async () => {
+    resetConfig();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await emitProductEvent({
+      productId: 'widgets',
+      event: 'e',
+      metadata: JSON.parse('{"constructor":"private","toString":"private","__proto__":"private"}') as Record<
+        string,
+        string
+      >,
+    });
+    expect(sent().metadata).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(expect.any(String), {
+      event: 'e',
+      productId: 'widgets',
+      keys: ['constructor', 'toString', '__proto__'],
+    });
   });
 
   const realPayloads: [string, Record<string, string | number | boolean>][] = [
