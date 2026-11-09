@@ -115,6 +115,25 @@ const pulse = keyframes`
 /** What the line under the toolbar says; an error reads in the danger colour. */
 type Note = { kind: 'info' | 'success' | 'error'; text: string } | null;
 
+/** What the pane's live region says, so a screen reader hears each build start, finish or fail. */
+function buildAnnouncement(status: ModelEngine['status'], error: ModelEngine['error']): string {
+  if (status === 'building') return 'Building the model.';
+  if (status === 'ok') return 'Model built.';
+  if (status !== 'error' || !error) return '';
+  return error.line
+    ? `Model build failed at line ${error.line}: ${error.message}`
+    : `Model build failed: ${error.message}`;
+}
+
+const VISUALLY_HIDDEN = {
+  position: 'absolute',
+  width: 1,
+  height: 1,
+  overflow: 'hidden',
+  clip: 'rect(0 0 0 0)',
+  whiteSpace: 'nowrap',
+} as const;
+
 function errorText(caught: unknown): string {
   return caught instanceof Error ? caught.message : String(caught);
 }
@@ -336,7 +355,7 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
           {name ?? '3D model'}
         </Typography>
         {name && (
-          <Chip size="sm" variant="soft" color={STATUS_COLOR[status]} role="status" data-testid="model-pane-status">
+          <Chip size="sm" variant="soft" color={STATUS_COLOR[status]} data-testid="model-pane-status">
             {STATUS_LABEL[status]}
           </Chip>
         )}
@@ -351,6 +370,11 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
           <CloseIcon />
         </IconButton>
       </Stack>
+
+      {/* Always mounted: a live region added together with its text is often not read out. */}
+      <Box component="span" role="status" aria-live="polite" sx={VISUALLY_HIDDEN} data-testid="model-pane-announcer">
+        {buildAnnouncement(status, error)}
+      </Box>
 
       {error && (
         <Alert

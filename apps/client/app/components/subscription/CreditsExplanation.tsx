@@ -47,7 +47,7 @@ const CreditsExplanation = () => {
           {formatCreditAmount(credits)} credits available
         </Typography>
       </Box>
-      <SignupGrantStatus />
+      {!organizationId && <SignupGrantStatus />}
       <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
         {showFreeCreditsNote && 'Free starting credits require no card. '}Your chats and files remain yours if the
         balance runs out.

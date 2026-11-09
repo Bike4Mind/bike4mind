@@ -263,7 +263,7 @@ const ProfileMenu = () => {
   const avatarVersion = useUser(s => s.avatarVersion);
   // Delegated admins too: the console admits anyone it has a tab to show.
   const canOpenAdmin = canEnterAdminConsole(currentUser);
-  const { accounts, selectedAccount, setSelectedAccount, showAccountType } = useAccounts();
+  const { accounts, selectedAccount, setSelectedAccount, showAccountType, refetchOrganizations } = useAccounts();
 
   const { isFeatureEnabled } = useFeatureEnabled();
   const isQuestMasterEnabled = isFeatureEnabled('enableQuestMaster');
@@ -368,6 +368,12 @@ const ProfileMenu = () => {
     if (open) focusMenuItem(panelRef.current, focusOnOpenRef.current);
   }, [open]);
 
+  // Team balances only reach the client through the organizations query, which no push updates, so a
+  // spend made outside a streamed turn would otherwise show the stale pool until a reload.
+  useEffect(() => {
+    if (open) void refetchOrganizations();
+  }, [open, refetchOrganizations]);
+
   useEffect(() => {
     if (moreOpen) focusMenuItem(flyoutRef.current, 'first');
   }, [moreOpen]);
@@ -404,8 +410,7 @@ const ProfileMenu = () => {
     }
   };
 
-  const planLabel =
-    selectedAccount && !selectedAccount.personal ? t('account.team', 'Team') : t('account.personal', 'Personal');
+  const activeTeamName = selectedAccount && !selectedAccount.personal ? selectedAccount.name : null;
 
   return (
     <Box ref={rootRef} sx={{ position: 'relative' }}>
@@ -871,9 +876,29 @@ const ProfileMenu = () => {
           <Typography level="title-sm" sx={{ fontWeight: 700 }} noWrap>
             {currentUser?.name}
           </Typography>
-          <Typography level="body-xs" sx={{ color: 'text.tertiary' }} noWrap>
-            {planLabel}
-          </Typography>
+          {activeTeamName ? (
+            // The name truncates on its own so the "(Team)" marker always stays visible.
+            <Box
+              data-testid="profile-menu-active-account"
+              sx={{ display: 'flex', gap: 0.5, minWidth: 0, color: 'text.tertiary' }}
+            >
+              <Typography level="body-xs" sx={{ color: 'inherit', minWidth: 0 }} noWrap>
+                {activeTeamName}
+              </Typography>
+              <Typography level="body-xs" sx={{ color: 'inherit', flexShrink: 0 }}>
+                {t('account.team_suffix', '(Team)')}
+              </Typography>
+            </Box>
+          ) : (
+            <Typography
+              level="body-xs"
+              sx={{ color: 'text.tertiary' }}
+              noWrap
+              data-testid="profile-menu-active-account"
+            >
+              {t('account.personal', 'Personal')}
+            </Typography>
+          )}
         </Box>
         {open ? (
           <KeyboardArrowUpIcon sx={{ fontSize: '20px', color: 'text.tertiary' }} />

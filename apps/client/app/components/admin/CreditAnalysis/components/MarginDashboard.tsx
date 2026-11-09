@@ -64,6 +64,8 @@ const RatioChip: React.FC<{ credits: number; cogsUsd: number; target: number }> 
 };
 
 const numberCell = { fontVariantNumeric: 'tabular-nums' } as const;
+// Model ids only break at hyphens; without this a long id spills into the next column.
+const idCell = { overflowWrap: 'anywhere' } as const;
 
 // The server error envelope puts the human-readable reason in data.error
 // (see server/middlewares/errorHandler.ts); data.message and err.message
@@ -163,7 +165,10 @@ export const MarginDashboard: React.FC = () => {
   const providerNeedle = providerFilter.trim().toLowerCase();
   const userNeedle = userSearch.trim().toLowerCase();
   const modelDayRows = (modelDay?.rows ?? []).filter(
-    r => !providerNeedle || r.provider.toLowerCase().includes(providerNeedle)
+    r =>
+      !providerNeedle ||
+      r.provider.toLowerCase().includes(providerNeedle) ||
+      (r.executedProvider ?? '').toLowerCase().includes(providerNeedle)
   );
   const userRows = (byUser?.rows ?? []).filter(
     r =>
@@ -262,12 +267,13 @@ export const MarginDashboard: React.FC = () => {
               By model by day
             </Typography>
             <Sheet sx={{ maxHeight: 320, overflow: 'auto' }}>
-              <Table stickyHeader hoverRow size="sm" data-testid="margin-model-day-table">
+              <Table stickyHeader hoverRow size="sm" sx={{ minWidth: '64rem' }} data-testid="margin-model-day-table">
                 <thead>
                   <tr>
                     <th>Day</th>
                     <th>Provider</th>
                     <th>Model</th>
+                    <th>Executed model</th>
                     <th style={{ textAlign: 'right' }}>Requests</th>
                     <th style={{ textAlign: 'right' }}>COGS (USD)</th>
                     <th style={{ textAlign: 'right' }}>Credits</th>
@@ -275,22 +281,36 @@ export const MarginDashboard: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {modelDayRows.map(row => (
-                    <tr key={`${row.day}-${row.provider}-${row.model}`}>
-                      <td>{row.day}</td>
-                      <td>{row.provider}</td>
-                      <td>{row.model}</td>
-                      <td style={{ textAlign: 'right', ...numberCell }}>{row.requests.toLocaleString()}</td>
-                      <td style={{ textAlign: 'right', ...numberCell }}>${row.cogsUsd.toFixed(4)}</td>
-                      <td style={{ textAlign: 'right', ...numberCell }}>{row.creditsCharged.toLocaleString()}</td>
-                      <td>
-                        <RatioChip credits={row.creditsCharged} cogsUsd={row.cogsUsd} target={target} />
-                      </td>
-                    </tr>
-                  ))}
+                  {modelDayRows.map(row => {
+                    const executedProvider = row.executedProvider ?? row.provider;
+                    const executedModel = row.executedModel ?? row.model;
+                    const substituted = executedProvider !== row.provider || executedModel !== row.model;
+                    return (
+                      <tr key={`${row.day}-${row.provider}-${row.model}-${executedProvider}-${executedModel}`}>
+                        <td>{row.day}</td>
+                        <td>{row.provider}</td>
+                        <td style={idCell}>{row.model}</td>
+                        <td style={idCell} data-testid="margin-executed-model-cell">
+                          {substituted ? (
+                            `${executedProvider} / ${executedModel}`
+                          ) : (
+                            <Typography level="body-sm" color="neutral">
+                              -
+                            </Typography>
+                          )}
+                        </td>
+                        <td style={{ textAlign: 'right', ...numberCell }}>{row.requests.toLocaleString()}</td>
+                        <td style={{ textAlign: 'right', ...numberCell }}>${row.cogsUsd.toFixed(4)}</td>
+                        <td style={{ textAlign: 'right', ...numberCell }}>{row.creditsCharged.toLocaleString()}</td>
+                        <td>
+                          <RatioChip credits={row.creditsCharged} cogsUsd={row.cogsUsd} target={target} />
+                        </td>
+                      </tr>
+                    );
+                  })}
                   {modelDayRows.length === 0 && (
                     <tr>
-                      <td colSpan={7}>
+                      <td colSpan={8}>
                         <Typography level="body-sm" color="neutral">
                           No usage events yet.
                         </Typography>
@@ -348,7 +368,13 @@ export const MarginDashboard: React.FC = () => {
               Monthly COGS by provider (invoice reconciliation)
             </Typography>
             <Sheet sx={{ maxHeight: 320, overflow: 'auto' }}>
-              <Table stickyHeader hoverRow size="sm" data-testid="margin-provider-month-table">
+              <Table
+                stickyHeader
+                hoverRow
+                size="sm"
+                sx={{ minWidth: '88rem' }}
+                data-testid="margin-provider-month-table"
+              >
                 <thead>
                   <tr>
                     <th>Month</th>

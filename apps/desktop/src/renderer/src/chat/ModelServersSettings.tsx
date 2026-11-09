@@ -715,6 +715,7 @@ function ServerRow({
   // Ollama over SSH takes no credential at all; an OpenAI-compatible server there may take its own API key.
   const takesCredentials = !server.local && (!ssh || server.kind === 'openai-compatible');
   const askCredentials = takesCredentials && (server.health.state === 'credentials' || server.credentialsMissing);
+  const settingsDisabled = busy || !!server.unusable;
   const removesCredential = draft.type === 'none' && server.auth.type !== 'none';
   const canSaveCredential = !secretMissing(draft) && (draft.type !== 'none' || removesCredential);
 
@@ -808,7 +809,7 @@ function ServerRow({
               <Select
                 size="sm"
                 value={server.access}
-                disabled={busy}
+                disabled={settingsDisabled}
                 onChange={(_event, access) => access && void update({ access })}
                 slotProps={{ button: { 'data-testid': 'model-servers-access-select' } }}
               >
@@ -821,7 +822,7 @@ function ServerRow({
               <Select
                 size="sm"
                 value={server.kind}
-                disabled={busy}
+                disabled={settingsDisabled}
                 onChange={(_event, kind) => kind && kind !== server.kind && void update({ kind })}
                 slotProps={{ button: { 'data-testid': 'model-servers-kind-select' } }}
               >
@@ -834,7 +835,7 @@ function ServerRow({
                 size="sm"
                 variant="outlined"
                 color="neutral"
-                disabled={busy}
+                disabled={settingsDisabled}
                 onClick={() => {
                   if (!editing) setDraft(draftFor(server.auth));
                   setEditing(!editing);
@@ -920,7 +921,7 @@ function ServerRow({
             size="sm"
             variant="plain"
             color="neutral"
-            disabled={busy}
+            disabled={settingsDisabled}
             onClick={() => setEditingSpecs(open => !open)}
             data-testid="model-servers-specs-btn"
           >
