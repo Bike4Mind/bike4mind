@@ -64,12 +64,15 @@ import { api } from '@client/app/contexts/ApiContext';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import {
   AdminDialog,
+  AdminDialogFooter,
   AdminPageHeader,
   DataTable,
   EmptyState,
   ErrorState,
   Fact,
   FilterChip,
+  FilterInputLabel,
+  FilterToolbar,
   InlineBar,
   LoadingState,
   SectionCard,
@@ -78,7 +81,7 @@ import {
   StatusChip,
   type DataColumn,
 } from './shared';
-import { ADMIN_REGION_GAP, adminFocusScope } from './shared/adminStyles';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
 
 interface SlackWorkspace {
   id: string;
@@ -141,25 +144,6 @@ const MIN_SCORE_OPTIONS = [
   { value: '50', label: '50+' },
   { value: '70', label: '70+' },
 ];
-
-const filterLabel = (text: string) => (
-  <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
-    {text}
-  </Typography>
-);
-
-/** The button row under a dialog's content, the commit button last. */
-const DialogFooter = ({ children }: { children: ReactNode }) => (
-  <Stack
-    direction="row"
-    justifyContent="flex-end"
-    flexWrap="wrap"
-    gap={1}
-    sx={{ pt: 2, mt: 1, borderTop: '1px solid', borderColor: 'admin.border' }}
-  >
-    {children}
-  </Stack>
-);
 
 // Benign turns are stored as severity 'low' (there is no benign tier), so they are labelled
 // separately rather than sharing the real low-severity chip.
@@ -418,7 +402,7 @@ const CreateIssueModal = ({
         )}
       </DialogContent>
       {configuredRepo && (
-        <DialogFooter>
+        <AdminDialogFooter>
           <Button
             variant="plain"
             color="neutral"
@@ -435,7 +419,7 @@ const CreateIssueModal = ({
           >
             Create issue
           </Button>
-        </DialogFooter>
+        </AdminDialogFooter>
       )}
     </AdminDialog>
   );
@@ -466,7 +450,7 @@ const IssueCreatedModal = ({
       <DialogContent>
         <Typography level="body-sm">{description}</Typography>
       </DialogContent>
-      <DialogFooter>
+      <AdminDialogFooter>
         <Button
           component="a"
           href={issueUrl}
@@ -477,7 +461,7 @@ const IssueCreatedModal = ({
         >
           {buttonLabel}
         </Button>
-      </DialogFooter>
+      </AdminDialogFooter>
     </AdminDialog>
   );
 };
@@ -1699,22 +1683,11 @@ export function ContextInspectorTab() {
         </StatStrip>
       )}
 
-      <Stack
-        direction="row"
-        flexWrap="wrap"
-        alignItems="center"
-        gap={1}
-        data-testid="context-inspector-filter-bar"
-        sx={{
-          ...adminFocusScope,
-          // One height for every control so the row reads as a single toolbar when it wraps.
-          '& .MuiInput-root': { minHeight: 32 },
-        }}
-      >
+      <FilterToolbar data-testid="context-inspector-filter-bar">
         <Input
           type="date"
           size="sm"
-          startDecorator={filterLabel('From')}
+          startDecorator={<FilterInputLabel>From</FilterInputLabel>}
           value={startDate}
           onChange={e => {
             setStartDate(e.target.value);
@@ -1725,7 +1698,7 @@ export function ContextInspectorTab() {
         <Input
           type="date"
           size="sm"
-          startDecorator={filterLabel('To')}
+          startDecorator={<FilterInputLabel>To</FilterInputLabel>}
           value={endDate}
           onChange={e => {
             setEndDate(e.target.value);
@@ -1773,7 +1746,7 @@ export function ContextInspectorTab() {
             setPage(0);
           }}
         />
-      </Stack>
+      </FilterToolbar>
 
       {/* With entries on screen a failed refresh is a banner above them; with none it takes their place. */}
       {error && data && (

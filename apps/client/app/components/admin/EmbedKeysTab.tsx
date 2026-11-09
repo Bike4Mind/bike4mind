@@ -61,11 +61,19 @@ import { useGetOrganization, useSearchOrganizations } from '@client/app/hooks/da
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
 import { isRevoked, revocationTooltip } from '@client/app/utils/apiKeyRevocation';
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import { AdminDialog, AdminPageHeader, DataTable, EmptyState, StatusChip, type DataColumn } from './shared';
+import {
+  AdminDialog,
+  AdminDialogFooter,
+  AdminPageHeader,
+  DataTable,
+  EmptyState,
+  StatusChip,
+  type DataColumn,
+} from './shared';
 import { ADMIN_REGION_GAP, adminFocus } from './shared/adminStyles';
 
 dayjs.extend(relativeTime);
@@ -73,21 +81,6 @@ dayjs.extend(relativeTime);
 const isEmbedKey = (key: IUserApiKeyDocument) => key.scopes.includes(ApiKeyScope.EMBED_CHAT);
 
 const maskedPrefix = (prefix: string) => `${prefix}\u2022\u2022\u2022`;
-
-/** The button row under a dialog's content, the commit button last. */
-function DialogFooter({ children }: { children: ReactNode }) {
-  return (
-    <Stack
-      direction="row"
-      justifyContent="flex-end"
-      flexWrap="wrap"
-      gap={1}
-      sx={{ pt: 2, mt: 1, borderTop: '1px solid', borderColor: 'admin.border' }}
-    >
-      {children}
-    </Stack>
-  );
-}
 
 /**
  * Controlled origin allow-list editor for an embed key. Unlike
@@ -519,7 +512,7 @@ function NewEmbedKeyModal({
 
         <EmbedKeyFormFields form={form} onChange={setForm} ownerHasWhitelabel={ownerHasWhitelabel} />
       </DialogContent>
-      <DialogFooter>
+      <AdminDialogFooter>
         <Button variant="plain" color="neutral" onClick={handleClose} data-testid="embed-key-create-cancel-btn">
           Cancel
         </Button>
@@ -531,7 +524,7 @@ function NewEmbedKeyModal({
         >
           Create embed key
         </Button>
-      </DialogFooter>
+      </AdminDialogFooter>
     </AdminDialog>
   );
 }
@@ -589,7 +582,7 @@ function ConfigureEmbedKeyModal({ embedKey, onClose }: { embedKey: IUserApiKeyDo
 
         <EmbedKeyFormFields form={form} onChange={setForm} ownerHasWhitelabel={embedKey.ownerHasWhitelabel ?? false} />
       </DialogContent>
-      <DialogFooter>
+      <AdminDialogFooter>
         <Button variant="plain" color="neutral" onClick={onClose} data-testid="embed-key-configure-cancel-btn">
           Cancel
         </Button>
@@ -601,7 +594,7 @@ function ConfigureEmbedKeyModal({ embedKey, onClose }: { embedKey: IUserApiKeyDo
         >
           Save changes
         </Button>
-      </DialogFooter>
+      </AdminDialogFooter>
     </AdminDialog>
   );
 }
@@ -644,11 +637,11 @@ function EmbedKeyCreatedModal({ apiKey, onClose }: { apiKey: string; onClose: ()
           </Tooltip>
         </Box>
       </DialogContent>
-      <DialogFooter>
+      <AdminDialogFooter>
         <Button onClick={onClose} data-testid="embed-key-created-done-btn">
           Done
         </Button>
-      </DialogFooter>
+      </AdminDialogFooter>
     </AdminDialog>
   );
 }
@@ -867,7 +860,7 @@ export default function EmbedKeysTab() {
             Sites using <strong>{revokingKey?.name}</strong> stop working right away. A revoked key cannot be restored.
           </Typography>
         </DialogContent>
-        <DialogFooter>
+        <AdminDialogFooter>
           <Button
             variant="plain"
             color="neutral"
@@ -891,7 +884,7 @@ export default function EmbedKeysTab() {
           >
             Revoke key
           </Button>
-        </DialogFooter>
+        </AdminDialogFooter>
       </AdminDialog>
     </Stack>
   );

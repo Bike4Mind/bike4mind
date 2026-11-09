@@ -11,8 +11,17 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import type { OptionalPathRetrievalRate, RateArm } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
-import { AdminPageHeader, EmptyState, ErrorState, LoadingState, StatStrip, StatTile } from './shared';
-import { ADMIN_REGION_GAP, adminFocusScope } from './shared/adminStyles';
+import {
+  AdminPageHeader,
+  EmptyState,
+  ErrorState,
+  FilterInputLabel,
+  FilterToolbar,
+  LoadingState,
+  StatStrip,
+  StatTile,
+} from './shared';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
 
 /**
  * The measurement behind the per-turn retrieval-routing question (#1394): when the knowledge tools
@@ -103,12 +112,6 @@ function StatSection({
   );
 }
 
-const filterLabel = (text: string) => (
-  <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
-    {text}
-  </Typography>
-);
-
 // A blank cutoff means "let the server pick", which pins it to the live forced-retrieval floor
 // rather than to a number this component invented. Kept as a string so the field can be cleared.
 const NO_FILTERS = { startDate: '', endDate: '', answerableMinScore: '' };
@@ -172,22 +175,11 @@ export default function RetrievalRateTab() {
         }
       />
 
-      <Stack
-        direction="row"
-        flexWrap="wrap"
-        alignItems="center"
-        gap={1}
-        data-testid="retrieval-rate-filter-bar"
-        sx={{
-          ...adminFocusScope,
-          // One height for every control so the row reads as a single toolbar when it wraps.
-          '& .MuiInput-root': { minHeight: 32 },
-        }}
-      >
+      <FilterToolbar data-testid="retrieval-rate-filter-bar">
         <Input
           size="sm"
           type="date"
-          startDecorator={filterLabel('From')}
+          startDecorator={<FilterInputLabel>From</FilterInputLabel>}
           value={filters.startDate}
           onChange={e => setFilters({ ...filters, startDate: e.target.value })}
           slotProps={{ input: { 'aria-label': 'Start date' } }}
@@ -196,7 +188,7 @@ export default function RetrievalRateTab() {
         <Input
           size="sm"
           type="date"
-          startDecorator={filterLabel('To')}
+          startDecorator={<FilterInputLabel>To</FilterInputLabel>}
           value={filters.endDate}
           onChange={e => setFilters({ ...filters, endDate: e.target.value })}
           slotProps={{ input: { 'aria-label': 'End date' } }}
@@ -205,14 +197,14 @@ export default function RetrievalRateTab() {
         <Input
           size="sm"
           type="number"
-          startDecorator={filterLabel('Answerable cutoff')}
+          startDecorator={<FilterInputLabel>Answerable cutoff</FilterInputLabel>}
           slotProps={{ input: { min: 0, max: 1, step: 0.05, 'aria-label': 'Answerable cutoff' } }}
           placeholder="default"
           value={filters.answerableMinScore}
           onChange={e => setFilters({ ...filters, answerableMinScore: e.target.value })}
           data-testid="retrieval-rate-cutoff-input"
         />
-      </Stack>
+      </FilterToolbar>
 
       {isLoading && <LoadingState label="Folding turns" testId="retrieval-rate-loading" />}
 
