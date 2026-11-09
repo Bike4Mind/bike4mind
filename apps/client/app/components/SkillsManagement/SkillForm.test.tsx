@@ -514,6 +514,28 @@ describe('SkillForm update from SKILL.md (edit mode)', () => {
     expect(value('skill-name-input')).toBe('summarize');
   });
 
+  it('keeps edits made after the preview to fields the preview did not list', async () => {
+    renderEdit();
+    upload('---\nname: summarize\ndescription: New description\nargument-hint: "[file]"\n---\nOld body');
+    const apply = await screen.findByTestId('skill-form-update-apply');
+    fireEvent.change(screen.getByTestId('skill-body-input'), { target: { value: 'My later edit' } });
+    fireEvent.click(apply);
+    expect(value('skill-description-input')).toBe('New description');
+    expect(value('skill-body-input')).toBe('My later edit');
+  });
+
+  it('does not show the make-a-copy banner for a same-origin export on edit', async () => {
+    renderEdit();
+    upload(
+      toSkillMd(
+        { name: 'summarize', description: 'New description', body: 'New body' },
+        { sourceUrl: `${window.location.origin}/skills/1` }
+      )
+    );
+    expect(await screen.findByTestId('skill-form-update-preview')).toBeInTheDocument();
+    expect(screen.queryByTestId('skill-form-import-from-b4m')).toBeNull();
+  });
+
   it('says so when the file matches the skill', async () => {
     renderEdit();
     upload('---\nname: summarize\ndescription: Old description\nargument-hint: "[file]"\n---\nOld body');

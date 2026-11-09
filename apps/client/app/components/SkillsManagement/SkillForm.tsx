@@ -113,14 +113,16 @@ export const SkillForm: FC<SkillFormProps> = ({
   // Bumped by every import so a slow earlier file read cannot overwrite a newer one.
   const importReadId = useRef(0);
 
-  const applyFields = (fields: SkillMdFields, bundle?: SkillFolderBundle) => {
+  // `only` (edit mode) limits the write to the previewed change keys, so a field the preview did not list keeps edits made since.
+  const applyFields = (fields: SkillMdFields, bundle?: SkillFolderBundle, only?: ReadonlySet<string>) => {
+    const include = (key: string) => !only || only.has(key);
     if (fields.name !== undefined && !updateFromSkillMd) setName(fields.name);
-    if (fields.description !== undefined) setDescription(fields.description);
-    setArgumentHint(fields.argumentHint ?? '');
-    if (fields.body !== undefined) setBody(fields.body);
-    setDisableModelInvocation(fields.disableModelInvocation ?? false);
-    setClaudeCodeAllowedTools(fields.claudeCodeAllowedTools ?? []);
-    if (bundle) {
+    if (fields.description !== undefined && include('description')) setDescription(fields.description);
+    if (include('argument-hint')) setArgumentHint(fields.argumentHint ?? '');
+    if (fields.body !== undefined && include('body')) setBody(fields.body);
+    if (include('model-invocation')) setDisableModelInvocation(fields.disableModelInvocation ?? false);
+    if (include('claude-code-tools')) setClaudeCodeAllowedTools(fields.claudeCodeAllowedTools ?? []);
+    if (bundle && include('files')) {
       setFiles(bundle.files);
       setSkippedFiles(bundle.skipped);
     }
@@ -408,7 +410,11 @@ export const SkillForm: FC<SkillFormProps> = ({
                     <Button
                       size="sm"
                       onClick={() => {
-                        applyFields(pendingUpdate.fields, pendingUpdate.bundle);
+                        applyFields(
+                          pendingUpdate.fields,
+                          pendingUpdate.bundle,
+                          new Set(pendingUpdate.preview.changes.map(change => change.key))
+                        );
                         setPendingUpdate(null);
                       }}
                       disabled={!pendingUpdate.preview.changes.length}
@@ -460,7 +466,7 @@ export const SkillForm: FC<SkillFormProps> = ({
                 </Stack>
               </Alert>
             ) : null}
-            {source ? (
+            {source && !(updateFromSkillMd && sourceIsSameOrigin && !source.thirdParty) ? (
               <Alert
                 color={source.thirdParty || !sourceIsSameOrigin ? 'warning' : 'primary'}
                 variant="soft"
