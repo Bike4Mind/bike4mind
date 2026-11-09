@@ -132,7 +132,7 @@ import {
   SMALL_INPUT_MS_CEILING,
   measureGrowth,
   seededCorpus,
-} from '@client/__tests__/utils/regexLinearity';
+} from '@bike4mind/server-utils/__tests__/utils/regexLinearity';
 import { Logger } from '@bike4mind/observability';
 
 describe('LiveopsTriageService', () => {
