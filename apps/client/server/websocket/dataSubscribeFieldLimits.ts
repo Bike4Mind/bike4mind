@@ -4,6 +4,7 @@ import {
   ORGANIZATION_SECRET_FIELDS,
   OWNER_ONLY_PROMPT_META_PROJECTION_PATHS,
   SERVER_OWNED_SESSION_FIELDS,
+  SERVER_OWNED_SESSION_ORIGIN_FIELDS,
 } from '@bike4mind/common';
 
 /**
@@ -102,7 +103,12 @@ export function resolveFieldLimits(
     return Object.fromEntries(excluded.map(path => [path, false]));
   }
   if (collectionName === sessionCollectionName) {
-    return Object.fromEntries([...SERVER_OWNED_SESSION_FIELDS, 'origin.apiKeyId'].map(path => [path, false]));
+    return Object.fromEntries(
+      [...SERVER_OWNED_SESSION_FIELDS, ...SERVER_OWNED_SESSION_ORIGIN_FIELDS.map(f => `origin.${f}`)].map(path => [
+        path,
+        false,
+      ])
+    );
   }
   if (collectionName === organizationCollectionName) {
     const excluded = [...ORGANIZATION_SECRET_FIELDS, ...(isPlatformAdmin ? [] : ORGANIZATION_OWNER_ONLY_FIELDS)];
