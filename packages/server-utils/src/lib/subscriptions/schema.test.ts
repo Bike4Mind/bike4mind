@@ -27,6 +27,7 @@ describe('OrgSubscriptionSubscribeSchema.organization', () => {
   it.each([
     {},
     { organizationId: 'org_test', organizationData: { name: 'New Team' } },
+    { organizationData: { name: '' } },
     { organizationId: '' },
     { organizationId: '', organizationData: { name: 'New Team' } },
     { organizationId: null, organizationData: { name: 'New Team' } },

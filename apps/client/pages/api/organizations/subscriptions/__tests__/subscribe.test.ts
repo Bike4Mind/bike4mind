@@ -630,6 +630,20 @@ describe('POST /api/organizations/subscriptions/subscribe - request-shape and id
     expect(mockSessionsCreate).not.toHaveBeenCalled();
   });
 
+  it('rejects an empty new-team name before creating a Stripe customer or checkout', async () => {
+    const { req, res } = makeBody({ organizationData: { name: '' } });
+
+    await expect((handler as HandlerFn)(req, res)).rejects.toMatchObject({
+      issues: expect.arrayContaining([expect.objectContaining({ path: ['organizationData', 'name'] })]),
+    });
+
+    expect(mockGetSettingsValue).not.toHaveBeenCalled();
+    expect(mockVerifyOrgOwner).not.toHaveBeenCalled();
+    expect(mockCreateCustomer).not.toHaveBeenCalled();
+    expect(mockAttachOrgStripeCustomer).not.toHaveBeenCalled();
+    expect(mockSessionsCreate).not.toHaveBeenCalled();
+  });
+
   it.each([{ organizationId: 'org_1', organizationData: { name: 'Brand New Org' } }, {}])(
     'rejects invalid organization selectors before lookups or Stripe side effects: %j',
     async body => {

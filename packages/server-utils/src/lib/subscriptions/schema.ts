@@ -62,7 +62,7 @@ export const OrgSubscriptionSubscribeSchema = z
      */
     organizationData: z
       .object({
-        name: z.string(),
+        name: z.string().min(1),
       })
       .optional(),
 
