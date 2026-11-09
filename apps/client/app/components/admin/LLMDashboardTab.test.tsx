@@ -137,6 +137,10 @@ describe('LLMDashboardTab bulk selection', () => {
     fireEvent.click(inputIn('admin-table-select-page'));
 
     expect(screen.getByTestId('llm-dashboard-bulk-bar')).toHaveTextContent('2 selected');
+    // the sticky dock spans the content width: it must pass clicks through to the rows beside the bars
+    expect(screen.getByTestId('llm-dashboard-dock')).toHaveStyle({ pointerEvents: 'none' });
+    expect(screen.getByTestId('llm-dashboard-bulk-bar')).toHaveStyle({ pointerEvents: 'auto' });
+    expect(screen.getByTestId('llm-dashboard-save-bar-dock')).toHaveStyle({ pointerEvents: 'auto' });
 
     search('');
     expect(inputIn('admin-table-select-gpt-5-preview')).toBeChecked();

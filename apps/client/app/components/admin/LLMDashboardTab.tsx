@@ -621,9 +621,15 @@ const LLMDashboardTab: React.FC = () => {
       {(selectedModelIds.length > 0 || changedCount > 0) && (
         // One sticky dock, so the bulk bar and the save bar stack instead of overlapping. Left-aligned so
         // the AI chat pill in the bottom-right corner does not cover their buttons (as UsersBulkBar does).
-        <Stack gap={1} alignItems="flex-start" sx={{ position: 'sticky', bottom: 8, zIndex: 3 }}>
+        // The dock spans the content width, so it must not take clicks meant for the rows beside the bars.
+        <Stack
+          gap={1}
+          alignItems="flex-start"
+          sx={{ position: 'sticky', bottom: 8, zIndex: 3, pointerEvents: 'none' }}
+          data-testid="llm-dashboard-dock"
+        >
           {selectedModelIds.length > 0 && (
-            <Box data-testid="llm-dashboard-bulk-bar" sx={{ maxWidth: '100%' }}>
+            <Box data-testid="llm-dashboard-bulk-bar" sx={{ maxWidth: '100%', pointerEvents: 'auto' }}>
               <BulkActionBar
                 selection={{ mode: 'explicit', ids: selectedModelIds }}
                 totalMatching={filteredModels.length}
@@ -656,12 +662,14 @@ const LLMDashboardTab: React.FC = () => {
               </BulkActionBar>
             </Box>
           )}
-          <SaveBar
-            count={changedCount}
-            pending={saveLLMConfigurations.isPending}
-            onSave={handleSave}
-            onDiscard={handleDiscard}
-          />
+          <Box data-testid="llm-dashboard-save-bar-dock" sx={{ maxWidth: '100%', pointerEvents: 'auto' }}>
+            <SaveBar
+              count={changedCount}
+              pending={saveLLMConfigurations.isPending}
+              onSave={handleSave}
+              onDiscard={handleDiscard}
+            />
+          </Box>
         </Stack>
       )}
 
