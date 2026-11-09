@@ -547,7 +547,6 @@ export class SmartChunker {
     return validated;
   }
 
-  /** Truncates `text` at MAX_EXTRACTED_TEXT_CHARS, warning when it does. */
   private refuseExtraction(refusal: ExtractionRefusal): void {
     this.lastExtractionRefusal = refusal;
     this.logger.warn(
@@ -557,6 +556,7 @@ export class SmartChunker {
     );
   }
 
+  /** Truncates `text` at MAX_EXTRACTED_TEXT_CHARS, warning when it does. */
   private capExtractedText(text: string, format: string): string {
     if (text.length <= MAX_EXTRACTED_TEXT_CHARS) return text;
     this.logger.warn(
