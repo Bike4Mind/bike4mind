@@ -3,7 +3,7 @@ import type { AppWorktree, WorktreeRemoval, WorktreeSweepItem } from './worktree
 import type { LoopResult, LoopState } from './loop';
 import type { PromptCacheTtl } from '@bike4mind/common';
 import type { AttentionNotice, AttentionOpenEvent } from './attention';
-import type { AccountCredits, AccountProfile } from './account';
+import type { AccountBilling, AccountCredits, AccountProfile, SubscribePlanResult } from './account';
 import type { AccountPage, AuthState, EnvironmentSelection, SetEnvironmentResult } from './auth';
 import type {
   ChromeHostsResult,
@@ -159,6 +159,8 @@ export const IPC_CHANNELS = {
   authStateChanged: 'auth:state-changed',
   accountGetCredits: 'account:get-credits',
   accountGetProfile: 'account:get-profile',
+  accountGetBilling: 'account:get-billing',
+  accountSubscribePlan: 'account:subscribe-plan',
   usageGetHistory: 'usage:get-history',
   fleetGetState: 'fleet:get-state',
   fleetRefresh: 'fleet:refresh',
@@ -753,6 +755,8 @@ export interface DesktopApi {
      * round-trips taken at two different instants.
      */
     getProfile(): Promise<AccountProfile>;
+    getBilling(): Promise<AccountBilling>;
+    subscribePlan(priceId: string): Promise<SubscribePlanResult>;
   };
   usage: {
     /**

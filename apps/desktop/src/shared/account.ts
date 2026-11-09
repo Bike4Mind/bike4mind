@@ -48,3 +48,33 @@ export interface AccountProfile {
   /** Null when the read failed, or when the server stated no tier. */
   tier: AccountTier | null;
 }
+
+export interface AccountBillingPlan {
+  priceId: string;
+  name: string;
+  description: string;
+  credits: number;
+  interval: 'monthly' | 'yearly';
+  priceCents: number | null;
+  currency: 'usd';
+  features: string[];
+}
+
+export interface AccountBillingSubscription {
+  priceId: string;
+  subscriptionId: string | null;
+  status: string;
+  periodEndsAt: string | null;
+  canceledAt: string | null;
+}
+
+export interface AccountBilling {
+  billingEnabled: boolean;
+  plans: AccountBillingPlan[];
+  /** Non-terminal subscriptions, active first. Any row blocks a new checkout. */
+  subscriptions: AccountBillingSubscription[];
+  error?: string;
+}
+
+/** Success means checkout opened, not that a payment completed. */
+export type SubscribePlanResult = { ok: true } | { ok: false; error: string };
