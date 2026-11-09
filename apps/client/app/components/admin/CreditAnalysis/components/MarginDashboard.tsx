@@ -267,7 +267,7 @@ export const MarginDashboard: React.FC = () => {
               By model by day
             </Typography>
             <Sheet sx={{ maxHeight: 320, overflow: 'auto' }}>
-              <Table stickyHeader hoverRow size="sm" sx={{ minWidth: '56rem' }} data-testid="margin-model-day-table">
+              <Table stickyHeader hoverRow size="sm" sx={{ minWidth: '64rem' }} data-testid="margin-model-day-table">
                 <thead>
                   <tr>
                     <th>Day</th>
@@ -372,7 +372,7 @@ export const MarginDashboard: React.FC = () => {
                 stickyHeader
                 hoverRow
                 size="sm"
-                sx={{ minWidth: '72rem' }}
+                sx={{ minWidth: '84rem' }}
                 data-testid="margin-provider-month-table"
               >
                 <thead>
