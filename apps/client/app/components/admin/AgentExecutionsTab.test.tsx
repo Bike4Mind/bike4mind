@@ -277,4 +277,29 @@ describe('AgentExecutionsTab', () => {
     await waitFor(() => expect(mocks.post).toHaveBeenCalledTimes(1));
     expect(mocks.post.mock.calls[0][1]).toEqual({ executionIds: ['exec-1'] });
   });
+
+  it('blocks the open dialog and says why when a poll drops every selected row', async () => {
+    renderTab();
+    await screen.findByTestId('stuck-execution-row-exec-1');
+
+    selectRow('exec-1');
+    fireEvent.click(screen.getByTestId('stuck-agent-executions-cleanup-btn'));
+    const dialog = await screen.findByTestId('stuck-agent-executions-release-dialog');
+    fireEvent.change(within(dialog).getByTestId('stuck-agent-executions-release-dialog-reason-input'), {
+      target: { value: 'Abandoned by a user who left' },
+    });
+
+    mocks.get.mockResolvedValue({ data: { items: [ITEMS[1], ITEMS[2]], olderThanMinutes: 20 } });
+    fireEvent.click(screen.getByTestId('stuck-agent-executions-refresh-btn'));
+    await waitFor(() => expect(screen.queryByTestId('stuck-execution-row-exec-1')).toBeNull());
+
+    expect(within(dialog).getByTestId('stuck-agent-executions-release-dialog-hint')).toHaveTextContent(
+      'The selected executions are no longer listed.'
+    );
+    const confirm = within(dialog).getByTestId('stuck-agent-executions-release-dialog-confirm-btn');
+    expect(confirm).toBeDisabled();
+    fireEvent.click(confirm);
+    expect(mocks.post).not.toHaveBeenCalled();
+    expect(screen.getByTestId('stuck-agent-executions-release-dialog')).toBeInTheDocument();
+  });
 });
