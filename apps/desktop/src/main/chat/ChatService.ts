@@ -383,7 +383,8 @@ type SendOptions = {
   loop?: {
     signal: AbortSignal;
     valid(session: ChatSession): boolean;
-    settled(outcome: TurnOutcome, replyId: string): void;
+    skill: string;
+    settled(outcome: TurnOutcome, reply: { content: string; stopReason?: string }): void;
   };
   /** Only launchSpawned may consume the initial-turn reservation. */
   spawnSeed?: true;
@@ -786,26 +787,22 @@ export class ChatService {
                 ]
               : ['This is a user-requested recurring loop. Run the task once. Do not create another loop.'];
           return new Promise<LoopOutcome>(resolve => {
-            const settled = (outcome: TurnOutcome, replyId: string) => {
+            const settled = (outcome: TurnOutcome, reply: { content: string; stopReason?: string }) => {
               if (outcome !== 'completed') {
                 resolve({ ok: false, error: `Loop paused: turn ${outcome}. Start /loop again to resume.` });
                 return;
               }
-              void this.deps.store.get(sessionId).then(
-                updated => {
-                  const reply = updated?.messages.find(message => message.id === replyId);
-                  resolve(
-                    reply &&
-                      (!reply.stopReason || ['end_turn', 'stop', 'stop_sequence'].includes(reply.stopReason)) &&
-                      !reply.error
-                      ? { ok: true, reply: reply.content }
-                      : { ok: false, error: 'Loop paused: the reply stopped short. Start /loop again to resume.' }
-                  );
-                },
-                () => resolve({ ok: false, error: 'Could not read the loop result.' })
+              resolve(
+                !reply.stopReason || ['end_turn', 'stop', 'stop_sequence'].includes(reply.stopReason)
+                  ? { ok: true, reply: reply.content }
+                  : { ok: false, error: 'Loop paused: the reply stopped short. Start /loop again to resume.' }
               );
             };
-            void this.send(sessionId, action.prompt, [], { announce: true, notes, loop: { signal, valid, settled } })
+            void this.send(sessionId, action.prompt, [], {
+              announce: true,
+              notes,
+              loop: { signal, valid, settled, skill: JSON.stringify(command) },
+            })
               .then(result => {
                 if (!result.ok) resolve({ ok: false, error: result.error });
               })
@@ -2270,6 +2267,9 @@ export class ChatService {
     const skillCommand = invocation
       ? await this.deps.skills?.get(existing.project?.workingDirectory ?? null, invocation.name)
       : undefined;
+    if (options.loop && JSON.stringify(skillCommand) !== options.loop.skill) {
+      return { ok: false, error: 'The selected skill changed. Start /loop again.' };
+    }
     if (invocation && !skillCommand) {
       // Named rather than silently sent as prose: a skill the user believes ran, which in fact
       // reached the model as the literal text "/deploy", is the one outcome worth refusing over.
@@ -2411,6 +2411,10 @@ export class ChatService {
     // turn that will not go out must not cost a summary.
     await this.autoCompact(reconciled);
     timer?.lap('autoCompact');
+    if (options.loop) {
+      const current = await this.deps.store.get(sessionId);
+      if (!current || !options.loop.valid(current)) return { ok: false, error: 'Loop context changed or stopped.' };
+    }
     if (options.loop && !options.loop.valid(reconciled))
       return { ok: false, error: 'Loop context changed or stopped.' };
 
@@ -2457,7 +2461,7 @@ export class ChatService {
     if (released?.automatic?.kind === 'auto-fix') this.autoFixTurns.add(sessionId);
     else this.autoFixTurns.delete(sessionId);
     // A relay, an automatic turn and a spawn's seed prompt all start a turn nobody typed here.
-    if (!released?.relay && !released?.automatic && seedHops === undefined) {
+    if (!released?.relay && !released?.automatic && !options.loop && seedHops === undefined) {
       this.attendedTurns.add(sessionId);
       this.wake?.attended(sessionId);
       // The user typing here lifts a hold their stop put on agent wakes, restarts the wake cap,
@@ -2588,9 +2592,18 @@ export class ChatService {
       return { ok: false, error: 'This conversation is still replying. Wait for the turn to finish, then compact it.' };
     }
 
-    const session = await this.deps.store.get(sessionId);
-    if (!session) return { ok: false, error: 'That conversation no longer exists.' };
-    return this.compact(session, focus, false);
+    this.compacting.add(sessionId);
+    try {
+      const session = await this.deps.store.get(sessionId);
+      if (!session) return { ok: false, error: 'That conversation no longer exists.' };
+      const result = await this.compact(session, focus, false);
+      if (!result.ok) this.loops.pauseWaiting(sessionId);
+      return result;
+    } finally {
+      this.compacting.delete(sessionId);
+      this.flushQueue(sessionId);
+      this.loops.idle(sessionId);
+    }
   }
 
   /**
@@ -2779,7 +2792,7 @@ export class ChatService {
      * `continueReply`, which is carrying an existing turn on and keeps the depth it had.
      */
     hops?: number,
-    onSettled?: (outcome: TurnOutcome, replyId: string) => void
+    onSettled?: (outcome: TurnOutcome, reply: { content: string; stopReason?: string }) => void
   ): string {
     const sessionId = session.id;
     const replyId = resume?.id ?? randomUUID();
@@ -2788,7 +2801,10 @@ export class ChatService {
     this.deps.activity?.replyStarted(sessionId);
     if (hops !== undefined) this.turnRelay.set(sessionId, { hops, sends: 0 });
 
-    void this.runReply(session, replyId, api, controller, historyScope, resume)
+    let finalReply = { content: '' } as { content: string; stopReason?: string };
+    void this.runReply(session, replyId, api, controller, historyScope, resume, reply => {
+      finalReply = reply;
+    })
       // runReply already catches, so this only covers a throw from its own bookkeeping. A turn
       // whose end cannot be classified is treated as failed, which HOLDS the queue rather than
       // firing it - the safe direction when the outcome is unknown.
@@ -2818,7 +2834,7 @@ export class ChatService {
         // and keeps the report above the turn that answers it.
         await this.flushChildReports(sessionId).catch(() => undefined);
         this.settleQueue(sessionId, outcome);
-        onSettled?.(outcome, replyId);
+        onSettled?.(outcome, finalReply);
         this.loops.idle(sessionId);
       });
 
@@ -2981,7 +2997,8 @@ export class ChatService {
     api: AuthenticatedApiClient | null,
     controller: AbortController,
     historyScope: string | null,
-    resume?: ResumedReply
+    resume?: ResumedReply,
+    completed?: (reply: { content: string; stopReason?: string }) => void
   ): Promise<TurnOutcome> {
     const sessionId = session.id;
     // A new id from each mid-turn message on: see takeArrivals and the round loop below.
@@ -3848,6 +3865,7 @@ export class ChatService {
       }
 
       await settleSegment();
+      completed?.({ content, stopReason });
       // A truncated reply ('max_tokens'), a budget stop and a context stop all count as
       // completed: the model said something and the user can read it. Only the user's own stop
       // is 'aborted'.

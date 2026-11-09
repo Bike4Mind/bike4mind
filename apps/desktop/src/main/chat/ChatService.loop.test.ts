@@ -161,4 +161,31 @@ describe('ChatService /loop', () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(post).not.toHaveBeenCalled();
   });
+
+  it('refuses a skill that changes between validation and turn admission', async () => {
+    const original = { name: 'check', body: 'Check', source: 'account', filePath: '/check' };
+    getSkill
+      .mockResolvedValueOnce(original)
+      .mockResolvedValueOnce(original)
+      .mockResolvedValue({ ...original, body: 'Changed' });
+    await service.loopCommand(id, '30s /check');
+    await vi.waitFor(() => expect(service.getLoop(id)?.phase).toBe('paused'));
+    expect(post).not.toHaveBeenCalled();
+    expect((await store.get(id))?.messages).toEqual([]);
+  });
+
+  it('refuses context changes while a skill is being admitted', async () => {
+    const original = { name: 'check', body: 'Check', source: 'account', filePath: '/check' };
+    getSkill
+      .mockResolvedValueOnce(original)
+      .mockResolvedValueOnce(original)
+      .mockImplementationOnce(async () => {
+        await store.setModel(id, 'other-model');
+        return original;
+      });
+    await service.loopCommand(id, '30s /check');
+    await vi.waitFor(() => expect(service.getLoop(id)?.phase).toBe('paused'));
+    expect(post).not.toHaveBeenCalled();
+    expect((await store.get(id))?.messages).toEqual([]);
+  });
 });

@@ -17,9 +17,12 @@ export function LoopBar({ sessionId }: { sessionId: string | null }) {
       pushed = true;
       setState(event.state);
     });
-    void window.b4m.chat.getLoop(sessionId).then(value => {
-      if (live && !pushed) setState(value);
-    });
+    void window.b4m.chat
+      .getLoop(sessionId)
+      .then(value => {
+        if (live && !pushed) setState(value);
+      })
+      .catch(() => undefined);
     return () => {
       live = false;
       unsubscribe();
