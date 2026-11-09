@@ -38,9 +38,10 @@ export type AnthropicEffort = (typeof ANTHROPIC_EFFORT_LEVELS)[number];
 
 /**
  * The effort resolveAnthropicEffort sends when the caller states none: 'high' normally,
- * 'medium' for QuestMaster and for the MEDIUM_DEFAULT_EFFORT_FAMILIES models. That only
- * covers turns with thinking enabled; a turn without thinking sends no effort at all and
- * runs at the provider's own default, which is also 'medium' for those models.
+ * 'medium' for QuestMaster and for the MEDIUM_DEFAULT_EFFORT_FAMILIES models. The backends
+ * call it only on a turn with thinking enabled; a turn without thinking and without a
+ * reasoningEffort plan sends no effort and runs at the provider's own default, which is
+ * also 'medium' for those models.
  */
 export const DEFAULT_ANTHROPIC_EFFORT: AnthropicEffort = 'high';
 export const DEFAULT_QUEST_MASTER_ANTHROPIC_EFFORT: AnthropicEffort = 'medium';
