@@ -33,7 +33,9 @@ export const signupProtection: SignupProtection = {
           alert.threshold === 'missing'
             ? `${pool} setting is missing or invalid for ${alert.day}; its free grants are paused until it is set.`
             : alert.threshold === 'drip_cap_default'
-              ? `Signup drip cap is not set for ${alert.day}; the activity drip is using the default cap of ${alert.budget.toLocaleString('en-US')} credits.`
+              ? alert.budget > 0
+                ? `Signup drip cap is not set for ${alert.day}; the activity drip is using the default cap of ${alert.budget.toLocaleString('en-US')} credits.`
+                : `Signup drip cap is not set for ${alert.day}; no activity drip is paid until it is set.`
               : alert.threshold === 100
                 ? `${pool} exhausted for ${alert.day}: ${paid}; new grants are held.`
                 : `${pool} at ${alert.threshold}% for ${alert.day}: ${paid}.`,

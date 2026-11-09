@@ -43,10 +43,11 @@ const DIRECT_CREDIT_ALLOWLIST: Record<string, string> = {
   'packages/scripts/backfillPendingFreeCredits.ts': 'ops backfill',
 };
 
-// Block comments and whole-line comments only, so prose that names addCredits is not a caller.
+// Only comments that open a line, so prose naming addCredits is not a caller and a `/*` inside a
+// string literal cannot swallow the code after it.
 function stripComments(source: string): string {
   return source
-    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^[ \t]*\/\*[\s\S]*?\*\//gm, '')
     .split('\n')
     .filter(line => !line.trimStart().startsWith('//'))
     .join('\n');
