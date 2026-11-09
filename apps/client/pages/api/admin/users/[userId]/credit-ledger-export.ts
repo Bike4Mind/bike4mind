@@ -18,6 +18,7 @@ import {
   ledgerPageFilter,
   type LedgerCursor,
 } from '@server/utils/adminCreditLedger';
+import { loadLedgerWriteOffs } from '@server/utils/ledgerWriteOffs';
 
 const EXPORT_PAGE_SIZE = 500;
 const MAX_PAGES = Math.ceil(ADMIN_LEDGER_EXPORT_MAX_ROWS / EXPORT_PAGE_SIZE);
@@ -44,6 +45,7 @@ const CSV_HEADER = [
   'Cache write tokens',
   'Session id',
   'Tools',
+  'Written off',
 ];
 
 // A number is not a formula, so numeric cells stay raw (escaping would turn -412 into '-412).
@@ -71,6 +73,7 @@ const toCsvLine = (row: AdminLedgerRow): string =>
     numberCell(row.cacheWriteTokens),
     escapeCsvCell(row.sessionId),
     escapeCsvCell(row.toolNames?.join(' ')),
+    numberCell(row.writtenOffCredits),
   ].join(',');
 
 type ExportRequestQuery = {
@@ -116,16 +119,19 @@ const handler = baseApi({ auth: 'jwtOnly' }).get(
     // The balance and the first page come from one snapshot so a row landing between the reads cannot
     // skew the running balance. Later pages carry it forward from rows, so they need no snapshot.
     const firstWanted = Math.min(EXPORT_PAGE_SIZE, ADMIN_LEDGER_EXPORT_MAX_ROWS);
-    const { user, firstPage, firstBalance } = await withTransaction(
+    const { user, firstPage, firstBalance, writeOffs } = await withTransaction(
       async () => {
         const user = await userRepository.findById(userId);
         if (!user) throw new NotFoundError('User not found');
-        const firstPage = await readPage(user.id, undefined, firstWanted);
+        const [firstPage, writeOffs] = await Promise.all([
+          readPage(user.id, undefined, firstWanted),
+          loadLedgerWriteOffs(user.id),
+        ]);
         const firstBalance =
           contiguous && firstPage.length > 0
-            ? await balanceAfterFirstRow(user.id, user.currentCredits, firstPage[0], !filter.to)
+            ? await balanceAfterFirstRow(user.id, user.currentCredits, firstPage[0], !filter.to, writeOffs)
             : undefined;
-        return { user, firstPage, firstBalance };
+        return { user, firstPage, firstBalance, writeOffs };
       },
       { readConcern: { level: 'snapshot' } }
     );
@@ -147,6 +153,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).get(
           balanceAfterFirst: carriedBalance,
           userId: user.id,
           logger: req.logger,
+          writeOffs,
         });
 
         // Headers go out with the first page, after every 4xx check and the first read have succeeded.

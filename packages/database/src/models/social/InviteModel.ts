@@ -315,6 +315,24 @@ export class InviteRepository extends BaseRepository<IInviteDocument> implements
     return result.map(invite => invite.toJSON() as IInviteDocument);
   }
 
+  /** A bounded keyset page; callers may request one extra row to detect another page. */
+  async findPageByDocumentId(
+    documentId: string,
+    options: { type: InviteType; status?: 'pending' | 'accepted'; afterId?: string; limit: number }
+  ): Promise<IInviteDocument[]> {
+    const { type, status, afterId, limit } = options;
+    const invites = await this.inviteModel
+      .find({
+        documentId,
+        type,
+        ...(status !== undefined && { [`recipients.${status}.0`]: { $exists: true } }),
+        ...(afterId !== undefined && { _id: { $gt: afterId } }),
+      })
+      .sort({ _id: 1 })
+      .limit(limit);
+    return invites.map(invite => invite.toJSON() as IInviteDocument);
+  }
+
   async findAllByPendingUserIdOrEmail(
     userId: string,
     options?: { limit: number; page: number }

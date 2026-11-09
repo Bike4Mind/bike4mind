@@ -57,10 +57,15 @@ const mockWithTransaction = vi.fn(async (work: () => Promise<unknown>) => {
     transactionState.active = false;
   }
 });
+vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
+  unpublishUserArtifactsBySource: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock('@bike4mind/database', () => ({
   withTransaction: (work: () => Promise<unknown>) => mockWithTransaction(work),
   sessionRepository: {
     findById: (...a: any[]) => mockSessionFindById(...a),
+    // Skips the DELETE route's pre-delete take-down, which messageId.delete.test.ts covers.
+    findByIdAndUserId: async () => null,
     update: (...args: unknown[]) => mockSessionUpdate(...args),
     shareable: { findUpdateAccessById: async () => ({ id: 'sess-1' }) },
   },

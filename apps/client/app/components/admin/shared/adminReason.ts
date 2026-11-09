@@ -21,6 +21,8 @@ export const ADMIN_REASON_PRESETS = {
   limitedTier: ['Abuse / automated signups', 'Suspicious usage', 'Under investigation'],
   limitedTierLift: ['Reviewed, not abusive', 'Appeal accepted', 'Applied in error'],
   emailVerification: ['Ownership confirmed by support', 'Bounced or invalid address', 'Internal testing'],
+  emailManualVerify: ['Ownership confirmed by support', 'Internal testing'],
+  feedbackDeletion: ['Spam or abuse', 'Duplicate report', 'Test submission'],
   profileEdit: ['Customer request', 'Correcting a typo', 'Account recovery, identity verified'],
   apiKeyTrust: ['Known integration', 'Partner access', 'Suspicious usage'],
   newAccountSpendCap: ['Verified customer', 'Known high-volume user', 'Suspicious usage'],
@@ -86,6 +88,14 @@ export const ADMIN_REASON_PRESETS = {
     'Known customer or integration',
     'Not enough data to decide',
   ],
+  oauthClientRotate: ['Compromised or leaked secret', 'Routine rotation', 'Requested by the app owner'],
+  oauthClientDeactivate: [
+    'App retired',
+    'Compromised or leaked secret',
+    'Suspicious usage',
+    'Requested by the app owner',
+  ],
+  identityProviderDelete: ['Replaced by another provider', 'Domain no longer uses single sign-on', 'Created in error'],
 } as const satisfies Record<string, readonly string[]>;
 
 export type AdminReasonPresetKey = keyof typeof ADMIN_REASON_PRESETS;

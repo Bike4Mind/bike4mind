@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseSelfReport, SelfReportStreamFilter } from './selfReportConfidence';
+import { parseSelfReport, SelfReportStreamFilter, stripEmptyThink } from './selfReportConfidence';
 
 describe('parseSelfReport', () => {
   it('extracts score and reason and strips the tag from the text', () => {
@@ -230,5 +230,51 @@ describe('SelfReportStreamFilter after giving up on an oversized unclosed tag', 
   it('leaves text without a closing tag untouched', () => {
     const { all } = run([OVERSIZED, ' more text', ' and more']);
     expect(all).toBe('x'.repeat(700) + ' more text and more');
+  });
+});
+
+describe('stripEmptyThink', () => {
+  it('removes leading empty think blocks, whitespace inside and between them included', () => {
+    expect(stripEmptyThink('<think></think>Hi')).toBe('Hi');
+    expect(stripEmptyThink('<think>\n</think>\n<THINK> </THINK>Hi')).toBe('Hi');
+  });
+
+  it('leaves an empty think block that is not at the start', () => {
+    expect(stripEmptyThink('Use <think></think> to open a block')).toBe('Use <think></think> to open a block');
+  });
+
+  it('keeps a think block with content and any confidence tag', () => {
+    expect(stripEmptyThink('<think>plan</think>Hi')).toBe('<think>plan</think>Hi');
+    expect(stripEmptyThink('<confidence score="0.4">r</confidence>Hi')).toBe(
+      '<confidence score="0.4">r</confidence>Hi'
+    );
+  });
+});
+
+describe('SelfReportStreamFilter in thinkOnly mode', () => {
+  const run = (deltas: string[]) => {
+    const filter = new SelfReportStreamFilter({ thinkOnly: true });
+    const out = deltas.map(d => filter.push(d));
+    return { out, all: out.join('') + filter.flush() };
+  };
+
+  it('drops a leading empty think block split across deltas', () => {
+    const { out, all } = run(['<think>', '</think>', 'Hi']);
+    expect(out.slice(0, 2).every(chunk => chunk === '')).toBe(true);
+    expect(all).toBe('Hi');
+  });
+
+  it('leaves a confidence tag, an unclosed one, and a stray closing tag untouched', () => {
+    expect(run(['<confidence score="0.9">r</confidence>Hi']).all).toBe('<confidence score="0.9">r</confidence>Hi');
+    expect(run(['<confidence score="0.9">r', 'Hi']).all).toBe('<confidence score="0.9">rHi');
+    expect(run(['Hi</confidence>']).all).toBe('Hi</confidence>');
+  });
+
+  it('passes a think block with content straight through', () => {
+    expect(run(['<think>\nthinking</think>Hi']).all).toBe('<think>\nthinking</think>Hi');
+  });
+
+  it('returns nothing for a stream that is only an empty think block', () => {
+    expect(run(['<think>', '</think>']).all).toBe('');
   });
 });

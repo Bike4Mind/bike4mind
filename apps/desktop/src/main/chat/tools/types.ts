@@ -18,6 +18,7 @@ import type {
   SpawnRefusal,
 } from '@shared/chat';
 
+import { HEAD_SHARE } from './cappedOutput';
 import type { ScrollTarget } from '../browser/pageScripts';
 import type { CompletionRequest } from '../completions';
 import type { CompletionStreamEvent } from '../streamEvents';
@@ -829,7 +830,7 @@ export function capOutput(text: string, limit = MAX_TOOL_OUTPUT_CHARS): string {
  * where the failure and the exit line are at the bottom and a head-only cut discards both.
  * The result never exceeds `limit`, so a later capOutput at the same limit leaves it alone.
  */
-export function capOutputMiddle(text: string, limit = MAX_TOOL_OUTPUT_CHARS, headShare = 0.25): string {
+export function capOutputMiddle(text: string, limit = MAX_TOOL_OUTPUT_CHARS, headShare = HEAD_SHARE): string {
   if (text.length <= limit) return text;
   const marker = (dropped: number) => `\n\n[... ${dropped} characters omitted from the middle ...]\n\n`;
   const room = limit - marker(text.length).length;

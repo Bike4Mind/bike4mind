@@ -19,6 +19,16 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 
 export const TONE_MAPPING_EXPOSURE = 1;
 
+/**
+ * The pane's live canvas renders at most this many device pixels per CSS pixel: GTAO and bloom at
+ * full retina density cost far more per frame than they show. Stills and turntables set their own.
+ */
+export const MAX_VIEWPORT_PIXEL_RATIO = 1.5;
+
+export function viewportPixelRatio(devicePixelRatio: number): number {
+  return Math.min(devicePixelRatio > 0 ? devicePixelRatio : 1, MAX_VIEWPORT_PIXEL_RATIO);
+}
+
 // three's ACESFilmicToneMapping (tonemapping_pars_fragment), row-major here; must stay in step with it.
 const ACES_INPUT = [
   [0.59719, 0.35458, 0.04823],

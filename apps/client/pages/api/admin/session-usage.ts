@@ -3,6 +3,7 @@ import { usageEventRepository, agentExecutionRepository } from '@bike4mind/datab
 import {
   ApiKeyScope,
   CreditHolderType,
+  hasAdminPermission,
   type ISessionAgentExecution,
   type ISessionAgentModelUsage,
   type ISessionUsageResponse,
@@ -10,12 +11,13 @@ import {
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { NotFoundError } from '@bike4mind/utils';
 import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
+import { requireAdminPermission } from '@server/middlewares/adminApi';
 import { z } from 'zod';
 
 const QuerySchema = z.object({
   sessionId: z.string().min(1),
   // Required for non-admins: the org the session's spend was billed to. Admins
-  // read any session cross-org and may omit it.
+  // (support:read) read any session cross-org and may omit it.
   organizationId: z.string().min(1).optional(),
 });
 
@@ -25,7 +27,7 @@ const QuerySchema = z.object({
  * ran in the session with its per-model iteration billing. Answers "why did
  * this session cost what it did?".
  *
- * Access: platform admins read any session, cross-org. A non-admin must pass
+ * Access: admins with `support:read` read any session, cross-org. A non-admin must pass
  * the org they can access (verifyOrgOwner) AND the session's spend must be
  * billed to that org - sessions carry no org of their own, so ownership is
  * proven off the usage events. Mismatches 404 (same as no access, to avoid
@@ -55,10 +57,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req,
   // Undefined for admins (whole session, cross-org); set for a non-admin so
   // both the usage rollup and the execution list return only their org's slice.
   let orgScope: string | undefined;
-  if (!req.user.isAdmin) {
-    if (!organizationId) {
-      throw new ForbiddenError('Admin access required');
-    }
+  if (!organizationId || hasAdminPermission(req.user, 'support:read')) {
+    requireAdminPermission(req, 'support:read');
+  } else {
     await verifyOrgOwner(req.user, organizationId);
     const belongsToOrg = await usageEventRepository.sessionBelongsToOwner(
       sessionId,

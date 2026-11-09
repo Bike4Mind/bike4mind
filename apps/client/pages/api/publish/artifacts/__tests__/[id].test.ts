@@ -9,7 +9,8 @@ import bcrypt from 'bcryptjs';
  * No real database; the artifact doc is a plain mutable object with save()/toJSON().
  */
 
-const { findOne, deletePublishThumbnails, assertOutbound } = vi.hoisted(() => ({
+const { findOne, deletePublishThumbnails, assertOutbound, loadLiveOwner } = vi.hoisted(() => ({
+  loadLiveOwner: vi.fn(async (_ownerId: string) => ({ name: 'Owner' }) as { name: string } | null),
   assertOutbound: vi.fn(async (_user: unknown, _req: unknown) => undefined as void),
   findOne: vi.fn(),
   deletePublishThumbnails: vi.fn(async (_publicIds: string[], _logger: unknown) => 0),
@@ -51,6 +52,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 vi.mock('@server/services/publish', () => ({
+  loadLiveOwner,
   resolveVisibility: vi.fn(() => ({ ok: true })),
   invalidatePublishCdn: vi.fn(),
   restrictDuplicatePublications: vi.fn(),
@@ -101,6 +103,8 @@ async function patchGate(allowedDomains: string[], artifact = makeArtifact()) {
 beforeEach(() => {
   findOne.mockReset();
   assertOutbound.mockClear();
+  loadLiveOwner.mockReset();
+  loadLiveOwner.mockResolvedValue({ name: 'Owner' });
 });
 
 /** A public artifact carrying owner/moderation/storage internals. */
@@ -274,6 +278,41 @@ describe('GET public artifact - response scoping', () => {
     const res = await getArtifact({ id: OWNER, isAdmin: false }, gated);
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData().artifact.ownerId).toBe(OWNER);
+  });
+});
+
+describe('GET public artifact - owner liveness', () => {
+  it('404s an anonymous viewer when the owner is not live', async () => {
+    loadLiveOwner.mockResolvedValue(null);
+    const res = await getArtifact(undefined);
+    expect(res._getStatusCode()).toBe(404);
+    expect(res._getJSONData()).toEqual({ error: 'Artifact not found' });
+    expect(loadLiveOwner).toHaveBeenCalledWith(OWNER);
+  });
+
+  it('404s a signed-in non-manager when the owner is not live', async () => {
+    loadLiveOwner.mockResolvedValue(null);
+    const res = await getArtifact({ id: 'someone-else', isAdmin: false });
+    expect(res._getStatusCode()).toBe(404);
+  });
+
+  it('serves the public display fields when the owner is live', async () => {
+    const res = await getArtifact(undefined);
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().artifact.title).toBe('My Artifact');
+    expect(loadLiveOwner).toHaveBeenCalledWith(OWNER);
+  });
+
+  it('still returns the full record to an admin when the owner is not live', async () => {
+    loadLiveOwner.mockResolvedValue(null);
+    const res = await getArtifact({ id: 'admin-1', isAdmin: true });
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().artifact.ownerId).toBe(OWNER);
+  });
+
+  it('does not look the owner up for a manager', async () => {
+    await getArtifact({ id: OWNER, isAdmin: false });
+    expect(loadLiveOwner).not.toHaveBeenCalled();
   });
 });
 

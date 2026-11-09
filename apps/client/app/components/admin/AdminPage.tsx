@@ -193,7 +193,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.Analytics} {...selfFramed}>
             {activeTab === AdminTab.Analytics && <AnalyticsTab />}
           </TabPanel>
-          <TabPanel value={AdminTab.RegistrationInvites} {...selfFramed}>
+          <TabPanel value={AdminTab.RegistrationInvites}>
             {activeTab === AdminTab.RegistrationInvites && <InviteCenter />}
           </TabPanel>
           {enableUserMigration && (
@@ -220,9 +220,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
             {activeTab === AdminTab.Dependencies && <DependenciesTab />}
           </TabPanel>
           <TabPanel value={AdminTab.ApiCookbook}>{activeTab === AdminTab.ApiCookbook && <ApiCookbookTab />}</TabPanel>
-          <TabPanel value={AdminTab.Waitlist} {...selfFramed}>
-            {activeTab === AdminTab.Waitlist && <WaitlistTab />}
-          </TabPanel>
+          <TabPanel value={AdminTab.Waitlist}>{activeTab === AdminTab.Waitlist && <WaitlistTab />}</TabPanel>
           <TabPanel value={AdminTab.SignupDomainHolds}>
             {activeTab === AdminTab.SignupDomainHolds && <SignupDomainHoldsTab />}
           </TabPanel>
@@ -268,7 +266,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
             </TabPanel>
           )}
           <TabPanel value={AdminTab.ModelLogs}>{activeTab === AdminTab.ModelLogs && <ModelLogsTab />}</TabPanel>
-          <TabPanel value={AdminTab.ModelMetrics} {...selfFramed}>
+          <TabPanel value={AdminTab.ModelMetrics}>
             {activeTab === AdminTab.ModelMetrics && <ModelMetricsTab />}
           </TabPanel>
           <TabPanel value={AdminTab.ModelLifecycle}>

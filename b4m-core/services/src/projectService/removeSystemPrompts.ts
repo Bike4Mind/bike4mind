@@ -1,6 +1,7 @@
 import { IFabFileRepository, IProjectDocument, IProjectRepository, IUserDocument } from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
+import { canonicalId } from '../utils/objectIds';
 
 const removeSystemPromptsSchema = z.object({
   projectId: z.string(),
@@ -43,8 +44,8 @@ export const removeSystemPrompts = async (
       : found
   ) as IProjectDocument;
 
-  const removeSet = new Set(fileIds);
-  project.systemPrompts = project.systemPrompts.filter(prompt => !removeSet.has(prompt.fileId));
+  const removeSet = new Set(fileIds.map(canonicalId));
+  project.systemPrompts = project.systemPrompts.filter(prompt => !removeSet.has(canonicalId(prompt.fileId)));
   project.updatedAt = new Date();
 
   await db.projects.update({ id: project.id, systemPrompts: project.systemPrompts, updatedAt: project.updatedAt });

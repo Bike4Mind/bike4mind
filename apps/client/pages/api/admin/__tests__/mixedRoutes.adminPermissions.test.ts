@@ -53,6 +53,16 @@ const cases: AdminPermissionCase[] = [
     allowedMethods: ['GET', 'PUT'],
   },
   { file: '../release-notes/config', method: 'GET', permission: 'settings:manage', allowedMethods: ['GET', 'PUT'] },
+  ...['GET', 'POST', 'PUT', 'DELETE'].map(method => ({
+    file: '../team-members',
+    method,
+    permission: 'settings:manage',
+    allowedMethods: ['GET', 'POST', 'PUT', 'DELETE'],
+  })),
+  { file: '../create-user', method: 'POST', permission: 'settings:manage' },
+  { file: '../bulk-create-users', method: 'POST', permission: 'settings:manage' },
+  { file: '../sessions/[id]/index', method: 'GET', permission: 'support:read' },
+  { file: '../sessions/[id]/quests', method: 'GET', permission: 'support:read' },
 ];
 
 describeAdminPermissionCases(cases, state, file => import(/* @vite-ignore */ file));

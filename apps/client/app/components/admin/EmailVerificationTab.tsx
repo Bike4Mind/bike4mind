@@ -1,47 +1,28 @@
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
-import {
-  Badge,
-  Button,
-  Input,
-  IconButton,
-  LinearProgress,
-  Sheet,
-  Stack,
-  Typography,
-  Chip,
-  Card,
-  RadioGroup,
-  Radio,
-  FormControl,
-  Select,
-  Option,
-  Box,
-  Grid,
-  Modal,
-  ModalDialog,
-  ModalClose,
-} from '@mui/joy';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Button, Dropdown, IconButton, Menu, MenuButton, MenuItem, Stack, Typography } from '@mui/joy';
+import { keepPreviousData, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
+import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import EmailIcon from '@mui/icons-material/Email';
-import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import CancelIcon from '@mui/icons-material/Cancel';
-import WarningIcon from '@mui/icons-material/Warning';
-import FilterListIcon from '@mui/icons-material/FilterList';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import { api } from '@client/app/contexts/ApiContext';
 import { toast } from 'sonner';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
+import { getErrorMessage, getServerErrorField } from '@client/app/utils/error';
+import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import {
+  ActionDialog,
   ADMIN_REASON_PRESETS,
-  type AdminReasonDraft,
-  EMPTY_ADMIN_REASON,
-  composeAdminReason,
-  isAdminReasonComplete,
-} from '@client/app/components/admin/shared/adminReason';
-import { ReasonPicker } from '@client/app/components/admin/shared/ReasonPicker';
+  AdminPageHeader,
+  DataTable,
+  EmptyState,
+  FilterBar,
+  StatusChip,
+  UpdatingBar,
+  type AdminListState,
+  type DataColumn,
+} from './shared';
+import { ADMIN_PAGE_SIZES, ADMIN_REGION_GAP, adminFocus } from './shared/adminStyles';
+import UserIdChip from './Users/UserIdChip';
 
 interface User {
   _id: string;
@@ -58,18 +39,32 @@ interface User {
   createdAt: Date;
 }
 
+type VerificationStatusFilter = 'all' | 'verified' | 'unverified' | 'pending';
+
+/** GET /api/admin/users/email-verification; `totalCount` drives the pager. */
+interface EmailVerificationListResponse {
+  users: User[];
+  pagination: { page: number; limit: number; totalPages: number; totalCount: number };
+}
+
+const EMAIL_VERIFICATION_QUERY_KEY = ['admin', 'email-verification'] as const;
+
 const useGetEmailVerificationUsers = (params: {
   page?: number;
   limit?: number;
   search?: string;
-  status?: 'all' | 'verified' | 'unverified' | 'pending';
+  status?: VerificationStatusFilter;
 }) => {
   return useQuery({
-    queryKey: ['admin', 'email-verification', params],
+    queryKey: [...EMAIL_VERIFICATION_QUERY_KEY, params],
     queryFn: async () => {
-      const response = await api.get('/api/admin/users/email-verification', { params });
+      const response = await api.get<EmailVerificationListResponse>('/api/admin/users/email-verification', {
+        params,
+      });
       return response.data;
     },
+    // Keeps the current page on screen while the next one loads, so the pager never reads "0 of 0".
+    placeholderData: keepPreviousData,
   });
 };
 
@@ -82,7 +77,7 @@ const useResendVerification = () => {
       return response.data;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['admin', 'email-verification'] });
+      queryClient.invalidateQueries({ queryKey: EMAIL_VERIFICATION_QUERY_KEY });
     },
   });
 };
@@ -96,7 +91,7 @@ const useResendEmailChange = () => {
       return response.data;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['admin', 'email-verification'] });
+      queryClient.invalidateQueries({ queryKey: EMAIL_VERIFICATION_QUERY_KEY });
     },
   });
 };
@@ -110,7 +105,7 @@ const useVerifyEmail = () => {
       return response.data;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['admin', 'email-verification'] });
+      queryClient.invalidateQueries({ queryKey: EMAIL_VERIFICATION_QUERY_KEY });
     },
   });
 };
@@ -124,364 +119,186 @@ const useUnverifyEmail = () => {
       return response.data;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['admin', 'email-verification'] });
+      queryClient.invalidateQueries({ queryKey: EMAIL_VERIFICATION_QUERY_KEY });
     },
   });
 };
 
-interface ConfirmModalState {
-  open: boolean;
-  type: 'resend' | 'verify' | 'unverify' | 'resend-email-change' | null;
-  userId: string | null;
-  email: string | null;
-  username: string | null;
-  pendingEmail?: string | null;
-}
+// The routes send their explanation in `error`, not `message`.
+const errorText = (error: unknown) => getServerErrorField(error) ?? getErrorMessage(error);
 
-const PaginationControls = ({
-  currentPage,
-  totalPages,
-  onPageChange,
-  itemsPerPage,
-  onItemsPerPageChange,
-  totalCount,
-}: {
-  currentPage: number;
-  totalPages: number;
-  onPageChange: (page: number) => void;
-  itemsPerPage: number;
-  onItemsPerPageChange: (size: number) => void;
-  totalCount: number;
-}) => (
-  <Stack
-    direction="row"
-    justifyContent="space-between"
-    alignItems="center"
-    sx={{ my: { xs: 0.5, sm: 1 } }}
-    width="100%"
-  >
-    <Stack direction="row" spacing={{ xs: 1, sm: 2 }} justifyContent="center" alignItems="center">
-      <Button size="sm" disabled={currentPage <= 1} onClick={() => onPageChange(currentPage - 1)}>
-        Previous
-      </Button>
-      <Typography level="body-xs" sx={{ display: { sm: 'none' } }}>
-        {currentPage}/{totalPages}
-      </Typography>
-      <Typography level="title-sm" sx={{ display: { xs: 'none', sm: 'block' } }}>
-        Page {currentPage} of {totalPages}
-      </Typography>
-      <Button size="sm" disabled={currentPage >= totalPages} onClick={() => onPageChange(currentPage + 1)}>
-        Next
-      </Button>
-    </Stack>
+const STATUS_FILTER_OPTIONS = [
+  { value: 'verified', label: 'Verified' },
+  { value: 'unverified', label: 'Unverified' },
+  { value: 'pending', label: 'Pending verification' },
+] as const satisfies readonly { value: Exclude<VerificationStatusFilter, 'all'>; label: string }[];
 
-    <Stack
-      direction="row"
-      spacing={2}
-      alignItems="center"
-      justifyContent="flex-end"
-      sx={{ display: { xs: 'none', sm: 'flex' } }}
-    >
-      <FormControl>
-        <RadioGroup
-          orientation="horizontal"
-          value={itemsPerPage}
-          onChange={e => onItemsPerPageChange(Number(e.target.value))}
-        >
-          {[10, 20, 50].map(value => (
-            <Radio key={value} value={value} label={`${value} per page`} size="sm" sx={{ mr: 2 }} />
-          ))}
-        </RadioGroup>
-      </FormControl>
-      <Typography level="title-sm" fontWeight={800}>
-        Total Users: {totalCount}
-      </Typography>
-    </Stack>
-  </Stack>
-);
+const toStatusFilter = (value: string | undefined): VerificationStatusFilter =>
+  STATUS_FILTER_OPTIONS.find(option => option.value === value)?.value ?? 'all';
 
-const getStatusChip = (user: User, isExpired: (d?: Date) => boolean) => {
-  if (user.pendingEmail) {
-    return (
-      <Chip size="sm" color="primary">
-        Changing
-      </Chip>
-    );
-  }
-  if (user.emailVerified) {
-    return (
-      <Chip size="sm" color="success">
-        Verified
-      </Chip>
-    );
-  }
+const EMPTY_VALUE = '\u2014';
+
+const isExpired = (expiresAt?: Date) => !!expiresAt && new Date(expiresAt) < new Date();
+
+const verificationStatus = (user: User): { tone: AdminStatusTone; label: string } => {
+  if (user.pendingEmail) return { tone: 'info', label: 'Changing email' };
+  if (user.emailVerified) return { tone: 'good', label: 'Verified' };
   if (user.emailVerificationSentAt) {
-    return (
-      <Chip size="sm" color={isExpired(user.emailVerificationExpires) ? 'danger' : 'warning'}>
-        {isExpired(user.emailVerificationExpires) ? 'Expired' : 'Pending'}
-      </Chip>
-    );
+    return isExpired(user.emailVerificationExpires)
+      ? { tone: 'bad', label: 'Expired' }
+      : { tone: 'warn', label: 'Pending' };
   }
+  return { tone: 'neutral', label: 'Not sent' };
+};
+
+const DateCell = ({ value, expired = false }: { value?: Date; expired?: boolean }) => {
+  if (!value) return <Typography sx={{ color: 'admin.inkMuted' }}>{EMPTY_VALUE}</Typography>;
+  const date = new Date(value);
   return (
-    <Chip size="sm" color="neutral">
-      Not Sent
-    </Chip>
+    <Stack gap={0.25}>
+      <Typography level="body-sm" noWrap>
+        {expired ? 'Expired' : date.toLocaleDateString()}
+      </Typography>
+      <Typography level="body-xs" noWrap sx={{ color: 'admin.inkMuted' }}>
+        {expired ? date.toLocaleDateString() : date.toLocaleTimeString()}
+      </Typography>
+    </Stack>
   );
 };
 
-const EmailVerificationRow = ({
+const COLUMNS: DataColumn<User>[] = [
+  {
+    id: 'user',
+    label: 'User',
+    render: user => (
+      <Stack gap={0.25} alignItems="flex-start" sx={{ minWidth: 0 }}>
+        <Typography level="body-sm" fontWeight={500} noWrap title={user.username} sx={{ maxWidth: '100%' }}>
+          {user.username}
+        </Typography>
+        {user.name && (
+          <Typography level="body-xs" noWrap title={user.name} sx={{ color: 'admin.inkMuted', maxWidth: '100%' }}>
+            {user.name}
+          </Typography>
+        )}
+        <UserIdChip userId={user._id} />
+      </Stack>
+    ),
+  },
+  {
+    id: 'email',
+    label: 'Email',
+    width: '14rem',
+    render: user => (
+      <Stack gap={0.25} sx={{ minWidth: 0 }}>
+        <Typography level="body-sm" noWrap title={user.email}>
+          {user.email}
+        </Typography>
+        {user.pendingEmail && (
+          <Typography
+            level="body-xs"
+            noWrap
+            title={`Changing to ${user.pendingEmail}`}
+            sx={{ color: 'admin.inkMuted' }}
+            data-testid={`email-verification-pending-email-${user._id}`}
+          >
+            {'\u2192'} {user.pendingEmail}
+          </Typography>
+        )}
+      </Stack>
+    ),
+  },
+  {
+    id: 'status',
+    label: 'Status',
+    width: '8rem',
+    render: user => {
+      const { tone, label } = verificationStatus(user);
+      return <StatusChip tone={tone} label={label} data-testid={`email-verification-status-${user._id}`} />;
+    },
+  },
+  { id: 'verifiedAt', label: 'Verified', width: '8.5rem', render: user => <DateCell value={user.emailVerifiedAt} /> },
+  {
+    id: 'lastSent',
+    label: 'Last sent',
+    width: '8.5rem',
+    render: user => <DateCell value={user.emailVerificationSentAt} />,
+  },
+  {
+    id: 'expires',
+    label: 'Link expires',
+    width: '8.5rem',
+    render: user => (
+      <DateCell value={user.emailVerificationExpires} expired={isExpired(user.emailVerificationExpires)} />
+    ),
+  },
+];
+
+type RowCommand = 'resend' | 'resend-email-change' | 'verify' | 'unverify';
+
+const RowMenu = ({
   user,
-  index,
-  formatDate,
-  isExpired,
-  openConfirmModal,
-  resendEmailChangePending,
-  unverifyEmailPending,
-  verifyEmailPending,
-  resendVerificationPending,
+  resending,
+  onCommand,
 }: {
   user: User;
-  index: number;
-  formatDate: (date?: Date) => string;
-  isExpired: (expiresAt?: Date) => boolean;
-  openConfirmModal: (
-    type: 'resend' | 'verify' | 'unverify' | 'resend-email-change',
-    userId: string,
-    email: string,
-    username: string,
-    pendingEmail?: string
-  ) => void;
-  resendEmailChangePending: boolean;
-  unverifyEmailPending: boolean;
-  verifyEmailPending: boolean;
-  resendVerificationPending: boolean;
+  /** A resend for this row is in flight: its resend items are disabled and say so. */
+  resending: boolean;
+  onCommand: (command: RowCommand, user: User) => void;
 }) => {
-  const [mobileExpanded, setMobileExpanded] = useState(false);
-
-  const actionButtons = user.pendingEmail ? (
-    <Button
-      size="sm"
-      color="primary"
-      variant="soft"
-      startDecorator={<EmailIcon />}
-      onClick={() => openConfirmModal('resend-email-change', user._id, user.email, user.username, user.pendingEmail)}
-      loading={resendEmailChangePending}
-      disabled={resendEmailChangePending}
-      sx={{ width: { xs: '100%', sm: 'auto' } }}
+  const item = (command: RowCommand, label: string, disabled = false) => (
+    <MenuItem
+      disabled={disabled}
+      onClick={() => onCommand(command, user)}
+      data-testid={`email-verification-row-${command}-${user._id}`}
     >
-      Resend
-    </Button>
-  ) : user.emailVerified ? (
-    <Button
-      size="sm"
-      color="danger"
-      variant="soft"
-      startDecorator={<CancelIcon />}
-      onClick={() => openConfirmModal('unverify', user._id, user.email, user.username)}
-      loading={unverifyEmailPending}
-      disabled={unverifyEmailPending}
-      sx={{ width: { xs: '100%', sm: 'auto' } }}
-    >
-      Unverify
-    </Button>
-  ) : (
-    <>
-      <Button
-        size="sm"
-        color="success"
-        variant="soft"
-        startDecorator={<CheckCircleIcon />}
-        onClick={() => openConfirmModal('verify', user._id, user.email, user.username)}
-        loading={verifyEmailPending}
-        disabled={verifyEmailPending}
-        sx={{ width: { xs: '100%', sm: 'auto' } }}
-      >
-        Verify
-      </Button>
-      <Button
-        size="sm"
-        color="primary"
-        variant="soft"
-        startDecorator={<EmailIcon />}
-        onClick={() => openConfirmModal('resend', user._id, user.email, user.username)}
-        loading={resendVerificationPending}
-        disabled={resendVerificationPending}
-        sx={{ width: { xs: '100%', sm: 'auto' } }}
-      >
-        Resend
-      </Button>
-    </>
+      {label}
+    </MenuItem>
   );
-
   return (
-    <Card
-      variant="outlined"
-      sx={{
-        mb: { xs: 0.5, sm: 1 },
-        width: '100%',
-        bgcolor: index % 2 ? 'background.level1' : 'background.level2',
-        p: 1,
-        overflowX: { xs: 'hidden', sm: 'visible' },
-      }}
-    >
-      {/* Mobile compact summary - visible only on xs */}
-      <Box
-        data-testid={`email-verify-mobile-summary-${index}`}
-        onClick={() => setMobileExpanded(prev => !prev)}
-        sx={{
-          display: { xs: 'flex', sm: 'none' },
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          cursor: 'pointer',
+    <Dropdown>
+      <MenuButton
+        slots={{ root: IconButton }}
+        slotProps={{
+          root: {
+            size: 'sm',
+            variant: 'plain',
+            'aria-label': `Actions for ${user.username || user.email}`,
+            sx: { ...adminFocus, color: 'admin.inkMuted' },
+          },
         }}
+        data-testid={`email-verification-row-actions-${user._id}`}
       >
-        <Stack direction="column" sx={{ flex: 1, minWidth: 0 }}>
-          <Typography level="body-sm" fontWeight={600} noWrap>
-            {user.username}
-          </Typography>
-          <Typography level="body-xs" color="neutral" noWrap>
-            {user.email}
-          </Typography>
-        </Stack>
-        <Stack direction="row" spacing={0.5} alignItems="center" sx={{ flexShrink: 0 }}>
-          {getStatusChip(user, isExpired)}
-          <IconButton size="sm" variant="plain">
-            {mobileExpanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
-          </IconButton>
-        </Stack>
-      </Box>
-
-      {/* Mobile expanded details - visible only on xs when expanded */}
-      <Box sx={{ display: { xs: mobileExpanded ? 'block' : 'none', sm: 'none' }, pt: 1 }}>
-        <Stack spacing={0.5}>
-          <Stack direction="row" justifyContent="space-between">
-            <Typography level="body-xs" color="neutral">
-              Name
-            </Typography>
-            <Typography level="body-xs">{user.name}</Typography>
-          </Stack>
-          {user.pendingEmail && (
-            <Stack direction="row" justifyContent="space-between">
-              <Typography level="body-xs" color="neutral">
-                Pending Email
-              </Typography>
-              <Typography level="body-xs" sx={{ color: 'primary.500' }}>
-                {user.pendingEmail}
-              </Typography>
-            </Stack>
-          )}
-          <Stack direction="row" justifyContent="space-between">
-            <Typography level="body-xs" color="neutral">
-              Verified At
-            </Typography>
-            <Typography level="body-xs">{formatDate(user.emailVerifiedAt)}</Typography>
-          </Stack>
-          <Stack direction="row" justifyContent="space-between">
-            <Typography level="body-xs" color="neutral">
-              Last Sent
-            </Typography>
-            <Typography level="body-xs">{formatDate(user.emailVerificationSentAt)}</Typography>
-          </Stack>
-          <Stack direction="row" justifyContent="space-between">
-            <Typography level="body-xs" color="neutral">
-              Expires
-            </Typography>
-            <Typography level="body-xs">
-              {user.emailVerificationExpires
-                ? isExpired(user.emailVerificationExpires)
-                  ? 'Expired'
-                  : formatDate(user.emailVerificationExpires)
-                : '-'}
-            </Typography>
-          </Stack>
-          <Stack direction="column" spacing={0.5} sx={{ mt: 0.5 }}>
-            {actionButtons}
-          </Stack>
-        </Stack>
-      </Box>
-
-      {/* Desktop Grid layout - always visible on sm+ */}
-      <Box sx={{ display: { xs: 'none', sm: 'block' } }}>
-        <Grid container spacing={2} sx={{ width: '100%' }} alignItems="center">
-          <Grid xs={1.5}>
-            <Typography level="body-sm" sx={{ fontWeight: 500 }}>
-              {user.username}
-            </Typography>
-          </Grid>
-          <Grid xs={2}>
-            <Stack spacing={0.25}>
-              <Typography
-                level="body-sm"
-                sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                title={user.email}
-              >
-                {user.email}
-              </Typography>
-              {user.pendingEmail && (
-                <Typography
-                  level="body-xs"
-                  sx={{ color: 'primary.500', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                  title={`→ ${user.pendingEmail}`}
-                >
-                  → {user.pendingEmail}
-                </Typography>
-              )}
-            </Stack>
-          </Grid>
-          <Grid xs={1}>
-            <Typography level="body-sm">{user.name}</Typography>
-          </Grid>
-          <Grid xs={1}>{getStatusChip(user, isExpired)}</Grid>
-          <Grid xs={1.5}>
-            <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-              {formatDate(user.emailVerifiedAt)}
-            </Typography>
-          </Grid>
-          <Grid xs={1.5}>
-            <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-              {formatDate(user.emailVerificationSentAt)}
-            </Typography>
-          </Grid>
-          <Grid xs={1.5}>
-            <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-              {user.emailVerificationExpires
-                ? isExpired(user.emailVerificationExpires)
-                  ? '⚠️ Expired'
-                  : formatDate(user.emailVerificationExpires)
-                : '-'}
-            </Typography>
-          </Grid>
-          <Grid xs={2} sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-            {actionButtons}
-          </Grid>
-        </Grid>
-      </Box>
-    </Card>
+        <MoreHorizIcon sx={{ fontSize: 18 }} />
+      </MenuButton>
+      <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
+        {/* While an address change is pending, its link is the only action offered. */}
+        {user.pendingEmail &&
+          item('resend-email-change', resending ? 'Sending email change link' : 'Resend email change link', resending)}
+        {!user.pendingEmail && user.emailVerified && item('unverify', 'Unverify email')}
+        {!user.pendingEmail &&
+          !user.emailVerified &&
+          item('resend', resending ? 'Sending verification email' : 'Resend verification email', resending)}
+        {!user.pendingEmail && !user.emailVerified && item('verify', 'Verify email')}
+      </Menu>
+    </Dropdown>
   );
 };
 
 const EmailVerificationTab = () => {
   const { value: search, debouncedValue: debouncedSearch, setValue: setSearch } = useDebounceValue('');
   const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage, setItemsPerPage] = useState(20);
-  const [statusFilter, setStatusFilter] = useState<'all' | 'verified' | 'unverified' | 'pending'>('all');
-  const [showFilters, setShowFilters] = useState(false);
-  const [confirmModal, setConfirmModal] = useState<ConfirmModalState>({
-    open: false,
-    type: null,
-    userId: null,
-    email: null,
-    username: null,
-    pendingEmail: null,
-  });
-  // Only verify and unverify change the account, so only they ask for an audited reason.
-  const [reason, setReason] = useState<AdminReasonDraft>(EMPTY_ADMIN_REASON);
-  const needsReason = confirmModal.type === 'verify' || confirmModal.type === 'unverify';
+  const [pageSize, setPageSize] = useState<number>(ADMIN_PAGE_SIZES[0]);
+  const [statusFilter, setStatusFilter] = useState<VerificationStatusFilter>('all');
+  // Verify and unverify change the account, so they go through a dialog that asks for an audited reason.
+  const [dialog, setDialog] = useState<{ type: 'verify' | 'unverify'; user: User } | null>(null);
+  // Rows with a resend in flight, tracked here because a mutation only reports its latest call: a
+  // send on one row must not re-enable another row's resend while that one is still pending.
+  const [resendingIds, setResendingIds] = useState<ReadonlySet<string>>(() => new Set());
 
   const queryClient = useQueryClient();
   const users = useGetEmailVerificationUsers({
     page: currentPage,
-    limit: itemsPerPage,
+    limit: pageSize,
     search: debouncedSearch,
     status: statusFilter,
   });
@@ -490,349 +307,187 @@ const EmailVerificationTab = () => {
   const verifyEmail = useVerifyEmail();
   const unverifyEmail = useUnverifyEmail();
 
-  const totalPages = users.data?.pagination?.totalPages || 0;
-  const totalCount = users.data?.pagination?.totalCount || 0;
-  const activeFilterCount = statusFilter !== 'all' ? 1 : 0;
+  const rows = users.data?.users ?? [];
+  const totalCount = users.data?.pagination.totalCount ?? 0;
 
-  const openConfirmModal = (
-    type: 'resend' | 'verify' | 'unverify' | 'resend-email-change',
-    userId: string,
-    email: string,
-    username: string,
-    pendingEmail?: string
-  ) => {
-    setReason(EMPTY_ADMIN_REASON);
-    setConfirmModal({
-      open: true,
-      type,
-      userId,
-      email,
-      username,
-      pendingEmail,
-    });
+  const filterState: AdminListState = {
+    query: search,
+    filters: { status: statusFilter === 'all' ? '' : statusFilter },
+    view: '',
+  };
+  const changeFilters = (patch: Partial<AdminListState>) => {
+    if (patch.query !== undefined) setSearch(patch.query);
+    if (patch.filters) setStatusFilter(toStatusFilter(patch.filters.status));
+    setCurrentPage(1);
+  };
+  const hasFilters = search.trim() !== '' || statusFilter !== 'all';
+  const clearFilters = () => changeFilters({ query: '', filters: { status: '' } });
+
+  // Refreshes the list after a failure too: the backend may have changed state on the way (an
+  // expired token is cancelled, for one).
+  const reportFailure = (error: unknown) => {
+    toast.error(errorText(error));
+    void queryClient.invalidateQueries({ queryKey: EMAIL_VERIFICATION_QUERY_KEY });
   };
 
-  const closeConfirmModal = () => {
-    setConfirmModal({
-      open: false,
-      type: null,
-      userId: null,
-      email: null,
-      username: null,
-      pendingEmail: null,
-    });
-  };
-
-  const handleConfirmAction = async () => {
-    if (!confirmModal.userId || !confirmModal.type) return;
-    if (needsReason && !isAdminReasonComplete(reason)) return;
-
+  const runCommand = async (command: RowCommand, user: User) => {
+    if (command === 'verify' || command === 'unverify') {
+      setDialog({ type: command, user });
+      return;
+    }
+    setResendingIds(ids => new Set(ids).add(user._id));
     try {
-      switch (confirmModal.type) {
-        case 'resend':
-          await resendVerification.mutateAsync(confirmModal.userId);
-          toast.success(`Verification email resent to ${confirmModal.email}`);
-          break;
-        case 'verify':
-          await verifyEmail.mutateAsync({ userId: confirmModal.userId, reason: composeAdminReason(reason) });
-          toast.success(`Email verified for ${confirmModal.username}`);
-          break;
-        case 'unverify':
-          await unverifyEmail.mutateAsync({ userId: confirmModal.userId, reason: composeAdminReason(reason) });
-          toast.success(`Email unverified for ${confirmModal.username}`);
-          break;
-        case 'resend-email-change':
-          await resendEmailChange.mutateAsync(confirmModal.userId);
-          toast.success(`Email change verification resent to ${confirmModal.pendingEmail}`);
-          break;
+      if (command === 'resend') {
+        await resendVerification.mutateAsync(user._id);
+        toast.success(`Verification email resent to ${user.email}`);
+      } else {
+        await resendEmailChange.mutateAsync(user._id);
+        toast.success(`Email change link resent to ${user.pendingEmail}`);
       }
-      closeConfirmModal();
-    } catch (error: any) {
-      // Backend sends error message in 'error' field, not 'message'
-      const errorMessage =
-        error.response?.data?.error ||
-        error.response?.data?.message ||
-        error.message ||
-        `Failed to ${confirmModal.type} email`;
-      toast.error(errorMessage);
-
-      // Close modal even on error
-      closeConfirmModal();
-
-      // Refresh data to reflect any backend state changes (e.g., expired token auto-cancelled)
-      queryClient.invalidateQueries({ queryKey: ['admin', 'email-verification'] });
+    } catch (error) {
+      reportFailure(error);
+    } finally {
+      setResendingIds(ids => {
+        const next = new Set(ids);
+        next.delete(user._id);
+        return next;
+      });
     }
   };
 
-  const handleRefresh = () => {
-    users.refetch();
+  const confirmDialog = async (reason: string) => {
+    if (!dialog) return;
+    const { type, user } = dialog;
+    try {
+      if (type === 'verify') {
+        await verifyEmail.mutateAsync({ userId: user._id, reason });
+        toast.success(`Email verified for ${user.username}`);
+      } else {
+        await unverifyEmail.mutateAsync({ userId: user._id, reason });
+        toast.success(`Email unverified for ${user.username}`);
+      }
+    } catch (error) {
+      reportFailure(error);
+    }
+    setDialog(null);
   };
 
-  const formatDate = (date?: Date) => {
-    if (!date) return '-';
-    return new Date(date).toLocaleDateString() + ' ' + new Date(date).toLocaleTimeString();
-  };
-
-  const isExpired = (expiresAt?: Date) => {
-    if (!expiresAt) return false;
-    return new Date(expiresAt) < new Date();
-  };
+  const unverifying = dialog?.type === 'unverify';
 
   return (
-    <Sheet sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      <Box sx={{ flexShrink: 0 }}>
-        {/* Search & Filter Controls */}
-        <Card sx={{ px: { xs: 1, sm: 2 }, py: 1, mb: 1 }}>
-          <Stack spacing={1}>
-            <Stack direction="row" spacing={1} alignItems="end">
-              <FormControl sx={{ flex: 1, minWidth: 0 }}>
-                <Typography level="title-sm" sx={{ fontWeight: 500, mb: 0.5, display: { xs: 'none', sm: 'block' } }}>
-                  Search Users
-                </Typography>
-                <Input
-                  size="sm"
-                  startDecorator={<EmailIcon />}
-                  placeholder="Search by username, email, or name..."
-                  value={search}
-                  onChange={e => setSearch(e.target.value)}
-                />
-              </FormControl>
-
-              {/* Mobile-only filter toggle */}
-              <IconButton
-                data-testid="email-verify-filter-toggle"
-                variant={showFilters ? 'soft' : 'plain'}
-                color={activeFilterCount > 0 ? 'primary' : 'neutral'}
-                onClick={() => setShowFilters(prev => !prev)}
-                sx={{ display: { xs: 'flex', sm: 'none' }, flexShrink: 0 }}
-              >
-                <Badge badgeContent={activeFilterCount} badgeInset="14%">
-                  <FilterListIcon />
-                </Badge>
-              </IconButton>
-
-              {/* Desktop-only: inline status filter + refresh */}
-              <FormControl sx={{ minWidth: 180, display: { xs: 'none', sm: 'flex' } }}>
-                <Typography level="title-sm" sx={{ fontWeight: 500, mb: 0.5 }}>
-                  Status
-                </Typography>
-                <Select
-                  size="sm"
-                  value={statusFilter}
-                  onChange={(_, value) => {
-                    setStatusFilter(value as 'all' | 'verified' | 'unverified' | 'pending');
-                    setCurrentPage(1);
-                  }}
-                >
-                  <Option value="all">All Users</Option>
-                  <Option value="verified">Verified</Option>
-                  <Option value="unverified">Unverified</Option>
-                  <Option value="pending">Pending Verification</Option>
-                </Select>
-              </FormControl>
-
-              <Stack direction="row" spacing={1} alignItems="flex-end" sx={{ display: { xs: 'none', sm: 'flex' } }}>
-                <Button size="sm" startDecorator={<RefreshIcon />} onClick={handleRefresh} disabled={users.isPending}>
-                  Refresh
-                </Button>
-                <ContextHelpButton helpId="admin/email-verification" tooltipText="Email Verification Help" />
-              </Stack>
-            </Stack>
-
-            {/* Mobile collapsible filters */}
-            <Box sx={{ display: { xs: showFilters ? 'flex' : 'none', sm: 'none' }, flexDirection: 'column', gap: 1 }}>
-              <FormControl>
-                <Typography level="title-sm" sx={{ fontWeight: 500, mb: 0.5 }}>
-                  Status
-                </Typography>
-                <Select
-                  size="sm"
-                  value={statusFilter}
-                  onChange={(_, value) => {
-                    setStatusFilter(value as 'all' | 'verified' | 'unverified' | 'pending');
-                    setCurrentPage(1);
-                  }}
-                >
-                  <Option value="all">All Users</Option>
-                  <Option value="verified">Verified</Option>
-                  <Option value="unverified">Unverified</Option>
-                  <Option value="pending">Pending Verification</Option>
-                </Select>
-              </FormControl>
-              <Stack direction="row" spacing={1}>
-                <Button size="sm" startDecorator={<RefreshIcon />} onClick={handleRefresh} disabled={users.isPending}>
-                  Refresh
-                </Button>
-                <ContextHelpButton helpId="admin/email-verification" tooltipText="Email Verification Help" />
-              </Stack>
-            </Box>
-          </Stack>
-        </Card>
-
-        {users.isPending && <LinearProgress />}
-
-        {/* Top pagination - hidden on mobile */}
-        <Box sx={{ display: { xs: 'none', sm: 'block' } }}>
-          <PaginationControls
-            currentPage={currentPage}
-            totalPages={totalPages}
-            onPageChange={setCurrentPage}
-            itemsPerPage={itemsPerPage}
-            onItemsPerPageChange={size => {
-              setItemsPerPage(size);
-              setCurrentPage(1);
-            }}
-            totalCount={totalCount}
-          />
-        </Box>
-      </Box>
-
-      <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
-        {/* Sticky Header - hidden on mobile */}
-        <Card
-          variant="outlined"
-          sx={{
-            mb: 1,
-            width: '100%',
-            bgcolor: 'background.surface',
-            p: 1,
-            position: 'sticky',
-            top: 0,
-            zIndex: 1,
-            borderBottom: 2,
-            borderColor: 'divider',
-            display: { xs: 'none', sm: 'block' },
-          }}
-        >
-          <Grid container spacing={2} sx={{ width: '100%' }} alignItems="center">
-            <Grid xs={1.5}>
-              <Typography level="title-sm" sx={{ fontWeight: 600, color: 'text.primary' }}>
-                Username
-              </Typography>
-            </Grid>
-            <Grid xs={2}>
-              <Typography level="title-sm" sx={{ fontWeight: 600, color: 'text.primary' }}>
-                Email
-              </Typography>
-            </Grid>
-            <Grid xs={1}>
-              <Typography level="title-sm" sx={{ fontWeight: 600, color: 'text.primary' }}>
-                Name
-              </Typography>
-            </Grid>
-            <Grid xs={1}>
-              <Typography level="title-sm" sx={{ fontWeight: 600, color: 'text.primary' }}>
-                Status
-              </Typography>
-            </Grid>
-            <Grid xs={1.5}>
-              <Typography level="title-sm" sx={{ fontWeight: 600, color: 'text.primary' }}>
-                Verified At
-              </Typography>
-            </Grid>
-            <Grid xs={1.5}>
-              <Typography level="title-sm" sx={{ fontWeight: 600, color: 'text.primary' }}>
-                Last Sent
-              </Typography>
-            </Grid>
-            <Grid xs={1.5}>
-              <Typography level="title-sm" sx={{ fontWeight: 600, color: 'text.primary' }}>
-                Expires
-              </Typography>
-            </Grid>
-            <Grid xs={2}>
-              <Typography level="title-sm" sx={{ fontWeight: 600, color: 'text.primary' }}>
-                Actions
-              </Typography>
-            </Grid>
-          </Grid>
-        </Card>
-
-        {/* Data Rows */}
-        {users.data?.users.map((user: User, index: number) => (
-          <EmailVerificationRow
-            key={user._id}
-            user={user}
-            index={index}
-            formatDate={formatDate}
-            isExpired={isExpired}
-            openConfirmModal={openConfirmModal}
-            resendEmailChangePending={resendEmailChange.isPending}
-            unverifyEmailPending={unverifyEmail.isPending}
-            verifyEmailPending={verifyEmail.isPending}
-            resendVerificationPending={resendVerification.isPending}
-          />
-        ))}
-      </Box>
-
-      <Box sx={{ flexShrink: 0 }}>
-        <PaginationControls
-          currentPage={currentPage}
-          totalPages={totalPages}
-          onPageChange={setCurrentPage}
-          itemsPerPage={itemsPerPage}
-          onItemsPerPageChange={size => {
-            setItemsPerPage(size);
-            setCurrentPage(1);
-          }}
-          totalCount={totalCount}
-        />
-      </Box>
-
-      {/* Confirmation Modal */}
-      <Modal open={confirmModal.open} onClose={closeConfirmModal}>
-        <ModalDialog size="sm" variant="outlined">
-          <ModalClose />
-          <Typography level="h4" startDecorator={<WarningIcon />}>
-            {confirmModal.type === 'resend' && 'Resend Verification Email'}
-            {confirmModal.type === 'verify' && 'Verify Email'}
-            {confirmModal.type === 'unverify' && 'Unverify Email'}
-            {confirmModal.type === 'resend-email-change' && 'Resend Email Change Verification'}
-          </Typography>
-          <Typography level="body-md" sx={{ mt: 1 }}>
-            {confirmModal.type === 'resend' &&
-              `Are you sure you want to resend the verification email to ${confirmModal.email}?`}
-            {confirmModal.type === 'verify' &&
-              `Are you sure you want to manually verify the email for ${confirmModal.username} (${confirmModal.email})?`}
-            {confirmModal.type === 'unverify' &&
-              `Are you sure you want to unverify the email for ${confirmModal.username} (${confirmModal.email})? This will require the user to verify their email again.`}
-            {confirmModal.type === 'resend-email-change' &&
-              `Are you sure you want to resend the email change verification to ${confirmModal.pendingEmail}?`}
-          </Typography>
-          {needsReason && (
-            <Box sx={{ mt: 2 }}>
-              <ReasonPicker
-                presets={ADMIN_REASON_PRESETS.emailVerification}
-                value={reason}
-                onChange={setReason}
-                data-testid="email-verification-reason-input"
-              />
-            </Box>
-          )}
-          <Stack direction="row" spacing={2} justifyContent="flex-end" sx={{ mt: 3 }}>
-            <Button variant="outlined" color="neutral" onClick={closeConfirmModal}>
-              Cancel
-            </Button>
+    <Stack gap={ADMIN_REGION_GAP} sx={{ minWidth: 0 }} data-testid="admin-email-verification-tab">
+      <AdminPageHeader
+        title="Email verification"
+        count={users.data ? totalCount : undefined}
+        description="Accounts by email verification state. Resend a link, or verify an address by hand."
+        actions={
+          <>
+            <ContextHelpButton helpId="admin/email-verification" tooltipText="Email verification help" />
             <Button
-              color={confirmModal.type === 'unverify' ? 'danger' : 'primary'}
-              onClick={handleConfirmAction}
-              disabled={needsReason && !isAdminReasonComplete(reason)}
-              loading={
-                resendVerification.isPending ||
-                verifyEmail.isPending ||
-                unverifyEmail.isPending ||
-                resendEmailChange.isPending
-              }
+              variant="plain"
+              size="sm"
+              startDecorator={<RefreshIcon sx={{ fontSize: 16 }} />}
+              disabled={users.isFetching}
+              onClick={() => void users.refetch()}
+              data-testid="email-verification-refresh-btn"
+              sx={adminFocus}
             >
-              {confirmModal.type === 'resend' && 'Yes, Resend'}
-              {confirmModal.type === 'verify' && 'Yes, Verify'}
-              {confirmModal.type === 'unverify' && 'Yes, Unverify'}
-              {confirmModal.type === 'resend-email-change' && 'Yes, Resend'}
+              Refresh
             </Button>
-          </Stack>
-        </ModalDialog>
-      </Modal>
-    </Sheet>
+          </>
+        }
+      />
+
+      <FilterBar
+        state={filterState}
+        filters={[{ id: 'status', label: 'Status', options: STATUS_FILTER_OPTIONS }]}
+        onChange={changeFilters}
+        searchLabel="Search by username, email or name"
+      />
+
+      <Stack gap={1} sx={{ minWidth: 0 }}>
+        <UpdatingBar active={users.isFetching && !users.isPending} testId="email-verification-updating-bar" />
+        <DataTable
+          label="Email verification"
+          testId="email-verification-table"
+          rows={rows}
+          columns={COLUMNS}
+          getRowId={user => user._id}
+          rowTestId={user => `email-verification-row-${user._id}`}
+          loading={users.isPending}
+          error={users.isError ? errorText(users.error) : undefined}
+          onRetry={() => void users.refetch()}
+          empty={
+            hasFilters ? (
+              <EmptyState
+                title="No accounts match these filters"
+                action={
+                  <Button variant="outlined" onClick={clearFilters} data-testid="email-verification-empty-clear-btn">
+                    Clear filters
+                  </Button>
+                }
+              />
+            ) : (
+              <EmptyState
+                title="No accounts to show"
+                action={
+                  <Button
+                    variant="outlined"
+                    onClick={() => void users.refetch()}
+                    data-testid="email-verification-empty-refresh-btn"
+                  >
+                    Refresh
+                  </Button>
+                }
+              />
+            )
+          }
+          pagination={{
+            page: currentPage,
+            pageSize,
+            total: totalCount,
+            onPageChange: setCurrentPage,
+            onPageSizeChange: size => {
+              setPageSize(size);
+              setCurrentPage(1);
+            },
+          }}
+          rowActions={user => (
+            <RowMenu
+              user={user}
+              resending={resendingIds.has(user._id)}
+              onCommand={(command, row) => void runCommand(command, row)}
+            />
+          )}
+          minWidth="62rem"
+          maxHeight="none"
+        />
+      </Stack>
+
+      <ActionDialog
+        open={dialog !== null}
+        onClose={() => setDialog(null)}
+        title={unverifying ? 'Unverify email' : 'Verify email'}
+        description={
+          dialog &&
+          (unverifying ? (
+            <>
+              <strong>{dialog.user.username}</strong> ({dialog.user.email}) will have to verify this address again.
+            </>
+          ) : (
+            <>
+              Marks <strong>{dialog.user.email}</strong> as verified for {dialog.user.username} without the link being
+              clicked.
+            </>
+          ))
+        }
+        reasonPresets={unverifying ? ADMIN_REASON_PRESETS.emailVerification : ADMIN_REASON_PRESETS.emailManualVerify}
+        confirmLabel={unverifying ? 'Unverify email' : 'Verify email'}
+        tone={unverifying ? 'danger' : 'neutral'}
+        onConfirm={confirmDialog}
+        data-testid={unverifying ? 'email-unverify-dialog' : 'email-verify-dialog'}
+      />
+    </Stack>
   );
 };
 

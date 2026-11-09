@@ -15,6 +15,7 @@ import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/err
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { respond } from '@server/utils/respond';
+import { unpublishUserArtifactsBySource } from '@server/services/publish/purgeUserPublishedArtifacts';
 
 // Reading history is not a metered action; only the per-minute burst limit applies.
 const getHandler = nextRouteForContract(getSessionMessageContract, { exemptReadsFromDailyRateLimit: true }).get(
@@ -116,14 +117,46 @@ const putHandler = nextRouteForContract(updateSessionMessageContract).put(async 
 
 const deleteHandler = nextRouteForContract(deleteSessionMessageContract).delete(async (req, res) => {
   const { id: sessionId, messageId } = req.validatedParams;
-  await withTransaction(async () => {
-    await sessionService.deleteSessionMessage(
-      req.user.id,
+  const userId = req.user.id;
+
+  // Take published replies down before the delete, so a failed take-down fails the request while a
+  // retry can still find the message (a re-DELETE of a deleted message 404s). Same order as the
+  // delete-all-notebooks route in pages/api/sessions/index.ts.
+  const ownedSession = await sessionRepository.findByIdAndUserId(sessionId, userId);
+  const target = ownedSession ? await questRepository.findBySessionIdAndId(ownedSession.id, messageId) : null;
+  if (ownedSession && target) {
+    await unpublishUserArtifactsBySource(
+      userId,
+      { kind: 'replyMessage', sessionId: ownedSession.id, messageIds: [target.id] },
+      { logger: req.logger }
+    );
+  }
+
+  const deleted = await withTransaction(async () => {
+    const deletedMessage = await sessionService.deleteSessionMessage(
+      userId,
       { sessionId, messageId },
       { db: { sessions: sessionRepository, chatHistories: questRepository } }
     );
     await sessionRepository.update({ id: sessionId, updatedAt: new Date() });
+    return deletedMessage;
   });
+
+  // A reply publish that read the message before the delete committed can land its page after the
+  // take-down above, so sweep once more; publish/reply.ts re-checks the message after its own write.
+  try {
+    await unpublishUserArtifactsBySource(
+      userId,
+      { kind: 'replyMessage', sessionId: deleted.sessionId, messageIds: [deleted.id] },
+      { logger: req.logger }
+    );
+  } catch (error) {
+    req.logger.error('[PUBLISH] failed to take down replies published from a deleted message', {
+      error,
+      sessionId: deleted.sessionId,
+      messageId: deleted.id,
+    });
+  }
   return res.json({ msg: 'Message deleted' });
 });
 

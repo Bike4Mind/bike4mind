@@ -1,6 +1,7 @@
 export * from './types';
 export * from './defineEndpoint';
 export * from './deprecation';
+export * from './clientVersion';
 export { chatContract } from './contracts/chat.contract';
 export { startAgentExecutionContract, getAgentExecutionContract } from './contracts/agentExecutions.contract';
 export { sessionUpdateContract } from './contracts/sessionUpdate.contract';
@@ -13,6 +14,7 @@ export { synthesizeSpeechContract } from './contracts/tts.contract';
 export { generateMusicContract } from './contracts/music.contract';
 export { generateSoundEffectContract } from './contracts/soundEffects.contract';
 export { getMeContract } from './contracts/me.contract';
+export { getClientConfigContract } from './contracts/clientConfig.contract';
 export { registerPushTokenContract, unregisterPushTokenContract } from './contracts/pushTokens.contract';
 export { getCreditBalanceContract } from './contracts/credits.contract';
 export { listModelsContract } from './contracts/models.contract';
@@ -97,6 +99,14 @@ export {
   addProjectSessionsContract,
   removeProjectSessionContract,
 } from './contracts/projectContent.contract';
+export {
+  removeProjectMemberContract,
+  listProjectInvitesContract,
+  createProjectInviteContract,
+  addProjectSystemPromptsContract,
+  updateProjectSystemPromptContract,
+  removeProjectSystemPromptContract,
+} from './contracts/projectSharing.contract';
 export {
   listAgentsContract,
   getAgentContract,

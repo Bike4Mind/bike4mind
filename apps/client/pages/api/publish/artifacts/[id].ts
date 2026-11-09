@@ -11,6 +11,7 @@ import {
   normalizePublishTags,
 } from '@bike4mind/common';
 import {
+  loadLiveOwner,
   resolveVisibility,
   invalidatePublishCdn,
   restrictDuplicatePublications,
@@ -22,7 +23,7 @@ import { deletePublishThumbnails } from '@bike4mind/server-utils/utils/publishTh
 
 /**
  * /api/publish/artifacts/[id] - manage one published artifact by its publicId.
- *   GET    -> full record (owner/admin, or anyone if public)
+ *   GET    -> full record (owner/admin, or anyone if public and the owner is active)
  *   PATCH  -> update title/description/visibility/commentPolicy (owner/admin)
  *   DELETE -> soft-delete / archive (owner/admin)
  */
@@ -132,6 +133,11 @@ const handler = baseApi()
     // who merely knows the publicId - the gate is enforced on the serve path, so
     // treat it as not-found here (indistinguishable from a private artifact).
     if (artifact.visibility === 'public' && artifact.accessGate && !isManager) {
+      return res.status(404).json({ error: 'Artifact not found' });
+    }
+    // Nothing is served to other viewers on behalf of a deleted, banned or suspended account -
+    // the same plain 404 as the gate above, matching the serve route.
+    if (!isManager && !(await loadLiveOwner(artifact.ownerId))) {
       return res.status(404).json({ error: 'Artifact not found' });
     }
     // Owner/admin get the full record (the manage modal needs it); any other viewer

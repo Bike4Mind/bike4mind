@@ -103,6 +103,10 @@ export type UserTimelineSpendEntry = UserTimelineEntryBase & {
   apiKeyId?: string;
   /** The oldest charge in the group. */
   firstAt: Date;
+  /** The request a single-charge group paid for, which opens its usage receipt; absent on a multi-charge group. */
+  requestId?: string;
+  /** Cost the balance could not cover on capped turns; `credits` is what was charged. */
+  writtenOffCredits?: number;
   /** Balance right after the newest charge; absent when it could not be derived. */
   balanceAfter?: number;
   /** True when the hour held more charges than one read covers, so the totals are a lower bound. */

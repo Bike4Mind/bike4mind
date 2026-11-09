@@ -1,13 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, waitFor } from '@testing-library/react';
 
-const { mockGet, mockTrackPurchaseConversion } = vi.hoisted(() => ({
+const { mockGet, mockTrackPurchaseConversion, mockBootstrapSession, tokenState } = vi.hoisted(() => ({
   mockGet: vi.fn(),
   mockTrackPurchaseConversion: vi.fn(),
+  mockBootstrapSession: vi.fn(),
+  tokenState: { accessToken: 'token' as string | null },
 }));
 
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: mockGet } }));
 vi.mock('@client/app/utils/purchaseConversion', () => ({ trackPurchaseConversion: mockTrackPurchaseConversion }));
+vi.mock('@client/app/utils/sessionBootstrap', () => ({ bootstrapSession: mockBootstrapSession }));
+vi.mock('@client/app/hooks/useAccessToken', () => ({ useAccessToken: { getState: () => tokenState } }));
+
+const settle = () => new Promise(resolve => setTimeout(resolve, 0));
 
 import { consumeBillingCheckoutReturn } from '@client/app/utils/billingCheckoutReturn';
 import StripePaymentReturnHandler, { reportCreditPurchaseConversion } from './StripePaymentReturnHandler';
@@ -35,13 +41,35 @@ describe('StripePaymentReturnHandler', () => {
     vi.clearAllMocks();
     window.sessionStorage.clear();
     mockGet.mockResolvedValue({ data: FACTS });
+    mockBootstrapSession.mockResolvedValue(undefined);
+    tokenState.accessToken = 'token';
   });
 
   it('reports a succeeded credit purchase with the facts the server read from Stripe', async () => {
     returnTo(STRIPE_RETURN);
 
-    expect(mockGet).toHaveBeenCalledExactlyOnceWith('/api/stripe/payment-intent', { params: { id: 'pi_test_1' } });
     await waitFor(() => expect(mockTrackPurchaseConversion).toHaveBeenCalledExactlyOnceWith(FACTS));
+    expect(mockGet).toHaveBeenCalledExactlyOnceWith('/api/stripe/payment-intent', { params: { id: 'pi_test_1' } });
+  });
+
+  it('waits for the cold-load session bootstrap before the lookup', async () => {
+    let finishBootstrap!: () => void;
+    mockBootstrapSession.mockReturnValue(new Promise<void>(resolve => (finishBootstrap = resolve)));
+    returnTo(STRIPE_RETURN);
+
+    await settle();
+    expect(mockGet).not.toHaveBeenCalled();
+
+    finishBootstrap();
+    await waitFor(() => expect(mockGet).toHaveBeenCalledOnce());
+  });
+
+  it('skips the lookup and releases the claim when no session was restored', async () => {
+    tokenState.accessToken = null;
+    returnTo(STRIPE_RETURN);
+
+    await waitFor(() => expect(window.sessionStorage.getItem('b4m-reported-checkout-sessions')).toBe('[]'));
+    expect(mockGet).not.toHaveBeenCalled();
   });
 
   it("strips Stripe's params, the client secret included, and keeps the rest of the URL", () => {
@@ -118,6 +146,7 @@ describe('StripePaymentReturnHandler', () => {
     await waitFor(() => expect(mockTrackPurchaseConversion).toHaveBeenCalledExactlyOnceWith(FACTS));
 
     returnTo(STRIPE_RETURN);
+    await settle();
     expect(mockGet).toHaveBeenCalledTimes(2);
     expect(mockTrackPurchaseConversion).toHaveBeenCalledOnce();
   });

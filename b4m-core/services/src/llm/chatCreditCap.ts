@@ -154,6 +154,8 @@ export type BeginRoundParams = {
 export class TurnCreditLimiter {
   /** Set once the turn was stopped (a round it could not afford, or a stream that ran past the limit). */
   stoppedForCredits = false;
+  /** The lowest output budget the balance set below a round's own ceiling; undefined while the cap never bound. */
+  cappedOutputTokens: number | undefined;
 
   private roundModel: ModelInfo | null = null;
   private roundCommittedCredits = 0;
@@ -185,6 +187,9 @@ export class TurnCreditLimiter {
       minimumOutputTokens: Math.max(1, Math.min(MIN_AFFORDABLE_OUTPUT_TOKENS, params.maxOutputTokens)),
     });
     if (!budget.affordable) this.stoppedForCredits = true;
+    else if (budget.outputTokens < params.maxOutputTokens) {
+      this.cappedOutputTokens = Math.min(this.cappedOutputTokens ?? budget.outputTokens, budget.outputTokens);
+    }
     return budget;
   }
 
