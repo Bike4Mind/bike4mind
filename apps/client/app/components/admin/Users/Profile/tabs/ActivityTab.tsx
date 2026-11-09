@@ -6,6 +6,7 @@ import {
   USER_TIMELINE_CATEGORY_LABELS,
   USER_TIMELINE_TYPES,
   API_REQUEST_LOG_COVERAGE,
+  type AdminUsageReceiptQuery,
   type AuditEntry,
 } from '@bike4mind/common';
 import { useUserTimeline } from '@client/app/hooks/data/adminUserTimeline';
@@ -21,6 +22,7 @@ import {
 } from '../activitySearch';
 import { TimelineList, TimelineSkeleton } from './TimelineList';
 import { timelineItems } from './timelineItems';
+import { UsageReceiptDrawer } from './credits/UsageReceiptDrawer';
 
 export const CATEGORY_OPTIONS = USER_TIMELINE_CATEGORIES.map(category => ({
   value: category,
@@ -48,12 +50,14 @@ export const ActivityTimeline: React.FC<ActivityTimelineProps> = ({
 }) => {
   const timeline = useUserTimeline(userId, filters);
   const [selected, setSelected] = useState<AuditEntry | null>(null);
+  const [receipt, setReceipt] = useState<AdminUsageReceiptQuery | null>(null);
   const items = useMemo(
     () =>
       timelineItems(timeline.data?.pages.flatMap(page => page.entries) ?? [], {
         onOpenAudit: setSelected,
         onOpenCredits,
         onOpenApiRequests,
+        onOpenReceipt: setReceipt,
       }),
     [timeline.data, onOpenCredits, onOpenApiRequests]
   );
@@ -168,6 +172,7 @@ export const ActivityTimeline: React.FC<ActivityTimelineProps> = ({
         )}
       </SectionCard>
       <AuditEntryDrawer entry={selected} onClose={() => setSelected(null)} />
+      <UsageReceiptDrawer userId={userId} target={receipt} onClose={() => setReceipt(null)} />
     </>
   );
 };

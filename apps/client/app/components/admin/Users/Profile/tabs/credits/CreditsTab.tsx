@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Box, Button, Stack, Typography } from '@mui/joy';
+import { Box, Button, Link, Stack, Typography } from '@mui/joy';
 import FileDownloadOutlinedIcon from '@mui/icons-material/FileDownloadOutlined';
 import { toast } from 'sonner';
 import {
@@ -7,6 +7,7 @@ import {
   isContiguousLedgerFilter,
   type AdminCreditSummary,
   type AdminLedgerRow,
+  type AdminUsageReceiptQuery,
 } from '@bike4mind/common';
 import {
   fetchCreditLedgerExport,
@@ -30,6 +31,7 @@ import type { AdminUserProfile } from '../../userProfileModel';
 import { LedgerFilterBar } from './LedgerFilterBar';
 import { SignupGrantPendingCard } from './SignupGrantPendingCard';
 import { SpendBreakdownChart, SpendChart } from './SpendChart';
+import { UsageReceiptDrawer } from './UsageReceiptDrawer';
 import {
   EMPTY_LEDGER_FILTER,
   LEDGER_FILTER_OPTIONS,
@@ -90,7 +92,23 @@ const CodeText: React.FC<{ text: string; title?: string }> = ({ text, title = te
   </Box>
 );
 
-const LEDGER_COLUMNS: readonly DataColumn<AdminLedgerRow>[] = [
+/** A request id that opens its usage receipt. */
+const ReceiptLink: React.FC<{ id: string; title: string; onOpen: () => void }> = ({ id, title, onOpen }) => (
+  <Link
+    component="button"
+    level="body-sm"
+    title={`${title}\nOpen the usage receipt`}
+    onClick={onOpen}
+    data-testid="user-credits-receipt-link"
+    sx={{ display: 'block', maxWidth: '100%', fontFamily: 'code', fontSize: 12, textAlign: 'left' }}
+  >
+    <Box component="span" sx={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+      {id}
+    </Box>
+  </Link>
+);
+
+const ledgerColumns = (openReceipt: (target: AdminUsageReceiptQuery) => void): DataColumn<AdminLedgerRow>[] => [
   {
     id: 'when',
     label: 'When',
@@ -125,11 +143,22 @@ const LEDGER_COLUMNS: readonly DataColumn<AdminLedgerRow>[] = [
     id: 'request',
     label: 'Request',
     render: row => {
+      const open = (requestId: string) => () => openReceipt({ requestId, at: row.createdAt });
       if (row.requestId) {
         const session = row.sessionId ? `\nSession id: ${row.sessionId}` : '';
-        return <CodeText text={row.requestId} title={`API request id: ${row.requestId}${session}`} />;
+        return (
+          <ReceiptLink
+            id={row.requestId}
+            title={`API request id: ${row.requestId}${session}`}
+            onOpen={open(row.requestId)}
+          />
+        );
       }
-      if (row.questId) return <CodeText text={row.questId} title={`Chat message (quest) id: ${row.questId}`} />;
+      if (row.questId) {
+        return (
+          <ReceiptLink id={row.questId} title={`Chat message (quest) id: ${row.questId}`} onOpen={open(row.questId)} />
+        );
+      }
       return DASH;
     },
   },
@@ -144,6 +173,15 @@ const LEDGER_COLUMNS: readonly DataColumn<AdminLedgerRow>[] = [
         sx={{ color: row.credits > 0 ? 'admin.status.good.foreground' : 'admin.ink', fontWeight: 500 }}
       >
         {formatCreditDelta(row.credits)}
+        {row.writtenOffCredits ? (
+          <Box
+            component="span"
+            data-testid="user-credits-written-off"
+            sx={{ display: 'block', fontSize: 12, fontWeight: 400, color: 'admin.inkMuted', whiteSpace: 'nowrap' }}
+          >
+            charged, {formatCredits(row.writtenOffCredits)} written off
+          </Box>
+        ) : null}
       </Box>
     ),
   },
@@ -186,7 +224,15 @@ const SummaryStrip: React.FC<{ summary: AdminCreditSummary | undefined; balance:
     <StatTile
       label="Spent, 30 days"
       value={summary ? formatCredits(summary.spent.last30d) : DASH}
-      comparison={summary ? `${CREDITS_PER_DAY_FORMAT.format(summary.spent.last30d / 30)} a day on average` : undefined}
+      comparison={
+        <span data-testid="user-credits-spent-30d-comparison">
+          {!summary
+            ? DASH
+            : summary.writtenOff.last30d > 0
+              ? `Charged; ${formatCredits(summary.writtenOff.last30d)} more written off`
+              : `${CREDITS_PER_DAY_FORMAT.format(summary.spent.last30d / 30)} a day on average`}
+        </span>
+      }
     />
     <StatTile
       label="Top model, 30 days"
@@ -317,6 +363,8 @@ export const CreditsTab: React.FC<{ user: AdminUserProfile; onAdjust: () => void
   );
   const rows = useMemo(() => ledger.data?.pages.flatMap(page => page.rows) ?? [], [ledger.data]);
   const [exporting, setExporting] = useState(false);
+  const [receipt, setReceipt] = useState<AdminUsageReceiptQuery | null>(null);
+  const columns = useMemo(() => ledgerColumns(setReceipt), []);
 
   const exportCsv = async () => {
     setExporting(true);
@@ -394,7 +442,7 @@ export const CreditsTab: React.FC<{ user: AdminUserProfile; onAdjust: () => void
         <LedgerFilterBar value={filter} onChange={setFilter} modelOptions={modelOptions} />
         <DataTable
           rows={rows}
-          columns={LEDGER_COLUMNS}
+          columns={columns}
           getRowId={row => row.id}
           label="Credit ledger"
           loading={ledger.isLoading}
@@ -440,6 +488,7 @@ export const CreditsTab: React.FC<{ user: AdminUserProfile; onAdjust: () => void
           </Stack>
         )}
       </SectionCard>
+      <UsageReceiptDrawer userId={user.id} target={receipt} onClose={() => setReceipt(null)} />
     </Stack>
   );
 };

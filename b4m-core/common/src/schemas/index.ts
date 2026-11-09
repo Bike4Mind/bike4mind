@@ -25,6 +25,7 @@ export * from './mcpServer';
 export * from './identityProvider';
 export * from './userApiKeyResponse';
 export * from './adminUserCredits';
+export * from './adminUsageReceipt';
 export * from './adminSignupGrantPending';
 export * from './adminUserRisk';
 export * from './emailVerificationResponse';

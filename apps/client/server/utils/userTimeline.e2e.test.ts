@@ -34,6 +34,8 @@ const subject: TimelineSubject = {
 const T = (second: number) => new Date(Date.UTC(2026, 9, 20, 12, 0, second));
 const idAt = (second: number, suffix: string) =>
   new Types.ObjectId(Math.floor(T(second).getTime() / 1000).toString(16) + suffix);
+const WEB_NOTEBOOK_ID = idAt(50, 'ffffffffffffffd1');
+const AGENT_NOTEBOOK_ID = idAt(12, '00000000000000d2');
 
 let server: MongoMemoryServer;
 
@@ -152,7 +154,7 @@ beforeEach(async () => {
   await Session.collection.insertMany([
     // Ties with the login at T(50); its id is larger, so it sorts first.
     {
-      _id: idAt(50, 'ffffffffffffffd1'),
+      _id: WEB_NOTEBOOK_ID,
       name: 'Quarterly plan',
       userId: USER_ID,
       lastUpdated: T(50),
@@ -160,7 +162,7 @@ beforeEach(async () => {
       origin: { channel: 'web' },
     },
     {
-      _id: idAt(12, '00000000000000d2'),
+      _id: AGENT_NOTEBOOK_ID,
       name: 'Nightly job',
       userId: USER_ID,
       lastUpdated: T(12),
@@ -193,14 +195,14 @@ beforeEach(async () => {
 
 // Newest first, ties broken by id descending.
 const EXPECTED = [
-  'session:Quarterly plan',
+  `session:${WEB_NOTEBOOK_ID}`,
   'signin:login_success',
   'key:mint',
   'credit:purchase',
   'signin:step_up_failed',
   'credit:subscription',
   'admin:user.credits.adjusted',
-  'session:Nightly job',
+  `session:${AGENT_NOTEBOOK_ID}`,
   'signin:logout',
   'key:revoke',
 ];
@@ -208,7 +210,7 @@ const EXPECTED = [
 const label = (entry: UserTimelineEntry): string => {
   switch (entry.type) {
     case 'usage':
-      return `session:${entry.summary.match(/"(.*)"/)?.[1]}`;
+      return `session:${entry.notebookId}`;
     case 'credit':
       return `credit:${entry.transactionType}`;
     case 'signin':
@@ -250,9 +252,9 @@ describe('listUserTimeline against a real database', () => {
   it('filters by source', async () => {
     expect((await readAll(['credit'], 1)).map(label)).toEqual(['credit:purchase', 'credit:subscription']);
     expect((await readAll(['usage', 'key'], 2)).map(label)).toEqual([
-      'session:Quarterly plan',
+      `session:${WEB_NOTEBOOK_ID}`,
       'key:mint',
-      'session:Nightly job',
+      `session:${AGENT_NOTEBOOK_ID}`,
       'key:revoke',
     ]);
   });
@@ -274,7 +276,9 @@ describe('listUserTimeline against a real database', () => {
     expect(summaries['signin:login_success']).toBe('Signed in with Google');
     expect(summaries['key:mint']).toBe('Created API key CI key');
     expect(summaries['credit:purchase']).toBe('Bought credits: +5,000 credits');
-    expect(summaries['session:Nightly job']).toBe('Agent run started "Nightly job"');
+    expect(summaries[`session:${WEB_NOTEBOOK_ID}`]).toBe('Started a notebook');
+    expect(summaries[`session:${AGENT_NOTEBOOK_ID}`]).toBe('Started an agent run');
+    expect(JSON.stringify(entries)).not.toMatch(/Quarterly plan|Nightly job|Not theirs/);
   });
 
   it('serves credit events from the partial index', async () => {
