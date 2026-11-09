@@ -8,7 +8,7 @@ type SeedRequest = Parameters<typeof requireAdminPermission>[0];
  * What a delegated admin may give an account it creates, so the create routes cannot grant more
  * than the dedicated actions would: the admin role follows assertCanGrantAdminAccess, credits need
  * credits:adjust, and managed role/product tags stay full-admin only, as in the tag editor
- * (`pages/api/admin/users/[userId]/tags.ts`).
+ * (`pages/api/admin/users/[userId]/tags.ts`). Storage limits are not covered by this check.
  */
 export function assertCanSeedAccount(
   req: SeedRequest,
