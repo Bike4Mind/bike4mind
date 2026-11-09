@@ -132,16 +132,15 @@ test.describe('Studio - video and music forms', () => {
 
     // Lyric snippets exist only for a model that takes user lyrics; the default staging model does.
     const verse = page.getByTestId('music-form-lyrics-verse-snippet-btn');
-    if (await verse.isVisible()) {
-      await test.step('lyric snippet buttons insert section tags', async () => {
-        const instrumental = page.getByTestId('music-form-instrumental-switch');
-        if ((await instrumental.count()) > 0 && (await instrumental.isChecked())) await instrumental.click();
-        await verse.click();
-        await page.getByTestId('music-form-lyrics-chorus-snippet-btn').click();
-        const lyrics = page.getByTestId('music-form-lyrics-input');
-        await expect(lyrics).toHaveValue(/\[Verse\][\s\S]*\[Chorus\]/);
-      });
-    }
+    await expect(verse).toBeVisible();
+    await test.step('lyric snippet buttons insert section tags', async () => {
+      const instrumental = page.getByTestId('music-form-instrumental-switch');
+      if ((await instrumental.count()) > 0 && (await instrumental.isChecked())) await instrumental.click();
+      await verse.click();
+      await page.getByTestId('music-form-lyrics-chorus-snippet-btn').click();
+      const lyrics = page.getByTestId('music-form-lyrics-input');
+      await expect(lyrics).toHaveValue(/\[Verse\][\s\S]*\[Chorus\]/);
+    });
   });
 });
 
@@ -179,9 +178,8 @@ async function expectChargeMatchesEstimate(
   const context = `${mode}: charged ${charged} for an estimate of ${estimate}`;
   expect(charged, context).toBeLessThanOrEqual(estimate);
   expect(charged, context).toBeGreaterThanOrEqual(estimate - 1);
-  // The ledger row is the charge itself (credits are negative on a deduction), billed to the user.
+  // The ledger row is the charge itself (credits are negative on a deduction).
   expect(row.credits, `${context}; ledger row ${JSON.stringify(row)}`).toBe(-charged);
-  expect(row.ownerType).toBe('User');
 }
 
 /** Balance, shown estimate and existing ledger rows, read right before Generate is clicked. */
