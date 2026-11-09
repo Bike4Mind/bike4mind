@@ -5,6 +5,7 @@ import {
   isClaudeModelId,
   REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS,
   REASONING_SUPPORTED_MODELS,
+  RESPONSES_API_TOOL_MODELS,
   supportedChatModels,
 } from './models';
 import { settingsMap } from './schemas/settings';
@@ -75,9 +76,21 @@ describe('gpt-5 dated snapshot', () => {
   });
 
   it('is in the same reasoning sets as the alias', () => {
-    for (const set of [REASONING_SUPPORTED_MODELS, REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS]) {
+    for (const set of [
+      REASONING_SUPPORTED_MODELS,
+      REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS,
+      RESPONSES_API_TOOL_MODELS,
+    ]) {
       expect(set.has(ChatModels.GPT5_2025_08_07)).toBe(true);
       expect(set.has(ChatModels.GPT5)).toBe(true);
     }
   });
+
+  it.each(['DefaultAPIModel', 'EmailAnalysisModel'] as const)(
+    '%s setting rejects the snapshot and accepts the alias',
+    key => {
+      expect(settingsMap[key].schema.safeParse(ChatModels.GPT5_2025_08_07).success).toBe(false);
+      expect(settingsMap[key].schema.safeParse(ChatModels.GPT5).success).toBe(true);
+    }
+  );
 });
