@@ -64,6 +64,8 @@ const RatioChip: React.FC<{ credits: number; cogsUsd: number; target: number }> 
 };
 
 const numberCell = { fontVariantNumeric: 'tabular-nums' } as const;
+// Model ids only break at hyphens; without this a long id spills into the next column.
+const idCell = { overflowWrap: 'anywhere' } as const;
 
 // The server error envelope puts the human-readable reason in data.error
 // (see server/middlewares/errorHandler.ts); data.message and err.message
@@ -287,8 +289,8 @@ export const MarginDashboard: React.FC = () => {
                       <tr key={`${row.day}-${row.provider}-${row.model}-${executedProvider}-${executedModel}`}>
                         <td>{row.day}</td>
                         <td>{row.provider}</td>
-                        <td>{row.model}</td>
-                        <td data-testid="margin-executed-model-cell">
+                        <td style={idCell}>{row.model}</td>
+                        <td style={idCell} data-testid="margin-executed-model-cell">
                           {substituted ? (
                             `${executedProvider} / ${executedModel}`
                           ) : (
