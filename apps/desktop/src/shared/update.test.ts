@@ -226,12 +226,22 @@ describe('isBusy / describeBusy', () => {
     expect(isBusy({ ...quiet, replying: 1 })).toBe(true);
     expect(isBusy({ ...quiet, awaitingApproval: 1 })).toBe(true);
     expect(isBusy({ ...quiet, background: 1 })).toBe(true);
+    expect(isBusy({ ...quiet, terminals: 1 })).toBe(true);
+    expect(isBusy({ ...quiet, modelDownloads: 1 })).toBe(true);
+    expect(isBusy({ ...quiet, modelServers: 1 })).toBe(true);
+    expect(isBusy({ ...quiet, terminals: 0, modelDownloads: 0, modelServers: 0 })).toBe(false);
   });
 
   it('reads as a sentence, singular and plural', () => {
     expect(describeBusy(quiet)).toBe('Nothing is running.');
     expect(describeBusy({ ...quiet, replying: 1 })).toBe('1 session is still working.');
     expect(describeBusy({ ...quiet, background: 2 })).toBe('2 background processes are running.');
+    expect(describeBusy({ ...quiet, terminals: 1 })).toBe('1 terminal session is open.');
+    expect(describeBusy({ ...quiet, terminals: 2 })).toBe('2 terminal sessions are open.');
+    expect(describeBusy({ ...quiet, modelDownloads: 1 })).toBe('1 model download is active.');
+    expect(describeBusy({ ...quiet, modelDownloads: 2 })).toBe('2 model downloads are active.');
+    expect(describeBusy({ ...quiet, modelServers: 1 })).toBe('1 model server is running.');
+    expect(describeBusy({ ...quiet, modelServers: 2 })).toBe('2 model servers are running.');
     expect(describeBusy({ replying: 2, awaitingApproval: 1, background: 3 })).toBe(
       '2 sessions are still working, 1 session is waiting for you and 3 background processes are running.'
     );

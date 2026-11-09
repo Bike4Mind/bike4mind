@@ -423,6 +423,10 @@ export class ModelServerRegistry {
     return this.supervisor.stopAll();
   }
 
+  runningLocalServerCount(): number {
+    return this.supervisor.runningCount();
+  }
+
   /** Tests an address or SSH destination without saving it. */
   async probe(input: ModelServerProbeInput): Promise<ModelServerProbeResult> {
     if (input.transport === 'ssh') return this.probeSsh(input);
