@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { CREDIT_PACKAGES } from '@client/lib/credits/constants';
@@ -8,13 +8,35 @@ import { SUBSCRIPTION_PLANS, TEAM_PLAN } from '@bike4mind/server-utils/lib/userS
 // Read at render time, so a test can seed the stored platform rows.
 let serverSettings: { settingName: string; settingValue: unknown }[] | undefined = [];
 let settingsLoading = false;
+let settingsError = false;
+type BlockerOptions = {
+  enableBeforeUnload: boolean;
+  shouldBlockFn(args: {
+    current: { pathname: string; search: object };
+    next: { pathname: string; search: object };
+  }): boolean;
+};
+const mocks = vi.hoisted(() => ({
+  mutateAsync: vi.fn(),
+  refetch: vi.fn(),
+  useBlocker: vi.fn<(options: BlockerOptions) => { status: string }>(() => ({ status: 'idle' })),
+}));
 vi.mock('@client/app/hooks/data/settings', () => ({
-  useSettingsFromServer: () => ({ data: serverSettings, isLoading: settingsLoading }),
-  useUpdateSettings: () => ({ mutate: vi.fn(), isPending: false, error: null }),
+  useSettingsFromServer: () => ({
+    data: serverSettings,
+    isLoading: settingsLoading,
+    isError: settingsError,
+    isFetching: false,
+    refetch: mocks.refetch,
+  }),
+  useUpdateSettings: () => ({ mutate: vi.fn(), mutateAsync: mocks.mutateAsync, isPending: false, error: null }),
   useFloorAboveMeasuredWarning: () => undefined,
 }));
 vi.mock('./ScopedSettingOverrides', () => ({ default: () => null }));
-vi.mock('@tanstack/react-router', async () => (await import('./__tests__/fakeAdminRouter')).fakeRouterModule);
+vi.mock('@tanstack/react-router', async () => ({
+  ...(await import('./__tests__/fakeAdminRouter')).fakeRouterModule,
+  useBlocker: mocks.useBlocker,
+}));
 
 import { MIN_PRICE_PER_CREDIT_USD, formatUsdAmount, formatUsdPerCredit, settingsMap } from '@bike4mind/common';
 import { fakeAdminRouter } from './__tests__/fakeAdminRouter';
@@ -41,9 +63,18 @@ const renderTab = () =>
     </TestWrapper>
   );
 
+const lastBlocker = () => mocks.useBlocker.mock.lastCall?.[0];
+
+const ALL_KEYS = GROWTH_PRICING_SECTIONS.flatMap(section => section.keys);
+
 beforeEach(() => {
   serverSettings = [];
   settingsLoading = false;
+  settingsError = false;
+  mocks.mutateAsync.mockReset().mockResolvedValue({});
+  mocks.refetch.mockReset();
+  mocks.useBlocker.mockClear();
+  useAdminModal.getState().setTabChangeGuard(null);
   fakeAdminRouter.reset({ tab: 'growth-pricing' });
   useCreditAnalysisStore.setState({ activeTab: 'users' });
   useAdminModal.setState({ activeTab: AdminTab.GrowthPricing });
@@ -77,8 +108,94 @@ describe('AdminGrowthPricingTab', () => {
       ])
     );
     for (const key of keys) {
-      expect(screen.getByTestId(`admin-setting-${key}-save-btn`)).toBeTruthy();
+      expect(screen.getByTestId(`admin-setting-${key}-helper`)).toBeTruthy();
     }
+  });
+
+  it('opens with the page header', () => {
+    renderTab();
+
+    const tab = screen.getByTestId('admin-growth-pricing-tab');
+    const header = screen.getByTestId('admin-page-header');
+    expect(tab.firstElementChild).toBe(header);
+    expect(within(header).getByRole('heading', { level: 1 }).textContent).toBe('Growth and pricing');
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    expect(tab).toHaveStyle({ maxWidth: '1280px' });
+  });
+
+  it('renders each group as a section, never a card inside a card', () => {
+    renderTab();
+
+    const tab = screen.getByTestId('admin-growth-pricing-tab');
+    for (const id of [...GROWTH_PRICING_SECTIONS.map(section => section.id), 'related']) {
+      const section = screen.getByTestId(`admin-growth-pricing-section-${id}`);
+      expect(section.tagName).toBe('SECTION');
+      expect(section.closest('.MuiCard-root')).toBeNull();
+    }
+    // The editor rows still draw their own card (AdminSettingInputField); none may sit in another card.
+    for (const card of tab.querySelectorAll('.MuiCard-root')) {
+      expect(card.parentElement?.closest('.MuiCard-root')).toBeNull();
+    }
+    for (const section of GROWTH_PRICING_SECTIONS) {
+      expect(
+        within(screen.getByTestId(`admin-growth-pricing-section-${section.id}`)).getByRole('heading', { level: 2 })
+          .textContent
+      ).toBe(section.title);
+    }
+  });
+
+  it('saves the page through one SaveBar instead of a Save button per field', async () => {
+    renderTab();
+
+    for (const key of ALL_KEYS) {
+      expect(screen.queryByTestId(`admin-setting-${key}-save-btn`)).toBeNull();
+    }
+    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
+
+    fireEvent.change(screen.getByTestId('admin-setting-teamPlanMaxSeats-input'), { target: { value: '300' } });
+    expect(screen.getAllByTestId('admin-save-bar')).toHaveLength(1);
+    expect(screen.getByTestId('admin-save-bar').textContent).toContain('1 unsaved change');
+    expect(mocks.mutateAsync).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByTestId('admin-setting-ReferralHoldDays-input'), { target: { value: '21' } });
+    expect(screen.getByTestId('admin-save-bar').textContent).toContain('2 unsaved changes');
+
+    fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+    await waitFor(() => expect(screen.queryByTestId('admin-save-bar')).toBeNull());
+    expect(mocks.mutateAsync).toHaveBeenCalledTimes(2);
+    expect(mocks.mutateAsync).toHaveBeenCalledWith({ key: 'teamPlanMaxSeats', value: 300 });
+    expect(mocks.mutateAsync).toHaveBeenCalledWith({ key: 'ReferralHoldDays', value: 21 });
+  });
+
+  it('discards staged edits without saving', () => {
+    renderTab();
+    const input = screen.getByTestId('admin-setting-teamPlanMaxSeats-input') as HTMLInputElement;
+
+    fireEvent.change(input, { target: { value: '300' } });
+    expect(input.value).toBe('300');
+    fireEvent.click(screen.getByTestId('admin-save-discard-btn'));
+
+    expect(input.value).toBe('100');
+    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
+    expect(mocks.mutateAsync).not.toHaveBeenCalled();
+  });
+
+  it('guards leaving the page while an edit is unsaved', () => {
+    renderTab();
+    const here = { pathname: '/admin', search: { tab: 'growth-pricing' } };
+    const otherTab = { pathname: '/admin', search: { tab: 'admin-settings' } };
+
+    expect(lastBlocker()?.enableBeforeUnload).toBe(false);
+    expect(lastBlocker()?.shouldBlockFn({ current: here, next: otherTab })).toBe(false);
+    expect(useAdminModal.getState().tabChangeGuard).toBeNull();
+
+    fireEvent.change(screen.getByTestId('admin-setting-teamPlanMaxSeats-input'), { target: { value: '300' } });
+
+    expect(lastBlocker()?.enableBeforeUnload).toBe(true);
+    expect(lastBlocker()?.shouldBlockFn({ current: here, next: otherTab })).toBe(true);
+    expect(lastBlocker()?.shouldBlockFn({ current: here, next: { pathname: '/', search: {} } })).toBe(true);
+    // Sidebar switches go through the store; the provider routes them so the blocker sees them too.
+    expect(useAdminModal.getState().tabChangeGuard).not.toBeNull();
   });
 
   it('shows defaults when nothing is stored, and the stored value once one is', () => {
@@ -244,11 +361,24 @@ describe('AdminGrowthPricingTab', () => {
     }
   });
 
-  it('shows a loader until settings arrive', () => {
+  it('shows a loader under the header until settings arrive', () => {
     settingsLoading = true;
     renderTab();
-    expect(screen.getByTestId('admin-growth-pricing-loading')).toBeTruthy();
-    expect(screen.queryByTestId('admin-growth-pricing-tab')).toBeNull();
+    expect(screen.getByTestId('admin-growth-pricing-loading').textContent).toBe('Loading growth and pricing settings');
+    expect(screen.getByTestId('admin-page-header')).toBeTruthy();
+    expect(screen.queryByTestId('admin-growth-pricing-section-signup')).toBeNull();
+  });
+
+  it('offers a retry when settings fail to load', () => {
+    serverSettings = undefined;
+    settingsError = true;
+    renderTab();
+
+    expect(screen.getByTestId('admin-error-state')).toBeTruthy();
+    expect(screen.queryByTestId('admin-growth-pricing-section-signup')).toBeNull();
+    expect(screen.queryByTestId('admin-setting-teamPlanMaxSeats-input')).toBeNull();
+    fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
+    expect(mocks.refetch).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -259,12 +389,12 @@ describe('AdminGrowthPricingTab enforceCredits lock', () => {
     vi.unstubAllEnvs();
   });
 
-  it('locks the toggle and Save on a hosted deployment and says why', () => {
+  it('locks the toggle on a hosted deployment and says why', () => {
     vi.stubEnv('B4M_SELF_HOST', undefined);
     renderTab();
 
     expect((screen.getByTestId('admin-setting-enforceCredits-switch') as HTMLInputElement).disabled).toBe(true);
-    expect((screen.getByTestId('admin-setting-enforceCredits-save-btn') as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByTestId('admin-setting-enforceCredits-save-btn')).toBeNull();
     expect(screen.getByTestId('admin-setting-enforceCredits-helper').textContent).toBe(LOCKED_NOTE);
   });
 
