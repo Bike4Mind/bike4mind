@@ -187,6 +187,39 @@ describe('RapidReplyTab', () => {
     });
   });
 
+  it('keeps every staged RapidReplySettings field when the SaveBar writes them one after another', async () => {
+    renderTab();
+
+    fireEvent.click(within(screen.getByTestId('rapid-reply-transition-mode-select')).getByRole('combobox'));
+    fireEvent.click(screen.getByRole('option', { name: 'append' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Metrics' }));
+    fireEvent.change(screen.getByTestId('rapid-reply-max-latency-input').querySelector('input')!, {
+      target: { value: '1500' },
+    });
+    fireEvent.change(screen.getByTestId('rapid-reply-min-success-rate-input').querySelector('input')!, {
+      target: { value: '80' },
+    });
+    expect(screen.getByTestId('admin-save-bar').textContent).toContain('3 unsaved changes');
+
+    fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+    await waitFor(() => expect(screen.queryByTestId('admin-save-bar')).toBeNull());
+
+    // Each field is its own draft and its own write; each write builds on the one before it, so the
+    // last write carries all three edits rather than only its own field over the stale baseline.
+    const writes = mocks.updateSettings.mock.calls.map(([call]) => call);
+    expect(writes).toHaveLength(3);
+    expect(writes.every(write => write.key === 'RapidReplySettings')).toBe(true);
+    expect(writes.at(-1)).toEqual({
+      key: 'RapidReplySettings',
+      value: {
+        transitionMode: 'append',
+        fallbackBehavior: 'continue',
+        maxAcceptableLatency: 1500,
+        minSuccessRate: 80,
+      },
+    });
+  });
+
   it('blocks the save while a threshold is out of range', () => {
     renderTab();
 
