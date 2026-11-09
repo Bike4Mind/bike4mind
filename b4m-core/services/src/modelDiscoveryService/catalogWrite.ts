@@ -22,6 +22,7 @@ import {
   type ICatalogContributor,
   type IModelCatalogRowInput,
   type ModelRecord,
+  type ParsedClaudeModelId,
 } from '@bike4mind/common';
 import type { ResolvedCatalogRecord } from '@bike4mind/llm-adapters';
 import isEqual from 'lodash/isEqual.js';
@@ -746,7 +747,8 @@ function planOne(
 
   const priorContributors = input.priorContributors?.get(candidate.modelId);
   const credited = new Map<FieldGroup, string>();
-  // A copy whose model the build now describes yields to the seed tier: the row stops claiming the group.
+  // A copy whose model the build now describes is released: the row stops claiming the group, and the seed
+  // tables or the default answer instead.
   const releasedKeys =
     inheritedFromSibling(priorContributors) && describedByBuild(record.id, input)
       ? API_SURFACE_KEYS.filter(key => record[key] !== undefined)
@@ -990,27 +992,30 @@ function withholdsOpenAiTools(
 }
 
 /**
- * The apiSurface flags a model that states none copies from its newest active sibling: same vendor, same
- * adapterFamily and, for a Claude id, the same product line. A sibling's flags are what its rows state over
- * what the seed tables say for it, and inheritApiSurface (common claudeToolCapabilities.ts) keeps a copied
- * forced tool_choice, prefill or refusal fallback from widening the model's own answer. Skipped for a model
- * the build already describes, where a copied discovery value would outrank the seed tier. An operator row
- * still overrides each flag (PER_KEY_GROUPS in llm-adapters mergeCatalog.ts).
+ * The apiSurface flags a Claude model that states none copies from its newest active sibling no newer than
+ * itself: same vendor, adapterFamily and product line, at or below its version, so a new release never
+ * rewrites what an older model was copied from. A sibling's flags are what its rows state over what the
+ * seed tables say for it, and inheritApiSurface (common claudeToolCapabilities.ts) keeps a copied forced
+ * tool_choice or prefill from widening the model's own answer and never copies refusal fallback. Skipped
+ * for an id with no Claude version and for a model the build already describes, where a copied discovery
+ * value would outrank the build's own answer. An operator row still overrides each flag (PER_KEY_GROUPS in
+ * llm-adapters mergeCatalog.ts).
  */
 function inheritedApiSurface(
   record: ModelRecord,
   input: CatalogWriteInput
 ): { values: Partial<ApiSurface>; siblingId: string } | undefined {
   if (Object.keys(statedApiSurface(record)).length > 0 || describedByBuild(record.id, input)) return undefined;
+  const version = parseClaudeModelId(record.id);
   const family = adapterFamilyOf(record, input);
-  if (!family) return undefined;
-  const line = parseClaudeModelId(record.id)?.family;
+  if (!version || !family) return undefined;
 
   let newest: { id: string; releaseDate?: string; values: Partial<ApiSurface> } | undefined;
   for (const [id, resolved] of input.inForce ?? input.base) {
     const sibling = resolved.record;
     if (id === record.id || sibling.vendor !== record.vendor || statusOf(sibling) !== 'active') continue;
-    if (parseClaudeModelId(id)?.family !== line) continue;
+    const siblingVersion = parseClaudeModelId(id);
+    if (siblingVersion?.family !== version.family || compareVersions(siblingVersion, version) > 0) continue;
     if (adapterFamilyOf(sibling, input) !== family) continue;
     const seeded =
       typeof sibling.backend === 'string'
@@ -1048,16 +1053,18 @@ function adapterFamilyOf(record: Record<string, unknown>, input: CatalogWriteInp
   return input.resolveDispatch?.(record as unknown as ModelRecord)?.adapterFamily;
 }
 
-/** Sort order, newest first: the Claude version when both ids carry one, then releaseDate, then id. */
+type ClaudeVersion = Pick<ParsedClaudeModelId, 'major' | 'minor'>;
+
+/** Negative when `a` is the older version; a bare major (`claude-opus-5`) is its `.0`. */
+const compareVersions = (a: ClaudeVersion, b: ClaudeVersion): number =>
+  a.major - b.major || (a.minor ?? 0) - (b.minor ?? 0);
+
+/** Sort order, newest first: the Claude version, then releaseDate, then id. */
 function newerModel(a: { id: string; releaseDate?: string }, b: { id: string; releaseDate?: string }): number {
   const versionA = parseClaudeModelId(a.id);
   const versionB = parseClaudeModelId(b.id);
-  if (versionA && versionB) {
-    if (versionA.major !== versionB.major) return versionB.major - versionA.major;
-    const minorA = versionA.minor ?? 0;
-    const minorB = versionB.minor ?? 0;
-    if (minorA !== minorB) return minorB - minorA;
-  }
+  const byVersion = versionA && versionB ? compareVersions(versionB, versionA) : 0;
+  if (byVersion !== 0) return byVersion;
   const released = (b.releaseDate ?? '').localeCompare(a.releaseDate ?? '');
   return released !== 0 ? released : a.id.localeCompare(b.id);
 }

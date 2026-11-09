@@ -2552,12 +2552,36 @@ describe('apiSurface inheritance', () => {
       toolSearch: true,
       toolChanges: true,
       deferredToolAddition: true,
-      refusalFallback: false,
     });
+    expect(row.patch).not.toHaveProperty('refusalFallback');
     expect(row.contributors).toContainEqual({
       group: 'apiSurface',
       source: `${SIBLING_CONTRIBUTOR_PREFIX}claude-fable-5-1`,
     });
+  });
+
+  it('never copies from a sibling newer than the model', () => {
+    const newer = [heldRow(claude('claude-opus-5-5')), heldRow(claude('claude-opus-5'))];
+    const legacy = anthropicRun(newer, [{ modelId: 'claude-opus-4-1', patch: claude('claude-opus-4-1') }]);
+    expect(legacy.rows[0].ownedGroups).not.toContain('apiSurface');
+
+    const withNewerFable = anthropicRun([...siblings, heldRow(claude('claude-fable-5-3', { toolSearch: false }))]);
+    expect(withNewerFable.rows[0].contributors).toContainEqual({
+      group: 'apiSurface',
+      source: `${SIBLING_CONTRIBUTOR_PREFIX}claude-fable-5-1`,
+    });
+  });
+
+  it('copies nothing for an id with no Claude version', () => {
+    const openAiDispatch = {
+      adapterFamily: 'openai-chat',
+      dispatchProfile: { maxTokensParam: 'max_tokens', toolTransport: 'chat' },
+    };
+    const gpt5 = heldRow({ ...gpt6().patch, id: 'gpt-5', name: 'GPT-5', ...openAiDispatch, toolSearch: true });
+    const result = plan({ resolveDispatch: dispatchable, base: resolveCatalogRecords([gpt5]) });
+
+    expect(result.rows[0].modelId).toBe('gpt-6');
+    expect(result.rows[0].ownedGroups).not.toContain('apiSurface');
   });
 
   it('serves the introduced model with no forced tool_choice, no prefill and tool search on', () => {
@@ -2646,10 +2670,10 @@ describe('apiSurface inheritance', () => {
     expect(row.patch).toMatchObject({
       forcedToolChoice: false,
       assistantPrefill: false,
-      refusalFallback: false,
       toolSearch: true,
       toolChanges: true,
     });
+    expect(row.patch).not.toHaveProperty('refusalFallback');
   });
 
   it('chooses the sibling as operator rows corrected it', () => {

@@ -1336,15 +1336,15 @@ describe('mergeCatalog: the apiSurface group', () => {
     lifecycle: { status: 'active' },
     reasoning: { supported: true, style: 'anthropic-adaptive' },
   };
-  // What discovery writes for it: copied from claude-fable-5-1's seed-table verdict.
-  const inherited: ApiSurface = {
+  // What discovery writes for it: copied from claude-fable-5-1's seed-table verdict, refusal fallback excepted.
+  const inherited: Partial<ApiSurface> = {
     forcedToolChoice: false,
     assistantPrefill: false,
     toolSearch: true,
     toolChanges: true,
     deferredToolAddition: true,
-    refusalFallback: false,
   };
+  const served: ApiSurface = { ...inherited, refusalFallback: false } as ApiSurface;
   const discoveryRow = (apiSurface: Partial<ApiSurface> | null) =>
     row({
       modelId: fable52.id,
@@ -1367,7 +1367,7 @@ describe('mergeCatalog: the apiSurface group', () => {
 
     expect(dropped).toEqual([]);
     expect(models[0]).toMatchObject({ id: fable52.id, thinkingStyle: 'adaptive', ...inherited });
-    expect(resolveApiSurface(models[0])).toEqual(inherited);
+    expect(resolveApiSurface(models[0])).toEqual(served);
   });
 
   it('falls back to the conservative default when no row states the flags', () => {
@@ -1390,7 +1390,7 @@ describe('mergeCatalog: the apiSurface group', () => {
 
     expect(dropped).toEqual([]);
     expect(models[0]).toMatchObject({ adapterFamily: 'anthropic-messages', dispatchProfile: fable52.dispatchProfile });
-    expect(resolveApiSurface(models[0])).toEqual({ ...inherited, toolSearch: false });
+    expect(resolveApiSurface(models[0])).toEqual({ ...served, toolSearch: false });
   });
 
   it('applies each row its own keys, the higher-ranked row winning only the keys both state', () => {
@@ -1398,25 +1398,20 @@ describe('mergeCatalog: the apiSurface group', () => {
       modelId: fable52.id,
       source: 'seed',
       ownedGroups: ['apiSurface'],
-      patch: { id: fable52.id, toolSearch: true, toolChanges: true },
+      patch: { id: fable52.id, toolSearch: true, toolChanges: true, deferredToolAddition: true },
     });
-    const older = discoveryRow({ deferredToolAddition: true, toolChanges: false });
-    const newer = row({
-      modelId: fable52.id,
-      source: 'discovery',
-      ownedGroups: ['apiSurface'],
-      patch: { id: fable52.id, deferredToolAddition: false, refusalFallback: true },
-      effectiveFrom: new Date('2026-03-01T00:00:00Z'),
-    });
-    const [merged] = mergeCatalog([], [newer, seedSide, older], ANTHROPIC_KEY);
+    const discovered = discoveryRow({ toolChanges: false, forcedToolChoice: false });
+    const operator = operatorRow({ deferredToolAddition: false, forcedToolChoice: true });
+    const [merged] = mergeCatalog([], [operator, seedSide, discovered], ANTHROPIC_KEY);
 
     expect(merged).toMatchObject({
       toolSearch: true,
       toolChanges: false,
       deferredToolAddition: false,
-      refusalFallback: true,
+      forcedToolChoice: true,
     });
-    expect(merged).not.toHaveProperty('forcedToolChoice');
+    expect(merged).not.toHaveProperty('assistantPrefill');
+    expect(merged).not.toHaveProperty('refusalFallback');
   });
 
   it('keeps the operator value over a later discovery row', () => {

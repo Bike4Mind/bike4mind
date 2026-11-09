@@ -193,18 +193,18 @@ export function resolveApiSurface(model: ApiSurfaceModel): ApiSurface {
   return resolved;
 }
 
-// A sibling's true here says nothing safe about this model: a forced choice or prefill the model rejects is a
-// 400, and a thrown refusal needs a fallback chain configured for this id (utils adminSettings/fallback.ts).
-const NARROW_ONLY_KEYS = ['forcedToolChoice', 'assistantPrefill', 'refusalFallback'] as const;
+// A sibling accepting these says nothing about this model, and sending either to a model that rejects it is a 400.
+const NARROW_ONLY_KEYS = ['forcedToolChoice', 'assistantPrefill'] as const;
 
 /**
  * The flags `model` (which states none) takes from a sibling's: the optional request features as the
  * sibling has them, and the NARROW_ONLY_KEYS only where the sibling narrows what the model would resolve
- * to on its own, never where it widens it.
+ * to on its own. refusalFallback is never copied: routing around a decline stays a seed or operator decision.
  */
 export function inheritApiSurface(model: ApiSurfaceModel, sibling: Partial<ApiSurface>): Partial<ApiSurface> {
   const own = resolveApiSurface(model);
   const inherited = { ...sibling };
+  delete inherited.refusalFallback;
   for (const key of NARROW_ONLY_KEYS) {
     const value = inherited[key];
     if (value !== undefined) inherited[key] = value && own[key];

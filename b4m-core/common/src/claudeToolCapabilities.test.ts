@@ -371,14 +371,15 @@ describe('inheritApiSurface', () => {
     expect(inherited).toMatchObject({ forcedToolChoice: false, assistantPrefill: false, toolSearch: true });
   });
 
-  it('does not carry a refusal fallback over to an id with no fallback chain of its own', () => {
+  it('never copies refusal fallback, which stays a seed or operator decision', () => {
     expect(fable5.refusalFallback).toBe(true);
     const inherited = inheritApiSurface(
       { id: 'claude-fable-5-3', backend: ModelBackend.Anthropic, thinkingStyle: 'adaptive' },
       fable5
     );
 
-    expect(inherited).toMatchObject({ forcedToolChoice: false, refusalFallback: false, toolChanges: true });
+    expect(inherited).toMatchObject({ forcedToolChoice: false, toolChanges: true });
+    expect(inherited).not.toHaveProperty('refusalFallback');
   });
 
   it('takes a restriction from the sibling where the model would otherwise allow it', () => {
