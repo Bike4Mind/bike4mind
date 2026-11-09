@@ -4,8 +4,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // Keep @bike4mind/common real so we assert against the actual settingsMap default; mock only
 // the infra + middleware seams. AdminSettings.find(...).lean() returns whatever we stage below.
 let stored: Array<Record<string, unknown>> = [];
+let lastFilter: { settingName: { $in: string[] } } | undefined;
 vi.mock('@bike4mind/database/infra', () => ({
-  AdminSettings: { find: () => ({ lean: () => Promise.resolve(stored) }) },
+  AdminSettings: {
+    find: (filter: typeof lastFilter) => {
+      lastFilter = filter;
+      return { lean: () => Promise.resolve(stored) };
+    },
+  },
 }));
 // `enc:` marks ciphertext so a test can prove the mask is derived from decrypted plaintext.
 // A non-`enc:` value passes through, matching decryptAtRest's plaintext-coexistence contract.
@@ -20,14 +26,29 @@ vi.mock('@server/utils/publicSettingsArtifact', () => ({
 }));
 
 import handler from '../fetch';
-import { SENSITIVE_SETTING_MASK, settingsMap } from '@bike4mind/common';
+import { SENSITIVE_SETTING_MASK, allSettingDefinitions, settingsMap, userReadableSettingKeys } from '@bike4mind/common';
 
-const runHandler = async () => {
+const runHandler = async (user: object = { isAdmin: true }) => {
   const json = vi.fn((x: unknown) => x);
-  const req = { user: { isAdmin: true }, logger: { info: vi.fn(), error: vi.fn() } };
+  const req = { user, logger: { info: vi.fn(), error: vi.fn() } };
   await (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(req, { json });
   return json.mock.calls[0][0] as Array<{ settingName: string; settingValue: unknown }>;
 };
+
+describe('settings/fetch catalog by caller', () => {
+  const fullCatalog = allSettingDefinitions().map(s => s.key);
+
+  it.each([
+    ['a full admin', { isAdmin: true }, fullCatalog],
+    ['a settings:manage delegate', { isAdmin: false, adminPermissions: ['settings:manage'] }, fullCatalog],
+    ['a delegate without settings:manage', { isAdmin: false, adminPermissions: ['support:read'] }, null],
+    ['a non-admin', { isAdmin: false }, null],
+  ])('queries the right keys for %s', async (_label, user, expected) => {
+    stored = [];
+    await runHandler(user);
+    expect(lastFilter?.settingName.$in).toEqual(expected ?? userReadableSettingKeys());
+  });
+});
 
 describe('settings/fetch defaultEmbeddingModel server-resolved default', () => {
   beforeEach(() => {

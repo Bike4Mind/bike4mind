@@ -8,7 +8,11 @@ import { createMocks } from 'node-mocks-http';
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
-    const chain: any = { use: () => chain, post: (fn: any) => fn };
+    let guard: any;
+    const chain: any = {
+      use: (fn: any) => ((guard = fn), chain),
+      post: (fn: any) => async (req: any, res: any) => (guard(req, res, () => {}), fn(req, res)),
+    };
     return chain;
   },
 }));
@@ -168,9 +172,7 @@ describe('/api/auth/mfa/force-reset', () => {
       { userId: 'target-1', reason: 'Lost authenticator' }
     );
 
-    await forceResetHandler(req as any, res as any);
-
-    expect(res._getStatusCode()).toBe(403);
+    await expect(forceResetHandler(req as any, res as any)).rejects.toThrow('Missing permission: users:moderate');
     expect(mockRevokeAllForUser).not.toHaveBeenCalled();
     expect(mockRemovePasskeys).not.toHaveBeenCalled();
   });

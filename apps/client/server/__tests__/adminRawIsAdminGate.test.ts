@@ -14,6 +14,10 @@ import { blankStringLiterals } from './scopeCoverageHelpers';
  * that also serves non-admins), is in RAW_GATE_ALLOWLIST, or is in OUTSIDE_ADMIN_GATE. The allowlist
  * only shrinks: migrate a route, then delete its entry. Every entry must name a route that exists and
  * still gates raw, so a stale entry fails the suite.
+ *
+ * ADMIN_ROUTES_ELSEWHERE extends the scan to admin-only routes that live outside `pages/api/admin`.
+ * Mixed-audience routes that branch on isAdmin for owner-or-admin logic are not listed: they use
+ * requireAdminPermission() on their admin branch instead.
  */
 
 const ROUTES_DIR = path.join(__dirname, '..', '..', 'pages', 'api', 'admin');
@@ -32,6 +36,20 @@ const OUTSIDE_ADMIN_GATE = new Map<string, string>([
   ['qa/report/[runId]/[token]/[...path].ts', 'report assets, authorized by the run-scoped token in the path'],
 ]);
 
+const API_DIR = path.join(__dirname, '..', '..', 'pages', 'api');
+
+const ADMIN_ROUTES_ELSEWHERE = [
+  'auth/mfa/force-reset.ts',
+  'inbox/admin-send.ts',
+  'reg-invites/migrate.ts',
+  'reg-invites/update.ts',
+  'security/blocked-ips.ts',
+  'security/blocked-ips/evaluate.ts',
+  'settings/fetch.ts',
+  'settings/index.ts',
+  'settings/update.ts',
+];
+
 const RAW_GATE_ALLOWLIST = new Set<string>([
   'abuse/bulk-execute.ts',
   'abuse/bulk-preview.ts',
@@ -42,7 +60,6 @@ const RAW_GATE_ALLOWLIST = new Set<string>([
   'moderation-incidents/[id]/verdict.ts',
   'moderation-incidents/index.ts',
   'organizations/[id]/convert-to-paid.ts',
-  'organizations/[id]/group-types.ts',
   'organizations/[id]/revoke.ts',
   'organizations/[id]/seats.ts',
   'organizations/[id]/top-up.ts',
@@ -201,6 +218,15 @@ describe('admin routes do not gate on the raw isAdmin flag', () => {
 
   it.each(files.map(f => [rel(f), f]))('%s', (name, file) => {
     if (RAW_GATE_ALLOWLIST.has(name) || OUTSIDE_ADMIN_GATE.has(name)) return;
+    expect(
+      usesRawIsAdminGate(readFileSync(file, 'utf8')),
+      `${name} gates on raw isAdmin; use adminApi() with a per-method adminPermissions entry`
+    ).toBe(false);
+  });
+
+  it.each(ADMIN_ROUTES_ELSEWHERE)('pages/api/%s', name => {
+    const file = path.join(API_DIR, name);
+    expect(existsSync(file), `${name} no longer exists; remove it from ADMIN_ROUTES_ELSEWHERE`).toBe(true);
     expect(
       usesRawIsAdminGate(readFileSync(file, 'utf8')),
       `${name} gates on raw isAdmin; use adminApi() with a per-method adminPermissions entry`

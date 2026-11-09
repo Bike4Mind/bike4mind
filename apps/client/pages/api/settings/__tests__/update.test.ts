@@ -48,7 +48,12 @@ vi.mock('@bike4mind/utils/security', () => ({
   isValidEncryptionKey: (k: unknown) => typeof k === 'string' && k.length === 64,
 }));
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({ put: (handler: (...a: unknown[]) => unknown) => handler }),
+  baseApi: () => ({
+    use() {
+      return this;
+    },
+    put: (handler: (...a: unknown[]) => unknown) => handler,
+  }),
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (handler: (...a: unknown[]) => unknown) => handler,
@@ -75,17 +80,46 @@ const stageWriteResult = (settingName: string, settingValue: unknown) => {
   });
 };
 
-const runHandler = async (key: string, value: unknown, extra: Record<string, unknown> = {}) => {
+const runHandler = async (
+  key: string,
+  value: unknown,
+  extra: Record<string, unknown> = {},
+  user: object = { isAdmin: true }
+) => {
   const json = vi.fn((x: unknown) => x);
   const req = {
-    user: { isAdmin: true },
-    ability: { can: () => true },
+    user,
     body: { key, value, ...extra },
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
   await (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(req, { json });
   return json.mock.calls[0][0] as { settingName: string; settingValue: unknown };
 };
+
+describe('settings/update settings that constrain delegated admins', () => {
+  const DELEGATE = { isAdmin: false, adminPermissions: ['settings:manage'] };
+
+  beforeEach(() => {
+    findOneAndUpdate.mockReset();
+    vi.clearAllMocks();
+  });
+
+  it.each(['AdminApprovalsEnabled', 'AdminApprovalCreditThreshold', 'AdminAuditCriticalGrantCredits'])(
+    'refuses a settings:manage delegate changing %s before any write',
+    async key => {
+      await expect(runHandler(key, 0, {}, DELEGATE)).rejects.toThrow(
+        'Only full administrators can change this setting'
+      );
+      expect(findOneAndUpdate).not.toHaveBeenCalled();
+    }
+  );
+
+  it('lets a full admin change them', async () => {
+    stageWriteResult('AdminApprovalsEnabled', false);
+    await runHandler('AdminApprovalsEnabled', false);
+    expect(findOneAndUpdate).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe('settings/update sensitive value handling', () => {
   beforeEach(() => {

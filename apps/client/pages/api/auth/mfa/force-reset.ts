@@ -1,4 +1,4 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { mfaService } from '@bike4mind/services';
 import {
@@ -7,7 +7,7 @@ import {
   passkeyCredentialRepository,
   withTransaction,
 } from '@bike4mind/database';
-import { redactUserSecretsForSelf, selfUserResponseSchema } from '@bike4mind/common';
+import { ForbiddenError, redactUserSecretsForSelf, selfUserResponseSchema } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
 import { logAuthAudit } from '@server/utils/authAudit';
 import {
@@ -28,13 +28,9 @@ const forceResetResponseSchema = z.object({
   user: selfUserResponseSchema,
 });
 
-const handler = baseApi().post(
+const handler = adminApi({ adminPermissions: { POST: 'users:moderate' } }).post(
   asyncHandler(async (req, res) => {
     const adminUser = req.user;
-
-    if (!adminUser?.isAdmin) {
-      return res.status(403).json({ error: 'Forbidden' });
-    }
 
     const { userId, reason: rawReason } = forceResetBodySchema.parse(req.body);
 
@@ -104,7 +100,7 @@ const handler = baseApi().post(
 
       resetBody = { success: result.success, user: redactUserSecretsForSelf(result.user) };
     } catch (error: any) {
-      if (auditWriteStarted) throw error;
+      if (auditWriteStarted || error instanceof ForbiddenError) throw error;
       console.error('Error force resetting MFA:', error);
       return res.status(400).json({ error: error.message || 'Failed to reset MFA' });
     }

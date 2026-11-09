@@ -11,6 +11,7 @@ import {
   MIN_PRICE_PER_CREDIT_USD,
   partitionDomainList,
   partitionEmailList,
+  isFullAdmin,
   isRegisteredSettingKey,
   resolveSettingDefinition,
 } from '@bike4mind/common';
@@ -21,7 +22,7 @@ import { decryptAtRest } from '@bike4mind/utils/security';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { encryptSecret, isEncrypted, isValidEncryptionKey } from '@bike4mind/server-utils/security/secretEncryption';
@@ -34,24 +35,31 @@ import { recordAdminSettingChange } from '@server/utils/adminSettingsAudit';
 // plaintext-at-rest degradation once, rather than silently or on every write.
 let warnedSelfHostPlaintext = false;
 
+// These settings constrain delegated admins themselves, so settings:manage alone must not loosen them.
+const FULL_ADMIN_SETTING_KEYS = new Set([
+  'AdminApprovalsEnabled',
+  'AdminApprovalBulkUserThreshold',
+  'AdminApprovalCreditThreshold',
+  'AdminApprovalExpiryHours',
+  'AdminAuditCriticalGrantCredits',
+  'AdminAuditDailyGrantCredits',
+]);
+
 // Update Admin Setting
-const handler = baseApi().put(
+const handler = adminApi({ adminPermissions: { PUT: 'settings:manage' } }).put(
   asyncHandler<
     unknown,
     unknown,
     { key: string; value: unknown; confirmClear?: boolean; confirmAboveMeasuredFloor?: boolean }
   >(async (req, res) => {
-    if (!req.user.isAdmin) throw new ForbiddenError('Permission denied');
-
-    // Authorize before any branch reads or returns stored setting data.
-    if (!req.ability) throw new NotFoundError('Ability not found');
-    if (!req.ability.can('update', AdminSettings)) throw new NotFoundError('Permission denied');
-
     // A contributed key is accepted once registered; anything else still fails SettingKeySchema (400).
     const key: string =
       typeof req.body.key === 'string' && isRegisteredSettingKey(req.body.key)
         ? req.body.key
         : SettingKeySchema.parse(req.body.key);
+    if (FULL_ADMIN_SETTING_KEYS.has(key) && !isFullAdmin(req.user)) {
+      throw new ForbiddenError('Only full administrators can change this setting');
+    }
     const definition = resolveSettingDefinition(key)!;
 
     // Delete, not store the default, so the setting reads as unset again. hardDelete: the upsert below

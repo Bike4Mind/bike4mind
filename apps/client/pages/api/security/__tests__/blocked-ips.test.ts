@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 /**
- * Managing the IP blocklist is an administrative security control: every method is admin-only,
+ * Managing the IP blocklist is an administrative security control: every method is permission-gated,
  * every change is audited with a reason, and a block takes a validated target, scope and duration.
  */
 
@@ -12,19 +12,29 @@ const mockRefs = vi.hoisted(() => ({
   deleteHandler: null as null | ((req: any, res: any) => unknown),
 }));
 
+// The chain runs adminApi's real permission guard ahead of each handler.
 vi.mock('@server/middlewares/baseApi', () => {
+  let guard: any;
+  const gated = (method: string, fn: any) => async (req: any, res: any) => {
+    req.method = method;
+    guard(req, res, () => {});
+    return fn(req, res);
+  };
   const chain: any = {
-    use: () => chain,
+    use: (fn: any) => {
+      guard = fn;
+      return chain;
+    },
     get: (fn: any) => {
-      mockRefs.getHandler = fn;
+      mockRefs.getHandler = gated('GET', fn);
       return chain;
     },
     post: (fn: any) => {
-      mockRefs.postHandler = fn;
+      mockRefs.postHandler = gated('POST', fn);
       return chain;
     },
     delete: (fn: any) => {
-      mockRefs.deleteHandler = fn;
+      mockRefs.deleteHandler = gated('DELETE', fn);
       return chain;
     },
   };
@@ -106,7 +116,7 @@ describe('/api/security/blocked-ips', () => {
     ['DELETE', () => mockRefs.deleteHandler!, () => repo.unblock],
   ])('%s rejects a non-admin without touching the repository', async (_method, getHandler, getRepoFn) => {
     const { req, res } = mocks(NON_ADMIN, { body: { ...BLOCK, ip: '1.2.3.4' }, query: { ip: '1.2.3.4' } });
-    await expect(getHandler()(req, res)).rejects.toThrow(/admin/i);
+    await expect(getHandler()(req, res)).rejects.toThrow(/Missing permission/);
     expect(getRepoFn()).not.toHaveBeenCalled();
   });
 
