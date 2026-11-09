@@ -130,8 +130,10 @@ describe('BedrockNewsClaimPage', () => {
     mockPost.mockResolvedValue({ data: { ...READY, payable: 0 } });
     renderPage();
     const note = await screen.findByRole('note');
-    expect(note).toHaveTextContent('This account has reached today\u2019s Bike4Mind limit.');
-    expect(screen.queryByRole('button', { name: /^Add / })).not.toBeInTheDocument();
+    expect(note).toHaveTextContent('Bike4Mind\u2019s daily limit is reached for that day');
+    expect(note).toHaveTextContent('Another Bike4Mind account can still claim them.');
+    expect(note).not.toHaveTextContent('tomorrow');
+    expect(screen.queryByTestId('claim-confirm-btn')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Use another account' })).toBeEnabled();
   });
 

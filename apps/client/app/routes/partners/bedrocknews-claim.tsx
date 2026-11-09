@@ -371,18 +371,11 @@ const ReadyView = ({
         </Typography>
       </Sheet>
 
-      {limitReached ? (
+      {limitReached && <LimitNote>{CAPPED_NOTE} Another Bike4Mind account can still claim them.</LimitNote>}
+      {!limitReached && payable != null && payable < credits && (
         <LimitNote>
-          This account has reached today&rsquo;s Bike4Mind limit. The credits stay waiting in Headword: claim them
-          tomorrow or with another account.
+          Your daily limit allows <strong>up to {payable}</strong> today. The rest stays waiting in Headword.
         </LimitNote>
-      ) : (
-        payable != null &&
-        payable < credits && (
-          <LimitNote>
-            Your daily limit allows <strong>up to {payable}</strong> today. The rest stays waiting in Headword.
-          </LimitNote>
-        )
       )}
 
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
@@ -450,8 +443,8 @@ const ReadyView = ({
           </Button>
         )}
         <Button
-          variant="outlined"
-          color="neutral"
+          variant={limitReached ? 'solid' : 'outlined'}
+          color={limitReached ? 'primary' : 'neutral'}
           disabled={confirming || switchingAccount}
           onClick={onUseAnotherAccount}
           sx={ACTION_SX}
