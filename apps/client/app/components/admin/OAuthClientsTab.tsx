@@ -51,7 +51,7 @@ import {
 import { isAxiosError } from 'axios';
 import { getErrorMessage } from '@client/app/utils/error';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
-import { AdminDialog, AdminPageHeader, DataTable, EmptyState, ErrorState, type DataColumn } from './shared';
+import { AdminDialog, AdminPageHeader, DataTable, EmptyState, type DataColumn } from './shared';
 import { ADMIN_REGION_GAP, adminFocus } from './shared/adminStyles';
 
 const QUERY_KEY = 'admin-oauth-clients';
@@ -352,7 +352,6 @@ export default function OAuthClientsTab() {
     data: clients = [],
     isPending,
     isError,
-    isFetching,
     error: listError,
     refetch,
   } = useQuery({ queryKey: [QUERY_KEY], queryFn: fetchOAuthClients });
@@ -555,7 +554,7 @@ export default function OAuthClientsTab() {
       label: 'Created',
       width: '7rem',
       render: client => (
-        <Typography level="body-xs" noWrap>
+        <Typography level="body-xs" noWrap sx={client.createdAt ? undefined : { color: 'admin.inkMuted' }}>
           {client.createdAt ? new Date(client.createdAt).toLocaleDateString() : '-'}
         </Typography>
       ),
@@ -583,53 +582,46 @@ export default function OAuthClientsTab() {
         </Alert>
       )}
 
-      {isError && clients.length === 0 ? (
-        <Box data-testid="oauth-clients-load-error">
-          <ErrorState
-            message={`Could not load OAuth clients: ${getErrorMessage(listError)}`}
-            onRetry={() => void refetch()}
-            retrying={isFetching}
-          />
-        </Box>
-      ) : (
-        <DataTable
-          label="OAuth clients"
-          testId="oauth-clients-table"
-          rows={clients}
-          columns={columns}
-          getRowId={client => client.id}
-          rowTestId={client => `oauth-client-row-${client.clientId}`}
-          loading={isPending}
-          onRetry={() => void refetch()}
-          empty={
-            <Box data-testid="oauth-clients-empty">
-              <EmptyState
-                title="No OAuth clients registered yet"
-                description="Register an app to let it offer Sign in with Bike4Mind."
-                action={
-                  <Button
-                    size="sm"
-                    variant="outlined"
-                    startDecorator={<AddIcon />}
-                    onClick={openCreate}
-                    data-testid="oauth-clients-empty-add-btn"
-                  >
-                    Register client
-                  </Button>
-                }
-              />
-            </Box>
-          }
-          rowActions={client => (
-            <ClientRowMenu client={client} onEdit={() => openEdit(client)} onRotate={() => setRotateTarget(client)} />
-          )}
-          // Fixed columns total 59.5rem; redirect URIs take the rest and truncate. Below 68rem the table
-          // scrolls sideways inside its frame.
-          minWidth="68rem"
-          maxHeight="none"
-          pagination={false}
-        />
-      )}
+      <DataTable
+        label="OAuth clients"
+        testId="oauth-clients-table"
+        rows={clients}
+        columns={columns}
+        getRowId={client => client.id}
+        rowTestId={client => `oauth-client-row-${client.clientId}`}
+        loading={isPending}
+        error={
+          isError && clients.length === 0 ? `Could not load OAuth clients: ${getErrorMessage(listError)}` : undefined
+        }
+        onRetry={() => void refetch()}
+        empty={
+          <Box data-testid="oauth-clients-empty">
+            <EmptyState
+              title="No OAuth clients registered yet"
+              description="Register an app to let it offer Sign in with Bike4Mind."
+              action={
+                <Button
+                  size="sm"
+                  variant="outlined"
+                  startDecorator={<AddIcon />}
+                  onClick={openCreate}
+                  data-testid="oauth-clients-empty-add-btn"
+                >
+                  Register client
+                </Button>
+              }
+            />
+          </Box>
+        }
+        rowActions={client => (
+          <ClientRowMenu client={client} onEdit={() => openEdit(client)} onRotate={() => setRotateTarget(client)} />
+        )}
+        // Fixed columns total 59.5rem; redirect URIs take the rest and truncate. Below 68rem the table
+        // scrolls sideways inside its frame.
+        minWidth="68rem"
+        maxHeight="none"
+        pagination={false}
+      />
 
       <AdminDialog
         open={createOpen}
@@ -913,7 +905,7 @@ export default function OAuthClientsTab() {
               onClick={() => deactivateTarget && activeMutation.mutate({ client: deactivateTarget, isActive: false })}
               data-testid="oauth-client-deactivate-confirm-btn"
             >
-              Deactivate
+              Deactivate client
             </Button>
           </Stack>
         </DialogContent>

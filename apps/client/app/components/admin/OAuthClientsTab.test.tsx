@@ -316,7 +316,7 @@ describe('OAuthClientsTab', () => {
   it('shows a load error instead of the empty state when the list fetch fails', async () => {
     api.fetchOAuthClients.mockRejectedValue(new Error('Forbidden'));
     renderTab();
-    expect(await screen.findByTestId('oauth-clients-load-error')).toHaveTextContent(/Forbidden/);
+    expect(await screen.findByTestId('admin-error-state')).toHaveTextContent(/Forbidden/);
     expect(screen.queryByTestId('oauth-clients-empty')).not.toBeInTheDocument();
   });
 
@@ -336,7 +336,7 @@ describe('OAuthClientsTab', () => {
 
     expect(await screen.findByTestId('oauth-clients-refresh-error')).toHaveTextContent(/Gateway timeout/);
     expect(screen.getByTestId('oauth-client-row-b4m_my_app_0011aabb')).toBeInTheDocument();
-    expect(screen.queryByTestId('oauth-clients-load-error')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('admin-error-state')).not.toBeInTheDocument();
   });
 
   it('hides rotate for a public (PKCE) client', async () => {
@@ -432,11 +432,8 @@ describe('OAuthClientsTab page frame', () => {
     api.fetchOAuthClients.mockRejectedValueOnce(new Error('Forbidden'));
     renderTab();
 
-    const loadError = await screen.findByTestId('oauth-clients-load-error');
-    expect(within(loadError).getByTestId('admin-error-state')).toHaveTextContent(
-      'Could not load OAuth clients: Forbidden'
-    );
-    fireEvent.click(within(loadError).getByTestId('admin-error-retry-btn'));
+    expect(await screen.findByTestId('admin-error-state')).toHaveTextContent('Could not load OAuth clients: Forbidden');
+    fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
     expect(await screen.findByTestId('oauth-client-row-b4m_my_app_0011aabb')).toBeInTheDocument();
     expect(api.fetchOAuthClients).toHaveBeenCalledTimes(2);
   });
