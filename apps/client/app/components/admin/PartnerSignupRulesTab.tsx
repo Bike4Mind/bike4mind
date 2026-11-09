@@ -36,6 +36,7 @@ import {
   AdminSearchInput,
   DataTable,
   EmptyState,
+  ErrorState,
   StatusChip,
   type DataColumn,
 } from './shared';
@@ -97,7 +98,13 @@ export default function PartnerSignupRulesTab() {
     onError: (error: unknown) => toast.error(getErrorMessage(error)),
   });
 
-  const { data: backfillPreview, isPending: backfillPreviewLoading } = useQuery({
+  const {
+    data: backfillPreview,
+    isPending: backfillPreviewLoading,
+    isFetching: backfillPreviewFetching,
+    error: backfillPreviewError,
+    refetch: refetchBackfillPreview,
+  } = useQuery({
     queryKey: ['partner-rule-backfill-preview', backfillTarget?.id],
     queryFn: () => previewPartnerRuleBackfill(backfillTarget!.id),
     enabled: !!backfillTarget,
@@ -387,11 +394,13 @@ export default function PartnerSignupRulesTab() {
         reasonAudited={false}
         confirmLabel={`Add ${matched} user${plural(matched)}`}
         blockedReason={
-          backfillPreviewLoading
+          backfillPreviewLoading || backfillPreviewFetching
             ? 'Checking who would be added...'
-            : !matched
-              ? 'No existing users match this rule.'
-              : null
+            : backfillPreviewError
+              ? 'Load the backfill preview before adding users.'
+              : !matched
+                ? 'No existing users match this rule.'
+                : null
         }
         pending={backfillMutation.isPending}
         onConfirm={async () => {
@@ -400,38 +409,46 @@ export default function PartnerSignupRulesTab() {
         data-testid="partner-rule-backfill-modal"
         testIds={{ confirm: 'partner-rule-backfill-confirm-btn' }}
       >
-        {!backfillPreviewLoading && (
-          <Box
-            data-testid="partner-rule-backfill-preview"
-            sx={{ borderTop: '1px solid', borderBottom: '1px solid', borderColor: 'admin.border', py: 1.5 }}
-          >
-            <Typography level="title-md">
-              {matched} user{plural(matched)} will be added
-            </Typography>
-            {backfillPreview && (
-              <Typography level="body-sm" sx={{ mt: 0.5 }} data-testid="partner-rule-backfill-seat-impact">
-                {backfillPreview.stripeBilled
-                  ? `Stripe-billed org: seat ceiling stays at ${backfillPreview.seats}; candidates past it are rejected (add seats to admit them).`
-                  : backfillPreview.projectedSeats > backfillPreview.seats
-                    ? `Seat ceiling: ${backfillPreview.seats} -> ${backfillPreview.projectedSeats} (raised to fit)`
-                    : `Seat ceiling: ${backfillPreview.seats} (unchanged; everyone fits under it)`}
+        {backfillPreviewError ? (
+          <ErrorState
+            message={getErrorMessage(backfillPreviewError)}
+            onRetry={() => void refetchBackfillPreview()}
+            retrying={backfillPreviewFetching}
+          />
+        ) : (
+          !backfillPreviewLoading && (
+            <Box
+              data-testid="partner-rule-backfill-preview"
+              sx={{ borderTop: '1px solid', borderBottom: '1px solid', borderColor: 'admin.border', py: 1.5 }}
+            >
+              <Typography level="title-md">
+                {matched} user{plural(matched)} will be added
               </Typography>
-            )}
-            {!!backfillPreview?.sample.length && (
-              <Stack spacing={0.25} sx={{ mt: 1, maxHeight: 180, overflow: 'auto' }}>
-                {backfillPreview.sample.map(user => (
-                  <Typography key={user.id} level="body-xs" sx={{ color: 'admin.inkMuted' }}>
-                    {user.email || user.name}
-                  </Typography>
-                ))}
-                {backfillPreview.matched > backfillPreview.sample.length && (
-                  <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
-                    + {backfillPreview.matched - backfillPreview.sample.length} more
-                  </Typography>
-                )}
-              </Stack>
-            )}
-          </Box>
+              {backfillPreview && (
+                <Typography level="body-sm" sx={{ mt: 0.5 }} data-testid="partner-rule-backfill-seat-impact">
+                  {backfillPreview.stripeBilled
+                    ? `Stripe-billed org: seat ceiling stays at ${backfillPreview.seats}; candidates past it are rejected (add seats to admit them).`
+                    : backfillPreview.projectedSeats > backfillPreview.seats
+                      ? `Seat ceiling: ${backfillPreview.seats} -> ${backfillPreview.projectedSeats} (raised to fit)`
+                      : `Seat ceiling: ${backfillPreview.seats} (unchanged; everyone fits under it)`}
+                </Typography>
+              )}
+              {!!backfillPreview?.sample.length && (
+                <Stack spacing={0.25} sx={{ mt: 1, maxHeight: 180, overflow: 'auto' }}>
+                  {backfillPreview.sample.map(user => (
+                    <Typography key={user.id} level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+                      {user.email || user.name}
+                    </Typography>
+                  ))}
+                  {backfillPreview.matched > backfillPreview.sample.length && (
+                    <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+                      + {backfillPreview.matched - backfillPreview.sample.length} more
+                    </Typography>
+                  )}
+                </Stack>
+              )}
+            </Box>
+          )
         )}
       </ActionDialog>
     </Stack>

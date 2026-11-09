@@ -446,6 +446,7 @@ export default function SignupDomainHoldsTab() {
         label="Disposable list sources"
         testId="signup-domain-holds-sources"
         loading={query.isPending}
+        error={query.error ? getErrorMessage(query.error) : undefined}
         onRetry={() => {
           void query.refetch();
         }}

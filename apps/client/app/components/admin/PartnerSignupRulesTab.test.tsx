@@ -289,6 +289,54 @@ describe('PartnerSignupRulesTab admin frame', () => {
     expect(api.deletePartnerSignupRule.mock.calls[0][0]).toBe('r1');
   });
 
+  it('reports a failed backfill preview and blocks confirmation until a retry succeeds', async () => {
+    const retryPreview = Promise.withResolvers<unknown>();
+    api.fetchPartnerSignupRules.mockResolvedValue(listOf([makeRule({ organizationId: 'org1' })]));
+    api.previewPartnerRuleBackfill
+      .mockRejectedValueOnce(new Error('Preview unavailable'))
+      .mockReturnValueOnce(retryPreview.promise);
+    renderTab();
+
+    await openRowMenu('partner.com');
+    await userEvent.click(screen.getByTestId('partner-rule-backfill-partner.com'));
+    expect(await screen.findByTestId('admin-error-state')).toHaveTextContent('Preview unavailable');
+    expect(screen.queryByTestId('partner-rule-backfill-preview')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByTestId('partner-rule-backfill-modal-reason-input-preset-0'));
+    expect(screen.getByTestId('partner-rule-backfill-confirm-btn')).toBeDisabled();
+    expect(api.runPartnerRuleBackfill).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByTestId('admin-error-retry-btn'));
+    expect(screen.getByTestId('partner-rule-backfill-confirm-btn')).toBeDisabled();
+    retryPreview.resolve({ matched: 1, sample: [], seats: 5, projectedSeats: 5, stripeBilled: false });
+    await waitFor(() => expect(screen.getByTestId('partner-rule-backfill-confirm-btn')).toBeEnabled());
+    await userEvent.click(screen.getByTestId('partner-rule-backfill-confirm-btn'));
+    await waitFor(() => expect(api.runPartnerRuleBackfill).toHaveBeenCalledWith('r1'));
+  });
+
+  it('blocks a cached backfill preview while refreshing and after that refresh fails', async () => {
+    const refreshPreview = Promise.withResolvers<unknown>();
+    api.fetchPartnerSignupRules.mockResolvedValue(listOf([makeRule({ organizationId: 'org1' })]));
+    api.previewPartnerRuleBackfill
+      .mockResolvedValueOnce({ matched: 1, sample: [], seats: 5, projectedSeats: 5, stripeBilled: false })
+      .mockReturnValueOnce(refreshPreview.promise);
+    renderTab();
+
+    await openRowMenu('partner.com');
+    await userEvent.click(screen.getByTestId('partner-rule-backfill-partner.com'));
+    await userEvent.click(await screen.findByTestId('partner-rule-backfill-modal-reason-input-preset-0'));
+    await waitFor(() => expect(screen.getByTestId('partner-rule-backfill-confirm-btn')).toBeEnabled());
+    await userEvent.click(screen.getByTestId('partner-rule-backfill-modal-cancel-btn'));
+
+    await openRowMenu('partner.com');
+    await userEvent.click(screen.getByTestId('partner-rule-backfill-partner.com'));
+    await userEvent.click(await screen.findByTestId('partner-rule-backfill-modal-reason-input-preset-0'));
+    expect(screen.getByTestId('partner-rule-backfill-confirm-btn')).toBeDisabled();
+    refreshPreview.reject(new Error('Refresh unavailable'));
+    expect(await screen.findByTestId('admin-error-state')).toHaveTextContent('Refresh unavailable');
+    expect(screen.getByTestId('partner-rule-backfill-confirm-btn')).toBeDisabled();
+    expect(api.runPartnerRuleBackfill).not.toHaveBeenCalled();
+  });
+
   it('blocks the backfill when the dry run matches no one', async () => {
     api.fetchPartnerSignupRules.mockResolvedValue(listOf([makeRule({ organizationId: 'org1' })]));
     api.previewPartnerRuleBackfill.mockResolvedValue({

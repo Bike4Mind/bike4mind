@@ -112,6 +112,16 @@ beforeEach(() => {
 });
 
 describe('SignupDomainHoldsTab', () => {
+  it('reports a failed list request for both tables instead of claiming the source refresh has not run', async () => {
+    getMock.mockRejectedValue(new Error('Holds unavailable'));
+    renderTab();
+
+    const errors = await screen.findAllByTestId('admin-error-state');
+    expect(errors).toHaveLength(2);
+    for (const error of errors) expect(error).toHaveTextContent('Holds unavailable');
+    expect(screen.queryByText('The disposable list refresh has not run yet')).not.toBeInTheDocument();
+  });
+
   it('marks a hold the disposable list rule confirmed and keeps Release available', async () => {
     getMock.mockResolvedValue({
       data: {
