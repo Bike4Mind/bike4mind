@@ -35,7 +35,7 @@ const BUILT: ModelBuildOutcome = {
   units: 'mm',
 };
 
-type BuildRequest = { type: 'build'; id: number; print: boolean };
+type BuildRequest = { type: 'build'; id: number; print: boolean; params: Record<string, number> };
 
 let host: HTMLDivElement;
 let emitUpdate: (update: { sessionId: string; state: ModelViewState }) => void = () => {};
@@ -57,7 +57,7 @@ function Harness() {
 
 const flush = () => act(async () => {});
 
-/** Mounts the hook with STATE open, answers the engine's ready ping, and returns the frame's requests. */
+/** Mounts the hook for activeSession, answers the engine's ready ping, and returns the frame's requests. */
 async function mountWithEngine(): Promise<{ frame: HTMLIFrameElement; requests: BuildRequest[] }> {
   act(() => root.render(<Harness />));
   await flush();
@@ -135,6 +135,34 @@ describe('useModelEngine', () => {
     expect(requests.at(-1)).toEqual(expect.objectContaining({ type: 'build', id: 2, print: false }));
   });
 
+  it('mounts the engine frame when the hook mounts, before any model is open', async () => {
+    activeSession = null;
+    act(() => root.render(<Harness />));
+    await flush();
+    expect(document.querySelector('[data-testid="model-engine-frame"]')).not.toBeNull();
+  });
+
+  it('keeps one slider preview in flight and follows it with a single build at the latest value', async () => {
+    const { frame, requests } = await mountWithEngine();
+    reply(frame, { type: 'built', id: 1, outcome: BUILT });
+    await flush();
+
+    act(() => engine.previewParam('width', 10));
+    await flush();
+    expect(requests).toHaveLength(2);
+    for (const value of [20, 30, 40, 50]) act(() => engine.previewParam('width', value));
+    await flush();
+    expect(requests).toHaveLength(2);
+
+    reply(frame, { type: 'built', id: 2, outcome: BUILT });
+    await flush();
+    expect(requests).toHaveLength(3);
+    expect(requests[2]).toEqual(expect.objectContaining({ id: 3, params: { width: 50 } }));
+    reply(frame, { type: 'built', id: 3, outcome: BUILT });
+    await flush();
+    expect(requests).toHaveLength(3);
+  });
+
   it('queues an STL export behind a file build instead of cancelling it', async () => {
     const { frame, requests } = await mountWithEngine();
     reply(frame, { type: 'built', id: 1, outcome: BUILT });
@@ -176,15 +204,14 @@ describe('useModelEngine', () => {
 
   it("starts a new conversation with no model while another conversation's stays open", async () => {
     activeSession = 'chat-b';
-    act(() => root.render(<Harness />));
-    await flush();
+    const { requests } = await mountWithEngine();
     expect(engine.state.path).toBeNull();
 
     act(() => emitState({ ...STATE, generation: 2 }, 'chat-a'));
     await flush();
     expect(engine.state.path).toBeNull();
     expect(engine.status).toBe('idle');
-    expect(document.querySelector('[data-testid="model-engine-frame"]')).toBeNull();
+    expect(requests).toEqual([]);
   });
 
   it("brings a conversation's model back when switching to it, and drops it on leaving", async () => {

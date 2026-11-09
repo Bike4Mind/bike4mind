@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,27 +15,37 @@ type Reply = { ok: true; parts: Part[] } | { ok: false; error: string };
 const scratch = mkdtempSync(join(tmpdir(), 'model-worker-'));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
+const manifoldPath = createRequire(import.meta.url).resolve('manifold-3d/manifold.js');
+
+// The node project's types declare WebAssembly as a namespace only; the runtime has it as a value.
+type WasmApi = { compile(bytes: Uint8Array): Promise<object>; instantiate(...args: unknown[]): Promise<unknown> };
+const wasmApi = (globalThis as unknown as { WebAssembly: WasmApi }).WebAssembly;
+
+type WorkerScope = { onmessage: (event: { data: unknown }) => Promise<void> };
+
 /**
  * Runs the real worker script in Node against the real manifold-3d build: the browser globals it
- * leans on (self, a blob: URL for the model source) are stood in for, nothing else.
+ * leans on (self, a blob: URL for the model source) are stood in for, nothing else. `wasm` is the
+ * page's precompiled module, as the engine page hands it over; without one the worker loads its own.
  */
-async function build(source: string, print: boolean): Promise<Reply> {
+async function build(source: string, print: boolean, wasm: object | null = null): Promise<Reply> {
   const asset = resolveEngineAsset('/worker.js');
   if (asset?.kind !== 'inline') throw new Error('worker.js is not served inline');
-  const manifold = pathToFileURL(createRequire(import.meta.url).resolve('manifold-3d/manifold.js')).href;
+  const manifold = pathToFileURL(manifoldPath).href;
   const file = join(scratch, `worker-${Math.random().toString(36).slice(2)}.mjs`);
   writeFileSync(file, asset.body.replace("'./manifold.js'", JSON.stringify(manifold)));
   const modelFile = join(scratch, `model-${Math.random().toString(36).slice(2)}.mjs`);
   writeFileSync(modelFile, source);
   vi.spyOn(URL, 'createObjectURL').mockReturnValue(pathToFileURL(modelFile).href);
   vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
-  const reply = new Promise<Reply>(resolve => {
-    (globalThis as { self?: unknown }).self = { postMessage: (data: Reply) => resolve(data) };
-  });
+  const posted: unknown[] = [];
+  (globalThis as { self?: unknown }).self = { postMessage: (data: unknown) => posted.push(data) };
   await import(/* @vite-ignore */ pathToFileURL(file).href);
-  const worker = (globalThis as unknown as { self: { onmessage: (event: { data: unknown }) => Promise<void> } }).self;
-  await worker.onmessage({ data: { source, params: {}, print } });
-  return reply;
+  const worker = (globalThis as unknown as { self: WorkerScope }).self;
+  await worker.onmessage({ data: { type: 'init', wasm } });
+  expect(posted).toEqual([{ type: 'ready' }]);
+  await worker.onmessage({ data: { type: 'build', source, params: {}, print } });
+  return posted[1] as Reply;
 }
 
 /** True when every edge is shared by exactly two triangles, i.e. the mesh is closed. */
@@ -101,5 +111,14 @@ describe('model worker', () => {
   it('reports a part that is not a shape the same way for a print', async () => {
     const reply = await build('export default function model() { return [{ name: "x" }]; }', true);
     expect(reply.ok ? '' : reply.error).toContain('item 0 is not');
+  });
+
+  it('instantiates from the precompiled module the engine page hands over', async () => {
+    const wasm = await wasmApi.compile(readFileSync(join(manifoldPath, '..', 'manifold.wasm')));
+    const instantiate = vi.spyOn(wasmApi, 'instantiate');
+    const reply = await build(OVERLAPPING, false, wasm);
+    expect(reply.ok && reply.parts.map(part => part.name)).toEqual(['a', 'b']);
+    expect(instantiate).toHaveBeenCalledWith(wasm, expect.anything());
+    instantiate.mockRestore();
   });
 });
