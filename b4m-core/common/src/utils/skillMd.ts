@@ -281,7 +281,7 @@ const BARE_FILE_PATH =
   /(?<![\w/.:-])(?:\.{1,2}\/)?[\w-]+(?:[./][\w-]+)*\.(?:sh|py|js|ts|mjs|md|json|ya?ml|txt)\b(?![\w/-])/g;
 
 // Repo-level docs live in the user's project, not the skill folder (README.md can ship in one).
-const REPO_LEVEL_DOC = /(?:^|\/)(?:CLAUDE|AGENTS|CONTRIBUTING)\.md$/i;
+const REPO_LEVEL_DOC = /^(?:\.\/)?(?:CLAUDE|AGENTS|CONTRIBUTING)\.md$/;
 // Example paths in prose: `path/to/file.ts`, `src/foo.ts`, `src/foo*`.
 const PLACEHOLDER_PATH = /(?:^|\/)path\/to\/|(?:^|\/)src\/(?:foo|bar|baz)(?:[.*]|$)|\*/i;
 

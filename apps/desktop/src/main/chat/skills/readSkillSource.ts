@@ -37,7 +37,8 @@ export async function readSkillSource(path: string): Promise<SkillUploadPreview>
       files.splice(0, files.length, ...checked.files);
       others.sort();
     }
-    const { name, description, body, argumentHint, claudeCodeAllowedTools, disableModelInvocation } = parsed.fields;
+    const { name, description, body, argumentHint, claudeCodeAllowedTools, claudeCodeModel, disableModelInvocation } =
+      parsed.fields;
     return {
       ok: true,
       fields: {
@@ -46,6 +47,7 @@ export async function readSkillSource(path: string): Promise<SkillUploadPreview>
         body: body ?? '',
         ...(argumentHint !== undefined ? { argumentHint } : {}),
         ...(claudeCodeAllowedTools !== undefined ? { claudeCodeAllowedTools } : {}),
+        ...(claudeCodeModel !== undefined ? { claudeCodeModel } : {}),
         ...(disableModelInvocation !== undefined ? { disableModelInvocation } : {}),
         ...(files.length ? { files } : {}),
       },

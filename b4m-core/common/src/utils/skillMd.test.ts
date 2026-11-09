@@ -370,11 +370,19 @@ describe('referencedRelativePaths', () => {
 
   it('skips repo-level docs and placeholder paths, keeps README.md and real paths', () => {
     const body = [
-      'Follow CLAUDE.md and CONTRIBUTING.md, plus docs/AGENTS.md.',
+      'Follow CLAUDE.md and CONTRIBUTING.md, plus ./AGENTS.md.',
       'Edit `path/to/file.ts`, `src/foo.ts` and `src/foo.test.ts`; match src/foo*.',
       'Run scripts/run.sh, see [guide](reference.md) and [skip](CLAUDE.md), [ex](path/to/x.md), README.md.',
     ].join('\n');
     expect(referencedRelativePaths(body)).toEqual(['reference.md', 'scripts/run.sh', 'README.md']);
+  });
+
+  it('still reports a shipped file that shares a repo doc name in a subfolder or other case', () => {
+    expect(referencedRelativePaths('See references/agents.md and docs/CLAUDE.md and claude.md.')).toEqual([
+      'references/agents.md',
+      'docs/CLAUDE.md',
+      'claude.md',
+    ]);
   });
 
   it('returns nothing for a self-contained body', () => {
