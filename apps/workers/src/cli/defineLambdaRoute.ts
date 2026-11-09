@@ -155,10 +155,19 @@ export function defineLambdaRoute<C extends EndpointContract>(
     // validation, as in nextRouteForContract. A public contract skipped the connect above, and
     // only a declared client reads the setting.
     const headers = event.headers ?? {};
+    const gateLogger = new Logger({ metadata: { requestId } });
+    let canReadMinimums = true;
     if (parseClientIdentity(headers) && mongoose.connection.readyState !== 1) {
-      await connectDB(Config.MONGODB_URI.replace('%STAGE%', Config.STAGE), new Logger({ metadata: { requestId } }));
+      try {
+        await connectDB(Config.MONGODB_URI.replace('%STAGE%', Config.STAGE), gateLogger);
+      } catch (error) {
+        // Fail open, as the gate does when the setting cannot be read: a client that declared
+        // itself must never be worse off than one that did not, and a public route needs no DB.
+        canReadMinimums = false;
+        gateLogger.warn('[clientVersionGate] database unavailable; not gating client versions', { error });
+      }
     }
-    const upgradeRequired = await checkClientVersion(headers, new Logger({ metadata: { requestId } }));
+    const upgradeRequired = canReadMinimums ? await checkClientVersion(headers, gateLogger) : undefined;
     if (upgradeRequired) {
       return json(upgradeRequired.statusCode, {
         error: upgradeRequired.message,

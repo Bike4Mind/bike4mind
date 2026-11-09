@@ -3817,7 +3817,7 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 6,
   }),
-  // Read by apps/client/server/middlewares/clientVersionGate.ts.
+  // Read by packages/server-utils/src/middlewares/clientVersionGate.ts.
   minimumClientVersions: makeObjectSetting({
     key: 'minimumClientVersions',
     name: 'Minimum Client Versions',

@@ -39,6 +39,7 @@ vi.mock('@server/cli/resolveContractAuth', () => ({
 }));
 
 import { defineLambdaRoute } from './defineLambdaRoute';
+import { connectDB, mongoose } from '@bike4mind/database';
 import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 
 const makeEvent = (body: unknown): APIGatewayProxyEventV2 =>
@@ -82,6 +83,27 @@ describe('defineLambdaRoute + chatContract', () => {
       client_name: 'b4m-sdk-ts',
       minimum_version: '2.1.0',
     });
+  });
+
+  it('skips the gate rather than 500ing when a public route cannot reach the DB for a declared client', async () => {
+    const publicRoute = defineLambdaRoute({ ...chatContract, auth: 'public' }, async () => ({
+      statusCode: 200,
+      body: { ok: true },
+    }));
+    const connection = mongoose.connection as { readyState: number };
+    connection.readyState = 0;
+    vi.mocked(connectDB).mockRejectedValueOnce(new Error('db down'));
+    try {
+      const event = {
+        headers: { 'x-client-name': 'b4m-sdk-ts', 'x-client-version': '2.0.0' },
+        body: JSON.stringify({ message: 'hello' }),
+      } as unknown as APIGatewayProxyEventV2;
+      const res = asResult(await publicRoute(event));
+      expect(res.statusCode).toBe(200);
+      expect(mockCheckClientVersion).not.toHaveBeenCalled();
+    } finally {
+      connection.readyState = 1;
+    }
   });
 
   it('rejects a body that fails contract validation with 422', async () => {
