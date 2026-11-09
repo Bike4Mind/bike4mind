@@ -1509,6 +1509,8 @@ const overwatchAnalyticsQueue = new sst.aws.Queue('overwatchAnalyticsQueue', {
     retry: 3,
   },
   transform: {
+    // SSE-SQS, not SSE-KMS: the AWS-managed alias/aws/sqs key policy cannot be edited, so keep this as is.
+    // The DLQ stays on KMS.
     queue: { sqsManagedSseEnabled: true },
   },
 });
