@@ -52,3 +52,13 @@ export const ADMIN_DETAIL_MAX_WIDTH = 1280;
 
 /** Joy spacing units between page regions (header, banners, filters, table): 24 px. */
 export const ADMIN_REGION_GAP = 3;
+
+/**
+ * Spread on a Joy `TabList`: the strip stays on one line and scrolls sideways in its own box, so a
+ * tab label never wraps or drops to a second line (DESIGN_GUIDE section 3, "Narrow screens").
+ */
+export const adminTabStrip = {
+  flexWrap: 'nowrap',
+  overflowX: 'auto',
+  '& > [role="tab"]': { flex: 'none', whiteSpace: 'nowrap' },
+} as const;

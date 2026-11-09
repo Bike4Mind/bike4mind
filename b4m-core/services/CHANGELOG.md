@@ -1,5 +1,39 @@
 # @bike4mind/services
 
+## 25.0.0
+
+### Major Changes
+
+- [#6637](https://github.com/Bike4Mind/bike4mind/pull/6637) [`5398063`](https://github.com/Bike4Mind/bike4mind/commit/5398063cd155b1d95722bca9de3b0d5abfeb7ded) Thanks [@onoya](https://github.com/onoya)! - unify providers and expose model discovery
+
+### Minor Changes
+
+- [#5676](https://github.com/Bike4Mind/bike4mind/pull/5676) [`ebebc81`](https://github.com/Bike4Mind/bike4mind/commit/ebebc810e031649a6a7e4b56d7b8ce83489d53b6) Thanks [@jjmarfa](https://github.com/jjmarfa)! - expose custom MCP tools to chat and agents behind an approval gate
+
+- [#6403](https://github.com/Bike4Mind/bike4mind/pull/6403) [`2e5e01d`](https://github.com/Bike4Mind/bike4mind/commit/2e5e01db57d70a42054cc03463c00c63b222de05) Thanks [@onoya](https://github.com/onoya)! - APNs push delivery pipeline
+
+- [#6499](https://github.com/Bike4Mind/bike4mind/pull/6499) [`b2469a7`](https://github.com/Bike4Mind/bike4mind/commit/b2469a74bf1655e7f3665d4c8e2598fd9d929903) Thanks [@jarlacut](https://github.com/jarlacut)! - run restricted-tier substitute model on platform-metered routes
+
+- [#6522](https://github.com/Bike4Mind/bike4mind/pull/6522) [`5026479`](https://github.com/Bike4Mind/bike4mind/commit/5026479e3039fc50f92c1ff98b3589c2b67af3bb) Thanks [@onoya](https://github.com/onoya)! - record signup risk signals and label replay cohorts
+
+- [#6765](https://github.com/Bike4Mind/bike4mind/pull/6765) [`ba63f14`](https://github.com/Bike4Mind/bike4mind/commit/ba63f1463716c2e4553043cb6365f1abb2408916) Thanks [@onoya](https://github.com/onoya)! - name a new notebook from its first prompt at turn start
+
+### Patch Changes
+
+- [#6627](https://github.com/Bike4Mind/bike4mind/pull/6627) [`9830975`](https://github.com/Bike4Mind/bike4mind/commit/9830975903ef41719f4f02e0dfb3711fe9075e7f) Thanks [@aflordelis](https://github.com/aflordelis)! - move the remaining lower shared layer into the package
+
+- [#6806](https://github.com/Bike4Mind/bike4mind/pull/6806) [`02d3b6b`](https://github.com/Bike4Mind/bike4mind/commit/02d3b6b34a684f80cd6b194c0bbbc81be1f5a0e4) Thanks [@onoya](https://github.com/onoya)! - count only user-visible sunsets in ModelsDeprecated
+
+- Updated dependencies [[`ebebc81`](https://github.com/Bike4Mind/bike4mind/commit/ebebc810e031649a6a7e4b56d7b8ce83489d53b6), [`2e5e01d`](https://github.com/Bike4Mind/bike4mind/commit/2e5e01db57d70a42054cc03463c00c63b222de05), [`5026479`](https://github.com/Bike4Mind/bike4mind/commit/5026479e3039fc50f92c1ff98b3589c2b67af3bb), [`dcdb4e5`](https://github.com/Bike4Mind/bike4mind/commit/dcdb4e5162dc67a43b35f6f79e65d96698eaa260), [`29ee272`](https://github.com/Bike4Mind/bike4mind/commit/29ee2723eb5b8a85f909731d321ab04b111ee626), [`f510fd1`](https://github.com/Bike4Mind/bike4mind/commit/f510fd1486ea96498b27282d6af14a8ba2afbc42), [`9830975`](https://github.com/Bike4Mind/bike4mind/commit/9830975903ef41719f4f02e0dfb3711fe9075e7f), [`5398063`](https://github.com/Bike4Mind/bike4mind/commit/5398063cd155b1d95722bca9de3b0d5abfeb7ded), [`beb7322`](https://github.com/Bike4Mind/bike4mind/commit/beb73225c3ad2736b62e26bf23fc4f92c34d7d86), [`c0231d2`](https://github.com/Bike4Mind/bike4mind/commit/c0231d28460ec31f7f5ff13cdb82d73925a9b347), [`49f06f2`](https://github.com/Bike4Mind/bike4mind/commit/49f06f2b460cafc964a04b929f6f21679e9e9f47), [`06db5b6`](https://github.com/Bike4Mind/bike4mind/commit/06db5b690400d5668eb2acb1f1b48c0b9542856e), [`9c44e07`](https://github.com/Bike4Mind/bike4mind/commit/9c44e076692dbe22988a51329e69dadfe9abc687), [`ba63f14`](https://github.com/Bike4Mind/bike4mind/commit/ba63f1463716c2e4553043cb6365f1abb2408916), [`2c7fdfe`](https://github.com/Bike4Mind/bike4mind/commit/2c7fdfe2fbe5dc68ce729ee20f5b3c25204be497), [`2af48f3`](https://github.com/Bike4Mind/bike4mind/commit/2af48f34153450dd0e80589950584708f6c3afa2), [`763126b`](https://github.com/Bike4Mind/bike4mind/commit/763126b28325007c1c0fd8088896b65c5f7ef999), [`6f367fa`](https://github.com/Bike4Mind/bike4mind/commit/6f367faa3311440783a079ae605e342d56a44805)]:
+  - @bike4mind/agents@1.7.0
+  - @bike4mind/common@24.0.0
+  - @bike4mind/llm-adapters@2.4.0
+  - @bike4mind/fab-pipeline@3.0.0
+  - @bike4mind/utils@11.0.0
+  - @bike4mind/auth@1.2.3
+  - @bike4mind/db-core@0.8.14
+  - @bike4mind/mcp@2.2.2
+
 ## 24.0.0
 
 ### Major Changes

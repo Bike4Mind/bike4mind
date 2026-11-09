@@ -35,6 +35,7 @@ import { readPanelFlag, spawnedSessions, writePanelFlag } from './backgroundTask
 import { BrowserPane } from './BrowserPane';
 import { SimulatorPane } from './SimulatorPane';
 import { ModelPane } from './ModelPane';
+import { useModelBackgroundBuilds } from './model3d/useModelBackgroundBuilds';
 import { useModelEngine } from './model3d/useModelEngine';
 import { useSimulatorView } from './useSimulatorView';
 import { readBrowserPaneOpen, writeBrowserPaneOpen } from './agentBrowser';
@@ -50,7 +51,13 @@ import { PanelRightIcon } from './icons';
 import { OpenPaneButtons, PanesMenu, type PaneControl } from './PanesMenu';
 import { ProjectSubtitleLine } from './ProjectSubtitleLine';
 import { MessageThread } from './MessageThread';
-import { chatShellRootSx, columnStackSx, contentColumnSx } from './layout';
+import {
+  chatShellRootSx,
+  COLUMN_LAYOUT_TRANSITION,
+  columnStackSx,
+  contentColumnSx,
+  SESSION_PANEL_SPACE_VAR,
+} from './layout';
 import { ModelPicker } from './ModelPicker';
 import { modelSwitchCredits } from './modelSwitchCost';
 import { ReasoningEffortPicker } from './ReasoningEffortPicker';
@@ -61,7 +68,7 @@ import { CacheExpiryNote } from './CacheExpiryNote';
 import { ContextRing } from './ContextRing';
 import { GrantedFolderChips, SessionChips } from './SessionChips';
 import { SESSION_PANEL_ID, SessionPanel } from './SessionPanel';
-import { panelFitsBesideThread, useElementWidth, useSessionPanelPrefs } from './sessionPanelState';
+import { panelFitsBesideThread, SESSION_PANEL_SPACE, useElementWidth, useSessionPanelPrefs } from './sessionPanelState';
 import { createPullRequestPrompt } from './changesBarModel';
 import { useWorkspaceChanges } from './useWorkspaceChanges';
 import { openInSessionBrowser } from './prLinks';
@@ -112,6 +119,7 @@ import { useCreationTools } from './useCreationTools';
 import { BoardView } from './orchestrator/BoardView';
 import { OrchestratePill } from './orchestrator/OrchestratePill';
 import { OrchestrateToggle } from './orchestrator/OrchestrateToggle';
+import { ExampleQuestStrip } from './orchestrator/exampleQuests';
 import { ambientHeld, isEditable, isPrintableKey, useAmbientSettle } from './orchestrator/ambient';
 import type {
   AgentActions,
@@ -356,8 +364,11 @@ export function ChatShell({
   const simulatorView = useSimulatorView();
   const [simulatorOpen, setSimulatorOpen] = useState(false);
   const darkMode = useTheme().palette.mode === 'dark';
-  // Mounted here rather than in the pane so builds, GLB writes and screenshots keep working while it is closed.
-  const modelEngine = useModelEngine(darkMode);
+  // Mounted here rather than in the pane so builds, GLB writes and screenshots keep working while it
+  // is closed. Each conversation has its own model: the pane follows this one, and the background
+  // builds keep every other conversation's model tools working.
+  const modelEngine = useModelEngine(darkMode, activeId);
+  useModelBackgroundBuilds(activeId, darkMode);
   const [modelOpen, setModelOpen] = useState(false);
   // Per conversation rather than one flag: see terminalPanelState.ts.
   const [terminalSessions, setTerminalSessions] = useState(readTerminalOpenSessions);
@@ -434,11 +445,16 @@ export function ChatShell({
       return !current;
     });
   }, []);
-  // The agent opening a model (model_view) is the user asking to see it, so a new path opens the pane.
+  // The agent opening a model (model_view) is the user asking to see it, so a new path opens the pane;
+  // a conversation opens with its pane showing its own model, or closed when it has none.
   const modelPath = modelEngine.state.path;
+  const modelPaneFor = useRef(activeId);
   useEffect(() => {
-    if (modelPath) setModelOpen(true);
-  }, [modelPath]);
+    if (modelPaneFor.current !== activeId) {
+      modelPaneFor.current = activeId;
+      setModelOpen(modelPath !== null);
+    } else if (modelPath) setModelOpen(true);
+  }, [activeId, modelPath]);
   const toggleModel = useCallback(() => setModelOpen(current => !current), []);
   const toggleBrowser = useCallback(() => {
     setBrowserOpen(current => {
@@ -713,15 +729,23 @@ export function ChatShell({
     canSpawnDeeper(activeSummary) &&
     modelSupportsTools(activeSummary.model, findModelOption(catalog.models, activeSummary.model));
   const delegating = activeSummary?.orchestrate === true;
-  // Showing the stage never changes the behaviour: an agentless Code session gets the empty stage,
-  // which offers to turn Orchestrate on. A Chat session with no agents has no stage at all.
-  const orchestrating = orchestratorPrefs.surface === 'orchestrate' && (spawnedStates.length > 0 || orchestrateCapable);
+  // The stage exists only once there is an agent to show, whatever the Orchestrate behaviour: a fresh
+  // orchestrating session gets its example quests above the composer instead (ExampleQuestStrip).
+  const hasAgents = spawnedStates.length > 0;
+  const orchestrating = orchestratorPrefs.surface === 'orchestrate' && hasAgents;
   const { setOrchestrate } = conversation;
+  // A stored 'orchestrate' with nothing to show (agents deleted, or left from an empty stage) is dropped,
+  // so the stage never pops up later on its own. Not while the list loads: it has no agents yet either.
+  const staleAgentsSurface = !settling && !hasAgents && orchestratorPrefs.surface === 'orchestrate';
+  useEffect(() => {
+    if (staleAgentsSurface) setOrchestratorSurface('chat');
+  }, [staleAgentsSurface, setOrchestratorSurface]);
+  const showExampleQuests =
+    !opening && orchestrateCapable && delegating && !hasAgents && !turnOpen && conversation.messages.length === 0;
 
   // Derived during render, not in an effect: TavernView only plays its intro if introPlaying is
-  // already true when it mounts, which is the same commit that enters orchestrate mode. Held back
-  // while the stage is empty, so the intro plays as the first agent walks in.
-  const orchestrateEntry = orchestrating && spawnedStates.length > 0 ? activeId : null;
+  // already true when it mounts, which is the same commit that enters orchestrate mode.
+  const orchestrateEntry = orchestrating ? activeId : null;
   const [introEntry, setIntroEntry] = useState<string | null>(null);
   const [introPhase, setIntroPhase] = useState<IntroPhase>('off');
   if (orchestrateEntry !== introEntry) {
@@ -896,6 +920,7 @@ export function ChatShell({
     !opening && !initialCodeSetup && conversation.session?.mode === 'code' ? conversation.session.project : undefined;
   const panelDocked = threadRegionWidth === null || panelFitsBesideThread(threadRegionWidth);
   const panelShown = !!panelProject && (panelDocked ? panelPrefs.open : panelPopoverOpen);
+  const panelSpace = panelShown && panelDocked ? SESSION_PANEL_SPACE : 0;
   const bindingErrorHidden =
     !!panelProject && !!conversation.project.error && (!panelShown || panelPrefs.collapsed.has('environment'));
   const { toggleOpen: togglePanelOpen } = panelPrefs;
@@ -1594,7 +1619,11 @@ export function ChatShell({
           onOpenSkillMarket={openSkillMarket}
         />
       ) : (
-        <Stack ref={conversationColumn} sx={{ flex: 1, minWidth: 0, ...columnStackSx }}>
+        <Stack
+          ref={conversationColumn}
+          data-testid="chat-conversation-column"
+          sx={{ flex: 1, minWidth: 0, ...columnStackSx, [SESSION_PANEL_SPACE_VAR]: `${panelSpace}px` }}
+        >
           <Box sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
             <Box sx={{ ...contentColumnSx, py: 1.25, display: 'flex', alignItems: 'center', gap: 1 }}>
               <Box sx={{ flex: 1, minWidth: 0 }}>
@@ -1619,7 +1648,6 @@ export function ChatShell({
                 // The surface shown, which is Chat when a stored 'orchestrate' has nothing to show.
                 surface={orchestrating ? 'orchestrate' : 'chat'}
                 onSurfaceChange={orchestratorPrefs.setSurface}
-                canStart={orchestrateCapable}
               />
               <Box
                 data-testid="chat-header-tools"
@@ -1679,7 +1707,20 @@ export function ChatShell({
           >
             {/* One tree for both surfaces, so entering or leaving orchestrate, or toggling the dock,
                 never remounts the thread and loses the reader's place in it. */}
-            <Box sx={{ position: 'relative', display: 'flex', flex: 1, minHeight: 0 }}>
+            <Box
+              data-testid="chat-thread-region"
+              sx={{
+                position: 'relative',
+                display: 'flex',
+                flex: 1,
+                minHeight: 0,
+                pr: `${panelSpace}px`,
+                // The row reserves the rail once, including for the orchestrator's narrower dock.
+                [SESSION_PANEL_SPACE_VAR]: '0px',
+                transition: `padding-right ${COLUMN_LAYOUT_TRANSITION}`,
+                '@media (prefers-reduced-motion: reduce)': { transition: 'none' },
+              }}
+            >
               {orchestratorShown && (
                 <OrchestratorSurface
                   // Keyed so a switch between orchestrating parents resets selection and sort, and never reuses sprites.
@@ -1700,7 +1741,6 @@ export function ChatShell({
                   focusAgent={noticeFocus?.rootId === activeId ? noticeFocus.agentId : null}
                   onFocusAgentConsumed={clearNoticeFocus}
                   onExampleQuest={pickExampleQuest}
-                  onTurnOn={orchestrateCapable && !delegating ? () => void setOrchestrate(true) : undefined}
                   desk={innkeeperDesk}
                   ambient={stageAmbient}
                   dockControl={
@@ -1946,6 +1986,12 @@ export function ChatShell({
               turnOpen={turnOpen}
               sx={contentColumnSx}
             />
+
+            {showExampleQuests && (
+              <Box sx={contentColumnSx}>
+                <ExampleQuestStrip onPick={pickExampleQuest} />
+              </Box>
+            )}
 
             <Composer
               sessionId={activeId}

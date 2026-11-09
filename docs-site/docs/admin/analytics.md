@@ -101,7 +101,7 @@ Each chart has a **View as table** button that shows the same numbers as a table
 
 ## Per-user activity
 
-The raw per-user activity log (a row per day, action and user, with organization, date, search and metadata filters and CSV export) is on **Overview > Events**, in the **By user** view. See [Metrics](./metrics.md).
+The raw per-user activity log (a row per day, action and user, with organization, date, search and metadata filters and CSV export) is on **Overview > Event metrics**, in the **By user** view. See [Metrics](./metrics.md).
 
 ---
 

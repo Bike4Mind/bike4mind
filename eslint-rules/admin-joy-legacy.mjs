@@ -2,7 +2,6 @@
 // swapping primitives alone would change form, dialog and table behavior. Remove entries as migrated.
 const componentsByFile = {
   'AdminDashboardTab.tsx': ['Card'],
-  'AdminGrowthPricingTab.tsx': ['Card'],
   'AdminLiveOpsTriageMultiConfigTab.tsx': ['Card', 'Modal'],
   'AdminModalTab.tsx': ['Card', 'Table'],
   'AdminModalTabNew.tsx': ['Modal', 'Card'],
@@ -38,7 +37,6 @@ const componentsByFile = {
   'FilesTab/EditTagModal.tsx': ['Modal'],
   'FilesTab/index.tsx': ['Table'],
   'GitHubConnectionTab.tsx': ['Card', 'Modal'],
-  'HelpAnalyticsTab/index.tsx': ['Card', 'Modal', 'Table'],
   'IdentityProvidersTab.tsx': ['Card', 'Modal', 'Table'],
   'IntegrationDemandTab.tsx': ['Table'],
   'IntegrationHealth/components/IntegrationDetailPanel.tsx': ['Card', 'Table'],

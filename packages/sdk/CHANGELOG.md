@@ -1,5 +1,13 @@
 # @bike4mind/sdk
 
+## 2.0.0
+
+### Major Changes
+
+- [#6637](https://github.com/Bike4Mind/bike4mind/pull/6637) [`5398063`](https://github.com/Bike4Mind/bike4mind/commit/5398063cd155b1d95722bca9de3b0d5abfeb7ded) Thanks [@onoya](https://github.com/onoya)! - unify providers and expose model discovery
+
+- [#6746](https://github.com/Bike4Mind/bike4mind/pull/6746) [`9c44e07`](https://github.com/Bike4Mind/bike4mind/commit/9c44e076692dbe22988a51329e69dadfe9abc687) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - type the known content blocks in completions messages
+
 ## 1.7.0
 
 ### Minor Changes

@@ -1,6 +1,5 @@
 export default {
   'AdminDashboardTab.tsx': [[3, '230f0025f26e9c84']],
-  'AdminGrowthPricingTab.tsx': [[2, '9366696592e95a71']],
   'AdminLiveOpsTriageMultiConfigTab.tsx': [[9, 'dc8a25326b09e153']],
   'AdminModalTab.tsx': [
     [2, '43dca498ff9a0de5'],
@@ -39,7 +38,6 @@ export default {
   'FilesTab/EditTagModal.tsx': [[3, 'e29b446aa5957de4']],
   'FilesTab/index.tsx': [[4, 'bb9b66251f6b8489']],
   'GitHubConnectionTab.tsx': [[8, '1fd7087d06a0ddbe']],
-  'HelpAnalyticsTab/index.tsx': [[2, '10fc50c397d94954']],
   'IdentityProvidersTab.tsx': [[2, '073759fd26afa7fa']],
   'IntegrationDemandTab.tsx': [[3, '33c84625c2e68e9d']],
   'IntegrationHealth/components/IntegrationDetailPanel.tsx': [[2, 'b7900285fffe06e6']],

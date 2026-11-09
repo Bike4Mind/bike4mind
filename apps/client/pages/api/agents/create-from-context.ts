@@ -20,6 +20,7 @@ import {
   Permission,
   UnprocessableEntityError,
   isImageAttachment,
+  isTerminalCreditRefusal,
 } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, NotFoundError, getFileContent, getSettingsByNames } from '@bike4mind/utils';
 import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
@@ -534,7 +535,8 @@ const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
       if (
         error instanceof UnprocessableEntityError ||
         error instanceof ForbiddenError ||
-        error instanceof BadRequestError
+        error instanceof BadRequestError ||
+        isTerminalCreditRefusal(error)
       ) {
         throw error;
       }

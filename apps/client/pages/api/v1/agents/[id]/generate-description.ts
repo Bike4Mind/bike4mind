@@ -3,7 +3,7 @@
  * POST /api/agents/[id]/generate-description, over the same generateAgentDescription. The description is
  * returned, not saved. A provider failure is a 502 rather than the SPA route's 500 body.
  */
-import { generateAgentDescriptionContract } from '@bike4mind/common';
+import { generateAgentDescriptionContract, isTerminalCreditRefusal } from '@bike4mind/common';
 import { generateAgentDescription } from '@server/agents/authoring/generateAgentDescription';
 import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import { AUTHORING_RATE_LIMIT_BUCKET, findOwnedAgent } from '@server/agents/v1AgentRoute';
@@ -31,7 +31,7 @@ const handler = nextRouteForContract(generateAgentDescriptionContract, {
         ),
       });
     } catch (error) {
-      req.logger.error('Error generating agent description:', error);
+      if (!isTerminalCreditRefusal(error)) req.logger.error('Error generating agent description:', error);
       throw toV1AuthoringError(error);
     }
   })

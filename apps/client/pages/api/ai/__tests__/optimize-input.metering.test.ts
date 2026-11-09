@@ -6,7 +6,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { insufficientCreditsError } from '@bike4mind/common';
+import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, insufficientCreditsError, TooManyRequestsError } from '@bike4mind/common';
 
 const m = vi.hoisted(() => ({
   enforce: true,
@@ -105,6 +105,26 @@ describe('POST /api/ai/optimize-input metering', () => {
     m.hold.mockRejectedValue(insufficientCreditsError('You do not have enough credits.'));
 
     await expect(call()).rejects.toMatchObject({ statusCode: 422 });
+    expect(m.complete).not.toHaveBeenCalled();
+  });
+
+  it('surfaces the free-tier daily cap as its 429 without logging an error', async () => {
+    m.hold.mockRejectedValue(
+      new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
+        errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+        retryAfter: 3600,
+      })
+    );
+    const { req, res } = createMocks({ method: 'POST', body: { text: 'make this better' } });
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn() };
+    Object.assign(req, { user: { id: 'u1' }, logger });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the stubbed router's param type is loose
+    await expect((handler as any)(req, res)).rejects.toMatchObject({
+      statusCode: 429,
+      additionalInfo: { errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE },
+    });
+    expect(logger.error).not.toHaveBeenCalled();
     expect(m.complete).not.toHaveBeenCalled();
   });
 

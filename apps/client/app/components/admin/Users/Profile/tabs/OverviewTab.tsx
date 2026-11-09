@@ -21,7 +21,7 @@ import { OrganizationsCard } from './OrganizationsCard';
 import { ClientsCard } from './ClientsCard';
 import { HeaderAction, RowAction } from './cardActions';
 import { TimelineList, TimelineSkeleton } from './TimelineList';
-import { timelineItem } from './timelineItems';
+import { timelineItems } from './timelineItems';
 import { USER_ROLE_LABELS, isManagedTag, userRole, type AdminUserProfile } from '../userProfileModel';
 
 const RECENT_ACTIVITY_COUNT = 6;
@@ -167,16 +167,16 @@ const RecentActivityCard: React.FC<{ userId: string; onViewAll: () => void; onOp
   onViewAll,
   onOpenCredits,
 }) => {
-  const [categories, setCategories] = useState<UserTimelineCategory[]>([...USER_TIMELINE_CATEGORIES]);
+  const [categories, setCategories] = useState<UserTimelineCategory[]>(
+    USER_TIMELINE_CATEGORIES.filter(category => category !== 'api')
+  );
   const timeline = useUserTimeline(
     userId,
     { types: typesOfCategories(categories) },
     { pageSize: RECENT_ACTIVITY_COUNT }
   );
   const [selected, setSelected] = useState<AuditEntry | null>(null);
-  const items = (timeline.data?.pages[0]?.entries ?? []).map(entry =>
-    timelineItem(entry, { onOpenAudit: setSelected, onOpenCredits })
-  );
+  const items = timelineItems(timeline.data?.pages[0]?.entries ?? [], { onOpenAudit: setSelected, onOpenCredits });
 
   const body = () => {
     if (timeline.isLoading) return <TimelineSkeleton rows={3} />;

@@ -21,6 +21,7 @@ import { armGenerationCallback, resolveGenerationCallback } from '@server/genera
 import { assertReferenceImagesSupported } from '@server/utils/assertReferenceImagesSupported';
 import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
+import { isModelRequiresSubscriptionError } from '@bike4mind/services/llm/modelAdmission';
 
 const handler = nextRouteForContract(generateImageContract).post(async (req, res) => {
   assertAiAccessAllowed(req.user);
@@ -179,11 +180,18 @@ const handler = nextRouteForContract(generateImageContract).post(async (req, res
 
     return res.json(response);
   } catch (error) {
-    req.logger.error(`[DEBUG API] Error in generate-image endpoint:`, {
+    const details = {
       error,
       errorMessage: error instanceof Error ? error.message : 'Unknown error',
       userId: req.user?.id,
-    });
+    };
+    // A free-tier caller picking a paid-only model is their plan, not a fault: warn, and the error
+    // handler still answers 403. Every other admission refusal stays at error (same rule as ChatCompletionInvoke).
+    if (isModelRequiresSubscriptionError(error)) {
+      req.logger.warn(`[DEBUG API] generate-image refused: model requires a paid plan`, details);
+    } else {
+      req.logger.error(`[DEBUG API] Error in generate-image endpoint:`, details);
+    }
     throw error;
   }
 });
