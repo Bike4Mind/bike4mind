@@ -16,7 +16,7 @@ const settings: PreferenceArenaSettings = {
 
 const verifiedUser: ArenaUser = {
   emailVerified: true,
-  noCardUnlocks: ['github_verified'],
+  signupGrant: { stage: 'unlocked', unlockedBy: 'card_verified' },
 };
 
 const pair = (over: Partial<IArenaPairDocument> = {}): IArenaPairDocument =>

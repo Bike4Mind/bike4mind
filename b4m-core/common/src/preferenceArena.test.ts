@@ -84,18 +84,10 @@ describe('isArenaVerifiedUser', () => {
     );
   });
 
-  it('accepts a GitHub or work-email no-card unlock even though the grant was never stamped', () => {
-    for (const reason of ['github_verified', 'work_email_verified'] as const) {
-      expect(isArenaVerifiedUser({ emailVerified: true, noCardUnlocks: [reason] })).toBe(true);
+  it('does not count a retired GitHub or work-email unlock as verified', () => {
+    for (const unlockedBy of ['github_verified', 'work_email_verified'] as const) {
+      expect(isArenaVerifiedUser({ emailVerified: true, signupGrant: { stage: 'unlocked', unlockedBy } })).toBe(false);
     }
-    expect(isArenaVerifiedUser({ emailVerified: true, noCardUnlocks: [] })).toBe(false);
-  });
-
-  it('applies the account checks to a no-card unlock too', () => {
-    const unlocked = { emailVerified: true, noCardUnlocks: ['github_verified' as const] };
-    expect(isArenaVerifiedUser({ ...unlocked, emailVerified: false })).toBe(false);
-    expect(isArenaVerifiedUser({ ...unlocked, isSynthetic: true })).toBe(false);
-    expect(isArenaVerifiedUser({ ...unlocked, deletedAt: new Date() })).toBe(false);
   });
 
   it('rejects unverified email, synthetic, deleted and missing grants', () => {

@@ -135,6 +135,19 @@ describe('releaseDueSubscriptionRewards against a real replica set', () => {
     expect(await referralSubscriptionRewardRepository.findByInvoiceId('in_1')).toMatchObject({ status: 'released' });
   });
 
+  it('pays the reward into a promo lot that expires after 90 days', async () => {
+    const inviter = await seedDueReward();
+    const ninetyDaysMs = 90 * 24 * 60 * 60 * 1000;
+    const before = Date.now();
+
+    await releaseDueSubscriptionRewards({ now: NOW, paymentOutcome: stillPaid });
+
+    const [lot] = await creditLotRepository.findByOwner(inviter.id, 'User' as never);
+    expect(lot).toMatchObject({ amount: REWARD_CREDITS, source: 'promo' });
+    expect(lot.expiresAt.getTime()).toBeGreaterThanOrEqual(before + ninetyDaysMs);
+    expect(lot.expiresAt.getTime()).toBeLessThanOrEqual(Date.now() + ninetyDaysMs);
+  });
+
   it('rolls the claim back when the grant fails, then pays once on the next run', async () => {
     const inviter = await seedDueReward();
     grantFailure.next = true;

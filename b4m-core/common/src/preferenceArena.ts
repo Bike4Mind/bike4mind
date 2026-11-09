@@ -19,17 +19,6 @@ export type ArenaPairSource = (typeof ARENA_PAIR_SOURCES)[number];
  */
 export const ARENA_VERIFIED_UNLOCK_REASONS: readonly SignupGrantUnlockReason[] = ['card_verified', 'phone_verified'];
 
-/**
- * Ledger rows written by the retired GitHub and work-email unlocks. They never stamped the signup
- * grant, so accounts that already hold one stay verified through the row alone.
- */
-export const ARENA_LEGACY_UNLOCK_REASONS = ['github_verified', 'work_email_verified'] as const;
-export type ArenaLegacyUnlockReason = (typeof ARENA_LEGACY_UNLOCK_REASONS)[number];
-
-export function arenaLegacyUnlockTransactionId(reason: ArenaLegacyUnlockReason, userId: string): string {
-  return `unlock-grant:${reason}:${userId}`;
-}
-
 export type ArenaIneligibleReason = 'disabled' | 'unverified' | 'blocked';
 
 export type ArenaRejectReason =
@@ -118,14 +107,11 @@ export interface ArenaEligibilityFields {
   isSynthetic?: boolean | null;
   deletedAt?: Date | null;
   signupGrant?: Pick<SignupGrant, 'stage' | 'unlockedBy'> | null;
-  /** Retired unlocks this user holds a ledger row for. */
-  noCardUnlocks?: readonly ArenaLegacyUnlockReason[];
 }
 
 /** Account-block checks (ban, dispute, suspension) are the caller's, via `accountBlockReasons`. */
 export function isArenaVerifiedUser(user: ArenaEligibilityFields): boolean {
   if (!user.emailVerified || user.isSynthetic || user.deletedAt) return false;
-  if ((user.noCardUnlocks?.length ?? 0) > 0) return true;
   const grant = user.signupGrant;
   return grant?.stage === 'unlocked' && !!grant.unlockedBy && ARENA_VERIFIED_UNLOCK_REASONS.includes(grant.unlockedBy);
 }
