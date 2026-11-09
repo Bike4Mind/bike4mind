@@ -415,6 +415,9 @@ describe('runDeterministicScan - shell commands', () => {
     '- Run `cat package.json`',
     'Run git status to see changes',
     '```sh\ncd repo && git merge feature\n```',
+    'Run `git push --force-with-lease`',
+    'Run `env FOO=bar pnpm test`',
+    'Run `cp .env.example .env`',
   ])('holds routine commands at review: %s', body => {
     expect(rules(body)).toContain('shell_commands:medium');
     expect(rules(body)).not.toContain('dangerous_shell_command:high');
@@ -428,10 +431,16 @@ describe('runDeterministicScan - shell commands', () => {
     '```sh\nrm -fr /tmp/x\n```',
     'Run `git push --force`',
     'Run `git push -f origin main`',
-    'Run `git push --force-with-lease`',
     'Run `cat ~/.ssh/id_rsa`',
     'Run `cat ~/.aws/credentials`',
     '```\ncat .env\n```',
+    'Run `source .env.local`',
+    'Run `. ./.env`',
+    'Run `less .env`',
+    'Run `head -n 3 .env`',
+    'Run `cat ~/.netrc`',
+    'Run `cat ~/.npmrc`',
+    'Run `export -p`',
     'Run `printenv`',
     '```bash\nenv | sort\n```',
   ])('holds dangerous commands at high: %s', body => {

@@ -653,7 +653,7 @@ function scanText(raw: string, allowlist: string[]) {
 
 const SHELL_FENCE_LANGS = new Set(['', 'sh', 'bash', 'shell', 'zsh', 'console', 'terminal', 'shellscript']);
 const ROUTINE_COMMAND =
-  /^(?:\$\s+)?(?:sudo\s+)?(?:git|gh|pnpm|npm|npx|yarn|ls|cat|head|tail|grep|rg|find|pwd|cd|mkdir|cp|mv|touch|echo|wc|diff|node)\s+\S/;
+  /^(?:\$\s+)?(?:sudo\s+)?(?:git|gh|pnpm|npm|npx|yarn|ls|cat|head|tail|grep|rg|find|pwd|cd|mkdir|cp|mv|touch|echo|wc|diff|node|env)\s+\S/;
 const SHELL_COMMAND_HEAD =
   /^(?:\$\s+)?(?:sudo\s+)?(?:git|gh|pnpm|npm|npx|yarn|ls|cat|head|tail|grep|rg|find|pwd|cd|mkdir|cp|mv|touch|echo|wc|diff|node|curl|wget|rm|printenv|env)(?:\s|$)/;
 const DANGEROUS_COMMANDS: { pattern: RegExp; label: string }[] = [
@@ -663,11 +663,16 @@ const DANGEROUS_COMMANDS: { pattern: RegExp; label: string }[] = [
       /\brm\s+(?:-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r|-r\s+-f|-f\s+-r|--recursive\s+--force|--force\s+--recursive)\b/i,
     label: 'runs rm -rf',
   },
-  { pattern: /\bgit\s+push\b[^\n]*?\s(?:--force(?:-with-lease)?\b|-[a-zA-Z]*f[a-zA-Z]*\b)/, label: 'force-pushes' },
+  { pattern: /\bgit\s+push\b[^\n]*?\s(?:--force(?![-\w])|-[a-zA-Z]*f[a-zA-Z]*\b)/, label: 'force-pushes' },
   {
     pattern:
-      /(?:^|[\s"'=:])(?:~|\$HOME)?\/?\.(?:ssh|gnupg)(?:\/|\b)|\.aws\/credentials|(?<![\w-])\.env(?:\.(?!example|sample|template)[\w.-]+)?(?![\w-])|\.netrc\b|\.npmrc\b|\bid_(?:rsa|ed25519|ecdsa)\b/,
+      /(?:^|[\s"'=:])(?:~|\$HOME)?\/?\.(?:ssh|gnupg)(?:\/|\b)|\.aws\/credentials|\.netrc\b|\.npmrc\b|\bid_(?:rsa|ed25519|ecdsa)\b/,
     label: 'reads or writes credential files',
+  },
+  {
+    pattern:
+      /(?:^|[|;&]\s*)(?:\$\s+)?(?:sudo\s+)?(?:(?:cat|source|less|more|head|tail|bat|grep|rg|sed|awk)|\.)\s[^|;&\n]*?(?<![\w-])\.env(?:\.(?!example|sample|template)[\w.-]+)?(?![\w-]|\.\w)/,
+    label: 'reads an env file',
   },
   {
     pattern: /\bprintenv\b|(?:^|[|;&]\s*)(?:\$\s+)?env\s*(?:$|[|>])|\bexport\s+-p\b/,
