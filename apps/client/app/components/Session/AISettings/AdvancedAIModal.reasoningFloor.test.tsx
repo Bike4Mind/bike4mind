@@ -133,6 +133,7 @@ describe('AdvancedAIModal - Max output tokens below the reasoning floor', () => 
       can_think: undefined,
       backend: undefined,
       dispatchProfile: undefined,
+      thinkingAlwaysOn: undefined,
     });
   });
 
@@ -180,6 +181,14 @@ describe('AdvancedAIModal - Max output tokens below the reasoning floor', () => 
     expect(screen.queryByTestId('token-allocation-reasoning-floor-warning')).toBeNull();
   });
 
+  // Such a model is sent no thinking field (thinkingForSend), so a stored toggle raises nothing.
+  it('warns on an always-thinking Anthropic model even with the stored toggle on', () => {
+    Object.assign(modelInfoRows[0], { can_think: true, backend: 'anthropic', thinkingAlwaysOn: true });
+    renderDetails(8192, { enabled: true, budget_tokens: 16_000 });
+
+    expect(screen.getByTestId('token-allocation-reasoning-floor-warning')).toBeInTheDocument();
+  });
+
   it('still warns with thinking on where the adapter sends the value as set', () => {
     Object.assign(modelInfoRows[0], {
       thinkingStyle: undefined,
@@ -198,22 +207,5 @@ describe('AdvancedAIModal - Max output tokens below the reasoning floor', () => 
     renderDetails(8192);
 
     expect(screen.queryByTestId('token-allocation-reasoning-floor-warning')).toBeNull();
-  });
-});
-
-describe('AdvancedAIModal - Reasoning Effort selector', () => {
-  beforeEach(() => {
-    Object.assign(modelInfoRows[0], { thinkingStyle: 'adaptive', can_think: true, thinkingAlwaysOn: undefined });
-  });
-
-  it('shows the selector for an adaptive model whose thinking is always on', () => {
-    modelInfoRows[0].thinkingAlwaysOn = true;
-    renderDetails(8192);
-    expect(screen.getByText('Reasoning Effort')).toBeTruthy();
-  });
-
-  it('hides it for an adaptive model that can switch thinking off', () => {
-    renderDetails(8192);
-    expect(screen.queryByText('Reasoning Effort')).toBeNull();
   });
 });

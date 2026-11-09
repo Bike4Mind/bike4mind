@@ -1253,9 +1253,7 @@ const ToolsSection = ({
                   name="Thinking"
                   description={
                     thinkingAlwaysOn
-                      ? modelInfo?.thinkingStyle === 'adaptive'
-                        ? 'Always on for this model. Set how hard it thinks with Reasoning Effort in Advanced Settings'
-                        : 'Always on for this model'
+                      ? 'This model always thinks before responding'
                       : modelSupportsThinking
                         ? 'Reasons step-by-step before responding; tune the token budget for longer chains'
                         : 'Not supported by the selected model'

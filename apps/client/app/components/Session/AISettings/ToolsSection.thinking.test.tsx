@@ -115,12 +115,13 @@ beforeEach(() => {
 });
 
 describe('ToolsSection thinking row', () => {
-  it('shows a fixed always-on label pointing at Reasoning Effort, with no toggle or budget, for Opus 5.5', () => {
+  it('shows a fixed always-thinks label with no Reasoning Effort pointer, toggle or budget, for Opus 5.5', () => {
     mocks.state.model = 'claude-opus-5-5';
     const { container } = render(<ToolsSection />, { wrapper: Wrapper });
     const row = thinkingRow(container);
     expect(screen.getByTestId('tools-thinking-always-on')).toBeTruthy();
-    expect(row.textContent).toContain('Reasoning Effort');
+    expect(row.textContent).toContain('This model always thinks before responding');
+    expect(row.textContent).not.toContain('Reasoning Effort');
     expect(screen.queryByTestId('tools-thinking-toggle-btn')).toBeNull();
     expect(row.querySelector('input[type="number"]')).toBeNull();
   });
@@ -137,7 +138,7 @@ describe('ToolsSection thinking row', () => {
     expect(row.querySelector('input[type="number"]')).toBeTruthy();
   });
 
-  it('shows always-on without a Reasoning Effort pointer for Kimi K2.7 Code', () => {
+  it('shows the same always-thinks label for Kimi K2.7 Code', () => {
     mocks.state.model = 'kimi-k2.7-code';
     const { container } = render(<ToolsSection />, { wrapper: Wrapper });
     expect(screen.getByTestId('tools-thinking-always-on')).toBeTruthy();
