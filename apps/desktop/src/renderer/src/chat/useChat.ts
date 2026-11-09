@@ -514,6 +514,8 @@ export interface ConversationController {
   /** A first turn waiting on its worktree, before `turn` exists. Null otherwise. */
   preparing: WorkspaceProgress | null;
   sendError: string | null;
+  /** The chat whose read failed, so the shell stops treating it as opening; null otherwise. */
+  openFailedFor: string | null;
   /** One-shot message about something main changed while accepting a turn. Not a failure. */
   notice: string | null;
   dismissNotice: () => void;
@@ -606,6 +608,7 @@ export function useConversation(
   const [phase, setPhase] = useState<ModelPhase | null>(null);
   const [preparing, setPreparing] = useState<WorkspaceProgress | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
+  const [openFailedFor, setOpenFailedFor] = useState<string | null>(null);
   const [notices, setNotices] = useState<ContextNotice[]>([]);
   const notice = useMemo(() => noticeText(notices), [notices]);
   const setNotice = useCallback((text: string | null) => setNotices(text ? [{ message: text }] : []), []);
@@ -651,6 +654,7 @@ export function useConversation(
 
   useEffect(() => {
     setSendError(null);
+    setOpenFailedFor(null);
     setNotices(backgroundNotices.get(sessionId ?? '') ?? []);
     if (sessionId) backgroundNotices.delete(sessionId);
     setProjectError(null);
@@ -676,25 +680,36 @@ export function useConversation(
       openRead.current = read;
       const preparationBeforeRead = workspaceVersion.current;
       const historyBeforeRead = historyVersion.current;
-      void window.b4m.chat.getSession(sessionId).then(loaded => {
+      const failed = (error: unknown): void => {
         if (!current) return;
-        if (preparationBeforeRead !== workspaceVersion.current) return load();
-        if (historyBeforeRead !== historyVersion.current) return load();
-        if (read.stale) return load();
-        // A reply already running arrives as main's live copy, and the events from now on
-        // extend it. One that settled while this read was in flight is stale: read again
-        // rather than put back a turn the 'done' already closed.
-        const live = loaded?.replyInFlight;
-        if (live && settledReplies.current.has(live.messageId)) return load();
-        openRead.current = null;
-        setSession(loaded);
-        setMessages(loaded?.messages ?? []);
-        // A started session opened while its worktree is still being cut: no event is coming
-        // to say so, the 'workspace' one went out before this window was looking.
-        setPreparing(current => current ?? loaded?.preparingWorkspace ?? null);
-        setStreaming(!!live);
-        setTurn(live ? { startedAt: live.startedAt, tokens: null } : null);
-      });
+        if (openRead.current === read) openRead.current = null;
+        setSendError(`Could not open this conversation. ${error instanceof Error ? error.message : String(error)}`);
+        setSession(null);
+        setMessages([]);
+        setOpenFailedFor(sessionId);
+      };
+      void window.b4m.chat
+        .getSession(sessionId)
+        .then(loaded => {
+          if (!current) return;
+          if (preparationBeforeRead !== workspaceVersion.current) return load();
+          if (historyBeforeRead !== historyVersion.current) return load();
+          if (read.stale) return load();
+          // A reply already running arrives as main's live copy, and the events from now on
+          // extend it. One that settled while this read was in flight is stale: read again
+          // rather than put back a turn the 'done' already closed.
+          const live = loaded?.replyInFlight;
+          if (live && settledReplies.current.has(live.messageId)) return load();
+          openRead.current = null;
+          setSession(loaded);
+          setMessages(loaded?.messages ?? []);
+          // A started session opened while its worktree is still being cut: no event is coming
+          // to say so, the 'workspace' one went out before this window was looking.
+          setPreparing(current => current ?? loaded?.preparingWorkspace ?? null);
+          setStreaming(!!live);
+          setTurn(live ? { startedAt: live.startedAt, tokens: null } : null);
+        })
+        .catch(failed);
     };
     load();
     // Read rather than derived: main owns the queue, and a window opening onto a session that
@@ -1217,6 +1232,7 @@ export function useConversation(
           name === 'compact'
             ? await window.b4m.chat.compactContext(sessionId, args)
             : await window.b4m.chat.clearContext(sessionId);
+        if (activeSessionId.current !== sessionId) return;
         if (!result.ok) {
           setSendError(result.error);
           return;
@@ -1224,7 +1240,7 @@ export function useConversation(
         setSession(result.session);
         setMessages(result.session.messages);
       } finally {
-        setCommandProgress(null);
+        if (activeSessionId.current === sessionId) setCommandProgress(null);
       }
     },
     [sessionId, shareDirectory]
@@ -1580,6 +1596,7 @@ export function useConversation(
     phase,
     preparing,
     sendError,
+    openFailedFor,
     notice,
     dismissNotice,
     send,

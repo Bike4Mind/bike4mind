@@ -332,7 +332,8 @@ export function ChatShell({
   // A conversation picked before its transcript has been read would otherwise show the empty
   // thread's "send a message" line for a frame - or, on a switch, the PREVIOUS conversation's
   // transcript under this one's id until the read lands.
-  const opening = settling || (!!activeId && conversation.session?.id !== activeId);
+  const opening =
+    settling || (!!activeId && conversation.session?.id !== activeId && conversation.openFailedFor !== activeId);
   // The composer's per-chat settings show conversation.session, still the previous chat's while opening.
   const chatSettingsLocked = !activeId || opening;
   const spawnSuggestions = useSpawnSuggestions(conversation.session);
@@ -2090,6 +2091,7 @@ export function ChatShell({
               leading={
                 <>
                   <ApprovalModePill
+                    key={`approval:${activeId ?? ''}`}
                     mode={conversation.session?.approvalMode ?? 'ask'}
                     disabled={chatSettingsLocked}
                     onSelect={mode => void conversation.setApprovalMode(mode)}
@@ -2112,6 +2114,7 @@ export function ChatShell({
                   trailing={
                     <>
                       <ModelPicker
+                        key={`model:${activeId ?? ''}`}
                         catalog={catalog}
                         modelId={conversation.session?.model ?? null}
                         disabled={chatSettingsLocked}
@@ -2133,6 +2136,7 @@ export function ChatShell({
                   {compact => (
                     <>
                       <ReasoningEffortPicker
+                        key={`effort:${activeId ?? ''}`}
                         models={catalog.models}
                         modelId={conversation.session?.model ?? null}
                         effort={conversation.session?.reasoningEffort ?? 'default'}
@@ -2153,6 +2157,7 @@ export function ChatShell({
                         onChange={conversation.setGeneration}
                       />
                       <PromptCacheTtlPicker
+                        key={`cache:${activeId ?? ''}`}
                         model={modelOption}
                         ttl={sessionCacheTtl}
                         contextTokens={composerUsage.contextTokens ?? 0}

@@ -223,7 +223,7 @@ describe('Composer chat settings across a chat switch', () => {
       const read = { ...SESSIONS.find(entry => entry.id === id), messages: [] };
       if (id === 'first') return Promise.resolve({ ...read, model: OPUS.id } as unknown as ChatSession);
       return new Promise<ChatSession>(
-        resolve => (answerSecond = () => resolve({ ...read, model: MODEL.id } as unknown as ChatSession))
+        resolve => (answerSecond = () => resolve({ ...read, model: OPUS.id } as unknown as ChatSession))
       );
     };
     await renderShell();
@@ -236,7 +236,51 @@ describe('Composer chat settings across a chat switch', () => {
 
     await act(async () => answerSecond());
     expect(el('chat-session-title').textContent).toBe('Second');
-    for (const testId of ['approval-mode-btn', 'model-picker-btn', 'generation-settings-btn'])
-      expect(disabled(testId), testId).toBe(false);
+    for (const testId of CONTROLS) expect(disabled(testId), testId).toBe(false);
+  });
+
+  it('unlock when the chat being opened fails to read', async () => {
+    const chat = window.b4m.chat as unknown as Record<string, unknown>;
+    chat.listModels = async () => ({ models: [MODEL, OPUS] });
+    chat.getSession = async (id: string) => {
+      if (id === 'second') throw new Error('database locked');
+      return { ...SESSIONS.find(entry => entry.id === id), model: OPUS.id, messages: [] } as unknown as ChatSession;
+    };
+    await renderShell();
+    await act(async () => document.querySelectorAll<HTMLElement>('[data-testid="chat-session-item"]')[1].click());
+    await act(async () => undefined);
+    expect(find('chat-thread-opening')).toBeNull();
+    for (const testId of ['approval-mode-btn', 'model-picker-btn']) expect(disabled(testId), testId).toBe(false);
+  });
+
+  const SETTERS = [
+    'setSessionModel',
+    'setSessionReasoningEffort',
+    'setSessionPromptCacheTtl',
+    'setApprovalMode',
+  ] as const;
+
+  it.each([
+    ['approval-mode-btn', 'approval-mode-option-'],
+    ['model-picker-btn', 'model-picker-option'],
+    ['effort-picker-btn', 'effort-picker-option'],
+    ['prompt-cache-ttl-picker-btn', 'prompt-cache-ttl-picker-option-'],
+  ])('closes the open %s menu on Mod+2 and calls no setter', async (button, option) => {
+    const setters = SETTERS.map(name => vi.fn(async () => null));
+    const chat = window.b4m.chat as unknown as Record<string, unknown>;
+    SETTERS.forEach((name, index) => (chat[name] = setters[index]));
+    chat.listModels = async () => ({ models: [MODEL, OPUS] });
+    chat.getSession = async (id: string) =>
+      ({ ...SESSIONS.find(entry => entry.id === id), model: OPUS.id, messages: [] }) as unknown as ChatSession;
+    await renderShell();
+    await act(async () => el('composer-tune-btn').click());
+    await act(async () => el(button).click());
+    const open = () => document.querySelector(`[data-testid^="${option}"]`);
+    expect(open()).not.toBeNull();
+
+    await press(el(button), { key: '2', code: 'Digit2', ctrlKey: true });
+    expect(el('chat-session-title').textContent).toBe('Second');
+    expect(open()).toBeNull();
+    for (const setter of setters) expect(setter).not.toHaveBeenCalled();
   });
 });
