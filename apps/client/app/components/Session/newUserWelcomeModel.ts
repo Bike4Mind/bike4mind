@@ -54,10 +54,6 @@ interface CreditsLineArgs {
   /** An explicit grant or the maximum staged entitlement before risk assessment. */
   pendingGrant: number | null;
   pendingGrantIsMaximum?: boolean;
-  /** Daily activity drip amount; omitted or 0 when the drip is off. */
-  dailyDripCredits?: number;
-  /** Raw signupGrantActivityMinActiveSeconds setting; invalid values read as the default. */
-  minActiveSeconds?: unknown;
 }
 
 /** "5 minutes" style phrase for the active-time minimum, rounded to whole minutes, or tenths of an hour from 60 minutes. */
@@ -112,14 +108,13 @@ export function welcomeCreditsLine({
   awaitingVerification,
   pendingGrant,
   pendingGrantIsMaximum = false,
-  dailyDripCredits = 0,
-  minActiveSeconds,
 }: CreditsLineArgs): string | null {
   if (!enforceCredits) return null;
   if (awaitingVerification) {
     return pendingGrant && pendingGrant > 0
       ? pendingGrantIsMaximum
-        ? `Verify your email to unlock up to ${formatCreditBalance(pendingGrant)} now. ${unlockPathsCopy(dailyDripCredits, minActiveSeconds)}`
+        ? // The unlock paths come from SignupGrantStatus, which the card renders right below for a staged grant.
+          `Verify your email to unlock up to ${formatCreditBalance(pendingGrant)} now.`
         : `Verify your email to unlock your ${formatCreditBalance(pendingGrant)}.`
       : 'Verify your email to unlock your free credits.';
   }

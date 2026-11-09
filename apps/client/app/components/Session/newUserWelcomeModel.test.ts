@@ -53,30 +53,29 @@ describe('welcomeCreditsLine', () => {
     );
   });
 
-  it('names every unlock path and the daily drip amount for a staged tranche', () => {
+  it('leaves the unlock paths to SignupGrantStatus for a staged tranche', () => {
     expect(
       welcomeCreditsLine({
         ...base,
         awaitingVerification: true,
         pendingGrant: 1000,
         pendingGrantIsMaximum: true,
-        dailyDripCredits: 1000,
       })
-    ).toBe(
-      'Verify your email to unlock up to 1,000 credits now. The rest unlocks up to 1,000 credits for each day you have Bike4Mind open and in use for about 1 minute (a hidden tab or 5 minutes without input does not count), all at once when you subscribe, or all at once when you verify a card.'
+    ).toBe('Verify your email to unlock up to 1,000 credits now.');
+  });
+});
+
+describe('unlockPathsCopy', () => {
+  it('names every unlock path and the daily drip amount', () => {
+    expect(unlockPathsCopy(1000)).toBe(
+      'The rest unlocks up to 1,000 credits for each day you have Bike4Mind open and in use for about 1 minute (a hidden tab or 5 minutes without input does not count), all at once when you subscribe, or all at once when you verify a card.'
     );
   });
 
   it('omits the daily drip clause when the drip is off', () => {
-    const line = welcomeCreditsLine({
-      ...base,
-      awaitingVerification: true,
-      pendingGrant: 1000,
-      pendingGrantIsMaximum: true,
-    });
+    const line = unlockPathsCopy(0);
     expect(line).toContain('when you subscribe');
     expect(line).not.toContain('each day');
-    expect(line).not.toContain('eligibility');
   });
 });
 

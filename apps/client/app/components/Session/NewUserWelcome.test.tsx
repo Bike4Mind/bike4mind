@@ -184,9 +184,12 @@ describe('NewUserWelcome', () => {
     };
     renderWelcome();
     expect(screen.getByTestId('new-user-welcome-credits')).toHaveTextContent(
-      'Verify your email to unlock up to 10,000 credits now. The rest unlocks all at once when you subscribe, or all at once when you verify a card.'
+      /^Verify your email to unlock up to 10,000 credits now\.$/
     );
     expect(screen.queryByTestId('new-user-welcome-answers-estimate')).not.toBeInTheDocument();
+    // The unlock paths sentence appears once on the card, from the grant status block.
+    expect(screen.getByTestId('signup-grant-unlock-paths')).toHaveTextContent('The rest unlocks');
+    expect(screen.getAllByText(/The rest unlocks/)).toHaveLength(1);
   });
 
   it('updates, hides and restores the estimate as the selected model changes', () => {
