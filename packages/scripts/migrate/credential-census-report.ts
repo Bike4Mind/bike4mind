@@ -41,6 +41,7 @@ export interface CensusRow {
 const PROTECT = 'migrate:protect-credentials';
 const TOKENS = 'migrate:encrypt-tokens';
 const ADMIN = 'migrate:encrypt-admin-secrets';
+const IDP_MIGRATION = 'migration 20260904000000_encrypt-identity-provider-secrets';
 
 const fields = (
   collection: string,
@@ -54,8 +55,8 @@ const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\
 
 // Collection names are Mongoose's default pluralization; the integration test pins each to its model.
 export const CENSUS_FIELDS: CensusField[] = [
-  ...fields('apikeys', ['apiKey'], 'bound-ciphertext', `${PROTECT} (or ${ADMIN})`),
-  ...fields('mcpservers', ['envVariables.value'], 'bound-ciphertext', `${PROTECT} (or ${TOKENS})`, {
+  ...fields('apikeys', ['apiKey'], 'bound-ciphertext', PROTECT),
+  ...fields('mcpservers', ['envVariables.value'], 'bound-ciphertext', PROTECT, {
     array: 'envVariables',
   }),
   ...fields('mcpservers', ['metadata.webhooks.github.secret'], 'ciphertext', TOKENS),
@@ -103,6 +104,13 @@ export const CENSUS_FIELDS: CensusField[] = [
   ...fields('orggithubconnections', ['privateKey', 'cachedAccessToken', 'accessToken'], 'ciphertext', null),
   ...fields('orggoogledriveconnections', ['oauthRefreshToken'], 'ciphertext', null),
   ...fields('orgjiraconnections', ['accessToken'], 'ciphertext', null),
+  ...fields(
+    'identityproviders',
+    ['samlConfig.decryptionPvk', 'samlConfig.privateCert', 'oktaConfig.clientSecret'],
+    'ciphertext',
+    IDP_MIGRATION
+  ),
+  ...fields('userapikeys', ['callbackSigningSecret'], 'ciphertext', null),
 ];
 
 export const censusLabel = (field: CensusField): string =>
@@ -157,8 +165,12 @@ export async function runCredentialCensus(db: mongo.Db, census: CensusField[] = 
 
 const pending = (row: CensusRow): number => row.plaintext + (row.unbound ?? 0);
 
-/** 1 while any field still holds a plaintext, unhashed or unbound value. */
-export const censusExitCode = (rows: CensusRow[]): 0 | 1 => (rows.some(row => pending(row) > 0) ? 1 : 0);
+/**
+ * 2 when no field has any value (wrong or empty database: a clean answer would be false), else 1
+ * while any field still holds a plaintext, unhashed or unbound value, else 0.
+ */
+export const censusExitCode = (rows: CensusRow[]): 0 | 1 | 2 =>
+  rows.every(row => row.checked === 0) ? 2 : rows.some(row => pending(row) > 0) ? 1 : 0;
 
 export function formatCensus(rows: CensusRow[]): string {
   const width = Math.max(...rows.map(row => row.label.length));
