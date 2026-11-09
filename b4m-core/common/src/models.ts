@@ -702,6 +702,12 @@ export type ModelInfo = {
    */
   thinkingStyle?: 'legacy' | 'adaptive';
   /**
+   * Thinking cannot be switched off for this model. Derived by getAvailableModels
+   * (thinkingCannotBeDisabled in @bike4mind/llm-adapters), never hand-set on a table
+   * entry. Absent means thinking is switchable, or the model does not think.
+   */
+  thinkingAlwaysOn?: true;
+  /**
    * The catalog says this model takes OpenAI's `reasoning_effort`. Set only for a
    * record whose reasoning style is 'openai-effort'; absent means "not stated" and
    * the OpenAI adapter falls back to REASONING_SUPPORTED_MODELS.
