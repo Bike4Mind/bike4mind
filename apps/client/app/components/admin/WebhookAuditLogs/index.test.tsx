@@ -169,7 +169,10 @@ describe('WebhookAuditLogsTab delivery dialog', () => {
     mocks.useWebhookAuditLog.mockReturnValue({
       data: delivery(DELIVERY_ID, 'failed', {
         metadata: { prNumber: 42, branch: 'main' },
-        actions: [{ type: 'triage', status: 'failed', durationMs: 30 }],
+        actions: [
+          { type: 'triage', status: 'failed', durationMs: 30 },
+          { type: 'comment', status: 'success' },
+        ],
         error: { message: 'Boom', code: 'E_TRIAGE' },
         processedAt: '2026-10-20T10:00:02.000Z',
       }),
@@ -190,6 +193,14 @@ describe('WebhookAuditLogsTab delivery dialog', () => {
     expect(details.querySelectorAll('section > dl')).toHaveLength(6);
     expect(within(details).getAllByTestId('webhook-logs-status-chip')[0]).toHaveAttribute('data-tone', 'bad');
     expect(within(details).getByTestId('webhook-details-signature-chip')).toHaveAttribute('data-tone', 'good');
+    expect(
+      within(details)
+        .getAllByTestId('admin-status-chip')
+        .map(chip => [chip.textContent, chip.getAttribute('data-tone')])
+    ).toEqual([
+      ['failed', 'bad'],
+      ['success', 'good'],
+    ]);
     expect(within(details).getByTestId('webhook-details-error')).toHaveTextContent('Boom');
     expect(details).toHaveTextContent('#42');
   });
@@ -223,6 +234,22 @@ describe('WebhookAuditLogsTab page anatomy', () => {
       expect(getComputedStyle(within(strip).getByText(value)).color).toBe('var(--joy-palette-admin-ink)');
     }
     expect(precedes(screen.getByTestId('admin-page-header'), strip)).toBe(true);
+  });
+
+  it('shows a failed stats load as an error with Try again in place of the strip', () => {
+    const refetchStats = vi.fn();
+    mocks.useWebhookAuditStats.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: new Error('Stats unavailable'),
+      isError: true,
+      refetch: refetchStats,
+    });
+    renderTab();
+    expect(screen.queryByTestId('admin-stat-strip')).toBeNull();
+    expect(screen.getByTestId('admin-error-state')).toHaveTextContent('Statistics failed to load: Stats unavailable');
+    fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
+    expect(refetchStats).toHaveBeenCalledTimes(1);
   });
 
   it('puts search, range and filters in one row that wraps as a whole, with no labelled selects', () => {

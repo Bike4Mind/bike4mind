@@ -116,6 +116,21 @@ describe('GitHubConnectionTab page anatomy and states', () => {
     expect(await screen.findByTestId('github-connection-details')).toBeInTheDocument();
   });
 
+  it('keeps the connection on screen under UpdatingBar while Refresh reloads', async () => {
+    renderTab();
+    await screen.findByTestId('github-connection-details');
+    let resolveConnection: (value: unknown) => void = () => undefined;
+    mocks.get.mockImplementationOnce(() => new Promise(resolve => (resolveConnection = resolve)));
+
+    fireEvent.click(within(header()).getByTestId('github-connection-refresh-btn'));
+    expect(await screen.findByTestId('github-connection-updating')).toBeInTheDocument();
+    expect(screen.getByTestId('github-connection-details')).toBeInTheDocument();
+    expect(screen.queryByTestId('admin-loading-state')).toBeNull();
+
+    await act(async () => resolveConnection({ data: { connected: true, connection: APP_CONNECTION } }));
+    expect(screen.queryByTestId('github-connection-updating')).toBeNull();
+  });
+
   it('replaces the dashed card with EmptyState whose actions open the connect dialogs', async () => {
     routeGets(null);
     mocks.post.mockResolvedValue({ data: {} });
@@ -266,7 +281,9 @@ describe('GitHubConnectionTab destructive dialogs', () => {
     expect(mocks.put).not.toHaveBeenCalled();
 
     pickReason('github-empty-repos-dialog');
-    fireEvent.click(screen.getByTestId('github-empty-repos-dialog-confirm-btn'));
+    const confirm = screen.getByTestId('github-empty-repos-dialog-confirm-btn');
+    expect(getComputedStyle(confirm).backgroundColor).toContain('danger');
+    fireEvent.click(confirm);
     await waitFor(() =>
       expect(mocks.put).toHaveBeenCalledWith('/api/admin/github/connection', { allowedRepositories: [] })
     );

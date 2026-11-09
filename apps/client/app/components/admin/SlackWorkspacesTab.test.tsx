@@ -280,7 +280,9 @@ describe('SlackWorkspacesTab dialogs', () => {
     expect(within(dialog).getByRole('heading', { level: 2 })).toHaveTextContent('Cancel export');
     expect(mocks.delete).not.toHaveBeenCalled();
     pickReason('slack-export-cancel-job-dialog');
-    fireEvent.click(screen.getByTestId('slack-export-cancel-job-dialog-confirm-btn'));
+    const confirm = screen.getByTestId('slack-export-cancel-job-dialog-confirm-btn');
+    expect(getComputedStyle(confirm).backgroundColor).toContain('danger');
+    fireEvent.click(confirm);
 
     await waitFor(() => expect(mocks.delete).toHaveBeenCalledWith('/api/slack/export/status/job-1'));
     await waitFor(() => expect(screen.queryByTestId('slack-export-cancel-job-dialog')).toBeNull());
