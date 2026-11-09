@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { z } from 'zod';
 import {
   OVERWATCH_ANALYTICS_SCHEMA_VERSION,
   OVERWATCH_ANONYMOUS_USER_ID,
@@ -171,6 +172,50 @@ export async function emitPageViewEvent(opts: PageViewEmitOptions): Promise<void
   });
 }
 
+const productIdSchema = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
+const productMetadataSchema = z.object({
+  userType: z.enum(['subscriber', 'free']).optional(),
+  lane: z.literal('synthetic').optional(),
+  internal: z.literal(true).optional(),
+  userAction: z.literal(false).optional(),
+  method: z.enum(['otc', 'google', 'facebook', 'github', 'apple', 'okta', 'saml', 'admin', 'link']).optional(),
+  hopId: z
+    .string()
+    .regex(/^[0-9a-f]{32}$/)
+    .optional(),
+  srcProductId: productIdSchema.optional(),
+  src: productIdSchema.optional(),
+  dest: productIdSchema.optional(),
+  verified: z.literal(true).optional(),
+  touch: z.enum(['first', 'last', 'both']).optional(),
+  attribution: z.literal('self-reported').optional(),
+  amount: z.number().finite().nonnegative().optional(),
+  source: z.literal('signup').optional(),
+  feature: z.literal('chat').optional(),
+  secondsSinceSignup: z.number().int().nonnegative().optional(),
+  kind: z.enum(['subscription', 'credits']).optional(),
+  value: z.number().finite().nonnegative().optional(),
+  currency: z
+    .string()
+    .regex(/^[A-Z]{3}$/)
+    .optional(),
+  billingReason: z.enum(['subscription_create', 'subscription_cycle', 'subscription_update', 'manual']).optional(),
+  periodEnd: z.iso.datetime({ offset: false }).optional(),
+  reason: z.enum(['cancellation_requested', 'payment_disputed', 'payment_failed', 'unknown']).optional(),
+  plan: z.enum(['Professional', 'Team', 'LibreOncology', 'unknown']).optional(),
+  interval: z.enum(['monthly', 'yearly']).optional(),
+  daysSubscribed: z.number().int().nonnegative().optional(),
+  attempt: z.number().int().nonnegative().optional(),
+  initiatedBy: z.enum(['admin', 'self']).optional(),
+  wasSubscriber: z.boolean().optional(),
+  daysSinceSignup: z.number().int().nonnegative().optional(),
+  fromPlan: z.enum(['Professional', 'Team', 'LibreOncology', 'unknown']).optional(),
+  toPlan: z.enum(['Professional', 'Team', 'LibreOncology', 'unknown']).optional(),
+  fromInterval: z.enum(['monthly', 'yearly']).optional(),
+  toInterval: z.enum(['monthly', 'yearly']).optional(),
+  direction: z.enum(['upgrade', 'downgrade', 'same_tier', 'unknown']).optional(),
+});
+
 export interface ProductEventOptions {
   /** The Overwatch product the event is counted under. Needs a key in OVERWATCH_PRODUCT_INGEST_KEYS. */
   productId: string;
@@ -185,7 +230,7 @@ export interface ProductEventOptions {
   userType?: 'subscriber' | 'free';
   referrer?: string;
   utm?: OverwatchUtm;
-  /** Flat and small: the ingest schema caps metadata at 1KB. */
+  /** Known categorical and numeric fields only; unknown or invalid fields are not emitted. */
   metadata?: Record<string, string | number | boolean>;
   /**
    * A caller-chosen UUID for an event that may be sent more than once for one occurrence (a
@@ -203,7 +248,14 @@ export interface ProductEventOptions {
  */
 export async function emitProductEvent(opts: ProductEventOptions): Promise<void> {
   if (!isAnalyticsConfigured(opts.productId)) return;
-  const metadata = { ...opts.metadata, ...(opts.userType !== undefined && { userType: opts.userType }) };
+  const candidateMetadata = { ...opts.metadata, ...(opts.userType !== undefined && { userType: opts.userType }) };
+  const metadata: Record<string, string | number | boolean> = {};
+  for (const [key, schema] of Object.entries(productMetadataSchema.shape)) {
+    const value = candidateMetadata[key as keyof typeof candidateMetadata];
+    if (value === undefined) continue;
+    const parsed = schema.safeParse(value);
+    if (parsed.success && parsed.data !== undefined) metadata[key] = parsed.data;
+  }
   return postEvent(
     {
       userId: opts.userId ? pseudonymizeUserId(opts.userId) : OVERWATCH_ANONYMOUS_USER_ID,
