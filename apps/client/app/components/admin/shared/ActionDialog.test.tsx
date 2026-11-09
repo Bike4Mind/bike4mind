@@ -114,6 +114,30 @@ describe('ActionDialog', () => {
     await waitFor(() => expect(onConfirm).toHaveBeenCalledWith('Goodwill credit'));
   });
 
+  it('holds Cancel and shows the commit loading while the write is in flight', () => {
+    const confirm = openDialog({ pending: true });
+
+    expect(confirm).toHaveClass('MuiButton-loading');
+    expect(screen.getByTestId('adjust-dialog-cancel-btn')).toBeDisabled();
+  });
+
+  it('holds Cancel until a confirm that returns a promise settles', async () => {
+    let finish: (() => void) | undefined;
+    const onConfirm = vi.fn(
+      () =>
+        new Promise<void>(resolve => {
+          finish = resolve;
+        })
+    );
+    const confirm = openDialog({ onConfirm });
+    fireEvent.click(screen.getByTestId('adjust-dialog-reason-input-preset-0'));
+    fireEvent.click(confirm);
+
+    await waitFor(() => expect(screen.getByTestId('adjust-dialog-cancel-btn')).toBeDisabled());
+    finish?.();
+    await waitFor(() => expect(screen.getByTestId('adjust-dialog-cancel-btn')).toBeEnabled());
+  });
+
   it('reserves solid danger for the final confirm only', () => {
     const confirm = openDialog({ tone: 'danger' });
 

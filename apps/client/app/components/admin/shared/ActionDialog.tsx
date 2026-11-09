@@ -156,7 +156,8 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
             <Kbd>Enter</Kbd> to apply
           </Typography>
         )}
-        <Button variant="plain" color="neutral" onClick={onClose} data-testid={`${testId}-cancel-btn`}>
+        {/* Held while the write is in flight: closing then would not cancel it. */}
+        <Button variant="plain" color="neutral" onClick={onClose} disabled={busy} data-testid={`${testId}-cancel-btn`}>
           Cancel
         </Button>
         <Button
