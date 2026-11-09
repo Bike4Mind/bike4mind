@@ -57,7 +57,7 @@ describe('baseApi req-timing metadata', () => {
     const res = await call(handler);
     res.emit('finish');
 
-    expect(timing()).toEqual([expect.objectContaining({ status: 200, aborted: false })]);
+    expect(timing()).toEqual([expect.objectContaining({ status: 200, aborted: false, headersSent: true })]);
     expect(timing()[0]).not.toHaveProperty('userId');
   });
 
