@@ -71,6 +71,7 @@ vi.mock('axios', () => ({
 }));
 
 const { default: handler } = await import('@pages/api/blog/generate-featured-image');
+const { default: imageLogger } = await import('@bike4mind/server-utils/utils/imageLogger');
 
 const testLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
@@ -108,7 +109,7 @@ describe('POST /api/blog/generate-featured-image metering', () => {
     );
 
     await expect(call()).rejects.toMatchObject({ statusCode: 429 });
-    expect(testLogger.error).not.toHaveBeenCalled();
+    expect(imageLogger.error).not.toHaveBeenCalled();
   });
 
   it('refuses a model admission rejects before reserving or calling the provider', async () => {
