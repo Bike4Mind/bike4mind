@@ -62,7 +62,7 @@ In your Okta Admin Console:
 
 ### Step 2: Add Identity Provider in B4M
 
-1. Go to **Admin > General Ops > Identity Providers**
+1. Go to **Admin > Trust and safety > Identity providers**
 2. Click **Add identity provider**
 3. Fill in the form:
 
