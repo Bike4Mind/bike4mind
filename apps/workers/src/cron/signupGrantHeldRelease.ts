@@ -27,7 +27,7 @@ export async function runSignupGrantHeldRelease(now: Date = new Date()): Promise
     riskReviewAutoApprovals: RiskReviewAutoApprovalSweepResult;
   }
 > {
-  // Queued gear/referral rewards go first: they are owed from the trickle pool before new drips.
+  // Queued gear/referral/arena rewards go first: they are owed from the trickle pool before new drips.
   // A failure here must not stall the held signup grants and unlocks below.
   try {
     const rewards = await creditService.releaseHeldCreditRewards(

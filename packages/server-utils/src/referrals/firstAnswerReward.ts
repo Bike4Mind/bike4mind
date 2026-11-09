@@ -15,7 +15,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 export type RewardParty = {
   isSynthetic?: boolean | null;
   deletedAt?: Date | null;
-  signupGrant?: Pick<SignupGrant, 'blocked'> | null;
+  signupGrant?: Pick<SignupGrant, 'blocked' | 'unlockForfeited'> | null;
 } & AccountStateFields;
 
 // Shared with the release-time gate in creditService.payCreditReward, so a queued reward is never looser.

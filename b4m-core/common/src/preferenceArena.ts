@@ -109,7 +109,7 @@ export interface ArenaEligibilityFields {
   signupGrant?: Pick<SignupGrant, 'stage' | 'unlockedBy'> | null;
 }
 
-/** Account-block checks (ban, dispute, suspension) are the caller's, via `accountBlockReasons`. */
+/** Account-block checks are the caller's, via creditService.isRewardRecipientBlocked. */
 export function isArenaVerifiedUser(user: ArenaEligibilityFields): boolean {
   if (!user.emailVerified || user.isSynthetic || user.deletedAt) return false;
   const grant = user.signupGrant;

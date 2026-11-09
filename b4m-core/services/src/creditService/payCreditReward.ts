@@ -5,7 +5,7 @@ import {
   type SignupGrant,
   type SignupProtection,
 } from '@bike4mind/common';
-import { accountBlockReasons, type AccountStateFields } from '../userService/accountState';
+import { accountBlockReasons, isAiAccessRevoked, type AccountStateFields } from '../userService/accountState';
 import {
   drawnInRefundScope,
   queueHeadBlocks,
@@ -57,6 +57,8 @@ export type RewardPartyFields = AccountStateFields & {
   isSynthetic?: boolean | null;
   deletedAt?: Date | null;
   signupGrant?: Pick<SignupGrant, 'blocked' | 'unlockForfeited'> | null;
+  isModerated?: boolean | null;
+  riskScore?: { reviewState?: string | null } | null;
 };
 
 /**
@@ -100,18 +102,27 @@ export type PayCreditRewardOutcome =
 
 /**
  * 'transient' covers states an account can leave (dispute pending, suspension or suspend_pending, both
- * appealable, or an admin grant block or forfeited unlock on the recipient, which an admin can lift): the release keeps such a reward
- * queued rather than voiding it, which would forfeit it for good.
+ * appealable, or an admin grant block on the recipient, which an admin can lift): the release keeps such a reward
+ * queued rather than voiding it, which would forfeit it for good. A forfeited signup unlock is never cleared
+ * (userService.forfeitPaymentUnlock), so the recipient's queued rewards are voided instead of holding the queue head.
  */
 type PartyBlock = 'terminal' | 'transient' | null;
 
 const partyBlock = (party: RewardPartyFields | null, isRecipient = false): PartyBlock => {
   if (!party || party.deletedAt || party.isSynthetic || party.isBanned) return 'terminal';
+  if (isRecipient && party.signupGrant?.unlockForfeited) return 'terminal';
   return (isRecipient ? isRewardRecipientBlocked(party) : isRewardPartyBlocked(party)) ? 'transient' : null;
 };
 
+/** The vote-time arena gates (apps/client/server/preferenceArena/arenaService.ts ineligibleReason) beyond the account gate. */
+const arenaRecipientBlocked = (party: RewardPartyFields) =>
+  isAiAccessRevoked(party) || party.riskScore?.reviewState === 'pending';
+
 async function partiesBlock(reward: HeldCreditRewardInput, adapters: PayCreditRewardAdapters): Promise<PartyBlock> {
-  const userBlock = partyBlock(await adapters.users.findById(reward.userId), true);
+  const recipient = await adapters.users.findById(reward.userId);
+  const userBlock =
+    partyBlock(recipient, true) ??
+    (reward.source === 'preference_arena' && recipient && arenaRecipientBlocked(recipient) ? 'transient' : null);
   if (userBlock === 'terminal') return userBlock;
   const friendId = reward.metadata?.[REFERRED_USER_ID_METADATA_KEY];
   const isReferral = reward.source === 'referral_first_answer' || reward.source === 'referral_subscription';
@@ -214,7 +225,7 @@ async function payNow(
 }
 
 /**
- * Pays a free reward (gear, referral) from the trickle pool. A dry pool, or a queued older reward the
+ * Pays a free reward (gear, referral, arena vote) from the trickle pool. A dry pool, or a queued older reward the
  * pool could no longer cover after this one, holds it for releaseHeldCreditRewards; a blocked account
  * gets nothing and nothing is queued, except that a block landing after the queue insert pauses that row.
  * Idempotent on `transactionId`.
@@ -247,9 +258,14 @@ export async function payCreditReward(
   }
   await adapters.heldRewards.hold(reward);
   // A block can commit between the check above and this insert, after its pause already ran; the flag is
-  // read again once the row exists, so either that pause or this one takes it out of the queue. Only a grant
-  // block pauses, since only unblock resumes paused rows; a forfeit landing here stays held and release defers it.
-  if (isSignupGrantBlocked((await adapters.users.findById(reward.userId)) ?? {})) {
+  // read again once the row exists, so either that pause or this one takes it out of the queue. A grant block
+  // pauses, since unblock resumes paused rows; a forfeit is never lifted, so its row is voided.
+  const recipient = (await adapters.users.findById(reward.userId)) ?? {};
+  if (recipient.signupGrant?.unlockForfeited) {
+    await adapters.heldRewards.settle(reward.transactionId, 'void');
+    return { outcome: 'blocked' };
+  }
+  if (isSignupGrantBlocked(recipient)) {
     await adapters.heldRewards.pauseOne(reward.transactionId);
     return { outcome: 'blocked' };
   }
