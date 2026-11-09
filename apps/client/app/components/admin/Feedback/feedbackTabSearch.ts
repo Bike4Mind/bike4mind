@@ -29,12 +29,10 @@ const FEEDBACK_VIEW_PARAMS = [
 
 export const FEEDBACK_TAB_PARAMS = [...FEEDBACK_VIEW_PARAMS, FEEDBACK_ID_PARAM] as const;
 
-// `feedbackStatus` is the checked statuses joined with commas (`New,Closed`). No status checked is a
-// real state distinct from the default (it matches nothing; useFeedbackOperations skips the list
-// query), so it gets its own token. Only a URL can carry it: the status filter chip checks every
-// status again when its last one is unpicked.
+// `feedbackStatus` is the checked statuses joined with commas (`New,Closed`). An empty set has no form:
+// the status filter chip checks every status again when its last one is unpicked, and the retired
+// `none` token an older link may carry reads as the default.
 const STATUS_SEPARATOR = ',';
-const NO_STATUS_TOKEN = 'none';
 
 const FEEDBACK_ORDERS = ['asc', 'desc'] as const;
 type FeedbackOrder = (typeof FEEDBACK_ORDERS)[number];
@@ -83,15 +81,14 @@ const isFeedbackStatus = (value: string): value is FeedbackStatus =>
 
 /** The checked statuses a `feedbackStatus` value names, or undefined when it is malformed (one bad token voids it). */
 const decodeStatuses = (value: unknown): FeedbackStatus[] | undefined => {
-  if (value === NO_STATUS_TOKEN) return [];
   if (typeof value !== 'string' || value === '') return undefined;
   const tokens = value.split(STATUS_SEPARATOR);
   if (!tokens.every(isFeedbackStatus)) return undefined;
   return FEEDBACK_STATUS_ORDER.filter(status => tokens.includes(status));
 };
 
-const encodeStatuses = (statuses: readonly FeedbackStatus[]): string =>
-  statuses.length === 0 ? NO_STATUS_TOKEN : statuses.join(STATUS_SEPARATOR);
+const encodeStatuses = (statuses: readonly FeedbackStatus[]): string | undefined =>
+  statuses.length === 0 ? undefined : statuses.join(STATUS_SEPARATOR);
 
 const parseStatus = (value: unknown): string | undefined => {
   const statuses = decodeStatuses(value);

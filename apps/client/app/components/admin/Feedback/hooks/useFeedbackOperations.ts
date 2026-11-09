@@ -52,9 +52,9 @@ export const useFeedbackOperations = (params: FeedbackListParams): UseFeedbackOp
   const [feedbackToDelete, setFeedbackToDelete] = useState<string | null>(null);
   const [openDeleteFeedbackModal, toggleDeleteFeedbackModal] = useToggle();
 
-  // No status checked matches nothing by definition. Only a URL carrying the `none` token reaches
-  // that state (the status filter chip never leaves it empty). Skipping the request rather than
-  // omitting the param is what keeps it matching nothing: `status` absent means "any status" to the
+  // No status checked matches nothing by definition. The tab never produces it (the status chip and
+  // the URL both fall back to a status set), but skipping the request rather than omitting the param
+  // keeps it matching nothing if a caller ever does: `status` absent means "any status" to the
   // server, which would invert the filter into showing every report.
   const hasStatusSelection = (params.status?.length ?? 0) > 0;
 

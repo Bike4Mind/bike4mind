@@ -26,23 +26,34 @@ describe('the status param', () => {
     expect(parseStatus('InProgress')).toBe('InProgress');
   });
 
-  it('keeps the explicit no-status token', () => {
-    expect(parseStatus('none')).toBe('none');
+  // The chip can no longer leave the filter empty, so the `none` token an older link may carry is dropped.
+  it('reads the retired no-status token as the default', () => {
+    expect(parseStatus('none')).toBeUndefined();
+    expect(feedbackViewFromSearch({ feedbackStatus: 'none' }).statusFilters).toEqual(
+      DEFAULT_FEEDBACK_VIEW.statusFilters
+    );
   });
 
   it.each([['Bogus'], ['New,Bogus'], [''], [42], [['New']], [undefined]])('rejects %j', value => {
     expect(parseStatus(value)).toBeUndefined();
   });
 
-  it('round-trips every combination of checked boxes', () => {
+  it('round-trips every non-empty combination of checked boxes', () => {
     const all = [FeedbackStatus.New, FeedbackStatus.InProgress, FeedbackStatus.Closed];
-    for (let mask = 0; mask < 2 ** all.length; mask++) {
+    for (let mask = 1; mask < 2 ** all.length; mask++) {
       const checked = all.filter((_, index) => mask & (1 << index));
       const view = { ...DEFAULT_FEEDBACK_VIEW, statusFilters: statusFilters(...checked) };
       expect(feedbackViewFromSearch(feedbackViewToSearch(view)).statusFilters, checked.join()).toEqual(
         view.statusFilters
       );
     }
+  });
+
+  it('writes nothing for an empty status set, which reads back as the default', () => {
+    const search = feedbackViewToSearch({ ...DEFAULT_FEEDBACK_VIEW, statusFilters: statusFilters() });
+
+    expect(search.feedbackStatus).toBeUndefined();
+    expect(feedbackViewFromSearch(search).statusFilters).toEqual(DEFAULT_FEEDBACK_VIEW.statusFilters);
   });
 });
 
@@ -74,7 +85,7 @@ describe('feedbackViewFromSearch', () => {
   it('reads every view param, tolerating quoted numbers from a hand-typed link', () => {
     expect(
       feedbackViewFromSearch({
-        feedbackStatus: 'none',
+        feedbackStatus: 'Closed,InProgress',
         feedbackSubject: 'turn',
         feedbackOrg: 'Acme',
         feedbackOrder: 'asc',
@@ -82,7 +93,7 @@ describe('feedbackViewFromSearch', () => {
         feedbackLimit: '50',
       })
     ).toEqual({
-      statusFilters: statusFilters(),
+      statusFilters: statusFilters(FeedbackStatus.InProgress, FeedbackStatus.Closed),
       subject: 'turn',
       organizations: ['Acme'],
       sortAscending: true,
