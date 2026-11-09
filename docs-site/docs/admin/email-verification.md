@@ -11,7 +11,7 @@ The Email Verification tab allows administrators to monitor and manage the email
 
 ## Overview
 
-The tab displays a table of users with their email verification details. It supports search, status filtering, pagination, and bulk actions. The page opens with the title **Email verification** and the number of matching users, with a help button and **Refresh** on the right. Verify and unverify open a dialog that asks for a reason; resending a link applies at once.
+The tab displays a table of users with their email verification details. It supports search, status filtering and pagination. The page opens with the title **Email verification** and the number of matching users, with a help button and **Refresh** on the right. Verify and unverify open a dialog that asks for a reason; resending a link applies at once.
 
 ## Search and Filtering
 
