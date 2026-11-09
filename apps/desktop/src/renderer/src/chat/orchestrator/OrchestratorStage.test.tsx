@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ambientHeld } from './ambient';
 import { OrchestratorStage, type OrchestratorViewProps } from './OrchestratorStage';
 import { EXAMPLE_QUESTS } from './exampleQuests';
 import type { AgentView } from './roster';
@@ -308,6 +309,21 @@ describe('OrchestratorStage', () => {
       await renderSettled([agentFixture('n', 'needs-you')]);
       act(() => el('orchestrator-needs-you-open-btn').click());
       expect(wake).toHaveBeenCalledTimes(1);
+      expect(query('orchestrator-peek-drawer')).not.toBeNull();
+    });
+
+    it('lets an open drawer settle out with the chrome and brings it back on waking', async () => {
+      await renderSettled([agentFixture('n', 'needs-you')], false);
+      act(() => el('orchestrator-needs-you-pill').click());
+      expect(query('orchestrator-peek-drawer')).not.toBeNull();
+      // A drawer left open is the usual way to watch the Tavern: it must not hold the chrome up.
+      expect(ambientHeld(document)).toBe(false);
+
+      await renderSettled([agentFixture('n', 'needs-you')], true);
+      expect(getComputedStyle(el('orchestrator-peek-drawer-region')).display).toBe('none');
+
+      await renderSettled([agentFixture('n', 'needs-you')], false);
+      expect(getComputedStyle(el('orchestrator-peek-drawer-region')).display).not.toBe('none');
       expect(query('orchestrator-peek-drawer')).not.toBeNull();
     });
 

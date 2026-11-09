@@ -307,13 +307,17 @@ export function OrchestratorStage({
           {needsYouCard}
         </Box>
         {selected && (
-          <AgentPeekDrawer
-            key={selected.id}
-            agent={selected}
-            persona={personas.get(selected.id)}
-            onClose={() => setSelectedId(null)}
-            actions={actions}
-          />
+          // Settles out with the rest of the chrome but stays mounted, selection and all, so waking
+          // brings it back where it was (ambient.ts gives focus back to it too).
+          <Box data-testid="orchestrator-peek-drawer-region" sx={{ display: settled ? 'none' : 'contents' }}>
+            <AgentPeekDrawer
+              key={selected.id}
+              agent={selected}
+              persona={personas.get(selected.id)}
+              onClose={() => setSelectedId(null)}
+              actions={actions}
+            />
+          </Box>
         )}
       </Box>
     </Box>

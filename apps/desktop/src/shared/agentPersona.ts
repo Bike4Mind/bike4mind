@@ -96,10 +96,17 @@ const EPITHET_RULES: ReadonlyArray<readonly [Epithet, readonly string[]]> = [
   ['Seeker', ['find', 'search', 'audit', 'scan', 'investigate', 'look for', 'unused', 'todo']],
 ];
 
+function matchEpithet(text: string): Epithet | undefined {
+  const lower = text.toLowerCase();
+  return EPITHET_RULES.find(([, keywords]) => keywords.some(keyword => lower.includes(keyword)))?.[0];
+}
+
+/**
+ * The title names the task; the seed prompt is read only when the title says nothing, since a delegated
+ * brief nearly always asks to "report back" with a "summary" and would otherwise make everyone a Scribe.
+ */
 export function epithetFor(title: string, seedPrompt: string): Epithet {
-  const text = `${title}\n${seedPrompt}`.toLowerCase();
-  const rule = EPITHET_RULES.find(([, keywords]) => keywords.some(keyword => text.includes(keyword)));
-  return rule ? rule[0] : 'Wanderer';
+  return matchEpithet(title) ?? matchEpithet(seedPrompt) ?? 'Wanderer';
 }
 
 function hashOf(text: string): number {

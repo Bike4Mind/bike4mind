@@ -1,6 +1,6 @@
 import type { AgentState, AgentView } from '../roster';
 import type { Epithet } from '@shared/agentPersona';
-import type { CharacterId, Pose } from './tavernArt';
+import { CHARACTER_COUNT, characterCraft, type CharacterId, type Pose } from './tavernArt';
 
 export type TavernZone = 'workbench' | 'bar' | 'hearth' | 'benches' | 'door';
 
@@ -93,22 +93,43 @@ export function poseFor(state: AgentState): Pose {
   return POSE[state];
 }
 
-// Wanderer is absent on purpose: with no craft to show it keeps the id-based pick, so the fallback
-// epithet does not turn the roster into clones of one sprite.
-const EPITHET_CHARACTER: Partial<Record<Epithet, CharacterId>> = {
-  Warden: 3,
-  Scribe: 2,
-  Seeker: 2,
-  Tinkerer: 4,
-  Cartographer: 1,
-};
+/** What a character is chosen from: the agent's id, its age (oldest choose first) and its kind of work. */
+export type CastSubject = { id: string; createdAt: string; epithet?: Epithet };
 
-export function characterFor(agentId: string, epithet?: Epithet): CharacterId {
-  const byCraft = epithet ? EPITHET_CHARACTER[epithet] : undefined;
-  if (byCraft) return byCraft;
+function hashOf(text: string): number {
   let hash = 0;
-  for (let index = 0; index < agentId.length; index++) hash = (hash * 31 + agentId.charCodeAt(index)) >>> 0;
-  return ((hash % 4) + 1) as CharacterId;
+  for (let index = 0; index < text.length; index++) hash = (hash * 31 + text.charCodeAt(index)) >>> 0;
+  return hash;
+}
+
+const byAge = (a: CastSubject, b: CastSubject) =>
+  a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+
+/**
+ * Gives every agent a character sheet, a pure function of the roster so it survives reloads. Oldest
+ * first, each agent takes a sheet nobody has yet, preferring one whose craft matches its epithet and
+ * otherwise walking the cast from a point picked by its id hash. Only once every sheet is in use does
+ * a sheet repeat, and then a fresh round starts so repeats spread evenly.
+ */
+export function assignCharacters(
+  agents: readonly CastSubject[],
+  count: number = CHARACTER_COUNT,
+  craftOf: (character: CharacterId) => Epithet = characterCraft
+): Map<string, CharacterId> {
+  const taken = new Set<CharacterId>();
+  const characters = new Map<string, CharacterId>();
+  for (const agent of [...agents].sort(byAge)) {
+    if (taken.size >= count) taken.clear();
+    const start = hashOf(agent.id) % count;
+    const free = Array.from({ length: count }, (_, step) => ((start + step) % count) + 1).filter(
+      character => !taken.has(character)
+    );
+    const character = free.find(candidate => agent.epithet && craftOf(candidate) === agent.epithet) ?? free[0];
+    if (character === undefined) throw new Error('assignCharacters: empty cast');
+    taken.add(character);
+    characters.set(agent.id, character);
+  }
+  return characters;
 }
 
 /** For the door, `slot` is the agent's index in the queue and `point` is always `DOOR_POINT`. */
