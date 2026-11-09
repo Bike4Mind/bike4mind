@@ -11369,7 +11369,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key does not hold any of the required scopes. */
+      /** @description The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`). */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

@@ -25371,7 +25371,7 @@
             }
           },
           "403": {
-            "description": "The API key does not hold any of the required scopes.",
+            "description": "The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`).",
             "content": {
               "application/json": {
                 "schema": {
