@@ -1,31 +1,22 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, type ReactNode } from 'react';
 import { isAxiosError } from 'axios';
 import {
   Box,
-  Card,
-  CardContent,
   Typography,
   Stack,
   Select,
   Option,
   Input,
   Button,
-  Chip,
   Grid,
-  CircularProgress,
-  Sheet,
   Accordion,
   AccordionSummary,
   AccordionDetails,
   AccordionGroup,
-  Table,
-  LinearProgress,
   Tooltip,
   Switch,
   Alert,
-  Modal,
-  ModalDialog,
-  ModalClose,
+  DialogContent,
   Divider,
   FormControl,
   FormLabel,
@@ -33,20 +24,12 @@ import {
   IconButton,
   List,
   ListItem,
-  ListItemDecorator,
   FormHelperText,
 } from '@mui/joy';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import WarningAmberIcon from '@mui/icons-material/WarningAmber';
-import ErrorIcon from '@mui/icons-material/Error';
-import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import InfoIcon from '@mui/icons-material/Info';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import AnalyticsIcon from '@mui/icons-material/Analytics';
 import GitHubIcon from '@mui/icons-material/GitHub';
-import SettingsIcon from '@mui/icons-material/Settings';
-import LightbulbIcon from '@mui/icons-material/Lightbulb';
-import ReportProblemIcon from '@mui/icons-material/ReportProblem';
 import LinkIcon from '@mui/icons-material/Link';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import TokenDistributionBar from '@client/app/components/common/TokenDistributionBar';
@@ -56,6 +39,9 @@ import {
   type AnomalySeverity,
   type PrimaryAnomaly,
   type ContextTelemetryAlerts,
+  type RecommendedAction,
+  type SubagentTelemetry,
+  type ToolTelemetry,
 } from '@bike4mind/common';
 import {
   useContextTelemetry,
@@ -75,6 +61,24 @@ import { useGetSettingsValue, useUpdateSettings } from '@client/app/hooks/data/s
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
+import type { AdminStatusTone } from '@client/app/utils/themes/admin';
+import {
+  AdminDialog,
+  AdminPageHeader,
+  DataTable,
+  EmptyState,
+  ErrorState,
+  Fact,
+  FilterChip,
+  InlineBar,
+  LoadingState,
+  SectionCard,
+  StatStrip,
+  StatTile,
+  StatusChip,
+  type DataColumn,
+} from './shared';
+import { ADMIN_REGION_GAP, adminFocusScope } from './shared/adminStyles';
 
 interface SlackWorkspace {
   id: string;
@@ -86,63 +90,109 @@ interface SlackWorkspace {
 // Default settings derived from schema (module-level to avoid re-parsing on every render)
 const DEFAULT_ALERT_SETTINGS = ContextTelemetryAlertsSchema.parse({});
 
-// Severity colors
-const SEVERITY_COLORS: Record<AnomalySeverity, string> = {
-  low: '#4caf50',
-  medium: '#ffc107',
-  high: '#ff9800',
-  critical: '#f44336',
+// One tone per severity across the page, on the guide's risk scale (DESIGN_GUIDE section 2, "Status
+// tones": high risk is bad, medium risk is warn, low risk is neutral).
+const SEVERITY_TONE: Partial<Record<string, AdminStatusTone>> = {
+  critical: 'bad',
+  high: 'bad',
+  medium: 'warn',
+  low: 'neutral',
+};
+const severityTone = (severity: string): AdminStatusTone => SEVERITY_TONE[severity] ?? 'neutral';
+const capitalize = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+
+const RECOMMENDED_ACTIONS: Record<RecommendedAction, { label: string; tone: AdminStatusTone }> = {
+  no_action: { label: 'No action needed', tone: 'good' },
+  monitor: { label: 'Monitor', tone: 'neutral' },
+  investigate_soon: { label: 'Investigate soon', tone: 'warn' },
+  immediate_action: { label: 'Immediate action', tone: 'bad' },
 };
 
-// Severity icons. Benign turns are stored as severity 'low' (there is no benign tier),
-// so they are flagged separately rather than sharing the real low-severity indicator.
-const SeverityIcon = ({ severity, benign }: { severity: AnomalySeverity; benign?: boolean }) => {
-  if (benign) {
-    return <InfoIcon sx={{ color: 'neutral.400' }} />;
-  }
-  switch (severity) {
-    case 'critical':
-      return <ErrorIcon sx={{ color: SEVERITY_COLORS.critical }} />;
-    case 'high':
-      return <WarningAmberIcon sx={{ color: SEVERITY_COLORS.high }} />;
-    case 'medium':
-      return <WarningAmberIcon sx={{ color: SEVERITY_COLORS.medium }} />;
-    case 'low':
-      return <CheckCircleIcon sx={{ color: SEVERITY_COLORS.low }} />;
-    default:
-      return <InfoIcon />;
-  }
+const PRIORITY_TONE: Partial<Record<string, AdminStatusTone>> = { P0: 'bad', P1: 'warn', P2: 'warn', P3: 'neutral' };
+
+const HEALTH_CHECK_STATUS: Record<HealthCheckItem['status'], { label: string; tone: AdminStatusTone }> = {
+  ok: { label: 'OK', tone: 'good' },
+  warning: { label: 'Warning', tone: 'warn' },
+  error: { label: 'Error', tone: 'bad' },
 };
 
-// Anomaly Indicators
+const OVERALL_HEALTH: Record<IntegrationHealthResponse['overall'], { label: string; tone: AdminStatusTone }> = {
+  healthy: { label: 'Healthy', tone: 'good' },
+  degraded: { label: 'Degraded', tone: 'warn' },
+  unhealthy: { label: 'Unhealthy', tone: 'bad' },
+};
+
+const SEVERITIES: AnomalySeverity[] = ['critical', 'high', 'medium', 'low'];
+
+const ANOMALY_TYPES: { value: PrimaryAnomaly; label: string }[] = [
+  { value: 'context_overflow', label: 'Context overflow' },
+  { value: 'high_utilization', label: 'High utilization' },
+  { value: 'high_truncation', label: 'High truncation' },
+  { value: 'tool_failure', label: 'Tool failure' },
+  { value: 'subagent_timeout', label: 'Subagent timeout' },
+  { value: 'slow_response', label: 'Slow response' },
+  { value: 'multiple', label: 'Multiple' },
+];
+
+// Unset means the server default, which leaves out entries scoring 0.
+const MIN_SCORE_OPTIONS = [
+  { value: '0', label: 'Any, including 0' },
+  { value: '30', label: '30+' },
+  { value: '50', label: '50+' },
+  { value: '70', label: '70+' },
+];
+
+const filterLabel = (text: string) => (
+  <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
+    {text}
+  </Typography>
+);
+
+/** The button row under a dialog's content, the commit button last. */
+const DialogFooter = ({ children }: { children: ReactNode }) => (
+  <Stack
+    direction="row"
+    justifyContent="flex-end"
+    flexWrap="wrap"
+    gap={1}
+    sx={{ pt: 2, mt: 1, borderTop: '1px solid', borderColor: 'admin.border' }}
+  >
+    {children}
+  </Stack>
+);
+
+// Benign turns are stored as severity 'low' (there is no benign tier), so they are labelled
+// separately rather than sharing the real low-severity chip.
+const SeverityChip = ({ severity, benign }: { severity: AnomalySeverity; benign?: boolean }) => (
+  <StatusChip
+    tone={benign ? 'neutral' : severityTone(severity)}
+    label={benign ? 'Benign' : `${capitalize(severity)} severity`}
+    data-testid="context-inspector-severity-chip"
+  />
+);
+
 const AnomalyIndicators = ({ anomalies }: { anomalies: ContextTelemetry['anomalies'] }) => {
   const activeAnomalies = [
-    anomalies.contextOverflow && 'Context Overflow',
-    anomalies.criticalUtilization && 'Critical Utilization (95%+)',
-    anomalies.highUtilization && !anomalies.criticalUtilization && 'High Utilization (90%+)',
-    anomalies.criticalTruncation && 'Critical Truncation (75%+)',
-    anomalies.highTruncation && !anomalies.criticalTruncation && 'High Truncation (50%+)',
-    anomalies.toolFailureSpike && 'Tool Failure Spike',
-    anomalies.toolTimeout && 'Tool Timeout',
-    anomalies.subagentTimeout && 'Subagent Timeout',
-    anomalies.slowTotalResponse && 'Slow Response',
-    anomalies.slowFirstToken && 'Slow First Token',
+    anomalies.contextOverflow && 'Context overflow',
+    anomalies.criticalUtilization && 'Critical utilization (95%+)',
+    anomalies.highUtilization && !anomalies.criticalUtilization && 'High utilization (90%+)',
+    anomalies.criticalTruncation && 'Critical truncation (75%+)',
+    anomalies.highTruncation && !anomalies.criticalTruncation && 'High truncation (50%+)',
+    anomalies.toolFailureSpike && 'Tool failure spike',
+    anomalies.toolTimeout && 'Tool timeout',
+    anomalies.subagentTimeout && 'Subagent timeout',
+    anomalies.slowTotalResponse && 'Slow response',
+    anomalies.slowFirstToken && 'Slow first token',
   ].filter((x): x is string => Boolean(x));
 
   if (activeAnomalies.length === 0) {
-    return (
-      <Chip size="sm" color="success" variant="outlined">
-        No Anomalies
-      </Chip>
-    );
+    return <StatusChip tone="good" label="No anomalies" data-testid="context-inspector-anomaly-chip" />;
   }
 
   return (
-    <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+    <Stack direction="row" gap={0.5} flexWrap="wrap">
       {activeAnomalies.map(anomaly => (
-        <Chip key={anomaly} size="sm" color="warning" variant="outlined">
-          {anomaly}
-        </Chip>
+        <StatusChip key={anomaly} tone="warn" label={anomaly} data-testid="context-inspector-anomaly-chip" />
       ))}
     </Stack>
   );
@@ -172,80 +222,42 @@ const AnalysisModal = ({
   cachedAt?: string;
   onReanalyze?: () => void;
 }) => {
+  const summaryTone = analysis ? severityTone(analysis.severity) : 'neutral';
   return (
-    <Modal open={open} onClose={onClose}>
-      <ModalDialog sx={{ maxWidth: 600, maxHeight: '80vh', overflow: 'auto' }}>
-        <ModalClose />
-        <Typography level="h4" sx={{ mb: 2 }}>
-          Anomaly Analysis
-        </Typography>
+    <AdminDialog
+      open={open}
+      onClose={onClose}
+      title="Anomaly analysis"
+      width={640}
+      data-testid="context-inspector-analysis-dialog"
+    >
+      <DialogContent sx={{ gap: 2 }}>
+        {isLoading && <LoadingState label="Analyzing the entry" testId="context-inspector-analysis-loading" />}
 
-        {isLoading && (
-          <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
-            <CircularProgress />
-          </Box>
-        )}
-
-        {error && (
-          <Alert color="danger" variant="outlined" sx={{ mb: 2 }}>
-            Failed to analyze: {error.message}
-          </Alert>
-        )}
+        {error && <Alert color="danger">Failed to analyze: {error.message}</Alert>}
 
         {analysis && (
-          <Stack spacing={2}>
-            {/* Summary */}
-            <Card
-              variant="soft"
-              color={analysis.severity === 'critical' ? 'danger' : analysis.severity === 'high' ? 'warning' : 'neutral'}
+          <>
+            <Alert
+              color={summaryTone === 'bad' ? 'danger' : summaryTone === 'warn' ? 'warning' : 'neutral'}
+              data-testid="context-inspector-analysis-summary"
             >
-              <CardContent>
-                <Typography level="body-sm" fontWeight="md">
-                  {analysis.summary}
-                </Typography>
-              </CardContent>
-            </Card>
+              {analysis.summary}
+            </Alert>
 
-            {/* Severity & Impact */}
             <Box>
-              <Stack direction="row" spacing={2} alignItems="center">
-                <Chip
-                  size="lg"
-                  color={
-                    analysis.severity === 'critical'
-                      ? 'danger'
-                      : analysis.severity === 'high'
-                        ? 'warning'
-                        : analysis.severity === 'medium'
-                          ? 'warning'
-                          : 'success'
-                  }
-                  variant="outlined"
-                >
-                  {analysis.severity.toUpperCase()} SEVERITY
-                </Chip>
+              <Stack direction="row" gap={1} flexWrap="wrap">
+                <StatusChip
+                  tone={summaryTone}
+                  label={`${capitalize(analysis.severity)} severity`}
+                  data-testid="context-inspector-analysis-severity"
+                />
                 {analysis.recommendedAction && (
-                  <Chip
-                    size="lg"
-                    color={
-                      analysis.recommendedAction === 'immediate_action'
-                        ? 'danger'
-                        : analysis.recommendedAction === 'investigate_soon'
-                          ? 'warning'
-                          : analysis.recommendedAction === 'monitor'
-                            ? 'neutral'
-                            : 'success'
-                    }
-                    variant="outlined"
-                  >
-                    {analysis.recommendedAction === 'no_action'
-                      ? 'No Action Needed'
-                      : analysis.recommendedAction === 'monitor'
-                        ? 'Monitor'
-                        : analysis.recommendedAction === 'investigate_soon'
-                          ? 'Investigate Soon'
-                          : 'Immediate Action'}
-                  </Chip>
+                  <StatusChip
+                    tone={RECOMMENDED_ACTIONS[analysis.recommendedAction].tone}
+                    label={RECOMMENDED_ACTIONS[analysis.recommendedAction].label}
+                    data-testid="context-inspector-analysis-action"
+                  />
                 )}
               </Stack>
               <Typography level="body-sm" sx={{ mt: 1 }}>
@@ -253,94 +265,65 @@ const AnalysisModal = ({
               </Typography>
             </Box>
 
-            <Divider />
-
-            {/* Findings */}
-            <Box>
-              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
-                <ReportProblemIcon color="warning" />
-                <Typography level="title-md">Findings</Typography>
-              </Stack>
-              <List size="sm">
+            <SectionCard title="Findings" body="custom" data-testid="context-inspector-findings">
+              <List marker="disc" size="sm" sx={{ px: 2, py: 1 }}>
                 {analysis.findings.map((finding, idx) => (
-                  <ListItem key={`finding-${idx}`}>
-                    <ListItemDecorator>
-                      <WarningAmberIcon fontSize="small" color="warning" />
-                    </ListItemDecorator>
-                    <Typography level="body-sm">{finding}</Typography>
-                  </ListItem>
+                  <ListItem key={`finding-${idx}`}>{finding}</ListItem>
                 ))}
               </List>
-            </Box>
+            </SectionCard>
 
-            <Divider />
-
-            {/* Recommendations */}
-            <Box>
-              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
-                <LightbulbIcon color="success" />
-                <Typography level="title-md">Recommendations</Typography>
-              </Stack>
-              <List size="sm">
+            <SectionCard title="Recommendations" body="custom" data-testid="context-inspector-recommendations">
+              <List marker="disc" size="sm" sx={{ px: 2, py: 1 }}>
                 {analysis.recommendations.map((rec, idx) => (
-                  <ListItem key={`rec-${idx}`}>
-                    <ListItemDecorator>
-                      <CheckCircleIcon fontSize="small" color="success" />
-                    </ListItemDecorator>
-                    <Typography level="body-sm">{rec}</Typography>
-                  </ListItem>
+                  <ListItem key={`rec-${idx}`}>{rec}</ListItem>
                 ))}
               </List>
-            </Box>
+            </SectionCard>
 
-            {/* Historical Baselines */}
             {baselines && (
-              <>
-                <Divider />
-                <Box>
-                  <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
-                    <AnalyticsIcon color="primary" />
-                    <Typography level="title-md">Historical Baselines</Typography>
-                    <Chip size="sm" variant="outlined" color="neutral">
-                      {baselines.windowDays}-day, N={baselines.sampleCount}
-                    </Chip>
-                  </Stack>
-                  <Sheet variant="outlined" sx={{ borderRadius: 'sm', p: 1.5 }}>
-                    <Stack spacing={0.5}>
-                      <Typography level="body-sm">
-                        Avg Response Time: {((baselines.avgResponseTimeMs || 0) / 1000).toFixed(1)}s
-                      </Typography>
-                      <Typography level="body-sm">
-                        P95 Response Time: {((baselines.p95ResponseTimeMs || 0) / 1000).toFixed(1)}s
-                      </Typography>
-                      <Typography level="body-sm">
-                        Normal Utilization: {baselines.utilizationRange?.low ?? 0}% –{' '}
-                        {baselines.utilizationRange?.high ?? 0}% (mean ± 1σ)
-                      </Typography>
-                    </Stack>
-                  </Sheet>
-                </Box>
-              </>
+              <SectionCard
+                title="Historical baselines"
+                action={
+                  <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+                    {baselines.windowDays}-day window, N={baselines.sampleCount}
+                  </Typography>
+                }
+                data-testid="context-inspector-baselines"
+              >
+                <Fact label="Avg response time">{((baselines.avgResponseTimeMs || 0) / 1000).toFixed(1)}s</Fact>
+                <Fact label="P95 response time">{((baselines.p95ResponseTimeMs || 0) / 1000).toFixed(1)}s</Fact>
+                <Fact label="Normal utilization">
+                  {`${baselines.utilizationRange?.low ?? 0}% \u2013 ${baselines.utilizationRange?.high ?? 0}% (mean \u00b1 1\u03c3)`}
+                </Fact>
+              </SectionCard>
             )}
 
             {/* Analysis Source & Cache Info */}
-            <Stack direction="row" justifyContent="space-between" alignItems="center">
+            <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1} flexWrap="wrap">
               {analysisSource && (
-                <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+                <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
                   Analysis source: {analysisSource}
                   {cached && cachedAt && ` (cached ${new Date(cachedAt).toLocaleString()})`}
                 </Typography>
               )}
               {cached && onReanalyze && (
-                <Button size="sm" variant="outlined" color="neutral" onClick={onReanalyze} disabled={isLoading}>
+                <Button
+                  size="sm"
+                  variant="outlined"
+                  color="neutral"
+                  onClick={onReanalyze}
+                  disabled={isLoading}
+                  data-testid="context-inspector-reanalyze-btn"
+                >
                   Re-analyze
                 </Button>
               )}
             </Stack>
-          </Stack>
+          </>
         )}
-      </ModalDialog>
-    </Modal>
+      </DialogContent>
+    </AdminDialog>
   );
 };
 
@@ -396,62 +379,65 @@ const CreateIssueModal = ({
   };
 
   return (
-    <Modal open={open} onClose={handleClose}>
-      <ModalDialog sx={{ maxWidth: 500 }}>
-        <ModalClose />
-        <Typography level="h4" sx={{ mb: 2 }}>
-          Create GitHub Issue
-        </Typography>
+    <AdminDialog
+      open={open}
+      onClose={handleClose}
+      title="Create GitHub issue"
+      width={500}
+      data-testid="context-inspector-create-issue-dialog"
+    >
+      <DialogContent sx={{ gap: 2 }}>
+        {!configuredRepo ? (
+          <Alert color="warning" data-testid="context-inspector-no-repo-banner">
+            No GitHub repository is configured. Set the GitHub owner and repo under Alerts and integrations, then try
+            again.
+          </Alert>
+        ) : (
+          <>
+            <FormControl>
+              <FormLabel>Repository</FormLabel>
+              <Input value={repository} disabled />
+              <FormHelperText>Configured under Alerts and integrations</FormHelperText>
+            </FormControl>
 
-        <Stack spacing={2}>
-          {!configuredRepo ? (
-            <Alert color="warning" variant="outlined">
-              No GitHub repository configured. Please configure GitHub owner and repo in the settings above.
-            </Alert>
-          ) : (
-            <>
-              <FormControl>
-                <FormLabel>Repository</FormLabel>
-                <Input value={repository} disabled />
-                <FormHelperText>Configured in Alert & Integration Settings</FormHelperText>
-              </FormControl>
+            <FormControl>
+              <FormLabel>Additional context (optional)</FormLabel>
+              <Textarea
+                value={additionalContext}
+                onChange={e => setAdditionalContext(e.target.value)}
+                minRows={3}
+                maxRows={6}
+                placeholder="Add any additional context or notes about this anomaly..."
+                slotProps={{ textarea: { maxLength: 5000 } }}
+              />
+              <FormHelperText>{additionalContext.length}/5000 characters</FormHelperText>
+            </FormControl>
 
-              <FormControl>
-                <FormLabel>Additional Context (Optional)</FormLabel>
-                <Textarea
-                  value={additionalContext}
-                  onChange={e => setAdditionalContext(e.target.value)}
-                  minRows={3}
-                  maxRows={6}
-                  placeholder="Add any additional context or notes about this anomaly..."
-                  slotProps={{ textarea: { maxLength: 5000 } }}
-                />
-                <FormHelperText>{additionalContext.length}/5000 characters</FormHelperText>
-              </FormControl>
-
-              {createIssue.error && (
-                <Alert color="danger" variant="outlined">
-                  Failed to create issue: {createIssue.error.message}
-                </Alert>
-              )}
-
-              <Stack direction="row" spacing={1} justifyContent="flex-end">
-                <Button variant="outlined" color="neutral" onClick={handleClose}>
-                  Cancel
-                </Button>
-                <Button
-                  startDecorator={createIssue.isPending ? <CircularProgress size="sm" /> : <GitHubIcon />}
-                  onClick={handleSubmit}
-                  loading={createIssue.isPending}
-                >
-                  Create Issue
-                </Button>
-              </Stack>
-            </>
-          )}
-        </Stack>
-      </ModalDialog>
-    </Modal>
+            {createIssue.error && <Alert color="danger">Failed to create issue: {createIssue.error.message}</Alert>}
+          </>
+        )}
+      </DialogContent>
+      {configuredRepo && (
+        <DialogFooter>
+          <Button
+            variant="plain"
+            color="neutral"
+            onClick={handleClose}
+            data-testid="context-inspector-create-issue-cancel-btn"
+          >
+            Cancel
+          </Button>
+          <Button
+            startDecorator={<GitHubIcon />}
+            onClick={handleSubmit}
+            loading={createIssue.isPending}
+            data-testid="context-inspector-create-issue-submit-btn"
+          >
+            Create issue
+          </Button>
+        </DialogFooter>
+      )}
+    </AdminDialog>
   );
 };
 
@@ -469,165 +455,130 @@ const IssueCreatedModal = ({
   isDuplicate?: boolean;
   issueNumber?: number;
 }) => {
-  const heading = isDuplicate ? 'Existing Issue Found' : 'Issue Created';
+  const heading = isDuplicate ? 'Existing issue found' : 'Issue created';
   const description = isDuplicate
     ? `A GitHub issue already exists for this anomaly${issueNumber && issueNumber > 0 ? `: #${issueNumber}` : ''}.`
     : 'The GitHub issue has been created successfully.';
-  const buttonLabel = isDuplicate ? 'View Existing Issue on GitHub' : 'View Issue on GitHub';
+  const buttonLabel = isDuplicate ? 'View existing issue on GitHub' : 'View issue on GitHub';
 
   return (
-    <Modal open={open} onClose={onClose}>
-      <ModalDialog>
-        <ModalClose />
-        <Stack spacing={2} alignItems="center" sx={{ py: 2 }}>
-          {isDuplicate ? (
-            <InfoIcon sx={{ fontSize: 48, color: 'primary.500' }} />
-          ) : (
-            <CheckCircleIcon sx={{ fontSize: 48, color: 'success.500' }} />
-          )}
-          <Typography level="h4">{heading}</Typography>
-          <Typography level="body-sm" textAlign="center">
-            {description}
-          </Typography>
-          <Button component="a" href={issueUrl} target="_blank" rel="noopener noreferrer" startDecorator={<LinkIcon />}>
-            {buttonLabel}
-          </Button>
-        </Stack>
-      </ModalDialog>
-    </Modal>
+    <AdminDialog open={open} onClose={onClose} title={heading} data-testid="context-inspector-issue-created-dialog">
+      <DialogContent>
+        <Typography level="body-sm">{description}</Typography>
+      </DialogContent>
+      <DialogFooter>
+        <Button
+          component="a"
+          href={issueUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          startDecorator={<LinkIcon />}
+          data-testid="context-inspector-issue-link"
+        >
+          {buttonLabel}
+        </Button>
+      </DialogFooter>
+    </AdminDialog>
   );
 };
 
-// Health Check Card Component (matches LiveOps Triage pattern)
-const HealthCheckCard = ({ check }: { check: HealthCheckItem }) => {
+// One integration check: its name, a status chip and the detail line, without a card of its own.
+const HealthCheckRow = ({ check }: { check: HealthCheckItem }) => {
   return (
-    <Box
-      sx={{
-        display: 'flex',
-        alignItems: 'flex-start',
-        gap: 1.5,
-        p: 1.5,
-        borderRadius: 'sm',
-        border: '1px solid',
-        borderColor: check.status === 'ok' ? 'success.400' : check.status === 'warning' ? 'warning.400' : 'danger.400',
-        bgcolor: 'background.surface',
-      }}
-    >
-      {check.status === 'ok' ? (
-        <CheckCircleIcon sx={{ fontSize: 20, color: 'success.500', mt: 0.25 }} />
-      ) : check.status === 'warning' ? (
-        <WarningAmberIcon sx={{ fontSize: 20, color: 'warning.500', mt: 0.25 }} />
-      ) : (
-        <ErrorIcon sx={{ fontSize: 20, color: 'danger.500', mt: 0.25 }} />
-      )}
-      <Box sx={{ flex: 1, minWidth: 0 }}>
-        <Typography
-          level="body-sm"
-          fontWeight="lg"
-          sx={{
-            color: check.status === 'ok' ? 'success.700' : check.status === 'warning' ? 'warning.700' : 'danger.700',
-          }}
-        >
+    <Box sx={{ minWidth: 0 }} data-testid="context-inspector-health-check">
+      <Stack direction="row" alignItems="center" gap={1} flexWrap="wrap">
+        <Typography level="title-sm" sx={{ color: 'admin.ink' }}>
           {check.name}
         </Typography>
-        <Typography level="body-xs" sx={{ color: 'text.secondary', wordBreak: 'break-word' }}>
-          {check.message}
+        <StatusChip tone={HEALTH_CHECK_STATUS[check.status].tone} label={HEALTH_CHECK_STATUS[check.status].label} />
+      </Stack>
+      <Typography level="body-xs" sx={{ color: 'admin.inkMuted', wordBreak: 'break-word' }}>
+        {check.message}
+      </Typography>
+    </Box>
+  );
+};
+
+const DRY_RUN_COLUMNS: DataColumn<DryRunResult>[] = [
+  {
+    id: 'source',
+    label: 'Source',
+    width: '6rem',
+    render: result => (
+      <StatusChip tone="neutral" label={result.source === 'test' ? 'Test' : 'Real'} data-testid="dry-run-source-chip" />
+    ),
+  },
+  {
+    id: 'priority',
+    label: 'Priority',
+    width: '6rem',
+    render: result => (
+      <StatusChip
+        tone={PRIORITY_TONE[result.action.priority] ?? 'neutral'}
+        label={result.action.priority}
+        data-testid="dry-run-priority-chip"
+      />
+    ),
+  },
+  {
+    id: 'anomaly',
+    label: 'Anomaly',
+    render: result => (
+      <Box sx={{ minWidth: 0 }}>
+        <Typography level="body-sm" noWrap>
+          {result.telemetrySummary.primaryAnomaly} (score: {result.telemetrySummary.anomalyScore})
+        </Typography>
+        <Typography level="body-xs" noWrap sx={{ color: 'admin.inkMuted' }}>
+          {result.telemetrySummary.modelId} &bull; {result.telemetrySummary.provider}
         </Typography>
       </Box>
-    </Box>
-  );
-};
-
-// Priority color mapping for dry run results
-const PRIORITY_COLORS: Record<string, 'danger' | 'warning' | 'success' | 'neutral'> = {
-  P0: 'danger',
-  P1: 'warning',
-  P2: 'warning',
-  P3: 'success',
-};
-
-// Dry Run Result Card Component
-const DryRunResultCard = ({ result }: { result: DryRunResult }) => {
-  const priorityColor = PRIORITY_COLORS[result.action.priority] || 'neutral';
-
-  return (
-    <Box
-      data-testid="dry-run-result-card"
-      sx={{
-        p: 1.5,
-        borderRadius: 'sm',
-        border: '1px solid',
-        borderColor: 'divider',
-        bgcolor: 'background.level1',
-      }}
-    >
-      <Stack direction="row" justifyContent="space-between" alignItems="flex-start">
-        <Stack spacing={0.5}>
-          <Stack direction="row" spacing={1} alignItems="center">
-            <Chip
-              data-testid="dry-run-source-chip"
-              size="sm"
-              color={result.source === 'test' ? 'primary' : 'neutral'}
-              variant="outlined"
-            >
-              {result.source === 'test' ? 'Test' : 'Real'}
-            </Chip>
-            <Chip data-testid="dry-run-priority-chip" size="sm" color={priorityColor} variant="soft">
-              {result.action.priority}
-            </Chip>
-            <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-              {new Date(result.timestamp).toLocaleTimeString()}
-            </Typography>
-          </Stack>
-
-          <Typography level="body-sm" fontWeight="md">
-            {result.telemetrySummary.primaryAnomaly} (score: {result.telemetrySummary.anomalyScore})
-          </Typography>
-
-          <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-            {result.telemetrySummary.modelId} &bull; {result.telemetrySummary.provider}
-          </Typography>
-        </Stack>
-
-        <Stack spacing={0.5} alignItems="flex-end">
+    ),
+  },
+  {
+    id: 'outcome',
+    label: 'Outcome',
+    render: result => (
+      <Box sx={{ minWidth: 0 }}>
+        <Stack direction="row" gap={0.5}>
           {result.action.wouldCreateIssue ? (
-            <Chip
-              data-testid="dry-run-create-issue-chip"
-              size="sm"
-              color="success"
-              variant="soft"
-              startDecorator={<GitHubIcon sx={{ fontSize: 14 }} />}
-            >
-              Would create issue
-            </Chip>
+            <StatusChip tone="info" label="Would create issue" data-testid="dry-run-create-issue-chip" />
           ) : result.action.isDuplicate ? (
-            <Chip data-testid="dry-run-duplicate-chip" size="sm" color="neutral" variant="outlined">
-              Duplicate of #{result.action.matchedIssueNumber}
-            </Chip>
+            <StatusChip
+              tone="neutral"
+              label={`Duplicate of #${result.action.matchedIssueNumber}`}
+              data-testid="dry-run-duplicate-chip"
+            />
           ) : null}
-
           {result.action.isRegression && (
-            <Chip data-testid="dry-run-regression-chip" size="sm" color="danger" variant="soft">
-              Regression from #{result.action.regressedFromIssue}
-            </Chip>
+            <StatusChip
+              tone="bad"
+              label={`Regression from #${result.action.regressedFromIssue}`}
+              data-testid="dry-run-regression-chip"
+            />
           )}
-
           {result.action.wouldSendSlackAlert && (
-            <Chip data-testid="dry-run-slack-chip" size="sm" color="primary" variant="outlined">
-              Would send Slack
-            </Chip>
+            <StatusChip tone="info" label="Would send Slack" data-testid="dry-run-slack-chip" />
           )}
         </Stack>
-      </Stack>
-
-      {result.action.wouldCreateIssue && result.action.issueTitle && (
-        <Typography level="body-xs" sx={{ mt: 1, color: 'text.secondary' }}>
-          Title: {result.action.issueTitle}
-        </Typography>
-      )}
-    </Box>
-  );
-};
+        {result.action.wouldCreateIssue && result.action.issueTitle && (
+          <Typography level="body-xs" noWrap sx={{ color: 'admin.inkMuted', maxWidth: '24rem' }}>
+            Title: {result.action.issueTitle}
+          </Typography>
+        )}
+      </Box>
+    ),
+  },
+  {
+    id: 'time',
+    label: 'Time',
+    width: '7rem',
+    render: result => (
+      <Typography level="body-sm" noWrap>
+        {new Date(result.timestamp).toLocaleTimeString()}
+      </Typography>
+    ),
+  },
+];
 
 // Dry Run Section Component
 const DryRunSection = () => {
@@ -655,81 +606,90 @@ const DryRunSection = () => {
   return (
     <>
       <Divider />
-      <Typography level="title-sm">Dry Run Testing</Typography>
-      <Typography level="body-xs" sx={{ color: 'text.secondary', mb: 2 }}>
-        Test your configuration without creating actual issues or sending alerts.
-      </Typography>
+      <Stack gap={1.5} data-testid="dry-run-section">
+        <Box>
+          <Typography level="title-sm" component="h4" sx={{ color: 'admin.ink' }}>
+            Dry run testing
+          </Typography>
+          <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+            Test your configuration without creating actual issues or sending alerts.
+          </Typography>
+        </Box>
 
-      {/* Test Configuration Button */}
-      <Stack direction="row" spacing={2} alignItems="center" sx={{ mb: 2 }}>
-        <Button
-          data-testid="dry-run-test-btn"
-          variant="outlined"
-          color="primary"
-          startDecorator={<PlayArrowIcon />}
-          onClick={handleTest}
-          loading={testConfigMutation.isPending}
-        >
-          Test with Sample Data
-        </Button>
-        <Select
-          data-testid="dry-run-sample-type-select"
-          size="sm"
-          value={selectedSampleType}
-          onChange={(_, v) => v && setSelectedSampleType(v)}
-          sx={{ minWidth: 120 }}
-        >
-          <Option value="critical">Critical</Option>
-          <Option value="high">High</Option>
-          <Option value="medium">Medium</Option>
-          <Option value="low">Low</Option>
-        </Select>
+        <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
+          <Button
+            data-testid="dry-run-test-btn"
+            size="sm"
+            variant="outlined"
+            startDecorator={<PlayArrowIcon />}
+            onClick={handleTest}
+            loading={testConfigMutation.isPending}
+          >
+            Test with sample data
+          </Button>
+          <Select
+            data-testid="dry-run-sample-type-select"
+            size="sm"
+            value={selectedSampleType}
+            onChange={(_, v) => v && setSelectedSampleType(v)}
+            aria-label="Sample severity"
+            sx={{ minWidth: 120 }}
+          >
+            <Option value="critical">Critical</Option>
+            <Option value="high">High</Option>
+            <Option value="medium">Medium</Option>
+            <Option value="low">Low</Option>
+          </Select>
+        </Stack>
+
+        {testConfigMutation.isError && (
+          <Alert color="danger">Test failed: {testConfigMutation.error?.message || 'Unknown error'}</Alert>
+        )}
+
+        <Stack direction="row" justifyContent="space-between" alignItems="center">
+          <Typography level="title-sm" component="h4" sx={{ color: 'admin.ink' }}>
+            Recent dry run results
+          </Typography>
+          <IconButton
+            data-testid="dry-run-refresh-btn"
+            size="sm"
+            variant="plain"
+            aria-label="Refresh dry run results"
+            onClick={() => refetchResults()}
+          >
+            <RefreshIcon />
+          </IconButton>
+        </Stack>
+        <Box data-testid="dry-run-results-panel">
+          <DataTable
+            label="Recent dry run results"
+            rows={dryRunResults?.results ?? []}
+            columns={DRY_RUN_COLUMNS}
+            getRowId={result => result._id}
+            rowTestId={() => 'dry-run-result-card'}
+            loading={isLoadingResults}
+            error={isResultsError ? 'Could not load dry run results.' : undefined}
+            onRetry={() => void refetchResults()}
+            empty={
+              <EmptyState
+                title="No dry run results yet"
+                description="Turn on dry run mode and trigger some anomalies, or test with sample data above."
+                action={null}
+              />
+            }
+            pagination={false}
+            maxHeight="none"
+            minWidth="48rem"
+            testId="dry-run-results-table"
+          />
+        </Box>
       </Stack>
-
-      {/* Error display for test config */}
-      {testConfigMutation.isError && (
-        <Alert color="danger" variant="soft" sx={{ mb: 2 }}>
-          Test failed: {testConfigMutation.error?.message || 'Unknown error'}
-        </Alert>
-      )}
-
-      {/* Dry Run Results Panel */}
-      <Card data-testid="dry-run-results-panel" variant="outlined">
-        <CardContent>
-          <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
-            <Typography level="title-sm">Recent Dry Run Results</Typography>
-            <IconButton data-testid="dry-run-refresh-btn" size="sm" variant="plain" onClick={() => refetchResults()}>
-              <RefreshIcon />
-            </IconButton>
-          </Stack>
-
-          {isResultsError ? (
-            <Alert data-testid="dry-run-results-error" color="danger" variant="soft" size="sm">
-              Failed to load dry run results. Try refreshing.
-            </Alert>
-          ) : isLoadingResults ? (
-            <Box data-testid="dry-run-loading" sx={{ display: 'flex', justifyContent: 'center', p: 2 }}>
-              <CircularProgress size="sm" />
-            </Box>
-          ) : !dryRunResults?.results.length ? (
-            <Typography data-testid="dry-run-empty-state" level="body-sm" sx={{ color: 'text.secondary' }}>
-              No dry run results yet. Enable dry run mode and trigger some anomalies, or use the test button above.
-            </Typography>
-          ) : (
-            <Stack data-testid="dry-run-results-list" spacing={1}>
-              {dryRunResults.results.map(result => (
-                <DryRunResultCard key={result._id} result={result} />
-              ))}
-            </Stack>
-          )}
-        </CardContent>
-      </Card>
     </>
   );
 };
 
-// Settings Section Component (matches What's New tab pattern with Save/Reset)
-const SettingsSection = ({
+// Alert settings card (matches What's New tab pattern with Save/Reset)
+const AlertSettingsCard = ({
   alertSettings,
   onUpdateSettings,
   isUpdating,
@@ -796,50 +756,51 @@ const SettingsSection = ({
   );
 
   return (
-    <Box sx={{ p: 2 }}>
-      {/* Section Header */}
-      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
-        <Stack direction="row" spacing={1} alignItems="center">
-          <SettingsIcon color="primary" />
-          <Typography level="title-lg">Alert & Integration Settings</Typography>
+    <SectionCard
+      title="Alerts and integrations"
+      body="custom"
+      action={
+        <Stack direction="row" alignItems="center" gap={1}>
           {integrationStatus?.overall && (
-            <Chip
-              size="sm"
-              variant="outlined"
-              color={
-                integrationStatus.overall === 'healthy'
-                  ? 'success'
-                  : integrationStatus.overall === 'degraded'
-                    ? 'warning'
-                    : 'danger'
-              }
-            >
-              {integrationStatus.overall.toUpperCase()}
-            </Chip>
+            <StatusChip
+              tone={OVERALL_HEALTH[integrationStatus.overall].tone}
+              label={OVERALL_HEALTH[integrationStatus.overall].label}
+              data-testid="context-inspector-health-chip"
+            />
           )}
+          <Tooltip title="Refresh health status">
+            <IconButton
+              size="sm"
+              variant="plain"
+              aria-label="Refresh health status"
+              onClick={onRefreshHealth}
+              disabled={isRefreshing}
+              data-testid="context-inspector-health-refresh-btn"
+            >
+              <RefreshIcon />
+            </IconButton>
+          </Tooltip>
         </Stack>
-        <Tooltip title="Refresh health status">
-          <IconButton size="sm" variant="plain" onClick={onRefreshHealth} disabled={isRefreshing}>
-            <RefreshIcon />
-          </IconButton>
-        </Tooltip>
-      </Stack>
-
-      <Typography level="body-sm" sx={{ color: 'text.secondary', mb: 2 }}>
+      }
+      data-testid="context-inspector-settings-card"
+    >
+      <Typography level="body-sm" sx={{ color: 'admin.inkMuted', px: 2, pt: 1.75 }}>
         Configure Slack alerts and GitHub issue creation for context telemetry anomalies.
       </Typography>
 
       {/* Integration Health Status */}
       {integrationStatus?.checks && (
-        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 2, mb: 2 }}>
+        <Box
+          sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 2, px: 2, pt: 2 }}
+        >
           {integrationStatus.checks.map((check, idx) => (
-            <HealthCheckCard key={idx} check={check} />
+            <HealthCheckRow key={idx} check={check} />
           ))}
         </Box>
       )}
 
       {/* Configuration Accordion */}
-      <AccordionGroup>
+      <AccordionGroup sx={{ px: 1, py: 1 }}>
         <Accordion expanded={configExpanded} onChange={() => setConfigExpanded(!configExpanded)}>
           <AccordionSummary indicator={<ExpandMoreIcon />}>
             <Typography level="title-sm">Configuration</Typography>
@@ -852,11 +813,10 @@ const SettingsSection = ({
                   checked={localSettings.enabled}
                   onChange={e => setLocalSettings({ ...localSettings, enabled: e.target.checked })}
                   disabled={isUpdating}
-                  color={localSettings.enabled ? 'success' : 'neutral'}
                 />
                 <Box>
                   <Typography level="body-md" fontWeight="bold">
-                    {localSettings.enabled ? 'Alerts Enabled' : 'Alerts Disabled'}
+                    {localSettings.enabled ? 'Alerts enabled' : 'Alerts disabled'}
                   </Typography>
                   <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
                     Send alerts to Slack when anomalies are detected
@@ -871,11 +831,10 @@ const SettingsSection = ({
                   checked={localSettings.dryRun ?? false}
                   onChange={e => setLocalSettings({ ...localSettings, dryRun: e.target.checked })}
                   disabled={isUpdating}
-                  color={localSettings.dryRun ? 'warning' : 'neutral'}
                 />
                 <Box>
                   <Typography level="body-md" fontWeight="bold">
-                    Dry Run Mode
+                    Dry run mode
                   </Typography>
                   <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
                     Log actions without creating issues or sending alerts
@@ -886,17 +845,17 @@ const SettingsSection = ({
               <Divider />
 
               {/* Slack Integration */}
-              <Typography level="title-sm">Slack Integration</Typography>
+              <Typography level="title-sm">Slack integration</Typography>
               <Grid container spacing={2}>
                 <Grid xs={12} md={6}>
                   <FormControl>
-                    <FormLabel>Slack Workspace</FormLabel>
+                    <FormLabel>Slack workspace</FormLabel>
                     {isWorkspacesError ? (
-                      <Alert color="danger" variant="outlined" size="sm" sx={{ mt: 1 }}>
+                      <Alert color="danger" size="sm" sx={{ mt: 1 }}>
                         Failed to load Slack workspaces. Check your connection and try again.
                       </Alert>
                     ) : workspacesData?.workspaces.length === 0 ? (
-                      <Alert color="warning" variant="outlined" size="sm" sx={{ mt: 1 }}>
+                      <Alert color="warning" size="sm" sx={{ mt: 1 }}>
                         No Slack workspaces found. Configure via Admin → Slack Workspaces.
                       </Alert>
                     ) : (
@@ -935,11 +894,11 @@ const SettingsSection = ({
               <Divider />
 
               {/* GitHub Integration */}
-              <Typography level="title-sm">GitHub Integration</Typography>
+              <Typography level="title-sm">GitHub integration</Typography>
               <Grid container spacing={2}>
                 <Grid xs={12} md={6}>
                   <FormControl>
-                    <FormLabel>GitHub Owner</FormLabel>
+                    <FormLabel>GitHub owner</FormLabel>
                     <Input
                       value={localSettings.githubOwner ?? ''}
                       onChange={e => setLocalSettings({ ...localSettings, githubOwner: e.target.value })}
@@ -951,7 +910,7 @@ const SettingsSection = ({
                 </Grid>
                 <Grid xs={12} md={6}>
                   <FormControl>
-                    <FormLabel>GitHub Repo</FormLabel>
+                    <FormLabel>GitHub repo</FormLabel>
                     <Input
                       value={localSettings.githubRepo ?? ''}
                       onChange={e => setLocalSettings({ ...localSettings, githubRepo: e.target.value })}
@@ -970,7 +929,7 @@ const SettingsSection = ({
                         disabled={isUpdating}
                       />
                       <Box>
-                        <Typography level="body-sm">Auto-create GitHub Issues</Typography>
+                        <Typography level="body-sm">Auto-create GitHub issues</Typography>
                         <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
                           Automatically create issues for critical anomalies
                         </Typography>
@@ -983,7 +942,7 @@ const SettingsSection = ({
               <Divider />
 
               {/* LLM Configuration */}
-              <Typography level="title-sm">LLM Configuration</Typography>
+              <Typography level="title-sm">LLM configuration</Typography>
               <Grid container spacing={2}>
                 <Grid xs={12} md={6}>
                   <FormControl>
@@ -1031,7 +990,7 @@ const SettingsSection = ({
                 </Grid>
                 <Grid xs={12} md={6}>
                   <FormControl>
-                    <FormLabel>Max Tokens</FormLabel>
+                    <FormLabel>Max tokens</FormLabel>
                     <Input
                       type="number"
                       value={localSettings.maxTokens ?? 2000}
@@ -1061,7 +1020,7 @@ const SettingsSection = ({
                 </Grid>
                 <Grid xs={12} md={6}>
                   <FormControl>
-                    <FormLabel>LLM Analysis Threshold</FormLabel>
+                    <FormLabel>LLM analysis threshold</FormLabel>
                     <Input
                       type="number"
                       value={localSettings.llmAnalysisThreshold ?? 30}
@@ -1081,11 +1040,11 @@ const SettingsSection = ({
               <Divider />
 
               {/* Alert Thresholds */}
-              <Typography level="title-sm">Alert Thresholds</Typography>
+              <Typography level="title-sm">Alert thresholds</Typography>
               <Grid container spacing={2}>
                 <Grid xs={12} md={4}>
                   <FormControl>
-                    <FormLabel>Alert Threshold</FormLabel>
+                    <FormLabel>Alert threshold</FormLabel>
                     <Input
                       type="number"
                       value={localSettings.alertThreshold}
@@ -1100,7 +1059,7 @@ const SettingsSection = ({
                 </Grid>
                 <Grid xs={12} md={4}>
                   <FormControl>
-                    <FormLabel>Critical Threshold</FormLabel>
+                    <FormLabel>Critical threshold</FormLabel>
                     <Input
                       type="number"
                       value={localSettings.criticalThreshold}
@@ -1115,7 +1074,7 @@ const SettingsSection = ({
                 </Grid>
                 <Grid xs={12} md={4}>
                   <FormControl>
-                    <FormLabel>Dedup Window (Minutes)</FormLabel>
+                    <FormLabel>Dedup window (minutes)</FormLabel>
                     <Input
                       type="number"
                       value={localSettings.dedupWindowMinutes}
@@ -1133,11 +1092,11 @@ const SettingsSection = ({
               <Divider />
 
               {/* Performance Targets (SLOs) */}
-              <Typography level="title-sm">Performance Targets (SLOs)</Typography>
+              <Typography level="title-sm">Performance targets (SLOs)</Typography>
               <Grid container spacing={2}>
                 <Grid xs={12} md={6}>
                   <FormControl>
-                    <FormLabel>Response Time P95 (seconds)</FormLabel>
+                    <FormLabel>Response time P95 (seconds)</FormLabel>
                     <Input
                       type="number"
                       value={Math.round((localSettings.sloResponseTimeP95Ms ?? 60000) / 1000)}
@@ -1155,7 +1114,7 @@ const SettingsSection = ({
                 </Grid>
                 <Grid xs={12} md={6}>
                   <FormControl>
-                    <FormLabel>First Token Time (seconds)</FormLabel>
+                    <FormLabel>First token time (seconds)</FormLabel>
                     <Input
                       type="number"
                       value={Math.round((localSettings.sloFirstTokenTimeMs ?? 5000) / 1000)}
@@ -1173,7 +1132,7 @@ const SettingsSection = ({
                 </Grid>
                 <Grid xs={12} md={6}>
                   <FormControl>
-                    <FormLabel>Error Rate (%)</FormLabel>
+                    <FormLabel>Error rate (%)</FormLabel>
                     <Input
                       type="number"
                       value={localSettings.sloErrorRatePercent ?? 2}
@@ -1188,7 +1147,7 @@ const SettingsSection = ({
                 </Grid>
                 <Grid xs={12} md={6}>
                   <FormControl>
-                    <FormLabel>Context Utilization (%)</FormLabel>
+                    <FormLabel>Context utilization (%)</FormLabel>
                     <Input
                       type="number"
                       value={localSettings.sloContextUtilizationPercent ?? 85}
@@ -1209,11 +1168,11 @@ const SettingsSection = ({
               <Divider />
 
               {/* Historical Baselines */}
-              <Typography level="title-sm">Historical Baselines</Typography>
+              <Typography level="title-sm">Historical baselines</Typography>
               <Grid container spacing={2}>
                 <Grid xs={12} md={6}>
                   <FormControl>
-                    <FormLabel>Baseline Window (days)</FormLabel>
+                    <FormLabel>Baseline window (days)</FormLabel>
                     <Input
                       type="number"
                       value={localSettings.baselineWindowDays ?? 7}
@@ -1234,9 +1193,7 @@ const SettingsSection = ({
               <Divider />
               <Stack direction="row" spacing={2} justifyContent="flex-end" alignItems="center">
                 {isDirty && (
-                  <Chip size="sm" color="warning" variant="outlined">
-                    Unsaved changes
-                  </Chip>
+                  <StatusChip tone="warn" label="Unsaved changes" data-testid="context-inspector-unsaved-chip" />
                 )}
                 <Button
                   data-testid="settings-reset-btn"
@@ -1272,12 +1229,90 @@ const SettingsSection = ({
           </AccordionDetails>
         </Accordion>
       </AccordionGroup>
-    </Box>
+    </SectionCard>
   );
 };
 
-// Individual telemetry entry card
-const TelemetryEntryCard = ({
+// Entries are rows of one card, divided by hairlines rather than each in a card of its own.
+const ENTRY_ROW_SX = { px: 2, py: 1.75, minWidth: 0, '& + &': { borderTop: '1px solid', borderColor: 'admin.border' } };
+
+// Rows come from the loaded entry, so these tables never show their error state.
+const ignoreRetry = () => undefined;
+
+const TOOL_COLUMNS: DataColumn<ToolTelemetry>[] = [
+  {
+    id: 'tool',
+    label: 'Tool',
+    render: tool => (
+      <Typography level="body-sm" noWrap>
+        {tool.toolName}
+      </Typography>
+    ),
+  },
+  { id: 'calls', label: 'Calls', numeric: true, render: tool => tool.invocationCount.toLocaleString() },
+  {
+    id: 'failures',
+    label: 'Failures',
+    numeric: true,
+    render: tool => (tool.failureCount > 0 ? <StatusChip tone="bad" label={tool.failureCount.toLocaleString()} /> : 0),
+  },
+  {
+    id: 'avgTime',
+    label: 'Avg time',
+    numeric: true,
+    render: tool => (tool.invocationCount > 0 ? `${(tool.totalDurationMs / tool.invocationCount).toFixed(0)}ms` : '-'),
+  },
+  {
+    id: 'lastError',
+    label: 'Last error',
+    render: tool => (
+      <Typography level="body-xs" sx={{ maxWidth: 200 }} noWrap>
+        {tool.lastError ?? '-'}
+      </Typography>
+    ),
+  },
+];
+
+const SUBAGENT_COLUMNS: DataColumn<SubagentTelemetry>[] = [
+  {
+    id: 'agent',
+    label: 'Agent',
+    render: agent => (
+      <Typography level="body-sm" noWrap>
+        {agent.agentName}
+      </Typography>
+    ),
+  },
+  { id: 'delegations', label: 'Delegations', numeric: true, render: agent => agent.delegationCount.toLocaleString() },
+  {
+    id: 'timeouts',
+    label: 'Timeouts',
+    numeric: true,
+    render: agent =>
+      agent.timeoutCount > 0 ? <StatusChip tone="bad" label={agent.timeoutCount.toLocaleString()} /> : 0,
+  },
+  {
+    id: 'totalTime',
+    label: 'Total time',
+    numeric: true,
+    render: agent => `${(agent.totalDurationMs / 1000).toFixed(1)}s`,
+  },
+  { id: 'tokens', label: 'Tokens', numeric: true, render: agent => agent.totalTokensUsed.toLocaleString() },
+];
+
+const Metric = ({ label, children }: { label: string; children: ReactNode }) => (
+  <Box>
+    <Typography component="dt" level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+      {label}
+    </Typography>
+    <Typography component="dd" level="body-sm" sx={{ m: 0, color: 'admin.ink', fontVariantNumeric: 'tabular-nums' }}>
+      {children}
+    </Typography>
+  </Box>
+);
+
+// One telemetry entry, as a row of the entries card
+const TelemetryEntryRow = ({
   entry,
   onAnalyze,
   onCreateIssue,
@@ -1293,115 +1328,80 @@ const TelemetryEntryCard = ({
 
   if (!telemetry) {
     return (
-      <Card variant="outlined" sx={{ mb: 1 }}>
-        <CardContent>
-          <Typography level="body-sm" color="neutral">
-            No telemetry data available
-          </Typography>
-        </CardContent>
-      </Card>
+      <Box component="article" sx={ENTRY_ROW_SX} data-testid={`context-inspector-entry-${entry.id}`}>
+        <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
+          No telemetry data available
+        </Typography>
+      </Box>
     );
   }
 
   const { model, contextWindow, performance, anomalies, tools, subagents } = telemetry;
 
   return (
-    <Card variant="outlined" sx={{ mb: 1 }}>
-      <CardContent>
-        <Stack direction="row" justifyContent="space-between" alignItems="flex-start" sx={{ mb: 1 }}>
-          <Stack direction="row" spacing={1} alignItems="center">
-            <SeverityIcon severity={anomalies.severity} benign={anomalies.primaryAnomaly === 'none'} />
-            <Typography level="title-sm">{model.modelId}</Typography>
-            <Chip size="sm" variant="outlined">
+    <Box component="article" sx={ENTRY_ROW_SX} data-testid={`context-inspector-entry-${entry.id}`}>
+      <Stack gap={1.5}>
+        <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1} flexWrap="wrap">
+          <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap" sx={{ minWidth: 0 }}>
+            <Typography level="title-sm" sx={{ color: 'admin.ink' }}>
+              {model.modelId}
+            </Typography>
+            <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
               {model.provider}
-            </Chip>
-            {model.fallbackUsed && (
-              <Chip size="sm" color="warning" variant="outlined">
-                Fallback
-              </Chip>
-            )}
+            </Typography>
+            <SeverityChip severity={anomalies.severity} benign={anomalies.primaryAnomaly === 'none'} />
+            {model.fallbackUsed && <StatusChip tone="warn" label="Fallback" />}
           </Stack>
-          <Stack direction="row" spacing={1} alignItems="center">
+          <Stack direction="row" gap={0.5} alignItems="center">
+            <Typography level="body-xs" sx={{ color: 'admin.inkMuted', mr: 0.5 }}>
+              {new Date(entry.timestamp).toLocaleString()}
+            </Typography>
             <Tooltip title="Analyze anomalies">
-              <IconButton size="sm" variant="outlined" color="primary" onClick={() => onAnalyze(entry.id)}>
+              <IconButton
+                size="sm"
+                variant="plain"
+                aria-label="Analyze anomalies"
+                onClick={() => onAnalyze(entry.id)}
+                data-testid={`context-inspector-analyze-${entry.id}`}
+              >
                 <AnalyticsIcon />
               </IconButton>
             </Tooltip>
-            <Tooltip title={githubEnabled ? 'Create GitHub Issue' : 'GitHub not configured'}>
+            <Tooltip title={githubEnabled ? 'Create GitHub issue' : 'GitHub not configured'}>
               <span>
                 <IconButton
                   size="sm"
-                  variant="outlined"
-                  color="neutral"
+                  variant="plain"
+                  aria-label="Create GitHub issue"
                   onClick={() => onCreateIssue(entry.id)}
                   disabled={!githubEnabled}
+                  data-testid={`context-inspector-create-issue-${entry.id}`}
                 >
                   <GitHubIcon />
                 </IconButton>
               </span>
             </Tooltip>
-            <Typography level="body-xs" color="neutral">
-              {new Date(entry.timestamp).toLocaleString()}
-            </Typography>
           </Stack>
         </Stack>
 
-        <Grid container spacing={2} sx={{ mb: 1 }}>
-          <Grid xs={6} md={3}>
-            <Typography level="body-xs" color="neutral">
-              Input Tokens
-            </Typography>
-            <Typography level="body-sm" fontWeight="md">
-              {contextWindow.inputTokens.toLocaleString()}
-            </Typography>
-          </Grid>
-          <Grid xs={6} md={3}>
-            <Typography level="body-xs" color="neutral">
-              Utilization
-            </Typography>
-            <Stack direction="row" alignItems="center" spacing={1}>
-              <LinearProgress
-                determinate
-                value={Math.min(contextWindow.utilizationPercentage, 100)}
-                color={
-                  contextWindow.utilizationPercentage >= 90
-                    ? 'danger'
-                    : contextWindow.utilizationPercentage >= 75
-                      ? 'warning'
-                      : 'success'
-                }
-                sx={{ flexGrow: 1 }}
-              />
-              <Typography level="body-sm">{contextWindow.utilizationPercentage.toFixed(1)}%</Typography>
-            </Stack>
-          </Grid>
-          <Grid xs={6} md={3}>
-            <Typography level="body-xs" color="neutral">
-              Response Time
-            </Typography>
-            <Typography level="body-sm" fontWeight="md">
-              {(performance.totalResponseTimeMs / 1000).toFixed(2)}s
-            </Typography>
-          </Grid>
-          <Grid xs={6} md={3}>
-            <Typography level="body-xs" color="neutral">
-              Anomaly Score
-            </Typography>
-            <Stack direction="row" alignItems="center" spacing={1}>
-              <Typography
-                level="body-sm"
-                fontWeight="md"
-                color={anomalies.anomalyScore >= 50 ? 'danger' : anomalies.anomalyScore >= 30 ? 'warning' : 'success'}
-              >
-                {anomalies.anomalyScore}/100
-              </Typography>
-            </Stack>
-          </Grid>
-        </Grid>
+        <Box
+          component="dl"
+          sx={{ m: 0, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 1.5 }}
+        >
+          <Metric label="Input tokens">{contextWindow.inputTokens.toLocaleString()}</Metric>
+          <Metric label="Utilization">
+            <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', gap: 1 }}>
+              <InlineBar value={Math.min(contextWindow.utilizationPercentage, 100)} max={100} />
+              {contextWindow.utilizationPercentage.toFixed(1)}%
+            </Box>
+          </Metric>
+          <Metric label="Response time">{(performance.totalResponseTimeMs / 1000).toFixed(2)}s</Metric>
+          <Metric label="Anomaly score">{anomalies.anomalyScore}/100</Metric>
+        </Box>
 
         <AnomalyIndicators anomalies={anomalies} />
 
-        <Accordion expanded={expanded} onChange={() => setExpanded(!expanded)} sx={{ mt: 1 }}>
+        <Accordion expanded={expanded} onChange={() => setExpanded(!expanded)}>
           <AccordionSummary indicator={<ExpandMoreIcon />}>
             <Typography level="body-sm">Details</Typography>
           </AccordionSummary>
@@ -1409,7 +1409,7 @@ const TelemetryEntryCard = ({
             <Stack spacing={2}>
               {/* Basic-tier notice: system prompts & feature breakdown require Enhanced */}
               {!telemetry.systemPrompts && (
-                <Typography level="body-xs" sx={{ fontStyle: 'italic', color: 'text.tertiary' }}>
+                <Typography level="body-xs" sx={{ fontStyle: 'italic', color: 'admin.inkMuted' }}>
                   Basic tier — system prompt breakdown and feature details require <strong>Enhanced</strong> telemetry.
                 </Typography>
               )}
@@ -1417,7 +1417,7 @@ const TelemetryEntryCard = ({
               {contextWindow.tokensBySource && (
                 <Box>
                   <Typography level="body-sm" fontWeight="md" sx={{ mb: 1 }}>
-                    Token Distribution
+                    Token distribution
                   </Typography>
                   <TokenDistributionBar tokensBySource={contextWindow.tokensBySource} />
                 </Box>
@@ -1427,12 +1427,12 @@ const TelemetryEntryCard = ({
               {telemetry.systemPrompts && telemetry.systemPrompts.prompts.length > 0 && (
                 <Box>
                   <Typography level="body-sm" fontWeight="md" sx={{ mb: 1 }}>
-                    System Prompts ({telemetry.systemPrompts.totalTokens.toLocaleString()} tokens)
+                    System prompts ({telemetry.systemPrompts.totalTokens.toLocaleString()} tokens)
                   </Typography>
                   <Grid container spacing={1}>
                     {telemetry.systemPrompts.prompts.map(prompt => (
                       <Grid key={`${prompt.name}-${prompt.source}`} xs={4} md={2}>
-                        <Typography level="body-xs" color="neutral">
+                        <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
                           {prompt.name} ({prompt.source})
                         </Typography>
                         <Typography level="body-sm">{prompt.tokenCount.toLocaleString()}</Typography>
@@ -1448,43 +1448,16 @@ const TelemetryEntryCard = ({
                   <Typography level="body-sm" fontWeight="md" sx={{ mb: 1 }}>
                     Tools ({tools.length})
                   </Typography>
-                  <Table size="sm">
-                    <thead>
-                      <tr>
-                        <th>Tool</th>
-                        <th>Calls</th>
-                        <th>Failures</th>
-                        <th>Avg Time</th>
-                        <th>Last Error</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {tools.slice(0, 10).map(tool => (
-                        <tr key={tool.toolName}>
-                          <td>{tool.toolName}</td>
-                          <td>{tool.invocationCount}</td>
-                          <td>
-                            {tool.failureCount > 0 ? (
-                              <Chip size="sm" color="danger" variant="outlined">
-                                {tool.failureCount}
-                              </Chip>
-                            ) : (
-                              0
-                            )}
-                          </td>
-                          <td>
-                            {tool.invocationCount > 0 ? (tool.totalDurationMs / tool.invocationCount).toFixed(0) : '-'}
-                            ms
-                          </td>
-                          <td>
-                            <Typography level="body-xs" sx={{ maxWidth: 200 }} noWrap>
-                              {tool.lastError ?? '-'}
-                            </Typography>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </Table>
+                  <DataTable
+                    label="Tools"
+                    rows={tools.slice(0, 10)}
+                    columns={TOOL_COLUMNS}
+                    getRowId={tool => tool.toolName}
+                    onRetry={ignoreRetry}
+                    pagination={false}
+                    maxHeight="none"
+                    testId={`context-inspector-tools-table-${entry.id}`}
+                  />
                 </Box>
               )}
 
@@ -1494,36 +1467,16 @@ const TelemetryEntryCard = ({
                   <Typography level="body-sm" fontWeight="md" sx={{ mb: 1 }}>
                     Subagents ({subagents.length})
                   </Typography>
-                  <Table size="sm">
-                    <thead>
-                      <tr>
-                        <th>Agent</th>
-                        <th>Delegations</th>
-                        <th>Timeouts</th>
-                        <th>Total Time</th>
-                        <th>Tokens</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {subagents.map(agent => (
-                        <tr key={agent.agentName}>
-                          <td>{agent.agentName}</td>
-                          <td>{agent.delegationCount}</td>
-                          <td>
-                            {agent.timeoutCount > 0 ? (
-                              <Chip size="sm" color="danger" variant="outlined">
-                                {agent.timeoutCount}
-                              </Chip>
-                            ) : (
-                              0
-                            )}
-                          </td>
-                          <td>{(agent.totalDurationMs / 1000).toFixed(1)}s</td>
-                          <td>{agent.totalTokensUsed.toLocaleString()}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </Table>
+                  <DataTable
+                    label="Subagents"
+                    rows={subagents}
+                    columns={SUBAGENT_COLUMNS}
+                    getRowId={agent => agent.agentName}
+                    onRetry={ignoreRetry}
+                    pagination={false}
+                    maxHeight="none"
+                    testId={`context-inspector-subagents-table-${entry.id}`}
+                  />
                 </Box>
               )}
 
@@ -1531,17 +1484,17 @@ const TelemetryEntryCard = ({
               {model.fallbackUsed && (
                 <Box>
                   <Typography level="body-sm" fontWeight="md" sx={{ mb: 1 }}>
-                    Fallback Details
+                    Fallback details
                   </Typography>
-                  <Typography level="body-sm">Original Model: {model.originalModelId ?? 'Unknown'}</Typography>
+                  <Typography level="body-sm">Original model: {model.originalModelId ?? 'Unknown'}</Typography>
                   <Typography level="body-sm">Reason: {model.fallbackReason ?? 'Unknown'}</Typography>
                 </Box>
               )}
             </Stack>
           </AccordionDetails>
         </Accordion>
-      </CardContent>
-    </Card>
+      </Stack>
+    </Box>
   );
 };
 
@@ -1642,297 +1595,281 @@ export function ContextInspectorTab() {
 
   const totalPages = data ? Math.ceil(data.total / pageSize) : 0;
 
+  const filtersSet = Boolean(startDate || endDate || provider || minAnomalyScore !== null || severity || anomalyType);
+  const clearFilters = () => {
+    setStartDate('');
+    setEndDate('');
+    setProvider(null);
+    setMinAnomalyScore(null);
+    setSeverity(null);
+    setAnomalyType(null);
+    setPage(0);
+  };
+
   return (
-    <Box>
-      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
-        <Typography level="h4">Context Telemetry Inspector</Typography>
-        <Stack direction="row" spacing={2} alignItems="center">
-          <Stack direction="row" spacing={1} alignItems="center">
-            <Typography level="body-sm">Telemetry Collection</Typography>
-            <Switch checked={telemetryEnabled} onChange={handleToggleTelemetry} disabled={updateSettings.isPending} />
-            <Chip size="sm" color={telemetryEnabled ? 'success' : 'neutral'} variant="outlined">
-              {telemetryEnabled ? 'Enabled' : 'Disabled'}
-            </Chip>
-          </Stack>
-          <Button
-            startDecorator={isFetching ? <CircularProgress size="sm" /> : <RefreshIcon />}
-            variant="outlined"
-            onClick={() => refetch()}
-            disabled={isFetching}
-          >
-            {isFetching ? 'Refreshing...' : 'Refresh'}
-          </Button>
-        </Stack>
-      </Stack>
+    <Stack gap={ADMIN_REGION_GAP} sx={{ minWidth: 0 }} data-testid="context-inspector-root">
+      <AdminPageHeader
+        title="Context inspector"
+        description="Context window, latency and anomaly telemetry for recent completions, with Slack and GitHub alerts."
+        actions={
+          <>
+            <Stack direction="row" alignItems="center" gap={1}>
+              <Switch
+                checked={telemetryEnabled}
+                onChange={handleToggleTelemetry}
+                disabled={updateSettings.isPending}
+                slotProps={{
+                  input: {
+                    'aria-label': 'Telemetry collection',
+                    'data-testid': 'context-inspector-telemetry-toggle',
+                  },
+                }}
+              />
+              <Typography level="body-sm" sx={{ color: 'admin.inkSecondary' }}>
+                Telemetry collection
+              </Typography>
+              <StatusChip
+                tone={telemetryEnabled ? 'good' : 'neutral'}
+                label={telemetryEnabled ? 'Enabled' : 'Disabled'}
+                data-testid="context-inspector-telemetry-chip"
+              />
+            </Stack>
+            <Button
+              size="sm"
+              variant="outlined"
+              startDecorator={<RefreshIcon />}
+              onClick={() => refetch()}
+              loading={isFetching}
+              data-testid="context-inspector-refresh-btn"
+            >
+              Refresh
+            </Button>
+          </>
+        }
+      />
 
       {!telemetryEnabled && (
-        <Alert color="warning" variant="outlined" sx={{ mb: 2 }}>
+        <Alert color="warning" data-testid="context-inspector-disabled-banner">
           Telemetry collection is disabled. Enable it to start capturing operational metadata for new completions.
         </Alert>
       )}
 
-      {/* Settings Section */}
-      <Sheet variant="outlined" sx={{ mb: 2, borderRadius: 'sm' }}>
-        <SettingsSection
-          alertSettings={alertSettings}
-          onUpdateSettings={handleUpdateAlertSettings}
-          isUpdating={updateSettings.isPending}
-          updateError={updateSettings.error}
-          integrationStatus={integrationStatus}
-          onRefreshHealth={() => refetchIntegrationStatus()}
-          isRefreshing={isRefreshingIntegration}
-        />
-      </Sheet>
+      <AlertSettingsCard
+        alertSettings={alertSettings}
+        onUpdateSettings={handleUpdateAlertSettings}
+        isUpdating={updateSettings.isPending}
+        updateError={updateSettings.error}
+        integrationStatus={integrationStatus}
+        onRefreshHealth={() => refetchIntegrationStatus()}
+        isRefreshing={isRefreshingIntegration}
+      />
 
-      {/* Stats Overview */}
       {data?.stats && (
-        <Grid container spacing={2} sx={{ mb: 2 }}>
-          <Grid xs={6} md={2}>
-            <Card variant="soft">
-              <CardContent>
-                <Typography level="body-xs" color="neutral">
-                  Total Entries
-                </Typography>
-                <Typography level="h4">{data.stats.totalEntries.toLocaleString()}</Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-          <Grid xs={6} md={2}>
-            <Card variant="soft">
-              <CardContent>
-                <Typography level="body-xs" color="neutral">
-                  Avg Anomaly Score
-                </Typography>
-                <Typography level="h4" color={data.stats.avgAnomalyScore >= 30 ? 'danger' : 'success'}>
-                  {data.stats.avgAnomalyScore}
-                </Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-          <Grid xs={6} md={2}>
-            <Card variant="soft">
-              <CardContent>
-                <Typography level="body-xs" color="neutral">
-                  Avg Utilization
-                </Typography>
-                <Typography level="h4" color={data.stats.avgUtilization >= 90 ? 'danger' : 'success'}>
-                  {data.stats.avgUtilization}%
-                </Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-          <Grid xs={6} md={2}>
-            <Card variant="soft">
-              <CardContent>
-                <Typography level="body-xs" color="neutral">
-                  Avg Response Time
-                </Typography>
-                <Typography level="h4">{(data.stats.avgResponseTimeMs / 1000).toFixed(1)}s</Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-          <Grid xs={12} md={4}>
-            <Card variant="soft">
-              <CardContent>
-                <Typography level="body-xs" color="neutral">
-                  Severity Distribution
-                </Typography>
-                <Stack direction="row" spacing={1} sx={{ mt: 0.5 }}>
-                  {(['critical', 'high', 'medium', 'low'] as AnomalySeverity[]).map(sev => (
-                    <Chip
+        <StatStrip aria-label="Telemetry summary">
+          <StatTile label="Total entries" value={data.stats.totalEntries} />
+          <StatTile
+            label="Avg anomaly score"
+            value={data.stats.avgAnomalyScore}
+            comparison={data.stats.avgAnomalyScore >= 30 ? <StatusChip tone="warn" label="High" /> : undefined}
+          />
+          <StatTile
+            label="Avg utilization"
+            value={`${data.stats.avgUtilization}%`}
+            comparison={data.stats.avgUtilization >= 90 ? <StatusChip tone="warn" label="High" /> : undefined}
+          />
+          <StatTile label="Avg response time" value={`${(data.stats.avgResponseTimeMs / 1000).toFixed(1)}s`} />
+          <StatTile
+            label="Severity"
+            value={
+              <Stack component="span" direction="row" gap={0.5} flexWrap="wrap" sx={{ py: 0.25 }}>
+                {SEVERITIES.map(sev => {
+                  const count = data.stats.severityDistribution[sev] ?? 0;
+                  return (
+                    <StatusChip
                       key={sev}
-                      size="sm"
-                      variant="outlined"
-                      sx={{ borderColor: SEVERITY_COLORS[sev], color: SEVERITY_COLORS[sev] }}
-                    >
-                      {sev}: {data.stats.severityDistribution[sev] ?? 0}
-                    </Chip>
-                  ))}
-                </Stack>
-              </CardContent>
-            </Card>
-          </Grid>
-        </Grid>
+                      tone={count > 0 ? severityTone(sev) : 'neutral'}
+                      label={`${capitalize(sev)}: ${count}`}
+                      data-testid={`context-inspector-severity-${sev}`}
+                    />
+                  );
+                })}
+              </Stack>
+            }
+          />
+        </StatStrip>
       )}
 
-      {/* Filters */}
-      <Sheet variant="outlined" sx={{ p: 2, mb: 2, borderRadius: 'sm' }}>
-        <Grid container spacing={2} alignItems="flex-end">
-          <Grid xs={6} md={2}>
-            <Typography level="body-sm" sx={{ mb: 0.5 }}>
-              Start Date
+      <Stack
+        direction="row"
+        flexWrap="wrap"
+        alignItems="center"
+        gap={1}
+        data-testid="context-inspector-filter-bar"
+        sx={{
+          ...adminFocusScope,
+          // One height for every control so the row reads as a single toolbar when it wraps.
+          '& .MuiInput-root': { minHeight: 32 },
+        }}
+      >
+        <Input
+          type="date"
+          size="sm"
+          startDecorator={filterLabel('From')}
+          value={startDate}
+          onChange={e => {
+            setStartDate(e.target.value);
+            setPage(0);
+          }}
+          slotProps={{ input: { 'aria-label': 'Start date' } }}
+        />
+        <Input
+          type="date"
+          size="sm"
+          startDecorator={filterLabel('To')}
+          value={endDate}
+          onChange={e => {
+            setEndDate(e.target.value);
+            setPage(0);
+          }}
+          slotProps={{ input: { 'aria-label': 'End date' } }}
+        />
+        <FilterChip
+          id="provider"
+          label="Provider"
+          value={provider ?? undefined}
+          options={(data?.stats?.providers ?? []).map(p => ({ value: p, label: p }))}
+          onChange={value => {
+            setProvider(value ?? null);
+            setPage(0);
+          }}
+        />
+        <FilterChip
+          id="min-score"
+          label="Anomaly score"
+          value={minAnomalyScore === null ? undefined : String(minAnomalyScore)}
+          options={MIN_SCORE_OPTIONS}
+          onChange={value => {
+            setMinAnomalyScore(value === undefined ? null : Number(value));
+            setPage(0);
+          }}
+        />
+        <FilterChip
+          id="severity"
+          label="Severity"
+          value={severity ?? undefined}
+          options={SEVERITIES.map(sev => ({ value: sev, label: capitalize(sev) }))}
+          onChange={value => {
+            setSeverity(SEVERITIES.find(sev => sev === value) ?? null);
+            setPage(0);
+          }}
+        />
+        <FilterChip
+          id="anomaly-type"
+          label="Anomaly type"
+          value={anomalyType ?? undefined}
+          options={ANOMALY_TYPES}
+          onChange={value => {
+            setAnomalyType(ANOMALY_TYPES.find(type => type.value === value)?.value ?? null);
+            setPage(0);
+          }}
+        />
+      </Stack>
+
+      {/* With entries on screen a failed refresh is a banner above them; with none it takes their place. */}
+      {error && data && (
+        <Alert color="danger" data-testid="context-inspector-error-banner">
+          Could not refresh telemetry: {error.message}
+        </Alert>
+      )}
+
+      <SectionCard
+        title="Telemetry entries"
+        body="custom"
+        action={
+          data?.entries?.length ? (
+            <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }} data-testid="context-inspector-entries-count">
+              Showing {data.entries.length} of {data.total} entries
             </Typography>
-            <Input
-              type="date"
-              value={startDate}
-              onChange={e => {
-                setStartDate(e.target.value);
-                setPage(0);
-              }}
-              size="sm"
-            />
-          </Grid>
-          <Grid xs={6} md={2}>
-            <Typography level="body-sm" sx={{ mb: 0.5 }}>
-              End Date
-            </Typography>
-            <Input
-              type="date"
-              value={endDate}
-              onChange={e => {
-                setEndDate(e.target.value);
-                setPage(0);
-              }}
-              size="sm"
-            />
-          </Grid>
-          <Grid xs={6} md={2}>
-            <Typography level="body-sm" sx={{ mb: 0.5 }}>
-              Provider
-            </Typography>
-            <Select
-              size="sm"
-              value={provider}
-              onChange={(_, v) => {
-                setProvider(v);
-                setPage(0);
-              }}
-              placeholder="All Providers"
-            >
-              <Option value={null}>All Providers</Option>
-              {data?.stats?.providers?.map(p => (
-                <Option key={p} value={p}>
-                  {p}
-                </Option>
+          ) : undefined
+        }
+        data-testid="context-inspector-entries-card"
+      >
+        {isLoading ? (
+          <LoadingState label="Loading telemetry" testId="context-inspector-loading" />
+        ) : error && !data ? (
+          <ErrorState
+            message={`Could not load telemetry: ${error.message}`}
+            onRetry={() => void refetch()}
+            retrying={isFetching}
+          />
+        ) : !data?.entries?.length ? (
+          <EmptyState
+            title={filtersSet ? 'No entries match these filters' : 'No telemetry entries yet'}
+            description={
+              filtersSet ? undefined : 'Context telemetry is recorded for new completions while collection is enabled.'
+            }
+            action={
+              filtersSet ? (
+                <Button
+                  size="sm"
+                  variant="outlined"
+                  onClick={clearFilters}
+                  data-testid="context-inspector-clear-filters-btn"
+                >
+                  Clear filters
+                </Button>
+              ) : null
+            }
+          />
+        ) : (
+          <>
+            <AccordionGroup>
+              {data.entries.map(entry => (
+                <TelemetryEntryRow
+                  key={entry.id}
+                  entry={entry}
+                  onAnalyze={handleAnalyze}
+                  onCreateIssue={handleCreateIssue}
+                  githubEnabled={integrationStatus?.github ?? false}
+                />
               ))}
-            </Select>
-          </Grid>
-          <Grid xs={6} md={2}>
-            <Typography level="body-sm" sx={{ mb: 0.5 }}>
-              Min Anomaly Score
-            </Typography>
-            <Select
-              size="sm"
-              value={minAnomalyScore}
-              onChange={(_, v) => {
-                setMinAnomalyScore(v);
-                setPage(0);
-              }}
-              placeholder="Any"
-            >
-              <Option value={null}>Any (&gt;0)</Option>
-              <Option value={0}>0 / All</Option>
-              <Option value={30}>30+</Option>
-              <Option value={50}>50+</Option>
-              <Option value={70}>70+</Option>
-            </Select>
-          </Grid>
-          <Grid xs={6} md={2}>
-            <Typography level="body-sm" sx={{ mb: 0.5 }}>
-              Severity
-            </Typography>
-            <Select
-              size="sm"
-              value={severity}
-              onChange={(_, v) => {
-                setSeverity(v);
-                setPage(0);
-              }}
-              placeholder="All"
-            >
-              <Option value={null}>All</Option>
-              <Option value="critical">Critical</Option>
-              <Option value="high">High</Option>
-              <Option value="medium">Medium</Option>
-              <Option value="low">Low</Option>
-            </Select>
-          </Grid>
-          <Grid xs={6} md={2}>
-            <Typography level="body-sm" sx={{ mb: 0.5 }}>
-              Anomaly Type
-            </Typography>
-            <Select
-              size="sm"
-              value={anomalyType}
-              onChange={(_, v) => {
-                setAnomalyType(v);
-                setPage(0);
-              }}
-              placeholder="All"
-            >
-              <Option value={null}>All</Option>
-              <Option value="context_overflow">Context Overflow</Option>
-              <Option value="high_utilization">High Utilization</Option>
-              <Option value="high_truncation">High Truncation</Option>
-              <Option value="tool_failure">Tool Failure</Option>
-              <Option value="subagent_timeout">Subagent Timeout</Option>
-              <Option value="slow_response">Slow Response</Option>
-              <Option value="multiple">Multiple</Option>
-            </Select>
-          </Grid>
-        </Grid>
-      </Sheet>
+            </AccordionGroup>
 
-      {/* Results */}
-      {isLoading || isFetching ? (
-        <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1, py: 4 }}>
-          <CircularProgress />
-          <Typography level="body-sm" color="neutral">
-            {isLoading ? 'Loading telemetry data...' : 'Refreshing...'}
-          </Typography>
-        </Box>
-      ) : error ? (
-        <Card color="danger" variant="soft">
-          <CardContent>
-            <Typography>Error loading telemetry data: {(error as Error).message}</Typography>
-          </CardContent>
-        </Card>
-      ) : !data?.entries?.length ? (
-        <Card variant="outlined">
-          <CardContent>
-            <Typography level="body-md" color="neutral" textAlign="center">
-              No telemetry entries found. Context telemetry is recorded for new completions when enabled.
-            </Typography>
-          </CardContent>
-        </Card>
-      ) : (
-        <>
-          <Typography level="body-sm" color="neutral" sx={{ mb: 1 }}>
-            Showing {data.entries.length} of {data.total} entries
-          </Typography>
-          <AccordionGroup>
-            {data.entries.map(entry => (
-              <TelemetryEntryCard
-                key={entry.id}
-                entry={entry}
-                onAnalyze={handleAnalyze}
-                onCreateIssue={handleCreateIssue}
-                githubEnabled={integrationStatus?.github ?? false}
-              />
-            ))}
-          </AccordionGroup>
-
-          {/* Pagination */}
-          {totalPages > 1 && (
-            <Stack direction="row" justifyContent="center" spacing={1} sx={{ mt: 2 }}>
-              <Button size="sm" variant="outlined" disabled={page === 0} onClick={() => setPage(p => p - 1)}>
-                Previous
-              </Button>
-              <Typography level="body-sm" sx={{ alignSelf: 'center' }}>
-                Page {page + 1} of {totalPages}
-              </Typography>
-              <Button
-                size="sm"
-                variant="outlined"
-                disabled={page >= totalPages - 1}
-                onClick={() => setPage(p => p + 1)}
+            {totalPages > 1 && (
+              <Stack
+                direction="row"
+                alignItems="center"
+                justifyContent="flex-end"
+                gap={1}
+                sx={{ px: 2, py: 1, borderTop: '1px solid', borderColor: 'admin.border' }}
+                data-testid="context-inspector-pager"
               >
-                Next
-              </Button>
-            </Stack>
-          )}
-        </>
-      )}
+                <Typography level="body-sm" sx={{ color: 'admin.inkMuted', mr: 'auto' }}>
+                  Page {page + 1} of {totalPages}
+                </Typography>
+                <Button
+                  size="sm"
+                  variant="outlined"
+                  disabled={page === 0}
+                  onClick={() => setPage(p => p - 1)}
+                  data-testid="context-inspector-prev-btn"
+                >
+                  Previous
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outlined"
+                  disabled={page >= totalPages - 1}
+                  onClick={() => setPage(p => p + 1)}
+                  data-testid="context-inspector-next-btn"
+                >
+                  Next
+                </Button>
+              </Stack>
+            )}
+          </>
+        )}
+      </SectionCard>
 
       {/* Modals */}
       <AnalysisModal
@@ -1968,7 +1905,7 @@ export function ContextInspectorTab() {
         isDuplicate={isDuplicateIssue}
         issueNumber={duplicateIssueNumber}
       />
-    </Box>
+    </Stack>
   );
 }
 
