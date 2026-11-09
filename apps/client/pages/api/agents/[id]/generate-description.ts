@@ -8,7 +8,7 @@ import { assertOutboundActionAllowed } from '@server/auth/assertOutboundActionAl
 import { agentRepository } from '@bike4mind/database';
 import { generateAgentDescription } from '@server/agents/authoring/generateAgentDescription';
 import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
-import { HTTPError } from '@bike4mind/common';
+import { HTTPError, isTerminalCreditRefusal } from '@bike4mind/common';
 
 interface AgentDescriptionResponse {
   description: string;
@@ -41,7 +41,7 @@ const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
 
       res.json({ description });
     } catch (error) {
-      req.logger.error('Error generating agent description:', error);
+      if (!isTerminalCreditRefusal(error)) req.logger.error('Error generating agent description:', error);
 
       // Credit and admission refusals keep their status (422).
       if (error instanceof HTTPError) throw error;

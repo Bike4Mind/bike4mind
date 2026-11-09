@@ -144,21 +144,52 @@ function storedTransport(transport: StoredServer['transport']): ModelServerTrans
   return destination && port !== null ? { type: 'ssh', destination, port } : null;
 }
 
-/** Null for a record this version cannot use (an unknown transport); it stays on disk untouched. */
-export function hydrate(stored: StoredServer): ModelServerRecord | null {
-  const transport = storedTransport(stored.transport);
-  if (!transport) return null;
+/**
+ * A saved SSH server whose destination or port cannot be used (a hand edit), so it is never connected to. It is
+ * listed with its problem so the user can see it and remove it.
+ */
+export interface UnusableServerRecord extends Omit<ModelServerRecord, 'transport' | 'models' | 'specs'> {
+  transport: { type: 'ssh'; destination: string | null };
+  problem: string;
+}
+
+/** The unusable record for a stored SSH server that hydrate turns down; null for any other record. */
+export function unusableServer(stored: StoredServer): UnusableServerRecord | null {
+  const { transport } = stored;
+  if (transport.type !== 'ssh' || typeof transport.destination !== 'string' || storedTransport(transport)) return null;
+  const destination = parseSshDestination(transport.destination);
+  return {
+    ...recordFields(stored),
+    transport: { type: 'ssh', destination },
+    problem: destination
+      ? 'Its saved SSH port is not a number from 1 to 65535.'
+      : 'Its saved SSH destination is not one ssh can be given safely.',
+  };
+}
+
+function recordFields(
+  stored: StoredServer
+): Pick<ModelServerRecord, 'id' | 'name' | 'kind' | 'access' | 'auth' | 'addedAt'> {
   return {
     id: stored.id,
     name: stored.name,
     kind: stored.kind,
-    transport,
     access: stored.access,
     auth: stored.auth.type === 'header' ? { type: 'header', name: stored.auth.name } : { type: stored.auth.type },
+    addedAt: typeof stored.addedAt === 'string' ? stored.addedAt : '',
+  };
+}
+
+/** Null for a record this version cannot use (an unknown transport, or see unusableServer); it stays on disk untouched. */
+export function hydrate(stored: StoredServer): ModelServerRecord | null {
+  const transport = storedTransport(stored.transport);
+  if (!transport) return null;
+  return {
+    ...recordFields(stored),
+    transport,
     models: Array.isArray(stored.models)
       ? stored.models.filter((name): name is string => typeof name === 'string')
       : [],
-    addedAt: typeof stored.addedAt === 'string' ? stored.addedAt : '',
     specs: readSpecs(stored.specs),
   };
 }
@@ -283,6 +314,8 @@ export interface DesktopModelServers {
   path: string | null;
   /** Why the file could not be used; never quotes its contents. */
   problem: string | null;
+  /** SSH servers saved with a destination or port that cannot be used; absent when there are none. */
+  unusable?: UnusableServerRecord[];
 }
 
 export interface ReadDesktopOptions extends DesktopDirsOptions {
@@ -334,13 +367,19 @@ export async function readDesktopModelServers(opts: ReadDesktopOptions = {}): Pr
     const all = (parsed as { servers?: unknown } | null)?.servers;
     if (!Array.isArray(all)) return { servers: [], path: file, problem: `${FILE_NAME} has no server list.` };
     const servers: SharedServerRecord[] = [];
+    const unusable: UnusableServerRecord[] = [];
     for (const value of all) {
-      const record = isStored(value) ? hydrate(value) : null;
+      if (!isStored(value)) continue;
+      const record = hydrate(value);
       if (record?.transport.type === 'http') {
         servers.push({ ...record, transport: { type: 'http', baseUrl: withoutUserinfo(record.transport.baseUrl) } });
       } else if (record) servers.push(record);
+      else {
+        const turnedDown = unusableServer(value);
+        if (turnedDown) unusable.push(turnedDown);
+      }
     }
-    return { servers, path: file, problem: null };
+    return { servers, path: file, problem: null, ...(unusable.length > 0 ? { unusable } : {}) };
   }
   return { servers: [], path: null, problem: null };
 }

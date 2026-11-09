@@ -147,6 +147,13 @@ the switch off or changing models clears the current hint and discards late answ
 previous choice. Ollama completion requests time out after 30 seconds; hosted requests after
 five. Loading the model list can add time before generation starts.
 
+## Troubleshooting saved SSH model servers
+
+A saved SSH server with an invalid port or destination stays visible under Settings > Model
+servers as **Refused**, with a message naming the problem. Desktop does not connect to it.
+Remove that server and add it again with a destination such as `user@gpu.example.com` and
+its model server's port from 1 to 65535. A missing saved port uses Ollama's 11434.
+
 ## Starting local model servers
 
 Settings > Model servers offers Start, Stop, Restart and Launch settings for This computer

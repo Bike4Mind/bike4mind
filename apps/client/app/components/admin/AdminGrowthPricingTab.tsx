@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Alert, Card, CardContent, Divider, LinearProgress, Link, Stack, Typography } from '@mui/joy';
+import { Alert, Link, Stack, Typography } from '@mui/joy';
 import WarningIcon from '@mui/icons-material/Warning';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { useNavigate } from '@tanstack/react-router';
@@ -28,6 +28,9 @@ import {
 } from './adminTabParams';
 import { useAdminModal } from './useAdminModal';
 import { useCreditAnalysisStore } from './CreditAnalysis/store';
+import { SettingsDraftProvider } from './SettingsDraftProvider';
+import { AdminPageHeader, ErrorState, LoadingState, SettingsSection } from './shared';
+import { ADMIN_DETAIL_MAX_WIDTH, ADMIN_REGION_GAP } from './shared/adminStyles';
 
 /**
  * The growth and monetization knobs, grouped on one page so they can be tuned without hunting
@@ -163,8 +166,19 @@ export const describeDerivedValue = (key: SettingKey, value: unknown): string | 
   }
 };
 
+const SectionHeading = ({ title, description }: { title: string; description: string }) => (
+  <Stack sx={{ gap: 0.5, mb: 2 }}>
+    <Typography level="title-md" component="h2" sx={{ color: 'admin.ink' }}>
+      {title}
+    </Typography>
+    <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
+      {description}
+    </Typography>
+  </Stack>
+);
+
 const AdminGrowthPricingTab = () => {
-  const { data, isLoading } = useSettingsFromServer();
+  const { data, isLoading, isError, isFetching, refetch } = useSettingsFromServer();
   const navigate = useNavigate();
   const setAdminTab = useAdminModal(state => state.setActiveTab);
   const setCreditAnalysisTab = useCreditAnalysisStore(state => state.setActiveTab);
@@ -195,7 +209,8 @@ const AdminGrowthPricingTab = () => {
     return map;
   }, [data]);
 
-  // No data after loading means the read failed; the catalog says so rather than showing defaults.
+  // A failed read renders ErrorState below. No data and no error means the query is paused (offline) or
+  // disabled (no token yet); the catalog then shows the Team grant as unknown rather than defaults.
   const teamPlan = useMemo(
     () =>
       data
@@ -223,17 +238,12 @@ const AdminGrowthPricingTab = () => {
     return out;
   }, [storedByKey]);
 
-  if (isLoading) return <LinearProgress data-testid="admin-growth-pricing-loading" />;
-
   return (
-    <Stack spacing={2} sx={{ maxWidth: 1100 }} data-testid="admin-growth-pricing-tab">
-      <div>
-        <Typography level="h3">Growth and Pricing</Typography>
-        <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
-          Starter credits, signup, pricing, team-plan and rate limits in one place. Changes apply without a deploy;
-          server caches pick them up within a few minutes.
-        </Typography>
-      </div>
+    <Stack sx={{ gap: ADMIN_REGION_GAP, maxWidth: ADMIN_DETAIL_MAX_WIDTH }} data-testid="admin-growth-pricing-tab">
+      <AdminPageHeader
+        title="Growth and pricing"
+        description="Signup, referral, credit, team-plan and preference arena settings. Saved changes apply within a few minutes, without a deploy."
+      />
 
       {warnings.map(warning => (
         <Alert
@@ -247,84 +257,110 @@ const AdminGrowthPricingTab = () => {
         </Alert>
       ))}
 
-      {GROWTH_PRICING_SECTIONS.map(section => (
-        <Card key={section.id} variant="outlined" data-testid={`admin-growth-pricing-section-${section.id}`}>
-          <Typography level="title-lg">{section.title}</Typography>
-          <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
-            {section.description}
-          </Typography>
-          <Divider inset="none" />
-          <CardContent>
-            <Stack spacing={1}>
-              {section.keys.map((key, index) => {
-                const setting = settingsMap[key];
-                const stored = storedByKey.get(key);
-                const current = stored ?? setting.defaultValue;
-                const derived = describeDerivedValue(key, current);
-                return (
-                  <div key={key}>
-                    <Typography
-                      level="body-xs"
-                      sx={{ color: 'text.tertiary', mb: 0.5 }}
-                      data-testid={`admin-growth-pricing-current-${key}`}
-                    >
-                      Current: {formatValue(current)}
-                      {stored === undefined ? ' (default)' : ` - default ${formatValue(setting.defaultValue)}`}
+      {isLoading ? (
+        <LoadingState label="Loading growth and pricing settings" testId="admin-growth-pricing-loading" />
+      ) : isError && !data ? (
+        <ErrorState
+          message="Growth and pricing settings could not be loaded."
+          onRetry={() => void refetch()}
+          retrying={isFetching}
+        />
+      ) : (
+        // Inside the provider each field stages its edit for the page's one SaveBar and leave-page guard
+        // instead of rendering its own Save button.
+        <SettingsDraftProvider>
+          <Stack sx={{ gap: 2 }}>
+            {GROWTH_PRICING_SECTIONS.map(section => (
+              <SettingsSection
+                key={section.id}
+                component="section"
+                sx={{ mb: 0 }}
+                data-testid={`admin-growth-pricing-section-${section.id}`}
+              >
+                <SectionHeading title={section.title} description={section.description} />
+                <Stack sx={{ gap: 1 }}>
+                  {section.keys.map((key, index) => {
+                    const setting = settingsMap[key];
+                    const stored = storedByKey.get(key);
+                    const current = stored ?? setting.defaultValue;
+                    const derived = describeDerivedValue(key, current);
+                    return (
+                      <div key={key}>
+                        <Typography
+                          level="body-xs"
+                          sx={{ color: 'text.tertiary', mb: 0.5 }}
+                          data-testid={`admin-growth-pricing-current-${key}`}
+                        >
+                          Current: {formatValue(current)}
+                          {stored === undefined ? ' (default)' : ` - default ${formatValue(setting.defaultValue)}`}
+                        </Typography>
+                        {derived && (
+                          <Typography
+                            level="body-xs"
+                            sx={{ color: 'text.tertiary', mb: 0.5 }}
+                            data-testid={`admin-growth-pricing-derived-${key}`}
+                          >
+                            {derived}
+                          </Typography>
+                        )}
+                        <AdminSettingInputField
+                          // Remount when the stored value changes so the editor never shows a stale draft.
+                          key={`${key}-${JSON.stringify(stored ?? null)}`}
+                          index={index}
+                          setting={setting}
+                          defaultValue={current}
+                          lockedNote={
+                            key === 'enforceCredits' && isEnforceCreditsLocked()
+                              ? 'Always on for hosted deployments'
+                              : undefined
+                          }
+                        />
+                      </div>
+                    );
+                  })}
+                </Stack>
+              </SettingsSection>
+            ))}
+
+            <CheckoutCatalogPanel teamPlan={teamPlan} />
+
+            <SettingsSection component="section" sx={{ mb: 0 }} data-testid="admin-growth-pricing-section-related">
+              <SectionHeading
+                title="Related settings"
+                description="Pricing and limits that are edited on other admin pages, so no setting has two editors."
+              />
+              <Stack sx={{ gap: 2 }}>
+                {GROWTH_PRICING_LINKS.map(link => (
+                  <Stack
+                    key={link.id}
+                    component="section"
+                    sx={{ gap: 0.5, alignItems: 'flex-start' }}
+                    data-testid={`admin-growth-pricing-section-${link.id}`}
+                  >
+                    <Typography level="title-md" component="h3" sx={{ color: 'admin.ink' }}>
+                      {link.title}
                     </Typography>
-                    {derived && (
-                      <Typography
-                        level="body-xs"
-                        sx={{ color: 'text.tertiary', mb: 0.5 }}
-                        data-testid={`admin-growth-pricing-derived-${key}`}
-                      >
-                        {derived}
-                      </Typography>
-                    )}
-                    <AdminSettingInputField
-                      // Remount when the stored value changes so the editor never shows a stale draft.
-                      key={`${key}-${JSON.stringify(stored ?? null)}`}
-                      index={index}
-                      setting={setting}
-                      defaultValue={current}
-                      lockedNote={
-                        key === 'enforceCredits' && isEnforceCreditsLocked()
-                          ? 'Always on for hosted deployments'
-                          : undefined
-                      }
-                    />
-                  </div>
-                );
-              })}
-            </Stack>
-          </CardContent>
-        </Card>
-      ))}
-
-      <CheckoutCatalogPanel teamPlan={teamPlan} />
-
-      {GROWTH_PRICING_LINKS.map(section => (
-        <Card key={section.id} variant="outlined" data-testid={`admin-growth-pricing-section-${section.id}`}>
-          <Typography level="title-lg">{section.title}</Typography>
-          <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
-            {section.description}
-          </Typography>
-          <Divider inset="none" />
-          <CardContent>
-            {/* component="button": a Joy Link with only an onClick renders an <a> with no href,
-                which is not focusable. */}
-            <Link
-              level="body-sm"
-              component="button"
-              startDecorator={<OpenInNewIcon sx={{ fontSize: 14 }} />}
-              onClick={openLink[section.id]}
-              sx={{ alignSelf: 'flex-start' }}
-              data-testid={`admin-growth-pricing-link-${section.id}`}
-            >
-              {section.linkLabel}
-            </Link>
-          </CardContent>
-        </Card>
-      ))}
+                    <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
+                      {link.description}
+                    </Typography>
+                    {/* component="button": a Joy Link with only an onClick renders an <a> with no href,
+                        which is not focusable. */}
+                    <Link
+                      level="body-sm"
+                      component="button"
+                      startDecorator={<OpenInNewIcon sx={{ fontSize: 14 }} />}
+                      onClick={openLink[link.id]}
+                      data-testid={`admin-growth-pricing-link-${link.id}`}
+                    >
+                      {link.linkLabel}
+                    </Link>
+                  </Stack>
+                ))}
+              </Stack>
+            </SettingsSection>
+          </Stack>
+        </SettingsDraftProvider>
+      )}
     </Stack>
   );
 };

@@ -196,8 +196,8 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       { Icon: LayoutDashboard, tab: AdminTab.Dashboard, label: 'Dashboard', testid: 'admin-dashboard-tab-btn' },
       { Icon: ChartLine, tab: AdminTab.Analytics, label: 'Analytics' },
       { Icon: HeartPulse, tab: AdminTab.SystemHealth, label: 'System health' },
-      { Icon: Activity, tab: AdminTab.EventMetrics, label: 'Events' },
-      { Icon: LifeBuoy, tab: AdminTab.HelpAnalytics, label: 'Help usage', testid: 'admin-help-analytics-btn' },
+      { Icon: Activity, tab: AdminTab.EventMetrics, label: 'Event metrics' },
+      { Icon: LifeBuoy, tab: AdminTab.HelpAnalytics, label: 'Help analytics', testid: 'admin-help-analytics-btn' },
     ],
   },
   {

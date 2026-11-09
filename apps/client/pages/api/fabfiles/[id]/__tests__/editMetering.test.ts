@@ -6,7 +6,13 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ChatModels, ForbiddenError, insufficientCreditsError } from '@bike4mind/common';
+import {
+  ChatModels,
+  DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+  ForbiddenError,
+  TooManyRequestsError,
+  insufficientCreditsError,
+} from '@bike4mind/common';
 
 vi.mock('@server/utils/untrustedCompletionQuota', () => ({
   admitRequestCompletion: vi.fn().mockResolvedValue({ release: async () => undefined }),
@@ -177,6 +183,21 @@ describe('POST /api/fabfiles/{id}/edit metering', () => {
 
     await expect(call()).rejects.toMatchObject({ statusCode: 422 });
     expect(m.complete).not.toHaveBeenCalled();
+  });
+
+  it('surfaces the free-tier daily cap as its 429 without logging an error', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    m.reserve.mockRejectedValue(
+      new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
+        errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+        retryAfter: 3600,
+      })
+    );
+
+    await expect(call()).rejects.toMatchObject({ statusCode: 429 });
+    expect(consoleError).not.toHaveBeenCalled();
+    expect(m.complete).not.toHaveBeenCalled();
+    consoleError.mockRestore();
   });
 
   it('403s a model the user is not admitted to, before reserving or calling the provider', async () => {

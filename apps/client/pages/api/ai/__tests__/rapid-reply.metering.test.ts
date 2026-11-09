@@ -7,7 +7,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { insufficientCreditsError } from '@bike4mind/common';
+import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, TooManyRequestsError, insufficientCreditsError } from '@bike4mind/common';
 
 const m = vi.hoisted(() => ({
   enforce: true,
@@ -115,6 +115,8 @@ vi.mock('@server/rapidReply/resolveRapidModel', () => ({
 
 const { default: handler } = await import('@pages/api/ai/rapid-reply');
 
+const testLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn() };
+
 async function call(body: Record<string, unknown> = {}, user: Record<string, unknown> = {}) {
   const { req, res } = createMocks({
     method: 'POST',
@@ -122,7 +124,7 @@ async function call(body: Record<string, unknown> = {}, user: Record<string, unk
   });
   Object.assign(req, {
     user: { id: 'u1', tags: [], groups: [], ...user },
-    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn() },
+    logger: testLogger,
   });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the stubbed router's param type is loose
   await (handler as any)(req, res);
@@ -153,6 +155,21 @@ describe('POST /api/ai/rapid-reply metering', () => {
     expect(m.complete).not.toHaveBeenCalled();
     expect(m.send).not.toHaveBeenCalled();
     expect(m.saveResult).not.toHaveBeenCalled();
+  });
+
+  it('soft-fails the free-tier daily cap with its own reason, without logging an error', async () => {
+    m.hold.mockRejectedValue(
+      new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
+        errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+        retryAfter: 3600,
+      })
+    );
+
+    const res = await call();
+
+    expect(res._getJSONData()).toEqual({ success: false, reason: DAILY_FREE_LIMIT_REACHED_ERROR_CODE });
+    expect(testLogger.error).not.toHaveBeenCalled();
+    expect(m.complete).not.toHaveBeenCalled();
   });
 
   it('reserves before the call and settles the priced usage once', async () => {

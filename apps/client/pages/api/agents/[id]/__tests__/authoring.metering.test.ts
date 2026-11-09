@@ -4,7 +4,7 @@
  * through instead of remapping it to their generic 400/500 body.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { insufficientCreditsError } from '@bike4mind/common';
+import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, insufficientCreditsError, TooManyRequestsError } from '@bike4mind/common';
 
 vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
   assertOutboundActionAllowed: async () => undefined,
@@ -97,5 +97,20 @@ describe.each(ROUTES)('POST /api/agents/[id]/%s metering', (route, helper, body)
 
     await expect(done).rejects.toMatchObject({ statusCode: 422 });
     expect(res.status).not.toHaveBeenCalled();
+  });
+
+  it('keeps the 429 of the free-tier daily cap and does not log it as an error', async () => {
+    helper.mockRejectedValue(
+      new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
+        errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+        retryAfter: 3600,
+      })
+    );
+
+    const { req, res, done } = call(route, { ...body });
+
+    await expect(done).rejects.toMatchObject({ statusCode: 429 });
+    expect(res.status).not.toHaveBeenCalled();
+    expect(req.logger.error).not.toHaveBeenCalled();
   });
 });

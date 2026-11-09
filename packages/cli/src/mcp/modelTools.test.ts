@@ -921,6 +921,35 @@ describe('model tools', () => {
       expect(unknown.text).toContain('No model server named nope');
     });
 
+    it('says why a saved SSH server whose port cannot be used is not used', async () => {
+      const { call } = await setup({
+        servers: {
+          load: async () => ({
+            servers: [],
+            problem: null,
+            unusable: [
+              {
+                id: 'ddd',
+                name: 'typo',
+                kind: 'ollama',
+                access: 'chat',
+                auth: { type: 'none' },
+                addedAt: '',
+                transport: { type: 'ssh', destination: 'me@lab' },
+                problem: 'Its saved SSH port is not a number from 1 to 65535.',
+              },
+            ],
+          }),
+          secret: async () => () => undefined,
+        },
+      });
+      const result = await call('models_list', { server: 'typo' });
+      expect(result.isError).toBe(true);
+      expect(result.text).toBe(
+        'typo cannot be used: Its saved SSH port is not a number from 1 to 65535. Remove it in Desktop and add it again.'
+      );
+    });
+
     it('scrubs a token the server echoes into pull progress and the result', async () => {
       const ollama = await startFakeServer({
         'GET /api/version': json({ version: '0.12.0' }),

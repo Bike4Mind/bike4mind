@@ -1,5 +1,45 @@
 # @bike4mind/common
 
+## 24.0.0
+
+### Major Changes
+
+- [#6637](https://github.com/Bike4Mind/bike4mind/pull/6637) [`5398063`](https://github.com/Bike4Mind/bike4mind/commit/5398063cd155b1d95722bca9de3b0d5abfeb7ded) Thanks [@onoya](https://github.com/onoya)! - unify providers and expose model discovery
+
+- [#6746](https://github.com/Bike4Mind/bike4mind/pull/6746) [`9c44e07`](https://github.com/Bike4Mind/bike4mind/commit/9c44e076692dbe22988a51329e69dadfe9abc687) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - type the known content blocks in completions messages
+
+### Minor Changes
+
+- [#5676](https://github.com/Bike4Mind/bike4mind/pull/5676) [`ebebc81`](https://github.com/Bike4Mind/bike4mind/commit/ebebc810e031649a6a7e4b56d7b8ce83489d53b6) Thanks [@jjmarfa](https://github.com/jjmarfa)! - expose custom MCP tools to chat and agents behind an approval gate
+
+- [#6403](https://github.com/Bike4Mind/bike4mind/pull/6403) [`2e5e01d`](https://github.com/Bike4Mind/bike4mind/commit/2e5e01db57d70a42054cc03463c00c63b222de05) Thanks [@onoya](https://github.com/onoya)! - APNs push delivery pipeline
+
+- [#6522](https://github.com/Bike4Mind/bike4mind/pull/6522) [`5026479`](https://github.com/Bike4Mind/bike4mind/commit/5026479e3039fc50f92c1ff98b3589c2b67af3bb) Thanks [@onoya](https://github.com/onoya)! - record signup risk signals and label replay cohorts
+
+- [#6523](https://github.com/Bike4Mind/bike4mind/pull/6523) [`dcdb4e5`](https://github.com/Bike4Mind/bike4mind/commit/dcdb4e5162dc67a43b35f6f79e65d96698eaa260) Thanks [@onoya](https://github.com/onoya)! - search users, keys and organizations by identifier
+
+- [#6551](https://github.com/Bike4Mind/bike4mind/pull/6551) [`f510fd1`](https://github.com/Bike4Mind/bike4mind/commit/f510fd1486ea96498b27282d6af14a8ba2afbc42) Thanks [@onoya](https://github.com/onoya)! - pending-first signup domain holds queue with young-domain age recheck
+
+- [#6664](https://github.com/Bike4Mind/bike4mind/pull/6664) [`beb7322`](https://github.com/Bike4Mind/bike4mind/commit/beb73225c3ad2736b62e26bf23fc4f92c34d7d86) Thanks [@onoya](https://github.com/onoya)! - edit structured settings through a form generated from their schema
+
+- [#6665](https://github.com/Bike4Mind/bike4mind/pull/6665) [`c0231d2`](https://github.com/Bike4Mind/bike4mind/commit/c0231d28460ec31f7f5ff13cdb82d73925a9b347) Thanks [@dea0030](https://github.com/dea0030)! - web UI to add, review and manage custom MCP connectors
+
+- [#6672](https://github.com/Bike4Mind/bike4mind/pull/6672) [`49f06f2`](https://github.com/Bike4Mind/bike4mind/commit/49f06f2b460cafc964a04b929f6f21679e9e9f47) Thanks [@onoya](https://github.com/onoya)! - explain every capability-validator failure with a typed why-not reason
+
+- [#6693](https://github.com/Bike4Mind/bike4mind/pull/6693) [`06db5b6`](https://github.com/Bike4Mind/bike4mind/commit/06db5b690400d5668eb2acb1f1b48c0b9542856e) Thanks [@onoya](https://github.com/onoya)! - grade an account's shadow detections when an admin suspends or reinstates it
+
+- [#6765](https://github.com/Bike4Mind/bike4mind/pull/6765) [`ba63f14`](https://github.com/Bike4Mind/bike4mind/commit/ba63f1463716c2e4553043cb6365f1abb2408916) Thanks [@onoya](https://github.com/onoya)! - name a new notebook from its first prompt at turn start
+
+- [#6815](https://github.com/Bike4Mind/bike4mind/pull/6815) [`763126b`](https://github.com/Bike4Mind/bike4mind/commit/763126b28325007c1c0fd8088896b65c5f7ef999) Thanks [@maconard](https://github.com/maconard)! - detect intel gpus and size them for sycl and vulkan
+
+### Patch Changes
+
+- [#6526](https://github.com/Bike4Mind/bike4mind/pull/6526) [`29ee272`](https://github.com/Bike4Mind/bike4mind/commit/29ee2723eb5b8a85f909731d321ab04b111ee626) Thanks [@onoya](https://github.com/onoya)! - classify expected tool and OAuth outcomes
+
+- [#6627](https://github.com/Bike4Mind/bike4mind/pull/6627) [`9830975`](https://github.com/Bike4Mind/bike4mind/commit/9830975903ef41719f4f02e0dfb3711fe9075e7f) Thanks [@aflordelis](https://github.com/aflordelis)! - move the remaining lower shared layer into the package
+
+- [#6803](https://github.com/Bike4Mind/bike4mind/pull/6803) [`2c7fdfe`](https://github.com/Bike4Mind/bike4mind/commit/2c7fdfe2fbe5dc68ce729ee20f5b3c25204be497) Thanks [@onoya](https://github.com/onoya)! - enrich assessment campaign context
+
 ## 23.0.0
 
 ### Major Changes

@@ -1,6 +1,6 @@
 import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQuota';
 import { baseApi } from '@server/middlewares/baseApi';
-import { IUserDocument, UnprocessableEntityError } from '@bike4mind/common';
+import { IUserDocument, UnprocessableEntityError, isTerminalCreditRefusal } from '@bike4mind/common';
 import {
   getEffectiveApiKeyByBackend,
   OperationsModelService,
@@ -104,7 +104,7 @@ Generate a detailed image prompt for a featured blog image that captures the ess
       prompt: generatedPrompt.trim(),
     };
   } catch (error) {
-    logger.error('[BlogImagePrompt] Error:', error);
+    if (!isTerminalCreditRefusal(error)) logger.error('[BlogImagePrompt] Error:', error);
     throw error;
   }
 }
@@ -133,8 +133,8 @@ const handler = baseApi().post(
 
       return res.json(result);
     } catch (error) {
-      // The credit reservation keeps its own 422 rather than collapsing into the generic 500.
-      if (error instanceof UnprocessableEntityError) throw error;
+      // A credit refusal (422 out of credits, 429 free-tier daily cap) must surface with its own status instead of degrading to a generic 500; the error handler logs it at warn.
+      if (error instanceof UnprocessableEntityError || isTerminalCreditRefusal(error)) throw error;
       console.error('Blog image prompt generation error:', error);
       return res.status(500).json({
         success: false,
