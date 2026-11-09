@@ -20,14 +20,19 @@
  *   subdocuments only the matching elements change (`versions.createdBy` anonymizes the versions
  *   this person created, not every version).
  *
- * What an export includes for a document, decided by where the match is rather than by the action:
- * - A match on a scalar path (`userId`, `metadata.actorId`): the whole document minus `secretPaths`,
- *   plus its `viaParent` children.
- * - A match only on array paths (an array of ids such as `userIds`, or a key inside an array of
- *   subdocuments such as `versions.createdBy`): only the matching elements and the document id,
- *   whatever the action. The other elements name other people (co-members of a fraud cluster, other
- *   editors of a page), and the rest of the document is not this person's to take.
- * When a document matches on both kinds, the scalar match decides and the whole document is exported.
+ * What an export includes for a document (`exportScope.ts` implements this):
+ * - A `deleteDocument` or `retain` match on a scalar path (`userId`, `metadata.actorId`) marks the
+ *   document as the person's own record: the whole document minus `secretPaths`, plus its
+ *   `viaParent` children.
+ * - Any other match exports only the matched paths and the document id. That is every `anonymize`
+ *   (the document belongs to someone else and only records this person: a referrer's export carries
+ *   the `referredByUserId` of each account they referred, not those accounts), with its `alsoRedact`
+ *   fields because they repeat this person's identity; and every match through an array (an array of
+ *   ids such as `userIds`, or a key inside an array of subdocuments such as `versions.createdBy`),
+ *   whatever the action, where only the matching elements are exported. The other elements name
+ *   other people (co-members of a fraud cluster, other editors of a page).
+ * When a document matches several references and one of them is an own-record match, the whole
+ * document is exported.
  */
 
 /** What erasure does with a document (or field) that references the erased person. */
@@ -96,9 +101,12 @@ export type DataHolder =
     }
   /**
    * The document carries no user field of its own but belongs to a parent document that does (a
-   * file chunk to its file). It is deleted when its parent is deleted and exported when its parent
-   * is exported whole (a scalar match, per the export rules above). When the parent survives, the child is kept,
-   * except that `attribution` is anonymized and `deleteWhenParentAnonymized` removes it.
+   * file chunk to its file). It is deleted when its parent is deleted. When the parent survives, the
+   * child is kept, except that `attribution` is anonymized and `deleteWhenParentAnonymized` removes it.
+   * It is exported whole when its parent is exported whole (an own-record match, per the export rules
+   * above) or when `deleteWhenParentAnonymized` marks it as the person's own content. Otherwise a
+   * parent match alone exports nothing from it: only a match on its own `attribution` does, and then
+   * only the matched paths.
    */
   | {
       kind: 'viaParent';
@@ -109,7 +117,8 @@ export type DataHolder =
       parentKey?: string;
       /**
        * People recorded on the child who need not be the parent's owner (a collaborator's message in
-       * someone else's notebook). Anonymized like a holder reference, and exported to that person.
+       * someone else's notebook). Anonymized like a holder reference; that person's export carries only
+       * the matched paths and the child's id.
        */
       attribution?: readonly AttributionReference[];
       /**
