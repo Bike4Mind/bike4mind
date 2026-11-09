@@ -4,6 +4,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChatSession, ChatStreamEvent, SendMessageResult } from '@shared/chat';
+import type { LoopResult } from '@shared/loop';
 import { MessageThread } from './MessageThread';
 import { useConversation, type ConversationController } from './useChat';
 
@@ -24,6 +25,7 @@ const at = '2026-11-07T00:00:00.000Z';
 const summaryChanged = vi.fn();
 const getSession = vi.fn<(id: string) => Promise<ChatSession | null>>();
 const sendMessage = vi.fn<() => Promise<SendMessageResult>>();
+const loopCommand = vi.fn<() => Promise<LoopResult>>();
 let conversation: ConversationController;
 let stream: (event: ChatStreamEvent) => void;
 let container: HTMLDivElement;
@@ -86,6 +88,7 @@ function expectHistory(id: string) {
 beforeEach(() => {
   getSession.mockReset().mockImplementation(async id => session(id));
   sendMessage.mockReset().mockResolvedValue({ ok: true, messageId: 'reply' });
+  loopCommand.mockReset();
   summaryChanged.mockReset();
   Element.prototype.scrollIntoView = () => undefined;
   Object.assign(window, {
@@ -93,6 +96,7 @@ beforeEach(() => {
       chat: {
         getSession,
         sendMessage,
+        loopCommand,
         getQueuedMessages: async () => [],
         onSessionSummary: () => () => undefined,
         onQueueChanged: () => () => undefined,
@@ -114,6 +118,28 @@ afterEach(() => {
 });
 
 describe('sending while navigating between conversations', () => {
+  it.each([true, false])('ignores a loop result arriving after navigation (accepted: %s)', async accepted => {
+    await show('first');
+    const pending = deferred<LoopResult>();
+    loopCommand.mockReturnValueOnce(pending.promise);
+    let command: Promise<void>;
+    await act(async () => {
+      command = conversation.runCommand('loop', '30s Check the build');
+    });
+    await show('second');
+
+    await act(async () => {
+      pending.resolve(
+        accepted ? { ok: true, state: null, notice: 'Loop started.' } : { ok: false, error: 'Skill unavailable.' }
+      );
+      await command;
+    });
+
+    expectHistory('second');
+    expect(conversation.sendError).toBeNull();
+    expect(conversation.notice).toBeNull();
+  });
+
   it('keeps the selected history when an earlier send finishes its session read after a stopped approval', async () => {
     await show('first');
     const pending = deferred<ChatSession | null>();

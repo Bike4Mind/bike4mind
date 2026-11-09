@@ -382,7 +382,8 @@ const SESSION_PAUSED_MESSAGE = 'Your session expired before this reply finished.
 type SendOptions = {
   loop?: {
     signal: AbortSignal;
-    valid(session: ChatSession): boolean;
+    valid(session: ChatSession): Promise<boolean>;
+    workspacePrepared(previous: ChatProject, session: ChatSession): void;
     skill: string;
     settled(outcome: TurnOutcome, reply: { content: string; stopReason?: string }): void;
   };
@@ -754,9 +755,24 @@ export class ChatService {
       const session = await this.deps.store.get(sessionId);
       if (!session || session.archived) return { ok: false, error: 'Open an unarchived conversation first.' };
       if (session.mode === 'code' && !session.project) return { ok: false, error: 'Choose a project folder first.' };
-      const context = (value: ChatSession) =>
-        JSON.stringify([value.mode, value.model, value.project, value.grantedDirectories]);
-      const capturedContext = context(session);
+      const context = (value: ChatSession) => {
+        const project = value.project;
+        return JSON.stringify([
+          value.mode,
+          value.model,
+          project && [
+            project.directory,
+            project.name,
+            project.branch,
+            project.workspace,
+            project.workspaceBranch,
+            project.workingDirectory,
+            project.contextDirectories,
+          ],
+          value.grantedDirectories,
+        ]);
+      };
+      const captured = { context: context(session), roots: JSON.stringify(await this.deps.access.list()) };
       const invocation = parseSkillInvocation(action.prompt);
       const command = invocation
         ? await this.deps.skills?.get(session.project?.workingDirectory ?? null, invocation.name)
@@ -769,18 +785,37 @@ export class ChatService {
         { sessionId, prompt: action.prompt, intervalMs: action.intervalMs, phase: 'scheduled', nextRunAt: Date.now() },
         async signal => {
           const current = await this.deps.store.get(sessionId);
-          const valid = (value: ChatSession) =>
-            !signal.aborted &&
-            !value.archived &&
-            this.deps.store.scopeKey() === scope &&
-            context(value) === capturedContext;
-          if (!current || !valid(current)) return { ok: false, error: 'Loop context changed. Start /loop again.' };
+          const valid = async (value: ChatSession) => {
+            const roots = JSON.stringify(await this.deps.access.list());
+            return (
+              !signal.aborted &&
+              !value.archived &&
+              this.deps.store.scopeKey() === scope &&
+              context(value) === captured.context &&
+              roots === captured.roots
+            );
+          };
+          const workspacePrepared = (previous: ChatProject, value: ChatSession) => {
+            if (!value.project) return;
+            // Accept only the derived worktree fields written by ensureWorkspace.
+            const original = {
+              ...value,
+              project: {
+                ...value.project,
+                workingDirectory: previous.workingDirectory,
+                workspaceBranch: previous.workspaceBranch,
+              },
+            };
+            if (context(original) === captured.context) captured.context = context(value);
+          };
+          if (!current || !(await valid(current)))
+            return { ok: false, error: 'Loop context changed. Start /loop again.' };
           if (invocation) {
             const selected = await this.deps.skills?.get(current.project?.workingDirectory ?? null, invocation.name);
             if (JSON.stringify(selected) !== JSON.stringify(command))
               return { ok: false, error: 'The selected skill changed or is no longer trusted. Start /loop again.' };
           }
-          if (!valid(current)) return { ok: false, error: 'Loop stopped.' };
+          if (!(await valid(current))) return { ok: false, error: 'Loop stopped.' };
           const notes =
             action.intervalMs === null
               ? [
@@ -802,7 +837,7 @@ export class ChatService {
             void this.send(sessionId, action.prompt, [], {
               announce: true,
               notes,
-              loop: { signal, valid, settled, skill: JSON.stringify(command) },
+              loop: { signal, valid, workspacePrepared, settled, skill: JSON.stringify(command) },
             })
               .then(result => {
                 if (!result.ok) resolve({ ok: false, error: result.error });
@@ -812,6 +847,8 @@ export class ChatService {
         }
       );
       return { ok: true, state: this.getLoop(sessionId) };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
     } finally {
       if (this.loopRequests.get(sessionId) === request) this.loopRequests.delete(sessionId);
     }
@@ -2237,7 +2274,8 @@ export class ChatService {
     // turn after appending it would leave the prompt in the thread with no reply coming.
     const existing = await this.deps.store.get(sessionId);
     if (!existing) return { ok: false, error: 'That conversation no longer exists.' };
-    if (options.loop && !options.loop.valid(existing)) return { ok: false, error: 'Loop context changed or stopped.' };
+    if (options.loop && !(await options.loop.valid(existing)))
+      return { ok: false, error: 'Loop context changed or stopped.' };
 
     // Refused in main, not merely disabled in the UI. A Code session with no project has no
     // working directory, and a turn is the only thing that can make its tools run - so the
@@ -2385,9 +2423,11 @@ export class ChatService {
     // still ahead of the prompt being stored, for the reason createCodeSession resolved before
     // writing the session: a worktree that cannot be made must refuse the turn rather than
     // leave a prompt in the thread with no reply coming.
+    const previousProject = options.loop && awaitsWorktree(existing.project) ? existing.project : undefined;
     const workspaceFailure = await this.ensureWorkspace(existing, prompt, timer);
     timer?.lap('workspace');
     if (workspaceFailure) return { ok: false, error: workspaceFailure.error };
+    if (previousProject) options.loop?.workspacePrepared(previousProject, existing);
 
     // The skill's body becomes the turn, and `skill` records which one so the thread can show
     // "/review src/foo.ts" rather than the page of instructions that was actually sent.
@@ -2414,9 +2454,10 @@ export class ChatService {
     timer?.lap('autoCompact');
     if (options.loop) {
       const current = await this.deps.store.get(sessionId);
-      if (!current || !options.loop.valid(current)) return { ok: false, error: 'Loop context changed or stopped.' };
+      if (!current || !(await options.loop.valid(current)))
+        return { ok: false, error: 'Loop context changed or stopped.' };
     }
-    if (options.loop && !options.loop.valid(reconciled))
+    if (options.loop && !(await options.loop.valid(reconciled)))
       return { ok: false, error: 'Loop context changed or stopped.' };
 
     // A relay carries `role: 'user'` because that is the only role out-of-band text can reach a
@@ -2449,7 +2490,8 @@ export class ChatService {
     const session = await this.deps.store.appendMessage(sessionId, userMessage);
     timer?.lap('append');
     if (!session) return { ok: false, error: 'That conversation no longer exists.' };
-    if (options.loop && !options.loop.valid(session)) return { ok: false, error: 'Loop context changed or stopped.' };
+    if (options.loop && !(await options.loop.valid(session)))
+      return { ok: false, error: 'Loop context changed or stopped.' };
 
     // Now that the conversation's attachments are settled, anything on disk it does not
     // reference was added to the composer and then removed. See AttachmentStore.prune.

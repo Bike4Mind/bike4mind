@@ -1180,6 +1180,7 @@ export function useConversation(
       }
       if (name === 'loop') {
         const result = await window.b4m.chat.loopCommand(sessionId, args);
+        if (activeSessionId.current !== sessionId) return;
         if (!result.ok) setSendError(result.error);
         else
           setNotice(

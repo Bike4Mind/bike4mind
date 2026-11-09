@@ -1,4 +1,4 @@
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import { SessionStore } from './SessionStore';
 import { MessageQueue } from './MessageQueue';
+import { git } from './project/git';
 import type { AccessStore } from './tools/AccessStore';
 import type { SkillCatalog } from './skills/SkillCatalog';
 
@@ -17,10 +18,12 @@ describe('ChatService /loop', () => {
   let post: ReturnType<typeof vi.fn>;
   let id: string;
   let signedIn: boolean;
+  let roots: string[];
   const getSkill = vi.fn();
   beforeEach(async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     signedIn = true;
+    roots = [];
     streams = [];
     post = vi.fn(async () => {
       const stream = new PassThrough();
@@ -33,7 +36,7 @@ describe('ChatService /loop', () => {
       .mockResolvedValue({ name: 'check', body: 'Check $ARGUMENTS', source: 'account', filePath: '/check' });
     service = new ChatService({
       store,
-      access: { list: async () => [] } as unknown as AccessStore,
+      access: { list: async () => roots } as unknown as AccessStore,
       logger: { debug: vi.fn(), warn: vi.fn() },
       getApiClient: () =>
         signedIn
@@ -57,7 +60,7 @@ describe('ChatService /loop', () => {
   });
 
   async function waitForPosts(count: number) {
-    await vi.waitFor(() => expect(post).toHaveBeenCalledTimes(count));
+    await vi.waitFor(() => expect(post, JSON.stringify(service.getLoop(id))).toHaveBeenCalledTimes(count));
   }
   async function finish(text = 'done\nLOOP_NEXT: 1m') {
     streams
@@ -169,6 +172,83 @@ describe('ChatService /loop', () => {
     });
     expect(post).not.toHaveBeenCalled();
   });
+
+  it('returns a visible refusal when reading the session fails', async () => {
+    vi.spyOn(store, 'get').mockRejectedValueOnce(new Error('Permission denied'));
+    await expect(service.loopCommand(id, '30s check')).resolves.toEqual({
+      ok: false,
+      error: 'Permission denied',
+    });
+    expect(service.getLoop(id)).toBeNull();
+  });
+
+  it('pauses when global shared folders change between runs', async () => {
+    await service.loopCommand(id, '30s check');
+    await waitForPosts(1);
+    await finish();
+    roots = ['/new-shared-folder'];
+    service.refreshAccessScopes();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.waitFor(() => expect(service.getLoop(id)?.phase).toBe('paused'));
+    expect(post).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses global shared folder changes during skill admission', async () => {
+    const original = { name: 'check', body: 'Check', source: 'account', filePath: '/check' };
+    getSkill
+      .mockResolvedValueOnce(original)
+      .mockResolvedValueOnce(original)
+      .mockImplementationOnce(async () => {
+        roots = ['/new-shared-folder'];
+        service.refreshAccessScopes();
+        return original;
+      });
+    await service.loopCommand(id, '30s /check');
+    await vi.waitFor(() => expect(service.getLoop(id)?.phase).toBe('paused'));
+    expect(post).not.toHaveBeenCalled();
+    expect((await store.get(id))?.messages).toEqual([]);
+  });
+
+  it.each(['none', 'model', 'folder'])(
+    'prepares the first Code worktree while preserving context checks (changed=%s)',
+    async changed => {
+      const directory = await realpath(await mkdtemp(join(tmpdir(), 'b4m-loop-project-')));
+      await git(directory, ['init', '--initial-branch=main', '--quiet']);
+      await git(directory, ['config', 'user.email', 'test@example.com']);
+      await git(directory, ['config', 'user.name', 'Test']);
+      await writeFile(join(directory, 'README.md'), 'Loop project\n');
+      await git(directory, ['add', 'README.md']);
+      await git(directory, ['commit', '--quiet', '-m', 'initial']);
+      const created = await service.createCodeSession({ directory, branch: 'main', workspace: true });
+      if (!created.ok) throw new Error(created.error);
+      id = created.session.id;
+      await store.rename(id, 'Loop worktree test');
+      if (changed !== 'none') {
+        const updateWorkspace = store.updateProjectWorkspace.bind(store);
+        vi.spyOn(store, 'updateProjectWorkspace').mockImplementation(async (...args) => {
+          const result = await updateWorkspace(...args);
+          if (changed === 'model') await store.setModel(id, 'other-model');
+          else await store.addContextDirectory(id, '/new-context-folder');
+          return result;
+        });
+      }
+      await service.loopCommand(id, '30s check');
+      await vi.waitFor(async () => expect((await store.get(id))?.project?.workingDirectory).not.toBe(directory));
+      if (changed !== 'none') {
+        await vi.waitFor(() => expect(service.getLoop(id)?.phase).toBe('paused'));
+        expect(post).not.toHaveBeenCalled();
+        expect((await store.get(id))?.messages).toEqual([]);
+        return;
+      }
+      await waitForPosts(1);
+      await finish();
+      const project = (await store.get(id))?.project;
+      expect(project?.workspaceBranch).toMatch(/^b4m\//);
+      await vi.advanceTimersByTimeAsync(30_000);
+      await waitForPosts(2);
+      expect((await store.get(id))?.project).toEqual(project);
+    }
+  );
 
   it('refuses a skill that changes between validation and turn admission', async () => {
     const original = { name: 'check', body: 'Check', source: 'account', filePath: '/check' };
