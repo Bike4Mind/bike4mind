@@ -3,9 +3,8 @@ import Alert from '@mui/joy/Alert';
 import Button from '@mui/joy/Button';
 import Typography from '@mui/joy/Typography';
 import type { LoopState } from '@shared/loop';
-import { contentColumnSx } from './layout';
 
-export function LoopBar({ sessionId }: { sessionId: string | null }) {
+export function useLoop(sessionId: string | null) {
   const [state, setState] = useState<LoopState | null>(null);
   useEffect(() => {
     setState(null);
@@ -28,7 +27,10 @@ export function LoopBar({ sessionId }: { sessionId: string | null }) {
       unsubscribe();
     };
   }, [sessionId]);
-  if (!state || state.sessionId !== sessionId) return null;
+  return state?.sessionId === sessionId ? state : null;
+}
+
+export function LoopBar({ state }: { state: LoopState }) {
   const cadence = state.intervalMs === null ? 'Model-paced' : `${state.intervalMs / 1000}s after completion`;
   const next = state.nextRunAt === null ? state.phase : `Next: ${new Date(state.nextRunAt).toLocaleTimeString()}`;
   return (
@@ -37,7 +39,7 @@ export function LoopBar({ sessionId }: { sessionId: string | null }) {
       color={state.phase === 'paused' ? 'warning' : 'neutral'}
       variant="soft"
       size="sm"
-      sx={{ ...contentColumnSx, mt: 1 }}
+      sx={{ minWidth: 0, alignItems: 'flex-start', flexDirection: 'column', gap: 0.75, overflowWrap: 'anywhere' }}
       data-testid="loop-status"
       endDecorator={
         <Button

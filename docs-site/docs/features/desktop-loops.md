@@ -26,7 +26,7 @@ Without an interval, the model selects a delay after each run. Desktop asks it t
 
 ## Controls and safety
 
-The loop status above the composer shows its prompt, cadence, next run time, and any pause reason. Use **Stop loop** or `/loop stop` to cancel future runs without interrupting a turn already running. The ordinary Stop button also ends the loop and interrupts the current turn.
+The session side panel's **Background tasks** section shows the loop prompt, cadence, next run time, and any pause reason. Use the session panel button in the conversation header to open it on a narrow window. Use **Stop loop** in that section or `/loop stop` to cancel future runs without interrupting a turn already running. The ordinary Stop button also ends the loop and interrupts the current turn.
 
 You can have one loop per conversation. Starting another replaces its schedule. A busy conversation waits for its current turn and queued messages; a loop never cancels your work. Permission cards remain open until you answer them. Errors, stopped-short replies, failed turns, and invalid pacing decisions pause the loop. Start `/loop` again explicitly to resume.
 

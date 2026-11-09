@@ -4,7 +4,12 @@ import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LoopState } from '@shared/loop';
-import { LoopBar } from './LoopBar';
+import { LoopBar, useLoop } from './LoopBar';
+
+function LoopHarness() {
+  const state = useLoop('s');
+  return state ? <LoopBar state={state} /> : null;
+}
 
 describe('LoopBar', () => {
   let root: Root;
@@ -48,7 +53,7 @@ describe('LoopBar', () => {
     await act(async () =>
       root.render(
         <CssVarsProvider>
-          <LoopBar sessionId="s" />
+          <LoopHarness />
         </CssVarsProvider>
       )
     );

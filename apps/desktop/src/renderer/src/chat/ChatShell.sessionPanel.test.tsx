@@ -93,6 +93,7 @@ function quietBridge(overrides: Record<string, unknown>) {
 /** What the bridge reports for the open session; reset in beforeEach. */
 let transcript: ChatMessage[] = [];
 let processes: BackgroundProcessInfo[] = [];
+let loop: import('@shared/loop').LoopState | null = null;
 let updateProject: () => Promise<unknown> = async () => ({ ok: true });
 let sendMessage: () => Promise<SendMessageResult>;
 
@@ -108,6 +109,7 @@ beforeEach(() => {
   window.localStorage.clear();
   transcript = [];
   processes = [];
+  loop = null;
   updateProject = async () => ({ ok: true });
   sendMessage = async () => ({ ok: true, messageId: 'm1' });
   Element.prototype.scrollIntoView = () => undefined;
@@ -137,6 +139,7 @@ beforeEach(() => {
         getSession: async (id: string) =>
           ({ ...SESSIONS.find(entry => entry.id === id), messages: transcript }) as unknown as ChatSession,
         listBackgroundProcesses: async () => processes,
+        getLoop: async () => loop,
         inspectProject: async () => ({ currentBranch: 'main', branches: [] }),
         updateProject: () => updateProject(),
         sendMessage: () => sendMessage(),
@@ -212,6 +215,26 @@ function deferSend() {
 }
 
 describe('the session panel in the shell', () => {
+  it('keeps a Chat loop in Background tasks, never above the input, across panel toggles', async () => {
+    paneWidth(1600);
+    loop = {
+      sessionId: 'chatting',
+      prompt: 'Check the build',
+      intervalMs: 30_000,
+      phase: 'scheduled',
+      nextRunAt: Date.now() + 30_000,
+    };
+    await open('chatting', 'chat');
+    expect(get('session-panel-section-background').contains(get('loop-status'))).toBe(true);
+    expect(find('session-panel-section-environment')).toBeNull();
+    const composer = get('chat-composer-input');
+    await act(async () => get('chat-toggle-session-panel-btn').click());
+    expect(find('loop-status')).toBeNull();
+    expect(get('chat-composer-input')).toBe(composer);
+    await act(async () => get('chat-toggle-session-panel-btn').click());
+    expect(get('session-panel-section-background').contains(get('loop-stop-btn'))).toBe(true);
+  });
+
   it('reserves a rail beside the thread of a Code session with a folder', async () => {
     paneWidth(1100);
     transcript = [{ id: 'm1', role: 'user', content: 'Hello', createdAt: '2026-10-01T00:00:00.000Z' }];

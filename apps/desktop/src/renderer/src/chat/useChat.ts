@@ -1184,7 +1184,11 @@ export function useConversation(
         else
           setNotice(
             result.notice ??
-              (result.state ? `Loop ${result.state.phase}: ${result.state.prompt}` : 'No active loop in this session.')
+              (result.state
+                ? args.trim() === 'list'
+                  ? `Loop ${result.state.phase}: ${result.state.prompt}`
+                  : null
+                : 'No active loop in this session.')
           );
         return;
       }
