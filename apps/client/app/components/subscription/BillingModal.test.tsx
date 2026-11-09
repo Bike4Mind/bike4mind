@@ -27,7 +27,10 @@ const logEvent = vi.hoisted(() => vi.fn());
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string, fallback?: unknown) => (typeof fallback === 'string' ? fallback : key),
+    t: (key: string, fallback?: unknown, options?: Record<string, unknown>) => {
+      const text = typeof fallback === 'string' ? fallback : key;
+      return text.replace(/\{\{(\w+)\}\}/g, (_match, name: string) => String(options?.[name] ?? ''));
+    },
   }),
 }));
 vi.mock('@client/app/hooks/data/credits', () => ({ useGetCreditTransactions: () => ({ data: [], isPending: false }) }));
@@ -393,8 +396,43 @@ describe('BillingModal', () => {
       renderModal();
       expect(state.teamQueryOwner).toEqual({ ownerId: 'org-1', enabled: true });
       expect(screen.getByTestId('billing-current-plan-name')).toHaveTextContent('Team');
+      expect(screen.getByTestId('billing-current-plan-name')).not.toHaveTextContent('Subscription');
       expect(screen.getByTestId('billing-current-plan-detail')).toHaveTextContent('subscriptions.renews_on');
-      expect(screen.getByTestId('billing-current-plan-seats')).toBeInTheDocument();
+      expect(screen.getByTestId('billing-current-plan-seats')).toHaveTextContent('5 seats');
+    });
+
+    it('does not query the team plan while the modal is closed', () => {
+      render(
+        <TestWrapper>
+          <BillingModal open={false} onClose={vi.fn()} />
+        </TestWrapper>
+      );
+      expect(state.teamQueryOwner).toEqual({ ownerId: 'org-1', enabled: false });
+    });
+
+    it('shows a canceled team plan as expiring', () => {
+      state.teamSubscriptions = [subRow({ subscriptionId: 'sub_team', canceledAt: new Date('2026-01-15T00:00:00Z') })];
+      renderModal();
+      expect(screen.getByTestId('billing-current-plan-detail')).toHaveTextContent('subscriptions.expires_on');
+    });
+
+    it('omits the seats line when the team seat count is unknown', () => {
+      state.account = { id: 'org-1', personal: false };
+      state.teamSubscriptions = [subRow({ subscriptionId: 'sub_team' })];
+      renderModal();
+      expect(screen.getByTestId('billing-current-plan-name')).toHaveTextContent('Team');
+      expect(screen.queryByTestId('billing-current-plan-seats')).not.toBeInTheDocument();
+    });
+
+    it.each([
+      ['errored', { subscriptionsError: true, subscriptionsPending: false }],
+      ['still loading', { subscriptionsError: false, subscriptionsPending: true }],
+    ])('shows the team plan while the personal plan read is %s', (_label, personal) => {
+      Object.assign(state, personal);
+      state.teamSubscriptions = [subRow({ subscriptionId: 'sub_team' })];
+      renderModal();
+      expect(screen.getByTestId('billing-current-plan-name')).toHaveTextContent('Team');
+      expect(screen.queryByTestId('billing-current-plan-retry')).not.toBeInTheDocument();
     });
 
     it('flags a failed team payment', () => {
@@ -413,6 +451,7 @@ describe('BillingModal', () => {
       state.teamSubscriptionsPending = true;
       renderModal();
       expect(screen.queryByTestId('billing-current-plan-name')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('billing-current-plan-detail')).not.toBeInTheDocument();
     });
 
     it('retries the team read, not the personal one, when it fails', () => {
