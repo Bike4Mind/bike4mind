@@ -656,68 +656,105 @@ const ROUTINE_COMMAND =
   /^(?:\$\s+)?(?:sudo\s+)?(?:git|gh|pnpm|npm|npx|yarn|ls|cat|head|tail|grep|rg|find|pwd|cd|mkdir|cp|mv|touch|echo|wc|diff|node|env)\s+\S/;
 const SHELL_COMMAND_HEAD =
   /^(?:\$\s+)?(?:sudo\s+)?(?:git|gh|pnpm|npm|npx|yarn|ls|cat|head|tail|grep|rg|find|pwd|cd|mkdir|cp|mv|touch|echo|wc|diff|node|curl|wget|rm|printenv|env)(?:\s|$)/;
-const DANGEROUS_COMMANDS: { pattern: RegExp; label: string }[] = [
-  { pattern: /\b(?:curl|wget)\b[^|\n]*\|\s*(?:sudo\s+)?(?:ba|z|da|k)?sh\b/, label: 'pipes a download into a shell' },
+const CREDENTIAL_PATH =
+  /(?:^|[\s"'=:])(?:~|\$HOME)?\/?\.(?:ssh|gnupg)(?:\/|\b)|\.aws\/credentials|\.netrc\b|\.npmrc\b|\bid_(?:rsa|ed25519|ecdsa)\b/;
+// 'segment' patterns run on each part of a chained command so a flag on one command is never read
+// as belonging to another; 'whole' patterns need the unsplit line (a pipe is part of the match).
+const DANGEROUS_COMMANDS: { pattern: RegExp; label: string; scope: 'segment' | 'whole' }[] = [
+  {
+    pattern: /\b(?:curl|wget)\b[^|\n]*\|\s*(?:sudo\s+)?(?:ba|z|da|k)?sh\b/,
+    label: 'pipes a download into a shell',
+    scope: 'whole',
+  },
   {
     pattern:
       /\brm\s+(?:-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r|-r\s+-f|-f\s+-r|--recursive\s+--force|--force\s+--recursive)\b/i,
     label: 'runs rm -rf',
+    scope: 'whole',
   },
-  { pattern: /\bgit\s+push\b[^\n]*?\s(?:--force(?![-\w])|-[a-zA-Z]*f[a-zA-Z]*\b)/, label: 'force-pushes' },
   {
-    pattern:
-      /(?:^|[\s"'=:])(?:~|\$HOME)?\/?\.(?:ssh|gnupg)(?:\/|\b)|\.aws\/credentials|\.netrc\b|\.npmrc\b|\bid_(?:rsa|ed25519|ecdsa)\b/,
+    pattern: /\bgit\s+push\b[^\n]*?\s(?:--force(?![-\w])|-[a-zA-Z]*f[a-zA-Z]*\b)/,
+    label: 'force-pushes',
+    scope: 'segment',
+  },
+  {
+    // A command word must precede the path, so a tree listing or "add a line to .npmrc" is not a read.
+    pattern: new RegExp(`^(?:\\$\\s+)?(?:sudo\\s+)?(?!id_)[a-z][\\w.-]*\\s+(?:[^\\n]*?)(?:${CREDENTIAL_PATH.source})`),
     label: 'reads or writes credential files',
+    scope: 'segment',
   },
   {
     pattern:
-      /(?:^|[|;&]\s*)(?:\$\s+)?(?:sudo\s+)?(?:(?:cat|source|less|more|head|tail|bat|grep|rg|sed|awk)|\.)\s[^|;&\n]*?(?<![\w-])\.env(?:\.(?!example|sample|template)[\w.-]+)?(?![\w-]|\.\w)/,
+      /^(?:\$\s+)?(?:sudo\s+)?(?:(?:cat|source|less|more|head|tail|bat|grep|rg|sed|awk)|\.)\s[^|;&\n]*?(?<![\w-])\.env(?:\.(?!example|sample|template)[\w.-]+)?(?![\w-]|\.\w)/,
     label: 'reads an env file',
+    scope: 'segment',
   },
   {
     pattern: /\bprintenv\b|(?:^|[|;&]\s*)(?:\$\s+)?env\s*(?:$|[|>])|\bexport\s+-p\b/,
     label: 'dumps environment variables',
+    scope: 'whole',
   },
 ];
 
+type ShellCandidate = { text: string; shell: boolean; inline: boolean };
+
 /** Shell commands a skill tells the agent to run: fenced blocks, inline code and "run ..." lines. */
-function extractShellCandidates(text: string): string[] {
-  const candidates: string[] = [];
-  let fence: { lang: string } | undefined;
+function extractShellCandidates(text: string): ShellCandidate[] {
+  const candidates: ShellCandidate[] = [];
+  let fence: { char: string; length: number; lang: string } | undefined;
   for (const line of text.split('\n')) {
-    const open = /^\s*(?:```|~~~)\s*([A-Za-z0-9_-]*)/.exec(line);
-    if (open) {
-      fence = fence ? undefined : { lang: open[1].toLowerCase() };
-      continue;
+    const marker = /^\s*(`{3,}|~{3,})\s*([A-Za-z0-9_-]*)(.*)$/.exec(line);
+    if (marker) {
+      const [, run, lang, rest] = marker;
+      if (!fence) {
+        fence = { char: run[0], length: run.length, lang: lang.toLowerCase() };
+        continue;
+      }
+      // Only a bare run of the same character, at least as long as the opener, closes a fence.
+      if (run[0] === fence.char && run.length >= fence.length && !lang && rest.trim() === '') {
+        fence = undefined;
+        continue;
+      }
     }
     if (fence) {
-      if (SHELL_FENCE_LANGS.has(fence.lang)) candidates.push(line.trim());
+      candidates.push({ text: line.trim(), shell: SHELL_FENCE_LANGS.has(fence.lang), inline: false });
       continue;
     }
-    for (const span of line.matchAll(/`([^`\n]+)`/g)) candidates.push(span[1].trim());
+    for (const span of line.matchAll(/`([^`\n]+)`/g)) {
+      candidates.push({ text: span[1].trim(), shell: true, inline: true });
+    }
     const run = /^\s*(?:[-*]\s+)?(?:run|execute)\s*:?\s+(.+)$/i.exec(line);
-    if (run && SHELL_COMMAND_HEAD.test(run[1].trim())) candidates.push(run[1].trim());
+    if (run && SHELL_COMMAND_HEAD.test(run[1].trim())) {
+      candidates.push({ text: run[1].trim(), shell: true, inline: false });
+    }
   }
-  return candidates.filter(c => c.length > 0);
+  return candidates.filter(c => c.text.length > 0);
 }
+
+const COMMAND_SEPARATOR = /&&|\|\||[;|]/;
 
 /**
  * Deterministic shell-command risk: a dangerous pattern is high, any other routine command is
  * medium. Prose such as "push the change" is never a candidate because only code spans, fenced
- * shell blocks and "run <command>" lines are read.
+ * blocks and "run <command>" lines are read. Dangerous patterns run on every fenced line whatever
+ * its language; the routine check runs on shell fences, inline code and "run" lines only.
  */
 function scanShellCommands(text: string): ISkillScanFinding[] {
   const findings: ISkillScanFinding[] = [];
-  const candidates = extractShellCandidates(text);
   const danger = new Map<string, string>();
   let routine: string | undefined;
-  for (const candidate of candidates) {
-    for (const { pattern, label } of DANGEROUS_COMMANDS) {
-      if (!danger.has(label) && pattern.test(candidate)) danger.set(label, candidate);
+  for (const candidate of extractShellCandidates(text)) {
+    const segments = candidate.text.split(COMMAND_SEPARATOR).map(part => part.trim());
+    // A lone `env` in inline code is a mention (the "env" key of a config), not a dump.
+    const mention = candidate.inline && candidate.text === 'env';
+    for (const { pattern, label, scope } of DANGEROUS_COMMANDS) {
+      if (danger.has(label) || mention) continue;
+      if (scope === 'whole' ? pattern.test(candidate.text) : segments.some(part => pattern.test(part))) {
+        danger.set(label, candidate.text);
+      }
     }
-    if (routine === undefined) {
-      const segment = candidate.split(/&&|\|\||[;|]/).find(part => ROUTINE_COMMAND.test(part.trim()));
-      if (segment) routine = segment.trim();
+    if (routine === undefined && candidate.shell) {
+      routine = segments.find(part => ROUTINE_COMMAND.test(part));
     }
   }
   if (danger.size > 0) {
