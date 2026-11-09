@@ -15,6 +15,7 @@ import {
   type PaymentUnlockReason,
   type SignupGrant,
   type SignupGrantUnlockReason,
+  type SignupProtection,
   type SignupUnlockForfeitCause,
 } from '@bike4mind/common';
 import { withTransaction } from '@bike4mind/db-core';
@@ -696,6 +697,20 @@ export async function resolveDripLimits(adminSettings: GrantAdapters['db']['admi
 }
 
 /**
+ * Alerts once per pool-day that a running drip uses the built-in cap. The built-in cap is 0, so an unstored cap
+ * silently stops the drip: callers that stop on a spent cap before reaching dripSignupGrant must call this first.
+ */
+export async function alertIfDripCapDefault(
+  signupProtection: SignupProtection | undefined,
+  day: string,
+  limits: Awaited<ReturnType<typeof resolveDripLimits>>
+): Promise<void> {
+  const budgetConfig = signupProtection?.grantBudget;
+  if (limits.dailyCredits > 0 && limits.dripCapSource === 'default' && budgetConfig)
+    await alertDripCapDefault(budgetConfig, day, limits.dripCap);
+}
+
+/**
  * Pays a UTC day's activity drip, or a trusted preview period within it. The caller establishes eligibility; this owns
  * the rate, the cap, the once-per-day ledger id and the draw from the trickle pool. A dry trickle pool
  * skips the day (withheld, not queued); signup tranches held on the signup pool do not stop it. The pool is
@@ -710,11 +725,10 @@ export async function dripSignupGrant(
 ): Promise<GrantFreeCreditsResult> {
   if (period !== undefined && !/^preview:\d{1,4}:\d+$/.test(period)) return noGrant();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return noGrant();
-  const { dailyCredits, dripCap, dripCapSource } = await resolveDripLimits(adapters.db.adminSettings);
+  const limits = await resolveDripLimits(adapters.db.adminSettings);
+  const { dailyCredits, dripCap } = limits;
   if (!(dailyCredits > 0)) return noGrant();
-  // The built-in default cap is 0, so an unstored cap silently stops a drip that is otherwise on.
-  const budgetConfig = adapters.db.signupProtection?.grantBudget;
-  if (dripCapSource === 'default' && budgetConfig) await alertDripCapDefault(budgetConfig, day, dripCap);
+  await alertIfDripCapDefault(adapters.db.signupProtection, day, limits);
   if (!(dripCap > 0)) return noGrant();
   const user = await adapters.db.users.findById(userId);
   if (!user?.signupGrant || user.signupGrant.unlockForfeited || hasPaidSignupDrip(user.signupGrant, day, period))

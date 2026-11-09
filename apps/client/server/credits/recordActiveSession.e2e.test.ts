@@ -17,7 +17,8 @@ import {
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 import { recordHeartbeat } from './recordActiveSession';
-import { unlockSignupGrantFromActivity } from './activityUnlock';
+import { payActivityDripForDay, unlockSignupGrantFromActivity } from './activityUnlock';
+import { signupProtection } from '@bike4mind/server-utils/auth/signupProtection';
 import * as dripPeriods from './signupDripPeriod';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -190,6 +191,27 @@ describe('active session heartbeat', () => {
     expect((await pingEvery60s(user.id, 300, 360)).creditsGranted).toBe(0);
     expect(await dripRows(user.id)).toHaveLength(1);
     expect((await User.findById(user.id))?.signupGrant?.lastDripPeriod).toBeUndefined();
+  });
+
+  it('alerts the unset drip cap once a day from the heartbeat and the activity payout', async () => {
+    const notify = vi.spyOn(signupProtection.grantBudget!, 'notify').mockResolvedValue();
+    delete config.signupGrantDripCap;
+    const user = await createSignupStageUser();
+    expect(await ping(user.id, 0)).toMatchObject({ creditsGranted: 0, spent: true });
+    expect(await ping(user.id, 600)).toMatchObject({ creditsGranted: 0, spent: true });
+    expect((await payActivityDripForDay(user.id, at(700))).creditsGranted).toBe(0);
+    expect(notify.mock.calls).toEqual([
+      [expect.objectContaining({ threshold: 'drip_cap_default', pool: 'trickle', day: '2030-03-01', budget: 0 })],
+    ]);
+  });
+
+  it('does not alert the drip cap from the heartbeat with a stored cap of 0', async () => {
+    const notify = vi.spyOn(signupProtection.grantBudget!, 'notify').mockResolvedValue();
+    config.signupGrantDripCap = '0';
+    const user = await createSignupStageUser();
+    expect(await ping(user.id, 0)).toMatchObject({ spent: true });
+    expect((await payActivityDripForDay(user.id, at(60))).creditsGranted).toBe(0);
+    expect(notify).not.toHaveBeenCalled();
   });
 
   it('pays on the second 60s ping at the default 60 second minimum', async () => {
