@@ -39,6 +39,17 @@ describe('admin layout primitives', () => {
     expect(screen.getByTestId('create-account')).toBeVisible();
   });
 
+  it('keeps the actions at their own width so a long description wraps instead of a button label', () => {
+    renderToolkit(
+      <AdminPageHeader
+        title="OAuth clients"
+        description="Apps registered to use sign in. Each client authenticates at the token endpoint with its secret, and may only redirect to its registered URIs."
+        actions={<button data-testid="register-client">Register client</button>}
+      />
+    );
+    expect(screen.getByTestId('admin-page-header-actions')).toHaveStyle({ flexShrink: '0' });
+  });
+
   it('renders the page title as the h1 and a nested sub-view title as an h2', () => {
     renderToolkit(
       <>
