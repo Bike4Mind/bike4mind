@@ -1,8 +1,8 @@
 /** Per stream. The model pays for this text on every later turn, the endpoint being stateless. */
 export const MAX_STREAM_BYTES = 40_000;
 
-/** Same split as capOutputMiddle: the end of a command's output carries its errors, summary and URLs. */
-const HEAD_SHARE = 0.25;
+/** The end of a command's output carries its errors, summary and URLs, so it gets the larger share. */
+export const HEAD_SHARE = 0.25;
 
 /** Small chunks are merged past this count, so trimming the tail never walks a long array. */
 const MAX_TAIL_CHUNKS = 64;

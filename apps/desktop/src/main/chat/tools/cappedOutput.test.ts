@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CappedOutput, MAX_STREAM_BYTES } from './cappedOutput';
+import { CappedOutput, HEAD_SHARE, MAX_STREAM_BYTES } from './cappedOutput';
 
 const PR_URL = 'https://github.com/example-org/widgets/pull/611';
 
@@ -45,22 +45,33 @@ describe('CappedOutput', () => {
   });
 
   it('never splits a multi-byte character at either cut or across chunks', () => {
-    const encoded = Buffer.from('é中😀'.repeat(50));
+    const encoded = Buffer.from('\u00e9\u4e2d\u{1F600}'.repeat(50));
     const chunks: Buffer[] = [];
     for (let at = 0; at < encoded.length; at += 7) chunks.push(encoded.subarray(at, at + 7));
 
     const text = collect(chunks, 101);
 
-    expect(text).not.toContain('�');
+    expect(text).not.toContain('\ufffd');
     const [head, tail] = text.split(/\n\[\.\.\. \d+ bytes omitted from the middle \.\.\.\]\n/);
-    expect('é中😀'.repeat(50).startsWith(head)).toBe(true);
-    expect('é中😀'.repeat(50).endsWith(tail)).toBe(true);
+    expect('\u00e9\u4e2d\u{1F600}'.repeat(50).startsWith(head)).toBe(true);
+    expect('\u00e9\u4e2d\u{1F600}'.repeat(50).endsWith(tail)).toBe(true);
     const omitted = Number(/(\d+) bytes omitted/.exec(text)?.[1]);
     expect(Buffer.byteLength(head) + Buffer.byteLength(tail) + omitted).toBe(encoded.length);
   });
 
   it('decodes a character split across chunks when nothing is cut', () => {
-    const encoded = Buffer.from('café');
-    expect(collect([encoded.subarray(0, 4), encoded.subarray(4)])).toBe('café');
+    const encoded = Buffer.from('caf\u00e9');
+    expect(collect([encoded.subarray(0, 4), encoded.subarray(4)])).toBe('caf\u00e9');
+  });
+
+  it('splits the cap between head and tail by HEAD_SHARE', () => {
+    const max = 1_000;
+    const text = collect(['h'.repeat(5_000), 't'.repeat(5_000)], max);
+    const [head, tail] = text.split(/\n\[\.\.\. \d+ bytes omitted from the middle \.\.\.\]\n/);
+    expect(HEAD_SHARE).toBe(0.25);
+    expect(Buffer.byteLength(head)).toBe(250);
+    expect(Buffer.byteLength(tail)).toBe(750);
+    expect(head).toBe('h'.repeat(250));
+    expect(tail).toBe('t'.repeat(750));
   });
 });

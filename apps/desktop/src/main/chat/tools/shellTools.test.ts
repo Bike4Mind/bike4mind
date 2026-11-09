@@ -59,6 +59,34 @@ describe('bash_execute', () => {
     expect(result.length).toBeLessThanOrEqual(MAX_TOOL_OUTPUT_CHARS);
   });
 
+  it('keeps a small stderr whole and gives a large stdout its own middle cut that keeps its end', async () => {
+    const result = await bashExecute.run(
+      { command: `echo small-error >&2; head -c 100000 /dev/zero | tr '\\0' a; echo; echo the-end` },
+      context
+    );
+    const [stdoutPart, stderrPart] = result.split('[stderr]');
+    expect(stderrPart).toContain('\nsmall-error\n');
+    expect(stderrPart).not.toContain('omitted');
+    expect(stdoutPart).toContain('omitted from the middle');
+    expect(stdoutPart).toContain('a\nthe-end');
+    expect(result.length).toBeLessThanOrEqual(MAX_TOOL_OUTPUT_CHARS);
+  });
+
+  it('fits both streams under the cap when the total is only just over it, each keeping its tail', async () => {
+    const result = await bashExecute.run(
+      {
+        command: `head -c 15000 /dev/zero | tr '\\0' a; echo; echo out-end; head -c 15500 /dev/zero | tr '\\0' b >&2; echo >&2; echo err-end >&2`,
+      },
+      context
+    );
+    const [stdoutPart, stderrPart] = result.split('[stderr]');
+    expect(result.length).toBeLessThanOrEqual(MAX_TOOL_OUTPUT_CHARS);
+    expect(stdoutPart).toContain('omitted from the middle');
+    expect(stderrPart).toContain('omitted from the middle');
+    expect(stdoutPart).toContain('a\nout-end');
+    expect(stderrPart).toContain('b\nerr-end');
+  });
+
   it('writes inside a granted root', async () => {
     await bashExecute.run({ command: 'echo written > allowed.txt' }, context);
     await expect(readFile(join(root, 'allowed.txt'), 'utf8')).resolves.toContain('written');
