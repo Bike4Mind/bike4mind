@@ -642,6 +642,38 @@ describe('commands main ran unasked', () => {
   });
 
   it.each([
+    ['git clean -fdx $x', ''],
+    ['git clean -fdx ${x:+}.claude', ''],
+    ['git clean -fdx -- "$x"', ''],
+    ['git clean -fdx `echo .claude`', ''],
+    ['git clean -fdX -e $x', ''],
+    ['git clean -fdX --exclude=$x', ''],
+    ['git rm -r $x', ''],
+    ['git rm -r ${x:+}.claude', ''],
+    ['git rm -r --cached $x', ''],
+    ['git mv $x y', ''],
+    ['git mv -f src/a.ts $x', ''],
+    // brepo's `.claude` is untracked, so each exclude pattern makes it one more ignored folder `-X` removes.
+    ["git clean -fdX -e '.clau*'", 'brepo'],
+    ["git clean -fdX -e '.clau*' -e a", 'brepo'],
+    ["git clean -fdX -e a --exclude '.clau*' -e b", 'brepo'],
+    ["git clean -fdX -e'.clau*'", 'brepo'],
+    ["git clean -fdX -e.cl''au*", 'brepo'],
+    ['git clean -fdx', 'brepo'],
+  ])('asks in every mode for %s (in proj/%s), whose paths git removes or moves', async (command, folder) => {
+    expect(await judge(command, folder)).toMatchObject(asks);
+  });
+
+  it.each([
+    ['git clean -fdx src', ''],
+    ['git clean -fdX -e a', 'brepo'],
+    ['git rm src/a.ts', ''],
+    ['git mv src/a.ts src/z.ts', ''],
+  ])('runs %s (in proj/%s) unasked, naming no protected path', async (command, folder) => {
+    expect(await judge(command, folder)).toMatchObject({ auto: true, full: true });
+  });
+
+  it.each([
     'git diff --name-only \\--output=.claude/settings.json',
     'git diff --outp\\ut=.claude/settings.json HEAD~1',
     'git diff "--output"=.claude/settings.json HEAD~1',

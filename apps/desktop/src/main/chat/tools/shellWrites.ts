@@ -741,8 +741,10 @@ interface GitGrammar {
 
 interface GitArgs {
   positionals: string[];
-  /** Options given, by long name or letter, with their values. */
+  /** Options given, by long name or letter, with their values; the last value of a repeated one. */
   given: Map<string, string | true>;
+  /** Every value of a valued option, in order, by long name or letter. */
+  values: [string, string][];
   /** Words after `--`. */
   paths: string[];
   /** An option outside the grammar, which the scan cannot read. */
@@ -751,7 +753,7 @@ interface GitArgs {
 
 /** Reads `args` as git's parse-options does, taking a long option's unique abbreviation for it. */
 function gitArgs(args: readonly string[], grammar: GitGrammar): GitArgs {
-  const read: GitArgs = { positionals: [], given: new Map(), paths: [], unknown: false };
+  const read: GitArgs = { positionals: [], given: new Map(), values: [], paths: [], unknown: false };
   const names = [...(grammar.flags ?? []), ...(grammar.long ?? [])];
   for (let index = 0; index < args.length; index++) {
     const arg = args[index] as string;
@@ -767,12 +769,16 @@ function gitArgs(args: readonly string[], grammar: GitGrammar): GitArgs {
         read.unknown = true;
         continue;
       }
-      read.given.set(name, value ?? ((grammar.long ?? []).includes(name) ? (args[++index] ?? '') : true));
+      const taken = value ?? ((grammar.long ?? []).includes(name) ? (args[++index] ?? '') : true);
+      read.given.set(name, taken);
+      if (typeof taken === 'string') read.values.push([name, taken]);
     } else if (arg.length > 1 && arg.startsWith('-')) {
       for (let at = 1; at < arg.length; at++) {
         const letter = arg[at] as string;
         if ((grammar.valued ?? '').includes(letter)) {
-          read.given.set(letter, arg.slice(at + 1) || (args[++index] ?? ''));
+          const taken = arg.slice(at + 1) || (args[++index] ?? '');
+          read.given.set(letter, taken);
+          read.values.push([letter, taken]);
           break;
         }
         if (!(grammar.letters ?? '').includes(letter)) read.unknown = true;
@@ -1549,9 +1555,10 @@ async function settingsListed(top: string, args: readonly string[]): Promise<str
 /** What `git clean` would remove, from its own dry run with the same choice of files. */
 async function cleanWrites(read: GitArgs, cwd: string): Promise<TreeWrite> {
   const options = ['d', 'x', 'X'].filter(letter => read.given.has(letter)).map(letter => `-${letter}`);
-  const excludes = [read.given.get('e'), read.given.get('exclude')].filter(
-    (value): value is string => typeof value === 'string'
-  );
+  // Each `-e` adds a pattern, which under `-X` is one more to remove.
+  const excludes = read.values.filter(([name]) => name === 'e' || name === 'exclude').map(([, value]) => value);
+  // The dry run gets each word as written here, which a quote or backslash left inside it would change.
+  if ([...excludes, ...read.positionals, ...read.paths].some(word => /['"\\]/.test(word))) return UNREAD_TREE;
   const listed = await gitQuery(cwd, [
     'clean',
     '-n',
@@ -1874,6 +1881,9 @@ async function writesOf(
   return { files: inPlaceEdit(program, args), trees: [] };
 }
 
+/** git subcommands that remove, move or overwrite the work-tree paths their words name. */
+const REMOVES_PATHS = new Set(['clean', 'rm', 'mv']);
+
 /** What one git call writes, and whether it only rewrote paths (`git checkout -- <path>`), leaving HEAD where it was. */
 async function gitWrites(
   git: { sub: string; rest: string[]; cwd: string },
@@ -1882,6 +1892,10 @@ async function gitWrites(
   script: GitScript
 ): Promise<{ writes: InPlaceWrites; restores: boolean }> {
   const relocate = (path: string): string => resolveOperand(git.cwd, path);
+  // An expansion in a word of `git clean`, `rm` or `mv` may name any path to remove, move or overwrite.
+  if (REMOVES_PATHS.has(git.sub) && git.rest.some(arg => /[$`]/.test(arg))) {
+    return { writes: { files: [], trees: [], unread: true }, restores: false };
+  }
   if (git.sub === 'apply') {
     return { writes: { ...(await gitApplyWrites(git.rest, node, git.cwd)), links: true }, restores: true };
   }
