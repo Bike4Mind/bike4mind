@@ -237,6 +237,10 @@ Shortcuts:
 | `s` | Suspend (user profile) |
 | Cmd+S | Save (settings forms) |
 
+## Admin assistant eval
+
+A new admin tab or admin tool adds at least one question to `b4m-core/services/src/llm/evals/adminAssistant/cases.ts`, so the admin assistant is measured on it. See that directory's README for the "Adding its question" step.
+
 ## 8. Rollout
 
 1. **Tokens and toolkit.** Admin tokens in the Joy theme; the components above in `components/admin/shared` with tests.
