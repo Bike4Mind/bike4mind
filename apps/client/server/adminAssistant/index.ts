@@ -15,7 +15,8 @@ export type { AdminToolResult } from './defineAdminTool';
 
 type AdminToolRegistry = Partial<Record<AdminAssistantToolName, ToolDefinition>>;
 
-// Each admin tool registers itself here; a full Record so a declared name without a tool fails to compile.
+// Each admin tool registers itself here (a full Record, so a declared name without a tool fails to compile),
+// and adds a `data` case to b4m-core/services/src/llm/evals/adminAssistant/cases.ts.
 const ADMIN_TOOL_REGISTRY: Record<AdminAssistantToolName, ToolDefinition> = {
   admin_get_health: getHealthTool,
   admin_get_org: getOrgTool,
