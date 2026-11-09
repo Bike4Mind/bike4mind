@@ -58,7 +58,13 @@ export type ParseSkillMdResult =
       /** Present when the file is a Bike4Mind export (carries the source stamp). */
       source?: { url: string; thirdParty: boolean };
     }
-  | { ok: false; error: string };
+  | {
+      ok: false;
+      /** A plain-language message with the fix; the only field the CLI needs. */
+      error: string;
+      /** The raw parser message, when `error` is a friendlier rewording of it. */
+      details?: string;
+    };
 
 /**
  * Serializes a skill to SKILL.md. allowedTools is never written (B4M tool names are not Claude Code
@@ -128,6 +134,53 @@ export function splitAllowedTools(value: unknown): string[] {
   return tools;
 }
 
+const UNQUOTED_TOP_LEVEL_VALUE = /^([^\s#:][^:]*?):[ \t]+(\S.*)$/;
+
+/** Line of the first top-level `key: "value` whose opening quote never closes on its own line. */
+function findUnclosedQuoteLine(lines: string[]): number | undefined {
+  const index = lines.findIndex(line => {
+    const match = line.match(/^[^\s#][^:]*:[ \t]+(["'])(.*)$/);
+    if (!match) return false;
+    const rest = match[2].replace(match[1] === '"' ? /\\./g : /''/g, '');
+    return !rest.includes(match[1]);
+  });
+  return index === -1 ? undefined : index + 1;
+}
+
+/**
+ * Turns a YAML failure into a message with a fix. The frontmatter starts on file line 2 (line 1 is
+ * the opening ---), so every reported line is the frontmatter line plus one.
+ */
+function describeYamlError(frontmatter: string, error: unknown): ParseSkillMdResult {
+  const details = error instanceof Error ? error.message : String(error);
+  const code = typeof error === 'object' && error !== null && 'code' in error ? String(error.code) : '';
+  const linePos =
+    typeof error === 'object' && error !== null && 'linePos' in error
+      ? (error.linePos as Array<{ line: number }> | undefined)
+      : undefined;
+  const lines = frontmatter.split('\n');
+  const errorLine = linePos?.[0]?.line;
+  const fail = (message: string): ParseSkillMdResult => ({ ok: false, error: message, details });
+
+  if (code === 'TAB_AS_INDENT' && errorLine) {
+    return fail(`Line ${errorLine + 1} uses a tab for indentation; YAML needs spaces.`);
+  }
+  if (code === 'MISSING_CHAR' && /quote/i.test(details)) {
+    const line = findUnclosedQuoteLine(lines) ?? errorLine;
+    if (line) return fail(`Line ${line + 1} has a quote that is never closed.`);
+  }
+  if (errorLine) {
+    const match = lines[errorLine - 1]?.match(UNQUOTED_TOP_LEVEL_VALUE);
+    if (match && !/^["'[{|>&*!]/.test(match[2]) && match[2].includes(': ')) {
+      return fail(
+        `Line ${errorLine + 1} (\`${match[1]}\`) has a colon followed by a space, which YAML reads as a new key. Wrap the value in double quotes.`
+      );
+    }
+    return fail(`The frontmatter is not valid YAML (line ${errorLine + 1}).`);
+  }
+  return fail('The frontmatter is not valid YAML.');
+}
+
 /** Parses a SKILL.md into skill form fields. Never throws; a malformed file yields `ok: false`. */
 export function parseSkillMd(input: string): ParseSkillMdResult {
   // Normalize line endings so a Windows-authored file does not leave `\r` in the body, where the
@@ -149,7 +202,7 @@ export function parseSkillMd(input: string): ParseSkillMdResult {
     const frontmatter = quoteRawArgumentHint(split.frontmatter);
     data = YAML.parse(frontmatter) ?? {};
   } catch (error) {
-    return { ok: false, error: `Invalid YAML frontmatter: ${error instanceof Error ? error.message : String(error)}` };
+    return describeYamlError(split.frontmatter, error);
   }
   if (typeof data !== 'object' || data === null || Array.isArray(data)) {
     return { ok: false, error: 'The frontmatter must be a set of key: value pairs.' };

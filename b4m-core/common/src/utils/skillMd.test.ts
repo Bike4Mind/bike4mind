@@ -203,6 +203,41 @@ describe('parseSkillMd', () => {
     expect(!result.ok && result.error).toBeTruthy();
   });
 
+  describe('friendly YAML errors', () => {
+    const fail = (text: string) => {
+      const result = parseSkillMd(text);
+      if (result.ok) throw new Error('expected a failure');
+      return result;
+    };
+
+    it('explains an unquoted colon with the real line and key, and keeps the parser text', () => {
+      const result = fail(
+        "---\nname: team-rules\ndescription: Applies the team's house rules: TikTok-safe layout\n---\nbody"
+      );
+      expect(result.error).toBe(
+        'Line 3 (`description`) has a colon followed by a space, which YAML reads as a new key. Wrap the value in double quotes.'
+      );
+      expect(result.details).toMatch(/Nested mappings are not allowed/);
+    });
+
+    it('explains a tab used for indentation', () => {
+      const result = fail('---\nname: a\nmetadata:\n\tfoo: 1\n---\nbody');
+      expect(result.error).toBe('Line 4 uses a tab for indentation; YAML needs spaces.');
+      expect(result.details).toBeTruthy();
+    });
+
+    it('explains an unclosed quote at the line that opens it', () => {
+      const result = fail('---\nname: a\ndescription: "never closed\nother: 1\n---\nbody');
+      expect(result.error).toBe('Line 3 has a quote that is never closed.');
+    });
+
+    it('falls back to the line number for other YAML errors', () => {
+      const result = fail('---\nname: [unclosed\n---\nbody');
+      expect(result.error).toMatch(/^The frontmatter is not valid YAML \(line \d+\)\.$/);
+      expect(result.details).toBeTruthy();
+    });
+  });
+
   it('returns source for stamped exports and flags third-party ones', () => {
     const skill = { name: 'x', description: 'd', body: 'b' };
     const own = parseSkillMd(toSkillMd(skill, { sourceUrl: 'https://app.example/skills/1' }));
