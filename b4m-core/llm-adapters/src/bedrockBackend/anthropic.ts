@@ -349,7 +349,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
   }
 
   /** Catalog record first: an operator row's refusalFallback must win over the table (see resolveApiSurface). */
-  private refusalFallsBack(model: string): boolean {
+  private fallsBackOnRefusal(model: string): boolean {
     return refusalFallsBack(
       this._dispatch.for(model) ??
         this.getModelInfoList().find(m => m.id === model) ?? { id: model, backend: ModelBackend.Bedrock }
@@ -1362,7 +1362,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       }
 
       const stopReason = (response as { stop_reason?: string }).stop_reason;
-      if (stopReason === 'refusal' && this.refusalFallsBack(model)) {
+      if (stopReason === 'refusal' && this.fallsBackOnRefusal(model)) {
         throw safetyRefusalError(model);
       }
 
@@ -1559,7 +1559,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
           providerBlocks.push({ providerBlock: anthropicBlock(serverBlock), textOffset: 0 });
         }
       } else if (isMessageDelta(chunk)) {
-        refused = chunk.delta?.stop_reason === 'refusal' && this.refusalFallsBack(model);
+        refused = chunk.delta?.stop_reason === 'refusal' && this.fallsBackOnRefusal(model);
         // Anthropic's native vocabulary is the canonical one, so it passes through unchanged. base.ts
         // forwards it to CompletionInfo.stopReason; without it a max_tokens cut-off is silent. pause_turn
         // additionally tells the caller to re-send and resume a paused server tool loop.

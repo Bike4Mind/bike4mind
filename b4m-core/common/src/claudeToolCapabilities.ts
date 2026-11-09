@@ -134,18 +134,18 @@ const servedNatively = (model: ClaudeToolCapabilityModel): boolean =>
   model.backend === ModelBackend.Anthropic || model.backend === ModelBackend.Bedrock;
 
 /**
- * The seed tables' verdict for a model they name, or undefined for one they do not. A named model gets
- * every flag, computed exactly as the tables were read before the catalog carried them.
+ * The seed tables' verdict for a model they name, or undefined for one they do not. A model named by its
+ * Claude version (or listed for refusal fallback) gets every flag, computed exactly as the tables were read
+ * before the catalog carried them. One only the forced tool_choice deny-list matches (a patch version, a
+ * gateway prefix) gets that one flag, so its other flags still come from the catalog or the default.
  */
 export function seedApiSurface(
   model: Pick<ApiSurfaceModel, 'id' | 'backend' | 'adapterFamily'>
-): ApiSurface | undefined {
+): Partial<ApiSurface> | undefined {
+  if (!seedDescribes(model)) {
+    return NO_FORCED_TOOL_CHOICE_FAMILY.test(model.id) ? { forcedToolChoice: false } : undefined;
+  }
   const version = claudeFamilyVersion(model.id);
-  const named =
-    (version !== null && SEEDED_VERSIONS.has(version)) ||
-    NO_FORCED_TOOL_CHOICE_FAMILY.test(model.id) ||
-    REFUSAL_FALLBACK_MODELS.has(model.id);
-  if (!named) return undefined;
   const listed = (versions: ReadonlySet<string>) => version !== null && versions.has(version);
   return {
     forcedToolChoice: !NO_FORCED_TOOL_CHOICE_FAMILY.test(model.id),
@@ -159,11 +159,18 @@ export function seedApiSurface(
   };
 }
 
+/** Whether the seed tables give the model a full verdict, so nothing needs inheriting for it. */
+export function seedDescribes(model: Pick<ApiSurfaceModel, 'id'>): boolean {
+  const version = claudeFamilyVersion(model.id);
+  return (version !== null && SEEDED_VERSIONS.has(version)) || REFUSAL_FALLBACK_MODELS.has(model.id);
+}
+
 /**
- * The verdict for a model neither the catalog nor the seed describes. Every recent Anthropic
- * adaptive-thinking model 400s on a forced tool_choice and on a prefill, so an unknown one gets
- * neither; any other model keeps the permissive answer it always had. Optional features stay off
- * until someone states them, and a refusal surfaces as a decline rather than routing around it.
+ * The verdict for a model neither the catalog nor the seed describes. Every adaptive-thinking model the
+ * seed tables name rejects a prefill and several reject a forced tool_choice, while downgrading a forced
+ * choice to `auto` plus `strict` works on all of them, so an unknown adaptive model gets neither. Any other
+ * model keeps the permissive answer it always had. Optional features stay off until someone states them,
+ * and a refusal surfaces as a decline rather than routing around it.
  */
 function defaultApiSurface(model: ApiSurfaceModel): ApiSurface {
   const adaptive = model.thinkingStyle === 'adaptive';
@@ -186,9 +193,31 @@ export function resolveApiSurface(model: ApiSurfaceModel): ApiSurface {
   return resolved;
 }
 
-/** Whether the model accepts a forced `tool_choice`. Adapters downgrade a forced choice to `auto` + `strict` otherwise. */
-export function supportsForcedToolChoice(model: ApiSurfaceModel): boolean {
-  return resolveApiSurface(model).forcedToolChoice;
+// A sibling's true here says nothing safe about this model: a forced choice or prefill the model rejects is a
+// 400, and a thrown refusal needs a fallback chain configured for this id (utils adminSettings/fallback.ts).
+const NARROW_ONLY_KEYS = ['forcedToolChoice', 'assistantPrefill', 'refusalFallback'] as const;
+
+/**
+ * The flags `model` (which states none) takes from a sibling's: the optional request features as the
+ * sibling has them, and the NARROW_ONLY_KEYS only where the sibling narrows what the model would resolve
+ * to on its own, never where it widens it.
+ */
+export function inheritApiSurface(model: ApiSurfaceModel, sibling: Partial<ApiSurface>): Partial<ApiSurface> {
+  const own = resolveApiSurface(model);
+  const inherited = { ...sibling };
+  for (const key of NARROW_ONLY_KEYS) {
+    const value = inherited[key];
+    if (value !== undefined) inherited[key] = value && own[key];
+  }
+  return inherited;
+}
+
+/**
+ * Whether the model accepts a forced `tool_choice`. Adapters downgrade a forced choice to `auto` + `strict`
+ * otherwise. A bare id is still accepted, as the pre-catalog signature took one.
+ */
+export function supportsForcedToolChoice(model: string | ApiSurfaceModel): boolean {
+  return resolveApiSurface(typeof model === 'string' ? { id: model } : model).forcedToolChoice;
 }
 
 /** Whether a `stop_reason: 'refusal'` is thrown into the fallback chain instead of surfacing as a decline. */

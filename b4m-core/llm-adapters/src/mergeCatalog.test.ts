@@ -5,7 +5,7 @@ import {
   ModelBackend,
   REFUSAL_FALLBACK_MODELS,
   resolveApiSurface,
-  seedApiSurface,
+  seedDescribes,
   toModelRecord,
 } from '@bike4mind/common';
 import type { ApiSurface, IModelCatalogRow, ModelInfo } from '@bike4mind/common';
@@ -1393,6 +1393,32 @@ describe('mergeCatalog: the apiSurface group', () => {
     expect(resolveApiSurface(models[0])).toEqual({ ...inherited, toolSearch: false });
   });
 
+  it('applies each row its own keys, the higher-ranked row winning only the keys both state', () => {
+    const seedSide = row({
+      modelId: fable52.id,
+      source: 'seed',
+      ownedGroups: ['apiSurface'],
+      patch: { id: fable52.id, toolSearch: true, toolChanges: true },
+    });
+    const older = discoveryRow({ deferredToolAddition: true, toolChanges: false });
+    const newer = row({
+      modelId: fable52.id,
+      source: 'discovery',
+      ownedGroups: ['apiSurface'],
+      patch: { id: fable52.id, deferredToolAddition: false, refusalFallback: true },
+      effectiveFrom: new Date('2026-03-01T00:00:00Z'),
+    });
+    const [merged] = mergeCatalog([], [newer, seedSide, older], ANTHROPIC_KEY);
+
+    expect(merged).toMatchObject({
+      toolSearch: true,
+      toolChanges: false,
+      deferredToolAddition: false,
+      refusalFallback: true,
+    });
+    expect(merged).not.toHaveProperty('forcedToolChoice');
+  });
+
   it('keeps the operator value over a later discovery row', () => {
     const later = { ...discoveryRow(inherited), effectiveFrom: new Date('2026-03-01T00:00:00Z') };
     const [merged] = mergeCatalog([], [operatorRow({ refusalFallback: true }), later], ANTHROPIC_KEY);
@@ -1428,23 +1454,14 @@ describe('mergeCatalog: the apiSurface group', () => {
       ...(await new AnthropicBackend('test-key').getModelInfo()),
       ...(await new AnthropicBedrockBackend().getModelInfo()),
     ];
-    // What the id tables answered for a model they do not name, before the catalog carried these flags.
-    const LEGACY_UNNAMED: ApiSurface = {
-      forcedToolChoice: true,
-      assistantPrefill: true,
-      toolSearch: false,
-      toolChanges: false,
-      deferredToolAddition: false,
-      refusalFallback: false,
-    };
-
-    it('resolves every static Claude model exactly as the id tables did', async () => {
+    // The id-only answers are pinned per ChatModels id in common claudeToolCapabilities.test.ts.
+    it('answers every static model from its id alone, never from the adaptive default', async () => {
       const models = await staticModels();
-      const merged = mergeCatalog(models, [], NO_KEYS);
+      expect(mergeCatalog(models, [], NO_KEYS)).toBe(models);
 
-      expect(merged).toBe(models);
-      for (const model of merged) {
-        expect(resolveApiSurface(model), model.id).toEqual(seedApiSurface(model) ?? LEGACY_UNNAMED);
+      for (const model of models) {
+        if (model.thinkingStyle === 'adaptive') expect(seedDescribes(model), model.id).toBe(true);
+        expect(resolveApiSurface(model), model.id).toEqual(resolveApiSurface({ id: model.id, backend: model.backend }));
       }
     });
 

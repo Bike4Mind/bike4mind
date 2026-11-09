@@ -1,4 +1,5 @@
 import {
+  API_SURFACE_KEYS,
   CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
   DEFAULT_MAX_OUTPUT_TOKENS,
   FIELD_GROUPS,
@@ -9,9 +10,11 @@ import {
   ModelRecordWrite,
   groupsTouchedByPatch,
   isDiscoveryVerdict,
+  inheritApiSurface,
   lifecycleStatusRank,
   parseClaudeModelId,
   seedApiSurface,
+  seedDescribes,
   statedApiSurface,
   type AdapterFamily,
   type ApiSurface,
@@ -129,6 +132,11 @@ export interface CatalogWriteInput {
   probedProfiles?: ReadonlyMap<string, ProbedDispatchAnswer>;
   /** Belief per model from the NON-operator rows in force. */
   base: ReadonlyMap<string, ResolvedCatalogRecord>;
+  /**
+   * Belief per model from every row in force, operator rows included. The sibling an apiSurface is
+   * inherited from is chosen here, so an operator's lifecycle or apiSurface correction counts. Defaults to base.
+   */
+  inForce?: ReadonlyMap<string, ResolvedCatalogRecord>;
   /**
    * Backends a PROVIDER source listed successfully this run. A model whose own
    * backend is missing here has no authoritative voice in the run, which is what
@@ -736,23 +744,33 @@ function planOne(
     }
   }
 
+  const priorContributors = input.priorContributors?.get(candidate.modelId);
   const credited = new Map<FieldGroup, string>();
-  // Same window as the promotion decision: introduced, or not yet promoted.
-  const inherited = decides ? inheritedApiSurface(record, input) : undefined;
-  if (inherited) {
-    record = { ...record, ...inherited.values };
-    ownedGroups.add('apiSurface');
-    credited.set('apiSurface', `${SIBLING_CONTRIBUTOR_PREFIX}${inherited.siblingId}`);
+  // A copy whose model the build now describes yields to the seed tier: the row stops claiming the group.
+  const releasedKeys =
+    inheritedFromSibling(priorContributors) && describedByBuild(record.id, input)
+      ? API_SURFACE_KEYS.filter(key => record[key] !== undefined)
+      : [];
+  if (releasedKeys.length > 0) {
+    record = omit(record, releasedKeys) as ModelRecord;
+  } else {
+    // Any run, not only the promotion window: a model promoted before this group existed gets its copy once.
+    const inherited = inheritedApiSurface(record, input);
+    if (inherited) {
+      record = { ...record, ...inherited.values };
+      ownedGroups.add('apiSurface');
+      credited.set('apiSurface', `${SIBLING_CONTRIBUTOR_PREFIX}${inherited.siblingId}`);
+    }
   }
 
-  if (ownedGroups.size === 0) return { unchanged: true };
+  if (ownedGroups.size === 0 && releasedKeys.length === 0) return { unchanged: true };
 
   const owned = claimedGroups(record, ownedGroups, input.priorDiscoveryGroups?.get(candidate.modelId)).filter(
     group => !(presentationElsewhere && group === 'presentation')
   );
-  const priorContributors = input.priorContributors?.get(candidate.modelId);
+  if (owned.length === 0) return { unchanged: true };
   const contributors = contributorsFor(candidate, contributed, owned, priorContributors, derivedGroups, credited);
-  const changedKeys = changedWithinGroups(base, record, owned);
+  const changedKeys = [...changedWithinGroups(base, record, owned), ...releasedKeys].sort();
   // Availability provenance changes what the read path serves: a provider's disable stands,
   // while discovery's own verdict yields to curation. A clearance followed by the same promotion
   // refusal can leave every record field unchanged, so persist the changed credit as well.
@@ -974,22 +992,22 @@ function withholdsOpenAiTools(
 /**
  * The apiSurface flags a model that states none copies from its newest active sibling: same vendor, same
  * adapterFamily and, for a Claude id, the same product line. A sibling's flags are what its rows state over
- * what the seed tables say for it, never the read-time default. Skipped for a model the static or seed
- * tables already describe, where a copied discovery value would outrank the seed tier. An operator row
+ * what the seed tables say for it, and inheritApiSurface (common claudeToolCapabilities.ts) keeps a copied
+ * forced tool_choice, prefill or refusal fallback from widening the model's own answer. Skipped for a model
+ * the build already describes, where a copied discovery value would outrank the seed tier. An operator row
  * still overrides each flag (PER_KEY_GROUPS in llm-adapters mergeCatalog.ts).
  */
 function inheritedApiSurface(
   record: ModelRecord,
   input: CatalogWriteInput
 ): { values: Partial<ApiSurface>; siblingId: string } | undefined {
-  if (Object.keys(statedApiSurface(record)).length > 0) return undefined;
-  if (input.staticModelIds?.has(record.id)) return undefined;
+  if (Object.keys(statedApiSurface(record)).length > 0 || describedByBuild(record.id, input)) return undefined;
   const family = adapterFamilyOf(record, input);
-  if (!family || seedApiSurface({ id: record.id, backend: record.backend, adapterFamily: family })) return undefined;
+  if (!family) return undefined;
   const line = parseClaudeModelId(record.id)?.family;
 
   let newest: { id: string; releaseDate?: string; values: Partial<ApiSurface> } | undefined;
-  for (const [id, resolved] of input.base) {
+  for (const [id, resolved] of input.inForce ?? input.base) {
     const sibling = resolved.record;
     if (id === record.id || sibling.vendor !== record.vendor || statusOf(sibling) !== 'active') continue;
     if (parseClaudeModelId(id)?.family !== line) continue;
@@ -1004,8 +1022,24 @@ function inheritedApiSurface(
     const contender = { id, releaseDate, values };
     if (!newest || newerModel(contender, newest) < 0) newest = contender;
   }
-  return newest && { values: newest.values, siblingId: newest.id };
+  if (!newest) return undefined;
+  const own = {
+    id: record.id,
+    backend: record.backend,
+    adapterFamily: family,
+    thinkingStyle: record.reasoning?.style === 'anthropic-adaptive' ? ('adaptive' as const) : undefined,
+  };
+  return { values: inheritApiSurface(own, newest.values), siblingId: newest.id };
 }
+
+/** The adapter tables ship the model, or the seed tables give it a full apiSurface verdict. */
+function describedByBuild(modelId: string, input: CatalogWriteInput): boolean {
+  return input.staticModelIds?.has(modelId) === true || seedDescribes({ id: modelId });
+}
+
+const inheritedFromSibling = (contributors: readonly ICatalogContributor[] | undefined): boolean =>
+  contributors?.some(entry => entry.group === 'apiSurface' && entry.source.startsWith(SIBLING_CONTRIBUTOR_PREFIX)) ===
+  true;
 
 /** The record's adapterFamily, or the one the resolver would give it (seed rows carry none). */
 function adapterFamilyOf(record: Record<string, unknown>, input: CatalogWriteInput): AdapterFamily | undefined {

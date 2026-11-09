@@ -3,9 +3,11 @@ import {
   chatSupportsDeferredToolAddition,
   completionsSupportsToolChanges,
   completionsSupportsToolSearch,
+  inheritApiSurface,
   refusalFallsBack,
   resolveApiSurface,
   seedApiSurface,
+  seedDescribes,
   supportsAssistantPrefill,
   supportsForcedToolChoice,
   supportsToolChanges,
@@ -325,6 +327,26 @@ describe('resolveApiSurface', () => {
     expect(supportsAssistantPrefill(overridden)).toBe(false);
   });
 
+  it('still takes a bare model id, as the pre-catalog signature did', () => {
+    expect(supportsForcedToolChoice(ChatModels.CLAUDE_5_5_OPUS)).toBe(false);
+    expect(supportsForcedToolChoice('claude-mythos-5-1')).toBe(false);
+    expect(supportsForcedToolChoice('anthropic/claude-sonnet-5-5')).toBe(false);
+    expect(supportsForcedToolChoice(ChatModels.CLAUDE_5_5_HAIKU)).toBe(true);
+  });
+
+  it('seeds only forcedToolChoice for an id the deny-list alone matches', () => {
+    for (const id of ['claude-opus-5-5-1', 'anthropic/claude-opus-5-5']) {
+      expect(seedApiSurface({ id }), id).toEqual({ forcedToolChoice: false });
+      expect(seedDescribes({ id }), id).toBe(false);
+      expect(resolveApiSurface({ id, backend: ModelBackend.Anthropic, thinkingStyle: 'adaptive' }), id).toMatchObject({
+        forcedToolChoice: false,
+        assistantPrefill: false,
+      });
+      expect(supportsAssistantPrefill({ id }), id).toBe(true);
+    }
+    expect(seedDescribes({ id: 'claude-opus-5-5' })).toBe(true);
+  });
+
   it('seeds refusalFallback from REFUSAL_FALLBACK_MODELS only', () => {
     expect(refusalFallsBack({ id: ChatModels.CLAUDE_FABLE_5, backend: ModelBackend.Anthropic })).toBe(true);
     expect(refusalFallsBack({ id: ChatModels.CLAUDE_FABLE_5_1_BEDROCK, backend: ModelBackend.Bedrock })).toBe(true);
@@ -332,5 +354,39 @@ describe('resolveApiSurface', () => {
     expect(
       refusalFallsBack({ id: ChatModels.CLAUDE_FABLE_5, backend: ModelBackend.Anthropic, refusalFallback: false })
     ).toBe(false);
+  });
+});
+
+describe('inheritApiSurface', () => {
+  const haiku55 = seedApiSurface({ id: ChatModels.CLAUDE_5_5_HAIKU, backend: ModelBackend.Anthropic }) ?? {};
+  const fable5 = seedApiSurface({ id: ChatModels.CLAUDE_FABLE_5, backend: ModelBackend.Anthropic }) ?? {};
+
+  it('never widens an adaptive model past its default from a permissive older sibling', () => {
+    expect(haiku55).toMatchObject({ forcedToolChoice: true, toolSearch: true });
+    const inherited = inheritApiSurface(
+      { id: 'claude-haiku-6', backend: ModelBackend.Anthropic, thinkingStyle: 'adaptive' },
+      haiku55
+    );
+
+    expect(inherited).toMatchObject({ forcedToolChoice: false, assistantPrefill: false, toolSearch: true });
+  });
+
+  it('does not carry a refusal fallback over to an id with no fallback chain of its own', () => {
+    expect(fable5.refusalFallback).toBe(true);
+    const inherited = inheritApiSurface(
+      { id: 'claude-fable-5-3', backend: ModelBackend.Anthropic, thinkingStyle: 'adaptive' },
+      fable5
+    );
+
+    expect(inherited).toMatchObject({ forcedToolChoice: false, refusalFallback: false, toolChanges: true });
+  });
+
+  it('takes a restriction from the sibling where the model would otherwise allow it', () => {
+    const inherited = inheritApiSurface(
+      { id: 'claude-fable-5-2', backend: ModelBackend.Anthropic },
+      { forcedToolChoice: false, assistantPrefill: false }
+    );
+
+    expect(inherited).toEqual({ forcedToolChoice: false, assistantPrefill: false });
   });
 });
