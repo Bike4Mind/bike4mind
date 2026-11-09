@@ -12,6 +12,7 @@ import {
 import type { NextRequest } from 'next/server';
 import { allowsUsercontentRequest } from '@bike4mind/server-utils/utils/usercontentRequest';
 import { HOP_PARAM } from '@bike4mind/server-utils/lib/hopNames';
+import { redactShareTokenPath } from './server/middlewares/requestLogUrl';
 
 // Blocks path traversal and null-byte injection before reaching the ISR cache layer (#7190)
 const PATH_TRAVERSAL_PATTERN = /(\.\.[/\\])|([/\\]\.\.)|(\.\.%2[fF])|(%2[fF]\.\.)/;
@@ -61,7 +62,7 @@ export function proxy(request: NextRequest) {
   // CloudFront-stamped client IP headers.
   const originSecret = process.env.ORIGIN_VERIFY_SECRET;
   if (originSecret && !originVerified(request, originSecret)) {
-    console.warn(`[SECURITY] Blocked direct-origin request: ${request.method} ${pathname}`);
+    console.warn(`[SECURITY] Blocked direct-origin request: ${request.method} ${redactShareTokenPath(pathname)}`);
     return new NextResponse('Forbidden', { status: 403 });
   }
 

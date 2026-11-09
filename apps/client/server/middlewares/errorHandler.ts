@@ -2,6 +2,7 @@ import { HTTPError, HttpStatus, NotFoundError, UnprocessableEntityError, isZodEr
 import { Request, Response } from 'express';
 import { fromZodError } from 'zod-validation-error';
 import type { RateLimitErrorInfo } from '@server/cli/auth';
+import { requestLogUrl } from './requestLogUrl';
 
 /**
  * The public error envelope. Shared with the completions SSE route
@@ -81,7 +82,9 @@ const errorHandler = (error: unknown, req: Request, res: Response) => {
         // Counts the remaps ahead of removing this rule: production hits under this marker are
         // the casts still left to guard or fix. The original message names the model and the
         // path the 404 below would hide; it stays server-side. Stays `warn` so it cannot alarm.
-        req.logger.warn(`[cast-id-remap] ${req.method} ${(req.url ?? '').split('?')[0]}: ${errorObj.message ?? ''}`);
+        req.logger.warn(
+          `[cast-id-remap] ${req.method} ${requestLogUrl((req.url ?? '').split('?')[0])}: ${errorObj.message ?? ''}`
+        );
         errorObj = new NotFoundError('Resource not found');
       } else {
         // Mongoose's cast message names the model and the schema field (`... at path
@@ -105,7 +108,7 @@ const errorHandler = (error: unknown, req: Request, res: Response) => {
 
     // 4xx = client error (expected in normal operation) -> warn
     // 5xx = server error (actual bug/outage) -> error (triggers LiveOps via CloudWatch filter)
-    const message = `${req.method} ${(req.url ?? '').split('?')[0]} → ${statusCode}: ${errorObj.message || 'No message available'}`;
+    const message = `${req.method} ${requestLogUrl((req.url ?? '').split('?')[0])} → ${statusCode}: ${errorObj.message || 'No message available'}`;
     if (statusCode >= 500 && !(errorObj instanceof HTTPError && errorObj.expected)) {
       req.logger.error(message, error);
     } else {
@@ -131,7 +134,10 @@ const errorHandler = (error: unknown, req: Request, res: Response) => {
   }
 
   // Unknown error shape - treat as server error
-  req.logger.error(`${req.method} ${(req.url ?? '').split('?')[0]} → ${statusCode}: Unknown error`, error);
+  req.logger.error(
+    `${req.method} ${requestLogUrl((req.url ?? '').split('?')[0])} → ${statusCode}: Unknown error`,
+    error
+  );
   res.status(statusCode).json(buildErrorBody({ error: 'An unknown error occurred', requestId: req.requestId }));
   return;
 };
