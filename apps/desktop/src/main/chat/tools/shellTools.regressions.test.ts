@@ -687,6 +687,21 @@ describe('commands main ran unasked', () => {
   });
 
   it.each([
+    "git cle''an -fdx",
+    'git cle"an" -fdx',
+    'git c\\lean -fdx',
+    'git cl$x -fdx',
+    'git c{l,}ean -fdx',
+    'git cle?n -fdx',
+    "git -C . cle''an -fdx",
+    "env git cle''an -fdx",
+    "git pu''sh origin main",
+  ])('asks in every mode for %s, whose git subcommand bash rewrites', async command => {
+    expect(await judge(command)).toMatchObject(asks);
+  });
+
+  it.each([
+    ['git clean -fdx', ''],
     ['git clean -fdx src', ''],
     ['git clean -fdX -e a', 'brepo'],
     ['git rm src/a.ts', ''],

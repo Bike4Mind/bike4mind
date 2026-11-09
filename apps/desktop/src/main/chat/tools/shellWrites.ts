@@ -1892,8 +1892,9 @@ async function gitWrites(
   script: GitScript
 ): Promise<{ writes: InPlaceWrites; restores: boolean }> {
   const relocate = (path: string): string => resolveOperand(git.cwd, path);
-  // An expansion in a word of `git clean`, `rm` or `mv` may name any path to remove, move or overwrite.
-  if (REMOVES_PATHS.has(git.sub) && git.rest.some(arg => /[$`]/.test(arg))) {
+  // A subcommand bash rewrites (`cle''an`, `cl$x`) may be any of them, and an expansion in a word of `git clean`,
+  // `rm` or `mv` may name any path to remove, move or overwrite.
+  if (/['"\\$`*?[{}]/.test(git.sub) || (REMOVES_PATHS.has(git.sub) && git.rest.some(arg => /[$`]/.test(arg)))) {
     return { writes: { files: [], trees: [], unread: true }, restores: false };
   }
   if (git.sub === 'apply') {

@@ -3901,6 +3901,14 @@ export function outboundReason(raw: readonly string[], stdin = false): string | 
     return null;
   }
   if (name === 'gh') {
+    // A subcommand bash rewrites (`p''r`, `cre\ate`, `$x`) may be any of the ones below.
+    const [written = '', writtenAction = ''] = raw.slice(start + 1).filter(arg => !unquote(arg).startsWith('-'));
+    if (
+      SPELLED_PROGRAM.test(written) ||
+      (/^(gist|release|issue|pr)$/.test(unquote(written)) && SPELLED_PROGRAM.test(writtenAction))
+    ) {
+      return 'gh with a subcommand bash rewrites';
+    }
     const [sub, action] = args.filter(arg => !arg.startsWith('-'));
     if ((sub === 'gist' && (action === 'create' || action === 'edit')) || (sub === 'release' && action === 'upload')) {
       return `gh ${sub} ${action}`;
@@ -4350,7 +4358,7 @@ function untrackableCommand(raw: readonly string[]): boolean {
     if (extended || /^[A-Za-z]*[TIF]/.test(bashOption(first) ?? '')) return true;
     if (words.some(arg => mayPassOption(arg, valued, tarListsOrRuns, tarNames, true))) return true;
   }
-  if (name === 'git' && gitConfigRunsProgram(words)) return true;
+  if (name === 'git' && (gitConfigRunsProgram(words) || gitSubcommandSpelled(words))) return true;
   // Each of these runs a program the option names.
   const pre = (arg: string): boolean => /^--pre(-glob)?(=|$)/.test(arg);
   if (name === 'rg' && words.some(arg => mayPassOption(arg, '', pre, ['--pre', '--pre-glob'], false))) return true;
@@ -4422,6 +4430,17 @@ function gitConfigRunsProgram(raw: readonly string[]): boolean {
     const [key] = setting;
     if (key !== undefined && GIT_PROGRAM_CONFIG.test(key.split('=')[0] ?? '')) return true;
     if (GIT_GLOBAL_VALUED.has(arg)) at++;
+  }
+  return false;
+}
+
+/** Whether the word git reads as its subcommand is one bash rewrites (`cle''an`, `c\lean`, `cl$x`), as a program word. */
+function gitSubcommandSpelled(raw: readonly string[]): boolean {
+  for (let at = 0; at < raw.length; at++) {
+    const word = raw[at] as string;
+    const arg = optionStandIn(word, 'Cc');
+    if (arg === null || !arg.startsWith('-')) return SPELLED_PROGRAM.test(word);
+    if (arg === '-c' || arg === '--config-env' || GIT_GLOBAL_VALUED.has(arg)) at++;
   }
   return false;
 }
