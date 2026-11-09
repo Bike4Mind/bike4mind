@@ -37,7 +37,7 @@ compute per-run and per-day USD caps) and settings that only toggle a feature.
 - **Changes customer price**: `yes` when changing the value changes what a customer is charged, or what they
   receive for money already paid. Free grants and limits are `no` even when they change platform cost.
 - **Proposed section**: where the key belongs in the five-section layout from the admin settings epic:
-  Signup / Credit pricing and conversion / Model pricing / Plans, seats and packs /
+  Signup and starter credits / Credit pricing and conversion / Model pricing / Plans, seats and packs /
   Usage limits.
 
 ## Settings

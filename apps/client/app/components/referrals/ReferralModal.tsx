@@ -239,12 +239,12 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
                 },
                 {
                   testId: 'first-payment',
-                  when: 'when your friend makes their first payment',
+                  when: "on your friend's first full-price Professional subscription payment, usable after a hold",
                   credits: referralSummary.rewards.firstPayment,
                 },
                 {
                   testId: 'second-payment',
-                  when: 'when your friend makes their second payment',
+                  when: "on your friend's second full-price Professional subscription payment, usable after a hold",
                   credits: referralSummary.rewards.secondPayment,
                 },
               ]

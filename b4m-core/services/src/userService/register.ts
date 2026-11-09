@@ -412,7 +412,7 @@ export const registerUser = async (
     pendingEmailUsed: null,
     regInvites: [],
     referredByUserId,
-    // Marked whatever the referral credits resolve to, so a later invite bonus can key off it.
+    // Marks the referral signup so a later invite bonus can key off it.
     ...(isReferralInvite && invite
       ? { signupInvite: { source: 'referral' as const, inviteId: invite.id, at: new Date() } }
       : {}),
