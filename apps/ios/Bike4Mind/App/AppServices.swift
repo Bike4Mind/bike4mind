@@ -3,6 +3,7 @@ import Foundation
 import Observation
 import UIKit
 import WidgetKit
+import os
 
 /// Builds and shares the signed-in object graph: the API client, the realtime socket and the on-disk
 /// cache for the current server. Rebuilt when the server changes, because tokens, sockets and cached
@@ -144,12 +145,19 @@ final class AppServices {
     let api = api
     let widgets = widgets
     Task {
-      guard let balance = try? await api.creditBalance() else { return }
-      await widgets.recordCredits(balance)
+      do {
+        await widgets.recordCredits(try await api.creditBalance())
+      } catch {
+        // The widget keeps its last balance; the next foreground or settled turn tries again.
+        AppServices.logger.error("Credits widget refresh failed: \(String(describing: error), privacy: .public)")
+      }
     }
   }
 
-  /// A fresh launch knows of no running agent; and fixture runs seed the widgets with canned data.
+  nonisolated static let logger = Logger(subsystem: "com.bike4mind.app", category: "app")
+
+  /// A fresh launch or sign-in knows of no running agent, and fixture runs seed the widgets with canned data.
+  /// Must not run on an App Lock unlock (it would clear a run in flight); `AuthLifecycle` gates that.
   func prepareWidgets() {
     let widgets = widgets
     #if DEBUG

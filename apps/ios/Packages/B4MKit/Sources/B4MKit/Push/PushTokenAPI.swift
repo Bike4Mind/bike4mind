@@ -32,14 +32,10 @@ public protocol PushTokenAPI: Sendable {
 /// `B4MClient` (and behind `B4MAPI`) when the snapshot next updates. Until then this keeps the same
 /// bearer + single-401-retry behavior as `APIClient`.
 public struct PushTokenClient: PushTokenAPI {
-  private let baseURL: URL
-  private let tokens: any AccessTokenProviding
-  private let transport: any HTTPTransport
+  private let requester: AuthorizedRequester
 
   public init(baseURL: URL, tokens: any AccessTokenProviding, transport: any HTTPTransport = URLSessionTransport()) {
-    self.baseURL = baseURL
-    self.tokens = tokens
-    self.transport = transport
+    requester = AuthorizedRequester(baseURL: baseURL, tokens: tokens, transport: transport)
   }
 
   /// `POST /api/v1/push-tokens`. `activityId` and `questId` are set only for `kind: liveActivity`; nil
@@ -79,33 +75,9 @@ public struct PushTokenClient: PushTokenAPI {
     try await send(method: "DELETE", body: try JSONEncoder().encode(UnregisterBody(token: token)))
   }
 
+  /// Same bearer, single-401-retry and error folding as every other hand-written route.
   private func send(method: String, body: Data) async throws {
-    var attempt = 0
-    while true {
-      var request = URLRequest(url: baseURL.appending(path: "api/v1/push-tokens"))
-      request.httpMethod = method
-      request.httpBody = body
-      request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-      request.setValue("Bearer \(try await tokens.accessToken())", forHTTPHeaderField: "Authorization")
-
-      let response: HTTPURLResponse
-      do {
-        response = try await transport.send(request).1
-      } catch is URLError {
-        throw APIError.offline
-      }
-      switch response.statusCode {
-      case 200..<300:
-        return
-      case 401 where attempt == 0:
-        attempt += 1
-        await tokens.invalidateAccessToken()
-      case 401:
-        await tokens.sessionRejected()
-        throw APIError.signedOut
-      case let status:
-        throw APIError(status: status)
-      }
-    }
+    let response = try await requester.send(method: method, path: "api/v1/push-tokens", jsonBody: body)
+    guard (200..<300).contains(response.status) else { throw APIError(status: response.status) }
   }
 }

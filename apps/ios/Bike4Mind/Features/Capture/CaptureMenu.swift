@@ -2,6 +2,7 @@ import B4MKit
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
+import os
 
 /// The capture affordance for lake-oriented surfaces: take a photo, pick photos, or record a voice note, then
 /// choose where to save it. The share extension reaches the same composer from other apps.
@@ -26,6 +27,8 @@ struct CaptureMenu: View {
   @State private var isPickingPhotos = false
   @State private var pickedPhotos: [PhotosPickerItem] = []
   @State private var problem: String?
+  /// Items that did load when some did not: the composer opens once the notice about the rest is dismissed.
+  @State private var afterProblem: [ShareItem]?
 
   var body: some View {
     Menu {
@@ -68,8 +71,15 @@ struct CaptureMenu: View {
         EmptyView()
       }
     }
-    .alert("Couldn't use that", isPresented: Binding(get: { problem != nil }, set: { if !$0 { problem = nil } })) {
-      Button("OK", role: .cancel) {}
+    .alert(
+      afterProblem == nil ? "Couldn't use that" : "Some photos were skipped",
+      isPresented: Binding(get: { problem != nil }, set: { if !$0 { problem = nil } })
+    ) {
+      Button("OK", role: .cancel) {
+        guard let items = afterProblem else { return }
+        afterProblem = nil
+        flow = .composer(items)
+      }
     } message: {
       Text(problem ?? "")
     }
@@ -85,21 +95,43 @@ struct CaptureMenu: View {
 
   private func load(_ picked: [PhotosPickerItem]) async {
     var urls: [URL] = []
+    var failed = 0
     for item in picked {
-      if let file = try? await item.loadTransferable(type: PickedImageFile.self) { urls.append(file.url) }
+      do {
+        if let file = try await item.loadTransferable(type: PickedImageFile.self) {
+          urls.append(file.url)
+        } else {
+          failed += 1
+        }
+      } catch {
+        failed += 1
+        Self.logger.error("Picked photo could not be loaded: \(String(describing: error), privacy: .public)")
+      }
     }
-    await present(files: urls)
+    await present(files: urls, alreadyFailed: failed)
   }
 
-  private func present(files: [URL]) async {
+  private func present(files: [URL], alreadyFailed: Int = 0) async {
     let sources = files.map { LocalFileAttachment(fileURL: $0, type: Self.type(of: $0)) }
     let loaded = await ShareItemLoader().load(sources)
+    let failed = alreadyFailed + loaded.skippedCount
     guard !loaded.items.isEmpty else {
+      afterProblem = nil
       problem = "None of the selected photos could be read."
+      return
+    }
+    guard failed == 0 else {
+      afterProblem = loaded.items
+      problem =
+        failed == 1
+        ? "1 photo couldn't be read. The rest are ready to save."
+        : "\(failed) photos couldn't be read. The rest are ready to save."
       return
     }
     flow = .composer(loaded.items)
   }
+
+  private static let logger = Logger(subsystem: "com.bike4mind.app", category: "capture")
 
   private static func type(of url: URL) -> UTType {
     UTType(filenameExtension: url.pathExtension) ?? .image

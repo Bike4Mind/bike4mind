@@ -6,6 +6,7 @@ import UIKit
 /// Everything with logic lives in B4MKit.
 final class ShareViewController: UIViewController {
   private var host: UIHostingController<AnyView>?
+  private let staging = FileManager.default.temporaryDirectory.appending(path: "share-\(UUID().uuidString)")
 
   override func viewDidLoad() {
     super.viewDidLoad()
@@ -14,7 +15,6 @@ final class ShareViewController: UIViewController {
   }
 
   private func present() async {
-    let staging = FileManager.default.temporaryDirectory.appending(path: "share-\(UUID().uuidString)")
     let providers = (extensionContext?.inputItems as? [NSExtensionItem] ?? []).flatMap { $0.attachments ?? [] }
     let loaded = await ShareItemLoader().load(
       providers.map { ItemProviderAttachment(provider: $0, stagingDirectory: staging) })
@@ -69,11 +69,17 @@ final class ShareViewController: UIViewController {
     host = controller
   }
 
+  private func removeStaging() {
+    try? FileManager.default.removeItem(at: staging)
+  }
+
   private func complete() {
+    removeStaging()
     extensionContext?.completeRequest(returningItems: nil)
   }
 
   private func cancel() {
+    removeStaging()
     extensionContext?.cancelRequest(withError: NSError(domain: NSCocoaErrorDomain, code: NSUserCancelledError))
   }
 }

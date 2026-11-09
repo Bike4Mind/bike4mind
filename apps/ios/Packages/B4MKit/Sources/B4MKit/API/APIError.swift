@@ -34,3 +34,23 @@ extension APIError {
     }
   }
 }
+
+extension APIError {
+  /// Token-layer failures as a screen sees them. Only a session the server ended reads as signed out.
+  init(_ authError: AuthError) {
+    switch authError {
+    case .rateLimited: self = .rateLimited
+    case .server(let status): self = .server(status: status)
+    case .invalidResponse: self = .malformedResponse
+    case .signedOut, .refreshRejected, .cancelled, .authorizationDenied, .authorizationFailed, .stateMismatch,
+      .invalidCallback, .tokenExchangeFailed:
+      self = .signedOut
+    }
+  }
+
+  /// The Keychain is not readable yet (launched before first unlock). Surfaced as retryable `.offline`:
+  /// the session is intact and the call works once the device is unlocked.
+  init(_ keychainError: KeychainError) {
+    self = keychainError.isTransient ? .offline : .malformedResponse
+  }
+}

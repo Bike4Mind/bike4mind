@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Turns a recorded audio file into text.
 public protocol TranscriptionService: Sendable {
@@ -77,9 +78,8 @@ public struct TranscriptionClient: TranscriptionService {
       method: "POST", path: "api/v1/transcriptions/uploads",
       jsonBody: try JSONEncoder().encode(UploadRequest(mimeType: mimeType, fileSize: audio.count)))
     try Self.require(201, mint)
-    guard let ticket = try? JSONDecoder().decode(UploadReply.self, from: mint.body),
-      let uploadURL = URL(string: ticket.uploadUrl)
-    else { throw APIError.malformedResponse }
+    let ticket = try Self.decode(UploadReply.self, from: mint.body)
+    guard let uploadURL = URL(string: ticket.uploadUrl) else { throw APIError.malformedResponse }
 
     try await upload(audio, fileName: audioFile.lastPathComponent, fields: ticket.uploadFields, to: uploadURL)
 
@@ -87,9 +87,7 @@ public struct TranscriptionClient: TranscriptionService {
       method: "POST", path: "api/v1/transcriptions",
       jsonBody: try JSONEncoder().encode(TranscribeRequest(fileKey: ticket.fileKey)))
     try Self.require(200, response)
-    guard let reply = try? JSONDecoder().decode(TextReply.self, from: response.body) else {
-      throw APIError.malformedResponse
-    }
+    let reply = try Self.decode(TextReply.self, from: response.body)
     return reply.text.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
@@ -119,6 +117,19 @@ public struct TranscriptionClient: TranscriptionService {
     }
     guard (200..<300).contains(status) else {
       throw TranscriptionError.failed(message: "The recording did not upload.")
+    }
+  }
+
+  private static let logger = Logger(subsystem: "com.bike4mind.app", category: "transcription")
+
+  private static func decode<T: Decodable>(_ type: T.Type, from body: Data) throws -> T {
+    do {
+      return try JSONDecoder().decode(type, from: body)
+    } catch {
+      logger.error(
+        "Transcription response did not decode as \(String(describing: type), privacy: .public): \(WireDecoding.describe(error), privacy: .public)"
+      )
+      throw APIError.malformedResponse
     }
   }
 

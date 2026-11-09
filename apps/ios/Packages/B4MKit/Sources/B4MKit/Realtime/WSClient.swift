@@ -7,7 +7,8 @@ public enum RealtimeConnectionState: Equatable, Sendable {
   case connecting(attempt: Int)
   case connected
   case waitingToReconnect(attempt: Int)
-  /// Reconnect attempts are exhausted; `resume()` (on app foreground) starts over.
+  /// Fast reconnect attempts are exhausted; the client retries slowly, and `resume()` (on app foreground)
+  /// restarts the fast schedule.
   case suspended
 }
 
@@ -59,7 +60,7 @@ extension RealtimeClient {
 /// - Heartbeat every 15s; the server answers with the bare text `pong`. Sixty seconds without any frame
 ///   closes the socket and reconnects.
 /// - Unexpected closes are normal (the gateway caps connection lifetime): reconnect with backoff, then
-///   re-send every subscription and emit `.refetchNeeded`.
+///   re-send every subscription and emit `.refetchNeeded` (once per established connection lost).
 /// - On token rotation send `reauth_connection`; the server drops all subscriptions and answers
 ///   `resubscribe_required`, upon which every subscription is re-sent.
 public actor WSClient: RealtimeClient {
@@ -88,7 +89,8 @@ public actor WSClient: RealtimeClient {
   private var connection: (any WebSocketConnection)?
   /// Distinguishes the current socket from one being torn down, so a late callback cannot act on it.
   private var connectionGeneration = 0
-  private var hasConnectedBefore = false
+  /// Set when a connection that had carried frames drops; the next connect asks consumers to refetch.
+  private var lostEstablishedConnection = false
   private(set) var lastReceivedAt = Date.distantPast
   private var cachedURL: URL?
   private var reassembler = ChunkReassembler()
@@ -138,13 +140,14 @@ public actor WSClient: RealtimeClient {
     rotationTask?.cancel()
     rotationTask = nil
     tearDownConnection()
-    hasConnectedBefore = false
+    lostEstablishedConnection = false
     setState(.idle)
   }
 
   public func resume() {
     guard connectionState == .suspended else { return }
-    lifecycleTask = nil
+    // A suspended client may be parked in the slow retry tier; restart the fast schedule now.
+    lifecycleTask?.cancel()
     startLifecycle()
   }
 
@@ -154,16 +157,20 @@ public actor WSClient: RealtimeClient {
     }
   }
 
-  /// Connect, serve the socket until it closes, back off, repeat. Exits on cancellation, on a dead
-  /// session, or when attempts run out.
+  /// Connect, serve the socket until it closes, back off, repeat. Exits on cancellation or a dead
+  /// session. Past `maxAttempts` consecutive failures the client is `.suspended` and retries only every
+  /// `slowRetryInterval` until `resume()` restarts the fast schedule.
+  ///
+  /// The attempt counter resets only after a connection proved itself by receiving a frame: a socket that
+  /// opens and dies at once (or an upgrade that keeps failing) must keep backing off, or every cycle
+  /// would mint a ticket and request a refetch in a tight loop.
   private func runLifecycle() async {
     var attempt = 0
     while !Task.isCancelled {
       setState(.connecting(attempt: attempt))
       do {
         let connection = try await openConnection()
-        attempt = 0
-        await serve(connection)
+        if await serve(connection) { attempt = 0 }
       } catch APIError.signedOut {
         logger.notice("Realtime stopped: the session ended")
         setState(.idle)
@@ -173,21 +180,34 @@ public actor WSClient: RealtimeClient {
         if Task.isCancelled { return }
         // The endpoint may have moved (a redeploy); look it up again on the next attempt.
         cachedURL = nil
-        logger.notice("Realtime connect failed: \(String(describing: error), privacy: .public)")
+        logger.notice("Realtime connect failed: \(Self.redacted(error), privacy: .public)")
       }
       if Task.isCancelled { return }
 
-      guard let delay = backoff.delay(forAttempt: attempt) else {
+      let delay: Duration
+      if let fastDelay = backoff.delay(forAttempt: attempt) {
+        delay = fastDelay
+        setState(.waitingToReconnect(attempt: attempt))
+      } else {
+        delay = backoff.slowRetryInterval
         setState(.suspended)
-        return
       }
-      setState(.waitingToReconnect(attempt: attempt))
       do {
         try await sleep(delay)
       } catch {
         return
       }
       attempt += 1
+    }
+  }
+
+  /// Error text safe for a public log: a URL error's description embeds the request URL, which
+  /// carries the single-use `?ticket=`.
+  static func redacted(_ error: any Error) -> String {
+    switch error {
+    case let urlError as URLError: "URLError(\(urlError.code.rawValue))"
+    case let apiError as APIError: "APIError.\(apiError)"
+    default: "\((error as NSError).domain)(\((error as NSError).code))"
     }
   }
 
@@ -204,11 +224,12 @@ public actor WSClient: RealtimeClient {
     return try await connector.connect(to: url.appendingTicket(ticket))
   }
 
-  /// Runs one socket until it closes. Returns normally on any close: the caller decides whether to retry.
-  private func serve(_ socket: any WebSocketConnection) async {
+  /// Runs one socket until it closes. Returns whether it was established (received at least one frame);
+  /// the caller decides whether to retry.
+  private func serve(_ socket: any WebSocketConnection) async -> Bool {
     guard !Task.isCancelled else {
       socket.close()
-      return
+      return false
     }
     connectionGeneration += 1
     let generation = connectionGeneration
@@ -219,21 +240,27 @@ public actor WSClient: RealtimeClient {
     for subscription in subscriptions.values {
       await send(.subscribe(subscription.request), on: socket)
     }
-    if hasConnectedBefore { emit(.refetchNeeded) }
-    hasConnectedBefore = true
+    if lostEstablishedConnection {
+      lostEstablishedConnection = false
+      emit(.refetchNeeded)
+    }
     startHeartbeat(generation: generation)
 
+    var established = false
     while !Task.isCancelled {
       do {
         let text = try await socket.receive()
         guard generation == connectionGeneration else { break }
+        established = true
         await handle(text)
       } catch {
         break
       }
     }
 
+    if established { lostEstablishedConnection = true }
     if generation == connectionGeneration { tearDownConnection() }
+    return established
   }
 
   private func tearDownConnection() {
@@ -366,7 +393,7 @@ public actor WSClient: RealtimeClient {
     } catch {
       // A failed send means the socket is dying; the receive loop will notice and reconnect, and the
       // reconnect re-sends subscriptions, so nothing is retried here.
-      logger.notice("Realtime send failed: \(String(describing: error), privacy: .public)")
+      logger.notice("Realtime send failed: \(Self.redacted(error), privacy: .public)")
     }
   }
 

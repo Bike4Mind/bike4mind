@@ -16,7 +16,6 @@ xcuserdata/
 .swiftpm/
 Packages/*/.build/
 Packages/*/.swiftpm/
-Package.resolved
 
 # Test output
 *.xcresult
@@ -26,4 +25,13 @@ Tools/Generator/.build/
 fastlane/report.xml
 fastlane/test_output/
 fastlane/README.md
-Gemfile.lock
+
+# Signing material and local Ruby state; none of it may ever be committed.
+*.p8
+*.p12
+*.mobileprovision
+*.cer
+*.xcarchive
+fastlane/.env.default
+vendor/bundle/
+.bundle/

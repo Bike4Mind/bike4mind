@@ -161,6 +161,29 @@ final class ShareItemLoaderTests: XCTestCase {
     XCTAssertEqual(ShareItemLoader.fileName(suggested: "a/b", location: location, type: nil), "a-b")
   }
 
+  func testProviderNamesAreSanitized() {
+    let location = URL(fileURLWithPath: "/tmp/fallback.txt")
+    XCTAssertEqual(
+      ShareItemLoader.fileName(suggested: "../../etc/passwd", location: location, type: nil), "-..-etc-passwd")
+    XCTAssertEqual(ShareItemLoader.fileName(suggested: ".hidden", location: location, type: nil), "hidden")
+    XCTAssertEqual(ShareItemLoader.fileName(suggested: "a:b\\c", location: location, type: nil), "a-b-c")
+    XCTAssertEqual(
+      ShareItemLoader.fileName(suggested: "re\u{0}port\n\u{7F}.pdf", location: location, type: nil), "report.pdf")
+    XCTAssertEqual(ShareItemLoader.fileName(suggested: "...", location: location, type: nil), "fallback.txt")
+    XCTAssertEqual(
+      ShareItemLoader.fileName(suggested: "", location: URL(fileURLWithPath: "/tmp/..."), type: nil), "Shared file")
+  }
+
+  func testJPEGCopyIsCappedOnItsLongEdgeAndKeepsOrientation() throws {
+    let source = try writeImage(type: .png, name: "big.png", width: 600, height: 200, orientation: 6)
+    let jpeg = try ImageTranscoder.jpegCopy(of: source, maxPixelSize: 300)
+    let output = try XCTUnwrap(CGImageSourceCreateWithURL(jpeg as CFURL, nil))
+    let properties = try XCTUnwrap(CGImageSourceCopyPropertiesAtIndex(output, 0, nil) as? [CFString: Any])
+    XCTAssertEqual(properties[kCGImagePropertyPixelWidth] as? Int, 300)
+    XCTAssertEqual(properties[kCGImagePropertyPixelHeight] as? Int, 100)
+    XCTAssertEqual(properties[kCGImagePropertyOrientation] as? Int, 6, "EXIF orientation survives the transcode")
+  }
+
   func testHEICAndHEIFNeedATranscode() {
     XCTAssertTrue(ShareItemLoader.needsJPEGTranscode(.heic))
     XCTAssertTrue(ShareItemLoader.needsJPEGTranscode(.heif))
@@ -194,17 +217,20 @@ final class ShareItemLoaderTests: XCTestCase {
     XCTAssertEqual(try Data(contentsOf: shared.fileURL), Data("hello".utf8))
   }
 
-  private func writeImage(type: UTType, name: String) throws -> URL {
+  private func writeImage(
+    type: UTType, name: String, width: Int = 4, height: Int = 4, orientation: Int? = nil
+  ) throws -> URL {
     let url = temp.url.appending(path: name)
     let context = try XCTUnwrap(
       CGContext(
-        data: nil, width: 4, height: 4, bitsPerComponent: 8, bytesPerRow: 0,
+        data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
         space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
     let image = try XCTUnwrap(context.makeImage())
     guard let sink = CGImageDestinationCreateWithURL(url as CFURL, type.identifier as CFString, 1, nil) else {
       throw XCTSkip("No encoder for \(type.identifier)")
     }
-    CGImageDestinationAddImage(sink, image, nil)
+    let properties = orientation.map { [kCGImagePropertyOrientation: $0] as CFDictionary }
+    CGImageDestinationAddImage(sink, image, properties)
     guard CGImageDestinationFinalize(sink) else { throw XCTSkip("Encoder failed for \(type.identifier)") }
     return url
   }

@@ -13,6 +13,7 @@ enum WidgetDestination {
   static var settings: URL { link("settings") }
 
   private static func link(_ path: String) -> URL {
-    URL(string: "https://\(DeepLinkRouter.appHost)/\(path)")!
+    // An id with a space or '%' makes `URL(string:)` return nil; fall back to the app root rather than crash.
+    URL(string: "https://\(DeepLinkRouter.appHost)/\(path)") ?? URL(string: "https://\(DeepLinkRouter.appHost)/")!
   }
 }

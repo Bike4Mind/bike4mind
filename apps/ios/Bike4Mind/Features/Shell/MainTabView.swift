@@ -5,7 +5,6 @@ import SwiftUI
 /// Tab selection and the Sessions stack live in `AppNavigator`, which deep links and notification taps drive.
 struct MainTabView: View {
   @Environment(AppServices.self) private var services
-  @Environment(\.openURL) private var openURL
 
   var body: some View {
     @Bindable var navigator = services.navigator
@@ -34,26 +33,31 @@ struct MainTabView: View {
       .tabItem { Label("Settings", systemImage: "gearshape") }
       .tag(AppTab.settings)
     }
+    // Keyed on the request, so a second Siri request while the sheet is up replaces the draft instead of
+    // being dropped.
     .sheet(
-      isPresented: Binding(
-        get: { navigator.newConversationRequest != nil },
-        set: { if !$0 { navigator.dismissNewConversation() } })
-    ) {
-      NewConversationView(
-        draft: navigator.newConversationRequest?.draft ?? "", api: services.api, activities: services.questActivities)
+      item: Binding(
+        get: { navigator.newConversationRequest.map(NewConversationSheet.init) },
+        set: { if $0 == nil { navigator.dismissNewConversation() } })
+    ) { sheet in
+      NewConversationView(draft: sheet.request.draft, api: services.api, activities: services.questActivities)
     }
-    .onChange(of: navigator.externalURL) { _, url in
-      guard let url else { return }
-      openURL(url)
-      navigator.consumeExternalURL()
-    }
+    .inAppSafari(
+      url: Binding(
+        get: { navigator.externalURL },
+        set: { if $0 == nil { navigator.consumeExternalURL() } }))
   }
+}
+
+private struct NewConversationSheet: Identifiable {
+  let request: ComposeRequest
+  var id: ComposeRequest { request }
 }
 
 /// The Lakes tab has no native screen yet, so it points at the web app instead of promising one.
 struct LakesPlaceholderScreen: View {
   @Environment(AuthController.self) private var auth
-  @Environment(\.openURL) private var openURL
+  @State private var webPage: URL?
 
   var body: some View {
     ContentUnavailableView {
@@ -61,10 +65,11 @@ struct LakesPlaceholderScreen: View {
     } description: {
       Text("Browsing data lakes isn't in the app yet. Open Bike4Mind on the web to work with them.")
     } actions: {
-      Button("Open Bike4Mind on the Web") { openURL(auth.environment.baseURL) }
+      Button("Open Bike4Mind on the Web") { webPage = auth.environment.baseURL }
         .buttonStyle(.borderedProminent)
         .accessibilityIdentifier("lakes-open-web-btn")
     }
     .navigationTitle("Lakes")
+    .inAppSafari(url: $webPage)
   }
 }

@@ -1,6 +1,10 @@
 # Bike4Mind iOS lanes. Run from apps/ios: `bundle exec fastlane <lane>`.
 # The Makefile stays the source of truth for build and test; lanes only call it.
 
+require "base64"
+require "fileutils"
+require "tmpdir"
+
 default_platform(:ios)
 
 IOS_ROOT = File.expand_path("..", __dir__)
@@ -16,15 +20,20 @@ platform :ios do
     sh("make -C #{IOS_ROOT} build")
   end
 
-  # NOT RUNNABLE YET: there is no Apple Developer team, App Store Connect app record or signing
-  # setup. The lane refuses to start until every variable below is present, so it cannot half-run.
+  # NOT RUNNABLE UNTIL signing is configured (IOS_TEAM_ID, an App Store Connect app record and API key).
+  # The lane refuses to start until every variable below is present, so it cannot half-run.
   # When signing exists: enable automatic signing for the team, create an App Store Connect API key
   # (App Manager role), and export the variables in CI secrets. No certificate or key lives in the repo.
   desc "Archive and upload to TestFlight (needs signing; see comments)"
   lane :beta do
     required = %w[IOS_TEAM_ID ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_CONTENT_BASE64]
     missing = required.select { |name| ENV[name].to_s.empty? }
-    UI.user_error!("beta needs signing: missing #{missing.join(', ')}. See apps/ios/DEVICE_TESTING.md.") unless missing.empty?
+    UI.user_error!("beta needs signing: missing #{missing.join(', ')}. See the fastlane section of apps/ios/README.md.") unless missing.empty?
+
+    # xcodebuild needs the same key as a file to provision on CI; it lives only in a temp dir for this run.
+    key_dir = Dir.mktmpdir("asc-key")
+    key_path = File.join(key_dir, "AuthKey_#{ENV['ASC_KEY_ID']}.p8")
+    File.write(key_path, Base64.decode64(ENV["ASC_KEY_CONTENT_BASE64"]), perm: 0o600)
 
     api_key = app_store_connect_api_key(
       key_id: ENV["ASC_KEY_ID"],
@@ -33,12 +42,27 @@ platform :ios do
       is_key_content_base64: true
     )
 
-    build_app(
-      project: "Bike4Mind.xcodeproj",
-      scheme: "Bike4Mind",
-      export_method: "app-store",
-      xcargs: "DEVELOPMENT_TEAM=#{ENV['IOS_TEAM_ID']} -allowProvisioningUpdates"
-    )
-    upload_to_testflight(api_key: api_key, skip_waiting_for_build_processing: true)
+    # TestFlight rejects a duplicate build number, so CI's monotonically increasing run number is the build.
+    build_number = ENV["GITHUB_RUN_NUMBER"].to_s
+    xcargs = [
+      "DEVELOPMENT_TEAM=#{ENV['IOS_TEAM_ID']}",
+      "-allowProvisioningUpdates",
+      "-authenticationKeyPath #{key_path}",
+      "-authenticationKeyID #{ENV['ASC_KEY_ID']}",
+      "-authenticationKeyIssuerID #{ENV['ASC_ISSUER_ID']}"
+    ]
+    xcargs << "CURRENT_PROJECT_VERSION=#{build_number}" unless build_number.empty?
+
+    begin
+      build_app(
+        project: "Bike4Mind.xcodeproj",
+        scheme: "Bike4Mind",
+        export_method: "app-store",
+        xcargs: xcargs.join(" ")
+      )
+      upload_to_testflight(api_key: api_key, skip_waiting_for_build_processing: true)
+    ensure
+      FileUtils.rm_rf(key_dir)
+    end
   end
 end

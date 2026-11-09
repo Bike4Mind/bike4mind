@@ -2624,17 +2624,7 @@ public enum Operations {
                 /// Lists only sessions created through this channel. `web` also matches sessions with no recorded origin.
                 ///
                 /// - Remark: Generated from `#/paths/api/v1/sessions/GET/query/origin`.
-                @frozen public enum OriginPayload: String, Codable, Hashable, Sendable, CaseIterable {
-                    case web = "web"
-                    case api = "api"
-                    case slack = "slack"
-                    case cli = "cli"
-                    case agent = "agent"
-                }
-                /// Lists only sessions created through this channel. `web` also matches sessions with no recorded origin.
-                ///
-                /// - Remark: Generated from `#/paths/api/v1/sessions/GET/query/origin`.
-                public var origin: Operations.ListSessions.Input.Query.OriginPayload?
+                public var origin: Swift.String?
                 /// Creates a new `Query`.
                 ///
                 /// - Parameters:
@@ -2648,7 +2638,7 @@ public enum Operations {
                     cursor: Swift.String? = nil,
                     search: Swift.String? = nil,
                     surface: Swift.String? = nil,
-                    origin: Operations.ListSessions.Input.Query.OriginPayload? = nil
+                    origin: Swift.String? = nil
                 ) {
                     self.limit = limit
                     self.cursor = cursor
@@ -4189,15 +4179,7 @@ public enum Operations {
                 /// `added` lists credits received, `deducted` credits spent. Changing it starts a new listing: drop the cursor.
                 ///
                 /// - Remark: Generated from `#/paths/api/v1/credits/transactions/GET/query/type`.
-                @frozen public enum _TypePayload: String, Codable, Hashable, Sendable, CaseIterable {
-                    case all = "all"
-                    case added = "added"
-                    case deducted = "deducted"
-                }
-                /// `added` lists credits received, `deducted` credits spent. Changing it starts a new listing: drop the cursor.
-                ///
-                /// - Remark: Generated from `#/paths/api/v1/credits/transactions/GET/query/type`.
-                public var _type: Operations.ListCreditTransactions.Input.Query._TypePayload?
+                public var _type: Swift.String?
                 /// Creates a new `Query`.
                 ///
                 /// - Parameters:
@@ -4209,7 +4191,7 @@ public enum Operations {
                     limit: Swift.Int? = nil,
                     cursor: Swift.String? = nil,
                     days: Swift.Int? = nil,
-                    _type: Operations.ListCreditTransactions.Input.Query._TypePayload? = nil
+                    _type: Swift.String? = nil
                 ) {
                     self.limit = limit
                     self.cursor = cursor

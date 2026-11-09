@@ -43,18 +43,19 @@ public final class AppNavigator {
     if let tab = route.tab { selectedTab = tab }
     switch route {
     case .session(let id):
-      // A deep link carries only the id; the detail screen loads the transcript by id and the title
-      // fills in from the list when the user next visits it.
+      // A deep link carries only the id; the detail screen loads the transcript and looks the name up.
       if sessionPath.last?.id != id { sessionPath = [.placeholder(id: id)] }
     case .sessions:
       sessionPath = []
     case .compose(let request):
       composeRequest = request
       if case .session(let id) = request.target, sessionPath.last?.id != id {
-        sessionPath = [.placeholder(id: id)]
+        sessionPath = [.placeholder(id: id, name: request.sessionName)]
       }
-    case .lakes, .lake, .media, .settings:
+    case .lakes, .media, .settings:
       break
+    case .lake(let id):
+      externalURL = Self.webURL(forLake: id)
     case .web(let url):
       externalURL = url
     }
@@ -77,6 +78,12 @@ public final class AppNavigator {
     return composeRequest
   }
 
+  /// Same shape as the universal link `DeepLinkRouter` reads, so the web app resolves it the same way.
+  static func webURL(forLake id: String) -> URL? {
+    guard DeepLinkRouter.isValidIdentifier(id) else { return nil }
+    return URL(string: "https://\(DeepLinkRouter.appHost)/lakes/\(id)")
+  }
+
   public func consumeExternalURL() {
     externalURL = nil
   }
@@ -95,8 +102,9 @@ public final class AppNavigator {
 }
 
 extension SessionSummary {
-  /// Stand-in used when only an id is known (deep links). The detail screen needs just the id.
-  static func placeholder(id: String) -> SessionSummary {
-    SessionSummary(id: id, name: "", lastUsedModel: nil, firstCreated: .distantPast, lastUpdated: .distantPast)
+  /// Stand-in used when only an id is known (deep links). The detail screen needs just the id and looks up
+  /// an empty name (see `SessionLookup.name`).
+  static func placeholder(id: String, name: String = "") -> SessionSummary {
+    SessionSummary(id: id, name: name, lastUsedModel: nil, firstCreated: .distantPast, lastUpdated: .distantPast)
   }
 }

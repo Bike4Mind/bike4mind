@@ -24,9 +24,12 @@ struct AskBike4MindIntent: AppIntent {
   }
 }
 
+// Today this opens a new conversation with the note as its draft; saving straight to a lake natively is the
+// follow-up, and the title should change back when it lands.
 struct CaptureNoteIntent: AppIntent {
-  static let title: LocalizedStringResource = "Capture note to lake"
-  static let description = IntentDescription("Draft a note to save to your data lake.")
+  static let title: LocalizedStringResource = "Capture note"
+  static let description = IntentDescription(
+    "Start a new conversation with your note ready to send. Nothing is sent until you tap Send.")
   static let openAppWhenRun = true
 
   @Parameter(title: "Note", requestValueDialog: "What should the note say?")
@@ -58,8 +61,12 @@ struct SessionEntityQuery: EntityStringQuery {
     return page.items.map { SessionEntity(id: $0.id, name: $0.name) }
   }
 
+  /// Resolves a saved Shortcut's session however far down the list it has sunk (see `SessionLookup`).
+  @MainActor
   func entities(for identifiers: [String]) async throws -> [SessionEntity] {
-    try await sessions().filter { identifiers.contains($0.id) }
+    guard let api = AppDelegate.services?.api else { return [] }
+    return try await SessionLookup.sessions(withIDs: Set(identifiers), api: api)
+      .map { SessionEntity(id: $0.id, name: $0.name) }
   }
 
   func entities(matching string: String) async throws -> [SessionEntity] {
@@ -81,7 +88,11 @@ struct StartQuestIntent: AppIntent {
 
   @MainActor
   func perform() async throws -> some IntentResult {
-    open(.startQuest(sessionID: session.id))
+    var route = AssistantRequest.startQuest(sessionID: session.id).route
+    if case .compose(let request) = route {
+      route = .compose(ComposeRequest(target: request.target, draft: request.draft, sessionName: session.name))
+    }
+    AppDelegate.services?.events.open(route)
     return .result()
   }
 }

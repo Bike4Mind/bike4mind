@@ -1,5 +1,4 @@
-#!/usr/bin/env swift
-// Renders the placeholder app icon and launch mark into the asset catalog. Run from apps/ios:
+#!/usr/bin/env swift  // Renders the placeholder app icon and launch mark into the asset catalog. Run from apps/ios:
 //
 //   swift Tools/GenerateAppIcon.swift
 //
@@ -60,7 +59,8 @@ let catalog = "Bike4Mind/Resources/Assets.xcassets"
 
 // App icon: opaque 1024 square (the system applies the corner mask).
 let icon = makeContext(pixels: 1024, opaque: true)
-let gradient = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB), colors: [brand, brandDeep] as CFArray, locations: [0, 1])!
+let gradient = CGGradient(
+  colorsSpace: CGColorSpace(name: CGColorSpace.sRGB), colors: [brand, brandDeep] as CFArray, locations: [0, 1])!
 icon.drawLinearGradient(gradient, start: CGPoint(x: 0, y: 1024), end: CGPoint(x: 1024, y: 0), options: [])
 icon.saveGState()
 icon.translateBy(x: 192, y: 192)
@@ -86,4 +86,5 @@ let launchMarkContents = """
     "info" : { "author" : "xcode", "version" : 1 }
   }
   """
-try! launchMarkContents.write(toFile: "\(catalog)/LaunchMark.imageset/Contents.json", atomically: true, encoding: .utf8)
+try launchMarkContents.write(
+  toFile: "\(catalog)/LaunchMark.imageset/Contents.json", atomically: true, encoding: .utf8)

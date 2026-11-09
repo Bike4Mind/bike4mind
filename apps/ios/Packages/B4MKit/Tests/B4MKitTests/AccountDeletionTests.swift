@@ -7,80 +7,97 @@ private let base = URL(string: "https://app.example.test")!
 private func json(_ text: String) -> Data { Data(text.utf8) }
 
 final class AccountClientWireTests: XCTestCase {
-  func testDeleteSendsBearerDeleteToUsersMeWithNoBody() async throws {
-    let transport = FakeTransport { _ in (200, json(#"{"deletionScheduledFor":"2026-12-02T10:00:00.000Z"}"#)) }
+  // Fixtures mirror apps/client/pages/api/account/deletion.ts and the error envelope of
+  // apps/client/server/middlewares/errorHandler.ts (additionalInfo spread at the top level).
+
+  func testRequestIsABearerPostToAccountDeletion() async throws {
+    let body = json(
+      #"{"deletion":{"requestedAt":"2026-11-02T10:00:00.000Z","scheduledFor":"2026-12-02T10:00:00.000Z","source":"self"},"canceledSubscriptions":0}"#
+    )
+    let transport = FakeTransport { _ in (202, body) }
     let client = AccountClient(baseURL: base, tokens: FakeTokens(), transport: transport)
 
     let receipt = try await client.requestDeletion()
 
     let requests = await transport.requests
     let request = try XCTUnwrap(requests.first)
-    XCTAssertEqual(request.httpMethod, "DELETE")
-    XCTAssertEqual(request.url?.path(), "/api/users/me")
+    XCTAssertEqual(request.httpMethod, "POST")
+    XCTAssertEqual(request.url?.path(), "/api/account/deletion")
     XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer token-1")
     XCTAssertNil(request.httpBody)
     XCTAssertEqual(receipt.scheduledFor, Date(timeIntervalSince1970: 1_796_205_600))
   }
 
-  func testDeleteSucceedsOnAnEmptyBody() async throws {
-    let transport = FakeTransport { _ in (204, Data()) }
+  func testRequestSucceedsOnAnEmptyBody() async throws {
+    let transport = FakeTransport { _ in (202, Data()) }
     let client = AccountClient(baseURL: base, tokens: FakeTokens(), transport: transport)
     let receipt = try await client.requestDeletion()
     XCTAssertNil(receipt.scheduledFor)
   }
 
-  func testRestoreIsAPostToRestoreDeletion() async throws {
-    let transport = FakeTransport { _ in (200, Data()) }
+  func testRestoreIsADeleteOnAccountDeletion() async throws {
+    let transport = FakeTransport { _ in (204, Data()) }
     let client = AccountClient(baseURL: base, tokens: FakeTokens(), transport: transport)
     try await client.restoreDeletion()
     let requests = await transport.requests
     let request = try XCTUnwrap(requests.first)
-    XCTAssertEqual(request.httpMethod, "POST")
-    XCTAssertEqual(request.url?.path(), "/api/users/me/restore-deletion")
+    XCTAssertEqual(request.httpMethod, "DELETE")
+    XCTAssertEqual(request.url?.path(), "/api/account/deletion")
+  }
+
+  func testRestoreWhenNothingIsScheduledCountsAsRestored() async throws {
+    let transport = FakeTransport { _ in (404, json(#"{"error":"This account is not scheduled for deletion."}"#)) }
+    let client = AccountClient(baseURL: base, tokens: FakeTokens(), transport: transport)
+    try await client.restoreDeletion()
   }
 
   func testRestoreFailureSurfacesAsAPIError() async {
-    let transport = FakeTransport { _ in (500, Data()) }
+    let transport = FakeTransport { _ in (409, json(#"{"error":"Account deletion has started"}"#)) }
     let client = AccountClient(baseURL: base, tokens: FakeTokens(), transport: transport)
     do {
       try await client.restoreDeletion()
       XCTFail("expected failure")
     } catch {
-      XCTAssertEqual(error as? APIError, .server(status: 500))
+      XCTAssertEqual(error as? APIError, .server(status: 409))
     }
   }
 
   func testConflictListsTheBlockingOrganizations() async {
     let body = json(
       """
-      {"error":"Transfer ownership first","code":"account_deletion_org_transfer_required",
-       "organizations":[{"id":"org1","name":"Acme"},{"id":"org2","name":"Side Project"}]}
+      {"code":"ACCOUNT_DELETION_ORG_OWNER","organizations":[{"id":"org1","name":"Acme"},{"id":"org2","name":" "}],
+       "error":"Transfer or delete the organizations you own before deleting your account.","request_id":"r1"}
       """)
     let transport = FakeTransport { _ in (409, body) }
     let client = AccountClient(baseURL: base, tokens: FakeTokens(), transport: transport)
     await assertFailure(
-      client, .organizationTransferRequired([.init(id: "org1", name: "Acme"), .init(id: "org2", name: "Side Project")]))
-  }
-
-  func testConflictAcceptsOrganizationsUnderDetailsAndFillsMissingNames() async {
-    let body = json(
-      #"{"error":"x","code":"account_deletion_org_transfer_required","details":{"organizations":[{"id":"o1"},{"name":"no id"}]}}"#
+      client,
+      .organizationTransferRequired([.init(id: "org1", name: "Acme"), .init(id: "org2", name: "Untitled organization")])
     )
-    let transport = FakeTransport { _ in (409, body) }
-    let client = AccountClient(baseURL: base, tokens: FakeTokens(), transport: transport)
-    await assertFailure(client, .organizationTransferRequired([.init(id: "o1", name: "Untitled organization")]))
   }
 
-  func testAConflictWithAnotherCodeIsAGenericServerError() async {
-    let transport = FakeTransport { _ in (409, json(#"{"error":"busy","code":"something_else"}"#)) }
+  func testAConflictWithoutOrganizationsMeansAlreadyScheduled() async {
+    let transport = FakeTransport { _ in
+      (409, json(#"{"error":"This account is already scheduled for deletion.","request_id":"r1"}"#))
+    }
     let client = AccountClient(baseURL: base, tokens: FakeTokens(), transport: transport)
-    await assertFailure(client, .api(.server(status: 409)))
+    await assertFailure(client, .alreadyScheduled)
   }
 
   func testForbiddenMeansThisSessionMayNotDelete() async {
-    let transport = FakeTransport { _ in (403, json(#"{"error":"impersonating"}"#)) }
+    let transport = FakeTransport { _ in
+      (403, json(#"{"error":"Account deletion cannot be requested while impersonating a user."}"#))
+    }
     let client = AccountClient(baseURL: base, tokens: FakeTokens(), transport: transport)
     await assertFailure(client, .notPermitted)
+  }
+
+  func testTheStepUpGateAsksForARecentSignIn() async {
+    for code in ["step_up_required", "step_up_unavailable"] {
+      let transport = FakeTransport { _ in (403, json(#"{"code":"\#(code)","error":"Recent verification required"}"#)) }
+      let client = AccountClient(baseURL: base, tokens: FakeTokens(), transport: transport)
+      await assertFailure(client, .recentSignInRequired)
+    }
   }
 
   func testOfflineSurfacesAsAPIFailure() async {
@@ -102,26 +119,30 @@ final class AccountClientWireTests: XCTestCase {
 }
 
 final class AccountDeletionPendingTests: XCTestCase {
+  // The 403 of packages/server-utils/src/auth/deletionPendingGate.ts through the shared error envelope.
   func testRecognizesThePendingShapeWithItsDate() {
-    let body = json(#"{"accountDeletionPending":true,"deletionScheduledFor":"2026-12-02T10:00:00Z"}"#)
+    let body = json(
+      #"{"code":"ACCOUNT_DELETION_PENDING","scheduledFor":"2026-12-02T10:00:00.000Z","error":"This account is scheduled for deletion. Cancel the deletion to use it again.","request_id":"r1"}"#
+    )
     let notice = AccountDeletionPendingDetector.notice(status: 403, body: body)
     XCTAssertEqual(notice, AccountDeletionNotice(scheduledFor: Date(timeIntervalSince1970: 1_796_205_600)))
   }
 
   func testPendingWithoutADateStillCounts() {
-    let notice = AccountDeletionPendingDetector.notice(status: 403, body: json(#"{"accountDeletionPending":true}"#))
+    let notice = AccountDeletionPendingDetector.notice(
+      status: 403, body: json(#"{"code":"ACCOUNT_DELETION_PENDING"}"#))
     XCTAssertEqual(notice, AccountDeletionNotice(scheduledFor: nil))
   }
 
   func testOrdinaryForbiddenBodiesAreNotPending() {
     XCTAssertNil(AccountDeletionPendingDetector.notice(status: 403, body: json(#"{"error":"nope"}"#)))
-    XCTAssertNil(AccountDeletionPendingDetector.notice(status: 403, body: json(#"{"accountDeletionPending":false}"#)))
+    XCTAssertNil(AccountDeletionPendingDetector.notice(status: 403, body: json(#"{"code":"step_up_required"}"#)))
     XCTAssertNil(AccountDeletionPendingDetector.notice(status: 403, body: Data()))
     XCTAssertNil(AccountDeletionPendingDetector.notice(status: 403, body: json("not json")))
   }
 
   func testOnlyA403IsPending() {
-    let body = json(#"{"accountDeletionPending":true}"#)
+    let body = json(#"{"code":"ACCOUNT_DELETION_PENDING"}"#)
     XCTAssertNil(AccountDeletionPendingDetector.notice(status: 200, body: body))
     XCTAssertNil(AccountDeletionPendingDetector.notice(status: 401, body: body))
   }

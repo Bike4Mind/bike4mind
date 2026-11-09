@@ -29,7 +29,8 @@ public struct NotificationPayload: Equatable, Sendable {
   /// Where tapping the notification should go: the `deepLink` when it routes, else the session id.
   public var route: Route? {
     if let deepLink, let route = DeepLinkRouter.route(url: deepLink) { return route }
-    return sessionID.map { .session(id: $0) }
+    guard let sessionID, DeepLinkRouter.isValidIdentifier(sessionID) else { return nil }
+    return .session(id: sessionID)
   }
 }
 

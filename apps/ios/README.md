@@ -1,7 +1,7 @@
 # Bike4Mind iOS
 
 Native iPhone app (SwiftUI, Swift 6). `make build`, `make test`, `make format`, `make lint` (see the Makefile).
-Simulator-only until an Apple Developer team exists; see [DEVICE_TESTING.md](DEVICE_TESTING.md) for everything that
+Simulator-only until an Apple Developer team id is configured (`IOS_TEAM_ID`); see [DEVICE_TESTING.md](DEVICE_TESTING.md) for everything that
 needs a device or signing.
 
 ## Feature map
@@ -75,9 +75,10 @@ Sessions upload chip can be watched; the first send to the Receipts lake fails o
 ## Push notifications and universal links
 
 - `Bike4Mind.entitlements` declares `aps-environment` (`development`; Xcode rewrites it to `production` when
-  archiving with distribution signing) and `applinks:app.bike4mind.com`.
+  archiving with distribution signing) and `applinks:app.bike4mind.com` and `webcredentials:app.bike4mind.com` (the AASA file needs both an `applinks` entry
+  and a `webcredentials.apps` entry for the app id).
 - Unsigned simulator builds ignore entitlements (the simulator `.xcent` is empty), so `make build` stays green with
-  no team. Nothing is gated. Once an Apple Developer team exists: set `DEVELOPMENT_TEAM`, enable the Push
+  no team. Nothing is gated. Once an Apple Developer team id is configured: set `DEVELOPMENT_TEAM`, enable the Push
   Notifications and Associated Domains capabilities on the App ID, and publish the AASA file on app.bike4mind.com.
   Until then, universal links open in Safari and APNs registration fails (logged, harmless) in the simulator.
 - Authorization: provisional (silent) on first signed-in moment; the system prompt appears once, when the user first
@@ -85,7 +86,7 @@ Sessions upload chip can be watched; the first send to the Receipts lake fails o
 
 ## Widgets, App Intents and the media gallery
 
-- **Widgets** (`Widgets/`): the app writes a `WidgetSnapshot` JSON into the `group.com.bike4mind.app` container and the extension only reads it, with no network or auth in the widget process. The app calls `WidgetCenter.reloadTimelines` when a chat turn settles, credits load, or the latest image changes. A missing container degrades to placeholders. `Widgets/Bike4MindWidgets.swift` is the bundle entry point; a Live Activity adds its `ActivityConfiguration` there and reuses `Widgets/Shared/`.
+- **Widgets** (`Widgets/`): the app writes a `WidgetSnapshot` JSON into the `group.com.bike4mind.app` container and the extension only reads it, with no network or auth in the widget process. The app calls `WidgetCenter.reloadTimelines` when a chat turn settles, credits load, or the latest image changes. A missing container degrades to placeholders. `Widgets/Bike4MindWidgets.swift` is the bundle entry point and registers the widgets plus `QuestLiveActivity`, which reuses `Widgets/Shared/`.
 - **App Intents** (`Bike4Mind/Features/Intents/`): Ask, Start quest and Capture note only open the composer with a draft (`AssistantRequest.route`); they never send.
 - **Media tab** (`Bike4Mind/Features/Media/`): a grid over the Files API via the hand-written `MediaClient`. Presigned URLs are re-fetched near expiry and at most twice after a playback failure. Under `B4M_UI_FIXTURES=1` the tab and the widgets show canned data.
 ## Share and capture
@@ -137,10 +138,10 @@ in sync with the manifests and with what the build actually sends.
 
 - `bundle install`, then `bundle exec fastlane test` (same as `make test`), `build` (simulator build) and `beta` (TestFlight).
   **`beta` is a stub:** it refuses to run until `IOS_TEAM_ID`, `ASC_KEY_ID`, `ASC_ISSUER_ID` and `ASC_KEY_CONTENT_BASE64` are set,
-  and signing does not exist yet.
-- `.github/workflows/ios.yml` runs on changes to `apps/ios/**` and `apps/client/public/openapi.json`: `make lint`, `make test`,
-  the generated-client reproducibility check (`make generate-client` then `git diff --exit-code`) and `make build`, with SwiftPM cached.
-  The runner needs an Xcode that matches the project's SDK; adjust the runner image if it lags.
+  and signing is not configured in the repo.
+- `.github/workflows/ios.yml` runs on changes to `apps/ios/**`: the entitlements parity check (`Tools/check-entitlements-parity.sh`), `make lint`, `make test`,
+  the generated-client reproducibility check (`make generate-client` then `git status --porcelain` must be empty) and `make build`, with SwiftPM cached.
+  The workflow selects the newest installed Xcode 26.x and the first available iPhone simulator. The runner needs an Xcode that matches the project's SDK; adjust the runner image if it lags.
 
 ## Device testing
 

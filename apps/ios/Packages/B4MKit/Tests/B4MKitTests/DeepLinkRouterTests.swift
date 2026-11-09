@@ -59,7 +59,8 @@ final class DeepLinkRouterTests: XCTestCase {
     XCTAssertEqual(route("https://app.bike4mind.com"), .sessions)
     XCTAssertEqual(route("https://app.bike4mind.com/sessions"), .sessions)
     XCTAssertEqual(route("https://app.bike4mind.com/lakes"), .lakes)
-    XCTAssertEqual(route("https://app.bike4mind.com/lakes/lake-1"), .lake(id: "lake-1"))
+    let lakeURL = URL(string: "https://app.bike4mind.com/lakes/lake-1?tab=files")!
+    XCTAssertEqual(DeepLinkRouter.route(url: lakeURL), .web(lakeURL), "no native lake screen: keep the whole URL")
     XCTAssertEqual(route("https://app.bike4mind.com/media/xyz"), .media)
     XCTAssertEqual(route("https://app.bike4mind.com/settings/notifications"), .settings)
   }
@@ -76,7 +77,8 @@ final class DeepLinkRouterTests: XCTestCase {
 
   func testRoutesKnowTheirTab() {
     XCTAssertEqual(Route.session(id: "a").tab, .sessions)
-    XCTAssertEqual(Route.lake(id: "a").tab, .lakes)
+    XCTAssertNil(Route.lake(id: "a").tab)
+    XCTAssertEqual(Route.lakes.tab, .lakes)
     XCTAssertEqual(Route.media.tab, .media)
     XCTAssertEqual(Route.settings.tab, .settings)
     XCTAssertNil(Route.web(URL(string: "https://app.bike4mind.com/x")!).tab)

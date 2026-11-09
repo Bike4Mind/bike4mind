@@ -93,15 +93,15 @@ final class PushRegistrationTests: XCTestCase {
 
   private func makeCoordinator(
     status: NotificationAuthorization = .notDetermined,
-    environment: PushEnvironment = .sandbox
+    environment: PushEnvironment = .sandbox,
+    preferences: UserDefaults = UserDefaults(suiteName: "push-tests-\(UUID().uuidString)")!,
+    api: FakePushTokenAPI = FakePushTokenAPI()
   ) -> (PushRegistrationCoordinator, FakeNotificationCenter, FakeRemoteRegistrar, FakePushTokenAPI) {
     let center = FakeNotificationCenter(status: status)
     let remote = FakeRemoteRegistrar()
-    let api = FakePushTokenAPI()
-    let suite = "push-tests-\(UUID().uuidString)"
     let coordinator = PushRegistrationCoordinator(
       center: center, remote: remote, makeAPI: { api }, environment: environment, appVersion: "1.2.3",
-      preferences: UserDefaults(suiteName: suite)!)
+      preferences: preferences)
     return (coordinator, center, remote, api)
   }
 
@@ -223,6 +223,53 @@ final class PushRegistrationTests: XCTestCase {
     await coordinator.appDidBecomeActive()
     let unregistered = await api.unregistered
     XCTAssertEqual(unregistered, [tokenHex])
+  }
+
+  func testPermissionTurnedOffWhileTheAppWasNotRunningUnregistersOnRelaunch() async {
+    let preferences = UserDefaults(suiteName: "push-tests-\(UUID().uuidString)")!
+    let (first, _, _, _) = makeCoordinator(status: .authorized, preferences: preferences)
+    await first.sessionDidStart()
+    await first.didReceiveDeviceToken(tokenData)
+
+    let api = FakePushTokenAPI()
+    let (relaunched, _, _, _) = makeCoordinator(status: .denied, preferences: preferences, api: api)
+    await relaunched.sessionDidStart()
+    var unregistered = await api.unregistered
+    XCTAssertEqual(unregistered, [tokenHex])
+
+    await relaunched.appDidBecomeActive()
+    unregistered = await api.unregistered
+    XCTAssertEqual(unregistered, [tokenHex], "a withdrawn token is not withdrawn again")
+  }
+
+  func testARotatedTokenUnregistersTheOldOne() async {
+    let preferences = UserDefaults(suiteName: "push-tests-\(UUID().uuidString)")!
+    let (first, _, _, _) = makeCoordinator(status: .authorized, preferences: preferences)
+    await first.sessionDidStart()
+    await first.didReceiveDeviceToken(tokenData)
+
+    let api = FakePushTokenAPI()
+    let (relaunched, _, _, _) = makeCoordinator(status: .authorized, preferences: preferences, api: api)
+    await relaunched.sessionDidStart()
+    await relaunched.didReceiveDeviceToken(Data([0x01, 0x02]))
+    let registrations = await api.registrations
+    let unregistered = await api.unregistered
+    XCTAssertEqual(registrations.map(\.token), ["0102"])
+    XCTAssertEqual(unregistered, [tokenHex])
+  }
+
+  func testTheSameTokenAfterRelaunchIsNotUnregistered() async {
+    let preferences = UserDefaults(suiteName: "push-tests-\(UUID().uuidString)")!
+    let (first, _, _, _) = makeCoordinator(status: .authorized, preferences: preferences)
+    await first.sessionDidStart()
+    await first.didReceiveDeviceToken(tokenData)
+
+    let api = FakePushTokenAPI()
+    let (relaunched, _, _, _) = makeCoordinator(status: .authorized, preferences: preferences, api: api)
+    await relaunched.sessionDidStart()
+    await relaunched.didReceiveDeviceToken(tokenData)
+    let unregistered = await api.unregistered
+    XCTAssertTrue(unregistered.isEmpty)
   }
 
   func testFailedRegistrationRetriesOnNextForeground() async {

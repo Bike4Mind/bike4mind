@@ -21,7 +21,7 @@ struct AuthorizedRequester: Sendable {
       let first = try await perform(method: method, path: path, query: query, body: jsonBody, token: token)
       guard first.status == 401 else { return first }
 
-      await tokens.invalidateAccessToken()
+      await tokens.invalidateAccessToken(token)
       let fresh = try await tokens.accessToken()
       let retry = try await perform(method: method, path: path, query: query, body: jsonBody, token: fresh)
       if retry.status == 401 {
@@ -31,8 +31,10 @@ struct AuthorizedRequester: Sendable {
       return retry
     } catch let error as APIError {
       throw error
-    } catch is AuthError {
-      throw APIError.signedOut
+    } catch let error as AuthError {
+      throw APIError(error)
+    } catch let error as KeychainError where error.isTransient {
+      throw APIError(error)
     } catch is URLError {
       throw APIError.offline
     } catch is CancellationError {

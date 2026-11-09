@@ -5,13 +5,14 @@ CI. Work through it before the first TestFlight build and again before each rele
 
 ## Prerequisites (Apple Developer portal and backend)
 
-- [ ] Paid team, `DEVELOPMENT_TEAM` set, automatic signing on for the app and both extensions.
+- [ ] Apple Developer team id configured (`IOS_TEAM_ID` / `DEVELOPMENT_TEAM`) on a paid team, automatic signing on for the app and both extensions.
 - [ ] App IDs for `com.bike4mind.app`, the Share extension and the Widgets extension with these capabilities: Push
       Notifications, Associated Domains, App Groups (`group.com.bike4mind.app`), Keychain Sharing
       (`$(AppIdentifierPrefix)com.bike4mind.shared`). The App Group and the keychain group must be enabled on **all three**
       bundle ids, or the extension cannot reach the session.
 - [ ] `apple-app-site-association` published at `https://app.bike4mind.com/.well-known/apple-app-site-association` listing
-      `/sessions/*` and `/notebooks/*`.
+      `/sessions/*` and `/notebooks/*` under `applinks`, and the app id under `webcredentials.apps` (the entitlement declares
+      both `applinks:` and `webcredentials:app.bike4mind.com`).
 - [ ] APNs auth key uploaded to the backend; Live Activity push (`liveactivity` push type) enabled for it.
 - [ ] Backend deployed with the iOS OAuth client, push-token routes, Live Activity token kind, agent-run route and the
       account-deletion routes (see Account deletion below).
@@ -45,6 +46,10 @@ CI. Work through it before the first TestFlight build and again before each rele
 - [ ] With associated domains and real signing, `https://app.bike4mind.com/sessions/{id}` and `/notebooks/{id}` open the app from
       Notes, Messages and Safari. (Unsigned simulator builds open Safari instead; that is expected there.)
 - [ ] A link while signed out waits for sign-in and then opens the right screen.
+- [ ] Open an unhandled `https://app.bike4mind.com/<unknown path>` link on the device: it must open in Safari and not bounce back
+      into the app in a loop (universal-link re-entry check).
+- [ ] On device, tap a `.web` route and the Lakes "Open on the Web" button for an `app.bike4mind.com` page: both must open in the
+      in-app Safari sheet and must not reopen the app.
 
 ## Share extension and capture
 
@@ -57,6 +62,7 @@ CI. Work through it before the first TestFlight build and again before each rele
       refresh in the app and the extension at the same moment (start a share while the app is foregrounded, repeat many times).
       Watch for a sign-out storm: either process must not end the session when the other rotated first. The app retries once with
       the freshly stored token; confirm the extension does too.
+- [ ] Share a 48MP or other very large HEIC from Photos: the extension stays under its memory limit and completes (OOM regression check).
 - [ ] Camera, microphone and photo-library permission prompts show the usage strings and denial is handled with a clear message.
 - [ ] Voice note records, transcribes and drops text into the composer.
 
@@ -65,8 +71,9 @@ CI. Work through it before the first TestFlight build and again before each rele
 - [ ] Video and audio play from the gallery; AirPlay routes; Picture in Picture works; presigned URL expiry recovers on its own.
 - [ ] Siri phrases for Ask, Start quest and Capture note are recognized; the actions appear in Shortcuts and Spotlight and only
       open the composer with a draft (never send).
-- [ ] Widgets: Credits, Latest generation and Running agents in the gallery (small and medium), placeholder and signed-out
-      appearance, dark mode, and a tap landing on the right screen.
+- [ ] Widgets: Credits (small), Latest generation (small, medium) and Running agents (small, medium) in the gallery,
+      placeholder and signed-out appearance, dark mode, and a tap landing on the right screen.
+- [ ] Lock-screen accessory widgets render and refresh: Credits (circular, rectangular, inline) and Running agents (rectangular, inline).
 
 ## Account deletion (App Store 5.1.1(v))
 

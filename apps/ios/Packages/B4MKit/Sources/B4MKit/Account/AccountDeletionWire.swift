@@ -11,22 +11,26 @@ public struct AccountOrganization: Equatable, Sendable, Identifiable {
   }
 }
 
-/// Hand-written wire format for account deletion. These routes are not in the committed OpenAPI
-/// snapshot (the server work lands separately), so the generated client has no operations for them.
-/// Keep in sync with the server routes when the spec snapshot next updates:
+/// Hand-written wire format for account deletion. Server counterparts: apps/client/pages/api/account/deletion.ts,
+/// apps/client/server/users/accountDeletion.ts and packages/server-utils/src/auth/deletionPendingGate.ts.
 ///
-/// - `DELETE /api/users/me`: JWT bearer, no body. 2xx means deletion was requested with a 30-day grace
-///   period and every session, this one included, was revoked. An impersonating admin gets 403.
-///   409 with `code: "account_deletion_org_transfer_required"` and `organizations: [{id, name}]` means the
-///   user still owns organizations that need a new owner.
-/// - `POST /api/users/me/restore-deletion`: cancels a pending deletion for a signed-in pending account.
+/// `/api/account/deletion` (JWT bearer only):
+/// - `POST` requests deletion. 202 `{deletion: {requestedAt, scheduledFor, source}, canceledSubscriptions}`,
+///   after which every session, this one included, is revoked. Behind a step-up gate: 403
+///   `{code: "step_up_required" | "step_up_unavailable"}` until the session proves a recent sign-in.
+///   403 without a code: an impersonating admin. 409 `{code: "ACCOUNT_DELETION_ORG_OWNER",
+///   organizations: [{id, name}]}`: owned organizations need a new owner first; 409 without it: already
+///   scheduled.
+/// - `DELETE` cancels a pending deletion: 204. 404 means nothing was scheduled; 409 means the purge has
+///   started and it can no longer be cancelled.
 ///
-/// While deletion is pending, most other routes answer 403 `{accountDeletionPending: true,
-/// deletionScheduledFor}`; `AccountDeletionPendingDetector` recognizes that shape.
+/// While deletion is pending, other routes answer 403 `{code: "ACCOUNT_DELETION_PENDING", scheduledFor}`;
+/// `AccountDeletionPendingDetector` recognizes that shape.
 enum AccountDeletionWire {
-  static let deletePath = "api/users/me"
-  static let restorePath = "api/users/me/restore-deletion"
-  static let orgTransferRequiredCode = "account_deletion_org_transfer_required"
+  static let path = "api/account/deletion"
+  static let orgOwnerCode = "ACCOUNT_DELETION_ORG_OWNER"
+  static let pendingCode = "ACCOUNT_DELETION_PENDING"
+  static let stepUpCodes: Set<String> = ["step_up_required", "step_up_unavailable"]
 
   private struct ErrorEnvelope: Decodable {
     struct Organization: Decodable {
@@ -34,52 +38,57 @@ enum AccountDeletionWire {
       let name: String?
     }
 
-    struct Details: Decodable {
-      let organizations: [Organization]?
-    }
-
     let code: String?
-    let errorCode: String?
     let organizations: [Organization]?
-    let details: Details?
   }
 
   private struct Receipt: Decodable {
-    let deletionScheduledFor: String?
+    struct Deletion: Decodable {
+      let scheduledFor: String?
+    }
+
+    let deletion: Deletion?
   }
 
-  /// Maps the response of `DELETE /api/users/me`.
+  /// Maps the response of `POST /api/account/deletion`.
   static func deletionResult(status: Int, body: Data) throws -> AccountDeletionReceipt {
     switch status {
     case 200..<300:
       let receipt = try? JSONDecoder().decode(Receipt.self, from: body)
-      return AccountDeletionReceipt(scheduledFor: receipt?.deletionScheduledFor.flatMap(parseDate))
+      return AccountDeletionReceipt(scheduledFor: receipt?.deletion?.scheduledFor.flatMap(parseDate))
     case 403:
+      if let code = errorCode(body: body), stepUpCodes.contains(code) {
+        throw AccountDeletionFailure.recentSignInRequired
+      }
       throw AccountDeletionFailure.notPermitted
     case 409:
       if let organizations = organizationsBlockingDeletion(body: body) {
         throw AccountDeletionFailure.organizationTransferRequired(organizations)
       }
-      throw AccountDeletionFailure.api(.server(status: 409))
+      throw AccountDeletionFailure.alreadyScheduled
     default:
       throw AccountDeletionFailure.api(APIError(status: status))
     }
   }
 
-  /// Maps the response of `POST /api/users/me/restore-deletion`.
+  /// Maps the response of `DELETE /api/account/deletion`. A 404 (nothing scheduled) is the state the
+  /// caller wants, so it counts as restored.
   static func restoreResult(status: Int) throws {
-    guard (200..<300).contains(status) else { throw APIError(status: status) }
+    switch status {
+    case 200..<300, 404: return
+    default: throw APIError(status: status)
+    }
   }
 
-  /// The organizations listed by a 409 `account_deletion_org_transfer_required` envelope, or nil for any
-  /// other body. Looks at the top level and under `details`, because the envelope extension point is
-  /// not pinned down in the contract conventions.
+  static func errorCode(body: Data) -> String? {
+    (try? JSONDecoder().decode(ErrorEnvelope.self, from: body))?.code
+  }
+
+  /// The organizations listed by a 409 `ACCOUNT_DELETION_ORG_OWNER` envelope, or nil for any other body.
   static func organizationsBlockingDeletion(body: Data) -> [AccountOrganization]? {
-    guard let envelope = try? JSONDecoder().decode(ErrorEnvelope.self, from: body),
-      (envelope.code ?? envelope.errorCode) == orgTransferRequiredCode
+    guard let envelope = try? JSONDecoder().decode(ErrorEnvelope.self, from: body), envelope.code == orgOwnerCode
     else { return nil }
-    let raw = envelope.organizations ?? envelope.details?.organizations ?? []
-    return raw.compactMap { organization in
+    return (envelope.organizations ?? []).compactMap { organization in
       guard let id = organization.id, !id.isEmpty else { return nil }
       let name = organization.name?.trimmingCharacters(in: .whitespacesAndNewlines)
       return AccountOrganization(id: id, name: name.flatMap { $0.isEmpty ? nil : $0 } ?? "Untitled organization")

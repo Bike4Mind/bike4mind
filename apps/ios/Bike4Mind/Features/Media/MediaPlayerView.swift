@@ -2,6 +2,7 @@ import AVFoundation
 import AVKit
 import B4MKit
 import SwiftUI
+import os
 
 /// System player UI over `MediaPlayerConfiguration.standard`: AirPlay, picture-in-picture, and audio
 /// that keeps playing with the screen locked. Failures are reported so the caller can refetch a lapsed URL.
@@ -17,7 +18,13 @@ struct MediaPlayerView: UIViewControllerRepresentable {
 
   func makeUIViewController(context: Context) -> AVPlayerViewController {
     // Playback category is what lets audio continue in the background and PiP engage.
-    try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
+    do {
+      try AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
+    } catch {
+      // Playback still works in the foreground; only background audio and PiP are lost.
+      Logger(subsystem: "com.bike4mind.app", category: "media")
+        .error("Playback audio session category failed: \(String(describing: error), privacy: .public)")
+    }
     let controller = AVPlayerViewController()
     controller.allowsPictureInPicturePlayback = configuration.allowsPictureInPicture
     controller.canStartPictureInPictureAutomaticallyFromInline =

@@ -3,6 +3,16 @@ import Security
 
 public struct KeychainError: Error, Equatable, Sendable {
   public let status: OSStatus
+
+  public init(status: OSStatus) {
+    self.status = status
+  }
+
+  /// The item exists but cannot be read yet: a launch before first unlock (push, Live Activity) gets
+  /// `errSecInteractionNotAllowed`. Retrying once protected data is available succeeds.
+  public var isTransient: Bool {
+    status == errSecInteractionNotAllowed || status == errSecNotAvailable
+  }
 }
 
 /// Generic-password Keychain item, readable after first unlock so background refreshes

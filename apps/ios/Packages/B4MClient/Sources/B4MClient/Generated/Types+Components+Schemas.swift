@@ -155,6 +155,10 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/getSessionResponse200/includeLibraryFiles`.
             public var includeLibraryFiles: Swift.Bool?
+            /// The chat's prompt-cache lifetime. Absent when never set, which follows your default.
+            ///
+            /// - Remark: Generated from `#/components/schemas/getSessionResponse200/promptCacheTtl`.
+            public var promptCacheTtl: Swift.String?
             /// - Remark: Generated from `#/components/schemas/getSessionResponse200/lastUsedModel`.
             public var lastUsedModel: Swift.String?
             /// - Remark: Generated from `#/components/schemas/getSessionResponse200/firstCreated`.
@@ -175,6 +179,7 @@ extension Components {
             ///   - retrievalTags:
             ///   - lakeScopeExplicit: True when `retrievalTags` is a deliberate choice, so an empty list means "no lake" rather than "any".
             ///   - includeLibraryFiles: Whether the session grounds on your own library alongside its lakes. Absent when never set.
+            ///   - promptCacheTtl: The chat's prompt-cache lifetime. Absent when never set, which follows your default.
             ///   - lastUsedModel:
             ///   - firstCreated:
             ///   - lastUpdated:
@@ -190,6 +195,7 @@ extension Components {
                 retrievalTags: [Swift.String]? = nil,
                 lakeScopeExplicit: Swift.Bool? = nil,
                 includeLibraryFiles: Swift.Bool? = nil,
+                promptCacheTtl: Swift.String? = nil,
                 lastUsedModel: Swift.String? = nil,
                 firstCreated: Foundation.Date,
                 lastUpdated: Foundation.Date
@@ -205,6 +211,7 @@ extension Components {
                 self.retrievalTags = retrievalTags
                 self.lakeScopeExplicit = lakeScopeExplicit
                 self.includeLibraryFiles = includeLibraryFiles
+                self.promptCacheTtl = promptCacheTtl
                 self.lastUsedModel = lastUsedModel
                 self.firstCreated = firstCreated
                 self.lastUpdated = lastUpdated
@@ -221,6 +228,7 @@ extension Components {
                 case retrievalTags
                 case lakeScopeExplicit
                 case includeLibraryFiles
+                case promptCacheTtl
                 case lastUsedModel
                 case firstCreated
                 case lastUpdated
@@ -233,14 +241,7 @@ extension Components {
             /// - Remark: Generated from `#/components/schemas/getMeResponse200/name`.
             public var name: Swift.String
             /// - Remark: Generated from `#/components/schemas/getMeResponse200/tier`.
-            @frozen public enum TierPayload: String, Codable, Hashable, Sendable, CaseIterable {
-                case free = "free"
-                case basic = "basic"
-                case pro = "pro"
-                case other = "other"
-            }
-            /// - Remark: Generated from `#/components/schemas/getMeResponse200/tier`.
-            public var tier: Components.Schemas.GetMeResponse200.TierPayload
+            public var tier: Swift.String
             /// - Remark: Generated from `#/components/schemas/getMeResponse200/subscription`.
             public struct SubscriptionPayload: Codable, Hashable, Sendable {
                 /// - Remark: Generated from `#/components/schemas/getMeResponse200/subscription/plan_name`.
@@ -248,12 +249,7 @@ extension Components {
                 /// - Remark: Generated from `#/components/schemas/getMeResponse200/subscription/price_id`.
                 public var priceId: Swift.String
                 /// - Remark: Generated from `#/components/schemas/getMeResponse200/subscription/interval`.
-                @frozen public enum IntervalPayload: String, Codable, Hashable, Sendable, CaseIterable {
-                    case monthly = "monthly"
-                    case yearly = "yearly"
-                }
-                /// - Remark: Generated from `#/components/schemas/getMeResponse200/subscription/interval`.
-                public var interval: Components.Schemas.GetMeResponse200.SubscriptionPayload.IntervalPayload
+                public var interval: Swift.String
                 /// - Remark: Generated from `#/components/schemas/getMeResponse200/subscription/current_period_ends_at`.
                 public var currentPeriodEndsAt: Swift.String
                 /// Creates a new `SubscriptionPayload`.
@@ -266,7 +262,7 @@ extension Components {
                 public init(
                     planName: Swift.String,
                     priceId: Swift.String,
-                    interval: Components.Schemas.GetMeResponse200.SubscriptionPayload.IntervalPayload,
+                    interval: Swift.String,
                     currentPeriodEndsAt: Swift.String
                 ) {
                     self.planName = planName
@@ -322,7 +318,7 @@ extension Components {
             public init(
                 id: Swift.String,
                 name: Swift.String,
-                tier: Components.Schemas.GetMeResponse200.TierPayload,
+                tier: Swift.String,
                 subscription: Components.Schemas.GetMeResponse200.SubscriptionPayload? = nil,
                 credits: Components.Schemas.GetMeResponse200.CreditsPayload,
                 entitlements: [Swift.String]
@@ -363,31 +359,11 @@ extension Components {
             /// - Remark: Generated from `#/components/schemas/getQuestResponse200/id`.
             public var id: Swift.String
             /// - Remark: Generated from `#/components/schemas/getQuestResponse200/status`.
-            @frozen public enum StatusPayload: String, Codable, Hashable, Sendable, CaseIterable {
-                case pending = "pending"
-                case running = "running"
-                case done = "done"
-                case stopped = "stopped"
-            }
-            /// - Remark: Generated from `#/components/schemas/getQuestResponse200/status`.
-            public var status: Components.Schemas.GetQuestResponse200.StatusPayload?
+            public var status: Swift.String?
             /// - Remark: Generated from `#/components/schemas/getQuestResponse200/type`.
-            @frozen public enum _TypePayload: String, Codable, Hashable, Sendable, CaseIterable {
-                case message = "message"
-                case oob = "oob"
-                case error = "error"
-                case system = "system"
-                case voiceTranscript = "voice_transcript"
-            }
-            /// - Remark: Generated from `#/components/schemas/getQuestResponse200/type`.
-            public var _type: Components.Schemas.GetQuestResponse200._TypePayload?
+            public var _type: Swift.String?
             /// - Remark: Generated from `#/components/schemas/getQuestResponse200/errorCode`.
-            @frozen public enum ErrorCodePayload: String, Codable, Hashable, Sendable, CaseIterable {
-                case insufficientCredits = "insufficient_credits"
-                case spendCapExceeded = "spend_cap_exceeded"
-            }
-            /// - Remark: Generated from `#/components/schemas/getQuestResponse200/errorCode`.
-            public var errorCode: Components.Schemas.GetQuestResponse200.ErrorCodePayload?
+            public var errorCode: Swift.String?
             /// - Remark: Generated from `#/components/schemas/getQuestResponse200/reply`.
             public var reply: Swift.String?
             /// - Remark: Generated from `#/components/schemas/getQuestResponse200/replies`.
@@ -551,19 +527,7 @@ extension Components {
                 /// - Remark: Generated from `#/components/schemas/getQuestResponse200/turnTiming/RetriesPayload`.
                 public struct RetriesPayloadPayload: Codable, Hashable, Sendable {
                     /// - Remark: Generated from `#/components/schemas/getQuestResponse200/turnTiming/RetriesPayload/reason`.
-                    @frozen public enum ReasonPayload: String, Codable, Hashable, Sendable, CaseIterable {
-                        case streamIdleTimeout = "stream_idle_timeout"
-                        case streamTruncated = "stream_truncated"
-                        case requestTimeout = "request_timeout"
-                        case rateLimit = "rate_limit"
-                        case overloaded = "overloaded"
-                        case serverError = "server_error"
-                        case transport = "transport"
-                        case toolPairing = "tool_pairing"
-                        case other = "other"
-                    }
-                    /// - Remark: Generated from `#/components/schemas/getQuestResponse200/turnTiming/RetriesPayload/reason`.
-                    public var reason: Components.Schemas.GetQuestResponse200.TurnTimingPayload.RetriesPayloadPayload.ReasonPayload
+                    public var reason: Swift.String
                     /// - Remark: Generated from `#/components/schemas/getQuestResponse200/turnTiming/RetriesPayload/status`.
                     public var status: Swift.Double?
                     /// - Remark: Generated from `#/components/schemas/getQuestResponse200/turnTiming/RetriesPayload/retryAfterMs`.
@@ -634,7 +598,7 @@ extension Components {
                     ///   - model:
                     ///   - at:
                     public init(
-                        reason: Components.Schemas.GetQuestResponse200.TurnTimingPayload.RetriesPayloadPayload.ReasonPayload,
+                        reason: Swift.String,
                         status: Swift.Double? = nil,
                         retryAfterMs: Swift.Double? = nil,
                         requestId: Swift.String? = nil,
@@ -725,9 +689,9 @@ extension Components {
             ///   - executionTracking:
             public init(
                 id: Swift.String,
-                status: Components.Schemas.GetQuestResponse200.StatusPayload? = nil,
-                _type: Components.Schemas.GetQuestResponse200._TypePayload? = nil,
-                errorCode: Components.Schemas.GetQuestResponse200.ErrorCodePayload? = nil,
+                status: Swift.String? = nil,
+                _type: Swift.String? = nil,
+                errorCode: Swift.String? = nil,
                 reply: Swift.String? = nil,
                 replies: [Swift.String]? = nil,
                 fallbackInfo: Components.Schemas.GetQuestResponse200.FallbackInfoPayload? = nil,
@@ -841,6 +805,10 @@ extension Components {
                 ///
                 /// - Remark: Generated from `#/components/schemas/listSessionsResponse200/DataPayload/includeLibraryFiles`.
                 public var includeLibraryFiles: Swift.Bool?
+                /// The chat's prompt-cache lifetime. Absent when never set, which follows your default.
+                ///
+                /// - Remark: Generated from `#/components/schemas/listSessionsResponse200/DataPayload/promptCacheTtl`.
+                public var promptCacheTtl: Swift.String?
                 /// - Remark: Generated from `#/components/schemas/listSessionsResponse200/DataPayload/lastUsedModel`.
                 public var lastUsedModel: Swift.String?
                 /// - Remark: Generated from `#/components/schemas/listSessionsResponse200/DataPayload/firstCreated`.
@@ -861,6 +829,7 @@ extension Components {
                 ///   - retrievalTags:
                 ///   - lakeScopeExplicit: True when `retrievalTags` is a deliberate choice, so an empty list means "no lake" rather than "any".
                 ///   - includeLibraryFiles: Whether the session grounds on your own library alongside its lakes. Absent when never set.
+                ///   - promptCacheTtl: The chat's prompt-cache lifetime. Absent when never set, which follows your default.
                 ///   - lastUsedModel:
                 ///   - firstCreated:
                 ///   - lastUpdated:
@@ -876,6 +845,7 @@ extension Components {
                     retrievalTags: [Swift.String]? = nil,
                     lakeScopeExplicit: Swift.Bool? = nil,
                     includeLibraryFiles: Swift.Bool? = nil,
+                    promptCacheTtl: Swift.String? = nil,
                     lastUsedModel: Swift.String? = nil,
                     firstCreated: Foundation.Date,
                     lastUpdated: Foundation.Date
@@ -891,6 +861,7 @@ extension Components {
                     self.retrievalTags = retrievalTags
                     self.lakeScopeExplicit = lakeScopeExplicit
                     self.includeLibraryFiles = includeLibraryFiles
+                    self.promptCacheTtl = promptCacheTtl
                     self.lastUsedModel = lastUsedModel
                     self.firstCreated = firstCreated
                     self.lastUpdated = lastUpdated
@@ -907,6 +878,7 @@ extension Components {
                     case retrievalTags
                     case lakeScopeExplicit
                     case includeLibraryFiles
+                    case promptCacheTtl
                     case lastUsedModel
                     case firstCreated
                     case lastUpdated
@@ -952,41 +924,15 @@ extension Components {
                 /// `done` and `stopped` are terminal. Absent on turns written before status tracking.
                 ///
                 /// - Remark: Generated from `#/components/schemas/listSessionQuestsResponse200/DataPayload/status`.
-                @frozen public enum StatusPayload: String, Codable, Hashable, Sendable, CaseIterable {
-                    case pending = "pending"
-                    case running = "running"
-                    case done = "done"
-                    case stopped = "stopped"
-                }
-                /// `done` and `stopped` are terminal. Absent on turns written before status tracking.
-                ///
-                /// - Remark: Generated from `#/components/schemas/listSessionQuestsResponse200/DataPayload/status`.
-                public var status: Components.Schemas.ListSessionQuestsResponse200.DataPayloadPayload.StatusPayload?
+                public var status: Swift.String?
                 /// `error` marks a failed turn; `reply` then holds the failure text.
                 ///
                 /// - Remark: Generated from `#/components/schemas/listSessionQuestsResponse200/DataPayload/type`.
-                @frozen public enum _TypePayload: String, Codable, Hashable, Sendable, CaseIterable {
-                    case message = "message"
-                    case oob = "oob"
-                    case error = "error"
-                    case system = "system"
-                    case voiceTranscript = "voice_transcript"
-                }
-                /// `error` marks a failed turn; `reply` then holds the failure text.
-                ///
-                /// - Remark: Generated from `#/components/schemas/listSessionQuestsResponse200/DataPayload/type`.
-                public var _type: Components.Schemas.ListSessionQuestsResponse200.DataPayloadPayload._TypePayload?
+                public var _type: Swift.String?
                 /// Machine-readable failure class, present only on `type: "error"` turns that have one.
                 ///
                 /// - Remark: Generated from `#/components/schemas/listSessionQuestsResponse200/DataPayload/errorCode`.
-                @frozen public enum ErrorCodePayload: String, Codable, Hashable, Sendable, CaseIterable {
-                    case insufficientCredits = "insufficient_credits"
-                    case spendCapExceeded = "spend_cap_exceeded"
-                }
-                /// Machine-readable failure class, present only on `type: "error"` turns that have one.
-                ///
-                /// - Remark: Generated from `#/components/schemas/listSessionQuestsResponse200/DataPayload/errorCode`.
-                public var errorCode: Components.Schemas.ListSessionQuestsResponse200.DataPayloadPayload.ErrorCodePayload?
+                public var errorCode: Swift.String?
                 /// When the turn started; the sort key of the listing.
                 ///
                 /// - Remark: Generated from `#/components/schemas/listSessionQuestsResponse200/DataPayload/createdAt`.
@@ -1072,9 +1018,9 @@ extension Components {
                     id: Swift.String,
                     prompt: Swift.String? = nil,
                     reply: Swift.String? = nil,
-                    status: Components.Schemas.ListSessionQuestsResponse200.DataPayloadPayload.StatusPayload? = nil,
-                    _type: Components.Schemas.ListSessionQuestsResponse200.DataPayloadPayload._TypePayload? = nil,
-                    errorCode: Components.Schemas.ListSessionQuestsResponse200.DataPayloadPayload.ErrorCodePayload? = nil,
+                    status: Swift.String? = nil,
+                    _type: Swift.String? = nil,
+                    errorCode: Swift.String? = nil,
                     createdAt: Foundation.Date,
                     creditsUsed: Swift.Double? = nil,
                     pendingAction: Components.Schemas.ListSessionQuestsResponse200.DataPayloadPayload.PendingActionPayload? = nil
@@ -1133,30 +1079,7 @@ extension Components {
                 /// What moved the credits, e.g. `purchase`, `subscription`, `text_generation_usage`.
                 ///
                 /// - Remark: Generated from `#/components/schemas/listCreditTransactionsResponse200/DataPayload/type`.
-                @frozen public enum _TypePayload: String, Codable, Hashable, Sendable, CaseIterable {
-                    case purchase = "purchase"
-                    case subscription = "subscription"
-                    case genericAdd = "generic_add"
-                    case receivedCredit = "received_credit"
-                    case textGenerationUsage = "text_generation_usage"
-                    case imageGenerationUsage = "image_generation_usage"
-                    case imageEditUsage = "image_edit_usage"
-                    case videoGenerationUsage = "video_generation_usage"
-                    case realtimeVoiceUsage = "realtime_voice_usage"
-                    case toolUsage = "tool_usage"
-                    case completionApiUsage = "completion_api_usage"
-                    case decisionUsage = "decision_usage"
-                    case speechToTextUsage = "speech_to_text_usage"
-                    case textToSpeechUsage = "text_to_speech_usage"
-                    case soundEffectsUsage = "sound_effects_usage"
-                    case musicGenerationUsage = "music_generation_usage"
-                    case transferCredit = "transfer_credit"
-                    case genericDeduct = "generic_deduct"
-                }
-                /// What moved the credits, e.g. `purchase`, `subscription`, `text_generation_usage`.
-                ///
-                /// - Remark: Generated from `#/components/schemas/listCreditTransactionsResponse200/DataPayload/type`.
-                public var _type: Components.Schemas.ListCreditTransactionsResponse200.DataPayloadPayload._TypePayload
+                public var _type: Swift.String
                 /// Signed change to the balance: positive when credits were added, negative when they were spent.
                 ///
                 /// - Remark: Generated from `#/components/schemas/listCreditTransactionsResponse200/DataPayload/credits`.
@@ -1166,18 +1089,7 @@ extension Components {
                 /// The surface that spent the credits, on usage rows that record one.
                 ///
                 /// - Remark: Generated from `#/components/schemas/listCreditTransactionsResponse200/DataPayload/source`.
-                @frozen public enum SourcePayload: String, Codable, Hashable, Sendable, CaseIterable {
-                    case web = "web"
-                    case cli = "cli"
-                    case desktop = "desktop"
-                    case api = "api"
-                    case agent = "agent"
-                    case system = "system"
-                }
-                /// The surface that spent the credits, on usage rows that record one.
-                ///
-                /// - Remark: Generated from `#/components/schemas/listCreditTransactionsResponse200/DataPayload/source`.
-                public var source: Components.Schemas.ListCreditTransactionsResponse200.DataPayloadPayload.SourcePayload?
+                public var source: Swift.String?
                 /// - Remark: Generated from `#/components/schemas/listCreditTransactionsResponse200/DataPayload/createdAt`.
                 public var createdAt: Foundation.Date
                 /// Creates a new `DataPayloadPayload`.
@@ -1191,10 +1103,10 @@ extension Components {
                 ///   - createdAt:
                 public init(
                     id: Swift.String,
-                    _type: Components.Schemas.ListCreditTransactionsResponse200.DataPayloadPayload._TypePayload,
+                    _type: Swift.String,
                     credits: Swift.Double,
                     description: Swift.String? = nil,
-                    source: Components.Schemas.ListCreditTransactionsResponse200.DataPayloadPayload.SourcePayload? = nil,
+                    source: Swift.String? = nil,
                     createdAt: Foundation.Date
                 ) {
                     self.id = id

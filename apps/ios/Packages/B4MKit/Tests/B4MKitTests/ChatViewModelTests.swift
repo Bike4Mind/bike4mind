@@ -161,6 +161,22 @@ final class ChatViewModelTests: XCTestCase {
     model.stop()
   }
 
+  func testAPromptlessFrameDoesNotClaimTheOptimisticTurn() async {
+    await api.holdSends()
+    let model = makeModel(realtime: FakeRealtime())
+    model.draft = "Hi"
+    let send = Task { await model.send() }
+    let api = self.api!
+    await eventually { await api.sentMessages.count == 1 }
+
+    model.apply(frame("quest-other", reply: "from another device"))
+    XCTAssertEqual(model.liveTurns.count, 2, "a frame without a prompt cannot be proven to be ours")
+    XCTAssertTrue(model.liveTurns.contains { $0.id.hasPrefix("local-") })
+    await api.releaseSends()
+    await send.value
+    model.stop()
+  }
+
   func testPendingActionFrameMarksApprovalAndTicks() async {
     let model = makeModel(realtime: FakeRealtime())
     model.draft = "Book it"

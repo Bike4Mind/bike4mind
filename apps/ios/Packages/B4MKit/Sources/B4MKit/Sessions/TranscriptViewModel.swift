@@ -18,6 +18,7 @@ public final class TranscriptViewModel {
   @ObservationIgnored private let api: any B4MAPI
   @ObservationIgnored private let pageSize: Int
   @ObservationIgnored private var isRefreshing = false
+  @ObservationIgnored private var loadedPageCount = 0
 
   public init(sessionID: String, api: any B4MAPI, pageSize: Int = 50) {
     self.sessionID = sessionID
@@ -32,6 +33,9 @@ public final class TranscriptViewModel {
     await refresh()
   }
 
+  /// Re-reads every page currently held. Pages run oldest-first, so re-reading only the first page
+  /// would cut a long transcript back to its opening turns (a reconnect refresh must not lose what the
+  /// reader paged in). On any failure the held turns stay as they were.
   public func refresh() async {
     guard !isRefreshing else { return }
     isRefreshing = true
@@ -39,8 +43,15 @@ public final class TranscriptViewModel {
 
     if messages.isEmpty { state = .loading }
     do {
-      let page = try await api.listSessionQuests(sessionID: sessionID, cursor: nil, limit: pageSize)
-      pages.replace(with: page)
+      var fresh = PageAccumulator<QuestTurn>()
+      var fetchedPages = 0
+      repeat {
+        let page = try await api.listSessionQuests(sessionID: sessionID, cursor: fresh.nextCursor, limit: pageSize)
+        fresh.append(page)
+        fetchedPages += 1
+      } while fresh.hasMore && fetchedPages < loadedPageCount
+      pages = fresh
+      loadedPageCount = fetchedPages
       turns = pages.items
       messages = TranscriptMapper.messages(from: turns)
       loadMoreError = nil
@@ -64,6 +75,7 @@ public final class TranscriptViewModel {
     do {
       let page = try await api.listSessionQuests(sessionID: sessionID, cursor: cursor, limit: pageSize)
       pages.append(page)
+      loadedPageCount += 1
       turns = pages.items
       messages = TranscriptMapper.messages(from: turns)
       loadMoreError = nil

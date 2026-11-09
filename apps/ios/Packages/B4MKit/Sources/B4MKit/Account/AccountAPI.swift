@@ -9,12 +9,16 @@ public struct AccountDeletionReceipt: Equatable, Sendable {
   }
 }
 
-/// Why `DELETE /api/users/me` did not go through.
+/// Why `POST /api/account/deletion` did not go through.
 public enum AccountDeletionFailure: Error, Equatable, Sendable {
   /// The user owns organizations that must be transferred first.
   case organizationTransferRequired([AccountOrganization])
   /// The server refuses this session (an impersonating admin).
   case notPermitted
+  /// The step-up gate wants proof of a recent sign-in: signing in again satisfies it.
+  case recentSignInRequired
+  /// Deletion is already pending for this account.
+  case alreadyScheduled
   case api(APIError)
 }
 
@@ -37,7 +41,7 @@ public struct AccountClient: AccountAPI {
   public func requestDeletion() async throws -> AccountDeletionReceipt {
     let response: AuthorizedRequester.Response
     do {
-      response = try await requester.send(method: "DELETE", path: AccountDeletionWire.deletePath)
+      response = try await requester.send(method: "POST", path: AccountDeletionWire.path)
     } catch let error as APIError {
       throw AccountDeletionFailure.api(error)
     }
@@ -45,7 +49,7 @@ public struct AccountClient: AccountAPI {
   }
 
   public func restoreDeletion() async throws {
-    let response = try await requester.send(method: "POST", path: AccountDeletionWire.restorePath)
+    let response = try await requester.send(method: "DELETE", path: AccountDeletionWire.path)
     try AccountDeletionWire.restoreResult(status: response.status)
   }
 }

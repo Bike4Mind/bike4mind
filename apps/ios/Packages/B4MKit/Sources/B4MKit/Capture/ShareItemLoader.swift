@@ -133,6 +133,20 @@ public struct ShareItemLoader: Sendable {
     return .file(file)
   }
 
+  /// A provider-chosen name made safe as one path component here and as an upload name on the server:
+  /// no control characters, no path or HFS separators, no leading dots (hidden files, `..`).
+  static func sanitized(_ raw: String) -> String {
+    let separators: Set<Character> = ["/", "\\", ":"]
+    let cleaned = String(
+      raw.unicodeScalars.compactMap { scalar -> Character? in
+        if CharacterSet.controlCharacters.contains(scalar) { return nil }
+        let character = Character(scalar)
+        return separators.contains(character) ? "-" : character
+      })
+    let trimmed = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+    return String(trimmed.drop { $0 == "." || $0 == " " })
+  }
+
   static func needsJPEGTranscode(_ type: UTType) -> Bool {
     type.conforms(to: .heic) || type.conforms(to: .heif)
   }
@@ -140,8 +154,8 @@ public struct ShareItemLoader: Sendable {
   /// Keeps the provider's name when it has one; adds the extension when missing and swaps `.heic` for `.jpg`
   /// after a transcode.
   static func fileName(suggested: String?, location: URL, type: UTType?) -> String {
-    let raw = suggested.flatMap { $0.isEmpty ? nil : $0 } ?? location.lastPathComponent
-    let name = raw.replacingOccurrences(of: "/", with: "-")
+    let name =
+      sanitized(suggested ?? "").nilIfEmpty ?? sanitized(location.lastPathComponent).nilIfEmpty ?? "Shared file"
     guard let wanted = type?.preferredFilenameExtension else { return name }
     let current = (name as NSString).pathExtension
     if current.isEmpty { return "\(name).\(wanted)" }
@@ -155,17 +169,29 @@ public struct ShareItemLoader: Sendable {
 enum ImageTranscoder {
   struct Failure: Error {}
 
-  /// Writes a JPEG copy next to `source` and returns it.
-  static func jpegCopy(of source: URL, quality: Double = 0.9) throws -> URL {
+  /// Long edge of a transcoded photo. A 48 MP HEIC decoded at full size needs well over the share
+  /// extension's ~120 MB memory limit; 4096 px keeps every detail a reader or model can use.
+  static let maxPixelSize = 4096
+
+  /// Writes a JPEG copy next to `source`, downscaled to `maxPixelSize` on its long edge, and returns it.
+  static func jpegCopy(of source: URL, quality: Double = 0.9, maxPixelSize: Int = maxPixelSize) throws -> URL {
     guard let imageSource = CGImageSourceCreateWithURL(source as CFURL, nil) else { throw Failure() }
     let destination = source.deletingPathExtension().appendingPathExtension("jpg")
     guard
       let sink = CGImageDestinationCreateWithURL(destination as CFURL, UTType.jpeg.identifier as CFString, 1, nil)
     else { throw Failure() }
     // Passing the source's properties through keeps orientation, so the JPEG is not rotated.
-    let options = [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary
+    let options =
+      [
+        kCGImageDestinationLossyCompressionQuality: quality,
+        kCGImageDestinationImageMaxPixelSize: maxPixelSize,
+      ] as CFDictionary
     CGImageDestinationAddImageFromSource(sink, imageSource, 0, options)
     guard CGImageDestinationFinalize(sink) else { throw Failure() }
     return destination
   }
+}
+
+extension String {
+  fileprivate var nilIfEmpty: String? { isEmpty ? nil : self }
 }

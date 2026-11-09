@@ -19,7 +19,7 @@ actor FakeTokens: AccessTokenProviding {
     return try queue.removeFirst().get()
   }
 
-  func invalidateAccessToken() { invalidations += 1 }
+  func invalidateAccessToken(_ token: String) { invalidations += 1 }
   func sessionRejected() { rejections += 1 }
 }
 

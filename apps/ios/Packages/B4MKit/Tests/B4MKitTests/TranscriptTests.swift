@@ -138,4 +138,45 @@ final class TranscriptViewModelTests: XCTestCase {
     XCTAssertEqual(model.loadMoreError, .rateLimited)
     XCTAssertEqual(model.state, .loaded)
   }
+
+  func testRefreshKeepsEveryPagedInTurn() async {
+    let api = FakeAPI()
+    await api.setQuestPages([
+      nil: Page(items: [Samples.quest("1")], nextCursor: "c2"),
+      "c2": Page(items: [Samples.quest("2")], nextCursor: "c3"),
+      "c3": Page(items: [Samples.quest("3")], nextCursor: nil),
+    ])
+    let model = TranscriptViewModel(sessionID: "s", api: api, pageSize: 1)
+    await model.load()
+    await model.loadMore()
+    await model.loadMore()
+    XCTAssertEqual(model.turns.map(\.id), ["1", "2", "3"])
+
+    await api.setQuestPages([
+      nil: Page(items: [Samples.quest("1")], nextCursor: "c2"),
+      "c2": Page(items: [Samples.quest("2")], nextCursor: "c3"),
+      "c3": Page(items: [Samples.quest("3")], nextCursor: "c4"),
+      "c4": Page(items: [Samples.quest("4")], nextCursor: nil),
+    ])
+    await model.refresh()
+
+    XCTAssertEqual(model.turns.map(\.id), ["1", "2", "3"], "a reconnect refresh must not truncate to page one")
+    XCTAssertTrue(model.hasMore, "the turn added since is reachable by paging")
+  }
+
+  func testFailedRefreshKeepsTheHeldTurns() async {
+    let api = FakeAPI()
+    await api.setQuestPages([
+      nil: Page(items: [Samples.quest("1")], nextCursor: "c2"),
+      "c2": Page(items: [Samples.quest("2")], nextCursor: nil),
+    ])
+    let model = TranscriptViewModel(sessionID: "s", api: api, pageSize: 1)
+    await model.load()
+    await model.loadMore()
+
+    await api.setFailure(.offline)
+    await model.refresh()
+
+    XCTAssertEqual(model.turns.map(\.id), ["1", "2"])
+  }
 }

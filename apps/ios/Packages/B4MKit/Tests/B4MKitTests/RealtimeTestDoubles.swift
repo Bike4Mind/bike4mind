@@ -127,9 +127,15 @@ final class FakeSocket: WebSocketConnection, @unchecked Sendable {
 final class FakeConnector: WebSocketConnecting, @unchecked Sendable {
   private let sockets = Locked<[FakeSocket]>([])
   private let failures = Locked(0)
+  private let dropOnOpen = Locked(false)
 
   var all: [FakeSocket] { sockets.current }
   var latest: FakeSocket? { sockets.current.last }
+
+  /// When set, every socket is dropped by the server right after the upgrade, before any frame.
+  func dropSocketsOnOpen(_ drop: Bool) {
+    dropOnOpen.mutate { $0 = drop }
+  }
 
   /// The next `count` connects fail.
   func failNext(_ count: Int) {
@@ -145,17 +151,18 @@ final class FakeConnector: WebSocketConnecting, @unchecked Sendable {
     if shouldFail { throw URLError(.cannotConnectToHost) }
     let socket = FakeSocket(url: url)
     sockets.mutate { $0.append(socket) }
+    if dropOnOpen.current { socket.serverClose() }
     return socket
   }
 }
 
 /// Records every sleep. Durations equal to `suspending` park until cancelled (a heartbeat loop the
-/// test drives by hand); everything else returns at once (backoff, polling).
+/// test drives by hand, the realtime slow retry tier); everything else returns at once (backoff, polling).
 final class RecordingSleeper: @unchecked Sendable {
   private let recorded = Locked<[Duration]>([])
   private let suspending: Set<Duration>
 
-  init(suspending: Set<Duration> = [.seconds(15)]) {
+  init(suspending: Set<Duration> = [.seconds(15), .seconds(300)]) {
     self.suspending = suspending
   }
 

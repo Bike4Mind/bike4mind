@@ -40,6 +40,17 @@ public struct UploadJob: Codable, Identifiable, Equatable, Sendable {
   /// The most recent problem, whether the job is waiting to retry or has failed.
   public internal(set) var lastError: String?
   public internal(set) var updatedAt: Date
+  /// Set just before `POST /api/chat` goes out. The route is not idempotent, so a job found with this set
+  /// may already have its turn on the server and must be reconciled before it is sent again.
+  public internal(set) var sendAttemptedAt: Date?
+  /// Optional on disk so records written before the field existed still decode.
+  private var registerFailureCount: Int?
+
+  /// Transient failures in `registering` so far; bounds a server that keeps answering 5xx.
+  public internal(set) var registerFailures: Int {
+    get { registerFailureCount ?? 0 }
+    set { registerFailureCount = newValue }
+  }
 
   public init(
     id: UUID = UUID(), destination: CaptureDestination, payload: UploadPayload, note: String?, now: Date

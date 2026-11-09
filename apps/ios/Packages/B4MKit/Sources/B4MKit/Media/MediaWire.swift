@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Hand-written wire format for the internal Files routes the web app's generated-media views read:
 /// `GET /api/files?filters[generated]=true&filters[type]=...` and `GET /api/files/{id}`.
@@ -8,6 +9,19 @@ import Foundation
 /// endpoints return generation jobs, not the saved gallery, and there is no image list at all).
 /// Keep in sync with `searchFabFilesSchema` (b4m-core/services/src/fabFileService/search.ts).
 enum MediaWire {
+  private static let logger = Logger(subsystem: "com.bike4mind.app", category: "media")
+
+  /// Logs why a body did not decode (field paths only, no values) before it becomes `malformedResponse`.
+  static func decode<T: Decodable>(_ type: T.Type, from body: Data) throws -> T {
+    do {
+      return try JSONDecoder().decode(type, from: body)
+    } catch {
+      logger.error(
+        "Media response did not decode as \(String(describing: type), privacy: .public): \(WireDecoding.describe(error), privacy: .public)"
+      )
+      throw APIError.malformedResponse
+    }
+  }
   static let filesPath = "api/files"
 
   static func listQuery(kind: MediaKind?, page: Int, limit: Int) -> [URLQueryItem] {
@@ -49,18 +63,14 @@ enum MediaWire {
 
   static func page(status: Int, body: Data) throws -> MediaPage {
     guard status == 200 else { throw APIError(status: status) }
-    guard let decoded = try? JSONDecoder().decode(ListBody.self, from: body) else {
-      throw APIError.malformedResponse
-    }
+    let decoded = try decode(ListBody.self, from: body)
     // A row the gallery cannot draw (a document, a malformed record) is skipped, not fatal.
     return MediaPage(items: decoded.data.compactMap(item(from:)), hasMore: decoded.hasMore ?? false)
   }
 
   static func item(status: Int, body: Data) throws -> MediaItem {
     guard status == 200 else { throw APIError(status: status) }
-    guard let file = try? JSONDecoder().decode(File.self, from: body), let item = item(from: file) else {
-      throw APIError.malformedResponse
-    }
+    guard let item = item(from: try decode(File.self, from: body)) else { throw APIError.malformedResponse }
     return item
   }
 

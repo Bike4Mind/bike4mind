@@ -9,10 +9,8 @@ struct AccountRestoreView: View {
 
   var body: some View {
     AccountRestoreContent(
-      scheduledFor: scheduledFor,
-      model: AccountRestoreViewModel(
-        api: services.account,
-        didRestore: { [services] in services.accountStatus.reset() }),
+      scheduledFor: scheduledFor, api: services.account,
+      didRestore: { [services] in services.accountStatus.reset() },
       signOut: { [services] in await services.signOutEverywhere() })
   }
 }
@@ -24,10 +22,13 @@ private struct AccountRestoreContent: View {
   @State private var model: AccountRestoreViewModel
   @State private var isSigningOut = false
 
-  init(scheduledFor: Date?, model: AccountRestoreViewModel, signOut: @escaping () async -> Void) {
+  init(
+    scheduledFor: Date?, api: any AccountAPI, didRestore: @escaping @MainActor () -> Void,
+    signOut: @escaping () async -> Void
+  ) {
     self.scheduledFor = scheduledFor
     self.signOut = signOut
-    _model = State(initialValue: model)
+    _model = State(initialValue: AccountRestoreViewModel(api: api, didRestore: didRestore))
   }
 
   var body: some View {
@@ -95,7 +96,8 @@ private struct AccountRestoreContent: View {
 
   private var deadlineText: String {
     guard let scheduledFor else {
-      return "It will be permanently deleted at the end of the 30-day grace period unless you restore it."
+      return
+        "It will be permanently deleted at the end of the \(AccountDeletionViewModel.gracePeriodDays)-day grace period unless you restore it."
     }
     return
       "It will be permanently deleted on \(scheduledFor.formatted(date: .long, time: .omitted)) unless you restore it."

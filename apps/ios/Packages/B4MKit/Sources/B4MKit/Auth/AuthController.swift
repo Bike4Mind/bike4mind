@@ -1,6 +1,11 @@
 import Foundation
 import Observation
+import Security
 import os
+
+#if canImport(UIKit)
+  import UIKit
+#endif
 
 /// Owns the signed-in session: PKCE sign-in, the Keychain-held rotating refresh token, the
 /// in-memory access token, sign-out and the optional App Lock.
@@ -49,6 +54,7 @@ public final class AuthController: AccessTokenProviding {
   /// instead of writing a dead session's token back to the Keychain.
   @ObservationIgnored private var sessionGeneration = 0
   @ObservationIgnored private var rotationContinuations: [UUID: AsyncStream<String>.Continuation] = [:]
+  @ObservationIgnored private var protectedDataObservers: [any NSObjectProtocol] = []
 
   private static let appLockKey = "b4m.appLockEnabled"
 
@@ -79,17 +85,48 @@ public final class AuthController: AccessTokenProviding {
 
   // MARK: - Session lifecycle
 
-  /// Reads the Keychain once at launch. A stored refresh token means signed in; the access token is
-  /// minted lazily by the first `accessToken()` call.
+  /// Reads the Keychain at launch. A stored refresh token means signed in; the access token is minted
+  /// lazily by the first `accessToken()` call. A Keychain that is not readable yet (launched before first
+  /// unlock) leaves the state `.restoring` and retries when protected data becomes available or the app
+  /// returns to the foreground: it is not evidence of a signed-out user.
   public func restore() {
     guard state == .restoring else { return }
     do {
       let hasSession = try tokenStore.refreshToken() != nil
       state = hasSession ? (isAppLockEnabled ? .locked : .signedIn) : .signedOut(nil)
+    } catch let error as KeychainError where error.isTransient {
+      logger.notice("Keychain not readable yet (status \(error.status, privacy: .public)); restore deferred")
+      observeProtectedDataIfNeeded()
     } catch {
       logger.error("Keychain read failed during restore: \(error, privacy: .public)")
       state = .signedOut(nil)
     }
+  }
+
+  private func observeProtectedDataIfNeeded() {
+    guard protectedDataObservers.isEmpty else { return }
+    for name in Self.restoreRetryNotifications {
+      let observer = NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) {
+        [weak self] _ in
+        MainActor.assumeIsolated { self?.retryDeferredRestore() }
+      }
+      protectedDataObservers.append(observer)
+    }
+  }
+
+  private func retryDeferredRestore() {
+    restore()
+    guard state != .restoring else { return }
+    for observer in protectedDataObservers { NotificationCenter.default.removeObserver(observer) }
+    protectedDataObservers = []
+  }
+
+  private static var restoreRetryNotifications: [Notification.Name] {
+    #if canImport(UIKit)
+      [UIApplication.protectedDataDidBecomeAvailableNotification, UIApplication.willEnterForegroundNotification]
+    #else
+      []
+    #endif
   }
 
   /// Runs the PKCE authorization-code flow through the system web sheet and stores the resulting session.
@@ -138,6 +175,7 @@ public final class AuthController: AccessTokenProviding {
   /// when there is no session, and `AuthError.refreshRejected` when the server just ended it.
   public func accessToken() async throws -> String {
     if state == .restoring { restore() }
+    if state == .restoring { throw KeychainError(status: errSecInteractionNotAllowed) }
     if case .signedOut = state { throw AuthError.signedOut }
 
     if let token = cachedAccessToken, token.isUsable(at: now()) {
@@ -154,9 +192,11 @@ public final class AuthController: AccessTokenProviding {
     return try await refresh.value
   }
 
-  /// Drops the cached access token, e.g. after an API call answered 401, so the next
-  /// `accessToken()` refreshes.
-  public func invalidateAccessToken() {
+  /// Drops the cached access token after an API call carrying `rejected` answered 401, so the next
+  /// `accessToken()` refreshes. A token already replaced by a newer one is left alone: N concurrent
+  /// 401s on the same stale token cause one refresh, not N.
+  public func invalidateAccessToken(_ rejected: String) {
+    guard cachedAccessToken?.value == rejected else { return }
     cachedAccessToken = nil
   }
 

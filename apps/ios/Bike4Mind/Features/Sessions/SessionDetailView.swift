@@ -18,6 +18,8 @@ private struct ChatScreen: View {
   let session: SessionSummary
   @Environment(AppServices.self) private var services
   @State private var model: ChatViewModel
+  /// The list row's name, or one looked up after load for a session opened by id (push, link, intent).
+  @State private var title: String
   @FocusState private var composerFocused: Bool
   @State private var isRecordingVoice = false
   @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -28,6 +30,7 @@ private struct ChatScreen: View {
     agentRuns: any AgentRunStarting
   ) {
     self.session = session
+    _title = State(initialValue: session.name)
     _model = State(
       initialValue: ChatViewModel(
         sessionID: session.id, api: api, realtime: realtime, title: session.name, activities: activities,
@@ -36,7 +39,7 @@ private struct ChatScreen: View {
 
   var body: some View {
     content
-      .navigationTitle(session.name.isEmpty ? "Untitled" : session.name)
+      .navigationTitle(title.isEmpty ? "Untitled" : title)
       .navigationBarTitleDisplayMode(.inline)
       .background(Tokens.Palette.background)
       .safeAreaInset(edge: .bottom) { composer }
@@ -48,11 +51,14 @@ private struct ChatScreen: View {
           },
           onCancel: { isRecordingVoice = false })
       }
-      .task { await model.load() }
+      .task {
+        await model.load()
+        await resolveTitleIfNeeded()
+      }
       .task { await model.listen() }
       .onDisappear { model.stop() }
       .onChange(of: model.turns) { _, turns in
-        services.chatTurnsChanged(sessionID: session.id, title: session.name, turns: turns)
+        services.chatTurnsChanged(sessionID: session.id, title: title, turns: turns)
       }
       .onChange(of: settledLiveTurnCount) { _, _ in services.refreshWidgetCredits() }
       .onChange(of: services.navigator.composeRequest, initial: true) { _, _ in takeComposeRequest() }
@@ -65,6 +71,16 @@ private struct ChatScreen: View {
   /// Live turns that reached a terminal state; each one spent credits, so the Credits widget re-reads the balance.
   private var settledLiveTurnCount: Int {
     model.liveTurns.filter { $0.status?.isTerminal ?? false }.count
+  }
+
+  private func resolveTitleIfNeeded() async {
+    guard title.isEmpty,
+      let name = await SessionLookup.name(
+        forSession: session.id, api: services.api, cache: services.sessionListCache, turns: model.transcript.turns)
+    else { return }
+    title = name
+    // The widget row was recorded without a name when the turns first loaded.
+    services.chatTurnsChanged(sessionID: session.id, title: name, turns: model.turns)
   }
 
   /// An App Intent (Start quest) asked for this session's composer: prefill and focus it.

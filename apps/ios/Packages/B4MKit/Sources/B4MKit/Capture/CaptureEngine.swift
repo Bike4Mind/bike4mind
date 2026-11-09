@@ -9,6 +9,10 @@ public actor CaptureEngine {
   public struct Configuration: Sendable {
     /// PUTs attempted before a job is failed.
     public var maxUploadAttempts = 3
+    /// Transient failures (5xx, offline, rate limit) tolerated in `registering` before the job is failed.
+    public var maxRegisterFailures = 10
+    /// How far before `sendAttemptedAt` a server-side turn still counts as this job's, for clock skew.
+    public var sendClockSkew: TimeInterval = 5 * 60
     public var pollInterval: Duration = .seconds(2)
     /// Scan polls per `register` pass; a still-scanning file stays `registering` for the next pass.
     public var maxPollsPerPass = 15
@@ -148,6 +152,7 @@ public actor CaptureEngine {
     job.uploadSession = nil
     job.uploadTaskID = nil
     job.uploadAttempts = 0
+    job.registerFailures = 0
     job.lastError = nil
     persist(job)
     await advance(jobID)
@@ -200,11 +205,13 @@ public actor CaptureEngine {
   // MARK: - Advancing
 
   /// Moves one job as far as it can go without waiting on the network's other side: `queued` runs to
-  /// `uploading`, `registering` runs to `done`.
+  /// `uploading`, `registering` runs to `done`. A job makes at most a couple of transitions per pass; the
+  /// step cap only matters if the store stops recording them (a full disk), which must not spin.
   private func advance(_ id: UUID) async {
     guard inFlight.insert(id).inserted else { return }
     defer { inFlight.remove(id) }
-    while let job = try? store.load(id: id) {
+    for _ in 0..<4 {
+      guard let job = try? store.load(id: id) else { return }
       switch job.stage {
       case .queued:
         guard await startUpload(job) else { return }
@@ -222,8 +229,7 @@ public actor CaptureEngine {
     var job = job
     guard case .file(let name, let mimeType, let byteCount) = job.payload else {
       job.stage = .registering
-      persist(job)
-      return true
+      return persist(job)
     }
     let file = store.payloadURL(jobID: job.id, fileName: name)
     guard FileManager.default.fileExists(atPath: file.path(percentEncoded: false)) else {
@@ -266,12 +272,11 @@ public actor CaptureEngine {
           if let note = job.note { try await api.setNotes(fileID: fileID, notes: note) }
           try await api.addFileToLake(lakeID: lakeID, fileID: fileID)
         case .session(let sessionID, _):
-          try await api.sendSessionMessage(
-            sessionID: sessionID, message: Self.message(for: job), fileIDs: [fileID])
+          try await sendTurn(&job, sessionID: sessionID, fileIDs: [fileID])
         }
       case .message:
         guard case .session(let sessionID, _) = job.destination else { throw CaptureError.payloadMissing }
-        try await api.sendSessionMessage(sessionID: sessionID, message: Self.message(for: job), fileIDs: [])
+        try await sendTurn(&job, sessionID: sessionID, fileIDs: [])
       }
       job.stage = .done
       job.lastError = nil
@@ -281,6 +286,33 @@ public actor CaptureEngine {
     } catch {
       fail(&job, error)
     }
+  }
+
+  /// `POST /api/chat` is not idempotent: a timeout or 5xx after the server accepted the turn would, on a
+  /// blind retry, post it twice and charge for it twice. So the attempt is recorded before the request, and
+  /// any later pass first looks for the turn on the server.
+  private func sendTurn(_ job: inout UploadJob, sessionID: String, fileIDs: [String]) async throws {
+    let message = Self.message(for: job)
+    if let attemptedAt = job.sendAttemptedAt {
+      let lookup = try await api.findSentTurn(
+        sessionID: sessionID, message: message, sentAfter: attemptedAt.addingTimeInterval(-configuration.sendClockSkew))
+      switch lookup {
+      case .found(let questID):
+        let jobID = job.id
+        logger.notice(
+          "Capture job \(jobID, privacy: .public) already reached quest \(questID, privacy: .public); not resending")
+        return
+      case .notFound:
+        break
+      case .inconclusive:
+        // The user's explicit retry is the go-ahead to send again.
+        job.sendAttemptedAt = nil
+        throw CaptureError.deliveryUnknown
+      }
+    }
+    job.sendAttemptedAt = now()
+    guard persist(job) else { throw StoreUnavailable() }
+    try await api.sendSessionMessage(sessionID: sessionID, message: message, fileIDs: fileIDs)
   }
 
   private func waitUntilClean(fileID: String) async throws -> Bool {
@@ -304,19 +336,31 @@ public actor CaptureEngine {
 
   // MARK: - Failure
 
-  /// Transient trouble leaves the job where it is with the reason recorded; anything else fails it.
+  /// Transient trouble leaves the job where it is with the reason recorded (up to
+  /// `maxRegisterFailures` in `registering`); anything else fails it.
   private func fail(_ job: inout UploadJob, _ error: any Error) {
     let reason = Self.describe(error)
     job.lastError = reason
     if Self.isTransient(error) {
-      logger.notice("Capture job waiting to retry: \(reason, privacy: .public)")
+      if job.stage == .registering { job.registerFailures += 1 }
+      if job.registerFailures >= configuration.maxRegisterFailures {
+        let failures = job.registerFailures
+        logger.error("Capture job gave up after \(failures) failures: \(reason, privacy: .public)")
+        job.stage = .failed
+      } else {
+        logger.notice("Capture job waiting to retry: \(reason, privacy: .public)")
+      }
     } else {
       job.stage = .failed
     }
     persist(job)
   }
 
+  /// The job store refused a write; nothing may go out that the store cannot record.
+  struct StoreUnavailable: Error {}
+
   static func isTransient(_ error: any Error) -> Bool {
+    if error is StoreUnavailable { return true }
     guard let api = error as? APIError else { return false }
     switch api {
     case .offline, .rateLimited, .server, .signedOut: return true
@@ -330,6 +374,8 @@ public actor CaptureEngine {
     case CaptureError.turnRefused(let message): message ?? "The conversation could not take this message."
     case CaptureError.blocked: "The file was blocked by the server's scan."
     case CaptureError.payloadMissing: "The file is no longer on this device."
+    case CaptureError.deliveryUnknown: "This may already be in the conversation. Retry to send it again."
+    case is StoreUnavailable: "This device is out of storage."
     case APIError.signedOut: "Sign in to Bike4Mind to finish this."
     case APIError.offline: "No connection."
     case APIError.forbidden: "You don't have permission to add to this destination."
@@ -402,15 +448,19 @@ public actor CaptureEngine {
     for job in jobs() where job.stage == .done && job.updatedAt < cutoff { try? store.remove(id: job.id) }
   }
 
-  private func persist(_ job: UploadJob) {
+  /// Returns whether the job was recorded; callers that move a job forward stop when it was not.
+  @discardableResult
+  private func persist(_ job: UploadJob) -> Bool {
     var job = job
     job.updatedAt = now()
+    defer { notify() }
     do {
       try store.save(job)
+      return true
     } catch {
       logger.error("Saving capture job failed: \(error, privacy: .public)")
+      return false
     }
-    notify()
   }
 }
 

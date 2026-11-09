@@ -28,6 +28,14 @@ struct ZoomableImageView: View {
           .accessibilityLabel("Generated image")
           .accessibilityAddTraits(.isImage)
           .accessibilityIdentifier("media-zoomable-image")
+          .accessibilityZoomAction { action in
+            withAnimation(.easeInOut(duration: 0.2)) {
+              let step: CGFloat = action.direction == .zoomIn ? 1.5 : 1 / 1.5
+              scale = (scale * step).clamped(to: range)
+              committedScale = scale
+              if scale <= 1 { resetPan() }
+            }
+          }
       case .failure:
         Color.clear.task { await onFailure() }
       default:

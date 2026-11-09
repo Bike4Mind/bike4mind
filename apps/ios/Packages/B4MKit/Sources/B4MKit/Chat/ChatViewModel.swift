@@ -96,8 +96,16 @@ public final class ChatViewModel {
     sendFailures[questID]
   }
 
+  /// Call from the screen's `.task`. The first appearance loads the transcript. A reappearance after `stop()`
+  /// must not leave a turn stuck on "working": agent runs send no frames, so only polling ever settles them.
   public func load() async {
-    await transcript.load()
+    let hasUnsettledTurns = liveTurns.contains { !($0.status?.isTerminal ?? false) }
+    if hasUnsettledTurns, case .loaded = transcript.state {
+      await refresh()
+    } else {
+      await transcript.load()
+    }
+    resumePolling()
   }
 
   public func refresh() async {
@@ -182,8 +190,15 @@ public final class ChatViewModel {
     lastHeardAt[receipt.questID] = lastHeardAt[receipt.questID] ?? now()
 
     if stillAwaiting, let localIndex = liveTurns.firstIndex(where: { $0.id == localID }) {
-      if liveTurns.contains(where: { $0.id == receipt.questID }) {
+      if let streamedIndex = liveTurns.firstIndex(where: { $0.id == receipt.questID }) {
         // A frame for this quest arrived first and was not matched to the optimistic turn.
+        let streamed = liveTurns[streamedIndex]
+        if streamed.prompt?.isEmpty ?? true, let prompt = liveTurns[localIndex].prompt {
+          liveTurns[streamedIndex] = QuestTurn(
+            id: streamed.id, prompt: prompt, reply: streamed.reply, status: streamed.status, kind: streamed.kind,
+            errorCode: streamed.errorCode, createdAt: streamed.createdAt, creditsUsed: streamed.creditsUsed,
+            pendingAction: streamed.pendingAction)
+        }
         liveTurns.remove(at: localIndex)
       } else {
         let local = liveTurns[localIndex]
@@ -270,9 +285,11 @@ public final class ChatViewModel {
     play(ChatHaptic.transition(from: stored, to: new))
   }
 
+  /// Only an exact, non-empty prompt claims the optimistic turn: a prompt-less frame could be another
+  /// device's quest in the same session. An unmatched frame of our own is reconciled by `accept`.
   private static func prompt(_ local: String?, matches streamed: String?) -> Bool {
     guard let streamed = streamed?.trimmingCharacters(in: .whitespacesAndNewlines), !streamed.isEmpty else {
-      return true
+      return false
     }
     return local?.trimmingCharacters(in: .whitespacesAndNewlines) == streamed
   }
@@ -296,6 +313,13 @@ public final class ChatViewModel {
         if outcome { polls += 1 }
       }
       self?.finishPolling(questID)
+    }
+  }
+
+  /// Picks polling back up for accepted turns still in flight; `startPolling` ignores ones already polled.
+  private func resumePolling() {
+    for turn in liveTurns where !(turn.status?.isTerminal ?? false) && !turn.id.hasPrefix("local-") {
+      startPolling(turn.id)
     }
   }
 
@@ -343,10 +367,13 @@ public final class ChatViewModel {
     }
   }
 
-  /// Live turns the refreshed transcript already shows as settled are redundant.
+  /// Live turns the refreshed transcript already shows as settled are redundant. A transcript copy with an
+  /// explicit terminal status also wins over a live copy still marked running: that live copy is one whose
+  /// polling stopped (the screen went away) before it heard the end.
   private func pruneSettledLiveTurns() {
     let settled = Set(transcript.turns.filter { $0.status?.isTerminal ?? true }.map(\.id))
-    liveTurns.removeAll { settled.contains($0.id) && ($0.status?.isTerminal ?? true) }
+    let finished = Set(transcript.turns.filter { $0.status?.isTerminal == true }.map(\.id))
+    liveTurns.removeAll { finished.contains($0.id) || (settled.contains($0.id) && ($0.status?.isTerminal ?? true)) }
   }
 
   private func play(_ haptic: ChatHaptic?) {

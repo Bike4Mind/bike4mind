@@ -24,8 +24,8 @@ public enum DeepLinkRouter {
       guard let identifier else { return .sessions }
       return isValidIdentifier(identifier) ? .session(id: identifier) : .web(url)
     case "lakes":
-      guard let identifier else { return .lakes }
-      return isValidIdentifier(identifier) ? .lake(id: identifier) : .web(url)
+      // No native lake screen yet: the web keeps the lake id (and anything else in the URL).
+      return identifier == nil ? .lakes : .web(url)
     case "media":
       return .media
     case "settings":

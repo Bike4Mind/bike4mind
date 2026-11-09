@@ -51,7 +51,7 @@ struct SignInView: View {
     VStack(spacing: Tokens.Spacing.m) {
       if errorMessage == nil, !hasAttemptedSignIn, signOutReason == .accountDeletionRequested {
         Text(
-          "Your account is scheduled for deletion. Sign in within 30 days to restore it, or do nothing and it will be permanently deleted."
+          "Your account is scheduled for deletion. Sign in within \(AccountDeletionViewModel.gracePeriodDays) days to restore it, or do nothing and it will be permanently deleted."
         )
         .font(Tokens.Typography.caption)
         .foregroundStyle(Tokens.Palette.secondaryText)

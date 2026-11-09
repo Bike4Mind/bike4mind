@@ -12,7 +12,7 @@ public enum AssistantRequest: Equatable, Sendable {
   case captureNote(text: String)
 
   /// Prefix that tells the assistant what to do with a captured note. v1 stand-in for a real lake upload.
-  public static let captureNotePrefix = "Save this note to my data lake:\n\n"
+  public static let captureNotePrefix = "Save this note:\n\n"
 
   /// Every intent opens the composer with text in it and sends nothing: a misheard Siri phrase must not
   /// spend credits, and the user reviews the text first.

@@ -21,7 +21,7 @@ struct BearerAuthMiddleware: ClientMiddleware {
     // A one-shot body cannot be resent; surface the 401 rather than send a truncated request.
     guard body == nil || body?.iterationBehavior == .multiple else { return (response, responseBody) }
 
-    await tokens.invalidateAccessToken()
+    await tokens.invalidateAccessToken(token)
     let freshToken = try await tokens.accessToken()
     let (retryResponse, retryBody) = try await next(authorized(request, token: freshToken), body, baseURL)
     if retryResponse.status == .unauthorized {

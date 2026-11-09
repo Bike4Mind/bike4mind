@@ -166,6 +166,10 @@ final class WSClientTests: XCTestCase {
     XCTAssertEqual(firstIDs, ["sub-early", "sub-late"])
     XCTAssertFalse(events.current.contains(.refetchNeeded), "the first connect is not a reconnect")
 
+    clock.advance(by: 1)
+    first.push("pong")
+    let pongTime = clock.now
+    await eventually { await client.lastReceivedAt == pongTime }
     first.serverClose()
     await eventually { [connector] in connector!.all.count == 2 }
     let second = try XCTUnwrap(connector.latest)
@@ -191,12 +195,57 @@ final class WSClientTests: XCTestCase {
     await client.start()
 
     await eventually { await client.connectionState == .suspended }
+    await eventually { [sleeper] in sleeper!.durations.contains(.seconds(300)) }
     let attemptsBeforeResume = await handshake.mintedTickets.count
-    XCTAssertEqual(attemptsBeforeResume, 4, "the initial try plus three retries")
+    XCTAssertEqual(attemptsBeforeResume, 4, "the initial try plus three retries, then the slow tier")
 
     connector.failNext(0)
     await client.resume()
     await eventually { await client.connectionState == .connected }
+  }
+
+  func testSocketsDroppedRightAfterOpenKeepBackingOffWithoutRefetching() async throws {
+    let client = makeClient(maxAttempts: 4)
+    let events = await record(client)
+    connector.dropSocketsOnOpen(true)
+    await client.start()
+
+    await eventually { await client.connectionState == .suspended }
+    let fastDelays = sleeper.durations.filter { $0 < .seconds(15) }
+    XCTAssertEqual(
+      fastDelays, [.milliseconds(125), .milliseconds(500), .milliseconds(1125), .milliseconds(2000)],
+      "a socket that never carried a frame is a failed attempt: the backoff keeps growing")
+    let minted = await handshake.mintedTickets.count
+    XCTAssertEqual(minted, 5, "bounded by maxAttempts instead of minting tickets forever")
+    XCTAssertFalse(events.current.contains(.refetchNeeded), "no connection was ever established")
+  }
+
+  func testRefetchIsRequestedOncePerEstablishedConnectionLost() async throws {
+    let client = makeClient(maxAttempts: 3)
+    let first = try await connected(client)
+    let events = await record(client)
+    clock.advance(by: 1)
+    first.push("pong")
+    let pongTime = clock.now
+    await eventually { await client.lastReceivedAt == pongTime }
+
+    connector.dropSocketsOnOpen(true)
+    first.serverClose()
+    await eventually { await client.connectionState == .suspended }
+    connector.dropSocketsOnOpen(false)
+    await client.resume()
+    await eventually { [connector] in connector!.latest.map { !$0.isClosed } ?? false }
+    await eventually { await client.connectionState == .connected }
+
+    XCTAssertEqual(events.current.filter { $0 == .refetchNeeded }.count, 1)
+  }
+
+  func testRedactedErrorsNeverCarryTheTicketURL() {
+    let error = URLError(
+      .badServerResponse, userInfo: [NSURLErrorFailingURLStringErrorKey: "wss://ws.example.test/prod?ticket=secret"])
+    let text = WSClient.redacted(error)
+    XCTAssertFalse(text.contains("ticket"))
+    XCTAssertFalse(text.contains("example.test"))
   }
 
   // MARK: - Token rotation

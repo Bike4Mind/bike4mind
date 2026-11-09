@@ -7,8 +7,10 @@ public enum Route: Hashable, Sendable {
   /// The Sessions tab root.
   case sessions
   case session(id: String)
-  /// The Lakes tab root. Lake detail arrives with its screen; until then `lake` lands on the root.
+  /// The Lakes tab root.
   case lakes
+  /// No native lake screen exists yet, so `AppNavigator` opens the lake on the web and stays on the current tab.
+  /// `DeepLinkRouter` already sends lake links as `.web` with the original URL; this case is for other producers.
   case lake(id: String)
   /// The Media tab root.
   case media
@@ -19,14 +21,14 @@ public enum Route: Hashable, Sendable {
   /// A bike4mind.com page with no native screen: handed to Safari rather than dropped.
   case web(URL)
 
-  /// The tab a route lives in; `nil` for `.web`.
+  /// The tab a route lives in; `nil` for what opens on the web.
   public var tab: AppTab? {
     switch self {
     case .sessions, .session, .compose: .sessions
-    case .lakes, .lake: .lakes
+    case .lakes: .lakes
     case .media: .media
     case .settings: .settings
-    case .web: nil
+    case .lake, .web: nil
     }
   }
 }
@@ -44,9 +46,13 @@ public struct ComposeRequest: Hashable, Sendable {
 
   public let target: Target
   public let draft: String
+  /// The session's name when the caller already knows it (a Shortcut's session parameter), so the screen
+  /// opened by id is titled at once instead of after a lookup.
+  public let sessionName: String
 
-  public init(target: Target, draft: String = "") {
+  public init(target: Target, draft: String = "", sessionName: String = "") {
     self.target = target
     self.draft = draft
+    self.sessionName = sessionName
   }
 }

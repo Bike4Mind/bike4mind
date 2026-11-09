@@ -6,24 +6,27 @@ struct NotificationSettingsView: View {
 
   var body: some View {
     NotificationSettingsContent(
-      model: NotificationSettingsViewModel(
-        push: services.push, prefs: services.notificationPrefs, settings: services.systemSettings))
+      push: services.push, prefs: services.notificationPrefs, settings: services.systemSettings)
   }
 }
 
 private struct NotificationSettingsContent: View {
+  /// Off until the server stores per-category preferences: the local prefs service is not read by anything that
+  /// sends pushes, so these toggles would change nothing. Flip on with the server-backed service in `AppServices`.
+  private static let showsCategoryPreferences = false
+
   @State private var model: NotificationSettingsViewModel
   @Environment(\.scenePhase) private var scenePhase
 
-  init(model: NotificationSettingsViewModel) {
-    _model = State(initialValue: model)
+  init(push: PushRegistrationCoordinator, prefs: any NotificationPrefsService, settings: any SystemSettingsOpening) {
+    _model = State(initialValue: NotificationSettingsViewModel(push: push, prefs: prefs, settings: settings))
   }
 
   var body: some View {
     Form {
       Group {
         masterSection
-        if model.isMasterEnabled {
+        if Self.showsCategoryPreferences, model.isMasterEnabled {
           categorySection
         }
       }

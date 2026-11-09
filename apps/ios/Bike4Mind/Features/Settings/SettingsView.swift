@@ -54,7 +54,7 @@ struct SettingsView: View {
           .foregroundStyle(Tokens.Palette.destructive)
           .accessibilityIdentifier("settings-delete-account-link")
       } footer: {
-        Text("Permanently deletes your account after a 30-day grace period.")
+        Text("Permanently deletes your account after a \(AccountDeletionViewModel.gracePeriodDays)-day grace period.")
       }
       .listRowBackground(Tokens.Palette.groupedBackground)
     }

@@ -1,16 +1,16 @@
 name: iOS
 
+# openapi.json is not a trigger: the job regenerates from the committed package snapshot, so it cannot
+# detect drift from the server spec. Spec sync is a tracked follow-up of the iOS epic.
 on:
   pull_request:
     paths:
       - 'apps/ios/**'
-      - 'apps/client/public/openapi.json'
       - '.github/workflows/ios.yml'
   push:
     branches: [main]
     paths:
       - 'apps/ios/**'
-      - 'apps/client/public/openapi.json'
       - '.github/workflows/ios.yml'
 
 permissions:
@@ -18,7 +18,7 @@ permissions:
 
 concurrency:
   group: ios-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   ios:
@@ -30,6 +30,32 @@ jobs:
         working-directory: apps/ios
     steps:
       - uses: actions/checkout@v6
+
+      # Pin the toolchain: the newest Xcode 26.x installed on the image, never the image default.
+      - name: Select Xcode
+        working-directory: .
+        run: |
+          xcode_app=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1)
+          if [ -z "$xcode_app" ]; then
+            echo "No Xcode 26.x found on this runner image" >&2
+            exit 1
+          fi
+          sudo xcode-select -s "$xcode_app"
+          xcodebuild -version
+
+      # Use whichever iPhone simulator the pinned Xcode ships instead of hardcoding a model name.
+      - name: Pick simulator
+        run: |
+          device=$(xcrun simctl list devices available -j | python3 -c "
+          import json, sys
+          names = [d['name'] for ds in json.load(sys.stdin)['devices'].values() for d in ds if d['name'].startswith('iPhone')]
+          print(sorted(names)[0] if names else '')")
+          if [ -z "$device" ]; then
+            echo "No iPhone simulator available" >&2
+            exit 1
+          fi
+          echo "Using simulator: $device"
+          echo "SIMULATOR=$device" >> "$GITHUB_ENV"
 
       # Swift packages resolve and compile the OpenAPI generator once; later runs reuse them.
       - name: Cache SwiftPM
@@ -43,6 +69,9 @@ jobs:
           key: ios-spm-${{ runner.os }}-${{ hashFiles('apps/ios/**/Package.swift', 'apps/ios/**/Package.resolved') }}
           restore-keys: ios-spm-${{ runner.os }}-
 
+      - name: Entitlements parity
+        run: Tools/check-entitlements-parity.sh
+
       - name: Lint
         run: make lint
 
@@ -53,7 +82,12 @@ jobs:
       - name: Generated client is reproducible
         run: |
           make generate-client
-          git diff --exit-code -- .
+          changes=$(git status --porcelain -- .)
+          if [ -n "$changes" ]; then
+            echo "Regenerating changed the tree (modified or untracked files):" >&2
+            echo "$changes" >&2
+            exit 1
+          fi
 
       - name: Build
         run: make build

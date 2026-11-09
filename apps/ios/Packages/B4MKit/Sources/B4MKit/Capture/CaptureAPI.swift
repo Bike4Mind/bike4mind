@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// The presigned upload the server minted for one file. `uploadURL` is a one-shot S3 PUT whose signature
 /// binds the exact byte count and expires at `expiresAt` (ten minutes on the server today).
@@ -43,6 +44,17 @@ public enum CaptureError: Error, Equatable, Sendable {
   case turnRefused(message: String?)
   case blocked
   case payloadMissing
+  /// An earlier send may have reached the server and the session is too long to check; sending again could
+  /// duplicate the turn (and its credit charge), so the user decides.
+  case deliveryUnknown
+}
+
+/// Whether a session already holds the turn a capture tried to send.
+public enum SentTurnLookup: Equatable, Sendable {
+  case found(questID: String)
+  case notFound
+  /// The session's recent turns could not all be read.
+  case inconclusive
 }
 
 /// Everything capture asks of the backend. Hand-written: these are public `/api/v1` contracts that the
@@ -56,6 +68,9 @@ public protocol CaptureAPI: Sendable {
   func addFileToLake(lakeID: String, fileID: String) async throws
   /// Sends a chat turn into `sessionID` carrying the uploaded files. Not idempotent.
   func sendSessionMessage(sessionID: String, message: String, fileIDs: [String]) async throws
+  /// Looks for a turn in `sessionID` whose prompt is `message`, created at or after `sentAfter`. The chat
+  /// route takes no idempotency key, so prompt plus time window is the only reconciliation available.
+  func findSentTurn(sessionID: String, message: String, sentAfter: Date) async throws -> SentTurnLookup
 }
 
 /// Hand-written client over `AuthorizedRequester` (bearer, one 401 retry, sign-out on the second).
@@ -67,6 +82,7 @@ public protocol CaptureAPI: Sendable {
 /// - `GET   /api/v1/data-lakes`                      listDataLakes (dataLakes.contract.ts)
 /// - `POST  /api/v1/data-lakes/{id}/files/{file_id}` addDataLakeFile
 /// - `POST  /api/chat`                               sendChatMessage with `fileIds` (chat.contract.ts)
+/// - `GET   /api/v1/sessions/{id}/quests`            listSessionQuests (oldest first)
 ///
 /// Keep in sync with those contracts. They move into `B4MClient` (and behind `B4MAPI`) when the generator's
 /// operation filter takes them.
@@ -114,6 +130,20 @@ public struct CaptureClient: CaptureAPI {
     let error: String?
   }
 
+  private struct QuestListReply: Decodable {
+    struct Quest: Decodable {
+      let id: String
+      let prompt: String?
+      let createdAt: String?
+    }
+    let data: [Quest]
+    let nextCursor: String?
+  }
+
+  /// Pages read when reconciling a send. The list runs oldest-first, so a session longer than this cannot
+  /// be checked and the lookup reports `.inconclusive`.
+  static let maxReconcilePages = 10
+
   // MARK: - Operations
 
   public func createUpload(fileName: String, mimeType: String, byteCount: Int) async throws -> UploadTicket {
@@ -134,7 +164,11 @@ public struct CaptureClient: CaptureAPI {
       throw APIError.malformedResponse
     }
     guard let raw = reply.moderationStatus else { return .unscanned }
-    return RemoteFileStatus(rawValue: raw) ?? .pending
+    guard let status = RemoteFileStatus(rawValue: raw) else {
+      Self.logger.notice("Unknown file moderation status \(raw, privacy: .public); treating it as pending")
+      return .pending
+    }
+    return status
   }
 
   public func setNotes(fileID: String, notes: String) async throws {
@@ -171,7 +205,33 @@ public struct CaptureClient: CaptureAPI {
     if receipt.isRefused { throw CaptureError.turnRefused(message: receipt.message) }
   }
 
+  public func findSentTurn(sessionID: String, message: String, sentAfter: Date) async throws -> SentTurnLookup {
+    let wanted = message.trimmingCharacters(in: .whitespacesAndNewlines)
+    let dates = LenientISO8601DateTranscoder()
+    var cursor: String?
+    for _ in 0..<Self.maxReconcilePages {
+      var query = [URLQueryItem(name: "limit", value: "100")]
+      if let cursor { query.append(URLQueryItem(name: "cursor", value: cursor)) }
+      let response = try await requester.send(method: "GET", path: "api/v1/sessions/\(sessionID)/quests", query: query)
+      try Self.require(200, response)
+      guard let reply = try? Self.decoder.decode(QuestListReply.self, from: response.body) else {
+        throw APIError.malformedResponse
+      }
+      let match = reply.data.first { quest in
+        guard quest.prompt?.trimmingCharacters(in: .whitespacesAndNewlines) == wanted else { return false }
+        guard let created = quest.createdAt.flatMap({ try? dates.decode($0) }) else { return true }
+        return created >= sentAfter
+      }
+      if let match { return .found(questID: match.id) }
+      guard let next = reply.nextCursor else { return .notFound }
+      cursor = next
+    }
+    return .inconclusive
+  }
+
   // MARK: - Helpers
+
+  private static let logger = Logger(subsystem: "com.bike4mind.app", category: "capture")
 
   private static func encode(_ value: some Encodable) throws -> Data {
     let encoder = JSONEncoder()

@@ -10,19 +10,20 @@ public struct AccountDeletionNotice: Equatable, Sendable {
 }
 
 /// Recognizes the 403 body a pending-deletion account gets from most routes:
-/// `{"accountDeletionPending": true, "deletionScheduledFor": "<ISO date>"}`.
+/// `{"code": "ACCOUNT_DELETION_PENDING", "scheduledFor": "<ISO date>", "error": "..."}`
+/// (packages/server-utils/src/auth/deletionPendingGate.ts on the server).
 public enum AccountDeletionPendingDetector {
   private struct Body: Decodable {
-    let accountDeletionPending: Bool?
-    let deletionScheduledFor: String?
+    let code: String?
+    let scheduledFor: String?
   }
 
   public static func notice(status: Int, body: Data) -> AccountDeletionNotice? {
     guard status == 403, !body.isEmpty,
       let decoded = try? JSONDecoder().decode(Body.self, from: body),
-      decoded.accountDeletionPending == true
+      decoded.code == AccountDeletionWire.pendingCode
     else { return nil }
-    return AccountDeletionNotice(scheduledFor: decoded.deletionScheduledFor.flatMap(AccountDeletionWire.parseDate))
+    return AccountDeletionNotice(scheduledFor: decoded.scheduledFor.flatMap(AccountDeletionWire.parseDate))
   }
 }
 

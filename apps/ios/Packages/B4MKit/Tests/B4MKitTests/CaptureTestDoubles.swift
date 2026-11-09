@@ -11,6 +11,7 @@ actor FakeCaptureAPI: CaptureAPI {
     case setNotes(file: String, notes: String)
     case addToLake(lake: String, file: String)
     case sendMessage(session: String, message: String, files: [String])
+    case findSentTurn(session: String, message: String)
   }
 
   private(set) var calls: [Call] = []
@@ -19,6 +20,7 @@ actor FakeCaptureAPI: CaptureAPI {
   var statusError: (any Error)?
   var attachError: (any Error)?
   var lakePages: [String?: Page<LakeSummary>] = [:]
+  var sentTurnLookup: SentTurnLookup = .notFound
   private var statusIndex = 0
   private var ticketCount = 0
 
@@ -68,6 +70,12 @@ actor FakeCaptureAPI: CaptureAPI {
   }
 
   func setLakePages(_ pages: [String?: Page<LakeSummary>]) { lakePages = pages }
+  func setSentTurnLookup(_ lookup: SentTurnLookup) { sentTurnLookup = lookup }
+
+  func findSentTurn(sessionID: String, message: String, sentAfter: Date) async throws -> SentTurnLookup {
+    calls.append(.findSentTurn(session: sessionID, message: message))
+    return sentTurnLookup
+  }
 }
 
 /// Background session stand-in: records started PUTs, reports which are "live", and lets a test emit events.

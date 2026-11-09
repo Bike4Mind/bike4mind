@@ -221,6 +221,118 @@ final class CaptureEngineTests: XCTestCase {
     XCTAssertEqual(job.lastError, "Not enough credits")
   }
 
+  // MARK: - Non-idempotent chat send
+
+  func testAnAmbiguousSendIsReconciledInsteadOfResent() async throws {
+    let api = FakeCaptureAPI()
+    await api.setAttachError(APIError.server(status: 504))
+    let rig = rig(api: api)
+    let job = try only(await rig.engine.submit([.text("hi")], to: session, note: nil))
+    XCTAssertEqual(job.stage, .registering)
+    XCTAssertNotNil(job.sendAttemptedAt, "the attempt is recorded before the request goes out")
+
+    await api.setAttachError(nil)
+    await api.setSentTurnLookup(.found(questID: "q-1"))
+    await rig.engine.resume()
+
+    XCTAssertEqual(stage(rig, job.id), .done)
+    let calls = await rig.api.calls
+    XCTAssertEqual(
+      calls,
+      [
+        .sendMessage(session: "sess-1", message: "hi", files: []),
+        .findSentTurn(session: "sess-1", message: "hi"),
+      ], "the turn the server already holds is not posted (or charged) twice")
+  }
+
+  func testAnAmbiguousSendThatNeverLandedIsSentAgain() async throws {
+    let api = FakeCaptureAPI()
+    await api.setAttachError(APIError.offline)
+    let rig = rig(api: api)
+    let job = try only(await rig.engine.submit([.text("hi")], to: session, note: nil))
+
+    await api.setAttachError(nil)
+    await rig.engine.resume()
+
+    XCTAssertEqual(stage(rig, job.id), .done)
+    let sends = await rig.api.calls.filter { if case .sendMessage = $0 { true } else { false } }
+    XCTAssertEqual(sends.count, 2)
+  }
+
+  func testAnUncheckableSendFailsAndAnExplicitRetrySendsIt() async throws {
+    let api = FakeCaptureAPI()
+    await api.setAttachError(APIError.server(status: 502))
+    let rig = rig(api: api)
+    let job = try only(await rig.engine.submit([.text("hi")], to: session, note: nil))
+
+    await api.setAttachError(nil)
+    await api.setSentTurnLookup(.inconclusive)
+    await rig.engine.resume()
+    let failed = try XCTUnwrap(try rig.store.load(id: job.id))
+    XCTAssertEqual(failed.stage, .failed)
+    XCTAssertEqual(failed.lastError, "This may already be in the conversation. Retry to send it again.")
+
+    await rig.engine.retry(jobID: job.id)
+    XCTAssertEqual(stage(rig, job.id), .done)
+    let calls = await rig.api.calls
+    XCTAssertEqual(calls.last, .sendMessage(session: "sess-1", message: "hi", files: []))
+  }
+
+  func testPersistentServerErrorsWhileRegisteringEventuallyFailTheJob() async throws {
+    let api = FakeCaptureAPI()
+    await api.setAttachError(APIError.server(status: 503))
+    var configuration = Self.fastConfiguration
+    configuration.maxRegisterFailures = 3
+    let store = FileUploadJobStore(directory: temp.url)
+    let clock = clock
+    let engine = CaptureEngine(
+      store: store, api: api, ownIdentifier: BackgroundSessionIdentifier.app,
+      makeUploader: { _ in FakeUploader(identifier: BackgroundSessionIdentifier.app) }, now: { clock.now },
+      sleep: { _ in }, configuration: configuration)
+    let job = try only(await engine.submit([photo()], to: lake, note: nil))
+    var registering = try XCTUnwrap(try store.load(id: job.id))
+    registering.stage = .registering
+    registering.ticket = UploadTicket(
+      fileID: "file-1", uploadURL: URL(string: "https://s3.example.test/put/1")!, expiresAt: clock.now)
+    try store.save(registering)
+
+    for _ in 0..<5 { await engine.resume() }
+
+    let final = try XCTUnwrap(try store.load(id: job.id))
+    XCTAssertEqual(final.stage, .failed)
+    XCTAssertEqual(final.registerFailures, 3)
+  }
+
+  func testAStoreThatCannotSaveDoesNotSpin() async throws {
+    let store = UnwritableJobStore(FileUploadJobStore(directory: temp.url))
+    let clock = clock
+    let api = FakeCaptureAPI()
+    let engine = CaptureEngine(
+      store: store, api: api, ownIdentifier: BackgroundSessionIdentifier.app,
+      makeUploader: { _ in FakeUploader(identifier: BackgroundSessionIdentifier.app) }, now: { clock.now },
+      sleep: { _ in }, configuration: Self.fastConfiguration)
+    _ = try await engine.enqueue([.text("hi")], to: session, note: nil)
+    store.failSaves = true
+
+    await engine.resume()
+
+    let calls = await api.calls
+    XCTAssertTrue(calls.isEmpty, "nothing is sent that the store could not record")
+  }
+
+  func testOldJobRecordsWithoutTheNewFieldsStillDecode() throws {
+    let legacy = """
+      {"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","destination":{"session":{"id":"s","name":"n"}},
+       "payload":{"message":{"_0":"hi"}},"createdAt":"2026-11-01T00:00:00Z","stage":"registering",
+       "uploadAttempts":0,"updatedAt":"2026-11-01T00:00:00Z"}
+      """
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    let job = try decoder.decode(UploadJob.self, from: Data(legacy.utf8))
+    XCTAssertEqual(job.registerFailures, 0)
+    XCTAssertNil(job.sendAttemptedAt)
+  }
+
   // MARK: - Starting an upload
 
   func testATransientCreateUploadFailureLeavesTheJobQueuedForRetry() async throws {
@@ -474,4 +586,34 @@ extension FakeUploader {
   func adopt(_ job: UploadJob) {
     adopt(jobID: job.id, taskID: job.uploadTaskID ?? -1)
   }
+}
+
+/// Delegates to a real store; saves fail once `failSaves` is set (a full disk).
+private final class UnwritableJobStore: UploadJobStore, @unchecked Sendable {
+  private let base: FileUploadJobStore
+  private let lock = NSLock()
+  private var _failSaves = false
+
+  init(_ base: FileUploadJobStore) { self.base = base }
+
+  var failSaves: Bool {
+    get { lock.withLock { _failSaves } }
+    set { lock.withLock { _failSaves = newValue } }
+  }
+
+  func loadAll() throws -> [UploadJob] { try base.loadAll() }
+  func load(id: UUID) throws -> UploadJob? { try base.load(id: id) }
+  func save(_ job: UploadJob) throws {
+    if failSaves { throw CocoaError(.fileWriteOutOfSpace) }
+    try base.save(job)
+  }
+  func remove(id: UUID) throws { try base.remove(id: id) }
+  func payloadURL(jobID: UUID, fileName: String) -> URL { base.payloadURL(jobID: jobID, fileName: fileName) }
+  func stagePayload(copying source: URL, jobID: UUID, fileName: String) throws -> URL {
+    try base.stagePayload(copying: source, jobID: jobID, fileName: fileName)
+  }
+  func writePayload(_ data: Data, jobID: UUID, fileName: String) throws -> URL {
+    try base.writePayload(data, jobID: jobID, fileName: fileName)
+  }
+  func discardPayload(jobID: UUID) { base.discardPayload(jobID: jobID) }
 }

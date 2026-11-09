@@ -57,6 +57,9 @@ public final class AccountDeletionViewModel {
       switch failure {
       case .organizationTransferRequired(let organizations): state = .blockedByOrganizations(organizations)
       case .notPermitted: state = .notPermitted
+      // No dedicated screen state yet for the step-up gate; it surfaces as a refusal.
+      case .recentSignInRequired: state = .failed(.forbidden)
+      case .alreadyScheduled: state = .failed(.server(status: 409))
       case .api(let error): state = .failed(error)
       }
     } catch let error as APIError {

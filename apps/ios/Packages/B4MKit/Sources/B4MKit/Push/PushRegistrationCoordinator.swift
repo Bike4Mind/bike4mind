@@ -32,6 +32,14 @@ public final class PushRegistrationCoordinator {
   @ObservationIgnored private var inFlightToken: String?
 
   private static let promptedKey = "b4m.push.fullPromptRequested"
+  private static let serverTokenKey = "b4m.push.serverToken"
+
+  /// The last token the server accepted, kept across launches so a token the server still pushes to can be
+  /// withdrawn after a relaunch (permission turned off while the app was not running, or an APNs rotation).
+  @ObservationIgnored private var serverToken: String? {
+    get { preferences.string(forKey: Self.serverTokenKey) }
+    set { preferences.set(newValue, forKey: Self.serverTokenKey) }
+  }
 
   public init(
     center: any NotificationCenterProviding,
@@ -62,6 +70,7 @@ public final class PushRegistrationCoordinator {
       status = await requestAuthorization(.provisional) ?? status
     }
     authorization = status
+    await withdrawIfDenied()
     await syncRegistration()
   }
 
@@ -84,6 +93,7 @@ public final class PushRegistrationCoordinator {
       group.addTask {
         do {
           try await api.unregisterPushToken(token)
+          await MainActor.run { self.forgetServerToken(token) }
         } catch {
           logger.notice("Unregister failed (best effort): \(error, privacy: .public)")
         }
@@ -133,15 +143,22 @@ public final class PushRegistrationCoordinator {
 
   public func refreshAuthorization() async {
     authorization = await center.authorizationStatus()
-    if authorization == .denied, let token = registeredToken {
-      // The user turned notifications off in iOS Settings: stop the server pushing to a mute device.
-      registeredToken = nil
-      await unregisterQuietly(token)
-    }
+    await withdrawIfDenied()
     await syncRegistration()
   }
 
   // MARK: - Internals
+
+  /// The user turned notifications off in iOS Settings: stop the server pushing to a mute device.
+  private func withdrawIfDenied() async {
+    guard authorization == .denied, isSessionActive, let token = registeredToken ?? serverToken else { return }
+    registeredToken = nil
+    await unregisterQuietly(token)
+  }
+
+  private func forgetServerToken(_ token: String) {
+    if serverToken == token { serverToken = nil }
+  }
 
   private func requestAuthorization(_ kind: AuthorizationRequestKind) async -> NotificationAuthorization? {
     do {
@@ -163,16 +180,25 @@ public final class PushRegistrationCoordinator {
     defer { if inFlightToken == token { inFlightToken = nil } }
     do {
       try await makeAPI().registerPushToken(token, environment: environment, appVersion: appVersion)
-      // The session may have ended while the request was out; do not record it as registered then.
-      if isSessionActive { registeredToken = token }
     } catch {
       logger.error("Push token registration failed: \(error, privacy: .public)")
+      return
+    }
+    // The session may have ended while the request was out; do not record it as registered then.
+    guard isSessionActive else { return }
+    registeredToken = token
+    let previous = serverToken
+    serverToken = token
+    if let previous, previous != token {
+      // APNs rotated the token; the old one would otherwise stay registered until it bounces.
+      await unregisterQuietly(previous)
     }
   }
 
   private func unregisterQuietly(_ token: String) async {
     do {
       try await makeAPI().unregisterPushToken(token)
+      forgetServerToken(token)
     } catch {
       logger.notice("Unregister failed (best effort): \(error, privacy: .public)")
     }

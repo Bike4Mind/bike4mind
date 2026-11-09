@@ -28,12 +28,25 @@ final class AppNavigatorTests: XCTestCase {
 
   func testTabRootsSelectTheirTab() {
     let navigator = AppNavigator()
-    navigator.apply(.lake(id: "l1"))
+    navigator.apply(.lakes)
     XCTAssertEqual(navigator.selectedTab, .lakes)
     navigator.apply(.media)
     XCTAssertEqual(navigator.selectedTab, .media)
     navigator.apply(.settings)
     XCTAssertEqual(navigator.selectedTab, .settings)
+  }
+
+  func testLakeRouteOpensTheLakeOnTheWebWithoutSwitchingTabs() {
+    let navigator = AppNavigator()
+    navigator.apply(.lake(id: "l1"))
+    XCTAssertEqual(navigator.selectedTab, .sessions)
+    XCTAssertEqual(navigator.externalURL, URL(string: "https://app.bike4mind.com/lakes/l1"))
+  }
+
+  func testComposeRequestCarriesAKnownSessionName() {
+    let navigator = AppNavigator()
+    navigator.apply(.compose(ComposeRequest(target: .session(id: "s1"), sessionName: "Trip plan")))
+    XCTAssertEqual(navigator.sessionPath.map(\.name), ["Trip plan"])
   }
 
   func testWebRouteSurfacesExternalURLOnce() {

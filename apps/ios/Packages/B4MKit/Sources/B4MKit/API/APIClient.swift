@@ -109,7 +109,8 @@ public struct APIClient: B4MAPI {
   private static func map(_ error: any Error) -> APIError {
     switch error {
     case let apiError as APIError: apiError
-    case is AuthError: .signedOut
+    case let authError as AuthError: APIError(authError)
+    case let keychainError as KeychainError: APIError(keychainError)
     case is URLError: .offline
     case is DecodingError: .malformedResponse
     default: .malformedResponse
@@ -140,9 +141,9 @@ extension QuestTurn {
       id: payload.id,
       prompt: payload.prompt,
       reply: payload.reply,
-      status: payload.status.flatMap { Status(rawValue: $0.rawValue) },
-      kind: payload._type.flatMap { Kind(rawValue: $0.rawValue) },
-      errorCode: payload.errorCode.flatMap { ErrorCode(rawValue: $0.rawValue) },
+      status: payload.status.flatMap(Status.init(rawValue:)),
+      kind: payload._type.flatMap(Kind.init(rawValue:)),
+      errorCode: payload.errorCode.flatMap(ErrorCode.init(rawValue:)),
       createdAt: payload.createdAt,
       creditsUsed: payload.creditsUsed,
       pendingAction: payload.pendingAction.map(PendingAction.init)
@@ -156,9 +157,9 @@ extension QuestTurn {
       id: payload.id,
       prompt: nil,
       reply: payload.reply,
-      status: payload.status.flatMap { Status(rawValue: $0.rawValue) },
-      kind: payload._type.flatMap { Kind(rawValue: $0.rawValue) },
-      errorCode: payload.errorCode.flatMap { ErrorCode(rawValue: $0.rawValue) },
+      status: payload.status.flatMap(Status.init(rawValue:)),
+      kind: payload._type.flatMap(Kind.init(rawValue:)),
+      errorCode: payload.errorCode.flatMap(ErrorCode.init(rawValue:)),
       createdAt: payload.createdAt ?? Date()
     )
   }
@@ -168,8 +169,25 @@ extension PendingAction {
   fileprivate init(_ payload: QuestPayload.PendingActionPayload) {
     self.init(
       tool: payload.tool,
-      parameters: payload.params.additionalProperties.mapValues { String(describing: $0.value ?? "") },
+      parameters: payload.params.additionalProperties.mapValues(Self.displayText),
       requestedAt: Date(timeIntervalSince1970: payload.ts / 1000)
     )
+  }
+
+  /// A tool argument as the user should read it: strings verbatim, scalars plainly, objects and
+  /// arrays as compact JSON (never Swift's `Optional(...)`/`AnyHashable(...)` debug rendering).
+  fileprivate static func displayText(_ container: OpenAPIValueContainer) -> String {
+    switch container.value {
+    case nil: return ""
+    case let string as String: return string
+    case let bool as Bool: return bool ? "true" : "false"
+    case let int as Int: return String(int)
+    case let double as Double: return String(double)
+    default:
+      let encoder = JSONEncoder()
+      encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+      guard let data = try? encoder.encode(container) else { return "" }
+      return String(decoding: data, as: UTF8.self)
+    }
   }
 }

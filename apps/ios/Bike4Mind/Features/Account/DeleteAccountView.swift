@@ -8,14 +8,13 @@ struct DeleteAccountView: View {
 
   var body: some View {
     DeleteAccountContent(
-      model: AccountDeletionViewModel(
-        api: services.account,
-        endSession: { [services] in
-          // The server revoked every session with the request; the shared sign-out path still runs so
-          // Live Activities end, push unregisters (best effort) and the Keychain is wiped.
-          services.accountStatus.beginSignOutAfterDeletion()
-          await services.signOutEverywhere(reason: .accountDeletionRequested)
-        }))
+      api: services.account,
+      endSession: { [services] in
+        // The server revoked every session with the request; the shared sign-out path still runs so
+        // Live Activities end, push unregisters (best effort) and the Keychain is wiped.
+        services.accountStatus.beginSignOutAfterDeletion()
+        await services.signOutEverywhere(reason: .accountDeletionRequested)
+      })
   }
 }
 
@@ -23,8 +22,8 @@ private struct DeleteAccountContent: View {
   @State private var model: AccountDeletionViewModel
   @FocusState private var isFieldFocused: Bool
 
-  init(model: AccountDeletionViewModel) {
-    _model = State(initialValue: model)
+  init(api: any AccountAPI, endSession: @escaping @MainActor () async -> Void) {
+    _model = State(initialValue: AccountDeletionViewModel(api: api, endSession: endSession))
   }
 
   var body: some View {
