@@ -983,6 +983,12 @@ describe('Skill Market (real mongod)', () => {
       createdByUserId: AUTHOR,
     } as never);
     await call(detailHandler, 'DELETE', AUTHOR, { id: listing.id });
+    // A listing with an open report is refused until a moderator has reviewed it.
+    await expect(call(permanentHandler, 'DELETE', AUTHOR, { id: listing.id })).rejects.toMatchObject({
+      statusCode: 409,
+    });
+    expect(await SkillListingReport.countDocuments({ listingId: listing.id })).toBe(1);
+    await SkillListingReport.updateMany({ listingId: listing.id }, { $set: { status: 'dismissed' } });
     await expect(call(permanentHandler, 'DELETE', OTHER, { id: listing.id })).rejects.toMatchObject({
       statusCode: 403,
     });

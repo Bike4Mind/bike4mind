@@ -118,7 +118,12 @@ const handler = baseApi()
     }
 
     await skillRepository.delete(id as string);
-    await withdrawSkillListings(skill.id);
+    try {
+      await withdrawSkillListings(skill.id);
+    } catch (err) {
+      // The delete is committed; the author can still withdraw from My listings.
+      req.logger.error(`Failed to withdraw Skill Market listings for deleted skill ${skill.id}: ${String(err)}`);
+    }
     res.status(204).end();
   });
 

@@ -485,6 +485,15 @@ describe('/api/skills/[id] DELETE — delete permission', () => {
     expect(none.res._getStatusCode()).toBe(204);
   });
 
+  it('still returns 204 and logs when the withdraw throws after the delete committed', async () => {
+    mockWithdrawSkillListings.mockRejectedValueOnce(new Error('db down'));
+    const { req, res } = makeReqRes('DELETE', OWNER);
+    await handler(req, res);
+    expect(mockDelete).toHaveBeenCalledWith('skill-1');
+    expect(res._getStatusCode()).toBe(204);
+    expect((req as unknown as { logger: { error: ReturnType<typeof vi.fn> } }).logger.error).toHaveBeenCalled();
+  });
+
   it('does not withdraw listings when the delete is refused', async () => {
     const { req, res } = makeReqRes('DELETE', SHARED_UPDATE);
     await expect(handler(req, res)).rejects.toBeInstanceOf(ForbiddenError);

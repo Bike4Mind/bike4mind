@@ -213,12 +213,16 @@ export async function withdrawOwnListing(userId: string, listingId: string): Pro
 /**
  * The author permanently deletes a withdrawn listing and everything keyed to it. Live, held,
  * delisted and report-hidden listings are refused: the last two keep blocking a republish after a
- * takedown. Importers keep their copies (`marketStatus` reads a missing listing as removed).
+ * takedown. So is a listing with open reports, which moderators have not yet reviewed. Importers keep their copies (`marketStatus` reads a missing listing as removed).
  */
 export async function deleteOwnWithdrawnListing(userId: string, listingId: string): Promise<void> {
   const listing = await findListing(listingId);
   if (!listing) throw new NotFoundError('Listing not found');
   if (listing.authorUserId !== userId) throw new ForbiddenError('Only the author can delete a listing');
+
+  if (await SkillListingReport.exists({ listingId: String(listing.id), status: 'open' })) {
+    throw new ConflictError('This listing has open reports and cannot be deleted until they are reviewed');
+  }
 
   // One atomic delete so a concurrent restore or moderation action cannot slip between check and delete.
   // hardDelete: the soft-delete plugin would otherwise only stamp deletedAt, keeping shareToken
