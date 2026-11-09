@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Box, Stack, Switch, Typography } from '@mui/joy';
+import { Stack, Switch, Typography } from '@mui/joy';
 import { toast } from 'sonner';
 import type { ArenaModelWinRate } from '@bike4mind/common';
 import {
@@ -13,13 +13,16 @@ import PreferenceArenaImportBox from './PreferenceArenaImportBox';
 import {
   AdminPageHeader,
   DataTable,
+  EmptyState,
   ErrorState,
+  LoadingState,
   SectionCard,
   StatStrip,
   StatTile,
   StatusChip,
   type DataColumn,
 } from './shared';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
 
 const REJECTION_LABELS: Record<string, string> = {
   rewards_off: 'Rewards off',
@@ -85,17 +88,21 @@ function StatsSection() {
         <StatTile label="Credits awarded" value={stats?.votes.creditsAwarded ?? '-'} />
       </StatStrip>
       <SectionCard title="Rejected votes" body="custom" data-testid="arena-rejections-card">
-        <Stack direction="row" gap={1} flexWrap="wrap" sx={{ p: 2 }}>
-          {rejections.length === 0 ? (
-            <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
-              {isPending ? 'Loading' : 'No rejected votes'}
-            </Typography>
-          ) : (
-            rejections.map(([reason, count]) => (
+        {rejections.length > 0 ? (
+          <Stack direction="row" gap={1} flexWrap="wrap" sx={{ p: 2 }}>
+            {rejections.map(([reason, count]) => (
               <StatusChip key={reason} tone="neutral" label={`${REJECTION_LABELS[reason] ?? reason}: ${count}`} />
-            ))
-          )}
-        </Stack>
+            ))}
+          </Stack>
+        ) : isPending ? (
+          <LoadingState label="Loading rejected votes" testId="arena-rejections-loading" />
+        ) : (
+          <EmptyState
+            title="No rejected votes"
+            description="Votes the arena turns down for credit are counted here by reason."
+            action={null}
+          />
+        )}
       </SectionCard>
       <SectionCard title="Win rate by task type and model" body="custom" data-testid="arena-winrates-card">
         <DataTable
@@ -105,7 +112,13 @@ function StatsSection() {
           label="Win rates"
           loading={isPending}
           onRetry={() => void refetch()}
-          empty="No votes yet"
+          empty={
+            <EmptyState
+              title="No votes yet"
+              description="Win rates appear here once users compare two answers in the arena."
+              action={null}
+            />
+          }
           testId="arena-winrates-table"
         />
       </SectionCard>
@@ -172,7 +185,7 @@ function PairsSection() {
         loading={isPending}
         error={isError ? getErrorMessage(error) : undefined}
         onRetry={() => void refetch()}
-        empty="No pairs yet. Import some below."
+        empty={<EmptyState title="No pairs yet" description="Import pairs below to start the arena." action={null} />}
         testId="arena-pairs-table"
         pagination={{
           page,
@@ -191,16 +204,14 @@ function PairsSection() {
 
 export default function PreferenceArenaTab() {
   return (
-    <Box data-testid="preference-arena-tab">
-      <Stack gap={3}>
-        <AdminPageHeader
-          title="Preference arena"
-          description="Blind pairwise comparisons that verified users judge for promotional credits. Settings live under Pricing."
-        />
-        <StatsSection />
-        <PairsSection />
-        <PreferenceArenaImportBox />
-      </Stack>
-    </Box>
+    <Stack gap={ADMIN_REGION_GAP} sx={{ minWidth: 0 }} data-testid="preference-arena-tab">
+      <AdminPageHeader
+        title="Preference arena"
+        description="Blind pairwise comparisons that verified users judge for promotional credits. Settings live under Pricing."
+      />
+      <StatsSection />
+      <PairsSection />
+      <PreferenceArenaImportBox />
+    </Stack>
   );
 }
