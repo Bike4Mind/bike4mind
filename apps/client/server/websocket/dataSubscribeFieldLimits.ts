@@ -3,6 +3,7 @@ import {
   ORGANIZATION_OWNER_ONLY_FIELDS,
   ORGANIZATION_SECRET_FIELDS,
   OWNER_ONLY_PROMPT_META_PROJECTION_PATHS,
+  SERVER_OWNED_SESSION_FIELDS,
 } from '@bike4mind/common';
 
 /**
@@ -41,6 +42,10 @@ import {
  * (inviteManager.filterInviteRecipientsToSelf / toSharerInviteViews); a per-query projection cannot,
  * so `recipients` and `typedRecipients` are dropped for every non-admin and `token` for everyone.
  * Client subscribers treat an invite event as a cue to refetch through REST rather than reading it.
+ *
+ * sessions: REST strips SERVER_OWNED_SESSION_FIELDS and origin.apiKeyId for every viewer.
+ * A subscription may include both owned and shared sessions, so the query projection must
+ * exclude them for everyone, including the owner, to match the REST response shape.
  */
 /** Quest fields no session viewer should see, the owner included; see the quests note above. */
 const QUEST_SERVER_ONLY_FIELDS = CHAT_MESSAGE_WITHHELD_FIELDS;
@@ -52,6 +57,7 @@ const INVITE_ADMIN_ONLY_FIELDS = ['recipients', 'typedRecipients'] as const;
 export type FieldLimitOptions = {
   /** Passed in rather than hardcoded so a collection rename can't silently drop the exclusion. */
   questCollectionName: string;
+  sessionCollectionName: string;
   organizationCollectionName: string;
   inviteCollectionName: string;
   /** The subscribed session belongs to the caller (see the quests note above). */
@@ -64,6 +70,7 @@ export function resolveFieldLimits(
   collectionName: string,
   {
     questCollectionName,
+    sessionCollectionName,
     organizationCollectionName,
     inviteCollectionName,
     isQuestOwner = false,
@@ -93,6 +100,9 @@ export function resolveFieldLimits(
   if (collectionName === questCollectionName) {
     const excluded = [...(isQuestOwner ? [] : OWNER_ONLY_PROMPT_META_PROJECTION_PATHS), ...QUEST_SERVER_ONLY_FIELDS];
     return Object.fromEntries(excluded.map(path => [path, false]));
+  }
+  if (collectionName === sessionCollectionName) {
+    return Object.fromEntries([...SERVER_OWNED_SESSION_FIELDS, 'origin.apiKeyId'].map(path => [path, false]));
   }
   if (collectionName === organizationCollectionName) {
     const excluded = [...ORGANIZATION_SECRET_FIELDS, ...(isPlatformAdmin ? [] : ORGANIZATION_OWNER_ONLY_FIELDS)];

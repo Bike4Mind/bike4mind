@@ -192,6 +192,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   // relays, not just the one-time fetchInitialData query above.
   const fieldLimits = resolveFieldLimits(collectionName, {
     questCollectionName: Quest.collection.collectionName,
+    sessionCollectionName: SessionModel.collection.collectionName,
     organizationCollectionName: Organization.collection.collectionName,
     inviteCollectionName: Invite.collection.collectionName,
     isQuestOwner: isOwnQuestSession,
