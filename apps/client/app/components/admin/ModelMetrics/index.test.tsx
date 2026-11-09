@@ -199,16 +199,27 @@ describe('ModelMetricsTab - filters', () => {
   });
 
   it('resolves URL filters into the query and keeps the same filters across rerenders', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-03-10T12:00:00.000Z'));
     urlState.filters = { period: '24h', model: 'model-a', status: 'error' };
     const { rerender } = render(<ModelMetricsTab />, { wrapper: TestWrapper });
     const first = lastMetricsFilters();
     expect(first).toMatchObject({ modelFilter: 'model-a', statusFilter: 'error', userFilter: undefined });
-    expect(first.dateFrom).toEqual(expect.any(String));
-    expect(first.dateTo).toEqual(expect.any(String));
+    expect(first.dateFrom).toBe('2026-03-09T12:00:00.000Z');
+    expect(first.dateTo).toBe('2026-03-10T12:00:00.000Z');
 
     rerender(<ModelMetricsTab />);
     // Same reference: a memo-less dayjs() per render would churn the react-query key.
     expect(lastMetricsFilters()).toBe(first);
+    vi.useRealTimers();
+  });
+
+  it('passes a picked user to the metrics query', () => {
+    metricsState.data = [];
+    render(<ModelMetricsTab />, { wrapper: TestWrapper });
+    expect(lastMetricsFilters().userFilter).toBeUndefined();
+    fireEvent.click(screen.getByTestId('stub-pick-user'));
+    expect(lastMetricsFilters().userFilter).toBe('user-1');
   });
 
   it('treats a period outside the presets as unset', () => {

@@ -19,12 +19,12 @@ The filter bar at the top of Model Metrics applies each filter as you pick it. T
 
 | Filter | Description |
 |--------|-------------|
-| **Period** | One of Today, Last 24 hours, Last 7 days or Last 30 days. With no period selected, all recorded calls are shown. |
+| **Period** | One of Today, Last 24 hours, Last 7 days or Last 30 days. With no period selected, the 500 most recent calls are shown. |
 | **Model** | Filter by AI model |
 | **User** | Filter by specific user |
 | **Status** | Done, Error or Pending |
 
-A **Short / Full** control next to the filters switches between simplified model names and full identifiers. When a filter matches nothing, use **Clear filters** to reset them all.
+A **Short names** / **Full names** control next to the filters switches between simplified model names and full identifiers. When a filter matches nothing, use **Clear filters** to reset them all.
 
 ### Tabs
 
@@ -43,7 +43,7 @@ Click the **Export CSV** button in the page header to download the current filte
 
 ### Performance Metrics Info
 
-The Raw Data tab includes an info modal that documents performance metrics fields, including streaming performance data (chunk count, total stream time) when available in the dataset.
+The Raw data tab includes an info modal that documents performance metrics fields, including streaming performance data (chunk count, total stream time) when available in the dataset.
 
 #### Time to First Visible Token (TTFVT)
 
@@ -52,7 +52,7 @@ text that actually renders: an extended-thinking model's hidden reasoning does n
 and neither do the tool-call arguments a model writes before answering.
 
 A turn that streamed but never rendered visible text -- reasoning-only, or one that errored before
-answering -- has **no** TTFVT rather than a fast-looking one. The Raw Data tab shows those as
+answering -- has **no** TTFVT rather than a fast-looking one. The Raw data tab shows those as
 `never rendered`, alongside the time the first chunk of any kind arrived, which tells you the model
 did respond while the user saw nothing.
 
@@ -65,9 +65,9 @@ changing, not the product getting slower, so do not compare across it.
 
 #### Troubleshooting: TTFVT looks better than users report
 
-- **`never rendered` rows in Raw Data.** These are frozen turns, and they are the ones users
+- **`never rendered` rows in Raw data.** These are frozen turns, and they are the ones users
   complain about. They are excluded from the First Token trend chart rather than averaged into it,
-  so the chart cannot show them -- scan the Raw Data tab instead, where they are flagged in
+  so the chart cannot show them -- scan the Raw data tab instead, where they are flagged in
   red. There is no TTFVT sort key, so scanning is the only way in. There is no dedicated filter or counter for them yet; more of them appearing is the signal,
   even while the chart looks flat.
 - **TTFVT far below Client First Token Time.** Both apply the same visibility rule, so ordinarily
@@ -100,7 +100,7 @@ The Event Metrics tab tracks system-wide events across the platform, providing v
 | **Event** | Filter by event type |
 | **Category** | Filter by event category (e.g., Slack, System, User) |
 
-Unlike Model Metrics, there is no Apply button: a filter applies as soon as you pick it. **Clear filters** resets the range to All time and removes the other filters.
+A filter applies as soon as you pick it. **Clear filters** resets the range to All time and removes the other filters.
 
 ### Tabs
 
