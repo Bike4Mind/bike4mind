@@ -14,7 +14,7 @@ import {
   DOOR_POINT,
   INNKEEPER_POINT,
   LABEL_SPAN,
-  characterFor,
+  assignCharacters,
   nameLabelLayout,
   hiddenByCounter,
   placeAgents,
@@ -24,7 +24,7 @@ import {
   type SlotPoint,
 } from './scene';
 import { TavernLight, type TavernMood } from './TavernLight';
-import { INNKEEPER_ART, TAVERN_BACKDROP, characterSprite, type InnkeeperPose } from './tavernArt';
+import { INNKEEPER_ART, TAVERN_BACKDROP, characterSprite, type CharacterId, type InnkeeperPose } from './tavernArt';
 
 const BUBBLE_MAX = 28;
 const NAME_MAX = 26;
@@ -111,6 +111,17 @@ function usePlacements(agents: readonly AgentView[]) {
     previous.current = placements;
   }, [placements]);
   return placements;
+}
+
+/** Recomputed only when the cast changes (ids, ages, epithets), not on every status tick. */
+function useCharacters(agents: readonly AgentView[], personas: ReadonlyMap<string, AgentPersona>) {
+  const subjects = agents.map(agent => ({
+    id: agent.id,
+    createdAt: agent.createdAt,
+    epithet: personas.get(agent.id)?.epithet,
+  }));
+  const castKey = subjects.map(subject => `${subject.id}@${subject.createdAt}@${subject.epithet ?? ''}`).join('\n');
+  return useMemo(() => assignCharacters(subjects), [castKey]);
 }
 
 /** Flips to true two frames after mount (so the starting position is painted first), or at once if `already`. */
@@ -317,6 +328,7 @@ function Sprite({
   point,
   label,
   persona,
+  character,
   via,
   walkIn,
   selected,
@@ -328,6 +340,7 @@ function Sprite({
   point: SlotPoint;
   label: NameLabel;
   persona: AgentPersona | undefined;
+  character: CharacterId;
   /** The agent that spawned this one, below the first level; kept off the nameplate to keep it short. */
   via?: string;
   /** Mount at the door and walk to `point`; read on mount only. */
@@ -377,7 +390,7 @@ function Sprite({
       <ContactShadow />
       <Box
         component="img"
-        src={characterSprite(characterFor(agent.id, persona?.epithet), pose)}
+        src={characterSprite(character, pose)}
         alt=""
         draggable={false}
         sx={{
@@ -575,6 +588,7 @@ export function TavernView({
   const mode = useTheme().palette.mode;
   const mood: TavernMood = settled ? 'last-call' : mode === 'dark' ? 'night' : 'day';
   const placements = usePlacements(agents);
+  const characters = useCharacters(agents, personas);
   const arrived = useArrived(introPlaying);
   const act = innkeeperAct(parent, agents);
   const heldVisit = useHeldVisit(act.pose === 'walking' ? act.target : undefined);
@@ -717,6 +731,7 @@ export function TavernView({
             point={arrived ? placement.point : DOOR_POINT}
             label={labels.get(agent.id) ?? HIDDEN_LABEL}
             persona={personas.get(agent.id)}
+            character={characters.get(agent.id) ?? 1}
             via={spawnerName(agent, agents, spawner => personas.get(spawner.id)?.label ?? spawner.title)}
             walkIn={mounted.current && !prefersReducedMotion()}
             selected={agent.id === selectedId}
