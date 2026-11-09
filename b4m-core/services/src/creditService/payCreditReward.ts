@@ -14,7 +14,7 @@ import {
 } from '../userService/signupGrantBudget';
 import { addCreditsWithLedgerRow, DuplicateCreditTransactionError, type AddCreditsAdapters } from './addCredits';
 
-export type CreditRewardSource = 'gear' | 'referral_first_answer';
+export type CreditRewardSource = 'gear' | 'referral_first_answer' | 'preference_arena';
 
 /** `source` is stamped on the ledger row as metadata.rewardSource; `reason` keeps each caller's existing label. */
 export type HeldCreditRewardInput = {

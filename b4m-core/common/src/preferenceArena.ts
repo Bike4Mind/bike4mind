@@ -33,7 +33,14 @@ export function arenaLegacyUnlockTransactionId(reason: ArenaLegacyUnlockReason, 
 export type ArenaIneligibleReason = 'disabled' | 'unverified' | 'blocked';
 
 export type ArenaRejectReason =
-  'rewards_off' | 'too_fast' | 'gold_missed' | 'unqualified' | 'low_gold_accuracy' | 'daily_cap' | 'lifetime_cap';
+  | 'rewards_off'
+  | 'too_fast'
+  | 'gold_missed'
+  | 'unqualified'
+  | 'low_gold_accuracy'
+  | 'daily_cap'
+  | 'lifetime_cap'
+  | 'reward_blocked';
 
 export const PREFERENCE_ARENA_REWARD_REASON = 'preference_arena_vote';
 
@@ -207,6 +214,8 @@ export type ArenaVoteRequest = z.infer<typeof arenaVoteRequestSchema>;
  */
 export interface ArenaVoteResponse {
   creditsAwarded: number;
+  /** The reward pool is dry: creditsAwarded is owed and pays when the pool refills, not added yet. */
+  queued?: true;
 }
 
 const arenaAnswerSchema = z.object({

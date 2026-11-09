@@ -29,6 +29,7 @@ const REJECTION_LABELS: Record<string, string> = {
   low_gold_accuracy: 'Low gold accuracy',
   daily_cap: 'Daily cap',
   lifetime_cap: 'Lifetime cap',
+  reward_blocked: 'Reward blocked',
 };
 
 const PAGE_LIMIT = 25;

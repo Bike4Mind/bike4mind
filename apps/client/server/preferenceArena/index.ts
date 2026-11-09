@@ -9,13 +9,12 @@ import {
   adminSettingsRepository,
   arenaPairRepository,
   arenaVoteRepository,
-  creditLotRepository,
   creditTransactionRepository,
   User,
-  userRepository,
 } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { creditService } from '@bike4mind/services';
+import { buildCreditRewardAdapters } from '@bike4mind/server-utils/credits/creditRewardAdapters';
 import { getSettingsMap } from '@bike4mind/utils';
 import { createArenaService, type ArenaUser } from './arenaService';
 
@@ -73,11 +72,7 @@ export function getArenaService(logger: Pick<Logger, 'error' | 'warn'>) {
     loadSettings: loadArenaSettings,
     findPaidCredits: async transactionId =>
       (await creditTransactionRepository.findOne({ transactionId }))?.credits ?? null,
-    addCredits: creditService.addCreditsWithLedgerRow,
-    creditAdapters: {
-      db: { creditTransactions: creditTransactionRepository, creditLots: creditLotRepository },
-      creditHolderMethods: userRepository,
-    },
+    payReward: reward => creditService.payCreditReward(reward, buildCreditRewardAdapters()),
     logger,
   });
 }

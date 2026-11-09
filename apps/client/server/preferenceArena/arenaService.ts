@@ -1,10 +1,8 @@
 import {
   arenaRaterStanding,
   arenaVoteTransactionId,
-  CreditHolderType,
   ForbiddenError,
   isArenaVerifiedUser,
-  isSignupGrantBlocked,
   judgeArenaVote,
   NotFoundError,
   PREFERENCE_ARENA_REWARD_REASON,
@@ -20,6 +18,7 @@ import {
   type ArenaVoteRequest,
   type ArenaVoteResponse,
   type PreferenceArenaSettings,
+  type SignupGrant,
 } from '@bike4mind/common';
 import type {
   ArenaPairRepository,
@@ -28,21 +27,19 @@ import type {
   IArenaVoteDocument,
 } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
-import type { creditService } from '@bike4mind/services';
 import {
-  accountBlockReasons,
-  isAiAccessRevoked,
-  type AccountStateFields,
-} from '@bike4mind/services/userService/accountState';
+  isRewardRecipientBlocked,
+  type HeldCreditRewardInput,
+  type PayCreditRewardOutcome,
+} from '@bike4mind/services/creditService';
+import { isAiAccessRevoked, type AccountStateFields } from '@bike4mind/services/userService/accountState';
 
 export type ArenaUser = ArenaEligibilityFields &
   AccountStateFields & {
     isModerated?: boolean | null;
     riskScore?: { reviewState?: string | null } | null;
-    signupGrant?: { blocked?: { at: Date } } | null;
+    signupGrant?: Pick<SignupGrant, 'blocked' | 'unlockForfeited'> | null;
   };
-
-type AddCredits = typeof creditService.addCreditsWithLedgerRow;
 
 export type ArenaServiceDeps = {
   pairs: Pick<
@@ -72,8 +69,8 @@ export type ArenaServiceDeps = {
   loadSettings: () => Promise<PreferenceArenaSettings>;
   /** Credits the ledger already holds under this transaction id, or null when it has no such row. */
   findPaidCredits: (transactionId: string) => Promise<number | null>;
-  addCredits: AddCredits;
-  creditAdapters: Parameters<AddCredits>[1];
+  /** creditService.payCreditReward: draws from the trickle pool and queues the reward when it is dry. */
+  payReward: (reward: HeldCreditRewardInput) => Promise<PayCreditRewardOutcome>;
   logger: Pick<Logger, 'error' | 'warn'>;
   now?: () => Date;
   random?: () => number;
@@ -122,8 +119,7 @@ export function createArenaService(deps: ArenaServiceDeps) {
     if (!settings.enabled) return 'disabled';
     const user = await deps.loadUser(userId);
     if (!user) return 'unverified';
-    if (accountBlockReasons(user).length > 0 || user.moderation?.status === 'suspend_pending') return 'blocked';
-    if (isSignupGrantBlocked(user)) return 'blocked';
+    if (isRewardRecipientBlocked(user)) return 'blocked';
     if (isAiAccessRevoked(user) || user.riskScore?.reviewState === 'pending') return 'blocked';
     if (!isArenaVerifiedUser(user)) return 'unverified';
     return null;
@@ -190,21 +186,22 @@ export function createArenaService(deps: ArenaServiceDeps) {
     return winner ?? { status: 'empty' };
   }
 
-  async function grantCredits(userId: string, voteId: string, pairId: string, credits: number): Promise<void> {
+  async function grantCredits(
+    userId: string,
+    voteId: string,
+    pairId: string,
+    credits: number
+  ): Promise<PayCreditRewardOutcome> {
     try {
-      await deps.addCredits(
-        {
-          ownerId: userId,
-          ownerType: CreditHolderType.User,
-          credits,
-          type: 'generic_add',
-          transactionId: arenaVoteTransactionId(voteId),
-          reason: PREFERENCE_ARENA_REWARD_REASON,
-          description: 'Preference arena vote reward',
-          metadata: { voteId, pairId },
-        },
-        deps.creditAdapters
-      );
+      return await deps.payReward({
+        transactionId: arenaVoteTransactionId(voteId),
+        userId,
+        credits,
+        source: 'preference_arena',
+        reason: PREFERENCE_ARENA_REWARD_REASON,
+        description: 'Preference arena vote reward',
+        metadata: { voteId, pairId },
+      });
     } catch (err) {
       logger.error('[preference-arena] reward grant failed', err, { userId, voteId });
       throw err;
@@ -280,17 +277,25 @@ export function createArenaService(deps: ArenaServiceDeps) {
     });
 
     let outcome: { credited: true; creditsAwarded: number } | { credited: false; rejectReason: ArenaRejectReason };
+    let queued = false;
     if (!judgement.accepted) {
       outcome = { credited: false, rejectReason: judgement.reason };
     } else {
+      let paid: PayCreditRewardOutcome;
       try {
-        await grantCredits(userId, row.id, pairId, judgement.credits);
+        paid = await grantCredits(userId, row.id, pairId, judgement.credits);
       } catch (err) {
         // The ledger dedupes on the vote's transaction id, so the retry re-judges and pays once.
         await votes.releaseClaim(userId, pairId, votedAt);
         throw err;
       }
-      outcome = { credited: true, creditsAwarded: judgement.credits };
+      // A queued reward is owed, so it counts against the daily and lifetime caps like a paid one:
+      // a dry pool must not let a rater keep voting past them.
+      queued = paid.outcome === 'queued';
+      outcome =
+        paid.outcome === 'blocked'
+          ? { credited: false, rejectReason: 'reward_blocked' }
+          : { credited: true, creditsAwarded: judgement.credits };
     }
 
     const recorded = await votes.recordVote(userId, pairId, votedAt, {
@@ -300,7 +305,7 @@ export function createArenaService(deps: ArenaServiceDeps) {
       goldCorrect,
       ...outcome,
     });
-    if (recorded) return { creditsAwarded: recorded.creditsAwarded };
+    if (recorded) return { creditsAwarded: recorded.creditsAwarded, ...(queued ? { queued: true as const } : {}) };
     // Only a stale-claim takeover gets here; both claimants share the vote's transaction id, so the
     // ledger paid once.
     logger.error('[preference-arena] vote claim was taken over before recording', undefined, {

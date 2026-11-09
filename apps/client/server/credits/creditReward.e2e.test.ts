@@ -323,6 +323,22 @@ describe('payCreditReward', () => {
     expect(await balance(later.id)).toBe(100);
   });
 
+  it('queues a preference arena reward on a dry pool and pays it under its source on refill', async () => {
+    config.signupGrantTricklePoolDaily = '0';
+    const rater = await makeUser();
+    const vote = { ...reward(rater.id, 'vote'), transactionId: 'arena-vote:v1', source: 'preference_arena' as const };
+    expect((await creditService.payCreditReward(vote, adapters)).outcome).toBe('queued');
+    expect(await HeldCreditRewardModel.findOne({ transactionId: 'arena-vote:v1' }).lean()).toMatchObject({
+      source: 'preference_arena',
+      status: 'held',
+    });
+    expect(await CreditTransaction.countDocuments({ transactionId: 'arena-vote:v1' })).toBe(0);
+
+    config.signupGrantTricklePoolDaily = '1000';
+    expect(await creditService.releaseHeldCreditRewards(adapters, { limit: 10 })).toMatchObject({ paid: 1 });
+    expect(await balance(rater.id)).toBe(100);
+  });
+
   it('answers duplicate for a reward already in the ledger', async () => {
     const user = await makeUser();
     await creditService.payCreditReward(reward(user.id, 'projects'), adapters);
