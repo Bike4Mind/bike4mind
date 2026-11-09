@@ -186,7 +186,7 @@ export const IntegrationDetailPanel: React.FC<IntegrationDetailPanelProps> = ({
           </Typography>
           <StatusChip
             tone={entry.circuitBreaker.available ? 'good' : 'bad'}
-            label={MODE_LABEL[entry.circuitBreaker.mode] ?? entry.circuitBreaker.mode}
+            label={MODE_LABEL[entry.circuitBreaker.mode]}
           />
           {entry.circuitBreaker.autoTripped && <StatusChip tone="bad" label="Auto-tripped" />}
           {entry.circuitBreaker.reason && (

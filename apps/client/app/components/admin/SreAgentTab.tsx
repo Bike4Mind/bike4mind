@@ -196,53 +196,51 @@ function RepoGateEditor({
   }) => void;
 }) {
   return (
-    <Box sx={{ '& + &': { borderTop: '1px solid', borderColor: 'admin.border' } }}>
-      <Box sx={{ py: 1.5 }}>
-        <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1 }}>
-          <Typography level="title-sm">{label}</Typography>
-          <Switch checked={gate.enabled} onChange={e => onChange({ ...gate, enabled: e.target.checked })} size="sm" />
-        </Stack>
-        {gate.enabled && (
-          <Stack spacing={1.5}>
-            <Stack direction="row" spacing={2}>
-              <FormControl sx={{ flex: 1 }}>
-                <FormLabel>Auto Threshold</FormLabel>
-                <NumericInput
-                  size="sm"
-                  value={gate.autoThreshold}
-                  min={0}
-                  max={100}
-                  onChange={n => onChange({ ...gate, autoThreshold: n })}
-                />
-                <FormHelperText>Auto-approve above this confidence</FormHelperText>
-              </FormControl>
-              <FormControl sx={{ flex: 1 }}>
-                <FormLabel>Ask Threshold</FormLabel>
-                <NumericInput
-                  size="sm"
-                  value={gate.askThreshold}
-                  min={0}
-                  max={100}
-                  onChange={n => onChange({ ...gate, askThreshold: n })}
-                />
-                <FormHelperText>Request human review above this</FormHelperText>
-              </FormControl>
-            </Stack>
-            <Stack direction="row" spacing={2}>
-              <FormControl sx={{ flex: 1 }}>
-                <FormLabel>Approval Timeout (hours)</FormLabel>
-                <NumericInput
-                  size="sm"
-                  value={gate.approvalTimeoutHours}
-                  min={1}
-                  onChange={n => onChange({ ...gate, approvalTimeoutHours: n })}
-                />
-              </FormControl>
-              <Box sx={{ flex: 1 }} />
-            </Stack>
+    <Box sx={{ py: 1.5, '& + &': { borderTop: '1px solid', borderColor: 'admin.border' } }}>
+      <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1 }}>
+        <Typography level="title-sm">{label}</Typography>
+        <Switch checked={gate.enabled} onChange={e => onChange({ ...gate, enabled: e.target.checked })} size="sm" />
+      </Stack>
+      {gate.enabled && (
+        <Stack spacing={1.5}>
+          <Stack direction="row" spacing={2}>
+            <FormControl sx={{ flex: 1 }}>
+              <FormLabel>Auto Threshold</FormLabel>
+              <NumericInput
+                size="sm"
+                value={gate.autoThreshold}
+                min={0}
+                max={100}
+                onChange={n => onChange({ ...gate, autoThreshold: n })}
+              />
+              <FormHelperText>Auto-approve above this confidence</FormHelperText>
+            </FormControl>
+            <FormControl sx={{ flex: 1 }}>
+              <FormLabel>Ask Threshold</FormLabel>
+              <NumericInput
+                size="sm"
+                value={gate.askThreshold}
+                min={0}
+                max={100}
+                onChange={n => onChange({ ...gate, askThreshold: n })}
+              />
+              <FormHelperText>Request human review above this</FormHelperText>
+            </FormControl>
           </Stack>
-        )}
-      </Box>
+          <Stack direction="row" spacing={2}>
+            <FormControl sx={{ flex: 1 }}>
+              <FormLabel>Approval Timeout (hours)</FormLabel>
+              <NumericInput
+                size="sm"
+                value={gate.approvalTimeoutHours}
+                min={1}
+                onChange={n => onChange({ ...gate, approvalTimeoutHours: n })}
+              />
+            </FormControl>
+            <Box sx={{ flex: 1 }} />
+          </Stack>
+        </Stack>
+      )}
     </Box>
   );
 }
@@ -446,156 +444,152 @@ function RepoConfigCard({
         <CollapsibleSection title="Integrations">
           <Stack spacing={2}>
             <Box>
-              <Box>
-                <Typography level="title-sm" sx={{ mb: 0.5 }}>
-                  Slack
-                </Typography>
-                <Typography level="body-xs" sx={{ color: 'admin.inkMuted', mb: 1.5 }}>
-                  Used for approval messages when confidence falls in the &quot;ask&quot; band.
-                </Typography>
-                <Stack spacing={1.5}>
-                  <Stack direction="row" spacing={2}>
-                    <FormControl sx={{ flex: 1 }}>
-                      <FormLabel>Workspace</FormLabel>
-                      {workspaces.length === 0 ? (
-                        <Alert size="sm" variant="soft" color="warning">
-                          No Slack workspaces found. Install one via Admin &rarr; Slack.
-                        </Alert>
-                      ) : (
-                        <Select
-                          size="sm"
-                          value={repo.slack?.workspaceId || ''}
-                          onChange={(_, value) => {
-                            onChange({
-                              ...repo,
-                              slack: {
-                                ...repo.slack,
-                                workspaceId: value || undefined,
-                                approverIds: repo.slack?.approverIds ?? '',
-                              },
-                            });
-                          }}
-                          placeholder="Select a workspace..."
-                        >
-                          {workspaces.map(ws => (
-                            <Option key={ws.id} value={ws.id}>
-                              {ws.name || ws.slackTeamId}
-                            </Option>
-                          ))}
-                        </Select>
-                      )}
-                    </FormControl>
-                    <FormControl sx={{ flex: 1 }}>
-                      <FormLabel>Channel ID</FormLabel>
-                      <Input
+              <Typography level="title-sm" sx={{ mb: 0.5 }}>
+                Slack
+              </Typography>
+              <Typography level="body-xs" sx={{ color: 'admin.inkMuted', mb: 1.5 }}>
+                Used for approval messages when confidence falls in the &quot;ask&quot; band.
+              </Typography>
+              <Stack spacing={1.5}>
+                <Stack direction="row" spacing={2}>
+                  <FormControl sx={{ flex: 1 }}>
+                    <FormLabel>Workspace</FormLabel>
+                    {workspaces.length === 0 ? (
+                      <Alert size="sm" variant="soft" color="warning">
+                        No Slack workspaces found. Install one via Admin &rarr; Slack.
+                      </Alert>
+                    ) : (
+                      <Select
                         size="sm"
-                        placeholder="e.g. C06CWQNTSAH"
-                        value={repo.slack?.channelId ?? ''}
-                        onChange={e => {
-                          const val = e.target.value || undefined;
+                        value={repo.slack?.workspaceId || ''}
+                        onChange={(_, value) => {
                           onChange({
                             ...repo,
-                            slack: { ...repo.slack, channelId: val, approverIds: repo.slack?.approverIds ?? '' },
+                            slack: {
+                              ...repo.slack,
+                              workspaceId: value || undefined,
+                              approverIds: repo.slack?.approverIds ?? '',
+                            },
                           });
                         }}
-                      />
-                      <FormHelperText>Channel for approval messages (use channel ID, not name)</FormHelperText>
-                    </FormControl>
-                  </Stack>
-                  <FormControl>
-                    <FormLabel>Approver IDs</FormLabel>
+                        placeholder="Select a workspace..."
+                      >
+                        {workspaces.map(ws => (
+                          <Option key={ws.id} value={ws.id}>
+                            {ws.name || ws.slackTeamId}
+                          </Option>
+                        ))}
+                      </Select>
+                    )}
+                  </FormControl>
+                  <FormControl sx={{ flex: 1 }}>
+                    <FormLabel>Channel ID</FormLabel>
                     <Input
                       size="sm"
-                      placeholder="e.g. U01ABC123, U02DEF456"
-                      value={repo.slack?.approverIds ?? ''}
+                      placeholder="e.g. C06CWQNTSAH"
+                      value={repo.slack?.channelId ?? ''}
                       onChange={e => {
-                        onChange({ ...repo, slack: { ...repo.slack, approverIds: e.target.value } });
+                        const val = e.target.value || undefined;
+                        onChange({
+                          ...repo,
+                          slack: { ...repo.slack, channelId: val, approverIds: repo.slack?.approverIds ?? '' },
+                        });
                       }}
                     />
-                    <FormHelperText>
-                      Comma-separated Slack user IDs authorized to approve/reject fixes. Leave empty to allow anyone in
-                      the channel.
-                    </FormHelperText>
+                    <FormHelperText>Channel for approval messages (use channel ID, not name)</FormHelperText>
                   </FormControl>
                 </Stack>
-              </Box>
+                <FormControl>
+                  <FormLabel>Approver IDs</FormLabel>
+                  <Input
+                    size="sm"
+                    placeholder="e.g. U01ABC123, U02DEF456"
+                    value={repo.slack?.approverIds ?? ''}
+                    onChange={e => {
+                      onChange({ ...repo, slack: { ...repo.slack, approverIds: e.target.value } });
+                    }}
+                  />
+                  <FormHelperText>
+                    Comma-separated Slack user IDs authorized to approve/reject fixes. Leave empty to allow anyone in
+                    the channel.
+                  </FormHelperText>
+                </FormControl>
+              </Stack>
             </Box>
 
             <Divider />
 
             <Box>
-              <Box>
-                <Typography level="title-sm" sx={{ mb: 0.5 }}>
-                  GitHub
-                </Typography>
-                <Typography level="body-xs" sx={{ color: 'admin.inkMuted', mb: 1.5 }}>
-                  Target repository for issue intake, code analysis, and fix PRs. Uses the system default GitHub
-                  connection.
-                </Typography>
-                <Stack spacing={1.5}>
-                  <Stack direction="row" spacing={2}>
-                    <FormControl sx={{ flex: 1 }}>
-                      <FormLabel>Owner</FormLabel>
-                      <Input
-                        size="sm"
-                        placeholder="e.g. MillionOnMars"
-                        value={repo.owner}
-                        onChange={e => onChange({ ...repo, owner: e.target.value })}
-                        data-testid={`sre-repo-owner-${index}`}
-                      />
-                      <FormHelperText>GitHub org or user</FormHelperText>
-                    </FormControl>
-                    <FormControl sx={{ flex: 1 }}>
-                      <FormLabel>Repository</FormLabel>
-                      <Input
-                        size="sm"
-                        placeholder="e.g. lumina5"
-                        value={repo.repo}
-                        onChange={e => onChange({ ...repo, repo: e.target.value })}
-                        data-testid={`sre-repo-name-${index}`}
-                      />
-                      <FormHelperText>Repository name</FormHelperText>
-                    </FormControl>
-                  </Stack>
-                  <FormControl>
-                    <FormLabel>PR Reviewers</FormLabel>
+              <Typography level="title-sm" sx={{ mb: 0.5 }}>
+                GitHub
+              </Typography>
+              <Typography level="body-xs" sx={{ color: 'admin.inkMuted', mb: 1.5 }}>
+                Target repository for issue intake, code analysis, and fix PRs. Uses the system default GitHub
+                connection.
+              </Typography>
+              <Stack spacing={1.5}>
+                <Stack direction="row" spacing={2}>
+                  <FormControl sx={{ flex: 1 }}>
+                    <FormLabel>Owner</FormLabel>
                     <Input
                       size="sm"
-                      placeholder="e.g. octocat, hubot"
-                      value={repo.reviewers ?? ''}
-                      onChange={e => setRepoField(repo, 'reviewers', e.target.value || undefined, onChange)}
+                      placeholder="e.g. MillionOnMars"
+                      value={repo.owner}
+                      onChange={e => onChange({ ...repo, owner: e.target.value })}
+                      data-testid={`sre-repo-owner-${index}`}
                     />
-                    <FormHelperText>Comma-separated GitHub usernames to request as reviewers on fix PRs</FormHelperText>
+                    <FormHelperText>GitHub org or user</FormHelperText>
                   </FormControl>
-                  <Divider />
-                  <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
-                    Workflow callback authentication — token is stored encrypted, URL is derived automatically.
-                  </Typography>
-                  <FormControl>
-                    <FormLabel>Callback Token</FormLabel>
+                  <FormControl sx={{ flex: 1 }}>
+                    <FormLabel>Repository</FormLabel>
                     <Input
                       size="sm"
-                      placeholder={
-                        isCallbackMasked
-                          ? 'Token configured — enter new value to change'
-                          : 'Bearer token for workflow callbacks'
-                      }
-                      value={isCallbackMasked ? '' : (repo.callbackToken ?? '')}
-                      onChange={e => onChange({ ...repo, callbackToken: e.target.value || SRE_SECRET_PLACEHOLDER })}
-                      endDecorator={
-                        <Button size="sm" variant="plain" onClick={generateToken}>
-                          Generate
-                        </Button>
-                      }
+                      placeholder="e.g. lumina5"
+                      value={repo.repo}
+                      onChange={e => onChange({ ...repo, repo: e.target.value })}
+                      data-testid={`sre-repo-name-${index}`}
                     />
-                    <FormHelperText>
-                      {isCallbackMasked
-                        ? 'Token configured — copy the GitHub secret SRE_CALLBACK_TOKEN to match'
-                        : 'Used by the SRE workflow to authenticate callback requests'}
-                    </FormHelperText>
+                    <FormHelperText>Repository name</FormHelperText>
                   </FormControl>
                 </Stack>
-              </Box>
+                <FormControl>
+                  <FormLabel>PR Reviewers</FormLabel>
+                  <Input
+                    size="sm"
+                    placeholder="e.g. octocat, hubot"
+                    value={repo.reviewers ?? ''}
+                    onChange={e => setRepoField(repo, 'reviewers', e.target.value || undefined, onChange)}
+                  />
+                  <FormHelperText>Comma-separated GitHub usernames to request as reviewers on fix PRs</FormHelperText>
+                </FormControl>
+                <Divider />
+                <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+                  Workflow callback authentication {'\u2014'} token is stored encrypted, URL is derived automatically.
+                </Typography>
+                <FormControl>
+                  <FormLabel>Callback Token</FormLabel>
+                  <Input
+                    size="sm"
+                    placeholder={
+                      isCallbackMasked
+                        ? 'Token configured \u2014 enter new value to change'
+                        : 'Bearer token for workflow callbacks'
+                    }
+                    value={isCallbackMasked ? '' : (repo.callbackToken ?? '')}
+                    onChange={e => onChange({ ...repo, callbackToken: e.target.value || SRE_SECRET_PLACEHOLDER })}
+                    endDecorator={
+                      <Button size="sm" variant="plain" onClick={generateToken}>
+                        Generate
+                      </Button>
+                    }
+                  />
+                  <FormHelperText>
+                    {isCallbackMasked
+                      ? 'Token configured \u2014 copy the GitHub secret SRE_CALLBACK_TOKEN to match'
+                      : 'Used by the SRE workflow to authenticate callback requests'}
+                  </FormHelperText>
+                </FormControl>
+              </Stack>
             </Box>
           </Stack>
         </CollapsibleSection>
