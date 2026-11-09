@@ -58,10 +58,8 @@ const summaryOf = (row: AdminApprovalRow) => row.summary ?? ACTION_LABELS[row.ac
 const REJECT_PRESETS = ['Not justified', 'Wrong target', 'Needs more detail'] as const;
 const IMPERSONATION_PRESETS = ['Reproducing a customer issue', 'Investigating a reported problem'] as const;
 
-const decideHint = (row: AdminApprovalRow, ownId: string | undefined) =>
-  !!row.requestedBy && row.requestedBy.id === ownId
-    ? 'Another admin must approve your own request.'
-    : 'You do not have the permission this request needs.';
+const decideHint = (row: AdminApprovalRow) =>
+  row.own ? 'Another admin must approve your own request.' : 'You do not have the permission this request needs.';
 
 const formatTime = (iso: string) => new Date(iso).toLocaleString();
 
@@ -275,8 +273,8 @@ const Approvals: React.FC = () => {
       );
     }
     if (row.status !== 'pending') return null;
-    const isRequester = !!currentUser?.id && row.requestedBy?.id === currentUser.id;
-    const hint = row.canDecide ? '' : decideHint(row, currentUser?.id);
+    const isRequester = !!row.own;
+    const hint = row.canDecide ? '' : decideHint(row);
     return (
       <Stack direction="row" spacing={0.5}>
         <Tooltip title={hint} disableHoverListener={row.canDecide}>
@@ -379,18 +377,10 @@ const Approvals: React.FC = () => {
         <ActionDialog
           open
           onClose={() => setRejecting(null)}
-          title={
-            !!rejecting.requestedBy && rejecting.requestedBy.id === currentUser?.id
-              ? 'Withdraw request'
-              : 'Reject request'
-          }
+          title={rejecting.own ? 'Withdraw request' : 'Reject request'}
           description={`Closes "${summaryOf(rejecting)}" without running it.`}
           reasonPresets={REJECT_PRESETS}
-          confirmLabel={
-            !!rejecting.requestedBy && rejecting.requestedBy.id === currentUser?.id
-              ? 'Withdraw request'
-              : 'Reject request'
-          }
+          confirmLabel={rejecting.own ? 'Withdraw request' : 'Reject request'}
           tone="danger"
           pending={reject.isPending}
           onConfirm={async reason => {

@@ -54,7 +54,7 @@ A page whose edits need `settings:manage` also opens to `settings:manage` alone 
 | Retrieval, Webhook logs, Help analytics, API key scopes, Integration demand, Audit log, Approvals, Stripe disputes, Shadow detections | `support:read` |
 | Tools, Gears, Stuck executions | `support:read` or `settings:manage` |
 
-Other tabs require full admin access. Inside an open tab, an action the delegate cannot perform is disabled and names the permission it needs, such as "Missing permission: users:moderate". A detail page under a tab the delegate cannot open, such as a user profile, shows the same message in place of the page.
+Other tabs require full admin access. Inside an open tab, an action the delegate cannot perform is disabled and names the permission it needs, such as "Missing permission: users:moderate". A detail page under a tab the delegate cannot open, such as a user profile, shows "Full admin access required" in place of the page.
 
 ## Granting permissions
 
