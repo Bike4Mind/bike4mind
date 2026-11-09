@@ -10,6 +10,7 @@ import { markFirstSignupSession } from '@client/app/utils/firstSignupSession';
 import { useTranslation, Trans } from 'react-i18next';
 import { toast } from 'sonner';
 import { dismissOtcCodeSentToast, toastOtcCodeSent } from './otcToast';
+import { AccountSuspendedNotice } from './AccountSuspendedNotice';
 import {
   Box,
   Button,
@@ -129,6 +130,8 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   const [emailError, setEmailError] = useState<string | null>(null);
   const { mutateAsync: verifyOTC, isPending: isVerifying } = useVerifyOTC();
   const { data: publicConfig, isLoading: isPublicConfigLoading } = usePublicConfig();
+  // Non-null once sign-in is refused for an admin suspension; the stored reason category ('' if unknown).
+  const [suspendedCategory, setSuspendedCategory] = useState<string | null>(null);
   const mfaChallenge = useMfaChallenge({
     allowRememberDevice: publicConfig?.allowTrustedDevices ?? false,
     onComplete: ({ user }) => setCurrentUser(user),
@@ -190,6 +193,14 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
     const errorCode = url.searchParams.get('error');
     const baseMessage = getLoginErrorMessage(errorCode);
     if (!baseMessage) return;
+    // An admin suspension gets the persistent notice (category, policy, appeal) instead of a toast.
+    if (errorCode === 'account_suspended') {
+      setSuspendedCategory(url.searchParams.get('reason') ?? '');
+      url.searchParams.delete('error');
+      url.searchParams.delete('reason');
+      window.history.replaceState({}, '', url.pathname + url.search + url.hash);
+      return;
+    }
     const blocked = isBlockedAccountLoginError(errorCode);
     // A blocked-account notice names the support address from the public config, so wait for it;
     // a failed config fetch still shows the notice, just without the address.
@@ -373,6 +384,11 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
       const reissuedToken = (error as { pendingToken?: string })?.pendingToken;
       if (reissuedToken) {
         setPendingToken(reissuedToken);
+      }
+      const suspensionCategory = (error as { suspensionCategory?: string })?.suspensionCategory;
+      if (suspensionCategory !== undefined) {
+        setSuspendedCategory(suspensionCategory);
+        return;
       }
       toast.error(errorMessage);
     }
@@ -610,6 +626,9 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
               mx: 'auto',
             }}
           >
+            {suspendedCategory !== null && (
+              <AccountSuspendedNotice category={suspendedCategory} supportEmail={publicConfig?.supportEmail} />
+            )}
             {/* Email Step */}
             {currentStep === 'email' && (
               <form

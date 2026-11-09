@@ -94,11 +94,11 @@ vi.mock('@server/websocket/subscriptionScopes', () => ({
   inviteSubscriptionScope: vi.fn(),
 }));
 
-vi.mock('@bike4mind/server-utils/utils/errors', () => ({
-  ForbiddenError: class ForbiddenError extends Error {},
-  NotFoundError: class NotFoundError extends Error {},
-  UnauthorizedError: class UnauthorizedError extends Error {},
-}));
+// The real classes: the account-state gate throws @bike4mind/common's errors, so a stand-in class would never match.
+vi.mock('@bike4mind/server-utils/utils/errors', async () => {
+  const { ForbiddenError, NotFoundError, UnauthorizedError } = await import('@bike4mind/common');
+  return { ForbiddenError, NotFoundError, UnauthorizedError };
+});
 
 vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   sendToConnection: vi.fn(),
@@ -283,7 +283,7 @@ describe('dataSubscribeRequest WS handler - account state', () => {
   });
 
   it.each([
-    ['a banned account', { isBanned: true }, UnauthorizedError],
+    ['a banned account', { isBanned: true }, ForbiddenError],
     ['a dispute-pending account', { disputePending: true }, ForbiddenError],
     ['a moderation-suspended account', { moderation: { status: 'suspended' } }, ForbiddenError],
   ])(

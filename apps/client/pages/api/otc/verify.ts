@@ -1,9 +1,11 @@
 import { issueSessionForRequest } from '@server/auth/issueSession';
-import { blockedSignInMessage } from '@server/auth/blockedSignIn';
+import { blockedSignInMessage, configuredSupportEmail } from '@server/auth/blockedSignIn';
 import { signupProtection } from '@bike4mind/server-utils/auth/signupProtection';
 import {
+  ACCOUNT_SUSPENDED_ERROR_CODE,
   AuthEvents,
   HTTPError,
+  buildSuspensionNotice,
   InternalServerError,
   TooManyRequestsError,
   UnprocessableEntityError,
@@ -235,7 +237,14 @@ const handler = baseApi({ auth: false })
         return res.status(403).json({ error: 'This account cannot sign in.' });
       }
       if (existingUser.isBanned) {
-        return res.status(403).json({ error: 'This account has been suspended.' });
+        const notice = buildSuspensionNotice(existingUser.suspensionReasonCategory, {
+          email: configuredSupportEmail(),
+        });
+        return res.status(403).json({
+          error: notice.message,
+          errorCode: ACCOUNT_SUSPENDED_ERROR_CODE,
+          suspension: { reason_category: notice.category },
+        });
       }
       const blockedMessage = blockedSignInMessage(existingUser);
       if (blockedMessage) {

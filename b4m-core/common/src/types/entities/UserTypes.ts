@@ -8,6 +8,7 @@ import { IMementoDocument } from './MementoTypes';
 import { ICreditHolder, ICreditHolderFlooredDebit, ICreditHolderMethods } from './CreditHolderTypes';
 import { PaginatedResponse, UserReasoningEffort } from '../common';
 import type { AuthStrategy } from '../../schemas/user';
+import type { SuspensionReasonCategory } from '../../accountSuspensionCategories';
 import type { SignupRiskSignal } from '../../schemas/settings';
 import type { SignupRiskAutoApprovalPolicy } from '../../schemas/signupRiskReview';
 import type { RiskEvidenceRecord, RiskEvidenceSummary, RiskEvidenceTrigger } from '../../schemas/riskEvidence';
@@ -452,6 +453,8 @@ export interface IUser extends ICreditHolder {
   signupGrantHeldAt?: Date | null;
   level: UserLevelType;
   isBanned: boolean;
+  /** Why the account is suspended, as told to the user; null when not suspended or suspended without one. */
+  suspensionReasonCategory?: SuspensionReasonCategory | null;
   isModerated: boolean;
   /** Admin override that trusts the account for personal API keys (userApiKeyService/trust.ts). Absent on legacy docs. */
   apiKeyTrustApproved?: boolean;
