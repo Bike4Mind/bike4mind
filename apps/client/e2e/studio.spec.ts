@@ -1,3 +1,4 @@
+import { stat } from 'fs/promises';
 import { test, expect } from './fixtures';
 import { TIMEOUTS } from './constants';
 import { getTestUsers } from './helpers/test-users';
@@ -227,6 +228,13 @@ test.describe('Studio - generated media', () => {
       expect(snapshot.estimate).toBeGreaterThan(0);
       const response = await studioPage.generateAudio('speech', prompt);
       expect(response.status(), `TTS answered ${response.status()}`).toBe(200);
+      // The estimate prices the default provider; a fallback bills the vendor that did the work
+      // (pages/api/ai/tts.ts), so name the swap instead of failing parity as a billing error.
+      const fallbackFrom = response.headers()['x-b4m-tts-provider-fallback-from'];
+      expect(
+        fallbackFrom,
+        `TTS fell back from ${fallbackFrom} to ${response.headers()['x-b4m-tts-provider']}`
+      ).toBeUndefined();
       await expectChargeMatchesEstimate(studioPage, 'speech', snapshot);
     });
 
@@ -257,6 +265,7 @@ test.describe('Studio - generated media', () => {
       const download = await downloadPromise;
       expect(download.suggestedFilename()).toMatch(/\.(mp3|wav|ogg|opus|aac|flac|pcm)$/i);
       expect(await download.failure()).toBeNull();
+      expect((await stat(await download.path())).size, 'downloaded clip is empty').toBeGreaterThan(0);
     });
 
     await test.step('the clip is still listed after a fresh load', async () => {
@@ -292,6 +301,11 @@ test.describe('Studio - generated media', () => {
     await test.step('the clip is not listed under speech', async () => {
       await studioPage.tab('speech').click();
       await studioPage.waitForModality('speech');
+      // Wait for the gallery query to settle (list or empty state); otherwise the count below could pass
+      // before the list loads.
+      await expect(page.getByTestId('speech-gallery').or(page.getByTestId('speech-gallery-empty'))).toBeVisible({
+        timeout: TIMEOUTS.ACTION,
+      });
       await expect(studioPage.audioCard(prompt)).toHaveCount(0);
     });
   });
