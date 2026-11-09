@@ -1,25 +1,22 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import {
   Alert,
   Box,
   Button,
-  Card,
   Chip,
+  Dropdown,
   FormControl,
   FormLabel,
   IconButton,
   Input,
-  Modal,
-  ModalDialog,
+  Link,
+  Menu,
+  MenuButton,
+  MenuItem,
   Option,
   Select,
   Stack,
-  Table,
   Typography,
-  CircularProgress,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
   Checkbox,
   LinearProgress,
   Switch,
@@ -27,17 +24,12 @@ import {
   Tooltip,
 } from '@mui/joy';
 import Refresh from '@mui/icons-material/Refresh';
-import Delete from '@mui/icons-material/Delete';
-import Warning from '@mui/icons-material/Warning';
 import Add from '@mui/icons-material/Add';
 import Download from '@mui/icons-material/Download';
-import Cancel from '@mui/icons-material/Cancel';
-import CheckCircle from '@mui/icons-material/CheckCircle';
-import Error from '@mui/icons-material/Error';
 import InfoOutlined from '@mui/icons-material/InfoOutlined';
+import MoreHoriz from '@mui/icons-material/MoreHoriz';
 import Update from '@mui/icons-material/Update';
 import LinkOff from '@mui/icons-material/LinkOff';
-import Image from 'next/image';
 import { toast } from 'sonner';
 import { isAxiosError } from 'axios';
 import { api } from '@client/app/contexts/ApiContext';
@@ -45,7 +37,19 @@ import CreateSlackAppModal from './CreateSlackAppModal';
 import { SlackEvents } from '@bike4mind/common';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
-import { useIsMobile } from '@client/app/hooks/useIsMobile';
+import {
+  ADMIN_REASON_PRESETS,
+  ActionDialog,
+  AdminDialog,
+  AdminPageHeader,
+  DataTable,
+  EmptyState,
+  LoadingState,
+  StatusChip,
+  UpdatingBar,
+  type DataColumn,
+} from './shared';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
 
 interface SlackWorkspace {
   id: string;
@@ -93,11 +97,107 @@ interface AsyncExportJob {
   errorMessage?: string;
 }
 
+const LOAD_ERROR = 'Slack workspaces failed to load.';
+
+const formatDate = (dateString: string) => {
+  return new Date(dateString).toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  });
+};
+
+const Mono: React.FC<{ children: ReactNode }> = ({ children }) => (
+  <Typography component="span" level="body-xs" sx={{ fontFamily: 'code', color: 'admin.inkMuted' }}>
+    {children}
+  </Typography>
+);
+
+const NoValue = () => (
+  <Box component="span" sx={{ color: 'admin.inkMuted' }}>
+    -
+  </Box>
+);
+
+/** The manifest check result for one workspace, with the fix one click away when it needs one. */
+const ManifestCell: React.FC<{
+  workspace: SlackWorkspace;
+  status: ManifestStatus | undefined;
+  onUpdate: () => void;
+  onReconnect: () => void;
+}> = ({ workspace, status, onUpdate, onReconnect }) => {
+  if (!status || status.status === 'checking') {
+    return <StatusChip tone="neutral" label="Checking" data-testid={`manifest-status-loading-${workspace.id}`} />;
+  }
+  if (status.status === 'up_to_date') {
+    return <StatusChip tone="good" label="Up to date" data-testid={`manifest-status-ok-${workspace.id}`} />;
+  }
+  if (status.status === 'outdated') {
+    return (
+      <Stack direction="row" gap={0.5} alignItems="center">
+        <StatusChip tone="warn" label="Update available" data-testid={`manifest-status-outdated-${workspace.id}`} />
+        <Tooltip title="Update manifest">
+          <IconButton
+            size="sm"
+            variant="plain"
+            aria-label="Update manifest"
+            onClick={onUpdate}
+            data-testid={`manifest-update-btn-${workspace.id}`}
+          >
+            <Update />
+          </IconButton>
+        </Tooltip>
+      </Stack>
+    );
+  }
+  if (status.status === 'missing_token') {
+    return (
+      <Stack direction="row" gap={0.5} alignItems="center">
+        <StatusChip tone="bad" label="Reconnect needed" data-testid={`manifest-status-missing-${workspace.id}`} />
+        <Tooltip title="Reconnect configuration token">
+          <IconButton
+            size="sm"
+            variant="plain"
+            aria-label="Reconnect configuration token"
+            onClick={onReconnect}
+            data-testid={`manifest-reconnect-btn-${workspace.id}`}
+          >
+            <LinkOff />
+          </IconButton>
+        </Tooltip>
+      </Stack>
+    );
+  }
+  // A failed check says nothing about the manifest itself, so it stays neutral.
+  return (
+    <Tooltip title={status.message || 'Failed to check manifest status'}>
+      <Box component="span" sx={{ display: 'inline-flex' }}>
+        <StatusChip tone="neutral" label="Check failed" data-testid={`manifest-status-error-${workspace.id}`} />
+      </Box>
+    </Tooltip>
+  );
+};
+
+/** Cancel and commit buttons at the bottom-right of a dialog, as ActionDialog lays them out. */
+const DialogFooter: React.FC<{ children: ReactNode }> = ({ children }) => (
+  <Stack
+    direction="row"
+    justifyContent="flex-end"
+    gap={1}
+    flexWrap="wrap"
+    sx={{ pt: 2, mt: 1, borderTop: '1px solid', borderColor: 'admin.border' }}
+  >
+    {children}
+  </Stack>
+);
+
 const SlackWorkspacesTab: React.FC = () => {
-  const isMobile = useIsMobile();
   const { mutate: logEvent } = useLogEvent();
   const [workspaces, setWorkspaces] = useState<SlackWorkspace[]>([]);
   const [loading, setLoading] = useState(true);
+  // A refetch keeps the table on screen under UpdatingBar; LoadingState is only for the first load.
+  const [refreshing, setRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [deactivateModalOpen, setDeactivateModalOpen] = useState(false);
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [selectedWorkspace, setSelectedWorkspace] = useState<SlackWorkspace | null>(null);
@@ -192,16 +292,17 @@ const SlackWorkspacesTab: React.FC = () => {
   };
 
   const fetchWorkspaces = async () => {
-    setLoading(true);
+    setRefreshing(true);
     try {
       const response = await api.get('/api/admin/slack-workspaces');
       setWorkspaces(response.data.workspaces);
+      setLoadError(null);
       checkManifestStatuses(response.data.workspaces);
     } catch (error) {
       console.error('Error fetching workspaces:', error);
-      toast.error('Failed to load Slack workspaces');
+      setLoadError(LOAD_ERROR);
     } finally {
-      setLoading(false);
+      setRefreshing(false);
     }
   };
 
@@ -219,7 +320,7 @@ const SlackWorkspacesTab: React.FC = () => {
       } catch (error) {
         if (!cancelled) {
           console.error('Error fetching workspaces:', error);
-          toast.error('Failed to load Slack workspaces');
+          setLoadError(LOAD_ERROR);
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -272,14 +373,6 @@ const SlackWorkspacesTab: React.FC = () => {
     }
   };
 
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    });
-  };
-
   // Export modal state
   const [exportChannelId, setExportChannelId] = useState('');
   const [exportFormat, setExportFormat] = useState<'json' | 'csv' | 'markdown'>('json');
@@ -293,6 +386,8 @@ const SlackWorkspacesTab: React.FC = () => {
   // Async export state
   const [useAsyncExport, setUseAsyncExport] = useState(false);
   const [asyncJob, setAsyncJob] = useState<AsyncExportJob | null>(null);
+  // The job whose cancel confirm is open.
+  const [cancelJobId, setCancelJobId] = useState<string | null>(null);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const pollJobStatus = useCallback(async (jobId: string) => {
@@ -349,8 +444,9 @@ const SlackWorkspacesTab: React.FC = () => {
     };
   }, []);
 
-  const cancelAsyncExport = async () => {
-    if (!asyncJob) return;
+  /** Resolves true once the job is cancelled; a failure is reported in a toast. */
+  const cancelAsyncExport = async (): Promise<boolean> => {
+    if (!asyncJob) return false;
 
     try {
       await api.delete(`/api/slack/export/status/${asyncJob.id}`);
@@ -361,8 +457,10 @@ const SlackWorkspacesTab: React.FC = () => {
         clearInterval(pollingIntervalRef.current);
         pollingIntervalRef.current = null;
       }
+      return true;
     } catch (error: any) {
       toast.error(error.response?.data?.message || 'Failed to cancel export');
+      return false;
     }
   };
 
@@ -682,1128 +780,759 @@ const SlackWorkspacesTab: React.FC = () => {
     }
   };
 
-  if (loading) {
+  const closeDeactivateDialog = () => {
+    setDeactivateModalOpen(false);
+    setSelectedWorkspace(null);
+  };
+
+  const resetExportDialog = () => {
+    setExportModalOpen(false);
+    setSelectedWorkspace(null);
+    setExportChannelId('');
+    setExportDateStart('');
+    setExportDateEnd('');
+    setSelectedPreset('');
+    setChannelInfo(null);
+    setChannelError(null);
+    setAsyncJob(null);
+    setUseAsyncExport(false);
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
+    }
+  };
+
+  const closeUpdateDialog = () => {
+    setUpdateModalOpen(false);
+    setUpdateModalWorkspace(null);
+  };
+
+  const closeReconnectDialog = () => {
+    setReconnectModalOpen(false);
+    setReconnectModalWorkspace(null);
+    setReconnectToken('');
+    setReconnectError(null);
+  };
+
+  const jobRunning = asyncJob?.status === 'processing' || asyncJob?.status === 'pending';
+  const jobFinished =
+    asyncJob?.status === 'completed' || asyncJob?.status === 'failed' || asyncJob?.status === 'cancelled';
+  const updateStatus = updateModalWorkspace ? manifestStatuses[updateModalWorkspace.id] : undefined;
+  const updateDiffs = updateStatus?.status === 'outdated' ? updateStatus.differences : undefined;
+
+  const columns: DataColumn<SlackWorkspace>[] = [
+    {
+      id: 'name',
+      label: 'Workspace',
+      sortValue: workspace => workspace.name,
+      render: workspace => workspace.name,
+    },
+    {
+      id: 'team',
+      label: 'Team ID',
+      width: '8rem',
+      render: workspace => (workspace.slackTeamId ? <Mono>{workspace.slackTeamId}</Mono> : <NoValue />),
+    },
+    {
+      id: 'app',
+      label: 'App ID',
+      width: '9rem',
+      render: workspace => (workspace.slackAppId ? <Mono>{workspace.slackAppId}</Mono> : <NoValue />),
+    },
+    {
+      id: 'bot',
+      label: 'Bot name',
+      width: '9rem',
+      render: workspace => workspace.slackBotName || <NoValue />,
+    },
+    {
+      id: 'installed',
+      label: 'Installed',
+      width: '13rem',
+      render: workspace =>
+        workspace.installedAt ? (
+          formatDate(workspace.installedAt)
+        ) : (
+          <Stack direction="row" gap={1} alignItems="center">
+            <StatusChip
+              tone="warn"
+              label="Not installed"
+              data-testid={`slack-workspace-not-installed-${workspace.id}`}
+            />
+            <Button
+              size="sm"
+              variant="outlined"
+              color="neutral"
+              component="a"
+              href={`/integrations/slack/install?workspaceId=${workspace.id}`}
+              data-testid={`slack-workspace-install-btn-${workspace.id}`}
+            >
+              Install
+            </Button>
+          </Stack>
+        ),
+    },
+    {
+      id: 'status',
+      label: 'Status',
+      width: '7rem',
+      render: workspace => (
+        <StatusChip
+          tone={workspace.isActive ? 'good' : 'neutral'}
+          label={workspace.isActive ? 'Active' : 'Inactive'}
+          dot
+          data-testid={`slack-workspace-status-${workspace.id}`}
+        />
+      ),
+    },
+    {
+      id: 'manifest',
+      label: 'Manifest',
+      width: '12rem',
+      render: workspace => (
+        <ManifestCell
+          workspace={workspace}
+          status={manifestStatuses[workspace.id]}
+          onUpdate={() => {
+            setUpdateModalWorkspace(workspace);
+            setUpdateModalOpen(true);
+          }}
+          onReconnect={() => {
+            setReconnectModalWorkspace(workspace);
+            setReconnectModalOpen(true);
+          }}
+        />
+      ),
+    },
+  ];
+
+  // Deactivate is destructive, so it sits in the row's menu rather than as a red icon in every row.
+  const rowActions = (workspace: SlackWorkspace) => {
+    const teamIdOrId = workspace.slackTeamId || workspace.id;
     return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: 200 }}>
-        <CircularProgress />
-      </Box>
+      <>
+        {workspace.installedAt && (
+          <Tooltip title="Export channel history">
+            <IconButton
+              size="sm"
+              variant="plain"
+              aria-label={`Export channel history from ${workspace.name}`}
+              onClick={() => handleExportClick(workspace)}
+              disabled={!workspace.isActive}
+              data-testid={`slack-workspace-export-btn-${teamIdOrId}`}
+            >
+              <Download />
+            </IconButton>
+          </Tooltip>
+        )}
+        <Dropdown>
+          <MenuButton
+            slots={{ root: IconButton }}
+            slotProps={{ root: { size: 'sm', variant: 'plain' } }}
+            aria-label={`More actions for ${workspace.name}`}
+            data-testid={`slack-workspace-menu-btn-${teamIdOrId}`}
+          >
+            <MoreHoriz />
+          </MenuButton>
+          <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
+            <MenuItem
+              color="danger"
+              disabled={!workspace.isActive}
+              onClick={() => handleDeactivateClick(workspace)}
+              data-testid={`slack-workspace-deactivate-btn-${teamIdOrId}`}
+            >
+              Deactivate workspace
+            </MenuItem>
+          </Menu>
+        </Dropdown>
+      </>
     );
-  }
+  };
 
   return (
-    <Box>
-      {/* Header */}
-      <Stack
-        direction={{ xs: 'column', sm: 'row' }}
-        justifyContent="space-between"
-        alignItems={{ xs: 'flex-start', sm: 'center' }}
-        gap={1}
-        sx={{ mb: 3 }}
-      >
-        <Stack direction="row" alignItems="center" spacing={1.5}>
-          <Image src="/icons/Slack_Logo.svg" alt="Slack" width={28} height={28} />
-          <Typography level="h3">Slack Workspaces</Typography>
-          <ContextHelpButton helpId="admin/slack-workspaces" tooltipText="Slack Workspaces Help" />
-          <Chip size="sm" variant="soft" color="neutral">
-            {workspaces.length} connected
-          </Chip>
+    <Stack gap={ADMIN_REGION_GAP} sx={{ minWidth: 0 }} data-testid="slack-workspaces-tab">
+      <AdminPageHeader
+        title="Slack workspaces"
+        count={loading || loadError ? undefined : workspaces.length}
+        description="Slack workspaces connected through OAuth. Deactivating one stops the bot from replying there."
+        actions={
+          <>
+            <Button
+              size="sm"
+              startDecorator={<Add />}
+              onClick={() => setCreateAppModalOpen(true)}
+              data-testid="slack-create-app-btn"
+            >
+              Create Slack app
+            </Button>
+            <Button
+              size="sm"
+              variant="outlined"
+              color="neutral"
+              startDecorator={<Refresh />}
+              onClick={fetchWorkspaces}
+              loading={refreshing}
+              disabled={loading}
+              data-testid="slack-workspaces-refresh-btn"
+            >
+              Refresh
+            </Button>
+            <ContextHelpButton helpId="admin/slack-workspaces" tooltipText="Slack workspaces help" />
+          </>
+        }
+      />
+
+      {loading ? (
+        <LoadingState label="Loading Slack workspaces" />
+      ) : (
+        <Stack gap={1} sx={{ minWidth: 0 }}>
+          <UpdatingBar active={refreshing} testId="slack-workspaces-updating" />
+          <DataTable
+            rows={workspaces}
+            columns={columns}
+            getRowId={workspace => workspace.id}
+            label="Slack workspaces"
+            error={loadError ?? undefined}
+            onRetry={fetchWorkspaces}
+            empty={
+              <EmptyState
+                title="No workspaces connected"
+                description="A workspace appears here once someone installs the bot at /integrations/slack/install."
+                action={
+                  <Button
+                    variant="outlined"
+                    color="neutral"
+                    startDecorator={<Add />}
+                    onClick={() => setCreateAppModalOpen(true)}
+                    data-testid="slack-workspaces-empty-create-btn"
+                  >
+                    Create Slack app
+                  </Button>
+                }
+              />
+            }
+            rowActions={rowActions}
+            rowTestId={workspace => `slack-workspace-row-${workspace.id}`}
+            testId="slack-workspaces-table"
+            minWidth="62rem"
+          />
         </Stack>
-        <Stack direction="row" spacing={1} sx={{ width: { xs: '100%', sm: 'auto' } }}>
-          {isMobile ? (
-            <>
-              <Tooltip title="Create Slack App">
-                <IconButton
-                  variant="solid"
-                  color="primary"
-                  onClick={() => setCreateAppModalOpen(true)}
-                  size="sm"
-                  data-testid="slack-create-app-btn"
-                >
-                  <Add />
-                </IconButton>
-              </Tooltip>
-              <Tooltip title="Refresh">
-                <IconButton
-                  variant="outlined"
-                  color="neutral"
-                  onClick={fetchWorkspaces}
-                  size="sm"
-                  data-testid="slack-workspaces-refresh-btn"
-                >
-                  <Refresh />
-                </IconButton>
-              </Tooltip>
-            </>
-          ) : (
-            <>
-              <Button
-                variant="solid"
-                color="primary"
-                startDecorator={<Add />}
-                onClick={() => setCreateAppModalOpen(true)}
-                size="sm"
-                data-testid="slack-create-app-btn"
-              >
-                Create Slack App
-              </Button>
+      )}
+
+      <ActionDialog
+        open={deactivateModalOpen}
+        onClose={closeDeactivateDialog}
+        title="Deactivate workspace"
+        description={
+          <>
+            The bot stops replying in <strong>{selectedWorkspace?.name}</strong>. You can reconnect the workspace later
+            by reinstalling it through OAuth.
+          </>
+        }
+        reasonPresets={ADMIN_REASON_PRESETS.slackWorkspaceDeactivate}
+        reasonAudited={false}
+        confirmLabel="Deactivate workspace"
+        tone="danger"
+        pending={deactivating}
+        onConfirm={handleDeactivateConfirm}
+        data-testid="slack-workspace-deactivate-dialog"
+        testIds={{ confirm: 'slack-workspace-deactivate-confirm-btn' }}
+      />
+
+      <AdminDialog
+        open={exportModalOpen}
+        onClose={() => {
+          if (!exporting && (!asyncJob || asyncJob.status !== 'processing')) resetExportDialog();
+        }}
+        title="Export channel history"
+        width={600}
+        data-testid="slack-export-dialog"
+      >
+        <Stack gap={2}>
+          <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
+            Export complete channel history for <strong>{selectedWorkspace?.name}</strong>
+          </Typography>
+
+          <Alert color="neutral" startDecorator={<InfoOutlined />} data-testid="slack-export-bot-guidance-alert">
+            <Box>
+              <Typography level="body-sm">
+                <strong>Requirement:</strong> The {selectedWorkspace?.slackBotName || 'Slack bot'} must be a member of
+                the channel you want to export. In Slack, type{' '}
+                <code>/invite @{selectedWorkspace?.slackBotName || 'Slack bot'}</code> in the channel to add it.
+              </Typography>
+              <Typography level="body-xs" sx={{ mt: 0.5 }}>
+                For private channels, you must have permission to invite bots.
+              </Typography>
+            </Box>
+          </Alert>
+
+          <FormControl required>
+            <FormLabel>Channel ID</FormLabel>
+            <Stack direction="row" gap={1}>
+              <Input
+                placeholder="C01234ABCDE"
+                value={exportChannelId}
+                onChange={e => handleChannelIdChange(e.target.value)}
+                disabled={exporting || checkingChannel}
+                slotProps={{
+                  input: { 'data-testid': 'slack-export-channel-id-input' },
+                }}
+                sx={{ flex: 1 }}
+              />
               <Button
                 variant="outlined"
                 color="neutral"
-                startDecorator={<Refresh />}
-                onClick={fetchWorkspaces}
-                size="sm"
-                data-testid="slack-workspaces-refresh-btn"
+                onClick={checkChannelInfo}
+                disabled={!exportChannelId || exporting || checkingChannel}
+                loading={checkingChannel}
+                data-testid="slack-export-check-channel-btn"
               >
-                Refresh
+                Check
               </Button>
-            </>
+            </Stack>
+            <Typography level="body-xs" sx={{ mt: 0.5, color: 'admin.inkMuted' }}>
+              In Slack, right-click the channel, choose Copy link, and take the ID from the end of the URL.
+            </Typography>
+          </FormControl>
+
+          {channelError && (
+            <Alert color="danger" data-testid="slack-export-channel-error">
+              {channelError}
+            </Alert>
+          )}
+
+          {channelInfo && (
+            <Alert color={channelInfo.warning ? 'warning' : 'neutral'} data-testid="slack-export-channel-info">
+              <Stack gap={1} sx={{ flex: 1, minWidth: 0 }}>
+                <Stack direction="row" alignItems="center" gap={1} flexWrap="wrap">
+                  <Typography level="title-sm">#{channelInfo.name}</Typography>
+                  {channelInfo.isPrivate && <StatusChip tone="neutral" label="Private" />}
+                  {channelInfo.isArchived && <StatusChip tone="warn" label="Archived" />}
+                </Stack>
+                <Stack direction="row" gap={2} flexWrap="wrap">
+                  <Typography level="body-xs">
+                    <strong>Est. messages:</strong>{' '}
+                    {channelInfo.estimatedMessageCount !== null
+                      ? channelInfo.estimatedMessageCount.toLocaleString()
+                      : 'Unknown'}
+                  </Typography>
+                  <Typography level="body-xs">
+                    <strong>Members:</strong> {channelInfo.memberCount.toLocaleString()}
+                  </Typography>
+                </Stack>
+                {channelInfo.oldestMessageTs && (
+                  <Typography level="body-xs">
+                    First message: {new Date(parseFloat(channelInfo.oldestMessageTs) * 1000).toLocaleDateString()}
+                  </Typography>
+                )}
+                {channelInfo.warning && <Typography level="body-xs">{channelInfo.warning}</Typography>}
+              </Stack>
+            </Alert>
+          )}
+
+          <FormControl>
+            <FormLabel>Export format</FormLabel>
+            <Select
+              value={exportFormat}
+              onChange={(_, value) => setExportFormat(value as 'json' | 'csv' | 'markdown')}
+              disabled={exporting}
+              data-testid="slack-export-format-select"
+            >
+              <Option value="json">JSON (structured data)</Option>
+              <Option value="csv">CSV (spreadsheet)</Option>
+              <Option value="markdown">Markdown (readable)</Option>
+            </Select>
+          </FormControl>
+
+          <FormControl>
+            <FormLabel>Date range</FormLabel>
+            <Stack direction="row" sx={{ mb: 1, flexWrap: 'wrap', gap: 0.5 }}>
+              <Chip
+                size="sm"
+                variant={selectedPreset === 'last7' ? 'solid' : 'soft'}
+                color={selectedPreset === 'last7' ? 'primary' : 'neutral'}
+                onClick={() => applyDatePreset('last7')}
+                sx={{ cursor: 'pointer' }}
+                disabled={exporting}
+                data-testid="slack-export-preset-last7"
+              >
+                Last 7 days
+              </Chip>
+              <Chip
+                size="sm"
+                variant={selectedPreset === 'last30' ? 'solid' : 'soft'}
+                color={selectedPreset === 'last30' ? 'primary' : 'neutral'}
+                onClick={() => applyDatePreset('last30')}
+                sx={{ cursor: 'pointer' }}
+                disabled={exporting}
+                data-testid="slack-export-preset-last30"
+              >
+                Last 30 days
+              </Chip>
+              <Chip
+                size="sm"
+                variant={selectedPreset === 'thisMonth' ? 'solid' : 'soft'}
+                color={selectedPreset === 'thisMonth' ? 'primary' : 'neutral'}
+                onClick={() => applyDatePreset('thisMonth')}
+                sx={{ cursor: 'pointer' }}
+                disabled={exporting}
+                data-testid="slack-export-preset-thisMonth"
+              >
+                This month
+              </Chip>
+              <Chip
+                size="sm"
+                variant={selectedPreset === 'lastMonth' ? 'solid' : 'soft'}
+                color={selectedPreset === 'lastMonth' ? 'primary' : 'neutral'}
+                onClick={() => applyDatePreset('lastMonth')}
+                sx={{ cursor: 'pointer' }}
+                disabled={exporting}
+                data-testid="slack-export-preset-lastMonth"
+              >
+                Last month
+              </Chip>
+              <Chip
+                size="sm"
+                variant={selectedPreset === 'allTime' ? 'solid' : 'soft'}
+                color={selectedPreset === 'allTime' ? 'primary' : 'neutral'}
+                onClick={() => applyDatePreset('allTime')}
+                sx={{ cursor: 'pointer' }}
+                disabled={exporting}
+                data-testid="slack-export-preset-allTime"
+              >
+                All time
+              </Chip>
+            </Stack>
+            <Stack direction="row" gap={2} flexWrap="wrap">
+              <FormControl sx={{ flex: 1, minWidth: '10rem' }}>
+                <FormLabel>Start date</FormLabel>
+                <Input
+                  type="date"
+                  value={exportDateStart}
+                  onChange={e => {
+                    setExportDateStart(e.target.value);
+                    setSelectedPreset(''); // Clear preset when manually editing
+                  }}
+                  disabled={exporting}
+                  slotProps={{
+                    input: { 'data-testid': 'slack-export-date-start-input' },
+                  }}
+                />
+              </FormControl>
+              <FormControl sx={{ flex: 1, minWidth: '10rem' }}>
+                <FormLabel>End date</FormLabel>
+                <Input
+                  type="date"
+                  value={exportDateEnd}
+                  onChange={e => {
+                    setExportDateEnd(e.target.value);
+                    setSelectedPreset(''); // Clear preset when manually editing
+                  }}
+                  disabled={exporting}
+                  slotProps={{
+                    input: { 'data-testid': 'slack-export-date-end-input' },
+                  }}
+                />
+              </FormControl>
+            </Stack>
+          </FormControl>
+
+          {!exportDateStart && !exportDateEnd && (
+            <Alert color="warning" size="sm" data-testid="slack-export-no-date-warning">
+              <Typography level="body-xs">
+                Exporting without date filters may timeout on large channels. Consider adding a date range for channels
+                with many messages.
+              </Typography>
+            </Alert>
+          )}
+
+          <Stack gap={1}>
+            <Checkbox
+              label="Include thread replies"
+              checked={exportIncludeThreads}
+              onChange={e => setExportIncludeThreads(e.target.checked)}
+              disabled={exporting}
+              data-testid="slack-export-include-threads-checkbox"
+            />
+            <Checkbox
+              label="Include user names (resolves user IDs)"
+              checked={exportIncludeUserNames}
+              onChange={e => setExportIncludeUserNames(e.target.checked)}
+              disabled={exporting}
+              data-testid="slack-export-include-usernames-checkbox"
+            />
+          </Stack>
+
+          <Divider />
+
+          <Stack direction="row" alignItems="center" justifyContent="space-between" gap={2}>
+            <Box>
+              <Typography level="title-sm">Background export</Typography>
+              <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+                Process large channels in background (up to 15 minutes)
+              </Typography>
+            </Box>
+            <Switch
+              checked={useAsyncExport}
+              onChange={e => setUseAsyncExport(e.target.checked)}
+              disabled={exporting || jobRunning}
+              data-testid="slack-export-async-toggle"
+            />
+          </Stack>
+
+          {asyncJob && (
+            <Alert
+              color={asyncJob.status === 'completed' ? 'success' : asyncJob.status === 'failed' ? 'danger' : 'neutral'}
+              data-testid="slack-export-job-status"
+            >
+              <Stack gap={1.5} sx={{ flex: 1, minWidth: 0 }}>
+                <Stack direction="row" alignItems="center" justifyContent="space-between" gap={1} flexWrap="wrap">
+                  <Typography level="title-sm">
+                    {asyncJob.status === 'completed' && 'Export complete'}
+                    {asyncJob.status === 'failed' && 'Export failed'}
+                    {asyncJob.status === 'cancelled' && 'Export cancelled'}
+                    {asyncJob.status === 'processing' && 'Exporting...'}
+                    {asyncJob.status === 'pending' && 'Starting...'}
+                  </Typography>
+                  {jobRunning && (
+                    <Button
+                      size="sm"
+                      variant="outlined"
+                      color="danger"
+                      onClick={() => setCancelJobId(asyncJob.id)}
+                      data-testid="slack-export-cancel-async-btn"
+                    >
+                      Cancel export
+                    </Button>
+                  )}
+                </Stack>
+
+                {jobRunning && (
+                  <>
+                    <LinearProgress determinate value={asyncJob.progress} />
+                    <Typography level="body-xs">
+                      {asyncJob.currentStep}
+                      {asyncJob.processedMessages !== undefined && asyncJob.processedMessages > 0 && (
+                        <>
+                          {' • '}
+                          {asyncJob.processedMessages.toLocaleString()} messages
+                        </>
+                      )}
+                    </Typography>
+                  </>
+                )}
+
+                {asyncJob.status === 'completed' && asyncJob.downloadUrl && (
+                  <Stack gap={1} alignItems="flex-start">
+                    <Typography level="body-xs">
+                      {asyncJob.processedMessages?.toLocaleString()} messages exported
+                      {asyncJob.fileSize && (
+                        <>
+                          {' • '}
+                          {(asyncJob.fileSize / 1024).toFixed(1)} KB
+                        </>
+                      )}
+                    </Typography>
+                    <Button
+                      startDecorator={<Download />}
+                      component="a"
+                      href={asyncJob.downloadUrl}
+                      download
+                      data-testid="slack-export-download-btn"
+                    >
+                      Download export
+                    </Button>
+                    <Typography level="body-xs">
+                      Link expires:{' '}
+                      {asyncJob.downloadExpiresAt ? new Date(asyncJob.downloadExpiresAt).toLocaleString() : 'in 1 hour'}
+                    </Typography>
+                  </Stack>
+                )}
+
+                {asyncJob.status === 'failed' && (
+                  <Typography level="body-xs">{asyncJob.errorMessage || 'Unknown error occurred'}</Typography>
+                )}
+              </Stack>
+            </Alert>
+          )}
+
+          {exporting && !useAsyncExport && (
+            <Box>
+              <LinearProgress />
+              <Typography level="body-sm" sx={{ mt: 1, textAlign: 'center', color: 'admin.inkMuted' }}>
+                Exporting channel... This may take a while for large channels.
+              </Typography>
+            </Box>
           )}
         </Stack>
-      </Stack>
+        <DialogFooter>
+          <Button
+            variant="plain"
+            color="neutral"
+            onClick={resetExportDialog}
+            disabled={exporting || jobRunning}
+            data-testid="slack-export-cancel-btn"
+          >
+            {jobFinished ? 'Close' : 'Cancel'}
+          </Button>
+          {(!asyncJob || asyncJob.status === 'cancelled' || asyncJob.status === 'failed') && (
+            <Button
+              onClick={handleExportConfirm}
+              loading={exporting}
+              disabled={!exportChannelId}
+              data-testid="slack-export-confirm-btn"
+            >
+              {useAsyncExport ? 'Start export' : 'Export'}
+            </Button>
+          )}
+        </DialogFooter>
+      </AdminDialog>
 
-      {/* Description */}
-      <Typography level="body-sm" sx={{ mb: 3, color: 'text.secondary' }}>
-        Manage Slack workspaces connected via OAuth. Deactivating a workspace will stop the bot from responding to
-        messages in that workspace.
-      </Typography>
-
-      {/* Table */}
-      {workspaces.length === 0 ? (
-        <Box
-          sx={{
-            textAlign: 'center',
-            py: 6,
-            px: 2,
-            border: '1px dashed',
-            borderColor: 'divider',
-            borderRadius: 'md',
-          }}
-        >
-          <Image src="/icons/Slack_Logo.svg" alt="Slack" width={48} height={48} style={{ opacity: 0.5 }} />
-          <Typography level="h4" sx={{ mt: 2, mb: 1 }}>
-            No workspaces connected
-          </Typography>
-          <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
-            Workspaces will appear here when users install the bot via OAuth at <code>/integrations/slack/install</code>
-          </Typography>
-        </Box>
-      ) : isMobile ? (
-        <Stack spacing={1}>
-          {workspaces.map(workspace => {
-            const isInstalled = !!workspace.installedAt;
-            const teamIdOrId = workspace.slackTeamId || workspace.id;
-            const ms = manifestStatuses[workspace.id];
-
-            const manifestNode = (() => {
-              if (!ms || ms.status === 'checking') {
-                return <CircularProgress size="sm" data-testid={`manifest-status-loading-${workspace.id}`} />;
-              }
-              if (ms.status === 'up_to_date') {
-                return (
-                  <Chip
-                    size="sm"
-                    variant="soft"
-                    color="success"
-                    startDecorator={<CheckCircle sx={{ fontSize: 14 }} />}
-                    data-testid={`manifest-status-ok-${workspace.id}`}
-                  >
-                    Up to date
-                  </Chip>
-                );
-              }
-              if (ms.status === 'outdated') {
-                return (
-                  <Stack direction="row" spacing={0.5} alignItems="center">
-                    <Chip
-                      size="sm"
-                      variant="soft"
-                      color="warning"
-                      startDecorator={<Update sx={{ fontSize: 14 }} />}
-                      data-testid={`manifest-status-outdated-${workspace.id}`}
-                    >
-                      Update Available
-                    </Chip>
-                    <IconButton
-                      size="sm"
-                      variant="plain"
-                      color="warning"
-                      title="Update manifest"
-                      onClick={() => {
-                        setUpdateModalWorkspace(workspace);
-                        setUpdateModalOpen(true);
-                      }}
-                      data-testid={`manifest-update-btn-${workspace.id}`}
-                    >
-                      <Update sx={{ fontSize: 16 }} />
-                    </IconButton>
-                  </Stack>
-                );
-              }
-              if (ms.status === 'missing_token') {
-                return (
-                  <Stack direction="row" spacing={0.5} alignItems="center">
-                    <Chip
-                      size="sm"
-                      variant="soft"
-                      color="danger"
-                      startDecorator={<LinkOff sx={{ fontSize: 14 }} />}
-                      data-testid={`manifest-status-missing-${workspace.id}`}
-                    >
-                      Reconnect
-                    </Chip>
-                    <IconButton
-                      size="sm"
-                      variant="plain"
-                      color="danger"
-                      title="Reconnect configuration token"
-                      onClick={() => {
-                        setReconnectModalWorkspace(workspace);
-                        setReconnectModalOpen(true);
-                      }}
-                      data-testid={`manifest-reconnect-btn-${workspace.id}`}
-                    >
-                      <LinkOff sx={{ fontSize: 16 }} />
-                    </IconButton>
-                  </Stack>
-                );
-              }
-              return (
-                <Tooltip title={ms.message || 'Failed to check manifest status'} variant="soft">
-                  <Chip size="sm" variant="soft" color="neutral" data-testid={`manifest-status-error-${workspace.id}`}>
-                    Error
-                  </Chip>
-                </Tooltip>
-              );
-            })();
-
-            return (
-              <Card key={workspace.id} variant="outlined" sx={{ p: 1.5 }}>
-                <Stack spacing={1}>
-                  <Stack direction="row" justifyContent="space-between" alignItems="center">
-                    <Typography level="title-sm" fontWeight="md">
-                      {workspace.name}
-                    </Typography>
-                    <Chip size="sm" variant="soft" color={workspace.isActive ? 'success' : 'neutral'}>
-                      {workspace.isActive ? 'Active' : 'Inactive'}
-                    </Chip>
-                  </Stack>
-                  <Stack spacing={0.25}>
-                    {workspace.slackTeamId && (
-                      <Typography level="body-xs" sx={{ fontFamily: 'monospace' }}>
-                        Team: {workspace.slackTeamId}
-                      </Typography>
-                    )}
-                    {workspace.slackAppId && (
-                      <Typography level="body-xs" sx={{ fontFamily: 'monospace' }}>
-                        App: {workspace.slackAppId}
-                      </Typography>
-                    )}
-                    {workspace.slackBotName && <Typography level="body-xs">Bot: {workspace.slackBotName}</Typography>}
-                    {isInstalled ? (
-                      <Typography level="body-xs">Installed: {formatDate(workspace.installedAt!)}</Typography>
-                    ) : (
-                      <Chip size="sm" variant="soft" color="warning">
-                        Not Installed
-                      </Chip>
-                    )}
-                  </Stack>
-                  <Stack direction="row" spacing={0.5} alignItems="center" justifyContent="space-between">
-                    <Stack direction="row" spacing={0.5} alignItems="center" sx={{ flex: 1, minWidth: 0 }}>
-                      {manifestNode}
-                    </Stack>
-                    <Stack direction="row" spacing={0.5}>
-                      {isInstalled ? (
-                        <Tooltip title="Export channel history">
-                          <IconButton
-                            size="sm"
-                            variant="plain"
-                            color="primary"
-                            onClick={() => handleExportClick(workspace)}
-                            disabled={!workspace.isActive}
-                            data-testid={`slack-workspace-export-btn-${teamIdOrId}`}
-                          >
-                            <Download />
-                          </IconButton>
-                        </Tooltip>
-                      ) : (
-                        <Button
-                          size="sm"
-                          variant="solid"
-                          color="primary"
-                          component="a"
-                          href={`/integrations/slack/install?workspaceId=${workspace.id}`}
-                          data-testid={`slack-workspace-install-btn-${workspace.id}`}
-                        >
-                          Install
-                        </Button>
-                      )}
-                      <Tooltip title="Deactivate workspace">
-                        <IconButton
-                          size="sm"
-                          variant="plain"
-                          color="danger"
-                          onClick={() => handleDeactivateClick(workspace)}
-                          disabled={!workspace.isActive}
-                          data-testid={`slack-workspace-deactivate-btn-${teamIdOrId}`}
-                        >
-                          <Delete />
-                        </IconButton>
-                      </Tooltip>
-                    </Stack>
-                  </Stack>
-                </Stack>
-              </Card>
-            );
-          })}
-        </Stack>
-      ) : (
-        <Table
-          aria-label="Slack workspaces table"
-          sx={{
-            '& thead th': { bgcolor: 'background.level1' },
-            '& tbody tr:hover': { bgcolor: 'background.level1' },
-          }}
-        >
-          <thead>
-            <tr>
-              <th style={{ width: '16%' }}>Workspace</th>
-              <th style={{ width: '10%' }}>Team ID</th>
-              <th style={{ width: '12%' }}>App ID</th>
-              <th style={{ width: '12%' }}>Bot Name</th>
-              <th style={{ width: '10%' }}>Installed</th>
-              <th style={{ width: '8%' }}>Status</th>
-              <th style={{ width: '16%' }}>Manifest</th>
-              <th style={{ width: '16%', textAlign: 'right' }}>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {workspaces.map(workspace => {
-              const isInstalled = !!workspace.installedAt;
-              const teamIdOrId = workspace.slackTeamId || workspace.id;
-
-              return (
-                <tr key={workspace.id}>
-                  <td>
-                    <Typography level="body-sm" fontWeight="md">
-                      {workspace.name}
-                    </Typography>
-                  </td>
-                  <td>
-                    <Typography level="body-xs" sx={{ fontFamily: 'monospace' }}>
-                      {workspace.slackTeamId || '-'}
-                    </Typography>
-                  </td>
-                  <td>
-                    <Typography level="body-xs" sx={{ fontFamily: 'monospace' }}>
-                      {workspace.slackAppId || '-'}
-                    </Typography>
-                  </td>
-                  <td>
-                    <Typography level="body-sm">{workspace.slackBotName || '-'}</Typography>
-                  </td>
-                  <td>
-                    {isInstalled ? (
-                      <Typography level="body-sm">{formatDate(workspace.installedAt!)}</Typography>
-                    ) : (
-                      <Chip size="sm" variant="soft" color="warning">
-                        Not Installed
-                      </Chip>
-                    )}
-                  </td>
-                  <td>
-                    <Chip size="sm" variant="soft" color={workspace.isActive ? 'success' : 'neutral'}>
-                      {workspace.isActive ? 'Active' : 'Inactive'}
-                    </Chip>
-                  </td>
-                  <td>
-                    {(() => {
-                      const ms = manifestStatuses[workspace.id];
-                      if (!ms || ms.status === 'checking') {
-                        return <CircularProgress size="sm" data-testid={`manifest-status-loading-${workspace.id}`} />;
-                      }
-                      if (ms.status === 'up_to_date') {
-                        return (
-                          <Chip
-                            size="sm"
-                            variant="soft"
-                            color="success"
-                            startDecorator={<CheckCircle sx={{ fontSize: 14 }} />}
-                            data-testid={`manifest-status-ok-${workspace.id}`}
-                          >
-                            Up to date
-                          </Chip>
-                        );
-                      }
-                      if (ms.status === 'outdated') {
-                        return (
-                          <Stack direction="row" spacing={0.5} alignItems="center">
-                            <Chip
-                              size="sm"
-                              variant="soft"
-                              color="warning"
-                              startDecorator={<Update sx={{ fontSize: 14 }} />}
-                              data-testid={`manifest-status-outdated-${workspace.id}`}
-                            >
-                              Update Available
-                            </Chip>
-                            <IconButton
-                              size="sm"
-                              variant="plain"
-                              color="warning"
-                              title="Update manifest"
-                              onClick={() => {
-                                setUpdateModalWorkspace(workspace);
-                                setUpdateModalOpen(true);
-                              }}
-                              data-testid={`manifest-update-btn-${workspace.id}`}
-                            >
-                              <Update sx={{ fontSize: 16 }} />
-                            </IconButton>
-                          </Stack>
-                        );
-                      }
-                      if (ms.status === 'missing_token') {
-                        return (
-                          <Stack direction="row" spacing={0.5} alignItems="center">
-                            <Chip
-                              size="sm"
-                              variant="soft"
-                              color="danger"
-                              startDecorator={<LinkOff sx={{ fontSize: 14 }} />}
-                              data-testid={`manifest-status-missing-${workspace.id}`}
-                            >
-                              Reconnect
-                            </Chip>
-                            <IconButton
-                              size="sm"
-                              variant="plain"
-                              color="danger"
-                              title="Reconnect configuration token"
-                              onClick={() => {
-                                setReconnectModalWorkspace(workspace);
-                                setReconnectModalOpen(true);
-                              }}
-                              data-testid={`manifest-reconnect-btn-${workspace.id}`}
-                            >
-                              <LinkOff sx={{ fontSize: 16 }} />
-                            </IconButton>
-                          </Stack>
-                        );
-                      }
-                      // error state
-                      return (
-                        <Tooltip title={ms.message || 'Failed to check manifest status'} variant="soft">
-                          <Chip
-                            size="sm"
-                            variant="soft"
-                            color="neutral"
-                            data-testid={`manifest-status-error-${workspace.id}`}
-                          >
-                            Error
-                          </Chip>
-                        </Tooltip>
-                      );
-                    })()}
-                  </td>
-                  <td style={{ textAlign: 'right' }}>
-                    <Stack direction="row" spacing={0.5} justifyContent="flex-end">
-                      {isInstalled ? (
-                        <>
-                          <IconButton
-                            size="sm"
-                            variant="plain"
-                            color="primary"
-                            onClick={() => handleExportClick(workspace)}
-                            disabled={!workspace.isActive}
-                            title="Export channel history"
-                            data-testid={`slack-workspace-export-btn-${teamIdOrId}`}
-                          >
-                            <Download />
-                          </IconButton>
-                        </>
-                      ) : (
-                        <Button
-                          size="sm"
-                          variant="solid"
-                          color="primary"
-                          component="a"
-                          href={`/integrations/slack/install?workspaceId=${workspace.id}`}
-                          data-testid={`slack-workspace-install-btn-${workspace.id}`}
-                        >
-                          Install
-                        </Button>
-                      )}
-                      <IconButton
-                        size="sm"
-                        variant="plain"
-                        color="danger"
-                        onClick={() => handleDeactivateClick(workspace)}
-                        disabled={!workspace.isActive}
-                        title="Deactivate workspace"
-                        data-testid={`slack-workspace-deactivate-btn-${teamIdOrId}`}
-                      >
-                        <Delete />
-                      </IconButton>
-                    </Stack>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </Table>
-      )}
-
-      {/* Deactivate Confirmation Modal */}
-      <Modal
-        open={deactivateModalOpen}
-        onClose={() => {
-          setDeactivateModalOpen(false);
-          setSelectedWorkspace(null);
+      {/* Keyed to the job it was opened for, so a later job never reopens it. */}
+      <ActionDialog
+        open={jobRunning && cancelJobId === asyncJob?.id}
+        onClose={() => setCancelJobId(null)}
+        title="Cancel export"
+        description="The background export stops now and its progress is lost. You can start a new export afterwards."
+        reasonPresets={ADMIN_REASON_PRESETS.slackExportCancel}
+        reasonAudited={false}
+        confirmLabel="Cancel export"
+        tone="danger"
+        onConfirm={async () => {
+          if (await cancelAsyncExport()) setCancelJobId(null);
         }}
-      >
-        <ModalDialog variant="outlined" role="alertdialog">
-          <DialogTitle>
-            <Warning sx={{ color: 'warning.500', mr: 1 }} />
-            Deactivate Workspace
-          </DialogTitle>
-          <DialogContent>
-            <Typography level="body-md">
-              Are you sure you want to deactivate <strong>{selectedWorkspace?.name}</strong>?
-            </Typography>
-            <Typography level="body-sm" sx={{ mt: 1, color: 'text.secondary' }}>
-              The bot will stop responding to messages in this workspace. The workspace can be reconnected by
-              reinstalling via OAuth.
-            </Typography>
-          </DialogContent>
-          <DialogActions>
-            <Button
-              variant="plain"
-              color="neutral"
-              onClick={() => {
-                setDeactivateModalOpen(false);
-                setSelectedWorkspace(null);
-              }}
-              data-testid="slack-workspace-deactivate-cancel-btn"
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="solid"
-              color="danger"
-              onClick={handleDeactivateConfirm}
-              loading={deactivating}
-              data-testid="slack-workspace-deactivate-confirm-btn"
-            >
-              Deactivate
-            </Button>
-          </DialogActions>
-        </ModalDialog>
-      </Modal>
+        data-testid="slack-export-cancel-job-dialog"
+      />
 
-      {/* Export Channel Modal */}
-      <Modal
-        open={exportModalOpen}
-        onClose={() => {
-          if (!exporting && (!asyncJob || asyncJob.status !== 'processing')) {
-            setExportModalOpen(false);
-            setSelectedWorkspace(null);
-            setExportChannelId('');
-            setExportDateStart('');
-            setExportDateEnd('');
-            setSelectedPreset('');
-            setChannelInfo(null);
-            setChannelError(null);
-            setAsyncJob(null);
-            setUseAsyncExport(false);
-            if (pollingIntervalRef.current) {
-              clearInterval(pollingIntervalRef.current);
-              pollingIntervalRef.current = null;
-            }
-          }
-        }}
-      >
-        <ModalDialog variant="outlined" sx={{ minWidth: { xs: '95vw', sm: 500 }, maxWidth: { xs: '95vw', sm: 600 } }}>
-          <DialogTitle>
-            <Download sx={{ color: 'primary.500', mr: 1 }} />
-            Export Slack Channel
-          </DialogTitle>
-          <DialogContent>
-            <Stack spacing={2}>
-              <Typography level="body-sm" sx={{ color: 'text.secondary', mb: 1 }}>
-                Export complete channel history for <strong>{selectedWorkspace?.name}</strong>
-              </Typography>
-
-              {/* Bot membership guidance */}
-              <Alert
-                color="neutral"
-                variant="soft"
-                startDecorator={<InfoOutlined />}
-                sx={{ mb: 1 }}
-                data-testid="slack-export-bot-guidance-alert"
-              >
-                <Box>
-                  <Typography level="body-sm">
-                    <strong>Requirement:</strong> The {selectedWorkspace?.slackBotName || 'Slack bot'} must be a member
-                    of the channel you want to export. In Slack, type{' '}
-                    <code>/invite @{selectedWorkspace?.slackBotName || 'Slack bot'}</code> in the channel to add it.
-                  </Typography>
-                  <Typography level="body-xs" sx={{ mt: 0.5, color: 'text.tertiary' }}>
-                    For private channels, you must have permission to invite bots.
-                  </Typography>
-                </Box>
-              </Alert>
-
-              <FormControl required>
-                <FormLabel>Channel ID</FormLabel>
-                <Stack direction="row" spacing={1}>
-                  <Input
-                    placeholder="C01234ABCDE"
-                    value={exportChannelId}
-                    onChange={e => handleChannelIdChange(e.target.value)}
-                    disabled={exporting || checkingChannel}
-                    slotProps={{
-                      input: { 'data-testid': 'slack-export-channel-id-input' },
-                    }}
-                    sx={{ flex: 1 }}
-                  />
-                  <Button
-                    variant="soft"
-                    color="neutral"
-                    onClick={checkChannelInfo}
-                    disabled={!exportChannelId || exporting || checkingChannel}
-                    loading={checkingChannel}
-                    data-testid="slack-export-check-channel-btn"
-                  >
-                    Check
-                  </Button>
-                </Stack>
-                <Typography level="body-xs" sx={{ mt: 0.5, color: 'text.secondary' }}>
-                  Right-click channel → Copy link → Extract ID from URL
-                </Typography>
-              </FormControl>
-
-              {/* Channel Info Display */}
-              {channelError && (
-                <Alert color="danger" variant="soft" startDecorator={<Warning />}>
-                  {channelError}
-                </Alert>
-              )}
-
-              {channelInfo && (
-                <Card variant="soft" color={channelInfo.warning ? 'warning' : 'success'} sx={{ p: 2 }}>
-                  <Stack spacing={1}>
-                    <Stack direction="row" alignItems="center" spacing={1}>
-                      <Typography level="title-sm">#{channelInfo.name}</Typography>
-                      {channelInfo.isPrivate && (
-                        <Chip size="sm" variant="soft" color="neutral">
-                          Private
-                        </Chip>
-                      )}
-                      {channelInfo.isArchived && (
-                        <Chip size="sm" variant="soft" color="warning">
-                          Archived
-                        </Chip>
-                      )}
-                    </Stack>
-
-                    <Stack direction="row" spacing={2}>
-                      <Typography level="body-xs">
-                        <strong>Est. messages:</strong>{' '}
-                        {channelInfo.estimatedMessageCount !== null
-                          ? channelInfo.estimatedMessageCount.toLocaleString()
-                          : 'Unknown'}
-                      </Typography>
-                      <Typography level="body-xs">
-                        <strong>Members:</strong> {channelInfo.memberCount.toLocaleString()}
-                      </Typography>
-                    </Stack>
-
-                    {channelInfo.oldestMessageTs && (
-                      <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-                        First message: {new Date(parseFloat(channelInfo.oldestMessageTs) * 1000).toLocaleDateString()}
-                      </Typography>
-                    )}
-
-                    {channelInfo.warning && (
-                      <Alert color="warning" variant="outlined" size="sm" sx={{ mt: 1 }}>
-                        <Typography level="body-xs">{channelInfo.warning}</Typography>
-                      </Alert>
-                    )}
-                  </Stack>
-                </Card>
-              )}
-
-              <FormControl>
-                <FormLabel>Export Format</FormLabel>
-                <Select
-                  value={exportFormat}
-                  onChange={(_, value) => setExportFormat(value as 'json' | 'csv' | 'markdown')}
-                  disabled={exporting}
-                  data-testid="slack-export-format-select"
-                >
-                  <Option value="json">JSON (structured data)</Option>
-                  <Option value="csv">CSV (spreadsheet)</Option>
-                  <Option value="markdown">Markdown (readable)</Option>
-                </Select>
-              </FormControl>
-
-              <FormControl>
-                <FormLabel>Date Range</FormLabel>
-                <Stack direction="row" spacing={1} sx={{ mb: 1, flexWrap: 'wrap', gap: 0.5 }}>
-                  <Chip
-                    size="sm"
-                    variant={selectedPreset === 'last7' ? 'solid' : 'soft'}
-                    color={selectedPreset === 'last7' ? 'primary' : 'neutral'}
-                    onClick={() => applyDatePreset('last7')}
-                    sx={{ cursor: 'pointer' }}
-                    disabled={exporting}
-                    data-testid="slack-export-preset-last7"
-                  >
-                    Last 7 days
-                  </Chip>
-                  <Chip
-                    size="sm"
-                    variant={selectedPreset === 'last30' ? 'solid' : 'soft'}
-                    color={selectedPreset === 'last30' ? 'primary' : 'neutral'}
-                    onClick={() => applyDatePreset('last30')}
-                    sx={{ cursor: 'pointer' }}
-                    disabled={exporting}
-                    data-testid="slack-export-preset-last30"
-                  >
-                    Last 30 days
-                  </Chip>
-                  <Chip
-                    size="sm"
-                    variant={selectedPreset === 'thisMonth' ? 'solid' : 'soft'}
-                    color={selectedPreset === 'thisMonth' ? 'primary' : 'neutral'}
-                    onClick={() => applyDatePreset('thisMonth')}
-                    sx={{ cursor: 'pointer' }}
-                    disabled={exporting}
-                    data-testid="slack-export-preset-thisMonth"
-                  >
-                    This month
-                  </Chip>
-                  <Chip
-                    size="sm"
-                    variant={selectedPreset === 'lastMonth' ? 'solid' : 'soft'}
-                    color={selectedPreset === 'lastMonth' ? 'primary' : 'neutral'}
-                    onClick={() => applyDatePreset('lastMonth')}
-                    sx={{ cursor: 'pointer' }}
-                    disabled={exporting}
-                    data-testid="slack-export-preset-lastMonth"
-                  >
-                    Last month
-                  </Chip>
-                  <Chip
-                    size="sm"
-                    variant={selectedPreset === 'allTime' ? 'solid' : 'soft'}
-                    color={selectedPreset === 'allTime' ? 'primary' : 'neutral'}
-                    onClick={() => applyDatePreset('allTime')}
-                    sx={{ cursor: 'pointer' }}
-                    disabled={exporting}
-                    data-testid="slack-export-preset-allTime"
-                  >
-                    All time
-                  </Chip>
-                </Stack>
-                <Stack direction="row" spacing={2}>
-                  <FormControl sx={{ flex: 1 }}>
-                    <FormLabel>Start Date</FormLabel>
-                    <Input
-                      type="date"
-                      value={exportDateStart}
-                      onChange={e => {
-                        setExportDateStart(e.target.value);
-                        setSelectedPreset(''); // Clear preset when manually editing
-                      }}
-                      disabled={exporting}
-                      slotProps={{
-                        input: { 'data-testid': 'slack-export-date-start-input' },
-                      }}
-                    />
-                  </FormControl>
-                  <FormControl sx={{ flex: 1 }}>
-                    <FormLabel>End Date</FormLabel>
-                    <Input
-                      type="date"
-                      value={exportDateEnd}
-                      onChange={e => {
-                        setExportDateEnd(e.target.value);
-                        setSelectedPreset(''); // Clear preset when manually editing
-                      }}
-                      disabled={exporting}
-                      slotProps={{
-                        input: { 'data-testid': 'slack-export-date-end-input' },
-                      }}
-                    />
-                  </FormControl>
-                </Stack>
-              </FormControl>
-
-              {!exportDateStart && !exportDateEnd && (
-                <Alert color="warning" size="sm" data-testid="slack-export-no-date-warning">
-                  <Typography level="body-xs">
-                    Exporting without date filters may timeout on large channels. Consider adding a date range for
-                    channels with many messages.
-                  </Typography>
-                </Alert>
-              )}
-
-              <Stack spacing={1}>
-                <Checkbox
-                  label="Include thread replies"
-                  checked={exportIncludeThreads}
-                  onChange={e => setExportIncludeThreads(e.target.checked)}
-                  disabled={exporting}
-                  data-testid="slack-export-include-threads-checkbox"
-                />
-                <Checkbox
-                  label="Include user names (resolves user IDs)"
-                  checked={exportIncludeUserNames}
-                  onChange={e => setExportIncludeUserNames(e.target.checked)}
-                  disabled={exporting}
-                  data-testid="slack-export-include-usernames-checkbox"
-                />
-              </Stack>
-
-              <Divider />
-
-              {/* Background Export Toggle */}
-              <Stack direction="row" alignItems="center" justifyContent="space-between">
-                <Box>
-                  <Typography level="title-sm">Background Export</Typography>
-                  <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-                    Process large channels in background (up to 15 minutes)
-                  </Typography>
-                </Box>
-                <Switch
-                  checked={useAsyncExport}
-                  onChange={e => setUseAsyncExport(e.target.checked)}
-                  disabled={exporting || asyncJob?.status === 'processing' || asyncJob?.status === 'pending'}
-                  data-testid="slack-export-async-toggle"
-                />
-              </Stack>
-
-              {/* Async Export Progress */}
-              {asyncJob && (
-                <Card
-                  variant="soft"
-                  color={
-                    asyncJob.status === 'completed'
-                      ? 'success'
-                      : asyncJob.status === 'failed'
-                        ? 'danger'
-                        : asyncJob.status === 'cancelled'
-                          ? 'neutral'
-                          : 'primary'
-                  }
-                  sx={{ p: 2 }}
-                >
-                  <Stack spacing={1.5}>
-                    <Stack direction="row" alignItems="center" justifyContent="space-between">
-                      <Stack direction="row" alignItems="center" spacing={1}>
-                        {asyncJob.status === 'completed' && <CheckCircle fontSize="small" color="success" />}
-                        {asyncJob.status === 'failed' && <Error fontSize="small" color="error" />}
-                        {asyncJob.status === 'cancelled' && <Cancel fontSize="small" color="disabled" />}
-                        {(asyncJob.status === 'processing' || asyncJob.status === 'pending') && (
-                          <CircularProgress size="sm" />
-                        )}
-                        <Typography level="title-sm">
-                          {asyncJob.status === 'completed' && 'Export Complete'}
-                          {asyncJob.status === 'failed' && 'Export Failed'}
-                          {asyncJob.status === 'cancelled' && 'Export Cancelled'}
-                          {asyncJob.status === 'processing' && 'Exporting...'}
-                          {asyncJob.status === 'pending' && 'Starting...'}
-                        </Typography>
-                      </Stack>
-                      {(asyncJob.status === 'processing' || asyncJob.status === 'pending') && (
-                        <Button
-                          size="sm"
-                          variant="soft"
-                          color="danger"
-                          onClick={cancelAsyncExport}
-                          startDecorator={<Cancel />}
-                          data-testid="slack-export-cancel-async-btn"
-                        >
-                          Cancel
-                        </Button>
-                      )}
-                    </Stack>
-
-                    {(asyncJob.status === 'processing' || asyncJob.status === 'pending') && (
-                      <>
-                        <LinearProgress determinate value={asyncJob.progress} />
-                        <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-                          {asyncJob.currentStep}
-                          {asyncJob.processedMessages !== undefined && asyncJob.processedMessages > 0 && (
-                            <> • {asyncJob.processedMessages.toLocaleString()} messages</>
-                          )}
-                        </Typography>
-                      </>
-                    )}
-
-                    {asyncJob.status === 'completed' && asyncJob.downloadUrl && (
-                      <Stack spacing={1}>
-                        <Typography level="body-xs">
-                          {asyncJob.processedMessages?.toLocaleString()} messages exported
-                          {asyncJob.fileSize && <> • {(asyncJob.fileSize / 1024).toFixed(1)} KB</>}
-                        </Typography>
-                        <Button
-                          variant="solid"
-                          color="success"
-                          startDecorator={<Download />}
-                          component="a"
-                          href={asyncJob.downloadUrl}
-                          download
-                          data-testid="slack-export-download-btn"
-                        >
-                          Download Export
-                        </Button>
-                        <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-                          Link expires:{' '}
-                          {asyncJob.downloadExpiresAt
-                            ? new Date(asyncJob.downloadExpiresAt).toLocaleString()
-                            : 'in 1 hour'}
-                        </Typography>
-                      </Stack>
-                    )}
-
-                    {asyncJob.status === 'failed' && (
-                      <Typography level="body-xs" color="danger">
-                        {asyncJob.errorMessage || 'Unknown error occurred'}
-                      </Typography>
-                    )}
-                  </Stack>
-                </Card>
-              )}
-
-              {/* Sync Export Progress */}
-              {exporting && !useAsyncExport && (
-                <Box>
-                  <LinearProgress />
-                  <Typography level="body-sm" sx={{ mt: 1, textAlign: 'center', color: 'text.secondary' }}>
-                    Exporting channel... This may take a while for large channels.
-                  </Typography>
-                </Box>
-              )}
-            </Stack>
-          </DialogContent>
-          <DialogActions>
-            <Button
-              variant="plain"
-              color="neutral"
-              onClick={() => {
-                setExportModalOpen(false);
-                setSelectedWorkspace(null);
-                setExportChannelId('');
-                setExportDateStart('');
-                setExportDateEnd('');
-                setSelectedPreset('');
-                setChannelInfo(null);
-                setChannelError(null);
-                setAsyncJob(null);
-                setUseAsyncExport(false);
-                if (pollingIntervalRef.current) {
-                  clearInterval(pollingIntervalRef.current);
-                  pollingIntervalRef.current = null;
-                }
-              }}
-              disabled={exporting || asyncJob?.status === 'processing' || asyncJob?.status === 'pending'}
-              data-testid="slack-export-cancel-btn"
-            >
-              {asyncJob?.status === 'completed' || asyncJob?.status === 'failed' || asyncJob?.status === 'cancelled'
-                ? 'Close'
-                : 'Cancel'}
-            </Button>
-            {(!asyncJob || asyncJob.status === 'cancelled' || asyncJob.status === 'failed') && (
-              <Button
-                variant="solid"
-                color="primary"
-                onClick={handleExportConfirm}
-                loading={exporting}
-                disabled={!exportChannelId}
-                data-testid="slack-export-confirm-btn"
-              >
-                {useAsyncExport ? 'Start Export' : 'Export'}
-              </Button>
-            )}
-          </DialogActions>
-        </ModalDialog>
-      </Modal>
-
-      {/* Update Manifest Confirmation Modal */}
-      <Modal
+      <AdminDialog
         open={updateModalOpen}
         onClose={() => {
-          if (!updating) {
-            setUpdateModalOpen(false);
-            setUpdateModalWorkspace(null);
-          }
+          if (!updating) closeUpdateDialog();
         }}
+        title="Update manifest"
+        width={560}
+        role="alertdialog"
+        data-testid="manifest-update-dialog"
       >
-        <ModalDialog variant="outlined" role="alertdialog">
-          <DialogTitle>
-            <Update sx={{ color: 'warning.500', mr: 1 }} />
-            Update Manifest
-          </DialogTitle>
-          <DialogContent>
-            <Stack spacing={2}>
-              <Typography level="body-md">
-                Update the manifest for{' '}
-                <strong>{updateModalWorkspace?.name || updateModalWorkspace?.slackAppId}</strong>?
-              </Typography>
-              <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
-                This will update scopes, events, commands, interactivity settings, and workflow steps. Your app&apos;s
-                name, description, and color will not be changed. Workflows that already use a workflow step whose
-                inputs changed need that step re-added in Workflow Builder.
-              </Typography>
-              {(() => {
-                const ms = updateModalWorkspace ? manifestStatuses[updateModalWorkspace.id] : undefined;
-                const diffs = ms?.status === 'outdated' ? ms.differences : undefined;
-                if (!diffs) return null;
-                return (
-                  <Box
-                    sx={{
-                      maxHeight: 200,
-                      overflow: 'auto',
-                      bgcolor: 'background.level1',
-                      borderRadius: 'sm',
-                      p: 1.5,
-                    }}
-                  >
-                    <Typography level="title-sm" sx={{ mb: 1 }}>
-                      Changes to apply:
-                    </Typography>
-                    {diffs.map((diff: ManifestDifference, i: number) => (
-                      <Box key={i} sx={{ mb: 1 }}>
-                        <Typography level="body-xs" sx={{ fontFamily: 'monospace', fontWeight: 'bold' }}>
-                          {diff.field}
-                        </Typography>
-                        <Typography level="body-xs" sx={{ color: 'danger.500' }}>
-                          - {JSON.stringify(diff.actual)}
-                        </Typography>
-                        <Typography level="body-xs" sx={{ color: 'success.500' }}>
-                          + {JSON.stringify(diff.expected)}
-                        </Typography>
-                      </Box>
-                    ))}
-                  </Box>
-                );
-              })()}
-            </Stack>
-          </DialogContent>
-          <DialogActions>
-            <Button
-              variant="plain"
-              color="neutral"
-              onClick={() => {
-                setUpdateModalOpen(false);
-                setUpdateModalWorkspace(null);
+        <Stack gap={2}>
+          <Typography level="body-md">
+            Update the manifest for <strong>{updateModalWorkspace?.name || updateModalWorkspace?.slackAppId}</strong>?
+          </Typography>
+          <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
+            This will update scopes, events, commands, interactivity settings, and workflow steps. Your app&apos;s name,
+            description, and color will not be changed. Workflows that already use a workflow step whose inputs changed
+            need that step re-added in Workflow Builder.
+          </Typography>
+          {updateDiffs && (
+            <Box
+              data-testid="manifest-update-diff"
+              sx={{
+                maxHeight: '12.5rem',
+                overflow: 'auto',
+                bgcolor: 'admin.surfaceSubtle',
+                border: '1px solid',
+                borderColor: 'admin.border',
+                borderRadius: 'sm',
+                p: 1.5,
               }}
-              disabled={updating}
-              data-testid="manifest-update-cancel-btn"
             >
-              Cancel
-            </Button>
-            <Button
-              variant="solid"
-              color="warning"
-              onClick={handleUpdateManifest}
-              loading={updating}
-              data-testid="manifest-update-confirm-btn"
-            >
-              Update Manifest
-            </Button>
-          </DialogActions>
-        </ModalDialog>
-      </Modal>
+              <Typography level="title-sm" sx={{ mb: 1 }}>
+                Changes to apply
+              </Typography>
+              {updateDiffs.map((diff: ManifestDifference, i: number) => (
+                <Box key={i} sx={{ mb: 1 }}>
+                  <Typography level="body-xs" sx={{ fontFamily: 'code', color: 'admin.ink' }}>
+                    {diff.field}
+                  </Typography>
+                  <Typography level="body-xs" sx={{ fontFamily: 'code', color: 'admin.status.bad.foreground' }}>
+                    - {JSON.stringify(diff.actual)}
+                  </Typography>
+                  <Typography level="body-xs" sx={{ fontFamily: 'code', color: 'admin.status.good.foreground' }}>
+                    + {JSON.stringify(diff.expected)}
+                  </Typography>
+                </Box>
+              ))}
+            </Box>
+          )}
+        </Stack>
+        <DialogFooter>
+          <Button
+            variant="plain"
+            color="neutral"
+            onClick={closeUpdateDialog}
+            disabled={updating}
+            data-testid="manifest-update-cancel-btn"
+          >
+            Cancel
+          </Button>
+          <Button onClick={handleUpdateManifest} loading={updating} data-testid="manifest-update-confirm-btn">
+            Update manifest
+          </Button>
+        </DialogFooter>
+      </AdminDialog>
 
-      {/* Reconnect Configuration Token Modal */}
-      <Modal
+      <AdminDialog
         open={reconnectModalOpen}
         onClose={() => {
-          if (!reconnecting) {
-            setReconnectModalOpen(false);
-            setReconnectModalWorkspace(null);
-            setReconnectToken('');
-            setReconnectError(null);
-          }
+          if (!reconnecting) closeReconnectDialog();
         }}
+        title="Reconnect configuration token"
+        width={480}
+        data-testid="reconnect-dialog"
       >
-        <ModalDialog variant="outlined" sx={{ minWidth: { xs: '95vw', sm: 450 } }}>
-          <DialogTitle>
-            <LinkOff sx={{ color: 'primary.500', mr: 1 }} />
-            Reconnect Configuration Token
-          </DialogTitle>
-          <DialogContent>
-            <Stack spacing={2}>
-              <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
-                Provide a Slack app configuration token to enable manifest management for{' '}
-                <strong>{reconnectModalWorkspace?.name || reconnectModalWorkspace?.slackAppId}</strong>.
-              </Typography>
-              <Alert color="neutral" variant="soft" startDecorator={<InfoOutlined />}>
-                <Typography level="body-xs">
-                  Go to{' '}
-                  <a
-                    href="https://api.slack.com/apps"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{ color: 'inherit', textDecoration: 'underline' }}
-                  >
-                    api.slack.com/apps
-                  </a>
-                  , scroll below the app list, and find <strong>Your App Configuration Tokens</strong>. Click{' '}
-                  <strong>Generate Token</strong> next to your workspace. Note: tokens expire after 12 hours.
-                </Typography>
-              </Alert>
-              {reconnectError && (
-                <Alert color="danger" variant="soft" size="sm">
-                  {reconnectError}
-                </Alert>
-              )}
-              <FormControl required>
-                <FormLabel>Configuration Token</FormLabel>
-                <Input
-                  type="password"
-                  value={reconnectToken}
-                  onChange={e => setReconnectToken(e.target.value)}
-                  placeholder="xoxe.xoxp-..."
-                  disabled={reconnecting}
-                  data-testid="reconnect-token-input"
-                />
-              </FormControl>
-            </Stack>
-          </DialogContent>
-          <DialogActions>
-            <Button
-              variant="plain"
-              color="neutral"
-              onClick={() => {
-                setReconnectModalOpen(false);
-                setReconnectModalWorkspace(null);
-                setReconnectToken('');
-                setReconnectError(null);
-              }}
+        <Stack gap={2}>
+          <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
+            Provide a Slack app configuration token to enable manifest management for{' '}
+            <strong>{reconnectModalWorkspace?.name || reconnectModalWorkspace?.slackAppId}</strong>.
+          </Typography>
+          <Alert color="neutral" startDecorator={<InfoOutlined />}>
+            <Typography level="body-xs">
+              Go to{' '}
+              <Link href="https://api.slack.com/apps" target="_blank" rel="noopener noreferrer">
+                api.slack.com/apps
+              </Link>
+              , scroll below the app list, and find <strong>Your App Configuration Tokens</strong>. Click{' '}
+              <strong>Generate Token</strong> next to your workspace. Note: tokens expire after 12 hours.
+            </Typography>
+          </Alert>
+          {reconnectError && (
+            <Alert color="danger" size="sm" data-testid="reconnect-error-alert">
+              {reconnectError}
+            </Alert>
+          )}
+          <FormControl required>
+            <FormLabel>Configuration token</FormLabel>
+            <Input
+              type="password"
+              value={reconnectToken}
+              onChange={e => setReconnectToken(e.target.value)}
+              placeholder="xoxe.xoxp-..."
               disabled={reconnecting}
-              data-testid="reconnect-cancel-btn"
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="solid"
-              color="primary"
-              onClick={handleReconnect}
-              loading={reconnecting}
-              disabled={!reconnectToken.trim()}
-              data-testid="reconnect-confirm-btn"
-            >
-              Reconnect
-            </Button>
-          </DialogActions>
-        </ModalDialog>
-      </Modal>
+              slotProps={{ input: { 'data-testid': 'reconnect-token-input' } }}
+            />
+          </FormControl>
+        </Stack>
+        <DialogFooter>
+          <Button
+            variant="plain"
+            color="neutral"
+            onClick={closeReconnectDialog}
+            disabled={reconnecting}
+            data-testid="reconnect-cancel-btn"
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={handleReconnect}
+            loading={reconnecting}
+            disabled={!reconnectToken.trim()}
+            data-testid="reconnect-confirm-btn"
+          >
+            Reconnect
+          </Button>
+        </DialogFooter>
+      </AdminDialog>
 
-      {/* Create Slack App Modal */}
       <CreateSlackAppModal
         open={createAppModalOpen}
         onClose={() => setCreateAppModalOpen(false)}
@@ -1812,7 +1541,7 @@ const SlackWorkspacesTab: React.FC = () => {
           fetchWorkspaces(); // Refresh workspaces list to show the newly created app
         }}
       />
-    </Box>
+    </Stack>
   );
 };
 

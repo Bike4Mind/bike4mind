@@ -98,6 +98,8 @@ export const ADMIN_REASON_PRESETS = {
   ],
   identityProviderDelete: ['Replaced by another provider', 'Domain no longer uses single sign-on', 'Created in error'],
   knowledgeFileRemoval: ['File no longer needed', 'Outdated instructions', 'Missing file reference'],
+  slackWorkspaceDeactivate: ['Workspace no longer used', 'Customer request', 'Bot misbehaving', 'Security concern'],
+  slackExportCancel: ['Started by mistake', 'Wrong channel or date range', 'Taking too long'],
 } as const satisfies Record<string, readonly string[]>;
 
 export type AdminReasonPresetKey = keyof typeof ADMIN_REASON_PRESETS;

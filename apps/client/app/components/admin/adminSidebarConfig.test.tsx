@@ -96,6 +96,7 @@ describe('SIDEBAR_SECTIONS', () => {
   it('names the integration items like their page titles', () => {
     const labelOf = (tab: AdminTab) => allItems.find(i => i.tab === tab)?.label;
     expect(labelOf(AdminTab.WebhookAuditLogs)).toBe('Webhook audit logs');
+    expect(labelOf(AdminTab.SlackWorkspaces)).toBe('Slack workspaces');
   });
 
   });

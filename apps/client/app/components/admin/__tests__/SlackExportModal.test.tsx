@@ -3,6 +3,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { getThemeConfig } from '@client/app/utils/themes';
 
 /**
  * Tests for the Slack export modal: date range presets, export flow, and error handling.
@@ -61,6 +63,9 @@ vi.mock('@client/app/hooks/useIsMobile', () => ({
 // Import component after mocks
 import SlackWorkspacesTab from '../SlackWorkspacesTab';
 
+// The admin toolkit reads the admin palette tokens, which only the app theme defines.
+const appTheme = extendTheme({ ...getThemeConfig() });
+
 // Helper to create a wrapper with QueryClient
 const createWrapper = () => {
   const queryClient = new QueryClient({
@@ -71,7 +76,9 @@ const createWrapper = () => {
     },
   });
   const TestWrapper = ({ children }: { children: React.ReactNode }) => (
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    <QueryClientProvider client={queryClient}>
+      <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
+    </QueryClientProvider>
   );
   TestWrapper.displayName = 'TestWrapper';
   return TestWrapper;
@@ -106,8 +113,10 @@ describe('SlackWorkspacesTab Export Modal', () => {
     mockApi.get.mockResolvedValue({ data: { workspaces: mockWorkspaces } });
   });
 
+  // Only this file's mocks: resetting every mock would also wipe the setup file's matchMedia,
+  // which the theme provider reads.
   afterEach(() => {
-    vi.resetAllMocks();
+    [mockGet, mockPost, mockSuccess, mockError, mockWarning].forEach(mock => mock.mockReset());
   });
 
   describe('Date Range Presets', () => {

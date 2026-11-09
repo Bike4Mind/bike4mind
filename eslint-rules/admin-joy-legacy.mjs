@@ -52,7 +52,6 @@ const componentsByFile = {
   'RegistrationInvites/components/DeleteConfirmModal.tsx': ['Modal'],
   'ScopedOverridesByScope.tsx': ['Card'],
   'SlackMetrics/SlackMetricsTab.tsx': ['Card'],
-  'SlackWorkspacesTab.tsx': ['Card', 'Modal', 'Table'],
   'SreAgentTab.tsx': ['Card', 'Modal', 'Table'],
   'Team/index.tsx': ['Card', 'Modal'],
   'Users/BulkAbuseResponseModal.tsx': ['Modal'],

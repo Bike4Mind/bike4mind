@@ -53,7 +53,6 @@ export default {
   'RegistrationInvites/components/DeleteConfirmModal.tsx': [[2, '56babe87ab4ebac2']],
   'ScopedOverridesByScope.tsx': [[9, '3599e2aac9a178b8']],
   'SlackMetrics/SlackMetricsTab.tsx': [[2, 'e2ae0a0feb2b939a']],
-  'SlackWorkspacesTab.tsx': [[2, '533bd942dfb864f5']],
   'SreAgentTab.tsx': [[11, '5feea0e0c55f7cf4']],
   'Team/index.tsx': [[1, '78a3901c08799aeb']],
   'Users/BulkAbuseResponseModal.tsx': [[22, 'c70df252992eb367']],

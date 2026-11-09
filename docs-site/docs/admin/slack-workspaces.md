@@ -11,7 +11,7 @@ The Slack Workspaces tab provides administrators with a centralized interface fo
 
 ## Workspace Table
 
-The main view displays a table of all connected workspaces. A count chip in the header shows the total number of connected workspaces.
+The main view displays a table of all connected workspaces. The page title shows the number of connected workspaces in brackets. On a narrow screen the table keeps its columns and scrolls sideways inside its own frame.
 
 | Column | Description |
 |--------|-------------|
@@ -19,20 +19,21 @@ The main view displays a table of all connected workspaces. A count chip in the 
 | **Team ID** | The Slack team identifier (monospace) |
 | **App ID** | The Slack application identifier (monospace) |
 | **Bot Name** | The name of the installed bot |
-| **Installed** | The date the bot was installed, or a "Not Installed" warning chip |
-| **Status** | Active (green) or Inactive (neutral) chip |
+| **Installed** | The date the bot was installed, or a "Not installed" chip with an **Install** button |
+| **Status** | An "Active" (green) or "Inactive" (grey) status chip |
 | **Manifest** | Current manifest status with actionable indicators |
-| **Actions** | Export, Install, and Deactivate action buttons |
 
-When no workspaces are connected, an empty state message explains that workspaces appear after users install the bot via OAuth at `/integrations/slack/install`.
+Hover over or focus a row to show its actions: the export (download) button on an installed workspace and a **More actions** menu that holds **Deactivate workspace**.
+
+When no workspaces are connected, an empty state explains that workspaces appear after users install the bot via OAuth at `/integrations/slack/install`, with a **Create Slack app** button. While the list loads you see a loading indicator, and if it fails to load you see an error with a **Try again** button. **Refresh** reloads the list and keeps the current rows on screen while it does.
 
 ## Creating a Slack App
 
-Click the **Create Slack App** button in the header to open the creation modal. This launches the `CreateSlackAppModal` component which guides you through setting up a new Slack application. After successful creation, the workspace list automatically refreshes.
+Click the **Create Slack app** button in the header to open the creation modal. This launches the `CreateSlackAppModal` component which guides you through setting up a new Slack application. After successful creation, the workspace list automatically refreshes.
 
 ## Installing a Bot
 
-For workspaces that show "Not Installed" status, an **Install** button appears in the Actions column. Clicking it navigates to `/integrations/slack/install?workspaceId={id}` to initiate the OAuth installation flow.
+For workspaces that show "Not installed", an **Install** button appears next to the chip in the Installed column. Clicking it navigates to `/integrations/slack/install?workspaceId={id}` to initiate the OAuth installation flow.
 
 ## Manifest Management
 
@@ -40,15 +41,15 @@ The system automatically checks the manifest status of each workspace on load. M
 
 | Manifest Status | Indicator | Action |
 |----------------|-----------|--------|
-| **Checking** | Spinning progress indicator | Wait for check to complete |
-| **Up to date** | Green "Up to date" chip with checkmark | No action needed |
-| **Update Available** | Yellow "Update Available" chip | Click the update icon to review and apply changes |
-| **Reconnect** | Red "Reconnect" chip | Click to provide a new configuration token |
-| **Error** | Neutral "Error" chip with tooltip | Hover for error details |
+| **Checking** | Grey "Checking" chip | Wait for check to complete |
+| **Up to date** | Green "Up to date" chip | No action needed |
+| **Update available** | Amber "Update available" chip | Click the update icon to review and apply changes |
+| **Reconnect needed** | Red "Reconnect needed" chip | Click the reconnect icon to provide a new configuration token |
+| **Check failed** | Grey "Check failed" chip with tooltip | Hover for error details |
 
 ### Updating a Manifest
 
-When a manifest update is available, clicking the update icon opens a confirmation modal that shows:
+When a manifest update is available, clicking the update icon opens a confirmation dialog that shows:
 
 - The workspace name being updated
 - A scrollable list of specific differences between the current and expected manifest (field name, current value, and new value)
@@ -56,11 +57,11 @@ When a manifest update is available, clicking the update icon opens a confirmati
 
 ### Reconnecting a Configuration Token
 
-When the manifest status shows "Reconnect" (missing token), clicking the reconnect icon opens a modal to provide a Slack app configuration token. The modal includes instructions for generating a token from `api.slack.com/apps`. Configuration tokens expire after 12 hours.
+When the manifest status shows "Reconnect needed" (missing token), clicking the reconnect icon opens a dialog to provide a Slack app configuration token. The dialog includes instructions for generating a token from `api.slack.com/apps`. Configuration tokens expire after 12 hours.
 
 ## Channel Message Export
 
-Click the export (download) icon on any active, installed workspace to open the export modal. The export feature supports both synchronous (immediate download) and asynchronous (background processing) modes.
+Click the export (download) icon on any active, installed workspace to open the export dialog. The export feature supports both synchronous (immediate download) and asynchronous (background processing) modes.
 
 ### Export Configuration
 
@@ -71,7 +72,7 @@ Click the export (download) icon on any active, installed workspace to open the 
 | **Date Range** | Optional date filtering with preset shortcuts and custom date pickers |
 | **Include thread replies** | Checkbox to include threaded message replies (enabled by default) |
 | **Include user names** | Checkbox to resolve user IDs to display names (enabled by default) |
-| **Background Export** | Toggle for asynchronous processing of large channels (up to 15 minutes) |
+| **Background export** | Toggle for asynchronous processing of large channels (up to 15 minutes) |
 
 ### Date Range Presets
 
@@ -99,15 +100,15 @@ After entering a channel ID, click **Check** to validate the channel before expo
 
 If the channel has more than 10,000 estimated messages and no date filter is set, the system automatically applies the "Last 30 days" preset.
 
-The bot must be a member of the target channel. The modal displays guidance on how to invite the bot using `/invite @BotName` in Slack.
+The bot must be a member of the target channel. The dialog displays guidance on how to invite the bot using `/invite @BotName` in Slack.
 
 ### Synchronous Export
 
-With Background Export disabled, the export downloads immediately as a file. The system handles partial exports gracefully, notifying the user if warnings occurred during export.
+With Background export off, the export downloads immediately as a file. The system handles partial exports gracefully, notifying the user if warnings occurred during export.
 
 ### Asynchronous (Background) Export
 
-With Background Export enabled, the export runs in the background with real-time progress tracking:
+With Background export on, the export runs in the background with real-time progress tracking:
 
 | Job Status | Description |
 |------------|-------------|
@@ -117,7 +118,7 @@ With Background Export enabled, the export runs in the background with real-time
 | **Failed** | Export failed; error message is displayed |
 | **Cancelled** | Export was cancelled by the user |
 
-Progress is polled every 2 seconds. Active background exports can be cancelled. The download link for completed exports has an expiration time (displayed in the UI).
+Progress is polled every 2 seconds. To stop an active background export, click **Cancel export**, pick or write a reason in the confirmation dialog, and confirm. The download link for completed exports has an expiration time (displayed in the UI).
 
 ### Export Error Handling
 
@@ -125,15 +126,15 @@ The system provides specific error messages and suggestions for common failure s
 
 ## Deactivating a Workspace
 
-Click the delete icon on any active workspace to open a confirmation modal. Deactivating a workspace stops the bot from responding to messages in that workspace. The workspace can be reconnected later by reinstalling via OAuth. Deactivation events are logged for audit purposes.
+Open the **More actions** menu on an active workspace and choose **Deactivate workspace**. A confirmation dialog asks you to pick or write a reason before you confirm. Deactivating a workspace stops the bot from responding to messages in that workspace. The workspace can be reconnected later by reinstalling via OAuth. Deactivation events are logged for audit purposes.
 
 ## Best Practices
 
 - Always validate a channel with the **Check** button before exporting, especially for large channels.
 - Use date range filters for channels with more than 10,000 messages to avoid timeouts.
-- Enable **Background Export** for large channels rather than relying on synchronous downloads.
-- Keep app manifests up to date by applying updates when the "Update Available" indicator appears.
-- Regenerate configuration tokens promptly when the "Reconnect" status appears, as tokens expire after 12 hours.
+- Turn on **Background export** for large channels rather than relying on synchronous downloads.
+- Keep app manifests up to date by applying updates when the "Update available" indicator appears.
+- Regenerate configuration tokens promptly when the "Reconnect needed" status appears, as tokens expire after 12 hours.
 
 ---
 
