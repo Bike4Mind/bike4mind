@@ -6,6 +6,7 @@ const h = vi.hoisted(() => ({
   handlers: {} as Record<string, Handler>,
   findByAtlassianCloudId: vi.fn(),
   update: vi.fn(),
+  create: vi.fn(),
   deleteConfig: vi.fn(),
   deleteSubs: vi.fn(),
   countByWebhookConfig: vi.fn(),
@@ -29,6 +30,7 @@ vi.mock('@bike4mind/database', () => ({
   jiraWebhookConfigRepository: {
     findByAtlassianCloudId: h.findByAtlassianCloudId,
     update: h.update,
+    create: h.create,
     delete: h.deleteConfig,
   },
   jiraWebhookSubscriptionRepository: {
@@ -77,7 +79,9 @@ describe('PUT /api/webhooks/jira/config without rotateSecret', () => {
   });
 
   it('writes only enabled, with no secret keys', async () => {
-    await h.handlers.put({ user: { id: 'user-1' }, body: { enabled: false } }, makeRes());
+    const res = makeRes();
+    await h.handlers.put({ user: { id: 'user-1' }, body: { enabled: false } }, res);
+    expect(res.json.mock.calls[0][0].secret).toBeUndefined();
 
     expect(h.update).toHaveBeenCalledTimes(1);
     expect(h.update.mock.calls[0][0]).toStrictEqual({ id: 'jcfg-1', enabled: false });
@@ -145,5 +149,46 @@ describe('PUT and DELETE /api/webhooks/jira/config by a user who cannot manage t
     expect(h.update).toHaveBeenCalledTimes(1);
     await h.handlers.delete({ user: { id: 'admin-1', isAdmin: true } }, makeRes());
     expect(h.deleteConfig).toHaveBeenCalledWith('jcfg-1');
+  });
+});
+
+describe('Jira config one-time secret responses', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getValidTokens.mockResolvedValue({ cloudId: 'cloud-1', siteUrl: 'https://site.example.net' });
+    h.countByWebhookConfig.mockResolvedValue(0);
+  });
+
+  it('returns the generated secret on creation and stores its encrypted value', async () => {
+    h.findByAtlassianCloudId.mockResolvedValue(null);
+    h.create.mockImplementation(async (config: Record<string, unknown>) => ({ ...config, id: 'jcfg-1' }));
+    const res = makeRes();
+
+    await h.handlers.post({ user: { id: 'user-1' }, body: {} }, res);
+
+    const response = res.json.mock.calls[0][0] as { secret: string; secretMasked: string };
+    expect(response.secret).toMatch(/^[a-f0-9]{64}$/);
+    expect(h.create).toHaveBeenCalledWith(expect.objectContaining({ secret: `enc(${response.secret})` }));
+    expect(response.secretMasked).toBe('*'.repeat(60) + response.secret.slice(-4));
+  });
+
+  it('returns a fresh secret on rotation and preserves the encrypted previous secret', async () => {
+    h.findByAtlassianCloudId.mockResolvedValue({ ...storedConfig });
+    h.update.mockImplementation(async (partial: Record<string, unknown>) => ({ ...storedConfig, ...partial }));
+    const res = makeRes();
+
+    await h.handlers.put({ user: { id: 'user-1' }, body: { rotateSecret: true } }, res);
+
+    const response = res.json.mock.calls[0][0] as { secret: string; secretMasked: string; isRotating: boolean };
+    expect(response.secret).toMatch(/^[a-f0-9]{64}$/);
+    expect(h.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'jcfg-1',
+        secret: `enc(${response.secret})`,
+        previousSecret: storedConfig.secret,
+      })
+    );
+    expect(response.secretMasked).toBe('*'.repeat(60) + response.secret.slice(-4));
+    expect(response.isRotating).toBe(true);
   });
 });

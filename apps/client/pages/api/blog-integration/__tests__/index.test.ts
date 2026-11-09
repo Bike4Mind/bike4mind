@@ -63,8 +63,13 @@ function request(body: unknown) {
 }
 
 describe('GET /api/blog-integration', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
   it('returns only the last four characters of the decrypted key', async () => {
-    findById.mockResolvedValue({ blogIntegration: { apiKey: 'prefix-1234abcd', baseUrl: 'https://blog.example.com' } });
+    findById.mockResolvedValue({
+      blogIntegration: { apiKey: 'enc:prefix-1234abcd', baseUrl: 'https://blog.example.com' },
+    });
     const { req, res } = createMocks({ method: 'GET' });
     Object.assign(req, { user: { id: 'u1' } });
 
@@ -76,8 +81,8 @@ describe('GET /api/blog-integration', () => {
     expect(JSON.stringify(body)).not.toContain('prefix');
   });
 
-  it('does not expose a key shorter than the preview length', async () => {
-    findById.mockResolvedValue({ blogIntegration: { apiKey: 'abc' } });
+  it.each(['', 'a', 'abc', 'abcd'])('fully masks the short key %j', async apiKey => {
+    findById.mockResolvedValue({ blogIntegration: { apiKey: `enc:${apiKey}` } });
     const { req, res } = createMocks({ method: 'GET' });
     Object.assign(req, { user: { id: 'u1' } });
 
