@@ -117,6 +117,22 @@ describe('ActionDialog', () => {
     await waitFor(() => expect(onConfirm).toHaveBeenCalledWith('Goodwill credit'));
   });
 
+  it('keeps the required star on the typed-confirm sentence instead of a line of its own', () => {
+    openDialog({ typedConfirm: { expected: 'a-very-long-address-that-wraps@example.com', noun: 'email address' } });
+
+    const star = screen.getByTestId('adjust-dialog-typed-required');
+    // same inline span as the name, joined by a non-breaking space, so a wrap never strands the star
+    expect(star.parentElement).toBe(screen.getByTestId('adjust-dialog-typed-expected').parentElement);
+    expect(star).toHaveTextContent('*');
+    expect(star.textContent?.charCodeAt(0)).toBe(0xa0);
+    expect(star).toHaveAttribute('aria-hidden', 'true');
+    // Joy's own star, a separate flex item, is hidden
+    const joyStar = star.closest('label')?.querySelector('.MuiFormLabel-asterisk');
+    expect(joyStar).not.toBeNull();
+    expect(joyStar).toHaveStyle({ display: 'none' });
+    expect(screen.getByTestId('adjust-dialog-typed-input')).toBeRequired();
+  });
+
   it('reserves solid danger for the final confirm only', () => {
     const confirm = openDialog({ tone: 'danger' });
 

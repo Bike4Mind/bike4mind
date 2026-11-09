@@ -219,6 +219,31 @@ describe('SecopsTriageTab', () => {
     expect(mocks.update.mutateAsync).not.toHaveBeenCalled();
   });
 
+  it('opens clean when the stored model is no longer offered, keeping it as an unavailable option', async () => {
+    mocks.rawConfig = { llmEnrichment: true, modelId: 'model-gone' };
+    renderTab();
+
+    expect(screen.queryByTestId('admin-save-bar')).not.toBeInTheDocument();
+    const select = screen.getByTestId('secops-triage-model-select');
+    expect(select).toHaveTextContent('model-gone (not available)');
+    fireEvent.click(within(select).getByRole('combobox'));
+    expect(await screen.findByTestId('secops-triage-model-unavailable')).toHaveTextContent(
+      'model-gone (not available)'
+    );
+    expect(screen.getByRole('option', { name: 'Fast model' })).toBeInTheDocument();
+    expect(screen.queryByTestId('admin-save-bar')).not.toBeInTheDocument();
+  });
+
+  it('opens clean when the stored Slack workspace is no longer listed', async () => {
+    mocks.rawConfig = { slackWorkspaceId: 'ws-gone' };
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByTestId('secops-triage-slack-workspace-select')).toHaveTextContent('ws-gone (not available)')
+    );
+    expect(screen.queryByTestId('admin-save-bar')).not.toBeInTheDocument();
+  });
+
   it('marks dry run with a warn chip and LLM enrichment with a good chip while they are on', () => {
     mocks.rawConfig = { dryRun: true, llmEnrichment: true, modelId: 'model-fast' };
     renderTab();

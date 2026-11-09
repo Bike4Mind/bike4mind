@@ -130,9 +130,10 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
         />
         {typedConfirm && (
           <FormControl required>
-            <FormLabel htmlFor={typedInputId}>
-              {/* One inline span: FormLabel is a flex row, which drops bare space text nodes around the code.
-                  Typography renders as a block, so the code is forced inline to stay on the sentence's line. */}
+            {/* One inline span: FormLabel is a flex row, which drops bare space text nodes around the code and
+                wraps its own required star onto a line of its own after a long name. Typography renders as a
+                block, so the code is forced inline, and the star is drawn here on a non-breaking space. */}
+            <FormLabel htmlFor={typedInputId} slotProps={{ asterisk: { sx: { display: 'none' } } }}>
               <span>
                 This cannot be undone. Type{' '}
                 <Typography
@@ -144,6 +145,14 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
                   {typedConfirm.expected}
                 </Typography>{' '}
                 to confirm.
+                <Typography
+                  component="span"
+                  aria-hidden="true"
+                  sx={{ display: 'inline', color: 'var(--FormLabel-asteriskColor)' }}
+                  data-testid={`${testId}-typed-required`}
+                >
+                  {'\u00a0*'}
+                </Typography>
               </span>
             </FormLabel>
             <Input

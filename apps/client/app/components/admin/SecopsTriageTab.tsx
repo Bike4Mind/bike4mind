@@ -278,6 +278,15 @@ function SecopsTriageConfigPanel() {
                   {ws.name || ws.slackTeamId}
                 </Option>
               ))}
+              {/* A stored id the list no longer offers stays selectable: Joy's Select resets a value it cannot
+                  find to null on mount, which would mark an untouched page as dirty. */}
+              {workspacesData &&
+                config.slackWorkspaceId &&
+                !workspacesData.workspaces.some(ws => ws.id === config.slackWorkspaceId) && (
+                  <Option value={config.slackWorkspaceId} data-testid="secops-triage-slack-workspace-unavailable">
+                    {`${config.slackWorkspaceId} (not available)`}
+                  </Option>
+                )}
             </Select>
             <FormHelperText>
               Slack app/workspace to use for posting. Must be invited to the channel below. Leave empty to use the first
@@ -337,6 +346,11 @@ function SecopsTriageConfigPanel() {
                     {model.name}
                   </Option>
                 ))}
+                {models && config.modelId && !textModels.some(model => model.id === config.modelId) && (
+                  <Option value={config.modelId} data-testid="secops-triage-model-unavailable">
+                    {`${config.modelId} (not available)`}
+                  </Option>
+                )}
               </Select>
               <FormHelperText>
                 LLM model used for finding enrichment and health assessment. A fast model like Claude Haiku is
