@@ -79,6 +79,9 @@ const renderTab = () => {
   );
 };
 
+const openRowMenu = async (domain: string) =>
+  userEvent.click(await screen.findByTestId(`partner-rule-actions-${domain}`));
+
 describe('PartnerSignupRulesTab tags', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -116,7 +119,8 @@ describe('PartnerSignupRulesTab tags', () => {
     api.fetchPartnerSignupRules.mockResolvedValue(listOf([makeRule()]));
     renderTab();
 
-    await userEvent.click(await screen.findByTestId('partner-rule-edit-partner.com'));
+    await openRowMenu('partner.com');
+    await userEvent.click(screen.getByTestId('partner-rule-edit-partner.com'));
     const input = screen.getByTestId('partner-rule-tags-input').querySelector('input')!;
     await userEvent.click(input);
     await userEvent.keyboard('{Backspace}{Backspace}');
@@ -188,7 +192,8 @@ describe('PartnerSignupRulesTab subscription', () => {
     );
     renderTab();
 
-    await userEvent.click(await screen.findByTestId('partner-rule-edit-partner.com'));
+    await openRowMenu('partner.com');
+    await userEvent.click(screen.getByTestId('partner-rule-edit-partner.com'));
 
     await waitFor(() =>
       expect(screen.getByTestId('partner-rule-subscription-select')).toHaveTextContent('price_removed (unavailable)')
@@ -227,5 +232,89 @@ describe('PartnerSignupRulesTab grant package', () => {
 
     expect(await screen.findByTestId('partner-rule-cap-hits-r1')).toHaveTextContent('3 cap hits');
     expect(screen.getByTestId('partner-rule-package-r1')).toHaveTextContent('Launch pack');
+  });
+});
+
+describe('PartnerSignupRulesTab admin frame', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.searchOrganizations.mockResolvedValue([]);
+    api.deletePartnerSignupRule.mockResolvedValue(undefined);
+    api.runPartnerRuleBackfill.mockResolvedValue({ added: 1 });
+  });
+
+  it('shows one h1 with the count and no count chip', async () => {
+    api.fetchPartnerSignupRules.mockResolvedValue(listOf([makeRule()]));
+    renderTab();
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'Partner signups (1)' })).toBeInTheDocument();
+    expect(screen.queryByTestId('partner-rule-count')).not.toBeInTheDocument();
+  });
+
+  it('offers Add rule from the empty state', async () => {
+    api.fetchPartnerSignupRules.mockResolvedValue(listOf([]));
+    renderTab();
+
+    expect(await screen.findByTestId('admin-empty-state')).toHaveTextContent('No partner signup rules yet');
+    await userEvent.click(screen.getByTestId('partner-rule-empty-add-btn'));
+    expect(screen.getByTestId('partner-rule-modal')).toBeInTheDocument();
+  });
+
+  it('clears a search that matches nothing', async () => {
+    api.fetchPartnerSignupRules.mockResolvedValue(listOf([]));
+    renderTab();
+
+    await userEvent.type(await screen.findByTestId('partner-rule-search-input'), 'zzz');
+    expect(await screen.findByText('No rules match this search')).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId('partner-rule-clear-search-btn'));
+    expect(screen.getByTestId('partner-rule-search-input')).toHaveValue('');
+  });
+
+  it('keeps delete out of the row until the menu opens, then confirms through the dialog', async () => {
+    api.fetchPartnerSignupRules.mockResolvedValue(listOf([makeRule()]));
+    renderTab();
+
+    await screen.findByTestId('partner-rule-row-partner.com');
+    expect(screen.queryByTestId('partner-rule-delete-partner.com')).not.toBeInTheDocument();
+    await openRowMenu('partner.com');
+    await userEvent.click(screen.getByTestId('partner-rule-delete-partner.com'));
+
+    expect(screen.getByTestId('partner-rule-delete-modal')).toBeInTheDocument();
+    expect(api.deletePartnerSignupRule).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByTestId('partner-rule-delete-modal-reason-input-preset-0'));
+    await userEvent.click(screen.getByTestId('partner-rule-delete-confirm-btn'));
+    await waitFor(() => expect(api.deletePartnerSignupRule).toHaveBeenCalledTimes(1));
+    expect(api.deletePartnerSignupRule.mock.calls[0][0]).toBe('r1');
+  });
+
+  it('blocks the backfill when the dry run matches no one', async () => {
+    api.fetchPartnerSignupRules.mockResolvedValue(listOf([makeRule({ organizationId: 'org1' })]));
+    api.previewPartnerRuleBackfill.mockResolvedValue({
+      matched: 0,
+      sample: [],
+      seats: 5,
+      projectedSeats: 5,
+      stripeBilled: false,
+    });
+    renderTab();
+
+    await openRowMenu('partner.com');
+    await userEvent.click(screen.getByTestId('partner-rule-backfill-partner.com'));
+
+    expect(await screen.findByTestId('partner-rule-backfill-modal-hint')).toHaveTextContent('No existing users match');
+    expect(screen.getByTestId('partner-rule-backfill-confirm-btn')).toBeDisabled();
+  });
+
+  it('sends the chosen page size as the limit and returns to page 1', async () => {
+    api.fetchPartnerSignupRules.mockResolvedValue(listOf([makeRule()]));
+    renderTab();
+
+    await screen.findByTestId('partner-rule-row-partner.com');
+    await userEvent.click(screen.getByRole('combobox'));
+    await userEvent.click(await screen.findByRole('option', { name: '50' }));
+
+    await waitFor(() =>
+      expect(api.fetchPartnerSignupRules).toHaveBeenLastCalledWith(expect.objectContaining({ limit: 50, page: 1 }))
+    );
   });
 });

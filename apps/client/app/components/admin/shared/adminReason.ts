@@ -96,6 +96,12 @@ export const ADMIN_REASON_PRESETS = {
     'Requested by the app owner',
   ],
   identityProviderDelete: ['Replaced by another provider', 'Domain no longer uses single sign-on', 'Created in error'],
+  partnerSignupRule: ['Partner agreement ended', 'Created in error', 'Replaced by another rule', 'Account cleanup'],
+  partnerBackfill: ['Partner onboarding', 'Organization request', 'Rule added after signups', 'Internal testing'],
+  signupDomainHoldRelease: ['Reviewed, domain is legitimate', 'Known customer or partner', 'Domain has aged'],
+  signupDomainHoldConfirm: ['Reviewed, domain is abusive', 'Matches a known abuse pattern', 'Under investigation'],
+  heldSignupGrantRelease: ['Reviewed, not abusive', 'Verified customer', 'Support request', 'Internal testing'],
+  heldSignupGrantRevoke: ['Abuse / automated signups', 'Credit farming', 'Granted in error'],
 } as const satisfies Record<string, readonly string[]>;
 
 export type AdminReasonPresetKey = keyof typeof ADMIN_REASON_PRESETS;
