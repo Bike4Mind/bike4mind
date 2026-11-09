@@ -6,7 +6,12 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { getEmbeddingModelCost, insufficientCreditsError } from '@bike4mind/common';
+import {
+  DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+  TooManyRequestsError,
+  getEmbeddingModelCost,
+  insufficientCreditsError,
+} from '@bike4mind/common';
 
 const { quotaAdmission, quotaRelease } = vi.hoisted(() => {
   const release = vi.fn().mockResolvedValue(undefined);
@@ -154,6 +159,8 @@ const { default: handler } = await import('@pages/api/sessions/semantic-search')
 
 const QUERY = 'bike trip';
 
+const testLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), updateMetadata: vi.fn() };
+
 async function call(
   currentCredits: number,
   organizationId?: string,
@@ -164,7 +171,7 @@ async function call(
   Object.assign(req, {
     user: { id: 'u1', currentCredits, organizationId },
     apiKeyInfo,
-    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), updateMetadata: vi.fn() },
+    logger: testLogger,
   });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the stubbed router's param type is loose
   await (handler as any)(req, res);
@@ -271,6 +278,20 @@ describe('POST /api/sessions/semantic-search metering', () => {
     expect(m.embed).not.toHaveBeenCalled();
   });
 
+  it('surfaces the free-tier daily cap as its 429 without logging an error', async () => {
+    m.realExpansion = true;
+    m.reserveText.mockRejectedValue(
+      new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
+        errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+        retryAfter: 3600,
+      })
+    );
+
+    await expect(call(100)).rejects.toMatchObject({ statusCode: 429 });
+    expect(testLogger.error).not.toHaveBeenCalled();
+    expect(m.embed).not.toHaveBeenCalled();
+  });
+
   it('propagates a real reranker credit refusal instead of accepting its cosine fallback', async () => {
     m.realReranking = true;
     m.reserveText.mockResolvedValueOnce({ settle: m.settle, refund: m.refund });
@@ -323,6 +344,19 @@ describe('POST /api/sessions/semantic-search metering', () => {
       getEmbeddingModelCost('text-embedding-3-small', Buffer.byteLength(QUERY, 'utf8')),
       'semantic search embedding'
     );
+  });
+
+  it('aborts with the free-tier daily cap 429 when a later input cannot be reserved', async () => {
+    m.reserveEmbedding.mockResolvedValueOnce({ refund: m.refundEmbedding });
+    m.reserveEmbedding.mockRejectedValueOnce(
+      new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
+        errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+        retryAfter: 3600,
+      })
+    );
+
+    await expect(call(100, undefined, undefined, false)).rejects.toMatchObject({ statusCode: 429 });
+    expect(testLogger.error).not.toHaveBeenCalled();
   });
 
   it('refunds an embedding hold when its provider fails', async () => {

@@ -1,7 +1,13 @@
 import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { randomUUID } from 'crypto';
-import { ImageModels, ModelInfo, UnprocessableEntityError, usdToCredits } from '@bike4mind/common';
+import {
+  ImageModels,
+  ModelInfo,
+  UnprocessableEntityError,
+  isTerminalCreditRefusal,
+  usdToCredits,
+} from '@bike4mind/common';
 import {
   BadRequestError,
   ExpectedImageGenerationError,
@@ -248,7 +254,8 @@ const handler = baseApi().post<Request<unknown, GenerateFeaturedImageResponse, G
       if (
         error instanceof UnprocessableEntityError ||
         error instanceof ForbiddenError ||
-        error instanceof BadRequestError
+        error instanceof BadRequestError ||
+        isTerminalCreditRefusal(error)
       ) {
         throw error;
       }
