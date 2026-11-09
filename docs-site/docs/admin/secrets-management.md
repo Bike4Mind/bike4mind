@@ -56,7 +56,7 @@ The rotation data automatically refreshes every 5 minutes to keep the displayed 
 
 ## System Secrets
 
-The System Secrets tab provides a comprehensive view of all configurable platform secrets, organized by category. It supports a two-tier secret architecture where values can come from SST (infrastructure) or be overridden via the admin GUI.
+The System secrets tab provides a comprehensive view of all configurable platform secrets, organized by category. It supports a two-tier secret architecture where values can come from SST (infrastructure) or be overridden via the admin GUI.
 
 ### Infrastructure Secrets (Tier 1)
 
@@ -64,16 +64,16 @@ The top section displays read-only infrastructure secrets that must be configure
 
 Each secret shows a status chip:
 
-| Status | Color | Icon | Description |
-|--------|-------|------|-------------|
-| **Configured** | Green | Check circle | Secret is properly set |
-| **Warning** | Yellow | Warning triangle | Secret has a potential issue |
-| **Placeholder** | Yellow | Warning triangle | Secret contains a placeholder value |
-| **Invalid** | Red | Error | Secret value is invalid |
-| **Insecure** | Red | Error | Secret value does not meet security requirements |
-| **Missing** | Red | Error | Secret is not configured |
+| Status | Color | Description |
+|--------|-------|-------------|
+| **Configured** | Green | Secret is properly set |
+| **Warning** | Amber | Secret has a potential issue |
+| **Placeholder** | Grey | Secret contains a placeholder value |
+| **Invalid** | Red | Secret value is invalid |
+| **Insecure** | Red | Secret value does not meet security requirements |
+| **Missing** | Red | Secret is not configured |
 
-Hovering over a status chip shows additional context including a message and hint when available. The current SST stage is displayed at the bottom of this section.
+Hovering over a status chip shows additional context including a message and hint when available. The section description names the current SST stage.
 
 ### Configurable Secrets (Tier 2/3)
 
@@ -82,47 +82,48 @@ Below the infrastructure section, configurable secrets are grouped by category:
 | Category | Label |
 |----------|-------|
 | `auth` | Authentication |
-| `mail` | Email Configuration |
-| `oauth` | OAuth Providers |
-| `api_key` | API Keys |
-| `slack` | Slack Integration |
+| `mail` | Email configuration |
+| `oauth` | OAuth providers |
+| `api_key` | API keys |
+| `slack` | Slack integration |
 
-Each category is displayed in its own card with a table containing:
+The secrets are listed in one table, with a header row for each category. The table contains:
 
 | Column | Description |
 |--------|-------------|
-| **Secret** | The secret name in monospace font, with a warning chip if there are warnings |
+| **Secret** | The secret name in monospace font, with a Warning chip if there are warnings. Hover the chip to read them. |
 | **Description** | What the secret is used for |
-| **Status** | Source chip indicating the current value source |
+| **Source** | Chip indicating the current value source |
 | **Value** | Masked value (e.g., `sk-****1234`) or dash if not set |
-| **Actions** | Edit button, plus Delete button if a database override exists |
+
+The row actions are in the "..." menu at the end of each row: "Edit value", plus "Delete override" if a database override exists.
 
 ### Source Status Chips
 
 | Chip | Color | Meaning |
 |------|-------|---------|
-| **GUI Override** | Green | Value is set via the admin panel (database) |
-| **SST** | Primary (blue) | Value comes from the SST secret |
-| **Not Configured** | Danger (red) | No value is set in either source |
+| **GUI override** | Indigo | Value is set via the admin panel (database) |
+| **SST** | Grey | Value comes from the SST secret |
+| **Not configured** | Grey | No value is set in either source |
 
 ### Editing a Secret
 
-Click the Edit icon to open the edit dialog:
+Open the row's "..." menu and choose "Edit value" to open the "Edit value" dialog:
 
 1. The dialog shows the secret name, description, and current source information.
 2. Enter the new value in the password input field. Toggle visibility with the eye icon.
-3. Click Save to encrypt and store the value. The secret takes effect immediately.
+3. Click "Save value" to encrypt and store the value. The secret takes effect immediately.
 
 Values are encrypted before storage in the database.
 
 ### Deleting a GUI Override
 
-When a secret has a database override (shown as "GUI Override"), a Delete button appears in the Actions column. Clicking it prompts for confirmation, warning that the secret will revert to using the SST value (if configured). This is useful for rolling back an admin-set value.
+When a secret has a database override (shown as "GUI override"), the row's "..." menu offers "Delete override". Choosing it opens a confirmation dialog, warning that the secret will revert to using the SST value (if configured) and that the override value is not kept; click "Delete override" in the dialog to confirm. This is useful for rolling back an admin-set value.
 
 ## Best Practices
 
 - Monitor the Secrets Rotation tab regularly to identify secrets approaching their rotation deadline. Overdue rotations are highlighted in yellow.
-- Use the System Secrets GUI override capability for quick configuration changes, but ensure critical secrets are also properly set in SST for disaster recovery.
+- Use the System secrets GUI override capability for quick configuration changes, but ensure critical secrets are also properly set in SST for disaster recovery.
 - When editing system secrets, use the visibility toggle to verify the entered value before saving.
 - Delete GUI overrides when they are no longer needed to keep the secret source clean and traceable.
 - The 5-minute auto-refresh on the Secrets Rotation tab ensures the display stays current, but use the manual refresh button after making changes to see immediate updates.

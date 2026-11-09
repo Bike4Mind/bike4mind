@@ -80,6 +80,10 @@ describe('SIDEBAR_SECTIONS', () => {
     expect(allItems.find(i => i.tab === AdminTab.Waitlist)?.label).toBe('Invite Center');
   });
 
+  it('labels the secrets items with their page titles', () => {
+    expect(allItems.find(i => i.tab === AdminTab.SystemSecrets)?.label).toBe('System secrets');
+  });
+
   it('only badges the Waitlist, Subscriptions and Audit log tabs', () => {
     const badged = allItems.filter(i => i.badge).map(i => [i.tab, i.badge]);
     expect(badged).toEqual([

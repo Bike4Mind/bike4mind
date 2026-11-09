@@ -84,7 +84,6 @@ export default {
   'WaitlistTab.tsx': [[6, '58d2e911d62ace4f']],
   'SystemPromptEditor.tsx': [[2, 'd7fd73474f2153cb']],
   'SystemPromptsManager.tsx': [[2, '98c62168033635be']],
-  'SystemSecretsTab.tsx': [[12, 'dbb24e47ac76bfc0']],
   'Team/index.tsx': [[1, 'f243178815e501ea']],
   'ToolDefinitionsTab.tsx': [[2, '562c6807618929aa']],
   'Users/BulkAbuseResponseModal.tsx': [[22, 'c70df252992eb367']],

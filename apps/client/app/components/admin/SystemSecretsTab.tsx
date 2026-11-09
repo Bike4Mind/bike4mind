@@ -8,40 +8,44 @@
  * - Delete database overrides to revert to SST value
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, type ReactNode } from 'react';
 import {
+  Alert,
   Box,
   Button,
-  Card,
-  CardContent,
-  Chip,
-  Divider,
+  DialogContent,
+  Dropdown,
   FormControl,
   FormLabel,
-  Input,
-  Modal,
-  ModalDialog,
-  Stack,
-  Table,
-  Typography,
   IconButton,
-  Alert,
-  CircularProgress,
+  Input,
+  ListDivider,
+  Menu,
+  MenuButton,
+  MenuItem,
+  Stack,
+  Tooltip,
+  Typography,
 } from '@mui/joy';
-import Edit from '@mui/icons-material/Edit';
-import Delete from '@mui/icons-material/Delete';
+import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
+import Refresh from '@mui/icons-material/Refresh';
 import Visibility from '@mui/icons-material/Visibility';
 import VisibilityOff from '@mui/icons-material/VisibilityOff';
-import Warning from '@mui/icons-material/Warning';
-import Info from '@mui/icons-material/Info';
-import Refresh from '@mui/icons-material/Refresh';
-import CheckCircle from '@mui/icons-material/CheckCircle';
-import ErrorIcon from '@mui/icons-material/Error';
-import Tooltip from '@mui/joy/Tooltip';
 import { toast } from 'sonner';
 import { isAxiosError } from 'axios';
 import { api } from '@client/app/contexts/ApiContext';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
+import type { AdminStatusTone } from '@client/app/utils/themes/admin';
+import {
+  AdminDialog,
+  AdminPageHeader,
+  DataTable,
+  EmptyState,
+  StatusChip,
+  type DataColumn,
+  type DataTableGroup,
+} from './shared';
+import { ADMIN_REGION_GAP, adminFocus } from './shared/adminStyles';
 
 interface SecretStatus {
   secretName: string;
@@ -88,41 +92,85 @@ interface Tier1StatusResponse {
 
 const CATEGORY_LABELS: Record<string, string> = {
   auth: 'Authentication',
-  mail: 'Email Configuration',
-  oauth: 'OAuth Providers',
-  api_key: 'API Keys',
-  slack: 'Slack Integration',
+  mail: 'Email configuration',
+  oauth: 'OAuth providers',
+  api_key: 'API keys',
+  slack: 'Slack integration',
 };
 
 const CATEGORY_ORDER = ['auth', 'mail', 'oauth', 'api_key', 'slack'];
 
-/**
- * Status chip component for Tier 1 secrets
- */
-const Tier1StatusChip: React.FC<{
-  status: Tier1SecretStatus;
-  message?: string;
-  hint?: string;
-}> = ({ status, message, hint }) => {
-  const statusConfig: Record<
-    Tier1SecretStatus,
-    { color: 'success' | 'warning' | 'danger'; icon: React.ReactNode; label: string }
-  > = {
-    configured: { color: 'success', icon: <CheckCircle fontSize="small" />, label: 'Configured' },
-    warning: { color: 'warning', icon: <Warning fontSize="small" />, label: 'Warning' },
-    placeholder: { color: 'warning', icon: <Warning fontSize="small" />, label: 'Placeholder' },
-    invalid: { color: 'danger', icon: <ErrorIcon fontSize="small" />, label: 'Invalid' },
-    insecure: { color: 'danger', icon: <ErrorIcon fontSize="small" />, label: 'Insecure' },
-    missing: { color: 'danger', icon: <ErrorIcon fontSize="small" />, label: 'Missing' },
-  };
+const TIER1_STATUS: Record<Tier1SecretStatus, { tone: AdminStatusTone; label: string }> = {
+  configured: { tone: 'good', label: 'Configured' },
+  // Neutral, not warn: a stage can hold many placeholders, and a column of amber hides the real problems.
+  placeholder: { tone: 'neutral', label: 'Placeholder' },
+  warning: { tone: 'warn', label: 'Warning' },
+  invalid: { tone: 'bad', label: 'Invalid' },
+  insecure: { tone: 'bad', label: 'Insecure' },
+  missing: { tone: 'bad', label: 'Missing' },
+};
 
-  const config = statusConfig[status];
+/** Where the value comes from. Unset is neutral: an optional integration left off is not a fault. */
+function sourceStatus(secret: SecretStatus): { tone: AdminStatusTone; label: string } {
+  if (!secret.isConfigured) return { tone: 'neutral', label: 'Not configured' };
+  if (secret.source === 'database') return { tone: 'info', label: 'GUI override' };
+  if (secret.source === 'sst') return { tone: 'neutral', label: 'SST' };
+  return { tone: 'neutral', label: 'Unknown' };
+}
 
-  const chip = (
-    <Chip size="sm" color={config.color} variant="soft" startDecorator={config.icon}>
-      {config.label}
-    </Chip>
-  );
+const dash = (
+  <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
+    -
+  </Typography>
+);
+
+/** One line that truncates with an ellipsis, the full text on hover. */
+const TruncatedText = ({ text, mono, testId }: { text: string; mono?: boolean; testId?: string }) => (
+  <Tooltip title={text} placement="top-start">
+    <Typography
+      level="body-sm"
+      noWrap
+      data-testid={testId}
+      sx={{ color: 'admin.ink', minWidth: 0, ...(mono && { fontFamily: 'code' }) }}
+    >
+      {text}
+    </Typography>
+  </Tooltip>
+);
+
+const KeyName = ({ children }: { children: ReactNode }) => (
+  <Typography component="code" fontFamily="code" sx={{ color: 'admin.ink' }}>
+    {children}
+  </Typography>
+);
+
+const DialogFooter = ({ children }: { children: ReactNode }) => (
+  <Stack
+    direction="row"
+    justifyContent="flex-end"
+    gap={1}
+    sx={{ pt: 2, mt: 1, borderTop: '1px solid', borderColor: 'admin.border' }}
+  >
+    {children}
+  </Stack>
+);
+
+const SectionTitle = ({ title, description, testId }: { title: string; description: ReactNode; testId: string }) => (
+  <Box data-testid={testId}>
+    <Typography level="title-md" component="h2" sx={{ color: 'admin.ink' }}>
+      {title}
+    </Typography>
+    <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
+      {description}
+    </Typography>
+  </Box>
+);
+
+/** Status chip for a Tier 1 secret; the validator's message and hint show on hover. */
+const Tier1StatusChip: React.FC<{ secret: Tier1SecretInfo }> = ({ secret }) => {
+  const { tone, label } = TIER1_STATUS[secret.status];
+  const { message, hint } = secret;
+  const chip = <StatusChip tone={tone} label={label} data-testid={`system-secrets-infra-status-${secret.name}`} />;
 
   if (hint || message) {
     return (
@@ -131,7 +179,11 @@ const Tier1StatusChip: React.FC<{
           <Box sx={{ maxWidth: 400 }}>
             {message && <Typography level="body-xs">{message}</Typography>}
             {hint && (
-              <Typography level="body-xs" sx={{ fontFamily: 'monospace', mt: message ? 1 : 0, wordBreak: 'break-all' }}>
+              <Typography
+                level="body-xs"
+                data-testid={`system-secrets-infra-hint-${secret.name}`}
+                sx={{ fontFamily: 'code', mt: message ? 1 : 0, wordBreak: 'break-all' }}
+              >
                 {hint}
               </Typography>
             )}
@@ -147,127 +199,182 @@ const Tier1StatusChip: React.FC<{
   return chip;
 };
 
-/**
- * Tier 1 Status Section - displays infrastructure secrets status (read-only)
- */
-const Tier1StatusSection: React.FC = () => {
-  const [tier1Status, setTier1Status] = useState<Tier1StatusResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-
-  const fetchTier1Status = useCallback(async (showRefreshIndicator = false) => {
-    if (showRefreshIndicator) setRefreshing(true);
-    try {
-      const response = await api.get<Tier1StatusResponse>('/api/admin/system-secrets/tier1-status');
-      setTier1Status(response.data);
-    } catch (error) {
-      console.error('Error fetching Tier 1 status:', error);
-      toast.error('Failed to load infrastructure secrets status');
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchTier1Status();
-  }, [fetchTier1Status]);
-
-  if (loading) {
-    return (
-      <Card variant="outlined" sx={{ mb: 3 }}>
-        <CardContent>
-          <Box display="flex" justifyContent="center" alignItems="center" minHeight={100}>
-            <CircularProgress size="sm" />
-          </Box>
-        </CardContent>
-      </Card>
-    );
-  }
-
-  if (!tier1Status) {
-    return null;
-  }
-
-  const hasIssues = tier1Status.secrets.some(s => s.blocksDeploy);
-
+function SecretRowMenu({
+  secret,
+  onEdit,
+  onDelete,
+}: {
+  secret: SecretStatus;
+  onEdit: (secret: SecretStatus) => void;
+  onDelete: (secret: SecretStatus) => void;
+}) {
   return (
-    <Card variant="outlined" color={hasIssues ? 'warning' : 'neutral'} sx={{ mb: 3 }}>
-      <CardContent>
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
-          <Box>
-            <Typography level="title-md">Infrastructure Secrets (SST)</Typography>
-            <Typography level="body-sm" color="neutral">
-              These secrets must be configured via SST CLI. A deploy of this stage is refused while any of them is
-              unset.
-            </Typography>
-          </Box>
-          <IconButton
-            size="sm"
-            variant="plain"
-            color="neutral"
-            onClick={() => fetchTier1Status(true)}
-            disabled={refreshing}
-            title="Refresh status"
-          >
-            {refreshing ? <CircularProgress size="sm" /> : <Refresh />}
-          </IconButton>
-        </Box>
-
-        <Table size="sm">
-          <tbody>
-            {tier1Status.secrets.map(secret => (
-              <tr key={secret.name}>
-                <td style={{ width: '40%' }}>
-                  <Typography level="body-sm" fontFamily="monospace">
-                    {secret.name}
-                  </Typography>
-                </td>
-                <td>
-                  <Tier1StatusChip status={secret.status} message={secret.message} hint={secret.hint} />
-                  {secret.status !== 'configured' && !secret.blocksDeploy && (
-                    <Typography level="body-xs" color="neutral" sx={{ mt: 0.5 }}>
-                      Not required on this stage
-                    </Typography>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </Table>
-
-        <Typography level="body-xs" color="neutral" sx={{ mt: 2 }}>
-          Stage: <code>{tier1Status.stage}</code>
-        </Typography>
-      </CardContent>
-    </Card>
+    <Dropdown>
+      <MenuButton
+        slots={{ root: IconButton }}
+        slotProps={{
+          root: {
+            size: 'sm',
+            variant: 'plain',
+            'aria-label': `Actions for ${secret.secretName}`,
+            sx: { ...adminFocus, color: 'admin.inkMuted' },
+          },
+        }}
+        data-testid={`system-secrets-row-actions-${secret.secretName}`}
+      >
+        <MoreHorizIcon sx={{ fontSize: 18 }} />
+      </MenuButton>
+      <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
+        <MenuItem onClick={() => onEdit(secret)} data-testid={`system-secrets-row-edit-${secret.secretName}`}>
+          Edit value
+        </MenuItem>
+        {secret.dbRecord && (
+          <>
+            <ListDivider />
+            <MenuItem onClick={() => onDelete(secret)} data-testid={`system-secrets-row-delete-${secret.secretName}`}>
+              Delete override
+            </MenuItem>
+          </>
+        )}
+      </Menu>
+    </Dropdown>
   );
-};
+}
+
+const tier1Columns: readonly DataColumn<Tier1SecretInfo>[] = [
+  {
+    id: 'secret',
+    label: 'Secret',
+    render: secret => <TruncatedText text={secret.name} mono testId={`system-secrets-infra-name-${secret.name}`} />,
+  },
+  {
+    id: 'status',
+    label: 'Status',
+    width: '20rem',
+    render: secret => (
+      <Stack direction="row" alignItems="center" gap={1} sx={{ minWidth: 0 }}>
+        <Tier1StatusChip secret={secret} />
+        {secret.status !== 'configured' && !secret.blocksDeploy && (
+          <Typography level="body-xs" noWrap sx={{ color: 'admin.inkMuted' }}>
+            Not required on this stage
+          </Typography>
+        )}
+      </Stack>
+    ),
+  },
+];
+
+const secretColumns: readonly DataColumn<SecretStatus>[] = [
+  {
+    id: 'secret',
+    label: 'Secret',
+    width: '17rem',
+    render: secret => (
+      <Stack direction="row" alignItems="center" gap={1} sx={{ minWidth: 0 }}>
+        <TruncatedText text={secret.secretName} mono testId={`system-secrets-name-${secret.secretName}`} />
+        {secret.warnings && secret.warnings.length > 0 && (
+          <Tooltip title={secret.warnings.join(' ')}>
+            <Box component="span" sx={{ flexShrink: 0 }}>
+              <StatusChip tone="warn" label="Warning" data-testid={`system-secrets-warning-${secret.secretName}`} />
+            </Box>
+          </Tooltip>
+        )}
+      </Stack>
+    ),
+  },
+  {
+    id: 'description',
+    label: 'Description',
+    render: secret => (secret.description ? <TruncatedText text={secret.description} /> : dash),
+  },
+  {
+    id: 'source',
+    label: 'Source',
+    width: '9rem',
+    render: secret => {
+      const { tone, label } = sourceStatus(secret);
+      return <StatusChip tone={tone} label={label} data-testid={`system-secrets-source-${secret.secretName}`} />;
+    },
+  },
+  {
+    id: 'value',
+    label: 'Value',
+    width: '10rem',
+    render: secret =>
+      secret.maskedValue ? (
+        <Typography level="body-sm" noWrap sx={{ fontFamily: 'code', color: 'admin.ink' }}>
+          {secret.maskedValue}
+        </Typography>
+      ) : (
+        dash
+      ),
+  },
+];
 
 const SystemSecretsTab: React.FC = () => {
+  const [tier1Status, setTier1Status] = useState<Tier1StatusResponse | null>(null);
+  const [tier1Loading, setTier1Loading] = useState(true);
+  const [tier1Failed, setTier1Failed] = useState(false);
   const [secrets, setSecrets] = useState<SecretStatus[]>([]);
   const [loading, setLoading] = useState(true);
+  const [secretsFailed, setSecretsFailed] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editingSecret, setEditingSecret] = useState<SecretStatus | null>(null);
   const [secretValue, setSecretValue] = useState('');
   const [showValue, setShowValue] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [deletingSecret, setDeletingSecret] = useState<SecretStatus | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const fetchTier1Status = useCallback(async () => {
+    try {
+      const response = await api.get<Tier1StatusResponse>('/api/admin/system-secrets/tier1-status');
+      setTier1Status(response.data);
+      setTier1Failed(false);
+    } catch (error) {
+      console.error('Error fetching Tier 1 status:', error);
+      setTier1Failed(true);
+    } finally {
+      setTier1Loading(false);
+    }
+  }, []);
 
   const fetchSecrets = useCallback(async () => {
     try {
       const response = await api.get<SecretsResponse>('/api/admin/system-secrets');
       setSecrets(response.data.secrets);
+      setSecretsFailed(false);
     } catch (error) {
       console.error('Error fetching secrets:', error);
-      toast.error('Failed to load system secrets');
+      setSecretsFailed(true);
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
+    fetchTier1Status();
     fetchSecrets();
-  }, [fetchSecrets]);
+  }, [fetchTier1Status, fetchSecrets]);
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await Promise.all([fetchTier1Status(), fetchSecrets()]);
+    setRefreshing(false);
+  };
+
+  const retryTier1 = () => {
+    setTier1Failed(false);
+    setTier1Loading(true);
+    fetchTier1Status();
+  };
+
+  const retrySecrets = () => {
+    setSecretsFailed(false);
+    setLoading(true);
+    fetchSecrets();
+  };
 
   const handleEdit = (secret: SecretStatus) => {
     setEditingSecret(secret);
@@ -312,214 +419,238 @@ const SystemSecretsTab: React.FC = () => {
       return;
     }
 
-    if (
-      !confirm(
-        `Are you sure you want to delete the database override for ${secret.secretName}?\n\n` +
-          `This will revert to using the SST value (if configured).`
-      )
-    ) {
-      return;
-    }
-
+    setDeleting(true);
     try {
       await api.delete(`/api/admin/system-secrets/${secret.dbRecord.id}`);
       toast.success(`Database override for ${secret.secretName} deleted`);
+      setDeletingSecret(null);
       fetchSecrets();
     } catch (error) {
       const errorMessage = isAxiosError(error) ? error.response?.data?.error : undefined;
       toast.error(errorMessage || 'Failed to delete secret');
+    } finally {
+      setDeleting(false);
     }
   };
 
-  const getSourceChip = (secret: SecretStatus) => {
-    if (!secret.isConfigured) {
-      return (
-        <Chip color="danger" size="sm" variant="soft">
-          Not Configured
-        </Chip>
-      );
-    }
-    if (secret.source === 'database') {
-      return (
-        <Chip color="success" size="sm" variant="soft">
-          GUI Override
-        </Chip>
-      );
-    }
-    if (secret.source === 'sst') {
-      return (
-        <Chip color="primary" size="sm" variant="soft">
-          SST
-        </Chip>
-      );
-    }
-    return (
-      <Chip color="neutral" size="sm" variant="soft">
-        Unknown
-      </Chip>
-    );
-  };
-
-  const groupedSecrets = CATEGORY_ORDER.reduce(
-    (acc, category) => {
-      const categorySecrets = secrets.filter(s => s.category === category);
-      if (categorySecrets.length > 0) {
-        acc[category] = categorySecrets;
-      }
-      return acc;
-    },
-    {} as Record<string, SecretStatus[]>
-  );
-
-  if (loading) {
-    return (
-      <Box display="flex" justifyContent="center" alignItems="center" minHeight={200}>
-        <CircularProgress />
+  // One header row per category, in CATEGORY_ORDER; a secret outside those categories is not listed.
+  const listedSecrets = secrets.filter(secret => CATEGORY_ORDER.includes(secret.category));
+  const groups: DataTableGroup[] = CATEGORY_ORDER.map(category => ({
+    id: category,
+    rowIds: listedSecrets.filter(secret => secret.category === category).map(secret => secret.secretName),
+    header: (
+      <Box sx={{ px: 1.5, py: 1, bgcolor: 'admin.surfaceSubtle' }} data-testid={`system-secrets-group-${category}`}>
+        <Typography level="title-sm" component="h3" sx={{ color: 'admin.ink' }}>
+          {CATEGORY_LABELS[category] || category}
+        </Typography>
       </Box>
-    );
-  }
+    ),
+  }));
+
+  const stage = tier1Status?.stage;
 
   return (
-    <Box>
-      <Stack direction="row" alignItems="center" spacing={1} mb={3}>
-        <Typography level="h3">System Secrets</Typography>
-        <ContextHelpButton helpId="admin/secrets-management" tooltipText="System Secrets Help" />
+    <Stack gap={ADMIN_REGION_GAP} sx={{ minWidth: 0 }} data-testid="admin-system-secrets-tab">
+      <AdminPageHeader
+        title="System secrets"
+        description="Infrastructure secrets set with SST, and the secrets you can override from here."
+        actions={
+          <>
+            <ContextHelpButton helpId="admin/secrets-management" tooltipText="System secrets help" />
+            <Button
+              variant="outlined"
+              size="sm"
+              startDecorator={<Refresh sx={{ fontSize: 16 }} />}
+              loading={refreshing}
+              onClick={handleRefresh}
+              data-testid="system-secrets-refresh-btn"
+              sx={adminFocus}
+            >
+              Refresh
+            </Button>
+          </>
+        }
+      />
+
+      <Stack component="section" gap={1.5} sx={{ minWidth: 0 }}>
+        <SectionTitle
+          title="Infrastructure secrets (SST)"
+          testId="system-secrets-infra-title"
+          description={
+            <>
+              Set with the SST CLI, not here. A deploy of{' '}
+              {stage ? (
+                <>
+                  stage <KeyName>{stage}</KeyName>
+                </>
+              ) : (
+                'this stage'
+              )}{' '}
+              is refused while a required one is unset.
+            </>
+          }
+        />
+        <DataTable
+          label="Infrastructure secrets"
+          testId="system-secrets-infra-table"
+          rows={tier1Status?.secrets ?? []}
+          columns={tier1Columns}
+          getRowId={secret => secret.name}
+          rowTestId={secret => `system-secrets-infra-row-${secret.name}`}
+          loading={tier1Loading}
+          error={tier1Failed ? 'Could not load the infrastructure secrets status.' : undefined}
+          onRetry={retryTier1}
+          empty={
+            <EmptyState
+              title="No infrastructure secrets to check"
+              action={
+                <Button variant="outlined" onClick={retryTier1} data-testid="system-secrets-infra-empty-refresh-btn">
+                  Refresh
+                </Button>
+              }
+            />
+          }
+          pagination={false}
+          maxHeight="none"
+        />
       </Stack>
 
-      {/* Tier 1 Infrastructure Secrets Status (read-only) */}
-      <Tier1StatusSection />
+      <Stack component="section" gap={1.5} sx={{ minWidth: 0 }}>
+        <SectionTitle
+          title="Configurable secrets"
+          testId="system-secrets-configurable-title"
+          description="Overrides set here are encrypted and take effect immediately; delete one to go back to the SST value."
+        />
+        <DataTable
+          label="Configurable secrets"
+          testId="system-secrets-table"
+          rows={listedSecrets}
+          columns={secretColumns}
+          getRowId={secret => secret.secretName}
+          rowTestId={secret => `system-secrets-row-${secret.secretName}`}
+          loading={loading}
+          error={secretsFailed ? 'Could not load the system secrets.' : undefined}
+          onRetry={retrySecrets}
+          empty={
+            <EmptyState
+              title="No configurable secrets"
+              action={
+                <Button variant="outlined" onClick={retrySecrets} data-testid="system-secrets-empty-refresh-btn">
+                  Refresh
+                </Button>
+              }
+            />
+          }
+          groups={groups}
+          rowActions={secret => <SecretRowMenu secret={secret} onEdit={handleEdit} onDelete={setDeletingSecret} />}
+          pagination={false}
+          // Wide enough that every column keeps one line; below it the table scrolls inside its frame.
+          minWidth="56rem"
+          maxHeight="none"
+        />
+      </Stack>
 
-      {/* Tier 2/3 Configurable Secrets */}
-      <Alert color="neutral" startDecorator={<Info />} sx={{ mb: 3 }}>
-        Configure secrets below to override SST values. Changes take effect immediately.
-      </Alert>
-
-      {Object.entries(groupedSecrets).map(([category, categorySecrets]) => (
-        <Card key={category} variant="outlined" sx={{ mb: 2 }}>
-          <CardContent>
-            <Typography level="title-lg" sx={{ mb: 2 }}>
-              {CATEGORY_LABELS[category] || category}
+      <AdminDialog
+        open={editModalOpen}
+        onClose={handleCloseModal}
+        title="Edit value"
+        width={500}
+        data-testid="system-secrets-edit-dialog"
+      >
+        <DialogContent sx={{ gap: 2 }}>
+          <Box>
+            <Typography level="body-sm" component="div">
+              New value for <KeyName>{editingSecret?.secretName}</KeyName>.
             </Typography>
-            <Table>
-              <thead>
-                <tr>
-                  <th style={{ width: '25%' }}>Secret</th>
-                  <th style={{ width: '30%' }}>Description</th>
-                  <th style={{ width: '15%' }}>Status</th>
-                  <th style={{ width: '15%' }}>Value</th>
-                  <th style={{ width: '15%' }}>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {categorySecrets.map(secret => (
-                  <tr key={secret.secretName}>
-                    <td>
-                      <Typography level="body-sm" fontFamily="monospace">
-                        {secret.secretName}
-                      </Typography>
-                      {secret.warnings && secret.warnings.length > 0 && (
-                        <Chip
-                          color="warning"
-                          size="sm"
-                          variant="soft"
-                          startDecorator={<Warning fontSize="small" />}
-                          sx={{ mt: 0.5 }}
-                        >
-                          Warning
-                        </Chip>
-                      )}
-                    </td>
-                    <td>
-                      <Typography level="body-sm">{secret.description}</Typography>
-                    </td>
-                    <td>{getSourceChip(secret)}</td>
-                    <td>
-                      <Typography level="body-sm" fontFamily="monospace">
-                        {secret.maskedValue || '-'}
-                      </Typography>
-                    </td>
-                    <td>
-                      <Stack direction="row" spacing={1}>
-                        <IconButton
-                          size="sm"
-                          variant="plain"
-                          color="primary"
-                          onClick={() => handleEdit(secret)}
-                          title="Edit secret"
-                        >
-                          <Edit fontSize="small" />
-                        </IconButton>
-                        {secret.dbRecord && (
-                          <IconButton
-                            size="sm"
-                            variant="plain"
-                            color="danger"
-                            onClick={() => handleDelete(secret)}
-                            title="Delete database override (revert to SST)"
-                          >
-                            <Delete fontSize="small" />
-                          </IconButton>
-                        )}
-                      </Stack>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </Table>
-          </CardContent>
-        </Card>
-      ))}
-
-      {/* Edit Modal */}
-      <Modal open={editModalOpen} onClose={handleCloseModal}>
-        <ModalDialog sx={{ maxWidth: 500 }}>
-          <Typography level="h4" mb={2}>
-            {editingSecret?.dbRecord ? 'Update' : 'Set'} {editingSecret?.secretName}
-          </Typography>
-
-          <Typography level="body-sm" mb={2}>
-            {editingSecret?.description}
-          </Typography>
+            {editingSecret?.description && (
+              <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
+                {editingSecret.description}
+              </Typography>
+            )}
+          </Box>
 
           {editingSecret?.dbRecord && (
-            <Alert color="neutral" size="sm" sx={{ mb: 2 }}>
-              Current source: {editingSecret.source === 'database' ? 'GUI Override' : 'SST'}
+            <Alert color="neutral" size="sm">
+              Current source: {editingSecret.source === 'database' ? 'GUI override' : 'SST'}
               {editingSecret.maskedValue && ` (${editingSecret.maskedValue})`}
             </Alert>
           )}
 
-          <FormControl sx={{ mb: 2 }}>
-            <FormLabel>New Value</FormLabel>
+          <FormControl>
+            <FormLabel>New value</FormLabel>
             <Input
               type={showValue ? 'text' : 'password'}
               value={secretValue}
               onChange={e => setSecretValue(e.target.value)}
               placeholder="Enter secret value"
+              slotProps={{ input: { 'data-testid': 'system-secrets-edit-value-input' } }}
               endDecorator={
                 <IconButton
                   variant="plain"
                   onClick={() => setShowValue(!showValue)}
-                  title={showValue ? 'Hide value' : 'Show value'}
+                  aria-label={showValue ? 'Hide value' : 'Show value'}
+                  data-testid="system-secrets-edit-visibility-btn"
                 >
                   {showValue ? <VisibilityOff /> : <Visibility />}
                 </IconButton>
               }
             />
           </FormControl>
+        </DialogContent>
+        <DialogFooter>
+          <Button
+            variant="plain"
+            color="neutral"
+            onClick={handleCloseModal}
+            data-testid="system-secrets-edit-cancel-btn"
+          >
+            Cancel
+          </Button>
+          <Button
+            color="primary"
+            onClick={handleSave}
+            loading={saving}
+            disabled={!secretValue.trim()}
+            data-testid="system-secrets-edit-save-btn"
+          >
+            Save value
+          </Button>
+        </DialogFooter>
+      </AdminDialog>
 
-          <Divider sx={{ my: 2 }} />
-
-          <Stack direction="row" spacing={1} justifyContent="flex-end">
-            <Button variant="plain" color="neutral" onClick={handleCloseModal}>
-              Cancel
-            </Button>
-            <Button color="primary" onClick={handleSave} loading={saving} disabled={!secretValue.trim()}>
-              Save
-            </Button>
-          </Stack>
-        </ModalDialog>
-      </Modal>
-    </Box>
+      <AdminDialog
+        open={deletingSecret !== null}
+        onClose={() => setDeletingSecret(null)}
+        title="Delete override"
+        role="alertdialog"
+        data-testid="system-secrets-delete-dialog"
+      >
+        <DialogContent>
+          <Typography level="body-sm" component="div">
+            Deletes the override for <KeyName>{deletingSecret?.secretName}</KeyName>. The platform goes back to the SST
+            value, if one is set. The override value is not kept.
+          </Typography>
+        </DialogContent>
+        <DialogFooter>
+          <Button
+            variant="plain"
+            color="neutral"
+            onClick={() => setDeletingSecret(null)}
+            data-testid="system-secrets-delete-cancel-btn"
+          >
+            Cancel
+          </Button>
+          <Button
+            color="danger"
+            loading={deleting}
+            onClick={() => deletingSecret && handleDelete(deletingSecret)}
+            data-testid="system-secrets-delete-confirm-btn"
+          >
+            Delete override
+          </Button>
+        </DialogFooter>
+      </AdminDialog>
+    </Stack>
   );
 };
 

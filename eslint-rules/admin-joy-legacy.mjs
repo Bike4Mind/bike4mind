@@ -83,7 +83,6 @@ const componentsByFile = {
   'WaitlistTab.tsx': ['Table', 'Card'],
   'SystemPromptEditor.tsx': ['Modal', 'Table'],
   'SystemPromptsManager.tsx': ['Card', 'Modal'],
-  'SystemSecretsTab.tsx': ['Card', 'Modal', 'Table'],
   'Team/index.tsx': ['Card', 'Modal'],
   'ToolDefinitionsTab.tsx': ['Card', 'Modal', 'Table'],
   'Users/BulkAbuseResponseModal.tsx': ['Modal'],
