@@ -293,6 +293,9 @@ const NO_REFERRER_META = '<meta name="referrer" content="no-referrer">';
 // those cases (no enumeration signal).
 function sendLinkNotFound(req: Request, res: Response) {
   res.setHeader('Vary', 'Accept');
+  // Neither form may be stored by an edge cache that does not key on Accept: a cached JSON
+  // 404 would otherwise be handed to the next browser navigation of the same link.
+  res.setHeader('Cache-Control', 'no-store');
   if (!String(req.headers.accept ?? '').includes('text/html')) {
     return res.status(404).json({ error: 'Not found' });
   }
@@ -301,7 +304,6 @@ function sendLinkNotFound(req: Request, res: Response) {
     'Content-Security-Policy',
     "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"
   );
-  res.setHeader('Cache-Control', 'no-store');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Robots-Tag', 'noindex, nofollow');
   res.setHeader('Referrer-Policy', 'no-referrer');

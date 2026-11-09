@@ -1836,6 +1836,7 @@ describe('GET /api/publish/serve - /a/<shareToken> no-sign-in links', () => {
       expect(res._getStatusCode()).toBe(404);
       expect(res._getJSONData()).toEqual({ error: 'Not found' });
       expect(res.getHeader('Vary')).toBe('Accept');
+      expect(res.getHeader('Cache-Control')).toBe('no-store');
     });
   });
 
