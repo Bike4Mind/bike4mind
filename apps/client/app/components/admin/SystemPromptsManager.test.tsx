@@ -183,6 +183,36 @@ describe('SystemPromptsManager', () => {
     }
   });
 
+  it('clears the picker search when the dialog closes, so a reopen starts from the empty term', async () => {
+    renderManager();
+    await screen.findByTestId('system-files-row-file-a');
+    fireEvent.click(screen.getByTestId('system-files-add-btn'));
+    let dialog = await screen.findByTestId('system-files-add-dialog');
+    await within(dialog).findByTestId('system-files-pick-file-b');
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.change(within(dialog).getByTestId('system-files-search-input'), { target: { value: 'sty' } });
+      await act(() => vi.advanceTimersByTimeAsync(300));
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(pickerSearches()).toEqual(['', 'sty']);
+
+    for (const close of ['system-files-add-cancel-btn', 'system-files-add-dialog-close-btn']) {
+      fireEvent.click(within(dialog).getByTestId(close));
+      await waitFor(() => expect(screen.queryByTestId('system-files-add-dialog')).toBeNull());
+      fireEvent.click(screen.getByTestId('system-files-add-btn'));
+      dialog = await screen.findByTestId('system-files-add-dialog');
+      await waitFor(() => expect(pickerSearches().at(-1)).toBe(''));
+      expect(within(dialog).getByTestId('system-files-search-input')).toHaveValue('');
+      if (close === 'system-files-add-cancel-btn') {
+        fireEvent.change(within(dialog).getByTestId('system-files-search-input'), { target: { value: 'x' } });
+        await waitFor(() => expect(pickerSearches().at(-1)).toBe('x'));
+      }
+    }
+  });
+
   it('opens a file read-only from its row menu, and offers no view for a missing one', async () => {
     renderManager();
 

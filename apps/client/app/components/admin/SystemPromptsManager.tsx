@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import {
   Alert,
   Box,
@@ -173,6 +173,13 @@ export const SystemPromptsManager: React.FC = () => {
   const handleSearch = useMemo(() => debounce((value: string) => setSearch(value), 300), []);
   useEffect(() => () => handleSearch.cancel(), [handleSearch]);
 
+  const closePicker = useCallback(() => {
+    handleSearch.cancel();
+    setSearch('');
+    setSelectedFiles([]);
+    setShowFilePicker(false);
+  }, [handleSearch]);
+
   /** Resolves true once the settings write succeeds; a failure is reported by toast and rolled back. */
   const handleRemoveFile = async (fileId: string): Promise<boolean> => {
     // Store the current data for potential rollback
@@ -241,8 +248,7 @@ export const SystemPromptsManager: React.FC = () => {
       );
 
       toast.success(`Added ${selectedFiles.length} system file(s)`);
-      setSelectedFiles([]);
-      setShowFilePicker(false);
+      closePicker();
     } catch (error) {
       toast.error('Failed to add system files');
       console.error(error);
@@ -415,7 +421,7 @@ export const SystemPromptsManager: React.FC = () => {
 
       <AdminDialog
         open={showFilePicker}
-        onClose={() => setShowFilePicker(false)}
+        onClose={closePicker}
         title="Add system files"
         width={600}
         data-testid="system-files-add-dialog"
@@ -505,15 +511,7 @@ export const SystemPromptsManager: React.FC = () => {
             {selectedFiles.length} file(s) selected
           </Typography>
           <Stack direction="row" gap={1}>
-            <Button
-              variant="plain"
-              color="neutral"
-              onClick={() => {
-                setShowFilePicker(false);
-                setSelectedFiles([]);
-              }}
-              data-testid="system-files-add-cancel-btn"
-            >
+            <Button variant="plain" color="neutral" onClick={closePicker} data-testid="system-files-add-cancel-btn">
               Cancel
             </Button>
             <Button
