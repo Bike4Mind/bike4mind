@@ -92,8 +92,9 @@ export function logApiKeyUsageOnResponse({
           });
         void started
           .then(existingLogId => {
-            // A missing start may mean account purge; never recreate it from a late response.
-            if (captured && !existingLogId) return;
+            // null means the account was purged; never recreate it from a late response.
+            // undefined means the start write failed, so the terminal write creates the row.
+            if (captured && existingLogId === null) return;
             return ApiKeyUsageManager.logUsage({
               ...identity,
               responseTime: Date.now() - startTime,

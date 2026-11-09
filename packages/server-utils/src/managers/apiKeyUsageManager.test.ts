@@ -63,6 +63,20 @@ describe('ApiKeyUsageManager.logUsage', () => {
     expect(createMock).not.toHaveBeenCalled();
   });
 
+  it('resolves undefined and warns when the start write fails', async () => {
+    beginMock.mockRejectedValue(new Error('db down'));
+    const warn = vi.fn();
+    await expect(
+      ApiKeyUsageManager.beginCompletionUsage({
+        ...baseParams,
+        source: 'api',
+        ownerType: CreditHolderType.User,
+        logger: { warn } as never,
+      })
+    ).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
   it('persists source and ownerType on the usage log row', async () => {
     await ApiKeyUsageManager.logUsage({ ...baseParams, source: 'cli', ownerType: CreditHolderType.Organization });
 

@@ -27,7 +27,8 @@ export interface LogApiKeyUsageParams {
  * All operations are user-scoped for security
  */
 export class ApiKeyUsageManager {
-  static async beginCompletionUsage(params: LogApiKeyUsageParams): Promise<string | null> {
+  /** Resolves to the start row id, `null` when the account is gone, or `undefined` when the write failed. */
+  static async beginCompletionUsage(params: LogApiKeyUsageParams): Promise<string | null | undefined> {
     const { keyId, userId, ipAddress, endpoint, method, source, ownerType, completionObservation, logger } = params;
     try {
       return await apiKeyUsageLogRepository.beginCompletionObservation({
@@ -44,7 +45,7 @@ export class ApiKeyUsageManager {
       logger?.warn('Completion request start metadata could not be recorded', {
         errorName: error instanceof Error ? error.name : typeof error,
       });
-      return null;
+      return undefined;
     }
   }
 

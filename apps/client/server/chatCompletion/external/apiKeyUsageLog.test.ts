@@ -164,6 +164,22 @@ describe('logApiKeyUsageOnResponse', () => {
     expect(mockLogUsage).not.toHaveBeenCalled();
   });
 
+  it('creates the terminal row when the start write failed', async () => {
+    mockBeginUsage.mockResolvedValue(undefined);
+    const res = makeRes({ headersSent: true });
+    const { ready, track } = register(res, {
+      requestId: 'synthetic-request',
+      requestedModel: 'model-alpha',
+      outcome: () => 'completed',
+    });
+    await ready;
+    res.emit('finish');
+    await track.mock.calls[1][0];
+    expect(mockLogUsage).toHaveBeenCalledTimes(1);
+    expect(mockLogUsage.mock.calls[0][0]).not.toHaveProperty('existingLogId');
+    expect(mockLogUsage.mock.calls[0][0]).toMatchObject({ completionObservation: { outcome: 'completed' } });
+  });
+
   it('logs immediately when the response is already finished', async () => {
     const res = makeRes({ headersSent: true, writableFinished: true });
     register(res);
