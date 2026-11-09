@@ -55,14 +55,6 @@ async function unsuspendedUserIds(userIds: string[]): Promise<Set<string>> {
 const abuseProbabilityOf = (judgment: LatestJudgment): number | null =>
   judgment.probabilities.find(entry => entry.value === 'abuse')?.probability ?? null;
 
-const assessedUserIds = (detection: ShadowDetectionItem): string[] => {
-  if (detection.detector !== 'accountCampaign' || !detection.group) return detection.userIds;
-  const direct = new Set(
-    detection.group.members.filter(member => member.membership === 'direct').map(member => member.userId)
-  );
-  return detection.userIds.filter(id => direct.has(id));
-};
-
 /** Strongest first; an unscored judgment ranks after every scored one, then newest first. */
 const byStrength = (a: AiAbuseAdvisory, b: AiAbuseAdvisory) =>
   (b.abuseProbability ?? -1) - (a.abuseProbability ?? -1) || b.assessedAt.getTime() - a.assessedAt.getTime();
@@ -142,13 +134,15 @@ export async function listAiAbuseAdvisories(
 
   const judgments = await latestJudgments(detections.map(detection => detection.id));
   const flagged = detections.filter(detection => judgments.get(detection.id)?.result === 'abuse');
-  const open = await unsuspendedUserIds([...new Set(flagged.flatMap(assessedUserIds))]);
+  const open = await unsuspendedUserIds([...new Set(flagged.flatMap(detection => detection.userIds))]);
 
   const strongest = new Map<string, AiAbuseAdvisory>();
   for (const detection of flagged) {
     const judgment = judgments.get(detection.id);
     if (!judgment) continue;
-    for (const userId of assessedUserIds(detection)) {
+    // A campaign verdict covers every member, transitive ones included: the assessment prompt tells
+    // the model to answer abuse only when that is justified for the whole set.
+    for (const userId of detection.userIds) {
       if (!open.has(userId)) continue;
       const candidate: AiAbuseAdvisory = {
         userId,

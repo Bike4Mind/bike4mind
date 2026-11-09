@@ -199,25 +199,30 @@ describe('listAiAbuseAdvisories', () => {
     expect(h.findLinked).toHaveBeenCalledWith([userId(1)], NOW);
   });
 
-  it('does not project a campaign verdict onto transitive members', async () => {
+  it('applies a campaign verdict to transitive members, who also count toward block suggestions', async () => {
+    const members = [userId(1), userId(2), userId(3)];
     h.listUnreviewedSince.mockResolvedValue([
       detection({
         id: detectionId(1),
         detector: 'accountCampaign',
-        userIds: [userId(1), userId(2)],
+        userIds: members,
+        network: network('198.51.100.10'),
         group: {
           members: [
             { userId: userId(1), membership: 'direct' },
             { userId: userId(2), membership: 'transitive' },
+            { userId: userId(3), membership: 'transitive' },
           ],
-          evidence: [],
+          evidence: [{ relationship: 'mailDomain', value: 'example.org', userIds: members }],
         } as unknown as ShadowDetectionItem['group'],
       }),
     ]);
     h.aggregate.mockResolvedValue([judgment(detectionId(1), 'abuse', 0.9)]);
     const result = await listAiAbuseAdvisories(NOW);
-    expect(result.advisories.map(row => row.userId)).toEqual([userId(1)]);
-    expect(h.findLinked).toHaveBeenCalledWith([userId(1)], NOW);
+    expect(result.advisories.map(row => [row.userId, row.abuseProbability])).toEqual(members.map(id => [id, 0.9]));
+    expect(result.networks.map(entry => [entry.ip, entry.accountCount])).toEqual([['198.51.100.10', 3]]);
+    expect(result.mailDomains).toEqual([{ domain: 'example.org', accountCount: 3 }]);
+    expect(h.findLinked).toHaveBeenCalledWith(members, NOW);
   });
 
   it('retains settled advisories and reports failed coverage if candidate discovery fails', async () => {
