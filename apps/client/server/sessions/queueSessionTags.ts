@@ -2,8 +2,8 @@ import { accessibleBy } from '@casl/mongoose';
 import { Permission, type IUserDocument } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { Session } from '@bike4mind/database/auth';
-import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
-import { SessionEvents } from '@server/utils/eventBus';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
+import { SessionEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { assertSessionOperationalCredits } from '@server/utils/sessionOperationalCreditPreflight';
 

@@ -68,6 +68,24 @@ Subscriptions display color-coded status chips:
 
 Active subscriptions that have a cancellation date set display an additional schedule icon, with a tooltip indicating when the subscription will cancel (e.g., "Subscription will cancel on Jan 15, 2026").
 
+## Mismatches with Stripe
+
+Each night the platform compares every Stripe subscription with its own record. It only reads from Stripe and never changes anything there. Differences in status, plan, quantity, renewal date, scheduled cancellation, price or an organization's seat count are recorded as open findings.
+
+When findings are open, a banner above the views shows how many subscriptions differ from Stripe. Select **Review mismatches** to open the **Mismatched** view, which lists only those subscriptions. Dismissing the banner hides it until the count changes.
+
+The Mismatched view also lists Stripe subscriptions that have no record on the platform, each with a link to open it in Stripe. Those need to be resolved in Stripe or by the customer's owner, because there is nothing to sync.
+
+### Sync from Stripe
+
+A subscription with an open mismatch shows a **Mismatch** chip on its detail page. To fix it:
+
+1. Open **More** and select **Sync from Stripe**.
+2. Review the preview. It is read from Stripe at that moment and lists each value that will change, from the current value to Stripe's value.
+3. Choose a reason and confirm.
+
+Sync copies Stripe's values onto the platform record and, for an organization, its seat count. If Stripe no longer has the subscription, the record is marked canceled. Stripe is never changed. If someone else changed the record after you opened the dialog, the sync stops and you reopen it to see the current values. Every sync is written to the admin log with the before and after values.
+
 ## Pagination
 
 Pagination controls appear both above and below the subscription table:

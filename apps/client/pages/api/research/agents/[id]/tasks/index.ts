@@ -8,7 +8,7 @@ import {
   researchDataRepository,
   taskScheduleRepository,
 } from '@bike4mind/database';
-import { researchTaskJobs } from '@server/utils/researchTasks';
+import { researchTaskJobs } from '@bike4mind/server-utils/utils/researchTasks';
 import { assertOwnerCanAfford } from '@server/billing/meterPlatformCompletion';
 import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
 import { ResearchTaskType, ResearchTaskExecutionType } from '@bike4mind/common';

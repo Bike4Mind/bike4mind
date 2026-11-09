@@ -27,9 +27,8 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 
 let server: Awaited<ReturnType<typeof createMongoReplSet>>;
 const config = {
-  stagedSignupGrantEnabled: 'true',
-  signupGrantCredits: '12',
-  verifiedUnlockCredits: '28',
+  signupGrantInitialCredits: '12',
+  signupGrantDripCap: '28',
   // Payment unlocks pay on the payment here; paymentUnlockHold.e2e.test.ts covers the hold.
   signupUnlockPaymentHoldHours: '0',
 };
@@ -400,6 +399,7 @@ describe('staged signup ledger', () => {
       expect(collectRiskSignals).not.toHaveBeenCalled();
       const persisted = await User.findById(user.id);
       expect(persisted?.signupGrantAssessment?.status).toBe('unavailable');
+      expect(persisted?.signupGrantAssessment).not.toHaveProperty('signals');
       expect(persisted?.signupGrant?.stage).toBe('signup');
       expect(await CreditTransaction.countDocuments({})).toBe(0);
       expect((await userService.releaseSignupTranche(user.id, adapters)).creditsGranted).toBe(0);
@@ -448,18 +448,17 @@ describe('staged signup ledger', () => {
     );
     expect((await userService.releaseSignupTranche(user.id, retryAdapters)).creditsGranted).toBe(12);
     expect((await userService.releaseSignupTranche(user.id, retryAdapters)).creditsGranted).toBe(0);
-    expect((await User.findById(user.id))?.signupGrantAssessment?.status).toBe('evaluated');
+    const evaluated = (await User.findById(user.id))?.signupGrantAssessment;
+    expect(evaluated?.status).toBe('evaluated');
+    expect(evaluated?.signals).toEqual({ datacenter: false });
     expect(await CreditTransaction.countDocuments({ transactionId: `verify-grant:${user.id}` })).toBe(1);
   });
 
   const activitySettings = (overrides: Record<string, string | undefined> = {}) => {
     const values: Record<string, string | undefined> = {
-      stagedSignupGrantEnabled: 'true',
-      signupGrantActivityEnabled: 'true',
       signupGrantActivityMinActiveSeconds: '600',
-      signupGrantActivityDailyCredits: '10',
-      signupGrantActivityMaxCredits: '28',
-      verifiedUnlockCredits: config.verifiedUnlockCredits,
+      signupGrantDailyCredits: '10',
+      signupGrantDripCap: config.signupGrantDripCap,
       signupGrantTricklePoolDaily: '1000000000',
       ...overrides,
     };
@@ -545,7 +544,53 @@ describe('staged signup ledger', () => {
     expect((await User.findById(user.id))?.currentCredits).toBe(40);
   });
 
-  it('skips signal collection for a disabled policy', async () => {
+  it('records shadow signals under a disabled policy without changing the grant', async () => {
+    const collectRiskSignals = vi.fn(async () => ({ datacenter: true, ipSignups: 4, challengeVerified: null }));
+    const user = await createUser();
+    expect((await userService.releaseSignupTranche(user.id, { ...adapters, collectRiskSignals })).creditsGranted).toBe(
+      12
+    );
+    expect(collectRiskSignals).toHaveBeenCalledOnce();
+    const assessment = (await User.findById(user.id))?.signupGrantAssessment;
+    expect(assessment).toMatchObject({ band: 'full', status: 'disabled', credits: 12 });
+    expect(assessment?.signals).toEqual({ datacenter: true, ipSignups: 4, challengeVerified: null });
+  });
+
+  it('records no signals when no collector ran', async () => {
+    const user = await createUser();
+    expect((await userService.releaseSignupTranche(user.id, adapters)).creditsGranted).toBe(12);
+    expect((await User.findById(user.id))?.signupGrantAssessment).not.toHaveProperty('signals');
+  });
+
+  it('does not wait on a stalled shadow collection under a disabled policy', async () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const stalledCollector = vi.fn(() => new Promise<never>(() => undefined));
+    const user = await createUser();
+    expect(
+      (await userService.releaseSignupTranche(user.id, { ...adapters, collectRiskSignals: stalledCollector }))
+        .creditsGranted
+    ).toBe(12);
+    expect((await User.findById(user.id))?.signupGrantAssessment).not.toHaveProperty('signals');
+    expect(warning).toHaveBeenCalledWith('[signup-risk] Shadow observation collection failed; signals not recorded');
+  });
+
+  it('grants in full when a shadow collector query fails server-side', async () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const collectRiskSignals = vi.fn(async () => {
+      await User.aggregate([{ $match: { $unknownOperator: 1 } }]);
+      return { datacenter: false };
+    });
+    const user = await createUser();
+    expect((await userService.releaseSignupTranche(user.id, { ...adapters, collectRiskSignals })).creditsGranted).toBe(
+      12
+    );
+    expect((await User.findById(user.id))?.signupGrantAssessment).not.toHaveProperty('signals');
+    expect(collectRiskSignals).toHaveBeenCalledOnce();
+    expect(warning).toHaveBeenCalledWith('[signup-risk] Shadow observation collection failed; signals not recorded');
+  });
+
+  it('grants in full and records no signals when shadow collection fails under a disabled policy', async () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const failingCollector = vi.fn(async () => {
       throw new Error('lookup timeout');
     });
@@ -554,7 +599,13 @@ describe('staged signup ledger', () => {
       (await userService.releaseSignupTranche(user.id, { ...adapters, collectRiskSignals: failingCollector }))
         .creditsGranted
     ).toBe(12);
-    expect(failingCollector).not.toHaveBeenCalled();
+    expect(failingCollector).toHaveBeenCalledOnce();
+    const assessment = (await User.findById(user.id))?.signupGrantAssessment;
+    expect(assessment?.status).toBe('disabled');
+    expect(assessment).not.toHaveProperty('signals');
+    expect(warning).toHaveBeenCalledExactlyOnceWith(
+      '[signup-risk] Shadow observation collection failed; signals not recorded'
+    );
   });
 
   it('rejects unbounded validator entitlements and banned accounts', async () => {
@@ -801,7 +852,7 @@ describe('staged signup ledger', () => {
     const at = new Date('2030-03-01T10:00:00Z');
     await User.collection.updateOne({ _id: user._id }, { $set: { createdAt: new Date('2030-02-01T00:00:00Z') } });
     await userService.releaseSignupTranche(user.id, adapters);
-    activitySettings({ signupGrantActivityDailyCredits: daily });
+    activitySettings({ signupGrantDailyCredits: daily });
     await accrue(user.id, '2030-03-01', 600_000);
     expect((await unlockSignupGrantFromActivity(user.id, at)).creditsGranted).toBe(0);
     expect((await User.findById(user.id))?.currentCredits).toBe(12);

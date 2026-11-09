@@ -3,13 +3,13 @@
  * the same enhanceAgentField. The enhanced text is returned, not saved. A provider failure is a 502
  * rather than the SPA route's 500 body.
  */
-import { enhanceAgentFieldContract } from '@bike4mind/common';
+import { enhanceAgentFieldContract, isTerminalCreditRefusal } from '@bike4mind/common';
 import { enhanceAgentField } from '@server/agents/authoring/enhanceAgentField';
 import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import { AUTHORING_RATE_LIMIT_BUCKET, findOwnedAgent } from '@server/agents/v1AgentRoute';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { toV1AuthoringError } from '@server/agents/v1AgentErrors';
-import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 import { assertOutboundActionAllowed } from '@server/auth/assertOutboundActionAllowed';
 import { type ContractRequest, nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQuota';
@@ -33,7 +33,7 @@ const handler = nextRouteForContract(enhanceAgentFieldContract, {
       );
       return res.json({ enhanced_value: enhanced });
     } catch (error) {
-      req.logger.error('Error enhancing agent field:', error);
+      if (!isTerminalCreditRefusal(error)) req.logger.error('Error enhancing agent field:', error);
       throw toV1AuthoringError(error);
     }
   })

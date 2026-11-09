@@ -63,7 +63,7 @@ const PLANS: Record<string, { interval: SubscriptionPlanInterval; tier?: UserSub
 };
 
 const mockGetPlanByPriceId = vi.fn();
-vi.mock('@client/lib/userSubscriptions/utils', () => ({
+vi.mock('@bike4mind/server-utils/lib/userSubscriptions/utils', () => ({
   getSubscriptionPlanByPriceId: (...args: unknown[]) => mockGetPlanByPriceId(...args),
 }));
 

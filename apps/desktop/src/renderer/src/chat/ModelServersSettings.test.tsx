@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MachineView } from '@shared/models';
 import type {
   ModelServerAccess,
+  ModelServerFound,
   ModelServerKind,
   ModelServerLaunchView,
   ModelServerProbeResult,
@@ -211,8 +212,51 @@ describe('ModelServersSettings add form', () => {
 });
 
 describe('ModelServersSettings SSH servers', () => {
-  it('tests an SSH destination with no credential fields or kind choice', async () => {
-    const probe = vi.fn(async () => ({ ...openServer('me@gpu', 'gpu'), openToAnyone: false }));
+  const found = (overrides: Partial<ModelServerFound>): ModelServerFound => ({
+    port: 11434,
+    kind: 'ollama',
+    product: null,
+    version: '0.12.0',
+    models: 2,
+    latencyMs: 4,
+    needsCredentials: false,
+    suggestedName: 'gpu',
+    ...overrides,
+  });
+
+  const discovered = (
+    servers: ModelServerFound[],
+    extra: Partial<ModelServerProbeResult> = {}
+  ): ModelServerProbeResult => ({
+    ...openServer('me@gpu', servers[0]?.suggestedName ?? 'gpu'),
+    openToAnyone: false,
+    kind: servers.length === 1 ? servers[0].kind : null,
+    found: servers,
+    ...extra,
+  });
+
+  const rows = () => [...document.querySelectorAll<HTMLElement>('[data-testid="model-servers-add-found-row"]')];
+  const within = <T extends HTMLElement = HTMLElement>(row: HTMLElement, id: string) =>
+    row.querySelector<T>(`[data-testid="${id}"]`);
+  const saveButton = () => element<HTMLButtonElement>('model-servers-add-save-btn');
+
+  async function typeInto(input: HTMLInputElement, value: string) {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    await act(async () => {
+      setter?.call(input, value);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+
+  async function mountWithAdd(probe: Parameters<typeof mount>[1], add: unknown) {
+    await mount([], probe);
+    (window as unknown as { b4m: { modelServers: Record<string, unknown> } }).b4m.modelServers.add = add;
+    await click('model-servers-add-via-ssh');
+    await type('model-servers-add-address-input', 'me@gpu');
+  }
+
+  it('tests an SSH destination on every usual port, with no credential fields or kind choice', async () => {
+    const probe = vi.fn(async () => discovered([found({})]));
     await mount([], probe);
     expect(document.querySelector('[data-testid="model-servers-add-auth-select"]')).not.toBeNull();
     await click('model-servers-add-via-ssh');
@@ -220,18 +264,159 @@ describe('ModelServersSettings SSH servers', () => {
     await type('model-servers-add-address-input', 'me@gpu');
     await click('model-servers-add-test-btn');
     expect(probe).toHaveBeenCalledWith({ address: 'me@gpu', credential: { type: 'none' }, transport: 'ssh' });
-    expect(element<HTMLInputElement>('model-servers-add-name-input').value).toBe('gpu');
+    expect(rows()).toHaveLength(1);
+    expect(rows()[0].textContent).toContain('Ollama 0.12.0 on port 11434, 2 models');
+    expect(within<HTMLInputElement>(rows()[0], 'model-servers-add-found-name-input')?.value).toBe('gpu');
+    expect(within(rows()[0], 'model-servers-add-found-token-input')).toBeNull();
     expect(document.querySelector('[data-testid="model-servers-add-kind-select"]')).toBeNull();
-    expect(element<HTMLButtonElement>('model-servers-add-save-btn').disabled).toBe(false);
+    expect(saveButton().textContent).toBe('Save server');
+    expect(saveButton().disabled).toBe(false);
   });
 
-  it('marks a saved SSH server and offers no credentials or kind change for it', async () => {
-    await mount([server({ transport: 'ssh', address: 'me@gpu' })]);
+  it('sends a port the user names', async () => {
+    const probe = vi.fn(async () => discovered([found({ port: 9001 })]));
+    await mount([], probe);
+    await click('model-servers-add-via-ssh');
+    await type('model-servers-add-address-input', 'me@gpu');
+    await type('model-servers-add-port-input', ' 9001 ');
+    await click('model-servers-add-test-btn');
+    expect(probe).toHaveBeenCalledWith({
+      address: 'me@gpu',
+      credential: { type: 'none' },
+      transport: 'ssh',
+      port: '9001',
+    });
+  });
+
+  it('shows what to do when nothing is found', async () => {
+    const error = 'SSH to me@gpu works, but no model server answers on the usual ports there.';
+    const probe = vi.fn(async () => ({ ...discovered([]), ok: false, found: undefined, kind: null, error }));
+    await mount([], probe);
+    await click('model-servers-add-via-ssh');
+    await type('model-servers-add-address-input', 'me@gpu');
+    await click('model-servers-add-test-btn');
+    expect(element('model-servers-add-result').textContent).toBe(error);
+    expect(rows()).toHaveLength(0);
+    expect(document.querySelector('[data-testid="model-servers-add-save-btn"]')).toBeNull();
+  });
+
+  it('saves each checked server on its own port, with an API key only where one is entered', async () => {
+    const probe = vi.fn(async () =>
+      discovered([
+        found({ suggestedName: 'gpu Ollama' }),
+        found({
+          port: 8080,
+          kind: 'openai-compatible',
+          product: 'llama-swap',
+          version: null,
+          models: 40,
+          suggestedName: 'gpu llama-swap',
+        }),
+        found({
+          port: 8000,
+          kind: 'openai-compatible',
+          version: null,
+          models: null,
+          needsCredentials: true,
+          suggestedName: 'gpu port 8000',
+        }),
+      ])
+    );
+    const add = vi.fn(async () => ({ ok: true as const, servers: [] }));
+    await mountWithAdd(probe, add);
+    await click('model-servers-add-test-btn');
+    expect(rows().map(row => row.dataset.port)).toEqual(['11434', '8080', '8000']);
+    expect(rows()[1].textContent).toContain('llama-swap on port 8080, 40 models');
+    expect(rows()[2].textContent).toContain('OpenAI-compatible on port 8000, asks for an API key');
+    expect(saveButton().textContent).toBe('Save 3 servers');
+    expect(saveButton().disabled).toBe(true);
+
+    await typeInto(within<HTMLInputElement>(rows()[2], 'model-servers-add-found-token-input')!, 'tok-row');
+    expect(saveButton().disabled).toBe(false);
+    await act(async () => within<HTMLInputElement>(rows()[0], 'model-servers-add-found-checkbox')!.click());
+    expect(saveButton().textContent).toBe('Save 2 servers');
+    await click('model-servers-add-save-btn');
+    expect(add.mock.calls).toEqual([
+      [
+        {
+          address: 'me@gpu',
+          transport: 'ssh',
+          port: 8080,
+          credential: { type: 'none' },
+          name: 'gpu llama-swap',
+          kind: 'openai-compatible',
+          access: 'chat',
+        },
+      ],
+      [
+        {
+          address: 'me@gpu',
+          transport: 'ssh',
+          port: 8000,
+          credential: { type: 'bearer', token: 'tok-row' },
+          name: 'gpu port 8000',
+          kind: 'openai-compatible',
+          access: 'chat',
+        },
+      ],
+    ]);
+    expect(rows()).toHaveLength(0);
+    expect(element<HTMLInputElement>('model-servers-add-address-input').value).toBe('');
+  });
+
+  it('keeps a server that failed to save with its reason, after saving the rest', async () => {
+    const probe = vi.fn(async () =>
+      discovered([
+        found({ suggestedName: 'gpu Ollama' }),
+        found({ port: 8080, kind: 'openai-compatible', suggestedName: 'gpu llama' }),
+      ])
+    );
+    const add = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, error: 'A server named gpu Ollama is already saved.' })
+      .mockResolvedValueOnce({ ok: true, servers: [] });
+    await mountWithAdd(probe, add);
+    await click('model-servers-add-test-btn');
+    await click('model-servers-add-save-btn');
+    expect(add).toHaveBeenCalledTimes(2);
+    expect(rows().map(row => row.dataset.port)).toEqual(['11434']);
+    expect(within(rows()[0], 'model-servers-add-found-error')?.textContent).toBe(
+      'A server named gpu Ollama is already saved.'
+    );
+  });
+
+  it('ignores a test result that arrives after the port changed', async () => {
+    let answer: (result: ModelServerProbeResult) => void = () => undefined;
+    const probe = vi.fn(() => new Promise<ModelServerProbeResult>(resolve => (answer = resolve)));
+    await mount([], probe);
+    await click('model-servers-add-via-ssh');
+    await type('model-servers-add-address-input', 'me@gpu');
+    await click('model-servers-add-test-btn');
+    await type('model-servers-add-port-input', '8080');
+    await act(async () => answer(discovered([found({})])));
+    expect(rows()).toHaveLength(0);
+  });
+
+  it('marks a saved SSH Ollama with its port, and offers a kind change but no credentials', async () => {
+    await mount([server({ transport: 'ssh', address: 'me@gpu', port: 11434 })]);
     expect(element('model-servers-ssh-chip').textContent).toBe('SSH');
-    expect(element('model-servers-address').textContent).toBe('me@gpu');
+    expect(element('model-servers-address').textContent).toBe('me@gpu - port 11434 on that machine');
     expect(document.querySelector('[data-testid="model-servers-credentials-btn"]')).toBeNull();
-    expect(document.querySelector('[data-testid="model-servers-kind-select"]')).toBeNull();
+    expect(document.querySelector('[data-testid="model-servers-kind-select"]')).not.toBeNull();
     expect(document.querySelector('[data-testid="model-servers-access-select"]')).not.toBeNull();
+  });
+
+  it('offers an OpenAI-compatible server over SSH an API key and nothing else', async () => {
+    const { update } = await mount([
+      server({ transport: 'ssh', address: 'me@gpu', port: 8080, kind: 'openai-compatible', auth: { type: 'bearer' } }),
+    ]);
+    await click('model-servers-credentials-btn');
+    await click('model-servers-edit-auth-select');
+    expect(document.querySelector('[data-testid="model-servers-edit-auth-header"]')).toBeNull();
+    await click('model-servers-edit-auth-bearer');
+    await type('model-servers-edit-token-input', 'tok-new');
+    await click('model-servers-credentials-save-btn');
+    expect(update).toHaveBeenCalledWith('aaa111', { credential: { type: 'bearer', token: 'tok-new' } });
   });
 });
 
@@ -650,6 +835,19 @@ describe('ModelServersSettings launch settings', () => {
     expect(byTestId('model-servers-launch-start-btn')).toBeNull();
   });
 
+  it('says plainly, not as a warning, that it found no Ollama to start, with no Start', async () => {
+    const programMissing =
+      'Desktop could not find Ollama on this computer. Install it from ollama.com, then check again.';
+    await show({
+      ...LOCAL,
+      health: { ...health, state: 'unreachable' },
+      launch: launch({ canStart: false, programMissing }),
+    });
+    expect(byTestId('model-servers-launch-program-missing')?.textContent).toBe(programMissing);
+    expect(byTestId('model-servers-launch-problem')).toBeNull();
+    expect(byTestId('model-servers-launch-start-btn')).toBeNull();
+  });
+
   it('keeps saved launch settings over what it read from the server', async () => {
     const prefill = { settings: { kvCacheType: 'q8_0' as const }, from: 'OLLAMA_KV_CACHE_TYPE=q8_0' };
     await show({ ...LOCAL, launch: launch({ prefill, settings: { flashAttention: 'on' } }) });
@@ -776,6 +974,88 @@ describe('probedSummary', () => {
       'an unconfirmed Strix Halo budget as a lower bound',
       { memoryKind: 'unified', totalMemoryBytes: 62 * GIB, gpuMemoryBytes: 31 * GIB, gpuName: null, confidence: 'low' },
       '62 GiB of RAM, and the GPU can use at least 31 GiB of memory',
+    ],
+    [
+      'Intel integrated graphics on Linux by name',
+      {
+        memoryKind: 'unified',
+        totalMemoryBytes: 32 * GIB,
+        gpuMemoryBytes: null,
+        gpuName: 'Intel Raptor Lake-P [Iris Xe Graphics]',
+        confidence: 'high',
+      },
+      '32 GiB of memory shared with the GPU (Intel Raptor Lake-P [Iris Xe Graphics])',
+    ],
+    [
+      'Intel integrated graphics on Windows with its shared-memory limit',
+      {
+        memoryKind: 'unified',
+        totalMemoryBytes: 32 * GIB,
+        gpuMemoryBytes: 16 * GIB,
+        gpuName: 'Intel(R) Iris(R) Xe Graphics',
+        confidence: 'high',
+      },
+      '32 GiB of RAM, and the GPU (Intel(R) Iris(R) Xe Graphics) can use 16 GiB of memory',
+    ],
+    [
+      'an Intel card on Linux of unknown memory, with what reads it',
+      {
+        memoryKind: 'discrete',
+        totalMemoryBytes: 32 * GIB,
+        gpuMemoryBytes: null,
+        gpuName: 'Intel GPU [8086:e223]',
+        confidence: 'low',
+        vramNeedsLlamaServer: true,
+      },
+      '32 GiB of RAM and an Intel GPU [8086:e223] of unknown memory, which a llama.cpp SYCL or Vulkan build of llama-server reads',
+    ],
+    [
+      'a named Intel card on Linux of unknown memory',
+      {
+        memoryKind: 'discrete',
+        totalMemoryBytes: 32 * GIB,
+        gpuMemoryBytes: null,
+        gpuName: 'Intel Battlemage G31 [Arc Pro B70]',
+        confidence: 'low',
+        vramNeedsLlamaServer: true,
+      },
+      '32 GiB of RAM and an Intel Battlemage G31 [Arc Pro B70] of unknown memory, which a llama.cpp SYCL or Vulkan build of llama-server reads',
+    ],
+    [
+      'an Intel card named without a leading Intel',
+      {
+        memoryKind: 'discrete',
+        totalMemoryBytes: 32 * GIB,
+        gpuMemoryBytes: null,
+        gpuName: 'NVIDIA GeForce RTX 4090 (Intel host)',
+        confidence: 'low',
+        vramNeedsLlamaServer: true,
+      },
+      '32 GiB of RAM and an Intel GPU (NVIDIA GeForce RTX 4090 (Intel host)) of unknown memory, which a llama.cpp SYCL or Vulkan build of llama-server reads',
+    ],
+    [
+      'an unnamed Intel card on Linux of unknown memory',
+      {
+        memoryKind: 'discrete',
+        totalMemoryBytes: 32 * GIB,
+        gpuMemoryBytes: null,
+        gpuName: null,
+        confidence: 'low',
+        vramNeedsLlamaServer: true,
+      },
+      '32 GiB of RAM and an Intel GPU of unknown memory, which a llama.cpp SYCL or Vulkan build of llama-server reads',
+    ],
+    [
+      'an Intel card once its memory is read',
+      {
+        memoryKind: 'discrete',
+        totalMemoryBytes: 32 * GIB,
+        gpuMemoryBytes: 32 * GIB,
+        gpuName: 'Intel GPU [8086:e223]',
+        confidence: 'high',
+        vramNeedsLlamaServer: false,
+      },
+      '32 GiB of RAM and 32 GiB of GPU memory (Intel GPU [8086:e223])',
     ],
   ] satisfies [string, MachineView, string][])('describes %s', (_label, machine, text) => {
     expect(probedSummary(machine)).toBe(text);

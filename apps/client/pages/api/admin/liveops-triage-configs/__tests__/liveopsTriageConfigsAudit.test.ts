@@ -43,7 +43,7 @@ vi.mock('@bike4mind/database', () => ({
   liveopsTriageRunRepository: { hasActiveRunForConfig: h.hasActiveRunForConfig },
   liveopsTriageConfigAuditLogRepository: { createLog: h.createLog },
 }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 import createHandler from '../index';
 import itemHandler from '../[id]';

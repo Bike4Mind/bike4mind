@@ -16,7 +16,7 @@ import {
   lakeConnectorClaimRepository,
 } from '@bike4mind/database';
 import { GITHUB_LAKE_PLACEHOLDER_NAME, NotFoundError } from '@bike4mind/common';
-import { nameLakeAfterRepository } from '@server/integrations/github/dataLake/githubLakeConnection';
+import { nameLakeAfterRepository } from '@bike4mind/server-utils/integrations/github/dataLake/githubLakeConnection';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 

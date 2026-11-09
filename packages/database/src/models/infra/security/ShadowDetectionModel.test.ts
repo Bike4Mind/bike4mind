@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import { Types } from 'mongoose';
 import { setupMongoTest } from '../../../__test__/utils';
+import { User } from '../../auth/UserModel';
 import {
   ShadowDetectionModel,
   shadowDetectionRepository,
@@ -105,6 +107,20 @@ describe('shadowDetectionRepository', () => {
     expect(confirmed.data.map(item => item.id)).toEqual([older]);
   });
 
+  it('counts open detections for a user, leaving out those judged legitimate', async () => {
+    await shadowDetectionRepository.record(detection({ userIds: ['u1', 'u2'] }));
+    await grade(await shadowDetectionRepository.record(detection({ userIds: ['u1'] })), 0, 'confirmed_abuse');
+    await grade(await shadowDetectionRepository.record(detection({ userIds: ['u1'] })), 0, 'legitimate_human');
+    await ShadowDetectionModel.updateOne(
+      { _id: await shadowDetectionRepository.record(detection({ userIds: ['u1'] })) },
+      { $set: { verdict: 'legitimate_automation' } }
+    );
+
+    expect(await shadowDetectionRepository.countOpenForUser('u1')).toBe(2);
+    expect(await shadowDetectionRepository.countOpenForUser('u2')).toBe(1);
+    expect(await shadowDetectionRepository.countOpenForUser('u3')).toBe(0);
+  });
+
   it('adds a verdict and bumps the revision', async () => {
     const id = await shadowDetectionRepository.record(detection());
 
@@ -115,7 +131,13 @@ describe('shadowDetectionRepository', () => {
     expect(result.item.verdict).toBe('confirmed_abuse');
     expect(result.item.revision).toBe(1);
     expect(result.item.verdicts).toEqual([
-      { verdict: 'confirmed_abuse', reason: 'Checked the cohort', reviewerId: 'admin1', reviewedAt: expect.any(Date) },
+      {
+        verdict: 'confirmed_abuse',
+        reason: 'Checked the cohort',
+        reviewerId: 'admin1',
+        reviewedAt: expect.any(Date),
+        source: 'review',
+      },
     ]);
   });
 
@@ -161,6 +183,7 @@ describe('shadowDetectionRepository', () => {
         detector: 'signupNetworkBurst',
         policyVersion: 2,
         recorded: 1,
+        noAction: 0,
         confirmedAbuse: 0,
         legitimateHuman: 0,
         legitimateAutomation: 0,
@@ -170,6 +193,7 @@ describe('shadowDetectionRepository', () => {
         detector: 'signupNetworkBurst',
         policyVersion: 1,
         recorded: 3,
+        noAction: 0,
         confirmedAbuse: 1,
         legitimateHuman: 1,
         legitimateAutomation: 0,
@@ -178,8 +202,213 @@ describe('shadowDetectionRepository', () => {
     ]);
   });
 
+  it('counts would-not-act records as recorded but keeps their verdicts out of precision', async () => {
+    const [acted, notActed] = await Promise.all([
+      shadowDetectionRepository.record(detection({ detector: 'signupDomainHold', wouldAction: 'confirmHold' })),
+      shadowDetectionRepository.record(detection({ detector: 'signupDomainHold', wouldAction: 'none' })),
+      shadowDetectionRepository.record(detection({ detector: 'signupDomainHold', wouldAction: 'none' })),
+    ]);
+    await grade(acted, 0, 'confirmed_abuse');
+    await grade(notActed, 0, 'legitimate_human');
+
+    await expect(shadowDetectionRepository.summarize()).resolves.toEqual([
+      {
+        detector: 'signupDomainHold',
+        policyVersion: 1,
+        recorded: 3,
+        noAction: 2,
+        confirmedAbuse: 1,
+        legitimateHuman: 0,
+        legitimateAutomation: 0,
+        insufficientEvidence: 0,
+      },
+    ]);
+    const listed = await shadowDetectionRepository.list({ detector: 'signupDomainHold', limit: 10 });
+    expect(listed.data).toHaveLength(3);
+  });
+
+  it('excludes detectors in the unreviewed query so they never take a slot from the limit', async () => {
+    const since = new Date('2026-09-01T00:00:00Z');
+    const older = await shadowDetectionRepository.record(detection({ detectedAt: new Date('2026-10-01T00:00:00Z') }));
+    await Promise.all(
+      [2, 3, 4].map(day =>
+        shadowDetectionRepository.record(
+          detection({
+            detector: 'signupDomainHold',
+            wouldAction: 'none',
+            detectedAt: new Date(`2026-10-0${day}T00:00:00Z`),
+          })
+        )
+      )
+    );
+
+    const unfiltered = await shadowDetectionRepository.listUnreviewedSince(since, 1);
+    expect(unfiltered[0]?.detector).toBe('signupDomainHold');
+
+    const filtered = await shadowDetectionRepository.listUnreviewedSince(since, 1, {
+      excludeDetectors: ['signupDomainHold'],
+    });
+    expect(filtered.map(item => item.id)).toEqual([older]);
+  });
+
+  it('finds detections naming any of the users, newest first, up to the limit', async () => {
+    const older = await shadowDetectionRepository.record(
+      detection({ userIds: ['u1', 'u2'], detectedAt: new Date('2026-10-01T00:00:00Z') })
+    );
+    const newer = await shadowDetectionRepository.record(
+      detection({ userIds: ['u3'], detectedAt: new Date('2026-10-02T00:00:00Z') })
+    );
+    await shadowDetectionRepository.record(detection({ userIds: ['u9'] }));
+
+    const found = await shadowDetectionRepository.findForUsers(['u2', 'u3'], 10);
+
+    expect(found).toEqual([
+      { id: newer, detector: 'signupNetworkBurst', userIds: ['u3'], detectedAt: new Date('2026-10-02T00:00:00Z') },
+      {
+        id: older,
+        detector: 'signupNetworkBurst',
+        userIds: ['u2'],
+        detectedAt: new Date('2026-10-01T00:00:00Z'),
+      },
+    ]);
+    await expect(shadowDetectionRepository.findForUsers(['u2', 'u3'], 1)).resolves.toHaveLength(1);
+    await expect(shadowDetectionRepository.findForUsers([], 10)).resolves.toEqual([]);
+  });
+
+  it('returns only the requested accounts of a detection that names others', async () => {
+    const id = await shadowDetectionRepository.record(detection({ userIds: ['u1', 'u2', 'u3', 'u4'] }));
+
+    const found = await shadowDetectionRepository.findForUsers(['u2', 'u4', 'u8'], 10);
+
+    expect(found.map(item => ({ id: item.id, userIds: item.userIds }))).toEqual([{ id, userIds: ['u2', 'u4'] }]);
+  });
+
   it('declares the retention TTL on detectedAt', async () => {
     const ttl = ShadowDetectionModel.schema.indexes().find(([, options]) => options?.expireAfterSeconds !== undefined);
     expect(ttl).toEqual([{ detectedAt: 1 }, expect.objectContaining({ expireAfterSeconds: 365 * 24 * 60 * 60 })]);
+  });
+
+  describe('account status verdicts', () => {
+    const SUSPENDED = 'Abuse / automated signups';
+    const REINSTATED = 'Suspended in error';
+    const userId = new Types.ObjectId().toString();
+    const peerId = new Types.ObjectId().toString();
+
+    beforeEach(async () => {
+      await User.collection.deleteMany({});
+    });
+
+    const suspend = () =>
+      shadowDetectionRepository.gradeForSuspension({ userId, reason: SUSPENDED, reviewerId: 'admin1' });
+    const reinstate = () =>
+      shadowDetectionRepository.gradeForReinstatement({ userId, reason: REINSTATED, reviewerId: 'admin2' });
+    const stored = async (id: string) => (await shadowDetectionRepository.findById(id))!;
+
+    it('grades every ungraded detection naming a suspended account confirmed abuse', async () => {
+      const burst = await shadowDetectionRepository.record(detection({ userIds: [userId, peerId] }));
+      const spend = await shadowDetectionRepository.record(
+        detection({ detector: 'youngAccountSpend', userIds: [userId], network: null })
+      );
+      const unrelated = await shadowDetectionRepository.record(detection({ userIds: [peerId] }));
+
+      const graded = await suspend();
+
+      expect(graded.map(item => item.id).sort()).toEqual([burst, spend].sort());
+      expect((await stored(burst)).verdicts).toEqual([
+        {
+          verdict: 'confirmed_abuse',
+          reason: SUSPENDED,
+          reviewerId: 'admin1',
+          reviewedAt: expect.any(Date),
+          source: 'suspension',
+        },
+      ]);
+      expect(await stored(spend)).toMatchObject({ verdict: 'confirmed_abuse', revision: 1 });
+      expect(await stored(unrelated)).toMatchObject({ verdict: null, revision: 0 });
+    });
+
+    it('leaves a detection a reviewer already graded untouched on suspension', async () => {
+      const id = await shadowDetectionRepository.record(detection({ userIds: [userId] }));
+      await grade(id, 0, 'legitimate_human');
+
+      expect(await suspend()).toEqual([]);
+      expect(await stored(id)).toMatchObject({ verdict: 'legitimate_human', revision: 1 });
+    });
+
+    it('appends legitimate human use after the suspension verdict on reinstatement', async () => {
+      const id = await shadowDetectionRepository.record(detection({ userIds: [userId] }));
+      await suspend();
+
+      const graded = await reinstate();
+
+      expect(graded.map(item => item.id)).toEqual([id]);
+      const item = await stored(id);
+      expect(item.verdict).toBe('legitimate_human');
+      expect(item.verdicts.map(entry => [entry.verdict, entry.source])).toEqual([
+        ['confirmed_abuse', 'suspension'],
+        ['legitimate_human', 'reinstatement'],
+      ]);
+    });
+
+    it('grades an ungraded detection legitimate human use on reinstatement', async () => {
+      const id = await shadowDetectionRepository.record(detection({ userIds: [userId] }));
+
+      await reinstate();
+
+      expect(await stored(id)).toMatchObject({ verdict: 'legitimate_human', revision: 1 });
+    });
+
+    it('never overrides a reviewer verdict on reinstatement, including one from before sources existed', async () => {
+      const reviewed = await shadowDetectionRepository.record(detection({ userIds: [userId] }));
+      await grade(reviewed, 0, 'confirmed_abuse');
+      const legacy = await shadowDetectionRepository.record(detection({ userIds: [userId] }));
+      await ShadowDetectionModel.updateOne(
+        { _id: legacy },
+        {
+          $set: { verdict: 'insufficient_evidence', revision: 1 },
+          $push: {
+            verdicts: { verdict: 'insufficient_evidence', reason: 'Old', reviewerId: 'a', reviewedAt: new Date() },
+          },
+        }
+      );
+
+      expect(await reinstate()).toEqual([]);
+      expect(await stored(reviewed)).toMatchObject({ verdict: 'confirmed_abuse', revision: 1 });
+      expect(await stored(legacy)).toMatchObject({ verdict: 'insufficient_evidence', revision: 1 });
+    });
+
+    it('keeps a burst graded while another account in it is still suspended', async () => {
+      await User.collection.insertOne({ _id: new Types.ObjectId(peerId), isBanned: true });
+      const id = await shadowDetectionRepository.record(detection({ userIds: [userId, peerId] }));
+      await suspend();
+
+      expect(await reinstate()).toEqual([]);
+      expect(await stored(id)).toMatchObject({ verdict: 'confirmed_abuse', revision: 1 });
+    });
+
+    it('grades a detection confirmed abuse again when the account is suspended after a reinstatement', async () => {
+      const id = await shadowDetectionRepository.record(detection({ userIds: [userId] }));
+      await suspend();
+      await reinstate();
+
+      expect((await suspend()).map(item => item.id)).toEqual([id]);
+      expect(await stored(id)).toMatchObject({ verdict: 'confirmed_abuse', revision: 3 });
+    });
+
+    it('does not repeat confirmed abuse on a second suspension', async () => {
+      const id = await shadowDetectionRepository.record(detection({ userIds: [userId] }));
+      await suspend();
+
+      expect(await suspend()).toEqual([]);
+      expect((await stored(id)).verdicts).toHaveLength(1);
+    });
+
+    it('does not repeat legitimate human use on a second reinstatement', async () => {
+      const id = await shadowDetectionRepository.record(detection({ userIds: [userId] }));
+      await reinstate();
+
+      expect(await reinstate()).toEqual([]);
+      expect((await stored(id)).verdicts).toHaveLength(1);
+    });
   });
 });

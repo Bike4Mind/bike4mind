@@ -178,6 +178,19 @@ export const b4mTools = {
  * tool map explicitly.
  */
 export { generateTools, generateMcpTools, generateMcpToolsFromCache } from './toolGenerators';
+export {
+  generateCustomMcpTools,
+  customMcpToolId,
+  loadCustomMcpConnections,
+  isReadOnlyCustomTool,
+  isCustomToolOffered,
+  CUSTOM_MCP_DATA_NOTICE,
+  MAX_CUSTOM_TOOLS_PER_TURN,
+  type CustomMcpToolHost,
+  type CustomMcpConnectionOffer,
+  type CustomMcpToolCallInput,
+  type CustomMcpApprovalRequest,
+} from './customMcpTools';
 
 // Shared "confirmed empty" guard so the chat path (ToolBuilder) and agent path (loadAgentMcpTools) cannot drift.
 export { MCP_EMPTY_TOOL_FETCH_TTL_MS, shouldLiveFetchTools, buildMcpToolCacheUpdate } from './mcpToolFetchCache';

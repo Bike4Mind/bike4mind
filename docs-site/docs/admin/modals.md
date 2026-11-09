@@ -52,7 +52,7 @@ Pagination controls appear below the table when there are results:
 
 ## Creating a Modal
 
-Click the "Create New Modal" button to open the wizard. The wizard uses a step-by-step flow with a progress stepper at the top.
+Click the "Create modal" button to open the wizard. The wizard uses a step-by-step flow with a progress stepper at the top.
 
 ### Wizard Steps
 

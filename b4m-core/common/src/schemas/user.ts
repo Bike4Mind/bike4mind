@@ -206,6 +206,7 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   organizationId: true,
   lastActiveAt: true,
   isOnline: true,
+  clientUsage: true,
   mementos: true,
   showCreditsUsed: true,
   platformEmailAddress: true,

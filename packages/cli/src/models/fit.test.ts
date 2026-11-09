@@ -26,6 +26,14 @@ const rtx = (vramGiB: number, ramGiB: number): HardwareProfile => ({
   gpuCount: 1,
 });
 
+const intelIgpu = (ramGiB: number): HardwareProfile => ({
+  ...cpu(ramGiB),
+  memoryKind: 'unified',
+  gpuName: 'Intel(R) Iris(R) Xe Graphics',
+  gpuCount: 1,
+  gpuVendor: 'intel',
+});
+
 afterEach(() => {
   vi.unstubAllEnvs();
 });
@@ -69,6 +77,38 @@ describe('machineLabel', () => {
   it('names the memory a model can run in', () => {
     expect(machineLabel({ hardware: cpu(64) })).toBe('no GPU, 68.7 GB RAM');
     expect(machineLabel({ hardware: rtx(24, 64) })).toBe('NVIDIA GeForce RTX 4090 with 25.8 GB, 68.7 GB RAM');
+  });
+
+  it('names Intel integrated graphics on unified memory, and rates an Arc of unknown VRAM on the CPU', () => {
+    expect(machineLabel({ hardware: intelIgpu(32) })).toBe('Intel(R) Iris(R) Xe Graphics, 34.4 GB, rated on the CPU');
+    expect(machineLabel({ hardware: { ...intelIgpu(32), gpuName: null } })).toBe(
+      'unified memory, 34.4 GB, rated on the CPU'
+    );
+    expect(machineLabel({ hardware: { ...intelIgpu(32), gpuVendor: 'amd' } })).toBe(
+      'Intel(R) Iris(R) Xe Graphics, 34.4 GB'
+    );
+    expect(machineLabel({ hardware: { ...intelIgpu(128), gpuName: 'NVIDIA GB10', gpuVendor: 'nvidia' } })).toBe(
+      'NVIDIA GB10, 137.4 GB'
+    );
+    const arc = { ...rtx(16, 32), gpuName: 'Intel GPU [8086:e223]', gpuMemoryBytes: null, gpuVendor: 'intel' as const };
+    expect(machineLabel({ hardware: arc })).toBe(
+      'Intel GPU of unknown memory (a SYCL or Vulkan llama-server on PATH reads it), rated on the CPU, 34.4 GB RAM'
+    );
+    expect(machineLabel({ hardware: { ...arc, platform: 'win32' } })).toBe(
+      'GPU of unknown memory, rated on the CPU, 34.4 GB RAM'
+    );
+    expect(machineLabel({ hardware: { ...arc, gpuVendor: 'nvidia' } })).toBe(
+      'GPU of unknown memory, rated on the CPU, 34.4 GB RAM'
+    );
+  });
+});
+
+describe('rateDownload on Intel integrated graphics', () => {
+  it('rates from the CPU budget Ollama uses there, keeping the CPU margin', () => {
+    const fit = rateDownload(4 * GIB, { hardware: intelIgpu(32) }, 8192);
+    expect(fit.verdict).toBe('fits');
+    // 75% of 32 GiB less the 256 MiB CPU margin.
+    expect(fit.detail).toContain('the 25.5 GB a model can use in RAM here');
   });
 });
 

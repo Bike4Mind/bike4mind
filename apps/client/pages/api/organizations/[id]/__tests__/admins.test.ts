@@ -36,9 +36,11 @@ const findById = vi.hoisted(() => vi.fn());
 const update = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: { findById, update } }));
 vi.mock('@bike4mind/database/auth', () => ({ userRepository: {} }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn().mockResolvedValue(null) }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
+}));
 
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import '@pages/api/organizations/[id]/admins';
 
 /** An org owned by `owner1`, whose `users[]` roster is supplied per test. */

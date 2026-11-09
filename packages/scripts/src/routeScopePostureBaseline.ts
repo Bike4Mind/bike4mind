@@ -5,7 +5,7 @@ const LEGACY_SEED = `
 0014144d7a31 00459418c5d4 0082e20e5e16 012943bc9f1f 015fe5574654 019613c66472 01e76397a5b1 025026e73656
 02a9a8784972 02db23b9c09d 02eb81a2d4be 03ae80759d70 0499f2fb2938 04c2eb056241 059f95b85ce8
 069c0fd3979b 0788614b3938 07c79827305e 07dcf88475fe 080ed3e0d392 085a16311592 085f7b671c0e 08e7e98a46ea
-0a251cf95f46 0aabf881da2b 0b337074c70f 0c88b6367241 0d119fd0d32c 0d6ae17c640a 0e4aea3f65e2 0f41949eaec1
+0a251cf95f46 0aabf881da2b 0b337074c70f 0c88b6367241 0d6ae17c640a 0e4aea3f65e2 0f41949eaec1
 1072c65e46a4 10dbc40ebbe9 10f24ae25362 115f3f769671 11cc92235ae8 12482b7e1ad0 129566209214 1321a72682a9
 1684e10bfdb3 174f292b2c5d 17e8900be450 194285aca1ba 1aaca6dce28e 1bb806fd997f
 1bc6f6451909 1fb1f3fc424e 2008c3ee7616 206ac1b5c273 21d0bb0f522a 22394c3ae59f 23c5dbe38c62
@@ -14,17 +14,17 @@ const LEGACY_SEED = `
 2c901735a4cb 2d305da3cdc4 2d3670ecd606 2e37fbac941b 2e3ac54b7154 2e6353f669e3 2eb927ef4a46
 2ed882bb22ae 2ef37c2e2c94 2f0ab631adc3 2f234de390db 2f620478ac6a 2f91883ed973 2fc40391ca31 2fdc2e0b829c
 31617db73f2b 31c617980486 32f2089e6d27 3463552d7759 350efa8ccb14 35884ed714cb 369e060a227e 3781b2e67763
-37a70e432b71 37cba665495b 3979778768d8 3a1642518922 3a6efe7298ed 3aa0321b6274 3b334f7f2498 3b86c658c0bf
+37a70e432b71 37cba665495b 3979778768d8 3a1642518922 3a6efe7298ed 3aa0321b6274 3b86c658c0bf
 3bb083db8e64 3dc9363baa1a 3df999299a2d 3e3eaf9cd77c 3e4176be1c48 3ec72e3ac0a3 3effb03d9325
 40f556547602 413f7c8082e4 419f21991350 41a8f5c2b662 41f918864b1c 42e07254368d 434a8e4932ed
 43d112295f48 46bd586deb06 49627b2c4d6b 49bddae03ab9 4b1fbd0505df 4b38e95bd3e3 4b56c2365175 4b7ce8871d5f
-4bd858496fa6 4bdf4b58eefe 4be8154314f1 4ca8d8bb3c82 4dc25ea3603f 4f71544360b9 5086931d9a00
+4bd858496fa6 4bdf4b58eefe 4be8154314f1 4ca8d8bb3c82 4dc25ea3603f 5086931d9a00
 5104cfb8d929 51423d9e0878 516d279ce4f4 5171252d9a94 51947f2b1cdb 51cf666f59e7 53d06dab635c
 545593ba3989 548b1206f618 55b27aa4d619 5605b2684050 58e7cd021cb6 5931a8193ada 5a5583cb1274
 5d5074ebd89b 6061ef57218e 60ffb54be1c8 642b95025886 64bf2def6df8 64ecbfe8b19b 65a4fc3788a6 65e21f6e4e9c
 66a1f13bee09 66b8806c19b4 694c40e91bf8 6a032237a84b 6a4110961627 6cb4a83cf579 6cc07f5224fa 6d4d6131f033
 6e4748fb4c51 6e5c5d7e8628 6e730bc9a088 6ed0cb009120 6ed73113755c 6efb9ab92dd4 6f6415cc0c9e 704dec55a202
-71962a5dc759 719ca3481f88 747dbc66d426 74d86b0154ca 759e9e7d0711 7622709bda98
+71962a5dc759 719ca3481f88 747dbc66d426 74d86b0154ca 759e9e7d0711
 76467e0ca19b 7754cd457960 777dd2c3b707 77d0050dc89d 792b8f3b724e 793331087f34 795061ea8886 7962d46a3446
 79b8cbfc6191 79ea94f9b88b 7a0b85223940 7a50ea2ea194 7ce094888133 7f05fda4b2fa
 7f7d74a5303c 80c347fac5c3 83165b5eba40 87151090a57a 887df910134d 888d16d5150f 8a6e6e9471e0 8ad42d260760
@@ -45,10 +45,10 @@ d312a05b0b11 d3e467aeaff4 d3eaab3ea5bc d62a191ecb73 d6ea87dfd1f3 d72c4c7fb8cb d7
 d8960e4f9824 d935bc3fc33f d9ef50186023 db2f2ec79ba9 db38b5af6ebf dba77c4f75e1 dcb472615f55 decee2b17e42
 dfe94bb65dd6 e1f44ac43bb5 e23d092bb96b e382e8b70179 e45612c7685b e469c9c36006 e46ab1a21ce4 e50fe3fb8c42
 e57e7baff157 e595cbe31df0 e5b445a66b3b e5fa24fb7ad2 ea1c26f079c0 ea47451367b2 eb064860e4cb eb393164d18a
-eb489128dd54 eb8ffcc904f4 ec21ea5d7155 ec85c1a61fa3 ed3e6176e5c7 ee1a91584891 efc5836a2d56 f01fbbb5a514
+eb489128dd54 eb8ffcc904f4 ec21ea5d7155 ed3e6176e5c7 ee1a91584891 efc5836a2d56 f01fbbb5a514
 f077a8409874 f2a758fff8dc f2b0a5d37469 f3a75784b4ba f3eaddde86e8 f582657aa6d2
 f6c79f784d66 f7313baf7c87 f7b1abb973f8 f7b767e8d08b f835f59b19c4 f87ac4f79b9c f968e17e377e f9b399174d48
-fab5d2fb8c6e fad1aeec6013 fbae6f7451be fbb811957a79 fc6ae97a0af2 fe869b6f837a ff38b81ff8b8 ffdd84ef0662
+fab5d2fb8c6e fad1aeec6013 fbb811957a79 fc6ae97a0af2 fe869b6f837a ff38b81ff8b8 ffdd84ef0662
 `;
 
 /** Checked by checkRouteScopePosture.test.ts; see routeScopePosture.ts for what each list means. */
@@ -80,10 +80,7 @@ export const ROUTE_SCOPE_BASELINE: ScopeBaseline = {
     '/api/app-files/update-tags',
     '/api/artifacts',
     '/api/artifacts/[id]',
-    '/api/artifacts/[id]/versions',
     '/api/artifacts/[id]/versions/[version]',
-    '/api/artifacts/search',
-    '/api/artifacts/types',
     '/api/auth/github/authorize',
     '/api/auth/github/disconnect',
     '/api/auth/mfa/force-reset',
@@ -319,12 +316,10 @@ export const ROUTE_SCOPE_BASELINE: ScopeBaseline = {
     '/api/sessions/[id]/agents/trigger-proactive-messages',
     '/api/sessions/[id]/auto-rename',
     '/api/sessions/[id]/chat',
-    '/api/sessions/[id]/chat/[messageId]',
     '/api/sessions/[id]/chat/[messageId]/fork',
     '/api/sessions/[id]/chat/[messageId]/snip',
     '/api/sessions/[id]/chat/stop-reply',
     '/api/sessions/[id]/favorite',
-    '/api/sessions/[id]/files',
     '/api/sessions/[id]/questmaster-plans',
     '/api/sessions/[id]/summary',
     '/api/sessions/[id]/tag',
@@ -334,7 +329,6 @@ export const ROUTE_SCOPE_BASELINE: ScopeBaseline = {
     '/api/sessions/download',
     '/api/sessions/favorites',
     '/api/sessions/recent-proactive-messages',
-    '/api/sessions/semantic-search',
     '/api/sessions/shared',
     '/api/settings',
     '/api/settings/fetch',

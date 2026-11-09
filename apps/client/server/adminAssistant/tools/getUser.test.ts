@@ -12,10 +12,10 @@ vi.mock('@bike4mind/database', () => ({
   organizationRepository: { search: (...args: unknown[]) => search(...args) },
 }));
 const getActiveSubscriptionsForUser = vi.fn();
-vi.mock('../../entitlements/activeSubscriptions', () => ({
+vi.mock('@bike4mind/server-utils/entitlements/activeSubscriptions', () => ({
   getActiveSubscriptionsForUser: (...args: unknown[]) => getActiveSubscriptionsForUser(...args),
 }));
-vi.mock('@client/lib/userSubscriptions/constants', () => ({
+vi.mock('@bike4mind/server-utils/lib/userSubscriptions/constants', () => ({
   SUBSCRIPTION_PLANS: [{ priceId: 'price_pro', name: 'Professional' }],
   TEAM_PLAN: { priceId: 'price_team', name: 'Team' },
 }));

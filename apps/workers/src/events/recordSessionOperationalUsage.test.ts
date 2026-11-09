@@ -12,7 +12,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: vi.fn() },
 }));
 const activePlanResolver = vi.hoisted(() => ({ hasActivePlan: vi.fn() }));
-vi.mock('@server/entitlements/activeSubscriptions', () => ({ activePlanResolver }));
+vi.mock('@bike4mind/server-utils/entitlements/activeSubscriptions', () => ({ activePlanResolver }));
 
 import { getTextModelCost, getTurnsCost, type ModelInfo } from '@bike4mind/common';
 import { recordSessionOperationalUsage } from './recordSessionOperationalUsage';

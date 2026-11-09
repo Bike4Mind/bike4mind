@@ -1,3 +1,4 @@
+import { ExpectedToolError } from '@bike4mind/common';
 import { MCPClient, McpServerConfigError } from '@bike4mind/mcp';
 import { Resource } from 'sst';
 import { resolveMcpTenantKey } from './mcpTenantKey';
@@ -112,7 +113,7 @@ export const handler = async (params: any) => {
       }
 
       return payload;
-    } catch (error: any) {
+    } catch (error: unknown) {
       lastError = error instanceof Error ? error : new Error(String(error));
 
       const isConnectionError =
@@ -135,9 +136,13 @@ export const handler = async (params: any) => {
       }
 
       const errorMessage = lastError.message;
-      const enhancedError = new Error(`MCP Handler failed for ${name} (action: ${action}): ${errorMessage}`);
+      const isExpectedConnectionError = /Connection closed|\bEPIPE\b|\bECONNRESET\b/.test(errorMessage);
+      const FailureError = isExpectedConnectionError ? ExpectedToolError : Error;
+      const enhancedError = new FailureError(`MCP Handler failed for ${name} (action: ${action}): ${errorMessage}`);
+      // Retries are exhausted, so a server that keeps failing (e.g. crashes on start) still pages
+      // here. The typed ExpectedToolError only lets the calling adapter log its own line at warn.
       console.error(
-        `❌ MCP Handler Error for ${name}:`,
+        `MCP Handler Error for ${name}:`,
         enhancedError,
         ...(stderrTail.length ? ['\nchild stderr:', stderrTail.join('\n')] : [])
       );

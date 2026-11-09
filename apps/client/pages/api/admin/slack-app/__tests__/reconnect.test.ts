@@ -34,7 +34,7 @@ vi.mock('@bike4mind/database/infra', () => ({
   slackDevWorkspaceRepository: { findById: h.findById, storeConfigToken: h.storeConfigToken },
 }));
 vi.mock('@bike4mind/database', () => ({ withTransaction: (fn: () => Promise<unknown>) => fn() }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 import handler from '../reconnect';
 

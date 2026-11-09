@@ -29,9 +29,8 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 let server: Awaited<ReturnType<typeof createMongoReplSet>>;
 const UNCAPPED = '1000000000';
 const config: Record<string, string> = {
-  stagedSignupGrantEnabled: 'true',
-  signupGrantCredits: '12',
-  verifiedUnlockCredits: '28',
+  signupGrantInitialCredits: '12',
+  signupGrantDripCap: '28',
   signupGrantSignupPoolDaily: UNCAPPED,
   signupGrantTricklePoolDaily: UNCAPPED,
   // Payment unlocks pay on the payment here; paymentUnlockHold.e2e.test.ts covers the hold.
@@ -307,7 +306,6 @@ describe('signup grant daily budget', () => {
 
   it('holds an unstaged account instead of paying past the budget, and pays it later', async () => {
     config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '12';
-    config.defaultFreeCredits = '12';
     clock = new Date('2030-03-01T10:00:00Z');
     const [first, second] = await Promise.all([createUser(false, 0), createUser(false, 1)]);
     expect(await userService.grantFreeCredits(first, adapters)).toMatchObject({ creditsGranted: 12 });
@@ -323,7 +321,6 @@ describe('signup grant daily budget', () => {
 
   it('queues a new signup behind an unstaged grant held on an earlier day', async () => {
     config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '12';
-    config.defaultFreeCredits = '12';
     clock = new Date('2030-03-01T10:00:00Z');
     const [first, held] = await Promise.all([createUser(false, 0), createUser(false, 1)]);
     await userService.grantFreeCredits(first, adapters);
@@ -338,7 +335,6 @@ describe('signup grant daily budget', () => {
 
   it('does not queue new signups behind a hold the release cron would never pay', async () => {
     config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '100';
-    config.defaultFreeCredits = '12';
     clock = new Date('2030-03-02T10:00:00Z');
     const orphan = await createUser(false, 0);
     await User.updateOne(
@@ -350,7 +346,6 @@ describe('signup grant daily budget', () => {
   });
 
   it('drops the budget hold of a grant withheld for domain review, so it stops counting as backlog', async () => {
-    config.defaultFreeCredits = '12';
     clock = new Date('2030-03-02T10:00:00Z');
     const user = await createUser(false, 0);
     await User.updateOne(
@@ -387,7 +382,6 @@ describe('signup grant daily budget', () => {
   });
 
   it('holds a risk-review account behind an older budget backlog as a budget hold', async () => {
-    config.defaultFreeCredits = '12';
     clock = new Date('2030-03-02T10:00:00Z');
     const older = await createUser(false, 0);
     await User.updateOne(
@@ -426,7 +420,6 @@ describe('signup grant daily budget', () => {
   const tagsOf = async (id: string) => (await User.findById(id))?.tags ?? [];
   it('clears the hold on an alias tranche the inbox claim refuses once the next day opens', async () => {
     config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '12';
-    config.defaultFreeCredits = '12';
     clock = new Date('2030-04-01T10:00:00Z');
     const paid = await createInbox('x.y@gmail.com', true);
     const alias = await createInbox('xy+1@gmail.com', true);
@@ -464,7 +457,6 @@ describe('signup grant daily budget', () => {
 
   it('clears a stale hold on an unstaged alias the inbox claim refuses', async () => {
     config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '12';
-    config.defaultFreeCredits = '12';
     const paid = await createInbox('c.d@gmail.com', false);
     const alias = await createInbox('cd+3@gmail.com', false);
     expect(await userService.grantFreeCredits(paid, adapters)).toMatchObject({ creditsGranted: 12 });
@@ -484,7 +476,6 @@ describe('signup grant daily budget', () => {
 
   it('leaves an already-paid account with a stale pending tag untouched on an exhausted day', async () => {
     config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '12';
-    config.defaultFreeCredits = '12';
     const [paid, staleHold, other] = await Promise.all([0, 1, 2].map(n => createUser(false, n)));
     for (const user of [paid, staleHold]) {
       await CreditTransaction.create({
@@ -515,7 +506,6 @@ describe('signup grant daily budget', () => {
 
   it('keeps the hold on an account the budget still cannot pay', async () => {
     config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '12';
-    config.defaultFreeCredits = '12';
     const [first, second] = await Promise.all([createUser(false, 0), createUser(false, 1)]);
     await userService.grantFreeCredits(first, adapters);
     await userService.grantFreeCredits(second, adapters);
@@ -594,7 +584,6 @@ describe('signup grant daily budget', () => {
 
   it('keeps the draw when the follow-up write fails after the grant was paid', async () => {
     config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '30';
-    config.defaultFreeCredits = '12';
     const held = await createUser(false, 0);
     await User.updateOne({ _id: held.id }, { $set: { signupGrantHeldReason: 'budget_exhausted' } });
     const failing = {

@@ -22,13 +22,14 @@ vi.mock('@server/admin/subscriptionsList/listAdminSubscriptions', () => ({
   adminSubscriptionsExportPage: (...args: unknown[]) => mockPage(...args),
   adminSubscriptionsMatch: (...args: unknown[]) => mockMatch(...args),
   OWNER_SEARCH_LIMIT: 500,
+  MISMATCH_ID_LIMIT: 5000,
 }));
-vi.mock('@client/app/utils/adminSubscriptionsFilter', async importOriginal => ({
-  ...(await importOriginal<typeof import('@client/app/utils/adminSubscriptionsFilter')>()),
+vi.mock('@bike4mind/server-utils/app/utils/adminSubscriptionsFilter', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/app/utils/adminSubscriptionsFilter')>()),
   ADMIN_SUBSCRIPTIONS_EXPORT_MAX_ROWS: 1000,
 }));
 
-import type { AdminSubscriptionRow } from '@client/app/utils/adminSubscriptionsFilter';
+import type { AdminSubscriptionRow } from '@bike4mind/server-utils/app/utils/adminSubscriptionsFilter';
 import handler from '../export';
 
 const ADMIN = { id: 'a'.repeat(24), isAdmin: true };
@@ -207,6 +208,17 @@ describe('GET /api/admin/subscriptions/export', () => {
 
     expect(res._getData().trim().split('\n').at(-1)).toBe(
       '# Search matched more than 500 owners; narrow it to export every match'
+    );
+  });
+
+  it('ends with a line saying so when the Mismatched view hit its cap', async () => {
+    mockMatch.mockResolvedValueOnce({ match: { status: 'x' }, searchTruncated: false, mismatchTruncated: true });
+    mockPage.mockResolvedValueOnce([makeRow(1)]);
+
+    const { res } = await call({ mismatch: 'yes' });
+
+    expect(res._getData().trim().split('\n').at(-1)).toBe(
+      '# Mismatched view covers the first 5000 subscriptions with open findings'
     );
   });
 

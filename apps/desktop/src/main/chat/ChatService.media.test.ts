@@ -130,7 +130,8 @@ describe('ChatService generation tools', () => {
 
     const preamble = axiosPost.mock.calls[0][1].messages[0].content;
     expect(preamble).toMatch(/SPENDS THE USER CREDITS/);
-    expect(preamble).toMatch(/Never describe what a generated image depicts/);
+    expect(preamble).toMatch(/attached for you to see\s+when your model reads images/);
+    expect(preamble).toMatch(/Never describe\s+an image you were not shown/);
   });
 
   it('folds the media a tool reported onto the settled call, and persists it', async () => {

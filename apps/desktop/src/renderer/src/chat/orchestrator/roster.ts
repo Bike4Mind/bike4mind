@@ -1,6 +1,8 @@
+import type { ModelSelection, WorkerTask, RootPolicy } from '@shared/orchestration';
 import type { ChildOutcome } from '@shared/agentOutcome';
 import type { ChatSessionStatus, ChatSessionSummary, SessionSetupStep } from '@shared/chat';
 import type { PrSummary } from '@shared/pullRequest';
+import { descendantsOf } from '@shared/spawnTree';
 import { formatCredits } from '../statusLine';
 import type { AgentActivity } from './activity';
 
@@ -35,6 +37,9 @@ export interface AgentView {
   createdAt: string;
   updatedAt: string;
   model: string;
+  workerSelection?: ModelSelection;
+  workerTask?: WorkerTask;
+  orchestrationPolicy?: RootPolicy;
   state: AgentState;
   /** Working, but still being prepared: the setup step it is on. Stays 'working' for every count. */
   preparing?: SessionSetupStep;
@@ -67,54 +72,22 @@ const OUTCOME_STATE: Record<ChildOutcome, AgentState> = {
   'no-reply': 'idle',
 };
 
+export function deriveTaskAgentState(
+  session: Pick<ChatSessionSummary, 'workerTask' | 'lastOutcome'>,
+  status: ChatSessionStatus | undefined
+): AgentState {
+  const runtimeState = deriveAgentState(status, session.lastOutcome);
+  const task = session.workerTask?.state;
+  if (runtimeState === 'working' || runtimeState === 'needs-you' || !task) return runtimeState;
+  if (task.status === 'completed' && task.accepted) return 'done';
+  return task.status === 'canceled' ? 'stopped' : 'needs-you';
+}
+
 /** The live status wins; a stored outcome only speaks for a session that is neither running nor waiting. */
 export function deriveAgentState(status: ChatSessionStatus | undefined, outcome: ChildOutcome | undefined): AgentState {
   if (status === 'needs-action') return 'needs-you';
   if (status === 'processing') return 'working';
   return outcome ? OUTCOME_STATE[outcome] : 'idle';
-}
-
-/**
- * Distance from `rootId` up the parent chain, or null if the chain ends elsewhere, loops, or passes
- * through an archived session below the root (archiving an agent shelves its whole subtree).
- */
-function depthBelow(
-  session: ChatSessionSummary,
-  rootId: string,
-  byId: ReadonlyMap<string, ChatSessionSummary>
-): number | null {
-  const visited = new Set<string>([session.id]);
-  let depth = 0;
-  let current: ChatSessionSummary | undefined = session;
-  while (current?.origin) {
-    depth += 1;
-    const parentId: string = current.origin.parentSessionId;
-    if (parentId === rootId) return depth;
-    if (visited.has(parentId)) return null;
-    visited.add(parentId);
-    current = byId.get(parentId);
-    if (current?.archived) return null;
-  }
-  return null;
-}
-
-type SpawnedSession = ChatSessionSummary & Required<Pick<ChatSessionSummary, 'origin'>>;
-
-const isSpawned = (session: ChatSessionSummary): session is SpawnedSession => session.origin !== undefined;
-
-/** Every live session below `rootId`, with its depth. Shared by buildRoster and descendantIds. */
-function descendantsOf(
-  sessions: readonly ChatSessionSummary[],
-  rootId: string
-): Array<{ session: SpawnedSession; depth: number }> {
-  const byId = new Map(sessions.map(session => [session.id, session]));
-  const found: Array<{ session: SpawnedSession; depth: number }> = [];
-  for (const session of sessions) {
-    if (session.archived || !isSpawned(session) || session.id === rootId) continue;
-    const depth = depthBelow(session, rootId, byId);
-    if (depth !== null) found.push({ session, depth });
-  }
-  return found;
 }
 
 /** The ids buildRoster would list for `rootId`; cheap enough to compute on every render. */
@@ -130,9 +103,7 @@ export function agentStates(
   rootId: string | null
 ): AgentState[] {
   if (rootId === null) return [];
-  return descendantsOf(sessions, rootId).map(({ session }) =>
-    deriveAgentState(statuses.get(session.id), session.lastOutcome)
-  );
+  return descendantsOf(sessions, rootId).map(({ session }) => deriveTaskAgentState(session, statuses.get(session.id)));
 }
 
 /**
@@ -161,7 +132,7 @@ export function buildRoster(input: {
   const views: AgentView[] = [];
 
   for (const { session, depth } of descendantsOf(sessions, rootId)) {
-    const state = deriveAgentState(statuses.get(session.id), session.lastOutcome);
+    const state = deriveTaskAgentState(session, statuses.get(session.id));
     const setup = state === 'working' ? preparing?.get(session.id) : undefined;
     views.push({
       id: session.id,
@@ -172,6 +143,9 @@ export function buildRoster(input: {
       createdAt: session.createdAt,
       updatedAt: session.updatedAt,
       model: session.model,
+      workerSelection: session.workerSelection,
+      workerTask: session.workerTask,
+      orchestrationPolicy: session.orchestrationPolicy,
       state,
       ...(setup && { preparing: setup }),
       outcome: session.lastOutcome,

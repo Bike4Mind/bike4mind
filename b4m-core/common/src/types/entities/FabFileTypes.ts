@@ -75,7 +75,8 @@ export enum FabFileSourceType {
    * `sourceMetadata.sessionId`, when set, links it to the notebook it was made in - see
    * persistGeneratedFileAsFabFile for why that link is not the top-level `sessionId`.
    * `sourceMetadata.generatedCopyKey` names a second, generated-bucket copy that deletes also
-   * remove (see generatedCopyKeyOf).
+   * remove (see generatedCopyKeyOf). `sourceMetadata.generatedOutputKey` names the chat image the
+   * file holds, with no delete cascade, so copy-generated-image can find the generation behind it.
    */
   TOOL_GENERATED = 'tool_generated',
   /**
@@ -1311,6 +1312,14 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * @returns A promise that resolves to an array of files.
    */
   findAllByIds(ids: string[]): Promise<IFabFileDocument[]>;
+  /**
+   * One ascending-by-`_id` page of these ids (live rows only, summary fields only), resuming strictly
+   * after `afterId`. `hasMore` is true when a row exists past the page.
+   */
+  findPageByIds(
+    ids: string[],
+    options: { afterId?: string; limit: number }
+  ): Promise<{ data: IFabFileDocument[]; hasMore: boolean }>;
   /**
    * Existence only: which of these ids still resolve to a file. Projects `_id` and nothing else -
    * the alternative, `findAllByIds`, hydrates a full mongoose document per id (`tags`, `versions`,

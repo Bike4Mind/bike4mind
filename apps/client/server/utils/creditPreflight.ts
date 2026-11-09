@@ -9,7 +9,7 @@ import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { CreditHolderType, UnprocessableEntityError, type IUserDocument } from '@bike4mind/common';
 import type { ILogger } from '@bike4mind/observability';
 import { reserveRequestCredits, type CreditLedgerEntry } from '@server/billing/reserveRequestCredits';
-import { attributeToRequestApiKey } from '@server/billing/attributeToRequestApiKey';
+import { attributeToRequestApiKey } from '@bike4mind/server-utils/billing/attributeToRequestApiKey';
 
 // A billing state, not a bug. Each caller maps it onto its own established
 // response (422 `insufficient_credits` or 400) so this change does not

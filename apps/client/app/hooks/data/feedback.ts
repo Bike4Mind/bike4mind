@@ -20,7 +20,7 @@ export const feedbackSessionQueryKey = (sessionId: string, userId: string | unde
  * session is expected to carry at most a handful of reports, never enough to paginate.
  *
  * `userId` is sent explicitly and is NOT redundant with the endpoint's CASL scope: an admin holds
- * an unconditional `read` grant on FeedbackModel (`server/auth/ability.ts`), so for them the CASL
+ * an unconditional `read` grant on FeedbackModel (`packages/server-utils/src/auth/ability.ts`), so for them the CASL
  * clause narrows to `{}` and an unfiltered session read would return OTHER users' reports - which
  * this annotation would then render as "You reported this message", carrying that reporter's
  * content and identity with it. The filter is what makes this a read of "did I report this turn".

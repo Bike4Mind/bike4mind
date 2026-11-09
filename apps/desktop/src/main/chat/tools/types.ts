@@ -1,3 +1,5 @@
+import type { ModelBuildReport, ModelLighting, ModelPose, ModelView, ModelViewState } from '@shared/model3d';
+import type { SpawnOptions, TaskAction } from '@shared/orchestration';
 import type { CustomCommand } from '@bike4mind/cli/skills';
 import type { VideoModel } from '@bike4mind/common';
 import type { BrowserSnapshot } from '@shared/browserPage';
@@ -331,6 +333,23 @@ export interface SimulatorContext {
   detach(): void;
 }
 
+/** The parts of main's ModelLiveView (main/chat/model3d) the model tools use. */
+export interface ModelViewPort {
+  current(): ModelViewState;
+  open(path: string): Promise<ModelViewState>;
+  waitForBuild(): Promise<ModelBuildReport>;
+  capture(views: ModelView[], pose?: ModelPose): Promise<Uint8Array>;
+  /** An 8 s turntable clip of the current model, as WebM. */
+  recordTurntable(lighting: ModelLighting): Promise<Uint8Array>;
+  glbPath(): string | null;
+}
+
+export interface ModelContext {
+  view: ModelViewPort;
+  /** Keep a screenshot for the transcript, as BrowserContext.keepScreenshot does. */
+  keepScreenshot(bytes: Buffer, caption: string): Promise<ChatMedia | undefined>;
+}
+
 /**
  * Everything a tool may use. Narrow by default: no api client and no token, except for the
  * server-backed generation tools, which get exactly {@link MediaContext}, and the web tools,
@@ -365,6 +384,11 @@ export interface ToolContext {
   /** Protected folders not yet resolved: where a write lands relative to them is unknown, so every write is refused. */
   unresolvedProtectedPaths?: readonly string[];
   /**
+   * Folders no allow rule may cover (see protectedLocations.ts). A shell command reaching one asks in auto
+   * mode, as the rules would refuse it.
+   */
+  uncoverablePaths?: readonly string[];
+  /**
    * The conversation this call belongs to. Background processes are scoped by it, so one
    * conversation cannot read or stop another's just by naming a handle.
    */
@@ -392,6 +416,8 @@ export interface ToolContext {
   screen?: ScreenContext;
   /** Absent off macOS and in tests; the simulator tools are then not declared at all. */
   simulator?: SimulatorContext;
+  /** Absent outside a Code session with a working directory; the model tools are then not declared. */
+  model?: ModelContext;
   /** Absent outside the chat loop, where an image has nowhere to go; file_read then describes it in text. */
   images?: ImageContext;
   /**
@@ -548,7 +574,13 @@ export interface HostContext {
    * Refused rather than queued when a cap is hit; see SpawnRefusal for which caps and why the
    * model is told them apart.
    */
-  spawn(prompt: string, title: string | undefined, placement: SpawnPlacement): Promise<SpawnOutcome>;
+  spawn(
+    prompt: string,
+    title: string | undefined,
+    placement: SpawnPlacement,
+    options?: SpawnOptions
+  ): Promise<SpawnOutcome>;
+  taskAction?(sessionId: string, action: TaskAction): Promise<string>;
   /**
    * What a worktree child's new branch is cut from: the branch this session is on. Resolved once,
    * for the approval card, and carried from there in the placement, so the base the card names
@@ -706,8 +738,16 @@ export interface ApprovalAlways {
   directories: readonly string[];
   /** Physical paths named by a shell command, used to protect permission files even through aliases. */
   paths?: readonly string[];
+  /** Folders a glob or an expanded operand reaches anything under (see ShellScan.globFolders). */
+  globFolders?: readonly string[];
+  /** See ShellScan.dotlessGlobFolders. */
+  dotlessGlobFolders?: readonly string[];
   /** Paths in a WSL distro no root is in: asked each time, never covered by a rule, grant or saved answer. */
   ungranted?: readonly string[];
+  /** See ShellScan.writes: a rule never covers a write to a permission file. */
+  writes?: readonly string[];
+  /** See ShellScan.writtenTrees. */
+  writtenTrees?: readonly string[];
 }
 
 /** See ChatApprovalOption: this is that, plus what main does with the answer. */

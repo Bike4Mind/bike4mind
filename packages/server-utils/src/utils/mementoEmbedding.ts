@@ -1,4 +1,11 @@
-import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingConfig } from '@bike4mind/fab-pipeline';
+import {
+  bindEmbeddingModel,
+  buildEmbeddingRegistry,
+  embedOne,
+  embeddingBackendForModel,
+  resolveEmbeddingCredentials,
+} from '@bike4mind/utils/embeddingProviders';
+
 import { MEMENTO_EMBEDDING_MODEL, toMementoVector } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 
@@ -31,9 +38,9 @@ export async function generateMementoSummaryEmbedding(
   summary: string,
   { apiKeyTable, logger }: MementoEmbeddingDeps
 ): Promise<number[] | null> {
-  const provider = getProviderFromModel(MEMENTO_EMBEDDING_MODEL);
+  const provider = embeddingBackendForModel(MEMENTO_EMBEDDING_MODEL);
   // Keyless providers (Bedrock) report nothing missing and proceed on the AWS credential chain.
-  const { config: embeddingConfig, missing } = resolveEmbeddingConfig(provider, apiKeyTable);
+  const { config: embeddingConfig, missing } = resolveEmbeddingCredentials(provider, apiKeyTable);
   if (missing) {
     logger?.warn(
       `Memento embedding skipped: ${missing === 'ollama' ? 'Ollama base URL' : `${missing === 'openai' ? 'OpenAI' : 'VoyageAI'} API key`} not found`
@@ -42,8 +49,8 @@ export async function generateMementoSummaryEmbedding(
   }
 
   try {
-    const embeddingService = new EmbeddingFactory(embeddingConfig).createEmbeddingService(MEMENTO_EMBEDDING_MODEL);
-    return toMementoVector(await embeddingService.generateEmbedding(summary));
+    const embeddingService = bindEmbeddingModel(buildEmbeddingRegistry(embeddingConfig), MEMENTO_EMBEDDING_MODEL);
+    return toMementoVector(await embedOne(embeddingService, summary));
   } catch (error) {
     logger?.warn('Memento embedding failed; creating memento without an embedding', {
       error: error instanceof Error ? error.message : String(error),

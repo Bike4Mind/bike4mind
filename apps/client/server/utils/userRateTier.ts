@@ -7,8 +7,8 @@ import {
   getRequestActiveSubscriptions,
   type ActiveSubscription,
   type ActiveSubscriptionsRequest,
-} from '@server/entitlements/activeSubscriptions';
-import { getHighestLadderTier } from '@client/lib/userSubscriptions/utils';
+} from '@bike4mind/server-utils/entitlements/activeSubscriptions';
+import { getHighestLadderTier } from '@bike4mind/server-utils/lib/userSubscriptions/utils';
 import { holdsPaidStanding, type PaidStandingUser } from '@server/entitlements/paidStanding';
 import { UserSubscriptionTier } from '@bike4mind/server-utils/lib/userSubscriptions/types';
 import { isDevelopment } from '@bike4mind/server-utils/utils/config';

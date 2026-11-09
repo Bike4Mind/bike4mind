@@ -44,18 +44,10 @@ const b4mv3RestrictedPaths = [
       'validateUrlForFetch',
       'isPrivateIP',
       'isPrivateOrInternalHostname',
-      'EmbeddingFactory',
-      'EmbeddingConfig',
-      'EmbeddingService',
       'EmbeddingModelProvider',
       'EmbeddingModelInfo',
-      'getProviderFromModel',
-      'BedrockEmbeddingService',
-      'BedrockCredentials',
       'BEDROCK_EMBEDDING_MODEL_MAP',
-      'OpenAIEmbeddingService',
       'OPENAI_EMBEDDING_MODEL_MAP',
-      'VoyageAIEmbeddingProvider',
       'VOYAGEAI_EMBEDDING_MODEL_MAP',
       'BaseStorage',
       'S3Storage',
@@ -312,7 +304,8 @@ const noWorkersImportInClient = [
 // optimizePackageImports rewrites these for the app bundle, but vitest loads the barrel as-is:
 // `@mui/icons-material` alone requires ~10k icon modules (a third of the client shard's import
 // time), and `lodash` loads the whole library for one function. Spread into every apps/client
-// block that owns no-restricted-imports, for the last-rule-wins reason above.
+// block that owns no-restricted-imports, for the last-rule-wins reason above, and into the
+// packages/server-utils block, since the shared server code moved there from apps/client.
 const noHeavyBarrelImportsInClient = [
   {
     name: '@mui/icons-material',
@@ -792,7 +785,7 @@ export default defineConfig([
       'no-restricted-imports': [
         'error',
         {
-          paths: [...b4mv3RestrictedPaths, ...SERVER_UTILS_BOUNDARY.paths],
+          paths: [...b4mv3RestrictedPaths, ...noHeavyBarrelImportsInClient, ...SERVER_UTILS_BOUNDARY.paths],
           patterns: [...b4mv3RestrictedPatterns, ...SERVER_UTILS_BOUNDARY.patterns],
         },
       ],

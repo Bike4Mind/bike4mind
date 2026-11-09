@@ -52,6 +52,7 @@ import {
   Scale,
   ScanSearch,
   ScrollText,
+  ClipboardCheck,
   Settings,
   ShieldAlert,
   ShieldCheck,
@@ -146,6 +147,7 @@ export enum AdminTab {
   ShadowDetections = 73,
   ModerationIncidents = 74,
   StripeDisputes = 75,
+  Approvals = 76,
 }
 
 /**
@@ -194,8 +196,8 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       { Icon: LayoutDashboard, tab: AdminTab.Dashboard, label: 'Dashboard', testid: 'admin-dashboard-tab-btn' },
       { Icon: ChartLine, tab: AdminTab.Analytics, label: 'Analytics' },
       { Icon: HeartPulse, tab: AdminTab.SystemHealth, label: 'System health' },
-      { Icon: Activity, tab: AdminTab.EventMetrics, label: 'Events' },
-      { Icon: LifeBuoy, tab: AdminTab.HelpAnalytics, label: 'Help usage', testid: 'admin-help-analytics-btn' },
+      { Icon: Activity, tab: AdminTab.EventMetrics, label: 'Event metrics' },
+      { Icon: LifeBuoy, tab: AdminTab.HelpAnalytics, label: 'Help analytics', testid: 'admin-help-analytics-btn' },
     ],
   },
   {
@@ -273,6 +275,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
         testid: 'admin-audit-log-btn',
         badge: 'unreviewedAudit',
       },
+      { Icon: ClipboardCheck, tab: AdminTab.Approvals, label: 'Approvals', testid: 'admin-approvals-btn' },
       { Icon: Fingerprint, tab: AdminTab.IdentityProviders, label: 'Identity providers' },
       { Icon: KeyRound, tab: AdminTab.OAuthClients, label: 'OAuth clients', testid: 'admin-oauth-clients-btn' },
       { Icon: Key, tab: AdminTab.ApiKeyScopePreflight, label: 'API key scopes', testid: 'admin-scope-preflight-btn' },

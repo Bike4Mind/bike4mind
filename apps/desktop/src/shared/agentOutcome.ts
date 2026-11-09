@@ -1,4 +1,5 @@
 import { isTurnBudgetStop, type ChatMessage, type ChatSession, type ChatSessionSummary } from './chat';
+import { mentionedRefs } from './githubRefs';
 
 /**
  * How a spawned session ended, classified once for the two audiences that read it.
@@ -55,6 +56,7 @@ export function summarizeSession(session: ChatSession): ChatSessionSummary {
   const lastSnippet = lastAssistant ? snippetOf(plainText(closingText(lastAssistant))) : '';
   const totalUsdCost = sumUsage(messages, 'usdCost');
   const totalCredits = sumUsage(messages, 'creditsUsed');
+  const githubRefs = mentionedRefs(messages);
   return {
     ...summary,
     messageCount: messages.length,
@@ -62,6 +64,7 @@ export function summarizeSession(session: ChatSession): ChatSessionSummary {
     ...(lastSnippet ? { lastSnippet } : {}),
     ...(totalUsdCost !== undefined ? { totalUsdCost } : {}),
     ...(totalCredits !== undefined ? { totalCredits } : {}),
+    ...(githubRefs.length > 0 ? { githubRefs } : {}),
   };
 }
 
@@ -69,7 +72,7 @@ export function summarizeSession(session: ChatSession): ChatSessionSummary {
  * The prose a reply ended on. A tool-using reply's `content` opens with its first round's narration
  * ("Let me look at..."), so the last round that said anything is where its result is.
  */
-function closingText(message: ChatMessage): string {
+export function closingText(message: ChatMessage): string {
   const spoken = message.rounds?.filter(round => round.text.trim() !== '');
   return spoken?.length ? spoken[spoken.length - 1].text : message.content;
 }

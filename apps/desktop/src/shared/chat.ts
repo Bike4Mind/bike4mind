@@ -1,3 +1,4 @@
+import type { RootPolicy, ModelSelection, WorkerTask } from './orchestration';
 /**
  * The chat vocabulary that crosses the contextBridge.
  *
@@ -9,6 +10,7 @@
  * Credential-free like @shared/auth, for the same reason - see src/shared/ipc.ts.
  */
 
+import type { GithubRef } from './githubRefs';
 import type { GenerationJobState, PromptCacheTtl, ValidationViolation } from '@bike4mind/common';
 import type { ReasoningEffortSetting } from '@bike4mind/local-models/model-settings';
 import type { ChildOutcome } from './agentOutcome';
@@ -779,6 +781,11 @@ export interface ChatMessage {
    */
   display?: string;
   /**
+   * Set with `system` on the message a side chat opens with, naming the conversation it was
+   * branched from, so the thread can say so and link back. See ChatService.startSideChat.
+   */
+  sideChatOf?: { sessionId: string; title: string };
+  /**
    * Artifacts parsed out of this reply. Their markup is NOT in `content`, which holds the prose
    * around them; the wire rebuilds it from here (restoreArtifactMarkup) so the model still sees
    * its own artifact on a follow-up while the body is stored exactly once.
@@ -924,6 +931,15 @@ export type ChatMoveToBackgroundResult = { ok: true; process: BackgroundProcessI
  * disappears is not a cap.
  */
 export const MAX_SPAWN_DEPTH = 2;
+
+/**
+ * Whether a session is an agent its parent started, as opposed to a top-level conversation or a
+ * side chat the user drives. The agent surfaces (background panel, roster, quest readiness)
+ * list only these; the sidebar still nests every child under its parent.
+ */
+export function isAgentSession(session: { origin?: Pick<ChatSessionOrigin, 'kind'> }): boolean {
+  return session.origin !== undefined && session.origin.kind !== 'side-chat';
+}
 
 /** Whether this session may still start one under MAX_SPAWN_DEPTH. */
 export function canSpawnDeeper(session: { origin?: Pick<ChatSessionOrigin, 'depth'> }): boolean {
@@ -1259,9 +1275,17 @@ export interface ChatSessionOrigin {
   depth: number;
   /** The prompt it was started with, so the row can say what it was sent off to do. */
   seedPrompt: string;
+  /**
+   * 'side-chat' for a child the user branched off a highlight (ChatService.startSideChat). It
+   * nests under its parent like a spawn but is not an agent; see isAgentSession.
+   */
+  kind?: 'side-chat';
 }
 
 interface ChatSessionMeta {
+  orchestrationPolicy?: RootPolicy;
+  workerSelection?: ModelSelection;
+  workerTask?: WorkerTask;
   id: string;
   /**
    * What the sidebar row says. Provisionally a truncation of the first prompt, replaced moments
@@ -1362,6 +1386,8 @@ export interface ChatSessionSummary extends ChatSessionMeta {
   totalUsdCost?: number;
   /** Sum of usage.creditsUsed over all messages; absent when none reported it. */
   totalCredits?: number;
+  /** Issue and PR refs the transcript mentions, first seen first; absent when none. See githubRefs.ts. */
+  githubRefs?: GithubRef[];
 }
 
 export interface ChatSession extends ChatSessionMeta {
@@ -1561,14 +1587,13 @@ export interface ChatSessionStatusEvent {
 }
 
 /**
- * What a session is doing before its first reply: cutting its worktree, waiting on that
- * worktree's dependency install, or starting the turn itself.
+ * What a session is doing before its first reply: cutting its worktree, or starting the turn
+ * itself. A worktree's dependency install is not a step: it runs alongside the first turn.
  */
-export type SessionSetupStep = 'worktree' | 'dependencies' | 'starting';
+export type SessionSetupStep = 'worktree' | 'starting';
 
 export const SESSION_SETUP_LABEL: Record<SessionSetupStep, string> = {
   worktree: 'Creating worktree',
-  dependencies: 'Installing dependencies',
   starting: 'Starting up',
 };
 
@@ -1848,7 +1873,7 @@ export function branchHolder(
  * child's worktree is unusable or already taken. Told apart so the model reports it back rather
  * than retrying, since nothing it can do changes the answer.
  */
-export type SpawnRefusal = 'depth' | 'concurrency' | 'no-project' | 'empty-prompt' | 'branch';
+export type SpawnRefusal = 'depth' | 'concurrency' | 'no-project' | 'empty-prompt' | 'branch' | 'model-policy';
 
 /**
  * A task the model proposed handing to a new session, waiting on the user.
@@ -1937,6 +1962,14 @@ export interface StartSpawnSuggestionRequest {
   /** Required for a worktree start; ignored by the others. */
   branch?: string;
 }
+
+/** Branch a side chat off `sessionId` about text the user highlighted in its thread. */
+export interface StartSideChatRequest {
+  sessionId: string;
+  selection: string;
+}
+
+export type StartSideChatResult = { ok: true; session: ChatSessionSummary } | { ok: false; error: string };
 
 export type SpawnSuggestionResult = { ok: true; suggestion: ChatSpawnSuggestion } | { ok: false; error: string };
 

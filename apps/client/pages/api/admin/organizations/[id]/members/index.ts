@@ -13,7 +13,11 @@ import { organizationRepository, userRepository, withTransaction } from '@bike4m
 import { organizationService } from '@bike4mind/services';
 import { adminApi } from '@server/middlewares/adminApi';
 import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
-import { parseAdminActionReason, recordAdminActionFromRequest, userAuditTarget } from '@server/utils/adminAudit';
+import {
+  parseAdminActionReason,
+  recordAdminActionFromRequest,
+  userAuditTarget,
+} from '@bike4mind/server-utils/utils/adminAudit';
 import { assertFullAdminForMembership } from '@server/organizations/adminMembership';
 
 const BodySchema = z.object({ userId: z.string().regex(/^[0-9a-f]{24}$/i) });

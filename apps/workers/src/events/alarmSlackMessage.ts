@@ -35,6 +35,9 @@ export const ALARM_CATEGORIES: readonly AlarmCategory[] = ['cost', 'abuse', 'job
 export type AlarmDetailKind = 'young-account-spend';
 
 export type AlarmLinkKey =
+  | 'ai-advisory'
+  | 'campaign-evidence'
+  | 'api-key-accounts'
   | 'signup-activity'
   | 'waf-block-list'
   | 'dlq-replay'
@@ -55,6 +58,9 @@ export interface AlarmCatalogEntry {
   action: string;
   /** Short noun for the metric count, used in the "what happened" sentence. */
   unit?: string;
+  measurement?: 'hourly-census';
+  coverage?: string;
+  handoff?: string;
   /** Admin pages the "what to do" text points at; rendered as buttons when the app URL is known. */
   links?: AlarmLinkKey[];
   /** Data the relay fetches for the breaching window and passes in as FormatOptions.details. */
@@ -83,6 +89,9 @@ export interface SlackAlarmMessage {
 
 /** Admin console pages, by key. Paths are relative to the app origin. */
 export const ADMIN_LINKS: Record<AlarmLinkKey, { label: string; path: string }> = {
+  'ai-advisory': { label: 'AI-flagged accounts', path: '/admin?tab=users&aiVerdict=abuse' },
+  'campaign-evidence': { label: 'Campaign evidence', path: '/admin?tab=shadow-detections' },
+  'api-key-accounts': { label: 'Accounts with API keys', path: '/admin?tab=users&keys=yes' },
   'signup-activity': { label: 'Signup activity', path: '/admin?tab=users&signedUp=hour' },
   'waf-block-list': { label: 'WAF block list', path: '/admin?tab=security-dashboard' },
   'dlq-replay': { label: 'DLQ replay', path: '/admin?tab=dlq-replay' },
@@ -350,14 +359,20 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
     links: SIGNUP_LINKS,
   },
   NewAccountApiKeys: {
-    title: 'New accounts are creating API keys fast',
+    title: 'Review new-account API key volume',
     level: 'page',
     category: 'abuse',
     unit: 'API keys',
+    measurement: 'hourly-census',
     meaning:
-      'Accounts under 24 hours old created more API keys in one hour than the ceiling. Credit farms create keys right after signing up.',
-    action: 'Check which new accounts created the keys and revoke the ones that look automated.',
-    links: ['signup-activity'],
+      'The key count reached the configured threshold. Owners were under 24 hours old when keys were created. This is a volume signal, not confirmed harmful use. Shared campaign evidence may suggest coordination; review behavior before deciding on enforcement.',
+    coverage:
+      'The census counts persisted keys in a complete UTC hour, not distinct accounts or requests. CloudWatch evaluation times shown above are not the census creation interval. Deleted keys/accounts can be absent. AI-flagged accounts is a live queue of unreviewed detections from the last 24h, excluding suspended accounts; it is not matched to this metric. Check assessment timestamps and truncation in the evidence view. Empty results do not establish safety. Model scores are uncalibrated.',
+    action:
+      'Read-only review: start with AI-flagged accounts and Campaign evidence, then open individual profiles. Use Accounts with API keys as a broader discovery view. Read key creation times, sign-ins, available request outcomes, credits and ledger activity for the relevant UTC interval. Record coverage gaps; missing events or zero displayed spend do not establish inactivity. Do not revoke keys or block accounts on this threshold or an AI score alone.',
+    handoff:
+      'The responding operator owns triage: acknowledge in this Slack thread with an owner and next review time, or hand off to the backup responder. Escalate to the responsible abuse/security owner for attributable unauthorized activity, material spend or service impact. A metric recovery does not close the investigation.',
+    links: ['ai-advisory', 'campaign-evidence', 'api-key-accounts'],
   },
   'account-creation-metrics-missing': {
     title: 'The signup census did not run',
@@ -385,6 +400,17 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
       'Accounts under 7 days old spent more estimated AI dollars in one hour than the ceiling. Credit farms spend their free credits fast.',
     action:
       'Open the top accounts listed above on the admin users page and suspend any that look like abuse, then check the signup activity and the WAF block list.',
+    links: SIGNUP_LINKS,
+    detail: 'young-account-spend',
+  },
+  'young-account-spend-rate-warn': {
+    title: 'New accounts are spending more than usual on AI',
+    level: 'warn',
+    category: 'abuse',
+    unit: 'USD',
+    meaning:
+      'Accounts under 7 days old spent more estimated AI dollars in one hour than the warn line. This is the heads-up tier; the page tier is the young-account-spend-rate alarm.',
+    action: 'Glance at the top accounts listed above; nothing to do unless one looks like abuse.',
     links: SIGNUP_LINKS,
     detail: 'young-account-spend',
   },
@@ -632,6 +658,20 @@ const formatNumber = (raw: string) => {
   return Number.isFinite(n) ? String(n) : raw;
 };
 
+/** USD keeps cents, or 4 decimals below a cent so a tiny nonzero spend does not read as 0.00. */
+export function formatAlarmNumber(value: number, unit?: string): string {
+  if (unit === 'USD') {
+    const rounded = value.toFixed(value === 0 || Math.abs(value) >= 0.01 ? 2 : 4);
+    return value !== 0 && Number(rounded) === 0 ? String(Number(value.toPrecision(6))) : rounded;
+  }
+  return Number.isInteger(value) ? String(value) : String(Number(value.toPrecision(6)));
+}
+
+const displayNumber = (raw: string, unit?: string) => {
+  const n = Number(raw);
+  return Number.isFinite(n) ? formatAlarmNumber(n, unit) : raw;
+};
+
 const DATAPOINT_RE = /([-+\d.eE]+) \((\d{2})\/(\d{2})\/(\d{2}) (\d{2}):(\d{2}):(\d{2})\)/g;
 
 export type ParsedReason =
@@ -689,7 +729,11 @@ export function parseReason(alarm: CloudWatchAlarmPayload): ParsedReason {
   return { kind: 'raw', reason };
 }
 
-export function describeReason(alarm: CloudWatchAlarmPayload, unit?: string): string {
+export function describeReason(
+  alarm: CloudWatchAlarmPayload,
+  unit?: string,
+  measurement?: AlarmCatalogEntry['measurement']
+): string {
   const parsed = parseReason(alarm);
   if (parsed.kind === 'missing') {
     return parsed.minutes === undefined
@@ -698,23 +742,44 @@ export function describeReason(alarm: CloudWatchAlarmPayload, unit?: string): st
   }
   if (parsed.kind === 'raw') return parsed.reason;
 
-  const what = unit ? `${parsed.value} ${unit}` : `The value was ${parsed.value}`;
+  const value = displayNumber(parsed.value, unit);
+  const what = unit ? `${value} ${unit}` : `The value was ${value}`;
+  if (measurement === 'hourly-census') {
+    const threshold = parsed.threshold ? `; configured threshold ${displayNumber(parsed.threshold, unit)}` : '';
+    return `${what} in the latest breaching CloudWatch datapoint${threshold}.`;
+  }
   const when = parsed.period
     ? ` in the ${periodPhrase(parsed.period)} ending ${formatClock(new Date(parsed.latestStart + parsed.period * 1000))} UTC`
     : ` at ${formatClock(new Date(parsed.latestStart))} UTC`;
-  const threshold = parsed.threshold ? `; the ${parsed.limit} is ${parsed.threshold}` : '';
+  const threshold = parsed.threshold ? `; the ${parsed.limit} is ${displayNumber(parsed.threshold, unit)}` : '';
   return `${what}${when}${threshold}.`;
 }
 
 /** Field cells for the numbers-at-a-glance block; empty when the reason carries no numbers. */
-export function describeFields(alarm: CloudWatchAlarmPayload, unit?: string, changedAt?: Date): string[] {
+export function describeFields(
+  alarm: CloudWatchAlarmPayload,
+  unit?: string,
+  changedAt?: Date,
+  measurement?: AlarmCatalogEntry['measurement']
+): string[] {
   const parsed = parseReason(alarm);
   const fields: string[] = [];
   let sinceMs: number | undefined;
 
   if (parsed.kind === 'threshold') {
-    fields.push(`*Measured*\n${parsed.value}${unit ? ` ${unit}` : ''}`);
-    if (parsed.threshold) fields.push(`*${parsed.limit === 'floor' ? 'Floor' : 'Ceiling'}*\n${parsed.threshold}`);
+    fields.push(`*Measured*\n${displayNumber(parsed.value, unit)}${unit ? ` ${unit}` : ''}`);
+    if (parsed.threshold) {
+      fields.push(
+        `*${measurement === 'hourly-census' ? 'Threshold' : parsed.limit === 'floor' ? 'Floor' : 'Ceiling'}*\n${displayNumber(parsed.threshold, unit)}`
+      );
+    }
+    if (measurement === 'hourly-census') {
+      const start = new Date(parsed.latestStart).toISOString();
+      const end = parsed.period ? new Date(parsed.latestStart + parsed.period * 1000).toISOString() : undefined;
+      fields.push(`*CloudWatch evaluation window*\n${start}${end ? ` to ${end} (end exclusive)` : ''}`);
+      fields.push(`*Earliest breaching datapoint shown*\n${new Date(parsed.earliestStart).toISOString()}`);
+      return fields;
+    }
     fields.push(
       parsed.period
         ? `*Window*\n${periodPhrase(parsed.period)} ending ${formatClock(new Date(parsed.latestStart + parsed.period * 1000))} UTC`
@@ -917,12 +982,14 @@ export function formatAlarmSlackMessage(
     };
   }
 
-  const happened = describeReason(alarm, entry?.unit);
+  const happened = describeReason(alarm, entry?.unit, entry?.measurement);
   const why = entry?.meaning ?? alarm.AlarmDescription;
   const sections = [`*What happened*\n${escapeMrkdwn(happened)}`];
   if (why) sections.push(`*Why it matters*\n${escapeMrkdwn(why)}`);
   sections.push(...(options.details ?? []));
+  if (entry?.coverage) sections.push(`*Scope and freshness*\n${escapeMrkdwn(entry.coverage)}`);
   if (entry?.action) sections.push(`*What to do*\n${escapeMrkdwn(entry.action)}`);
+  if (entry?.handoff) sections.push(`*Ownership and escalation*\n${escapeMrkdwn(entry.handoff)}`);
 
   const buttons: { label: string; url: string }[] = [];
   if (url) buttons.push({ label: 'Open in CloudWatch', url });
@@ -947,7 +1014,7 @@ export function formatAlarmSlackMessage(
     level,
     title,
     mention: options.mention,
-    fields: describeFields(alarm, entry?.unit, when),
+    fields: describeFields(alarm, entry?.unit, when, entry?.measurement),
     sections,
     buttons,
     context,

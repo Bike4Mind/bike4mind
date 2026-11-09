@@ -3,7 +3,7 @@ import { ApiKeyScope, EmailJobOverallStatus } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
-import { definedKeys, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { definedKeys, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 // Reaches `BaseRepository.update` -> `$set`, so these cast before validators run. `isTestMode`
 // and the `recipientFilter` booleans are Boolean-typed (throw `CastError kind='Boolean'` on 2,

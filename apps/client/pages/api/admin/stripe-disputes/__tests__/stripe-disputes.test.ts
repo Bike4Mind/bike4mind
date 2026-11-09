@@ -78,8 +78,8 @@ vi.mock('@server/billing/stripeDisputes', () => ({
 }));
 vi.mock('@server/admin/usersBulk/adapters', () => ({ usersBulkUndoDeps: () => ({}) }));
 vi.mock('@server/admin/usersBulk/undo', () => ({ SUPERSEDED_MESSAGE: 'Changed by a later bulk action' }));
-vi.mock('@server/utils/adminAudit', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>()),
   recordAdminActionFromRequest: h.record,
 }));
 

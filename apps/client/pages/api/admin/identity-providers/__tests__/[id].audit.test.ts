@@ -43,7 +43,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@server/auth/oktaOidcClient', () => ({ clearConfigurationCache: h.clearConfigurationCache }));
 vi.mock('@bike4mind/observability', () => ({ Logger: { info: vi.fn() } }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 import handler from '../[id]';
 

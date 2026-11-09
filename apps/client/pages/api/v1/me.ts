@@ -8,7 +8,7 @@
 import { getMeContract } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { getUserEntitlements, toEntitlementUser } from '@server/entitlements';
-import { getRequestActiveSubscriptions } from '@server/entitlements/activeSubscriptions';
+import { getRequestActiveSubscriptions } from '@bike4mind/server-utils/entitlements/activeSubscriptions';
 import { resolveCallerPlan } from '@server/me/resolveCallerPlan';
 
 const handler = nextRouteForContract(getMeContract, {

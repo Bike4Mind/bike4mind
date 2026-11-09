@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Alert, Button, Checkbox, DialogActions, DialogContent, Option, Select, Stack, Typography } from '@mui/joy';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { PENDING_GRANTS_QUERY_KEY } from '@client/app/hooks/data/adminSignupGrant';
 import { api } from '@client/app/contexts/ApiContext';
 import { getErrorMessage } from '@client/app/utils/error';
 import { AdminDialog } from './shared/AdminDialog';
@@ -38,15 +39,21 @@ export default function HeldSignupGrantsTab() {
   });
   const release = useMutation({
     mutationFn: async (userIds: string[]) => (await api.post<ReleaseResult>(`${ENDPOINT}/release`, { userIds })).data,
-    onSuccess: async () => {
-      setSelected(new Set());
-      await queryClient.invalidateQueries({ queryKey: QUERY_KEY });
+    onSuccess: () => setSelected(new Set()),
+    onSettled: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: QUERY_KEY }),
+        queryClient.invalidateQueries({ queryKey: PENDING_GRANTS_QUERY_KEY }),
+      ]);
     },
   });
   const revoke = useMutation({
     mutationFn: async (batchId: string) => (await api.post<RevokeResult>(`${ENDPOINT}/revoke`, { batchId })).data,
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: QUERY_KEY });
+    onSettled: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: QUERY_KEY }),
+        queryClient.invalidateQueries({ queryKey: PENDING_GRANTS_QUERY_KEY }),
+      ]);
     },
   });
   const [confirmRevoke, setConfirmRevoke] = useState(false);

@@ -27,7 +27,7 @@ import {
   getFilesByIdsContract,
   bulkDeleteFilesContract,
 } from './files.contract';
-import { createEmbeddingsContract } from './embeddings.contract';
+import { createEmbeddingsContract, listEmbeddingModelsContract } from './embeddings.contract';
 import { postSlackMessageContract } from './slackMessages.contract';
 import { createTextRefinementContract } from './textRefinement.contract';
 import { createDecisionContract, listDecisionModelsContract } from './decisions.contract';
@@ -40,11 +40,21 @@ import {
   deleteArtifactContract,
   listArtifactVersionsContract,
   getArtifactVersionContract,
+  createArtifactVersionContract,
+  searchArtifactsContract,
+  listArtifactTypesContract,
 } from './artifacts.contract';
 import { createTranscriptionUploadContract, createTranscriptionContract } from './transcription.contract';
 import { createSessionContract } from './sessionCreate.contract';
 import { listSessionsContract } from './sessionList.contract';
 import { listSessionQuestsContract } from './sessionQuests.contract';
+import { listSessionFilesContract } from './sessionFiles.contract';
+import { searchSessionsContract } from './sessionSemanticSearch.contract';
+import {
+  getSessionMessageContract,
+  updateSessionMessageContract,
+  deleteSessionMessageContract,
+} from './sessionMessages.contract';
 import { listCreditTransactionsContract } from './creditTransactions.contract';
 import { getWhatsNewMediaContract, listWhatsNewContract } from './whatsNew.contract';
 import {
@@ -77,6 +87,14 @@ import {
   updateProjectContract,
   deleteProjectContract,
 } from './projects.contract';
+import {
+  listProjectFilesContract,
+  addProjectFilesContract,
+  removeProjectFileContract,
+  listProjectSessionsContract,
+  addProjectSessionsContract,
+  removeProjectSessionContract,
+} from './projectContent.contract';
 import {
   listAgentsContract,
   getAgentContract,
@@ -141,6 +159,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   getFilesByIdsContract,
   bulkDeleteFilesContract,
   createEmbeddingsContract,
+  listEmbeddingModelsContract,
   createTextRefinementContract,
   createDecisionContract,
   listDecisionModelsContract,
@@ -149,6 +168,11 @@ export const CONTRACTS: readonly EndpointContract[] = [
   createSessionContract,
   listSessionsContract,
   listSessionQuestsContract,
+  listSessionFilesContract,
+  searchSessionsContract,
+  getSessionMessageContract,
+  updateSessionMessageContract,
+  deleteSessionMessageContract,
   listCreditTransactionsContract,
   listDataLakesContract,
   getDataLakeContract,
@@ -181,10 +205,19 @@ export const CONTRACTS: readonly EndpointContract[] = [
   deleteArtifactContract,
   listArtifactVersionsContract,
   getArtifactVersionContract,
+  createArtifactVersionContract,
+  searchArtifactsContract,
+  listArtifactTypesContract,
   createTranscriptionUploadContract,
   createTranscriptionContract,
   updateProjectContract,
   deleteProjectContract,
+  listProjectFilesContract,
+  addProjectFilesContract,
+  removeProjectFileContract,
+  listProjectSessionsContract,
+  addProjectSessionsContract,
+  removeProjectSessionContract,
   listAgentsContract,
   getAgentContract,
   createAgentContract,

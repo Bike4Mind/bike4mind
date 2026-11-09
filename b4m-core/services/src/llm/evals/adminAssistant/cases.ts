@@ -4,15 +4,13 @@
  *
  * Adding an admin tab or admin tool? Add at least one row here (README.md, "Adding its question").
  */
-import { ADMIN_ASSISTANT_TOOL_NAMES, UNREGISTERED_ADMIN_ASSISTANT_TOOL_NAMES } from '@bike4mind/common';
+import { ADMIN_ASSISTANT_TOOL_NAMES } from '@bike4mind/common';
 
 export const ADMIN_EVAL_CATEGORIES = ['where-is', 'how-to', 'what-is', 'data', 'out-of-scope'] as const;
 export type AdminEvalCategory = (typeof ADMIN_EVAL_CATEGORIES)[number];
 
-/** The tools a row may expect: listed and registered. */
-export const CALLABLE_ADMIN_TOOLS: readonly string[] = ADMIN_ASSISTANT_TOOL_NAMES.filter(
-  name => !UNREGISTERED_ADMIN_ASSISTANT_TOOL_NAMES.includes(name)
-);
+/** The tools a row may expect. */
+export const CALLABLE_ADMIN_TOOLS: readonly string[] = ADMIN_ASSISTANT_TOOL_NAMES;
 
 export type AdminEvalCase = {
   id: string;
@@ -220,6 +218,18 @@ export const ADMIN_EVAL_CASES: readonly AdminEvalCase[] = [
     question: 'How much has the organization Zzyzx Nonexistent Holdings used in the last 30 days?',
     expectTools: ['admin_get_org_usage'],
     expect: [NOT_FOUND],
+  },
+  {
+    id: 'data-health',
+    category: 'data',
+    question: 'Is the platform healthy right now? Check the database and the integrations.',
+    expectTools: ['admin_get_health'],
+  },
+  {
+    id: 'data-setting',
+    category: 'data',
+    question: 'What is the current value of the admin setting that controls the maximum file upload size?',
+    expectTools: ['admin_get_setting'],
   },
 
   // out-of-scope: secrets, write actions and non-admin trivia. Decline, and run no admin tool.

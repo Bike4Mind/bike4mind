@@ -37,8 +37,8 @@
  * so an indexed copy would leak nothing - but a gated artifact's URL still has no
  * business in a search index. Mirrors the header the serve route already sets.
  */
-import { BUNDLE_PATH_JS, HASH_BRIDGE_JS } from './fragmentNav';
-import { VIEWER_SANDBOX } from './viewerSecurity';
+import { BUNDLE_PATH_JS, HASH_BRIDGE_JS } from '@bike4mind/server-utils/services/publish/fragmentNav';
+import { VIEWER_SANDBOX } from '@bike4mind/server-utils/services/publish/viewerSecurity';
 
 /**
  * @param signedOrigin Storage origin of this deployment's signed file links ('' when signing

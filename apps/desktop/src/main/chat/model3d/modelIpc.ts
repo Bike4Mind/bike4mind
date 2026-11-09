@@ -1,0 +1,210 @@
+import { realpath, stat, writeFile } from 'node:fs/promises';
+import { basename, dirname, join, resolve } from 'node:path';
+import { BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent, type WebContents } from 'electron';
+import { IPC_CHANNELS } from '@shared/ipc';
+import { isModelExportFormat, type ModelBuildReport, siblingGlbPath } from '@shared/model3d';
+import { stampModelPaneGlb } from './glbMarker';
+import type { ModelLiveViews } from './ModelLiveViews';
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+async function sameLocation(a: string, b: string): Promise<boolean> {
+  if (basename(a) !== basename(b)) return false;
+  const [first, second] = await Promise.all([
+    realpath(dirname(a)).catch(() => null),
+    realpath(dirname(b)).catch(() => null),
+  ]);
+  return first !== null && first === second;
+}
+
+async function isSameFile(a: string, b: string): Promise<boolean> {
+  const [first, second] = await Promise.all([stat(a).catch(() => null), stat(b).catch(() => null)]);
+  return first !== null && second !== null && first.dev === second.dev && first.ino === second.ino;
+}
+
+/**
+ * Writes an export to `target`. A GLB exported onto the open model's own sibling carries the pane's
+ * marker, so the next build may replace it (ModelLiveView refuses unmarked siblings); exported
+ * anywhere else it stays an ordinary user asset. The sibling is matched by file identity, so another
+ * spelling of it (case on a case-insensitive disk, a symlinked folder) is still the sibling.
+ */
+export async function writeExport(
+  format: 'glb' | 'stl',
+  bytes: Uint8Array,
+  target: string,
+  modelPath: string | null
+): Promise<void> {
+  const sibling = format === 'glb' && modelPath ? siblingGlbPath(modelPath) : null;
+  const isSibling = async () =>
+    sibling !== null &&
+    (resolve(target) === resolve(sibling) ||
+      (await sameLocation(target, sibling)) ||
+      (await isSameFile(target, sibling)));
+  if (await isSibling()) {
+    await writeFile(target, stampModelPaneGlb(bytes));
+    return;
+  }
+  await writeFile(target, bytes);
+  // A target that did not exist yet has no identity to compare until it is written.
+  if (await isSibling()) await writeFile(target, stampModelPaneGlb(bytes));
+}
+
+/** Only the fields main acts on; anything else the renderer sends is dropped. */
+export function parseBuildReport(value: unknown): ModelBuildReport | null {
+  if (!isRecord(value) || typeof value.generation !== 'number' || typeof value.ok !== 'boolean') return null;
+  const report: ModelBuildReport = { generation: value.generation, ok: value.ok };
+  if (typeof value.error === 'string') report.error = value.error.slice(0, 4000);
+  if (typeof value.glbError === 'string') report.glbError = value.glbError.slice(0, 4000);
+  if (typeof value.line === 'number') report.line = value.line;
+  const summary = value.summary;
+  if (
+    isRecord(summary) &&
+    Array.isArray(summary.parts) &&
+    Array.isArray(summary.size) &&
+    summary.size.length === 3 &&
+    typeof summary.units === 'string' &&
+    typeof summary.triangles === 'number' &&
+    isRecord(summary.params)
+  ) {
+    const params: Record<string, number> = {};
+    for (const [key, raw] of Object.entries(summary.params)) if (typeof raw === 'number') params[key] = raw;
+    report.summary = {
+      parts: summary.parts.filter((part): part is string => typeof part === 'string'),
+      size: [Number(summary.size[0]), Number(summary.size[1]), Number(summary.size[2])],
+      units: summary.units,
+      triangles: summary.triangles,
+      params,
+    };
+    if (Array.isArray(summary.joints)) {
+      const joints = summary.joints.filter((joint): joint is string => typeof joint === 'string');
+      if (joints.length) report.summary.joints = joints;
+    }
+  }
+  return report;
+}
+
+function windowOf(event: IpcMainInvokeEvent): BrowserWindow | null {
+  return BrowserWindow.fromWebContents(event.sender);
+}
+
+/** Recordings in flight per renderer. */
+const recordingCounts = new Map<WebContents, number>();
+const watchedSenders = new WeakSet<WebContents>();
+
+/**
+ * A backgrounded window's timers fire about once a second, which would draw a clip in slow motion,
+ * so throttling is off while any recording runs. It is a count, not a flag: the pane's Record and
+ * the agent's off-screen model_record can overlap in one window, and the first to finish must not
+ * re-enable throttling under the other. A reload or a closed window ends its recordings, so either
+ * one resets the count.
+ */
+export function setRecording(sender: WebContents, active: boolean): void {
+  if (!watchedSenders.has(sender)) {
+    watchedSenders.add(sender);
+    const reset = (): void => {
+      if (!recordingCounts.delete(sender) || sender.isDestroyed()) return;
+      sender.setBackgroundThrottling(true);
+    };
+    // did-navigate fires for a main-frame load or reload, not for in-page (hash) navigation.
+    sender.on('did-navigate', reset);
+    sender.once('destroyed', reset);
+  }
+  const count = Math.max(0, (recordingCounts.get(sender) ?? 0) + (active ? 1 : -1));
+  if (count > 0) recordingCounts.set(sender, count);
+  else recordingCounts.delete(sender);
+  sender.setBackgroundThrottling(count === 0);
+}
+
+function requireSessionId(value: unknown): string {
+  if (typeof value !== 'string' || !value) throw new Error('A model request must name its conversation.');
+  return value;
+}
+
+/**
+ * Renderer -> main handlers for the model pane. Every request names the conversation (session id)
+ * whose model it is about; see ModelLiveViews. Every write lands where that conversation's
+ * ModelLiveView allows (the open model's sibling GLB, its params) or where the user chose in a
+ * save dialog.
+ */
+export function modelIpcHandlers(views: ModelLiveViews): void {
+  ipcMain.handle(IPC_CHANNELS.modelGetState, (_event, sessionId: unknown) =>
+    views.current(requireSessionId(sessionId))
+  );
+  ipcMain.handle(IPC_CHANNELS.modelClose, (_event, sessionId: unknown) =>
+    views.find(requireSessionId(sessionId))?.close()
+  );
+  ipcMain.handle(
+    IPC_CHANNELS.modelReadAsset,
+    async (_event, sessionId: unknown) => (await views.find(requireSessionId(sessionId))?.readAsset()) ?? null
+  );
+
+  ipcMain.handle(IPC_CHANNELS.modelOpenDialog, async (event, sessionId: unknown) => {
+    const session = requireSessionId(sessionId);
+    const window = windowOf(event);
+    const options: Electron.OpenDialogOptions = {
+      title: 'Open a 3D model',
+      properties: ['openFile'],
+      filters: [{ name: '3D models', extensions: ['glb', 'stl', 'js'] }],
+    };
+    const picked = await (window ? dialog.showOpenDialog(window, options) : dialog.showOpenDialog(options));
+    const path = picked.canceled ? undefined : picked.filePaths[0];
+    return path ? views.for(session).open(path) : null;
+  });
+
+  ipcMain.handle(IPC_CHANNELS.modelBuildReport, (event, sessionId: unknown, value: unknown) => {
+    const view = views.find(requireSessionId(sessionId));
+    const report = parseBuildReport(value);
+    if (view && report) view.reportBuild(report, event.sender.id);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.modelWriteGlb, async (_event, sessionId: unknown, value: unknown) => {
+    const view = views.find(requireSessionId(sessionId));
+    if (!view || !isRecord(value) || typeof value.generation !== 'number' || !(value.bytes instanceof Uint8Array))
+      return null;
+    return view.writeGlb(value.generation, value.bytes);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.modelSetParam, async (_event, sessionId: unknown, value: unknown) => {
+    const view = views.find(requireSessionId(sessionId));
+    if (!view || !isRecord(value) || typeof value.key !== 'string' || typeof value.value !== 'number') return false;
+    return view.setParam(value.key, value.value);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.modelSaveExport, async (event, sessionId: unknown, value: unknown) => {
+    const session = requireSessionId(sessionId);
+    if (!isRecord(value) || !isModelExportFormat(value.format) || !(value.bytes instanceof Uint8Array)) {
+      return null;
+    }
+    const format = value.format;
+    const current = views.current(session).path;
+    const stem = current ? basename(current).replace(/\.(model\.js|glb|stl)$/i, '') : 'model';
+    const fileName = format === 'webm' ? `${stem}-turntable.webm` : `${stem}.${format}`;
+    const window = windowOf(event);
+    const options: Electron.SaveDialogOptions = {
+      title: format === 'webm' ? 'Save turntable video' : `Export ${format.toUpperCase()}`,
+      // Beside the model, where a game project keeps its assets, not wherever the last dialog was.
+      defaultPath: current ? join(dirname(current), fileName) : fileName,
+      filters: [{ name: format.toUpperCase(), extensions: [format] }],
+    };
+    const picked = await (window ? dialog.showSaveDialog(window, options) : dialog.showSaveDialog(options));
+    if (picked.canceled || !picked.filePath) return null;
+    if (format === 'webm') await writeFile(picked.filePath, value.bytes);
+    else await writeExport(format, value.bytes, picked.filePath, current);
+    return picked.filePath;
+  });
+
+  ipcMain.handle(IPC_CHANNELS.modelSetRecording, (event, active: unknown) => {
+    if (typeof active === 'boolean') setRecording(event.sender, active);
+  });
+
+  ipcMain.on(IPC_CHANNELS.modelCaptureResult, (_event, value: unknown) => {
+    if (!isRecord(value) || typeof value.id !== 'string') return;
+    // Capture ids are unique across conversations, so any view holding this one resolves it.
+    views.resolveCapture(value.id, {
+      bytes: value.bytes instanceof Uint8Array ? value.bytes : undefined,
+      error: typeof value.error === 'string' ? value.error : undefined,
+    });
+  });
+}

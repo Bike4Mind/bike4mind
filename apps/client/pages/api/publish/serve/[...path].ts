@@ -31,7 +31,7 @@ import {
 import { stripSearchResultCardFences, type CitableSource } from '@bike4mind/common';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { parsePublishPath } from '@server/services/publish/parsePublishPath';
-import { HASH_BRIDGE_JS } from '@server/services/publish/fragmentNav';
+import { HASH_BRIDGE_JS } from '@bike4mind/server-utils/services/publish/fragmentNav';
 import {
   BUFFERED_FILE_MAX_BYTES,
   SIGNED_LINK_TTL_SECONDS,
@@ -43,10 +43,10 @@ import {
   isStreamedFile,
   signedResponseFor,
 } from '@server/services/publish/signedFiles';
-import { gateProofSecondsLeft, requestHasGateProof } from '@server/services/publish/publishGateToken';
+import { gateProofSecondsLeft, requestHasGateProof } from '@bike4mind/server-utils/services/publish/publishGateToken';
 import { renderPassphraseShell } from '@server/services/publish/renderPassphraseShell';
 import { injectSignupGateBridge } from '@server/services/publish/signupGateBridge';
-import { PUBLISH_HOST } from '@server/services/publish/validateBundle';
+import { PUBLISH_HOST } from '@bike4mind/server-utils/services/publish/validateBundle';
 import { displayReplyTitleFromLine, replyFirstLine } from '@server/services/publish/plainTitle';
 import {
   buildBundleScriptSrc,
@@ -58,7 +58,7 @@ import {
   isAppWrapperHost,
   isUsercontentHost,
   VIEWER_SANDBOX,
-} from '@server/services/publish/viewerSecurity';
+} from '@bike4mind/server-utils/services/publish/viewerSecurity';
 import {
   buildShareFooterHtml,
   pickSharedByName,

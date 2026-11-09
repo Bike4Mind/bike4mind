@@ -44,7 +44,7 @@ vi.mock('@server/services/gears/catalog', () => ({
   GEAR_DEFAULTS: [{ key: 'daily', kind: 'reward', credits: 10 }],
   GEAR_CREDITS_SCALE: 1,
 }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 import indexHandler from '../index';
 import keyHandler from '../[key]';

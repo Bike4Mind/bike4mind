@@ -1,6 +1,6 @@
 import { resolveSettingDefinition, type AuditChange, type AuditEntry } from '@bike4mind/common';
 import { adminAuditService } from '@bike4mind/services';
-import { recordAdminActionFromRequest, type AdminAuditWriter } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest, type AdminAuditWriter } from '@bike4mind/server-utils/utils/adminAudit';
 
 type AuditRequest = Parameters<typeof recordAdminActionFromRequest>[0];
 

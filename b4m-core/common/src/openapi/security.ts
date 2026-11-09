@@ -8,7 +8,7 @@ import { registry } from './registry';
  * `Authorization: ApiKey <key>`, is documented in the descriptions rather than
  * as its own scheme (OpenAPI has no distinct type for it; it shares the bearer
  * slot semantically). Must stay in sync with `extractApiKeyFromHeaders`
- * (apps/client/server/utils/apiKeyRateLimitCheck.ts).
+ * (packages/server-utils/src/utils/apiKeyRateLimitCheck.ts).
  */
 export const bearerAuth = registry.registerComponent('securitySchemes', 'bearerAuth', {
   type: 'http',

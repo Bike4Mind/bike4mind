@@ -1,5 +1,5 @@
 import type { AgentState, AgentView } from '../roster';
-import type { Epithet } from './agentPersona';
+import type { Epithet } from '@shared/agentPersona';
 import type { CharacterId, Pose } from './tavernArt';
 
 export type TavernZone = 'workbench' | 'bar' | 'hearth' | 'benches' | 'door';
@@ -47,8 +47,25 @@ export const TAVERN_SLOTS: Record<SeatZone, readonly SlotPoint[]> = {
 
 export const DOOR_POINT: SlotPoint = { x: 4, y: 46 };
 
+/**
+ * The bar counter as drawn in the backdrop (percent of the scene box): `top` is where its top
+ * meets the shelving behind it, `front` where its front panel meets the floor.
+ */
+export const BAR_COUNTER = { left: 45, right: 77, top: 26.3, front: 38 } as const;
+
 /** Behind the bar counter, above the stools, so the Innkeeper never takes an agent's seat. */
-export const INNKEEPER_POINT: SlotPoint = { x: 62, y: 34 };
+export const INNKEEPER_POINT: SlotPoint = { x: 62, y: 30.5 };
+
+/**
+ * How much of a sprite standing at `point` the counter hides, as a percent of its box from the
+ * bottom. Feet behind the counter stand on floor the backdrop never shows, so everything below
+ * the counter top is cut away; anywhere else the sprite is whole and stands on visible floor.
+ */
+export function hiddenByCounter(point: SlotPoint, spriteHeight: number): number {
+  const behind = point.x >= BAR_COUNTER.left && point.x <= BAR_COUNTER.right && point.y < BAR_COUNTER.front;
+  if (!behind) return 0;
+  return Math.min(100, Math.max(0, ((point.y - BAR_COUNTER.top) / spriteHeight) * 100));
+}
 
 const ZONE: Record<AgentState, SeatZone> = {
   working: 'workbench',

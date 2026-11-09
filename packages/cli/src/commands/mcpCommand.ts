@@ -3,7 +3,7 @@
  * These run outside the interactive CLI session
  */
 
-import { ConfigStore } from '../storage/ConfigStore.js';
+import { ConfigStore, McpToggleRefusedError, type McpToggleOverride } from '../storage/ConfigStore.js';
 import type { CliConfig } from '../storage/types.js';
 import packageJson from '../../package.json';
 
@@ -86,7 +86,7 @@ export async function handleMcpCommand(subcommand: string, argv: McpCommandArgs)
         console.error('❌ Usage: b4m mcp enable <name>');
         process.exit(1);
       }
-      await handleEnable(config, argv.name, configStore);
+      await handleEnable(argv.name, configStore);
       break;
 
     case 'disable':
@@ -94,7 +94,7 @@ export async function handleMcpCommand(subcommand: string, argv: McpCommandArgs)
         console.error('❌ Usage: b4m mcp disable <name>');
         process.exit(1);
       }
-      await handleDisable(config, argv.name, configStore);
+      await handleDisable(argv.name, configStore);
       break;
 
     case 'serve': {
@@ -235,28 +235,44 @@ async function handleRemove(config: CliConfig, name: string, configStore: Config
   }
 }
 
+const OVERRIDE_NOTES: Record<NonNullable<McpToggleOverride>, string> = {
+  'strict-mcp-config':
+    'Saved in your config, but --strict-mcp-config ignores your config and connects only the servers in --mcp-config while it is passed.',
+  'mcp-config':
+    'Saved in your config, but --mcp-config also defines this server and its definition still applies while that file is passed.',
+};
+
+/** A refusal from the server's source, where nothing was written, is printed as it is and exits. */
+function exitOnToggleRefusal(error: unknown): void {
+  if (!(error instanceof McpToggleRefusedError)) return;
+  console.error(`\u274C ${error.message}`);
+  process.exit(1);
+}
+
 /**
  * Enable an MCP server
  */
-async function handleEnable(config: CliConfig, name: string, configStore: ConfigStore): Promise<void> {
-  const server = config.mcpServers.find(s => s.name === name);
-
-  if (!server) {
-    console.error(`❌ MCP server "${name}" not found.`);
-    process.exit(1);
-  }
-
-  if (server.enabled) {
-    console.log(`ℹ️  MCP server "${name}" is already enabled.`);
-    return;
-  }
-
+async function handleEnable(name: string, configStore: ConfigStore): Promise<void> {
   try {
-    await configStore.toggleMcpServer(name, true);
+    const server = await configStore.findMcpServer(name);
+
+    if (!server) {
+      console.error(`❌ MCP server "${name}" not found.`);
+      process.exit(1);
+    }
+
+    if (server.enabled === true) {
+      console.log(`ℹ️  MCP server "${name}" is already enabled.`);
+      if (server.overriddenBy) console.log(OVERRIDE_NOTES[server.overriddenBy]);
+      return;
+    }
+
+    const { overriddenBy } = await configStore.toggleMcpServer(name, true);
     console.log(`✅ Enabled MCP server "${name}"`);
     console.log('');
-    console.log('The server will connect next time you start the CLI.');
+    console.log(overriddenBy ? OVERRIDE_NOTES[overriddenBy] : 'The server will connect next time you start the CLI.');
   } catch (error) {
+    exitOnToggleRefusal(error);
     console.error(`❌ Failed to save configuration:`, error instanceof Error ? error.message : String(error));
     process.exit(1);
   }
@@ -265,25 +281,29 @@ async function handleEnable(config: CliConfig, name: string, configStore: Config
 /**
  * Disable an MCP server
  */
-async function handleDisable(config: CliConfig, name: string, configStore: ConfigStore): Promise<void> {
-  const server = config.mcpServers.find(s => s.name === name);
-
-  if (!server) {
-    console.error(`❌ MCP server "${name}" not found.`);
-    process.exit(1);
-  }
-
-  if (!server.enabled) {
-    console.log(`ℹ️  MCP server "${name}" is already disabled.`);
-    return;
-  }
-
+async function handleDisable(name: string, configStore: ConfigStore): Promise<void> {
   try {
-    await configStore.toggleMcpServer(name, false);
+    const server = await configStore.findMcpServer(name);
+
+    if (!server) {
+      console.error(`❌ MCP server "${name}" not found.`);
+      process.exit(1);
+    }
+
+    if (server.enabled === false) {
+      console.log(`ℹ️  MCP server "${name}" is already disabled.`);
+      if (server.overriddenBy) console.log(OVERRIDE_NOTES[server.overriddenBy]);
+      return;
+    }
+
+    const { overriddenBy } = await configStore.toggleMcpServer(name, false);
     console.log(`✅ Disabled MCP server "${name}"`);
     console.log('');
-    console.log('The server will not connect next time you start the CLI.');
+    console.log(
+      overriddenBy ? OVERRIDE_NOTES[overriddenBy] : 'The server will not connect next time you start the CLI.'
+    );
   } catch (error) {
+    exitOnToggleRefusal(error);
     console.error(`❌ Failed to save configuration:`, error instanceof Error ? error.message : String(error));
     process.exit(1);
   }

@@ -1,3 +1,4 @@
+import { llamaServerFitTargetMiB, type HardwareProfile } from '@bike4mind/common';
 import {
   DEFAULT_OLLAMA_SERVE_START_TIMEOUT_MS,
   findOllamaBinary,
@@ -26,6 +27,8 @@ export interface ServerHandle {
   readonly exited: Promise<{ code: number | null; signal: NodeJS.Signals | null; stopped: boolean }>;
   /** llama-server only: the per-process key every request needs. */
   readonly apiKey?: string;
+  /** Why it runs other than expected (a GPU build that found no GPU), shown while it runs (see `warning`). */
+  readonly warning?: string;
   log(): string[];
   stop(): Promise<unknown>;
 }
@@ -60,7 +63,8 @@ interface Slot {
 }
 
 export interface LocalServerSupervisorDeps {
-  launchers?: Launchers;
+  /** Required, so no test reaches hostLaunchers (a login shell and a disk scan) by leaving it out. */
+  launchers: Launchers;
   logger: { warn(message: string): void };
   /** A server Desktop started exited without being stopped, or one changed between starting, running and stopping. */
   changed(id: string): void;
@@ -92,7 +96,7 @@ export class LocalServerSupervisor {
   private writing: Promise<void> = Promise.resolve();
 
   constructor(private readonly deps: LocalServerSupervisorDeps) {
-    this.launchers = deps.launchers ?? hostLaunchers();
+    this.launchers = deps.launchers;
     this.processes = deps.processes ?? hostProcessProbe();
   }
 
@@ -192,6 +196,12 @@ export class LocalServerSupervisor {
     return this.problems.get(id) ?? null;
   }
 
+  /** Why the server Desktop runs for `id` is not where expected (a GPU build that found no GPU); null once it stops. */
+  warning(id: string): string | null {
+    const handle = this.slots.get(id)?.handle;
+    return handle?.running && handle.warning ? handle.warning : null;
+  }
+
   /** The Authorization header for a llama-server Desktop runs; null for any other server. */
   headers(id: string): Record<string, string> | null {
     const handle = this.slots.get(id)?.handle;
@@ -223,6 +233,7 @@ export class LocalServerSupervisor {
         throw controller.signal.reason;
       }
       slot.handle = handle;
+      if (handle.warning) this.deps.logger.warn(`MODEL SERVERS: ${handle.warning}`);
       this.watch(id, slot, handle);
       await this.remember(id, slot, handle);
     } catch (error) {
@@ -350,10 +361,12 @@ export interface HostLauncherOptions {
   env?: NodeJS.ProcessEnv;
   /** Whether this computer's GPU uses system memory (HardwareProfile memoryKind 'unified'); false when unknown. */
   unifiedMemory?(): Promise<boolean>;
+  /** The probed GPU vendor, which sets llama-server's --fit-target; null when there is none or the probe failed. */
+  gpuVendor?(): Promise<HardwareProfile['gpuVendor'] | null>;
 }
 
 /** Starts servers on this computer's own OS, finding programs on the user's login-shell PATH. */
-export function hostLaunchers({ env = process.env, unifiedMemory }: HostLauncherOptions = {}): Launchers {
+export function hostLaunchers({ env = process.env, unifiedMemory, gpuVendor }: HostLauncherOptions = {}): Launchers {
   return {
     async program(runtime, settings) {
       if (runtime === 'ollama') {
@@ -391,7 +404,11 @@ export function hostLaunchers({ env = process.env, unifiedMemory }: HostLauncher
         env: childEnv,
         startTimeoutMs: DEFAULT_OLLAMA_SERVE_START_TIMEOUT_MS,
       });
-      return runtime.startRouter({ port: request.port, flashAttention, signal });
+      const fitTargetMiB =
+        llamaServerFitTargetMiB({ gpuVendor: (await gpuVendor?.().catch(() => null)) ?? null }) ?? undefined;
+      const router = await runtime.startRouter({ port: request.port, flashAttention, fitTargetMiB, signal });
+      const warning = await runtime.warning();
+      return warning ? Object.assign(router, { warning }) : router;
     },
   };
 }

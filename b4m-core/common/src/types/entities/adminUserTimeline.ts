@@ -10,6 +10,7 @@ export const USER_TIMELINE_TYPES = [
   'signup',
   'signin',
   'key',
+  'api_request',
   'usage',
   'spend',
   'limit',
@@ -22,12 +23,13 @@ export const UserTimelineTypeSchema = z.enum(USER_TIMELINE_TYPES);
 export type UserTimelineType = z.infer<typeof UserTimelineTypeSchema>;
 
 /** The filters an admin picks from; each covers several sources. */
-export const USER_TIMELINE_CATEGORIES = ['spend', 'security', 'money', 'admin'] as const;
+export const USER_TIMELINE_CATEGORIES = ['spend', 'security', 'api', 'money', 'admin'] as const;
 export type UserTimelineCategory = (typeof USER_TIMELINE_CATEGORIES)[number];
 
 export const USER_TIMELINE_CATEGORY_TYPES: Readonly<Record<UserTimelineCategory, readonly UserTimelineType[]>> = {
   spend: ['spend', 'usage', 'limit'],
   security: ['signup', 'signin', 'key'],
+  api: ['api_request'],
   money: ['credit', 'payment'],
   admin: ['admin', 'moderation'],
 };
@@ -35,6 +37,7 @@ export const USER_TIMELINE_CATEGORY_TYPES: Readonly<Record<UserTimelineCategory,
 export const USER_TIMELINE_CATEGORY_LABELS: Readonly<Record<UserTimelineCategory, string>> = {
   spend: 'Spend',
   security: 'Security',
+  api: 'API',
   money: 'Money',
   admin: 'Admin',
 };
@@ -66,6 +69,23 @@ export type UserTimelineAuditEntry = UserTimelineEntryBase & {
 };
 
 export type UserTimelineUsageEntry = UserTimelineEntryBase & { type: 'usage'; notebookId: string };
+
+export const AdminApiRequestSchema = z.object({
+  keyId: z.string(),
+  method: z.string(),
+  endpoint: z.string(),
+  statusCode: z.number().int(),
+  responseTimeMs: z.number().nonnegative(),
+  ip: z.string(),
+});
+export type AdminApiRequest = z.infer<typeof AdminApiRequestSchema>;
+export type UserTimelineApiRequestEntry = UserTimelineEntryBase & {
+  type: 'api_request';
+  request: AdminApiRequest;
+};
+
+export const API_REQUEST_LOG_COVERAGE =
+  'Recorded API-key requests are retained for 90 days. Some authentication refusals and other API paths are not included; no rows does not mean no attempts.';
 
 /**
  * A roll-up of usage charges: one row per UTC hour, notebook, model, usage type, source and API key.
@@ -113,6 +133,7 @@ export type UserTimelineModerationEntry = UserTimelineEntryBase & { type: 'moder
 export type UserTimelineEntry =
   | UserTimelineAuditEntry
   | UserTimelineUsageEntry
+  | UserTimelineApiRequestEntry
   | UserTimelineSpendEntry
   | UserTimelineCreditEntry
   | UserTimelineSignupEntry

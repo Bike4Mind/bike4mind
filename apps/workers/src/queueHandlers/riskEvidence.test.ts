@@ -11,7 +11,10 @@ const { refreshRiskEvidence, requestRiskEvidenceRefresh, emitMetrics, checkStron
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
 vi.mock('@bike4mind/services', () => ({ userService: { refreshRiskEvidence } }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetrics }));
-vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh, riskEvidenceDb: () => ({}) }));
+vi.mock('@bike4mind/server-utils/auth/riskEvidence', () => ({
+  requestRiskEvidenceRefresh,
+  riskEvidenceDb: () => ({}),
+}));
 vi.mock('@server/security/autoContainment/strongLink', () => ({
   checkStrongLink,
   liveStrongLinkDeps: () => ({}),

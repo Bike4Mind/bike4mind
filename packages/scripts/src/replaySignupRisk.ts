@@ -4,6 +4,9 @@ import { pathToFileURL } from 'node:url';
 import { userService } from '@bike4mind/services';
 import { z } from 'zod';
 
+/** The largest cohort one replay accepts; the cohort labeler writes no more than this. */
+export const MAX_REPLAY_SAMPLES = 100_000;
+
 const replaySchema = z
   .object({
     policy: userService.signupRiskPolicySchema,
@@ -21,7 +24,7 @@ const replaySchema = z
           .strict()
       )
       .min(1)
-      .max(100_000),
+      .max(MAX_REPLAY_SAMPLES),
   })
   .strict();
 

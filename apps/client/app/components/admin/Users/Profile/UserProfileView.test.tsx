@@ -108,6 +108,8 @@ vi.mock('./actions/accountDialogs', () => {
     ResetMfaDialog: stub('mfa-reset-dialog'),
     RestrictDialog: stub('restrict-dialog'),
     ShadowTierDialog: stub('profile-shadow-tier-dialog'),
+    ScheduleDeletionDialog: stub('schedule-deletion-dialog'),
+    CancelDeletionDialog: stub('cancel-deletion-dialog'),
     SendMessageDialog: stub('send-message-dialog'),
     DeleteUserDialog: ({ onDeleted }: { onDeleted: () => void }) => (
       <div data-testid="delete-user-dialog">
@@ -389,6 +391,76 @@ describe('UserProfileView', () => {
       fireEvent.click(screen.getByTestId('stub-credits-adjust-btn'));
 
       expect(screen.getByTestId('adjust-credits-dialog')).toBeInTheDocument();
+    });
+  });
+
+  describe('deletion banner', () => {
+    const deletion = (over: Record<string, unknown> = {}) =>
+      ({
+        requestedAt: new Date('2026-10-01T00:00:00Z'),
+        scheduledFor: new Date('2026-11-20T00:00:00Z'),
+        source: 'support',
+        ...over,
+      }) as AdminUserProfile['deletion'];
+
+    it('is absent without a pending deletion', () => {
+      setup();
+      expect(screen.queryByTestId('user-profile-deletion-banner')).not.toBeInTheDocument();
+    });
+
+    it.each([
+      ['self', 'Self-serve'],
+      ['support', 'Support'],
+      ['admin', 'Admin'],
+    ])('shows the purge date, the %s source and the request date', (source, label) => {
+      setup(buildProfile({ deletion: deletion({ source }) }));
+
+      const banner = screen.getByTestId('user-profile-deletion-banner');
+      expect(banner).toHaveTextContent('Deletion scheduled for Nov 20, 2026 (UTC).');
+      expect(banner).toHaveTextContent(`Source: ${label}.`);
+      expect(banner).toHaveTextContent('Requested Oct 1, 2026 (UTC).');
+    });
+
+    it('Cancel deletion opens the cancel dialog', () => {
+      setup(buildProfile({ deletion: deletion() }));
+      fireEvent.click(screen.getByTestId('user-profile-cancel-deletion-btn'));
+      expect(screen.getByTestId('cancel-deletion-dialog')).toBeInTheDocument();
+    });
+
+    it('hides the cancel button once cleanup has started', () => {
+      setup(buildProfile({ deletion: deletion({ purgeStartedAt: new Date('2026-11-20T01:00:00Z') }) }));
+      expect(screen.getByTestId('user-profile-deletion-banner')).toHaveTextContent('Deletion in progress.');
+      expect(screen.queryByTestId('user-profile-cancel-deletion-btn')).not.toBeInTheDocument();
+    });
+
+    it('renders alongside the suspended banner', () => {
+      setup(buildProfile({ isBanned: true, deletion: deletion() }));
+      expect(screen.getByTestId('user-profile-deletion-banner')).toBeInTheDocument();
+      expect(screen.getByTestId('user-profile-status-banner')).toBeInTheDocument();
+    });
+
+    it('the menu offers Schedule deletion, then Cancel scheduled deletion once pending', async () => {
+      const { unmount } = setup();
+      fireEvent.click(screen.getByTestId('user-profile-more-btn'));
+      fireEvent.click(await screen.findByTestId('user-profile-menu-scheduleDeletion-item'));
+      expect(screen.getByTestId('schedule-deletion-dialog')).toBeInTheDocument();
+      unmount();
+
+      setup(buildProfile({ deletion: deletion() }));
+      fireEvent.click(screen.getByTestId('user-profile-more-btn'));
+      expect(screen.queryByTestId('user-profile-menu-scheduleDeletion-item')).not.toBeInTheDocument();
+      fireEvent.click(await screen.findByTestId('user-profile-menu-cancelDeletion-item'));
+      expect(screen.getByTestId('cancel-deletion-dialog')).toBeInTheDocument();
+    });
+
+    it('disables the menu cancel entry once the purge has started', async () => {
+      setup(buildProfile({ deletion: deletion({ purgeStartedAt: new Date('2026-11-20T01:00:00Z') }) }));
+      fireEvent.click(screen.getByTestId('user-profile-more-btn'));
+      const item = await screen.findByTestId('user-profile-menu-cancelDeletion-item');
+      expect(item).toHaveAttribute('aria-disabled', 'true');
+      expect(item).toHaveTextContent('purge in progress');
+      fireEvent.click(item);
+      expect(screen.queryByTestId('cancel-deletion-dialog')).not.toBeInTheDocument();
     });
   });
 

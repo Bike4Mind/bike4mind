@@ -42,7 +42,9 @@ Already granted balances are never deducted. The manual
 registration. Public mailbox providers, configured synthetic email domains, and
 enabled organization signup-rule domains are exempt from automatic holds.
 
-Review domains in **Admin > Signup Domain Holds**. **Confirm** keeps grants held.
+Review domains in **Admin > Signup Domain Holds**. Both decisions only change free
+signup credits; neither suspends or blocks an account. **Confirm** keeps grants held
+and future signups from the domain get no free credits; it can still be released.
 **Release** permanently exempts that domain from automatic re-holding and retries
 up to 100 verified pending grants. Use **Retry pending grants** if grants remain
 or a credit write failed. Each retry advances past the previous batch; after the
@@ -52,6 +54,14 @@ later unlocks still require their normal validators. Manual email blocks still t
 retains decisions and the admin identity/time of each review; observations expire
 after seven days. A domain's original cohort and five sample emails are retained
 with its review record.
+
+The queue opens on **Pending** (holds still waiting for a decision); **Blocked**,
+**Released** and **All** sit beside it with their counts, and a **Reason** filter
+narrows by hold family. Review rows are never deleted: a released row is what keeps
+its domain exempt and a blocked row is what keeps withholding credits. Settled
+holds decided more than **Signup Domain Holds: Show Settled Holds For (days)**
+ago (default 90) are only hidden from the lists; **Include older settled holds**
+shows them again.
 
 Each newly created hold attempts one Slack notification through
 `SlackSecurityAlertsWebhookUrl`. An empty security URL disables these alerts;
@@ -78,6 +88,30 @@ shows "Auto-confirmed by the disposable list rule". An admin can still **Release
 marker. Other reasons are left for an admin. Admin Confirm and Release write strict
 `signup_domain_hold.confirmed` / `signup_domain_hold.released` entries, and a Release that overrides an automated
 confirmation names the policy it overrode.
+
+After the rule, the same job runs the advisory assessment of pending `young-domain` holds
+(`apps/client/server/security/signupDomainHoldAssessment`) while **Advisory Assessment of Young-Domain Holds** is on
+(default off). For each hold without a current verdict it asks one Decisions question (`abuse`, `legitimate` or
+`insufficient_evidence`) over a summary of counts and flags only: domain age, mail provider class, whether
+`https://<domain>/` answers with real content (derived in code; the page itself is never sent), signup count and
+timing, and how many distinct networks, ASNs and countries the accounts came from. No email, IP, domain name or site
+text reaches the model. It only ever confirms: an `abuse` verdict at or above `minConfirmConfidence` (default 0.9)
+confirms the hold exactly like the rule (strict system audit entry, "Auto-confirmed by the advisory assessment").
+Every other outcome, including refusals and provider failures, leaves the hold pending with the verdict shown on the
+row; failures retry up to three times, an hour apart, and a domain gets at most three provider calls a day whatever was
+stored. An overloaded or unconfigured provider, a spent budget or a reached call cap ends the run without storing
+anything; a hold whose facts take over 20 seconds to gather is stored as a failed attempt (`summary timeout`). Each judged hold is also recorded
+on the Detections page under the `signupDomainHold` detector so verdicts can be graded; verdicts that would not have
+confirmed are listed there but left out of precision, and the abuse assessment never re-judges them. Calls use the platform key under their own budget, call cap
+and concurrency (**Model and Limits**: no model and a zero budget by default, so nothing is called until an operator
+sets both). Admin Confirm and Release keep the stored verdict as history.
+
+Last, the job rechecks pending `young-domain` holds (`apps/workers/src/cron/signupDomainAgeRecheck.ts`). A hold is
+created once and never re-evaluated at signup, so the job reads the domain's registration date from the cached RDAP
+intel (at most 50 lookups a run; a lookup with no date retries after a day), stores it on the row, and stamps
+`domainAgedAt` once the domain is at least **Hold Signups From Domains Younger Than (days)** old. The row then reads
+"Domain now aged" and its Release button is highlighted. It never releases: a released domain is exempt for good and
+cannot be re-blocked, so that call stays with an admin.
 
 ## Disposable lists and domain intelligence
 

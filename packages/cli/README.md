@@ -67,7 +67,31 @@ pnpm rebuild
 b4m
 ```
 
-The CLI will prompt you to authenticate with your Bike4Mind account on first run.
+When you are signed out, the CLI starts on a local model from Ollama or a model server saved in Desktop. With no local model available, it offers Bike4Mind sign-in.
+
+### Chat without signing in
+
+Start Ollama and pull a model, then open the CLI:
+
+```bash
+ollama serve
+# In another terminal:
+ollama pull qwen3.5
+b4m
+```
+
+The signed-out session lists only local models. Run `/login` to use Bike4Mind cloud models; finish or stop the current reply with Esc before signing in. From a local session, cancelling sign-in returns you to that session.
+
+For headless prompts, save a local default first:
+
+```bash
+b4m models use qwen3.5
+b4m -p "say hello" </dev/null
+```
+
+A signed-out headless run uses the selected local model or your saved local default. With a cloud default and no saved local default, it exits with an error instead of choosing an arbitrary model. ACP sessions also support local models while signed out.
+
+If no local model is found, start Ollama, pull a model, or check the saved model server's address and credentials. A server login hint uses `b4m models servers login <name>`. An expired Bike4Mind sign-in is refreshed at startup; a temporary refresh failure keeps the saved sign-in and uses local models for that run, so restart the CLI to retry.
 
 ### CLI Flags
 
@@ -169,6 +193,12 @@ b4m models rm qwen2.5:0.5b
 `curated` prints the curated list Desktop uses: the list bundled with the CLI, or a newer signed one when this build has a list URL and a trusted key (the published CLI bakes both in once they are configured; otherwise it only has the bundled list). A newer list is checked for at most every 6 hours, for up to 3 seconds, verified against the shipped keys and cached under `~/.bike4mind/model-hub/curated/`; a list that fails verification is ignored and the last good one stays. `--refresh` checks now. `--offline` or `B4M_CURATED=off` uses the last verified cached list (else the bundled one) and makes no request; `pull` accepts `--offline` too. The output names where the list came from. It lists the picks for this computer's memory first, then every build with the ref to pull, its size, license and tags (including the Ollama version a build needs). It contacts no runtime and downloads nothing; pull a row with `b4m models pull <ref>`, which asks for the license as below but does not check the build against the reviewed one. Abliterated builds are never on it, and a license that is not permissive, the model's own or its base model's, is shown as `restricted: <license>` (with `(base: <license>)`) and must be accepted before `pull`. With a saved Ollama host on another machine, the picks still describe this computer.
 
 Nothing downloads without confirmation: `pull` prints the size and license first and asks (`--yes` skips the question). A license that is not a permissive open-source one (Apache-2.0, MIT, BSD and similar), or no declared license, is named with a link and must be accepted at a prompt or with `--accept-license`. For Ollama registry models the license is read from the model's own license texts, and only unmodified Apache-2.0 or MIT texts count as permissive. Refs naming any other registry are refused. A gated repo needs access granted on Hugging Face first, `HF_TOKEN` set to that account's token, and your Ollama public key added at https://huggingface.co/settings/keys. Ctrl-C cancels a pull without installing anything; pulling again resumes, and says how much was already downloaded. Without a saved host, `b4m models` uses the first local runtime it detects; a scheme-less host without a port uses 11434, and `--ollama-host ''` clears the saved host. `--output-format json` prints `ls`, `search`, `show` and `curated` as JSON. With a saved host, `b4m -p` fails instead of switching to another model when the model picked with `b4m models use` is not available, or Ollama does not answer.
+
+`b4m models servers` also lists saved SSH servers with an invalid port or destination as
+refused and explains what to fix. Remove the server in Desktop and add it again; the CLI
+never edits Desktop's list. You can still clear its CLI credential by name with
+`b4m models servers logout <name>`. During `b4m models servers login`, Ctrl-C ends the
+credential check, prints "Cancelled." and exits with code 130 without saving the credential.
 
 `b4m mcp serve` (stdio only) offers the same operations to MCP clients as `models_list`, `models_search`, `models_pull` and `models_remove`, with the same checks. Pull and remove act only on the user's own approval. A client that supports elicitation asks the user directly, showing the size and every license, with a separate tick for a license that is not all permissive. With any other client nothing changes: the tool returns the preview and the `b4m models pull` or `b4m models rm` command for the user to run in a terminal, where the CLI asks them. `models_pull` reports the same fit verdict in its preview and prompt, and refuses a too-large model before asking unless the caller passes `force: true`, which still leaves the download to the user's approval. `models_search` leaves abliterated and uncensored builds out unless `includeAbliterated` is true, and then lists them last, labelled `notRecommended`, as `b4m models search --include-abliterated` does. The host comes from `B4M_OLLAMA_HOST`, the saved host, or detection, as for `b4m models`. `b4m mcp serve --local` serves these four tools alone and needs no Bike4Mind backend.
 
@@ -305,7 +335,7 @@ Configuration is stored in `~/.bike4mind/config.json`
 
 ### Authentication
 
-The CLI uses OAuth to authenticate with your Bike4Mind account. On first run, you'll be prompted to log in through the device authorization flow:
+Bike4Mind cloud models use OAuth authentication. You can chat with local models while signed out; run `/login` when you want to use your Bike4Mind account:
 
 1. Run `b4m` or use the `/login` command
 2. Visit the verification URL shown in the terminal

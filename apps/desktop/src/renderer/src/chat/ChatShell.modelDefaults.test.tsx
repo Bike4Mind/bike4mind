@@ -154,6 +154,10 @@ async function openSession(title: string) {
 }
 
 async function defaultLabel(): Promise<string | undefined> {
+  // Effort at its default sits in the composer's tune tray, which stays open once opened.
+  if (!document.querySelector('[data-testid="effort-picker-btn"]')) {
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="composer-tune-btn"]')?.click());
+  }
   await act(async () => document.querySelector<HTMLElement>('[data-testid="effort-picker-btn"]')?.click());
   const label = [...document.querySelectorAll('[data-testid="effort-picker-option"]')]
     .map(option => option.textContent ?? '')

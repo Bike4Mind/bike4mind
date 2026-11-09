@@ -24,6 +24,7 @@ import {
   SSE_KEEPALIVE,
   type CompletionSource,
   type CompletionSseErrorCode,
+  type IMessage,
   type SSEErrorEvent,
   type TurnUsage,
 } from '@bike4mind/common';
@@ -62,7 +63,7 @@ import {
   NO_COMPLETION_QUOTA,
   type CompletionQuotaGrant,
 } from '@server/utils/untrustedCompletionQuota';
-import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
+import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
 import { recordUserLimitEvent } from '@server/billing/userLimitEvents';
 import { logApiKeyUsageOnResponse } from './apiKeyUsageLog';
 
@@ -363,7 +364,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         creditHolds: createCompletionCreditHolds(logger),
         userId,
         model: body.model,
-        messages: body.messages,
+        messages: body.messages as IMessage[],
         options: body.options,
         db: {
           adminSettings: adminSettingsRepository,

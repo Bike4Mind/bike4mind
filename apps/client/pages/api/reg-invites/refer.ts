@@ -8,7 +8,7 @@ import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
-import { EmailEvents } from '@server/utils/eventBus';
+import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { getLogoUrl, buildEmailLogoImg } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
 import { Request } from 'express';

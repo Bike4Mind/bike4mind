@@ -47,6 +47,20 @@ vi.doMock('node:fs/promises', async () => {
   );
   return { ...recorded, default: recorded };
 });
+// A distro's share root exists on a Windows host; the rules floor resolves it with sync fs, which is otherwise real here.
+vi.doMock('node:fs', async () => {
+  const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
+  const distroRoot = (path: unknown): boolean =>
+    typeof path === 'string' && /^\\\\wsl\.localhost\\[^\\]+\\?$/i.test(path);
+  const realpathSync = Object.assign(
+    (path: string, options?: unknown) => (distroRoot(path) ? path : actual.realpathSync(path, options as undefined)),
+    {
+      native: (path: string, options?: unknown) =>
+        distroRoot(path) ? path : actual.realpathSync.native(path, options as undefined),
+    }
+  );
+  return { ...actual, realpathSync, default: { ...actual, realpathSync } };
+});
 vi.doMock('../../wsl/wslPath', async () => {
   const actual = await vi.importActual<typeof import('../../wsl/wslPath')>('../../wsl/wslPath');
   return {
@@ -301,6 +315,16 @@ describe('the folders a command in a WSL project may reach unasked', () => {
     expect(scan).not.toBeNull();
     expect(scan?.directories).toEqual([]);
     expect(scan?.ungranted).toEqual([]);
+  });
+
+  // The scan does not expand a glob in a distro, so it cannot tell whether nullglob drops it.
+  it.each([
+    ['shopt -s nullglob; find src/*.zz -delete', true],
+    ['find src/*.zz -delete', false],
+  ])('reads %s as unread: %s', async (command, unread) => {
+    const scan = await scanShell(command, root, [root]);
+
+    expect(scan?.unread === true).toBe(unread);
   });
 
   it('names the Linux folder an operand with a backslash lands in, outside the project', async () => {

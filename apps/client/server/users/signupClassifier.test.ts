@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isSuspectedSignup } from '@client/app/utils/signupSignals';
+import { isSuspectedSignup } from '@bike4mind/server-utils/app/utils/signupSignals';
 import {
   BURST_MIN_ACCOUNTS,
   classifyDomainCohorts,

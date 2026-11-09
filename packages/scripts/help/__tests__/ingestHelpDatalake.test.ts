@@ -1,3 +1,11 @@
+vi.mock('@bike4mind/utils/embeddingProviders', () => ({
+  buildEmbeddingRegistry: vi.fn(),
+  bindEmbeddingModel: vi.fn(),
+  embedOne: vi.fn(),
+  embeddingBackendForModel: vi.fn(),
+  resolveEmbeddingCredentials: vi.fn(),
+  resolveEmbeddingWithKeylessFallback: vi.fn(),
+}));
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -9,17 +17,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // off), so a real import here fails to resolve and the whole file errors at collection.
 // Same fix, same reason as vectorize-help-content.test.ts.
 //
-// The fab-pipeline symbols are only used by the module's own embedding-service builder,
+// The provider helpers are only used by the module's own embedding builder,
 // which these tests bypass via injected `deps.embed`. countCodePoints is mirrored rather
 // than stubbed because chunk charLength is derived from it.
 vi.mock('@bike4mind/common', () => ({
   countCodePoints: (text: string) => [...text].length,
   KnowledgeType: { TEXT: 'TEXT' },
-}));
-vi.mock('@bike4mind/fab-pipeline', () => ({
-  EmbeddingFactory: vi.fn(),
-  getProviderFromModel: vi.fn(),
-  resolveEmbeddingConfig: vi.fn(),
 }));
 
 import {
@@ -419,6 +422,31 @@ describe('ingestHelpDatalake', () => {
       createdByUserId: USER_ID,
       status: 'active',
     });
+  });
+
+  it.each([null, { id: 'lake-1', status: 'deleted' }, { id: 'lake-1', status: 'purging' }])(
+    'refuses to recreate or reactivate an unavailable lake on an unattended run: %j',
+    async lake => {
+      writeCorpus([makeEntry('features/a')], { 'features/a': '## One\n\nalpha\n' });
+      const h = makeHarness(lake);
+
+      await expect(ingestHelpDatalake(h.deps, { ...opts(), requireActiveLake: true })).rejects.toThrow(
+        'refusing unattended reactivation'
+      );
+
+      expect(h.lakeCreates).toEqual([]);
+      expect(h.lakeUpdates).toEqual([]);
+      expect(h.files).toEqual([]);
+      expect(h.embed).not.toHaveBeenCalled();
+    }
+  );
+
+  it('syncs an active lake on an unattended run', async () => {
+    writeCorpus([makeEntry('features/a')], { 'features/a': '## One\n\nalpha\n' });
+    const h = makeHarness();
+
+    expect(await ingestHelpDatalake(h.deps, { ...opts(), requireActiveLake: true })).toMatchObject({ created: 1 });
+    expect(h.lakeCreates).toEqual([]);
   });
 
   it('reactivates a deleted lake rather than re-creating it into the unique datalakeTag', async () => {

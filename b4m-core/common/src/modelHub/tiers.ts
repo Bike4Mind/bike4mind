@@ -1,5 +1,5 @@
 import type { HubTier } from '../schemas/modelHub';
-import type { HardwareProfile } from './fit';
+import { ollamaHardware, type HardwareProfile } from './fit';
 
 const GIB = 1024 ** 3;
 // Memory reads a little under the size it is sold as: a 16 GB card reports about 15.9 GiB, a 32 GB PC about 31.3 GiB.
@@ -7,15 +7,19 @@ const SOLD_SIZE_SLACK = 0.94;
 
 export interface HardwareClass {
   memoryKind: HubTier['memoryKind'];
-  /** GPU memory on a discrete GPU or AMD unified memory, total memory otherwise. */
+  /** GPU memory on a discrete GPU or AMD unified memory; total memory otherwise. */
   memoryBytes: number;
 }
 
-/** A discrete machine whose GPU memory is unknown is planned, and so classed, as CPU only. */
-export function hardwareClass(hw: HardwareProfile): HardwareClass {
-  // Only AMD unified memory reports gpuMemoryBytes: what ROCm can allocate, which a firmware carve-out keeps outside
-  // totalMemoryBytes. A low-confidence figure is already the smaller of the pools ROCm might use. Must pick the same
-  // pool as memoryBudgets in fit.ts, or the Curated tier and the fit badges disagree.
+/**
+ * A discrete machine whose GPU memory is unknown is planned, and so classed, as CPU only. Classed as Ollama, which
+ * pulls the Curated picks, uses the machine (ollamaHardware), as the fit badges plan it.
+ */
+export function hardwareClass(machine: HardwareProfile): HardwareClass {
+  const hw = ollamaHardware(machine);
+  // Only AMD unified memory (what ROCm can allocate, which a firmware carve-out keeps outside totalMemoryBytes) reports
+  // gpuMemoryBytes here. A low-confidence AMD figure is already the smaller of the pools ROCm might use. Must pick the
+  // same pool as memoryBudgets in fit.ts, or the Curated tier and the fit badges disagree.
   if (hw.memoryKind === 'unified')
     return {
       memoryKind: 'unified',

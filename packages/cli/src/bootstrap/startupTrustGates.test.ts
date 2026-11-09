@@ -5,7 +5,9 @@ import {
   isHostLaunchWithQueuedPrompt,
   shouldPromptMcpApproval,
   shouldShowEndpointPicker,
+  signInStart,
   type EndpointPickerGateInput,
+  type SignInStartInput,
 } from './startupTrustGates.js';
 
 describe('shouldShowEndpointPicker', () => {
@@ -24,6 +26,31 @@ describe('shouldShowEndpointPicker', () => {
     ['source-mode dev default', { ...baked, endpointSource: 'dev-default' }, false],
   ])('%s', (_name, input, expected) => {
     expect(shouldShowEndpointPicker(input)).toBe(expected);
+  });
+});
+
+describe('signInStart', () => {
+  const custom = { status: 'configured', url: 'https://api.example.test', source: 'custom' } as const;
+
+  it.each<[string, SignInStartInput, 'endpoint-picker' | 'login']>([
+    [
+      'no endpoint resolves',
+      { endpoint: { status: 'unconfigured' }, endpointChosen: false, hasAuthTokens: false },
+      'endpoint-picker',
+    ],
+    [
+      'first run on a baked default',
+      { endpoint: { ...custom, source: 'baked-default' }, endpointChosen: false, hasAuthTokens: false },
+      'endpoint-picker',
+    ],
+    [
+      'baked default already chosen',
+      { endpoint: { ...custom, source: 'baked-default' }, endpointChosen: true, hasAuthTokens: false },
+      'login',
+    ],
+    ['saved customUrl', { endpoint: custom, endpointChosen: false, hasAuthTokens: false }, 'login'],
+  ])('%s', (_name, input, expected) => {
+    expect(signInStart(input)).toBe(expected);
   });
 });
 

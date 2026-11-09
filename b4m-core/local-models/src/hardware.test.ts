@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { chmodSync, unlinkSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseWindowsGpus, scanLinuxGpus, WINDOWS_GPU_SCRIPT, windowsGpuCommand } from './gpus';
 import {
+  gpuQueries,
   parseMeminfo,
   parseNvidiaSmi,
   parseNvidiaSmiUsage,
@@ -10,6 +12,7 @@ import {
   probeHardware,
   probeMemoryUsage,
   type ExecLike,
+  type HardwareProbeOptions,
 } from './hardware';
 import {
   amdRaphaelIgpu,
@@ -18,11 +21,18 @@ import {
   aspeedBmc,
   intelArcA770I915,
   intelArcB580Xe,
+  intelBattlemageG31Xe,
   intelIgpu,
+  intelLunarLakeXe,
   KFD_CPU_NODE,
   KFD_RAPHAEL_NODE,
   KFD_RX7900XTX_NODE,
   KFD_STRIX_HALO_NODE,
+  LIST_DEVICES_NONE,
+  LIST_DEVICES_SYCL_B70_NAMED,
+  LIST_DEVICES_SYCL_B580_IGPU,
+  LIST_DEVICES_SYCL_G31,
+  LIST_DEVICES_VULKAN_G31,
   nvidiaGt218Nouveau,
   nvidiaRtx4090,
   PCI_IDS,
@@ -230,7 +240,7 @@ describe('probeHardware', () => {
 
   it('falls through to sysfs when nvidia-smi lists no GPUs', async () => {
     const profile = await linux({ devices: [intelIgpu] }, execFrom({ 'nvidia-smi': 'No devices were found\n' }));
-    expect(profile).toMatchObject({ ...cpuOnly, confidence: 'high' });
+    expect(profile).toMatchObject({ memoryKind: 'unified', gpuVendor: 'intel', gpuCount: 1, confidence: 'high' });
   });
 });
 
@@ -240,16 +250,35 @@ describe('probeHardware on Linux without nvidia-smi', () => {
     expect(await linux({ devices: [...pcieBridges, aspeedBmc] })).toMatchObject({ ...cpuOnly, confidence: 'high' });
   });
 
-  it('is confidently CPU-only with only Intel integrated graphics', async () => {
-    const profile = await linux({ devices: [intelIgpu], pciIds: PCI_IDS });
+  it.each([
+    ['i915', intelIgpu, 'Intel Raptor Lake-P [Iris Xe Graphics]'],
+    ['xe', intelLunarLakeXe, 'Intel Lunar Lake [Intel Arc Graphics 130V / 140V]'],
+  ])('reports Intel integrated graphics on %s as unified memory sharing the RAM', async (_driver, device, name) => {
+    const profile = await linux({ devices: [...pcieBridges, device], pciIds: PCI_IDS });
     expect(profile).toEqual({
       platform: 'linux',
       arch: 'x64',
+      memoryKind: 'unified',
       totalMemoryBytes: 64 * GiB,
+      gpuMemoryBytes: null,
+      gpuName: name,
+      gpuCount: 1,
+      gpuVendor: 'intel',
+      chip: null,
       diskFreeBytes: null,
-      ...cpuOnly,
       confidence: 'high',
     });
+  });
+
+  it('leaves Intel integrated graphics on another driver out', async () => {
+    for (const driver of ['vfio-pci', undefined]) {
+      expect(await linux({ devices: [{ ...intelIgpu, driver }] })).toMatchObject({ ...cpuOnly, confidence: 'high' });
+    }
+  });
+
+  it('reports Intel integrated graphics at low confidence when the RAM size is unknown', async () => {
+    const profile = await linux({ devices: [intelLunarLakeXe] }, execFrom({}), {}, 0);
+    expect(profile).toMatchObject({ memoryKind: 'unified', gpuVendor: 'intel', confidence: 'low' });
   });
 
   it('reads AMD discrete VRAM from amdgpu and skips the APU beside it, both identified through KFD', async () => {
@@ -468,14 +497,17 @@ describe('probeHardware on Linux without nvidia-smi', () => {
   });
 
   it('records Intel Arc on xe with unknown VRAM and skips the iGPU', async () => {
-    const profile = await linux({ devices: [intelIgpu, intelArcB580Xe], pciIds: PCI_IDS });
-    expect(profile).toMatchObject({
-      memoryKind: 'discrete',
-      gpuMemoryBytes: null,
-      gpuName: 'Intel Battlemage G21 [Arc B580]',
-      gpuCount: 1,
-      confidence: 'low',
-    });
+    for (const igpu of [intelIgpu, intelLunarLakeXe]) {
+      const profile = await linux({ devices: [igpu, intelArcB580Xe], pciIds: PCI_IDS });
+      expect(profile).toMatchObject({
+        memoryKind: 'discrete',
+        gpuMemoryBytes: null,
+        gpuName: 'Intel Battlemage G21 [Arc B580]',
+        gpuCount: 1,
+        gpuVendor: 'intel',
+        confidence: 'low',
+      });
+    }
   });
 
   it('records Intel Arc on i915 with unknown VRAM and low confidence', async () => {
@@ -485,7 +517,53 @@ describe('probeHardware on Linux without nvidia-smi', () => {
       gpuMemoryBytes: null,
       gpuName: 'Intel DG2 [Arc A770]',
       gpuCount: 1,
+      gpuVendor: 'intel',
       confidence: 'low',
+    });
+  });
+
+  it('records a Battlemage G31 alone on xe, unnamed in pci.ids, with unknown VRAM', async () => {
+    const profile = await linux({ devices: [...pcieBridges, intelBattlemageG31Xe], pciIds: PCI_IDS });
+    expect(profile).toMatchObject({
+      memoryKind: 'discrete',
+      gpuMemoryBytes: null,
+      gpuName: 'Intel GPU [8086:e223]',
+      gpuCount: 1,
+      gpuVendor: 'intel',
+      confidence: 'low',
+    });
+  });
+
+  it('prefers an NVIDIA GPU beside Intel integrated graphics, measured or not', async () => {
+    const devices = [intelIgpu, nvidiaRtx4090];
+    expect(await linux({ devices }, execFrom({ 'nvidia-smi': RTX_4090_SMI }))).toMatchObject({
+      memoryKind: 'discrete',
+      gpuMemoryBytes: 24564 * MiB,
+      gpuName: 'NVIDIA GeForce RTX 4090',
+      gpuCount: 1,
+      gpuVendor: 'nvidia',
+      confidence: 'high',
+    });
+    expect(await linux({ devices, pciIds: PCI_IDS })).toMatchObject({
+      memoryKind: 'discrete',
+      gpuMemoryBytes: null,
+      gpuName: 'NVIDIA AD102 [GeForce RTX 4090]',
+      gpuCount: 1,
+      gpuVendor: 'nvidia',
+      confidence: 'low',
+    });
+    expect(await linux({ devices: [intelLunarLakeXe, { ...nvidiaRtx4090, driver: 'nouveau' }] })).toMatchObject({
+      memoryKind: 'discrete',
+      gpuVendor: 'nvidia',
+      confidence: 'low',
+    });
+  });
+
+  it('keeps Intel integrated graphics beside an NVIDIA card no runtime can use', async () => {
+    expect(await linux({ devices: [intelIgpu, nvidiaGt218Nouveau] })).toMatchObject({
+      memoryKind: 'unified',
+      gpuVendor: 'intel',
+      gpuCount: 1,
     });
   });
 
@@ -536,11 +614,50 @@ describe('probeHardware on Linux without nvidia-smi', () => {
     const low = { ...cpuOnly, confidence: 'low' };
     expect(await linux({ devices: [amdRx7900xtx], kfdNodes: amdKfd, devNodes: false })).toMatchObject(low);
     expect(await linux({ devices: [nvidiaRtx4090], devNodes: false })).toMatchObject(low);
-    expect(await linux({ devices: [intelIgpu, nvidiaGt218Nouveau], devNodes: false })).toMatchObject({
-      ...cpuOnly,
-      confidence: 'high',
-    });
+    expect(await linux({ devices: [intelBattlemageG31Xe], devNodes: false })).toMatchObject(low);
   });
+
+  it('counts no GPU, at high confidence, when the only one this namespace cannot open is an Intel iGPU', async () => {
+    const high = { ...cpuOnly, confidence: 'high' };
+    expect(await linux({ devices: [intelIgpu, nvidiaGt218Nouveau], devNodes: false })).toMatchObject(high);
+  });
+
+  it('cannot list the GPUs when neither an Intel iGPU nor the card beside it can be opened', async () => {
+    const root = sysfs({ devices: [intelLunarLakeXe, amdRx7900xtx], kfdNodes: amdKfd, devNodes: false });
+    expect(await scanLinuxGpus(root, {})).toBeNull();
+    expect(
+      await probeHardware({ exec: execFrom({}), os: os(64 * GiB), platform: 'linux', rootDir: root, env: {} })
+    ).toMatchObject({ ...cpuOnly, confidence: 'low' });
+  });
+
+  it('detects a card the namespace can open beside an Intel iGPU whose render node it cannot', async () => {
+    for (const card of [amdRx7900xtx, { ...nvidiaRtx4090, driver: 'nouveau' }]) {
+      const root = sysfs({ devices: [intelLunarLakeXe, card], kfdNodes: amdKfd });
+      unlinkSync(join(root, 'dev/dri/renderD128'));
+      const gpus = await scanLinuxGpus(root, {});
+      expect(gpus?.map(gpu => gpu.vendor)).toEqual([card.vendor === '0x1002' ? 'amd' : 'nvidia']);
+      expect(
+        await probeHardware({ exec: execFrom({}), os: os(64 * GiB), platform: 'linux', rootDir: root, env: {} })
+      ).toMatchObject({ memoryKind: 'discrete', gpuName: gpus?.[0].name });
+    }
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'leaves out an Intel iGPU whose render node the user cannot open, and keeps such an Arc card at low confidence',
+    async () => {
+      for (const [device, scanned, confidence] of [
+        [intelLunarLakeXe, [], 'high'],
+        [intelBattlemageG31Xe, null, 'low'],
+      ] as const) {
+        const root = sysfs({ devices: [device] });
+        chmodSync(join(root, 'dev/dri/renderD128'), 0);
+        expect(await scanLinuxGpus(root, {})).toEqual(scanned);
+        expect(
+          await probeHardware({ exec: execFrom({}), os: os(64 * GiB), platform: 'linux', rootDir: root, env: {} })
+        ).toMatchObject({ ...cpuOnly, confidence });
+      }
+    }
+  );
 
   it('falls back to low confidence when the GPUs cannot be listed', async () => {
     const low = { ...cpuOnly, confidence: 'low' };
@@ -580,6 +697,293 @@ describe('probeHardware on Linux without nvidia-smi', () => {
       { vendor: 'amd', name: 'AMD GPU [1002:744c]', memoryBytes: 25753026560, memoryUsedBytes: 1185984512 },
     ]);
   });
+
+  it('scans Intel integrated graphics as shared system memory and a card as unmeasured', async () => {
+    const root = sysfs({ devices: [intelLunarLakeXe, intelBattlemageG31Xe] });
+    expect(await scanLinuxGpus(root, {})).toEqual([
+      { vendor: 'intel', name: 'Intel GPU [8086:64a0]', memoryBytes: null, sharedMemory: 'system' },
+      { vendor: 'intel', name: 'Intel GPU [8086:e223]', memoryBytes: null, pciDeviceId: 'e223' },
+    ]);
+  });
+});
+
+describe('Intel card VRAM from llama-server on Linux', () => {
+  // A SYCL or Vulkan build whose `--list-devices` prints `stdout` and counts its runs.
+  function listingBuild(stdout: string, library: string | null = 'libggml-sycl.so') {
+    const dir = mkdtempSync(join(tmpdir(), 'listing-'));
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+    const count = join(dir, 'runs');
+    const path = join(dir, 'llama-server');
+    const list = `fs.appendFileSync(${JSON.stringify(count)}, 'x'); process.stdout.write(${JSON.stringify(stdout)});`;
+    writeFileSync(path, `#!${process.execPath}\nimport('node:fs').then(fs => { ${list} });\n`, { mode: 0o755 });
+    if (library) writeFileSync(join(dir, library), '');
+    return { dir, path, runs: () => (existsSync(count) ? readFileSync(count, 'utf8').length : 0) };
+  }
+
+  const probe = (fixture: SysfsFixture, llamaServer: HardwareProbeOptions['llamaServer'], env = {}) =>
+    probeHardware({
+      exec: execFrom({}),
+      os: os(64 * GiB),
+      platform: 'linux',
+      arch: 'x64',
+      rootDir: sysfs(fixture),
+      env,
+      llamaServer,
+    });
+  const at = (path: string) => async () => ({ path });
+  const unknown = { memoryKind: 'discrete', gpuMemoryBytes: null, gpuVendor: 'intel', confidence: 'low' };
+  const secondG31 = { ...intelBattlemageG31Xe, address: '0000:04:00.0' };
+
+  it('sizes a Battlemage G31 from a SYCL or a Vulkan listing, at high confidence', async () => {
+    for (const [listing, mib] of [
+      [LIST_DEVICES_SYCL_G31, 32656],
+      [LIST_DEVICES_VULKAN_G31, 32558],
+    ] as const) {
+      const build = listingBuild(listing, listing === LIST_DEVICES_SYCL_G31 ? 'libggml-sycl.so' : 'libggml-vulkan.so');
+      expect(await probe({ devices: [...pcieBridges, intelBattlemageG31Xe] }, at(build.path))).toMatchObject({
+        memoryKind: 'discrete',
+        gpuMemoryBytes: mib * MiB,
+        gpuName: 'Intel GPU [8086:e223]',
+        gpuCount: 1,
+        gpuVendor: 'intel',
+        confidence: 'high',
+      });
+    }
+  });
+
+  it('sums two cards that one backend lists as many times', async () => {
+    const listing = `${LIST_DEVICES_SYCL_G31}  SYCL1: Intel(R) Graphics [0xe223] (32656 MiB, 32020 MiB free)\n`;
+    const profile = await probe({ devices: [intelBattlemageG31Xe, secondG31] }, at(listingBuild(listing).path));
+    expect(profile).toMatchObject({ gpuMemoryBytes: 2 * 32656 * MiB, gpuCount: 2, confidence: 'high' });
+  });
+
+  it('matches two different cards by listed id whatever the order, and leaves them unknown without ids', async () => {
+    const memory = async (listing: string, library = 'libggml-sycl.so') =>
+      (
+        await probeMemoryUsage({
+          exec: execFrom({}),
+          platform: 'linux',
+          rootDir: sysfs({ devices: [intelBattlemageG31Xe, intelArcB580Xe] }),
+          env: {},
+          llamaServer: at(listingBuild(listing, library).path),
+        })
+      ).gpus.map(gpu => [gpu.name, gpu.memoryBytes]);
+    const reversed =
+      'Available devices:\n' +
+      '  SYCL0: Intel(R) Graphics [0xe20b] (12216 MiB, 12216 MiB free)\n' +
+      '  SYCL1: Intel(R) Graphics [0xe223] (32656 MiB, 32656 MiB free)\n';
+    expect(await memory(reversed)).toEqual([
+      ['Intel GPU [8086:e223]', 32656 * MiB],
+      ['Intel GPU [8086:e20b]', 12216 * MiB],
+    ]);
+    const unnamed =
+      'Available devices:\n' +
+      '  Vulkan0: Intel(R) Arc(TM) B580 Graphics (12216 MiB, 12000 MiB free)\n' +
+      '  Vulkan1: Intel(R) Arc(TM) Pro B70 Graphics (32558 MiB, 31789 MiB free)\n';
+    expect(await memory(unnamed, 'libggml-vulkan.so')).toEqual([
+      ['Intel GPU [8086:e223]', null],
+      ['Intel GPU [8086:e20b]', null],
+    ]);
+  });
+
+  it('lists again when asked for a listing no older than llamaServerMaxAgeMs', async () => {
+    const build = listingBuild(LIST_DEVICES_SYCL_G31);
+    const options = {
+      exec: execFrom({}),
+      os: os(64 * GiB),
+      platform: 'linux' as const,
+      arch: 'x64' as const,
+      rootDir: sysfs({ devices: [intelBattlemageG31Xe] }),
+      env: {},
+      llamaServer: at(build.path),
+    };
+    await probeHardware(options);
+    await probeHardware(options);
+    expect(build.runs()).toBe(1);
+    expect(await probeHardware({ ...options, llamaServerMaxAgeMs: 0 })).toMatchObject({ gpuMemoryBytes: 32656 * MiB });
+    expect(build.runs()).toBe(2);
+  });
+
+  it('takes the first backend whose Intel devices match the cards, past other vendors', async () => {
+    const listing =
+      'Available devices:\n' +
+      '  SYCL0: Intel(R) Graphics [0xe223] (32656 MiB, 32611 MiB free)\n' +
+      '  Vulkan0: NVIDIA GeForce RTX 4090 (24564 MiB, 23000 MiB free)\n' +
+      '  Vulkan1: Intel(R) Arc(TM) Pro B70 Graphics (32558 MiB, 31789 MiB free)\n';
+    const build = listingBuild(listing);
+    expect(await probe({ devices: [intelBattlemageG31Xe] }, at(build.path))).toMatchObject({
+      gpuMemoryBytes: 32656 * MiB,
+    });
+    const vulkanOnly = listingBuild(listing.replace(/^ {2}SYCL0.*\n/m, ''), 'libggml-vulkan.so');
+    expect(await probe({ devices: [intelBattlemageG31Xe] }, at(vulkanOnly.path))).toMatchObject({
+      gpuMemoryBytes: 32558 * MiB,
+    });
+  });
+
+  it('tells a card from integrated graphics only by its model or PCI id', async () => {
+    const b580 = listingBuild(LIST_DEVICES_SYCL_B580_IGPU);
+    expect(await probe({ devices: [intelIgpu, intelArcB580Xe] }, at(b580.path))).toMatchObject({
+      gpuMemoryBytes: 12216 * MiB,
+      gpuName: 'Intel GPU [8086:e20b]',
+      confidence: 'high',
+    });
+    const byId = listingBuild(
+      `${LIST_DEVICES_SYCL_G31}  SYCL1: Intel(R) Graphics [0x64a0] (30000 MiB, 28000 MiB free)\n`
+    );
+    expect(await probe({ devices: [intelLunarLakeXe, intelBattlemageG31Xe] }, at(byId.path))).toMatchObject({
+      gpuMemoryBytes: 32656 * MiB,
+      confidence: 'high',
+    });
+    const unnamed = listingBuild(
+      'Available devices:\n' +
+        '  Vulkan0: Intel(R) Graphics (BMG G31) (32558 MiB, 31789 MiB free)\n' +
+        '  Vulkan1: Intel(R) Graphics (LNL) (30000 MiB, 28000 MiB free)\n',
+      'libggml-vulkan.so'
+    );
+    expect(await probe({ devices: [intelLunarLakeXe, intelBattlemageG31Xe] }, at(unnamed.path))).toMatchObject(unknown);
+    // Panther Lake's B390 and Lunar Lake's 140V are integrated, whatever their Arc names.
+    const integratedNames = listingBuild(
+      'Available devices:\n' +
+        '  SYCL0: Intel(R) Arc(TM) B390 GPU (16858 MiB, 16858 MiB free)\n' +
+        '  SYCL1: Intel(R) Arc(TM) 140V GPU (16GB) (16000 MiB, 15000 MiB free)\n'
+    );
+    expect(await probe({ devices: [intelIgpu, intelArcB580Xe] }, at(integratedNames.path))).toMatchObject(unknown);
+  });
+
+  it('leaves VRAM unknown when the listed Intel devices do not match the cards in number or id', async () => {
+    const cases: [SysfsFixture, string][] = [
+      [{ devices: [intelBattlemageG31Xe] }, LIST_DEVICES_SYCL_B580_IGPU],
+      [{ devices: [intelBattlemageG31Xe, secondG31] }, LIST_DEVICES_SYCL_G31],
+      [{ devices: [intelArcB580Xe] }, LIST_DEVICES_SYCL_G31],
+      [{ devices: [intelBattlemageG31Xe] }, LIST_DEVICES_NONE],
+      [
+        { devices: [intelBattlemageG31Xe] },
+        'Available devices:\n  Vulkan0: NVIDIA GeForce RTX 4090 (24564 MiB, 1 MiB free)\n',
+      ],
+      [{ devices: [intelBattlemageG31Xe] }, 'garbled\n'],
+    ];
+    for (const [fixture, listing] of cases) {
+      expect(await probe(fixture, at(listingBuild(listing).path))).toMatchObject(unknown);
+    }
+  });
+
+  it('leaves VRAM unknown without a llama-server that can list devices', async () => {
+    const plain = listingBuild(LIST_DEVICES_SYCL_G31, null);
+    const missing = join(plain.dir, 'nowhere', 'llama-server');
+    const locators: HardwareProbeOptions['llamaServer'][] = [
+      async () => null,
+      async () => {
+        throw new Error('settings unreadable');
+      },
+      at(missing),
+      at(plain.path),
+      undefined,
+    ];
+    for (const locate of locators) {
+      expect(await probe({ devices: [intelBattlemageG31Xe] }, locate)).toMatchObject(unknown);
+    }
+    expect(plain.runs()).toBe(0);
+  });
+
+  it('waits past the 10 s listing timeout for a llama-server that never answers, but not forever', async () => {
+    let reached: () => void = () => undefined;
+    const located = new Promise<void>(resolve => (reached = resolve));
+    const hang = () => {
+      reached();
+      return new Promise<null>(() => undefined);
+    };
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      let settled = false;
+      const profile = probe({ devices: [intelBattlemageG31Xe] }, hang).finally(() => (settled = true));
+      await located;
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(await profile).toMatchObject(unknown);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('finds llama-server on PATH by default', async () => {
+    const build = listingBuild(LIST_DEVICES_SYCL_G31);
+    const profile = await probe({ devices: [intelBattlemageG31Xe] }, undefined, { PATH: `relative:${build.dir}` });
+    expect(profile).toMatchObject({ gpuMemoryBytes: 32656 * MiB, confidence: 'high' });
+  });
+
+  it('reads no VRAM file from sysfs, where no upstream xe or i915 kernel has one', async () => {
+    const files = { lmem_total_bytes: '34359738368', physical_vram_size_bytes: '34359738368' };
+    const withFiles = { ...intelBattlemageG31Xe, files };
+    expect(await probe({ devices: [withFiles] }, async () => null)).toMatchObject(unknown);
+    const build = listingBuild(LIST_DEVICES_SYCL_G31);
+    expect(await probe({ devices: [withFiles] }, at(build.path))).toMatchObject({ gpuMemoryBytes: 32656 * MiB });
+  });
+
+  it('lists devices only for an Intel card of unknown VRAM, once per unchanged binary', async () => {
+    const build = listingBuild(LIST_DEVICES_SYCL_G31);
+    await probe({ devices: [amdRx7900xtx], kfdNodes: amdKfd }, at(build.path));
+    await probe({ devices: [intelLunarLakeXe] }, at(build.path));
+    expect(build.runs()).toBe(0);
+    await probe({ devices: [intelBattlemageG31Xe] }, at(build.path));
+    await probe({ devices: [intelBattlemageG31Xe] }, at(build.path));
+    expect(build.runs()).toBe(1);
+  });
+
+  it('sizes a lone G31 card from a SYCL listing that names it with no PCI id', async () => {
+    const build = listingBuild(LIST_DEVICES_SYCL_B70_NAMED);
+    expect(await probe({ devices: [intelBattlemageG31Xe] }, at(build.path))).toMatchObject({
+      memoryKind: 'discrete',
+      gpuMemoryBytes: 32656 * MiB,
+      gpuVendor: 'intel',
+      confidence: 'high',
+    });
+    const usage = await probeMemoryUsage({
+      exec: execFrom({}),
+      platform: 'linux',
+      rootDir: sysfs({ devices: [intelBattlemageG31Xe] }),
+      env: {},
+      llamaServer: at(build.path),
+    });
+    expect(usage.gpus).toMatchObject([{ memoryBytes: 32656 * MiB, memoryUsedBytes: (32656 - 491) * MiB }]);
+  });
+
+  it('reports VRAM in use from free memory, unknown when the backend reports free as the total', async () => {
+    const MEMINFO = 'MemTotal:       65716204 kB\nMemAvailable:   53019716 kB\n';
+    const usage = async (fixture: SysfsFixture, listing: string) =>
+      (
+        await probeMemoryUsage({
+          exec: execFrom({}),
+          platform: 'linux',
+          rootDir: sysfs({ ...fixture, files: { 'proc/meminfo': MEMINFO } }),
+          env: {},
+          llamaServer: at(listingBuild(listing).path),
+        })
+      ).gpus;
+    expect(await usage({ devices: [intelBattlemageG31Xe] }, LIST_DEVICES_SYCL_G31)).toEqual([
+      { vendor: 'intel', name: 'Intel GPU [8086:e223]', memoryBytes: 32656 * MiB, memoryUsedBytes: 45 * MiB },
+    ]);
+    expect(await usage({ devices: [intelIgpu, intelArcB580Xe] }, LIST_DEVICES_SYCL_B580_IGPU)).toEqual([
+      { vendor: 'intel', name: 'Intel GPU [8086:e20b]', memoryBytes: 12216 * MiB, memoryUsedBytes: null },
+    ]);
+  });
+
+  it('shares one listing between probeHardware and probeMemoryUsage', async () => {
+    const build = listingBuild(LIST_DEVICES_SYCL_G31);
+    const options = {
+      exec: execFrom({}),
+      os: os(64 * GiB),
+      platform: 'linux',
+      rootDir: sysfs({ devices: [intelBattlemageG31Xe] }),
+      env: {},
+      llamaServer: at(build.path),
+    };
+    const shared = { ...options, gpuQueries: gpuQueries(options) };
+    const [profile, usage] = await Promise.all([probeHardware(shared), probeMemoryUsage(shared)]);
+    expect(profile.gpuMemoryBytes).toBe(32656 * MiB);
+    expect(usage.gpus[0]?.memoryUsedBytes).toBe(45 * MiB);
+    expect(build.runs()).toBe(1);
+  });
 });
 
 describe('probeHardware on Windows without nvidia-smi', () => {
@@ -608,9 +1012,52 @@ describe('probeHardware on Windows without nvidia-smi', () => {
     expect(enumeration).toContain('exit 1');
   });
 
-  it('is confidently CPU-only with only integrated graphics', async () => {
-    expect(await windows(POWERSHELL_INTEL_IGPU_ONLY)).toMatchObject({ ...cpuOnly, confidence: 'high' });
+  it('is confidently CPU-only with no GPU', async () => {
     expect(await windows('[]')).toMatchObject({ ...cpuOnly, confidence: 'high' });
+  });
+
+  it('sizes Intel integrated graphics at the half of RAM Windows lets a GPU share', async () => {
+    expect(await windows(POWERSHELL_INTEL_IGPU_ONLY)).toMatchObject({
+      memoryKind: 'unified',
+      totalMemoryBytes: 32 * GiB,
+      gpuMemoryBytes: 16 * GiB,
+      gpuName: 'Intel(R) Iris(R) Xe Graphics',
+      gpuCount: 1,
+      gpuVendor: 'intel',
+      confidence: 'high',
+    });
+    const unsized = await probeHardware({
+      exec: execFrom({ [POWERSHELL]: POWERSHELL_INTEL_IGPU_ONLY }),
+      os: os(0),
+      platform: 'win32',
+      arch: 'x64',
+      env: {},
+    });
+    expect(unsized).toMatchObject({ memoryKind: 'unified', gpuMemoryBytes: null, confidence: 'low' });
+  });
+
+  it('prefers Intel Arc or an NVIDIA GPU beside Intel integrated graphics', async () => {
+    const igpu = JSON.parse(POWERSHELL_INTEL_IGPU_ONLY)[0];
+    const arc = JSON.parse(POWERSHELL_INTEL_ARC);
+    expect(await windows(JSON.stringify([igpu, arc]))).toMatchObject({
+      memoryKind: 'discrete',
+      gpuMemoryBytes: 17079205888,
+      gpuName: 'Intel(R) Arc(TM) A770 Graphics',
+      gpuCount: 1,
+      gpuVendor: 'intel',
+      confidence: 'high',
+    });
+    const nvidia = JSON.parse(POWERSHELL_NVIDIA)[0];
+    expect(await windows(JSON.stringify([igpu, nvidia]))).toMatchObject({
+      memoryKind: 'discrete',
+      gpuMemoryBytes: 25757220864,
+      gpuVendor: 'nvidia',
+    });
+    const intelCpu = { PROCESSOR_IDENTIFIER: 'Intel64 Family 6 Model 183 Stepping 1, GenuineIntel' };
+    const exec = execFrom({ [POWERSHELL]: POWERSHELL_INTEL_IGPU_ONLY, 'nvidia-smi': RTX_4090_SMI });
+    const profile = await probeHardware({ exec, os: os(32 * GiB), platform: 'win32', arch: 'x64', env: intelCpu });
+    expect(profile).toMatchObject({ memoryKind: 'discrete', gpuMemoryBytes: 24564 * MiB, gpuVendor: 'nvidia' });
+    expect(exec).not.toHaveBeenCalledWith(POWERSHELL, expect.anything());
   });
 
   it('reads AMD VRAM past the 4 GiB AdapterRAM cap and skips the APU', async () => {
@@ -800,10 +1247,12 @@ describe('parseWindowsGpus', () => {
     ]);
   });
 
+  const shared = { vendor: 'intel', name: 'Intel GPU', memoryBytes: null, sharedMemory: 'system' };
+
   it('reads the PCI bus from raw and resolved LocationInformation', () => {
     for (const location of [rawLocation(0, 2), 'PCI bus 0, device 2, function 0']) {
-      expect(parseWindowsGpus(intel({ location, adapterRam: GiB, memoryBytes: null }))).toEqual([]);
-      expect(parseWindowsGpus(intel({ location, adapterRam: 2 * GiB, memoryBytes: 2 * GiB }))).toEqual([]);
+      expect(parseWindowsGpus(intel({ location, adapterRam: GiB, memoryBytes: null }))).toEqual([shared]);
+      expect(parseWindowsGpus(intel({ location, adapterRam: 2 * GiB, memoryBytes: 2 * GiB }))).toEqual([shared]);
     }
     for (const location of [rawLocation(4, 0), 'PCI bus 4, device 0, function 0']) {
       expect(parseWindowsGpus(intel({ location, memoryBytes: 16 * GiB }))).toEqual([
@@ -813,8 +1262,25 @@ describe('parseWindowsGpus', () => {
   });
 
   it('falls back to memory size for Intel when the PCI location is missing', () => {
-    expect(parseWindowsGpus(intel({ location: null, memoryBytes: 128 * MiB }))).toEqual([]);
-    expect(parseWindowsGpus(intel({ location: null, memoryBytes: 16 * GiB }))?.length).toBe(1);
+    expect(parseWindowsGpus(intel({ location: null, memoryBytes: 128 * MiB }))).toEqual([shared]);
+    expect(parseWindowsGpus(intel({ location: null, memoryBytes: 16 * GiB }))).toEqual([
+      { vendor: 'intel', name: 'Intel GPU', memoryBytes: 16 * GiB },
+    ]);
+  });
+
+  it('keeps an Arc card whose VRAM is past the AdapterRAM cap and missing from the registry unsized', () => {
+    expect(parseWindowsGpus(intel({ location: rawLocation(4, 0), adapterRam: 4293918720, memoryBytes: null }))).toEqual(
+      [{ vendor: 'intel', name: 'Intel GPU', memoryBytes: null }]
+    );
+  });
+
+  it.each([null, '', '   '])('names an adapter without a name by its PCI ids: %j', name => {
+    expect(parseWindowsGpus(intel({ name, location: rawLocation(4, 0), memoryBytes: 16 * GiB }))).toEqual([
+      { vendor: 'intel', name: 'Intel GPU [8086:4680]', memoryBytes: 16 * GiB },
+    ]);
+    expect(parseWindowsGpus(amd({ name, memoryBytes: 16 * GiB }))).toEqual([
+      { vendor: 'amd', name: 'AMD GPU [1002:73bf]', memoryBytes: 16 * GiB },
+    ]);
   });
 
   it('skips disabled adapters', () => {
@@ -971,6 +1437,40 @@ describe('memory in use', () => {
       const [gpu] = (await probeMemoryUsage({ exec, platform: 'linux', rootDir, env: {} })).gpus;
       expect(gpu.memoryUsedBytes).toBeNull();
     }
+  });
+
+  it('reports an Intel card with unknown use and leaves the integrated GPU to available RAM', async () => {
+    const rootDir = sysfs({ devices: [intelIgpu, intelArcB580Xe], files: { 'proc/meminfo': MEMINFO } });
+    const exec = execFrom({});
+    expect(await probeMemoryUsage({ exec, platform: 'linux', rootDir, env: {} })).toEqual({
+      availableMemoryBytes: 53019716 * 1024,
+      gpus: [{ vendor: 'intel', name: 'Intel GPU [8086:e20b]', memoryBytes: null, memoryUsedBytes: null }],
+    });
+    const igpuOnly = sysfs({ devices: [intelLunarLakeXe], files: { 'proc/meminfo': MEMINFO } });
+    expect(await probeMemoryUsage({ exec, platform: 'linux', rootDir: igpuOnly, env: {} })).toEqual({
+      availableMemoryBytes: 53019716 * 1024,
+      gpus: [],
+    });
+  });
+
+  it('reports Intel memory use as unknown when meminfo or the GPU scan is unreadable', async () => {
+    const exec = execFrom({});
+    const noMeminfo = sysfs({ devices: [intelBattlemageG31Xe] });
+    expect(await probeMemoryUsage({ exec, platform: 'linux', rootDir: noMeminfo, env: {} })).toEqual({
+      availableMemoryBytes: null,
+      gpus: [{ vendor: 'intel', name: 'Intel GPU [8086:e223]', memoryBytes: null, memoryUsedBytes: null }],
+    });
+    const garbled = sysfs({ devices: [intelLunarLakeXe], files: { 'proc/meminfo': 'MemTotal: lots\n' } });
+    expect((await probeMemoryUsage({ exec, platform: 'linux', rootDir: garbled, env: {} })).availableMemoryBytes).toBe(
+      null
+    );
+    const hidden = sysfs({ devices: [intelBattlemageG31Xe], devNodes: false, files: { 'proc/meminfo': MEMINFO } });
+    expect(await probeMemoryUsage({ exec, platform: 'linux', rootDir: hidden, env: {} })).toEqual({
+      availableMemoryBytes: 53019716 * 1024,
+      gpus: [],
+    });
+    const windowsUsage = await probeMemoryUsage({ exec, platform: 'win32', env: {} });
+    expect(windowsUsage).toEqual({ availableMemoryBytes: null, gpus: [] });
   });
 
   it('reports nothing on macOS and only nvidia-smi on Windows', async () => {

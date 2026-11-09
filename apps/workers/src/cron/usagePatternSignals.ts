@@ -17,7 +17,7 @@ import { Logger } from '@bike4mind/observability';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { userService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { getActiveSubscriptionsForUser } from '@server/entitlements/activeSubscriptions';
+import { getActiveSubscriptionsForUser } from '@bike4mind/server-utils/entitlements/activeSubscriptions';
 
 const MS_PER_HOUR = 60 * 60 * 1000;
 /** Stop starting new users this long before the Lambda timeout. */

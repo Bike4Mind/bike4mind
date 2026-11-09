@@ -36,8 +36,8 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/services', () => ({ referService: { requireActiveGrantPackage: h.requirePackage } }));
 vi.mock('@server/managers/regInviteManager', () => ({ generateCode: () => 'CODE-123' }));
-vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publish } } }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publish } } }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 process.env.APP_URL = 'https://app.test';
 await import('../generate-invite');
@@ -98,6 +98,19 @@ describe('POST /api/subscribers/generate-invite - admin audit', () => {
     expect(h.audit).toHaveBeenCalledTimes(1);
     expect(res._getStatusCode()).toBe(201);
     expect(res._getJSONData()).toEqual(expect.objectContaining({ emailSent: false, inviteCode: 'CODE-123' }));
+  });
+
+  it('escapes a markup name in the invite email, both in the default body and an admin-edited one', async () => {
+    const probe = '<img src=x onerror=alert(1)>';
+    await run({ firstName: probe, lastName: '<b>x</b>' });
+    await run({ firstName: 'Jane', emailBody: `Hi ${probe}` });
+
+    for (const [{ body: html, subject }] of h.publish.mock.calls as [{ body: string; subject: string }][]) {
+      expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
+      expect(html).not.toContain('<img src=x');
+      expect(subject).not.toContain('<');
+    }
+    expect(h.publish).toHaveBeenCalledTimes(2);
   });
 });
 

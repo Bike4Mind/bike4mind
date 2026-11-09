@@ -2,7 +2,7 @@ import { fabFileRepository } from '@bike4mind/database';
 import { fabFilesService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
-import { FILES_READ_SCOPES } from '@server/files/fileScopes';
+import { FILES_READ_SCOPES } from '@bike4mind/server-utils/files/fileScopes';
 import { Request } from 'express';
 
 const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(

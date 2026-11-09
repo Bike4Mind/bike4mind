@@ -47,7 +47,8 @@ export async function dispatchDiscoveryRunNow(logger: Logger): Promise<{ dispatc
     // Imported here, not at module scope: this branch is self-host-only and the
     // discovery source registry it pulls in is pure cold-start parse cost for
     // the hosted frontend lambda.
-    const { DISCOVERY_DRIVER_ENV, isDiscoveryDriver } = await import('./startupLeg');
+    const { DISCOVERY_DRIVER_ENV, isDiscoveryDriver } =
+      await import('@bike4mind/server-utils/modelDiscovery/startupLeg');
     // Same gate as the startup leg and the interval task: the driver flag is the
     // ONE opt-in that decides whether this process may reach a provider at all,
     // and a manual run is the biggest fan-out of the three (skipReasonFor waives

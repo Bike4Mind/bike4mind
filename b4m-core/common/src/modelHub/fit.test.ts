@@ -16,8 +16,11 @@ import {
   flashAttnOffBytes,
   isCpuOnly,
   kvCacheBytes,
+  llamaServerFitTargetMiB,
   memoryBudgets,
+  ollamaHardware,
   ollamaNumCtx,
+  vramNeedsLlamaServer,
   type FitInput,
   type HardwareProfile,
 } from './fit';
@@ -214,6 +217,20 @@ describe('isCpuOnly', () => {
   ] as const)('%s: %s', (_label, hw, expected) => {
     expect(isCpuOnly(hw)).toBe(expected);
     expect(fit({ hardware: hw, runtime: OLLAMA, context: 16384 }).requested?.placement === 'cpu').toBe(expected);
+  });
+});
+
+describe('vramNeedsLlamaServer', () => {
+  const arc = { ...machine('discrete', 64), gpuVendor: 'intel' as const, gpuCount: 1 };
+  it.each([
+    ['an Intel card of unknown memory on Linux', arc, true],
+    ['the same card on Windows', { ...arc, platform: 'win32' }, false],
+    ['an Intel card whose memory was read', { ...arc, gpuMemoryBytes: 32 * GIB }, false],
+    ['an NVIDIA card of unknown memory', { ...arc, gpuVendor: 'nvidia' as const }, false],
+    ['Intel integrated graphics', { ...arc, memoryKind: 'unified' as const }, false],
+    ['no GPU', machine('cpu', 64), false],
+  ] as const)('%s: %s', (_label, hw, expected) => {
+    expect(vramNeedsLlamaServer(hw)).toBe(expected);
   });
 });
 
@@ -767,6 +784,108 @@ describe('estimateFit requested past the RAM pool', () => {
       context: 131072,
     }).requested!;
     expect(requested).toMatchObject({ fits: false, placement: 'gpu' });
+  });
+});
+
+/** Intel integrated graphics as probeHardware reports them: Linux leaves the share unknown, Windows half the RAM. */
+const intelIgpu = (ramGiB: number, platform: 'linux' | 'win32' = 'linux'): HardwareProfile => ({
+  ...machine('unified', ramGiB),
+  platform,
+  arch: 'x64',
+  gpuMemoryBytes: platform === 'win32' ? (ramGiB / 2) * GIB : null,
+  gpuName: 'Intel(R) Iris(R) Xe Graphics',
+  gpuCount: 1,
+  gpuVendor: 'intel',
+});
+const intelArc = (ramGiB: number, vramGiB: number | null): HardwareProfile => ({
+  ...machine('discrete', ramGiB, vramGiB),
+  gpuVendor: 'intel',
+});
+
+describe('Intel GPUs', () => {
+  it('keeps 512 MiB more per Intel device for the SYCL and Vulkan scratch buffers --fit does not count', () => {
+    expect(FIT_CONSTANTS.intelPoolBytes).toBe(512 * MIB);
+    expect(fitMarginBytes(intelIgpu(32))).toBe(1.5 * GIB);
+    expect(fitMarginBytes(intelIgpu(32, 'win32'))).toBe(1.5 * GIB);
+    expect(fitMarginBytes(intelArc(32, 16))).toBe(2.5 * GIB);
+    expect(fitMarginBytes({ ...intelArc(64, 32), gpuCount: 2 })).toBe(5 * GIB);
+    expect(fitMarginBytes(intelArc(32, null))).toBe(256 * MIB);
+    expect(fitMarginBytes(machine('discrete', 32, 16))).toBe(2 * GIB);
+    expect(fitMarginBytes({ ...machine('discrete', 32, 16), gpuVendor: 'nvidia' })).toBe(2 * GIB);
+  });
+
+  it('passes llama-server a --fit-target of the default 1 GiB plus the pool on Intel only', () => {
+    expect(llamaServerFitTargetMiB({ gpuVendor: 'intel' })).toBe(1536);
+    for (const gpuVendor of ['nvidia', 'amd', 'apple', null, undefined] as const) {
+      expect(llamaServerFitTargetMiB({ gpuVendor })).toBeNull();
+    }
+  });
+
+  it('budgets Intel integrated graphics from the unified share on Linux and the shared limit on Windows', () => {
+    expect(memoryBudgets(intelIgpu(32))).toEqual({
+      gpu: 32 * GIB * 0.66,
+      ramPool: 24 * GIB - 32 * GIB * 0.66,
+      cpuOnly: false,
+    });
+    expect(memoryBudgets(intelIgpu(32, 'win32'))).toEqual({ gpu: 16 * GIB, ramPool: 8 * GIB, cpuOnly: false });
+    expect(memoryBudgets(intelArc(32, null)).cpuOnly).toBe(true);
+  });
+
+  it('plans Intel integrated graphics as CPU only for Ollama, which skips Vulkan iGPUs', () => {
+    expect(ollamaHardware(intelIgpu(32))).toEqual({
+      ...intelIgpu(32),
+      memoryKind: 'cpu',
+      gpuMemoryBytes: null,
+      gpuName: null,
+      gpuCount: 0,
+      gpuVendor: null,
+    });
+    for (const hw of [intelArc(32, 16), strix(128, 96), machine('unified', 32), machine('cpu', 32)]) {
+      expect(ollamaHardware(hw)).toBe(hw);
+    }
+  });
+
+  it('puts an Intel iGPU plan on the GPU for llama-server and on the CPU for Ollama', () => {
+    const plan = (runtime: FitInput['runtime']) =>
+      estimateFit({ model: { arch: ARCH_64K, weightsBytes: 4 * GIB }, hardware: intelIgpu(32), mode: 'chat', runtime });
+    const llama = plan(LS);
+    expect(llama.placement).toBe('gpu');
+    expect(llama.memory.marginBytes).toBe(1.5 * GIB);
+    const ollama = plan(OLLAMA);
+    expect(ollama.placement).toBe('cpu');
+    expect(ollama.memory).toMatchObject({ marginBytes: 256 * MIB, budgetBytes: 32 * GIB * FIT_CONSTANTS.cpuFraction });
+    const options = contextOptions({
+      model: { arch: ARCH_64K, weightsBytes: 4 * GIB },
+      hardware: intelIgpu(32),
+      mode: 'chat',
+      runtime: OLLAMA,
+    });
+    expect(options.every(option => option.placement === 'cpu')).toBe(true);
+  });
+
+  it('fits less on an Intel Arc than on another card of the same VRAM', () => {
+    const on = (hardware: HardwareProfile) =>
+      estimateFit({ model: { arch: ARCH_64K, weightsBytes: 10 * GIB }, hardware, mode: 'chat', runtime: LS });
+    const arc = on(intelArc(64, 17));
+    const other = on(machine('discrete', 64, 17));
+    expect(arc.memory.marginBytes - other.memory.marginBytes).toBe(512 * MIB);
+    expect(other).toMatchObject({ verdict: 'fast', context: 65536, kv: F16 });
+    expect(arc.kv === F16 && arc.context === 65536).toBe(false);
+  });
+
+  it('sizes a download for Ollama on an Intel iGPU from the CPU budget and reports that margin and pool', () => {
+    expect(estimateFitFromSize(4 * GIB, intelIgpu(32), 8192)).toMatchObject({
+      cpuOnly: true,
+      budgetBytes: 32 * GIB * FIT_CONSTANTS.cpuFraction,
+      marginBytes: 256 * MIB,
+      ramPoolBytes: 0,
+    });
+    expect(estimateFitFromSize(4 * GIB, intelArc(64, 16), 8192)).toMatchObject({
+      cpuOnly: false,
+      budgetBytes: 16 * GIB,
+      marginBytes: 2.5 * GIB,
+      ramPoolBytes: 64 * GIB * FIT_CONSTANTS.discreteOffloadRamFraction,
+    });
   });
 });
 

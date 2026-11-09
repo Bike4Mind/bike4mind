@@ -11,7 +11,11 @@ import {
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import type { abuseService } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
-import { denySelfAdminAction, isSelfOrImpersonator, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import {
+  denySelfAdminAction,
+  isSelfOrImpersonator,
+  recordAdminActionFromRequest,
+} from '@bike4mind/server-utils/utils/adminAudit';
 import { cancelAccountSubscriptions, subscriptionCancellationAudit } from '@server/billing/cancelAccountSubscriptions';
 
 type AuditRequest = Parameters<typeof recordAdminActionFromRequest>[0];

@@ -102,23 +102,19 @@ export const AdminUsersBulkExecuteRequestSchema = AdminUsersBulkPreviewRequestSc
 });
 export type AdminUsersBulkExecuteRequest = z.infer<typeof AdminUsersBulkExecuteRequestSchema>;
 
-export type AdminUsersBulkResult = {
-  batchId: string;
-  applied: number;
-  skipped: number;
-  failed: { userId: string; error: string }[];
-  /** True when the batch stopped at its time budget; `remaining` users were not attempted. */
-  partial: boolean;
-  remaining: number;
-  /** ISO time after which undo is refused. */
-  undoExpiresAt: string;
-  /** Domains this batch added to blockedEmailDomains; undo removes exactly these. */
-  blockedDomains: string[];
-  /** Stripe subscriptions a suspend or contain canceled; undo cannot reinstate them. */
-  canceledSubscriptions: number;
-  /** Suspended users whose subscriptions Stripe would not cancel; they still need canceling by hand. */
-  subscriptionCancelFailures: { userId: string; error: string }[];
-};
+export const AdminUsersBulkResultSchema = z.object({
+  batchId: z.string(),
+  applied: z.number(),
+  skipped: z.number(),
+  failed: z.array(z.object({ userId: z.string(), error: z.string() })),
+  partial: z.boolean(),
+  remaining: z.number(),
+  undoExpiresAt: z.string(),
+  blockedDomains: z.array(z.string()),
+  canceledSubscriptions: z.number(),
+  subscriptionCancelFailures: z.array(z.object({ userId: z.string(), error: z.string() })),
+});
+export type AdminUsersBulkResult = z.infer<typeof AdminUsersBulkResultSchema>;
 
 export const AdminUsersBulkUndoRequestSchema = z.object({ batchId: z.string().uuid() });
 

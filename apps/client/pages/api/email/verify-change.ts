@@ -7,7 +7,7 @@ import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { AuthEvents, ConflictError } from '@bike4mind/common';
-import { calculateTokenAge } from '@server/utils/auditLog';
+import { calculateTokenAge } from '@bike4mind/server-utils/utils/auditLog';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { entitlementsForEmail } from '@bike4mind/server-utils/lib/entitlements/registry';
 import { pushEntitlementInvalidation } from '@server/entitlements/invalidate';

@@ -52,7 +52,7 @@ Each city card displays the following information, updated every second:
 
 ### Adding a Location
 
-Click the **Add Location** button to open a search modal. The modal provides:
+Click the **Add location** button to open a search modal. The modal provides:
 
 - A search input that filters cities by name, country, country code, time zone, or common time zone abbreviations (e.g., "PST", "CET", "JST")
 - Quick-pick chips for popular cities (Los Angeles, Austin, Kyiv, Cebu, London, Tokyo, Sydney, Dubai)

@@ -54,7 +54,7 @@ vi.mock('@server/auth/auth', async orig => ({
     next();
   },
 }));
-vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: (...args: unknown[]) => mocks.apiKeyRateLimit(...args),
 }));

@@ -562,7 +562,7 @@ export class NotebookExportService {
     // (`artifactService/get` -> `findLatestContent`). Keying on `artifact.version` instead looks
     // stricter and is wrong: `create` and `update` write the content row, the version row and the
     // artifact row as three separate calls with no transaction (documented at
-    // apps/client/server/utils/persistAgentArtifacts.ts) and assign `version` only after the
+    // packages/server-utils/src/utils/persistAgentArtifacts.ts) and assign `version` only after the
     // content write returns, so the pointer can only ever LAG the newest row, never lead it. An
     // export keyed on it ships the older body while the user is looking at the newer one.
     //

@@ -71,14 +71,22 @@ async function physicalSpellings(path: string): Promise<string[]> {
 export async function resolveSubject(subject: PermissionSubject): Promise<PermissionSubject> {
   const paths = subject.paths;
   const shellPaths = subject.shell?.paths;
-  if (!paths && !shellPaths) return subject;
-  const resolved = (await Promise.all((paths ?? []).map(physicalSpellings))).flat();
-  const resolvedShell = (await Promise.all((shellPaths ?? []).map(physicalSpellings))).flat();
+  const shellWrites = subject.shell?.writes;
+  if (!paths && !shellPaths && !shellWrites) return subject;
+  const spelled = async (list: readonly string[]): Promise<string[]> => [
+    ...new Set([...list, ...(await Promise.all(list.map(physicalSpellings))).flat()]),
+  ];
   return {
     ...subject,
-    ...(paths ? { paths: [...new Set([...paths, ...resolved])] } : {}),
-    ...(subject.shell && shellPaths
-      ? { shell: { ...subject.shell, paths: [...new Set([...shellPaths, ...resolvedShell])] } }
+    ...(paths ? { paths: await spelled(paths) } : {}),
+    ...(subject.shell && (shellPaths || shellWrites)
+      ? {
+          shell: {
+            ...subject.shell,
+            ...(shellPaths ? { paths: await spelled(shellPaths) } : {}),
+            ...(shellWrites ? { writes: await spelled(shellWrites) } : {}),
+          },
+        }
       : {}),
   };
 }

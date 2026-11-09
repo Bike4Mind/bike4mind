@@ -1,3 +1,8 @@
+import {
+  type EmbeddingKeyTable,
+  buildEmbeddingRegistry,
+  resolveEmbeddingWithKeylessFallback,
+} from '@bike4mind/utils/embeddingProviders';
 /**
  * Agent Executor Lambda Handler
  *
@@ -46,7 +51,7 @@ import {
   cacheRepository,
 } from '@bike4mind/database';
 import { newAccountSpendCapAdaptersWithAlert } from '@server/billing/newAccountSpendCapWithAlert';
-import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
+import { imageModerationIncidents } from '@bike4mind/server-utils/moderation/imageModerationIncidents';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import {
   registerLambdaErrorHandlers,
@@ -59,7 +64,7 @@ import {
   DEFAULT_OUTPUT_MAX_TOKENS,
 } from '@bike4mind/utils';
 import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
-import { EmbeddingFactory, resolveEmbeddingWithKeylessFallback, type EmbeddingKeyTable } from '@bike4mind/fab-pipeline';
+
 import {
   applyWorkspaceSessionSettings,
   workspaceAnswersTurns,
@@ -80,11 +85,11 @@ import { Permission } from '@bike4mind/common';
 import { accessibleBy } from '@casl/mongoose';
 import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
 import { getUserEntitlements } from '@server/entitlements';
-import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
+import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
 import { runDecisionTool } from '@server/decisions/runDecisionTool';
 import { executionTurnAuth } from '@server/auth/turnAuth';
 import { ownerWithheldUsers, withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
-import defineAbilitiesFor from '@server/auth/ability';
+import defineAbilitiesFor from '@bike4mind/server-utils/auth/ability';
 import { missionChatTools, MISSION_CHAT_TOOL_NAMES } from '@workers/deepAgent/missionChatTools';
 import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
 import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
@@ -140,6 +145,8 @@ import {
 import { resolveExecutionQuestId } from './agentExecutor.resolveQuestId';
 import {
   shouldWithholdToolCall,
+  partitionRepeatedApprovedCalls,
+  REPEATED_APPROVED_CALL_OBSERVATION,
   resumeApprovedPauseAndGateConfidence,
   handleWithheldToolCalls,
   settleGatedCall as settleGatedCallImpl,
@@ -150,6 +157,8 @@ import {
   evaluateConfidenceGate,
   formatConfidenceGateReason,
   decideIterationConfidencePause,
+  evaluateLowConfidenceCompletion,
+  DEFAULT_LOW_CONFIDENCE_COMPLETION,
 } from './agentExecutorUtils/confidenceGate';
 import { rehydrateOptiPlanState, ledgerForWrite } from './agentExecutorUtils/optiPlanLedger';
 import {
@@ -258,6 +267,8 @@ import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-uti
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
 import { publishRunPendingAction } from './agentExecutor.pendingAction';
+import { createAgentPushDeps, withAgentTerminalPush, publishAgentTerminalPush } from './agentExecutor.push';
+import { publishPushNotification, sessionDeepLink } from '@server/utils/pushNotifications';
 import { createAgentToolEchoMarker, persistedExecutionSteps } from '@bike4mind/server-utils/utils/markAgentToolEchoes';
 import { isHeadlessConnection } from '@bike4mind/server-utils/utils/headlessConnection';
 import { extractFinalAnswer } from '@bike4mind/server-utils/utils/extractFinalAnswer';
@@ -265,8 +276,9 @@ import { resolveAndPublishMementoCompletion } from '@server/utils/publishMemento
 import { resolveAndBuildMementosPreamble } from '@workers/utils/getFirstIterationMementosPreamble';
 import { resolveExecutionMementoGates } from '@bike4mind/server-utils/utils/resolveExecutionMementoGates';
 import { getFirstIterationSkillsPreamble } from '@workers/utils/getFirstIterationSkillsPreamble';
-import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
-import { loadAgentMcpTools, type AgentMcpTools } from '@workers/utils/loadAgentMcpTools';
+import { getMcpClientAdapter } from '@bike4mind/server-utils/utils/getMcpClientAdapter';
+import { customMcpToolHost } from '@server/mcpConnections/customMcpToolHost';
+import { loadAgentMcpTools, withAutoApprovedCustomTools, type AgentMcpTools } from '@workers/utils/loadAgentMcpTools';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
 import type { Context, SQSBatchResponse, SQSEvent } from 'aws-lambda';
@@ -693,7 +705,7 @@ async function loadMcpToolsSafe(userId: string, logger: Logger): Promise<AgentMc
   const enableMCPServer = (await adminSettingsRepository.getSettingsValue('EnableMCPServer')) ?? false;
   try {
     return await loadAgentMcpTools(
-      { mcpServers: mcpServerRepository, getMcpClient: getMcpClientAdapter, logger },
+      { mcpServers: mcpServerRepository, getMcpClient: getMcpClientAdapter, customMcp: customMcpToolHost, logger },
       { userId, enableMCPServer }
     );
   } catch (err) {
@@ -701,7 +713,13 @@ async function loadMcpToolsSafe(userId: string, logger: Logger): Promise<AgentMc
       userId,
       error: err instanceof Error ? err.message : String(err),
     });
-    return { mcpToolsByServer: {}, serverAgentConfig: {} };
+    return {
+      mcpToolsByServer: {},
+      serverAgentConfig: {},
+      autoApprovedCustomToolNames: [],
+      approvalRequiredCustomToolNames: [],
+      customToolNames: [],
+    };
   }
 }
 
@@ -724,7 +742,13 @@ async function loadMcpToolsForSession(
 ): Promise<AgentMcpTools> {
   if (session.disableUserIntegrations) {
     logger.info('[AgentExecutor][MCP] Session suppresses user integrations - skipping MCP tool load', { userId });
-    return { mcpToolsByServer: {}, serverAgentConfig: {} };
+    return {
+      mcpToolsByServer: {},
+      serverAgentConfig: {},
+      autoApprovedCustomToolNames: [],
+      approvalRequiredCustomToolNames: [],
+      customToolNames: [],
+    };
   }
   return loadMcpToolsSafe(userId, logger);
 }
@@ -882,7 +906,7 @@ export async function materializeAttachmentsForRun(args: {
           `is unavailable for this run and attachments fall through to raw content`
       );
     }
-    const embeddingFactory = new EmbeddingFactory(embeddingConfig);
+    const embeddingFactory = buildEmbeddingRegistry(embeddingConfig);
 
     // Reserve against the budget the turn will actually send, not the model's raw cap - a
     // derived cap on a reasoning model resolves to a much larger value (see
@@ -959,7 +983,8 @@ async function processExecution(
   checkpointDepth: number = 0
 ): Promise<void> {
   logger.updateMetadata({ executionId });
-  const sendWs = createWsSender(connectionId, logger);
+  // Every terminal frame of a top-level run also publishes its push (agentExecutor.push.ts).
+  const sendWs = withAgentTerminalPush(createWsSender(connectionId, logger), createAgentPushDeps(logger), logger);
 
   // Depth guard: refuse to process if this execution has self-dispatched too many times.
   // A runaway agent (infinite tool loop, stuck abort signal) would otherwise chain Lambdas
@@ -1492,7 +1517,14 @@ async function processExecution(
     // model fabricated results. Mirrors ChatCompletionProcess's buildMcpTools.
     //
     // Gated on the session's isolation contract - see `loadMcpToolsForSession`.
-    const { mcpToolsByServer, serverAgentConfig } = await loadMcpToolsForSession(session, execution.userId, logger);
+    const {
+      mcpToolsByServer,
+      serverAgentConfig,
+      autoApprovedCustomToolNames,
+      approvalRequiredCustomToolNames,
+      customToolNames,
+    } = await loadMcpToolsForSession(session, execution.userId, logger);
+    const customToolNameSet = new Set(customToolNames);
     const agentStore = new ServerAgentStore(serverAgentConfig, { userAgents, orgAgents });
     // MCP servers claimed exclusively by an agent (e.g. atlassian by
     // project_manager). Withheld from the parent LLM's tool list; reach the
@@ -1527,7 +1559,18 @@ async function processExecution(
     // Load current approved/denied tools for permission checking. In-process children are gated
     // on these same lists (`toolPermissions` below); dispatched children and DAG nodes get a
     // copy on their row.
-    const approvedTools = [...(execution.approvedTools ?? [])];
+    const approvedTools = withAutoApprovedCustomTools(
+      execution.approvedTools,
+      autoApprovedCustomToolNames,
+      approvalRequiredCustomToolNames
+    );
+    // Auto approvals belong to this tool snapshot, never to a child's persisted permission list.
+    // The child reloads current hints and policy before seeding its own automatic approvals.
+    const approvedToolsForDispatch = withAutoApprovedCustomTools(
+      execution.approvedTools,
+      [],
+      approvalRequiredCustomToolNames
+    );
     const deniedTools = [...(execution.deniedTools ?? [])];
 
     // MAX_STEP_CONTENT keeps one frame under the 128KB API Gateway limit, past which
@@ -1561,7 +1604,7 @@ async function processExecution(
           model: visibleModelId(info.model),
           // Snapshot of the parent's lists: a Lambda-dispatched child rebuilds its tool gate
           // from its own row (`processSubagentDispatch`).
-          approvedTools: [...approvedTools],
+          approvedTools: [...approvedToolsForDispatch],
           deniedTools: [...deniedTools],
           iterationBilling: [],
           totalCreditsUsed: 0,
@@ -1822,7 +1865,7 @@ async function processExecution(
         ...executionTurnAuth(execution),
         scopeDeniedTools: execution.scopeDeniedTools,
         adminRoleWithheld: execution.adminRoleWithheld,
-        approvedTools,
+        approvedTools: approvedToolsForDispatch,
         deniedTools,
         spawnedByExecutionId: executionId,
         enableArtifacts: callerEnableArtifacts,
@@ -2118,7 +2161,20 @@ async function processExecution(
         allSideEffects.push(sideEffect);
       },
       onPendingAction: action =>
-        publishRunPendingAction({ executionId, questId: runQuestId, action, questRepository, sendWs, logger }),
+        publishRunPendingAction({
+          executionId,
+          questId: runQuestId,
+          action,
+          questRepository,
+          sendWs,
+          logger,
+          approvalPush: {
+            userId: execution.userId,
+            sessionId: execution.sessionId,
+            sessionDeepLink,
+            publish: event => publishPushNotification(event, logger),
+          },
+        }),
       sessionId: execution.sessionId,
       questId: runQuestId,
       // Only spend no tracker bills reaches here: an in-process subagent whose `tracker.onStart`
@@ -2857,6 +2913,10 @@ async function processExecution(
     // See `resumeApprovedPauseAndGateConfidence` for the state machine itself - this is
     // only the wiring.
     const approvedPause = execution.pendingPermission?.approved ? execution.pendingPermission : undefined;
+    // Calls the resume below replays, checked against the next iteration only: a model that
+    // re-issues the identical custom connector write right after it ran gets an observation
+    // instead of a second card, which would ask the user to approve a duplicate.
+    let justReplayedCalls: GatedToolCall[] = [];
     if (approvedPause) {
       const { proceed } = await resumeApprovedPauseAndGateConfidence(
         {
@@ -2868,9 +2928,16 @@ async function processExecution(
           deniedTools,
           confidenceGateThreshold: orchestrationProfile?.confidenceGateThreshold ?? CONFIDENCE_GATE_THRESHOLD,
           confidenceOverrides: execution.confidenceOverrides,
+          guardedToolNames: customToolNameSet,
         },
         {
-          executeGatedToolCall: call => agent.executeGatedToolCall(call),
+          answerRepeatedCall: call =>
+            agent.replaceLastToolResultObservation(call.id, REPEATED_APPROVED_CALL_OBSERVATION),
+          executeGatedToolCall: async call => {
+            const observation = await agent.executeGatedToolCall(call);
+            justReplayedCalls.push(call);
+            return observation;
+          },
           toCheckpoint: () => agent.toCheckpoint(),
           updatePermissionState: id => agentExecutionRepository.updatePermissionState(id, { pendingPermission: null }),
           updateCheckpoint: (id, checkpoint) =>
@@ -3237,6 +3304,28 @@ async function processExecution(
       }
       iterationResult = deadlineOutcome.result;
 
+      const { repeats: repeatedApprovedCalls, remaining: withheldAfterRepeatGuard } = partitionRepeatedApprovedCalls(
+        iterationResult.gatedToolCalls ?? [],
+        justReplayedCalls,
+        customToolNameSet
+      );
+      justReplayedCalls = [];
+      if (repeatedApprovedCalls.length > 0) {
+        for (const call of repeatedApprovedCalls) {
+          agent.replaceLastToolResultObservation(call.id, REPEATED_APPROVED_CALL_OBSERVATION);
+        }
+        logger.warn('[Permission] Answered an exact repeat of a just-approved call without a second card', {
+          executionId,
+          tools: repeatedApprovedCalls.map(call => call.name),
+        });
+        // The checkpoint below must carry the replaced observation, not the "awaiting approval" placeholder.
+        iterationResult = {
+          ...iterationResult,
+          checkpoint: agent.toCheckpoint(),
+          gatedToolCalls: withheldAfterRepeatGuard,
+        };
+      }
+
       iterationIndex = iterationResult.checkpoint.iteration;
 
       // Persist checkpoint + bill the iteration before ANY branching.
@@ -3494,6 +3583,59 @@ async function processExecution(
     // Execution complete - re-read totalCreditsUsed from DB for accurate value
     const updatedExecution = await agentExecutionRepository.findById(executionId);
     const finalCheckpoint = agent.toCheckpoint();
+
+    // A final-answer iteration runs no tools, so the per-iteration gate never scores it; `block`
+    // parks the run paused with the answer in the checkpoint (Continue iterates, Stop accepts).
+    const completedOnAnswer =
+      iterationResult?.isComplete && !iterationResult.reachedMaxIterations && !iterationResult.reachedMaxTotalTokens;
+    const lowConfidenceCompletion =
+      completedOnAnswer && (updatedExecution?.lowConfidenceStreak ?? 0) > 0
+        ? evaluateLowConfidenceCompletion({
+            mode:
+              orchestrationProfile?.lowConfidenceCompletion ??
+              (
+                await adminSettingsRepository.getSettingsValue('orchestrationDefaults').catch(err => {
+                  logger.warn('[ConfidenceGate] Failed to load orchestrationDefaults; using built-in default', {
+                    error: err instanceof Error ? err.message : String(err),
+                  });
+                  return undefined;
+                })
+              )?.lowConfidenceCompletion ??
+              DEFAULT_LOW_CONFIDENCE_COMPLETION,
+            lowConfidenceStreak: updatedExecution?.lowConfidenceStreak,
+            lastConfidence: updatedExecution?.lastConfidence,
+            threshold: orchestrationProfile?.confidenceGateThreshold ?? CONFIDENCE_GATE_THRESHOLD,
+          })
+        : null;
+    if (lowConfidenceCompletion) {
+      const { mode, confidence, reason } = lowConfidenceCompletion;
+      logger.info('[ConfidenceGate] Low-confidence completion', { executionId, mode, confidence });
+      await sendWs('low_confidence_completion', { executionId, confidence, reason, mode });
+      if (mode === 'block') {
+        // Stop on this pause finishes via handleGateResponse (apps/client/server/websocket/agentExecute.ts),
+        // which persists a thinner result than the completion below (no resolveDisplayAnswer, artifacts, images).
+        const paused = await agentExecutionRepository.setPendingGate(executionId, {
+          iteration: Math.max(0, finalCheckpoint.iteration - 1),
+          confidence,
+          reason,
+          requestedAt: new Date(),
+        });
+        if (!paused) {
+          logger.info('[ConfidenceGate] Aborted concurrently - bailing without pausing');
+          await sendWs('failed', { executionId, reason: 'aborted' });
+          return;
+        }
+        await sendWs('confidence_gate', {
+          executionId,
+          iteration: Math.max(0, finalCheckpoint.iteration - 1),
+          confidence,
+          reason,
+        });
+        await sendWs('progress', { executionId, status: 'paused' });
+        return;
+      }
+    }
+
     const finalAnswer = extractFinalAnswer(finalCheckpoint.steps);
     // A run that stopped on the iteration ceiling (not model completion) leaves `finalAnswer` as
     // a mid-sentence fragment; wrap it in a deterministic truncation notice so the user sees an
@@ -3524,6 +3666,9 @@ async function processExecution(
       totalTokens: finalCheckpoint.totalTokens,
       totalIterations: finalCheckpoint.iteration,
       reachedMaxIterations,
+      ...(lowConfidenceCompletion && {
+        lowConfidence: { confidence: lowConfidenceCompletion.confidence, reason: lowConfidenceCompletion.reason },
+      }),
     });
 
     await sendWs('completed', {
@@ -3692,6 +3837,12 @@ async function fireDagNodeTerminalOnRefusal(args: {
           });
         });
       await sendWs('failed', { executionId: parentExecutionId, reason: 'dag_hook_error' });
+      // This sender belongs to the child's dispatch, so the parent's push is published explicitly.
+      await publishAgentTerminalPush(
+        { executionId: parentExecutionId, outcome: 'failed' },
+        createAgentPushDeps(logger),
+        logger
+      );
     }
   }
 }
@@ -4160,7 +4311,8 @@ async function processSubagentDispatch(
     // Gated on the same session isolation contract as the top-level load: this dispatch runs in
     // its own Lambda, so an unguarded load here would hand a subagent every personal MCP server
     // in a session whose whole point is not having them.
-    const { mcpToolsByServer, serverAgentConfig } = await loadMcpToolsForSession(session, child.userId, logger);
+    const { mcpToolsByServer, serverAgentConfig, autoApprovedCustomToolNames, approvalRequiredCustomToolNames } =
+      await loadMcpToolsForSession(session, child.userId, logger);
     const agentStore = new ServerAgentStore(serverAgentConfig, { userAgents, orgAgents });
     const agentDef = agentStore.getAgent(agentName);
     if (!agentDef) {
@@ -4193,7 +4345,14 @@ async function processSubagentDispatch(
       : undefined;
     // A dispatched child (subagent or DAG node) cannot pause for approval, so its tool calls
     // are refused unless the parent's lists, copied onto its row at creation, allow them.
-    const childToolPermissions = { approvedTools: child.approvedTools ?? [], deniedTools: child.deniedTools ?? [] };
+    const childToolPermissions = {
+      approvedTools: withAutoApprovedCustomTools(
+        child.approvedTools,
+        autoApprovedCustomToolNames,
+        approvalRequiredCustomToolNames
+      ),
+      deniedTools: child.deniedTools ?? [],
+    };
     const toolDeps: ToolBuilderDeps = {
       userId: child.userId,
       user: user as IUserDocument,
@@ -4395,6 +4554,12 @@ async function processSubagentDispatch(
           questRepository,
           sendWs,
           logger,
+          approvalPush: {
+            userId: child.userId,
+            sessionId: child.sessionId,
+            sessionDeepLink,
+            publish: event => publishPushNotification(event, logger),
+          },
         }),
       sessionId: child.sessionId,
       // Inherited from the parent at create time (see baseFields / nodeDefaults). Inert today -

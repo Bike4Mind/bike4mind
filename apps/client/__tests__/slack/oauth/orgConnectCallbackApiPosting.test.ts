@@ -38,7 +38,7 @@ vi.mock('@bike4mind/server-utils/auth/oauthFlowCookie', () => ({
   NONCE_SLOT: { orgSlackConnect: 'org-slack-connect' },
 }));
 const mockRecordAudit = vi.fn();
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionForActor: (...args: unknown[]) => mockRecordAudit(...args),
 }));
 vi.mock('@bike4mind/slack', () => ({

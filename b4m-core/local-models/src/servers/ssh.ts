@@ -3,15 +3,33 @@ import { chmod, mkdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { Duplex } from 'node:stream';
+import { trackChild } from '../processTree';
 import type { FetchLike } from '../types';
 import { createServerFetch, ServerTransportError } from './serverFetch';
 
+/** The far-end port of an SSH server saved before records carried one: Ollama's. */
+export const SSH_DEFAULT_PORT = 11434;
 /** Where an SSH server's Ollama is reached: loopback on the far end of the stdio forward. */
-export const SSH_OLLAMA_URL = 'http://127.0.0.1:11434';
-const FORWARD_TARGET = '127.0.0.1:11434';
+export const SSH_OLLAMA_URL = sshServerUrl(SSH_DEFAULT_PORT);
 export const SSH_CONNECT_TIMEOUT_S = 15;
-/** A probe over SSH waits for the connect timeout plus Ollama's answer. */
+/** A probe over SSH waits for the connect timeout plus the server's answer. */
 export const SSH_PROBE_TIMEOUT_MS = (SSH_CONNECT_TIMEOUT_S + 5) * 1000;
+
+/** The URL requests use for the server on the far end's loopback port `port`. */
+export function sshServerUrl(port: number): string {
+  return `http://127.0.0.1:${port}`;
+}
+
+/** What to do when parseSshPort turns a far-end port down. */
+export const SSH_PORT_PROBLEM = 'Enter the port the server listens on, on that machine: a number from 1 to 65535.';
+
+/** A TCP port from 1 to 65535, as a number or digits only; null for anything else. */
+export function parseSshPort(value: unknown): number | null {
+  const text = typeof value === 'number' ? String(value) : typeof value === 'string' ? value.trim() : '';
+  if (!/^\d{1,5}$/.test(text)) return null;
+  const port = Number(text);
+  return port >= 1 && port <= 65_535 ? port : null;
+}
 
 // An optional user, then a host name or a Host alias. No option, no spaces, no shell or ssh_config syntax.
 const DESTINATION = /^(?:[A-Za-z0-9._][A-Za-z0-9._-]{0,63}@)?[A-Za-z0-9_][A-Za-z0-9._-]{0,252}$/;
@@ -88,15 +106,18 @@ export function sshChildEnv(
 }
 
 /**
- * Arguments for one stdio forward to the far end's Ollama. Nothing in them can prompt or run a command.
+ * Arguments for one stdio forward to the far end's loopback `port`. Nothing in them can prompt or run a command.
  * Without our own `controlPath` the forward may reuse the user's master but never becomes one: a master
  * started here would end the user's sessions when it exits, or persist with this stripped environment.
  */
 export function sshArgs(
   destination: string,
   controlPath: string | null = null,
-  platform: NodeJS.Platform = process.platform
+  platform: NodeJS.Platform = process.platform,
+  port: number = SSH_DEFAULT_PORT
 ): string[] {
+  const target = parseSshPort(port);
+  if (target === null) throw new SshRefusedError(SSH_PORT_PROBLEM);
   const option = (value: string) => ['-o', value];
   return [
     ...option('BatchMode=yes'),
@@ -114,7 +135,7 @@ export function sshArgs(
       ? [...option('ControlMaster=auto'), ...option(`ControlPath=${controlPath}`), ...option('ControlPersist=120')]
       : [...option('ControlMaster=no'), ...(platform === 'win32' ? option('ControlPath=none') : [])]),
     '-W',
-    FORWARD_TARGET,
+    `127.0.0.1:${target}`,
     '--',
     destination,
   ];
@@ -163,6 +184,20 @@ export class SshConnectionError extends Error {
   }
 }
 
+/**
+ * SSH logged in, but the far end refused the forward to the port: nothing listens there, or (`ambiguous`, over a
+ * shared connection, which reports both the same way) its sshd does not allow forwarding.
+ */
+export class SshForwardRefusedError extends SshConnectionError {
+  constructor(
+    message: string,
+    readonly ambiguous: boolean
+  ) {
+    super(message);
+    this.name = 'SshForwardRefusedError';
+  }
+}
+
 const NOISE = [/^Warning: Permanently added/i, /^Pseudo-terminal will not be allocated/i];
 
 function lastLine(stderr: string): string | null {
@@ -180,8 +215,12 @@ export function describeSshFailure(
   code: number | null,
   destination: string,
   app = 'Desktop',
-  platform: NodeJS.Platform = process.platform
+  platform: NodeJS.Platform = process.platform,
+  port: number = SSH_DEFAULT_PORT
 ): Error {
+  const target = `127.0.0.1:${port}`;
+  // A saved port other than Ollama's may run any kind of server, so the advice names none.
+  const ollama = port === SSH_DEFAULT_PORT;
   const terminal = `\`ssh ${destination}\``;
   // Windows ssh.exe keeps its own known_hosts and keys, so a WSL terminal does not help, and BatchMode cannot prompt.
   const windows = platform === 'win32';
@@ -199,13 +238,16 @@ export function describeSshFailure(
     return new SshRefusedError(`Connect once from ${connectOnce} to trust this server's host key.${passphrase}`);
   }
   if (/open failed: connect failed/i.test(stderr)) {
-    return new SshConnectionError(
-      `SSH to ${destination} works, but Ollama is not running on it: nothing answers at ${FORWARD_TARGET} there. Start Ollama on that machine.`
+    return new SshForwardRefusedError(
+      ollama
+        ? `SSH to ${destination} works, but Ollama is not running on it: nothing answers at ${target} there. Start Ollama on that machine.`
+        : `SSH to ${destination} works, but nothing answers at ${target} there. Start the model server on that machine, or check its port.`,
+      false
     );
   }
   if (/administratively prohibited/i.test(stderr)) {
     return new SshRefusedError(
-      `${destination} does not allow SSH port forwarding, which ${app} needs to reach Ollama there. Set AllowTcpForwarding to yes or local in its sshd_config.`
+      `${destination} does not allow SSH port forwarding, which ${app} needs to reach ${ollama ? 'Ollama' : 'a model server'} there. Set AllowTcpForwarding to yes or local in its sshd_config.`
     );
   }
   if (/: Permission denied \(|Too many authentication failures|no more authentication methods/i.test(stderr)) {
@@ -215,8 +257,9 @@ export function describeSshFailure(
   }
   // Over a shared connection ssh reports every refused forward the same way, so name both causes.
   if (/Session open refused by peer|stdio forwarding failed/i.test(stderr)) {
-    return new SshConnectionError(
-      `SSH to ${destination} works, but it refused the forward to ${FORWARD_TARGET}. Check that Ollama is running there and that its sshd_config allows TCP forwarding (AllowTcpForwarding).`
+    return new SshForwardRefusedError(
+      `SSH to ${destination} works, but it refused the forward to ${target}. Check that ${ollama ? 'Ollama' : 'the model server'} is running there and that its sshd_config allows TCP forwarding (AllowTcpForwarding).`,
+      true
     );
   }
   if (/Could not resolve hostname/i.test(stderr)) {
@@ -246,7 +289,7 @@ export interface SshDeps {
 
 const STDERR_LIMIT = 8 * 1024;
 const CONFIG_LIMIT = 256 * 1024;
-const CONFIG_TIMEOUT_MS = 5_000;
+export const CONFIG_TIMEOUT_MS = 5_000;
 
 const defaultSpawn: Spawn = (command, args, options) =>
   spawnChild(command, args, { ...options, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -365,24 +408,30 @@ class SshForward extends Duplex {
 export interface SshEndpoint {
   /** Validated with `parseSshDestination`. */
   destination: string;
+  /** The far end's loopback port; defaults to SSH_DEFAULT_PORT. Validated with `parseSshPort`. */
+  port?: number;
   /** Shown in errors. */
   label: string;
   app?: string;
+  /** A server's own credential (an OpenAI-compatible server's --api-key), added as over http; ssh does the login. */
+  credentialHeaders?(): Record<string, string> | null;
 }
 
 /**
- * Fetch for an Ollama reached over SSH. Each request runs the system ssh with a stdio forward to the far
- * end's 127.0.0.1:11434, non-interactively; when the user's ssh config sets no ControlPath, requests share
- * one connection through a short socket under ~/.ssh/b4m. Requests carry no credentials: ssh does the login.
+ * Fetch for a model server reached over SSH. Each request runs the system ssh with a stdio forward to the far
+ * end's 127.0.0.1:`port`, non-interactively; when the user's ssh config sets no ControlPath, requests share
+ * one connection through a short socket under ~/.ssh/b4m.
  */
 export function createSshFetch(endpoint: SshEndpoint, deps: SshDeps = {}): FetchLike {
   const destination = parseSshDestination(endpoint.destination);
+  const port = parseSshPort(endpoint.port ?? SSH_DEFAULT_PORT);
   const app = endpoint.app ?? 'Desktop';
   const command = deps.command ?? 'ssh';
   const spawn = deps.spawn ?? defaultSpawn;
   const platform = deps.platform ?? process.platform;
   const env = sshChildEnv(deps.env, platform);
-  let args: string[] = destination ? sshArgs(destination, null, platform) : [];
+  const usable = destination !== null && port !== null;
+  let args: string[] = usable ? sshArgs(destination, null, platform, port) : [];
   let prepared: Promise<void> | null = null;
 
   const spawnFailed = (error: NodeJS.ErrnoException) =>
@@ -391,7 +440,7 @@ export function createSshFetch(endpoint: SshEndpoint, deps: SshDeps = {}): Fetch
       : new SshConnectionError(`${app} could not start ssh (${error.code ?? error.message}).`);
 
   const prepare = async () => {
-    if (!destination) return;
+    if (!usable) return;
     const shared = sharedControlPath(deps.home ?? accountHome(), platform);
     if (!shared) return;
     const config = await effectiveConfig(destination);
@@ -401,20 +450,41 @@ export function createSshFetch(endpoint: SshEndpoint, deps: SshDeps = {}): Fetch
     } catch {
       return;
     }
-    args = sshArgs(destination, shared.option, platform);
+    args = sshArgs(destination, shared.option, platform, port);
   };
 
   // `ssh -G` prints the configuration ssh would use, without connecting.
   const effectiveConfig = (target: string) =>
-    new Promise<string | null>(resolve => {
+    new Promise<string | null>(settle => {
+      let settled = false;
+      const resolve = (value: string | null) => {
+        if (settled) return;
+        settled = true;
+        settle(value);
+      };
       let child: ChildProcess;
+      const group = platform !== 'win32';
       try {
-        child = spawn(command, ['-G', '--', target], { env, windowsHide: true });
+        child = spawn(command, ['-G', '--', target], { env, windowsHide: true, detached: group });
       } catch {
         return resolve(null);
       }
+      trackChild(child);
       let out = '';
-      const timer = setTimeout(() => child.kill(), CONFIG_TIMEOUT_MS);
+      // A `Match exec` grandchild can outlive ssh and hold the pipes open, so end its whole group and our pipe ends.
+      const timer = setTimeout(() => {
+        if (group && child.pid) {
+          try {
+            process.kill(-child.pid, 'SIGKILL');
+          } catch {
+            // Already gone.
+          }
+        }
+        child.kill('SIGKILL');
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        resolve(null);
+      }, CONFIG_TIMEOUT_MS);
       child.stdout?.on('data', (chunk: Buffer) => {
         if (out.length < CONFIG_LIMIT) out += chunk.toString('utf8');
       });
@@ -432,10 +502,11 @@ export function createSshFetch(endpoint: SshEndpoint, deps: SshDeps = {}): Fetch
     });
 
   const inner = createServerFetch({
-    origin: new URL(SSH_OLLAMA_URL).origin,
+    // As URL spells it, so port 80 (dropped from an origin) still matches.
+    origin: new URL(sshServerUrl(port ?? SSH_DEFAULT_PORT)).origin,
     label: endpoint.label,
     app,
-    credentialHeaders: () => null,
+    credentialHeaders: () => endpoint.credentialHeaders?.() ?? null,
     connect: () => {
       let child: ChildProcess;
       try {
@@ -448,7 +519,7 @@ export function createSshFetch(endpoint: SshEndpoint, deps: SshDeps = {}): Fetch
       }
       return new SshForward(
         child,
-        (stderr, code) => describeSshFailure(stderr, code, destination as string, app, platform),
+        (stderr, code) => describeSshFailure(stderr, code, destination as string, app, platform, port as number),
         spawnFailed
       );
     },
@@ -456,7 +527,26 @@ export function createSshFetch(endpoint: SshEndpoint, deps: SshDeps = {}): Fetch
 
   return async (input, init) => {
     if (!destination) throw new SshRefusedError(sshDestinationProblem(endpoint.destination) as string);
-    await (prepared ??= prepare().catch(() => undefined));
+    if (port === null) throw new SshRefusedError(SSH_PORT_PROBLEM);
+    // An aborted request would still spawn ssh (-G, then -W) before http notices the signal.
+    const signal = init?.signal;
+    signal?.throwIfAborted();
+    prepared ??= prepare().catch(() => undefined);
+    if (signal) {
+      let onAbort!: () => void;
+      const aborted = new Promise<never>((_resolve, reject) => {
+        onAbort = () => reject(signal.reason);
+        signal.addEventListener('abort', onAbort, { once: true });
+      });
+      try {
+        await Promise.race([prepared, aborted]);
+      } finally {
+        signal.removeEventListener('abort', onAbort);
+      }
+    } else {
+      await prepared;
+    }
+    signal?.throwIfAborted();
     return inner(input, init);
   };
 }

@@ -59,13 +59,13 @@ vi.mock('@server/billing/freeTierDailyCapGate', () => ({
   checkFreeTierDailySpendCap: (...args: unknown[]) => mockCheckFreeTierDailySpendCap(...args),
 }));
 
-vi.mock('@server/utils/apiKeyTrust', () => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({
   resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
     rateLimit: key.rateLimit,
     ownerUntrusted: false,
   }),
 }));
-vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async orig => ({
   // Keep the real (pure) extractApiKeyFromHeaders - apiKeyAuth imports it; only
   // checkApiKeyRateLimit is stubbed.
   ...(await orig<Record<string, unknown>>()),
@@ -299,7 +299,6 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
       id: 'quest-1',
       status: 'pending',
       prompt: 'Hello there',
-      signupActivity: { userId: 'private-user', turnId: 'private-turn', startedAt: new Date() },
       callback: { url: 'https://private.example.test', apiKeyId: 'private-key' },
       embedding: [0.1, 0.2],
       slackNotification: { channel: 'private-channel' },
@@ -309,7 +308,7 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
     expect(res._getStatusCode()).toBe(200);
     const body = res._getJSONData();
     expect(body.quest).toMatchObject({ id: 'quest-1', status: 'pending', prompt: 'Hello there' });
-    for (const field of ['signupActivity', 'callback', 'embedding', 'slackNotification']) {
+    for (const field of ['callback', 'embedding', 'slackNotification']) {
       expect(body.quest).not.toHaveProperty(field);
     }
     expect(JSON.stringify(body)).not.toContain('private-');

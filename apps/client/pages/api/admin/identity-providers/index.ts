@@ -3,7 +3,7 @@ import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { ApiKeyScope, identityProviderListResponseSchema, identityProviderResponseSchema } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 const handler = adminApi({
   adminPermissions: { GET: 'settings:manage', POST: 'settings:manage' },

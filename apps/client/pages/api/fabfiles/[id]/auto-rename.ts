@@ -1,5 +1,5 @@
 import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQuota';
-import { Permission, UnprocessableEntityError, type IMessage } from '@bike4mind/common';
+import { Permission, UnprocessableEntityError, isTerminalCreditRefusal, type IMessage } from '@bike4mind/common';
 import { FabFile, withTransaction } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -9,7 +9,7 @@ import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { meterCompletionBackend } from '@bike4mind/services';
 import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
-import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 
 const handler = baseApi()
   .use((req, res, next) => {
@@ -304,8 +304,8 @@ Return only the filename (without extension) in kebab-case:`;
             model: modelId,
           });
         } catch (error) {
-          // The credit reservation keeps its own 422.
-          if (error instanceof UnprocessableEntityError) throw error;
+          // A credit refusal (422 out of credits, 429 free-tier daily cap) keeps its own status.
+          if (error instanceof UnprocessableEntityError || isTerminalCreditRefusal(error)) throw error;
           console.error('Auto-rename error:', error);
           throw new BadRequestError(error instanceof Error ? error.message : 'Failed to auto-rename file');
         }

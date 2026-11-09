@@ -3,6 +3,7 @@ import type { SecretCipher } from '../chat/mcp/McpServerStore';
 import { adoptedHandle, hostProcessProbe, readOwnedRecords, sameStartTime, type ProcessProbe } from './adoptedServers';
 import { hostLaunchers, LocalServerSupervisor, type Launchers, type ServerHandle } from './LocalServerSupervisor';
 import { observedFlashAttention, observedKvCacheType, observedLaunchVars, observedPrefill } from './observedOllama';
+import { inertLaunchers } from './testLaunchers';
 
 type Exit = { code: number | null; signal: NodeJS.Signals | null; stopped: boolean };
 
@@ -56,6 +57,20 @@ describe('LocalServerSupervisor', () => {
     expect(instance.owned('a')).toBeNull();
     expect(instance.problem('a')).toBeNull();
     expect(changed).toHaveBeenCalledWith('a');
+  });
+
+  it("shows and logs a started server's warning until it stops", async () => {
+    const warning = 'llama-server at /bin/x is a SYCL build but lists no GPU, so it runs on the CPU.';
+    const child = { ...handle(), warning };
+    const { instance, warn } = supervisor(async () => child);
+    await instance.start('r', { runtime: 'llama-server', port: 8090, settings: { modelsDir: '/m' } });
+    expect(instance.owned('r')).not.toBeNull();
+    expect(instance.warning('r')).toBe(warning);
+    expect(instance.problem('r')).toBeNull();
+    expect(warn).toHaveBeenCalledWith(`MODEL SERVERS: ${warning}`);
+    await instance.stop('r');
+    expect(instance.warning('r')).toBeNull();
+    expect(instance.problem('r')).toBeNull();
   });
 
   it('gives the router key only while the router runs', async () => {
@@ -647,6 +662,7 @@ describe('hostProcessProbe', () => {
 
     const rebooted = { ...files, [BOOT]: 'bbbb-2222\n' };
     const afterReboot = new LocalServerSupervisor({
+      launchers: inertLaunchers(),
       logger: { warn: vi.fn() },
       changed: vi.fn(),
       records: { read: async () => JSON.stringify(record), write: async () => undefined },
@@ -657,6 +673,7 @@ describe('hostProcessProbe', () => {
 
     const steppedClock = async (path: string) => (path === '/proc/stat' ? 'btime 1800000000\n' : proc(files)(path));
     const sameBoot = new LocalServerSupervisor({
+      launchers: inertLaunchers(),
       logger: { warn: vi.fn() },
       changed: vi.fn(),
       records: { read: async () => JSON.stringify(record), write: async () => undefined },

@@ -61,15 +61,12 @@ beforeEach(async () => {
   vi.restoreAllMocks();
   for (const key of Object.keys(config)) delete config[key];
   Object.assign(config, {
-    stagedSignupGrantEnabled: 'true',
-    signupGrantCredits: '1000',
-    verifiedUnlockCredits: '9000',
+    signupGrantInitialCredits: '1000',
+    signupGrantDripCap: '9000',
     signupGrantSignupPoolDaily: UNCAPPED,
     signupGrantTricklePoolDaily: UNCAPPED,
-    signupGrantActivityEnabled: 'true',
     signupGrantActivityMinActiveSeconds: '600',
-    signupGrantActivityDailyCredits: '1000',
-    signupGrantActivityMaxCredits: '9000',
+    signupGrantDailyCredits: '1000',
   });
   vi.spyOn(adminSettingsRepository, 'findBySettingName').mockImplementation(
     async name => (config[name] === undefined ? null : { settingValue: config[name] }) as never
@@ -198,7 +195,9 @@ describe('active session heartbeat', () => {
   it('pays on the second 60s ping at the default 60 second minimum', async () => {
     delete config.signupGrantActivityMinActiveSeconds;
     const user = await createSignupStageUser();
-    expect(await ping(user.id, 0)).toMatchObject({ activeSeconds: 0, paidToday: false, creditsGranted: 0 });
+    const first = await ping(user.id, 0);
+    expect(first).toMatchObject({ activeSeconds: 0, paidToday: false, creditsGranted: 0 });
+    expect(first).not.toHaveProperty('spent');
     expect(await ping(user.id, 60)).toMatchObject({ activeSeconds: 60, paidToday: true, creditsGranted: 1000 });
     expect(await dripRows(user.id)).toHaveLength(1);
   });
@@ -311,18 +310,10 @@ describe('active session heartbeat', () => {
     expect(await creditsOf(user.id)).toBe(1000);
   });
 
-  it('pays with the retired activity flag off when the daily amount is positive', async () => {
-    const user = await createSignupStageUser(0);
-    config.signupGrantActivityEnabled = 'false';
-    config.signupGrantDailyCredits = '1000';
-    await User.updateOne({ _id: user.id }, { currentCredits: 0 });
-    expect(await pingEvery60s(user.id, 0, 600)).toMatchObject({ creditsGranted: 1000, paidToday: true });
-  });
-
-  it('pays nothing when the daily amount is 0, even with the retired activity flag on', async () => {
+  it('pays nothing when the daily amount is 0', async () => {
     const user = await createSignupStageUser(0);
     config.signupGrantDailyCredits = '0';
-    await ping(user.id, 0);
+    expect(await ping(user.id, 0)).not.toHaveProperty('spent');
     await ping(user.id, 60);
     expect(await activityOf(user.id)).toBeUndefined();
     expect(await dripRows(user.id)).toHaveLength(0);
@@ -331,11 +322,11 @@ describe('active session heartbeat', () => {
   it('does nothing for a user without a grant or before the tranche is released, and when the daily amount is 0', async () => {
     const plain = await User.create({ username: 'plain', name: 'Plain', email: 'plain@example.test' });
     const plainResult = await ping(plain.id, 0);
-    expect(plainResult).toMatchObject({ activeSeconds: 0 });
+    expect(plainResult).toMatchObject({ activeSeconds: 0, spent: true });
     expect(plainResult).not.toHaveProperty('requiredSeconds');
     expect((await User.findById(plain.id))?.signupGrant).toBeUndefined();
     const user = await createSignupStageUser(1);
-    config.signupGrantActivityDailyCredits = '0';
+    config.signupGrantDailyCredits = '0';
     await ping(user.id, 0);
     await ping(user.id, 60);
     expect(await activityOf(user.id)).toBeUndefined();
@@ -372,12 +363,14 @@ describe('active session heartbeat', () => {
 
   it('accrues nothing at the lifetime cap and resumes once the cap rises', async () => {
     const user = await createSignupStageUser();
-    config.signupGrantActivityMaxCredits = '1000';
+    config.signupGrantDripCap = '1000';
     await User.updateOne({ _id: user.id }, { 'signupGrant.dripCredits': 1000 });
-    expect(await pingEvery60s(user.id, 0, 600)).toMatchObject({ creditsGranted: 0, activeSeconds: 0 });
+    expect(await pingEvery60s(user.id, 0, 600)).toMatchObject({ creditsGranted: 0, activeSeconds: 0, spent: true });
     expect(await activityOf(user.id)).toBeUndefined();
-    config.signupGrantActivityMaxCredits = '9000';
-    expect(await pingEvery60s(user.id, 660, 1260)).toMatchObject({ creditsGranted: 1000, paidToday: true });
+    config.signupGrantDripCap = '9000';
+    const resumed = await pingEvery60s(user.id, 660, 1260);
+    expect(resumed).toMatchObject({ creditsGranted: 1000, paidToday: true });
+    expect(resumed).not.toHaveProperty('spent');
   });
 
   it('reopens a drip-completed grant through the heartbeat when the live cap is raised', async () => {
@@ -409,7 +402,7 @@ describe('active session heartbeat', () => {
       }
     );
     config.signupGrantDripCap = '20000';
-    expect(await pingEvery60s(user.id, 0, 600)).toMatchObject({ creditsGranted: 0, activeSeconds: 0 });
+    expect(await pingEvery60s(user.id, 0, 600)).toMatchObject({ creditsGranted: 0, activeSeconds: 0, spent: true });
     expect(await activityOf(user.id)).toBeUndefined();
     expect(await dripRows(user.id)).toHaveLength(0);
   });

@@ -20,7 +20,7 @@ import {
   requireGitHubLakeAppConfig,
   resolveConnectableLake,
   toGitHubLakeConnectionResponse,
-} from '@server/integrations/github/dataLake/githubLakeConnection';
+} from '@bike4mind/server-utils/integrations/github/dataLake/githubLakeConnection';
 import {
   authorizeLakeConnectorAccess,
   authorizeLakeConnectorRead,

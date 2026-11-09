@@ -460,6 +460,13 @@ export interface IAgentExecution {
   lowConfidenceStreak?: number;
 
   /**
+   * Confidence of the most recent gate-evaluated iteration, written with `lowConfidenceStreak` by
+   * `recordIterationConfidence`. A final-answer iteration runs no tools and so is never evaluated;
+   * this is the score the answer was built on. Absent until the gate first evaluates an iteration.
+   */
+  lastConfidence?: number;
+
+  /**
    * Admin-only scripted per-iteration gate confidence; semantics are documented on
    * `confidence_overrides` in `AgentExecutionStartRequestSchema` (@bike4mind/common).
    */
@@ -835,6 +842,7 @@ const AgentExecutionSchema = new mongoose.Schema(
     // apply to every new execution.
     confidenceTelemetry: { type: ConfidenceTelemetrySchema, default: () => ({}) },
     lowConfidenceStreak: { type: Number, default: 0 },
+    lastConfidence: { type: Number },
     // `default: undefined` so a normal run carries no field rather than an empty script.
     confidenceOverrides: { type: [Number], default: undefined },
     // Opti-only; no default so non-opti executions don't carry an empty ledger.
@@ -1743,7 +1751,7 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
         // Mongo rejects an empty `$inc`, which a scripted above-threshold score would otherwise send.
         ...(Object.keys(inc).length > 0 ? { $inc: inc } : {}),
         ...(recordTelemetry ? { $min: { 'confidenceTelemetry.minConfidence': confidence } } : {}),
-        ...(belowThreshold ? {} : { $set: { lowConfidenceStreak: 0 } }),
+        $set: { lastConfidence: confidence, ...(belowThreshold ? {} : { lowConfidenceStreak: 0 }) },
       },
       { new: true, projection: { lowConfidenceStreak: 1 } }
     );

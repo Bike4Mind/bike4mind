@@ -14,6 +14,22 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
+    "APNS_KEY": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "APNS_KEY_ID": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "APNS_TEAM_ID": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "APNS_TOPIC": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
     "AgentExecutor": {
       "name": string
       "type": "sst.aws.Function"

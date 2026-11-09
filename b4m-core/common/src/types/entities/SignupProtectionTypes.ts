@@ -4,13 +4,82 @@ export type SignupObservation = { userId: string; email: string; domain: string;
 
 /** Hold reason for a domain found only on the aggregate disposable list (domainHoldReason in b4m-core/services). */
 export const DISPOSABLE_AGGREGATE_HOLD_REASON = 'disposable-aggregate';
+/** Prefix of the hold reason for a freshly registered domain; the full reason names the configured age. */
+export const YOUNG_DOMAIN_HOLD_REASON_PREFIX = 'young-domain';
+
+/** Queue views of the Signup Domain Holds admin list; `pending` is `held_pending_review`. */
+export const SIGNUP_DOMAIN_HOLD_STATUS_FILTERS = ['pending', 'blocked', 'released', 'all'] as const;
+export type SignupDomainHoldStatusFilter = (typeof SIGNUP_DOMAIN_HOLD_STATUS_FILTERS)[number];
+
+/**
+ * Reason families of a hold, each matched as a prefix of `reason`. Must stay in sync with the reasons
+ * domainHoldReason (b4m-core/services/src/userService/domainIntelligence.ts) and detectSignupBurst
+ * (signupBurstDetector.ts) produce.
+ */
+export const SIGNUP_DOMAIN_HOLD_REASON_FILTERS = {
+  'young-domain': YOUNG_DOMAIN_HOLD_REASON_PREFIX,
+  'disposable-aggregate': DISPOSABLE_AGGREGATE_HOLD_REASON,
+  'disposable-list': 'disposable-list',
+  'burner-mx': 'burner-mx',
+  'signup-burst': 'Verified signup burst',
+} as const;
+export type SignupDomainHoldReasonFilter = keyof typeof SIGNUP_DOMAIN_HOLD_REASON_FILTERS;
+export const SIGNUP_DOMAIN_HOLD_REASON_FILTER_KEYS = Object.keys(SIGNUP_DOMAIN_HOLD_REASON_FILTERS) as [
+  SignupDomainHoldReasonFilter,
+  ...SignupDomainHoldReasonFilter[],
+];
 
 /**
  * The automated policies that may decide a hold. They only ever confirm (keep credits held); a
- * release always comes from an admin. See apps/workers/src/cron/signupDomainHoldTriage.ts.
+ * release always comes from an admin. See apps/workers/src/cron/signupDomainHoldTriage.ts and
+ * apps/client/server/security/signupDomainHoldAssessment/signupDomainHoldAssessment.ts.
  */
-export const SIGNUP_DOMAIN_HOLD_AUTO_POLICIES = ['disposable-aggregate-rule'] as const;
+export const SIGNUP_DOMAIN_HOLD_AUTO_POLICIES = ['disposable-aggregate-rule', 'advisory-decision'] as const;
 export type SignupDomainHoldAutoPolicy = (typeof SIGNUP_DOMAIN_HOLD_AUTO_POLICIES)[number];
+
+/** Bumped when the assessment question or its feature summary changes, so older verdicts are redone. */
+export const SIGNUP_DOMAIN_HOLD_ASSESSMENT_POLICY_VERSION = 1;
+export const SIGNUP_DOMAIN_HOLD_JUDGMENTS = ['abuse', 'legitimate', 'insufficient_evidence'] as const;
+export type SignupDomainHoldJudgment = (typeof SIGNUP_DOMAIN_HOLD_JUDGMENTS)[number];
+/**
+ * PlatformDecisionFailureCode (apps/client/server/decisions/platformDecision.ts) plus `summary_timeout`;
+ * must stay in sync with it.
+ */
+export const SIGNUP_DOMAIN_HOLD_ASSESSMENT_FAILURES = [
+  'provider_not_configured',
+  'model_unavailable',
+  'provider_overloaded',
+  'provider_rejected',
+  'provider_error',
+  'malformed_response',
+  'refused',
+  'invalid_request',
+  'summary_timeout',
+] as const;
+export type SignupDomainHoldAssessmentFailure = (typeof SIGNUP_DOMAIN_HOLD_ASSESSMENT_FAILURES)[number];
+/** Failed assessments of one hold are retried up to this many times per policy version. */
+export const SIGNUP_DOMAIN_HOLD_ASSESSMENT_MAX_ATTEMPTS = 3;
+
+/** The last advisory verdict on a hold; kept after an admin decision as history. */
+export const signupDomainHoldAssessmentSchema = z.discriminatedUnion('outcome', [
+  z.object({
+    outcome: z.literal('judged'),
+    policyVersion: z.number().int(),
+    judgment: z.enum(SIGNUP_DOMAIN_HOLD_JUDGMENTS),
+    confidence: z.number().min(0).max(1),
+    model: z.string(),
+    assessedAt: z.date(),
+  }),
+  z.object({
+    outcome: z.literal('failed'),
+    policyVersion: z.number().int(),
+    failure: z.enum(SIGNUP_DOMAIN_HOLD_ASSESSMENT_FAILURES),
+    attempts: z.number().int().min(1),
+    model: z.string(),
+    assessedAt: z.date(),
+  }),
+]);
+export type SignupDomainHoldAssessment = z.infer<typeof signupDomainHoldAssessmentSchema>;
 
 export const signupDomainReviewSchema = z.object({
   domain: z.string(),
@@ -30,6 +99,13 @@ export const signupDomainReviewSchema = z.object({
       decidedAt: z.date(),
     })
     .optional(),
+  assessment: signupDomainHoldAssessmentSchema.optional(),
+  /** Young-domain recheck (signupDomainHoldTriage): the registration date it last read for the domain. */
+  domainRegisteredAt: z.date().optional(),
+  /** When the recheck last looked the domain up, so a failed lookup is retried on a backoff. */
+  domainAgeCheckedAt: z.date().optional(),
+  /** When the recheck found the domain past the young-domain age; a hint for the admin, never a decision. */
+  domainAgedAt: z.date().optional(),
 });
 export type SignupDomainReview = z.infer<typeof signupDomainReviewSchema>;
 
@@ -125,8 +201,6 @@ export type SignupProtection = {
   repository: SignupProtectionRepository;
   mode?: 'observe' | 'enforce';
   notifyHold?: (review: SignupDomainReview) => Promise<void>;
-  /** Alerts operators that a required setting is unset and the drip is running on its fallback. */
-  notifyConfig?: (alert: { setting: 'signupGrantDripCap'; fallback: number }) => Promise<void>;
   /** Daily per-pool payout budgets for free signup grants; absent means no budget is enforced. */
   grantBudget?: SignupGrantBudget;
   /** Called on every disposable-email refusal so false positives surface per source. Must not throw. */

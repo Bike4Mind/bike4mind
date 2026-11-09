@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
-vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
+vi.mock('@bike4mind/server-utils/auth/riskEvidence', () => ({
+  requestRiskEvidenceRefresh: vi.fn(async () => 'queued'),
+}));
 import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 import nc from 'next-connect';
@@ -18,7 +20,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/database/infra', () => ({
   secretRotationRepository: { findBySecretName: vi.fn() },
 }));
-vi.mock('@server/auth/ability', () => ({ default: vi.fn() }));
+vi.mock('@bike4mind/server-utils/auth/ability', () => ({ default: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { GOOGLE_CLIENT_ID: '', GITHUB_CLIENT_ID: '', JWT_SECRET: 'test-secret' },
 }));

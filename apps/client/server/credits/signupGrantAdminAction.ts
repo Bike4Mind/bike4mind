@@ -2,7 +2,11 @@ import type { Request } from 'express';
 import { assertCanActOnAdminTarget, ForbiddenError, NotFoundError, type AdminAuditAction } from '@bike4mind/common';
 import { userRepository } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/utils';
-import { denySelfAdminAction, isSelfOrImpersonator, parseAdminActionReason } from '@server/utils/adminAudit';
+import {
+  denySelfAdminAction,
+  isSelfOrImpersonator,
+  parseAdminActionReason,
+} from '@bike4mind/server-utils/utils/adminAudit';
 
 export type SignupGrantAuditTarget = { kind: 'user'; id: string; displayName: string };
 

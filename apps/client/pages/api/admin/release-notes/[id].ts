@@ -9,7 +9,7 @@ import {
   scrubCustomerText,
 } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { definedKeys, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { definedKeys, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { deploymentMediaOrigins } from '@server/utils/deploymentMediaOrigins';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';

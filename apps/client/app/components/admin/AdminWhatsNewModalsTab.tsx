@@ -379,7 +379,7 @@ function ModalTableRow({
  */
 function WhatsNewErrorFallback() {
   return (
-    <Alert variant="outlined" color="danger" sx={{ m: 2 }}>
+    <Alert variant="outlined" color="danger">
       <Typography level="title-md">Something went wrong</Typography>
       <Typography level="body-sm">
         An error occurred while loading the What&apos;s New management panel. Please try refreshing the page.
@@ -409,7 +409,7 @@ export default function AdminWhatsNewModalsTab() {
 
   return (
     <ErrorBoundary fallback={<WhatsNewErrorFallback />}>
-      <Box sx={{ p: 2 }}>
+      <Box>
         <Stack spacing={{ xs: 1.5, sm: 3 }}>
           {/* Header */}
           <Box>
@@ -418,8 +418,8 @@ export default function AdminWhatsNewModalsTab() {
               <ContextHelpButton helpId="admin/whats-new" tooltipText="What's New Help" />
             </Stack>
             <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
-              Manage the hand-authored What&apos;s New modals shown in the app. Release notes are managed in the
-              Release Notes tab.
+              Manage the hand-authored What&apos;s New modals shown in the app. Release notes are managed in the Release
+              Notes tab.
             </Typography>
             <Chip size="sm" variant="outlined" color={getChipColor()} sx={{ mt: 1 }}>
               Environment: {stage}

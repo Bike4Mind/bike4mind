@@ -52,11 +52,11 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: (...a: unknown[]) => mockUserFind(...a) },
 }));
 
-vi.mock('@server/entitlements/activeSubscriptions', () => ({
+vi.mock('@bike4mind/server-utils/entitlements/activeSubscriptions', () => ({
   getActiveSubscriptionsForUser: (...a: unknown[]) => mockSubs(...a),
 }));
 
-vi.mock('@server/entitlements/partnerRules', () => ({
+vi.mock('@bike4mind/server-utils/entitlements/partnerRules', () => ({
   partnerEntitlementsForEmail: (...a: unknown[]) => mockPartnerKeys(...a),
 }));
 

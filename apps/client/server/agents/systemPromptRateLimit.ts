@@ -1,4 +1,5 @@
 import type { Logger } from '@bike4mind/observability';
+import { isTerminalCreditRefusal } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 
 /** A BadRequestError so the SPA route keeps its 400; the public v1 route reports it as a 429. */
@@ -38,16 +39,17 @@ export const assertSystemPromptGenerationAllowed = (
 };
 
 /**
- * Logs a generate-system-prompt failure. A rate-limit refusal is a repeat request inside the
- * admin-set interval, an expected 4xx, so it logs at warn; every other failure stays at error.
+ * Logs a generate-system-prompt failure. A rate-limit refusal (a repeat request inside the admin-set
+ * interval) and a credit refusal (out of credits, free-tier daily cap) are expected 4xx, so they log
+ * at warn; every other failure stays at error.
  */
 export const logSystemPromptGenerationFailure = (
   logger: Pick<Logger, 'warn' | 'error'>,
   message: string,
   error: unknown
 ): void => {
-  if (error instanceof SystemPromptRateLimitError) {
-    logger.warn(message, error.message);
+  if (error instanceof SystemPromptRateLimitError || isTerminalCreditRefusal(error)) {
+    logger.warn(message, (error as Error).message);
     return;
   }
   logger.error(message, error);

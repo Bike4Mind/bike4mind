@@ -33,7 +33,9 @@ vi.mock('@client/server/tools/adminToolsServer', () => ({
 }));
 
 const mockAudit = vi.fn();
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: (...a: unknown[]) => mockAudit(...a) }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: (...a: unknown[]) => mockAudit(...a),
+}));
 
 const modalChanges: Array<{ kind: string; id: string; title: string }> = [];
 vi.mock('@client/server/tools/modalOperations', () => ({

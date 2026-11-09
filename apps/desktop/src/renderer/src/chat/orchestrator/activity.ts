@@ -1,5 +1,5 @@
-import { snippetOf } from '@shared/agentOutcome';
-import { SESSION_SETUP_LABEL, type ChatStreamEvent, type ChatToolCall } from '@shared/chat';
+import { SESSION_SETUP_LABEL, type ChatStreamEvent } from '@shared/chat';
+import { describeToolInput } from '@shared/toolDetail';
 import type { AgentView } from './roster';
 
 /** What a running agent is doing right now, as far as its stream shows. Status only, never stored. */
@@ -8,24 +8,7 @@ export type AgentActivity =
   | { kind: 'tool'; tool: string; detail: string; target?: string }
   | { kind: 'phase'; phase: 'waiting' | 'thinking' | 'responding' | 'writing-tool'; tool?: string };
 
-const DETAIL_MAX = 60;
-const DETAIL_KEYS = ['path', 'file_path', 'command', 'pattern', 'query', 'url'] as const;
-const PATH_KEYS: ReadonlySet<string> = new Set(['path', 'file_path']);
-
 const SESSION_TOOL = /^session_/;
-
-function basename(path: string): string {
-  return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
-}
-
-export function describeToolInput(call: Pick<ChatToolCall, 'name' | 'input'>): string {
-  for (const key of DETAIL_KEYS) {
-    const value = call.input[key];
-    if (typeof value !== 'string' || value === '') continue;
-    return snippetOf(PATH_KEYS.has(key) ? basename(value) : value, DETAIL_MAX);
-  }
-  return '';
-}
 
 function sameActivity(a: AgentActivity, b: AgentActivity): boolean {
   if (a.kind === 'tool' && b.kind === 'tool')

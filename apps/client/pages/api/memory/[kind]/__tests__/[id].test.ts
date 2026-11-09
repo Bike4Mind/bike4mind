@@ -76,7 +76,7 @@ vi.mock('@bike4mind/services', () => ({
 }));
 
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
-vi.mock('@server/utils/auditLog', () => ({
+vi.mock('@bike4mind/server-utils/utils/auditLog', () => ({
   DataLakeAuditEvents: { LAKE_MEMORY_PURGED: 'LAKE_MEMORY_PURGED' },
   logAuditEvent: h.logAuditEvent,
 }));

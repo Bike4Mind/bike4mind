@@ -1,3 +1,4 @@
+import { CloudWatchClient } from '@aws-sdk/client-cloudwatch';
 import { Logger } from '@bike4mind/observability';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { escapeSlackLine, escapeSlackText, toAbsoluteUrl } from '@bike4mind/common';
@@ -14,6 +15,10 @@ import {
 } from '../events/alarmSlackMessage';
 import { readAlarmMention } from '../events/alarmSlackMention';
 import { recordYoungAccountSpendShadowDetections } from './youngAccountSpendShadowDetections';
+import {
+  desiredYoungAccountAlarmThresholds,
+  reconcileYoungAccountAlarmThresholds,
+} from './youngAccountSpendAlarmThresholds';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
 import { z } from 'zod';
@@ -132,6 +137,29 @@ export function buildYoungAccountSpendMessage(
 
 const scheduledEventSchema = z.object({ time: z.iso.datetime() });
 
+/** Alarm names are set by infra/cron.ts from infra/llmSpend.ts; empty where that stage has no alarms. */
+async function applyAlarmThresholdOverrides(logger: Logger): Promise<void> {
+  const page = process.env.YOUNG_ACCOUNT_SPEND_ALARM_NAME?.trim();
+  const warn = process.env.YOUNG_ACCOUNT_SPEND_WARN_ALARM_NAME?.trim();
+  if (!page || !warn) {
+    logger.log('young-account-alarm-threshold-reconcile-skipped', { reason: 'alarm names not configured' });
+    return;
+  }
+  try {
+    const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
+    await reconcileYoungAccountAlarmThresholds({
+      client: new CloudWatchClient({}),
+      alarmNames: { page, warn },
+      desired: desiredYoungAccountAlarmThresholds(settings),
+      logger,
+    });
+  } catch (error) {
+    logger.error('young-account-alarm-threshold-reconcile-failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 export async function handler(event: unknown) {
   const logger = new Logger().withMetadata({ cron: 'youngAccountSpendAlert', stage: Resource.App.stage });
 
@@ -145,6 +173,20 @@ export async function handler(event: unknown) {
   const start = new Date(end.getTime() - HOUR_MS);
 
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', Resource.App.stage), logger);
+  try {
+    return await alertOnYoungAccountSpend(start, end, thresholds, logger);
+  } finally {
+    // Runs on quiet hours and failed alerts alike, so an override never waits on a breach.
+    await applyAlarmThresholdOverrides(logger);
+  }
+}
+
+async function alertOnYoungAccountSpend(
+  start: Date,
+  end: Date,
+  thresholds: YoungAccountSpendThresholds,
+  logger: Logger
+) {
   const summary = await counterLogRepository.findYoungAccountSpend(start, end, TOP_SPENDER_LIMIT);
   logger.log('young-account-spend', {
     windowStart: start.toISOString(),

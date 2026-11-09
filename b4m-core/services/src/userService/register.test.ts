@@ -716,9 +716,8 @@ describe('registerUser', () => {
       const readSetting = mockAdapters.db.adminSettings.findBySettingName.getMockImplementation();
       mockAdapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) => {
         const values: Record<string, string> = {
-          stagedSignupGrantEnabled: 'true',
-          signupGrantCredits: '12',
-          verifiedUnlockCredits: '28',
+          signupGrantInitialCredits: '12',
+          signupGrantDripCap: '28',
         };
         return name in values ? { settingValue: values[name] } : readSetting(name);
       });
@@ -735,13 +734,11 @@ describe('registerUser', () => {
       expect(invited.signupGrant).toBeUndefined();
     });
 
-    it('gives a staged-off environment seeded with drip cap 0 the flat grant amount with nothing locked', async () => {
+    it('gives a drip cap of 0 the flat grant amount with nothing locked', async () => {
       setAllowOpenRegistration('true');
       const readSetting = mockAdapters.db.adminSettings.findBySettingName.getMockImplementation();
       mockAdapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) => {
         const values: Record<string, string> = {
-          stagedSignupGrantEnabled: 'false',
-          defaultFreeCredits: '500',
           signupGrantInitialCredits: '500',
           signupGrantDailyCredits: '0',
           signupGrantDripCap: '0',
@@ -752,14 +749,11 @@ describe('registerUser', () => {
       expect(result.signupGrant).toMatchObject({ signupCredits: 500, unlockCredits: 0, creditsReleased: 0 });
     });
 
-    it('snapshots the schedule keys over the old tranche and unlock keys', async () => {
+    it('snapshots the schedule keys into the enrolled grant', async () => {
       setAllowOpenRegistration('true');
       const readSetting = mockAdapters.db.adminSettings.findBySettingName.getMockImplementation();
       mockAdapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) => {
         const values: Record<string, string> = {
-          stagedSignupGrantEnabled: 'true',
-          signupGrantCredits: '12',
-          verifiedUnlockCredits: '28',
           signupGrantInitialCredits: '0',
           signupGrantDripCap: '40',
         };
@@ -774,9 +768,8 @@ describe('registerUser', () => {
         const readSetting = mockAdapters.db.adminSettings.findBySettingName.getMockImplementation();
         mockAdapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) => {
           const values: Record<string, string> = {
-            stagedSignupGrantEnabled: 'true',
-            signupGrantCredits: '4',
-            verifiedUnlockCredits: '0',
+            signupGrantInitialCredits: '4',
+            signupGrantDripCap: '9000',
             ReferralCreditsAmount: '10',
           };
           return name in values ? { settingValue: values[name] } : readSetting(name);
@@ -925,11 +918,10 @@ describe('registerUser', () => {
         expect(created().pendingCreditGrant).toBeNull();
       });
 
-      it('pays a referral invite above the initial credits whole where the migration seeded drip cap 0', async () => {
+      it('pays a referral invite above the initial credits whole under a drip cap of 0', async () => {
         const readSetting = mockAdapters.db.adminSettings.findBySettingName.getMockImplementation();
         mockAdapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) => {
           const values: Record<string, string> = {
-            stagedSignupGrantEnabled: 'false',
             signupGrantInitialCredits: '4',
             signupGrantDailyCredits: '0',
             signupGrantDripCap: '0',
@@ -1146,7 +1138,7 @@ describe('registerViaOTC', () => {
   });
 
   // --- invite-resolved pending grant is released immediately (OTC proved the email) ---
-  it('grants the invite-resolved pending amount (not defaultFreeCredits) and clears the field', async () => {
+  it('grants the invite-resolved pending amount and clears the field', async () => {
     mockAdapters.db.registrationInvites.findByCode = vi.fn().mockResolvedValue({
       code: 'INVITE500',
       email: 'otc@example.com',
@@ -1157,7 +1149,6 @@ describe('registerViaOTC', () => {
 
     const result = await registerViaOTC({ ...otcParams, inviteCode: 'INVITE500' }, mockAdapters);
 
-    // The invite amount (500) wins over the defaultFreeCredits setting (100).
     expect(mockAddCredits).toHaveBeenCalledWith(
       expect.objectContaining({
         ownerId: 'newUserId',

@@ -1,32 +1,48 @@
-import React, { useState } from 'react';
-import { Box, Typography, LinearProgress, Tabs, TabList, Tab, TabPanel, Alert, Button } from '@mui/joy';
-import Warning from '@mui/icons-material/Warning';
+import React, { useState, type ReactNode } from 'react';
+import { Button, Stack, Tab, TabList, TabPanel, Tabs } from '@mui/joy';
+import RefreshIcon from '@mui/icons-material/Refresh';
 
-import { useEventMetrics } from './hooks/useEventMetrics';
-import { useEventMetricsState } from './hooks/useEventMetricsState';
+import { useEventMetrics, type MetricsFilters } from './hooks/useEventMetrics';
+import { useApplyPickedFilters, useEventMetricsState } from './hooks/useEventMetricsState';
 import { processChartData } from './utils/chartDataProcessor';
 import { ControlPanel } from './components/ControlPanel';
+import { EventMetricsStats } from './components/EventMetricsStats';
 import { OverviewTab } from './components/OverviewTab';
 import { CurationBreakdownTab } from './components/CurationBreakdownTab';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
-import { SegmentedControl, useAdminListUrlState } from '../shared';
+import {
+  AdminPageHeader,
+  ErrorState,
+  LoadingState,
+  SegmentedControl,
+  UpdatingBar,
+  useAdminListUrlState,
+} from '../shared';
+import { ADMIN_REGION_GAP, adminTabStrip } from '../shared/adminStyles';
 import { EVENTS_SEARCH_KEYS, EVENTS_VIEW_BY_USER } from './eventsTabSearch';
 import { UserActivityView } from './UserActivity';
 
-const EventMetricsPanel: React.FC = () => {
-  // Applied filters state (used for API calls)
-  const [appliedFilters, setAppliedFilters] = useState<{
-    dateFrom?: string;
-    dateTo?: string;
-    userFilter?: string;
-    eventFilter?: string;
-    eventCategoryFilter?: string;
-  }>({});
+/** Both views share the page header; the events view adds its Refresh action. */
+const EventMetricsHeader: React.FC<{ actions?: ReactNode }> = ({ actions }) => (
+  <AdminPageHeader
+    title="Event metrics"
+    description="Recorded product events by date, category, event and user."
+    actions={
+      <>
+        {actions}
+        <ContextHelpButton helpId="admin/metrics" tooltipText="Event metrics help" />
+      </>
+    }
+  />
+);
+
+const EventMetricsPanel: React.FC<{ viewSwitch: ReactNode }> = ({ viewSwitch }) => {
+  const [appliedFilters, setAppliedFilters] = useState<MetricsFilters>({});
 
   const { data: metrics = [], isLoading, isFetching, isError, error, forceRefresh } = useEventMetrics(appliedFilters);
 
   const {
-    // Filter states
+    dateRange,
     dateFrom,
     dateTo,
     userFilter,
@@ -37,73 +53,90 @@ const EventMetricsPanel: React.FC = () => {
     setUserFilter,
     setEventFilter,
     setEventCategoryFilter,
-    // UI states
     activeTab,
     setActiveTab,
-    // Computed data
     filteredAndSortedMetrics,
-    // Helper functions
+    hasFilters,
     clearFilters,
     setDateRange,
   } = useEventMetricsState(metrics);
+
+  useApplyPickedFilters({ dateFrom, dateTo, userFilter, eventFilter, eventCategoryFilter }, setAppliedFilters);
 
   const handleRefresh = () => {
     forceRefresh();
   };
 
-  const handleApplyFilters = () => {
-    setAppliedFilters({
-      dateFrom: dateFrom || undefined,
-      dateTo: dateTo || undefined,
-      userFilter: userFilter || undefined,
-      eventFilter: eventFilter || undefined,
-      eventCategoryFilter: eventCategoryFilter || undefined,
-    });
-  };
-
-  const handleClearFilters = () => {
-    clearFilters();
-    setAppliedFilters({});
-  };
-
   const chartData = processChartData(filteredAndSortedMetrics);
+  const errorState = isError && (
+    <ErrorState
+      message={`Event metrics failed to load. ${error instanceof Error ? error.message : ''}`.trim()}
+      onRetry={handleRefresh}
+      retrying={isFetching}
+    />
+  );
+
+  const emptyAction = hasFilters ? (
+    <Button variant="outlined" onClick={clearFilters} data-testid="event-metrics-empty-clear-filters-btn">
+      Clear filters
+    </Button>
+  ) : (
+    <Button variant="outlined" onClick={handleRefresh} data-testid="event-metrics-curation-refresh-btn">
+      Refresh metrics
+    </Button>
+  );
+
+  // LoadingState only on a first load: a filter change keeps the previous metrics (placeholder data)
+  // and refetches under the UpdatingBar.
+  let body: ReactNode;
+  if (isLoading) body = <LoadingState label="Loading event metrics" />;
+  else if (isError && metrics.length === 0) body = errorState;
+  else
+    body = (
+      <>
+        <UpdatingBar active={isFetching} testId="event-metrics-updating" />
+        {errorState}
+        <EventMetricsStats metrics={metrics} filteredMetrics={filteredAndSortedMetrics} />
+        <Tabs value={activeTab} onChange={(_, value) => setActiveTab(value as string)}>
+          <TabList sx={adminTabStrip}>
+            <Tab value="overview" data-testid="overview-tab">
+              Overview
+            </Tab>
+            <Tab value="curation" data-testid="curation-tab">
+              Curation breakdown
+            </Tab>
+          </TabList>
+          <TabPanel value="overview" sx={{ p: 0, pt: 2 }}>
+            <OverviewTab chartData={chartData} />
+          </TabPanel>
+          <TabPanel value="curation" sx={{ p: 0, pt: 2 }}>
+            <CurationBreakdownTab chartData={chartData} filtered={hasFilters} emptyAction={emptyAction} />
+          </TabPanel>
+        </Tabs>
+      </>
+    );
 
   return (
-    <Box>
-      {/* Error State */}
-      {isError && (
-        <Alert
-          color="danger"
-          variant="soft"
-          startDecorator={<Warning />}
-          endDecorator={
-            <Button variant="soft" color="danger" size="sm" onClick={handleRefresh}>
-              Retry
-            </Button>
-          }
-          sx={{ mb: 2 }}
-        >
-          <Box>
-            <Typography level="title-sm">Failed to load metrics</Typography>
-            <Typography level="body-sm">{error instanceof Error ? error.message : 'Unknown error'}</Typography>
-          </Box>
-        </Alert>
-      )}
-
-      {/* Loading indicator */}
-      {isLoading && (
-        <Box sx={{ mb: 2 }}>
-          <LinearProgress />
-          <Typography level="body-sm" sx={{ mt: 1, color: 'text.secondary' }}>
-            Loading event metrics...
-          </Typography>
-        </Box>
-      )}
-
-      {/* Control Panel */}
+    <Stack gap={ADMIN_REGION_GAP}>
+      <EventMetricsHeader
+        actions={
+          <Button
+            size="sm"
+            variant="outlined"
+            color="neutral"
+            startDecorator={<RefreshIcon />}
+            loading={isFetching}
+            onClick={handleRefresh}
+            data-testid="event-metrics-refresh-btn"
+          >
+            Refresh
+          </Button>
+        }
+      />
+      {viewSwitch}
       <ControlPanel
         metrics={metrics}
-        filteredMetrics={filteredAndSortedMetrics}
+        dateRange={dateRange}
         dateFrom={dateFrom}
         dateTo={dateTo}
         userFilter={userFilter}
@@ -114,60 +147,12 @@ const EventMetricsPanel: React.FC = () => {
         setUserFilter={setUserFilter}
         setEventFilter={setEventFilter}
         setEventCategoryFilter={setEventCategoryFilter}
-        onRefresh={handleRefresh}
-        onClearFilters={handleClearFilters}
+        onClearFilters={clearFilters}
         onSetDateRange={setDateRange}
-        onApplyFilters={handleApplyFilters}
-        isFetching={isFetching}
+        hasFilters={hasFilters}
       />
-
-      {/* Tabs Section */}
-      <Tabs value={activeTab} onChange={(_, value) => setActiveTab(value as string)}>
-        <Box
-          sx={{
-            display: 'flex',
-            flexDirection: { xs: 'column', sm: 'row' },
-            justifyContent: 'space-between',
-            alignItems: { xs: 'flex-start', sm: 'center' },
-            gap: 2,
-            mb: 1,
-          }}
-        >
-          <TabList sx={{ overflowX: 'auto', width: { xs: '100%', sm: 'auto' } }}>
-            <Tab value="overview" data-testid="overview-tab">
-              📊{' '}
-              <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>
-                {' '}
-                Overview
-              </Box>
-            </Tab>
-            <Tab value="curation" data-testid="curation-tab">
-              📁{' '}
-              <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>
-                {' '}
-                Curation Breakdown
-              </Box>
-            </Tab>
-          </TabList>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <Typography level="body-sm" sx={{ color: 'text.secondary', whiteSpace: 'nowrap' }}>
-              Showing {filteredAndSortedMetrics.length} of {metrics.length} events
-            </Typography>
-            <ContextHelpButton helpId="admin/metrics" tooltipText="Event Metrics Help" />
-          </Box>
-        </Box>
-
-        {/* Overview Tab */}
-        <TabPanel value="overview" sx={{ p: 1 }}>
-          <OverviewTab chartData={chartData} />
-        </TabPanel>
-
-        {/* Curation Breakdown Tab */}
-        <TabPanel value="curation" sx={{ p: 1 }}>
-          <CurationBreakdownTab chartData={chartData} />
-        </TabPanel>
-      </Tabs>
-    </Box>
+      {body}
+    </Stack>
   );
 };
 
@@ -180,19 +165,23 @@ const EventMetricsTab: React.FC = () => {
   const [state, update] = useAdminListUrlState(EVENTS_SEARCH_KEYS);
   const view = state.filters.view === EVENTS_VIEW_BY_USER ? EVENTS_VIEW_BY_USER : 'events';
 
+  const viewSwitch = (
+    <SegmentedControl
+      options={VIEW_OPTIONS}
+      value={view}
+      onChange={next => update({ filters: { view: next === 'events' ? '' : next } })}
+      aria-label="Events view"
+      data-testid="event-metrics-view"
+    />
+  );
+
+  if (view === 'events') return <EventMetricsPanel viewSwitch={viewSwitch} />;
   return (
-    <Box sx={{ p: { xs: 1.5, sm: 3 } }}>
-      <Box sx={{ mb: 2 }}>
-        <SegmentedControl
-          options={VIEW_OPTIONS}
-          value={view}
-          onChange={next => update({ filters: { view: next === 'events' ? '' : next } })}
-          aria-label="Events view"
-          data-testid="event-metrics-view"
-        />
-      </Box>
-      {view === 'events' ? <EventMetricsPanel /> : <UserActivityView />}
-    </Box>
+    <Stack gap={ADMIN_REGION_GAP}>
+      <EventMetricsHeader />
+      {viewSwitch}
+      <UserActivityView />
+    </Stack>
   );
 };
 

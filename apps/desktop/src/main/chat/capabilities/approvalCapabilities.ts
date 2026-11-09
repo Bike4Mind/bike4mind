@@ -5,7 +5,17 @@ import { spendsCredits } from '../tools/riskAssessment';
 
 export function capabilityFor(toolName: string, approvalKey?: string): Capability {
   if (spendsCredits(toolName)) return 'credits';
-  if (['file_read', 'file_write', 'file_edit', 'apply_patch', 'glob_files', 'grep_search'].includes(toolName)) {
+  if (
+    [
+      'file_read',
+      'file_write',
+      'file_edit',
+      'apply_patch',
+      'glob_files',
+      'grep_search',
+      'save_generated_image',
+    ].includes(toolName)
+  ) {
     return 'files';
   }
   if (approvalKey?.startsWith('browser-')) {

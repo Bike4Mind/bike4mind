@@ -46,7 +46,12 @@ describe('remoteMcpHandler isolation', () => {
     expect(keys.filter(k => /secret|token|password|key|uri/i.test(k))).toEqual([]);
   });
 
-  it('is linked from web so it can be invoked', () => {
-    expect(stripComments(read('infra/web.ts'))).toMatch(/link:\s*\[[^\]]*\bremoteMcpHandler\b/s);
-  });
+  // resolveRemoteMcpRunner fails closed on a hosted runtime without this link, so every runtime that
+  // runs custom connector tools must carry it: web (Confirm, inline chat), queued chat, and agents.
+  it.each(['infra/web.ts', 'infra/chatCompletion.ts', 'infra/agentExecutor.ts'])(
+    'is linked from %s so it can be invoked',
+    file => {
+      expect(stripComments(read(file))).toMatch(/link:\s*\[[^\]]*\bremoteMcpHandler\b/s);
+    }
+  );
 });

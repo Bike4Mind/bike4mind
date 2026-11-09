@@ -21,7 +21,13 @@
  */
 
 import { computeCosineSimilarity } from '@bike4mind/utils';
-import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingConfig } from '@bike4mind/fab-pipeline';
+import {
+  buildEmbeddingRegistry,
+  bindEmbeddingModel,
+  embedOne,
+  embeddingBackendForModel,
+  resolveEmbeddingCredentials,
+} from '@bike4mind/services/llm/embeddingProviders';
 import { isSupportedEmbeddingModel } from '@bike4mind/common';
 import type { HelpIndex, HelpIndexEntry, HelpEmbeddingsIndex, HelpEmbeddingChunk } from '@bike4mind/scripts/help/types';
 import {
@@ -434,17 +440,17 @@ export async function searchHelpContext(params: {
       if (!isSupportedEmbeddingModel(embeddingModel)) {
         logger.warn(`[HelpRetrieval] Embeddings model "${embeddingModel}" unsupported, using keyword search`);
       } else {
-        const requiredProvider = getProviderFromModel(embeddingModel);
+        const requiredProvider = embeddingBackendForModel(embeddingModel);
         // Gate on a MISSING credential, not on the config being non-empty. A keyless provider
         // (Bedrock, via the AWS credential chain) correctly populates nothing, and the old
         // emptiness check read that as "no credentials" and fell through to keyword search.
-        const { config: embeddingConfig, missing } = resolveEmbeddingConfig(requiredProvider, apiKeys);
+        const { config: embeddingConfig, missing } = resolveEmbeddingCredentials(requiredProvider, apiKeys);
 
         if (!missing) {
-          const embeddingFactory = new EmbeddingFactory(embeddingConfig);
-          const embeddingService = embeddingFactory.createEmbeddingService(embeddingModel);
+          const embeddingRuntime = buildEmbeddingRegistry(embeddingConfig);
+          const embeddingService = bindEmbeddingModel(embeddingRuntime, embeddingModel);
 
-          const fullQueryEmbedding = await embeddingService.generateEmbedding(question);
+          const fullQueryEmbedding = await embedOne(embeddingService, question);
           // The embedding client reports no usage; ~4 chars per token, as the other query-embed recorders estimate.
           embedding = {
             model: embeddingModel,

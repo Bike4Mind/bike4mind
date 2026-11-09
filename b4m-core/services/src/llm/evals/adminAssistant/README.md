@@ -71,4 +71,4 @@ A new admin tab (a `requiresAdmin` view in `viewRegistry.ts`) or admin tool (in 
 - a tab: a `where-is` row, and a `what-is` row with `expect` terms for what it does;
 - a tool: a `data` row with `expectTools`, and the seeded value in `expect` if the target user has one.
 
-`cases.test.ts` fails if a row names a view that is not an admin view or a tool the assistant cannot call. `admin_get_health` and `admin_get_setting` are listed in `ADMIN_ASSISTANT_TOOL_NAMES` but not registered, so no row may expect them yet (`UNREGISTERED_ADMIN_ASSISTANT_TOOL_NAMES` in `@bike4mind/common`; a test in `apps/client/server/adminAssistant/index.test.ts` keeps it in step with the registry and requires a row for every registered tool).
+`cases.test.ts` fails if a row names a view that is not an admin view or a tool the assistant cannot call. A test in `apps/client/server/adminAssistant/index.test.ts` requires a row for every registered tool.

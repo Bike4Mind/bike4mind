@@ -2,11 +2,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   CurationType,
   DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+  ForbiddenError,
   TooManyRequestsError,
   insufficientCreditsError,
   type CurationOptions,
 } from '@bike4mind/common';
 import { invalidateSettingsCache } from '@bike4mind/utils';
+import { ACCOUNT_BANNED_MESSAGE } from '../userService/accountState';
 import { NotebookCurationService, type NotebookCurationAdapters } from './index';
 
 // The curated-notebook write goes through fabFileService.createFabFile and must be refused by
@@ -95,6 +97,19 @@ describe('curation billing', () => {
     expect(
       await service.curateNotebook('s1', 'u1', { ...options, curationType: CurationType.EXECUTIVE_SUMMARY })
     ).toEqual({ success: false, error: capMessage, retryable: false });
+    expect(adapters.fabFileRepository.create).not.toHaveBeenCalled();
+  });
+
+  it('reports a suspended-account refusal as not retryable and persists nothing', async () => {
+    const adapters = buildDefaultAdapters();
+    const service = new NotebookCurationService({
+      ...adapters,
+      llmService: { complete: vi.fn().mockRejectedValue(new ForbiddenError(ACCOUNT_BANNED_MESSAGE)) },
+      llmModelId: 'ops-model',
+    } as unknown as NotebookCurationAdapters);
+    expect(
+      await service.curateNotebook('s1', 'u1', { ...options, curationType: CurationType.EXECUTIVE_SUMMARY })
+    ).toEqual({ success: false, error: ACCOUNT_BANNED_MESSAGE, retryable: false });
     expect(adapters.fabFileRepository.create).not.toHaveBeenCalled();
   });
 });

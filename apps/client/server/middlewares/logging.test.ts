@@ -162,3 +162,12 @@ describe('logging middleware - per-request log context', () => {
     expect(lastLines()[0]).not.toHaveProperty('requestId');
   });
 });
+
+it('keeps identifier queries out of request logger metadata', () => {
+  const secret = 'b4m_live_' + 'a'.repeat(32);
+  const { req, res, next } = makeReqRes({}, `/api/admin/search?q=${secret}`);
+  logging(req, res, next);
+  const line = logLine(req.logger);
+  expect(line.path).toBe('/api/admin/search');
+  expect(JSON.stringify(line)).not.toContain(secret);
+});

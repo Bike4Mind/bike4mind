@@ -54,6 +54,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.credits.denied': { category: 'credits', severity: 'critical', write: 'bestEffort' },
   'user.subscription.denied': { category: 'credits', severity: 'critical', write: 'bestEffort' },
   'billing.comp.changed': { category: 'credits', severity: 'notice', write: 'strict' },
+  'billing.subscription.synced': { category: 'credits', severity: 'notice', write: 'strict' },
   'billing.subscription.cancel_scheduled': { category: 'credits', severity: 'critical', write: 'strict' },
   'billing.subscription.resumed': { category: 'credits', severity: 'critical', write: 'strict' },
   // bestEffort: the StripeDispute record holds the resolution; the Contain a lost dispute applies is audited per user.
@@ -74,6 +75,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.restriction_lifted': { category: 'access', severity: 'notice', write: 'strict' },
 
   'user.deleted': { category: 'account', severity: 'critical', write: 'strict' },
+  'user.deletion.scheduled': { category: 'account', severity: 'critical', write: 'strict' },
+  'user.deletion.cancelled': { category: 'account', severity: 'notice', write: 'strict' },
   'user.deletion.denied': { category: 'account', severity: 'critical', write: 'bestEffort' },
   // notice, not critical like user.deleted: the sweep carrying out a user's own scheduled deletion.
   'user.deletion.completed': { category: 'account', severity: 'notice', write: 'strict' },
@@ -148,6 +151,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   // written in that user's transaction. reopened is the undo of approved.
   'user.signup_risk.approved': { category: 'access', severity: 'notice', write: 'strict' },
   'user.signup_risk.reopened': { category: 'access', severity: 'notice', write: 'strict' },
+  // A system actor approving on payment or quiet-account evidence (apps/client/server/security/riskReviewAutoApproval.ts).
+  'user.signup_risk.auto_approved': { category: 'access', severity: 'notice', write: 'strict' },
   'user.signup_risk.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
   // Signup domain holds: one strict entry per decision, written in the same transaction as the status
   // change. confirmed/released come from admins (apps/client/pages/api/admin/signup-domain-holds.ts);
@@ -350,12 +355,23 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'settings.agent_ops.version_activated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'settings.agent_ops.repaired': { category: 'settings', severity: 'info', write: 'bestEffort' },
 
+  'admin.search.performed': { category: 'support', severity: 'info', write: 'strict' },
+
   'audit.exported': { category: 'support', severity: 'info', write: 'bestEffort' },
   // info, not critical: a sign-off row must never itself enter the review queue. The review document is the source of truth.
   'audit.reviewed': { category: 'support', severity: 'info', write: 'bestEffort' },
   'audit.unreviewed': { category: 'support', severity: 'info', write: 'bestEffort' },
 
   'model_hub.curated.imported': { category: 'settings', severity: 'critical', write: 'strict' },
+
+  // Two-person approvals (apps/client/server/admin/approvals). executed/failed are bestEffort because
+  // the gated action has already run (or failed) when they are written; the record keeps the outcome.
+  'admin.approval.requested': { category: 'access', severity: 'notice', write: 'strict' },
+  'admin.approval.approved': { category: 'access', severity: 'critical', write: 'strict' },
+  'admin.approval.rejected': { category: 'access', severity: 'notice', write: 'strict' },
+  'admin.approval.executed': { category: 'access', severity: 'critical', write: 'bestEffort' },
+  'admin.approval.failed': { category: 'access', severity: 'critical', write: 'bestEffort' },
+  'admin.approval.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
 } as const satisfies Record<string, AdminAuditCatalogueEntry>;
 
 export type AdminAuditAction = keyof typeof ADMIN_AUDIT_CATALOGUE;

@@ -31,7 +31,7 @@ import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteTool
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import type { ToolMaterializer } from '@bike4mind/agents';
 import { buildSystemApiKeyTable } from '@bike4mind/server-utils/deepAgent/resolveBackend';
-import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
+import { imageModerationIncidents } from '@bike4mind/server-utils/moderation/imageModerationIncidents';
 
 /**
  * Builds the owner-scoped b4m toolbelt for a deep agent's act step.

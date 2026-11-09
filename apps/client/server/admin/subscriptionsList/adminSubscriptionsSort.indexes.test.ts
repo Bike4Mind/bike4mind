@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ADMIN_SUBSCRIPTIONS_SORT_FIELDS } from '@client/app/utils/adminSubscriptionsFilter';
+import { ADMIN_SUBSCRIPTIONS_SORT_FIELDS } from '@bike4mind/server-utils/app/utils/adminSubscriptionsFilter';
 import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import { adminSubscriptionsSort } from './adminSubscriptionsQuery';
 

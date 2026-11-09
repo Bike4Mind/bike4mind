@@ -35,7 +35,7 @@ vi.mock('@bike4mind/database/infra', () => ({
   },
 }));
 
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
 }));
 
@@ -64,7 +64,7 @@ vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   },
 }));
 
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   EmailEvents: {
     Send: {
       publish: (...args: unknown[]) => mockPublish(...args),

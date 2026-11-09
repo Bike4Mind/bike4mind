@@ -38,9 +38,8 @@ describe('createUniqueOAuthUser', () => {
   it('snapshots staging only for a newly created credit-eligible account', async () => {
     mockFindSetting.mockImplementation(async (name: string) => ({
       settingValue: {
-        stagedSignupGrantEnabled: 'true',
-        signupGrantCredits: '12',
-        verifiedUnlockCredits: '28',
+        signupGrantInitialCredits: '12',
+        signupGrantDripCap: '28',
       }[name],
     }));
     await createUniqueOAuthUser({
@@ -59,11 +58,9 @@ describe('createUniqueOAuthUser', () => {
     expect(mockCreate.mock.calls[1][0]).not.toHaveProperty('signupGrant');
   });
 
-  it('enrolls the schedule grant, not defaultFreeCredits, with the retired staged toggle off', async () => {
+  it('enrolls the schedule grant with nothing locked under a drip cap of 0', async () => {
     mockFindSetting.mockImplementation(async (name: string) => ({
       settingValue: {
-        stagedSignupGrantEnabled: 'false',
-        defaultFreeCredits: '5000',
         signupGrantInitialCredits: '40',
         signupGrantDripCap: '0',
       }[name],
@@ -82,7 +79,7 @@ describe('createUniqueOAuthUser', () => {
     const referralInvite = { inviteId: 'invite-1', inviterId: 'inviter-1', grantCredits: 30 };
     beforeEach(() => {
       mockFindSetting.mockImplementation(async (name: string) => ({
-        settingValue: { stagedSignupGrantEnabled: 'true', signupGrantCredits: '12', verifiedUnlockCredits: '28' }[name],
+        settingValue: { signupGrantInitialCredits: '12', signupGrantDripCap: '28' }[name],
       }));
     });
 

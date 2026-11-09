@@ -11,7 +11,7 @@ import {
   type ToolMaterializer,
   type WakeDeps,
 } from '@bike4mind/agents';
-import '@server/deepAgent/contributedToolbelts';
+import '@bike4mind/server-utils/deepAgent/contributedToolbelts';
 import { LlmWakeSteps } from '@bike4mind/server-utils/deepAgent/llmSteps';
 import { MongoDeepAgentStore } from '@bike4mind/server-utils/deepAgent/store';
 import { loadLinkedAgentContext } from '@bike4mind/server-utils/deepAgent/missions';
@@ -29,7 +29,7 @@ import {
   pauseMission,
 } from '@server/deepAgent/wakeMetering';
 import type { CompletionMeter } from '@bike4mind/services';
-import { resolveThinkingVisibilityForUserId } from '@server/utils/thinkingVisibility';
+import { resolveThinkingVisibilityForUserId } from '@bike4mind/server-utils/utils/thinkingVisibility';
 
 /**
  * Deep-agent wake trigger. One SQS message -> one wake cycle for one agent.

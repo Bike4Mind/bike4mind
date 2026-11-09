@@ -4,7 +4,7 @@ import { adminSettingsRepository } from '@bike4mind/database/infra';
 import { rapidReplyAuditLogRepository } from '@bike4mind/database/ai';
 import { ChatCompletionProcess, featureNames, ChatCompletionFeature } from '@bike4mind/services/llm';
 import { adminApi } from '@server/middlewares/adminApi';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { requestTurnAuth } from '@server/auth/turnAuth';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';

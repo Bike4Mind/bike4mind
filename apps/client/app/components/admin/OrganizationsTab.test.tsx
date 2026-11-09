@@ -21,7 +21,6 @@ vi.mock('@client/app/hooks/data/adminOrganizations', () => ({
   useAdminOrgGrants: useAdminOrgGrantsMock,
   useConvertOrgToPaid: idleMutation,
   useGrantOrganization: idleMutation,
-  useReconcileOrgSeats: idleMutation,
   useRevokeOrganization: idleMutation,
   useTopUpOrganization: idleMutation,
 }));
@@ -37,6 +36,9 @@ import OrganizationsTab from './OrganizationsTab';
 import { DEFAULT_ORGANIZATIONS_PARAMS } from './organizationsTabSearch';
 import { useOrganizationsTab } from './useOrganizationsTabParams';
 import { AdminCommandPalette } from './shared/AdminCommandPalette';
+import { useSubscriptionsTab } from './Subscriptions/useSubscriptionsTabParams';
+import { CLEARED_FILTER_PARAMS } from './Subscriptions/subscriptionsTabSearch';
+import { ADMIN_SUBSCRIPTIONS_TAB_SLUG } from './Subscriptions/Detail/subscriptionDetailModel';
 
 const ORG_A = 'aaaaaaaaaaaaaaaaaaaaaaaa';
 const ORG_B = 'bbbbbbbbbbbbbbbbbbbbbbbb';
@@ -131,5 +133,33 @@ describe('OrganizationsTab', () => {
       to: '/admin/subscriptions/$subscriptionId',
       params: { subscriptionId: GRANT_ID },
     });
+  });
+
+  it('offers Sync from Stripe on a paid org and opens the subscriptions list narrowed to its customer', () => {
+    const GRANT_ID = 'c'.repeat(24);
+    useAdminOrgGrantsMock.mockReturnValue({ data: [{ id: GRANT_ID, ownerId: ORG_B }] });
+    mockList({
+      data: {
+        data: [
+          { ...organization(ORG_A, 'Alpha Org'), stripeCustomerId: 'cus_alpha' },
+          organization(ORG_B, 'Beta Org'),
+          { ...organization('d'.repeat(24), 'Solo Org'), personal: true },
+        ],
+        totalOrganizations: 3,
+        totalPages: 1,
+      },
+    });
+    renderTab();
+
+    fireEvent.click(screen.getByTestId(`org-actions-${ORG_B}`));
+    expect(screen.queryByTestId(`sync-from-stripe-${ORG_B}`)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId(`org-actions-${'d'.repeat(24)}`));
+    expect(screen.queryByTestId(`sync-from-stripe-${'d'.repeat(24)}`)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId(`org-actions-${ORG_A}`));
+    fireEvent.click(screen.getByTestId(`sync-from-stripe-${ORG_A}`));
+
+    expect(useSubscriptionsTab.getState().params).toMatchObject({ ...CLEARED_FILTER_PARAMS, search: 'cus_alpha' });
+    expect(fakeAdminRouter.search).toMatchObject({ tab: ADMIN_SUBSCRIPTIONS_TAB_SLUG });
   });
 });

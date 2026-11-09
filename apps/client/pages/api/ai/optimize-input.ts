@@ -2,9 +2,9 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { blockedAtZeroTierLimit } from '@server/middlewares/perUserRateLimit';
-import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 import { meterCompletionBackend } from '@bike4mind/services';
-import { UnprocessableEntityError } from '@bike4mind/common';
+import { isTerminalCreditRefusal, UnprocessableEntityError } from '@bike4mind/common';
 import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import { z } from 'zod';
 
@@ -124,8 +124,9 @@ const handler = baseApi({ auth: 'jwtOnly' })
 
       return res.json(responsePayload);
     } catch (error) {
-      // Insufficient credits must surface (422) instead of degrading to a generic 500.
-      if (error instanceof UnprocessableEntityError) throw error;
+      // A credit refusal (422 out of credits, 429 free-tier daily cap) must surface with its own status
+      // instead of degrading to a generic 500; the error handler logs it at warn.
+      if (error instanceof UnprocessableEntityError || isTerminalCreditRefusal(error)) throw error;
       req.logger?.error?.('Optimize Input API error:', error);
       return res.status(500).json({
         error: 'Failed to optimize input. Please try again.',

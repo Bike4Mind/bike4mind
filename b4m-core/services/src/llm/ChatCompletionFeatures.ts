@@ -1,3 +1,9 @@
+import {
+  type EmbeddingRuntime,
+  bindEmbeddingModel,
+  embedOne,
+  embeddingBackendForModel,
+} from '@bike4mind/utils/embeddingProviders';
 import type { NewAccountSpendCapAdapters } from '../creditService/newAccountSpendCap';
 import type { UserLimitEventKind } from '@bike4mind/common';
 
@@ -10,6 +16,7 @@ export type LimitEventRecord = {
 import {
   ChatCompletionCreateInput,
   ChatCompletionCreateInputSchema,
+  isLowSignalNamingPrompt,
   ChatModels,
   ContextTelemetry,
   ContextTelemetryAlerts,
@@ -170,10 +177,8 @@ import {
   BaseStorage,
   computeCosineSimilarity,
   computeVerbatimTokenBudget,
-  EmbeddingFactory,
   type FabFileNotice,
   fetchAndProcessPreviousMessages,
-  getProviderFromModel,
   getSettingsByNames,
   IQueueService,
   ITokenizer,
@@ -195,6 +200,7 @@ import { forcedRetrievalNoContextPrompt, type ForcedRetrievalNoContextFinding } 
 import { resolveLakeMemoryScope } from './resolveLakeMemoryScope';
 import { MCPClient } from '@bike4mind/mcp';
 import uniq from 'lodash/uniq.js';
+import type { CustomMcpToolHost } from './tools/customMcpTools';
 import { mergeRetrievalSummary, type RetrievalSummary } from './tools/retrievalSummaryMerge';
 import { isObjectIdShaped } from './tools/base/objectId';
 import { scrubStaleProjectFiles } from '../sessionService/scrubStaleFileReferences';
@@ -510,6 +516,11 @@ export interface IChatCompletionServiceOptions {
     getTools: () => Promise<MCPClient['tools']>;
     callTool: (toolName: string, toolArgs: unknown) => Promise<unknown>;
   }>;
+  /**
+   * Custom remote connectors. Injected by the app tier (it owns policy, credentials and the call
+   * path) so b4m-core never imports it. Omitted -> no custom tools are offered.
+   */
+  customMcp?: CustomMcpToolHost;
   logEvent: (
     event: LLMEventPayload,
     options?: { session?: mongoose.ClientSession; ability?: MongoAbility }
@@ -631,7 +642,7 @@ export type ChatCompletionContext = Pick<
   fabFilesToMessages: (
     fabFileIds: string[],
     quest: IChatHistoryItemDocument,
-    embeddingFactory: EmbeddingFactory,
+    embeddingFactory: EmbeddingRuntime,
     message: string,
     attachedFileTokenBudget: number,
     modelInfo: ModelInfo
@@ -667,7 +678,7 @@ export interface ChatCompletionFeature {
   }) => Promise<{ shouldContinue: boolean }>;
   getContextMessages: (
     quest: IChatHistoryItemDocument,
-    embeddingFactory: EmbeddingFactory,
+    embeddingFactory: EmbeddingRuntime,
     message: string,
     modelInfo: ModelInfo,
     /** Input-window-derived; deliberately NOT the model's output cap. */
@@ -714,7 +725,7 @@ export class MementoFeature implements ChatCompletionFeature {
 
   async getContextMessages(
     quest: IChatHistoryItemDocument,
-    _embeddingFactory: EmbeddingFactory,
+    _embeddingFactory: EmbeddingRuntime,
     message: string,
     modelInfo: ModelInfo
   ): Promise<IMessage[]> {
@@ -760,7 +771,7 @@ export class MementoFeature implements ChatCompletionFeature {
     // that setting moved.
     //
     // MUST STAY IN SYNC with `getFirstIterationMementosPreamble.ts` (agent mode), which also passes
-    // neither. Passing `embeddingFactory.getDefaultEmbeddingModel()` here used to be what made the
+    // neither. Passing `embeddingFactory.defaultModel` here used to be what made the
     // two modes disagree: the factory resolved by CREDENTIAL PRIORITY (an OpenAI key alone returns
     // ada-002) and never read the setting - see `resolveEmbeddingModelFallback` below, which says the
     // same thing about naming a space. That argument did not merely pick a floor, it picked the space
@@ -872,7 +883,7 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
 
   async getContextMessages(
     quest: IChatHistoryItemDocument,
-    _embeddingFactory: EmbeddingFactory,
+    _embeddingFactory: EmbeddingRuntime,
     message: string
   ): Promise<IMessage[]> {
     // A personal corpus suppresses this card. The two compose badly otherwise: personalCorpusOnly is
@@ -1125,6 +1136,11 @@ export class AutoNameSessionFeature implements ChatCompletionFeature {
     const conversationMessages = messages.filter(m => m.role === 'user' || m.role === 'assistant');
     const conversationCount = Math.round(conversationMessages.length / 2);
     if (session.isAutoNamed && conversationMessages.length !== 1) {
+      return;
+    }
+    // Same rule as the turn-start publish (ChatCompletionInvoke.dispatchTurnStartAutoName): a
+    // "Hello" turn, even with its reply, only names the notebook "Greeting". A later turn names it.
+    if (!session.isAutoNamed && isLowSignalNamingPrompt(quest.prompt ?? '', quest.fabFileIds?.length ?? 0)) {
       return;
     }
     try {
@@ -1606,7 +1622,7 @@ export class ProjectFeature implements ChatCompletionFeature {
 
   async getContextMessages(
     quest: IChatHistoryItemDocument,
-    embeddingFactory: EmbeddingFactory,
+    embeddingFactory: EmbeddingRuntime,
     message: string,
     modelInfo: ModelInfo,
     attachedFileTokenBudget: number
@@ -2764,8 +2780,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * OPENAI_KEY_MISSING_MESSAGE on any lake whose files had not voted yet (newly created, or still
    * mid-ingest).
    *
-   * Read the BINDING, never `embeddingFactory.getDefaultEmbeddingModel()`. The factory reports
-   * Titan for any empty config, and `resolveEmbeddingConfig` returns an empty config for three
+   * Read the BINDING, never `embeddingFactory.defaultModel`. The factory reports
+   * Titan for any empty config, and `resolveEmbeddingCredentials` returns an empty config for three
    * different states - a genuine keyless substitution, an EXPIRED caller key, and a missing Ollama
    * base URL. Only the first is this deployment saying it holds no key; the other two are states the
    * resolver deliberately declines to substitute for, and `missing` is non-null on both. Deriving
@@ -2785,13 +2801,13 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * too, so the loud credential error survives instead of being quietly rerouted into a query
    * against a space the corpus was never written in.
    */
-  private async resolveEmbeddingModelFallback(embeddingFactory: EmbeddingFactory): Promise<SupportedEmbeddingModel> {
+  private async resolveEmbeddingModelFallback(embeddingFactory: EmbeddingRuntime): Promise<SupportedEmbeddingModel> {
     const binding = this.chatCompletion.embeddingBinding;
     // The binding is the model this turn will actually embed with, so it is also the right thing to
     // fall back TO when the setting is unusable. `getDefaultEmbeddingModel()` only stands in if the
     // seam has not run (no production path reaches here before it; a unit test can).
     const factoryDefault =
-      binding?.model ?? embeddingFactory.getDefaultEmbeddingModel?.() ?? OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002;
+      binding?.model ?? embeddingFactory.defaultModel ?? OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002;
     let configured: unknown;
     // Scoped to the settings READ alone. Widening it to cover the decision below would let a
     // programming error there be swallowed as "could not read the setting" and silently answer
@@ -2829,8 +2845,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         binding !== undefined &&
         binding.missing === null &&
         binding.model !== binding.requested &&
-        getProviderFromModel(binding.model) === ModelBackend.Bedrock;
-      if (substitutedToKeyless && getProviderFromModel(configured) !== ModelBackend.Bedrock) {
+        embeddingBackendForModel(binding.model) === ModelBackend.Bedrock;
+      if (substitutedToKeyless && embeddingBackendForModel(configured) !== ModelBackend.Bedrock) {
         this.logger.warn(
           `🔒 Forced retrieval: no credential resolved for defaultEmbeddingModel "${configured}"; ` +
             `embedding the query with keyless ${factoryDefault}, which is what this stage ingested with`
@@ -3072,7 +3088,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
 
   async getContextMessages(
     quest: IChatHistoryItemDocument,
-    embeddingFactory: EmbeddingFactory,
+    embeddingFactory: EmbeddingRuntime,
     message: string
   ): Promise<IMessage[]> {
     this.publishedCitableKeys = new Set();
@@ -3375,14 +3391,14 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         votingFiles.length > 0 ? votingFiles : indexedFiles,
         fallbackModel
       );
-      const embeddingService = embeddingFactory.createEmbeddingService(embeddingModel);
+      const embeddingService = bindEmbeddingModel(embeddingFactory, embeddingModel);
       // A follow-up is scored with the recent user turns blended in, embedded alongside rather than
       // after, so it costs one parallel embedding call and no model call; see forcedRetrievalQuery.
       const followUp = forcedRetrievalFollowUpContext(query, this.chatCompletion.priorUserPrompts);
       const [messageVector, contextVector] = await Promise.all([
-        embeddingService.generateEmbedding(query),
+        embedOne(embeddingService, query),
         followUp
-          ? embeddingService.generateEmbedding(followUp.context).catch(error => {
+          ? embedOne(embeddingService, followUp.context).catch(error => {
               this.logger.warn(
                 '\u{1F512} Forced retrieval: follow-up context embedding failed; using the message alone',
                 error

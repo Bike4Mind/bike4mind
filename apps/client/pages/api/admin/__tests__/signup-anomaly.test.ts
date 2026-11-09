@@ -2,7 +2,22 @@ import { describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 const mocks = vi.hoisted(() => ({ snapshot: vi.fn() }));
-vi.mock('@server/middlewares/baseApi', () => ({ baseApi: () => ({ get: (handler: unknown) => handler }) }));
+vi.mock('@server/middlewares/baseApi', () => ({
+  baseApi: () => {
+    const middlewares: ((req: unknown, res: unknown, next: () => void) => unknown)[] = [];
+    const chain = {
+      use: (middleware: (typeof middlewares)[number]) => {
+        middlewares.push(middleware);
+        return chain;
+      },
+      get: (handler: (req: unknown, res: unknown) => unknown) => async (req: unknown, res: unknown) => {
+        for (const middleware of middlewares) await middleware(req, res, () => undefined);
+        return handler(req, res);
+      },
+    };
+    return chain;
+  },
+}));
 vi.mock('@server/users/signupAnomaly', () => ({ getSignupAnomalySnapshot: mocks.snapshot }));
 import handler from '../signup-anomaly';
 
@@ -15,7 +30,7 @@ describe('signup anomaly route', () => {
   };
   it('rejects non-admins before reading counts', async () => {
     mocks.snapshot.mockClear();
-    expect((await run(false))._getStatusCode()).toBe(403);
+    await expect(run(false)).rejects.toThrow(/missing permission/i);
     expect(mocks.snapshot).not.toHaveBeenCalled();
   });
   it('returns a private uncached admin snapshot', async () => {

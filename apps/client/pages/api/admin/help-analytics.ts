@@ -1,8 +1,8 @@
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { HelpEventModel } from '@bike4mind/database';
-import { BadRequestError, ForbiddenError } from '@bike4mind/utils';
+import { BadRequestError } from '@bike4mind/utils';
 import { assertDateInRange } from '@server/utils/dateParam';
 import { stitchRoutedComments } from '@server/utils/helpFeedbackRouting';
 
@@ -27,7 +27,7 @@ function shiftedDate(value: string, label: string, offsetMinutes: number, endOfD
   return assertDateInRange(label, d);
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] })
   .use(
     rateLimit({
       limit: process.env.NODE_ENV === 'development' ? 100 : 20,
@@ -35,10 +35,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     })
   )
   .get(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
     const { dateFrom, dateTo, tzOffset } = req.query;
 
     // Parse the user's timezone offset (minutes from UTC, e.g. PST = 480).

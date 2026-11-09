@@ -12,6 +12,8 @@ import {
   sessionSend,
   delegatedSpawnSchema,
   questComplete,
+  taskReport,
+  taskAssess,
   sessionSpawn,
   sessionSuggestionDismiss,
   sessionSuggestionUpdate,
@@ -24,6 +26,7 @@ import {
   generateSpeechTool,
   generateVideoSchema,
   generateVideoTool,
+  saveGeneratedImageTool,
 } from './mediaTools';
 import { MCP_READ_TOOLS, MCP_TOOLS } from './mcpTools';
 import { memoryDelete, memoryRead, memoryWrite } from './memoryTools';
@@ -31,6 +34,7 @@ import { setSessionPullRequest } from './pullRequestTool';
 import { requestDirectory } from './requestDirectoryTool';
 import { screenCapture } from './screenTools';
 import { bashExecute } from './shellTools';
+import { MODEL_TOOLS } from './modelTools';
 import { SIMULATOR_TOOLS } from './simulatorTools';
 import { skillTool } from './skillTool';
 import { todoWrite } from './todoTool';
@@ -143,12 +147,16 @@ const BY_NAME = new Map(
     exploreTool,
     ...MEDIA_TOOLS,
     generateVideoTool,
+    saveGeneratedImageTool,
     ...HOST_TOOLS,
     ...SUGGESTION_TOOLS,
     questComplete,
+    taskReport,
+    taskAssess,
     ...BROWSER_TOOLS,
     screenCapture,
     ...SIMULATOR_TOOLS,
+    ...MODEL_TOOLS,
     ...MEMORY_TOOLS,
     ...SKILL_TOOLS,
     askUser,
@@ -222,6 +230,11 @@ export function toolsForRequest(options: {
    * resolves its project inside the granted roots and refuses without one.
    */
   simulator?: boolean;
+  /**
+   * The 3D model pane. Code sessions with a working directory only: a model and the GLB written
+   * beside it live in the project.
+   */
+  model?: boolean;
   /** A resolved memory store. Needs a project, which is what the store is keyed on. */
   memory?: boolean;
   /** A skill catalog for this session. No folder grant needed; a global skill is the user's own file. */
@@ -243,6 +256,8 @@ export function toolsForRequest(options: {
   suggestions?: boolean;
   /** Orchestrate is in effect, so session_spawn starts rather than suggests; see HostContext.delegates. */
   delegates?: boolean;
+  structuredTask?: boolean;
+  managedDelegation?: boolean;
   /**
    * Schemas contributed by the user's connected MCP servers, already namespaced and framed
    * (see chat/mcp/names.ts). They are appended rather than merged into a family above because
@@ -265,12 +280,17 @@ export function toolsForRequest(options: {
     ...(options.roots.length > 0 ? localTools(usesApplyPatch(options.modelId)) : []),
     ...(options.roots.length > 0 && options.explore ? [exploreTool] : []),
     ...(options.media ? MEDIA_TOOLS : []),
+    // Writes into the project, so it needs a granted folder as well as a session that generated something.
+    ...(options.media && options.roots.length > 0 ? [saveGeneratedImageTool] : []),
     ...(options.host ? HOST_TOOLS : []),
     ...(options.host && (options.suggestions ?? options.ask) ? SUGGESTION_TOOLS : []),
     ...(options.host && options.delegates ? [questComplete] : []),
+    ...(options.host && (options.delegates || options.managedDelegation) ? [taskAssess] : []),
+    ...(options.host && options.structuredTask ? [taskReport] : []),
     ...(options.browser ? BROWSER_TOOLS : []),
     ...(options.screen ? [screenCapture] : []),
     ...(options.simulator ? SIMULATOR_TOOLS : []),
+    ...(options.model && options.roots.length > 0 ? MODEL_TOOLS : []),
     ...(options.memory ? MEMORY_TOOLS : []),
     ...(options.skills ? SKILL_TOOLS : []),
     ...(options.web ? WEB_TOOLS : []),
@@ -281,7 +301,12 @@ export function toolsForRequest(options: {
   ];
   return [
     ...available.map(tool => ({
-      toolSchema: options.delegates && tool === sessionSpawn ? delegatedSpawnSchema : tool.schema,
+      toolSchema:
+        tool === sessionSpawn && options.delegates
+          ? delegatedSpawnSchema
+          : tool === sessionSpawn && options.managedDelegation
+            ? { ...tool.schema, parameters: delegatedSpawnSchema.parameters }
+            : tool.schema,
     })),
     ...(options.media && options.video?.length ? [{ toolSchema: generateVideoSchema(options.video) }] : []),
     ...(options.mcp ?? []).map(toolSchema => ({ toolSchema })),

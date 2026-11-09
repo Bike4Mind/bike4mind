@@ -90,7 +90,7 @@ export default function SecretsRotationTab() {
 
   if (error) {
     return (
-      <Box p={2}>
+      <Box>
         <Typography color="danger">Error loading secrets rotation data</Typography>
         <Button onClick={handleRefresh} variant="soft" sx={{ mt: 2 }}>
           Retry
@@ -100,7 +100,7 @@ export default function SecretsRotationTab() {
   }
 
   return (
-    <Sheet sx={{ p: 2, height: '100%', overflow: 'auto' }}>
+    <Sheet sx={{ height: '100%', overflow: 'auto' }}>
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
         <Stack direction="row" alignItems="center" spacing={1}>
           <Typography level="h3" startDecorator={<SecurityIcon />}>

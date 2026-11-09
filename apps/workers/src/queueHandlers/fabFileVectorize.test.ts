@@ -1,6 +1,26 @@
+vi.mock('@bike4mind/utils/embeddingProviders', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils/embeddingProviders')>()),
+  buildEmbeddingRegistry: vi.fn(() => ({})),
+  embeddingBackendForModel: vi.fn(() => 'openai'),
+  resolveEmbeddingCredentials: vi.fn(() => ({ config: {}, missing: null })),
+  resolveEmbeddingWithKeylessFallback: h.resolveEmbeddingWithKeylessFallback,
+
+  bindEmbeddingModel: (_registry: unknown, model: string) => ({
+    model,
+    maxInputTokens: 1000,
+    embed: async (inputs: readonly string[]) => ({ vectors: await Promise.all(inputs.map(text => h.getVector(text))) }),
+  }),
+}));
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { z } from 'zod';
-import { AI_ACCESS_REVOKED_MESSAGE } from '@bike4mind/services/userService/accountState';
+import {
+  ACCOUNT_BANNED_MESSAGE,
+  ACCOUNT_DISPUTE_PENDING_MESSAGE,
+  ACCOUNT_SUSPENDED_MESSAGE,
+  AI_ACCESS_DELETION_PENDING_MESSAGE,
+  AI_ACCESS_PENDING_REVIEW_MESSAGE,
+  AI_ACCESS_REVOKED_MESSAGE,
+} from '@bike4mind/services/userService/accountState';
 
 // Mirror of fabFileChunk.test.ts, scoped to the batchId log-metadata attach. We drive the raw
 // handler with a fully-vectorized FabFile so it hits the idempotency early-return right after the
@@ -18,6 +38,7 @@ const h = vi.hoisted(() => ({
   findAccessibleById: vi.fn(),
   markFailedIfNotAlready: vi.fn(),
   getVector: vi.fn(),
+  getVectors: vi.fn(),
   getEmbedding: vi.fn(),
   updateFileStatus: vi.fn(),
   incrementCounter: vi.fn(async () => ({ failedFiles: 1, processingFailedFiles: 1 })),
@@ -104,7 +125,10 @@ vi.mock('@bike4mind/database', () => ({
   User: { findById: vi.fn(async () => ({ id: 'u1' })) },
   withTransaction: vi.fn((fn: () => unknown) => fn()),
 }));
-vi.mock('@server/managers/fabFileManager', () => ({ getVector: h.getVector }));
+vi.mock('@bike4mind/server-utils/managers/fabFileManager', () => ({
+  getVector: h.getVector,
+  getVectors: h.getVectors,
+}));
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: vi.fn(async () => ({})) },
   embeddingCacheService: { getEmbedding: h.getEmbedding, setEmbedding: vi.fn().mockResolvedValue(undefined) },
@@ -128,8 +152,8 @@ vi.mock('@bike4mind/services', () => ({
 }));
 vi.mock('@server/billing/reserveRequestCredits', () => ({ reserveRequestCredits: h.reserveRequestCredits }));
 const activePlanResolver = vi.hoisted(() => ({ hasActivePlan: vi.fn() }));
-vi.mock('@server/entitlements/activeSubscriptions', () => ({ activePlanResolver }));
-vi.mock('@server/dataLakes/dataLakeBatchProgress', () => ({
+vi.mock('@bike4mind/server-utils/entitlements/activeSubscriptions', () => ({ activePlanResolver }));
+vi.mock('@bike4mind/server-utils/dataLakes/dataLakeBatchProgress', () => ({
   finalizeBatchIfComplete: vi.fn(),
   completedBatchStatus: vi.fn(),
   deferFailureIfRetryable: (...a: unknown[]) => h.deferFailureIfRetryable(...a),
@@ -153,6 +177,7 @@ vi.mock('@bike4mind/common', async () => {
     SupportedEmbeddingModelSchema: z.string(),
     getEmbeddingModelCost: vi.fn(() => 0.0001),
     getQuestErrorCode: actual.getQuestErrorCode,
+    ModelBackend: actual.ModelBackend,
     isTerminalCreditRefusal: actual.isTerminalCreditRefusal,
     usdToCredits: actual.usdToCredits,
     // Pinned: settlement rounding is a coin flip.
@@ -173,13 +198,6 @@ vi.mock('@bike4mind/common', async () => {
 });
 vi.mock('@bike4mind/fab-pipeline', () => ({
   ChunkSchema: z.object({}).passthrough(),
-  EmbeddingFactory: class {
-    createEmbeddingService() {
-      return { getModelInfo: () => ({ contextWindow: 1000 }) };
-    }
-  },
-  getProviderFromModel: vi.fn(() => 'openai'),
-  resolveEmbeddingWithKeylessFallback: h.resolveEmbeddingWithKeylessFallback,
   EmbeddingAuthError: class extends Error {
     constructor(
       readonly provider: string,
@@ -214,6 +232,7 @@ import { fabFileChunkRepository, User } from '@bike4mind/database';
 import { FabFileSourceType } from '@bike4mind/common';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@bike4mind/server-utils/utils/sqsDelivery';
+import { embeddingBackendForModel } from '@bike4mind/utils/embeddingProviders';
 import { dispatch } from './fabFileVectorize';
 
 const makeEvent = (body: Record<string, unknown>) => ({ Records: [{ body: JSON.stringify(body) }] }) as never;
@@ -346,6 +365,47 @@ describe('fabFileVectorize handler - stored error copy on vectorization failure'
     });
     h.getEmbedding.mockResolvedValue(null);
     h.markFailedIfNotAlready.mockResolvedValue(true);
+  });
+
+  it('keeps single cache misses on the safe embedding path', async () => {
+    const text = 'hello '.repeat(9000);
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile(undefined));
+    (fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'c1',
+      text,
+      tokenCount: 5,
+    });
+    h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.getVector).toHaveBeenCalledWith(expect.objectContaining({ model: expect.any(String) }), text);
+  });
+
+  it('embeds many non-OpenAI cache misses in one batched provider call, in chunk order', async () => {
+    const chunkIds = Array.from({ length: 40 }, (_, i) => `c${i}`);
+    h.findAccessibleById.mockResolvedValue({ ...unvectorizedFile(undefined), chunkCount: chunkIds.length });
+    (fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).mockImplementation(async (id: string) => ({
+      id,
+      text: `text ${id}`,
+      tokenCount: 5,
+    }));
+    h.getVectors.mockImplementation(async (_bound: unknown, texts: readonly string[]) =>
+      texts.map(() => [0.1, 0.2, 0.3])
+    );
+    vi.mocked(embeddingBackendForModel).mockReturnValue('voyage' as never);
+    try {
+      await dispatch(makeEvent({ ...payload, chunkIds }), {} as never, mockLogger);
+    } finally {
+      vi.mocked(embeddingBackendForModel).mockReturnValue('openai' as never);
+    }
+
+    expect(h.getVectors).toHaveBeenCalledTimes(1);
+    expect(h.getVectors).toHaveBeenCalledWith(
+      expect.objectContaining({ model: expect.any(String) }),
+      chunkIds.map(id => `text ${id}`)
+    );
+    expect(h.getVector).not.toHaveBeenCalled();
   });
 
   it('persists user-safe copy for a turn-attached file on an embedding-auth failure', async () => {
@@ -1614,9 +1674,16 @@ describe('fabFileVectorize handler - credit billing outside a data lake', () => 
     expect(h.reservationSettle).not.toHaveBeenCalled();
   });
 
-  it('fails the file once and consumes the message when AI access has been revoked', async () => {
+  it.each([
+    ['banned', ACCOUNT_BANNED_MESSAGE],
+    ['dispute-pending', ACCOUNT_DISPUTE_PENDING_MESSAGE],
+    ['suspended', ACCOUNT_SUSPENDED_MESSAGE],
+    ['deletion-pending', AI_ACCESS_DELETION_PENDING_MESSAGE],
+    ['moderated', AI_ACCESS_REVOKED_MESSAGE],
+    ['review-held', AI_ACCESS_PENDING_REVIEW_MESSAGE],
+  ])('fails the file once and consumes the message when a %s account is refused AI access', async (_, message) => {
     const { ForbiddenError } = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
-    h.reserveRequestCredits.mockRejectedValueOnce(new ForbiddenError(AI_ACCESS_REVOKED_MESSAGE));
+    h.reserveRequestCredits.mockRejectedValueOnce(new ForbiddenError(message));
     h.markFailedIfNotAlready.mockResolvedValueOnce(true);
     h.deferFailureIfRetryable.mockResolvedValueOnce(true);
 
@@ -1624,8 +1691,9 @@ describe('fabFileVectorize handler - credit billing outside a data lake', () => 
 
     expect(h.getVector).not.toHaveBeenCalled();
     expect(h.deferFailureIfRetryable).not.toHaveBeenCalled();
-    expect(h.markFailedIfNotAlready).toHaveBeenCalledExactlyOnceWith('ff1', AI_ACCESS_REVOKED_MESSAGE);
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledExactlyOnceWith('ff1', message);
     expect(h.reservationSettle).not.toHaveBeenCalled();
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('AI access'));
   });
 
   it.each(['billing store unavailable', 'unrelated forbidden request'])(

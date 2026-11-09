@@ -71,8 +71,8 @@ vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: Middlewa
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: h.passThrough }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: h.passThrough }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn() }));
-vi.mock('@server/utils/auditLog', () => ({ logAuditEvent: vi.fn(), EmailAuditEvents: {} }));
-vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn() } } }));
+vi.mock('@bike4mind/server-utils/utils/auditLog', () => ({ logAuditEvent: vi.fn(), EmailAuditEvents: {} }));
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn() } } }));
 vi.mock('@server/auth/trustedDevice', () => ({ clearTrustedDeviceCookie: vi.fn() }));
 vi.mock('@server/auth/issueSession', () => ({ issueBrowserSession: vi.fn() }));
 
@@ -94,10 +94,10 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: (fn: () => unknown) => fn(),
 }));
 // parseAdminActionReason and isSameUserId stay real; the audit writes need a database, so they are stubbed.
-vi.mock('@server/utils/adminAudit', async importOriginal => {
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => {
   const { ForbiddenError } = await import('@bike4mind/common');
   return {
-    ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
+    ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>()),
     recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
     denySelfAdminAction: vi.fn(async () => {
       throw new ForbiddenError('Admins cannot perform this action on their own account.');

@@ -38,8 +38,9 @@ vi.mock('@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient', ()
 }));
 // resolveConnectableLake is the REAL one: it is the connect route's org gate, and stubbing it would
 // leave the POST refusal for an appointed admin unproven.
-vi.mock('@server/integrations/github/dataLake/githubLakeConnection', async importOriginal => {
-  const actual = await importOriginal<typeof import('@server/integrations/github/dataLake/githubLakeConnection')>();
+vi.mock('@bike4mind/server-utils/integrations/github/dataLake/githubLakeConnection', async importOriginal => {
+  const actual =
+    await importOriginal<typeof import('@bike4mind/server-utils/integrations/github/dataLake/githubLakeConnection')>();
   return {
     buildGitHubLakeAuthorizeUrl: h.buildGitHubLakeAuthorizeUrl,
     requestGitHubLakeDisconnect: h.requestGitHubLakeDisconnect,

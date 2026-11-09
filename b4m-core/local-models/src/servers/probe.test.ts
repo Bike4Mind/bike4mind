@@ -18,6 +18,24 @@ describe('probeServer', () => {
     expect(outcome).toMatchObject({ kind: 'openai-compatible', product: 'vllm', version: '0.32.0', models: 3 });
   });
 
+  it('identifies llama-swap from owned_by, asks it for no product version, and counts every model it lists', async () => {
+    const asked: string[] = [];
+    const data = Array.from({ length: 300 }, (_, index) => ({ id: `m${index}`, owned_by: 'llama-swap' }));
+    const fake = (input: string) => {
+      asked.push(new URL(input).pathname);
+      return Promise.resolve(
+        input.endsWith('/v1/models') ? Response.json({ object: 'list', data }) : new Response(null, { status: 404 })
+      );
+    };
+    expect(await probeServer(fake, 'http://h', 'box', Date.now)).toMatchObject({
+      kind: 'openai-compatible',
+      product: 'llama-swap',
+      version: null,
+      models: 300,
+    });
+    expect(asked.sort()).toEqual(['/api/version', '/v1/models']);
+  });
+
   it('identifies Ollama by /api/version', async () => {
     const fake = (input: string) =>
       Promise.resolve(

@@ -20,16 +20,6 @@ export const ADMIN_ASSISTANT_TOOL_NAMES = [
 
 export type AdminAssistantToolName = (typeof ADMIN_ASSISTANT_TOOL_NAMES)[number];
 
-/**
- * Names above that have no tool registered in apps/client/server/adminAssistant/index.ts yet, so the
- * model cannot call them. Drop a name here in the same change that registers its tool; a client test
- * fails if this list and the registry disagree.
- */
-export const UNREGISTERED_ADMIN_ASSISTANT_TOOL_NAMES: readonly AdminAssistantToolName[] = [
-  'admin_get_health',
-  'admin_get_setting',
-];
-
 const ADMIN_ASSISTANT_TOOL_NAME_SET: ReadonlySet<string> = new Set(ADMIN_ASSISTANT_TOOL_NAMES);
 
 export function isAdminAssistantToolName(name: string): name is AdminAssistantToolName {

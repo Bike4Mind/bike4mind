@@ -9,6 +9,7 @@ import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { requireTurnstile } from '@server/middlewares/requireTurnstile';
+import { readSubscriberSignupNetwork, suspiciousNameReasons } from '@server/subscribers/waitlistSignal';
 import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
 import { ipSubject, otcLimitOf } from '@server/utils/otcLimits';
 import { SUBSCRIBER_LIMITS, reserveSubscriberAlert } from '@server/utils/subscriberLimits';
@@ -76,13 +77,23 @@ const handler = baseApi({ auth: false })
       return res.status(201).json(SIGNUP_ACK);
     }
 
+    // A payload-looking name is stored and answered like any other, so the response is no oracle
+    // for what the filter catches; it is only kept out of Slack and badged in the admin waitlist.
+    const reasons = suspiciousNameReasons([validatedBody.firstName, validatedBody.lastName]);
+    const suspicious = reasons.length > 0 ? { reasons } : null;
+
     try {
-      await Subscriber.create(validatedBody);
+      await Subscriber.create({ ...validatedBody, signupNetwork: readSubscriberSignupNetwork(req), suspicious });
     } catch (error) {
       // email is unique across soft-deleted rows too, and two concurrent signups can race the check
       // above. Either way the address is already stored; a 500 here would reveal that.
       if (isDuplicateKeyError(error)) return res.status(201).json(SIGNUP_ACK);
       throw error;
+    }
+
+    if (suspicious) {
+      req.logger?.warn('subscriber-signup-flagged', { reasons });
+      return res.status(201).json(SIGNUP_ACK);
     }
 
     try {

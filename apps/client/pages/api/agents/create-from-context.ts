@@ -20,6 +20,7 @@ import {
   Permission,
   UnprocessableEntityError,
   isImageAttachment,
+  isTerminalCreditRefusal,
 } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, NotFoundError, getFileContent, getSettingsByNames } from '@bike4mind/utils';
 import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
@@ -32,7 +33,7 @@ import { apiKeyService, meterCompletionBackend } from '@bike4mind/services';
 import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import { createAttachmentLakeAccess } from '@server/dataLakes/attachmentLakeAccess';
 import { v4 as uuidv4 } from 'uuid';
-import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 import { assertOutboundActionAllowed } from '@server/auth/assertOutboundActionAllowed';
 
 interface CreateFromContextRequest {
@@ -534,7 +535,8 @@ const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
       if (
         error instanceof UnprocessableEntityError ||
         error instanceof ForbiddenError ||
-        error instanceof BadRequestError
+        error instanceof BadRequestError ||
+        isTerminalCreditRefusal(error)
       ) {
         throw error;
       }

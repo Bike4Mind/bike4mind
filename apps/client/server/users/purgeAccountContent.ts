@@ -524,13 +524,9 @@ export async function purgeAccountContent(userId: string, { logger, assertLease 
     await assertLease();
     await collectionFor(model).deleteMany(ownerFilter(userId));
   }
-  for (const model of [
-    'Connection',
-    'ActiveCodeAgent',
-    'CodeAgentEvent',
-    'SessionAgentConfig',
-    'SessionToolApproval',
-  ]) {
+  // Connection rows are ended by the caller's realtime invalidation, which needs them to find
+  // subscriptions and leaves them for the sweep to close the sockets before deleting the rows.
+  for (const model of ['ActiveCodeAgent', 'CodeAgentEvent', 'SessionAgentConfig', 'SessionToolApproval']) {
     await assertLease();
     await collectionFor(model).deleteMany(ownerFilter(userId));
   }

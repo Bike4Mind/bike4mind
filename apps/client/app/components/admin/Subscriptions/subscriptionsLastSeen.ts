@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { create } from 'zustand';
 import { api } from '@client/app/contexts/ApiContext';
-import type { AdminSubscriptionsListResponse } from '@client/app/utils/adminSubscriptionsFilter';
+import type { AdminSubscriptionsListResponse } from '@bike4mind/server-utils/app/utils/adminSubscriptionsFilter';
 import { adminSubscriptionsQueryKey } from './useAdminSubscriptionsList';
 
 /** Newest Stripe row acknowledged by this browser, as an ISO string. Per browser on purpose. */

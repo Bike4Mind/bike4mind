@@ -2,7 +2,6 @@
 // swapping primitives alone would change form, dialog and table behavior. Remove entries as migrated.
 const componentsByFile = {
   'AdminDashboardTab.tsx': ['Card'],
-  'AdminGrowthPricingTab.tsx': ['Card'],
   'AdminLiveOpsTriageMultiConfigTab.tsx': ['Card', 'Modal'],
   'AdminModalTab.tsx': ['Card', 'Table'],
   'AdminModalTabNew.tsx': ['Modal', 'Card'],
@@ -40,7 +39,6 @@ const componentsByFile = {
   'FilesTab/EditTagModal.tsx': ['Modal'],
   'FilesTab/index.tsx': ['Table'],
   'GitHubConnectionTab.tsx': ['Card', 'Modal'],
-  'HelpAnalyticsTab/index.tsx': ['Card', 'Modal', 'Table'],
   'IdentityProvidersTab.tsx': ['Card', 'Modal', 'Table'],
   'IntegrationDemandTab.tsx': ['Table'],
   'IntegrationHealth/components/IntegrationDetailPanel.tsx': ['Card', 'Table'],
@@ -66,7 +64,7 @@ const componentsByFile = {
   'PublishedArtifactsTab.tsx': ['Table'],
   'RapidReplyMetrics.tsx': ['Card', 'Table'],
   'RapidReplyTab.tsx': ['Card', 'Modal', 'Table'],
-  'RateLimits/components/OverviewTab.tsx': ['Card', 'Table'],
+  'RateLimits/components/OverviewTab.tsx': ['Table'],
   'RateLimits/index.tsx': ['Table'],
   'RegistrationInvites/components/CreateInviteModal.tsx': ['Modal'],
   'RegistrationInvites/components/DeleteConfirmModal.tsx': ['Modal'],
@@ -96,7 +94,6 @@ const componentsByFile = {
   'Users/Views/RecentActivityView.tsx': ['Card'],
   'VoiceSettingsTab.tsx': ['Card', 'Modal'],
   'WebhookAuditLogs/index.tsx': ['Card', 'Table'],
-  'WorldTime.tsx': ['Card', 'Modal'],
   'email/EmailActivityHistory.tsx': ['Table'],
   'email/EmailJobDetail.tsx': ['Table', 'Modal'],
   'email/EmailJobsPanel.tsx': ['Table'],
