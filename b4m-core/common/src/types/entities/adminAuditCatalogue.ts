@@ -96,7 +96,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.revoked': { category: 'org', severity: 'notice', write: 'strict' },
   'org.group_types.updated': { category: 'org', severity: 'info', write: 'bestEffort' },
   'org.admins.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
-  'org.owner.transferred': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.owner.transferred': { category: 'org', severity: 'notice', write: 'strict' },
   'org.group_member.assigned': { category: 'org', severity: 'info', write: 'bestEffort' },
   'org.group_member.unassigned': { category: 'org', severity: 'info', write: 'bestEffort' },
   'org.invite.created': { category: 'org', severity: 'info', write: 'bestEffort' },
