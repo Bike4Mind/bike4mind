@@ -59,7 +59,11 @@ const InviteCenter = () => {
         aria-label="Invite views"
         data-testid="invite-center-views"
       />
-      {activeTab === 'bulk' ? <BulkInviteTab quickAction={quickAction} /> : <InviteCodesTab quickAction={quickAction} />}
+      {activeTab === 'bulk' ? (
+        <BulkInviteTab quickAction={quickAction} />
+      ) : (
+        <InviteCodesTab quickAction={quickAction} />
+      )}
     </Stack>
   );
 };

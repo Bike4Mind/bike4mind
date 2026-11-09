@@ -39,9 +39,7 @@ export const InviteTable: React.FC<InviteTableProps & { empty?: ReactNode; label
   const [expandedInviteId, setExpandedInviteId] = useState<string | null>(null);
 
   const statusLabel = (invite: RegInviteData) =>
-    invite.unlimitedUse && invite.expiresAt && new Date(invite.expiresAt).getTime() < now
-      ? 'expired'
-      : invite.status;
+    invite.unlimitedUse && invite.expiresAt && new Date(invite.expiresAt).getTime() < now ? 'expired' : invite.status;
 
   const columns: DataColumn<RegInviteData>[] = [
     {

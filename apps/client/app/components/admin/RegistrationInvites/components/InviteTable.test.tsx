@@ -14,7 +14,13 @@ const Wrapper = ({ children }: { children: ReactNode }) => <CssVarsProvider them
 
 const INVITES: RegInviteData[] = [
   { id: 'i1', code: 'ALPHA-1', userId: 'u1', status: RegInviteStatusType.open, createdAt: '2026-01-01T00:00:00.000Z' },
-  { id: 'i2', code: 'BETA-2', userId: 'u1', status: RegInviteStatusType.waiting, createdAt: '2026-01-02T00:00:00.000Z' },
+  {
+    id: 'i2',
+    code: 'BETA-2',
+    userId: 'u1',
+    status: RegInviteStatusType.waiting,
+    createdAt: '2026-01-02T00:00:00.000Z',
+  },
 ];
 
 const setup = () => {

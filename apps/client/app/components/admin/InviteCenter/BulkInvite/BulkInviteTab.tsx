@@ -711,9 +711,7 @@ const BulkInviteTab = ({ quickAction }: BulkInviteTabProps) => {
 
   // Show success state
   if (results && results.every(r => r.success)) {
-    return (
-      <BulkInviteSuccess results={results} onReset={handleReset} />
-    );
+    return <BulkInviteSuccess results={results} onReset={handleReset} />;
   }
 
   const nonEmptyRows = rows.filter(r => r.email);
