@@ -5,10 +5,13 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
 // Shared mock handles (hoisted so the vi.mock factories can close over them).
-const { recacheModel, recacheSpend, useSpendSpy } = vi.hoisted(() => ({
+const { recacheModel, recacheSpend, useSpendSpy, useModelMetricsSpy, updateUrlState, urlState } = vi.hoisted(() => ({
   recacheModel: vi.fn(),
   recacheSpend: vi.fn(),
   useSpendSpy: vi.fn(),
+  useModelMetricsSpy: vi.fn(),
+  updateUrlState: vi.fn(),
+  urlState: { query: '', view: '', filters: { period: '', model: '', status: '' } },
 }));
 
 const { metricsState } = vi.hoisted(() => ({
@@ -16,16 +19,21 @@ const { metricsState } = vi.hoisted(() => ({
     data: [{ id: 'm1' }] as unknown[],
     isLoading: false,
     isFetching: false,
+    isPlaceholderData: false,
     isError: false,
     refetch: vi.fn(),
   },
 }));
 vi.mock('./hooks/useModelMetrics', () => ({
-  useModelMetrics: () => ({ ...metricsState, recache: recacheModel }),
+  useModelMetrics: (...args: unknown[]) => {
+    useModelMetricsSpy(...args);
+    return { ...metricsState, recache: recacheModel };
+  },
 }));
 vi.mock('@client/app/components/admin/shared/useAdminListUrlState', async importOriginal => ({
   ...(await importOriginal<typeof import('@client/app/components/admin/shared/useAdminListUrlState')>()),
-  useAdminListUrlState: () => [{ query: '', view: '', filters: { period: '', model: '', status: '' } }, vi.fn()],
+  // Same reference per render, like the real hook's memoised state.
+  useAdminListUrlState: () => [urlState, updateUrlState],
 }));
 vi.mock('./hooks/useSpend', () => ({
   useSpend: (...args: unknown[]) => {
@@ -37,7 +45,13 @@ vi.mock('@client/app/hooks/data/useModelInfo', () => ({ useModelInfo: () => ({ d
 vi.mock('./utils/chartDataProcessor', () => ({ processChartData: () => [] }));
 vi.mock('./utils/csvExport', () => ({ exportToCSV: vi.fn() }));
 
-vi.mock('./components/ControlPanel', () => ({ ControlPanel: () => <div data-testid="toolbar" /> }));
+vi.mock('./components/ControlPanel', () => ({
+  ControlPanel: ({ onUserChange, userFilter }: { onUserChange: (user: string) => void; userFilter: string }) => (
+    <div data-testid="toolbar" data-user={userFilter}>
+      <button data-testid="stub-pick-user" onClick={() => onUserChange('user-1')} />
+    </div>
+  ),
+}));
 vi.mock('./components/OverviewTab', () => ({ OverviewTab: () => <div data-testid="overview" /> }));
 vi.mock('./components/AnalyticsTab', () => ({ AnalyticsTab: () => <div data-testid="analytics" /> }));
 vi.mock('./components/RawDataTab', () => ({ RawDataTab: () => <div data-testid="rawdata" /> }));
@@ -52,12 +66,24 @@ const TestWrapper = ({ children }: { children: React.ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
+const resetState = () => {
+  Object.assign(metricsState, {
+    data: [{ id: 'm1' }],
+    isLoading: false,
+    isFetching: false,
+    isPlaceholderData: false,
+    isError: false,
+  });
+  urlState.filters = { period: '', model: '', status: '' };
+};
+
+const lastMetricsFilters = () => useModelMetricsSpy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
 const lastUseSpendCall = () => useSpendSpy.mock.calls.at(-1) as [unknown, { enabled: boolean }];
 
 describe('ModelMetricsTab - Spend wiring', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    Object.assign(metricsState, { data: [{ id: 'm1' }], isLoading: false, isFetching: false, isError: false });
+    resetState();
   });
 
   it('keeps the spend query gated off until the Spend tab is active', () => {
@@ -73,13 +99,16 @@ describe('ModelMetricsTab - Spend wiring', () => {
   });
 
   it('passes only the spend-relevant filters to useSpend', () => {
+    urlState.filters = { period: '24h', model: 'model-a', status: 'error' };
     render(<ModelMetricsTab />, { wrapper: TestWrapper });
-    expect(lastUseSpendCall()[0]).toEqual({
-      dateFrom: undefined,
-      dateTo: undefined,
+    const spendFilters = lastUseSpendCall()[0] as Record<string, unknown>;
+    expect(spendFilters).toStrictEqual({
+      dateFrom: expect.any(String),
+      dateTo: expect.any(String),
       userFilter: undefined,
-      modelFilter: undefined,
+      modelFilter: 'model-a',
     });
+    expect(spendFilters).not.toHaveProperty('statusFilter');
   });
 
   it('Refresh busts the model-metrics cache on a non-spend tab', () => {
@@ -101,7 +130,7 @@ describe('ModelMetricsTab - Spend wiring', () => {
 describe('ModelMetricsTab - page frame', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    Object.assign(metricsState, { data: [{ id: 'm1' }], isLoading: false, isFetching: false, isError: false });
+    resetState();
   });
 
   it('renders the page header and plain tab labels', () => {
@@ -115,18 +144,98 @@ describe('ModelMetricsTab - page frame', () => {
     ]);
   });
 
-  it('shows the empty state when there are no rows', () => {
+  it('keeps every tab, including Spend, when there are no rows and shows the empty state in Overview', () => {
     metricsState.data = [];
     render(<ModelMetricsTab />, { wrapper: TestWrapper });
-    expect(screen.getByTestId('admin-empty-state')).toHaveTextContent('No model calls in this period');
+    expect(screen.getByTestId('admin-empty-state')).toHaveTextContent('No model calls yet');
+    expect(screen.getByRole('tab', { name: 'Spend' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Analytics' })).toBeInTheDocument();
     expect(screen.getByTestId('toolbar')).toBeInTheDocument();
   });
 
-  it('shows the error state with a retry when the query fails', () => {
+  it('offers Refresh from the unfiltered empty state', () => {
+    metricsState.data = [];
+    render(<ModelMetricsTab />, { wrapper: TestWrapper });
+    fireEvent.click(screen.getByTestId('model-metrics-empty-refresh-btn'));
+    expect(recacheModel).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps every tab and offers a retry when the query fails', () => {
     metricsState.data = [];
     metricsState.isError = true;
     render(<ModelMetricsTab />, { wrapper: TestWrapper });
+    expect(screen.getByRole('tab', { name: 'Spend' })).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
     expect(metricsState.refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not render the empty state in the Spend panel, and Refresh there busts spend', () => {
+    metricsState.data = [];
+    render(<ModelMetricsTab />, { wrapper: TestWrapper });
+    fireEvent.click(screen.getByRole('tab', { name: 'Spend' }));
+    expect(screen.getByTestId('spend')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('model-metrics-refresh-btn'));
+    expect(recacheSpend).toHaveBeenCalledTimes(1);
+  });
+
+  it('omits the header count at the server row cap', () => {
+    metricsState.data = Array.from({ length: 500 }, (_, i) => ({ id: `m${i}` }));
+    render(<ModelMetricsTab />, { wrapper: TestWrapper });
+    expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument();
+    expect(screen.queryByText('500')).not.toBeInTheDocument();
+  });
+
+  it('disables Export CSV while the rows are placeholder data', () => {
+    metricsState.isPlaceholderData = true;
+    render(<ModelMetricsTab />, { wrapper: TestWrapper });
+    expect(screen.getByTestId('model-metrics-export-btn')).toBeDisabled();
+  });
+});
+
+describe('ModelMetricsTab - filters', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetState();
+  });
+
+  it('resolves URL filters into the query and keeps the same filters across rerenders', () => {
+    urlState.filters = { period: '24h', model: 'model-a', status: 'error' };
+    const { rerender } = render(<ModelMetricsTab />, { wrapper: TestWrapper });
+    const first = lastMetricsFilters();
+    expect(first).toMatchObject({ modelFilter: 'model-a', statusFilter: 'error', userFilter: undefined });
+    expect(first.dateFrom).toEqual(expect.any(String));
+    expect(first.dateTo).toEqual(expect.any(String));
+
+    rerender(<ModelMetricsTab />);
+    // Same reference: a memo-less dayjs() per render would churn the react-query key.
+    expect(lastMetricsFilters()).toBe(first);
+  });
+
+  it('treats a period outside the presets as unset', () => {
+    urlState.filters = { period: '90d', model: '', status: '' };
+    metricsState.data = [];
+    render(<ModelMetricsTab />, { wrapper: TestWrapper });
+    expect(lastMetricsFilters().dateFrom).toBeUndefined();
+    expect(screen.getByTestId('admin-empty-state')).toHaveTextContent('No model calls yet');
+  });
+
+  it('clears URL and user filters from the filtered empty state', () => {
+    urlState.filters = { period: '', model: 'model-a', status: '' };
+    metricsState.data = [];
+    render(<ModelMetricsTab />, { wrapper: TestWrapper });
+    fireEvent.click(screen.getByTestId('stub-pick-user'));
+    expect(screen.getByTestId('toolbar')).toHaveAttribute('data-user', 'user-1');
+    expect(screen.getByTestId('admin-empty-state')).toHaveTextContent('No model calls match these filters');
+
+    fireEvent.click(screen.getByTestId('model-metrics-clear-filters-btn'));
+    expect(updateUrlState).toHaveBeenCalledWith({ filters: { period: '', model: '', status: '' } });
+    expect(screen.getByTestId('toolbar')).toHaveAttribute('data-user', '');
+  });
+
+  it('counts a user filter alone as a filter', () => {
+    metricsState.data = [];
+    render(<ModelMetricsTab />, { wrapper: TestWrapper });
+    fireEvent.click(screen.getByTestId('stub-pick-user'));
+    expect(screen.getByTestId('admin-empty-state')).toHaveTextContent('No model calls match these filters');
   });
 });

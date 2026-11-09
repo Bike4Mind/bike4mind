@@ -17,10 +17,10 @@ describe('resolvePeriod', () => {
     expect(resolvePeriod('30d', now).dateFrom).toBe(now.subtract(30, 'day').toISOString());
   });
 
-  it('starts today at the start of the day', () => {
+  it('runs today from the start to the end of the day', () => {
     const { dateFrom, dateTo } = resolvePeriod('today', now);
     expect(dateFrom).toBe(now.startOf('day').toISOString());
-    expect(dateTo).toBe(now.toISOString());
+    expect(dateTo).toBe(now.endOf('day').toISOString());
   });
 
   it('gives no bounds for an unset or unknown period', () => {

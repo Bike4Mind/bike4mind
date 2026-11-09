@@ -15,29 +15,31 @@ The Model Metrics tab provides detailed analytics on AI model usage and performa
 
 ### Filters
 
-The control panel at the top of Model Metrics supports the following filters. Filters are applied explicitly by clicking an Apply button, allowing you to configure multiple filter criteria before fetching data.
+The filter bar at the top of Model Metrics applies each filter as you pick it. There is no Apply button. Period, Model and Status are kept in the page URL, so a filtered view can be bookmarked or shared; the User filter is not.
 
 | Filter | Description |
 |--------|-------------|
-| **Date Range** | Start and end dates with preset shortcuts |
-| **User** | Filter by specific user |
+| **Period** | One of Today, Last 24 hours, Last 7 days or Last 30 days. With no period selected, all recorded calls are shown. |
 | **Model** | Filter by AI model |
-| **Status** | Filter by request status |
-| **Simplified Names** | Toggle to show simplified model names instead of full identifiers |
+| **User** | Filter by specific user |
+| **Status** | Done, Error or Pending |
+
+A **Short / Full** control next to the filters switches between simplified model names and full identifiers. When a filter matches nothing, use **Clear filters** to reset them all.
 
 ### Tabs
 
-Model Metrics is organized into three sub-tabs:
+Model Metrics is organized into four sub-tabs:
 
 | Tab | Description |
 |-----|-------------|
 | **Overview** | Summary cards and charts showing key metrics and distributions for the filtered dataset |
 | **Analytics** | Detailed chart visualizations with trend analysis based on the applied filters |
-| **Raw Data** | A sortable table of individual metric records with all fields visible. Supports column sorting and includes access to performance metrics documentation via an info modal. |
+| **Raw data** | A sortable table of individual metric records with all fields visible. Supports column sorting and includes access to performance metrics documentation via an info modal. |
+| **Spend** | Spend for the selected period, user and model |
 
 ### CSV Export
 
-Click the **Export CSV** button in the control panel to download the current filtered and sorted dataset as a CSV file. The filename includes a timestamp (e.g., `model-metrics-2026-02-15-14-30-00.csv`).
+Click the **Export CSV** button in the page header to download the current filtered and sorted dataset as a CSV file. The filename includes a timestamp (e.g., `model-metrics-2026-02-15-14-30-00.csv`).
 
 ### Performance Metrics Info
 

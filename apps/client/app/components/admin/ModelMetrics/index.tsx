@@ -18,14 +18,19 @@ import { AnalyticsTab } from './components/AnalyticsTab';
 import { RawDataTab } from './components/RawDataTab';
 import { SpendTab } from './components/SpendTab';
 import { AdminPageHeader, EmptyState, ErrorState, LoadingState, UpdatingBar, useAdminListUrlState } from '../shared';
-import { ADMIN_REGION_GAP } from '../shared/adminStyles';
-import { MODEL_METRICS_SEARCH_KEYS, resolvePeriod } from './modelMetricsSearch';
+import { ADMIN_REGION_GAP, adminTabStrip } from '../shared/adminStyles';
+import { MODEL_METRICS_SEARCH_KEYS, PERIOD_OPTIONS, resolvePeriod } from './modelMetricsSearch';
+
+// Row cap applied by pages/api/admin/model-metrics.ts (`.limit(500)`); at the cap the count is a floor, not a total.
+const SERVER_ROW_CAP = 500;
 
 const ModelMetricsTab: React.FC = () => {
   const [urlState, updateUrlState] = useAdminListUrlState(MODEL_METRICS_SEARCH_KEYS);
   // A user id identifies a person, so this one filter stays out of the URL.
   const [userFilter, setUserFilter] = useState('');
-  const { period = '', model = '', status = '' } = urlState.filters;
+  const { period: urlPeriod = '', model = '', status = '' } = urlState.filters;
+  // A period outside the presets (hand-edited URL) is treated as unset.
+  const period = PERIOD_OPTIONS.some(option => option.value === urlPeriod) ? urlPeriod : '';
 
   // Resolved once per pick, not per render: a fresh `now` would change the query key every render.
   const filters = useMemo(
@@ -39,7 +44,15 @@ const ModelMetricsTab: React.FC = () => {
   );
   const hasFilters = Boolean(period || model || status || userFilter);
 
-  const { data: metrics = [], isLoading, isFetching, isError, refetch, recache } = useModelMetrics(filters);
+  const {
+    data: metrics = [],
+    isLoading,
+    isFetching,
+    isPlaceholderData,
+    isError,
+    refetch,
+    recache,
+  } = useModelMetrics(filters);
   const { data: modelInfos = [] } = useModelInfo();
 
   const {
@@ -97,8 +110,8 @@ const ModelMetricsTab: React.FC = () => {
 
   const chartData = processChartData(filteredAndSortedMetrics, modelInfos, simplifiedNames);
 
-  const body = () => {
-    if (isLoading) return <LoadingState label="Loading model metrics" />;
+  // Shown in the panels that read model-metrics rows; Spend and Analytics have their own data.
+  const rowsState = (() => {
     if (isError && !metrics.length) {
       return (
         <ErrorState message="Could not load model metrics." onRetry={() => void refetch()} retrying={isFetching} />
@@ -107,26 +120,29 @@ const ModelMetricsTab: React.FC = () => {
     if (!metrics.length) {
       return (
         <EmptyState
-          title={hasFilters ? 'No model calls match these filters' : 'No model calls in this period'}
+          title={hasFilters ? 'No model calls match these filters' : 'No model calls yet'}
           action={
             hasFilters ? (
               <Button variant="outlined" onClick={clearFilters} data-testid="model-metrics-clear-filters-btn">
                 Clear filters
               </Button>
-            ) : undefined
+            ) : (
+              <Button variant="outlined" onClick={handleRefresh} data-testid="model-metrics-empty-refresh-btn">
+                Refresh
+              </Button>
+            )
           }
         />
       );
     }
     return null;
-  };
-  const emptyOrStatus = body();
+  })();
 
   return (
     <Stack gap={ADMIN_REGION_GAP}>
       <AdminPageHeader
         title="Model metrics"
-        count={isLoading ? undefined : metrics.length}
+        count={isLoading || metrics.length >= SERVER_ROW_CAP ? undefined : metrics.length}
         description="Per-call performance, token use and cost across models."
         actions={
           <>
@@ -144,12 +160,12 @@ const ModelMetricsTab: React.FC = () => {
               color="neutral"
               startDecorator={<DownloadIcon />}
               onClick={handleExportCSV}
-              disabled={!filteredAndSortedMetrics.length}
+              disabled={!filteredAndSortedMetrics.length || isPlaceholderData}
               data-testid="model-metrics-export-btn"
             >
               Export CSV
             </Button>
-            <ContextHelpButton helpId="admin/metrics" tooltipText="Model Metrics Help" />
+            <ContextHelpButton helpId="admin/metrics" tooltipText="Model metrics help" />
           </>
         }
       />
@@ -167,9 +183,11 @@ const ModelMetricsTab: React.FC = () => {
 
       <UpdatingBar active={isFetching && !isLoading} />
 
-      {emptyOrStatus ?? (
+      {isLoading ? (
+        <LoadingState label="Loading model metrics" />
+      ) : (
         <Tabs value={activeTab} onChange={(_, value) => setActiveTab(value as ModelMetricsTabValue)}>
-          <TabList sx={{ overflowX: 'auto' }}>
+          <TabList sx={adminTabStrip}>
             <Tab value="overview">Overview</Tab>
             <Tab value="analytics">Analytics</Tab>
             <Tab value="data">Raw data</Tab>
@@ -178,7 +196,7 @@ const ModelMetricsTab: React.FC = () => {
 
           {/* Overview Tab */}
           <TabPanel value="overview" sx={{ p: 1 }}>
-            <OverviewTab metrics={filteredAndSortedMetrics} chartData={chartData} />
+            {rowsState ?? <OverviewTab metrics={filteredAndSortedMetrics} chartData={chartData} />}
           </TabPanel>
 
           {/* Analytics Tab */}
@@ -188,15 +206,17 @@ const ModelMetricsTab: React.FC = () => {
 
           {/* Raw Data Tab */}
           <TabPanel value="data" sx={{ p: 1 }}>
-            <RawDataTab
-              metrics={filteredAndSortedMetrics}
-              modelInfos={modelInfos}
-              simplifiedNames={simplifiedNames}
-              sortField={sortField}
-              sortDirection={sortDirection}
-              onSort={handleSort}
-              onShowInfoModal={() => setShowInfoModal(true)}
-            />
+            {rowsState ?? (
+              <RawDataTab
+                metrics={filteredAndSortedMetrics}
+                modelInfos={modelInfos}
+                simplifiedNames={simplifiedNames}
+                sortField={sortField}
+                sortDirection={sortDirection}
+                onSort={handleSort}
+                onShowInfoModal={() => setShowInfoModal(true)}
+              />
+            )}
           </TabPanel>
 
           {/* Spend Tab */}

@@ -4,6 +4,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { ControlPanel } from './ControlPanel';
+import { MODEL_METRICS_SEARCH_KEYS } from '../modelMetricsSearch';
 import type { ModelMetric } from '../types';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -41,16 +42,18 @@ describe('ControlPanel', () => {
     expect(document.querySelector('input[type="datetime-local"]')).toBeNull();
   });
 
-  it('applies a status pick at once through onChange', () => {
-    const { onChange } = renderPanel();
+  it('applies a status pick at once through onChange without clearing the chosen user', () => {
+    const { onChange, onUserChange } = renderPanel({ userFilter: 'user-1' });
     fireEvent.click(screen.getByTestId('admin-filter-status'));
     fireEvent.click(screen.getByTestId('admin-filter-status-error'));
     expect(onChange).toHaveBeenCalledWith(
       expect.objectContaining({ filters: expect.objectContaining({ status: 'error' }) })
     );
+    expect(onUserChange).not.toHaveBeenCalledWith('');
   });
 
-  it('keeps the user pick out of the URL state patch consumer by reporting it separately', () => {
+  it('reports the user pick separately and has no user key in the URL', () => {
+    expect(MODEL_METRICS_SEARCH_KEYS.filters).not.toHaveProperty('user');
     const { onUserChange } = renderPanel();
     fireEvent.click(screen.getByTestId('admin-filter-user'));
     fireEvent.click(screen.getByTestId('admin-filter-user-user-2'));

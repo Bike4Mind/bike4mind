@@ -26,7 +26,8 @@ const PERIOD_HOURS: Record<string, number> = { '24h': 24, '7d': 24 * 7, '30d': 2
 /** An unset or unknown period means no date bounds. */
 export function resolvePeriod(period: string, now: dayjs.Dayjs): { dateFrom?: string; dateTo?: string } {
   const dateTo = now.toISOString();
-  if (period === 'today') return { dateFrom: now.startOf('day').toISOString(), dateTo };
+  // Today runs to the end of the day so Refresh still picks up calls made after the pick.
+  if (period === 'today') return { dateFrom: now.startOf('day').toISOString(), dateTo: now.endOf('day').toISOString() };
   const hours = PERIOD_HOURS[period];
   return hours ? { dateFrom: now.subtract(hours, 'hour').toISOString(), dateTo } : {};
 }
