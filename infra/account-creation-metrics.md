@@ -50,3 +50,30 @@ Slack destination, or alarm state is modified by local tests.
 
 SES event publishing reference:
 https://docs.aws.amazon.com/ses/latest/dg/event-publishing-add-event-destination-cloudwatch.html
+
+## Slack investigation links
+
+The new-account API-key alert links to the live AI-flagged Users queue, the
+unreviewed Detections list (campaign evidence and assessments), and a broader Users
+view filtered to accounts with API keys. From either list, open an individual
+account profile to read its keys, sign-ins, available activity and credits.
+These views are discovery aids, not an exact list of metric contributors.
+
+The advisory covers unreviewed detections from the last 24 hours with settled AI
+abuse judgments and excludes suspended accounts. Assessments can predate later
+activity; review their timestamps and coverage before acting. Reviewed, aged-out
+and suspended items can disappear from the live queue. Model scores are
+uncalibrated. Empty results are not evidence of complete coverage or safety.
+
+The alert labels CloudWatch evaluation timestamps separately from the complete
+UTC hour counted by the census. It reports the earliest breaching datapoint in
+the payload, without treating it as a continuous incident start. Existing alarms
+can carry evaluation timestamps that do not align with census boundaries; the
+renderer preserves the payload rather than guessing a creation interval.
+
+The responding operator acknowledges in the Slack thread with an owner and next
+review time, or hands off to the backup responder. Attributable unauthorized
+activity, material spend or service impact goes to the responsible abuse/security
+owner. This is a human handoff convention, not an automated acknowledgment timer
+or escalation service. Metric recovery is not incident closure. Delivery routes,
+mentions, email subscriptions, thresholds and enforcement settings are unchanged.
