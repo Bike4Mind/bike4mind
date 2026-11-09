@@ -90,7 +90,9 @@ const handler = baseApi({ auth: false })
               code: 'impersonation_return_required',
             });
           }
-          if (error instanceof UnauthorizedError) throw (await suspendedSessionRefusal(token)) ?? error;
+          if (error instanceof UnauthorizedError) {
+            throw (await suspendedSessionRefusal(token).catch(() => null)) ?? error;
+          }
           throw error;
         });
       requireNonSystemUser(rotated.user);

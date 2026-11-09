@@ -55,7 +55,6 @@ const NO_STAGED_SCOPES: ReadonlySet<string> = new Set<string>();
 /**
  * Hashes an API key for safe logging (avoids exposing partial credentials)
  */
-
 const hashApiKeyForLogging = (apiKey: string): string => {
   return createHash('sha256').update(apiKey).digest('hex').substring(0, 16);
 };
