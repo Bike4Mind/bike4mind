@@ -199,7 +199,19 @@ const productMetadataSchema = z.object({
     .string()
     .regex(/^[A-Z]{3}$/)
     .optional(),
-  billingReason: z.enum(['subscription_create', 'subscription_cycle', 'subscription_update', 'manual']).optional(),
+  billingReason: z
+    .enum([
+      'subscription_create',
+      'subscription_cycle',
+      'subscription_update',
+      'subscription',
+      'manual',
+      'upcoming',
+      'subscription_threshold',
+      'quote_accept',
+      'automatic_pending_invoice_item_invoice',
+    ])
+    .optional(),
   periodEnd: z.iso.datetime({ offset: false }).optional(),
   reason: z.enum(['cancellation_requested', 'payment_disputed', 'payment_failed', 'unknown']).optional(),
   plan: z.enum(['Professional', 'Team', 'LibreOncology', 'unknown']).optional(),
@@ -250,11 +262,21 @@ export async function emitProductEvent(opts: ProductEventOptions): Promise<void>
   if (!isAnalyticsConfigured(opts.productId)) return;
   const candidateMetadata = { ...opts.metadata, ...(opts.userType !== undefined && { userType: opts.userType }) };
   const metadata: Record<string, string | number | boolean> = {};
-  for (const [key, schema] of Object.entries(productMetadataSchema.shape)) {
+  const shape: Record<string, z.ZodType<string | number | boolean | undefined>> = productMetadataSchema.shape;
+  const dropped = Object.keys(candidateMetadata).filter(key => !(key in shape));
+  for (const [key, schema] of Object.entries(shape)) {
     const value = candidateMetadata[key as keyof typeof candidateMetadata];
     if (value === undefined) continue;
     const parsed = schema.safeParse(value);
     if (parsed.success && parsed.data !== undefined) metadata[key] = parsed.data;
+    else dropped.push(key);
+  }
+  if (dropped.length > 0) {
+    console.warn('[b4m-analytics] product event metadata fields dropped', {
+      event: opts.event,
+      productId: opts.productId,
+      keys: dropped,
+    });
   }
   return postEvent(
     {

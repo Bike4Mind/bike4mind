@@ -353,6 +353,80 @@ describe('emitProductEvent', () => {
     mockFetch.mockResolvedValue({ status: 200 });
   });
 
+  const realPayloads: [string, Record<string, string | number | boolean>][] = [
+    ['signup', { touch: 'first', attribution: 'self-reported', method: 'google' }],
+    ['hop', { hopId: 'a'.repeat(32), src: 'acme', dest: 'bike4mind', verified: true, lane: 'synthetic' }],
+    [
+      'purchase subscription',
+      {
+        kind: 'subscription',
+        value: 12.5,
+        currency: 'USD',
+        billingReason: 'subscription_cycle',
+        periodEnd: '2026-01-01T00:00:00.000Z',
+      },
+    ],
+    ['purchase credits', { kind: 'credits', value: 5, currency: 'USD', billingReason: 'manual' }],
+    [
+      'payment failed',
+      { kind: 'subscription', value: 10, currency: 'USD', attempt: 2, billingReason: 'subscription_threshold' },
+    ],
+    [
+      'plan change',
+      { fromPlan: 'Professional', toPlan: 'Team', fromInterval: 'monthly', toInterval: 'yearly', direction: 'upgrade' },
+    ],
+    ['account deleted', { initiatedBy: 'self', wasSubscriber: true, daysSinceSignup: 30 }],
+    ['cancel', { reason: 'payment_failed', plan: 'Team', interval: 'yearly' }],
+    [
+      'funnel',
+      { amount: 5, source: 'signup', feature: 'chat', secondsSinceSignup: 42, userAction: false, internal: true },
+    ],
+  ];
+
+  it.each(realPayloads)('passes the real %s payload through unchanged', async (_name, metadata) => {
+    resetConfig();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await emitProductEvent({ productId: 'widgets', event: 'e', metadata });
+    expect(sent().metadata).toEqual(metadata);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it.each([
+    ['plan', 'Enterprise'],
+    ['direction', 'sideways'],
+    ['currency', 'usd'],
+    ['periodEnd', 'not-a-date'],
+    ['value', -1],
+    ['hopId', 'xyz'],
+  ] as const)('drops an invalid %s value', async (key, bad) => {
+    resetConfig();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await emitProductEvent({ productId: 'widgets', event: 'e', metadata: { [key]: bad } });
+    expect(sent().metadata).toBeUndefined();
+    warn.mockRestore();
+  });
+
+  it('warns once with key names only when fields are dropped, and stays silent for clean metadata', async () => {
+    resetConfig();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await emitProductEvent({
+      productId: 'widgets',
+      event: 'e',
+      metadata: { plan: 'Secret Free Text', mystery: 'pii@example.com', method: 'google' },
+    });
+    expect(warn).toHaveBeenCalledTimes(1);
+    const args = warn.mock.calls[0];
+    expect(args[1]).toEqual({ event: 'e', productId: 'widgets', keys: expect.arrayContaining(['plan', 'mystery']) });
+    expect((args[1] as { keys: string[] }).keys).toHaveLength(2);
+    expect(JSON.stringify(args)).not.toContain('Secret Free Text');
+    expect(JSON.stringify(args)).not.toContain('pii@example.com');
+    warn.mockClear();
+    await emitProductEvent({ productId: 'widgets', event: 'e', metadata: { method: 'google' } });
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
   it('preserves a caller-chosen eventId through the HTTP transport on retries', async () => {
     resetConfig();
     const eventId = 'a9c3e930-1d8e-4bb0-84be-758d04f14c2e';
