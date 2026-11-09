@@ -21,7 +21,6 @@ export default {
   'CreditAnalysis/components/TransactionLedger.tsx': [[2, 'e95e565d6ab60401']],
   'CreditAnalysis/components/UsageDashboard.tsx': [[2, '647d55e913750371']],
   'CreditAnalysis/components/UserCreditsManager.tsx': [[2, '9d16c797d0b948e3']],
-  'DependenciesTab.tsx': [[2, '9e9d8dad48570e0a']],
   'DiscoveryRunDetailModal.tsx': [[2, '2dbf3bba4b9d6a8c']],
   'DlqReplayTab.tsx': [[2, 'c49941a37e1cc343']],
   'EmailVerificationTab.tsx': [[2, 'def9b5c49c1ced23']],

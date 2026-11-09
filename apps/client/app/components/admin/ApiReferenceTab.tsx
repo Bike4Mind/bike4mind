@@ -1,4 +1,4 @@
-import { Alert, Box, Button, Divider, Link, Sheet, ToggleButtonGroup, Typography } from '@mui/joy';
+import { Alert, Box, Button, Link, Sheet, Stack, ToggleButtonGroup, Typography } from '@mui/joy';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useState } from 'react';
@@ -6,6 +6,8 @@ import { getApiReferenceContent } from './content/apiReferenceContent';
 import { getQuickstartContent } from './content/quickstartContent';
 import { ExternalLinks } from '@client/app/utils/externalLinks';
 import { useGenericApiKeyScopes } from '@client/app/hooks/useGenericApiKeyScopes';
+import { AdminPageHeader } from './shared';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
 
 const markdownStyles = {
   '& h1': { fontSize: '1.8rem', fontWeight: 700, mt: 3, mb: 2 },
@@ -65,9 +67,9 @@ const markdownStyles = {
 type View = 'docs' | 'full' | 'quickstart';
 
 const VIEWS: { value: View; label: string }[] = [
-  { value: 'docs', label: 'Interactive Docs' },
-  { value: 'full', label: 'Auth & Unmigrated Endpoints' },
-  { value: 'quickstart', label: 'Claude Code Quickstart' },
+  { value: 'docs', label: 'Interactive docs' },
+  { value: 'full', label: 'Auth and unmigrated endpoints' },
+  { value: 'quickstart', label: 'Claude Code quickstart' },
 ];
 
 const ApiReferenceTab = () => {
@@ -75,55 +77,68 @@ const ApiReferenceTab = () => {
   const scopes = useGenericApiKeyScopes();
 
   return (
-    <Box sx={{ height: '100%', overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
-      <Box
-        sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1, mb: 3 }}
+    <Stack gap={ADMIN_REGION_GAP} sx={{ height: '100%' }} data-testid="admin-api-reference-tab">
+      <AdminPageHeader
+        title="API reference"
+        description="The public API spec, auth notes for older endpoints and a quickstart."
+        actions={
+          <>
+            <Button
+              component="a"
+              href={ExternalLinks.apiDocs}
+              target="_blank"
+              rel="noopener noreferrer"
+              variant="outlined"
+              color="neutral"
+              size="sm"
+              data-testid="api-reference-open-docs-btn"
+              sx={{ whiteSpace: 'nowrap' }}
+            >
+              Open in new tab
+            </Button>
+            <Button
+              component="a"
+              href={ExternalLinks.openApiSpec}
+              // Same-origin, so the browser saves rather than navigates.
+              download="openapi.json"
+              variant="outlined"
+              color="neutral"
+              size="sm"
+              data-testid="api-reference-download-spec-btn"
+              sx={{ whiteSpace: 'nowrap' }}
+            >
+              Download OpenAPI spec
+            </Button>
+          </>
+        }
+      />
+      <ToggleButtonGroup
+        size="sm"
+        value={view}
+        onChange={(_e, v) => v && setView(v as View)}
+        aria-label="Reference view"
+        sx={{ alignSelf: 'flex-start', flexWrap: 'wrap' }}
       >
-        <Typography level="h3">API Reference</Typography>
-        <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
+        {VIEWS.map(({ value, label }) => (
           <Button
-            component="a"
-            href={ExternalLinks.apiDocs}
-            target="_blank"
-            rel="noopener noreferrer"
-            variant="outlined"
-            color="neutral"
-            size="sm"
-            data-testid="api-reference-open-docs-btn"
+            key={value}
+            value={value}
+            data-testid={`api-reference-view-${value}-toggle`}
+            sx={{ whiteSpace: 'nowrap' }}
           >
-            Open in New Tab
+            {label}
           </Button>
-          <Button
-            component="a"
-            href={ExternalLinks.openApiSpec}
-            // Same-origin, so the browser saves rather than navigates.
-            download="openapi.json"
-            variant="outlined"
-            color="neutral"
-            size="sm"
-            data-testid="api-reference-download-spec-btn"
-          >
-            Download OpenAPI Spec
-          </Button>
-          <Divider orientation="vertical" />
-          <ToggleButtonGroup size="sm" value={view} onChange={(_e, v) => v && setView(v as View)}>
-            {VIEWS.map(({ value, label }) => (
-              <Button key={value} value={value} data-testid={`api-reference-view-${value}-toggle`}>
-                {label}
-              </Button>
-            ))}
-          </ToggleButtonGroup>
-        </Box>
-      </Box>
+        ))}
+      </ToggleButtonGroup>
       {view === 'full' && (
         // This reference is hand-maintained (apiReferenceContent.ts) and is not
         // generated from the code, so it can lag reality. Point readers at the
-        // generated, drift-gated spec (the Interactive Docs view) for endpoints that
+        // generated, drift-gated spec (the Interactive docs view) for endpoints that
         // have one. Removed as the hand-written surface is migrated onto contracts.
-        <Alert color="warning" variant="soft" sx={{ mb: 2 }} data-testid="api-reference-drift-banner">
+        <Alert color="warning" variant="soft" data-testid="api-reference-drift-banner">
           <Typography level="body-sm">
             This reference is hand-maintained and may lag the code. Where an endpoint has a contract, the Interactive
-            Docs view (
+            docs view (
             <Link
               href={ExternalLinks.apiDocs}
               target="_blank"
@@ -162,7 +177,7 @@ const ApiReferenceTab = () => {
           </ReactMarkdown>
         </Sheet>
       )}
-    </Box>
+    </Stack>
   );
 };
 

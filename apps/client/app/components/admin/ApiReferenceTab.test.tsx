@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { ApiKeyScope } from '@bike4mind/common';
@@ -25,6 +25,17 @@ describe('ApiReferenceTab', () => {
   });
 
   const showHandWritten = () => fireEvent.click(screen.getByTestId('api-reference-view-full-toggle'));
+
+  it('opens with the page header, the actions in its slot and no emoji', () => {
+    render(<ApiReferenceTab />, { wrapper: TestWrapper });
+    const header = screen.getByTestId('admin-page-header');
+    expect(screen.getByTestId('admin-api-reference-tab').firstElementChild).toBe(header);
+    expect(within(header).getByRole('heading', { level: 1 })).toHaveTextContent(/^API reference$/);
+    expect(within(header).getByTestId('api-reference-open-docs-btn')).toHaveTextContent('Open in new tab');
+    expect(within(header).getByTestId('api-reference-download-spec-btn')).toHaveTextContent('Download OpenAPI spec');
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    expect(document.body.textContent).not.toMatch(/\p{Extended_Pictographic}/u);
+  });
 
   it('embeds the generated docs by default, without the drift banner', () => {
     render(<ApiReferenceTab />, { wrapper: TestWrapper });
