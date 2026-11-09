@@ -47,7 +47,6 @@ import {
   OpenAIImageQuality,
   OpenAIImageSize,
   OpenAIImageStyle,
-  REASONING_SUPPORTED_MODELS,
   UserReasoningEffort,
   isKontextModel as isKontextImageModel,
   ADAPTIVE_THINKING_MAX_TOKENS_FLOOR,
@@ -99,6 +98,7 @@ import { MobileTopBar } from '@client/app/components/MobileTopBar';
 import { brand, grayAlpha, green, greenAlpha } from '@client/app/utils/themes/colors';
 
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
+import { offersReasoningEffort } from '@client/app/utils/thinkingPayload';
 import { visuallyHidden } from '@client/app/utils/a11yStyles';
 import { ContextHelpButton, FieldTooltip, FIELD_TOOLTIPS } from '@client/app/components/help';
 import {
@@ -513,7 +513,7 @@ const ResetButton: React.FC<{
   const resetScope = isImageModel(model)
     ? 'temperature and every image setting, including the seed'
     : 'temperature, output tokens, response history and spoken words';
-  const resetExclusions = REASONING_SUPPORTED_MODELS.has(model)
+  const resetExclusions = offersReasoningEffort(model, modelInfo)
     ? 'Tools and reasoning effort are not affected.'
     : 'Tools are not affected.';
   const tooltip = `Resets ${resetScope} to this model's defaults. ${resetExclusions}`;
@@ -1226,7 +1226,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
             )}
 
             {/* Reasoning Effort - only for reasoning-capable models */}
-            {REASONING_SUPPORTED_MODELS.has(model) && <ReasoningEffortSelector model={model} mode={mode} />}
+            {offersReasoningEffort(model, modelInfo) && <ReasoningEffortSelector model={model} mode={mode} />}
           </Box>
         </Box>
 

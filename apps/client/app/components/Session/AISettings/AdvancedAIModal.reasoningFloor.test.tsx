@@ -86,6 +86,7 @@ const modelInfoRows = vi.hoisted(() => [
     can_think: undefined as boolean | undefined,
     backend: undefined as string | undefined,
     dispatchProfile: undefined as { maxTokensParam: string; toolTransport: string } | undefined,
+    thinkingAlwaysOn: undefined as true | undefined,
   },
 ]);
 
@@ -197,5 +198,22 @@ describe('AdvancedAIModal - Max output tokens below the reasoning floor', () => 
     renderDetails(8192);
 
     expect(screen.queryByTestId('token-allocation-reasoning-floor-warning')).toBeNull();
+  });
+});
+
+describe('AdvancedAIModal - Reasoning Effort selector', () => {
+  beforeEach(() => {
+    Object.assign(modelInfoRows[0], { thinkingStyle: 'adaptive', can_think: true, thinkingAlwaysOn: undefined });
+  });
+
+  it('shows the selector for an adaptive model whose thinking is always on', () => {
+    modelInfoRows[0].thinkingAlwaysOn = true;
+    renderDetails(8192);
+    expect(screen.getByText('Reasoning Effort')).toBeTruthy();
+  });
+
+  it('hides it for an adaptive model that can switch thinking off', () => {
+    renderDetails(8192);
+    expect(screen.queryByText('Reasoning Effort')).toBeNull();
   });
 });
