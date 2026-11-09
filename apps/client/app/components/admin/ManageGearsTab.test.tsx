@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -59,6 +59,10 @@ const GEARS = [
   },
 ];
 
+const saveResponse = (body: Record<string, unknown>) => ({
+  data: { override: { ...body, updatedBy: 'admin-1', updatedAt: '2026-11-09T08:00:00.000Z' } },
+});
+
 const renderTab = () => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return render(
@@ -81,7 +85,7 @@ describe('ManageGearsTab', () => {
   beforeEach(() => {
     Object.values(mocks).forEach(mock => mock.mockClear());
     mocks.get.mockReset().mockResolvedValue({ data: { gears: GEARS } });
-    mocks.put.mockReset().mockResolvedValue({ data: {} });
+    mocks.put.mockReset().mockImplementation(async (_url: string, body: Record<string, unknown>) => saveResponse(body));
     mocks.del.mockReset().mockResolvedValue({ data: { ok: true } });
   });
 
@@ -151,10 +155,12 @@ describe('ManageGearsTab', () => {
     await waitFor(() => expect(screen.queryByTestId('admin-save-bar')).toBeNull());
     expect(screen.queryByTestId('manage-gear-credits-websearch')).toBeNull();
     expect(mocks.success).toHaveBeenCalledWith('Saved override for "websearch" - live now');
-    expect(mocks.get).toHaveBeenCalledTimes(2);
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('manage-gear-row-websearch')).toHaveTextContent('Search harder');
+    expect(screen.getByTestId('manage-gear-row-websearch')).toHaveTextContent('250');
   });
 
-  it('counts each changed gear and saves one request per gear', async () => {
+  it('updates each saved gear from the PUT response without refetching the list for each draft', async () => {
     renderTab();
     await screen.findByTestId('manage-gear-row-websearch');
 
@@ -170,6 +176,46 @@ describe('ManageGearsTab', () => {
       expect.objectContaining({ key: 'websearch', credits: 100, enabled: null }),
       expect.objectContaining({ key: 'files', credits: 0, enabled: null }),
     ]);
+    await waitFor(() => expect(screen.queryByTestId('admin-save-bar')).toBeNull());
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('manage-gear-row-websearch')).toHaveTextContent('100');
+    expect(await startEditing('files')).toHaveValue('0');
+  });
+
+  it('disables row commands while a save is in flight', async () => {
+    const request = Promise.withResolvers<ReturnType<typeof saveResponse>>();
+    mocks.put.mockReturnValueOnce(request.promise);
+    renderTab();
+    await screen.findByTestId('manage-gear-row-files');
+    fireEvent.change(await startEditing('files'), { target: { value: '10' } });
+    fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(1));
+    expect(screen.getByTestId('manage-gear-actions-files')).toBeDisabled();
+    expect(screen.getByTestId('manage-gear-credits-files')).toBeDisabled();
+    expect(mocks.del).not.toHaveBeenCalled();
+    await act(async () => {
+      request.resolve(saveResponse({ credits: 10 }));
+    });
+    await waitFor(() => expect(screen.queryByTestId('admin-save-bar')).toBeNull());
+  });
+
+  it('disables the SaveBar while a reset is in flight', async () => {
+    const request = Promise.withResolvers<{ data: { ok: boolean } }>();
+    mocks.del.mockReturnValueOnce(request.promise);
+    renderTab();
+    await screen.findByTestId('manage-gear-row-files');
+    fireEvent.change(await startEditing('files'), { target: { value: '10' } });
+    openRowMenu('files');
+    fireEvent.click(await screen.findByTestId('manage-gear-reset-files'));
+    await waitFor(() => expect(mocks.del).toHaveBeenCalledTimes(1));
+    expect(screen.getByTestId('admin-save-confirm-btn')).toBeDisabled();
+    fireEvent.keyDown(window, { key: 's', ctrlKey: true });
+    await waitFor(() => expect(screen.getByTestId('admin-save-bar')).toHaveTextContent('Wait for the gear reset'));
+    expect(mocks.put).not.toHaveBeenCalled();
+    await act(async () => {
+      request.resolve({ data: { ok: true } });
+    });
+    await waitFor(() => expect(screen.queryByTestId('admin-save-bar')).toBeNull());
   });
 
   it('discards every staged edit back to the loaded values without a request', async () => {
@@ -197,6 +243,27 @@ describe('ManageGearsTab', () => {
     expect(mocks.put).not.toHaveBeenCalled();
   });
 
+  it.each(['', ' ', '-1', '1.5', '1000001', 'Infinity', 'bad'])(
+    'blocks invalid credits %j without writing',
+    async credits => {
+      renderTab();
+      await screen.findByTestId('manage-gear-row-websearch');
+      fireEvent.change(await startEditing('websearch'), { target: { value: credits } });
+      expect(screen.getByTestId('admin-save-confirm-btn')).toBeDisabled();
+      expect(mocks.put).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['0', '1000000'])('saves valid boundary credits %s', async credits => {
+    renderTab();
+    await screen.findByTestId('manage-gear-row-websearch');
+    fireEvent.change(await startEditing('websearch'), { target: { value: credits } });
+    fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+    await waitFor(() => expect(screen.queryByTestId('admin-save-bar')).toBeNull());
+    expect(mocks.put).toHaveBeenCalledWith('/api/admin/gears', expect.objectContaining({ credits: Number(credits) }));
+    expect(await startEditing('websearch')).toHaveValue(credits);
+  });
+
   it('resets an overridden gear from its row menu with the same DELETE', async () => {
     renderTab();
     await screen.findByTestId('manage-gear-row-files');
@@ -212,6 +279,18 @@ describe('ManageGearsTab', () => {
     await waitFor(() => expect(mocks.del).toHaveBeenCalledTimes(1));
     expect(mocks.del).toHaveBeenCalledWith('/api/admin/gears/files');
     await waitFor(() => expect(mocks.success).toHaveBeenCalledWith('"files" reset to code defaults'));
+  });
+
+  it('keeps code defaults after a successful reset even when the following refresh fails', async () => {
+    renderTab();
+    await screen.findByTestId('manage-gear-row-files');
+    mocks.get.mockRejectedValueOnce(new Error('network down'));
+    openRowMenu('files');
+    fireEvent.click(await screen.findByTestId('manage-gear-reset-files'));
+    await screen.findByTestId('manage-gears-refresh-error');
+    expect(screen.queryByTestId('manage-gear-overridden-files')).toBeNull();
+    expect(await startEditing('files')).toHaveValue('500');
+    expect(within(screen.getByTestId('manage-gear-enabled-files')).getByRole('switch')).toBeChecked();
   });
 
   it('shows table skeleton rows on the first load, under the header', async () => {
@@ -233,7 +312,9 @@ describe('ManageGearsTab', () => {
   });
 
   it('keeps a gear that failed to save in edit mode with its draft, after saving the ones before it', async () => {
-    mocks.put.mockResolvedValueOnce({ data: {} }).mockRejectedValueOnce(new Error('Invalid ctaAction'));
+    mocks.put
+      .mockImplementationOnce(async (_url: string, body: Record<string, unknown>) => saveResponse(body))
+      .mockRejectedValueOnce(new Error('Invalid ctaAction'));
     renderTab();
     await screen.findByTestId('manage-gear-row-websearch');
 
@@ -247,6 +328,8 @@ describe('ManageGearsTab', () => {
     expect(mocks.put).toHaveBeenCalledTimes(2);
     expect(screen.queryByTestId('manage-gear-credits-websearch')).toBeNull();
     expect(screen.getByTestId('manage-gear-credits-files')).toHaveValue('7');
+    expect(screen.getByTestId('manage-gear-row-websearch')).toHaveTextContent('100');
+    expect(mocks.get).toHaveBeenCalledTimes(1);
   });
 
   it('drops the row draft on Cancel editing', async () => {

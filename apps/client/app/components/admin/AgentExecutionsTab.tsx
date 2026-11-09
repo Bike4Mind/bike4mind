@@ -83,10 +83,12 @@ const AgentExecutionsTab: React.FC = () => {
     setSelection(NO_SELECTION);
   }
 
-  const { data, isPending, isError, error, refetch, isFetching } = useStuckAgentExecutions(queryParams);
+  const { data, isPending, isError, error, refetch, isFetching, isPlaceholderData } =
+    useStuckAgentExecutions(queryParams);
   const cleanup = useCleanupAgentExecutions();
 
-  const items: StuckExecutionItem[] = data?.items ?? [];
+  // A previous filter's placeholder rows must never be selectable for a destructive action.
+  const items: StuckExecutionItem[] = isPlaceholderData ? [] : (data?.items ?? []);
   // Only rows still listed: the 30 s poll drops an execution that updated again, and releasing it
   // would end a run that is alive.
   const selectedIds =
@@ -289,7 +291,7 @@ const AgentExecutionsTab: React.FC = () => {
           selection={liveSelection}
           onSelectionChange={setSelection}
           pageResetKey={filterKey}
-          loading={isPending}
+          loading={isPending || isPlaceholderData}
           error={isError && !data ? errorMessage : undefined}
           onRetry={() => void refetch()}
           // Fixed columns total 54.75rem with the checkbox; the query takes the rest and truncates.

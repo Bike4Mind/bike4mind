@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import {
   Alert,
+  Box,
   Button,
   Dropdown,
   IconButton,
@@ -16,6 +17,7 @@ import {
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
+import { z } from 'zod';
 import { api } from '@client/app/contexts/ApiContext';
 import { SettingsDraftProvider, useSettingsDraft } from './SettingsDraftProvider';
 import { AdminPageHeader, DataTable, EmptyState, StatusChip, UpdatingBar, type DataColumn } from './shared';
@@ -87,10 +89,12 @@ const draftOf = (g: AdminGear): Draft => {
   };
 };
 
-const creditsBlocked = (draft: Draft) => {
-  const credits = Number(draft.credits);
-  return Number.isInteger(credits) && credits >= 0 ? undefined : 'Credits must be a non-negative integer';
-};
+const creditsSchema = z.string().trim().min(1).transform(Number).pipe(z.number().int().min(0).max(1_000_000));
+
+const creditsBlocked = (draft: Draft) =>
+  creditsSchema.safeParse(draft.credits).success
+    ? undefined
+    : 'Credits must be a non-negative integer no greater than 1,000,000';
 
 type SaveGear = (g: AdminGear, draft: Draft) => Promise<void>;
 
@@ -108,11 +112,11 @@ const useGearDraft = (gear: AdminGear, save: SaveGear) =>
 type CellProps = { gear: AdminGear; editing: boolean; busy: boolean; save: SaveGear };
 
 function GearEnabledCell({ gear, editing, busy, save }: CellProps) {
-  const { value, setValue } = useGearDraft(gear, save);
+  const { value, setValue, pending } = useGearDraft(gear, save);
   return (
     <Switch
       checked={value.enabled}
-      disabled={!editing || busy}
+      disabled={!editing || busy || pending}
       onChange={ev => setValue(previous => ({ ...previous, enabled: ev.target.checked }))}
       slotProps={{ input: { 'aria-label': `${gear.key} enabled` } }}
       data-testid={`manage-gear-enabled-${gear.key}`}
@@ -121,11 +125,12 @@ function GearEnabledCell({ gear, editing, busy, save }: CellProps) {
 }
 
 function GearCreditsCell({ gear, editing, save }: CellProps) {
-  const { value, setValue } = useGearDraft(gear, save);
+  const { value, setValue, pending } = useGearDraft(gear, save);
   if (!editing) return <>{Number(value.credits).toLocaleString()}</>;
   return (
     <Input
       size="sm"
+      disabled={pending}
       value={value.credits}
       onChange={ev => setValue(previous => ({ ...previous, credits: ev.target.value }))}
       slotProps={{ input: { inputMode: 'numeric', 'data-testid': `manage-gear-credits-${gear.key}` } }}
@@ -134,7 +139,7 @@ function GearCreditsCell({ gear, editing, save }: CellProps) {
 }
 
 function GearCopyCell({ gear, editing, save }: CellProps) {
-  const { value, setValue } = useGearDraft(gear, save);
+  const { value, setValue, pending } = useGearDraft(gear, save);
   if (!editing) {
     return (
       <Stack gap={0.25} sx={{ minWidth: 0 }}>
@@ -151,6 +156,7 @@ function GearCopyCell({ gear, editing, save }: CellProps) {
     <Stack gap={0.5}>
       <Input
         size="sm"
+        disabled={pending}
         value={value.title}
         onChange={ev => setValue(previous => ({ ...previous, title: ev.target.value }))}
         placeholder="Title"
@@ -158,6 +164,7 @@ function GearCopyCell({ gear, editing, save }: CellProps) {
       />
       <Input
         size="sm"
+        disabled={pending}
         value={value.tagline}
         onChange={ev => setValue(previous => ({ ...previous, tagline: ev.target.value }))}
         placeholder="Tagline"
@@ -165,6 +172,7 @@ function GearCopyCell({ gear, editing, save }: CellProps) {
       <Textarea
         size="sm"
         minRows={2}
+        disabled={pending}
         value={value.intro}
         onChange={ev => setValue(previous => ({ ...previous, intro: ev.target.value }))}
         placeholder="Intro"
@@ -174,7 +182,7 @@ function GearCopyCell({ gear, editing, save }: CellProps) {
 }
 
 function GearCtaCell({ gear, editing, save }: CellProps) {
-  const { value, setValue } = useGearDraft(gear, save);
+  const { value, setValue, pending } = useGearDraft(gear, save);
   if (!editing) {
     return (
       <Stack gap={0.25} sx={{ minWidth: 0 }}>
@@ -194,12 +202,14 @@ function GearCtaCell({ gear, editing, save }: CellProps) {
     <Stack gap={0.5}>
       <Input
         size="sm"
+        disabled={pending}
         value={value.cta}
         onChange={ev => setValue(previous => ({ ...previous, cta: ev.target.value }))}
         placeholder="CTA label"
       />
       <Input
         size="sm"
+        disabled={pending}
         value={value.ctaAction}
         onChange={ev => setValue(previous => ({ ...previous, ctaAction: ev.target.value }))}
         placeholder="navigate:/path | external:https://... | files"
@@ -218,7 +228,7 @@ function GearRowMenu({
   onStopEditing,
   onReset,
 }: CellProps & { onEdit(): void; onStopEditing(): void; onReset(): Promise<boolean> }) {
-  const { setValue } = useGearDraft(gear, save);
+  const { setValue, pending } = useGearDraft(gear, save);
   const discard = () => setValue(draftOf(gear));
   return (
     <Dropdown>
@@ -228,7 +238,7 @@ function GearRowMenu({
           root: {
             size: 'sm',
             variant: 'plain',
-            disabled: busy,
+            disabled: busy || pending,
             'aria-label': `Actions for ${gear.key}`,
             sx: { ...adminFocus, color: 'admin.inkMuted' },
           },
@@ -240,6 +250,7 @@ function GearRowMenu({
       <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
         {editing ? (
           <MenuItem
+            disabled={busy || pending}
             onClick={() => {
               discard();
               onStopEditing();
@@ -249,13 +260,14 @@ function GearRowMenu({
             Cancel editing
           </MenuItem>
         ) : (
-          <MenuItem onClick={onEdit} data-testid={`manage-gear-edit-${gear.key}`}>
+          <MenuItem disabled={busy || pending} onClick={onEdit} data-testid={`manage-gear-edit-${gear.key}`}>
             Edit gear
           </MenuItem>
         )}
         {gear.override !== null && (
           <MenuItem
             color="danger"
+            disabled={busy || pending}
             // discard() writes the baseline this render closed over, so it clears the draft whatever the refetch loaded.
             onClick={() => void onReset().then(reset => reset && discard())}
             data-testid={`manage-gear-reset-${gear.key}`}
@@ -288,12 +300,13 @@ const ManageGearsTab = () => {
     });
 
   const save: SaveGear = async (g, draft) => {
-    const credits = Number(draft.credits);
+    if (busy) throw new Error('Wait for the gear reset to finish before saving.');
+    const credits = creditsSchema.parse(draft.credits);
     // Sparse patch: only ship fields that differ from the code default, and
     // null out fields returned to it - keeps the override row honest about
     // what the admin actually changed.
     const d = g.defaults;
-    await api.put('/api/admin/gears', {
+    const response = await api.put<{ override: NonNullable<AdminGear['override']> }>('/api/admin/gears', {
       key: g.key,
       enabled: draft.enabled === d.enabled ? null : draft.enabled,
       credits: credits === d.credits ? null : credits,
@@ -303,15 +316,34 @@ const ManageGearsTab = () => {
       cta: draft.cta === d.cta ? null : draft.cta,
       ctaAction: draft.ctaAction === d.ctaAction ? null : draft.ctaAction,
     });
+    await queryClient.cancelQueries({ queryKey: ['admin', 'gears'] });
+    queryClient.setQueryData<{ gears: AdminGear[] }>(
+      ['admin', 'gears'],
+      previous =>
+        previous && {
+          ...previous,
+          gears: previous.gears.map(gear =>
+            gear.key === g.key ? { ...gear, override: response.data.override } : gear
+          ),
+        }
+    );
     toast.success(`Saved override for "${g.key}" - live now`);
     setRowEditing(g.key, false);
-    await refresh();
   };
 
   const reset = async (g: AdminGear) => {
     setBusy(true);
     try {
       await api.delete(`/api/admin/gears/${encodeURIComponent(g.key)}`);
+      await queryClient.cancelQueries({ queryKey: ['admin', 'gears'] });
+      queryClient.setQueryData<{ gears: AdminGear[] }>(
+        ['admin', 'gears'],
+        previous =>
+          previous && {
+            ...previous,
+            gears: previous.gears.map(gear => (gear.key === g.key ? { ...gear, override: null } : gear)),
+          }
+      );
       toast.success(`"${g.key}" reset to code defaults`);
       setRowEditing(g.key, false);
       await refresh();
@@ -369,45 +401,47 @@ const ManageGearsTab = () => {
         </Alert>
       )}
 
-      <SettingsDraftProvider>
-        <Stack gap={1}>
-          <UpdatingBar active={isFetching && !isPending} testId="manage-gears-updating" />
-          <DataTable
-            label="Gears"
-            testId="manage-gears-table"
-            rows={data?.gears ?? []}
-            columns={columns}
-            getRowId={g => g.key}
-            rowTestId={g => `manage-gear-row-${g.key}`}
-            loading={isPending}
-            error={isError && !data ? 'Could not load gears.' : undefined}
-            onRetry={() => void refetch()}
-            rowActions={g => (
-              <GearRowMenu
-                {...cell(g)}
-                onEdit={() => setRowEditing(g.key, true)}
-                onStopEditing={() => setRowEditing(g.key, false)}
-                onReset={() => reset(g)}
-              />
-            )}
-            // Fixed columns total 44.5rem with the actions column; the copy column takes the rest.
-            minWidth="62rem"
-            maxHeight="none"
-            pagination={false}
-            empty={
-              <EmptyState
-                title="No gears to show"
-                description="Gears are defined in code, so this list is never empty on a healthy deploy."
-                action={
-                  <Button variant="outlined" onClick={() => void refetch()} data-testid="manage-gears-refresh-btn">
-                    Refresh gears
-                  </Button>
-                }
-              />
-            }
-          />
-        </Stack>
-      </SettingsDraftProvider>
+      <Box component="fieldset" disabled={busy} sx={{ border: 0, p: 0, m: 0, minWidth: 0 }}>
+        <SettingsDraftProvider>
+          <Stack gap={1}>
+            <UpdatingBar active={isFetching && !isPending} testId="manage-gears-updating" />
+            <DataTable
+              label="Gears"
+              testId="manage-gears-table"
+              rows={data?.gears ?? []}
+              columns={columns}
+              getRowId={g => g.key}
+              rowTestId={g => `manage-gear-row-${g.key}`}
+              loading={isPending}
+              error={isError && !data ? 'Could not load gears.' : undefined}
+              onRetry={() => void refetch()}
+              rowActions={g => (
+                <GearRowMenu
+                  {...cell(g)}
+                  onEdit={() => setRowEditing(g.key, true)}
+                  onStopEditing={() => setRowEditing(g.key, false)}
+                  onReset={() => reset(g)}
+                />
+              )}
+              // Fixed columns total 44.5rem with the actions column; the copy column takes the rest.
+              minWidth="62rem"
+              maxHeight="none"
+              pagination={false}
+              empty={
+                <EmptyState
+                  title="No gears to show"
+                  description="Gears are defined in code, so this list is never empty on a healthy deploy."
+                  action={
+                    <Button variant="outlined" onClick={() => void refetch()} data-testid="manage-gears-refresh-btn">
+                      Refresh gears
+                    </Button>
+                  }
+                />
+              }
+            />
+          </Stack>
+        </SettingsDraftProvider>
+      </Box>
     </Stack>
   );
 };

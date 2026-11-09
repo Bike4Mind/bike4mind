@@ -23,6 +23,7 @@ import AddIcon from '@mui/icons-material/Add';
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import type { ModelInfo } from '@bike4mind/common';
 import { toast } from 'sonner';
+import { z } from 'zod';
 import { api } from '@client/app/contexts/ApiContext';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
@@ -96,6 +97,8 @@ Provide only the final system prompt text (do not include additional explanation
 
 /** The fields PUT /api/admin/agent-ops-settings takes. */
 type SettingsForm = Pick<AgentOpsSettings, 'generationLlmModel' | 'rateLimitSeconds' | 'isEnabled'>;
+type SettingsDraft = Omit<SettingsForm, 'rateLimitSeconds'> & { rateLimitSeconds: number | '' };
+const rateLimitSchema = z.number().int().min(0).max(3600);
 
 const SectionTitle = ({ children }: { children: React.ReactNode }) => (
   <Typography level="title-md" component="h2" sx={{ color: 'admin.ink' }}>
@@ -115,11 +118,15 @@ function GenerationSettings({
   modelLabels: Map<string, string>;
   onSave(form: SettingsForm): Promise<void>;
 }) {
-  const { value: form, setValue } = useSettingsDraft<SettingsForm>('agent-ops-settings', baseline, {
+  const { value: form, setValue } = useSettingsDraft<SettingsDraft>('agent-ops-settings', baseline, {
     name: 'Generation settings',
-    save: onSave,
+    save: draft => onSave({ ...draft, rateLimitSeconds: rateLimitSchema.parse(draft.rateLimitSeconds) }),
+    blocked: draft =>
+      rateLimitSchema.safeParse(draft.rateLimitSeconds).success
+        ? undefined
+        : 'Rate limit must be an integer between 0 and 3600 seconds',
   });
-  const set = (patch: Partial<SettingsForm>) => setValue(previous => ({ ...previous, ...patch }));
+  const set = (patch: Partial<SettingsDraft>) => setValue(previous => ({ ...previous, ...patch }));
 
   return (
     <SettingsSection component="section" sx={{ mb: 0 }} data-testid="agent-ops-settings-section">
@@ -153,7 +160,7 @@ function GenerationSettings({
           <Input
             type="number"
             value={form.rateLimitSeconds}
-            onChange={e => set({ rateLimitSeconds: parseInt(e.target.value) || 60 })}
+            onChange={e => set({ rateLimitSeconds: e.target.value === '' ? '' : Number(e.target.value) })}
             slotProps={{ input: { min: 0, max: 3600, 'data-testid': 'agent-ops-rate-limit-input' } }}
           />
           <FormHelperText>Minimum seconds between system prompt generations per agent.</FormHelperText>
@@ -397,7 +404,7 @@ const AgentOpsTab: React.FC = () => {
               value={settings.currentVersionNumber ? `Version ${settings.currentVersionNumber}` : 'None'}
             />
             <StatTile label="Total generations" value={settings.totalGenerationsCount || 0} />
-            <StatTile label="Rate limit" value={`${settings.rateLimitSeconds || 60}s`} />
+            <StatTile label="Rate limit" value={`${settings.rateLimitSeconds ?? 60}s`} />
             <StatTile label="Model" value={modelLabel(settings.generationLlmModel)} />
           </StatStrip>
         </Stack>

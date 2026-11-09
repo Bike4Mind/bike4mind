@@ -141,12 +141,12 @@ export const DiscoveryStatusCard: React.FC = () => {
   // The poll loop outlives a fast unmount (2 minutes of it), so every state
   // write past an await is gated on this.
   const unmounted = useRef(false);
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    unmounted.current = false;
+    return () => {
       unmounted.current = true;
-    },
-    []
-  );
+    };
+  }, []);
 
   const load = useCallback(async (): Promise<DiscoveryStatus> => {
     const res = await api.get<DiscoveryStatus>('/api/admin/model-discovery');

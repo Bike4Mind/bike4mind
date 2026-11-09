@@ -149,6 +149,19 @@ describe('DiscoveryStatusCard', () => {
     expect(mockGet).toHaveBeenCalledWith('/api/admin/model-discovery');
   });
 
+  it('loads status after StrictMode replays the mount effects', async () => {
+    render(
+      <React.StrictMode>
+        <TestWrapper>
+          <DiscoveryStatusCard />
+        </TestWrapper>
+      </React.StrictMode>
+    );
+
+    expect(await screen.findByTestId('discovery-status-last-run')).toHaveTextContent('cron on hosted');
+    expect(screen.queryByTestId('discovery-status-loading')).not.toBeInTheDocument();
+  });
+
   it('names the skipped sources without folding them into the attempt tally', async () => {
     mockGet.mockResolvedValue({
       data: statusWith(runLike({ skippedSources: [{ name: 'vertex', reason: 'not-configured' }] })),

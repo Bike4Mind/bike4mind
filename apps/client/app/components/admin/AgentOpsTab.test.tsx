@@ -226,6 +226,36 @@ describe('AgentOpsTab', () => {
     expect(mocks.useBlocker.mock.lastCall?.[0].enableBeforeUnload).toBe(false);
   });
 
+  it.each([0, 3600])('saves and displays the valid rate limit boundary %s', async rateLimitSeconds => {
+    mocks.put.mockImplementation(async (_url: string, body: Record<string, unknown>) => {
+      settingsResponse = { ...SETTINGS, ...body };
+      return { data: {} };
+    });
+    renderTab();
+    fireEvent.change(await screen.findByTestId('agent-ops-rate-limit-input'), {
+      target: { value: String(rateLimitSeconds) },
+    });
+    fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+    await waitFor(() => expect(screen.queryByTestId('admin-save-bar')).toBeNull());
+    expect(mocks.put).toHaveBeenCalledWith('/api/admin/agent-ops-settings', {
+      generationLlmModel: 'model-a',
+      rateLimitSeconds,
+      isEnabled: true,
+    });
+    expect(screen.getByTestId('agent-ops-rate-limit-input')).toHaveValue(rateLimitSeconds);
+    expect(screen.getByTestId('admin-stat-strip')).toHaveTextContent(`Rate limit${rateLimitSeconds}s`);
+  });
+
+  it.each(['', '-1', '1.5', '3601'])('blocks an invalid rate limit %j without writing', async rateLimitSeconds => {
+    renderTab();
+    fireEvent.change(await screen.findByTestId('agent-ops-rate-limit-input'), { target: { value: rateLimitSeconds } });
+    expect(screen.getByTestId('admin-save-bar')).toHaveTextContent(
+      'Rate limit must be an integer between 0 and 3600 seconds'
+    );
+    expect(screen.getByTestId('admin-save-confirm-btn')).toBeDisabled();
+    expect(mocks.put).not.toHaveBeenCalled();
+  });
+
   it('keeps the staged settings and shows the failure in the SaveBar when the save fails', async () => {
     mocks.put.mockRejectedValueOnce(new Error('Invalid LLM model specified'));
     renderTab();

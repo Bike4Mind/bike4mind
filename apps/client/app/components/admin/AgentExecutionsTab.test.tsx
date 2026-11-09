@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider, onlineManager } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -198,6 +198,29 @@ describe('AgentExecutionsTab', () => {
     fireEvent.change(screen.getByTestId('stuck-agent-executions-minutes'), { target: { value: '30' } });
 
     await waitFor(() => expect(screen.queryByTestId('admin-bulk-action-bar')).toBeNull());
+  });
+
+  it('does not offer the previous filter rows for release while the next request is pending', async () => {
+    renderTab();
+    await screen.findByTestId('stuck-execution-row-exec-1');
+    selectRow('exec-1');
+
+    const request = Promise.withResolvers<{ data: { items: typeof ITEMS; olderThanMinutes: number } }>();
+    mocks.get.mockReturnValueOnce(request.promise);
+    fireEvent.change(screen.getByTestId('stuck-agent-executions-minutes'), { target: { value: '60' } });
+
+    await waitFor(() => expect(lastGetParams()).toEqual({ minutes: 60, limit: 200 }));
+    expect(screen.queryByTestId('stuck-execution-row-exec-1')).toBeNull();
+    expect(screen.getAllByTestId('admin-table-skeleton-row').length).toBeGreaterThan(0);
+    expect(screen.queryByTestId('stuck-agent-executions-empty')).toBeNull();
+    expect(screen.queryByTestId('admin-bulk-action-bar')).toBeNull();
+    expect(mocks.post).not.toHaveBeenCalled();
+
+    await act(async () => {
+      request.resolve({ data: { items: [ITEMS[1]], olderThanMinutes: 60 } });
+    });
+    expect(await screen.findByTestId('stuck-execution-row-exec-2')).toBeInTheDocument();
+    expect(screen.queryByTestId('admin-bulk-action-bar')).toBeNull();
   });
 
   it('shows an EmptyState with a Refresh action when nothing is stuck', async () => {
