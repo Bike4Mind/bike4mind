@@ -81,11 +81,21 @@ describe('AnthropicBackend output_config.effort', () => {
       expect(effortOf(await capture({ reasoningEffort: level }, ChatModels.CLAUDE_5_5_HAIKU))).toBe(level);
     });
 
-    it('keeps QuestMaster at medium', async () => {
-      expect(effortOf(await capture({ questMaster: true, thinking: undefined }, ChatModels.CLAUDE_5_5_OPUS))).toBe(
+    it('keeps QuestMaster at medium on a high-default model', async () => {
+      expect(effortOf(await capture({ questMaster: true, thinking: undefined }, ChatModels.CLAUDE_5_OPUS))).toBe(
         'medium'
       );
     });
+
+    // No effort leaves these models on the provider's own default, which is medium for them.
+    it.each([ChatModels.CLAUDE_5_5_OPUS, ChatModels.CLAUDE_5_5_HAIKU])(
+      'sends no effort for %s when thinking is not enabled',
+      async model => {
+        const params = await capture({ thinking: undefined }, model);
+        expect(params).toBeDefined();
+        expect(effortOf(params)).toBeUndefined();
+      }
+    );
   });
 
   describe('a caller can choose the level', () => {

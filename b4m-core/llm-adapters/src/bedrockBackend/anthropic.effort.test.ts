@@ -34,6 +34,14 @@ describe('AnthropicBedrockBackend output_config.effort default', () => {
     expect(effortOf(ChatModels.CLAUDE_5_5_HAIKU_BEDROCK, { reasoningEffort: level })).toBe(level);
   });
 
+  // No effort leaves these models on the provider's own default, which is medium for them.
+  it.each([ChatModels.CLAUDE_5_5_OPUS_BEDROCK, ChatModels.CLAUDE_5_5_HAIKU_BEDROCK])(
+    'sends no effort for %s when thinking is not enabled',
+    model => {
+      expect(effortOf(model, { thinking: undefined })).toBeUndefined();
+    }
+  );
+
   it('keeps QuestMaster at medium on a high-default model', () => {
     expect(effortOf(ChatModels.CLAUDE_5_OPUS_BEDROCK, { questMaster: true, thinking: undefined })).toBe('medium');
   });

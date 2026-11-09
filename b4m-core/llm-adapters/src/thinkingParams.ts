@@ -2,6 +2,7 @@ import {
   ADAPTIVE_THINKING_MAX_TOKENS_FLOOR,
   ANTHROPIC_OUTPUT_CONFIG_EFFORT_MODELS,
   ChatModels,
+  claudeFamilyVersion,
   CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
   ModelBackend,
   NO_TEMPERATURE_MODELS,
@@ -36,22 +37,25 @@ export const ANTHROPIC_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']
 export type AnthropicEffort = (typeof ANTHROPIC_EFFORT_LEVELS)[number];
 
 /**
- * The effort a Claude turn runs at when the caller states none: 'high' normally, 'medium'
- * for QuestMaster and for the models in MEDIUM_DEFAULT_EFFORT_MODELS.
+ * The effort resolveAnthropicEffort sends when the caller states none: 'high' normally,
+ * 'medium' for QuestMaster and for the MEDIUM_DEFAULT_EFFORT_FAMILIES models. That only
+ * covers turns with thinking enabled; a turn without thinking sends no effort at all and
+ * runs at the provider's own default, which is also 'medium' for those models.
  */
 export const DEFAULT_ANTHROPIC_EFFORT: AnthropicEffort = 'high';
 export const DEFAULT_QUEST_MASTER_ANTHROPIC_EFFORT: AnthropicEffort = 'medium';
 
 /**
- * Models whose unstated effort is 'medium' rather than DEFAULT_ANTHROPIC_EFFORT. Exact ids,
- * direct and Bedrock, so a new model keeps 'high' until it is added here.
+ * Claude family-versions (claudeFamilyVersion) whose unstated effort is 'medium' rather than
+ * DEFAULT_ANTHROPIC_EFFORT, matched across direct, Bedrock-scoped, dated and suffixed ids. A
+ * new family-version keeps 'high' until it is added here.
  */
-export const MEDIUM_DEFAULT_EFFORT_MODELS: ReadonlySet<string> = new Set([
-  ChatModels.CLAUDE_5_5_OPUS,
-  ChatModels.CLAUDE_5_5_OPUS_BEDROCK,
-  ChatModels.CLAUDE_5_5_HAIKU,
-  ChatModels.CLAUDE_5_5_HAIKU_BEDROCK,
-]);
+export const MEDIUM_DEFAULT_EFFORT_FAMILIES: ReadonlySet<string> = new Set(['opus-5-5', 'haiku-5-5']);
+
+function hasMediumDefaultEffort(model: string): boolean {
+  const familyVersion = claudeFamilyVersion(model);
+  return familyVersion !== null && MEDIUM_DEFAULT_EFFORT_FAMILIES.has(familyVersion);
+}
 
 /**
  * B4M's six-level `ReasoningEffort` onto Anthropic's five.
@@ -119,7 +123,7 @@ export function resolveAnthropicEffort(input: {
     toAnthropicEffort(input.reasoningEffort) ??
     (input.questMaster === true
       ? DEFAULT_QUEST_MASTER_ANTHROPIC_EFFORT
-      : input.model !== undefined && MEDIUM_DEFAULT_EFFORT_MODELS.has(input.model)
+      : input.model !== undefined && hasMediumDefaultEffort(input.model)
         ? 'medium'
         : DEFAULT_ANTHROPIC_EFFORT)
   );

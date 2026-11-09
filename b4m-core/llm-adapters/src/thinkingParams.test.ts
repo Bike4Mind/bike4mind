@@ -768,9 +768,22 @@ describe('resolveAnthropicEffort', () => {
       expect(resolveAnthropicEffort({ model })).toBe('high');
     });
 
-    it('is high for an unknown id, including a dated variant of a medium model', () => {
-      expect(resolveAnthropicEffort({ model: 'claude-opus-5-5-20270101' })).toBe('high');
+    it.each([
+      'claude-opus-5-5-20270101',
+      'us.anthropic.claude-opus-5-5',
+      'eu.anthropic.claude-haiku-5-5-v1:0',
+      'apac.anthropic.claude-opus-5-5-20270101-v1:0',
+      'claude-opus-5-5[1m]',
+    ])('is medium for %s, another spelling of a medium model', model => {
+      expect(resolveAnthropicEffort({ model })).toBe('medium');
     });
+
+    it.each(['claude-sonnet-5-5', 'us.anthropic.claude-sonnet-5-5-v1:0', 'claude-opus-5-5-1', 'gpt-5', 'opus-5-5'])(
+      'is high for %s',
+      model => {
+        expect(resolveAnthropicEffort({ model })).toBe('high');
+      }
+    );
 
     it.each(MEDIUM)('lets a stated effort override the default on %s', model => {
       expect(resolveAnthropicEffort({ model, anthropicEffort: 'high' })).toBe('high');
