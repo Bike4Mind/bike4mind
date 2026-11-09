@@ -71,8 +71,13 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
 // real Mongo. liveShareTokens mirrors the real fold (legacy scalar first, revoked entries out).
 vi.mock('@bike4mind/database', () => ({
   shareTokenFilter: (token: string) => ({ __shareFilterFor: token }),
-  liveShareTokens: (a: { shareToken?: string | null; shareTokens?: { token?: string; revokedAt?: Date | null }[] }) => {
-    const live = (a.shareTokens ?? []).filter(e => !!e?.token && !e.revokedAt);
+  liveShareTokens: (a: {
+    shareToken?: string | null;
+    shareTokens?: { token?: string; revokedAt?: Date | null; expiresAt?: Date | null }[];
+  }) => {
+    const live = (a.shareTokens ?? []).filter(
+      e => !!e?.token && !e.revokedAt && (!e.expiresAt || e.expiresAt > new Date())
+    );
     const legacy = a.shareToken;
     return legacy && !live.some(e => e.token === legacy) ? [{ token: legacy, revokedAt: null }, ...live] : live;
   },

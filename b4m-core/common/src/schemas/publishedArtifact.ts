@@ -119,6 +119,7 @@ export const ShareTokenEntrySchema = z.object({
   token: z.string().optional(),
   createdAt: z.date().optional(),
   revokedAt: z.date().nullish(),
+  expiresAt: z.date().nullish(),
   viewCount: z.int().nonnegative().prefault(0),
   lastViewedAt: z.date().nullish(),
 });

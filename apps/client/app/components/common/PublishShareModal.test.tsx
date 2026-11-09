@@ -1471,6 +1471,51 @@ describe('PublishShareModal - access options match the Live Artifacts badge', ()
       expect(screen.getByTestId('publish-share-token-create').textContent).toBe('Create private link')
     );
   });
+
+  describe('private link expiry', () => {
+    const mintCalls = () =>
+      (api.post as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(([url]) =>
+        String(url).endsWith('/share-token')
+      );
+
+    const openPrivateLinkSection = async () => {
+      (api.get as unknown as ReturnType<typeof vi.fn>)
+        .mockReset()
+        .mockImplementation((url: string) =>
+          Promise.resolve({
+            data: url.endsWith('/share-token') ? { shareToken: null, shareLinks: [] } : { artifact: {} },
+          })
+        );
+      (api.post as unknown as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue({
+        data: { id: 'l1', shareToken: 'TOK', shareUrl: '/a/TOK', shareLinks: [] },
+      });
+      renderModal({ defaultVisibility: 'private', publish: vi.fn().mockResolvedValue(liveResult('private')) });
+      fireEvent.click(screen.getByTestId('publish-share-create'));
+      return screen.findByTestId('publish-share-token-create');
+    };
+
+    it('defaults to no expiry and sends none', async () => {
+      fireEvent.click(await openPrivateLinkSection());
+      await waitFor(() => expect(mintCalls()).toHaveLength(1));
+      expect(mintCalls()[0][1]).not.toHaveProperty('expiresAt');
+      expect((await screen.findByTestId('publish-share-token-expires')).textContent).toBe('This link does not expire.');
+    });
+
+    it('sends an expiry one day out when 1 day is chosen, and shows it', async () => {
+      const create = await openPrivateLinkSection();
+      fireEvent.click(within(screen.getByTestId('publish-share-token-expiry')).getByRole('combobox'));
+      fireEvent.click(await screen.findByTestId('publish-share-token-expiry-1d'));
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+      (api.post as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+        data: { id: 'l1', shareToken: 'TOK', shareUrl: '/a/TOK', shareLinks: [{ id: 'l1', expiresAt }] },
+      });
+      fireEvent.click(create);
+      await waitFor(() => expect(mintCalls()).toHaveLength(1));
+      const sent = Date.parse((mintCalls()[0][1] as { expiresAt: string }).expiresAt);
+      expect(Math.abs(sent - Date.parse(expiresAt))).toBeLessThan(60_000);
+      expect((await screen.findByTestId('publish-share-token-expires')).textContent).toContain('stops working on');
+    });
+  });
 });
 
 describe('PublishShareModal - a refused publish shows the server reason', () => {

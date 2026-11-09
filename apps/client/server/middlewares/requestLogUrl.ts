@@ -1,6 +1,6 @@
 // Import-free on purpose: proxy.ts runs in the edge runtime and imports this module too.
 
-// A share-link token is a bearer read capability, so its path segment never reaches app logs.
+// A share-link token is a bearer read capability, so app log lines carry its path segment redacted.
 // Covers the viewer route (`/a/<token>`) and its API (`/api/publish/serve/a/<token>/...`).
 const SHARE_TOKEN_PATH = /^(\/+(?:api\/+publish\/+serve\/+)?a\/+)([^/?#]+)/;
 

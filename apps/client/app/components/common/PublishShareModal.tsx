@@ -17,6 +17,8 @@ import {
   Switch,
   Alert,
   Checkbox,
+  Select,
+  Option,
   type ColorPaletteProp,
 } from '@mui/joy';
 import { useTheme } from '@mui/joy/styles';
@@ -49,6 +51,7 @@ import {
   getShareTokenState,
   isRevokeOrphanGateRefusal,
   type PublishAccessGateInput,
+  type ShareLink,
   type PublishMode,
   type ArtifactPublishOpts,
 } from '@client/app/utils/publishApi';
@@ -108,6 +111,25 @@ export interface PublishShareModalProps {
    */
   incompleteWarning?: string;
 }
+
+const SHARE_EXPIRY_DAYS = { none: null, '1d': 1, '7d': 7, '30d': 30 } as const;
+type ShareExpiryChoice = keyof typeof SHARE_EXPIRY_DAYS;
+const SHARE_EXPIRY_LABELS: Record<ShareExpiryChoice, string> = {
+  none: 'Never expires',
+  '1d': 'Expires in 1 day',
+  '7d': 'Expires in 7 days',
+  '30d': 'Expires in 30 days',
+};
+
+/** Computed at click time so the chosen lifetime starts when the link is made. */
+function shareExpiryIso(choice: ShareExpiryChoice): string | undefined {
+  const days = SHARE_EXPIRY_DAYS[choice];
+  return days === null ? undefined : new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+}
+
+type MintedLink = { shareToken: string; shareLinks: ShareLink[]; id: string };
+const mintedExpiry = (minted: MintedLink) => minted.shareLinks?.find(l => l.id === minted.id)?.expiresAt ?? null;
+const newestExpiry = (links: ShareLink[] | undefined) => links?.[links.length - 1]?.expiresAt ?? null;
 
 type VisibilityOption = { value: PublishVisibility; label: string; hint: string };
 
@@ -320,6 +342,8 @@ export function PublishShareModal({
   const [mode, setMode] = useState<PublishMode>('new');
   // The opt-in no-sign-in (`/a/<token>`) share link, minted lazily only when the owner asks.
   const [shareToken, setShareToken] = useState<string | null>(null);
+  const [shareExpiresAt, setShareExpiresAt] = useState<string | null>(null);
+  const [shareExpiry, setShareExpiry] = useState<ShareExpiryChoice>('none');
   const [shareBusy, setShareBusy] = useState(false);
   // Access gate on top of Public (issue #383). `gateTouched` distinguishes "left at
   // defaults" from an explicit choice, so an update-publish never clobbers an existing
@@ -362,6 +386,8 @@ export function PublishShareModal({
       setExisting(null);
       setMode('new');
       setShareToken(null);
+      setShareExpiresAt(null);
+      setShareExpiry('none');
       setShareBusy(false);
       setGateKind('none');
       setGatePassphrase('');
@@ -402,7 +428,10 @@ export function PublishShareModal({
     let active = true;
     void getShareTokenState(result.publicId)
       .then(state => {
-        if (active && state.shareToken) setShareToken(prev => prev ?? state.shareToken);
+        if (active && state.shareToken) {
+          setShareToken(prev => prev ?? state.shareToken);
+          setShareExpiresAt(prev => prev ?? newestExpiry(state.shareLinks));
+        }
       })
       .catch(() => {
         /* best-effort seed; Create still surfaces an existing link idempotently */
@@ -475,7 +504,10 @@ export function PublishShareModal({
           setStoredGate(state.accessGate?.kind ?? null);
           if (state.accessGate?.kind === 'domain') setGateDomainsText(state.accessGate.allowedDomains.join(', '));
         }
-        if (links?.shareToken) setShareToken(links.shareToken);
+        if (links?.shareToken) {
+          setShareToken(links.shareToken);
+          setShareExpiresAt(newestExpiry(links.shareLinks));
+        }
       })
       .catch(() => {
         /* lookup failure -> the plain publish form; the server still updates in place */
@@ -713,11 +745,13 @@ export function PublishShareModal({
   }, [confirmingClear]);
 
   // No-sign-in link (`/a/<token>`): mint on demand, rotate (revokes old links), or revoke.
-  const runShareToken = async (action: () => Promise<string | null>, successMsg: string): Promise<void> => {
+  const runShareToken = async (action: () => Promise<MintedLink | null>, successMsg: string): Promise<void> => {
     if (!result || shareBusy) return;
     setShareBusy(true);
     try {
-      setShareToken(await action());
+      const minted = await action();
+      setShareToken(minted?.shareToken ?? null);
+      setShareExpiresAt(minted ? mintedExpiry(minted) : null);
       toast.success(successMsg);
     } catch (err) {
       toast.error(errorMessage(err));
@@ -729,10 +763,13 @@ export function PublishShareModal({
     }
   };
   const onCreateShareToken = () =>
-    runShareToken(async () => (await createOrGetShareToken(result!.publicId)).shareToken, 'Link created');
+    runShareToken(
+      () => createOrGetShareToken(result!.publicId, { expiresAt: shareExpiryIso(shareExpiry) }),
+      'Link created'
+    );
   const onRegenerateShareToken = () =>
     runShareToken(
-      async () => (await regenerateShareToken(result!.publicId)).shareToken,
+      () => regenerateShareToken(result!.publicId, shareExpiryIso(shareExpiry)),
       'Link regenerated - the old link no longer works'
     );
   const onRevokeShareToken = () =>
@@ -1164,8 +1201,27 @@ export function PublishShareModal({
                       ? `This page is public, so the link above already opens for anyone${storedGate ? ` ${GATED_LINK_WHO[storedGate]}` : ''}. Revoke this one if you no longer need it.`
                       : `The link above only opens for ${visibility === 'organization' ? 'your team' : 'you'}. This one opens for anyone you send it to${storedGate ? ` ${GATED_LINK_WHO[storedGate]}` : ', without signing in'}.`}
                 </Typography>
+                <Select
+                  size="sm"
+                  value={shareExpiry}
+                  onChange={(_, value) => value && setShareExpiry(value)}
+                  sx={{ mb: 1, maxWidth: 220 }}
+                  aria-label="Private link expiry"
+                  data-testid="publish-share-token-expiry"
+                >
+                  {(Object.keys(SHARE_EXPIRY_LABELS) as ShareExpiryChoice[]).map(choice => (
+                    <Option key={choice} value={choice} data-testid={`publish-share-token-expiry-${choice}`}>
+                      {SHARE_EXPIRY_LABELS[choice]}
+                    </Option>
+                  ))}
+                </Select>
                 {shareToken ? (
                   <>
+                    <Typography level="body-xs" sx={{ mb: 0.5 }} data-testid="publish-share-token-expires">
+                      {shareExpiresAt
+                        ? `This link stops working on ${new Date(shareExpiresAt).toLocaleString()}.`
+                        : 'This link does not expire.'}
+                    </Typography>
                     <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
                       <Input
                         value={toShareTokenUrl(shareToken)}
