@@ -30,57 +30,120 @@ export const ENGINE_CSP = [
   "base-uri 'none'",
 ].join('; ');
 
-/** Builds time out after this long; the worker is then killed and the next build starts fresh. */
+/**
+ * A build's own budget, counted from the moment its worker is ready: worker boot and the manifold
+ * load never eat into it. Past it the worker is killed, which is what stops an endless loop.
+ */
 export const BUILD_TIMEOUT_MS = 5000;
+
+/**
+ * The ceiling on a worker becoming ready. Together with BUILD_TIMEOUT_MS it stays under the 30 s
+ * main waits for a build report (ModelLiveView.ts), so a stuck boot still reports its own error.
+ */
+export const BOOT_TIMEOUT_MS = 15000;
+
+export const BUILD_TIMEOUT_MESSAGE = `Build stopped after ${BUILD_TIMEOUT_MS / 1000} s without finishing. There is no line number because the code never returned: look for an endless loop or a very heavy operation.`;
 
 const ENGINE_HTML = `<!DOCTYPE html>
 <html><head><meta charset="utf-8"></head>
 <body><script type="module" src="./engine.js"></script></body></html>`;
 
 /**
- * The page script: one fresh Worker per build, so a model can neither leak WASM memory nor state
- * into the next build, and an endless loop costs one terminate() rather than a hung renderer.
+ * The page script. Each build still gets a fresh Worker, so a model can neither leak WASM memory
+ * nor state into the next build, and an endless loop costs one terminate() rather than a hung
+ * renderer. What it no longer pays for is the cold start: the WASM is compiled once per page and
+ * handed to every worker, and the next build's worker is booted (manifold loaded and set up) while
+ * the page is idle or the current build runs, so a build normally starts on a warm worker.
  */
 const ENGINE_JS = `
-let worker = null;
-let timer = null;
+const BUILD_TIMEOUT_MS = ${BUILD_TIMEOUT_MS};
+const BOOT_TIMEOUT_MS = ${BOOT_TIMEOUT_MS};
+const BUILD_TIMEOUT_MESSAGE = ${JSON.stringify(BUILD_TIMEOUT_MESSAGE)};
+// null when compiling here fails; each worker then loads the WASM itself.
+const compiled = WebAssembly.compileStreaming(fetch('./manifold.wasm')).catch(() => null);
+let next = null;
+let active = null;
+let latest = 0;
 function reply(id, outcome) {
   const transfer = [];
   if (outcome && outcome.ok) for (const part of outcome.parts) transfer.push(part.positions.buffer, part.indices.buffer);
   window.parent.postMessage({ type: 'built', id, outcome }, '*', transfer);
 }
-function stop() {
-  if (worker) worker.terminate();
-  worker = null;
-  clearTimeout(timer);
+function spawn() {
+  const worker = new Worker('./worker.js', { type: 'module' });
+  const ready = new Promise((resolve) => {
+    worker.onmessage = (event) => {
+      const data = event.data || {};
+      resolve(data.type === 'ready' ? true : data.error || 'The model engine failed to start.');
+    };
+    worker.onerror = (event) => resolve(event.message || 'The model worker failed to start.');
+  });
+  void compiled.then((wasm) => {
+    try {
+      worker.postMessage({ type: 'init', wasm });
+    } catch {
+      worker.postMessage({ type: 'init', wasm: null });
+    }
+  });
+  return { worker, ready };
 }
-function run(id, source, params, print) {
-  stop();
-  const current = new Worker('./worker.js', { type: 'module' });
-  worker = current;
-  timer = setTimeout(() => {
-    if (worker !== current) return;
-    stop();
-    reply(id, { ok: false, error: 'Build timed out after ${BUILD_TIMEOUT_MS / 1000} s. Look for an endless loop or a very heavy operation.' });
-  }, ${BUILD_TIMEOUT_MS});
-  current.onmessage = (event) => {
-    if (worker !== current) return;
-    stop();
+function stopActive() {
+  if (!active) return;
+  active.worker.terminate();
+  clearTimeout(active.timer);
+  active = null;
+}
+function bootOrTimeout(ready) {
+  let timer;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => resolve('The model engine did not start within ' + BOOT_TIMEOUT_MS / 1000 + ' s.'), BOOT_TIMEOUT_MS);
+  });
+  return Promise.race([ready, timeout]).finally(() => clearTimeout(timer));
+}
+async function run(id, source, params, print) {
+  stopActive();
+  latest += 1;
+  const token = latest;
+  next = next || spawn();
+  const engine = next;
+  const boot = await bootOrTimeout(engine.ready);
+  // Superseded while booting: the worker stays as next, for the build that superseded this one.
+  if (token !== latest) return;
+  next = null;
+  if (boot !== true) {
+    engine.worker.terminate();
+    reply(id, { ok: false, error: boot });
+    return;
+  }
+  const worker = engine.worker;
+  active = {
+    worker,
+    timer: setTimeout(() => {
+      if (!active || active.worker !== worker) return;
+      stopActive();
+      reply(id, { ok: false, error: BUILD_TIMEOUT_MESSAGE });
+    }, BUILD_TIMEOUT_MS),
+  };
+  worker.onmessage = (event) => {
+    if (!active || active.worker !== worker) return;
+    stopActive();
     reply(id, event.data);
   };
-  current.onerror = (event) => {
-    if (worker !== current) return;
-    stop();
-    reply(id, { ok: false, error: event.message || 'The model worker failed to start.' });
+  worker.onerror = (event) => {
+    if (!active || active.worker !== worker) return;
+    stopActive();
+    reply(id, { ok: false, error: event.message || 'The model worker failed.' });
   };
-  current.postMessage({ source, params, print });
+  worker.postMessage({ type: 'build', source, params, print });
+  next = spawn();
 }
 window.addEventListener('message', (event) => {
   if (event.source !== window.parent) return;
   const data = event.data;
   if (!data || data.type !== 'build' || typeof data.source !== 'string') return;
-  run(data.id, data.source, data.params || {}, data.print === true);
+  void run(data.id, data.source, data.params || {}, data.print === true);
 });
+next = spawn();
 window.parent.postMessage({ type: 'engine-ready' }, '*');
 `;
 
@@ -165,12 +228,37 @@ function partsOf(result, Manifold) {
   });
 }
 
+let m = null;
+
+// The page's compiled module when it has one, so a new worker instantiates instead of fetching and compiling.
+async function load(wasm) {
+  if (!wasm) return Module();
+  // Emscripten never settles Module() when instantiateWasm fails, so the failure is surfaced here.
+  return new Promise((resolve, reject) => {
+    Module({
+      instantiateWasm(imports, done) {
+        WebAssembly.instantiate(wasm, imports).then((instance) => done(instance, wasm), reject);
+        return {};
+      },
+    }).then(resolve, reject);
+  });
+}
+
+async function init(wasm) {
+  try {
+    m = await load(wasm);
+    m.setup();
+    self.postMessage({ type: 'ready' });
+  } catch (error) {
+    self.postMessage({ type: 'failed', error: 'The model engine failed to start: ' + (error instanceof Error ? error.message : String(error)) });
+  }
+}
+
 self.onmessage = async (event) => {
+  if (event.data.type === 'init') return init(event.data.wasm);
   const { source, params: overrides, print } = event.data;
   const url = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
   try {
-    const m = await Module();
-    m.setup();
     const mod = await import(url);
     if (typeof mod.default !== 'function') throw new Error('The model file must have a default export: export default function model({ m, p }) { ... }');
     const units = mod.units === 'm' ? 'm' : 'mm';

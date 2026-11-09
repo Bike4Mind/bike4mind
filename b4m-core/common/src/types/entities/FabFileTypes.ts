@@ -1,5 +1,5 @@
 import type { GeneratedAssetLineageEntry } from '../../generatedAsset';
-import { type ChunkStallReason } from '../../constants/chunking';
+import { type ChunkStallReason, type ExtractionRefusalReason } from '../../constants/chunking';
 import type { MembershipArm } from '../../constants/lakeMembershipHealth';
 import { IBaseRepository, type IMongoDocument } from '.';
 import { IShareableStaticMethods, type IShareableDocument } from './ShareableDocumentTypes';
@@ -394,6 +394,14 @@ export interface IFabFile {
   noExtractableTextAt?: Date | null;
 
   /**
+   * Why the last chunk pass declined to read this file at all (an over-budget or unopenable
+   * DOCX/XLSX container), or `null` when it read the file. Written on every chunk pass alongside
+   * `noExtractableTextAt`, which still carries the zero-chunk fact the rescue sweep keys on; this
+   * only says why, so readers can tell "too large" from "no text" (`describePipelineStall`).
+   */
+  extractionRefusalReason?: ExtractionRefusalReason | null;
+
+  /**
    * Set when this file belongs to data lakes whose required chunk policy its current chunks do not
    * satisfy (#1662); `null`/absent means no conflict. A report, not a failure: the file stays
    * chunked at its owner-altitude policy. Cleared when a re-chunk or membership change resolves it.
@@ -722,6 +730,7 @@ export const FAB_FILE_CONTENT_REWRITE_PATCH = {
   // Content-derived like the rest: the stamp asserts "no text in this file" about bytes the rewrite
   // replaced. Leaving it would keep the rescue sweep's terminal guard closed against the new content.
   noExtractableTextAt: null,
+  extractionRefusalReason: null,
 } as const;
 
 export interface IFabFileListItem {
