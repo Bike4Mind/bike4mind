@@ -31,7 +31,7 @@ export class GeminiImageProvider implements ImageProvider {
     const service = new GeminiImageService(ctx.apiKey, ctx.logger);
     let rendered: Rendered;
     try {
-      rendered = await raceAbort(this.render(service, request, inputs), ctx.signal);
+      rendered = await raceAbort(() => this.render(service, request, inputs), ctx.signal);
     } catch (error) {
       if (ctx.signal.aborted) throw error;
       const classified = classifyImageProviderError(error);
