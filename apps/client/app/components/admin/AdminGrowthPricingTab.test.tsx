@@ -147,6 +147,9 @@ describe('AdminGrowthPricingTab', () => {
           .textContent
       ).toBe(section.title);
     }
+    expect(
+      within(screen.getByTestId('admin-growth-pricing-section-catalog')).getByRole('heading', { level: 2 }).textContent
+    ).toBe('What checkout sells');
   });
 
   it('saves the page through one SaveBar instead of a Save button per field', async () => {
