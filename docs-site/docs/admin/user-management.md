@@ -165,7 +165,8 @@ an administrator session; API keys cannot read the IP evidence.
 
 On a user's profile, **Overview > Internal notes** stores plain-text support context.
 Reading requires `support:read`; adding, editing, and deleting require
-`users:moderate`. Full administrators have both permissions. Notes show their
+`users:moderate`. Full administrators have both permissions (see
+[Delegated Admin Permissions](./delegated-permissions.md)). Notes show their
 original author and time, and **View history** shows attributed revisions.
 Deletion hides a note while retaining its history; the Undo notification restores
 it. Legacy inline notes remain visible but read-only. Impersonated sessions cannot
@@ -386,4 +387,5 @@ The export includes all matching users, not just the current page, up to 15,000 
 - [Admin Dashboard Overview](./overview.md) - Overall admin panel navigation
 - [Email Verification](./email-verification.md) - Managing email verification status
 - [User Migration](./user-migration.md) - Bulk user migration
+- [Delegated Admin Permissions](./delegated-permissions.md) - Permission model for delegated admins
 - [Analytics](./analytics.md) - User activity analytics
