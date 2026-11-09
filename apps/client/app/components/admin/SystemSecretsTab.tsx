@@ -390,6 +390,16 @@ const SystemSecretsTab: React.FC = () => {
     setShowValue(false);
   };
 
+  const handleDismissEdit = () => {
+    if (saving) return;
+    handleCloseModal();
+  };
+
+  const handleCloseDelete = () => {
+    if (deleting) return;
+    setDeletingSecret(null);
+  };
+
   const handleSave = async () => {
     if (!editingSecret || !secretValue.trim()) {
       toast.error('Please enter a value');
@@ -519,7 +529,7 @@ const SystemSecretsTab: React.FC = () => {
         <SectionTitle
           title="Configurable secrets"
           testId="system-secrets-configurable-title"
-          description="Overrides set here are encrypted and take effect immediately; delete one to go back to the SST value."
+          description="Overrides set here are encrypted; delete one to go back to the SST value."
         />
         <DataTable
           label="Configurable secrets"
@@ -552,7 +562,7 @@ const SystemSecretsTab: React.FC = () => {
 
       <AdminDialog
         open={editModalOpen}
-        onClose={handleCloseModal}
+        onClose={handleDismissEdit}
         title="Edit value"
         width={500}
         data-testid="system-secrets-edit-dialog"
@@ -601,7 +611,8 @@ const SystemSecretsTab: React.FC = () => {
           <Button
             variant="plain"
             color="neutral"
-            onClick={handleCloseModal}
+            onClick={handleDismissEdit}
+            disabled={saving}
             data-testid="system-secrets-edit-cancel-btn"
           >
             Cancel
@@ -620,7 +631,7 @@ const SystemSecretsTab: React.FC = () => {
 
       <AdminDialog
         open={deletingSecret !== null}
-        onClose={() => setDeletingSecret(null)}
+        onClose={handleCloseDelete}
         title="Delete override"
         role="alertdialog"
         data-testid="system-secrets-delete-dialog"
@@ -635,7 +646,8 @@ const SystemSecretsTab: React.FC = () => {
           <Button
             variant="plain"
             color="neutral"
-            onClick={() => setDeletingSecret(null)}
+            onClick={handleCloseDelete}
+            disabled={deleting}
             data-testid="system-secrets-delete-cancel-btn"
           >
             Cancel

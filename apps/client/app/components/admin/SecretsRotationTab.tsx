@@ -4,6 +4,7 @@ import {
   DialogContent,
   Dropdown,
   FormControl,
+  FormHelperText,
   FormLabel,
   IconButton,
   Input,
@@ -17,6 +18,9 @@ import {
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { api } from '@client/app/contexts/ApiContext';
+import { getErrorMessage } from '@client/app/utils/error';
+import { toast } from 'sonner';
+import { z } from 'zod';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import dayjs from 'dayjs';
@@ -35,6 +39,8 @@ import {
 import { ADMIN_REGION_GAP, adminFocus } from './shared/adminStyles';
 
 dayjs.extend(relativeTime);
+
+const rotationIntervalSchema = z.number().int().min(1).max(365);
 
 /** An inactive record is not expected to rotate, so it never reads as overdue. */
 function rotationStatus(secret: SafeSecretRotation): { tone: AdminStatusTone; label: string } {
@@ -153,6 +159,7 @@ export default function SecretsRotationTab() {
       queryClient.invalidateQueries({ queryKey: ['secrets-rotation'] });
       setOpenEditModal(false);
     },
+    onError: (error: unknown) => toast.error(getErrorMessage(error)),
   });
 
   const renewMutation = useMutation({
@@ -161,6 +168,7 @@ export default function SecretsRotationTab() {
       queryClient.invalidateQueries({ queryKey: ['secrets-rotation'] });
       setOpenRenewModal(false);
     },
+    onError: (error: unknown) => toast.error(getErrorMessage(error)),
   });
 
   const handleRenew = (secret: SafeSecretRotation) => {
@@ -180,6 +188,18 @@ export default function SecretsRotationTab() {
   const handleRefresh = () => {
     refetch();
   };
+
+  const closeEditModal = () => {
+    if (editMutation.isPending) return;
+    setOpenEditModal(false);
+  };
+
+  const closeRenewModal = () => {
+    if (renewMutation.isPending) return;
+    setOpenRenewModal(false);
+  };
+
+  const validRotationInterval = rotationIntervalSchema.safeParse(editFormData.rotationIntervalDays).success;
 
   const columns: readonly DataColumn<SafeSecretRotation>[] = [
     {
@@ -286,7 +306,7 @@ export default function SecretsRotationTab() {
 
       <AdminDialog
         open={openEditModal}
-        onClose={() => setOpenEditModal(false)}
+        onClose={closeEditModal}
         title="Edit rotation"
         data-testid="secrets-rotation-edit-dialog"
       >
@@ -303,7 +323,7 @@ export default function SecretsRotationTab() {
               slotProps={{ input: { 'data-testid': 'secrets-rotation-edit-description-input' } }}
             />
           </FormControl>
-          <FormControl>
+          <FormControl error={!validRotationInterval}>
             <FormLabel>Rotation interval (days)</FormLabel>
             <Input
               name="rotationIntervalDays"
@@ -318,20 +338,22 @@ export default function SecretsRotationTab() {
                 },
               }}
             />
+            {!validRotationInterval && <FormHelperText>Enter a whole number from 1 to 365.</FormHelperText>}
           </FormControl>
         </DialogContent>
         <DialogFooter>
           <Button
             variant="plain"
             color="neutral"
-            onClick={() => setOpenEditModal(false)}
+            onClick={closeEditModal}
+            disabled={editMutation.isPending}
             data-testid="secrets-rotation-edit-cancel-btn"
           >
             Cancel
           </Button>
           <Button
             onClick={() => {
-              if (currentSecret) {
+              if (currentSecret && validRotationInterval) {
                 editMutation.mutate({
                   id: currentSecret.id,
                   ...editFormData,
@@ -339,6 +361,7 @@ export default function SecretsRotationTab() {
               }
             }}
             loading={editMutation.isPending}
+            disabled={!validRotationInterval}
             data-testid="secrets-rotation-edit-save-btn"
           >
             Save changes
@@ -348,7 +371,7 @@ export default function SecretsRotationTab() {
 
       <AdminDialog
         open={openRenewModal}
-        onClose={() => setOpenRenewModal(false)}
+        onClose={closeRenewModal}
         title="Mark secret as renewed"
         data-testid="secrets-rotation-renew-dialog"
       >
@@ -362,7 +385,8 @@ export default function SecretsRotationTab() {
           <Button
             variant="plain"
             color="neutral"
-            onClick={() => setOpenRenewModal(false)}
+            onClick={closeRenewModal}
+            disabled={renewMutation.isPending}
             data-testid="secrets-rotation-renew-cancel-btn"
           >
             Cancel

@@ -112,7 +112,7 @@ Open the row's "..." menu and choose "Edit value" to open the "Edit value" dialo
 
 1. The dialog shows the secret name, description, and current source information.
 2. Enter the new value in the password input field. Toggle visibility with the eye icon.
-3. Click "Save value" to encrypt and store the value. The secret takes effect immediately.
+3. Click "Save value" to encrypt and store the value.
 
 Values are encrypted before storage in the database.
 

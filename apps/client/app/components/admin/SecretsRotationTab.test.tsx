@@ -1,16 +1,17 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { SafeSecretRotation } from '@client/lib/secretRotation/utils';
 
-const mocks = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn(), post: vi.fn() }));
+const mocks = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn(), post: vi.fn(), error: vi.fn() }));
 
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: mocks.get, put: mocks.put, post: mocks.post } }));
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
+vi.mock('sonner', () => ({ toast: { error: mocks.error } }));
 
 import SecretsRotationTab from './SecretsRotationTab';
 
@@ -55,7 +56,7 @@ const openRowMenu = (id: string) => fireEvent.click(screen.getByTestId(`secrets-
 
 describe('SecretsRotationTab', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    Object.values(mocks).forEach(mock => mock.mockReset());
     mocks.get.mockResolvedValue({ data: [onSchedule, overdue, inactive] });
     mocks.put.mockResolvedValue({ data: {} });
     mocks.post.mockResolvedValue({ data: {} });
@@ -185,6 +186,113 @@ describe('SecretsRotationTab', () => {
       })
     );
     await waitFor(() => expect(screen.queryByTestId('secrets-rotation-edit-dialog')).toBeNull());
+  });
+
+  it.each(['edit', 'renew'] as const)('keeps the %s dialog attached to its pending request', async action => {
+    const request = Promise.withResolvers<{ data: Record<string, never> }>();
+    const mutation = action === 'edit' ? mocks.put : mocks.post;
+    mutation.mockReturnValueOnce(request.promise);
+    renderTab();
+    await screen.findByTestId('secrets-rotation-row-rot-2');
+    openRowMenu('rot-2');
+    fireEvent.click(await screen.findByTestId(`secrets-rotation-row-${action}-rot-2`));
+
+    const dialogId = `secrets-rotation-${action}-dialog`;
+    const dialog = await screen.findByTestId(dialogId);
+    const submitId = action === 'edit' ? 'secrets-rotation-edit-save-btn' : 'secrets-rotation-renew-confirm-btn';
+    fireEvent.click(within(dialog).getByTestId(submitId));
+    const cancel = within(dialog).getByTestId(`secrets-rotation-${action}-cancel-btn`);
+    await waitFor(() => expect(cancel).toBeDisabled());
+
+    fireEvent.click(cancel);
+    expect(dialog).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByTestId(`${dialogId}-close-btn`));
+    expect(dialog).toBeInTheDocument();
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    expect(dialog).toBeInTheDocument();
+    expect(dialog).toHaveTextContent(LONG_KEY);
+    expect(mutation).toHaveBeenCalledTimes(1);
+
+    await act(async () => request.resolve({ data: {} }));
+    await waitFor(() => expect(screen.queryByTestId(dialogId)).toBeNull());
+  });
+
+  it('shows a renewal refusal and keeps the dialog open for a retry', async () => {
+    const message = 'The signing secret has not changed since its last capture';
+    mocks.post.mockRejectedValueOnce(
+      Object.assign(new Error('Request failed'), { isAxiosError: true, response: { data: { error: message } } })
+    );
+    renderTab();
+    await screen.findByTestId('secrets-rotation-row-rot-1');
+    openRowMenu('rot-1');
+    fireEvent.click(await screen.findByTestId('secrets-rotation-row-renew-rot-1'));
+
+    const dialog = await screen.findByTestId('secrets-rotation-renew-dialog');
+    fireEvent.click(within(dialog).getByTestId('secrets-rotation-renew-confirm-btn'));
+
+    await waitFor(() => expect(mocks.error).toHaveBeenCalledWith(message));
+    expect(dialog).toBeInTheDocument();
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(within(dialog).getByTestId('secrets-rotation-renew-confirm-btn'));
+    await waitFor(() => expect(screen.queryByTestId('secrets-rotation-renew-dialog')).toBeNull());
+  });
+
+  it('shows an edit failure and preserves the entered values for a retry', async () => {
+    mocks.put.mockRejectedValueOnce(new Error('Network Error'));
+    renderTab();
+    await screen.findByTestId('secrets-rotation-row-rot-2');
+    openRowMenu('rot-2');
+    fireEvent.click(await screen.findByTestId('secrets-rotation-row-edit-rot-2'));
+
+    const dialog = await screen.findByTestId('secrets-rotation-edit-dialog');
+    const interval = within(dialog).getByTestId('secrets-rotation-edit-interval-input');
+    fireEvent.change(interval, { target: { value: '45' } });
+    fireEvent.click(within(dialog).getByTestId('secrets-rotation-edit-save-btn'));
+
+    await waitFor(() => expect(mocks.error).toHaveBeenCalledWith('Network Error'));
+    expect(dialog).toBeInTheDocument();
+    expect(interval).toHaveValue(45);
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(within(dialog).getByTestId('secrets-rotation-edit-save-btn'));
+    await waitFor(() => expect(screen.queryByTestId('secrets-rotation-edit-dialog')).toBeNull());
+  });
+
+  it.each(['', '0', '-1', '366', '1.5'])('does not submit an invalid rotation interval: %j', async value => {
+    renderTab();
+    await screen.findByTestId('secrets-rotation-row-rot-2');
+    openRowMenu('rot-2');
+    fireEvent.click(await screen.findByTestId('secrets-rotation-row-edit-rot-2'));
+
+    const dialog = await screen.findByTestId('secrets-rotation-edit-dialog');
+    fireEvent.change(within(dialog).getByTestId('secrets-rotation-edit-interval-input'), { target: { value } });
+    const save = within(dialog).getByTestId('secrets-rotation-edit-save-btn');
+    expect(save).toBeDisabled();
+    fireEvent.click(save);
+    expect(mocks.put).not.toHaveBeenCalled();
+    expect(dialog).toBeInTheDocument();
+  });
+
+  it.each([1, 365])('accepts the rotation interval boundary: %i', async rotationIntervalDays => {
+    renderTab();
+    await screen.findByTestId('secrets-rotation-row-rot-2');
+    openRowMenu('rot-2');
+    fireEvent.click(await screen.findByTestId('secrets-rotation-row-edit-rot-2'));
+
+    const dialog = await screen.findByTestId('secrets-rotation-edit-dialog');
+    fireEvent.change(within(dialog).getByTestId('secrets-rotation-edit-interval-input'), {
+      target: { value: String(rotationIntervalDays) },
+    });
+    fireEvent.click(within(dialog).getByTestId('secrets-rotation-edit-save-btn'));
+
+    await waitFor(() =>
+      expect(mocks.put).toHaveBeenCalledWith('/api/secret-rotations/rot-2', {
+        id: 'rot-2',
+        rotationIntervalDays,
+        description: 'Ingest token for attack simulation results',
+      })
+    );
   });
 
   it('shows skeleton rows under the header while the first load runs', async () => {

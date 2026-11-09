@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
@@ -288,6 +288,37 @@ describe('SystemSecretsTab', () => {
     await waitFor(() => expect(callsTo(SECRETS_URL)).toBe(2));
   });
 
+  it('keeps the edit dialog open until its save request finishes', async () => {
+    const finishSave = vi.fn<() => void>();
+    mocks.post.mockImplementation(
+      () =>
+        new Promise<void>(resolve => {
+          finishSave.mockImplementation(resolve);
+        })
+    );
+    renderTab();
+    await screen.findByTestId('system-secrets-row-SMTP_PASSWORD');
+    openRowMenu('SMTP_PASSWORD');
+    fireEvent.click(await screen.findByTestId('system-secrets-row-edit-SMTP_PASSWORD'));
+
+    const dialog = await screen.findByTestId('system-secrets-edit-dialog');
+    fireEvent.change(within(dialog).getByTestId('system-secrets-edit-value-input'), {
+      target: { value: 'new-smtp-pass' },
+    });
+    fireEvent.click(within(dialog).getByTestId('system-secrets-edit-save-btn'));
+
+    expect(within(dialog).getByTestId('system-secrets-edit-cancel-btn')).toBeDisabled();
+    fireEvent.click(within(dialog).getByTestId('system-secrets-edit-dialog-close-btn'));
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    expect(screen.getByTestId('system-secrets-edit-dialog')).toBe(dialog);
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      finishSave();
+    });
+    await waitFor(() => expect(screen.queryByTestId('system-secrets-edit-dialog')).toBeNull());
+  });
+
   it('deletes an override only after the confirm dialog, with the same request', async () => {
     renderTab();
     await screen.findByTestId('system-secrets-row-SMTP_PASSWORD');
@@ -306,6 +337,34 @@ describe('SystemSecretsTab', () => {
     await waitFor(() => expect(mocks.delete).toHaveBeenCalledWith('/api/admin/system-secrets/db-1'));
     await waitFor(() => expect(screen.queryByTestId('system-secrets-delete-dialog')).toBeNull());
     expect(mocks.toastSuccess).toHaveBeenCalledWith('Database override for SMTP_PASSWORD deleted');
+  });
+
+  it('keeps the delete dialog open until its request finishes', async () => {
+    const finishDeletion = vi.fn<() => void>();
+    mocks.delete.mockImplementation(
+      () =>
+        new Promise<void>(resolve => {
+          finishDeletion.mockImplementation(resolve);
+        })
+    );
+    renderTab();
+    await screen.findByTestId('system-secrets-row-SMTP_PASSWORD');
+    openRowMenu('SMTP_PASSWORD');
+    fireEvent.click(await screen.findByTestId('system-secrets-row-delete-SMTP_PASSWORD'));
+
+    const dialog = await screen.findByTestId('system-secrets-delete-dialog');
+    fireEvent.click(within(dialog).getByTestId('system-secrets-delete-confirm-btn'));
+
+    expect(within(dialog).getByTestId('system-secrets-delete-cancel-btn')).toBeDisabled();
+    fireEvent.click(within(dialog).getByTestId('system-secrets-delete-dialog-close-btn'));
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    expect(screen.getByTestId('system-secrets-delete-dialog')).toBe(dialog);
+    expect(mocks.delete).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      finishDeletion();
+    });
+    await waitFor(() => expect(screen.queryByTestId('system-secrets-delete-dialog')).toBeNull());
   });
 
   it('keeps the header and shows skeleton rows while the lists load', async () => {
