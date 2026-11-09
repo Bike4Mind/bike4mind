@@ -1,5 +1,7 @@
 import React, { useMemo } from 'react';
 import { Stack } from '@mui/joy';
+import { useQueries } from '@tanstack/react-query';
+import { api } from '@client/app/contexts/ApiContext';
 import { FilterBar, SegmentedControl, type AdminFilter, type AdminListState } from '../../shared';
 import { ModelMetric } from '../types';
 import { getDisplayName } from '../utils/formatters';
@@ -33,6 +35,23 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   simplifiedNames,
   onSimplifiedNamesChange,
 }) => {
+  const userIds = useMemo(
+    () =>
+      Array.from(
+        new Set(metrics.map(metric => metric.session?.userId).filter((id): id is string => Boolean(id)))
+      ).sort(),
+    [metrics]
+  );
+  // Same key as useGetUser (userQueryKey), so names are shared with the rest of the admin UI.
+  const userNames = useQueries({
+    queries: userIds.map(id => ({
+      queryKey: ['users', id],
+      queryFn: async () => (await api.get<{ username?: string }>(`/api/users/${id}`)).data,
+      staleTime: 1000 * 60 * 3,
+    })),
+    combine: results => results.map(result => result.data?.username),
+  });
+
   const filters = useMemo<AdminFilter[]>(() => {
     const unique = (pick: (metric: ModelMetric) => string | undefined) =>
       Array.from(new Set(metrics.map(pick).filter((value): value is string => Boolean(value)))).sort();
@@ -46,15 +65,14 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
           label: getDisplayName(value, modelInfos, simplifiedNames),
         })),
       },
-      // Labelled by id: FilterChip takes plain strings and a name lookup per option is not worth a request each.
       {
         id: 'user',
         label: 'User',
-        options: unique(metric => metric.session?.userId).map(value => ({ value, label: value })),
+        options: userIds.map((value, index) => ({ value, label: userNames[index] ?? value })),
       },
       { id: 'status', label: 'Status', options: STATUS_OPTIONS },
     ];
-  }, [metrics, modelInfos, simplifiedNames]);
+  }, [metrics, modelInfos, simplifiedNames, userIds, userNames]);
 
   return (
     <Stack direction="row" flexWrap="wrap" alignItems="center" gap={1} data-testid="model-metrics-toolbar">

@@ -1,15 +1,22 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
+vi.mock('@client/app/contexts/ApiContext', () => ({
+  api: { get: vi.fn(async (url: string) => ({ data: { username: `name-of-${url.split('/').pop()}` } })) },
+}));
+
 import { ControlPanel } from './ControlPanel';
 import { MODEL_METRICS_SEARCH_KEYS } from '../modelMetricsSearch';
 import type { ModelMetric } from '../types';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: React.ReactNode }) => (
-  <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
+  <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+    <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
+  </QueryClientProvider>
 );
 
 const metric = (model: string, userId: string) => ({ model: { name: model }, session: { userId } }) as ModelMetric;
@@ -31,6 +38,13 @@ const renderPanel = (overrides: Partial<React.ComponentProps<typeof ControlPanel
 };
 
 describe('ControlPanel', () => {
+  it('labels the user options by username, not id', async () => {
+    renderPanel();
+    fireEvent.click(screen.getByTestId('admin-filter-user'));
+    expect(await screen.findByText('name-of-user-1')).toBeInTheDocument();
+    expect(screen.queryByText('user-1')).not.toBeInTheDocument();
+  });
+
   it('renders one filter row with a chip per filter and no apply or date inputs', () => {
     renderPanel();
     expect(screen.getByTestId('admin-filter-bar')).toBeInTheDocument();
