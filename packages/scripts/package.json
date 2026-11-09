@@ -66,6 +66,7 @@
     "backfill:pending-free-credits": "tsx backfillPendingFreeCredits.ts",
     "backfill:oauth-starting-grant": "tsx backfillOAuthStartingGrant.ts",
     "audit:partial-credit-purchases": "tsx src/audit-partial-credit-purchases.ts",
+    "audit:organization-stripe-customers": "tsx src/audit-organization-stripe-customers.ts",
     "backfill:fabfile-moderation-status": "tsx src/backfill-fabfile-moderation-status.ts",
     "backfill:session-image-count": "tsx src/backfill-session-image-count.ts",
     "backfill:analytics-rollup": "tsx src/backfill-analytics-rollup.ts",

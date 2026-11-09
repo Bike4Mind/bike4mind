@@ -1,3 +1,4 @@
+import type { RolePolicy, TaskAction } from './orchestration';
 import type { AppWorktree, WorktreeRemoval, WorktreeSweepItem } from './worktreeRemoval';
 import type { LoopResult, LoopState } from './loop';
 import type { PromptCacheTtl } from '@bike4mind/common';
@@ -189,6 +190,9 @@ export const IPC_CHANNELS = {
   chatGetModelLoadOffer: 'chat:get-model-load-offer',
   chatSetSessionPinned: 'chat:set-session-pinned',
   chatSetSessionOrchestrate: 'chat:set-session-orchestrate',
+  chatGetRolePolicy: 'chat:get-role-policy',
+  chatSetRolePolicy: 'chat:set-role-policy',
+  chatTaskAction: 'chat:task-action',
   /**
    * The one way an approval mode changes. Renderer -> main only, driven by the composer pill:
    * there is deliberately no tool, no MCP surface and no model-facing path to this channel.
@@ -820,6 +824,9 @@ export interface DesktopApi {
     /** Pin a conversation to the top of the sidebar. Null when the session is gone. */
     setSessionPinned(sessionId: string, pinned: boolean): Promise<ChatSessionSummary | null>;
     setSessionOrchestrate(sessionId: string, orchestrate: boolean): Promise<ChatSessionSummary | null>;
+    getRolePolicy(): Promise<RolePolicy>;
+    setRolePolicy(policy: RolePolicy): Promise<RolePolicy>;
+    taskAction(sessionId: string, action: TaskAction): Promise<ChatSessionSummary>;
     /**
      * Set how much this conversation may do without asking. Called from the composer pill, in
      * response to the user clicking it, and from nowhere else - see IPC_CHANNELS above.

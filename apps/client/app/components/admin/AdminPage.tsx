@@ -226,13 +226,13 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.SignupDomainHolds}>
             {activeTab === AdminTab.SignupDomainHolds && <SignupDomainHoldsTab />}
           </TabPanel>
-          <TabPanel value={AdminTab.SignupRiskReview} {...selfFramed}>
+          <TabPanel value={AdminTab.SignupRiskReview}>
             {activeTab === AdminTab.SignupRiskReview && <SignupRiskReviewTab />}
           </TabPanel>
           <TabPanel value={AdminTab.ModerationIncidents}>
             {activeTab === AdminTab.ModerationIncidents && <ModerationIncidentsTab />}
           </TabPanel>
-          <TabPanel value={AdminTab.ShadowDetections} {...selfFramed}>
+          <TabPanel value={AdminTab.ShadowDetections}>
             {activeTab === AdminTab.ShadowDetections && <ShadowDetectionsTab />}
           </TabPanel>
           <TabPanel value={AdminTab.StripeDisputes}>
