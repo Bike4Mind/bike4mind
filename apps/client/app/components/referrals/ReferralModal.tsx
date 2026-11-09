@@ -234,7 +234,7 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
               {[
                 {
                   testId: 'first-answer',
-                  when: 'when your friend gets their first answer',
+                  when: 'when your friend verifies their email and gets their first answer',
                   credits: referralSummary.rewards.firstAnswer,
                 },
                 {

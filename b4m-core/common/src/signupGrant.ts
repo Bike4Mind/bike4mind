@@ -173,7 +173,7 @@ export function runtimeSignupGrantSchedule(
     dailyCredits: read('signupGrantDailyCredits') ?? 0,
     dripCap,
     unlockCredits: dripCap,
-    // An unset cap drips nothing but still locks an invite's remainder, as the empty pre-schedule config did.
+    // An unset cap drips nothing but still locks the remainder of an explicit totalCredits (test fixtures only).
     paysFlat: cap === 0,
     inviteBonusCredits: read('signupGrantInviteBonusCredits') ?? 0,
     dripCapSource: cap === undefined ? 'default' : 'setting',

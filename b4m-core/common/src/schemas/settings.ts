@@ -5491,7 +5491,7 @@ export const settingsMap = {
     int: true,
     userReadable: true,
     description:
-      'Total credits the daily drip may pay per account. Changes apply to enrolled accounts on their next drip, including accounts the drip already completed, but not accounts a verification unlock completed. Zero disables the drip and pays an invite in full at signup. While unset, nothing drips and an invite pays its initial share at signup, the rest on unlock.',
+      'Total credits the daily drip may pay per account. Changes apply to enrolled accounts on their next drip, including accounts the drip already completed, but not accounts a verification unlock completed. Zero, or unset, disables the drip.',
     category: 'Users',
   }),
   signupGrantInviteBonusCredits: makeNumberSetting({
