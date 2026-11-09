@@ -1,5 +1,5 @@
 import React from 'react';
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -198,6 +198,10 @@ describe('ModelMetricsTab - filters', () => {
     resetState();
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('resolves URL filters into the query and keeps the same filters across rerenders', () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-03-10T12:00:00.000Z'));
@@ -211,7 +215,6 @@ describe('ModelMetricsTab - filters', () => {
     rerender(<ModelMetricsTab />);
     // Same reference: a memo-less dayjs() per render would churn the react-query key.
     expect(lastMetricsFilters()).toBe(first);
-    vi.useRealTimers();
   });
 
   it('passes a picked user to the metrics query', () => {

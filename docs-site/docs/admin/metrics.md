@@ -19,7 +19,7 @@ The filter bar at the top of Model Metrics applies each filter as you pick it. T
 
 | Filter | Description |
 |--------|-------------|
-| **Period** | One of Today, Last 24 hours, Last 7 days or Last 30 days. With no period selected, the 500 most recent calls are shown. |
+| **Period** | One of Today, Last 24 hours, Last 7 days or Last 30 days. Every query returns at most the 500 most recent matching calls. |
 | **Model** | Filter by AI model |
 | **User** | Filter by specific user |
 | **Status** | Done, Error or Pending |
@@ -85,7 +85,7 @@ changing, not the product getting slower, so do not compare across it.
 
 ### Record Count
 
-A counter displays "Showing X of Y records" to indicate how many records match the current filters out of the total dataset.
+The page header shows how many calls match the current filters. The count is hidden once a query reaches the 500-call cap, because it would then be a floor rather than a total.
 
 ## Event Metrics
 
