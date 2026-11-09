@@ -704,13 +704,13 @@ const SlackWorkspacesTab: React.FC = () => {
       if (statusCode === 504) {
         errorMessage = 'Export timed out (Gateway Timeout)';
         suggestion =
-          'This channel has too many messages for a single export. Enable "Background Export" above or use date range filters.';
+          'This channel has too many messages for a single export. Enable "Background export" above or use date range filters.';
       } else if (statusCode === 408 || error.code === 'ECONNABORTED') {
         errorMessage = 'Export request timed out';
-        suggestion = 'Enable "Background Export" for large channels, or use a narrower date range.';
+        suggestion = 'Enable "Background export" for large channels, or use a narrower date range.';
       } else if (statusCode === 413) {
         errorMessage = 'Channel too large to export';
-        suggestion = 'Please use date filters to export smaller batches, or enable "Background Export".';
+        suggestion = 'Please use date filters to export smaller batches, or enable "Background export".';
       }
       // Handle blob error responses - when responseType is 'blob', error data is also a blob
       else if (error.response?.data instanceof Blob) {
@@ -721,13 +721,13 @@ const SlackWorkspacesTab: React.FC = () => {
           if (text.includes('<!DOCTYPE') || text.includes('<HTML>') || text.includes('<html>')) {
             if (text.includes('504') || text.includes('Gateway Timeout')) {
               errorMessage = 'Export timed out (Gateway Timeout)';
-              suggestion = 'Enable "Background Export" above for large channels.';
+              suggestion = 'Enable "Background export" above for large channels.';
             } else if (text.includes('502') || text.includes('Bad Gateway')) {
               errorMessage = 'Server temporarily unavailable';
               suggestion = 'Please wait a moment and try again.';
             } else {
               errorMessage = 'Export failed due to server error';
-              suggestion = 'Please try again. If the issue persists, enable "Background Export".';
+              suggestion = 'Please try again. If the issue persists, enable "Background export".';
             }
           } else {
             const parsed = JSON.parse(text);
@@ -756,7 +756,7 @@ const SlackWorkspacesTab: React.FC = () => {
           const contentType = error.response?.headers?.['content-type'] || '';
           if (contentType.includes('text/html')) {
             errorMessage = 'Export failed due to server timeout';
-            suggestion = 'Enable "Background Export" for large channels.';
+            suggestion = 'Enable "Background export" for large channels.';
           }
         }
       } else if (error.response?.data?.message) {

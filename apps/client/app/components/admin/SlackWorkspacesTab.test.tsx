@@ -399,6 +399,26 @@ describe('SlackWorkspacesTab dialogs', () => {
     unmount();
   });
 
+  it('keeps the cancel-export confirm open with a toast and the export running when the DELETE fails', async () => {
+    routeGets(WORKSPACES, RUNNING_JOB);
+    mocks.post.mockResolvedValue({ data: { jobId: 'job-1' } });
+    mocks.delete.mockRejectedValue({ response: { data: { message: 'Job already finished' } } });
+    const { unmount } = renderTab();
+    await loaded();
+    await startBackgroundExport();
+
+    fireEvent.click(screen.getByTestId('slack-export-cancel-async-btn'));
+    await screen.findByTestId('slack-export-cancel-job-dialog');
+    pickReason('slack-export-cancel-job-dialog');
+    fireEvent.click(screen.getByTestId('slack-export-cancel-job-dialog-confirm-btn'));
+
+    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('Job already finished'));
+    expect(screen.getByTestId('slack-export-cancel-job-dialog')).toBeInTheDocument();
+    expect(screen.getByTestId('slack-export-job-status')).toHaveTextContent('Exporting...');
+    expect(mocks.toast.success).not.toHaveBeenCalledWith('Export cancelled');
+    unmount();
+  });
+
   it('reviews a manifest update in an AdminDialog and posts the same payload', async () => {
     mocks.post.mockResolvedValue({ data: {} });
     renderTab();

@@ -83,6 +83,48 @@ const confirmDisconnect = async () => {
   fireEvent.click(screen.getByTestId('github-disconnect-confirm-btn'));
 };
 
+/** Makes the Edit checklist list acme/widgets, the one repository the connection allows. */
+const listOneRepository = () =>
+  mocks.useAdminGitHubRepositories.mockImplementation((enabled: boolean) => ({
+    data: enabled ? { repositories: [{ id: 1, full_name: 'acme/widgets', private: true }], hasMore: false } : undefined,
+    isLoading: false,
+    error: null,
+    refetch: vi.fn(),
+  }));
+
+/** Unticks the only allowed repository, saves, and confirms the empty-whitelist dialog. */
+const confirmEmptyWhitelist = async () => {
+  await screen.findByTestId('github-connection-details');
+  fireEvent.click(screen.getByTestId('github-edit-repos-btn'));
+  fireEvent.click(within(await screen.findByTestId('github-repo-checkbox-1')).getByRole('checkbox'));
+  fireEvent.click(screen.getByTestId('github-save-repos-btn'));
+  await screen.findByTestId('github-empty-repos-dialog');
+  pickReason('github-empty-repos-dialog');
+  fireEvent.click(screen.getByTestId('github-empty-repos-dialog-confirm-btn'));
+};
+
+/** Opens Rotate private key from the header, picks a reason, pastes a key and confirms. */
+const confirmRotate = async () => {
+  await screen.findByTestId('github-connection-details');
+  fireEvent.click(within(header()).getByTestId('github-rotate-key-btn'));
+  await screen.findByTestId('github-rotate-key-dialog');
+  pickReason('github-rotate-key-dialog');
+  fireEvent.change(screen.getByTestId('github-new-private-key-input'), { target: { value: 'NEW PEM' } });
+  fireEvent.click(screen.getByTestId('github-rotate-key-confirm-btn'));
+};
+
+const PAT_CONNECTION = {
+  id: 'conn-2',
+  connectionType: 'service_account',
+  accessTokenMasked: 'github_pat_****',
+  connectedAt: '2026-01-01T00:00:00.000Z',
+  health: { lastUsedAt: '2026-10-01T00:00:00.000Z', lastLatencyMs: 300 },
+  allowedRepositories: ['acme/widgets'],
+};
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** An expiry that daysUntil rounds up to `days`. */
+const expiresIn = (days: number) => new Date(Date.now() + days * DAY_MS - 60 * 1000).toISOString();
+
 beforeEach(() => {
   [mocks.get, mocks.post, mocks.put, mocks.delete, mocks.toast.success, mocks.toast.error].forEach(mock =>
     mock.mockReset()
@@ -238,7 +280,9 @@ describe('GitHubConnectionTab destructive dialogs', () => {
     renderTab();
     await screen.findByTestId('github-connection-details');
 
-    fireEvent.click(within(header()).getByTestId('github-disconnect-btn'));
+    const trigger = within(header()).getByTestId('github-disconnect-btn');
+    expect(trigger).toHaveTextContent('Disconnect GitHub');
+    fireEvent.click(trigger);
     const dialog = await screen.findByTestId('github-disconnect-dialog');
     expect(within(dialog).getByRole('heading', { level: 2 })).toHaveTextContent('Disconnect GitHub');
     const confirm = screen.getByTestId('github-disconnect-confirm-btn');
@@ -335,9 +379,134 @@ describe('GitHubConnectionTab destructive dialogs', () => {
   it('holds the empty-whitelist confirm open while its PUT runs', async () => {
     let resolvePut: (value: unknown) => void = () => undefined;
     mocks.put.mockImplementation(() => new Promise(resolve => (resolvePut = resolve)));
+    listOneRepository();
+    renderTab();
+    await confirmEmptyWhitelist();
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(1));
+
+    tryToClose('github-empty-repos-dialog');
+    expect(screen.getByTestId('github-empty-repos-dialog')).toBeInTheDocument();
+
+    await act(async () => resolvePut({ data: {} }));
+    await waitFor(() => expect(screen.queryByTestId('github-empty-repos-dialog')).toBeNull());
+  });
+
+  it('keeps the empty-whitelist confirm open with a toast and the list unchanged when the PUT fails', async () => {
+    mocks.put.mockRejectedValue(new Error('Server error'));
+    listOneRepository();
+    renderTab();
+    await confirmEmptyWhitelist();
+
+    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('Server error'));
+    expect(screen.getByTestId('github-empty-repos-dialog')).toBeInTheDocument();
+    expect(mocks.toast.success).not.toHaveBeenCalled();
+    expect(mocks.get.mock.calls.filter(([url]) => url === '/api/admin/github/connection')).toHaveLength(1);
+  });
+
+  it('holds the Rotate confirm open while its POST runs', async () => {
+    let resolvePost: (value: unknown) => void = () => undefined;
+    mocks.post.mockImplementation(() => new Promise(resolve => (resolvePost = resolve)));
+    renderTab();
+    await confirmRotate();
+    await waitFor(() => expect(mocks.post).toHaveBeenCalledTimes(1));
+
+    tryToClose('github-rotate-key-dialog');
+    expect(screen.getByTestId('github-rotate-key-dialog')).toBeInTheDocument();
+    expect(screen.getByTestId('github-new-private-key-input')).toHaveValue('NEW PEM');
+
+    await act(async () => resolvePost({ data: {} }));
+    await waitFor(() => expect(screen.queryByTestId('github-rotate-key-dialog')).toBeNull());
+  });
+
+  it('keeps the Rotate confirm open with a toast and the pasted key when the POST fails', async () => {
+    mocks.post.mockRejectedValue(new Error('Invalid private key'));
+    renderTab();
+    await confirmRotate();
+
+    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('Invalid private key'));
+    expect(screen.getByTestId('github-rotate-key-dialog')).toBeInTheDocument();
+    expect(screen.getByTestId('github-new-private-key-input')).toHaveValue('NEW PEM');
+    expect(mocks.toast.success).not.toHaveBeenCalled();
+  });
+});
+
+describe('GitHubConnectionTab service account PAT and repositories', () => {
+  it('connects a PAT from the empty state with the same payload', async () => {
+    routeGets(null);
+    mocks.post.mockResolvedValue({ data: {} });
+    renderTab();
+    fireEvent.click(within(await screen.findByTestId('admin-empty-state')).getByTestId('github-connect-pat-btn'));
+    const dialog = await screen.findByTestId('github-connect-pat-dialog');
+    expect(within(dialog).getByRole('heading', { level: 2 })).toHaveTextContent('Connect service account PAT');
+    expect(screen.getByTestId('github-connect-pat-confirm-btn')).toBeDisabled();
+
+    fireEvent.change(screen.getByTestId('github-pat-input'), { target: { value: 'github_pat_abc' } });
+    fireEvent.change(screen.getByTestId('github-pat-expiry-input'), { target: { value: '2027-01-31' } });
+    routeGets(PAT_CONNECTION);
+    fireEvent.click(screen.getByTestId('github-connect-pat-confirm-btn'));
+
+    await waitFor(() =>
+      expect(mocks.post).toHaveBeenCalledWith(
+        '/api/admin/github/connection',
+        {
+          connectionType: 'service_account',
+          accessToken: 'github_pat_abc',
+          patExpiresAt: '2027-01-31T00:00:00.000Z',
+        },
+        { signal: expect.any(AbortSignal) }
+      )
+    );
+    expect(mocks.toast.success).toHaveBeenCalledWith('Service account PAT connected');
+    const details = await screen.findByTestId('github-connection-details');
+    expect(within(details).getByRole('heading', { level: 3 })).toHaveTextContent('Service account PAT');
+    expect(screen.queryByTestId('github-connect-pat-dialog')).toBeNull();
+  });
+
+  it.each([
+    [6, 'PAT expires in 6 days. Consider rotating soon.', 'warning'],
+    [2, 'PAT expires in 2 days. Consider rotating soon.', 'danger'],
+    [-1, 'PAT has expired! Please update with a new token.', 'danger'],
+  ])('warns about a PAT expiring in %i days under the header', async (days, text, color) => {
+    routeGets({ ...PAT_CONNECTION, patExpiresAt: expiresIn(days) });
+    renderTab();
+    const details = await screen.findByTestId('github-connection-details');
+    const banner = screen.getByTestId('github-pat-expiry-warning');
+    expect(banner).toHaveTextContent(text);
+    expect(getComputedStyle(banner).backgroundColor).toContain(color);
+    expect(header().compareDocumentPosition(banner) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(banner.compareDocumentPosition(details) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('shows no expiry banner for a PAT with more than a week left', async () => {
+    routeGets({ ...PAT_CONNECTION, patExpiresAt: expiresIn(8) });
+    renderTab();
+    await screen.findByTestId('github-connection-details');
+    expect(screen.queryByTestId('github-pat-expiry-warning')).toBeNull();
+  });
+
+  it('shows the last API error as a danger banner and an Error health chip', async () => {
+    routeGets({ ...APP_CONNECTION, health: { lastUsedAt: '2026-10-01T00:00:00.000Z', lastError: 'Bad credentials' } });
+    renderTab();
+    const details = await screen.findByTestId('github-connection-details');
+    const banner = screen.getByTestId('github-last-error-alert');
+    expect(banner).toHaveTextContent('Bad credentials');
+    expect(getComputedStyle(banner).backgroundColor).toContain('danger');
+    const health = within(details).getByTestId('github-health-status-chip');
+    expect(health).toHaveTextContent('Error');
+    expect(health).toHaveAttribute('data-tone', 'bad');
+  });
+
+  it('saves a non-empty whitelist straight away with the same payload', async () => {
+    mocks.put.mockResolvedValue({ data: {} });
     mocks.useAdminGitHubRepositories.mockImplementation((enabled: boolean) => ({
       data: enabled
-        ? { repositories: [{ id: 1, full_name: 'acme/widgets', private: true }], hasMore: false }
+        ? {
+            repositories: [
+              { id: 1, full_name: 'acme/widgets', private: true },
+              { id: 2, full_name: 'acme/gadgets', private: false },
+            ],
+            hasMore: false,
+          }
         : undefined,
       isLoading: false,
       error: null,
@@ -346,17 +515,17 @@ describe('GitHubConnectionTab destructive dialogs', () => {
     renderTab();
     await screen.findByTestId('github-connection-details');
     fireEvent.click(screen.getByTestId('github-edit-repos-btn'));
-    fireEvent.click(within(await screen.findByTestId('github-repo-checkbox-1')).getByRole('checkbox'));
+    expect(within(screen.getByTestId('github-select-all')).getByText('Select all')).toBeInTheDocument();
+    fireEvent.click(within(await screen.findByTestId('github-repo-checkbox-2')).getByRole('checkbox'));
+    expect(within(screen.getByTestId('github-select-all')).getByText('Deselect all')).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('github-save-repos-btn'));
-    await screen.findByTestId('github-empty-repos-dialog');
-    pickReason('github-empty-repos-dialog');
-    fireEvent.click(screen.getByTestId('github-empty-repos-dialog-confirm-btn'));
-    await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(1));
 
-    tryToClose('github-empty-repos-dialog');
-    expect(screen.getByTestId('github-empty-repos-dialog')).toBeInTheDocument();
-
-    await act(async () => resolvePut({ data: {} }));
-    await waitFor(() => expect(screen.queryByTestId('github-empty-repos-dialog')).toBeNull());
+    await waitFor(() =>
+      expect(mocks.put).toHaveBeenCalledWith('/api/admin/github/connection', {
+        allowedRepositories: ['acme/widgets', 'acme/gadgets'],
+      })
+    );
+    expect(screen.queryByTestId('github-empty-repos-dialog')).toBeNull();
+    expect(mocks.toast.success).toHaveBeenCalledWith('Allowed repositories updated');
   });
 });

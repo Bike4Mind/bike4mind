@@ -244,7 +244,7 @@ const GitHubConnectionTab: React.FC = () => {
     }
   }, [connection?.id, connection?.allowedRepositories]);
 
-  const performSaveRepos = async () => {
+  const performSaveRepos = async (): Promise<boolean> => {
     setSavingRepos(true);
     try {
       await api.put('/api/admin/github/connection', {
@@ -254,8 +254,10 @@ const GitHubConnectionTab: React.FC = () => {
       setEditingRepos(false);
       setRepoSearchQuery('');
       fetchConnection();
+      return true;
     } catch (error) {
       toast.error(extractErrorMessage(error, 'Failed to update repositories'));
+      return false;
     } finally {
       setSavingRepos(false);
     }
@@ -334,14 +336,14 @@ const GitHubConnectionTab: React.FC = () => {
       );
       // Check if aborted before processing success
       if (!controller.signal.aborted) {
-        toast.success('Service Account PAT connected successfully');
+        toast.success('Service account PAT connected');
         setConnectPatModalOpen(false);
         fetchConnection();
       }
     } catch (error) {
       // Don't show error toast if request was aborted
       if (!controller.signal.aborted) {
-        toast.error(extractErrorMessage(error, 'Failed to connect Service Account'));
+        toast.error(extractErrorMessage(error, 'Failed to connect the service account'));
       }
     } finally {
       setConnecting(false);
@@ -629,7 +631,7 @@ const GitHubConnectionTab: React.FC = () => {
                         {testResult.type === 'app'
                           ? `App: ${testResult.appName || testResult.login}`
                           : `User: ${testResult.login}`}
-                        {' • '}
+                        {' \u2022 '}
                         {testResult.latencyMs}ms
                       </Typography>
                     )}
@@ -784,7 +786,7 @@ const GitHubConnectionTab: React.FC = () => {
 
                     <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1} flexWrap="wrap">
                       <Checkbox
-                        label={allVisibleSelected ? 'Deselect All' : 'Select All'}
+                        label={allVisibleSelected ? 'Deselect all' : 'Select all'}
                         aria-label={
                           allVisibleSelected
                             ? `Deselect all ${filteredRepos.length} visible repositories`
@@ -948,7 +950,7 @@ const GitHubConnectionTab: React.FC = () => {
                 onClick={() => setDisconnectModalOpen(true)}
                 data-testid="github-disconnect-btn"
               >
-                Disconnect
+                Disconnect GitHub
               </Button>
             )}
             <ContextHelpButton helpId="admin/github-connection" tooltipText="GitHub connection help" />
@@ -1063,12 +1065,12 @@ const GitHubConnectionTab: React.FC = () => {
       >
         <Stack gap={2}>
           <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
-            Enter a Fine-grained Personal Access Token from a service account.
+            Enter a fine-grained personal access token from a service account.
           </Typography>
 
           <Alert color="neutral" size="sm">
             <Typography level="body-xs">
-              Generate a Fine-grained PAT at{' '}
+              Generate a fine-grained PAT at{' '}
               <Link
                 href="https://github.com/settings/personal-access-tokens/new"
                 target="_blank"
@@ -1214,8 +1216,7 @@ const GitHubConnectionTab: React.FC = () => {
         tone="danger"
         pending={savingRepos}
         onConfirm={async () => {
-          await performSaveRepos();
-          setShowEmptyWarningModal(false);
+          if (await performSaveRepos()) setShowEmptyWarningModal(false);
         }}
         data-testid="github-empty-repos-dialog"
       />
