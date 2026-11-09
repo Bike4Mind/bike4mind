@@ -2,7 +2,7 @@ import React, { useRef, useState } from 'react';
 import { Box, Button, Link, Sheet, Stack, Typography } from '@mui/joy';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
-import { DETECTION_LINK_SPEND_DAYS, type IUser, type UserDetectionLinks } from '@bike4mind/common';
+import { DETECTION_LINK_SPEND_DAYS, type UserDetectionLinks } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { useUserDetectionLinks } from '@client/app/hooks/data/adminUserTimeline';
 import { updateUserToServer } from '@client/app/utils/userAPICalls';
@@ -22,6 +22,7 @@ import { DETECTOR_LABELS } from '../../shadowDetectorLabels';
 import { VERDICT_DISPLAY } from '../../ShadowDetectionsTab';
 import { formatCredits } from './actions/creditAdjustment';
 import { useOpenUserProfile } from './useOpenUserProfile';
+import type { AdminUserUpdate } from './actions/useAdminUserUpdate';
 
 type LinkedAccount = UserDetectionLinks['accounts'][number];
 
@@ -40,11 +41,12 @@ async function setSuspended(
   for (const account of accounts) {
     try {
       // A suspend defers its linked-account alert; propagateOnce sends one for the whole action.
-      await updateUserToServer(account.id, {
+      const update: AdminUserUpdate & { deferLinkPropagation?: boolean } = {
         isBanned,
         statusChangeReason: reason,
         ...(isBanned && { deferLinkPropagation: true }),
-      } as Partial<IUser>);
+      };
+      await updateUserToServer(account.id, update);
       done.push(account);
     } catch (error) {
       if (isStepUpCancelled(error)) throw error;

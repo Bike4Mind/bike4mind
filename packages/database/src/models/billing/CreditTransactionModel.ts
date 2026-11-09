@@ -507,7 +507,6 @@ export class CreditTransactionRepository
     return rows.map(row => ({ at: new Date(row._id), credits: row.credits }));
   }
 
-  /** AI spend (magnitudes) over rolling 24h/7d/30d windows, the 30-day top model and per-UTC-day sums. */
   /** AI spend in credits per owner since `since`; owners with none are absent. */
   async aiSpendByOwnersSince(
     ownerIds: string[],
@@ -529,6 +528,7 @@ export class CreditTransactionRepository
     return Object.fromEntries(rows.map(row => [String(row._id), row.credits]));
   }
 
+  /** AI spend (magnitudes) over rolling 24h/7d/30d windows, the 30-day top model and per-UTC-day sums. */
   async summarizeAiSpend(ownerId: string, ownerType: CreditHolderType, now: Date): Promise<AiSpendSummary> {
     const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
     const dailyFrom = new Date(dayStart.getTime() - (AI_SPEND_DAILY_WINDOW_DAYS - 1) * DAY_MS);
