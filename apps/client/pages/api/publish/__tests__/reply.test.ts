@@ -19,6 +19,7 @@ const dbMocks = vi.hoisted(() => ({
   refund: vi.fn(() => Promise.resolve()),
   consumePublishAction: vi.fn(),
   unpublish: vi.fn(),
+  questFindOne: vi.fn(),
 }));
 dbMocks.consumePublishAction.mockImplementation(() => Promise.resolve({ refund: dbMocks.refund }));
 
@@ -31,7 +32,12 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => ({
-  Quest: { findOne: () => ({ select: () => ({ lean: dbMocks.questLean }) }) },
+  Quest: {
+    findOne: (filter: unknown) => {
+      dbMocks.questFindOne(filter);
+      return { select: () => ({ lean: dbMocks.questLean }) };
+    },
+  },
   Session: { findById: () => ({ select: () => ({ lean: dbMocks.sessionLean }) }) },
   PublishedArtifact: {
     findOne: (filter: unknown) => {
@@ -202,6 +208,17 @@ describe('POST /api/publish/reply - ownership', () => {
       { logger: req.logger }
     );
     expect(res.statusCode).toBe(404);
+  });
+
+  it('re-checks the message with the same session id the lookup matched, not the stored session id', async () => {
+    dbMocks.sessionLean.mockResolvedValue({ _id: 'sess1', userId: OWNER });
+    const req = makeReq({ id: OWNER });
+    req.body = { sessionId: 'SESS1', messageId: 'msg1' };
+    const res = await run(req);
+    expect(res.statusCode).toBe(200);
+    expect(dbMocks.questFindOne).toHaveBeenCalledTimes(2);
+    expect(dbMocks.questFindOne).toHaveBeenNthCalledWith(1, { _id: 'msg1', sessionId: 'SESS1' });
+    expect(dbMocks.questFindOne).toHaveBeenNthCalledWith(2, { _id: 'msg1', sessionId: 'SESS1' });
   });
 
   it('leaves the page up when the message is still live after the write', async () => {
