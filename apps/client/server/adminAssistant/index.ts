@@ -1,5 +1,6 @@
 import type { AdminAssistantToolName } from '@bike4mind/common';
 import type { ToolDefinition } from '@bike4mind/services/llm/tools';
+import { getAiAdvisoriesTool } from './tools/getAiAdvisories';
 import { getHealthTool } from './tools/getHealth';
 import { getOrgTool } from './tools/getOrg';
 import { getOrgUsageTool } from './tools/getOrgUsage';
@@ -17,6 +18,7 @@ type AdminToolRegistry = Partial<Record<AdminAssistantToolName, ToolDefinition>>
 
 // Each admin tool registers itself here; a full Record so a declared name without a tool fails to compile.
 const ADMIN_TOOL_REGISTRY: Record<AdminAssistantToolName, ToolDefinition> = {
+  admin_get_ai_advisories: getAiAdvisoriesTool,
   admin_get_health: getHealthTool,
   admin_get_org: getOrgTool,
   admin_get_org_usage: getOrgUsageTool,
