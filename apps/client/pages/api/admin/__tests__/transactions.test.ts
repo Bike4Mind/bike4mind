@@ -38,11 +38,12 @@ import handler from '../transactions';
 
 const ORG = '6650000000000000000000aa';
 
-function call(options: { isAdmin?: boolean; hasUser?: boolean; query?: object }) {
+function call(options: { isAdmin?: boolean; adminPermissions?: string[]; hasUser?: boolean; query?: object }) {
   const { req, res } = createMocks({ method: 'GET', query: options.query ?? { organizationId: ORG } });
   if (options.hasUser !== false) {
-    (req as unknown as { user: { isAdmin: boolean; id: string } }).user = {
+    (req as unknown as { user: { isAdmin: boolean; adminPermissions?: string[]; id: string } }).user = {
       isAdmin: options.isAdmin ?? false,
+      adminPermissions: options.adminPermissions,
       id: 'user-1',
     };
   }
@@ -71,6 +72,16 @@ describe('GET /api/admin/transactions — access', () => {
     const { run } = call({ isAdmin: false });
     await run();
     expect(mockVerifyOrgOwner).toHaveBeenCalledWith({ id: 'user-1', isAdmin: false }, ORG);
+  });
+
+  it.each([
+    ['a full admin', { isAdmin: true }, true],
+    ['a support:read delegate', { adminPermissions: ['support:read'] }, true],
+    ['a delegate holding a different permission', { adminPermissions: ['settings:manage'] }, false],
+  ])('passes %s to verifyOrgOwner with admin reach %s', async (_label, user, adminReach) => {
+    const { run } = call(user);
+    await run();
+    expect(mockVerifyOrgOwner).toHaveBeenCalledWith({ id: 'user-1', isAdmin: adminReach }, ORG);
   });
 
   it('propagates verifyOrgOwner denial and never queries the ledger', async () => {

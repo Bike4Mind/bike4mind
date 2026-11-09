@@ -3,6 +3,7 @@ import { creditTransactionRepository } from '@bike4mind/database';
 import {
   ApiKeyScope,
   CreditHolderType,
+  hasAdminPermission,
   COMPLETION_SOURCES,
   CREDIT_ADD_TRANSACTION_TYPES,
   CREDIT_DEDUCT_TRANSACTION_TYPES,
@@ -51,8 +52,8 @@ const QuerySchema = z.object({
  * (metadata.actingUserId - API/CLI org-billed rows); web org-billed usage does
  * not carry it, so those rows have no member.
  *
- * Access: platform admins (cross-org) plus the org's own owner, via
- * verifyOrgOwner - which pins non-admins to their org and 404s the rest.
+ * Access: admins with `support:read` (cross-org) plus the org's own owner, via
+ * verifyOrgOwner - which pins everyone else to their org and 404s the rest.
  *
  * requiredScopes gates the API-key path only: apiKeyAuth 403s an under-scoped key
  * before req.user is set, so a key issued for a narrow integration can't read an
@@ -68,7 +69,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req,
   }
 
   const { organizationId, page = 1, limit = 25, days, type, source, model } = QuerySchema.parse(req.query);
-  await verifyOrgOwner(req.user, organizationId);
+  await verifyOrgOwner({ id: req.user.id, isAdmin: hasAdminPermission(req.user, 'support:read') }, organizationId);
 
   const { data, total } = await creditTransactionRepository.queryLedgerPage(
     organizationId,
