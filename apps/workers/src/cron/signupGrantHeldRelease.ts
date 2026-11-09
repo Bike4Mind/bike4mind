@@ -40,7 +40,7 @@ export async function runSignupGrantHeldRelease(now: Date = new Date()): Promise
     try {
       await alertForReleasedReferralRewards(
         rewards.paidRewards
-          .filter(paid => paid.source === 'referral_first_answer')
+          .filter(paid => paid.source === 'referral_first_answer' || paid.source === 'referral_subscription')
           .map(paid => paid.creditTransactionId)
       );
     } catch (error) {

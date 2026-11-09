@@ -7,35 +7,44 @@ import {
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 import {
+  AdminSettings,
   CreditTransaction,
+  HeldCreditRewardModel,
   ReferralSubscriptionRewardModel,
+  SignupGrantBudgetDayModel,
   User,
   creditLotRepository,
+  heldCreditRewardRepository,
   referralSubscriptionRewardRepository,
 } from '@bike4mind/database';
+import { creditService } from '@bike4mind/services';
+import { buildCreditRewardAdapters } from '../credits/creditRewardAdapters';
 import { releaseDueSubscriptionRewards, reverseSubscriptionRewardForRefund } from './subscriptionReward';
 
 const grantFailure = vi.hoisted(() => ({ next: false }));
 
-// Wraps the real grant so one call can fail after the claim has been written inside the transaction.
+// Wraps the real payout so one call can fail after the claim has been written inside the transaction.
 vi.mock('@bike4mind/services', async importActual => {
   const actual = await importActual<typeof import('@bike4mind/services')>();
   return {
     ...actual,
     creditService: {
       ...actual.creditService,
-      addCreditsWithLedgerRow: (...args: Parameters<typeof actual.creditService.addCreditsWithLedgerRow>) => {
+      payCreditReward: (...args: Parameters<typeof actual.creditService.payCreditReward>) => {
         if (grantFailure.next) {
           grantFailure.next = false;
           throw new Error('grant failed');
         }
-        return actual.creditService.addCreditsWithLedgerRow(...args);
+        return actual.creditService.payCreditReward(...args);
       },
     },
   };
 });
 vi.mock('../integrations/stripe/stripe', () => ({ getStripe: vi.fn() }));
-vi.mock('../integrations/slack/slack', () => ({ postMessageToSlack: vi.fn() }));
+vi.mock('../integrations/slack/slack', () => ({
+  postMessageToSlack: vi.fn(),
+  postMessageToSlackWithOutcome: vi.fn(async () => ({ ok: true })),
+}));
 vi.mock('./firstAnswerReward', async importActual => ({
   ...(await importActual<typeof import('./firstAnswerReward')>()),
   alertIfRewardsSpike: vi.fn(),
@@ -59,9 +68,20 @@ afterAll(async () => {
   await replSet?.stop();
 });
 
+const TRICKLE_POOL = 'signupGrantTricklePoolDaily';
+const setTricklePool = (credits: number) =>
+  AdminSettings.updateOne({ settingName: TRICKLE_POOL }, { settingValue: String(credits) });
+
 // dropDatabase removes the indexes the dedupe relies on.
 beforeEach(async () => {
-  await Promise.all([CreditTransaction.createIndexes(), ReferralSubscriptionRewardModel.createIndexes()]);
+  await Promise.all([
+    CreditTransaction.createIndexes(),
+    ReferralSubscriptionRewardModel.createIndexes(),
+    HeldCreditRewardModel.createIndexes(),
+    SignupGrantBudgetDayModel.createIndexes(),
+  ]);
+  // Payouts draw from the trickle pool; an unset pool would queue every reward.
+  await AdminSettings.create({ settingName: TRICKLE_POOL, settingValue: '1000000' });
 });
 
 afterEach(async () => {
@@ -245,6 +265,108 @@ describe('releaseDueSubscriptionRewards against a real replica set', () => {
 
       expect((await User.findById(inviter.id))?.currentCredits).toBe(0);
       expect(await lotOf(inviter.id)).toMatchObject({ amount: 2000, consumedAssigned: 2000 });
+    });
+  });
+
+  describe('trickle pool', () => {
+    const REF = () => `referral-subscription:${inviterId}:in_1`;
+    let inviterId = '';
+    const heldRow = () => HeldCreditRewardModel.findOne({ transactionId: REF() }).lean();
+    const reward = () => referralSubscriptionRewardRepository.findByInvoiceId('in_1');
+    const balance = async () => (await User.findById(inviterId))?.currentCredits ?? 0;
+    const refund = (amountRefunded: number, reason?: 'disputed') =>
+      reverseSubscriptionRewardForRefund({
+        paymentIntentId: 'pi_1',
+        amountRefunded,
+        amountCaptured: 3000,
+        now: NOW,
+        ...(reason ? { reason } : {}),
+      });
+    const releasePool = (adapters = buildCreditRewardAdapters()) =>
+      creditService.releaseHeldCreditRewards(adapters, { limit: 10 });
+    const releaseOnDryPool = async () => {
+      inviterId = (await seedDueReward()).id;
+      await setTricklePool(0);
+      expect(await releaseDueSubscriptionRewards({ now: NOW, paymentOutcome: stillPaid })).toMatchObject({
+        released: 1,
+        failed: 0,
+      });
+    };
+
+    it('queues the reward on a dry pool and pays it, with its lot, once the pool refills', async () => {
+      await releaseOnDryPool();
+
+      expect(await reward()).toMatchObject({ status: 'released' });
+      expect(await heldRow()).toMatchObject({
+        status: 'held',
+        credits: REWARD_CREDITS,
+        source: 'referral_subscription',
+        lotRef: REF(),
+      });
+      expect(await balance()).toBe(0);
+
+      await setTricklePool(1_000_000);
+      expect(await releasePool()).toMatchObject({ paid: 1 });
+      expect(await balance()).toBe(REWARD_CREDITS);
+      expect(await creditLotRepository.findByStripeRef(REF())).toMatchObject([{ amount: REWARD_CREDITS }]);
+
+      // The pool-paid reward is taken back from its own lot like a direct grant.
+      await refund(3000);
+      expect(await balance()).toBe(0);
+      expect(await reward()).toMatchObject({ status: 'taken_back', takenBackCredits: REWARD_CREDITS });
+    });
+
+    it.each([undefined, 'disputed' as const])(
+      'voids the queued reward on a full refund (reason %s) without touching the balance',
+      async reason => {
+        await releaseOnDryPool();
+
+        await refund(3000, reason);
+
+        expect(await heldRow()).toMatchObject({ status: 'void' });
+        expect(await reward()).toMatchObject({ status: 'taken_back', takenBackCredits: REWARD_CREDITS });
+        await setTricklePool(1_000_000);
+        expect(await releasePool()).toMatchObject({ paid: 0 });
+        expect(await balance()).toBe(0);
+        expect(await CreditTransaction.countDocuments({ ownerId: inviterId })).toBe(0);
+      }
+    );
+
+    it('pays only the unrefunded share of a partly refunded queued reward', async () => {
+      await releaseOnDryPool();
+
+      await refund(1500);
+
+      expect(await heldRow()).toMatchObject({ status: 'held', credits: REWARD_CREDITS / 2 });
+      expect(await reward()).toMatchObject({ status: 'released', takenBackCredits: REWARD_CREDITS / 2 });
+      await setTricklePool(1_000_000);
+      expect(await releasePool()).toMatchObject({ paid: 1 });
+      expect(await balance()).toBe(REWARD_CREDITS / 2);
+    });
+
+    it('rolls back a pool payout when a refund lowers the reward after the release listed it', async () => {
+      await releaseOnDryPool();
+      await setTricklePool(1_000_000);
+      const adapters = buildCreditRewardAdapters();
+      const racing = {
+        ...adapters,
+        heldRewards: {
+          ...heldCreditRewardRepository,
+          listHeld: async (limit: number, maxCredits?: number) => {
+            const rows = await heldCreditRewardRepository.listHeld(limit, maxCredits);
+            await refund(1500);
+            return rows;
+          },
+        },
+      };
+
+      expect(await releasePool(racing)).toMatchObject({ paid: 0, failed: 0 });
+      expect(await balance()).toBe(0);
+      expect(await heldRow()).toMatchObject({ status: 'held', credits: REWARD_CREDITS / 2 });
+
+      expect(await releasePool()).toMatchObject({ paid: 1 });
+      expect(await balance()).toBe(REWARD_CREDITS / 2);
+      expect(await CreditTransaction.countDocuments({ ownerId: inviterId })).toBe(1);
     });
   });
 });

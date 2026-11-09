@@ -14,7 +14,7 @@ import {
 } from '../userService/signupGrantBudget';
 import { addCreditsWithLedgerRow, DuplicateCreditTransactionError, type AddCreditsAdapters } from './addCredits';
 
-export type CreditRewardSource = 'gear' | 'referral_first_answer' | 'preference_arena';
+export type CreditRewardSource = 'gear' | 'referral_first_answer' | 'preference_arena' | 'referral_subscription';
 
 /** `source` is stamped on the ledger row as metadata.rewardSource; `reason` keeps each caller's existing label. */
 export type HeldCreditRewardInput = {
@@ -25,6 +25,8 @@ export type HeldCreditRewardInput = {
   reason: string;
   description: string;
   metadata?: Record<string, unknown>;
+  /** Stamped as the paid lot's stripeRef, so a refund take-back can find the lot (clawbackCreditLotsByStripeRef). */
+  lotRef?: string;
 };
 
 /** `paused` is a blocked account's reward, out of the queue until unblock restores it to `held`. */
@@ -41,7 +43,8 @@ export interface HeldCreditRewardRepository {
   oldestHeldCredits(maxCredits?: number): Promise<number | null>;
   /** Oldest held rewards first; `maxCredits` leaves out rewards larger than that (a whole day's pool). */
   listHeld(limit: number, maxCredits?: number): Promise<HeldCreditRewardRow[]>;
-  settle(transactionId: string, status: 'paid' | 'void'): Promise<void>;
+  /** Settles a `held` row; with `credits`, only while it still holds that amount. Returns how many rows moved. */
+  settle(transactionId: string, status: 'paid' | 'void', options?: { credits?: number }): Promise<number>;
   /** Moves a user's held rewards out of the queue; returns how many moved. */
   pauseForUser(userId: string): Promise<number>;
   /** Moves one held reward out of the queue, leaving the user's other rows alone; returns how many moved. */
@@ -111,14 +114,27 @@ async function partiesBlock(reward: HeldCreditRewardInput, adapters: PayCreditRe
   const userBlock = partyBlock(await adapters.users.findById(reward.userId), true);
   if (userBlock === 'terminal') return userBlock;
   const friendId = reward.metadata?.[REFERRED_USER_ID_METADATA_KEY];
-  if (reward.source !== 'referral_first_answer' || typeof friendId !== 'string') return userBlock;
+  const isReferral = reward.source === 'referral_first_answer' || reward.source === 'referral_subscription';
+  if (!isReferral || typeof friendId !== 'string') return userBlock;
   return partyBlock(await adapters.users.findById(friendId)) ?? userBlock;
 }
 
 type PayNowResult =
-  { status: 'paid'; creditTransactionId: string } | { status: 'exhausted' | 'contended' | 'duplicate' | 'blocked' };
+  | { status: 'paid'; creditTransactionId: string }
+  | { status: 'exhausted' | 'contended' | 'duplicate' | 'blocked' | 'changed' };
 
-async function payNow(reward: HeldCreditRewardInput, adapters: PayCreditRewardAdapters): Promise<PayNowResult> {
+/** Thrown inside the payout transaction when the held row changed since it was listed, to roll the payout back. */
+class HeldRewardChangedError extends Error {}
+
+/**
+ * `settleHeld` (release only) settles the queued row as paid in the payout transaction, provided it still holds
+ * `reward.credits`: a refund that reduced or voided it conflicts with that write, and the payout rolls back as 'changed'.
+ */
+async function payNow(
+  reward: HeldCreditRewardInput,
+  adapters: PayCreditRewardAdapters,
+  { settleHeld = false }: { settleHeld?: boolean } = {}
+): Promise<PayNowResult> {
   const reservation = await reserveSignupGrantBudget(adapters, reward.transactionId, reward.credits, {
     pool: 'trickle',
   });
@@ -128,14 +144,16 @@ async function payNow(reward: HeldCreditRewardInput, adapters: PayCreditRewardAd
   if (reservation.outcome === 'reserved' && !reservation.fresh) return { status: 'contended' };
   const { withTransaction } = adapters;
   // A duplicate insert aborts an owned transaction, so it must throw out of it rather than read on.
-  const creditAdapters: AddCreditsAdapters = withTransaction
-    ? { ...adapters, duplicateTransactionId: 'throw' }
-    : adapters;
+  const creditAdapters: AddCreditsAdapters = {
+    ...adapters,
+    ...(withTransaction ? { duplicateTransactionId: 'throw' as const } : {}),
+    lotRef: reward.lotRef ?? adapters.lotRef,
+  };
   const credit = async () => {
     // Read inside the payout transaction: a block that commits after the caller's check conflicts with this
     // write, and the retry then sees the flag. Without an owned transaction this narrows the window only.
     if (isRewardRecipientBlocked((await adapters.users.findById(reward.userId)) ?? {})) return null;
-    return addCreditsWithLedgerRow(
+    const credited = await addCreditsWithLedgerRow(
       {
         ownerId: reward.userId,
         ownerType: CreditHolderType.User,
@@ -148,6 +166,14 @@ async function payNow(reward: HeldCreditRewardInput, adapters: PayCreditRewardAd
       },
       creditAdapters
     );
+    if (
+      settleHeld &&
+      withTransaction &&
+      credited.creditTransactionId &&
+      !(await adapters.heldRewards.settle(reward.transactionId, 'paid', { credits: reward.credits }))
+    )
+      throw new HeldRewardChangedError();
+    return credited;
   };
   try {
     const credited = withTransaction ? await withTransaction(credit) : await credit();
@@ -162,6 +188,10 @@ async function payNow(reward: HeldCreditRewardInput, adapters: PayCreditRewardAd
     }
     return { status: 'paid', creditTransactionId };
   } catch (error) {
+    if (error instanceof HeldRewardChangedError) {
+      await reservation.release();
+      return { status: 'changed' };
+    }
     if (withTransaction && error instanceof DuplicateCreditTransactionError) {
       await reservation.release();
       return { status: 'duplicate' };
@@ -273,7 +303,7 @@ export async function releaseHeldCreditRewards(
         result.voided++;
         continue;
       }
-      const paid = await payNow(reward, adapters);
+      const paid = await payNow(reward, adapters, { settleHeld: true });
       if (paid.status === 'exhausted') {
         // A reward above the whole daily budget never fits; stopping at it would starve the queue behind it.
         // The scan already leaves those out; this covers a pool lowered while the run is under way.
@@ -282,8 +312,9 @@ export async function releaseHeldCreditRewards(
         result.budgetExhausted = true;
         break;
       }
-      // Another attempt owns today's draw; it settles the row, or a later run retries.
-      if (paid.status === 'contended') continue;
+      // Another attempt owns today's draw; it settles the row, or a later run retries. A row a refund changed
+      // after it was listed pays its new amount on a later run.
+      if (paid.status === 'contended' || paid.status === 'changed') continue;
       // Blocked after the check above; the row stays queued like any other transient block.
       if (paid.status === 'blocked') {
         result.deferred++;
