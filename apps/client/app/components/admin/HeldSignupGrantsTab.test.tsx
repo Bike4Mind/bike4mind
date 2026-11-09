@@ -72,6 +72,28 @@ describe('HeldSignupGrantsTab', () => {
     );
   });
 
+  it('keeps rows ticked while a release is in flight selected', async () => {
+    let resolve!: (v: unknown) => void;
+    postMock.mockReturnValue(
+      new Promise(r => {
+        resolve = r;
+      })
+    );
+    renderTab();
+    await selectRow(rows[0].id);
+    await confirmRelease();
+    await waitFor(() =>
+      expect(postMock).toHaveBeenCalledWith('/api/admin/held-signup-grants/release', { userIds: [rows[0].id] })
+    );
+
+    await selectRow(rows[1].id);
+    resolve({ data: { batchId: 'batch-1', results: [] } });
+    await waitFor(() => {
+      expect(within(screen.getByTestId(`admin-table-select-${rows[0].id}`)).getByRole('checkbox')).not.toBeChecked();
+      expect(within(screen.getByTestId(`admin-table-select-${rows[1].id}`)).getByRole('checkbox')).toBeChecked();
+    });
+  });
+
   it('shows an empty state with a way out', async () => {
     getMock.mockResolvedValue({ data: { data: [], nextCursor: null } });
     renderTab();

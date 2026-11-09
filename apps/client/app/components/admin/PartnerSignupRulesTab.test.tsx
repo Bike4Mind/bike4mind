@@ -116,7 +116,9 @@ describe('PartnerSignupRulesTab tags', () => {
   });
 
   it('sends an empty tags array when all tags are cleared on edit', async () => {
-    api.fetchPartnerSignupRules.mockResolvedValue(listOf([makeRule()]));
+    api.fetchPartnerSignupRules.mockResolvedValue(
+      listOf([makeRule({ label: '  Partner  ', notes: ' note ', signupCredits: 5 })])
+    );
     renderTab();
 
     await openRowMenu('partner.com');
@@ -128,7 +130,18 @@ describe('PartnerSignupRulesTab tags', () => {
 
     await waitFor(() => expect(api.updatePartnerSignupRule).toHaveBeenCalled());
     expect(api.updatePartnerSignupRule.mock.calls[0][0]).toBe('r1');
-    expect(api.updatePartnerSignupRule.mock.calls[0][1]).toMatchObject({ tags: [] });
+    expect(api.updatePartnerSignupRule.mock.calls[0][1]).toEqual(
+      expect.objectContaining({
+        tags: [],
+        label: 'Partner',
+        notes: 'note',
+        signupCredits: 5,
+        entitlements: [],
+        enabled: true,
+        organizationId: null,
+        subscription: null,
+      })
+    );
   });
 });
 
