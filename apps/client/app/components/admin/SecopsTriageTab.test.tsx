@@ -182,6 +182,18 @@ describe('SecopsTriageTab', () => {
     await waitFor(() => expect(screen.queryByTestId('admin-save-bar')).not.toBeInTheDocument());
   });
 
+  it('keeps the draft and the save bar when saving fails', async () => {
+    mocks.update.mutateAsync.mockRejectedValueOnce(new Error('boom'));
+    renderTab();
+    toggle('secops-triage-enabled-switch');
+    fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Failed to save: boom'));
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(screen.getByTestId('admin-save-bar')).toHaveTextContent('1 unsaved change');
+    expect(within(screen.getByTestId('secops-triage-enabled-switch')).getByRole('switch')).toBeChecked();
+  });
+
   it('still refuses to save LLM enrichment without a model', () => {
     renderTab();
     toggle('secops-triage-llm-enrichment-switch');
