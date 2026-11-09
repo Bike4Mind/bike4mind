@@ -601,11 +601,11 @@ not provider work or preflight checks. Failed reservation transactions are also
 recorded; requests that reserve no credits do not emit a latency sample.
 
 Hosted logs publish `HoldLatency` (milliseconds) and `SettlementsAfterSweep`
-(count) through CloudWatch embedded metrics in `Lumina5/CreditHolds`, with only
-`Stage` and `Lifecycle` dimensions. Owner ids and hold ids stay in logs, not metric
-dimensions. Self-host installations write the same observations without embedded
-CloudWatch metrics. Metrics follow CloudWatch retention; logs follow the
-deployment's configured log retention. No prompts, responses, credentials, or
+(count) through CloudWatch embedded metrics, with only `Stage` and `Lifecycle`
+dimensions. Owner ids and hold ids stay in logs, not metric dimensions. Self-host
+installations write the same observations without embedded CloudWatch metrics.
+Metrics follow CloudWatch retention; logs follow the deployment's configured log
+retention. No prompts, responses, credentials, or
 third-party analytics events are included.
 
 `SettlementsAfterSweep` counts settlement attempts whose pending hold and completed
