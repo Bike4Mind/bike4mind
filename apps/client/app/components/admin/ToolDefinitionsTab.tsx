@@ -1,7 +1,6 @@
-import React, { useState, useMemo, useEffect, type ReactNode } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Alert,
-  Box,
   Button,
   DialogContent,
   Dropdown,
@@ -18,7 +17,6 @@ import {
   Stack,
   Switch,
   Textarea,
-  Tooltip,
   Typography,
 } from '@mui/joy';
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
@@ -44,6 +42,7 @@ import {
   type DataColumn,
 } from './shared';
 import { ADMIN_REGION_GAP, adminFocus } from './shared/adminStyles';
+import { Dash, DialogFooter, Field, TruncatedText } from './promptAndToolParts';
 
 const PAGE_SIZE = 50;
 
@@ -53,42 +52,6 @@ const STATUS_FILTER = 'tool-status';
 
 const toEnabledFilter = (value: string | undefined): 'true' | 'false' | 'all' =>
   value === 'true' || value === 'false' ? value : 'all';
-
-const dash = (
-  <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
-    -
-  </Typography>
-);
-
-/** One line that truncates with an ellipsis, the full text on hover. */
-const TruncatedText = ({ text, testId }: { text: string; testId?: string }) => (
-  <Tooltip title={text} placement="top-start">
-    <Typography level="body-sm" noWrap data-testid={testId} sx={{ color: 'admin.ink', minWidth: 0 }}>
-      {text}
-    </Typography>
-  </Tooltip>
-);
-
-const DialogFooter = ({ children }: { children: ReactNode }) => (
-  <Stack
-    direction="row"
-    justifyContent="flex-end"
-    flexWrap="wrap"
-    gap={1}
-    sx={{ pt: 2, mt: 1, borderTop: '1px solid', borderColor: 'admin.border' }}
-  >
-    {children}
-  </Stack>
-);
-
-const Field = ({ label, children }: { label: string; children: ReactNode }) => (
-  <Box>
-    <Typography level="body-xs" sx={{ color: 'admin.inkMuted', mb: 0.5 }}>
-      {label}
-    </Typography>
-    {children}
-  </Box>
-);
 
 const enabledChip = (tool: IToolDefinition, testId?: string) => (
   <StatusChip
@@ -255,6 +218,8 @@ const ToolDefinitionsTab: React.FC = () => {
 
   const clearFilters = () => {
     setSearchQuery('');
+    // Skips the debounce so the cleared list loads in one request.
+    setDebouncedSearch('');
     setCategoryFilter('all');
     setEnabledFilter('all');
   };
@@ -298,7 +263,7 @@ const ToolDefinitionsTab: React.FC = () => {
     {
       id: 'description',
       label: 'Short description',
-      render: tool => (tool.shortDescription ? <TruncatedText text={tool.shortDescription} /> : dash),
+      render: tool => (tool.shortDescription ? <TruncatedText text={tool.shortDescription} /> : <Dash />),
     },
     {
       id: 'category',
@@ -322,7 +287,7 @@ const ToolDefinitionsTab: React.FC = () => {
       id: 'version',
       label: 'Version',
       width: '5rem',
-      render: tool => (tool.version > 0 ? `v${tool.version}` : dash),
+      render: tool => (tool.version > 0 ? `v${tool.version}` : <Dash />),
     },
     {
       id: 'usage',
@@ -372,7 +337,7 @@ const ToolDefinitionsTab: React.FC = () => {
 
       <FilterBar
         state={filterState}
-        searchLabel="Search tools"
+        searchLabel="Search name, description or tags"
         filters={[
           {
             id: CATEGORY_FILTER,
@@ -463,8 +428,12 @@ const ToolDefinitionsTab: React.FC = () => {
             </Field>
             <Field label="Tags">
               <Stack direction="row" gap={0.5} flexWrap="wrap">
-                {viewingTool.tags?.map(tag => <StatusChip key={tag} tone="neutral" label={tag} />) || (
-                  <Typography level="body-sm">No tags</Typography>
+                {viewingTool.tags?.length ? (
+                  viewingTool.tags.map(tag => <StatusChip key={tag} tone="neutral" label={tag} />)
+                ) : (
+                  <Typography level="body-sm" data-testid="tool-view-no-tags">
+                    No tags
+                  </Typography>
                 )}
               </Stack>
             </Field>
@@ -608,7 +577,10 @@ const ToolDefinitionsTab: React.FC = () => {
       {/* Revert confirm */}
       <AdminDialog
         open={revertingTool !== null}
-        onClose={() => setRevertingTool(null)}
+        // Esc, the X and the backdrop wait for an in-flight revert, like the disabled Cancel.
+        onClose={() => {
+          if (!deleteTool.isPending) setRevertingTool(null);
+        }}
         title="Revert to code defaults"
         role="alertdialog"
         data-testid="tool-revert-dialog"

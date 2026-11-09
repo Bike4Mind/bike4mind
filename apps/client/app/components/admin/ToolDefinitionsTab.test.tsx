@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -135,7 +135,7 @@ describe('ToolDefinitionsTab', () => {
     expect(screen.getByTestId('tool-row-weather_info')).toBeInTheDocument();
   });
 
-  it('lists the tools one level deep in a DataTable that keeps every header whole at 768 px', async () => {
+  it('lists the tools one level deep in a DataTable with a 68rem minWidth and one-line names', async () => {
     const { container } = renderTab();
 
     const table = await screen.findByTestId('tools-table');
@@ -177,6 +177,10 @@ describe('ToolDefinitionsTab', () => {
 
     const bar = screen.getByTestId('admin-filter-bar');
     expect(bar.firstElementChild).toContainElement(screen.getByTestId('admin-filter-search-input'));
+    expect(screen.getByTestId('admin-filter-search-input')).toHaveAttribute(
+      'aria-label',
+      'Search name, description or tags'
+    );
 
     fireEvent.change(screen.getByTestId('admin-filter-search-input'), { target: { value: 'weather' } });
     await waitFor(() => expect(listCalls()).toContain(`${LIST_URL}enabled=all&search=weather&page=1&limit=50`));
@@ -227,6 +231,17 @@ describe('ToolDefinitionsTab', () => {
     expect(within(dialog).getByRole('heading', { level: 2 })).toHaveTextContent('Search Code');
     expect(within(dialog).getByTestId('tool-view-id')).toHaveTextContent('github_search');
     expect(within(dialog).getByTestId('tool-view-status')).toHaveAttribute('data-tone', 'neutral');
+    expect(within(dialog).queryByTestId('tool-view-no-tags')).toBeNull();
+  });
+
+  it('says No tags in the details of a tool with an empty tag list', async () => {
+    respondWith(() => Promise.resolve(listResponse([{ ...TOOLS[0], tags: [] }])));
+    renderTab();
+    await openRowMenu('weather_info');
+    fireEvent.click(await screen.findByTestId('tool-row-view-weather_info'));
+
+    const dialog = await screen.findByTestId('tool-view-dialog');
+    expect(within(dialog).getByTestId('tool-view-no-tags')).toHaveTextContent('No tags');
   });
 
   it('offers revert only for an override and confirms it in an alert dialog that sends the same request', async () => {
@@ -248,6 +263,21 @@ describe('ToolDefinitionsTab', () => {
     await waitFor(() => expect(screen.queryByTestId('tool-revert-dialog')).toBeNull());
   });
 
+  it('keeps the revert confirm open on Esc and the X while the revert is in flight', async () => {
+    mocks.delete.mockReturnValue(new Promise(() => {}));
+    renderTab();
+    await openRowMenu('github_search');
+    fireEvent.click(await screen.findByTestId('tool-row-revert-github_search'));
+    const dialog = await screen.findByTestId('tool-revert-dialog');
+    fireEvent.click(within(dialog).getByTestId('tool-revert-confirm-btn'));
+    await waitFor(() => expect(mocks.delete).toHaveBeenCalledTimes(1));
+
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    fireEvent.click(within(dialog).getByTestId('tool-revert-dialog-close-btn'));
+    expect(screen.getByTestId('tool-revert-dialog')).toBeInTheDocument();
+    expect(within(dialog).getByTestId('tool-revert-cancel-btn')).toBeDisabled();
+  });
+
   it('pages on the server from the table footer', async () => {
     respondWith(() => Promise.resolve(listResponse(TOOLS, 120)));
     renderTab();
@@ -256,6 +286,51 @@ describe('ToolDefinitionsTab', () => {
     expect(screen.getByTestId('admin-table-range')).toHaveTextContent('1 to 2 of 120');
     fireEvent.click(screen.getByTestId('admin-table-next-btn'));
     await waitFor(() => expect(listCalls()).toContain(`${LIST_URL}enabled=all&page=2&limit=50`));
+  });
+
+  it('sends the page size picked in the table footer as the limit', async () => {
+    respondWith(() => Promise.resolve(listResponse(TOOLS, 120)));
+    renderTab();
+    await screen.findByTestId('tool-row-weather_info');
+
+    fireEvent.click(screen.getByTestId('admin-table-page-size'));
+    fireEvent.click(await screen.findByTestId('admin-table-page-size-25'));
+    await waitFor(() => expect(listCalls()).toContain(`${LIST_URL}enabled=all&page=1&limit=25`));
+  });
+
+  it('goes back to page 1 when a filter changes', async () => {
+    respondWith(() => Promise.resolve(listResponse(TOOLS, 120)));
+    renderTab();
+    await screen.findByTestId('tool-row-weather_info');
+    fireEvent.click(screen.getByTestId('admin-table-next-btn'));
+    await waitFor(() => expect(listCalls()).toContain(`${LIST_URL}enabled=all&page=2&limit=50`));
+
+    fireEvent.click(screen.getByTestId('admin-filter-tool-status'));
+    fireEvent.click(await screen.findByTestId('admin-filter-tool-status-false'));
+    await waitFor(() => expect(listCalls().at(-1)).toBe(`${LIST_URL}enabled=false&page=1&limit=50`));
+  });
+
+  it('waits for a 300 ms pause in typing, then searches once with the last term', async () => {
+    renderTab();
+    await screen.findByTestId('tool-row-weather_info');
+    const searches = () => listCalls().filter(url => url.includes('search='));
+
+    vi.useFakeTimers();
+    try {
+      const input = screen.getByTestId('admin-filter-search-input');
+      fireEvent.change(input, { target: { value: 'w' } });
+      await act(() => vi.advanceTimersByTimeAsync(100));
+      fireEvent.change(input, { target: { value: 'we' } });
+      await act(() => vi.advanceTimersByTimeAsync(100));
+      fireEvent.change(input, { target: { value: 'wea' } });
+      await act(() => vi.advanceTimersByTimeAsync(299));
+      expect(searches()).toEqual([]);
+
+      await act(() => vi.advanceTimersByTimeAsync(1));
+      expect(searches()).toEqual([`${LIST_URL}enabled=all&search=wea&page=1&limit=50`]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('offers Clear filters when the filters match nothing', async () => {
@@ -272,6 +347,23 @@ describe('ToolDefinitionsTab', () => {
     await waitFor(() =>
       expect(screen.getByTestId('admin-filter-tool-status')).toHaveAttribute('aria-label', 'Filter by Status')
     );
+  });
+
+  it('clears the search with the other filters in one step, with no request for the stale term', async () => {
+    renderTab();
+    await screen.findByTestId('tool-row-weather_info');
+    respondWith(() => Promise.resolve(listResponse([])));
+
+    fireEvent.click(screen.getByTestId('admin-filter-tool-status'));
+    fireEvent.click(await screen.findByTestId('admin-filter-tool-status-true'));
+    fireEvent.change(screen.getByTestId('admin-filter-search-input'), { target: { value: 'zzz' } });
+    await waitFor(() => expect(listCalls()).toContain(`${LIST_URL}enabled=true&search=zzz&page=1&limit=50`));
+    fireEvent.click(within(await screen.findByTestId('admin-empty-state')).getByTestId('tools-empty-clear-btn'));
+
+    // The unfiltered list is already cached from the first load, so it shows without a new request.
+    expect(await screen.findByTestId('tool-row-weather_info')).toBeInTheDocument();
+    expect(screen.getByTestId('admin-filter-search-input')).toHaveValue('');
+    expect(listCalls()).not.toContain(`${LIST_URL}enabled=all&search=zzz&page=1&limit=50`);
   });
 
   it('shows the table skeleton on first load and ErrorState with Try again on a failure', async () => {
