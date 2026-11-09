@@ -1,4 +1,4 @@
-import { useState, useEffect, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { isAxiosError } from 'axios';
 import {
   Box,
@@ -76,12 +76,14 @@ import {
   InlineBar,
   LoadingState,
   SectionCard,
+  SettingsSection,
   StatStrip,
   StatTile,
   StatusChip,
   type DataColumn,
 } from './shared';
 import { ADMIN_REGION_GAP } from './shared/adminStyles';
+import { SettingsDraftProvider, useSettingsDraft } from './SettingsDraftProvider';
 
 interface SlackWorkspace {
   id: string;
@@ -373,15 +375,14 @@ const CreateIssueModal = ({
       <DialogContent sx={{ gap: 2 }}>
         {!configuredRepo ? (
           <Alert color="warning" data-testid="context-inspector-no-repo-banner">
-            No GitHub repository is configured. Set the GitHub owner and repo under Alerts and integrations, then try
-            again.
+            No GitHub repository is configured. Set the GitHub owner and repo under Alert settings, then try again.
           </Alert>
         ) : (
           <>
             <FormControl>
               <FormLabel>Repository</FormLabel>
               <Input value={repository} disabled />
-              <FormHelperText>Configured under Alerts and integrations</FormHelperText>
+              <FormHelperText>Configured under Alert settings</FormHelperText>
             </FormControl>
 
             <FormControl>
@@ -592,9 +593,7 @@ const DryRunSection = () => {
       <Divider />
       <Stack gap={1.5} data-testid="dry-run-section">
         <Box>
-          <Typography level="title-sm" component="h4" sx={{ color: 'admin.ink' }}>
-            Dry run testing
-          </Typography>
+          <Subheading>Dry run testing</Subheading>
           <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
             Test your configuration without creating actual issues or sending alerts.
           </Typography>
@@ -617,7 +616,7 @@ const DryRunSection = () => {
             value={selectedSampleType}
             onChange={(_, v) => v && setSelectedSampleType(v)}
             aria-label="Sample severity"
-            sx={{ minWidth: 120 }}
+            sx={{ minWidth: '7.5rem' }}
           >
             <Option value="critical">Critical</Option>
             <Option value="high">High</Option>
@@ -631,9 +630,7 @@ const DryRunSection = () => {
         )}
 
         <Stack direction="row" justifyContent="space-between" alignItems="center">
-          <Typography level="title-sm" component="h4" sx={{ color: 'admin.ink' }}>
-            Recent dry run results
-          </Typography>
+          <Subheading>Recent dry run results</Subheading>
           <IconButton
             data-testid="dry-run-refresh-btn"
             size="sm"
@@ -672,48 +669,115 @@ const DryRunSection = () => {
   );
 };
 
-// Alert settings card (matches What's New tab pattern with Save/Reset)
-const AlertSettingsCard = ({
-  alertSettings,
-  onUpdateSettings,
-  isUpdating,
-  updateError,
+// Slack alerts, GitHub issue creation and integration health; the settings form is AlertSettingsSection.
+const IntegrationsCard = ({
   integrationStatus,
   onRefreshHealth,
   isRefreshing,
 }: {
-  alertSettings: ContextTelemetryAlerts | undefined;
-  onUpdateSettings: (settings: ContextTelemetryAlerts) => void;
-  isUpdating: boolean;
-  updateError: Error | null;
   integrationStatus: IntegrationHealthResponse | undefined;
   onRefreshHealth: () => void;
   isRefreshing: boolean;
-}) => {
+}) => (
+  <SectionCard
+    title="Alerts and integrations"
+    body="custom"
+    action={
+      <Stack direction="row" alignItems="center" gap={1}>
+        {integrationStatus?.overall && (
+          <StatusChip
+            tone={OVERALL_HEALTH[integrationStatus.overall].tone}
+            label={OVERALL_HEALTH[integrationStatus.overall].label}
+            data-testid="context-inspector-health-chip"
+          />
+        )}
+        <Tooltip title="Refresh health status">
+          <IconButton
+            size="sm"
+            variant="plain"
+            aria-label="Refresh health status"
+            onClick={onRefreshHealth}
+            disabled={isRefreshing}
+            data-testid="context-inspector-health-refresh-btn"
+          >
+            <RefreshIcon />
+          </IconButton>
+        </Tooltip>
+      </Stack>
+    }
+    data-testid="context-inspector-integrations-card"
+  >
+    <Typography
+      level="body-sm"
+      sx={{ color: 'admin.inkMuted', px: 2, pt: 1.75, pb: integrationStatus?.checks ? 0 : 1.75 }}
+    >
+      Slack alerts and GitHub issues for context telemetry anomalies. Configure them under Alert settings.
+    </Typography>
+    {integrationStatus?.checks && (
+      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 2, p: 2 }}>
+        {integrationStatus.checks.map((check, idx) => (
+          <HealthCheckRow key={idx} check={check} />
+        ))}
+      </Box>
+    )}
+  </SectionCard>
+);
+
+// A switch with its label and one-line description beside it.
+const SettingSwitch = ({
+  label,
+  description,
+  checked,
+  onChange,
+  disabled,
+  testId,
+}: {
+  label: string;
+  description: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  disabled: boolean;
+  testId: string;
+}) => (
+  <Stack direction="row" gap={2} alignItems="center">
+    <Switch
+      data-testid={testId}
+      checked={checked}
+      onChange={e => onChange(e.target.checked)}
+      disabled={disabled}
+      slotProps={{ input: { 'aria-label': label } }}
+    />
+    <Box>
+      <Typography level="body-md" sx={{ color: 'admin.ink' }}>
+        {label}
+      </Typography>
+      <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+        {description}
+      </Typography>
+    </Box>
+  </Stack>
+);
+
+// A 15 / 600 subheading inside a card (DESIGN_GUIDE section 5, "Cards").
+const Subheading = ({ children, sx }: { children: ReactNode; sx?: { mb: number } }) => (
+  <Typography level="title-md" component="h4" sx={{ color: 'admin.ink', ...sx }}>
+    {children}
+  </Typography>
+);
+
+// The contextTelemetryAlerts setting as one staged draft: edits wait for the page SaveBar, which
+// sends the whole object in one write, and Discard returns the form to the stored value.
+const AlertSettingsSection = ({ alertSettings }: { alertSettings: ContextTelemetryAlerts | undefined }) => {
   const [configExpanded, setConfigExpanded] = useState(false);
-
-  // Local state for editing (not saved until user clicks Save)
-  const [localSettings, setLocalSettings] = useState<ContextTelemetryAlerts>(alertSettings ?? DEFAULT_ALERT_SETTINGS);
-
-  // Sync local state when server data changes (including when settings are cleared)
-  useEffect(() => {
-    setLocalSettings(alertSettings ?? DEFAULT_ALERT_SETTINGS);
-  }, [alertSettings]);
-
-  // JSON round-trip strips undefined on both sides, so {key: undefined} vs {}
-  // does not falsely register as an unsaved change
-  const serverSettings = alertSettings ?? DEFAULT_ALERT_SETTINGS;
-  const isDirty =
-    JSON.stringify(JSON.parse(JSON.stringify(localSettings))) !==
-    JSON.stringify(JSON.parse(JSON.stringify(serverSettings)));
-
-  const handleSave = () => {
-    onUpdateSettings(localSettings);
-  };
-
-  const handleReset = () => {
-    setLocalSettings(alertSettings ?? DEFAULT_ALERT_SETTINGS);
-  };
+  const saveSettings = useUpdateSettings();
+  const {
+    value: localSettings,
+    setValue: setLocalSettings,
+    pending: isUpdating,
+  } = useSettingsDraft('contextTelemetryAlerts', alertSettings ?? DEFAULT_ALERT_SETTINGS, {
+    name: 'Alert settings',
+    save: value => saveSettings.mutateAsync({ key: 'contextTelemetryAlerts', value }),
+  });
 
   // Fetch available Slack workspaces (same as LiveOps Triage)
   const { data: workspacesData, isError: isWorkspacesError } = useQuery({
@@ -740,96 +804,43 @@ const AlertSettingsCard = ({
   );
 
   return (
-    <SectionCard
-      title="Alerts and integrations"
-      body="custom"
-      action={
-        <Stack direction="row" alignItems="center" gap={1}>
-          {integrationStatus?.overall && (
-            <StatusChip
-              tone={OVERALL_HEALTH[integrationStatus.overall].tone}
-              label={OVERALL_HEALTH[integrationStatus.overall].label}
-              data-testid="context-inspector-health-chip"
-            />
-          )}
-          <Tooltip title="Refresh health status">
-            <IconButton
-              size="sm"
-              variant="plain"
-              aria-label="Refresh health status"
-              onClick={onRefreshHealth}
-              disabled={isRefreshing}
-              data-testid="context-inspector-health-refresh-btn"
-            >
-              <RefreshIcon />
-            </IconButton>
-          </Tooltip>
-        </Stack>
-      }
-      data-testid="context-inspector-settings-card"
-    >
-      <Typography level="body-sm" sx={{ color: 'admin.inkMuted', px: 2, pt: 1.75 }}>
-        Configure Slack alerts and GitHub issue creation for context telemetry anomalies.
-      </Typography>
-
-      {/* Integration Health Status */}
-      {integrationStatus?.checks && (
-        <Box
-          sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 2, px: 2, pt: 2 }}
-        >
-          {integrationStatus.checks.map((check, idx) => (
-            <HealthCheckRow key={idx} check={check} />
-          ))}
-        </Box>
-      )}
-
-      {/* Configuration Accordion */}
+    <SettingsSection component="section" sx={{ mb: 0, p: 0 }} data-testid="context-inspector-alert-settings">
       <AccordionGroup sx={{ px: 1, py: 1 }}>
         <Accordion expanded={configExpanded} onChange={() => setConfigExpanded(!configExpanded)}>
-          <AccordionSummary indicator={<ExpandMoreIcon />}>
-            <Typography level="title-sm">Configuration</Typography>
+          <AccordionSummary
+            component="h3"
+            indicator={<ExpandMoreIcon />}
+            sx={{ m: 0 }}
+            slotProps={{ button: { 'data-testid': 'context-inspector-alert-settings-toggle' } }}
+          >
+            <Typography component="span" level="title-md" sx={{ color: 'admin.ink' }}>
+              Alert settings
+            </Typography>
           </AccordionSummary>
           <AccordionDetails>
             <Stack spacing={3} sx={{ pt: 1 }}>
-              {/* Enable/Disable Toggle */}
-              <Stack direction="row" spacing={2} alignItems="center">
-                <Switch
-                  checked={localSettings.enabled}
-                  onChange={e => setLocalSettings({ ...localSettings, enabled: e.target.checked })}
-                  disabled={isUpdating}
-                />
-                <Box>
-                  <Typography level="body-md" fontWeight="bold">
-                    {localSettings.enabled ? 'Alerts enabled' : 'Alerts disabled'}
-                  </Typography>
-                  <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-                    Send alerts to Slack when anomalies are detected
-                  </Typography>
-                </Box>
-              </Stack>
+              <SettingSwitch
+                label={localSettings.enabled ? 'Alerts enabled' : 'Alerts disabled'}
+                description="Send alerts to Slack when anomalies are detected"
+                checked={localSettings.enabled}
+                onChange={enabled => setLocalSettings({ ...localSettings, enabled })}
+                disabled={isUpdating}
+                testId="context-inspector-alerts-toggle"
+              />
 
-              {/* Dry Run Mode Toggle */}
-              <Stack direction="row" spacing={2} alignItems="center">
-                <Switch
-                  data-testid="dry-run-mode-toggle"
-                  checked={localSettings.dryRun ?? false}
-                  onChange={e => setLocalSettings({ ...localSettings, dryRun: e.target.checked })}
-                  disabled={isUpdating}
-                />
-                <Box>
-                  <Typography level="body-md" fontWeight="bold">
-                    Dry run mode
-                  </Typography>
-                  <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-                    Log actions without creating issues or sending alerts
-                  </Typography>
-                </Box>
-              </Stack>
+              <SettingSwitch
+                label="Dry run mode"
+                description="Log actions without creating issues or sending alerts"
+                checked={localSettings.dryRun ?? false}
+                onChange={dryRun => setLocalSettings({ ...localSettings, dryRun })}
+                disabled={isUpdating}
+                testId="dry-run-mode-toggle"
+              />
 
               <Divider />
 
               {/* Slack Integration */}
-              <Typography level="title-sm">Slack integration</Typography>
+              <Subheading>Slack integration</Subheading>
               <Grid container spacing={2}>
                 <Grid xs={12} md={6}>
                   <FormControl>
@@ -869,6 +880,7 @@ const AlertSettingsCard = ({
                       onChange={e => setLocalSettings({ ...localSettings, slackChannelId: e.target.value })}
                       placeholder="e.g., C06CWQNTSAH"
                       disabled={isUpdating}
+                      slotProps={{ input: { 'data-testid': 'context-inspector-slack-channel-input' } }}
                     />
                     <FormHelperText>Slack channel ID for anomaly alerts</FormHelperText>
                   </FormControl>
@@ -878,7 +890,7 @@ const AlertSettingsCard = ({
               <Divider />
 
               {/* GitHub Integration */}
-              <Typography level="title-sm">GitHub integration</Typography>
+              <Subheading>GitHub integration</Subheading>
               <Grid container spacing={2}>
                 <Grid xs={12} md={6}>
                   <FormControl>
@@ -905,28 +917,21 @@ const AlertSettingsCard = ({
                   </FormControl>
                 </Grid>
                 <Grid xs={12}>
-                  <FormControl>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                      <Switch
-                        checked={localSettings.autoCreateIssues ?? false}
-                        onChange={e => setLocalSettings({ ...localSettings, autoCreateIssues: e.target.checked })}
-                        disabled={isUpdating}
-                      />
-                      <Box>
-                        <Typography level="body-sm">Auto-create GitHub issues</Typography>
-                        <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-                          Automatically create issues for critical anomalies
-                        </Typography>
-                      </Box>
-                    </Box>
-                  </FormControl>
+                  <SettingSwitch
+                    label="Auto-create GitHub issues"
+                    description="Automatically create issues for critical anomalies"
+                    checked={localSettings.autoCreateIssues ?? false}
+                    onChange={autoCreateIssues => setLocalSettings({ ...localSettings, autoCreateIssues })}
+                    disabled={isUpdating}
+                    testId="context-inspector-auto-issues-toggle"
+                  />
                 </Grid>
               </Grid>
 
               <Divider />
 
               {/* LLM Configuration */}
-              <Typography level="title-sm">LLM configuration</Typography>
+              <Subheading>LLM configuration</Subheading>
               <Grid container spacing={2}>
                 <Grid xs={12} md={6}>
                   <FormControl>
@@ -943,7 +948,7 @@ const AlertSettingsCard = ({
                     >
                       {Object.entries(modelsByProvider).map(([provider, providerModels]) => [
                         <Option key={`__header_${provider}`} value={`__header_${provider}`} disabled>
-                          <Typography level="body-xs" sx={{ textTransform: 'uppercase', fontWeight: 'bold' }}>
+                          <Typography level="body-xs" sx={{ color: 'admin.inkMuted', textTransform: 'uppercase' }}>
                             {provider}
                           </Typography>
                         </Option>,
@@ -1024,7 +1029,7 @@ const AlertSettingsCard = ({
               <Divider />
 
               {/* Alert Thresholds */}
-              <Typography level="title-sm">Alert thresholds</Typography>
+              <Subheading>Alert thresholds</Subheading>
               <Grid container spacing={2}>
                 <Grid xs={12} md={4}>
                   <FormControl>
@@ -1076,7 +1081,7 @@ const AlertSettingsCard = ({
               <Divider />
 
               {/* Performance Targets (SLOs) */}
-              <Typography level="title-sm">Performance targets (SLOs)</Typography>
+              <Subheading>Performance targets (SLOs)</Subheading>
               <Grid container spacing={2}>
                 <Grid xs={12} md={6}>
                   <FormControl>
@@ -1152,7 +1157,7 @@ const AlertSettingsCard = ({
               <Divider />
 
               {/* Historical Baselines */}
-              <Typography level="title-sm">Historical baselines</Typography>
+              <Subheading>Historical baselines</Subheading>
               <Grid container spacing={2}>
                 <Grid xs={12} md={6}>
                   <FormControl>
@@ -1173,47 +1178,13 @@ const AlertSettingsCard = ({
                 </Grid>
               </Grid>
 
-              {/* Save/Reset Buttons */}
-              <Divider />
-              <Stack direction="row" spacing={2} justifyContent="flex-end" alignItems="center">
-                {isDirty && (
-                  <StatusChip tone="warn" label="Unsaved changes" data-testid="context-inspector-unsaved-chip" />
-                )}
-                <Button
-                  data-testid="settings-reset-btn"
-                  variant="outlined"
-                  color="neutral"
-                  onClick={handleReset}
-                  disabled={!isDirty || isUpdating}
-                >
-                  Reset
-                </Button>
-                <Button
-                  data-testid="settings-save-btn"
-                  variant="solid"
-                  color="primary"
-                  onClick={handleSave}
-                  disabled={!isDirty || isUpdating}
-                  loading={isUpdating}
-                >
-                  Save
-                </Button>
-              </Stack>
-
-              {/* Save error display */}
-              {updateError && (
-                <Alert data-testid="settings-save-error" color="danger" variant="soft" sx={{ mt: 2 }}>
-                  Failed to save settings: {updateError.message || 'Unknown error'}
-                </Alert>
-              )}
-
               {/* Dry Run Testing - only visible when dryRun is enabled */}
               {localSettings.dryRun && <DryRunSection />}
             </Stack>
           </AccordionDetails>
         </Accordion>
       </AccordionGroup>
-    </SectionCard>
+    </SettingsSection>
   );
 };
 
@@ -1222,6 +1193,17 @@ const ENTRY_ROW_SX = { px: 2, py: 1.75, minWidth: 0, '& + &': { borderTop: '1px 
 
 // Rows come from the loaded entry, so these tables never show their error state.
 const ignoreRetry = () => undefined;
+
+const MutedDash = () => (
+  <Typography
+    component="span"
+    level="body-sm"
+    sx={{ color: 'admin.inkMuted' }}
+    data-testid="context-inspector-empty-value"
+  >
+    -
+  </Typography>
+);
 
 const TOOL_COLUMNS: DataColumn<ToolTelemetry>[] = [
   {
@@ -1244,16 +1226,20 @@ const TOOL_COLUMNS: DataColumn<ToolTelemetry>[] = [
     id: 'avgTime',
     label: 'Avg time',
     numeric: true,
-    render: tool => (tool.invocationCount > 0 ? `${(tool.totalDurationMs / tool.invocationCount).toFixed(0)}ms` : '-'),
+    render: tool =>
+      tool.invocationCount > 0 ? `${(tool.totalDurationMs / tool.invocationCount).toFixed(0)}ms` : <MutedDash />,
   },
   {
     id: 'lastError',
     label: 'Last error',
-    render: tool => (
-      <Typography level="body-xs" sx={{ maxWidth: 200 }} noWrap>
-        {tool.lastError ?? '-'}
-      </Typography>
-    ),
+    render: tool =>
+      tool.lastError ? (
+        <Typography level="body-xs" sx={{ maxWidth: '12.5rem' }} noWrap>
+          {tool.lastError}
+        </Typography>
+      ) : (
+        <MutedDash />
+      ),
   },
 ];
 
@@ -1313,9 +1299,11 @@ const TelemetryEntryRow = ({
   if (!telemetry) {
     return (
       <Box component="article" sx={ENTRY_ROW_SX} data-testid={`context-inspector-entry-${entry.id}`}>
-        <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
-          No telemetry data available
-        </Typography>
+        <EmptyState
+          title="No telemetry data"
+          description={`This completion (${new Date(entry.timestamp).toLocaleString()}) was saved without context telemetry.`}
+          action={null}
+        />
       </Box>
     );
   }
@@ -1370,7 +1358,7 @@ const TelemetryEntryRow = ({
 
         <Box
           component="dl"
-          sx={{ m: 0, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 1.5 }}
+          sx={{ m: 0, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(8.75rem, 1fr))', gap: 1.5 }}
         >
           <Metric label="Input tokens">{contextWindow.inputTokens.toLocaleString()}</Metric>
           <Metric label="Utilization">
@@ -1400,9 +1388,7 @@ const TelemetryEntryRow = ({
               {/* Token Distribution */}
               {contextWindow.tokensBySource && (
                 <Box>
-                  <Typography level="body-sm" fontWeight="md" sx={{ mb: 1 }}>
-                    Token distribution
-                  </Typography>
+                  <Subheading sx={{ mb: 1 }}>Token distribution</Subheading>
                   <TokenDistributionBar tokensBySource={contextWindow.tokensBySource} />
                 </Box>
               )}
@@ -1410,9 +1396,9 @@ const TelemetryEntryRow = ({
               {/* System Prompt Details */}
               {telemetry.systemPrompts && telemetry.systemPrompts.prompts.length > 0 && (
                 <Box>
-                  <Typography level="body-sm" fontWeight="md" sx={{ mb: 1 }}>
+                  <Subheading sx={{ mb: 1 }}>
                     System prompts ({telemetry.systemPrompts.totalTokens.toLocaleString()} tokens)
-                  </Typography>
+                  </Subheading>
                   <Grid container spacing={1}>
                     {telemetry.systemPrompts.prompts.map(prompt => (
                       <Grid key={`${prompt.name}-${prompt.source}`} xs={4} md={2}>
@@ -1429,9 +1415,7 @@ const TelemetryEntryRow = ({
               {/* Tool Failures */}
               {tools && tools.length > 0 && (
                 <Box>
-                  <Typography level="body-sm" fontWeight="md" sx={{ mb: 1 }}>
-                    Tools ({tools.length})
-                  </Typography>
+                  <Subheading sx={{ mb: 1 }}>Tools ({tools.length})</Subheading>
                   <DataTable
                     label="Tools"
                     rows={tools.slice(0, 10)}
@@ -1448,9 +1432,7 @@ const TelemetryEntryRow = ({
               {/* Subagents */}
               {subagents && subagents.length > 0 && (
                 <Box>
-                  <Typography level="body-sm" fontWeight="md" sx={{ mb: 1 }}>
-                    Subagents ({subagents.length})
-                  </Typography>
+                  <Subheading sx={{ mb: 1 }}>Subagents ({subagents.length})</Subheading>
                   <DataTable
                     label="Subagents"
                     rows={subagents}
@@ -1467,9 +1449,7 @@ const TelemetryEntryRow = ({
               {/* Fallback Info */}
               {model.fallbackUsed && (
                 <Box>
-                  <Typography level="body-sm" fontWeight="md" sx={{ mb: 1 }}>
-                    Fallback details
-                  </Typography>
+                  <Subheading sx={{ mb: 1 }}>Fallback details</Subheading>
                   <Typography level="body-sm">Original model: {model.originalModelId ?? 'Unknown'}</Typography>
                   <Typography level="body-sm">Reason: {model.fallbackReason ?? 'Unknown'}</Typography>
                 </Box>
@@ -1525,13 +1505,6 @@ export function ContextInspectorTab() {
     updateSettings.mutate({
       key: 'EnableContextTelemetry',
       value: !telemetryEnabled,
-    });
-  };
-
-  const handleUpdateAlertSettings = (newSettings: ContextTelemetryAlerts) => {
-    updateSettings.mutate({
-      key: 'contextTelemetryAlerts',
-      value: newSettings,
     });
   };
 
@@ -1632,252 +1605,266 @@ export function ContextInspectorTab() {
         }
       />
 
-      {!telemetryEnabled && (
-        <Alert color="warning" data-testid="context-inspector-disabled-banner">
-          Telemetry collection is disabled. Enable it to start capturing operational metadata for new completions.
-        </Alert>
-      )}
-
-      <AlertSettingsCard
-        alertSettings={alertSettings}
-        onUpdateSettings={handleUpdateAlertSettings}
-        isUpdating={updateSettings.isPending}
-        updateError={updateSettings.error}
-        integrationStatus={integrationStatus}
-        onRefreshHealth={() => refetchIntegrationStatus()}
-        isRefreshing={isRefreshingIntegration}
-      />
-
-      {data?.stats && (
-        <StatStrip aria-label="Telemetry summary">
-          <StatTile label="Total entries" value={data.stats.totalEntries} />
-          <StatTile
-            label="Avg anomaly score"
-            value={data.stats.avgAnomalyScore}
-            comparison={data.stats.avgAnomalyScore >= 30 ? <StatusChip tone="warn" label="High" /> : undefined}
-          />
-          <StatTile
-            label="Avg utilization"
-            value={`${data.stats.avgUtilization}%`}
-            comparison={data.stats.avgUtilization >= 90 ? <StatusChip tone="warn" label="High" /> : undefined}
-          />
-          <StatTile label="Avg response time" value={`${(data.stats.avgResponseTimeMs / 1000).toFixed(1)}s`} />
-          <StatTile
-            label="Severity"
-            value={
-              <Stack component="span" direction="row" gap={0.5} flexWrap="wrap" sx={{ py: 0.25 }}>
-                {SEVERITIES.map(sev => {
-                  const count = data.stats.severityDistribution[sev] ?? 0;
-                  return (
-                    <StatusChip
-                      key={sev}
-                      tone={count > 0 ? severityTone(sev) : 'neutral'}
-                      label={`${capitalize(sev)}: ${count}`}
-                      data-testid={`context-inspector-severity-${sev}`}
-                    />
-                  );
-                })}
-              </Stack>
-            }
-          />
-        </StatStrip>
-      )}
-
-      <FilterToolbar data-testid="context-inspector-filter-bar">
-        <Input
-          type="date"
-          size="sm"
-          startDecorator={<FilterInputLabel>From</FilterInputLabel>}
-          value={startDate}
-          onChange={e => {
-            setStartDate(e.target.value);
-            setPage(0);
-          }}
-          slotProps={{ input: { 'aria-label': 'Start date' } }}
-        />
-        <Input
-          type="date"
-          size="sm"
-          startDecorator={<FilterInputLabel>To</FilterInputLabel>}
-          value={endDate}
-          onChange={e => {
-            setEndDate(e.target.value);
-            setPage(0);
-          }}
-          slotProps={{ input: { 'aria-label': 'End date' } }}
-        />
-        <FilterChip
-          id="provider"
-          label="Provider"
-          value={provider ?? undefined}
-          options={(data?.stats?.providers ?? []).map(p => ({ value: p, label: p }))}
-          onChange={value => {
-            setProvider(value ?? null);
-            setPage(0);
-          }}
-        />
-        <FilterChip
-          id="min-score"
-          label="Anomaly score"
-          value={minAnomalyScore === null ? undefined : String(minAnomalyScore)}
-          options={MIN_SCORE_OPTIONS}
-          onChange={value => {
-            setMinAnomalyScore(value === undefined ? null : Number(value));
-            setPage(0);
-          }}
-        />
-        <FilterChip
-          id="severity"
-          label="Severity"
-          value={severity ?? undefined}
-          options={SEVERITIES.map(sev => ({ value: sev, label: capitalize(sev) }))}
-          onChange={value => {
-            setSeverity(SEVERITIES.find(sev => sev === value) ?? null);
-            setPage(0);
-          }}
-        />
-        <FilterChip
-          id="anomaly-type"
-          label="Anomaly type"
-          value={anomalyType ?? undefined}
-          options={ANOMALY_TYPES}
-          onChange={value => {
-            setAnomalyType(ANOMALY_TYPES.find(type => type.value === value)?.value ?? null);
-            setPage(0);
-          }}
-        />
-      </FilterToolbar>
-
-      {/* With entries on screen a failed refresh is a banner above them; with none it takes their place. */}
-      {error && data && (
-        <Alert color="danger" data-testid="context-inspector-error-banner">
-          Could not refresh telemetry: {error.message}
-        </Alert>
-      )}
-
-      <SectionCard
-        title="Telemetry entries"
-        body="custom"
-        action={
-          data?.entries?.length ? (
-            <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }} data-testid="context-inspector-entries-count">
-              Showing {data.entries.length} of {data.total} entries
-            </Typography>
-          ) : undefined
-        }
-        data-testid="context-inspector-entries-card"
-      >
-        {isLoading ? (
-          <LoadingState label="Loading telemetry" testId="context-inspector-loading" />
-        ) : error && !data ? (
-          <ErrorState
-            message={`Could not load telemetry: ${error.message}`}
-            onRetry={() => void refetch()}
-            retrying={isFetching}
-          />
-        ) : !data?.entries?.length ? (
-          <EmptyState
-            title={filtersSet ? 'No entries match these filters' : 'No telemetry entries yet'}
-            description={
-              filtersSet ? undefined : 'Context telemetry is recorded for new completions while collection is enabled.'
-            }
-            action={
-              filtersSet ? (
-                <Button
-                  size="sm"
-                  variant="outlined"
-                  onClick={clearFilters}
-                  data-testid="context-inspector-clear-filters-btn"
-                >
-                  Clear filters
-                </Button>
-              ) : null
-            }
-          />
-        ) : (
-          <>
-            <AccordionGroup>
-              {data.entries.map(entry => (
-                <TelemetryEntryRow
-                  key={entry.id}
-                  entry={entry}
-                  onAnalyze={handleAnalyze}
-                  onCreateIssue={handleCreateIssue}
-                  githubEnabled={integrationStatus?.github ?? false}
-                />
-              ))}
-            </AccordionGroup>
-
-            {totalPages > 1 && (
-              <Stack
-                direction="row"
-                alignItems="center"
-                justifyContent="flex-end"
-                gap={1}
-                sx={{ px: 2, py: 1, borderTop: '1px solid', borderColor: 'admin.border' }}
-                data-testid="context-inspector-pager"
-              >
-                <Typography level="body-sm" sx={{ color: 'admin.inkMuted', mr: 'auto' }}>
-                  Page {page + 1} of {totalPages}
-                </Typography>
-                <Button
-                  size="sm"
-                  variant="outlined"
-                  disabled={page === 0}
-                  onClick={() => setPage(p => p - 1)}
-                  data-testid="context-inspector-prev-btn"
-                >
-                  Previous
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outlined"
-                  disabled={page >= totalPages - 1}
-                  onClick={() => setPage(p => p + 1)}
-                  data-testid="context-inspector-next-btn"
-                >
-                  Next
-                </Button>
-              </Stack>
-            )}
-          </>
+      {/* The page is a settings page for the alert settings: one SaveBar and leave-page guard for the
+          staged form. The telemetry switch in the header stays an instant write, as a mode toggle. */}
+      <SettingsDraftProvider>
+        {updateSettings.error && (
+          <Alert color="danger" data-testid="context-inspector-telemetry-error">
+            Could not change telemetry collection: {updateSettings.error.message}
+          </Alert>
         )}
-      </SectionCard>
 
-      {/* Modals */}
-      <AnalysisModal
-        open={analysisModalOpen}
-        onClose={() => setAnalysisModalOpen(false)}
-        analysis={analyzeMutation.data?.analysis ?? null}
-        isLoading={analyzeMutation.isPending}
-        error={analyzeMutation.error}
-        baselines={analyzeMutation.data?.historicalBaselines}
-        analysisSource={analyzeMutation.data?.analysisSource}
-        cached={analyzeMutation.data?.cached}
-        cachedAt={analyzeMutation.data?.cachedAt}
-        onReanalyze={handleReanalyze}
-      />
+        {!telemetryEnabled && (
+          <Alert color="warning" data-testid="context-inspector-disabled-banner">
+            Telemetry collection is disabled. Enable it to start capturing operational metadata for new completions.
+          </Alert>
+        )}
 
-      <CreateIssueModal
-        open={createIssueModalOpen}
-        onClose={() => setCreateIssueModalOpen(false)}
-        entryId={selectedEntryId}
-        onSuccess={handleIssueCreated}
-        onDuplicate={handleDuplicateIssue}
-        configuredRepo={
-          alertSettings?.githubOwner && alertSettings?.githubRepo
-            ? { owner: alertSettings.githubOwner, repo: alertSettings.githubRepo }
-            : null
-        }
-      />
+        <IntegrationsCard
+          integrationStatus={integrationStatus}
+          onRefreshHealth={() => refetchIntegrationStatus()}
+          isRefreshing={isRefreshingIntegration}
+        />
 
-      <IssueCreatedModal
-        open={issueCreatedModalOpen}
-        onClose={() => setIssueCreatedModalOpen(false)}
-        issueUrl={createdIssueUrl}
-        isDuplicate={isDuplicateIssue}
-        issueNumber={duplicateIssueNumber}
-      />
+        <AlertSettingsSection alertSettings={alertSettings} />
+
+        {data?.stats && (
+          <StatStrip aria-label="Telemetry summary">
+            <StatTile label="Total entries" value={data.stats.totalEntries} />
+            <StatTile
+              label="Avg anomaly score"
+              value={data.stats.avgAnomalyScore}
+              comparison={data.stats.avgAnomalyScore >= 30 ? <StatusChip tone="warn" label="High" /> : undefined}
+            />
+            <StatTile
+              label="Avg utilization"
+              value={`${data.stats.avgUtilization}%`}
+              comparison={data.stats.avgUtilization >= 90 ? <StatusChip tone="warn" label="High" /> : undefined}
+            />
+            <StatTile label="Avg response time" value={`${(data.stats.avgResponseTimeMs / 1000).toFixed(1)}s`} />
+            <StatTile
+              label="Severity"
+              value={
+                <Stack component="span" direction="row" gap={0.5} flexWrap="wrap" sx={{ py: 0.25 }}>
+                  {SEVERITIES.map(sev => {
+                    const count = data.stats.severityDistribution[sev] ?? 0;
+                    return (
+                      <StatusChip
+                        key={sev}
+                        tone={count > 0 ? severityTone(sev) : 'neutral'}
+                        label={`${capitalize(sev)}: ${count}`}
+                        data-testid={`context-inspector-severity-${sev}`}
+                      />
+                    );
+                  })}
+                </Stack>
+              }
+            />
+          </StatStrip>
+        )}
+
+        <FilterToolbar data-testid="context-inspector-filter-bar">
+          <Input
+            type="date"
+            size="sm"
+            startDecorator={<FilterInputLabel>From</FilterInputLabel>}
+            value={startDate}
+            onChange={e => {
+              setStartDate(e.target.value);
+              setPage(0);
+            }}
+            slotProps={{ input: { 'aria-label': 'Start date' } }}
+          />
+          <Input
+            type="date"
+            size="sm"
+            startDecorator={<FilterInputLabel>To</FilterInputLabel>}
+            value={endDate}
+            onChange={e => {
+              setEndDate(e.target.value);
+              setPage(0);
+            }}
+            slotProps={{ input: { 'aria-label': 'End date' } }}
+          />
+          <FilterChip
+            id="provider"
+            label="Provider"
+            value={provider ?? undefined}
+            options={(data?.stats?.providers ?? []).map(p => ({ value: p, label: p }))}
+            onChange={value => {
+              setProvider(value ?? null);
+              setPage(0);
+            }}
+          />
+          <FilterChip
+            id="min-score"
+            label="Anomaly score"
+            value={minAnomalyScore === null ? undefined : String(minAnomalyScore)}
+            options={MIN_SCORE_OPTIONS}
+            onChange={value => {
+              setMinAnomalyScore(value === undefined ? null : Number(value));
+              setPage(0);
+            }}
+          />
+          <FilterChip
+            id="severity"
+            label="Severity"
+            value={severity ?? undefined}
+            options={SEVERITIES.map(sev => ({ value: sev, label: capitalize(sev) }))}
+            onChange={value => {
+              setSeverity(SEVERITIES.find(sev => sev === value) ?? null);
+              setPage(0);
+            }}
+          />
+          <FilterChip
+            id="anomaly-type"
+            label="Anomaly type"
+            value={anomalyType ?? undefined}
+            options={ANOMALY_TYPES}
+            onChange={value => {
+              setAnomalyType(ANOMALY_TYPES.find(type => type.value === value)?.value ?? null);
+              setPage(0);
+            }}
+          />
+        </FilterToolbar>
+
+        {/* With entries on screen a failed refresh is a banner above them; with none it takes their place. */}
+        {error && data && (
+          <Alert color="danger" data-testid="context-inspector-error-banner">
+            Could not refresh telemetry: {error.message}
+          </Alert>
+        )}
+
+        <SectionCard
+          title="Telemetry entries"
+          body="custom"
+          action={
+            data?.entries?.length ? (
+              <Typography
+                level="body-xs"
+                sx={{ color: 'admin.inkMuted' }}
+                data-testid="context-inspector-entries-count"
+              >
+                Showing {data.entries.length} of {data.total} entries
+              </Typography>
+            ) : undefined
+          }
+          data-testid="context-inspector-entries-card"
+        >
+          {isLoading ? (
+            <LoadingState label="Loading telemetry" testId="context-inspector-loading" />
+          ) : error && !data ? (
+            <ErrorState
+              message={`Could not load telemetry: ${error.message}`}
+              onRetry={() => void refetch()}
+              retrying={isFetching}
+            />
+          ) : !data?.entries?.length ? (
+            <EmptyState
+              title={filtersSet ? 'No entries match these filters' : 'No telemetry entries yet'}
+              description={
+                filtersSet
+                  ? undefined
+                  : 'Context telemetry is recorded for new completions while collection is enabled.'
+              }
+              action={
+                filtersSet ? (
+                  <Button
+                    size="sm"
+                    variant="outlined"
+                    onClick={clearFilters}
+                    data-testid="context-inspector-clear-filters-btn"
+                  >
+                    Clear filters
+                  </Button>
+                ) : null
+              }
+            />
+          ) : (
+            <>
+              <AccordionGroup>
+                {data.entries.map(entry => (
+                  <TelemetryEntryRow
+                    key={entry.id}
+                    entry={entry}
+                    onAnalyze={handleAnalyze}
+                    onCreateIssue={handleCreateIssue}
+                    githubEnabled={integrationStatus?.github ?? false}
+                  />
+                ))}
+              </AccordionGroup>
+
+              {totalPages > 1 && (
+                <Stack
+                  direction="row"
+                  alignItems="center"
+                  justifyContent="flex-end"
+                  gap={1}
+                  sx={{ px: 2, py: 1, borderTop: '1px solid', borderColor: 'admin.border' }}
+                  data-testid="context-inspector-pager"
+                >
+                  <Typography level="body-sm" sx={{ color: 'admin.inkMuted', mr: 'auto' }}>
+                    Page {page + 1} of {totalPages}
+                  </Typography>
+                  <Button
+                    size="sm"
+                    variant="outlined"
+                    disabled={page === 0}
+                    onClick={() => setPage(p => p - 1)}
+                    data-testid="context-inspector-prev-btn"
+                  >
+                    Previous
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outlined"
+                    disabled={page >= totalPages - 1}
+                    onClick={() => setPage(p => p + 1)}
+                    data-testid="context-inspector-next-btn"
+                  >
+                    Next
+                  </Button>
+                </Stack>
+              )}
+            </>
+          )}
+        </SectionCard>
+
+        {/* Modals */}
+        <AnalysisModal
+          open={analysisModalOpen}
+          onClose={() => setAnalysisModalOpen(false)}
+          analysis={analyzeMutation.data?.analysis ?? null}
+          isLoading={analyzeMutation.isPending}
+          error={analyzeMutation.error}
+          baselines={analyzeMutation.data?.historicalBaselines}
+          analysisSource={analyzeMutation.data?.analysisSource}
+          cached={analyzeMutation.data?.cached}
+          cachedAt={analyzeMutation.data?.cachedAt}
+          onReanalyze={handleReanalyze}
+        />
+
+        <CreateIssueModal
+          open={createIssueModalOpen}
+          onClose={() => setCreateIssueModalOpen(false)}
+          entryId={selectedEntryId}
+          onSuccess={handleIssueCreated}
+          onDuplicate={handleDuplicateIssue}
+          configuredRepo={
+            alertSettings?.githubOwner && alertSettings?.githubRepo
+              ? { owner: alertSettings.githubOwner, repo: alertSettings.githubRepo }
+              : null
+          }
+        />
+
+        <IssueCreatedModal
+          open={issueCreatedModalOpen}
+          onClose={() => setIssueCreatedModalOpen(false)}
+          issueUrl={createdIssueUrl}
+          isDuplicate={isDuplicateIssue}
+          issueNumber={duplicateIssueNumber}
+        />
+      </SettingsDraftProvider>
     </Stack>
   );
 }

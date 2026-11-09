@@ -4,21 +4,36 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { AxiosError, AxiosHeaders } from 'axios';
 
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
   post: vi.fn(),
   updateSettings: vi.fn(),
+  saveSettings: vi.fn(),
+  updateError: null as Error | null,
   settings: {} as Record<string, unknown>,
+  useBlocker: vi.fn(() => ({ status: 'idle' })),
 }));
 
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: mocks.get, post: mocks.post } }));
 vi.mock('@client/app/hooks/data/settings', () => ({
   useGetSettingsValue: (key: string) => mocks.settings[key],
-  useUpdateSettings: () => ({ mutate: mocks.updateSettings, isPending: false, error: null }),
+  useUpdateSettings: () => ({
+    mutate: mocks.updateSettings,
+    mutateAsync: mocks.saveSettings,
+    isPending: false,
+    error: mocks.updateError,
+  }),
 }));
 vi.mock('@client/app/hooks/data/useModelInfo', () => ({ useModelInfo: () => ({ data: [] }) }));
+// The alert settings stage into SettingsDraftProvider, whose leave-page guard reads the router.
+vi.mock('@tanstack/react-router', async () => ({
+  ...(await import('./__tests__/fakeAdminRouter')).fakeRouterModule,
+  useBlocker: mocks.useBlocker,
+}));
 
+import { fakeAdminRouter } from './__tests__/fakeAdminRouter';
 import ContextInspectorTab from './ContextInspectorTab';
 
 const TELEMETRY_URL = '/api/admin/context-telemetry?';
@@ -150,6 +165,9 @@ const tiles = () =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  fakeAdminRouter.reset({ tab: 'context-inspector' });
+  mocks.updateError = null;
+  mocks.saveSettings.mockResolvedValue({});
   mocks.settings = { EnableContextTelemetry: true, contextTelemetryAlerts: undefined };
   telemetryResponse = () => Promise.resolve({ data: telemetry() });
   mocks.get.mockImplementation(routeGet);
@@ -178,12 +196,37 @@ describe('ContextInspectorTab page frame', () => {
     expect(container.querySelector('.MuiChip-variantOutlined, .MuiAlert-variantOutlined')).toBeNull();
     const cards = Array.from(container.querySelectorAll<HTMLElement>('section.MuiSheet-root'));
     expect(cards.map(card => card.getAttribute('data-testid'))).toEqual([
-      'context-inspector-settings-card',
+      'context-inspector-integrations-card',
+      'context-inspector-alert-settings',
       'context-inspector-entries-card',
     ]);
     for (const card of cards) expect(card.parentElement?.closest('.MuiSheet-root, .MuiCard-root')).toBeNull();
     expect(within(cards[0]).getByRole('heading', { level: 3 })).toHaveTextContent(/^Alerts and integrations$/);
+    expect(within(cards[1]).getByRole('heading', { level: 3 })).toHaveTextContent(/^Alert settings$/);
     expect(cards[0].querySelector('h3 svg')).toBeNull();
+  });
+
+  it('titles the settings and entry sub-groups at the section level, with muted helper text', async () => {
+    renderTab();
+    await screen.findByTestId('context-inspector-entry-e1');
+    fireEvent.click(screen.getByTestId('context-inspector-alert-settings-toggle'));
+    const settings = screen.getByTestId('context-inspector-alert-settings');
+    const subheads = within(settings).getAllByRole('heading', { level: 4 });
+    expect(subheads.map(heading => heading.textContent)).toEqual([
+      'Slack integration',
+      'GitHub integration',
+      'LLM configuration',
+      'Alert thresholds',
+      'Performance targets (SLOs)',
+      'Historical baselines',
+    ]);
+    for (const heading of subheads) expect(heading).toHaveClass('MuiTypography-title-md');
+    expect(within(settings).getByText('Send alerts to Slack when anomalies are detected')).toHaveStyle({
+      color: 'var(--joy-palette-admin-inkMuted)',
+    });
+    const entry = screen.getByTestId('context-inspector-entry-e1');
+    fireEvent.click(within(entry).getByRole('button', { name: 'Details' }));
+    expect(within(entry).getByRole('heading', { level: 4, name: 'Tools (1)' })).toHaveClass('MuiTypography-title-md');
   });
 
   it('warns with a toned banner, right under the header, while collection is off', async () => {
@@ -263,10 +306,39 @@ describe('ContextInspectorTab numbers and status', () => {
     expect(row).toHaveTextContent('web_search42200ms');
   });
 
+  it('shows an empty value as a muted dash, and an entry without telemetry as an empty state', async () => {
+    telemetryResponse = () =>
+      Promise.resolve({
+        data: telemetry({
+          entries: [
+            {
+              ...entry('e1'),
+              telemetry: {
+                ...entry('e1').telemetry,
+                tools: [{ toolName: 'noop', invocationCount: 0, failureCount: 0, totalDurationMs: 0 }],
+              },
+            },
+            { id: 'e3', timestamp: '2026-11-01T10:00:00.000Z' },
+          ],
+          total: 2,
+        }),
+      });
+    renderTab();
+    const row = within(await screen.findByTestId('context-inspector-tools-table-e1')).getByTestId(
+      'admin-table-row-noop'
+    );
+    const dashes = within(row).getAllByTestId('context-inspector-empty-value');
+    expect(dashes).toHaveLength(2);
+    for (const dash of dashes) expect(dash).toHaveStyle({ color: 'var(--joy-palette-admin-inkMuted)' });
+
+    const empty = within(screen.getByTestId('context-inspector-entry-e3')).getByTestId('admin-empty-state');
+    expect(empty).toHaveTextContent('No telemetry data');
+  });
+
   it('shows integration health as status chips', async () => {
     renderTab();
     await screen.findByTestId('context-inspector-entry-e1');
-    const card = screen.getByTestId('context-inspector-settings-card');
+    const card = screen.getByTestId('context-inspector-integrations-card');
     expect(await within(card).findByTestId('context-inspector-health-chip')).toHaveAttribute('data-tone', 'warn');
     const checks = within(card)
       .getAllByTestId('context-inspector-health-check')
@@ -334,6 +406,133 @@ describe('ContextInspectorTab requests and states', () => {
     fireEvent.click(within(entriesCard()).getByTestId('context-inspector-clear-filters-btn'));
     expect(await within(entriesCard()).findByText('No telemetry entries yet')).toBeInTheDocument();
     expect(screen.getByTestId('admin-filter-severity')).toHaveTextContent(/^Severity$/);
+  });
+});
+
+describe('ContextInspectorTab alert settings', () => {
+  const stored = {
+    enabled: true,
+    alertThreshold: 30,
+    criticalThreshold: 50,
+    dedupWindowMinutes: 5,
+    slackChannelId: 'C0OLD',
+    githubOwner: 'acme',
+    githubRepo: 'widgets',
+  };
+  const channel = () => screen.getByTestId('context-inspector-slack-channel-input');
+
+  it('stages edits for the page SaveBar, which saves the whole settings object in one write', async () => {
+    mocks.settings.contextTelemetryAlerts = stored;
+    renderTab();
+    await screen.findByTestId('context-inspector-entry-e1');
+    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('context-inspector-alert-settings-toggle'));
+    fireEvent.change(channel(), { target: { value: 'C0NEW' } });
+    const bar = screen.getByTestId('admin-save-bar');
+    expect(bar).toHaveTextContent('1 unsaved change');
+    expect(screen.getByTestId('context-inspector-root').lastElementChild).toBe(bar);
+    expect(mocks.saveSettings).not.toHaveBeenCalled();
+    expect(mocks.useBlocker).toHaveBeenLastCalledWith(expect.objectContaining({ enableBeforeUnload: true }));
+
+    fireEvent.click(within(bar).getByTestId('admin-save-confirm-btn'));
+    await waitFor(() => expect(mocks.saveSettings).toHaveBeenCalledTimes(1));
+    expect(mocks.saveSettings).toHaveBeenCalledWith({
+      key: 'contextTelemetryAlerts',
+      value: { ...stored, slackChannelId: 'C0NEW' },
+    });
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByTestId('admin-save-bar')).toBeNull());
+  });
+
+  it('puts a failed save on the SaveBar and keeps the edit', async () => {
+    mocks.settings.contextTelemetryAlerts = stored;
+    mocks.saveSettings.mockRejectedValue(new Error('denied'));
+    renderTab();
+    await screen.findByTestId('context-inspector-entry-e1');
+    fireEvent.click(screen.getByTestId('context-inspector-alert-settings-toggle'));
+    fireEvent.change(channel(), { target: { value: 'C0NEW' } });
+    fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+
+    expect(await within(screen.getByTestId('admin-save-bar')).findByRole('alert')).toHaveTextContent(
+      'Alert settings was not saved: denied.'
+    );
+    expect(channel()).toHaveValue('C0NEW');
+  });
+
+  it('discards staged edits back to the stored settings without saving', async () => {
+    mocks.settings.contextTelemetryAlerts = stored;
+    renderTab();
+    await screen.findByTestId('context-inspector-entry-e1');
+    fireEvent.click(screen.getByTestId('context-inspector-alert-settings-toggle'));
+    fireEvent.change(channel(), { target: { value: 'C0NEW' } });
+    fireEvent.click(within(screen.getByTestId('dry-run-mode-toggle')).getByRole('switch'));
+    expect(screen.getByTestId('admin-save-bar')).toHaveTextContent('1 unsaved change');
+
+    fireEvent.click(screen.getByTestId('admin-save-discard-btn'));
+    expect(channel()).toHaveValue('C0OLD');
+    expect(within(screen.getByTestId('dry-run-mode-toggle')).getByRole('switch')).not.toBeChecked();
+    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
+    expect(mocks.saveSettings).not.toHaveBeenCalled();
+  });
+
+  it('writes the telemetry switch at once, outside the SaveBar, and says when the write fails', async () => {
+    renderTab();
+    await screen.findByTestId('context-inspector-entry-e1');
+    fireEvent.click(screen.getByTestId('context-inspector-telemetry-toggle'));
+    expect(mocks.updateSettings).toHaveBeenCalledWith({ key: 'EnableContextTelemetry', value: false });
+    expect(mocks.saveSettings).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
+    expect(screen.queryByTestId('context-inspector-telemetry-error')).toBeNull();
+  });
+
+  it('shows a danger banner when the telemetry switch write fails', async () => {
+    mocks.updateError = new Error('forbidden');
+    renderTab();
+    await screen.findByTestId('context-inspector-entry-e1');
+    const banner = screen.getByTestId('context-inspector-telemetry-error');
+    expect(banner).toHaveClass('MuiAlert-colorDanger');
+    expect(banner).toHaveTextContent('Could not change telemetry collection: forbidden');
+  });
+});
+
+describe('ContextInspectorTab paging and refresh', () => {
+  it('moves the offset with Next and Previous', async () => {
+    telemetryResponse = () => Promise.resolve({ data: telemetry({ total: 45 }) });
+    renderTab();
+    await screen.findByTestId('context-inspector-entry-e1');
+    const pager = screen.getByTestId('context-inspector-pager');
+    expect(pager).toHaveTextContent('Page 1 of 3');
+    expect(within(pager).getByTestId('context-inspector-prev-btn')).toBeDisabled();
+
+    fireEvent.click(within(pager).getByTestId('context-inspector-next-btn'));
+    await waitFor(() => expect(telemetryCalls().at(-1)).toBe('/api/admin/context-telemetry?limit=20&offset=20'));
+    fireEvent.click(await screen.findByTestId('context-inspector-next-btn'));
+    await waitFor(() => expect(telemetryCalls().at(-1)).toBe('/api/admin/context-telemetry?limit=20&offset=40'));
+    expect(await screen.findByText('Page 3 of 3')).toBeInTheDocument();
+    expect(screen.getByTestId('context-inspector-next-btn')).toBeDisabled();
+
+    // Page 2 is cached, so Previous shows it again without a new request.
+    fireEvent.click(screen.getByTestId('context-inspector-prev-btn'));
+    expect(await screen.findByText('Page 2 of 3')).toBeInTheDocument();
+    expect(telemetryCalls()).toEqual([
+      '/api/admin/context-telemetry?limit=20',
+      '/api/admin/context-telemetry?limit=20&offset=20',
+      '/api/admin/context-telemetry?limit=20&offset=40',
+    ]);
+  });
+
+  it('keeps the entries under a danger banner when a refresh fails', async () => {
+    renderTab();
+    await screen.findByTestId('context-inspector-entry-e1');
+    telemetryResponse = () => Promise.reject(new Error('timeout'));
+    fireEvent.click(screen.getByTestId('context-inspector-refresh-btn'));
+
+    const banner = await screen.findByTestId('context-inspector-error-banner');
+    expect(banner).toHaveClass('MuiAlert-colorDanger');
+    expect(banner).toHaveTextContent('Could not refresh telemetry: timeout');
+    expect(screen.getByTestId('context-inspector-entry-e1')).toBeInTheDocument();
+    expect(within(entriesCard()).queryByTestId('admin-error-state')).toBeNull();
   });
 });
 
@@ -412,6 +611,60 @@ describe('ContextInspectorTab dialogs', () => {
       'href',
       'https://example.com/issues/7'
     );
+  });
+
+  it('re-analyzes a cached analysis with force', async () => {
+    mocks.post.mockResolvedValue({
+      data: {
+        id: 'e1',
+        analysis: {
+          summary: 'Fine.',
+          findings: [],
+          recommendations: [],
+          severity: 'low',
+          estimatedImpact: 'None.',
+          recommendedAction: 'no_action',
+        },
+        analysisSource: 'llm',
+        cached: true,
+        cachedAt: '2026-11-01T11:00:00.000Z',
+      },
+    });
+    renderTab();
+    fireEvent.click(await screen.findByTestId('context-inspector-analyze-e1'));
+    const reanalyze = await screen.findByTestId('context-inspector-reanalyze-btn');
+    fireEvent.click(reanalyze);
+    await waitFor(() =>
+      expect(mocks.post).toHaveBeenLastCalledWith('/api/admin/context-telemetry/e1/analyze?force=true')
+    );
+    expect(mocks.post).toHaveBeenCalledTimes(2);
+  });
+
+  it('points to the existing issue when GitHub already has one for the anomaly', async () => {
+    mocks.settings.contextTelemetryAlerts = { enabled: true, githubOwner: 'acme', githubRepo: 'widgets' };
+    mocks.post.mockRejectedValue(
+      new AxiosError('Conflict', '409', undefined, undefined, {
+        status: 409,
+        statusText: 'Conflict',
+        headers: {},
+        config: { headers: new AxiosHeaders() },
+        data: { existingIssue: { number: 12, url: 'https://example.com/issues/12' } },
+      })
+    );
+    renderTab();
+    const createBtn = await screen.findByTestId('context-inspector-create-issue-e1');
+    await waitFor(() => expect(createBtn).not.toBeDisabled());
+    fireEvent.click(createBtn);
+    fireEvent.click(screen.getByTestId('context-inspector-create-issue-submit-btn'));
+
+    const existing = await screen.findByTestId('context-inspector-issue-created-dialog');
+    expect(within(existing).getByRole('heading', { level: 2 })).toHaveTextContent('Existing issue found');
+    expect(existing).toHaveTextContent('A GitHub issue already exists for this anomaly: #12.');
+    expect(within(existing).getByTestId('context-inspector-issue-link')).toHaveAttribute(
+      'href',
+      'https://example.com/issues/12'
+    );
+    expect(screen.queryByTestId('context-inspector-create-issue-dialog')).toBeNull();
   });
 
   it('lists dry run results in a DataTable with priority and outcome chips', async () => {
