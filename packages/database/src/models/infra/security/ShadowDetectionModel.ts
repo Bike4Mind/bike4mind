@@ -224,57 +224,58 @@ const VERDICT_COUNT_FIELDS = {
   insufficient_evidence: 'insufficientEvidence',
 } as const satisfies Record<ShadowDetectionVerdict, keyof ShadowDetectionSummaryRow>;
 
-const toItem = (doc: LeanShadowDetection): ShadowDetectionItem => ({
-  id: doc._id.toString(),
-  detector: doc.detector,
-  policyVersion: doc.policyVersion,
-  wouldAction: doc.wouldAction,
-  summary: doc.summary,
-  userIds: doc.userIds ?? [],
-  network: doc.network
-    ? {
-        ip: doc.network.ip ?? null,
-        asn: doc.network.asn ?? null,
-        asnOrg: doc.network.asnOrg ?? null,
-        country: doc.network.country ?? null,
-        hosting: doc.network.hosting ?? null,
-      }
-    : null,
-  signals: (doc.signals ?? []).map(signal => ({
-    key: signal.key,
-    label: signal.label,
-    observed: signal.observed ?? null,
-    threshold: signal.threshold ?? null,
-  })),
-  windowMinutes: doc.windowMinutes ?? null,
-  group: doc.group ?? null,
-  ...(doc.completionSequence
-    ? { completionSequence: completionSequenceEvidenceSchema.parse(doc.completionSequence) }
-    : {}),
-  // Records written before payment evidence existed carry no field at all.
-  payment: doc.payment
-    ? {
-        paymentIntentId: doc.payment.paymentIntentId,
-        chargeId: doc.payment.chargeId ?? null,
-        kind: doc.payment.kind,
-        outcome: doc.payment.outcome,
-        amount: doc.payment.amount ?? null,
-        currency: doc.payment.currency ?? null,
-        riskLevel: doc.payment.riskLevel ?? null,
-        livemode: doc.payment.livemode,
-      }
-    : null,
-  detectedAt: doc.detectedAt,
-  verdict: doc.verdict ?? null,
-  verdicts: (doc.verdicts ?? []).map(entry => ({
-    verdict: entry.verdict,
-    reason: entry.reason,
-    reviewerId: entry.reviewerId,
-    reviewedAt: entry.reviewedAt,
-    ...(entry.source ? { source: entry.source } : {}),
-  })),
-  revision: doc.revision ?? 0,
-});
+const toItem = (doc: LeanShadowDetection): ShadowDetectionItem => {
+  const parsed = completionSequenceEvidenceSchema.safeParse(doc.completionSequence);
+  return {
+    id: doc._id.toString(),
+    detector: doc.detector,
+    policyVersion: doc.policyVersion,
+    wouldAction: doc.wouldAction,
+    summary: doc.summary,
+    userIds: doc.userIds ?? [],
+    network: doc.network
+      ? {
+          ip: doc.network.ip ?? null,
+          asn: doc.network.asn ?? null,
+          asnOrg: doc.network.asnOrg ?? null,
+          country: doc.network.country ?? null,
+          hosting: doc.network.hosting ?? null,
+        }
+      : null,
+    signals: (doc.signals ?? []).map(signal => ({
+      key: signal.key,
+      label: signal.label,
+      observed: signal.observed ?? null,
+      threshold: signal.threshold ?? null,
+    })),
+    windowMinutes: doc.windowMinutes ?? null,
+    group: doc.group ?? null,
+    ...(parsed.success ? { completionSequence: parsed.data } : {}),
+    // Records written before payment evidence existed carry no field at all.
+    payment: doc.payment
+      ? {
+          paymentIntentId: doc.payment.paymentIntentId,
+          chargeId: doc.payment.chargeId ?? null,
+          kind: doc.payment.kind,
+          outcome: doc.payment.outcome,
+          amount: doc.payment.amount ?? null,
+          currency: doc.payment.currency ?? null,
+          riskLevel: doc.payment.riskLevel ?? null,
+          livemode: doc.payment.livemode,
+        }
+      : null,
+    detectedAt: doc.detectedAt,
+    verdict: doc.verdict ?? null,
+    verdicts: (doc.verdicts ?? []).map(entry => ({
+      verdict: entry.verdict,
+      reason: entry.reason,
+      reviewerId: entry.reviewerId,
+      reviewedAt: entry.reviewedAt,
+      ...(entry.source ? { source: entry.source } : {}),
+    })),
+    revision: doc.revision ?? 0,
+  };
+};
 
 class ShadowDetectionRepository {
   /** One observation per ordered cohort and UTC activity day; reviewed records stay immutable. */
@@ -313,7 +314,12 @@ class ShadowDetectionRepository {
     );
     if (created.upsertedCount > 0) return (await reconcileMembers()) ? 'created' : 'unchanged';
     const updated = await ShadowDetectionModel.updateOne(
-      { _id: id, verdict: null, 'completionSequence.lastObservedAt': { $lt: sequence.lastObservedAt } },
+      {
+        _id: id,
+        verdict: null,
+        'completionSequence.lastObservedAt': { $lt: sequence.lastObservedAt },
+        'completionSequence.rounds': { $lte: sequence.rounds },
+      },
       {
         $set: { completionSequence: sequence, summary: input.summary, signals: input.signals },
         $inc: { revision: 1 },

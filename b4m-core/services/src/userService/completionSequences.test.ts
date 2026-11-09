@@ -49,6 +49,16 @@ describe('completion ordering regression cases', () => {
     ]);
     expect(result.patterns[0]).toMatchObject({ rounds: 2, minRequestsPerRound: 4, maxRequestsPerRound: 4 });
   });
+  it('marks an eligible run ambiguous when an excluded event shares its final timestamp', () => {
+    const cohort = members.slice(0, 3);
+    const tiedAt = 362;
+    const rows = [...round(cohort, 0), ...round(cohort, 360)];
+    expect(findCompletionSequences(rows).patterns[0].lastObservedAt).toEqual(event('unused', tiedAt).at);
+
+    const result = findCompletionSequences([...rows, { ...event('excluded', tiedAt), eligible: false }]);
+    expect(result.ambiguousTimestamps).toBe(true);
+    expect(result.patterns).toEqual([]);
+  });
   it('retains unrelated and excluded traffic as boundaries', () => {
     const rows = [0, 360].flatMap(start => [
       event('a', start),
