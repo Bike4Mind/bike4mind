@@ -61,7 +61,7 @@ vi.mock('@bike4mind/database', () => ({
   newAccountSpendCapAdapters: {},
   organizationRepository: {},
   questRepository: {},
-  sessionRepository: { update: mockSessionUpdate },
+  sessionRepository: { update: mockSessionUpdate, findByIdAndUserId: async () => null },
   usageEventRepository: {},
   userRepository: {},
   withTransaction: async (fn: () => Promise<unknown>) => fn(),
@@ -75,6 +75,7 @@ vi.mock('@bike4mind/services', () => ({
   meterCompletionBackend: (llm: unknown) => llm,
   sessionService: { deleteSessionMessage: mockDeleteSessionMessage },
 }));
+vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({ unpublishUserArtifactsBySource: vi.fn() }));
 vi.mock('@bike4mind/utils', () => ({ computeCosineSimilarity: () => 0, getSettingsByNames: vi.fn() }));
 vi.mock('@server/billing/meterPlatformCompletion', () => ({
   createRequestCompletionMeter: vi.fn(),
@@ -143,7 +144,10 @@ describe('notebook route scopes', () => {
 });
 
 describe('DELETE /api/v1/sessions/{id}/messages/{messageId}', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDeleteSessionMessage.mockResolvedValue({ id: 'quest-1', sessionId: 'sess-1' });
+  });
 
   const run = async (method: string) => {
     const { req, res } = createMocks({ method, query: { id: 'sess-1', messageId: 'quest-1' } });
