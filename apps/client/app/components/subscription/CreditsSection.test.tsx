@@ -161,7 +161,41 @@ describe('CreditsSection', () => {
     expect(screen.getByText('Organization Credits Active')).toBeInTheDocument();
   });
 
-  it('lists purchases only, and shows placeholders while they load', () => {
+  it('lists a subscription plan-credit grant newest-first alongside purchases', () => {
+    const purchase = {
+      id: 't1',
+      type: 'purchase',
+      credits: 16667,
+      amount: 1000,
+      status: 'completed',
+      createdAt: new Date('2026-03-02T12:00:00Z'),
+    } as unknown as ICreditTransaction;
+    const grant = {
+      id: 't3',
+      type: 'subscription',
+      credits: 50000,
+      createdAt: new Date('2026-04-02T12:00:00Z'),
+    } as unknown as ICreditTransaction;
+    renderSection({ transactions: [purchase, grant] });
+
+    const rows = screen.getAllByTestId('credits-history-row');
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveTextContent('50,000 credits');
+    expect(rows[0]).toHaveTextContent('Plan credits');
+    expect(rows[0]).toHaveTextContent('credits_modal.status.completed');
+    expect(rows[1]).toHaveTextContent('16,667 credits');
+    expect(rows[1]).toHaveTextContent('$10.00');
+    expect(screen.queryByText('credits_modal.no_transactions')).not.toBeInTheDocument();
+  });
+
+  it('shows the empty state when only non-history transactions exist', () => {
+    const usage = { id: 't2', type: 'generic_text', credits: 5 } as unknown as ICreditTransaction;
+    renderSection({ transactions: [usage] });
+    expect(screen.queryAllByTestId('credits-history-row')).toHaveLength(0);
+    expect(screen.getByText('credits_modal.no_transactions')).toBeInTheDocument();
+  });
+
+  it('lists purchases and plan credits only, and shows placeholders while they load', () => {
     // 16,667 credits for $10 is a retired pack: history renders from the ledger row, not the pack table.
     const purchase = {
       id: 't1',
