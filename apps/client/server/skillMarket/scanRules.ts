@@ -656,6 +656,11 @@ const ROUTINE_COMMAND =
   /^(?:\$\s+)?(?:sudo\s+)?(?:git|gh|pnpm|npm|npx|yarn|ls|cat|head|tail|grep|rg|find|pwd|cd|mkdir|cp|mv|touch|echo|wc|diff|node|env)\s+\S/;
 const SHELL_COMMAND_HEAD =
   /^(?:\$\s+)?(?:sudo\s+)?(?:git|gh|pnpm|npm|npx|yarn|ls|cat|head|tail|grep|rg|find|pwd|cd|mkdir|cp|mv|touch|echo|wc|diff|node|curl|wget|rm|printenv|env)(?:\s|$)/;
+// A home-relative or absolute credential path is a read on its own; bare filenames need a command word.
+const CREDENTIAL_ABSOLUTE_PATH =
+  /(?:^|[\s"'`=:(<])(?:~|\$\{?HOME\}?|\/[\w.@/-]*)\/(?:\.ssh\b|\.gnupg\b|\.aws\/credentials|\.netrc\b|\.npmrc\b|id_(?:rsa|ed25519|ecdsa)\b)/;
+// Text in a non-shell fence that forbids or comments out a command is not an instruction to run it.
+const NON_INSTRUCTION_LINE = /^(?:\/\/|#|\/\*|\*|--)|\b(?:not|never|don't|dont|avoid|without)\b/i;
 const CREDENTIAL_PATH =
   /(?:^|[\s"'=:])(?:~|\$HOME)?\/?\.(?:ssh|gnupg)(?:\/|\b)|\.aws\/credentials|\.netrc\b|\.npmrc\b|\bid_(?:rsa|ed25519|ecdsa)\b/;
 // 'segment' patterns run on each part of a chained command so a flag on one command is never read
@@ -678,8 +683,11 @@ const DANGEROUS_COMMANDS: { pattern: RegExp; label: string; scope: 'segment' | '
     scope: 'segment',
   },
   {
-    // A command word must precede the path, so a tree listing or "add a line to .npmrc" is not a read.
-    pattern: new RegExp(`^(?:\\$\\s+)?(?:sudo\\s+)?(?!id_)[a-z][\\w.-]*\\s+(?:[^\\n]*?)(?:${CREDENTIAL_PATH.source})`),
+    // A bare filename needs a command word before it, so a tree listing or "add a line to .npmrc" is
+    // not a read. A home-relative or absolute path matches without one.
+    pattern: new RegExp(
+      `^(?:\\$\\s+)?(?:sudo\\s+)?(?:\\w+=\\S*\\s+)*(?:\\$\\(|\\()?(?:\\/[\\w./-]*\\/)?(?!id_)[a-z][\\w.-]*\\s+(?:[^\\n]*?)(?:${CREDENTIAL_PATH.source})|${CREDENTIAL_ABSOLUTE_PATH.source}`
+    ),
     label: 'reads or writes credential files',
     scope: 'segment',
   },
@@ -696,7 +704,7 @@ const DANGEROUS_COMMANDS: { pattern: RegExp; label: string; scope: 'segment' | '
   },
 ];
 
-type ShellCandidate = { text: string; shell: boolean; inline: boolean };
+type ShellCandidate = { text: string; shell: boolean; inline: boolean; instructed?: boolean };
 
 /** Shell commands a skill tells the agent to run: fenced blocks, inline code and "run ..." lines. */
 function extractShellCandidates(text: string): ShellCandidate[] {
@@ -721,7 +729,8 @@ function extractShellCandidates(text: string): ShellCandidate[] {
       continue;
     }
     for (const span of line.matchAll(/`([^`\n]+)`/g)) {
-      candidates.push({ text: span[1].trim(), shell: true, inline: true });
+      const instructed = /\b(?:run|execute)\s*:?\s*$/i.test(line.slice(0, span.index));
+      candidates.push({ text: span[1].trim(), shell: true, inline: true, instructed });
     }
     const run = /^\s*(?:[-*]\s+)?(?:run|execute)\s*:?\s+(.+)$/i.exec(line);
     if (run && SHELL_COMMAND_HEAD.test(run[1].trim())) {
@@ -745,10 +754,11 @@ function scanShellCommands(text: string): ISkillScanFinding[] {
   let routine: string | undefined;
   for (const candidate of extractShellCandidates(text)) {
     const segments = candidate.text.split(COMMAND_SEPARATOR).map(part => part.trim());
-    // A lone `env` in inline code is a mention (the "env" key of a config), not a dump.
-    const mention = candidate.inline && candidate.text === 'env';
+    // A lone `env` in inline code is a mention (the "env" key of a config) unless told to run it.
+    const mention = candidate.inline && candidate.text === 'env' && !candidate.instructed;
+    const forbidden = !candidate.shell && !candidate.inline && NON_INSTRUCTION_LINE.test(candidate.text);
     for (const { pattern, label, scope } of DANGEROUS_COMMANDS) {
-      if (danger.has(label) || mention) continue;
+      if (danger.has(label) || mention || forbidden) continue;
       if (scope === 'whole' ? pattern.test(candidate.text) : segments.some(part => pattern.test(part))) {
         danger.set(label, candidate.text);
       }
