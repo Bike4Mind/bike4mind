@@ -44,6 +44,46 @@ export function runsInWsl(env: Record<string, string | undefined>, procVersion: 
   return Boolean(env.WSL_DISTRO_NAME || env.WSL_INTEROP) || /microsoft/i.test(procVersion ?? '');
 }
 
+/** Desktop runs on Windows or inside WSL, so Ollama at this computer's address may run in WSL. */
+export function isWslHost(
+  platform: NodeJS.Platform,
+  env: Record<string, string | undefined>,
+  procVersion: () => string | null
+): boolean {
+  return platform === 'win32' || (platform === 'linux' && runsInWsl(env, procVersion()));
+}
+
+// Releases whose scheduler holds an integrated GPU to free system RAM, the VM's under WSL (server/sched.go
+// availableMemoryForGPU): added in v0.30.0-rc0, checked through v0.40.15. Newer ones may carry the upstream fix.
+const FIRST_CAPPED_RELEASE = [0, 30, 0];
+const LAST_CAPPED_RELEASE = [0, 40, 15];
+// Release builds report their tag; source builds report 0.0.0 or a `git describe` version such as 0.40.13-11-ge7ff614.
+const RELEASE_VERSION = /^v?(\d+)\.(\d+)\.(\d+)(?:-rc\d+)?$/;
+
+const compareParts = (a: readonly number[], b: readonly number[]) => {
+  const differs = a.findIndex((part, index) => part !== b[index]);
+  return differs === -1 ? 0 : a[differs] - b[differs];
+};
+
+/**
+ * An Ollama release, by its /api/version, known to hold an integrated GPU under WSL to the VM's memory. A source build
+ * may carry the fix and a newer release may include it, so neither counts, nor does a missing version.
+ */
+export function releaseCapsWslGpu(version: string | null): boolean {
+  const match = version === null ? null : RELEASE_VERSION.exec(version.trim());
+  if (!match) return false;
+  const parts = match.slice(1, 4).map(Number);
+  return compareParts(parts, FIRST_CAPPED_RELEASE) >= 0 && compareParts(parts, LAST_CAPPED_RELEASE) <= 0;
+}
+
+const CAP_EFFECT =
+  "limits GPU memory to the WSL virtual machine's memory, so if this model needs more than that, it runs partly on the CPU and replies slowly. Giving WSL more memory in .wslconfig raises the limit.";
+
+/** The fit badge's flag, naming the release that has the limit, or, without one, the load that showed it. */
+export function wslGpuCapWarning(release: string | null): string {
+  return release ? `Ollama ${release.trim()} in WSL ${CAP_EFFECT}` : `It looks like Ollama in WSL ${CAP_EFFECT}`;
+}
+
 /** A model folder Ollama reported as a Linux path, so it runs under Linux. */
 export function isLinuxStoreDir(path: string | null): boolean {
   return typeof path === 'string' && path.startsWith('/');

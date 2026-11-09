@@ -1,6 +1,16 @@
 import type { LoadedModel } from '@bike4mind/local-models';
 import { describe, expect, it, vi } from 'vitest';
-import { clearsCap, isLinuxStoreDir, parseC2cMode, partialLoad, probeIntegratedGpu, runsInWsl } from './wslGpuCap';
+import {
+  clearsCap,
+  isLinuxStoreDir,
+  isWslHost,
+  parseC2cMode,
+  partialLoad,
+  probeIntegratedGpu,
+  releaseCapsWslGpu,
+  runsInWsl,
+  wslGpuCapWarning,
+} from './wslGpuCap';
 
 const GIB = 1024 ** 3;
 
@@ -48,6 +58,61 @@ describe('runsInWsl', () => {
     expect(runsInWsl({}, 'Linux version 6.18.33.2-microsoft-standard-WSL2 (root@host)')).toBe(true);
     expect(runsInWsl({}, 'Linux version 6.8.0-45-generic (buildd@lcy02)')).toBe(false);
     expect(runsInWsl({}, null)).toBe(false);
+  });
+});
+
+describe('isWslHost', () => {
+  const WSL_KERNEL = 'Linux version 6.18.33.2-microsoft-standard-WSL2 (root@host)';
+  const NATIVE_KERNEL = 'Linux version 6.8.0-45-generic (buildd@lcy02)';
+
+  it.each([
+    ['Windows', 'win32', {}, null, true],
+    ['WSL, from its environment', 'linux', { WSL_DISTRO_NAME: 'Ubuntu' }, null, true],
+    ['WSL, from its kernel', 'linux', {}, WSL_KERNEL, true],
+    ['native Linux', 'linux', {}, NATIVE_KERNEL, false],
+    ['Linux with an unreadable kernel version', 'linux', {}, null, false],
+    ['macOS', 'darwin', {}, null, false],
+  ] as const)('reads %s', (_case, platform, env, kernel, expected) => {
+    expect(isWslHost(platform, env, () => kernel)).toBe(expected);
+  });
+
+  it('reads /proc/version only on Linux', () => {
+    const procVersion = vi.fn(() => WSL_KERNEL);
+    isWslHost('win32', {}, procVersion);
+    isWslHost('darwin', { WSL_DISTRO_NAME: 'Ubuntu' }, procVersion);
+    expect(procVersion).not.toHaveBeenCalled();
+  });
+});
+
+describe('releaseCapsWslGpu', () => {
+  it.each(['0.30.0-rc0', '0.30.0', '0.35.2', '0.40.11', '0.40.15-rc2', '0.40.15', ' 0.40.15\n', 'v0.40.15'])(
+    'holds a WSL integrated GPU to the VM for release %j',
+    version => expect(releaseCapsWslGpu(version)).toBe(true)
+  );
+
+  it.each([
+    ['a release newer than the ones checked, which may carry the upstream fix', '0.40.16'],
+    ['a release candidate past the ones checked', '0.40.16-rc0'],
+    ['a later major release', '1.0.0'],
+    ['a release from before the scheduler limit', '0.24.0'],
+    ['an unstamped source build', '0.0.0'],
+    ['a source build stamped by git describe', '0.40.13-11-ge7ff614'],
+    ['a dirty source build at a tag', '0.40.15-0-g1a2b3c4-dirty'],
+    ['a version that is not one', 'unknown'],
+    ['an empty version', ''],
+    ['no version', null],
+  ])('cannot say for %s', (_case, version) => expect(releaseCapsWslGpu(version)).toBe(false));
+});
+
+describe('wslGpuCapWarning', () => {
+  it('names the release Ollama reported, or the load that showed the limit', () => {
+    expect(wslGpuCapWarning(' 0.40.15 ')).toMatch(/^Ollama 0\.40\.15 in WSL limits GPU memory to the WSL virtual/);
+    expect(wslGpuCapWarning(null)).toMatch(/^It looks like Ollama in WSL limits GPU memory/);
+    expect(wslGpuCapWarning(null)).toMatch(/runs partly on the CPU and replies slowly\. Giving WSL more memory/);
+  });
+
+  it('is plain ASCII', () => {
+    expect(wslGpuCapWarning('0.40.15')).toMatch(/^[\x20-\x7e]+$/);
   });
 });
 
