@@ -7,7 +7,7 @@ import {
   isOrgOwnerOrPlatformAdmin,
   orgAclRowConfersMembership,
 } from '@bike4mind/common';
-import { BadRequestError, ForbiddenError, NotFoundError, secureParameters } from '@bike4mind/utils';
+import { BadRequestError, NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 
 const transferOwnershipSchema = z.object({
@@ -59,7 +59,8 @@ export async function transferOwnership(
   if (!organization) throw new NotFoundError('Organization not found');
 
   if (!isOrgOwnerOrPlatformAdmin(user, organization)) {
-    throw new ForbiddenError('Only the billing owner or a platform admin can transfer ownership');
+    // Same answer as a missing org, so the endpoint cannot be used to probe which org ids exist.
+    throw new NotFoundError('Organization not found');
   }
   if (organization.personal) throw new BadRequestError('A personal organization cannot be transferred');
   if (newOwnerId === organization.userId) throw new BadRequestError('That user already owns this organization');

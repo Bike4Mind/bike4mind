@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { transferOwnership } from './transferOwnership';
 import { IOrganizationDocument, IUserDocument, Permission } from '@bike4mind/common';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/utils';
+import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 
 describe('organizationService - transferOwnership', () => {
   const owner = { id: 'owner1', email: 'owner@example.com', name: 'Owner' } as IUserDocument;
@@ -119,13 +119,51 @@ describe('organizationService - transferOwnership', () => {
     ]);
   });
 
-  it('refuses a caller who is neither the owner nor a platform admin', async () => {
-    await expect(run(stranger)).rejects.toThrow(ForbiddenError);
+  it('does not duplicate a previous owner who already has a roster row', async () => {
+    org = freshOrg({
+      users: [
+        { userId: 'admin1', permissions: [Permission.read] },
+        { userId: 'owner1', permissions: [Permission.read] },
+      ],
+    });
+    await run(owner);
+    expect(adapters.db.organizations.update.mock.calls[0][0].users).toEqual([
+      { userId: 'owner1', permissions: [Permission.read] },
+    ]);
+  });
+
+  it('keeps the other admins and removes only the new owner from adminUserIds', async () => {
+    org = freshOrg({ adminUserIds: ['admin1', 'admin2'] });
+    await run(owner);
+    expect(adapters.db.organizations.update.mock.calls[0][0].adminUserIds).toEqual(['admin2']);
+  });
+
+  it('leaves a null billing contact alone', async () => {
+    org = freshOrg({ billingContact: null as unknown as string });
+    const result = await run(owner);
+    expect(result).toMatchObject({ billingContactChanged: false, billingContact: null });
+    expect(adapters.db.organizations.update.mock.calls[0][0]).not.toHaveProperty('billingContact');
+  });
+
+  it('falls back to the username when the previous owner has no email', async () => {
+    usersById.owner1 = { id: 'owner1', username: 'owner-handle', name: 'Owner' } as IUserDocument;
+    const result = await run(owner);
+    expect(result.billingContactChanged).toBe(false);
+    expect(adapters.db.organizations.ensureUserDetails).toHaveBeenCalledWith('org1', {
+      id: 'owner1',
+      email: 'owner-handle',
+      name: 'Owner',
+    });
+  });
+
+  it('answers a caller who is neither the owner nor a platform admin as if the org did not exist', async () => {
+    await expect(run(stranger)).rejects.toThrow(NotFoundError);
     expect(adapters.db.organizations.update).not.toHaveBeenCalled();
   });
 
   it('refuses an org manager who is not the owner', async () => {
-    await expect(run(admin, 'admin1')).rejects.toThrow(ForbiddenError);
+    await expect(run(admin, 'admin1')).rejects.toThrow(NotFoundError);
+    expect(adapters.db.organizations.update).not.toHaveBeenCalled();
   });
 
   it('refuses a target who is a plain member, not an admin', async () => {
@@ -136,15 +174,28 @@ describe('organizationService - transferOwnership', () => {
   it('refuses an admin whose roster row confers no membership', async () => {
     org = freshOrg({ users: [{ userId: 'admin1', permissions: [] }] });
     await expect(run(owner)).rejects.toThrow(BadRequestError);
+    expect(adapters.db.organizations.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses an admin with no roster row', async () => {
+    org = freshOrg({ users: [{ userId: 'user2', permissions: [Permission.read] }] });
+    await expect(run(owner)).rejects.toThrow(BadRequestError);
+    expect(adapters.db.organizations.update).not.toHaveBeenCalled();
   });
 
   it('refuses a transfer to the current owner', async () => {
-    await expect(run(owner, 'owner1')).rejects.toThrow(BadRequestError);
+    org = freshOrg({
+      adminUserIds: ['owner1', 'admin1'],
+      users: [{ userId: 'owner1', permissions: [Permission.read] }],
+    });
+    await expect(run(owner, 'owner1')).rejects.toThrow(/already owns/);
+    expect(adapters.db.organizations.update).not.toHaveBeenCalled();
   });
 
   it('refuses a personal organization', async () => {
     org = freshOrg({ personal: true });
     await expect(run(owner)).rejects.toThrow(BadRequestError);
+    expect(adapters.db.organizations.update).not.toHaveBeenCalled();
   });
 
   it('refuses a target whose account is scheduled for deletion', async () => {
