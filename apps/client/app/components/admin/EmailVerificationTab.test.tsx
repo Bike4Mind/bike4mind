@@ -187,6 +187,7 @@ describe('EmailVerificationTab', () => {
     fireEvent.click(await screen.findByTestId(`email-verification-row-unverify-${VERIFIED_ID}`));
 
     expect(await screen.findByTestId('email-unverify-dialog')).toHaveTextContent('verified-user');
+    expect(screen.getByTestId('email-unverify-dialog')).toHaveTextContent('Bounced or invalid address');
     const confirm = screen.getByTestId('email-unverify-dialog-confirm-btn');
     expect(confirm).toBeDisabled();
     // Solid danger is reserved for this final confirm; Joy marks it with its color utility class.
@@ -210,13 +211,17 @@ describe('EmailVerificationTab', () => {
 
     await openRowMenu(UNVERIFIED_ID);
     fireEvent.click(await screen.findByTestId(`email-verification-row-verify-${UNVERIFIED_ID}`));
+    const verifyDialog = await screen.findByTestId('email-verify-dialog');
+    // Bounces are a reason to unverify, not to verify, so the verify dialog gets its own presets.
+    expect(verifyDialog).not.toHaveTextContent('Bounced or invalid address');
+    expect(verifyDialog).toHaveTextContent('Ownership confirmed by support');
     fireEvent.click(await screen.findByTestId('email-verify-dialog-reason-input-preset-0'));
     expect(screen.getByTestId('email-verify-dialog-confirm-btn').className).not.toMatch(/colorDanger/);
     fireEvent.click(screen.getByTestId('email-verify-dialog-confirm-btn'));
 
     await waitFor(() =>
       expect(m.post).toHaveBeenCalledWith(`/api/admin/users/${UNVERIFIED_ID}/verify-email`, {
-        reason: ADMIN_REASON_PRESETS.emailVerification[0],
+        reason: ADMIN_REASON_PRESETS.emailVerify[0],
       })
     );
   });

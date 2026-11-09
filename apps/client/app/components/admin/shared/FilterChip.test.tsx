@@ -29,8 +29,13 @@ describe('FilterChip', () => {
     expect(screen.queryByTestId('admin-filter-clear-status-btn')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId('admin-filter-status'));
-    fireEvent.click(screen.getByTestId('admin-filter-status-suspended'));
+    const suspended = screen.getByTestId('admin-filter-status-suspended');
+    expect(suspended).toHaveAttribute('role', 'menuitemcheckbox');
+    expect(suspended).toHaveAttribute('aria-checked', 'false');
+    fireEvent.click(suspended);
     expect(screen.getByTestId('admin-filter-status')).toHaveTextContent('Status: Suspended');
+    fireEvent.click(screen.getByTestId('admin-filter-status'));
+    expect(screen.getByTestId('admin-filter-status-suspended')).toHaveAttribute('aria-checked', 'true');
 
     fireEvent.click(screen.getByTestId('admin-filter-clear-status-btn'));
     expect(screen.getByTestId('admin-filter-status')).toHaveTextContent(/^Status$/);

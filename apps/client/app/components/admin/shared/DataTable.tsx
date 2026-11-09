@@ -239,8 +239,10 @@ export function DataTable<Row>({
   }
 
   const firstShown = total === 0 ? 0 : currentPage * pageSize + 1;
+  // Server-paged tables keep the previous page's rows on screen while the next one loads, so the
+  // row count alone would read past the total ("26 to 50 of 38") for a moment.
   const lastShown = pagination
-    ? currentPage * pageSize + pageRows.length
+    ? Math.min(currentPage * pageSize + pageRows.length, total)
     : Math.min((currentPage + 1) * pageSize, total);
   return (
     <Box

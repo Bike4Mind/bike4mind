@@ -64,6 +64,28 @@ describe('composeAdminReason', () => {
 });
 
 describe('ReasonPicker', () => {
+  it('drops the audit-log promise from the placeholder when the reason is not stored', () => {
+    const { unmount } = render(<Harness />, { wrapper: TestWrapper });
+    expect(screen.getByTestId('test-reason-input')).toHaveAttribute(
+      'placeholder',
+      'Why are you doing this? Recorded in the audit log.'
+    );
+    unmount();
+
+    render(
+      <ReasonPicker
+        presets={PRESETS}
+        value={EMPTY_ADMIN_REASON}
+        onChange={() => {}}
+        audited={false}
+        data-testid="test-reason-input"
+      />,
+      { wrapper: TestWrapper }
+    );
+    expect(screen.getByTestId('test-reason-input')).toHaveAttribute('placeholder', 'Why are you doing this?');
+    expect(screen.getByTestId('test-reason-input-helper')).not.toHaveTextContent('Recorded in the audit log');
+  });
+
   it('toggles a preset chip with aria-pressed and records the preset alone', () => {
     render(<Harness />, { wrapper: TestWrapper });
     const chip = screen.getByTestId('test-reason-input-preset-0');

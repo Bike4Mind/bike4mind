@@ -481,7 +481,7 @@ const EmailVerificationTab = () => {
             </>
           ))
         }
-        reasonPresets={ADMIN_REASON_PRESETS.emailVerification}
+        reasonPresets={unverifying ? ADMIN_REASON_PRESETS.emailVerification : ADMIN_REASON_PRESETS.emailVerify}
         confirmLabel={unverifying ? 'Unverify email' : 'Verify email'}
         tone={unverifying ? 'danger' : 'neutral'}
         onConfirm={confirmDialog}
