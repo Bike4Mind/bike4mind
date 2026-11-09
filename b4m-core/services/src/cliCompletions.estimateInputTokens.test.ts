@@ -49,6 +49,24 @@ describe('estimateInputTokens', () => {
     expect(tokens).toBeLessThan(3 * IMAGE_INPUT_TOKEN_ESTIMATE + 200);
   });
 
+  it('prices raw Anthropic and Responses image parts without normalization', () => {
+    const messages = [
+      {
+        role: 'user',
+        content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: SCREENSHOT_BASE64 } }],
+      },
+      {
+        role: 'user',
+        content: [{ type: 'input_image', image_url: `data:image/png;base64,${SCREENSHOT_BASE64}` }],
+      },
+    ] as unknown as IMessage[];
+
+    const tokens = estimateInputTokens(messages);
+
+    expect(tokens).toBeGreaterThanOrEqual(2 * IMAGE_INPUT_TOKEN_ESTIMATE);
+    expect(tokens).toBeLessThan(2 * IMAGE_INPUT_TOKEN_ESTIMATE + 200);
+  });
+
   it('still prices the text around an image', () => {
     const withText: IMessage = {
       role: 'user',
