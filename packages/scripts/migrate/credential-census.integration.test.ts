@@ -118,6 +118,50 @@ describe('credential census', () => {
     }
   });
 
+  it('censuses exactly the expected stores', () => {
+    expect(CENSUS_FIELDS.map(censusLabel)).toEqual([
+      'apikeys.apiKey',
+      'mcpservers.envVariables[].value',
+      'mcpservers.metadata.webhooks.github.secret',
+      'users.atlassianConnect.accessToken',
+      'users.atlassianConnect.refreshToken',
+      'users.googleDrive.accessToken',
+      'users.googleDrive.refreshToken',
+      'users.slackSettings.slackUserToken',
+      'users.blogIntegration.apiKey',
+      'users.securityQuestions[].answer',
+      'users.mfa.totpSecret',
+      'users.mfa.pendingBackupCodes',
+      'orgslackworkspaces.slackBotToken',
+      'slackdevworkspaces.slackBotToken',
+      'slackdevworkspaces.slackClientSecret',
+      'slackdevworkspaces.slackOAuthSigningSecret',
+      'slackdevworkspaces.slackVerificationToken',
+      'slackdevworkspaces.appConfigurationToken',
+      'adminsettings.settingValue',
+      'secretrotations.previousKey',
+      'memoryprincipalkeys.dek',
+      'mcpconnections.urlEnc',
+      'mcpconnections.auth.oauth.manualClientIdEnc',
+      'mcpconnections.auth.oauth.manualClientSecretEnc',
+      'mcpconnections.auth.oauth.accessTokenEnc',
+      'mcpconnections.auth.oauth.refreshTokenEnc',
+      'mcpconnections.auth.apiKey.valueEnc',
+      'mcpoauthclientregistrations.clientSecretEnc',
+      'mcpoauthclientregistrations.registrationAccessTokenEnc',
+      'mcpoauthpendings.codeVerifierEnc',
+      'orggithubconnections.privateKey',
+      'orggithubconnections.cachedAccessToken',
+      'orggithubconnections.accessToken',
+      'orggoogledriveconnections.oauthRefreshToken',
+      'orgjiraconnections.accessToken',
+      'identityproviders.samlConfig.decryptionPvk',
+      'identityproviders.samlConfig.privateCert',
+      'identityproviders.oktaConfig.clientSecret',
+      'userapikeys.callbackSigningSecret',
+    ]);
+  });
+
   it('counts exact plaintext, unbound and checked values per field', async () => {
     await seed();
     const rows = await runCredentialCensus(db);

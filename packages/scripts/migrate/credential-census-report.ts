@@ -41,7 +41,8 @@ export interface CensusRow {
 const PROTECT = 'migrate:protect-credentials';
 const TOKENS = 'migrate:encrypt-tokens';
 const ADMIN = 'migrate:encrypt-admin-secrets';
-const IDP_MIGRATION = 'migration 20260904000000_encrypt-identity-provider-secrets';
+const IDP_MIGRATION =
+  'migration 20260904000000_encrypt-identity-provider-secrets (if applied, delete its id 20260904000000 from the migrations collection, then migrate up)';
 
 const fields = (
   collection: string,
