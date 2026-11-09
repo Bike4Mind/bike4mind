@@ -52,7 +52,7 @@ export function apiRequestToEntry(row: ApiRequestRow): UserTimelineApiRequestEnt
     method: row.method,
     endpoint: row.endpoint.split(/[?#]/, 1)[0],
     statusCode: row.statusCode,
-    responseTimeMs: row.responseTime,
+    responseTimeMs: Math.max(0, row.responseTime),
     ip: row.ipAddress,
   });
   return {

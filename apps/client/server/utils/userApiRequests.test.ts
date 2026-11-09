@@ -76,4 +76,18 @@ describe('user API requests', () => {
     expect(JSON.stringify(entry)).not.toContain('secret');
     expect(entry.request).toMatchObject({ statusCode: 403, responseTimeMs: 12, keyId: 'k', ip: '203.0.113.1' });
   });
+
+  it('clamps a negative stored response time instead of failing the mapping', () => {
+    const row = {
+      _id: { toString: () => 'c'.repeat(24) },
+      keyId: 'k',
+      method: 'GET',
+      endpoint: '/api/v1/me',
+      statusCode: 200,
+      responseTime: -5,
+      ipAddress: '203.0.113.1',
+      timestamp: new Date('2026-11-01T12:00:00Z'),
+    } as unknown as Parameters<typeof apiRequestToEntry>[0];
+    expect(apiRequestToEntry(row).request.responseTimeMs).toBe(0);
+  });
 });
