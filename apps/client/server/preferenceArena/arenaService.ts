@@ -303,7 +303,7 @@ export function createArenaService(deps: ArenaServiceDeps) {
       // a dry pool must not let a rater keep voting past them.
       // A block can still leave a paused reward that pays on unblock; that one counts as queued.
       const owed = paid.outcome === 'blocked' ? await deps.findOwedCredits(arenaVoteTransactionId(row.id)) : null;
-      queued = paid.outcome === 'queued' || owed !== null;
+      queued = paid.outcome === 'queued' || (owed?.queued ?? false);
       outcome =
         paid.outcome === 'blocked' && owed === null
           ? { credited: false, rejectReason: 'reward_blocked' }

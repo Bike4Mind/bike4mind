@@ -421,6 +421,13 @@ describe('submitVote', () => {
     );
   });
 
+  it('does not flag a refused reward as queued when the ledger already paid it', async () => {
+    const { service, payReward, findOwedCredits } = build();
+    payReward.mockResolvedValue({ outcome: 'blocked' });
+    findOwedCredits.mockResolvedValueOnce(null).mockResolvedValueOnce({ credits: 2, queued: false });
+    expect(await service.submitVote('u1', vote)).toEqual({ creditsAwarded: 2 });
+  });
+
   it('refuses a rater who forfeited the signup unlock before paying anything', async () => {
     const user = { ...verifiedUser, signupGrant: { unlockForfeited: { cause: 'refund' as const, at: new Date(0) } } };
     const { service, payReward, votes } = build({ user });
