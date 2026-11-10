@@ -5,9 +5,7 @@
  * page. Observation only: it never rescores, sets riskScore.reviewState, or touches access, credits or
  * API keys. Off with the shadowDetectionRecordingEnabled setting, like every shadow detector.
  *
- * The same hourly run also grades stale signup network burst detections as automation
- * (server/security/shadowDetectionAutoGrade.ts, shadowDetectionAutoGradeAfterDays), so keeping the
- * Detections queue at zero needs no schedule of its own.
+ * The same run also auto-grades stale signup bursts: see server/security/shadowDetectionAutoGrade.ts.
  */
 
 import { Context } from 'aws-lambda';

@@ -10,15 +10,9 @@ import type { AdminAuditWriter } from '@bike4mind/server-utils/utils/adminAudit'
 import { ACCOUNT_STATUS_ACTIONS_FILTER } from './accountStatusAuditActions';
 
 /**
- * Grades stale signup network burst detections insufficient_evidence as automation, so the
- * Detections queue does not keep asking an admin about bursts nothing has corroborated. A detection
- * qualifies once it is `afterDays` old and still ungraded, when no account it names:
- *   - is suspended now, or was suspended or reinstated since the detection (admin audit log),
- *   - is named by a detection of any other detector,
- * and its latest judged advisory assessment is insufficient_evidence or absent. Each verdict is
- * conditional on the record still being ungraded at the revision read, so a person grading in
- * between wins. Like the suspend/reinstate auto-grade (server/admin/shadowDetectionStatusVerdicts.ts)
- * every graded record gets an audit entry; this one under a system actor.
+ * Grades stale, ungraded signup network burst detections insufficient_evidence as automation, unless
+ * a named account was suspended or reinstated, another detector names it, or an assessment says abuse.
+ * A person grading in between wins; the skipped cases are the corroborated ones.
  */
 
 export const AUTO_GRADED_DETECTOR: ShadowDetector = 'signupNetworkBurst';
