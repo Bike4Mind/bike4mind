@@ -2,6 +2,7 @@ import {
   hasAdminPermission,
   isFullAdmin,
   meetsAdminPermissionRequirement,
+  MODERATION_PAGE_READ,
   SETTINGS_PAGE_READ,
   CREDITS_PAGE_READ,
   type AdminPermissionRequirement,
@@ -43,6 +44,12 @@ export const DELEGATED_ADMIN_TAB_PERMISSIONS: Readonly<Partial<Record<AdminTab, 
   [AdminTab.Subscriptions]: CREDITS_PAGE_READ,
   // Its list, release and revoke routes all declare credits:adjust.
   [AdminTab.HeldSignupGrants]: 'credits:adjust',
+  // Pages whose writes need users:moderate; their GET routes declare the same MODERATION_PAGE_READ.
+  [AdminTab.EmailVerification]: MODERATION_PAGE_READ,
+  [AdminTab.SignupDomainHolds]: MODERATION_PAGE_READ,
+  [AdminTab.SignupRiskReview]: MODERATION_PAGE_READ,
+  [AdminTab.RateLimits]: MODERATION_PAGE_READ,
+  [AdminTab.PublishedPages]: MODERATION_PAGE_READ,
 };
 
 export function canOpenAdminTab(user: AdminIdentity, tab: AdminTab): boolean {

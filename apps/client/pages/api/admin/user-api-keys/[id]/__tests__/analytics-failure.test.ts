@@ -13,8 +13,8 @@ const mockRefs = vi.hoisted(() => ({
   postHandler: null as null | ((req: any, res: any) => unknown),
 }));
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => {
     const chain: any = {
       use: () => chain,
       patch: (fn: any) => {
@@ -59,6 +59,7 @@ vi.mock('@bike4mind/services', () => ({
   counterService: { incrementUserCounter },
 }));
 vi.mock('@bike4mind/database', () => ({
+  userRepository: { findById: vi.fn().mockResolvedValue({ id: 'owner-1' }) },
   mongoose: {},
   Ability: class {},
   User: {},

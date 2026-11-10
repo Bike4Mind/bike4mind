@@ -4,6 +4,7 @@ import { Avatar, Button, Dropdown, ListDivider, Menu, MenuButton, MenuItem, Stac
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import { useUser } from '@client/app/contexts/UserContext';
 import { EntityHeader, StatusChip } from '../../shared';
+import { AdminPermissionAction } from '../../shared/MissingPermission';
 import type { ProfileAction } from './actions/profileActions';
 import {
   LEVEL_LABELS,
@@ -25,13 +26,18 @@ type AdminIdentity = Parameters<typeof hasAdminPermission>[0];
 export const deletionBlockedReason = (actor: AdminIdentity, target: AdminUserProfile): string | null =>
   adminActionBlockedReason(actor, target, 'users:delete');
 
+/** Suspend, restrict and limited tier require users:moderate and a permitted target. */
+export const moderationBlockedReason = (actor: AdminIdentity, target: AdminUserProfile): string | null =>
+  adminActionBlockedReason(actor, target, 'users:moderate');
+
 const gateEntry = (entry: Exclude<MenuEntry, 'divider'>, blocked: string | null): MenuEntry =>
   blocked ? { ...entry, disabled: true, hint: blocked } : entry;
 
 const menuEntries = (
   user: AdminUserProfile,
   deletionBlocked: string | null,
-  loginAsBlocked: string | null
+  loginAsBlocked: string | null,
+  moderationBlocked: string | null
 ): MenuEntry[] => [
   { action: 'editProfile', label: 'Edit profile' },
   gateEntry({ action: 'loginAs', label: 'Log in as user' }, loginAsBlocked),
@@ -41,8 +47,14 @@ const menuEntries = (
   { action: 'productAccess', label: 'Manage product access' },
   'divider',
   { action: 'compliance', label: 'Compliance record' },
-  { action: 'restrict', label: user.isModerated ? 'Lift restriction' : 'Restrict account' },
-  { action: 'shadowTier', label: user.throttle?.tier === 'shadow' ? 'Remove limited tier' : 'Move to limited tier' },
+  gateEntry(
+    { action: 'restrict', label: user.isModerated ? 'Lift restriction' : 'Restrict account' },
+    moderationBlocked
+  ),
+  gateEntry(
+    { action: 'shadowTier', label: user.throttle?.tier === 'shadow' ? 'Remove limited tier' : 'Move to limited tier' },
+    moderationBlocked
+  ),
   gateEntry(
     user.deletion
       ? {
@@ -85,6 +97,7 @@ export const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({ user, onAc
   const org = organizationName(user);
   const level = user.level ? (LEVEL_LABELS[user.level] ?? user.level) : null;
   const { currentUser } = useUser();
+  const moderationBlocked = moderationBlockedReason(currentUser, user);
 
   return (
     <EntityHeader
@@ -136,14 +149,19 @@ export const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({ user, onAc
             Adjust credits
           </Button>
           {!user.isBanned && (
-            <Button
-              variant="outlined"
-              color="danger"
-              onClick={() => onAction('suspend')}
-              data-testid="user-profile-suspend-btn"
-            >
-              Suspend
-            </Button>
+            <AdminPermissionAction requirement="users:moderate" blockedReason={moderationBlocked}>
+              {disabled => (
+                <Button
+                  variant="outlined"
+                  color="danger"
+                  disabled={disabled}
+                  onClick={() => onAction('suspend')}
+                  data-testid="user-profile-suspend-btn"
+                >
+                  Suspend
+                </Button>
+              )}
+            </AdminPermissionAction>
           )}
           <Dropdown>
             <MenuButton
@@ -158,7 +176,8 @@ export const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({ user, onAc
               {menuEntries(
                 user,
                 deletionBlockedReason(currentUser, user),
-                adminActionBlockedReason(currentUser, user, 'users:impersonate')
+                adminActionBlockedReason(currentUser, user, 'users:impersonate'),
+                moderationBlocked
               ).map((entry, index) =>
                 entry === 'divider' ? (
                   <ListDivider key={`divider-${index}`} />

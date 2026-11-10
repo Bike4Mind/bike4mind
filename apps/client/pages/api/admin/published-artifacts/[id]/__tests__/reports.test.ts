@@ -61,6 +61,20 @@ describe('GET /api/admin/published-artifacts/:id/reports', () => {
     expect(mockFind).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['support:read', 200],
+    ['users:moderate', 200],
+    ['keys:revoke', null],
+  ])('a delegate holding %s gets %s', async (permission, status) => {
+    const { res, promise } = run({ user: { id: 'u1', isAdmin: false, adminPermissions: [permission] } });
+    if (status === null) {
+      await expect(promise).rejects.toThrow(/missing permission/i);
+      return;
+    }
+    await promise;
+    expect(res._getStatusCode()).toBe(status);
+  });
+
   it('returns the reports for the page with pagination metadata', async () => {
     mockCount.mockResolvedValue(1);
     const { res, promise } = run({ user: ADMIN });

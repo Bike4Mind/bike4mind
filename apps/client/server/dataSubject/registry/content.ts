@@ -1,4 +1,5 @@
 import type { DataHolderRegistry } from '../types';
+import { SAFETY_INCIDENT } from './retention';
 
 export const contentHolders = {
   Activity: {
@@ -90,8 +91,7 @@ export const contentHolders = {
         path: 'userId',
         matchBy: 'userId',
         action: 'retain',
-        reason:
-          'Safety incident kept for legal reporting obligations and to prevent repeat abuse (GDPR Art. 17(3)(b), (e))',
+        ...SAFETY_INCIDENT,
       },
       { path: 'falsePositiveBy', matchBy: 'userId', action: 'anonymize' },
       { path: 'noActionBy', matchBy: 'userId', action: 'anonymize' },

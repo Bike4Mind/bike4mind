@@ -21,7 +21,6 @@ const HEADINGS: Record<string, string> = {
   hearth: 'Hearth',
   'deep-agents': 'Deep agents',
   report: 'Report',
-  'quests-v5': 'Quests',
   hud: 'The Keep',
 };
 

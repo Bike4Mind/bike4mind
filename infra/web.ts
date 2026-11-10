@@ -207,11 +207,8 @@ const lambdaFunctionNames = new sst.Linkable('lambdaFunctionNames', {
     // Admin "Run now" (pages/api/admin/model-discovery) invokes the same
     // function the discovery cron targets, with { trigger: 'manual' }.
     modelDiscovery: modelDiscoveryFunction.name,
-    // QuestMaster v5 dispatches a node run from an API route
-    // (pages/api/quest-nodes/[id]/run -> runQuestNode). The WebSocket
-    // `agent_execute` handler reaches the same function through its own link;
-    // the frontend cannot, so the name is surfaced here rather than linking the
-    // whole function into the web app.
+    // The WebSocket `agent_execute` handler reaches the agent executor function
+    // through its own link; the name is surfaced here for the frontend.
     agentExecutor: agentExecutor.name,
   },
 });

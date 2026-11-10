@@ -200,7 +200,7 @@ failure used to be remapped to `404` by the error handler.
 This row describes the target, not the whole deployed surface. Roughly 27 files guard a malformed
 id with a `400` today and have **not** been converged - most inherit it from one of the three
 shared access helpers (`server/utils/orgAccess.ts`, `sessionAccess.ts`,
-`questMasterPlanAccess.ts`), the rest are their own guards, concentrated in `quest-plans/[id]/*`,
+`questMasterPlanAccess.ts`), the rest are their own guards, concentrated in
 `business-links/*`, `sre/*`, `users/[id]/slack-settings.ts`, `fabfiles/[id]/*`,
 `admin/liveops-triage-configs/*`, `[type]/[id]/index.ts` and
 `data-lakes/[id]/files/[fabFileId]/purge.ts`. Enumerate the current set rather than trusting this

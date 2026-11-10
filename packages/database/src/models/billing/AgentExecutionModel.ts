@@ -269,7 +269,6 @@ export interface IAgentExecution {
    * - `agentExecute.handleStart` (WS client dispatch) writes `cmd.questId`, which is actually the
    *   sessionId (a back-ref hack from the client - see that file's own comment refusing to fall
    *   back to it for the Lambda payload).
-   * - `questmaster/v5/runQuestNode.ts` writes the REAL Quest id here instead.
    * - Subagent and DAG children inherit whichever value their parent carried.
    *
    * Because the meaning depends on the creator, no consumer can safely interpret it. Use

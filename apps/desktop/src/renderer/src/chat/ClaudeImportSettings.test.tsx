@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
-import type { ClaudeImportState } from '@shared/claudeImport';
+import type { ClaudeImportKind, ClaudeImportState } from '@shared/claudeImport';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ClaudeImportSettings, useClaudeImport } from './ClaudeImportSettings';
 
@@ -19,6 +19,7 @@ window.matchMedia ??= ((media: string) => ({
 })) as typeof window.matchMedia;
 const ready: ClaudeImportState = {
   signedIn: true,
+  hints: { dismissed: [], codeSessions: null, webNotebooks: null },
   code: {
     settings: { enabled: false, sourceFolder: null, projects: 'all', includeSubagents: false },
     sourceFolder: '/home/.claude/projects',
@@ -43,16 +44,16 @@ const getState = vi.fn<() => Promise<ClaudeImportState>>();
 const listeners = new Set<(state: ClaudeImportState) => void>();
 let root: Root;
 let host: HTMLElement;
-function Harness() {
+function Harness({ focus }: { focus?: ClaudeImportKind }) {
   const [state, setState, error, retry] = useClaudeImport();
   return (
     <CssVarsProvider>
-      <ClaudeImportSettings state={state} onState={setState} loadError={error} onRetry={retry} />
+      <ClaudeImportSettings state={state} onState={setState} loadError={error} onRetry={retry} focus={focus} />
     </CssVarsProvider>
   );
 }
-async function mount() {
-  await act(async () => root.render(<Harness />));
+async function mount(focus?: ClaudeImportKind) {
+  await act(async () => root.render(<Harness focus={focus} />));
 }
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -113,5 +114,25 @@ describe('reading import settings', () => {
     });
     expect(host.querySelector('[data-testid="claude-import-load-error"]')).toBeNull();
     expect(host.querySelector('[data-testid="claude-import-settings"]')).not.toBeNull();
+  });
+});
+
+describe('opened from a sidebar sync hint', () => {
+  it('explains each source in one line and scrolls to the one asked for', async () => {
+    const scrolled: string[] = [];
+    const original = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = function (this: HTMLElement) {
+      scrolled.push(this.dataset.testid ?? '');
+    };
+    try {
+      getState.mockResolvedValue(ready);
+      await mount('b4m-web');
+      for (const id of ['code', 'chat', 'web']) {
+        expect(host.querySelector(`[data-testid="claude-import-${id}-explainer"]`)?.textContent).toContain('read-only');
+      }
+      expect(scrolled).toEqual(['claude-import-web-section']);
+    } finally {
+      HTMLElement.prototype.scrollIntoView = original;
+    }
   });
 });

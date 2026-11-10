@@ -19,7 +19,6 @@ import FileBrowser from '../components/Files/Browser';
 import SendToDataLakeModal from '@client/app/components/DataLakeWizard/SendToDataLakeModal';
 import MFAEnforcementWrapper from '../components/auth/MFAEnforcementWrapper';
 import EmailVerificationBanner from '@client/app/components/EmailVerificationBanner';
-import { LegacyQuestmasterNotice } from '@client/app/components/questmaster/LegacyQuestmasterRetirement';
 import CommandPalette from '../components/CommandPalette';
 import { useDataLakeBatchCompletionSync } from '@client/app/hooks/data/dataLakeWizard';
 
@@ -83,7 +82,6 @@ export const ProviderBundle: React.FC<ProviderBundleProps> = ({ children }) => {
           <SendToDataLakeModal />
           <CommandPalette />
           <EmailVerificationBanner />
-          <LegacyQuestmasterNotice />
           {children}
         </UIProviders>
       </SessionProviders>

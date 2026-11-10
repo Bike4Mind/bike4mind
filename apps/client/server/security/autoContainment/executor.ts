@@ -80,13 +80,13 @@ export const loadAutoContainmentConfig = async (): Promise<AutoContainmentConfig
   return getSettingsValue('autoContainmentConfig', settings, AutoContainmentConfigSchema.parse({}));
 };
 
-/** The Contain path with a system actor; null when no account on the request is eligible (admins never are). */
+/** The Contain path with a system actor; null when no account on the request is eligible (full admins never are; accounts with only delegated admin access can be). */
 export const containAsSystem =
   (logger?: Logger) =>
   async (request: ContainRequest): Promise<AdminUsersBulkResult | null> => {
     const now = new Date();
     const target = { kind: 'ids' as const, userIds: request.userIds };
-    const cohort = await resolveAdminUsersBulk(target, [], usersBulkResolveDeps, now);
+    const cohort = await resolveAdminUsersBulk(target, [], usersBulkResolveDeps, now, { actorIsFullAdmin: true });
     if (cohort.eligible.length === 0) return null;
     return executeAdminUsersBulk(
       {
@@ -97,7 +97,7 @@ export const containAsSystem =
         expectedCount: cohort.eligible.length,
         cohortHash: cohortHashOf(cohort.eligible),
       },
-      { id: AUTO_CONTAINMENT_ACTOR_ID, selfIds: [] },
+      { id: AUTO_CONTAINMENT_ACTOR_ID, selfIds: [], fullAdmin: true },
       usersBulkExecuteDepsFor(systemAuditWriter(AUTO_CONTAINMENT_ACTOR, AUDIT_ROUTE, logger), request.reason, logger)
     );
   };

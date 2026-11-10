@@ -13,6 +13,7 @@ import {
   ActionDialog,
   ADMIN_REASON_PRESETS,
   AdminPageHeader,
+  AdminPermissionAction,
   DataTable,
   EmptyState,
   FilterBar,
@@ -255,32 +256,41 @@ const RowMenu = ({
     </MenuItem>
   );
   return (
-    <Dropdown>
-      <MenuButton
-        slots={{ root: IconButton }}
-        slotProps={{
-          root: {
-            size: 'sm',
-            variant: 'plain',
-            'aria-label': `Actions for ${user.username || user.email}`,
-            sx: { ...adminFocus, color: 'admin.inkMuted' },
-          },
-        }}
-        data-testid={`email-verification-row-actions-${user._id}`}
-      >
-        <MoreHorizIcon sx={{ fontSize: 18 }} />
-      </MenuButton>
-      <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
-        {/* While an address change is pending, its link is the only action offered. */}
-        {user.pendingEmail &&
-          item('resend-email-change', resending ? 'Sending email change link' : 'Resend email change link', resending)}
-        {!user.pendingEmail && user.emailVerified && item('unverify', 'Unverify email')}
-        {!user.pendingEmail &&
-          !user.emailVerified &&
-          item('resend', resending ? 'Sending verification email' : 'Resend verification email', resending)}
-        {!user.pendingEmail && !user.emailVerified && item('verify', 'Verify email')}
-      </Menu>
-    </Dropdown>
+    <AdminPermissionAction requirement="users:moderate">
+      {missing => (
+        <Dropdown>
+          <MenuButton
+            disabled={missing}
+            slots={{ root: IconButton }}
+            slotProps={{
+              root: {
+                size: 'sm',
+                variant: 'plain',
+                'aria-label': `Actions for ${user.username || user.email}`,
+                sx: { ...adminFocus, color: 'admin.inkMuted' },
+              },
+            }}
+            data-testid={`email-verification-row-actions-${user._id}`}
+          >
+            <MoreHorizIcon sx={{ fontSize: 18 }} />
+          </MenuButton>
+          <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
+            {/* While an address change is pending, its link is the only action offered. */}
+            {user.pendingEmail &&
+              item(
+                'resend-email-change',
+                resending ? 'Sending email change link' : 'Resend email change link',
+                resending
+              )}
+            {!user.pendingEmail && user.emailVerified && item('unverify', 'Unverify email')}
+            {!user.pendingEmail &&
+              !user.emailVerified &&
+              item('resend', resending ? 'Sending verification email' : 'Resend verification email', resending)}
+            {!user.pendingEmail && !user.emailVerified && item('verify', 'Verify email')}
+          </Menu>
+        </Dropdown>
+      )}
+    </AdminPermissionAction>
   );
 };
 
