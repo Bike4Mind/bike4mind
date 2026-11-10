@@ -12,7 +12,7 @@ import { type MigrationFile } from './index';
  * `updatedAt` is left alone.
  */
 const migration: MigrationFile = {
-  id: 20260921240060,
+  id: 20260921240100,
   name: 'research config source tiers',
 
   up: async () => {

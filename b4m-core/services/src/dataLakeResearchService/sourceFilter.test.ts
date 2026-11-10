@@ -92,6 +92,11 @@ describe('classifySource', () => {
       expect(classifySource('https://blog.example.com/a', config)).toBe('blocked');
     });
 
+    it('lets a blocked match win even when a trusted entry is more specific', () => {
+      const config = levers({ trustedDomains: ['docs.example.com'], blockedDomains: ['example.com'] });
+      expect(classifySource('https://docs.example.com/', config)).toBe('blocked');
+    });
+
     it('lets the longest matching entry win across trusted and review', () => {
       const trustedWins = levers({ trustedDomains: ['docs.example.com'], reviewDomains: ['example.com'] });
       expect(classifySource('https://docs.example.com/a', trustedWins)).toBe('trusted');

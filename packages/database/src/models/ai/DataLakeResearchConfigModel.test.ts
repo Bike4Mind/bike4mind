@@ -249,7 +249,8 @@ describe('DataLakeResearchConfigRepository', () => {
       const { insertedId } = await rawLegacy();
       const [listed] = await repo.listByLake(LAKE);
       expect(listed).toMatchObject({ unlistedSources: 'review', reviewDomains: [], allowedDomains: [] });
-      expect(String(listed.id ?? insertedId)).toBe(String(insertedId));
+      expect(listed.id).toBeDefined();
+      expect(String(listed.id)).toBe(String(insertedId));
     });
 
     it('applies an edit old code made to allowedDomains after the migration ran', async () => {

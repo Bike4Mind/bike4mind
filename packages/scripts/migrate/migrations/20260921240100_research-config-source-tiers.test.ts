@@ -6,7 +6,7 @@ import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../database/src/
 // Importing './index' (for AvailableMigrations) pulls in a migration that reads SST bindings at load.
 vi.mock('../../utils/config', () => ({ Config: {} }));
 
-import migration from './20260921240060_research-config-source-tiers';
+import migration from './20260921240100_research-config-source-tiers';
 import { AvailableMigrations } from './index';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
