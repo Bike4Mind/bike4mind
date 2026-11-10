@@ -270,6 +270,22 @@ describe('sessionScriptRun', () => {
     'PATH=bin:"$PATH" git --help clean',
     'export PATH="$PWD/bin:$PATH"; git log',
     'PATH=$PATH:./bin git help clean',
+    'GIT_DIR=""./evil git status',
+    'GIT_DIR="$PWD"/evil git status',
+    'GIT_DIR=${PWD}/evil git status',
+    'GIT_DIR=$(pwd)/evil git status',
+    'GIT_DIR=`pwd`/evil git status',
+    'GIT_DIR=e\\vil git status',
+    'd=evil; GIT_DIR=$d git status',
+    'GIT_DIR=$X git status',
+    'git --git-dir=""./evil status',
+    "git --git-dir './evil' status",
+    'XDG_CONFIG_HOME=""./xdg git status',
+    'XDG_CONFIG_HOME=$X git status',
+    'PATH=:$PATH git help clean',
+    'PATH=$PATH: git help clean',
+    'PATH=$(pwd)/bin:$PATH git help clean',
+    'PATH="$PWD"/bin:$PATH git help clean',
   ])('flags %s, where git reads config or runs a program from a file this session wrote', async command => {
     const id = 'session-scripts-git-reads';
     for (const file of ['evil/config', 'xdg/git/config', 'x.sh', 'bin/man']) {
@@ -287,7 +303,7 @@ describe('sessionScriptRun', () => {
     'PAGER=cat git log',
     'PATH=/usr/bin:$PATH git log',
     'PATH=other:$PATH git help clean',
-    'GIT_DIR=$X git status',
+    'PATH=other:${PATH} git help clean',
     'echo PATH=./bin; git status',
     "git commit -m 'EDITOR=./x.sh'",
   ])('ignores %s, where git reads nothing this session wrote', async command => {
@@ -296,6 +312,13 @@ describe('sessionScriptRun', () => {
       await recordSessionWrite({ sessionId: id } as ToolContext, join(root, file));
     }
     expect(await runs(command, id)).toBeNull();
+  });
+
+  it('reads a git dir from each folder git is moved into', async () => {
+    const id = 'session-scripts-git-dir-moved';
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'sub', 'evil', 'config'));
+    expect(await runs('GIT_DIR=evil git -C sub status', id)).not.toBeNull();
+    expect(await runs('GIT_DIR=evil git status', id)).toBeNull();
   });
 
   it('reads a variable name in any case on Windows only', async () => {

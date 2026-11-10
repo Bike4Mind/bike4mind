@@ -14,6 +14,7 @@ import {
   shellHome,
   splitString,
   unquote,
+  wordValue,
   words,
 } from './shellScan';
 import { repositoryRoot } from './shellWrites';
@@ -444,6 +445,14 @@ async function scanScripts(
   let cwd = startDirectory;
   const gitAssigned = gitAssignments(tree.rootNode);
 
+  const newestWrite = (): number | '*' => {
+    let newest: number | undefined;
+    for (const generation of [...written.values(), ...trees.values()]) {
+      if (generation > (newest ?? -Infinity)) newest = generation;
+    }
+    return newest ?? '*';
+  };
+
   const treeGeneration = async (physical: string): Promise<number | undefined> => {
     let newest: number | undefined;
     for (const [tree, generation] of trees) {
@@ -471,11 +480,18 @@ async function scanScripts(
     }
   };
 
-  /** Adds a written file or rewritten folder at or under `raw`, a folder git reads config, hooks or programs from. */
-  const considerFolder = async (raw: string, directory: string): Promise<void> => {
+  /**
+   * Adds a written file or rewritten folder at or under `value`, a folder git reads config, hooks or programs from,
+   * given as bash passes it. A folder bash fills in may be any the session wrote to.
+   */
+  const considerFolder = async (value: string, directory: string): Promise<void> => {
     // `PATH="$PWD/bin:$PATH"` names a folder under the one git runs in.
-    const text = expandHome(unquote(raw), home).replace(/^\$(PWD|\{PWD\})(?=\/|$)/, '.');
-    if (!text || text.includes('$') || text.includes('`')) return;
+    const text = expandHome(value, home).replace(/^(\$PWD|\$\{PWD\}|\$\(\s*pwd\s*\)|`\s*pwd\s*`)(?=\/|$)/, '.');
+    if (!text) return;
+    if (text.includes('$') || text.includes('`')) {
+      if (!found.has(text)) found.set(text, { name: text, generation: newestWrite() });
+      return;
+    }
     for (const base of new Set([directory, startDirectory])) {
       for (const target of operandTargets(base, text)) {
         const physical = await physicalFrom(base, target);
@@ -533,19 +549,24 @@ async function scanScripts(
       for (const value of leadingOptionValues(args, ['-c']))
         for (const path of pathsIn(value)) await consider(path, cwd);
       const assigned = (variable: string): string[] => gitAssigned.get(variable) ?? [];
+      const values = words(node)
+        .map(wordValue)
+        .slice(start + 1);
       // git reads config and hooks from its git dir, runs an editor, pager or askpass the environment names, and
-      // finds the programs it runs by name (`man`, `ssh`, `git-<name>`) through PATH.
+      // finds the programs it runs by name (`man`, `ssh`, `git-<name>`) through PATH, where an empty entry is `.`.
       for (const folder of folders) {
         for (const gitDir of [
-          ...optionValues(args, ['--git-dir']),
+          ...optionValues(values, ['--git-dir']),
           ...assigned('GIT_DIR'),
           ...assigned('GIT_COMMON_DIR'),
         ])
           await considerFolder(gitDir, folder);
-        for (const config of assigned('XDG_CONFIG_HOME')) await consider(posix.join(config, 'git', 'config'), folder);
+        for (const config of assigned('XDG_CONFIG_HOME')) await considerFolder(posix.join(config, 'git'), folder);
         for (const program of ['EDITOR', 'VISUAL', 'PAGER', 'SSH_ASKPASS'].flatMap(assigned))
           for (const path of pathsIn(program)) await consider(path, folder);
-        for (const entry of assigned('PATH').flatMap(value => value.split(':'))) await considerFolder(entry, folder);
+        for (const entry of assigned('PATH').flatMap(value => value.split(':'))) {
+          if (!/^\$(PATH|\{PATH\})$/.test(entry)) await considerFolder(entry || '.', folder);
+        }
       }
     }
     if (executable.includes('/') || launched) await consider(executable, cwd);
