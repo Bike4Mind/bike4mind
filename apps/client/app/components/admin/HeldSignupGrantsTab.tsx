@@ -16,7 +16,10 @@ type ReleaseResult = {
   batchId: string;
   results: { userId: string; outcome: string; credits: number }[];
 };
-type RevokeResult = { batchId: string; results: { userId: string; outcome: string; credits: number }[] };
+type RevokeResult = {
+  batchId: string;
+  results: { userId: string; outcome: string; credits: number; heldRestored?: boolean }[];
+};
 
 const REASON_LABELS: Record<HeldReason, string> = {
   budget_exhausted: 'Daily budget spent',
@@ -107,6 +110,8 @@ export default function HeldSignupGrantsTab() {
           {revoke.data.results.length} grants.
           {revoke.data.results.some(result => result.outcome === 'state_changed') &&
             ' Accounts that received more credits since the release were left as they are.'}
+          {revoke.data.results.some(result => result.outcome === 'reversed' && !result.heldRestored) &&
+            ' Releases without saved account state only had their credits taken back and were not returned to the held list.'}
         </Alert>
       )}
       {confirmRevoke && (
