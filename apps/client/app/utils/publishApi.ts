@@ -737,11 +737,28 @@ export function buildArtifactPublishWiring(input: {
   reactFiles?: Record<string, string> | null;
 }): {
   resolveExisting: () => Promise<ManagedArtifact | null>;
+  resolvePublished: () => Promise<PublishResult | null>;
   publish: (visibility: PublishVisibility, opts?: ArtifactPublishOpts) => Promise<PublishResult>;
   incompleteWarning?: string;
 } {
+  // The dialog runs both lookups on open; one request serves both.
+  let lookup: Promise<ManagedArtifact | null> | undefined;
+  const findExisting = () => (lookup ??= findPublishedByArtifact(input.artifactId));
   return {
-    resolveExisting: () => findPublishedByArtifact(input.artifactId),
+    resolveExisting: findExisting,
+    resolvePublished: async () => {
+      const a = await findExisting();
+      if (!a) return null;
+      return {
+        publicId: a.publicId,
+        url: toArtifactSharePath(a.tier, a.scopeId, a.slug),
+        tier: a.tier,
+        scopeId: a.scopeId,
+        slug: a.slug,
+        visibility: a.visibility,
+        publishedAt: a.publishedAt ?? '',
+      };
+    },
     publish: artifactBundlePublisher(input),
     // A /p/ link is the point of no return: it can be handed to a client before anyone
     // notices the artifact's buttons are inert. Computed here rather than in the dialog so
