@@ -2085,6 +2085,22 @@ describe('ModelsScreen explore', () => {
       expect(q('models-detail-loading')).toBeNull();
     });
 
+    it('keeps the newer detail when an older load fails last', async () => {
+      await mount();
+      bridge.detail = UNREACHABLE;
+      const release = gateNext();
+      await openExplore();
+      await click(q('models-explore-result-row'));
+      bridge.detail = { ok: true, model: view({ id: 'newer/read' }) };
+      act(() => pushCuratedChanged());
+      await flush();
+      expect(q('models-detail')?.dataset.repo).toBe('newer/read');
+      release();
+      await flush();
+      expect(q('models-detail')?.dataset.repo).toBe('newer/read');
+      expect(q('models-detail-error')).toBeNull();
+    });
+
     it('keeps the newer read when an older load answers last', async () => {
       await mount();
       bridge.detail = { ok: true, model: view({ id: 'older/read' }) };
