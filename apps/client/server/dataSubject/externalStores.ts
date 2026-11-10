@@ -161,7 +161,8 @@ export const EXTERNAL_DATA_STORES: readonly ExternalDataStore[] = [
   {
     kind: 'logs',
     name: 'CloudWatch function and server logs',
-    holds: 'User ids, IP addresses and request metadata in log lines; console output is redacted by field name',
+    holds:
+      'User ids, IP addresses and request metadata in log lines, and the WebSocket API access log; console output is redacted by field name',
     // Default from `resolveDefaultLogging` (b4m-core/infra); some functions set their own retention in `infra/`.
     erasure: { action: 'expires', after: '1 month on production and 1 week elsewhere, unless a function sets its own' },
   },
@@ -170,6 +171,17 @@ export const EXTERNAL_DATA_STORES: readonly ExternalDataStore[] = [
     name: 'WAF request logs',
     holds: 'Client IP addresses and request headers',
     erasure: { action: 'expires', after: '30 days (log group retention, `infra/waf.ts`)' },
+  },
+  {
+    kind: 'logs',
+    name: 'Slack error-log channel',
+    // `formatErrorLogSlackMessage` (b4m-core/utils) drops every IP-shaped key before posting.
+    holds:
+      'Server error lines relayed from CloudWatch: user, session and request ids, paths and error text, no IP addresses',
+    erasure: {
+      action: 'notErased',
+      gap: 'Retention is a Slack workspace setting, not set in code; posted messages stay until it is',
+    },
   },
   {
     kind: 'queues',

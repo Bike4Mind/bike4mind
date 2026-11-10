@@ -63,7 +63,6 @@ describe('formatErrorLogSlackMessage', () => {
     expect(blocks[1].fields?.map(f => f.text)).toEqual([
       '*Request*\nbbcf0a53-5961-49e6-a00d-c559b9b38998',
       '*Trace*\nRoot=1-6ae09d02-686be67b2b31cdf56edfa9d7',
-      '*Client IP*\n203.0.113.9',
       '*Code*\nOAUTH_RESPONSE_IS_NOT_CONFORM',
       '*Log group*\nbike4mind-production-server',
     ]);
@@ -239,6 +238,25 @@ describe('metadata fallbacks', () => {
   it('prefers the error parsed from the message over metadata.error', () => {
     const payload = render({ metadata: { ...metadata, error: 'ignored text' } });
     expect(blocksOf(payload)[0].text?.text).not.toContain('ignored text');
+  });
+
+  it('never puts a client IP on the card, under any IP-shaped key', () => {
+    const payload = render({
+      metadata: {
+        ...metadata,
+        ip: '198.51.100.1',
+        ipAddress: '198.51.100.2',
+        actorIp: '198.51.100.3',
+        sourceIp: '198.51.100.4',
+        issuedIp: '2001:db8::1',
+        clientIpAddress: '198.51.100.5',
+        zip: '94107',
+      },
+    });
+    const serialized = JSON.stringify(payload);
+    expect(serialized).not.toMatch(/203\.0\.113\.9|198\.51\.100\.|2001:db8::1/);
+    expect(serialized).not.toContain('Client IP');
+    expect(contextTexts(payload)[0]).toBe('zip: 94107');
   });
 
   it('lists leftover scalar metadata in one context block before the CloudWatch link', () => {

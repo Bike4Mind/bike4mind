@@ -37,7 +37,6 @@ const FIELD_KEYS: { key: string; label: string }[] = [
   { key: 'path', label: 'Path' },
   { key: 'requestId', label: 'Request' },
   { key: 'traceId', label: 'Trace' },
-  { key: 'clientIp', label: 'Client IP' },
   { key: 'functionName', label: 'Function' },
   { key: 'userId', label: 'User' },
   { key: 'sessionId', label: 'Session' },
@@ -57,6 +56,14 @@ const CONTEXT_EXCLUDED_KEYS = new Set([
   'stage',
 ]);
 const CONTEXT_RAW_MAX = 1000;
+
+/**
+ * Client IPs stay in CloudWatch for abuse investigation but never reach Slack, whose retention we
+ * do not control. Matches `ip`, `ipAddress` and camelCase suffixes such as `clientIp`, `actorIp`,
+ * `sourceIp`, `issuedIp`. Keep in sync with the CloudWatch and Slack error-channel entries in
+ * `apps/client/server/dataSubject/externalStores.ts`.
+ */
+const isIpAddressKey = (key: string) => key === 'ip' || key === 'ipAddress' || /[a-z](Ip|IpAddress)$/.test(key);
 
 const SEVERITY_STYLE: Record<string, { emoji: string; color: string }> = {
   error: { emoji: ':red_circle:', color: '#E01E5A' },
@@ -171,7 +178,7 @@ function leftoverContext(metadata: Record<string, unknown>): string | undefined 
   const known = new Set(FIELD_KEYS.map(({ key }) => key));
   const entries: string[] = [];
   for (const [key, value] of Object.entries(metadata)) {
-    if (known.has(key) || CONTEXT_EXCLUDED_KEYS.has(key)) continue;
+    if (known.has(key) || CONTEXT_EXCLUDED_KEYS.has(key) || isIpAddressKey(key)) continue;
     if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') continue;
     const text = String(value);
     if (!text) continue;
