@@ -785,6 +785,20 @@ describe('registerUser', () => {
         expect(created().pendingCreditGrant).toBeNull();
       });
 
+      it("enrolls the default grant for a referral with a matching subscriber row, keeping the subscriber's storage", async () => {
+        enableStaging();
+        mockAdapters.db.registrationInvites.findByCode.mockResolvedValue(referralInvite());
+        mockAdapters.db.subscribers = {
+          findByEmail: vi
+            .fn()
+            .mockResolvedValue({ inviteCode: baseParams.inviteCode, startingCredits: 20000, startingStorage: 5000 }),
+        };
+        await registerUser(baseParams, mockAdapters);
+        expect(created().signupGrant).toMatchObject({ signupCredits: 4, unlockCredits: 9000, creditsReleased: 0 });
+        expect(created().pendingCreditGrant).toBeNull();
+        expect(created().storageLimitOverride).toBe(5000);
+      });
+
       it('gives a referral invitee the same grant as an open signup', async () => {
         enableStaging();
         const readSetting = mockAdapters.db.adminSettings.findBySettingName.getMockImplementation();
