@@ -189,9 +189,10 @@ describe('GitHubLakeCallbackPage', () => {
     renderPage();
 
     const [, options] = h.authorizeMutate.mock.calls[0];
-    options.onError(new Error('Network Error'));
-    expect(h.toastError).toHaveBeenCalledWith('Could not connect GitHub.');
+    options.onError({ isAxiosError: true, response: { data: { error: 'This authorization already expired.' } } });
+    expect(h.toastError).toHaveBeenCalledWith('This authorization already expired.');
     expect(h.setGitHubConnectFailure).not.toHaveBeenCalled();
+    expect(h.replace).toHaveBeenCalledWith('/');
     expect(h.openManager).not.toHaveBeenCalled();
   });
 
