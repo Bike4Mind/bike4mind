@@ -55,6 +55,14 @@ const queryResult = (overrides: Record<string, unknown>) => ({
 // The search debounce times itself with Date.now(), which these tests freeze.
 const elapseSearchDebounce = () => vi.setSystemTime(Date.now() + 1000);
 
+const SUPPORT_CASE = 'ZD-4821';
+
+// Searching and expanding a log are support reads: both stay disabled until a case is entered.
+const enterSupportCase = async (value = SUPPORT_CASE) => {
+  await userEvent.type(screen.getByTestId('model-logs-support-case-input'), value);
+  elapseSearchDebounce();
+};
+
 describe('ModelLogsTab', () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['Date'] });
@@ -164,14 +172,55 @@ describe('ModelLogsTab', () => {
     act(() => fakeAdminRouter.reset({ tab: 'model-logs' }));
     renderTab();
 
-    expect(mocks.useModelLogDetail).toHaveBeenLastCalledWith('log-1', false);
+    await enterSupportCase();
+    await waitFor(() => expect(screen.getByTestId('model-logs-details-toggle-btn')).toBeEnabled());
+    expect(mocks.useModelLogDetail).toHaveBeenLastCalledWith('log-1', SUPPORT_CASE, false);
     await userEvent.click(screen.getByTestId('model-logs-details-toggle-btn'));
-    expect(mocks.useModelLogDetail).toHaveBeenLastCalledWith('log-1', true);
+    expect(mocks.useModelLogDetail).toHaveBeenLastCalledWith('log-1', SUPPORT_CASE, true);
     expect(screen.getByTestId('model-logs-details').textContent).toContain('"gpt-4o"');
 
     await userEvent.click(screen.getByTestId('model-logs-details-toggle-btn'));
     expect(screen.queryByTestId('model-logs-details')).toBeNull();
-    expect(mocks.useModelLogDetail).toHaveBeenLastCalledWith('log-1', false);
+    expect(mocks.useModelLogDetail).toHaveBeenLastCalledWith('log-1', SUPPORT_CASE, false);
+  });
+
+  it('keeps the search input and the details toggle disabled until a valid support case is typed', async () => {
+    mocks.useModelLogs.mockReturnValue(queryResult({ data: { logs: [summary('log-1')], total: 1 } }));
+    mocks.useModelLogDetail.mockReturnValue({ data: undefined, isError: false });
+    act(() => fakeAdminRouter.reset({ tab: 'model-logs' }));
+    renderTab();
+
+    expect(screen.getByTestId('model-logs-search-input')).toBeDisabled();
+    expect(screen.getByTestId('model-logs-details-toggle-btn')).toBeDisabled();
+
+    await enterSupportCase('ab');
+    await waitFor(() => expect(screen.getByTestId('model-logs-search-input')).toBeDisabled());
+    expect(screen.getByTestId('model-logs-details-toggle-btn')).toBeDisabled();
+
+    await userEvent.type(screen.getByTestId('model-logs-support-case-input'), 'c');
+    elapseSearchDebounce();
+    await waitFor(() => expect(screen.getByTestId('model-logs-search-input')).toBeEnabled());
+    expect(screen.getByTestId('model-logs-details-toggle-btn')).toBeEnabled();
+  });
+
+  it('sends the support case to the list only together with a search', async () => {
+    mocks.useModelLogs.mockReturnValue(queryResult({ data: { logs: [], total: 0 } }));
+    act(() => fakeAdminRouter.reset({ tab: 'model-logs' }));
+    renderTab();
+
+    await enterSupportCase();
+    await waitFor(() =>
+      expect(mocks.useModelLogs).toHaveBeenLastCalledWith(
+        expect.objectContaining({ search: undefined, supportCase: SUPPORT_CASE })
+      )
+    );
+    await userEvent.type(screen.getByTestId('model-logs-search-input'), 'x');
+    elapseSearchDebounce();
+    await waitFor(() =>
+      expect(mocks.useModelLogs).toHaveBeenLastCalledWith(
+        expect.objectContaining({ search: 'x', supportCase: SUPPORT_CASE })
+      )
+    );
   });
 
   it('shows a progress bar while a detail loads, then an error with a retry if it fails', async () => {
@@ -181,6 +230,8 @@ describe('ModelLogsTab', () => {
     act(() => fakeAdminRouter.reset({ tab: 'model-logs' }));
     const { rerender } = renderTab();
 
+    await enterSupportCase();
+    await waitFor(() => expect(screen.getByTestId('model-logs-details-toggle-btn')).toBeEnabled());
     await userEvent.click(screen.getByTestId('model-logs-details-toggle-btn'));
     expect(screen.getByTestId('model-logs-details-loading')).toBeTruthy();
 
@@ -235,6 +286,8 @@ describe('ModelLogsTab', () => {
     act(() => fakeAdminRouter.reset({ tab: 'model-logs', modelLogsPage: 3 }));
     renderTab();
 
+    await enterSupportCase();
+    await waitFor(() => expect(screen.getByTestId('model-logs-search-input')).toBeEnabled());
     await userEvent.type(screen.getByTestId('model-logs-search-input'), 'x');
     expect(fakeAdminRouter.search).toEqual({ tab: 'model-logs' });
     elapseSearchDebounce();
@@ -400,7 +453,9 @@ describe('ModelLogsTab', () => {
       act(() => fakeAdminRouter.reset({ tab: 'model-logs' }));
       renderTab();
 
+      await enterSupportCase();
       const search = screen.getByTestId('model-logs-search-input');
+      await waitFor(() => expect(search).toBeEnabled());
       await userEvent.type(search, 'sonnet');
       elapseSearchDebounce();
       await waitFor(() =>

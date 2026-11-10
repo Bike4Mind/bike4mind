@@ -15,6 +15,8 @@ const mockRefs = vi.hoisted(() => ({
   getHandler: null as null | ((req: unknown, res: unknown) => unknown),
 }));
 
+const { mockRecordFeedbackRead } = vi.hoisted(() => ({ mockRecordFeedbackRead: vi.fn() }));
+
 vi.mock('@server/middlewares/baseApi', () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const chain: any = {
@@ -83,6 +85,8 @@ vi.mock('@bike4mind/utils', () => ({
   getSettingsValue: vi.fn(),
 }));
 
+// The audit write pulls the admin audit chain; feedbackReadAudit.test.ts covers it.
+vi.mock('@server/utils/feedbackReadAudit', () => ({ recordFeedbackRead: mockRecordFeedbackRead }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postFeedbackToSlack: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn() } } }));
@@ -153,6 +157,7 @@ describe('GET /api/feedback', () => {
     mockListDocs.mockReturnValue([]);
     mockCountDocuments.mockResolvedValue(0);
     mockDistinct.mockResolvedValue([]);
+    mockRecordFeedbackRead.mockResolvedValue(undefined);
     mockTextFind.mockReturnValue({ select: () => ({ lean: vi.fn().mockResolvedValue([]) }) });
   });
 
@@ -339,5 +344,37 @@ describe('GET /api/feedback', () => {
     const serialized = JSON.stringify(findFilter.$and);
     expect(serialized).toContain('match-1');
     expect(serialized).toContain('match-2');
+  });
+
+  describe('audit of staff reads', () => {
+    it('records the page it is about to serve, with the ids and the filters that produced it', async () => {
+      mockListDocs.mockReturnValue([
+        { id: 'f1', userId: 'reporter-1', toJSON: () => ({ id: 'f1' }) },
+        { id: 'f2', userId: 'reporter-2', toJSON: () => ({ id: 'f2' }) },
+      ]);
+
+      const { req, res } = buildRequest({ search: 'crash', page: '2', limit: '5' }, adminAbility());
+      await runHandler(req, res);
+
+      expect(mockRecordFeedbackRead).toHaveBeenCalledTimes(1);
+      const [auditedReq, reports, details] = mockRecordFeedbackRead.mock.calls[0];
+      expect(auditedReq).toBe(req);
+      expect(reports).toEqual([
+        { id: 'f1', userId: 'reporter-1' },
+        { id: 'f2', userId: 'reporter-2' },
+      ]);
+      expect(details).toMatchObject({ page: 2, limit: 5, search: 'crash' });
+    });
+
+    it('fails the request and serves no items when the audit write fails', async () => {
+      mockListDocs.mockReturnValue([{ id: 'f1', userId: 'reporter-1', toJSON: () => ({ id: 'f1' }) }]);
+      mockRecordFeedbackRead.mockRejectedValue(new Error('audit store down'));
+
+      const { req, res } = buildRequest({}, adminAbility());
+      await runHandler(req, res);
+
+      expect(res._getStatusCode()).toBe(500);
+      expect(res._getData()).not.toContain('f1');
+    });
   });
 });
