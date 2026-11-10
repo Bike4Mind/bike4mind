@@ -1278,7 +1278,7 @@ describe('PublishShareModal - reopening an already-published reply', () => {
 describe('PublishShareModal - reopening an already-published artifact', () => {
   const live: PublishResult = {
     publicId: 'art-1',
-    url: '/p/u1/my-artifact',
+    url: '/p/u/u1/my-artifact',
     tier: 'user',
     scopeId: 'u1',
     slug: 'my-artifact',
