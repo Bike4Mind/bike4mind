@@ -176,6 +176,14 @@ describe('Claude Code hint', () => {
     expect(query('sync-hint-claude-code-error')).not.toBeNull();
   });
 
+  it('does not report a failed "Not now" as a failure to turn sync on', async () => {
+    await mount(stateWith({ webNotebooks: 0 }), false);
+    dismissHint.mockRejectedValueOnce(new Error('write failed'));
+    await click('sync-hint-claude-code-dismiss-btn');
+    expect(query('sync-hint-claude-code')).not.toBeNull();
+    expect(query('sync-hint-claude-code-error')).toBeNull();
+  });
+
   it('"Not now" hides it for good', async () => {
     await mount(stateWith({ webNotebooks: 0 }), false);
     await click('sync-hint-claude-code-dismiss-btn');

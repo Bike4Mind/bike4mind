@@ -210,27 +210,30 @@ export function SidebarSyncHints({
 }) {
   const [state, setState] = useClaudeImport();
   const api = typeof window === 'undefined' ? undefined : window.b4m?.claudeImport;
-  const [enableFailed, setEnableFailed] = useState(false);
+  const [failedEnable, setFailedEnable] = useState<'claude-code' | 'web' | null>(null);
   const choice = pickSyncHint(state, empty);
   if (!api || !choice) return <>{fallback}</>;
 
-  const update = (work: () => Promise<ClaudeImportState>) => {
-    setEnableFailed(false);
-    void work().then(setState, () => setEnableFailed(true));
+  const update = (work: () => Promise<ClaudeImportState>, onFail: () => void = () => {}) => {
+    setFailedEnable(null);
+    void work().then(setState, onFail);
   };
   return (
     <>
       {choice.kind !== 'sidebar-empty' && fallback}
       <SyncHintsView
         choice={choice}
-        enableFailed={enableFailed}
+        enableFailed={failedEnable === choice.kind}
         onDismiss={id => update(() => api.dismissHint(id))}
         onEnable={source =>
-          update(async () => {
-            if (source === 'claude-code') await api.setCodeSettings({ enabled: true });
-            else await api.setWebSettings({ enabled: true });
-            return api.dismissHint(source);
-          })
+          update(
+            async () => {
+              if (source === 'claude-code') await api.setCodeSettings({ enabled: true });
+              else await api.setWebSettings({ enabled: true });
+              return api.dismissHint(source);
+            },
+            () => setFailedEnable(source)
+          )
         }
         onOpenSettings={onOpenSettings}
         onOpenExportHelp={() => void window.b4m.shell.openExternal(CLAUDE_EXPORT_HELP_URL)}
