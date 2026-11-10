@@ -32,6 +32,18 @@ const lake = vi.hoisted(() => {
   };
   return { state, reset };
 });
+const useGetScopedDataLakeTagCounts = vi.hoisted(() =>
+  vi.fn((_source: string, lakeIds: readonly string[]) => ({
+    data: lakeIds.length > 0 && lake.state.tagCounts ? { tagCounts: lake.state.tagCounts } : undefined,
+    ...lake.state.counts,
+  }))
+);
+const useGetDataLakeUncategorizedFiles = vi.hoisted(() =>
+  vi.fn((id: string | null, _enabled?: boolean) => ({
+    data: id ? lake.state.uncategorized : undefined,
+    ...lake.state.bucket,
+  }))
+);
 const useDataLakeFiles = vi.hoisted(() =>
   vi.fn((id: string | null, params?: { tag?: string }) => {
     const { state } = lake;
@@ -52,15 +64,9 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useGetArchivedDataLakes: () => ({ data: undefined }),
   // The in-lake tree's cross-tree search; idle with no query.
   useGetDataLakeArticles: () => ({ data: undefined, isLoading: false }),
-  useGetDataLakeUncategorizedFiles: (id: string | null) => ({
-    data: id ? lake.state.uncategorized : undefined,
-    ...lake.state.bucket,
-  }),
+  useGetDataLakeUncategorizedFiles,
   useGetDeletedDataLakes: () => ({ data: undefined }),
-  useGetScopedDataLakeTagCounts: (_source: string, lakeIds: readonly string[]) => ({
-    data: lakeIds.length > 0 && lake.state.tagCounts ? { tagCounts: lake.state.tagCounts } : undefined,
-    ...lake.state.counts,
-  }),
+  useGetScopedDataLakeTagCounts,
   useGetTransitionalDataLakes: () => ({ data: undefined }),
   usePermanentDeleteDataLake: () => ({ mutate: vi.fn(), isPending: false }),
   useRestoreDeletedDataLake: () => ({ mutate: vi.fn(), isPending: false }),
@@ -220,6 +226,8 @@ describe('ManagerNav lake tree counts', () => {
 
     renderInLake(makeLake({}), ['lk']);
 
+    expect(useGetScopedDataLakeTagCounts).toHaveBeenCalledWith('datalakes', ['lake-1']);
+    expect(useGetDataLakeUncategorizedFiles).toHaveBeenCalledWith('lake-1', true);
     expect(screen.getByTestId('datalake-manager-node-reproduction')).toHaveTextContent(/^Reproduction85$/);
     expect(screen.getByTestId('datalake-manager-node-results')).toHaveTextContent(/^Results73$/);
     expect(screen.getByTestId('datalake-manager-node-appendix')).toHaveTextContent(/^Appendix31$/);
@@ -293,6 +301,7 @@ describe('ManagerNav lake tree counts', () => {
     renderInLake(makeLake({}), ['lk']);
 
     expect(screen.queryByTestId('datalake-manager-node-reproduction')).toBeNull();
+    expect(screen.queryByTestId('datalake-manager-error')).toBeNull();
   });
 
   it('shows the error row when the Uncategorized bucket fails', () => {
@@ -352,5 +361,17 @@ describe('ManagerNav lake tree counts', () => {
     renderInLake(makeLake({}), ['lk', 'appendix']);
 
     expect(screen.queryByText('No files found')).toBeNull();
+    expect(screen.queryByTestId('datalake-manager-error')).toBeNull();
+  });
+
+  it('keeps a branch folder its subfolders when its own files fail to load', () => {
+    const overview = [makeFile('o1', ['lk:genre'])];
+    lake.state.tagCounts = countsFor([...overview, ...makeFiles('w', 3, ['lk:genre:war'])], 'lk:');
+    lake.state.folder = { isLoading: false, isError: true };
+
+    renderInLake(makeLake({}), ['lk', 'genre']);
+
+    expect(screen.getByTestId('datalake-manager-node-war')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-manager-error')).toBeNull();
   });
 });
