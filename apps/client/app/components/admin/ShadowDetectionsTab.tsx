@@ -901,7 +901,11 @@ export const ShadowDetectionsTab: React.FC = () => {
       />
       {bulkOutcome && (
         <Alert
-          color={bulkOutcome.conflicts.length + bulkOutcome.missing.length + bulkOutcome.failed.length > 0 ? 'warning' : 'success'}
+          color={
+            bulkOutcome.conflicts.length + bulkOutcome.missing.length + bulkOutcome.failed.length > 0
+              ? 'warning'
+              : 'success'
+          }
           data-testid="shadow-detection-bulk-outcome"
           endDecorator={
             <Button size="sm" variant="plain" color="neutral" onClick={() => setBulkOutcome(null)}>
@@ -915,6 +919,7 @@ export const ShadowDetectionsTab: React.FC = () => {
       <BulkActionBar
         selection={selection}
         totalMatching={rows.length}
+        selectAllLabel={detections.data?.truncated ? `Select all ${rows.length.toLocaleString()} loaded` : undefined}
         onSelectAllMatching={() => setSelection({ mode: 'allMatching' })}
         onClear={() => setSelection(EMPTY_SELECTION)}
       >

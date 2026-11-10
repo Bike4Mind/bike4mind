@@ -644,6 +644,15 @@ describe('ShadowDetectionsTab', () => {
       );
     });
 
+    it('words select-all as the loaded rows when the list is truncated', () => {
+      m.useShadowDetections.mockReturnValue(
+        queryResult(list({ truncated: true, data: [detection(), detection({ id: OTHER_ID, revision: 1 })] }))
+      );
+      renderTab();
+      selectRow(DETECTION_ID);
+      expect(screen.getByTestId('admin-select-all-matching-btn').textContent).toBe('Select all 2 loaded');
+    });
+
     it('blocks a selection over the request cap', async () => {
       const many = Array.from({ length: 201 }, (_, index) => detection({ id: index.toString(16).padStart(24, '0') }));
       m.useShadowDetections.mockReturnValue(queryResult(list({ data: many })));

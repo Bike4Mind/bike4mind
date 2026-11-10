@@ -6,12 +6,14 @@ export function BulkActionBar({
   selection,
   totalMatching,
   onSelectAllMatching,
+  selectAllLabel,
   onClear,
   children,
 }: {
   selection: AdminSelection;
   totalMatching: number;
   onSelectAllMatching: () => void;
+  selectAllLabel?: string;
   onClear: () => void;
   children: ReactNode;
 }) {
@@ -27,7 +29,7 @@ export function BulkActionBar({
         <Typography sx={{ color: 'admin.ink' }}>{count.toLocaleString()} selected</Typography>
         {selection.mode === 'explicit' && count < totalMatching && (
           <Button variant="plain" size="sm" onClick={onSelectAllMatching} data-testid="admin-select-all-matching-btn">
-            Select all {totalMatching.toLocaleString()} matching
+            {selectAllLabel ?? `Select all ${totalMatching.toLocaleString()} matching`}
           </Button>
         )}
         <Button variant="plain" size="sm" onClick={onClear} data-testid="admin-clear-selection-btn">
