@@ -192,6 +192,8 @@ UsageEventSchema.index({ ownerId: 1, ownerType: 1, createdAt: -1 });
 UsageEventSchema.index({ sessionId: 1, createdAt: -1 });
 // Supports platformUsageSummary()'s optional source filter over a time window.
 UsageEventSchema.index({ source: 1, createdAt: -1 });
+// Supports the hourly completion sequence/synchrony sweeps' 24h scan of completion_api rows.
+// Built via migration 20260921240070_ensure-usage-event-feature-status-index, not autoIndex.
 UsageEventSchema.index({ feature: 1, status: 1, createdAt: -1 });
 // Supports platformUsageSummary()'s byConsumer cut ($match apiKeyId present).
 UsageEventSchema.index({ apiKeyId: 1, createdAt: -1 });
