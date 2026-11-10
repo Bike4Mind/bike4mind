@@ -347,6 +347,10 @@ export const ADMIN_AUDIT_CATALOGUE = {
   // bestEffort: the AbuseAssessment record is the source of truth; an advisory assessment never acts.
   'security.detection.assessed': { category: 'access', severity: 'info', write: 'bestEffort' },
   'security.detection.replayed': { category: 'access', severity: 'info', write: 'bestEffort' },
+  // bestEffort: the AbuseEvalSet record is the source of truth; evaluation sets are grading data and never act.
+  'abuse.eval_set.created': { category: 'access', severity: 'info', write: 'bestEffort' },
+  'abuse.eval_set.verdict_recorded': { category: 'access', severity: 'info', write: 'bestEffort' },
+  'abuse.eval_set.run': { category: 'access', severity: 'info', write: 'bestEffort' },
   'moderation.incident.viewed': { category: 'support', severity: 'notice', write: 'strict' },
   // An admin read of other users' feedback text. No support case (triage reads it routinely), but strict.
   'feedback.viewed': { category: 'support', severity: 'info', write: 'strict' },

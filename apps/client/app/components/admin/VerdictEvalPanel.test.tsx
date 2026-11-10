@@ -8,6 +8,8 @@ import type { VerdictEvalReport } from '@client/app/utils/verdictEval';
 const m = vi.hoisted(() => ({ useVerdictEval: vi.fn() }));
 vi.mock('@client/app/hooks/data/shadowDetections', () => ({ useVerdictEval: m.useVerdictEval }));
 
+vi.mock('./VerdictEvalSetsPanel', () => ({ VerdictEvalSetsPanel: () => <div data-testid="eval-sets-panel" /> }));
+
 import { VerdictEvalPanel } from './VerdictEvalPanel';
 
 const appTheme = extendTheme({ ...getThemeConfig() });

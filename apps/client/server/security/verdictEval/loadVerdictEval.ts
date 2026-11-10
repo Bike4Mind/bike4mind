@@ -77,7 +77,7 @@ export const liveVerdictEvalDeps: VerdictEvalDeps = {
   },
 };
 
-async function inChunks<T>(values: string[], read: (chunk: string[]) => Promise<T[]>): Promise<T[]> {
+export async function inChunks<T>(values: string[], read: (chunk: string[]) => Promise<T[]>): Promise<T[]> {
   const rows: T[] = [];
   for (let start = 0; start < values.length; start += IN_CHUNK) {
     rows.push(...(await read(values.slice(start, start + IN_CHUNK))));

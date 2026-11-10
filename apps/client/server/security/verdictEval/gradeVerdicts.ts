@@ -105,14 +105,14 @@ export const ADMIN_VERDICT_LABELS: Record<ShadowDetectionVerdict, VerdictEvalLab
   insufficient_evidence: null,
 };
 
-const ASSESSMENT_PREDICTIONS: Record<AbuseAssessmentResult, Prediction> = {
+export const ASSESSMENT_PREDICTIONS: Record<AbuseAssessmentResult, Prediction> = {
   abuse: 'positive',
   legitimate_automation: 'negative',
   insufficient_evidence: 'abstain',
   unknown: 'abstain',
 };
 
-const CONTAINMENT_PREDICTIONS: Record<AutoContainmentOutcome, Prediction> = {
+export const CONTAINMENT_PREDICTIONS: Record<AutoContainmentOutcome, Prediction> = {
   would_contain: 'positive',
   contained: 'positive',
   // Capped means it would have contained but the hourly cap held it back.
@@ -122,7 +122,7 @@ const CONTAINMENT_PREDICTIONS: Record<AutoContainmentOutcome, Prediction> = {
   failed: 'abstain',
 };
 
-const SIGNUP_PREDICTIONS: Record<SignupChartVerdict, Prediction> = {
+export const SIGNUP_PREDICTIONS: Record<SignupChartVerdict, Prediction> = {
   suspected: 'positive',
   legit: 'negative',
   unclassified: 'abstain',
@@ -358,6 +358,18 @@ export function cohortRows(
   labels: ReadonlyMap<string, Label>,
   signals: ReadonlyMap<string, CohortSignals>
 ): VerdictEvalCohortRow[] {
+  return cohortRowsFrom(userIds, labels, userId => {
+    const accountSignals = signals.get(userId);
+    return accountSignals ? cohortsOf(accountSignals) : [];
+  });
+}
+
+/** `cohortRows` for callers that already hold each account's cohorts. */
+export function cohortRowsFrom(
+  userIds: Iterable<string>,
+  labels: ReadonlyMap<string, Label>,
+  cohortsFor: (userId: string) => readonly string[]
+): VerdictEvalCohortRow[] {
   const rows = EVAL_COHORTS.map(cohort => ({
     cohort,
     measurable: cohort !== 'assistive',
@@ -368,10 +380,8 @@ export function cohortRows(
     falsePositiveShare: null as number | null,
   }));
   for (const userId of new Set(userIds)) {
-    const accountSignals = signals.get(userId);
-    if (!accountSignals) continue;
     const label = labels.get(userId);
-    for (const cohort of cohortsOf(accountSignals)) {
+    for (const cohort of cohortsFor(userId)) {
       const row = rows.find(candidate => candidate.cohort === cohort);
       if (!row) continue;
       row.flaggedAccounts += 1;

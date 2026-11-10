@@ -12,10 +12,10 @@ export type VerdictEvalWindowDays = (typeof VERDICT_EVAL_WINDOWS)[number];
 
 /**
  * What is graded: the AI assessment of a detection (per model), the auto-containment decision on a
- * detection (per mode), and the signup chart's verdict on an account (the Users list's
- * Suspected / Likely legit chip).
+ * detection (per mode), the signup chart's verdict on an account (the Users list's Suspected /
+ * Likely legit chip), and, on an evaluation set, whether any detector flagged the account.
  */
-export const VERDICT_EVAL_GRADERS = ['assessment', 'containment', 'signupVerdict'] as const;
+export const VERDICT_EVAL_GRADERS = ['assessment', 'containment', 'signupVerdict', 'detectors'] as const;
 export type VerdictEvalGrader = (typeof VERDICT_EVAL_GRADERS)[number];
 
 export const VERDICT_EVAL_LABELS = ['abuse', 'legit'] as const;

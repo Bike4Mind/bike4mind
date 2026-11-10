@@ -12,12 +12,14 @@ import {
   type VerdictEvalScore,
   type VerdictEvalWindowDays,
 } from '@client/app/utils/verdictEval';
+import { VerdictEvalSetsPanel } from './VerdictEvalSetsPanel';
 import { DataTable, StatStrip, StatTile, formatUtc, type DataColumn } from './shared';
 
 const GRADER_LABELS: Record<VerdictEvalGrader, string> = {
   assessment: 'AI assessment',
   containment: 'Auto-containment',
   signupVerdict: 'Signup verdict',
+  detectors: 'Detectors',
 };
 
 const SOURCE_LABELS: Record<VerdictEvalLabelSource, string> = {
@@ -233,6 +235,7 @@ export const VerdictEvalPanel: React.FC = () => {
           pageResetKey={String(days)}
         />
       )}
+      <VerdictEvalSetsPanel />
     </Stack>
   );
 };

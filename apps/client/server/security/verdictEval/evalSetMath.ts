@@ -1,0 +1,324 @@
+import { createHash } from 'node:crypto';
+import type { AbuseEvalExample, AbuseEvalSetItem } from '@bike4mind/database';
+import {
+  EVAL_COHORTS,
+  VERDICT_EVAL_LABEL_SOURCES,
+  type VerdictEvalLabelSource,
+  type VerdictEvalWindowDays,
+} from '@client/app/utils/verdictEval';
+import {
+  evalSetRunSchema,
+  type EvalSetDetail,
+  type EvalSetExample,
+  type EvalSetRunReport,
+} from '@client/app/utils/verdictEvalSets';
+import {
+  ADMIN_VERDICT_LABELS,
+  ASSESSMENT_PREDICTIONS,
+  CONTAINMENT_PREDICTIONS,
+  SIGNUP_PREDICTIONS,
+  Scoreboard,
+  cohortRowsFrom,
+  ratio,
+  type EvalAssessment,
+  type EvalDecision,
+  type Label,
+  type Prediction,
+  type SignupChartVerdict,
+} from './gradeVerdicts';
+
+/**
+ * The pure half of the evaluation sets (evalSets.ts loads and stores): campaign keys, the split,
+ * the seeded sample, the Wilson bound and the run grader. Terms live in app/utils/verdictEvalSets.ts.
+ */
+
+const sha256Hex = (value: string) => createHash('sha256').update(value).digest('hex');
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Connected components of `userIds` linked by the groups (members of one detection, or accounts
+ * sharing a signup IP). An account in a group but outside `userIds` still joins its group's
+ * components. A component's key is its smallest id, so it is stable for the same links.
+ */
+export function campaignKeys(userIds: readonly string[], groups: readonly (readonly string[])[]): Map<string, string> {
+  const parent = new Map<string, string>();
+  const find = (id: string): string => {
+    const next = parent.get(id) ?? id;
+    if (next === id) {
+      parent.set(id, id);
+      return id;
+    }
+    const root = find(next);
+    parent.set(id, root);
+    return root;
+  };
+  const union = (a: string, b: string) => {
+    const rootA = find(a);
+    const rootB = find(b);
+    if (rootA === rootB) return;
+    // The smaller id stays the root, so a component's root is its smallest id.
+    if (rootA < rootB) parent.set(rootB, rootA);
+    else parent.set(rootA, rootB);
+  };
+  for (const id of userIds) find(id);
+  for (const group of groups) {
+    for (const id of group) find(id);
+    for (let index = 1; index < group.length; index += 1) union(group[0], group[index]);
+  }
+  return new Map(userIds.map(id => [id, find(id)]));
+}
+
+/** A campaign lands wholly on one split, chosen by the seed and its key. */
+export function splitOf(seed: string, campaignKey: string, heldOutShare: number): 'tuning' | 'heldOut' {
+  const fraction = Number.parseInt(sha256Hex(`${seed}:${campaignKey}`).slice(0, 8), 16) / 0xffffffff;
+  return fraction < heldOutShare ? 'heldOut' : 'tuning';
+}
+
+/** The same ids, seed and size always give the same sample (no `$sample`). */
+export function seededSample(ids: readonly string[], seed: string, size: number): string[] {
+  return ids
+    .map(id => ({ id, rank: sha256Hex(`${seed}:${id}`) }))
+    .sort((a, b) => (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : 0))
+    .slice(0, size)
+    .map(entry => entry.id);
+}
+
+/** Lower end of the Wilson score interval for `successes` of `trials`; null with no trials. */
+export function wilsonLowerBound(successes: number, trials: number, z = 1.96): number | null {
+  if (trials === 0) return null;
+  const p = successes / trials;
+  const z2 = z * z;
+  const centre = p + z2 / (2 * trials);
+  const margin = z * Math.sqrt((p * (1 - p) + z2 / (4 * trials)) / trials);
+  return Math.max(0, Math.round(((centre - margin) / (1 + z2 / trials)) * 1000) / 1000);
+}
+
+/** The smallest report window that reaches back to `since`, or null when none does. */
+export function windowCovering(since: Date, now: Date): VerdictEvalWindowDays | null {
+  const ageDays = (now.getTime() - since.getTime()) / DAY_MS;
+  return ([7, 30, 90] as const).find(days => days >= ageDays) ?? null;
+}
+
+const isLabelSource = (source: string): source is VerdictEvalLabelSource =>
+  (VERDICT_EVAL_LABEL_SOURCES as readonly string[]).includes(source);
+
+/**
+ * The example's label: its latest verdict when it has one (insufficient evidence means no label),
+ * otherwise the label frozen at draw.
+ */
+export function exampleLabel(example: Pick<AbuseEvalExample, 'verdicts' | 'frozenLabel'>): Label | null {
+  const latest = example.verdicts.at(-1);
+  if (latest) {
+    const label = ADMIN_VERDICT_LABELS[latest.verdict];
+    return label ? { label, source: 'adminVerdict' } : null;
+  }
+  if (example.frozenLabel && isLabelSource(example.frozenLabel.source)) {
+    return { label: example.frozenLabel.label, source: example.frozenLabel.source };
+  }
+  return null;
+}
+
+export type EvalSetPredictions = {
+  assessments: readonly EvalAssessment[];
+  decisions: readonly EvalDecision[];
+  /** Absent for an account the chart did not classify; such an example abstains. */
+  signupVerdicts: ReadonlyMap<string, SignupChartVerdict>;
+};
+
+/** The newest prediction per detection, then: any positive wins, all negative is negative, else abstain. */
+function combine(detectionIds: readonly string[], predictionOf: (detectionId: string) => Prediction): Prediction {
+  if (detectionIds.length === 0) return 'abstain';
+  const predictions = detectionIds.map(predictionOf);
+  if (predictions.includes('positive')) return 'positive';
+  return predictions.every(prediction => prediction === 'negative') ? 'negative' : 'abstain';
+}
+
+/** Per variant (model or mode), each detection's newest prediction. */
+function latestPredictions<Row extends { detectionId: string }>(
+  rows: readonly Row[],
+  variantOf: (row: Row) => string,
+  timeOf: (row: Row) => Date,
+  predictionOf: (row: Row) => Prediction
+): Map<string, Map<string, Prediction>> {
+  const newest = new Map<string, Map<string, Row>>();
+  for (const row of rows) {
+    const variant = variantOf(row);
+    const byDetection = newest.get(variant) ?? new Map<string, Row>();
+    const current = byDetection.get(row.detectionId);
+    if (!current || timeOf(row) > timeOf(current)) byDetection.set(row.detectionId, row);
+    newest.set(variant, byDetection);
+  }
+  return new Map(
+    [...newest].map(([variant, byDetection]) => [
+      variant,
+      new Map([...byDetection].map(([id, row]) => [id, predictionOf(row)])),
+    ])
+  );
+}
+
+/**
+ * Grades the automated verdicts on the held-out half of a set, against the examples' labels.
+ * Unflagged examples count as negatives for the assessment and containment graders: no detection
+ * means the system did not act. The recall estimate scales the labelled unflagged sample up to the
+ * unflagged accounts the held-out half stands for.
+ */
+export function gradeEvalSet(
+  set: Pick<AbuseEvalSetItem, 'examples' | 'population' | 'window'>,
+  predictions: EvalSetPredictions
+): EvalSetRunReport {
+  const heldOut = set.examples.filter(example => example.split === 'heldOut');
+  const labelled = heldOut.flatMap(example => {
+    const label = exampleLabel(example);
+    return label ? [{ example, label }] : [];
+  });
+  const board = new Scoreboard();
+  const at = (example: AbuseEvalExample) => example.signedUpAt ?? set.window.since;
+
+  for (const { example, label } of labelled) {
+    board.add({
+      grader: 'detectors',
+      variant: 'any',
+      prediction: example.kind === 'flagged' ? 'positive' : 'negative',
+      predicted: example.kind,
+      label,
+      detectionId: null,
+      userId: example.userId,
+      confidence: null,
+      at: at(example),
+    });
+    const chartVerdict = predictions.signupVerdicts.get(example.userId);
+    board.add({
+      grader: 'signupVerdict',
+      variant: 'chart',
+      prediction: chartVerdict ? SIGNUP_PREDICTIONS[chartVerdict] : 'abstain',
+      predicted: chartVerdict ?? 'unclassified',
+      label,
+      detectionId: null,
+      userId: example.userId,
+      confidence: null,
+      at: at(example),
+    });
+  }
+
+  const byVariant = [
+    {
+      grader: 'assessment' as const,
+      predictions: latestPredictions(
+        predictions.assessments,
+        row => row.model,
+        row => row.assessedAt,
+        row => ASSESSMENT_PREDICTIONS[row.result]
+      ),
+    },
+    {
+      grader: 'containment' as const,
+      predictions: latestPredictions(
+        predictions.decisions,
+        row => row.mode,
+        row => row.decidedAt,
+        row => CONTAINMENT_PREDICTIONS[row.outcome]
+      ),
+    },
+  ];
+  for (const { grader, predictions: perVariant } of byVariant) {
+    for (const [variant, perDetection] of perVariant) {
+      for (const { example, label } of labelled) {
+        const prediction: Prediction =
+          example.kind === 'unflagged'
+            ? 'negative'
+            : combine(example.detectionIds, id => perDetection.get(id) ?? 'abstain');
+        board.add({
+          grader,
+          variant,
+          prediction,
+          predicted: prediction,
+          label,
+          detectionId: null,
+          userId: example.userId,
+          confidence: null,
+          at: at(example),
+        });
+      }
+    }
+  }
+
+  const flaggedAbuse = labelled.filter(({ example, label }) => example.kind === 'flagged' && label.label === 'abuse');
+  const unflagged = labelled.filter(({ example }) => example.kind === 'unflagged');
+  const sampledUnflaggedAbuse = unflagged.filter(({ label }) => label.label === 'abuse').length;
+  const unflaggedSampled = set.examples.filter(example => example.kind === 'unflagged').length;
+  const heldOutUnflagged = heldOut.filter(example => example.kind === 'unflagged').length;
+  const unflaggedPopulation =
+    unflaggedSampled === 0 ? 0 : Math.round((set.population.unflagged * heldOutUnflagged) / unflaggedSampled);
+  const estimatedMissedAbuse =
+    unflagged.length === 0
+      ? null
+      : Math.round((sampledUnflaggedAbuse * unflaggedPopulation * 100) / unflagged.length) / 100;
+  const estimatedRecall =
+    estimatedMissedAbuse === null ? null : ratio(flaggedAbuse.length, flaggedAbuse.length + estimatedMissedAbuse);
+
+  const labels = new Map(labelled.map(({ example, label }) => [example.userId, label]));
+  const flaggedHeldOut = heldOut.filter(example => example.kind === 'flagged');
+  const cohortsByUser = new Map(flaggedHeldOut.map(example => [example.userId, example.cohorts]));
+  const labelSources: Record<string, number> = {};
+  for (const { label } of labelled) labelSources[label.source] = (labelSources[label.source] ?? 0) + 1;
+
+  return {
+    split: 'heldOut',
+    examples: heldOut.length,
+    labelled: labelled.length,
+    scores: board.scores().map(score => ({
+      ...score,
+      precisionLowerBound: wilsonLowerBound(score.truePositive, score.truePositive + score.falsePositive),
+    })),
+    recall: {
+      flaggedAbuse: flaggedAbuse.length,
+      sampledUnflaggedAbuse,
+      sampledUnflagged: unflagged.length,
+      unflaggedPopulation,
+      estimatedMissedAbuse,
+      estimatedRecall,
+    },
+    cohorts: cohortRowsFrom(cohortsByUser.keys(), labels, userId => cohortsByUser.get(userId) ?? []),
+    labelSources,
+  };
+}
+
+/** One example as the admin sees it: its label, latest verdict and the cohorts the report knows. */
+export function toEvalSetExample(example: AbuseEvalExample): EvalSetExample {
+  const label = exampleLabel(example);
+  const latest = example.verdicts.at(-1) ?? null;
+  return {
+    userId: example.userId,
+    kind: example.kind,
+    split: example.split,
+    detectionIds: example.detectionIds,
+    campaignKey: example.campaignKey,
+    cohorts: EVAL_COHORTS.filter(cohort => example.cohorts.includes(cohort)),
+    signedUpAt: example.signedUpAt,
+    currentLabel: label ? { label: label.label, source: latest ? 'verdict' : 'frozen' } : null,
+    latestVerdict: latest,
+    revision: example.revision,
+  };
+}
+
+/** A stored set as the detail response: examples with their labels, and the last two runs that still parse. */
+export function toEvalSetDetail(set: AbuseEvalSetItem): EvalSetDetail {
+  const runs = set.runs.slice(-2).flatMap(run => {
+    const parsed = evalSetRunSchema.safeParse(run);
+    return parsed.success ? [parsed.data] : [];
+  });
+  return {
+    id: set.id,
+    name: set.name,
+    note: set.note,
+    createdBy: set.createdBy,
+    window: set.window,
+    heldOutShare: set.heldOutShare,
+    population: set.population,
+    truncated: set.truncated,
+    createdAt: set.createdAt,
+    examples: set.examples.map(toEvalSetExample),
+    runs,
+    runCount: set.runs.length,
+  };
+}
