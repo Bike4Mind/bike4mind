@@ -330,6 +330,9 @@ export const TRUST_AND_SAFETY_GUIDE: readonly AdminGuideEntry[] = [
     ],
     keywords: [
       'delegated admin',
+      'delegate admin',
+      'grant admin access',
+      'admin rights',
       'admin permissions',
       'support:read',
       'users:moderate',

@@ -10,7 +10,7 @@ const SearchGuideInput = z.object({
     .trim()
     .min(1)
     .max(200)
-    .describe('The admin feature or task in plain words, e.g. "AI advisories" or "grant credits to an organization".'),
+    .describe('Two to four feature keywords, not the whole question, e.g. "AI advisories" or "grant credits".'),
 });
 
 export const searchGuideTool = defineAdminTool({

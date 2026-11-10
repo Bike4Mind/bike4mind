@@ -32,9 +32,9 @@ describe('ADMIN_GUIDE', () => {
   // The drift guard: a new admin tab fails here until the guide explains it. (global.admin is the console itself.)
   it('covers every admin tab view', () => {
     const covered = new Set(ADMIN_GUIDE.flatMap(entry => entry.views));
-    const missing = VIEW_REGISTRY.filter(view => view.id.startsWith('admin.') && !covered.has(view.id)).map(
-      view => view.id
-    );
+    const missing = VIEW_REGISTRY.filter(
+      view => view.requiresAdmin === true && view.id !== 'global.admin' && !covered.has(view.id)
+    ).map(view => view.id);
     expect(missing, `Admin views with no guide entry: ${missing.join(', ')}`).toEqual([]);
   });
 

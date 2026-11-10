@@ -43,6 +43,14 @@ describe('searchAdminGuide', () => {
     expect(idsFor('signup holds')).toEqual(['holds']);
   });
 
+  it('needs more than half the terms, so one of two is not enough', () => {
+    expect(idsFor('signup chargeback')).toEqual([]);
+  });
+
+  it('accepts two of three terms when one names the feature', () => {
+    expect(idsFor('signup holds chargeback')).toEqual(['holds']);
+  });
+
   it('caps the matches at the limit', () => {
     expect(idsFor('signup', FIXTURE, 1)).toHaveLength(1);
   });
@@ -65,6 +73,13 @@ describe('searchAdminGuide over ADMIN_GUIDE', () => {
     expect(searchAdminGuide(ADMIN_GUIDE, 'What does the Lighthouse Rewards tab do?', 3)).toEqual([]);
     // Real words, made-up feature: "user" is everywhere, but no entry is named "rewards".
     expect(searchAdminGuide(ADMIN_GUIDE, 'What does the user rewards tab do?', 3)).toEqual([]);
+  });
+
+  it('meets verb forms with the entry that names the task', () => {
+    expect(topFor('delegating admin rights')?.id).toBe('delegated-admin-permissions');
+    expect(topFor('delegate admin access to a user')?.id).toBe('delegated-admin-permissions');
+    expect(topFor('unban a banned user')?.id).toBe('user-suspend-restrict');
+    expect(topFor('refunding credits')?.id).toBe('user-adjust-credits');
   });
 
   it('reads past request verbs to the feature name', () => {

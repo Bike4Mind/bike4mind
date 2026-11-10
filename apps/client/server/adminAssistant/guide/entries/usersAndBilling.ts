@@ -117,6 +117,7 @@ export const USERS_AND_BILLING_GUIDE: readonly AdminGuideEntry[] = [
       'ban user',
       'block user',
       'unsuspend',
+      'unban',
       'reinstate',
       'lift restriction',
       'account suspension',
