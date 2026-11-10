@@ -15,7 +15,6 @@ const mockMessages = [
   {
     messageId: 'm1',
     body: '{"a":1}',
-    receiptHandle: 'rh1',
     sentTimestamp: '1700000000000',
     approximateReceiveCount: '14',
   },
@@ -153,7 +152,7 @@ describe('DlqReplayTab history table', () => {
 });
 
 describe('DlqReplayTab messages table', () => {
-  it('renders the "Attempts" column header instead of "Receives" after selecting a queue', () => {
+  it('labels the SQS receive count accurately after selecting a queue', () => {
     render(
       <CssVarsProvider>
         <DlqReplayTab />
@@ -161,20 +160,21 @@ describe('DlqReplayTab messages table', () => {
     );
     selectQueue();
     const table = screen.getByTestId('dlq-messages-table');
-    expect(within(table).getByText('Attempts')).toBeInTheDocument();
-    expect(within(table).queryByText('Receives')).toBeNull();
+    expect(within(table).getByText('Receives')).toBeInTheDocument();
+    expect(within(table).queryByText('Attempts')).toBeNull();
   });
 
-  it('wraps "Attempts" in a Tooltip with an explanatory title', () => {
+  it('explains that browser views contribute to the receive count', () => {
     render(
       <CssVarsProvider>
         <DlqReplayTab />
       </CssVarsProvider>
     );
     selectQueue();
-    const attemptsHeader = within(screen.getByTestId('dlq-messages-table')).getByText('Attempts');
-    const tooltipWrapper = attemptsHeader.closest('[aria-label], [title]') ?? attemptsHeader.parentElement;
+    const receivesHeader = within(screen.getByTestId('dlq-messages-table')).getByText('Receives');
+    const tooltipWrapper = receivesHeader.closest('[aria-label], [title]') ?? receivesHeader.parentElement;
     const titleAttr = tooltipWrapper?.getAttribute('title') ?? tooltipWrapper?.getAttribute('aria-label') ?? '';
-    expect(titleAttr).toContain('failed to process');
+    expect(titleAttr).toContain('including views in this browser');
+    expect(titleAttr).toContain('not a count of handler failures');
   });
 });

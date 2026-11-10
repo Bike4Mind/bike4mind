@@ -20,9 +20,8 @@ const QuerySchema = z.object({
 /**
  * GET /api/admin/dlq/messages?queue=<label>&maxMessages=10
  *
- * Peeks at messages in a specific DLQ with VisibilityTimeout 0 so
- * browsing never hides messages from other admins or inflates the
- * ApproximateReceiveCount counter.
+ * Receives messages with immediate visibility so browsing does not hide them from other admins.
+ * SQS still increments ApproximateReceiveCount for these receives.
  */
 const handler = adminApi({
   adminPermissions: { GET: 'settings:manage' },

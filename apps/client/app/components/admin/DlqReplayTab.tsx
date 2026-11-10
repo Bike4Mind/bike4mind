@@ -137,7 +137,7 @@ const MessageDrawer: React.FC<{
 
           <Box>
             <Typography level="body-sm" fontWeight="bold">
-              Attempts
+              Receive count
             </Typography>
             <Typography level="body-sm">{message.approximateReceiveCount ?? 'N/A'}</Typography>
           </Box>
@@ -445,8 +445,8 @@ const DlqReplayTab: React.FC = () => {
                 <th>Body Preview</th>
                 <th style={{ width: 160 }}>Sent At</th>
                 <th style={{ width: 100 }}>
-                  <Tooltip title="Times the original handler failed to process this message before SQS moved it to the DLQ">
-                    <span>Attempts</span>
+                  <Tooltip title="Approximate SQS receives, including views in this browser; not a count of handler failures">
+                    <span>Receives</span>
                   </Tooltip>
                 </th>
                 <th style={{ width: 80 }}>Actions</th>

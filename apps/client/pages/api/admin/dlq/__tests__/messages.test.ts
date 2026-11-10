@@ -50,7 +50,7 @@ describe('GET /api/admin/dlq/messages', () => {
     Attributes: { SentTimestamp: '1700000000000', ApproximateReceiveCount: count },
   });
 
-  it('calls receiveFromQueue with VisibilityTimeout 0 so browsing is read-only', async () => {
+  it('uses immediate visibility when browsing messages', async () => {
     h.receiveFromQueue.mockResolvedValue([makeMsg('m1', '3')]);
     const { req, res } = createMocks({ method: 'GET', query: { queue: 'quest', maxMessages: '5' } });
     (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
@@ -86,5 +86,6 @@ describe('GET /api/admin/dlq/messages', () => {
 
     const body = res._getJSONData();
     expect(body.messages[0].approximateReceiveCount).toBe('14');
+    expect(body.messages[0]).not.toHaveProperty('receiptHandle');
   });
 });
