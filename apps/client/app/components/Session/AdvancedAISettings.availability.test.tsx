@@ -37,7 +37,17 @@ const mocks = vi.hoisted(() => {
   const modalProps = { value: null as Record<string, unknown> | null };
   const mcpServers = { value: [] as Array<{ name: string; enabled: boolean }> };
   const adminFeatureFlags = { value: {} as Record<string, boolean> };
-  return { state, useLLM, toolAvailability, toolsButtonProps, modalProps, mcpServers, adminFeatureFlags };
+  const composerConnections = { value: [] as Array<{ id: string; slug: string }> };
+  return {
+    state,
+    useLLM,
+    toolAvailability,
+    toolsButtonProps,
+    modalProps,
+    mcpServers,
+    adminFeatureFlags,
+    composerConnections,
+  };
 });
 
 vi.mock('@client/app/contexts/LLMContext', () => ({ useLLM: mocks.useLLM }));
@@ -46,6 +56,13 @@ vi.mock('@client/app/contexts/SessionsContext', () => ({
 }));
 vi.mock('@client/app/hooks/data/agents', () => ({ useGetSessionAgents: () => ({ data: [] }) }));
 vi.mock('@client/app/hooks/data/mcpServers', () => ({ useMcpServers: () => ({ data: mocks.mcpServers.value }) }));
+vi.mock('@client/app/hooks/useComposerMcpConnections', () => ({
+  useComposerMcpConnections: () => ({
+    all: mocks.composerConnections.value,
+    offered: mocks.composerConnections.value,
+    loaded: true,
+  }),
+}));
 vi.mock('@client/app/hooks/data/settings', () => ({
   useConfig: () => ({ data: { toolAvailability: mocks.toolAvailability.value } }),
 }));
@@ -132,8 +149,10 @@ beforeEach(() => {
   mocks.mcpServers.value = [];
   mocks.state.enabledMcpServers = null;
   mocks.state.skipAutoOffers = false;
+  mocks.state.disabledMcpConnections = [];
   mocks.state.model = 'gpt-4o';
   mocks.adminFeatureFlags.value = {};
+  mocks.composerConnections.value = [];
 });
 
 describe('AdvancedAISettings tool indicators vs availability', () => {
@@ -211,6 +230,19 @@ describe('AdvancedAISettings MCP indicators vs "Only tools I pick"', () => {
     connect('notion', 'atlassian');
     mocks.state.skipAutoOffers = true;
     expect(renderIndicators().enabledMcpServers).toEqual(['atlassian']);
+  });
+
+  // Custom connectors have no icon, so each one on in the Tools menu adds to the "+N" badge.
+  it('counts each custom connector left on, and none under the flag', () => {
+    mocks.composerConnections.value = [
+      { id: 'c1', slug: 'acme' },
+      { id: 'c2', slug: 'docs' },
+    ];
+    mocks.state.disabledMcpConnections = ['docs'];
+    expect(renderIndicators().otherActiveToolsCount).toBe(1);
+
+    mocks.state.skipAutoOffers = true;
+    expect(renderIndicators().otherActiveToolsCount).toBe(0);
   });
 
   // The flag narrows what the server offers; it never re-enables a server the user turned off.
