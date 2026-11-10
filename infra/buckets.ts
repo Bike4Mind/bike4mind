@@ -133,6 +133,21 @@ const fabFileBucketLifecycle = new aws.s3.BucketLifecycleConfigurationV2('fabFil
       },
     },
     {
+      // Large email attachments, reachable only through 7-day file links (emailAttachments.ts).
+      // Prefix must stay in sync with SHARED_EMAIL_FILES_PREFIX there.
+      id: 'expire-shared-email-files',
+      status: 'Enabled',
+      filter: {
+        prefix: 'shared-email-files/',
+      },
+      expiration: {
+        days: 30,
+      },
+      noncurrentVersionExpiration: {
+        noncurrentDays: 1,
+      },
+    },
+    {
       // Without this, on a stage with ENABLE_BUCKET_VERSIONING every delete or overwrite under files/
       // (file delete, version trim, sweep:orphaned-storage) keeps its bytes forever as a noncurrent
       // version. 30 days is the rollback window for an overwritten or deleted object. A no-op on an

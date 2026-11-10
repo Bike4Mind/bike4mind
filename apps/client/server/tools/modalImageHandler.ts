@@ -1,9 +1,9 @@
-import { S3Client, CopyObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { S3Client, CopyObjectCommand } from '@aws-sdk/client-s3';
 import { Resource } from 'sst';
 import { v4 as uuidv4 } from 'uuid';
 import { FabFile } from '@bike4mind/database';
 import { isImageServeable } from '@bike4mind/common';
+import { MODAL_IMAGE_PREFIX, extractModalImageKey } from './modalImageUrls';
 
 const s3Client = new S3Client();
 
@@ -11,20 +11,17 @@ const s3Client = new S3Client();
 // the catch-all below (which falls back to returning the original URL for infra errors).
 class ModalImageModerationError extends Error {}
 
-/**
- * Handles modal images by copying them from temporary presigned URLs to permanent storage
- * and generating long-lived URLs for modal display
- */
+/** Copies a modal image from a temporary presigned URL to permanent storage and returns its S3 key. */
 export class ModalImageHandler {
-  private static readonly MODAL_IMAGE_PREFIX = 'modal-images/';
-  private static readonly URL_EXPIRY_SECONDS = 365 * 24 * 60 * 60; // 1 year
-
   /**
    * Process an image URL for modal storage
-   * If the URL is a presigned S3 URL, copy it to permanent modal storage
-   * Otherwise, return the URL as-is (for external URLs)
+   * If the URL is a presigned S3 URL, copy it to permanent modal storage and return the key
+   * (signed at serve time). Otherwise, return the URL as-is (for external URLs)
    */
   static async processModalImageUrl(imageUrl: string): Promise<string> {
+    const existingKey = extractModalImageKey(imageUrl);
+    if (existingKey) return existingKey;
+
     try {
       // Quick check for external URLs - return immediately without processing
       if (!imageUrl.includes('amazonaws.com') && !imageUrl.includes('X-Amz-Algorithm')) {
@@ -40,7 +37,7 @@ export class ModalImageHandler {
         const originalKey = pathParts[pathParts.length - 1].split('?')[0];
 
         // Refuse to promote a held/blocked uploaded image into a permanent,
-        // long-lived (1 year) platform-wide banner. No FabFile match (e.g. a generated
+        // platform-wide banner. No FabFile match (e.g. a generated
         // image with no upload record) falls through unaffected.
         const fabFile = await FabFile.findOne({ filePath: originalKey });
         if (fabFile && !isImageServeable(fabFile)) {
@@ -49,7 +46,7 @@ export class ModalImageHandler {
 
         // Generate a new permanent key for the modal image
         const fileExt = originalKey.split('.').pop() || 'jpg';
-        const permanentKey = `${this.MODAL_IMAGE_PREFIX}${uuidv4()}.${fileExt}`;
+        const permanentKey = `${MODAL_IMAGE_PREFIX}${uuidv4()}.${fileExt}`;
 
         // Copy the object to the permanent location
         await s3Client.send(
@@ -61,17 +58,7 @@ export class ModalImageHandler {
           })
         );
 
-        // Generate a long-lived presigned URL for the permanent location
-        const command = new GetObjectCommand({
-          Bucket: Resource.fabFileBucket.name,
-          Key: permanentKey,
-        });
-
-        const permanentUrl = await getSignedUrl(s3Client, command, {
-          expiresIn: this.URL_EXPIRY_SECONDS,
-        });
-
-        return permanentUrl;
+        return permanentKey;
       }
 
       // For external URLs or already permanent URLs, return as-is
@@ -84,83 +71,6 @@ export class ModalImageHandler {
       console.error('[ModalImageHandler] Error processing modal image URL:', error);
       // Return original URL if processing fails
       return imageUrl;
-    }
-  }
-
-  /**
-   * Process multiple image URLs for a modal
-   */
-  static async processModalImages(images: string[]): Promise<string[]> {
-    const processedImages = await Promise.all(images.map(url => this.processModalImageUrl(url)));
-    return processedImages;
-  }
-
-  /**
-   * Check if an image URL is expired and needs refreshing
-   */
-  static isUrlExpired(url: string): boolean {
-    try {
-      // Check for AWS presigned URL expiration parameters
-      if (url.includes('X-Amz-Expires') && url.includes('X-Amz-Date')) {
-        const urlObj = new URL(url);
-        const amzDate = urlObj.searchParams.get('X-Amz-Date');
-        const amzExpires = urlObj.searchParams.get('X-Amz-Expires');
-
-        if (amzDate && amzExpires) {
-          // Parse the date (format: YYYYMMDDTHHMMSSZ)
-          const year = parseInt(amzDate.substring(0, 4));
-          const month = parseInt(amzDate.substring(4, 6)) - 1; // JS months are 0-indexed
-          const day = parseInt(amzDate.substring(6, 8));
-          const hour = parseInt(amzDate.substring(9, 11));
-          const minute = parseInt(amzDate.substring(11, 13));
-          const second = parseInt(amzDate.substring(13, 15));
-
-          const startDate = new Date(Date.UTC(year, month, day, hour, minute, second));
-          const expiresInMs = parseInt(amzExpires) * 1000;
-          const expirationDate = new Date(startDate.getTime() + expiresInMs);
-
-          // Check if expired (with 5 minute buffer)
-          const now = new Date();
-          const bufferMs = 5 * 60 * 1000; // 5 minutes
-          return now.getTime() > expirationDate.getTime() - bufferMs;
-        }
-      }
-      return false;
-    } catch (error) {
-      console.error('[ModalImageHandler] Error checking URL expiration:', error);
-      return false;
-    }
-  }
-
-  /**
-   * Refresh an expired modal image URL
-   */
-  static async refreshModalImageUrl(modalId: string, oldUrl: string): Promise<string> {
-    try {
-      // Extract the key from the old URL
-      const urlObj = new URL(oldUrl);
-      const pathParts = urlObj.pathname.split('/');
-      const key = pathParts[pathParts.length - 1].split('?')[0];
-
-      // If it's already a modal image, just regenerate the URL
-      if (key.startsWith(this.MODAL_IMAGE_PREFIX)) {
-        const command = new GetObjectCommand({
-          Bucket: Resource.fabFileBucket.name,
-          Key: key,
-        });
-
-        const refreshedUrl = await getSignedUrl(s3Client, command, {
-          expiresIn: this.URL_EXPIRY_SECONDS,
-        });
-
-        return refreshedUrl;
-      }
-
-      // Otherwise, process it as a new image
-      return this.processModalImageUrl(oldUrl);
-    } catch (error) {
-      console.error('[ModalImageHandler] Error refreshing modal image URL:', error);
-      return oldUrl;
     }
   }
 }

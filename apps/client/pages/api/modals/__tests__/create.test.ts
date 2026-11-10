@@ -41,6 +41,9 @@ vi.mock('@bike4mind/database/social', () => ({
       mockRefs.created = data;
       Object.assign(this, data);
     }
+    toObject() {
+      return { ...this };
+    }
     save() {
       mockRefs.saveCalls += 1;
       return mockRefs.save();

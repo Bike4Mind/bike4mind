@@ -18,6 +18,7 @@ import SeedStagedSignupSettings from './20260921235967_seed-staged-signup-settin
 import EnsureQuestSignupActivityIndex from './20260921235966_ensure-quest-signup-activity-index';
 import EnsureUserSignupGrantOrgIndex from './20260921235968_ensure-user-signup-grant-org-index';
 import RedropShareTokenScalarIndex from './20260921235975_redrop-share-token-scalar-index';
+import ModalImageUrlToKey from './20260921000002_modal-image-url-to-key';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import EnsureCreditTransactionBalanceEventIndex from './20260921235947_ensure-credit-transaction-balance-event-index';
 import BackfillStorageLimitOverrides from './20260921235964_backfill-storage-limit-overrides';
@@ -556,6 +557,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureGeneratedMediaPurgeIndexes,
   ResealOAuthProviderTokens,
   ResearchConfigSourceTiers,
+  ModalImageUrlToKey,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
 ];
