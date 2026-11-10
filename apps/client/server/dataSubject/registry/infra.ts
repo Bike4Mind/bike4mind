@@ -10,14 +10,41 @@ export const infraHolders = {
     attribution: [{ path: 'requestedBy', matchBy: 'userId', action: 'anonymize' }],
   },
   // An admin's request for a second admin's sign-off on a privileged action, kept with the audit trail.
-  // `summary` and `paramsJson` (which may name the target account) are free text and not scanned.
+  // `summary` and `paramsJson` (which may name the target account) are free text and not scanned, so
+  // both admins are actors on it: their export carries only their own reference.
   AdminApproval: {
     kind: 'holder',
     references: [
-      { path: 'requestedBy.id', matchBy: 'userId', action: 'retain', ...AUDIT_LOG },
-      { path: 'requestedBy.selfIds', matchBy: 'userId', action: 'retain', ...AUDIT_LOG },
-      { path: 'requestedBy.email', matchBy: 'email', action: 'retain', ...AUDIT_LOG },
-      { path: 'decidedBy.id', matchBy: 'userId', action: 'retain', ...AUDIT_LOG },
+      {
+        path: 'requestedBy.id',
+        matchBy: 'userId',
+        action: 'retain',
+        ...AUDIT_LOG,
+        identifies: ['requestedBy.name'],
+        exportScope: 'reference',
+      },
+      {
+        path: 'requestedBy.selfIds',
+        matchBy: 'userId',
+        action: 'retain',
+        ...AUDIT_LOG,
+        exportScope: 'reference',
+      },
+      {
+        path: 'requestedBy.email',
+        matchBy: 'email',
+        action: 'retain',
+        ...AUDIT_LOG,
+        exportScope: 'reference',
+      },
+      {
+        path: 'decidedBy.id',
+        matchBy: 'userId',
+        action: 'retain',
+        ...AUDIT_LOG,
+        identifies: ['decidedBy.name'],
+        exportScope: 'reference',
+      },
     ],
   },
   AdminAuditAlertState: {
@@ -53,6 +80,9 @@ export const infraHolders = {
       },
     ],
     secretPaths: ['related.impersonationSessionId'],
+    // Written by `approvalAuditDetails` (server/admin/approvals/auditWriter.ts) and the team grant in
+    // server/admin/creditGrants/grantSubscription.ts: the requesting admin and the org owner.
+    withheldPaths: ['details.approval.requestedBy', 'details.organizationOwnerId'],
     unmatchedPaths: { 'actor.email': 'The acting admin, kept in the audit trail; not resolved to their account.' },
   },
   // A reviewer's sign-off on an audit entry: the sign-off stays, the link to the reviewer goes.

@@ -97,6 +97,8 @@ export type UserReference = ErasureAction & {
   /**
    * `email` is compared case-insensitively with the user's current email only: User does not
    * lowercase on write and keeps no previous addresses, so a later change of address is not matched.
+   * The export queries the address as given and lowercased (to stay on the index), so a stored copy
+   * in some other mixed case is not found.
    */
   matchBy: 'userId' | 'email';
   /** Extra equality filter, e.g. `{ ownerType: 'User' }` when `ownerId` may also hold an organization id. */
@@ -150,6 +152,12 @@ export type DataHolder =
        * left in place, so the gap is visible rather than silent.
        */
       unmatchedPaths?: Readonly<Record<string, string>>;
+      /**
+       * Paths under a `Mixed` field that name someone other than whoever the document is exported
+       * for (the approving admin an audit entry's `details` caches). Withheld from every export
+       * without being queried on, so they add no unindexed clause; erasure leaves them in place.
+       */
+      withheldPaths?: readonly string[];
     }
   /**
    * The document carries no user field of its own but belongs to a parent document that does (a

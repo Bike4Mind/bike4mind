@@ -170,7 +170,14 @@ describe('admin data subject export requests', () => {
 
     expect(res._getStatusCode()).toBe(409);
     expect(h.quota).not.toHaveBeenCalled();
-    expect(h.record).not.toHaveBeenCalled();
+    expect(h.record).toHaveBeenCalledTimes(1);
+    expect(h.record).toHaveBeenCalledWith(req, {
+      action: 'user.data_export.denied',
+      target: TARGET,
+      summary: 'blocked a data subject export of an account being deleted',
+      reason: 'Art. 15 request',
+      details: { attemptedAction: 'user.data_export.requested', refusal: 'account_deletion' },
+    });
     expect(h.send).not.toHaveBeenCalled();
   });
 

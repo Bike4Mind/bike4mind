@@ -42,6 +42,14 @@ const Ledger = mongoose.model(
     amount: Number,
   })
 );
+const AuthAudit = mongoose.model(
+  'DsTestAuthAudit',
+  new Schema({ userId: ObjectId, actorUserId: ObjectId, actorIp: String, userAgent: String })
+);
+const Session = mongoose.model(
+  'DsTestSession',
+  new Schema({ userId: ObjectId, impersonatedBy: ObjectId, device: { ip: String } })
+);
 const Undeclared = mongoose.model('DsTestUndeclared', new Schema({ ownerId: ObjectId }));
 
 const registry: DataHolderRegistry = {
@@ -94,6 +102,20 @@ const registry: DataHolderRegistry = {
         identifies: ['adminName', 'adminIp'],
         exportScope: 'reference',
       },
+    ],
+  },
+  DsTestAuthAudit: {
+    kind: 'holder',
+    references: [
+      { path: 'userId', matchBy: 'userId', action: 'anonymize', alsoRedact: ['actorIp', 'userAgent'] },
+      { path: 'actorUserId', matchBy: 'userId', action: 'anonymize', alsoRedact: ['actorIp', 'userAgent'] },
+    ],
+  },
+  DsTestSession: {
+    kind: 'holder',
+    references: [
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
+      { path: 'impersonatedBy', matchBy: 'userId', action: 'anonymize', alsoRedact: ['device'] },
     ],
   },
   DsTestRelease: { kind: 'noUserData', note: 'test' },
@@ -246,6 +268,61 @@ describe('SubjectRecordExport', () => {
       adminName: 'Me',
       adminIp: '10.0.0.2',
     });
+  });
+
+  it('leaves out a matched path that describes another person the record names', async () => {
+    const me = new mongoose.Types.ObjectId();
+    const admin = new mongoose.Types.ObjectId();
+    const byAdmin = await AuthAudit.create({ userId: me, actorUserId: admin, actorIp: '10.0.0.1', userAgent: 'admin' });
+    const unattributed = await AuthAudit.create({ userId: me, actorIp: '10.0.0.2', userAgent: 'mine' });
+    const byMe = await AuthAudit.create({ userId: me, actorUserId: me, actorIp: '10.0.0.3', userAgent: 'mine' });
+    const asActor = await AuthAudit.create({ userId: admin, actorUserId: me, actorIp: '10.0.0.4', userAgent: 'mine' });
+
+    const exporter = new SubjectRecordExport({ userId: me.toString(), email: null }, registry);
+    const records = json(await collect(exporter, 'DsTestAuthAudit'));
+    const byId = (id: unknown) => records.find((record: ExportedRecord) => record._id === String(id));
+
+    expect(records).toHaveLength(4);
+    expect(byId(byAdmin._id)).toEqual({ _id: byAdmin.id, userId: me.toString() });
+    expect(byId(unattributed._id)).toEqual({
+      _id: unattributed.id,
+      userId: me.toString(),
+      actorIp: '10.0.0.2',
+      userAgent: 'mine',
+    });
+    expect(byId(byMe._id)).toEqual({
+      _id: byMe.id,
+      userId: me.toString(),
+      actorUserId: me.toString(),
+      actorIp: '10.0.0.3',
+      userAgent: 'mine',
+    });
+    expect(byId(asActor._id)).toEqual({ _id: asActor.id, actorUserId: me.toString() });
+  });
+
+  it("withholds an impersonating admin's device from the person's own session, and keeps a normal session's", async () => {
+    const me = new mongoose.Types.ObjectId();
+    const admin = new mongoose.Types.ObjectId();
+    const normal = await Session.create({ userId: me, device: { ip: '10.0.0.5' } });
+    const impersonated = await Session.create({ userId: me, impersonatedBy: admin, device: { ip: '10.0.0.6' } });
+
+    const exporter = new SubjectRecordExport({ userId: me.toString(), email: null }, registry);
+    const records = json(await collect(exporter, 'DsTestSession'));
+    const byId = (id: unknown) => records.find((record: ExportedRecord) => record._id === String(id));
+
+    expect(byId(normal._id)).toMatchObject({ device: { ip: '10.0.0.5' } });
+    expect(byId(impersonated._id)).not.toHaveProperty('device');
+    expect(byId(impersonated._id)).not.toHaveProperty('impersonatedBy');
+  });
+
+  it('matches an email reference whatever the case of the subject email', async () => {
+    const team = await Team.create({ name: 't', inviteEmails: ['ada@example.com', 'bob@example.com'] });
+
+    const exporter = new SubjectRecordExport(
+      { userId: new mongoose.Types.ObjectId().toString(), email: 'Ada@Example.com' },
+      registry
+    );
+    expect(json(await collect(exporter, 'DsTestTeam'))).toEqual([{ _id: team.id, inviteEmails: ['ada@example.com'] }]);
   });
 
   it('skips email references when the subject has no email', async () => {

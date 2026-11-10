@@ -48,10 +48,10 @@ const personPathsOf = (reference: UserReference): readonly string[] => [
 const isExported = (holder: DataHolder): boolean =>
   holder.kind === 'subject' || holder.kind === 'holder' || holder.kind === 'viaParent';
 
-const secretPathsOf = (holder: DataHolder): readonly string[] =>
-  holder.kind === 'subject' || holder.kind === 'holder' || holder.kind === 'viaParent'
-    ? (holder.secretPaths ?? [])
-    : [];
+const withheldPathsOf = (holder: DataHolder): readonly string[] => {
+  if (holder.kind === 'holder') return [...(holder.secretPaths ?? []), ...(holder.withheldPaths ?? [])];
+  return holder.kind === 'subject' || holder.kind === 'viaParent' ? (holder.secretPaths ?? []) : [];
+};
 
 export class SubjectRecordExport {
   /** Exported models in an order that puts every `viaParent` child after its parent. */
@@ -87,9 +87,9 @@ export class SubjectRecordExport {
             ? this.childRecords(model, holder)
             : null;
     if (!source) return;
-    const secrets = secretPathsOf(holder);
+    const withheld = withheldPathsOf(holder);
     for await (const record of source) {
-      for (const secret of secrets) omitPath(record, secret);
+      for (const path of withheld) omitPath(record, path);
       yield record;
     }
     this.completed.add(model);
@@ -181,12 +181,17 @@ export class SubjectRecordExport {
   private filterFor(reference: UserReference): Record<string, unknown> | null {
     const expected = this.expectedValue(reference);
     if (!expected) return null;
-    const value =
-      reference.matchBy === 'userId' && mongoose.isObjectIdOrHexString(expected)
-        ? // A `Mixed` path is not cast by the schema and may hold either form.
-          { $in: [expected, new mongoose.Types.ObjectId(expected)] }
-        : expected;
-    return { ...reference.where, [reference.path]: value };
+    return { ...reference.where, [reference.path]: { $in: this.storedForms(reference, expected) } };
+  }
+
+  private storedForms(reference: UserReference, expected: string): unknown[] {
+    if (reference.matchBy === 'email') {
+      // Exact forms keep the query on the index; a stored address in any other mixed case is missed
+      // here, and the JS re-match below compares case-insensitively.
+      return [...new Set([expected, expected.toLowerCase()])];
+    }
+    // A `Mixed` path is not cast by the schema and may hold either form.
+    return mongoose.isObjectIdOrHexString(expected) ? [expected, new mongoose.Types.ObjectId(expected)] : [expected];
   }
 
   /**
@@ -246,8 +251,7 @@ export class SubjectRecordExport {
   }
 
   private matches(document: LeanDocument, reference: UserReference): boolean {
-    const expected = this.expectedValue(reference);
-    if (!expected || !valuesAt(document, reference.path).some(value => String(value) === expected)) return false;
+    if (!valuesAt(document, reference.path).some(this.isSubject(reference))) return false;
     return Object.entries(reference.where ?? {}).every(([path, wanted]) =>
       valuesAt(document, path).some(value => String(value) === wanted)
     );
@@ -255,7 +259,18 @@ export class SubjectRecordExport {
 
   private isSubject(reference: UserReference): (value: unknown) => boolean {
     const expected = this.expectedValue(reference);
-    return value => expected !== null && String(value) === expected;
+    if (expected === null) return () => false;
+    if (reference.matchBy === 'email') {
+      const lowered = expected.toLowerCase();
+      return value => typeof value === 'string' && value.toLowerCase() === lowered;
+    }
+    return value => String(value) === expected;
+  }
+
+  /** Whether the reference holds a value and none of it is this person. */
+  private namesSomeoneElse(document: LeanDocument, reference: UserReference): boolean {
+    const values = valuesAt(document, reference.path).filter(value => value !== null && value !== undefined);
+    return values.length > 0 && !values.some(this.isSubject(reference));
   }
 
   private recordFor(
@@ -269,7 +284,7 @@ export class SubjectRecordExport {
     this.rememberParentScope(model, document, scope);
     return scope.scope === 'wholeDocument'
       ? this.withholdOthers(document, references)
-      : this.matchedPathsRecord(document, scope.paths, matches);
+      : this.matchedPathsRecord(document, scope.paths, matches, references);
   }
 
   /**
@@ -290,7 +305,13 @@ export class SubjectRecordExport {
         kept.set(match.arrayPath, elements);
         continue;
       }
-      if (valuesAt(document, reference.path).some(isSubject)) continue;
+      // An empty `anonymize` reference names nobody, so the fields beside it describe whoever the
+      // document is about (a normal session's device, not an impersonating admin's).
+      const namesOther =
+        reference.action === 'anonymize'
+          ? this.namesSomeoneElse(document, reference)
+          : !valuesAt(document, reference.path).some(isSubject);
+      if (!namesOther) continue;
       for (const path of personPathsOf(reference)) omitPath(document, path);
     }
     for (const [arrayPath, elements] of throughArray) {
@@ -304,14 +325,28 @@ export class SubjectRecordExport {
     return document;
   }
 
-  /** The document id and `paths`; a path matched through an array keeps only this person's elements. */
+  /**
+   * The document id and `paths`; a path matched through an array keeps only this person's elements.
+   * A path that also describes someone another reference names is left out (the admin's IP on a
+   * session they revoked), as `withholdOthers` does for a whole document.
+   */
   private matchedPathsRecord(
     document: LeanDocument,
     paths: readonly string[],
-    matches: readonly ReferenceMatch[]
+    matches: readonly ReferenceMatch[],
+    references: readonly UserReference[]
   ): ExportedRecord {
     const record: ExportedRecord = { _id: document._id };
+    const matchedPaths = new Set(matches.map(({ reference }) => reference.path));
+    const matched = new Set(matches.map(({ reference }) => reference));
+    const othersPaths = new Set(
+      references
+        .filter(reference => !matched.has(reference) && this.namesSomeoneElse(document, reference))
+        .flatMap(personPathsOf)
+        .filter(path => !matchedPaths.has(path))
+    );
     for (const path of paths) {
+      if (othersPaths.has(path)) continue;
       const arrayMatches = matches.filter(({ reference, throughArray }) => throughArray && reference.path === path);
       if (arrayMatches.length === 0) {
         const values = valuesAt(document, path);

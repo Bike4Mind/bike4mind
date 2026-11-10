@@ -1,5 +1,10 @@
 import { v4 as uuidv4 } from 'uuid';
-import { ADMIN_DATA_EXPORT_FAILED_ACTION, ADMIN_DATA_EXPORT_REQUESTED_ACTION, ApiKeyScope } from '@bike4mind/common';
+import {
+  ADMIN_DATA_EXPORT_DENIED_ACTION,
+  ADMIN_DATA_EXPORT_FAILED_ACTION,
+  ADMIN_DATA_EXPORT_REQUESTED_ACTION,
+  ApiKeyScope,
+} from '@bike4mind/common';
 import { cacheRepository } from '@bike4mind/database';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
@@ -39,6 +44,13 @@ const handler = adminApi({
     // Mirrors the worker's skip, which would otherwise leave the export "building" with no reason given.
     const { scheduledFor, purgeStartedAt } = user.deletion ?? {};
     if (purgeStartedAt || (scheduledFor && new Date(scheduledFor).getTime() <= Date.now())) {
+      await recordAdminActionFromRequest(req, {
+        action: ADMIN_DATA_EXPORT_DENIED_ACTION,
+        target: auditTarget,
+        summary: 'blocked a data subject export of an account being deleted',
+        reason,
+        details: { attemptedAction: ADMIN_DATA_EXPORT_REQUESTED_ACTION, refusal: 'account_deletion' },
+      });
       return res.status(409).json({ error: 'This account is being permanently deleted, so it cannot be exported.' });
     }
 

@@ -516,7 +516,8 @@ records/           Admin data subject export only: every stored record that name
                    every other person named on a record. Where a record belongs to someone else and
                    only lists this person (a shared notebook's members, the admin who acted on an
                    account), just the entries or fields naming this person and the record id are
-                   included. Free text (notes, summaries) is exported as written.
+                   included. Free text (notes, summaries) is exported as written. Records already
+                   deleted and only awaiting permanent removal are not included.
                    records/index.json lists every collection searched with its record count; an
                    "omitted" value of time_limit or error means that collection is not included.
 `;

@@ -84,8 +84,9 @@ export const authHolders = {
     kind: 'holder',
     references: [
       { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
-      // The admin who impersonated is recorded on the impersonated person's session.
-      { path: 'impersonatedBy', matchBy: 'userId', action: 'anonymize' },
+      // The admin who impersonated is recorded on the impersonated person's session, and `device` is
+      // their request's, not the person's.
+      { path: 'impersonatedBy', matchBy: 'userId', action: 'anonymize', alsoRedact: ['device'] },
     ],
     secretPaths: [
       'sid',
@@ -317,8 +318,15 @@ export const authHolders = {
       'resetPasswordToken',
       'emailVerificationToken',
       'pendingEmailToken',
-      // The stored abuse-scoring result, withheld for the same reason as `PendingOtcToken.codes.riskSignals`.
+      // The stored abuse-scoring results and evidence, withheld for the same reason as
+      // `PendingOtcToken.codes.riskSignals`: exporting them would teach an abuser what the scoring sees.
       'signupGrantAssessment',
+      'riskScore',
+      'riskSignals',
+      'riskEvidence',
+      'signupMeta',
+      // The admin who wrote a note about this person; `AdminUserNote` withholds `author.name` the same way.
+      'userNotes.userName',
     ],
   },
   UserActivityCounter: {
@@ -350,6 +358,8 @@ export const authHolders = {
   UserUsagePatternSignals: {
     kind: 'holder',
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+    // The score itself is withheld from the export, as `User.riskScore` is.
+    secretPaths: ['signals', 'score', 'needsReview', 'skipped'],
   },
   Voice: {
     kind: 'holder',

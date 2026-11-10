@@ -158,7 +158,13 @@ export const billingHolders = {
   ReferralSubscriptionReward: {
     kind: 'holder',
     references: [
-      { path: 'payerId', matchBy: 'userId', action: 'retain', ...FINANCIAL_RECORD },
+      {
+        path: 'payerId',
+        matchBy: 'userId',
+        action: 'retain',
+        ...FINANCIAL_RECORD,
+        identifies: ['invoiceId', 'paymentIntentId'],
+      },
       { path: 'inviterId', matchBy: 'userId', action: 'retain', ...FINANCIAL_RECORD },
     ],
   },
