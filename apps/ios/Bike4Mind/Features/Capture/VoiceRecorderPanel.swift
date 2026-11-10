@@ -35,13 +35,13 @@ struct VoiceRecorderPanel: View {
     }
     .presentationDetents([.medium])
     // A swipe mid-recording would skip Cancel; it is blocked, and onDisappear still cleans up any other exit.
-    .interactiveDismissDisabled(model?.state == .recording)
+    .interactiveDismissDisabled(model?.state == .recording || model?.state == .starting)
     .task {
       if model == nil { model = Self.makeModel(services: services) }
     }
     .onDisappear {
       // Releases the audio session and deletes the partial recording.
-      guard let model, model.state == .recording else { return }
+      guard let model, model.state == .recording || model.state == .starting else { return }
       Task { await model.cancel() }
     }
     .onChange(of: model?.state) { _, state in
@@ -67,6 +67,8 @@ struct VoiceRecorderPanel: View {
         await model.stop()
       }
       Text("Recording").font(.footnote).foregroundStyle(Tokens.Palette.secondaryText)
+    case .starting:
+      ProgressView("Starting")
     case .transcribing, .transcribed:
       ProgressView("Transcribing")
     }

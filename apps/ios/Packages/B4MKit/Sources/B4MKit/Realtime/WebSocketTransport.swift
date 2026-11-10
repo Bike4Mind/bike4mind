@@ -20,11 +20,17 @@ public final class URLSessionWebSocketConnector: WebSocketConnecting {
   private let observer: WebSocketOpenObserver
   private let openTimeout: Duration
 
+  private let identity: ClientIdentity
+
   /// - Parameter openTimeout: how long the upgrade may take before the attempt counts as failed.
-  public init(configuration: URLSessionConfiguration = .default, openTimeout: Duration = .seconds(20)) {
+  public init(
+    configuration: URLSessionConfiguration = .default, openTimeout: Duration = .seconds(20),
+    identity: ClientIdentity = .current
+  ) {
     let observer = WebSocketOpenObserver()
     self.observer = observer
     self.openTimeout = openTimeout
+    self.identity = identity
     session = URLSession(configuration: configuration, delegate: observer, delegateQueue: nil)
   }
 
@@ -35,7 +41,9 @@ public final class URLSessionWebSocketConnector: WebSocketConnecting {
   public func connect(to url: URL) async throws -> any WebSocketConnection {
     // `resume()` returns before the upgrade; a refused upgrade (403/429/5xx, bad host) only surfaces
     // through the delegate, so wait for the open event before reporting a connection.
-    let connection = URLSessionWebSocketConnection(task: session.webSocketTask(with: url))
+    var request = URLRequest(url: url)
+    identity.apply(to: &request)
+    let connection = URLSessionWebSocketConnection(task: session.webSocketTask(with: request))
     let openTimeout = self.openTimeout
     let timeout = Task {
       try await Task.sleep(for: openTimeout)

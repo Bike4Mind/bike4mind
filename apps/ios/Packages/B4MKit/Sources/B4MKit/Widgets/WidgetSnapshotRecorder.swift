@@ -91,6 +91,13 @@ public actor WidgetSnapshotRecorder {
   // MARK: - Running aggregate
 
   private func publishRunning() {
+    // A session is only re-observed while its chat is open, so after leaving it mid-run its entry stops
+    // updating. Age it out on the widget's own freshness rule instead of letting other sessions' changes
+    // keep republishing it as running.
+    let currentTime = now()
+    activeSessions = activeSessions.filter {
+      currentTime.timeIntervalSince($0.value.touchedAt) <= WidgetEntryMapper.runningAgentsFreshness
+    }
     var snapshot = store.load() ?? .empty
     let total = activeSessions.values.reduce(0) { $0 + $1.count }
     let lead = activeSessions.max { $0.value.touchedAt < $1.value.touchedAt }
@@ -99,7 +106,9 @@ public actor WidgetSnapshotRecorder {
     }
     let previous = snapshot.runningAgents
     let changed = previous?.count != total || previous?.top != top
-    snapshot.runningAgents = .init(count: total, top: top, observedAt: now())
+    // Stamped with when the lead was last actually seen, not with this write, so the widget's freshness
+    // check still fires for an aggregate nobody is observing any more.
+    snapshot.runningAgents = .init(count: total, top: top, observedAt: lead?.value.touchedAt ?? currentTime)
     write(snapshot, reload: changed ? [WidgetKind.runningAgents] : [])
   }
 

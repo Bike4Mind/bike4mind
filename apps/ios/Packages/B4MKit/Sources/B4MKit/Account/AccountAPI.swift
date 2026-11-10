@@ -15,7 +15,9 @@ public enum AccountDeletionFailure: Error, Equatable, Sendable {
   case organizationTransferRequired([AccountOrganization])
   /// The server refuses this session (an impersonating admin).
   case notPermitted
-  /// The step-up gate wants proof of a recent sign-in: signing in again satisfies it.
+  /// The step-up gate wants fresh proof of identity. Signing in again does NOT satisfy it: only a successful
+  /// `POST /api/auth/step-up` (password, TOTP, passkey or emailed code) marks the session, and this app has no
+  /// step-up flow yet.
   case recentSignInRequired
   /// Deletion is already pending for this account.
   case alreadyScheduled

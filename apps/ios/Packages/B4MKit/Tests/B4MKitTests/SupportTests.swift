@@ -67,6 +67,25 @@ final class MarkdownTextTests: XCTestCase {
   }
 }
 
+final class TranscriptLinkPolicyTests: XCTestCase {
+  func testWebLinksOpenInTheInAppBrowser() throws {
+    for text in ["https://example.com/a?b=c", "HTTP://example.com"] {
+      let url = try XCTUnwrap(URL(string: text))
+      XCTAssertEqual(TranscriptLinkPolicy.webPage(for: url), url)
+    }
+  }
+
+  func testAppSchemesAndHostlessLinksAreDropped() throws {
+    for text in [
+      "tel:+15555550100", "sms:+15555550100", "facetime:someone@example.com", "shortcuts://run-shortcut?name=x",
+      "mailto:a@example.com", "javascript:alert(1)", "file:///etc/hosts", "https:relative",
+    ] {
+      let url = try XCTUnwrap(URL(string: text), text)
+      XCTAssertNil(TranscriptLinkPolicy.webPage(for: url), text)
+    }
+  }
+}
+
 final class RelativeTimeTests: XCTestCase {
   private let locale = Locale(identifier: "en_US")
 

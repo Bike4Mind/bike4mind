@@ -11,6 +11,8 @@ public final class AccountDeletionViewModel {
     case deleting
     case blockedByOrganizations([AccountOrganization])
     case notPermitted
+    /// The server wants a step-up proof this app cannot collect yet (see `AccountDeletionFailure`).
+    case recentSignInRequired
     case failed(APIError)
     case completed(scheduledFor: Date?)
   }
@@ -42,7 +44,7 @@ public final class AccountDeletionViewModel {
     guard isConfirmed else { return false }
     switch state {
     case .deleting, .completed: return false
-    case .idle, .blockedByOrganizations, .notPermitted, .failed: return true
+    case .idle, .blockedByOrganizations, .notPermitted, .recentSignInRequired, .failed: return true
     }
   }
 
@@ -57,8 +59,7 @@ public final class AccountDeletionViewModel {
       switch failure {
       case .organizationTransferRequired(let organizations): state = .blockedByOrganizations(organizations)
       case .notPermitted: state = .notPermitted
-      // No dedicated screen state yet for the step-up gate; it surfaces as a refusal.
-      case .recentSignInRequired: state = .failed(.forbidden)
+      case .recentSignInRequired: state = .recentSignInRequired
       case .alreadyScheduled: state = .failed(.server(status: 409))
       case .api(let error): state = .failed(error)
       }

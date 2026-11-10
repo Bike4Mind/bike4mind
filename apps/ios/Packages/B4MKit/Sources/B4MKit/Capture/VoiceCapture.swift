@@ -66,6 +66,8 @@ public enum VoiceCaptureError: Error, Equatable, Sendable {
 public final class VoiceCaptureModel {
   public enum State: Equatable {
     case idle
+    /// Between Start and the recorder running (the permission prompt, audio session setup).
+    case starting
     case recording
     case transcribing
     case transcribed(String)
@@ -85,29 +87,48 @@ public final class VoiceCaptureModel {
     self.minimumDuration = minimumDuration
   }
 
-  public var isBusy: Bool { state == .recording || state == .transcribing }
+  public var isBusy: Bool { state == .starting || state == .recording || state == .transcribing }
 
   /// Asks for the microphone if needed, then starts recording. No-op while busy.
+  ///
+  /// `.starting` is set before the first suspension, so a second Start in that window is a no-op instead of
+  /// a second recorder. A Cancel in that window moves the state off `.starting`; every resumption checks
+  /// for that and a recorder that came up anyway is torn down, so the mic never runs behind a closed panel.
   public func start() async {
     guard !isBusy else { return }
+    state = .starting
     switch await recorder.permission() {
     case .denied:
-      state = .failed(.microphoneDenied)
+      failStart(.microphoneDenied)
       return
     case .undetermined:
-      guard await recorder.requestPermission() else {
-        state = .failed(.microphoneDenied)
+      let granted = await recorder.requestPermission()
+      guard state == .starting else { return }
+      guard granted else {
+        failStart(.microphoneDenied)
         return
       }
     case .granted:
       break
     }
+    guard state == .starting else { return }
     do {
       try await recorder.start()
-      state = .recording
     } catch {
-      state = .failed(.recordingFailed)
+      failStart(.recordingFailed)
+      return
     }
+    guard state == .starting else {
+      await recorder.cancel()
+      return
+    }
+    state = .recording
+  }
+
+  /// A start that was cancelled meanwhile stays cancelled rather than surfacing a failure nobody waits for.
+  private func failStart(_ error: VoiceCaptureError) {
+    guard state == .starting else { return }
+    state = .failed(error)
   }
 
   /// Stops and transcribes. Only meaningful while recording.
@@ -140,8 +161,9 @@ public final class VoiceCaptureModel {
   }
 
   public func cancel() async {
-    await recorder.cancel()
+    // Idle first: a start still in flight sees it and stops the recorder it brings up.
     state = .idle
+    await recorder.cancel()
   }
 
   /// Takes the finished transcript, returning to idle so the model is ready for another clip.

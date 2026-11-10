@@ -12,6 +12,15 @@ struct RootView: View {
   @State private var hasShownShell = false
 
   var body: some View {
+    if let notice = services.clientUpgrade.notice {
+      // Nothing else this build sends would be served, so no other screen is worth showing.
+      UpdateRequiredView(minimumVersion: notice.minimumVersion)
+    } else {
+      authRoutedContent
+    }
+  }
+
+  private var authRoutedContent: some View {
     Group {
       switch auth.state {
       case .restoring:
@@ -123,5 +132,25 @@ struct RootView: View {
     let widgets = services.widgets
     Task { await widgets.signOut() }
     services.navigator.discardPendingRoute()
+  }
+}
+
+/// The server answered 426: this build is older than the oldest one it still serves.
+private struct UpdateRequiredView: View {
+  let minimumVersion: String?
+
+  var body: some View {
+    ContentUnavailableView {
+      Label("Update required", systemImage: "arrow.down.app")
+    } description: {
+      Text(message)
+    }
+  }
+
+  private var message: String {
+    guard let minimumVersion else {
+      return "This version of Bike4Mind is no longer supported. Update the app to continue."
+    }
+    return "This version of Bike4Mind is no longer supported. Update to version \(minimumVersion) or later to continue."
   }
 }

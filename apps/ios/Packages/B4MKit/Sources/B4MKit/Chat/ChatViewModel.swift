@@ -221,13 +221,21 @@ public final class ChatViewModel {
   /// The server accepted an agent run. The run is headless (no realtime frames), so its quest, the row
   /// that gains the reply, is followed by the fallback poll; the run's Live Activity is the run service's.
   private func acceptRun(_ receipt: AgentRunReceipt, localID: String) {
-    guard let questID = receipt.questID,
-      let localIndex = liveTurns.firstIndex(where: { $0.id == localID })
-    else { return }
+    guard let localIndex = liveTurns.firstIndex(where: { $0.id == localID }) else { return }
+    guard let questID = receipt.questID else {
+      // The server writes the quest best effort, so there may be no row to follow: nothing would ever settle
+      // the optimistic turn (polling and reconnect reconciliation skip `local-` ids). The run itself goes on,
+      // tracked by its Live Activity under the execution id, so the turn settles as started.
+      liveTurns[localIndex] = liveTurns[localIndex].updating(status: .done, reply: Self.untrackedRunReply)
+      return
+    }
     lastHeardAt[questID] = lastHeardAt[questID] ?? now()
     liveTurns[localIndex] = liveTurns[localIndex].updating(id: questID)
     startPolling(questID)
   }
+
+  static let untrackedRunReply =
+    "The agent run started. Its progress shows in its Live Activity rather than in this conversation."
 
   private func startActivity(for turn: QuestTurn, prompt: String?) {
     activities?.questStarted(

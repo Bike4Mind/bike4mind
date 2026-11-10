@@ -109,6 +109,7 @@ public actor CaptureEngine {
 
   /// Enqueues, then mints tickets and hands every file to the background session. Returns when the bytes are
   /// in the system's hands (or the first problem), which is as long as the share extension needs to stay alive.
+  /// The result has one job per item, in item order.
   @discardableResult
   public func submit(
     _ items: [ShareItem], to destination: CaptureDestination, note: String?
@@ -117,7 +118,9 @@ public actor CaptureEngine {
   {
     let jobs = try enqueue(items, to: destination, note: note)
     for job in jobs { await advance(job.id) }
-    return jobs.compactMap { try? store.load(id: $0.id) }
+    // One job per item, in order (`CaptureSubmitting`): an unreadable record keeps its enqueued snapshot
+    // rather than shifting every later job onto the wrong item.
+    return jobs.map { (try? store.load(id: $0.id)) ?? $0 }
   }
 
   /// App launch / foreground: retry lost uploads, push every unfinished job forward, prune old results.
@@ -364,7 +367,7 @@ public actor CaptureEngine {
     guard let api = error as? APIError else { return false }
     switch api {
     case .offline, .rateLimited, .server, .signedOut: return true
-    case .forbidden, .notFound, .malformedResponse: return false
+    case .forbidden, .notFound, .malformedResponse, .upgradeRequired: return false
     }
   }
 
@@ -382,6 +385,7 @@ public actor CaptureEngine {
     case APIError.notFound: "The destination no longer exists."
     case APIError.rateLimited: "Too many requests; will retry."
     case APIError.server: "Bike4Mind had a problem. Try again in a moment."
+    case APIError.upgradeRequired: "Update Bike4Mind to keep sending."
     default: "Something went wrong."
     }
   }

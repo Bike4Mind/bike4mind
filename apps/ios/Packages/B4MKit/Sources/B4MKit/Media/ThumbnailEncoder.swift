@@ -31,7 +31,9 @@ public protocol ImageDownloading: Sendable {
 }
 
 public struct URLSessionImageDownloader: ImageDownloading {
-  /// A hard ceiling so a surprise 200 MB file cannot be pulled into memory just for a widget.
+  /// A hard ceiling so a surprise 200 MB file cannot be pulled into memory just for a widget. Enforced while
+  /// streaming: a declared oversize body is refused before any of it is read, and an undeclared one is cut
+  /// off as soon as it passes the cap.
   public static let maxBytes = 20 * 1024 * 1024
 
   private let session: URLSession
@@ -41,9 +43,20 @@ public struct URLSessionImageDownloader: ImageDownloading {
   }
 
   public func download(_ url: URL) async throws -> Data {
-    let (data, response) = try await session.data(from: url)
-    guard (response as? HTTPURLResponse)?.statusCode == 200, data.count <= Self.maxBytes else {
+    let (bytes, response) = try await session.bytes(from: url)
+    // expectedContentLength is -1 when the server did not say; the loop below still enforces the cap.
+    guard (response as? HTTPURLResponse)?.statusCode == 200, response.expectedContentLength <= Int64(Self.maxBytes) else {
+      bytes.task.cancel()
       throw URLError(.badServerResponse)
+    }
+    var data = Data()
+    if response.expectedContentLength > 0 { data.reserveCapacity(Int(response.expectedContentLength)) }
+    for try await byte in bytes {
+      data.append(byte)
+      if data.count > Self.maxBytes {
+        bytes.task.cancel()
+        throw URLError(.dataLengthExceedsMaximum)
+      }
     }
     return data
   }

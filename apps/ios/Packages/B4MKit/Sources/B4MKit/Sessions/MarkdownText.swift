@@ -12,3 +12,17 @@ public enum MarkdownText {
     return (try? AttributedString(markdown: source, options: options)) ?? AttributedString(source)
   }
 }
+
+/// Where a tapped link in a transcript may go. Model output is steerable by whatever content the model read,
+/// and link text hides the target, so only web pages open (in the in-app browser); `tel:`, `sms:`,
+/// `facetime:`, `shortcuts:` and every other app scheme are dropped rather than handed to the system.
+public enum TranscriptLinkPolicy {
+  /// The page to show in the in-app browser, or nil when the link must not open at all.
+  public static func webPage(for url: URL) -> URL? {
+    guard let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http", url.host() != nil else {
+      return nil
+    }
+    return url
+  }
+}
+

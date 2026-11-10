@@ -38,6 +38,23 @@ final class WidgetSnapshotRecorderTests: XCTestCase {
     XCTAssertEqual(running?.top, .init(sessionID: "b", title: "Beta", status: "running"))
   }
 
+  func testASessionLeftMidRunAgesOutInsteadOfBeingRepublishedAsRunning() async {
+    let clock = Clock()
+    let store = InMemoryWidgetSnapshotStore()
+    let recorder = WidgetSnapshotRecorder(store: store, reloader: RecordingReloader(), now: { clock.now })
+    await recorder.recordTurns(sessionID: "a", sessionTitle: "Alpha", turns: [turn("1", status: .running)])
+    clock.advance(60)
+    await recorder.recordTurns(sessionID: "b", sessionTitle: "Beta", turns: [turn("2", status: .running)])
+    XCTAssertEqual(store.load()?.runningAgents?.observedAt, clock.now, "stamped with the lead's last sighting")
+
+    // Only session B is open now; A is never observed again.
+    clock.advance(WidgetEntryMapper.runningAgentsFreshness)
+    await recorder.recordTurns(sessionID: "b", sessionTitle: "Beta", turns: [turn("2", status: .done)])
+    let running = store.load()?.runningAgents
+    XCTAssertEqual(running?.count, 0, "A is older than the freshness window and no longer counted")
+    XCTAssertNil(running?.top)
+  }
+
   func testPendingApprovalOutranksRunning() async {
     let (recorder, store, _) = makeRecorder()
     let approval = PendingAction(tool: "web_browse", parameters: [:], requestedAt: referenceDate)

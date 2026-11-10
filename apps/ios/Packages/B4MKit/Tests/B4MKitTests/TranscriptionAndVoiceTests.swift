@@ -149,7 +149,21 @@ actor FakeRecorder: AudioRecording {
     return grantsOnRequest
   }
 
+  private var holdsStart = false
+  private var startWaiter: CheckedContinuation<Void, Never>?
+  var isWaitingToStart: Bool { startWaiter != nil }
+
+  /// Makes the next `start()` suspend until `releaseStart()`, like a slow audio session setup.
+  func holdStart() { holdsStart = true }
+
+  func releaseStart() {
+    holdsStart = false
+    startWaiter?.resume()
+    startWaiter = nil
+  }
+
   func start() async throws {
+    if holdsStart { await withCheckedContinuation { startWaiter = $0 } }
     if let startError { throw startError }
     started += 1
   }
@@ -280,6 +294,26 @@ final class VoiceCaptureModelTests: XCTestCase {
     XCTAssertEqual(model.state, .idle)
     let cancelled = await recorder.cancelled
     XCTAssertEqual(cancelled, 1)
+  }
+
+  func testASecondStartAndACancelWhileStartingLeaveNoRecorderRunning() async {
+    let (model, recorder, _) = make()
+    await recorder.holdStart()
+    let first = Task { await model.start() }
+    while !(await recorder.isWaitingToStart) { await Task.yield() }
+    XCTAssertEqual(model.state, .starting)
+    XCTAssertTrue(model.isBusy)
+
+    await model.start()
+    await model.cancel()
+    await recorder.releaseStart()
+    await first.value
+
+    XCTAssertEqual(model.state, .idle, "a cancelled start never reaches recording")
+    let started = await recorder.started
+    let cancelled = await recorder.cancelled
+    XCTAssertEqual(started, 1, "the second Start built no second recorder")
+    XCTAssertEqual(cancelled, 2, "the recorder that came up after Cancel was torn down")
   }
 
   func testStartWhileBusyAndStopWhileIdleAreNoOps() async {

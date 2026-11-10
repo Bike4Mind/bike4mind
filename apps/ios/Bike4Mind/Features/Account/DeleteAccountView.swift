@@ -114,6 +114,8 @@ private struct DeleteAccountContent: View {
     switch model.state {
     case .failed(let error): error.message
     case .notPermitted: "Account deletion isn't available for this session."
+    case .recentSignInRequired:
+      "Deleting your account needs you to confirm your identity, which this app can't do yet. Delete your account from Bike4Mind on the web."
     case .idle, .deleting, .blockedByOrganizations, .completed: nil
     }
   }

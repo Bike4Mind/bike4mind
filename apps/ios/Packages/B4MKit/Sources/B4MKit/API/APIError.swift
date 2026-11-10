@@ -14,11 +14,13 @@ public enum APIError: Error, Equatable, Sendable {
   case offline
   /// The server answered, but not with a body this client understands.
   case malformedResponse
+  /// The server no longer serves this build (HTTP 426). `ClientUpgradeStatus` has already been told.
+  case upgradeRequired
 
   public var isRetryable: Bool {
     switch self {
     case .offline, .rateLimited, .server: true
-    case .signedOut, .forbidden, .notFound, .malformedResponse: false
+    case .signedOut, .forbidden, .notFound, .malformedResponse, .upgradeRequired: false
     }
   }
 }
@@ -29,6 +31,7 @@ extension APIError {
     case 401: self = .signedOut
     case 403: self = .forbidden
     case 404: self = .notFound
+    case 426: self = .upgradeRequired
     case 429: self = .rateLimited
     default: self = .server(status: status)
     }

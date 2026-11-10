@@ -65,9 +65,12 @@ public struct KeychainTokenStore: TokenStore {
       return
     }
 
+    // ThisDeviceOnly: a rotating refresh token must not ride an encrypted backup onto a second device,
+    // where both copies would race to rotate it. After-first-unlock still lets the share extension and
+    // background refreshes read it. The update rewrites the attribute on items stored before this change.
     let attributes: [String: Any] = [
       kSecValueData as String: Data(token.utf8),
-      kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
+      kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
     ]
     let updateStatus = SecItemUpdate(baseQuery as CFDictionary, attributes as CFDictionary)
     if updateStatus == errSecSuccess { return }

@@ -160,6 +160,21 @@ final class LiveActivityChatTests: XCTestCase {
     model.stop()
   }
 
+  func testARunWithoutAQuestSettlesTheOptimisticTurnInsteadOfSpinningForever() async {
+    await starter.setResult(.success(AgentRunReceipt(executionID: "e3", questID: nil, sessionID: "s1")))
+    let model = makeModel()
+    model.sendsAsAgentRun = true
+    model.draft = "Audit"
+    await model.send()
+
+    let turn = try? XCTUnwrap(model.liveTurns.first)
+    XCTAssertEqual(model.liveTurns.count, 1)
+    XCTAssertEqual(turn?.status, .done)
+    XCTAssertEqual(turn?.reply, ChatViewModel.untrackedRunReply)
+    XCTAssertTrue(model.sendFailures.isEmpty)
+    model.stop()
+  }
+
   func testAFailedRunStartKeepsTheModeSoARetryIsStillARun() async {
     await starter.setResult(.failure(.server(status: 409)))
     let model = makeModel()

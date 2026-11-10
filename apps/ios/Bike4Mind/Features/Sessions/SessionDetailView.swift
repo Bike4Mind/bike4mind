@@ -22,6 +22,8 @@ private struct ChatScreen: View {
   @State private var title: String
   @FocusState private var composerFocused: Bool
   @State private var isRecordingVoice = false
+  /// A web link tapped in the transcript, shown in the in-app browser.
+  @State private var linkedPage: URL?
   @Environment(\.dynamicTypeSize) private var dynamicTypeSize
   @ScaledMetric(relativeTo: .title) private var composerIconSize: CGFloat = 32
 
@@ -43,6 +45,7 @@ private struct ChatScreen: View {
       .navigationBarTitleDisplayMode(.inline)
       .background(Tokens.Palette.background)
       .safeAreaInset(edge: .bottom) { composer }
+      .inAppSafari(url: $linkedPage)
       .sheet(isPresented: $isRecordingVoice) {
         VoiceRecorderPanel(
           onTranscript: { text in
@@ -149,6 +152,14 @@ private struct ChatScreen: View {
       }
       .scrollDismissesKeyboard(.interactively)
       .defaultScrollAnchor(.bottom)
+      // Links in model output never reach the system directly (see `TranscriptLinkPolicy`).
+      .environment(
+        \.openURL,
+        OpenURLAction { url in
+          guard let page = TranscriptLinkPolicy.webPage(for: url) else { return .discarded }
+          linkedPage = page
+          return .handled
+        })
       .onChange(of: model.messages.last) { _, last in
         guard let last else { return }
         withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(last.id, anchor: .bottom) }

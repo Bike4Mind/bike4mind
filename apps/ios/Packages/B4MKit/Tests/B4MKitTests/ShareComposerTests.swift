@@ -72,19 +72,46 @@ private actor RecordingSubmitter: CaptureSubmitting {
   var failure: (any Error)?
   var resultStage = UploadStage.uploading
 
+  /// Items (by display name) whose job fails on submit, whatever `resultStage` says.
+  var failingNames: Set<String> = []
+  var retryStage = UploadStage.uploading
+  private(set) var retried: [UUID] = []
+  private(set) var discarded: [UUID] = []
+  private var stored: [UploadJob] = []
+
   func setFailure(_ error: (any Error)?) { failure = error }
   func setResultStage(_ stage: UploadStage) { resultStage = stage }
+  func setFailingNames(_ names: Set<String>) { failingNames = names }
+  func setRetryStage(_ stage: UploadStage) { retryStage = stage }
 
   func submit(_ items: [ShareItem], to destination: CaptureDestination, note: String?) async throws -> [UploadJob] {
     calls.append(Call(items: items, destination: destination, note: note))
     if let failure { throw failure }
-    return items.map {
+    let created = items.map {
       var job = UploadJob(destination: destination, payload: .message($0.displayName), note: note, now: Date())
-      job.stage = resultStage
-      job.lastError = resultStage == .failed ? "nope" : nil
+      job.stage = failingNames.contains($0.displayName) ? .failed : resultStage
+      job.lastError = job.stage == .failed ? "nope" : nil
       return job
     }
+    stored += created
+    return created
   }
+
+  func retry(jobID: UUID) {
+    retried.append(jobID)
+    guard let index = stored.firstIndex(where: { $0.id == jobID }) else { return }
+    stored[index].stage = retryStage
+    stored[index].lastError = retryStage == .failed ? "still nope" : nil
+  }
+
+  func discard(jobID: UUID) {
+    discarded.append(jobID)
+    stored.removeAll { $0.id == jobID }
+  }
+
+  func jobs() -> [UploadJob] { stored }
+
+  func failedJobIDs() -> [UUID] { stored.filter { $0.stage == .failed }.map(\.id) }
 }
 
 @MainActor
@@ -219,6 +246,62 @@ final class ShareComposerModelTests: XCTestCase {
     model.choose(.lake(id: "l1", name: "Research"))
     await model.submit()
     XCTAssertEqual(model.phase, .failed("nope"))
+  }
+
+  func testRetryingAPartlyFailedSendRetriesOnlyTheFailedJob() async {
+    let submitter = RecordingSubmitter()
+    await submitter.setFailingNames([ShareItem.text("b").displayName])
+    let model = ShareComposerModel(
+      items: [.text("a"), .text("b")], source: StubSource(), submitter: submitter, store: InMemoryDestinationStore())
+    await model.load()
+    model.choose(.lake(id: "l", name: "L"))
+    await model.submit()
+    XCTAssertEqual(model.phase, .failed("nope"))
+    XCTAssertEqual(model.items, [.text("b")], "only what did not go through is left to send")
+    let failed = await submitter.failedJobIDs()
+
+    await model.submit()
+    let calls = await submitter.calls
+    let retried = await submitter.retried
+    XCTAssertEqual(calls.count, 1, "a second Send must not submit anything new")
+    XCTAssertEqual(retried, failed)
+    XCTAssertEqual(model.phase, .sent)
+  }
+
+  func testAFailedRetryKeepsTheFailedItemForTheNextAttempt() async {
+    let submitter = RecordingSubmitter()
+    await submitter.setFailingNames([ShareItem.text("b").displayName])
+    await submitter.setRetryStage(.failed)
+    let model = ShareComposerModel(
+      items: [.text("a"), .text("b")], source: StubSource(), submitter: submitter, store: InMemoryDestinationStore())
+    await model.load()
+    model.choose(.lake(id: "l", name: "L"))
+    await model.submit()
+    await model.submit()
+    XCTAssertEqual(model.phase, .failed("still nope"))
+    XCTAssertEqual(model.items, [.text("b")])
+    let retried = await submitter.retried
+    XCTAssertEqual(retried.count, 1)
+  }
+
+  func testChangingTheDestinationAfterAPartialFailureSendsOnlyTheFailedItemsAfresh() async {
+    let submitter = RecordingSubmitter()
+    await submitter.setFailingNames([ShareItem.text("b").displayName])
+    let model = ShareComposerModel(
+      items: [.text("a"), .text("b")], source: StubSource(), submitter: submitter, store: InMemoryDestinationStore())
+    await model.load()
+    model.choose(.lake(id: "l", name: "L"))
+    await model.submit()
+    let failed = await submitter.failedJobIDs()
+
+    await submitter.setFailingNames([])
+    model.choose(.lake(id: "m", name: "M"))
+    await model.submit()
+    let calls = await submitter.calls
+    let discarded = await submitter.discarded
+    XCTAssertEqual(calls.last, RecordingSubmitter.Call(items: [.text("b")], destination: .lake(id: "m", name: "M"), note: ""))
+    XCTAssertEqual(discarded, failed, "the old attempt's failed job does not linger")
+    XCTAssertEqual(model.phase, .sent)
   }
 
   func testRemovingAnItemUpdatesWhatIsSent() async {

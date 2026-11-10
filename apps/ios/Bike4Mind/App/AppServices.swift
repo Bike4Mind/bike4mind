@@ -39,6 +39,8 @@ final class AppServices {
   let agentRuns: any AgentRunStarting
   /// Whether the signed-in account is waiting to be deleted; `RootView` shows the restore screen then.
   let accountStatus = AccountStatus()
+  /// Whether the server has refused this build (HTTP 426); `RootView` shows the update screen then.
+  let clientUpgrade = ClientUpgradeStatus()
 
   init(auth: AuthController) {
     self.auth = auth

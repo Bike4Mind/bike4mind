@@ -17,7 +17,8 @@ public struct AccountOrganization: Equatable, Sendable, Identifiable {
 /// `/api/account/deletion` (JWT bearer only):
 /// - `POST` requests deletion. 202 `{deletion: {requestedAt, scheduledFor, source}, canceledSubscriptions}`,
 ///   after which every session, this one included, is revoked. Behind a step-up gate: 403
-///   `{code: "step_up_required" | "step_up_unavailable"}` until the session proves a recent sign-in.
+///   `{code: "step_up_required" | "step_up_unavailable"}` until the session passes
+///   `POST /api/auth/step-up` (a fresh sign-in alone does not count).
 ///   403 without a code: an impersonating admin. 409 `{code: "ACCOUNT_DELETION_ORG_OWNER",
 ///   organizations: [{id, name}]}`: owned organizations need a new owner first; 409 without it: already
 ///   scheduled.

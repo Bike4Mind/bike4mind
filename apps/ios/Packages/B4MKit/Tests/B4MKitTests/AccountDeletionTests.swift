@@ -274,6 +274,15 @@ final class AccountDeletionViewModelTests: XCTestCase {
     XCTAssertEqual(endedSessions, 0)
   }
 
+  func testTheStepUpGateGetsItsOwnStateRatherThanAGenericRefusal() async {
+    let api = ScriptedAccountAPI(deletion: .failure(AccountDeletionFailure.recentSignInRequired))
+    let model = makeModel(api)
+    model.confirmation = "DELETE"
+    await model.submit()
+    XCTAssertEqual(model.state, .recentSignInRequired)
+    XCTAssertEqual(endedSessions, 0)
+  }
+
   func testForbiddenAndNetworkFailuresKeepTheSessionAndAllowARetry() async {
     let api = ScriptedAccountAPI(deletion: .failure(AccountDeletionFailure.notPermitted))
     let model = makeModel(api)

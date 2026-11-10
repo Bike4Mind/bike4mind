@@ -12,6 +12,7 @@ extension APIError {
     case .forbidden: "You don't have access to this."
     case .signedOut: "Your session ended. Sign in again."
     case .malformedResponse: "Bike4Mind sent something this version of the app can't read. Try updating the app."
+    case .upgradeRequired: "This version of the app is no longer supported. Update Bike4Mind to continue."
     }
   }
 }

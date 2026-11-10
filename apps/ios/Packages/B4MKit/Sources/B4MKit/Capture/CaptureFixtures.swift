@@ -96,6 +96,11 @@ public actor FixtureCaptureJobs: CaptureSubmitting, CaptureJobTracking {
     await run(jobID)
   }
 
+  public func discard(jobID: UUID) {
+    stored.removeAll { $0.id == jobID }
+    notify()
+  }
+
   private func run(_ id: UUID) async {
     for stage in [UploadStage.uploading, .registering, .done] {
       try? await Task.sleep(for: stepDelay)

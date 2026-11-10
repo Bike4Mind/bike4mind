@@ -9,8 +9,14 @@ public protocol DestinationSource: Sendable {
 
 /// Hands items to the upload pipeline. `CaptureEngine` is the real one.
 public protocol CaptureSubmitting: Sendable {
+  /// One job per item, in item order.
   @discardableResult
   func submit(_ items: [ShareItem], to destination: CaptureDestination, note: String?) async throws -> [UploadJob]
+  /// Re-runs a failed job in place, keeping what it already knows (a turn that may have been sent is
+  /// reconciled rather than re-posted).
+  func retry(jobID: UUID) async
+  func discard(jobID: UUID) async
+  func jobs() async -> [UploadJob]
 }
 
 extension CaptureEngine: CaptureSubmitting {}
@@ -79,6 +85,11 @@ public final class ShareComposerModel {
   public var note = ""
   public private(set) var items: [ShareItem]
 
+  /// After a partly failed send: the failed job behind each entry of `items` (which then holds only what did
+  /// not go through), and what that send was addressed with. Sending again to the same place retries these
+  /// jobs, so what already went through is never sent twice.
+  @ObservationIgnored private var failedJobIDs: [UUID] = []
+  @ObservationIgnored private var failedSend: (destination: CaptureDestination, note: String)?
   @ObservationIgnored private let source: any DestinationSource
   @ObservationIgnored private let submitter: any CaptureSubmitting
   @ObservationIgnored private let store: any DestinationStore
@@ -144,21 +155,68 @@ public final class ShareComposerModel {
   public func remove(at index: Int) {
     guard items.indices.contains(index) else { return }
     items.remove(at: index)
+    // Only while `items` is exactly the failed items does an index name a job.
+    if failedJobIDs.count == items.count + 1 {
+      // The user dropped an item that failed: its job must not linger in the queue and resurface later.
+      let jobID = failedJobIDs.remove(at: index)
+      let submitter = submitter
+      Task { await submitter.discard(jobID: jobID) }
+    }
   }
 
   public func submit() async {
     guard canSubmit, let destination else { return }
     phase = .submitting
+    let sentItems = items
     do {
-      let jobs = try await submitter.submit(items, to: destination, note: note)
-      store.remember(destination)
-      if let failed = jobs.first(where: { $0.stage == .failed }) {
-        phase = .failed(failed.lastError ?? "Couldn't send this. Try again.")
+      let jobs: [UploadJob?]
+      if let failedSend, failedSend.destination == destination, failedSend.note == note, !failedJobIDs.isEmpty {
+        jobs = await retryFailedJobs()
       } else {
-        phase = .sent
+        // A new destination or note means a new send; the old attempt's failed jobs go with it.
+        await discardFailedJobs()
+        jobs = try await submitter.submit(sentItems, to: destination, note: note)
       }
+      store.remember(destination)
+      settle(sentItems: sentItems, jobs: jobs, destination: destination)
     } catch {
       phase = .failed(CaptureEngine.describe(error))
     }
+  }
+
+  private func retryFailedJobs() async -> [UploadJob?] {
+    let jobIDs = failedJobIDs
+    for jobID in jobIDs { await submitter.retry(jobID: jobID) }
+    let current = Dictionary(await submitter.jobs().map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    return jobIDs.map { current[$0] }
+  }
+
+  private func discardFailedJobs() async {
+    for jobID in failedJobIDs { await submitter.discard(jobID: jobID) }
+    failedJobIDs = []
+    failedSend = nil
+  }
+
+  /// Keeps only the items whose job failed, so the next Send cannot repeat what already went through.
+  /// A job that is gone from the queue is not failed: there is nothing left to retry.
+  private func settle(sentItems: [ShareItem], jobs: [UploadJob?], destination: CaptureDestination) {
+    let failedJobs = jobs.compactMap { $0 }.filter { $0.stage == .failed }
+    guard let firstFailure = failedJobs.first else {
+      failedJobIDs = []
+      failedSend = nil
+      phase = .sent
+      return
+    }
+    if jobs.count == sentItems.count {
+      let failedIndices = jobs.indices.filter { jobs[$0]?.stage == .failed }
+      items = failedIndices.map { sentItems[$0] }
+    } else {
+      // Breaks the one-job-per-item contract. Keep every item (none can be matched to its job) and still
+      // retry only the failed jobs, which never re-sends a delivered item.
+      assertionFailure("submitter returned \(jobs.count) jobs for \(sentItems.count) items")
+    }
+    failedJobIDs = failedJobs.map(\.id)
+    failedSend = (destination, note)
+    phase = .failed(firstFailure.lastError ?? "Couldn't send this. Try again.")
   }
 }
