@@ -80,9 +80,37 @@ describe('premiumNavItemForRedirect', () => {
     expect(premiumNavItemForRedirect([reports, product], '/product/run')?.label).toBe('Product');
   });
 
-  it('ignores visibility gates (the visitor is signed out)', () => {
-    const gated = item({ path: '/product', requireEntitlement: 'product:pro', requireFeatureTag: 'beta' });
+  it('ignores entitlement gates (the visitor is signed out)', () => {
+    const gated = item({ path: '/product', requireEntitlement: 'product:pro' });
     expect(premiumNavItemForRedirect([gated], '/product')).toBe(gated);
+  });
+
+  it('never names a feature-tag-gated item, even when an entitlement also grants it', () => {
+    const beta = item({ path: '/product', requireFeatureTag: 'beta' });
+    const both = item({ path: '/product', requireEntitlement: 'product:pro', requireFeatureTag: 'beta' });
+    expect(premiumNavItemForRedirect([beta], '/product')).toBeUndefined();
+    expect(premiumNavItemForRedirect([both], '/product/x')).toBeUndefined();
+    expect(premiumNavItemForRedirect([beta, product], '/product/x')?.label).toBe('Product');
+  });
+
+  it('resolves dot segments before matching, so the label follows where the redirect lands', () => {
+    expect(premiumNavItemForRedirect([product], '/product/../admin')).toBeUndefined();
+    expect(premiumNavItemForRedirect([product], '/other/../product/x')?.label).toBe('Product');
+    expect(premiumNavItemForRedirect([product], '/product/./x')?.label).toBe('Product');
+  });
+
+  it('keeps the first of two items that share a path', () => {
+    const first = item({ path: '/product', label: 'First' });
+    const second = item({ path: '/product/', label: 'Second' });
+    expect(premiumNavItemForRedirect([first, second], '/product/x')?.label).toBe('First');
+    expect(premiumNavItemForRedirect([second, first], '/product/x')?.label).toBe('Second');
+  });
+
+  it('ignores a query or hash in the item path', () => {
+    expect(premiumNavItemForRedirect([item({ path: '/product?tab=home' })], '/product/x')?.path).toBe(
+      '/product?tab=home'
+    );
+    expect(premiumNavItemForRedirect([item({ path: '/product#top' })], '/productx')).toBeUndefined();
   });
 
   it('never treats a root or trailing-slash item path as a catch-all', () => {
