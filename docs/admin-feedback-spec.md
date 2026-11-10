@@ -28,7 +28,7 @@ Each item: what I saw, why it hurts support, the change, and whether it needs ba
 
 ### F1. You cannot tell what kind of report a row is
 
-- **Seen:** the list has no Type column. A thumbs-up "Great summary", a thumbs-down "Answer ignored the attached file" and a bug report look identical; all carry a generic `feedback` tag. A thumbs-down with no comment renders as an empty Feedback cell, and changing its status toasts `"" feedback from <user> updated to: Closed`. Subject (turn, conversation, product, help) is a filter but not shown per row.
+- **Seen:** the list has no Type column. A thumbs-up "Great summary", a thumbs-down "Answer ignored the attached file" and a bug report look identical; all carry a generic `feedback` tag. A thumbs-down with no comment renders as an empty Feedback cell, and changing its status toasts `"No content" feedback from <user> updated to: Closed` (`""` on older reports that store empty content). Subject (turn, conversation, product, help) is a filter but not shown per row.
 - **Why:** severity is the first triage call. Today it takes reading every row, and an empty row gives nothing to read.
 - **Change:** a Type chip (bug, thumbs down, thumbs up, feedback, help rating) with the subject beside it; an empty comment reads "No comment" in muted text; the toast names the type instead of quoting empty text. Add a Type multi-select filter.
 - **Work:** frontend only. `type` and `subject` are already in the list projection. A `type` filter needs one API param; add a `{ type, status, createdAt }` index if the filter is used at volume.
@@ -128,7 +128,7 @@ Each item: what I saw, why it hurts support, the change, and whether it needs ba
 
 - **L1. Low row density.** The Created column stacks absolute date, relative time and every tag, so a row is about three lines tall and roughly five rows fit at 1440 x 900. Show relative time with the absolute time in a tooltip, and drop internal tags (`bugReport`, `feedback`) from the row once the Type chip exists.
 - **L2. Status falls off at 768 px.** The table scrolls inside its container as intended, but the Status column, the main action, sits past the visible edge. Pin Status (or the row menu) to the right edge, or move status into the drawer at narrow widths.
-- **L3. Empty-comment rows.** The empty cell and the `""` toast (F1) are the visible symptom.
+- **L3. Empty-comment rows.** The empty cell and the `"No content"` toast (F1) are the visible symptom.
 
 ## Decisions
 
