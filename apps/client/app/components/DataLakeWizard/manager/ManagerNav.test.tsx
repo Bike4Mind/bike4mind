@@ -19,6 +19,7 @@ const lake = vi.hoisted(() => {
     uncategorized: undefined as { data: TestFile[]; total: number } | undefined,
     bucket: { isLoading: false, isError: false } as QueryState,
     byTag: {} as Record<string, TestFile[]>,
+    byTagTotal: {} as Record<string, number>,
     folder: { isLoading: false, isError: false } as QueryState,
   };
   const reset = () => {
@@ -28,6 +29,7 @@ const lake = vi.hoisted(() => {
     state.uncategorized = undefined;
     state.bucket = { isLoading: false, isError: false };
     state.byTag = {};
+    state.byTagTotal = {};
     state.folder = { isLoading: false, isError: false };
   };
   return { state, reset };
@@ -50,7 +52,8 @@ const useDataLakeFiles = vi.hoisted(() =>
     if (!id) return { data: undefined, isLoading: false, isError: false };
     if (params?.tag) {
       const files = state.byTag[params.tag] ?? [];
-      return { data: { data: files, total: files.length }, ...state.folder };
+      const total = state.byTagTotal[params.tag] ?? files.length;
+      return { data: { data: files, total, hasMore: total > files.length }, ...state.folder };
     }
     return { data: state.firstPage ? { data: state.firstPage } : undefined, isLoading: false, isError: false };
   })
@@ -244,6 +247,29 @@ describe('ManagerNav lake tree counts', () => {
     expect(useDataLakeFiles).toHaveBeenCalledWith('lake-1', { tag: 'lk:appendix' });
     expect(screen.getAllByTestId(/^datalake-manager-file-/)).toHaveLength(31);
     expect(screen.getByTestId('datalake-manager-file-a30')).toBeInTheDocument();
+  });
+
+  it('says how many of the folder files are listed when the folder holds more than one page', () => {
+    const page = makeFiles('p', 100, ['lk:big']);
+    lake.state.tagCounts = [{ tag: 'lk:big', count: 150, fileCount: 150 }];
+    lake.state.byTag = { 'lk:big': page };
+    lake.state.byTagTotal = { 'lk:big': 150 };
+
+    renderInLake(makeLake({}), ['lk', 'big']);
+
+    expect(screen.getAllByTestId(/^datalake-manager-file-/)).toHaveLength(100);
+    expect(screen.getByTestId('datalake-manager-folder-truncated')).toHaveTextContent('Showing 100 of 150 files');
+  });
+
+  it('shows no cut-off note when the whole folder is listed', () => {
+    const files = makeFiles('q', 3, ['lk:small']);
+    lake.state.tagCounts = countsFor(files, 'lk:');
+    lake.state.byTag = { 'lk:small': files };
+
+    renderInLake(makeLake({}), ['lk', 'small']);
+
+    expect(screen.getAllByTestId(/^datalake-manager-file-/)).toHaveLength(3);
+    expect(screen.queryByTestId('datalake-manager-folder-truncated')).not.toBeInTheDocument();
   });
 
   it('lists a branch folder its own files beside its subfolders', () => {

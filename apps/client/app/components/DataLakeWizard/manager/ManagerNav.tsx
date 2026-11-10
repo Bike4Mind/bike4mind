@@ -740,6 +740,17 @@ export default function ManagerNav({
         />
       )}
 
+      {/* The folder's count covers the whole lake, but its file list is one 100-file page until paging lands. */}
+      {folderTag && folderResult?.hasMore && (
+        <Typography
+          level="body-xs"
+          data-testid="datalake-manager-folder-truncated"
+          sx={{ px: '12px', py: '6px', color: 'text.tertiary' }}
+        >
+          Showing {articles.length} of {folderResult.total} files
+        </Typography>
+      )}
+
       {/* Sticky bottom bar, same chrome as the in-chat tree footer. */}
       <Box sx={{ display: 'flex', gap: '8px', p: '12px', borderTop: '1px solid', borderColor }}>
         <Tooltip title="Browse data lakes other people have published, from across the app." size="sm">
