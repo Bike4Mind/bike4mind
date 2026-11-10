@@ -2438,7 +2438,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     }
     if (coverage.filesWithheldReindexing > 0) {
       // Names TIME as the remedy, matching describeRetrievalUnavailable's wording rule: the reader
-      // must not be sent to re-embed a document that is already re-embedding.
+      // must not be sent to re-embed a document that is already being indexed.
       reasons.push(
         `${coverage.filesWithheldReindexing} document(s) are still being indexed and were withheld - ` +
           'their passages are not searchable yet; they return on their own'

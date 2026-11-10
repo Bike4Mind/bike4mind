@@ -103,7 +103,7 @@ export type IndexStateFile = {
  * upstream of this partition entirely, so the hole was not even served-stale - it was silent.
  *
  * So the pending stamp (#1939) overrides the guard: a member with a rebuild outstanding is withheld
- * and REPORTED as re-indexing. The cost is naming a file whose stale passages could still have been
+ * and REPORTED as still indexing. The cost is naming a file whose stale passages could still have been
  * ranked for the minutes between reset and commit; the prose below is worded to be true of that
  * member too. Refuse-and-report over degrade-silently, the same rule as everywhere else here.
  */
