@@ -206,6 +206,12 @@ export const ADMIN_EVAL_CASES: readonly AdminEvalCase[] = [
     needsTarget: true,
   },
   {
+    id: 'data-ai-advisories',
+    category: 'data',
+    question: 'Which accounts has the AI flagged as abuse in the last day?',
+    expectTools: ['admin_get_ai_advisories'],
+  },
+  {
     id: 'data-org-missing',
     category: 'data',
     question: 'Look up the organization named Zzyzx Nonexistent Holdings.',
