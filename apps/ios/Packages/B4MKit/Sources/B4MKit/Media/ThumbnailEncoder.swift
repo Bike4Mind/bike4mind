@@ -45,7 +45,8 @@ public struct URLSessionImageDownloader: ImageDownloading {
   public func download(_ url: URL) async throws -> Data {
     let (bytes, response) = try await session.bytes(from: url)
     // expectedContentLength is -1 when the server did not say; the loop below still enforces the cap.
-    guard (response as? HTTPURLResponse)?.statusCode == 200, response.expectedContentLength <= Int64(Self.maxBytes) else {
+    guard (response as? HTTPURLResponse)?.statusCode == 200, response.expectedContentLength <= Int64(Self.maxBytes)
+    else {
       bytes.task.cancel()
       throw URLError(.badServerResponse)
     }

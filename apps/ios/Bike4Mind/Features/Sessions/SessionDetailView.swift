@@ -159,7 +159,8 @@ private struct ChatScreen: View {
           guard let page = TranscriptLinkPolicy.webPage(for: url) else { return .discarded }
           linkedPage = page
           return .handled
-        })
+        }
+      )
       .onChange(of: model.messages.last) { _, last in
         guard let last else { return }
         withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(last.id, anchor: .bottom) }

@@ -65,6 +65,45 @@ extension Components {
             /// - Remark: Generated from `#/components/schemas/ScopeForbiddenResponse/name`.
             @available(*, deprecated)
             public var name: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/ScopeForbiddenResponse/errorCode`.
+            public var errorCode: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/ScopeForbiddenResponse/suspension`.
+            public struct SuspensionPayload: Codable, Hashable, Sendable {
+                /// Which Terms of Service rule the account was suspended under. New categories may be added.
+                ///
+                /// - Remark: Generated from `#/components/schemas/ScopeForbiddenResponse/suspension/reason_category`.
+                public var reasonCategory: Swift.String
+                /// The policy page for this category. Absent on self-hosted deployments.
+                ///
+                /// - Remark: Generated from `#/components/schemas/ScopeForbiddenResponse/suspension/terms_url`.
+                public var termsUrl: Swift.String?
+                /// Where to appeal the suspension. Absent on self-hosted deployments.
+                ///
+                /// - Remark: Generated from `#/components/schemas/ScopeForbiddenResponse/suspension/appeal_url`.
+                public var appealUrl: Swift.String?
+                /// Creates a new `SuspensionPayload`.
+                ///
+                /// - Parameters:
+                ///   - reasonCategory: Which Terms of Service rule the account was suspended under. New categories may be added.
+                ///   - termsUrl: The policy page for this category. Absent on self-hosted deployments.
+                ///   - appealUrl: Where to appeal the suspension. Absent on self-hosted deployments.
+                public init(
+                    reasonCategory: Swift.String,
+                    termsUrl: Swift.String? = nil,
+                    appealUrl: Swift.String? = nil
+                ) {
+                    self.reasonCategory = reasonCategory
+                    self.termsUrl = termsUrl
+                    self.appealUrl = appealUrl
+                }
+                public enum CodingKeys: String, CodingKey {
+                    case reasonCategory = "reason_category"
+                    case termsUrl = "terms_url"
+                    case appealUrl = "appeal_url"
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/ScopeForbiddenResponse/suspension`.
+            public var suspension: Components.Schemas.ScopeForbiddenResponse.SuspensionPayload?
             /// API key scopes this route accepts. Holding any one of them satisfies it.
             ///
             /// - Remark: Generated from `#/components/schemas/ScopeForbiddenResponse/required_scopes`.
@@ -79,18 +118,24 @@ extension Components {
             ///   - error:
             ///   - requestId:
             ///   - name: Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+            ///   - errorCode:
+            ///   - suspension:
             ///   - requiredScopes: API key scopes this route accepts. Holding any one of them satisfies it.
             ///   - alsoRequiredScopes: API key scopes this route also requires. Every one must be held, on top of `required_scopes`.
             public init(
                 error: Swift.String,
                 requestId: Swift.String? = nil,
                 name: Swift.String? = nil,
+                errorCode: Swift.String? = nil,
+                suspension: Components.Schemas.ScopeForbiddenResponse.SuspensionPayload? = nil,
                 requiredScopes: [Swift.String]? = nil,
                 alsoRequiredScopes: [Swift.String]? = nil
             ) {
                 self.error = error
                 self.requestId = requestId
                 self.name = name
+                self.errorCode = errorCode
+                self.suspension = suspension
                 self.requiredScopes = requiredScopes
                 self.alsoRequiredScopes = alsoRequiredScopes
             }
@@ -98,8 +143,60 @@ extension Components {
                 case error
                 case requestId = "request_id"
                 case name
+                case errorCode
+                case suspension
                 case requiredScopes = "required_scopes"
                 case alsoRequiredScopes = "also_required_scopes"
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/UpgradeRequiredResponse`.
+        public struct UpgradeRequiredResponse: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/UpgradeRequiredResponse/error`.
+            public var error: Swift.String
+            /// - Remark: Generated from `#/components/schemas/UpgradeRequiredResponse/request_id`.
+            public var requestId: Swift.String?
+            /// Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+            ///
+            /// - Remark: Generated from `#/components/schemas/UpgradeRequiredResponse/name`.
+            @available(*, deprecated)
+            public var name: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/UpgradeRequiredResponse/errorCode`.
+            public var errorCode: Swift.String
+            /// - Remark: Generated from `#/components/schemas/UpgradeRequiredResponse/client_name`.
+            public var clientName: Swift.String
+            /// - Remark: Generated from `#/components/schemas/UpgradeRequiredResponse/minimum_version`.
+            public var minimumVersion: Swift.String
+            /// Creates a new `UpgradeRequiredResponse`.
+            ///
+            /// - Parameters:
+            ///   - error:
+            ///   - requestId:
+            ///   - name: Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+            ///   - errorCode:
+            ///   - clientName:
+            ///   - minimumVersion:
+            public init(
+                error: Swift.String,
+                requestId: Swift.String? = nil,
+                name: Swift.String? = nil,
+                errorCode: Swift.String,
+                clientName: Swift.String,
+                minimumVersion: Swift.String
+            ) {
+                self.error = error
+                self.requestId = requestId
+                self.name = name
+                self.errorCode = errorCode
+                self.clientName = clientName
+                self.minimumVersion = minimumVersion
+            }
+            public enum CodingKeys: String, CodingKey {
+                case error
+                case requestId = "request_id"
+                case name
+                case errorCode
+                case clientName = "client_name"
+                case minimumVersion = "minimum_version"
             }
         }
         /// - Remark: Generated from `#/components/schemas/getSessionResponse200`.

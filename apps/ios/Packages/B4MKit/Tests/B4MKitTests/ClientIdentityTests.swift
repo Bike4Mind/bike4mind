@@ -35,6 +35,10 @@ final class ClientIdentityTests: XCTestCase {
     XCTAssertEqual(ClientUpgradeDetector.notice(status: 426, body: body), ClientUpgradeNotice(minimumVersion: "1.2.0"))
     XCTAssertEqual(ClientUpgradeDetector.notice(status: 426, body: Data()), ClientUpgradeNotice(minimumVersion: nil))
     XCTAssertNil(ClientUpgradeDetector.notice(status: 400, body: body))
+    let unconfirmed = Data(#"{"errorCode":"other","minimum_version":"9.0.0"}"#.utf8)
+    XCTAssertEqual(
+      ClientUpgradeDetector.notice(status: 426, body: unconfirmed), ClientUpgradeNotice(minimumVersion: nil),
+      "the status alone refuses the build; an unconfirmed envelope contributes no minimum")
   }
 
   func testA426FoldsIntoUpgradeRequired() {
@@ -44,7 +48,7 @@ final class ClientIdentityTests: XCTestCase {
 
   @MainActor
   func testTheStatusLatchesOntoTheFirstAnswerThatNamesAVersion() {
-    let status = ClientUpgradeStatus(signal: ClientUpgradeSignal())
+    let status = ClientUpgradeStatus(signal: ClientUpgradeSignal()) {}
     XCTAssertFalse(status.isUpgradeRequired)
     status.receive(ClientUpgradeNotice(minimumVersion: nil))
     status.receive(ClientUpgradeNotice(minimumVersion: "1.2.0"))
@@ -75,6 +79,131 @@ final class URLSessionTransportIdentityTests: XCTestCase {
     XCTAssertEqual(sent.value(forHTTPHeaderField: "X-Client-Version"), "3.1.0")
     XCTAssertEqual(received.value, ClientUpgradeNotice(minimumVersion: "3.2.0"))
   }
+
+  func testGeneratedClientCallsDeclareTheClientAndMapTheDocumented426() async throws {
+    let api = APIClient(baseURL: Self.base, tokens: FakeTokens(), transport: Self.upgradeTransport())
+
+    await assertThrowsAPIError(.upgradeRequired) { _ = try await api.listSessions(cursor: nil, limit: 1) }
+
+    let sent = try XCTUnwrap(UpgradeRequiredProtocol.lastRequest)
+    XCTAssertEqual(sent.url?.path(), "/api/v1/sessions")
+    XCTAssertEqual(sent.value(forHTTPHeaderField: "X-Client-Name"), "b4m-ios")
+    XCTAssertEqual(sent.value(forHTTPHeaderField: "X-Client-Version"), "3.1.0")
+    XCTAssertEqual(sent.value(forHTTPHeaderField: "Authorization"), "Bearer token-1")
+  }
+
+  func testHandWrittenCallsDeclareTheClientAndMapA426() async throws {
+    let handshake = RealtimeHandshake(baseURL: Self.base, tokens: FakeTokens(), transport: Self.upgradeTransport())
+
+    await assertThrowsAPIError(.upgradeRequired) { _ = try await handshake.mintTicket() }
+
+    let sent = try XCTUnwrap(UpgradeRequiredProtocol.lastRequest)
+    XCTAssertEqual(sent.url?.path(), "/api/websocket/ticket")
+    XCTAssertEqual(sent.value(forHTTPHeaderField: "X-Client-Name"), "b4m-ios")
+    XCTAssertEqual(sent.value(forHTTPHeaderField: "X-Client-Version"), "3.1.0")
+  }
+
+  private static let base = URL(string: "https://app.example.test")!
+
+  private static func upgradeTransport() -> URLSessionTransport {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [UpgradeRequiredProtocol.self]
+    return URLSessionTransport(
+      session: URLSession(configuration: configuration), accountSignal: AccountDeletionSignal(),
+      identity: ClientIdentity(name: ClientIdentity.iOSClientName, marketingVersion: "3.1"),
+      upgradeSignal: ClientUpgradeSignal())
+  }
+}
+
+final class ClientVersionProbeTests: XCTestCase {
+  private let base = URL(string: "https://app.example.test")!
+
+  func testProbeAsksTheGateWithoutASession() async throws {
+    let fake = FakeTransport { _ in (200, Data(#"{"data":[]}"#.utf8)) }
+    try await ClientVersionProbe(baseURL: base, transport: fake).check()
+
+    let requests = await fake.requests
+    let request = try XCTUnwrap(requests.first)
+    XCTAssertEqual(request.httpMethod, "GET")
+    XCTAssertEqual(request.url?.path(), "/api/v1/whats-new")
+    XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+  }
+
+  func testProbeSurfacesUpgradeRequiredAndOffline() async {
+    let gated = ClientVersionProbe(baseURL: base, transport: FakeTransport { _ in (426, Data()) })
+    await assertThrowsAPIError(.upgradeRequired) { try await gated.check() }
+
+    let offline = ClientVersionProbe(
+      baseURL: base, transport: FakeTransport { _ in throw URLError(.notConnectedToInternet) })
+    await assertThrowsAPIError(.offline) { try await offline.check() }
+  }
+
+  func testAnyOtherAnswerIsThroughTheGate() async throws {
+    try await ClientVersionProbe(baseURL: base, transport: FakeTransport { _ in (500, Data()) }).check()
+  }
+}
+
+@MainActor
+final class ClientUpgradeStatusRecheckTests: XCTestCase {
+  private func status(probing outcomes: [Result<Void, any Error>]) -> (ClientUpgradeStatus, Locked<Int>) {
+    let remaining = Locked(outcomes)
+    let calls = Locked(0)
+    let status = ClientUpgradeStatus(signal: ClientUpgradeSignal()) {
+      calls.mutate { $0 += 1 }
+      try remaining.mutate { $0.removeFirst() }.get()
+    }
+    return (status, calls)
+  }
+
+  func testRecheckClearsOnceTheServerLetsTheBuildThrough() async {
+    let (status, _) = status(probing: [.success(())])
+    status.receive(ClientUpgradeNotice(minimumVersion: "2.1.0"))
+    await status.recheck()
+    XCTAssertFalse(status.isUpgradeRequired)
+    XCTAssertFalse(status.isChecking)
+  }
+
+  func testRecheckStaysWhileStillRefusedOrOffline() async {
+    let (status, calls) = status(probing: [.failure(APIError.upgradeRequired), .failure(APIError.offline)])
+    status.receive(ClientUpgradeNotice(minimumVersion: "2.1.0"))
+    await status.recheck()
+    await status.recheck()
+    XCTAssertEqual(status.notice, ClientUpgradeNotice(minimumVersion: "2.1.0"))
+    XCTAssertEqual(calls.current, 2)
+  }
+
+  func testAnyOtherAnswerCountsAsThroughTheGate() async {
+    let (status, _) = status(probing: [.failure(APIError.server(status: 500))])
+    status.receive(ClientUpgradeNotice(minimumVersion: nil))
+    await status.recheck()
+    XCTAssertFalse(status.isUpgradeRequired)
+  }
+
+  func testRecheckSendsNothingWhileTheBuildIsServed() async {
+    let (status, calls) = status(probing: [])
+    await status.recheck()
+    XCTAssertEqual(calls.current, 0, "a foreground with nothing refused sends no request")
+  }
+
+  func testAReportOnTheSignalEntersTheState() async {
+    let signal = ClientUpgradeSignal()
+    let status = ClientUpgradeStatus(signal: signal) {}
+    signal.report(ClientUpgradeNotice(minimumVersion: "3.0.0"))
+    for _ in 0..<50 where !status.isUpgradeRequired { await Task.yield() }
+    XCTAssertEqual(status.notice, ClientUpgradeNotice(minimumVersion: "3.0.0"))
+  }
+}
+
+private func assertThrowsAPIError(
+  _ expected: APIError, file: StaticString = #filePath, line: UInt = #line,
+  _ body: () async throws -> Void
+) async {
+  do {
+    try await body()
+    XCTFail("expected \(expected)", file: file, line: line)
+  } catch {
+    XCTAssertEqual(error as? APIError, expected, file: file, line: line)
+  }
 }
 
 private final class LockedBox<Value: Sendable>: @unchecked Sendable {
@@ -94,7 +223,8 @@ private final class UpgradeRequiredProtocol: URLProtocol, @unchecked Sendable {
 
   override func startLoading() {
     Self.captured.set(request)
-    let body = Data(#"{"error":"old","errorCode":"upgrade_required","client_name":"b4m-ios","minimum_version":"3.2.0"}"#.utf8)
+    let body = Data(
+      #"{"error":"old","errorCode":"upgrade_required","client_name":"b4m-ios","minimum_version":"3.2.0"}"#.utf8)
     let response = HTTPURLResponse(url: request.url!, statusCode: 426, httpVersion: nil, headerFields: nil)!
     client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
     client?.urlProtocol(self, didLoad: body)

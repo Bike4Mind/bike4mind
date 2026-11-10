@@ -85,6 +85,21 @@ final class WSClientTests: XCTestCase {
     XCTAssertTrue(connector.all.isEmpty)
   }
 
+  func testUpgradeRequiredTicketParksInTheSlowTierUntilResumed() async throws {
+    await handshake.setTicketFailure(.upgradeRequired)
+    let client = makeClient()
+    await client.start()
+
+    await eventually { await client.connectionState == .suspended }
+    await eventually { [sleeper] in sleeper!.durations.contains(.seconds(300)) }
+    XCTAssertFalse(sleeper.durations.contains { $0 < .seconds(15) }, "an outdated build never fast-retries")
+    XCTAssertTrue(connector.all.isEmpty)
+
+    await handshake.setTicketFailure(nil)
+    await client.resume()
+    await eventually { await client.connectionState == .connected }
+  }
+
   // MARK: - Heartbeat
 
   func testHeartbeatIsSentEveryFifteenSeconds() async throws {

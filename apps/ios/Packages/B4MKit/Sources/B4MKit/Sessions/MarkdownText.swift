@@ -25,4 +25,3 @@ public enum TranscriptLinkPolicy {
     return url
   }
 }
-

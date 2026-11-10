@@ -176,6 +176,11 @@ public actor WSClient: RealtimeClient {
         setState(.idle)
         lifecycleTask = nil
         return
+      } catch APIError.upgradeRequired {
+        // Fast retries cannot help an outdated build: park in the slow tier, which `resume()` leaves once the
+        // update-required state clears.
+        logger.notice("Realtime parked: this build is below the server's minimum")
+        attempt = backoff.maxAttempts
       } catch {
         if Task.isCancelled { return }
         // The endpoint may have moved (a redeploy); look it up again on the next attempt.

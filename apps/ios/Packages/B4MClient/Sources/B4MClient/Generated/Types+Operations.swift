@@ -302,7 +302,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// The API key does not hold any of the required scopes.
+            /// The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`).
             ///
             /// - Remark: Generated from `#/paths//api/sessions/{id}/get(getSession)/responses/403`.
             ///
@@ -633,6 +633,122 @@ public enum Operations {
                     default:
                         try throwUnexpectedResponseStatus(
                             expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct UpgradeRequired: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/api/sessions/{id}/GET/responses/426/headers`.
+                public struct Headers: Sendable, Hashable {
+                    /// Correlation id for this request; safe to log and quote in support requests.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/sessions/{id}/GET/responses/426/headers/X-Request-ID`.
+                    public var xRequestID: Swift.String?
+                    /// Request quota per minute.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/sessions/{id}/GET/responses/426/headers/X-RateLimit-Limit-Minute`.
+                    public var xRateLimitLimitMinute: Swift.Int?
+                    /// Requests remaining in the current minute.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/sessions/{id}/GET/responses/426/headers/X-RateLimit-Remaining-Minute`.
+                    public var xRateLimitRemainingMinute: Swift.Int?
+                    /// Unix epoch (seconds) when the minute window resets.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/sessions/{id}/GET/responses/426/headers/X-RateLimit-Reset-Minute`.
+                    public var xRateLimitResetMinute: Swift.Int?
+                    /// Request quota per day.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/sessions/{id}/GET/responses/426/headers/X-RateLimit-Limit-Day`.
+                    public var xRateLimitLimitDay: Swift.Int?
+                    /// Requests remaining in the current day.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/sessions/{id}/GET/responses/426/headers/X-RateLimit-Remaining-Day`.
+                    public var xRateLimitRemainingDay: Swift.Int?
+                    /// Unix epoch (seconds) when the day window resets.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/sessions/{id}/GET/responses/426/headers/X-RateLimit-Reset-Day`.
+                    public var xRateLimitResetDay: Swift.Int?
+                    /// Creates a new `Headers`.
+                    ///
+                    /// - Parameters:
+                    ///   - xRequestID: Correlation id for this request; safe to log and quote in support requests.
+                    ///   - xRateLimitLimitMinute: Request quota per minute.
+                    ///   - xRateLimitRemainingMinute: Requests remaining in the current minute.
+                    ///   - xRateLimitResetMinute: Unix epoch (seconds) when the minute window resets.
+                    ///   - xRateLimitLimitDay: Request quota per day.
+                    ///   - xRateLimitRemainingDay: Requests remaining in the current day.
+                    ///   - xRateLimitResetDay: Unix epoch (seconds) when the day window resets.
+                    public init(
+                        xRequestID: Swift.String? = nil,
+                        xRateLimitLimitMinute: Swift.Int? = nil,
+                        xRateLimitRemainingMinute: Swift.Int? = nil,
+                        xRateLimitResetMinute: Swift.Int? = nil,
+                        xRateLimitLimitDay: Swift.Int? = nil,
+                        xRateLimitRemainingDay: Swift.Int? = nil,
+                        xRateLimitResetDay: Swift.Int? = nil
+                    ) {
+                        self.xRequestID = xRequestID
+                        self.xRateLimitLimitMinute = xRateLimitLimitMinute
+                        self.xRateLimitRemainingMinute = xRateLimitRemainingMinute
+                        self.xRateLimitResetMinute = xRateLimitResetMinute
+                        self.xRateLimitLimitDay = xRateLimitLimitDay
+                        self.xRateLimitRemainingDay = xRateLimitRemainingDay
+                        self.xRateLimitResetDay = xRateLimitResetDay
+                    }
+                }
+                /// Received HTTP response headers
+                public var headers: Operations.GetSession.Output.UpgradeRequired.Headers
+                /// - Remark: Generated from `#/paths/api/sessions/{id}/GET/responses/426/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/api/sessions/{id}/GET/responses/426/content/application\/json`.
+                    case json(Components.Schemas.UpgradeRequiredResponse)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.UpgradeRequiredResponse {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.GetSession.Output.UpgradeRequired.Body
+                /// Creates a new `UpgradeRequired`.
+                ///
+                /// - Parameters:
+                ///   - headers: Received HTTP response headers
+                ///   - body: Received HTTP response body
+                public init(
+                    headers: Operations.GetSession.Output.UpgradeRequired.Headers = .init(),
+                    body: Operations.GetSession.Output.UpgradeRequired.Body
+                ) {
+                    self.headers = headers
+                    self.body = body
+                }
+            }
+            /// The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.
+            ///
+            /// - Remark: Generated from `#/paths//api/sessions/{id}/get(getSession)/responses/426`.
+            ///
+            /// HTTP response code: `426 upgradeRequired`.
+            case upgradeRequired(Operations.GetSession.Output.UpgradeRequired)
+            /// The associated value of the enum case if `self` is `.upgradeRequired`.
+            ///
+            /// - Throws: An error if `self` is not `.upgradeRequired`.
+            /// - SeeAlso: `.upgradeRequired`.
+            public var upgradeRequired: Operations.GetSession.Output.UpgradeRequired {
+                get throws {
+                    switch self {
+                    case let .upgradeRequired(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "upgradeRequired",
                             response: self
                         )
                     }
@@ -1052,7 +1168,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// The API key does not hold any of the required scopes.
+            /// The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`).
             ///
             /// - Remark: Generated from `#/paths//api/v1/me/get(getMe)/responses/403`.
             ///
@@ -1151,6 +1267,122 @@ public enum Operations {
                     default:
                         try throwUnexpectedResponseStatus(
                             expectedStatus: "methodNotAllowed",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct UpgradeRequired: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/api/v1/me/GET/responses/426/headers`.
+                public struct Headers: Sendable, Hashable {
+                    /// Correlation id for this request; safe to log and quote in support requests.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/me/GET/responses/426/headers/X-Request-ID`.
+                    public var xRequestID: Swift.String?
+                    /// Request quota per minute.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/me/GET/responses/426/headers/X-RateLimit-Limit-Minute`.
+                    public var xRateLimitLimitMinute: Swift.Int?
+                    /// Requests remaining in the current minute.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/me/GET/responses/426/headers/X-RateLimit-Remaining-Minute`.
+                    public var xRateLimitRemainingMinute: Swift.Int?
+                    /// Unix epoch (seconds) when the minute window resets.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/me/GET/responses/426/headers/X-RateLimit-Reset-Minute`.
+                    public var xRateLimitResetMinute: Swift.Int?
+                    /// Request quota per day.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/me/GET/responses/426/headers/X-RateLimit-Limit-Day`.
+                    public var xRateLimitLimitDay: Swift.Int?
+                    /// Requests remaining in the current day.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/me/GET/responses/426/headers/X-RateLimit-Remaining-Day`.
+                    public var xRateLimitRemainingDay: Swift.Int?
+                    /// Unix epoch (seconds) when the day window resets.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/me/GET/responses/426/headers/X-RateLimit-Reset-Day`.
+                    public var xRateLimitResetDay: Swift.Int?
+                    /// Creates a new `Headers`.
+                    ///
+                    /// - Parameters:
+                    ///   - xRequestID: Correlation id for this request; safe to log and quote in support requests.
+                    ///   - xRateLimitLimitMinute: Request quota per minute.
+                    ///   - xRateLimitRemainingMinute: Requests remaining in the current minute.
+                    ///   - xRateLimitResetMinute: Unix epoch (seconds) when the minute window resets.
+                    ///   - xRateLimitLimitDay: Request quota per day.
+                    ///   - xRateLimitRemainingDay: Requests remaining in the current day.
+                    ///   - xRateLimitResetDay: Unix epoch (seconds) when the day window resets.
+                    public init(
+                        xRequestID: Swift.String? = nil,
+                        xRateLimitLimitMinute: Swift.Int? = nil,
+                        xRateLimitRemainingMinute: Swift.Int? = nil,
+                        xRateLimitResetMinute: Swift.Int? = nil,
+                        xRateLimitLimitDay: Swift.Int? = nil,
+                        xRateLimitRemainingDay: Swift.Int? = nil,
+                        xRateLimitResetDay: Swift.Int? = nil
+                    ) {
+                        self.xRequestID = xRequestID
+                        self.xRateLimitLimitMinute = xRateLimitLimitMinute
+                        self.xRateLimitRemainingMinute = xRateLimitRemainingMinute
+                        self.xRateLimitResetMinute = xRateLimitResetMinute
+                        self.xRateLimitLimitDay = xRateLimitLimitDay
+                        self.xRateLimitRemainingDay = xRateLimitRemainingDay
+                        self.xRateLimitResetDay = xRateLimitResetDay
+                    }
+                }
+                /// Received HTTP response headers
+                public var headers: Operations.GetMe.Output.UpgradeRequired.Headers
+                /// - Remark: Generated from `#/paths/api/v1/me/GET/responses/426/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/api/v1/me/GET/responses/426/content/application\/json`.
+                    case json(Components.Schemas.UpgradeRequiredResponse)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.UpgradeRequiredResponse {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.GetMe.Output.UpgradeRequired.Body
+                /// Creates a new `UpgradeRequired`.
+                ///
+                /// - Parameters:
+                ///   - headers: Received HTTP response headers
+                ///   - body: Received HTTP response body
+                public init(
+                    headers: Operations.GetMe.Output.UpgradeRequired.Headers = .init(),
+                    body: Operations.GetMe.Output.UpgradeRequired.Body
+                ) {
+                    self.headers = headers
+                    self.body = body
+                }
+            }
+            /// The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/me/get(getMe)/responses/426`.
+            ///
+            /// HTTP response code: `426 upgradeRequired`.
+            case upgradeRequired(Operations.GetMe.Output.UpgradeRequired)
+            /// The associated value of the enum case if `self` is `.upgradeRequired`.
+            ///
+            /// - Throws: An error if `self` is not `.upgradeRequired`.
+            /// - SeeAlso: `.upgradeRequired`.
+            public var upgradeRequired: Operations.GetMe.Output.UpgradeRequired {
+                get throws {
+                    switch self {
+                    case let .upgradeRequired(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "upgradeRequired",
                             response: self
                         )
                     }
@@ -1570,7 +1802,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// The API key does not hold any of the required scopes.
+            /// The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`).
             ///
             /// - Remark: Generated from `#/paths//api/v1/credits/get(getCreditBalance)/responses/403`.
             ///
@@ -1669,6 +1901,122 @@ public enum Operations {
                     default:
                         try throwUnexpectedResponseStatus(
                             expectedStatus: "methodNotAllowed",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct UpgradeRequired: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/api/v1/credits/GET/responses/426/headers`.
+                public struct Headers: Sendable, Hashable {
+                    /// Correlation id for this request; safe to log and quote in support requests.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/credits/GET/responses/426/headers/X-Request-ID`.
+                    public var xRequestID: Swift.String?
+                    /// Request quota per minute.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/credits/GET/responses/426/headers/X-RateLimit-Limit-Minute`.
+                    public var xRateLimitLimitMinute: Swift.Int?
+                    /// Requests remaining in the current minute.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/credits/GET/responses/426/headers/X-RateLimit-Remaining-Minute`.
+                    public var xRateLimitRemainingMinute: Swift.Int?
+                    /// Unix epoch (seconds) when the minute window resets.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/credits/GET/responses/426/headers/X-RateLimit-Reset-Minute`.
+                    public var xRateLimitResetMinute: Swift.Int?
+                    /// Request quota per day.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/credits/GET/responses/426/headers/X-RateLimit-Limit-Day`.
+                    public var xRateLimitLimitDay: Swift.Int?
+                    /// Requests remaining in the current day.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/credits/GET/responses/426/headers/X-RateLimit-Remaining-Day`.
+                    public var xRateLimitRemainingDay: Swift.Int?
+                    /// Unix epoch (seconds) when the day window resets.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/credits/GET/responses/426/headers/X-RateLimit-Reset-Day`.
+                    public var xRateLimitResetDay: Swift.Int?
+                    /// Creates a new `Headers`.
+                    ///
+                    /// - Parameters:
+                    ///   - xRequestID: Correlation id for this request; safe to log and quote in support requests.
+                    ///   - xRateLimitLimitMinute: Request quota per minute.
+                    ///   - xRateLimitRemainingMinute: Requests remaining in the current minute.
+                    ///   - xRateLimitResetMinute: Unix epoch (seconds) when the minute window resets.
+                    ///   - xRateLimitLimitDay: Request quota per day.
+                    ///   - xRateLimitRemainingDay: Requests remaining in the current day.
+                    ///   - xRateLimitResetDay: Unix epoch (seconds) when the day window resets.
+                    public init(
+                        xRequestID: Swift.String? = nil,
+                        xRateLimitLimitMinute: Swift.Int? = nil,
+                        xRateLimitRemainingMinute: Swift.Int? = nil,
+                        xRateLimitResetMinute: Swift.Int? = nil,
+                        xRateLimitLimitDay: Swift.Int? = nil,
+                        xRateLimitRemainingDay: Swift.Int? = nil,
+                        xRateLimitResetDay: Swift.Int? = nil
+                    ) {
+                        self.xRequestID = xRequestID
+                        self.xRateLimitLimitMinute = xRateLimitLimitMinute
+                        self.xRateLimitRemainingMinute = xRateLimitRemainingMinute
+                        self.xRateLimitResetMinute = xRateLimitResetMinute
+                        self.xRateLimitLimitDay = xRateLimitLimitDay
+                        self.xRateLimitRemainingDay = xRateLimitRemainingDay
+                        self.xRateLimitResetDay = xRateLimitResetDay
+                    }
+                }
+                /// Received HTTP response headers
+                public var headers: Operations.GetCreditBalance.Output.UpgradeRequired.Headers
+                /// - Remark: Generated from `#/paths/api/v1/credits/GET/responses/426/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/api/v1/credits/GET/responses/426/content/application\/json`.
+                    case json(Components.Schemas.UpgradeRequiredResponse)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.UpgradeRequiredResponse {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.GetCreditBalance.Output.UpgradeRequired.Body
+                /// Creates a new `UpgradeRequired`.
+                ///
+                /// - Parameters:
+                ///   - headers: Received HTTP response headers
+                ///   - body: Received HTTP response body
+                public init(
+                    headers: Operations.GetCreditBalance.Output.UpgradeRequired.Headers = .init(),
+                    body: Operations.GetCreditBalance.Output.UpgradeRequired.Body
+                ) {
+                    self.headers = headers
+                    self.body = body
+                }
+            }
+            /// The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/credits/get(getCreditBalance)/responses/426`.
+            ///
+            /// HTTP response code: `426 upgradeRequired`.
+            case upgradeRequired(Operations.GetCreditBalance.Output.UpgradeRequired)
+            /// The associated value of the enum case if `self` is `.upgradeRequired`.
+            ///
+            /// - Throws: An error if `self` is not `.upgradeRequired`.
+            /// - SeeAlso: `.upgradeRequired`.
+            public var upgradeRequired: Operations.GetCreditBalance.Output.UpgradeRequired {
+                get throws {
+                    switch self {
+                    case let .upgradeRequired(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "upgradeRequired",
                             response: self
                         )
                     }
@@ -2115,7 +2463,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// The API key does not hold any of the required scopes.
+            /// The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`).
             ///
             /// - Remark: Generated from `#/paths//api/v1/quests/{id}/get(getQuest)/responses/403`.
             ///
@@ -2446,6 +2794,122 @@ public enum Operations {
                     default:
                         try throwUnexpectedResponseStatus(
                             expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct UpgradeRequired: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/api/v1/quests/{id}/GET/responses/426/headers`.
+                public struct Headers: Sendable, Hashable {
+                    /// Correlation id for this request; safe to log and quote in support requests.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/quests/{id}/GET/responses/426/headers/X-Request-ID`.
+                    public var xRequestID: Swift.String?
+                    /// Request quota per minute.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/quests/{id}/GET/responses/426/headers/X-RateLimit-Limit-Minute`.
+                    public var xRateLimitLimitMinute: Swift.Int?
+                    /// Requests remaining in the current minute.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/quests/{id}/GET/responses/426/headers/X-RateLimit-Remaining-Minute`.
+                    public var xRateLimitRemainingMinute: Swift.Int?
+                    /// Unix epoch (seconds) when the minute window resets.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/quests/{id}/GET/responses/426/headers/X-RateLimit-Reset-Minute`.
+                    public var xRateLimitResetMinute: Swift.Int?
+                    /// Request quota per day.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/quests/{id}/GET/responses/426/headers/X-RateLimit-Limit-Day`.
+                    public var xRateLimitLimitDay: Swift.Int?
+                    /// Requests remaining in the current day.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/quests/{id}/GET/responses/426/headers/X-RateLimit-Remaining-Day`.
+                    public var xRateLimitRemainingDay: Swift.Int?
+                    /// Unix epoch (seconds) when the day window resets.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/quests/{id}/GET/responses/426/headers/X-RateLimit-Reset-Day`.
+                    public var xRateLimitResetDay: Swift.Int?
+                    /// Creates a new `Headers`.
+                    ///
+                    /// - Parameters:
+                    ///   - xRequestID: Correlation id for this request; safe to log and quote in support requests.
+                    ///   - xRateLimitLimitMinute: Request quota per minute.
+                    ///   - xRateLimitRemainingMinute: Requests remaining in the current minute.
+                    ///   - xRateLimitResetMinute: Unix epoch (seconds) when the minute window resets.
+                    ///   - xRateLimitLimitDay: Request quota per day.
+                    ///   - xRateLimitRemainingDay: Requests remaining in the current day.
+                    ///   - xRateLimitResetDay: Unix epoch (seconds) when the day window resets.
+                    public init(
+                        xRequestID: Swift.String? = nil,
+                        xRateLimitLimitMinute: Swift.Int? = nil,
+                        xRateLimitRemainingMinute: Swift.Int? = nil,
+                        xRateLimitResetMinute: Swift.Int? = nil,
+                        xRateLimitLimitDay: Swift.Int? = nil,
+                        xRateLimitRemainingDay: Swift.Int? = nil,
+                        xRateLimitResetDay: Swift.Int? = nil
+                    ) {
+                        self.xRequestID = xRequestID
+                        self.xRateLimitLimitMinute = xRateLimitLimitMinute
+                        self.xRateLimitRemainingMinute = xRateLimitRemainingMinute
+                        self.xRateLimitResetMinute = xRateLimitResetMinute
+                        self.xRateLimitLimitDay = xRateLimitLimitDay
+                        self.xRateLimitRemainingDay = xRateLimitRemainingDay
+                        self.xRateLimitResetDay = xRateLimitResetDay
+                    }
+                }
+                /// Received HTTP response headers
+                public var headers: Operations.GetQuest.Output.UpgradeRequired.Headers
+                /// - Remark: Generated from `#/paths/api/v1/quests/{id}/GET/responses/426/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/api/v1/quests/{id}/GET/responses/426/content/application\/json`.
+                    case json(Components.Schemas.UpgradeRequiredResponse)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.UpgradeRequiredResponse {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.GetQuest.Output.UpgradeRequired.Body
+                /// Creates a new `UpgradeRequired`.
+                ///
+                /// - Parameters:
+                ///   - headers: Received HTTP response headers
+                ///   - body: Received HTTP response body
+                public init(
+                    headers: Operations.GetQuest.Output.UpgradeRequired.Headers = .init(),
+                    body: Operations.GetQuest.Output.UpgradeRequired.Body
+                ) {
+                    self.headers = headers
+                    self.body = body
+                }
+            }
+            /// The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/quests/{id}/get(getQuest)/responses/426`.
+            ///
+            /// HTTP response code: `426 upgradeRequired`.
+            case upgradeRequired(Operations.GetQuest.Output.UpgradeRequired)
+            /// The associated value of the enum case if `self` is `.upgradeRequired`.
+            ///
+            /// - Throws: An error if `self` is not `.upgradeRequired`.
+            /// - SeeAlso: `.upgradeRequired`.
+            public var upgradeRequired: Operations.GetQuest.Output.UpgradeRequired {
+                get throws {
+                    switch self {
+                    case let .upgradeRequired(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "upgradeRequired",
                             response: self
                         )
                     }
@@ -3170,6 +3634,122 @@ public enum Operations {
                     default:
                         try throwUnexpectedResponseStatus(
                             expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct UpgradeRequired: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/api/v1/sessions/GET/responses/426/headers`.
+                public struct Headers: Sendable, Hashable {
+                    /// Correlation id for this request; safe to log and quote in support requests.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/GET/responses/426/headers/X-Request-ID`.
+                    public var xRequestID: Swift.String?
+                    /// Request quota per minute.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/GET/responses/426/headers/X-RateLimit-Limit-Minute`.
+                    public var xRateLimitLimitMinute: Swift.Int?
+                    /// Requests remaining in the current minute.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/GET/responses/426/headers/X-RateLimit-Remaining-Minute`.
+                    public var xRateLimitRemainingMinute: Swift.Int?
+                    /// Unix epoch (seconds) when the minute window resets.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/GET/responses/426/headers/X-RateLimit-Reset-Minute`.
+                    public var xRateLimitResetMinute: Swift.Int?
+                    /// Request quota per day.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/GET/responses/426/headers/X-RateLimit-Limit-Day`.
+                    public var xRateLimitLimitDay: Swift.Int?
+                    /// Requests remaining in the current day.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/GET/responses/426/headers/X-RateLimit-Remaining-Day`.
+                    public var xRateLimitRemainingDay: Swift.Int?
+                    /// Unix epoch (seconds) when the day window resets.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/GET/responses/426/headers/X-RateLimit-Reset-Day`.
+                    public var xRateLimitResetDay: Swift.Int?
+                    /// Creates a new `Headers`.
+                    ///
+                    /// - Parameters:
+                    ///   - xRequestID: Correlation id for this request; safe to log and quote in support requests.
+                    ///   - xRateLimitLimitMinute: Request quota per minute.
+                    ///   - xRateLimitRemainingMinute: Requests remaining in the current minute.
+                    ///   - xRateLimitResetMinute: Unix epoch (seconds) when the minute window resets.
+                    ///   - xRateLimitLimitDay: Request quota per day.
+                    ///   - xRateLimitRemainingDay: Requests remaining in the current day.
+                    ///   - xRateLimitResetDay: Unix epoch (seconds) when the day window resets.
+                    public init(
+                        xRequestID: Swift.String? = nil,
+                        xRateLimitLimitMinute: Swift.Int? = nil,
+                        xRateLimitRemainingMinute: Swift.Int? = nil,
+                        xRateLimitResetMinute: Swift.Int? = nil,
+                        xRateLimitLimitDay: Swift.Int? = nil,
+                        xRateLimitRemainingDay: Swift.Int? = nil,
+                        xRateLimitResetDay: Swift.Int? = nil
+                    ) {
+                        self.xRequestID = xRequestID
+                        self.xRateLimitLimitMinute = xRateLimitLimitMinute
+                        self.xRateLimitRemainingMinute = xRateLimitRemainingMinute
+                        self.xRateLimitResetMinute = xRateLimitResetMinute
+                        self.xRateLimitLimitDay = xRateLimitLimitDay
+                        self.xRateLimitRemainingDay = xRateLimitRemainingDay
+                        self.xRateLimitResetDay = xRateLimitResetDay
+                    }
+                }
+                /// Received HTTP response headers
+                public var headers: Operations.ListSessions.Output.UpgradeRequired.Headers
+                /// - Remark: Generated from `#/paths/api/v1/sessions/GET/responses/426/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/GET/responses/426/content/application\/json`.
+                    case json(Components.Schemas.UpgradeRequiredResponse)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.UpgradeRequiredResponse {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.ListSessions.Output.UpgradeRequired.Body
+                /// Creates a new `UpgradeRequired`.
+                ///
+                /// - Parameters:
+                ///   - headers: Received HTTP response headers
+                ///   - body: Received HTTP response body
+                public init(
+                    headers: Operations.ListSessions.Output.UpgradeRequired.Headers = .init(),
+                    body: Operations.ListSessions.Output.UpgradeRequired.Body
+                ) {
+                    self.headers = headers
+                    self.body = body
+                }
+            }
+            /// The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/sessions/get(listSessions)/responses/426`.
+            ///
+            /// HTTP response code: `426 upgradeRequired`.
+            case upgradeRequired(Operations.ListSessions.Output.UpgradeRequired)
+            /// The associated value of the enum case if `self` is `.upgradeRequired`.
+            ///
+            /// - Throws: An error if `self` is not `.upgradeRequired`.
+            /// - SeeAlso: `.upgradeRequired`.
+            public var upgradeRequired: Operations.ListSessions.Output.UpgradeRequired {
+                get throws {
+                    switch self {
+                    case let .upgradeRequired(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "upgradeRequired",
                             response: self
                         )
                     }
@@ -4010,6 +4590,122 @@ public enum Operations {
                     }
                 }
             }
+            public struct UpgradeRequired: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/quests/GET/responses/426/headers`.
+                public struct Headers: Sendable, Hashable {
+                    /// Correlation id for this request; safe to log and quote in support requests.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/quests/GET/responses/426/headers/X-Request-ID`.
+                    public var xRequestID: Swift.String?
+                    /// Request quota per minute.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/quests/GET/responses/426/headers/X-RateLimit-Limit-Minute`.
+                    public var xRateLimitLimitMinute: Swift.Int?
+                    /// Requests remaining in the current minute.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/quests/GET/responses/426/headers/X-RateLimit-Remaining-Minute`.
+                    public var xRateLimitRemainingMinute: Swift.Int?
+                    /// Unix epoch (seconds) when the minute window resets.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/quests/GET/responses/426/headers/X-RateLimit-Reset-Minute`.
+                    public var xRateLimitResetMinute: Swift.Int?
+                    /// Request quota per day.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/quests/GET/responses/426/headers/X-RateLimit-Limit-Day`.
+                    public var xRateLimitLimitDay: Swift.Int?
+                    /// Requests remaining in the current day.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/quests/GET/responses/426/headers/X-RateLimit-Remaining-Day`.
+                    public var xRateLimitRemainingDay: Swift.Int?
+                    /// Unix epoch (seconds) when the day window resets.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/quests/GET/responses/426/headers/X-RateLimit-Reset-Day`.
+                    public var xRateLimitResetDay: Swift.Int?
+                    /// Creates a new `Headers`.
+                    ///
+                    /// - Parameters:
+                    ///   - xRequestID: Correlation id for this request; safe to log and quote in support requests.
+                    ///   - xRateLimitLimitMinute: Request quota per minute.
+                    ///   - xRateLimitRemainingMinute: Requests remaining in the current minute.
+                    ///   - xRateLimitResetMinute: Unix epoch (seconds) when the minute window resets.
+                    ///   - xRateLimitLimitDay: Request quota per day.
+                    ///   - xRateLimitRemainingDay: Requests remaining in the current day.
+                    ///   - xRateLimitResetDay: Unix epoch (seconds) when the day window resets.
+                    public init(
+                        xRequestID: Swift.String? = nil,
+                        xRateLimitLimitMinute: Swift.Int? = nil,
+                        xRateLimitRemainingMinute: Swift.Int? = nil,
+                        xRateLimitResetMinute: Swift.Int? = nil,
+                        xRateLimitLimitDay: Swift.Int? = nil,
+                        xRateLimitRemainingDay: Swift.Int? = nil,
+                        xRateLimitResetDay: Swift.Int? = nil
+                    ) {
+                        self.xRequestID = xRequestID
+                        self.xRateLimitLimitMinute = xRateLimitLimitMinute
+                        self.xRateLimitRemainingMinute = xRateLimitRemainingMinute
+                        self.xRateLimitResetMinute = xRateLimitResetMinute
+                        self.xRateLimitLimitDay = xRateLimitLimitDay
+                        self.xRateLimitRemainingDay = xRateLimitRemainingDay
+                        self.xRateLimitResetDay = xRateLimitResetDay
+                    }
+                }
+                /// Received HTTP response headers
+                public var headers: Operations.ListSessionQuests.Output.UpgradeRequired.Headers
+                /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/quests/GET/responses/426/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/quests/GET/responses/426/content/application\/json`.
+                    case json(Components.Schemas.UpgradeRequiredResponse)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.UpgradeRequiredResponse {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.ListSessionQuests.Output.UpgradeRequired.Body
+                /// Creates a new `UpgradeRequired`.
+                ///
+                /// - Parameters:
+                ///   - headers: Received HTTP response headers
+                ///   - body: Received HTTP response body
+                public init(
+                    headers: Operations.ListSessionQuests.Output.UpgradeRequired.Headers = .init(),
+                    body: Operations.ListSessionQuests.Output.UpgradeRequired.Body
+                ) {
+                    self.headers = headers
+                    self.body = body
+                }
+            }
+            /// The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/sessions/{id}/quests/get(listSessionQuests)/responses/426`.
+            ///
+            /// HTTP response code: `426 upgradeRequired`.
+            case upgradeRequired(Operations.ListSessionQuests.Output.UpgradeRequired)
+            /// The associated value of the enum case if `self` is `.upgradeRequired`.
+            ///
+            /// - Throws: An error if `self` is not `.upgradeRequired`.
+            /// - SeeAlso: `.upgradeRequired`.
+            public var upgradeRequired: Operations.ListSessionQuests.Output.UpgradeRequired {
+                get throws {
+                    switch self {
+                    case let .upgradeRequired(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "upgradeRequired",
+                            response: self
+                        )
+                    }
+                }
+            }
             public struct TooManyRequests: Sendable, Hashable {
                 /// - Remark: Generated from `#/paths/api/v1/sessions/{id}/quests/GET/responses/429/headers`.
                 public struct Headers: Sendable, Hashable {
@@ -4722,6 +5418,122 @@ public enum Operations {
                     default:
                         try throwUnexpectedResponseStatus(
                             expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct UpgradeRequired: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/api/v1/credits/transactions/GET/responses/426/headers`.
+                public struct Headers: Sendable, Hashable {
+                    /// Correlation id for this request; safe to log and quote in support requests.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/credits/transactions/GET/responses/426/headers/X-Request-ID`.
+                    public var xRequestID: Swift.String?
+                    /// Request quota per minute.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/credits/transactions/GET/responses/426/headers/X-RateLimit-Limit-Minute`.
+                    public var xRateLimitLimitMinute: Swift.Int?
+                    /// Requests remaining in the current minute.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/credits/transactions/GET/responses/426/headers/X-RateLimit-Remaining-Minute`.
+                    public var xRateLimitRemainingMinute: Swift.Int?
+                    /// Unix epoch (seconds) when the minute window resets.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/credits/transactions/GET/responses/426/headers/X-RateLimit-Reset-Minute`.
+                    public var xRateLimitResetMinute: Swift.Int?
+                    /// Request quota per day.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/credits/transactions/GET/responses/426/headers/X-RateLimit-Limit-Day`.
+                    public var xRateLimitLimitDay: Swift.Int?
+                    /// Requests remaining in the current day.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/credits/transactions/GET/responses/426/headers/X-RateLimit-Remaining-Day`.
+                    public var xRateLimitRemainingDay: Swift.Int?
+                    /// Unix epoch (seconds) when the day window resets.
+                    ///
+                    /// - Remark: Generated from `#/paths/api/v1/credits/transactions/GET/responses/426/headers/X-RateLimit-Reset-Day`.
+                    public var xRateLimitResetDay: Swift.Int?
+                    /// Creates a new `Headers`.
+                    ///
+                    /// - Parameters:
+                    ///   - xRequestID: Correlation id for this request; safe to log and quote in support requests.
+                    ///   - xRateLimitLimitMinute: Request quota per minute.
+                    ///   - xRateLimitRemainingMinute: Requests remaining in the current minute.
+                    ///   - xRateLimitResetMinute: Unix epoch (seconds) when the minute window resets.
+                    ///   - xRateLimitLimitDay: Request quota per day.
+                    ///   - xRateLimitRemainingDay: Requests remaining in the current day.
+                    ///   - xRateLimitResetDay: Unix epoch (seconds) when the day window resets.
+                    public init(
+                        xRequestID: Swift.String? = nil,
+                        xRateLimitLimitMinute: Swift.Int? = nil,
+                        xRateLimitRemainingMinute: Swift.Int? = nil,
+                        xRateLimitResetMinute: Swift.Int? = nil,
+                        xRateLimitLimitDay: Swift.Int? = nil,
+                        xRateLimitRemainingDay: Swift.Int? = nil,
+                        xRateLimitResetDay: Swift.Int? = nil
+                    ) {
+                        self.xRequestID = xRequestID
+                        self.xRateLimitLimitMinute = xRateLimitLimitMinute
+                        self.xRateLimitRemainingMinute = xRateLimitRemainingMinute
+                        self.xRateLimitResetMinute = xRateLimitResetMinute
+                        self.xRateLimitLimitDay = xRateLimitLimitDay
+                        self.xRateLimitRemainingDay = xRateLimitRemainingDay
+                        self.xRateLimitResetDay = xRateLimitResetDay
+                    }
+                }
+                /// Received HTTP response headers
+                public var headers: Operations.ListCreditTransactions.Output.UpgradeRequired.Headers
+                /// - Remark: Generated from `#/paths/api/v1/credits/transactions/GET/responses/426/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/api/v1/credits/transactions/GET/responses/426/content/application\/json`.
+                    case json(Components.Schemas.UpgradeRequiredResponse)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.UpgradeRequiredResponse {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.ListCreditTransactions.Output.UpgradeRequired.Body
+                /// Creates a new `UpgradeRequired`.
+                ///
+                /// - Parameters:
+                ///   - headers: Received HTTP response headers
+                ///   - body: Received HTTP response body
+                public init(
+                    headers: Operations.ListCreditTransactions.Output.UpgradeRequired.Headers = .init(),
+                    body: Operations.ListCreditTransactions.Output.UpgradeRequired.Body
+                ) {
+                    self.headers = headers
+                    self.body = body
+                }
+            }
+            /// The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/credits/transactions/get(listCreditTransactions)/responses/426`.
+            ///
+            /// HTTP response code: `426 upgradeRequired`.
+            case upgradeRequired(Operations.ListCreditTransactions.Output.UpgradeRequired)
+            /// The associated value of the enum case if `self` is `.upgradeRequired`.
+            ///
+            /// - Throws: An error if `self` is not `.upgradeRequired`.
+            /// - SeeAlso: `.upgradeRequired`.
+            public var upgradeRequired: Operations.ListCreditTransactions.Output.UpgradeRequired {
+                get throws {
+                    switch self {
+                    case let .upgradeRequired(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "upgradeRequired",
                             response: self
                         )
                     }

@@ -4,6 +4,9 @@ import Foundation
 enum AppLinks {
   static let terms = URL(string: "https://bike4mind.com/terms-of-service")!
   static let privacy = URL(string: "https://bike4mind.com/privacy")!
+  /// PLACEHOLDER: the App Store front page until the app has an App Store id. Replace with
+  /// `https://apps.apple.com/app/id<APP_STORE_ID>` once the listing exists.
+  static let appStore = URL(string: "https://apps.apple.com")!
 }
 
 enum AppInfo {

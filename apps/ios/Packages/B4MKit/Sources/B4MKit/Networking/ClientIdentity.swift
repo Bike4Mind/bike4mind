@@ -104,14 +104,20 @@ public final class ClientUpgradeSignal: @unchecked Sendable {
   }
 }
 
-/// Whether the server has refused this build. Sticky for the life of the process: only installing a newer
-/// build clears it, and that is a new process. `RootView` swaps the shell for the update screen while set.
+/// Whether the server has refused this build. `RootView` covers the app with the update screen while set; the
+/// session and the keychain are left alone, so a lowered minimum (or the installed update) puts the user
+/// straight back where they were.
 @MainActor
 @Observable
 public final class ClientUpgradeStatus {
   public private(set) var notice: ClientUpgradeNotice?
+  public private(set) var isChecking = false
+  @ObservationIgnored private let probe: @MainActor () async throws -> Void
 
-  public init(signal: ClientUpgradeSignal = .shared) {
+  /// - Parameter probe: one request through the server's gate (`ClientVersionProbe`); throws
+  ///   `APIError.upgradeRequired` while the refusal still applies.
+  public init(signal: ClientUpgradeSignal = .shared, probe: @escaping @MainActor () async throws -> Void) {
+    self.probe = probe
     signal.observe { [weak self] notice in
       Task { @MainActor in self?.receive(notice) }
     }
@@ -122,6 +128,50 @@ public final class ClientUpgradeStatus {
   public func receive(_ notice: ClientUpgradeNotice) {
     // Keep the first answer that named a version; later ones are the same refusal.
     if self.notice?.minimumVersion == nil { self.notice = notice }
+  }
+
+  /// Asks the server again ("Try again", and every foreground). Only an answer without a 426 clears the
+  /// refusal: being offline proves nothing either way.
+  public func recheck() async {
+    guard isUpgradeRequired, !isChecking else { return }
+    isChecking = true
+    defer { isChecking = false }
+    do {
+      try await probe()
+      notice = nil
+    } catch APIError.upgradeRequired, APIError.offline, is CancellationError {
+      return
+    } catch {
+      // Any other failure is still an answer from a server that let this build through the gate.
+      notice = nil
+    }
+  }
+}
+
+/// The re-check behind `ClientUpgradeStatus`: `GET /api/v1/whats-new?limit=1`, the cheapest contract route
+/// that runs the client-version gate without a session, so it answers the same signed in or out.
+public struct ClientVersionProbe: Sendable {
+  private let baseURL: URL
+  private let transport: any HTTPTransport
+
+  public init(baseURL: URL, transport: any HTTPTransport = URLSessionTransport()) {
+    self.baseURL = baseURL
+    self.transport = transport
+  }
+
+  public func check() async throws {
+    let url = baseURL.appending(path: "api/v1/whats-new").appending(queryItems: [
+      URLQueryItem(name: "limit", value: "1")
+    ])
+    var request = URLRequest(url: url)
+    request.setValue("application/json", forHTTPHeaderField: "Accept")
+    let status: Int
+    do {
+      status = try await transport.send(request).1.statusCode
+    } catch is URLError {
+      throw APIError.offline
+    }
+    if status == ClientUpgradeDetector.status { throw APIError.upgradeRequired }
   }
 }
 

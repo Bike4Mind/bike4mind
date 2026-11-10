@@ -299,7 +299,8 @@ final class ShareComposerModelTests: XCTestCase {
     await model.submit()
     let calls = await submitter.calls
     let discarded = await submitter.discarded
-    XCTAssertEqual(calls.last, RecordingSubmitter.Call(items: [.text("b")], destination: .lake(id: "m", name: "M"), note: ""))
+    XCTAssertEqual(
+      calls.last, RecordingSubmitter.Call(items: [.text("b")], destination: .lake(id: "m", name: "M"), note: ""))
     XCTAssertEqual(discarded, failed, "the old attempt's failed job does not linger")
     XCTAssertEqual(model.phase, .sent)
   }

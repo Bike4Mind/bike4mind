@@ -1,7 +1,8 @@
 import B4MKit
 import SwiftUI
 
-/// Routes between sign-in, the locked screen and the signed-in shell purely from `AuthController.state`.
+/// Routes between sign-in, the locked screen and the signed-in shell purely from `AuthController.state`;
+/// the update-required screen (`ClientUpgradeStatus`) covers all of them.
 struct RootView: View {
   @Environment(AuthController.self) private var auth
   @Environment(AppServices.self) private var services
@@ -12,11 +13,29 @@ struct RootView: View {
   @State private var hasShownShell = false
 
   var body: some View {
-    if let notice = services.clientUpgrade.notice {
-      // Nothing else this build sends would be served, so no other screen is worth showing.
-      UpdateRequiredView(minimumVersion: notice.minimumVersion)
-    } else {
+    let upgrade = services.clientUpgrade
+    // Same covering as App Lock: what sits underneath stays mounted (signed in, drafts intact, and still
+    // seeing foregrounds that re-check) but cannot be seen, tapped or reached by VoiceOver.
+    ZStack {
       authRoutedContent
+        .redacted(reason: upgrade.isUpgradeRequired ? .placeholder : [])
+        .blur(radius: upgrade.isUpgradeRequired ? 24 : 0)
+        .allowsHitTesting(!upgrade.isUpgradeRequired)
+        .accessibilityHidden(upgrade.isUpgradeRequired)
+      if let notice = upgrade.notice {
+        UpdateRequiredView(
+          minimumVersion: notice.minimumVersion, isChecking: upgrade.isChecking,
+          tryAgain: { Task { await upgrade.recheck() } }
+        )
+        .transition(.opacity)
+      }
+    }
+    .animation(.default, value: upgrade.notice)
+    .onChange(of: upgrade.isUpgradeRequired) { _, isRequired in
+      // The socket parks while the build is refused; bring it back as soon as the server lets it through.
+      guard !isRequired, auth.state == .signedIn else { return }
+      let realtime = services.realtime
+      Task { await realtime.resume() }
     }
   }
 
@@ -83,6 +102,8 @@ struct RootView: View {
   /// Idempotent foreground refresh; also run once from the launch edge, because a cold launch reaches
   /// `.active` while auth is still restoring.
   private func appDidBecomeActive() {
+    let upgrade = services.clientUpgrade
+    Task { await upgrade.recheck() }
     Task { await services.push.appDidBecomeActive() }
     services.resumeCapture()
     // A socket that gave up reconnecting while backgrounded gets a fresh start.
@@ -132,25 +153,5 @@ struct RootView: View {
     let widgets = services.widgets
     Task { await widgets.signOut() }
     services.navigator.discardPendingRoute()
-  }
-}
-
-/// The server answered 426: this build is older than the oldest one it still serves.
-private struct UpdateRequiredView: View {
-  let minimumVersion: String?
-
-  var body: some View {
-    ContentUnavailableView {
-      Label("Update required", systemImage: "arrow.down.app")
-    } description: {
-      Text(message)
-    }
-  }
-
-  private var message: String {
-    guard let minimumVersion else {
-      return "This version of Bike4Mind is no longer supported. Update the app to continue."
-    }
-    return "This version of Bike4Mind is no longer supported. Update to version \(minimumVersion) or later to continue."
   }
 }

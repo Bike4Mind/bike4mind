@@ -32,6 +32,7 @@ public struct APIClient: B4MAPI {
       case .unauthorized: throw APIError.signedOut
       case .forbidden: throw APIError.forbidden
       case .tooManyRequests: throw APIError.rateLimited
+      case .upgradeRequired: throw APIError.upgradeRequired
       case .undocumented(let status, _): throw APIError(status: status)
       default: throw APIError.malformedResponse
       }
@@ -50,6 +51,7 @@ public struct APIClient: B4MAPI {
       case .forbidden: throw APIError.forbidden
       case .notFound: throw APIError.notFound
       case .tooManyRequests: throw APIError.rateLimited
+      case .upgradeRequired: throw APIError.upgradeRequired
       case .undocumented(let status, _): throw APIError(status: status)
       default: throw APIError.malformedResponse
       }
@@ -65,6 +67,7 @@ public struct APIClient: B4MAPI {
       case .unauthorized: throw APIError.signedOut
       case .forbidden: throw APIError.forbidden
       case .tooManyRequests: throw APIError.rateLimited
+      case .upgradeRequired: throw APIError.upgradeRequired
       case .undocumented(let status, _): throw APIError(status: status)
       default: throw APIError.malformedResponse
       }
@@ -81,6 +84,7 @@ public struct APIClient: B4MAPI {
       case .forbidden: throw APIError.forbidden
       case .notFound: throw APIError.notFound
       case .tooManyRequests: throw APIError.rateLimited
+      case .upgradeRequired: throw APIError.upgradeRequired
       case .undocumented(let status, _): throw APIError(status: status)
       default: throw APIError.malformedResponse
       }

@@ -40,10 +40,13 @@ final class AppServices {
   /// Whether the signed-in account is waiting to be deleted; `RootView` shows the restore screen then.
   let accountStatus = AccountStatus()
   /// Whether the server has refused this build (HTTP 426); `RootView` shows the update screen then.
-  let clientUpgrade = ClientUpgradeStatus()
+  let clientUpgrade: ClientUpgradeStatus
 
   init(auth: AuthController) {
     self.auth = auth
+    clientUpgrade = ClientUpgradeStatus { [auth] in
+      try await ClientVersionProbe(baseURL: auth.environment.baseURL).check()
+    }
     let registrar = SystemRemoteNotificationRegistrar()
     systemSettings = registrar
     // TODO: swap for a server-backed service once userSettings.pushNotifications has a read/write endpoint.

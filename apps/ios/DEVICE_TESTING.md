@@ -92,6 +92,11 @@ Against a backend that has the deletion routes deployed:
 - [ ] After the deletion request the server revoked the session: confirm the best-effort push unregister and Live Activity token calls
       fail quietly and the user is never shown a "session ended" error instead of the deletion note.
 
+## Client version gate
+
+- [ ] Against staging, set the admin `minimumClientVersions` for client `b4m-ios` above the installed build: confirm the app shows
+      the update-required screen without signing out, then lower the minimum and confirm "Try again" (or a foreground) clears it.
+
 ## TestFlight smoke list
 
 Run on the first TestFlight build and every release candidate:

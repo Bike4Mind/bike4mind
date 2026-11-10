@@ -439,6 +439,68 @@ public struct Client: APIProtocol {
                         headers: headers,
                         body: body
                     ))
+                case 426:
+                    let headers: Operations.GetSession.Output.UpgradeRequired.Headers = .init(
+                        xRequestID: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-Request-ID",
+                            as: Swift.String.self
+                        ),
+                        xRateLimitLimitMinute: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Limit-Minute",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitRemainingMinute: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Remaining-Minute",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitResetMinute: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Reset-Minute",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitLimitDay: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Limit-Day",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitRemainingDay: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Remaining-Day",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitResetDay: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Reset-Day",
+                            as: Swift.Int.self
+                        )
+                    )
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Operations.GetSession.Output.UpgradeRequired.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas.UpgradeRequiredResponse.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .upgradeRequired(.init(
+                        headers: headers,
+                        body: body
+                    ))
                 case 429:
                     let headers: Operations.GetSession.Output.TooManyRequests.Headers = .init(
                         xRequestID: try converter.getOptionalHeaderFieldAsURI(
@@ -700,6 +762,68 @@ public struct Client: APIProtocol {
                         headers: headers,
                         body: body
                     ))
+                case 426:
+                    let headers: Operations.GetMe.Output.UpgradeRequired.Headers = .init(
+                        xRequestID: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-Request-ID",
+                            as: Swift.String.self
+                        ),
+                        xRateLimitLimitMinute: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Limit-Minute",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitRemainingMinute: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Remaining-Minute",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitResetMinute: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Reset-Minute",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitLimitDay: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Limit-Day",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitRemainingDay: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Remaining-Day",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitResetDay: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Reset-Day",
+                            as: Swift.Int.self
+                        )
+                    )
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Operations.GetMe.Output.UpgradeRequired.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas.UpgradeRequiredResponse.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .upgradeRequired(.init(
+                        headers: headers,
+                        body: body
+                    ))
                 case 429:
                     let headers: Operations.GetMe.Output.TooManyRequests.Headers = .init(
                         xRequestID: try converter.getOptionalHeaderFieldAsURI(
@@ -958,6 +1082,68 @@ public struct Client: APIProtocol {
                         preconditionFailure("bestContentType chose an invalid content type.")
                     }
                     return .methodNotAllowed(.init(
+                        headers: headers,
+                        body: body
+                    ))
+                case 426:
+                    let headers: Operations.GetCreditBalance.Output.UpgradeRequired.Headers = .init(
+                        xRequestID: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-Request-ID",
+                            as: Swift.String.self
+                        ),
+                        xRateLimitLimitMinute: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Limit-Minute",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitRemainingMinute: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Remaining-Minute",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitResetMinute: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Reset-Minute",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitLimitDay: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Limit-Day",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitRemainingDay: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Remaining-Day",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitResetDay: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Reset-Day",
+                            as: Swift.Int.self
+                        )
+                    )
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Operations.GetCreditBalance.Output.UpgradeRequired.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas.UpgradeRequiredResponse.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .upgradeRequired(.init(
                         headers: headers,
                         body: body
                     ))
@@ -1353,6 +1539,68 @@ public struct Client: APIProtocol {
                         headers: headers,
                         body: body
                     ))
+                case 426:
+                    let headers: Operations.GetQuest.Output.UpgradeRequired.Headers = .init(
+                        xRequestID: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-Request-ID",
+                            as: Swift.String.self
+                        ),
+                        xRateLimitLimitMinute: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Limit-Minute",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitRemainingMinute: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Remaining-Minute",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitResetMinute: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Reset-Minute",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitLimitDay: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Limit-Day",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitRemainingDay: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Remaining-Day",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitResetDay: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Reset-Day",
+                            as: Swift.Int.self
+                        )
+                    )
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Operations.GetQuest.Output.UpgradeRequired.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas.UpgradeRequiredResponse.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .upgradeRequired(.init(
+                        headers: headers,
+                        body: body
+                    ))
                 case 429:
                     let headers: Operations.GetQuest.Output.TooManyRequests.Headers = .init(
                         xRequestID: try converter.getOptionalHeaderFieldAsURI(
@@ -1740,6 +1988,68 @@ public struct Client: APIProtocol {
                         preconditionFailure("bestContentType chose an invalid content type.")
                     }
                     return .unprocessableContent(.init(
+                        headers: headers,
+                        body: body
+                    ))
+                case 426:
+                    let headers: Operations.ListSessions.Output.UpgradeRequired.Headers = .init(
+                        xRequestID: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-Request-ID",
+                            as: Swift.String.self
+                        ),
+                        xRateLimitLimitMinute: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Limit-Minute",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitRemainingMinute: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Remaining-Minute",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitResetMinute: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Reset-Minute",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitLimitDay: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Limit-Day",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitRemainingDay: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Remaining-Day",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitResetDay: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Reset-Day",
+                            as: Swift.Int.self
+                        )
+                    )
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Operations.ListSessions.Output.UpgradeRequired.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas.UpgradeRequiredResponse.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .upgradeRequired(.init(
                         headers: headers,
                         body: body
                     ))
@@ -2176,6 +2486,68 @@ public struct Client: APIProtocol {
                         headers: headers,
                         body: body
                     ))
+                case 426:
+                    let headers: Operations.ListSessionQuests.Output.UpgradeRequired.Headers = .init(
+                        xRequestID: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-Request-ID",
+                            as: Swift.String.self
+                        ),
+                        xRateLimitLimitMinute: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Limit-Minute",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitRemainingMinute: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Remaining-Minute",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitResetMinute: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Reset-Minute",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitLimitDay: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Limit-Day",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitRemainingDay: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Remaining-Day",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitResetDay: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Reset-Day",
+                            as: Swift.Int.self
+                        )
+                    )
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Operations.ListSessionQuests.Output.UpgradeRequired.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas.UpgradeRequiredResponse.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .upgradeRequired(.init(
+                        headers: headers,
+                        body: body
+                    ))
                 case 429:
                     let headers: Operations.ListSessionQuests.Output.TooManyRequests.Headers = .init(
                         xRequestID: try converter.getOptionalHeaderFieldAsURI(
@@ -2556,6 +2928,68 @@ public struct Client: APIProtocol {
                         preconditionFailure("bestContentType chose an invalid content type.")
                     }
                     return .unprocessableContent(.init(
+                        headers: headers,
+                        body: body
+                    ))
+                case 426:
+                    let headers: Operations.ListCreditTransactions.Output.UpgradeRequired.Headers = .init(
+                        xRequestID: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-Request-ID",
+                            as: Swift.String.self
+                        ),
+                        xRateLimitLimitMinute: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Limit-Minute",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitRemainingMinute: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Remaining-Minute",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitResetMinute: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Reset-Minute",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitLimitDay: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Limit-Day",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitRemainingDay: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Remaining-Day",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitResetDay: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Reset-Day",
+                            as: Swift.Int.self
+                        )
+                    )
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Operations.ListCreditTransactions.Output.UpgradeRequired.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas.UpgradeRequiredResponse.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .upgradeRequired(.init(
                         headers: headers,
                         body: body
                     ))

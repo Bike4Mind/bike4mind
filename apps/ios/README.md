@@ -32,6 +32,18 @@ hand-written (`B4MKit/Account/AccountDeletionWire.swift`) because the routes are
 organizations, and the 403 `{accountDeletionPending, deletionScheduledFor}` gate. `URLSessionTransport` recognizes that 403 on any
 call and `RootView` swaps the shell for the restore screen. Move the routes into the generated client when the snapshot catches up.
 
+## Client version handshake
+
+Every request declares the build with `X-Client-Name: b4m-ios` and `X-Client-Version` (`CFBundleShortVersionString` padded
+to strict SemVer, so `1.0` goes out as `1.0.0`). `URLSessionTransport` (`B4MKit/Networking/HTTPTransport.swift`) stamps
+them for the generated client, every hand-written wire and the share extension, and `URLSessionWebSocketConnector` for the
+socket upgrade; presigned object-storage uploads and downloads are left alone. The identity, the 426 detector, the signal and
+`ClientUpgradeStatus` live in `B4MKit/Networking/ClientIdentity.swift`.
+When an admin raises `minimumClientVersions` for `b4m-ios` above the build, the server answers 426 `upgrade_required`: the
+transport reports it on `ClientUpgradeSignal`, calls throw `APIError.upgradeRequired`, and `RootView` covers the app with the
+update-required screen (`ClientUpgradeStatus`) without signing out. "Try again" and every foreground re-check through
+`ClientVersionProbe`. The App Store link (`AppLinks.appStore`) is a placeholder until the app has an App Store id.
+
 ## Generated API client
 
 `Packages/B4MClient` is generated from the backend's OpenAPI spec with
