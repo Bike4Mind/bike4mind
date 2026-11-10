@@ -1,0 +1,412 @@
+import { describe, expect, it, vi } from 'vitest';
+import type { DeviceLinkRow } from '@bike4mind/database';
+
+vi.mock('@bike4mind/database', () => ({
+  adminSettingsRepository: {},
+  cacheRepository: {},
+  shadowDetectionRepository: {},
+  countSignupsWithFingerprint: vi.fn(),
+  findBannedDeviceLinkAccounts: vi.fn(),
+  findDeviceBaselineAccounts: vi.fn(),
+  loadDeviceLinkAccounts: vi.fn(),
+}));
+vi.mock('@bike4mind/utils', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils')>()),
+  getSettingsMap: vi.fn(),
+}));
+vi.mock('@server/security/abuseAssessment/abuseAssessment', () => ({ assessShadowDetection: vi.fn() }));
+vi.mock('@server/security/abuseAssessment/linkedAccountEvidence', () => ({ linkedAccountGroupEvidence: vi.fn() }));
+vi.mock('./executor', () => ({
+  applyAutoContainment: vi.fn(),
+  liveAutoContainmentDeps: vi.fn(),
+  loadAutoContainmentConfig: vi.fn(),
+}));
+
+import type { Logger } from '@bike4mind/observability';
+import { getSettingsMap } from '@bike4mind/utils';
+import {
+  buildDeviceLinkDetection,
+  checkDeviceLink,
+  DeviceLinkAssessError,
+  liveDeviceLinkDeps,
+  sweepDeviceLinks,
+  type DeviceLinkDeps,
+} from './deviceLink';
+import { loadAutoContainmentConfig } from './executor';
+import { evaluateDeviceLinks, toDeviceLinkAccount } from './deviceLinkEvaluation';
+
+const HOUR_MS = 60 * 60 * 1000;
+const NOW = new Date('2026-11-05T12:00:00Z');
+// Synthetic rare profile (an Android phone in desktop mode) and a mainstream phone profile.
+const RARE_UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36';
+const RARE_DEVICE = { screenResolution: '376x835', devicePixelRatio: 3.25, userAgent: RARE_UA };
+const PHONE_UA =
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 26_1 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1';
+const PHONE_DEVICE = { screenResolution: '390x844', devicePixelRatio: 3, userAgent: PHONE_UA };
+
+const row = (userId: string, overrides: Partial<DeviceLinkRow> = {}): DeviceLinkRow => ({
+  userId,
+  createdAt: new Date(NOW.getTime() - HOUR_MS),
+  signupIp: '192.0.2.10',
+  asn: 13335,
+  isDatacenter: true,
+  wafAnonIp: null,
+  ja4: null,
+  devices: [RARE_DEVICE],
+  ...overrides,
+});
+
+const newcomer = row('new-user');
+const banned = row('banned-user', {
+  createdAt: new Date(NOW.getTime() - 28 * HOUR_MS),
+  signupIp: '198.51.100.20',
+  asn: 64501,
+  isDatacenter: false,
+});
+
+function makeDeps(overrides: Partial<DeviceLinkDeps> = {}): DeviceLinkDeps {
+  return {
+    loadConfig: vi.fn(async () => ({ windowHours: 168, commonNetworks: 5 })),
+    loadAccounts: vi.fn(async () => [newcomer]),
+    findBanned: vi.fn(async () => [banned]),
+    findBaseline: vi.fn(async () => ({ rows: [newcomer, banned], truncated: false })),
+    isCommonFingerprint: vi.fn(async () => false),
+    claimOnce: vi.fn(async () => true),
+    releaseClaim: vi.fn(async () => undefined),
+    recordDetection: vi.fn(async () => 'detection-1'),
+    assessAndContain: vi.fn(async () => ({ assessed: true, containment: 'would_contain' as const })),
+    now: () => NOW,
+    ...overrides,
+  };
+}
+
+describe('toDeviceLinkAccount', () => {
+  it('classifies a WAF anonymous-IP signup as hosting', () => {
+    expect(toDeviceLinkAccount(row('new-user', { isDatacenter: false, wafAnonIp: true })).hosting).toBe(true);
+  });
+});
+
+describe('buildDeviceLinkDetection', () => {
+  it('reports the closest signup even when the strongest match is older', () => {
+    const detection = buildDeviceLinkDetection(
+      'new-user',
+      {
+        linked: true,
+        deviceNetworkSpread: 1,
+        matches: [
+          { blockedUserId: 'strong', corroboration: ['fingerprint', 'network'], hoursApart: 720 },
+          { blockedUserId: 'recent', corroboration: ['timing'], hoursApart: 5 },
+        ],
+      },
+      { windowHours: 168, commonNetworks: 5 },
+      NOW
+    );
+
+    expect(detection.summary).toBe(
+      'Used the same device as 2 banned accounts, the closest 5 hours apart, with the same TLS fingerprint and the same signup network'
+    );
+    expect(detection.signals.find(signal => signal.key === 'hoursToBannedDeviceLink')?.observed).toBe(5);
+  });
+});
+
+describe('checkDeviceLink', () => {
+  it("records and assesses a new account on a banned account's rare device despite a rotated VPN exit", async () => {
+    const deps = makeDeps();
+
+    const result = await checkDeviceLink('new-user', deps);
+
+    expect(result).toEqual({
+      status: 'recorded',
+      detectionId: 'detection-1',
+      assessed: true,
+      containment: 'would_contain',
+    });
+    expect(deps.findBanned).toHaveBeenCalledWith([RARE_UA]);
+    const detection = vi.mocked(deps.recordDetection).mock.calls[0][0];
+    expect(detection).toMatchObject({
+      detector: 'deviceLinkedToBlocked',
+      wouldAction: 'contain',
+      userIds: ['new-user'],
+    });
+    expect(detection.summary).toBe(
+      'Used the same device as 1 banned account, the closest 27 hours apart, with signups close in time'
+    );
+    expect(Object.fromEntries(detection.signals.map(signal => [signal.key, signal.observed]))).toEqual({
+      bannedDeviceLinks: 1,
+      deviceNetworkSpread: 2,
+      corroboratingSignals: 1,
+      sameFingerprint: 0,
+      sameSignupNetwork: 0,
+      hoursToBannedDeviceLink: 27,
+    });
+    expect(deps.assessAndContain).toHaveBeenCalledWith('detection-1');
+  });
+
+  it('skips an OAuth signup with no recorded device without reading banned accounts', async () => {
+    const deps = makeDeps({ loadAccounts: vi.fn(async () => [row('new-user', { devices: [] })]) });
+
+    expect(await checkDeviceLink('new-user', deps)).toEqual({ status: 'skipped', reason: 'no_device' });
+    expect(deps.findBanned).not.toHaveBeenCalled();
+  });
+
+  it('skips an account that is already banned', async () => {
+    const deps = makeDeps({ loadAccounts: vi.fn(async () => [{ ...newcomer, isBanned: true }]) });
+
+    expect(await checkDeviceLink('new-user', deps)).toEqual({ status: 'skipped', reason: 'already_banned' });
+    expect(deps.recordDetection).not.toHaveBeenCalled();
+  });
+
+  it('does not link on a mainstream device seen across many networks', async () => {
+    const phone = { devices: [PHONE_DEVICE] };
+    const baseline = [64510, 64511, 64512, 64513, 64514].map(asn => row(`other-${asn}`, { ...phone, asn }));
+    const deps = makeDeps({
+      loadAccounts: vi.fn(async () => [row('new-user', phone)]),
+      findBanned: vi.fn(async () => [{ ...banned, ...phone }]),
+      findBaseline: vi.fn(async () => ({ rows: baseline, truncated: false })),
+    });
+
+    expect(await checkDeviceLink('new-user', deps)).toEqual({ status: 'skipped', reason: 'common_device_only' });
+    expect(deps.recordDetection).not.toHaveBeenCalled();
+  });
+
+  it('does not link on a device match alone, long after the ban and on another network', async () => {
+    const deps = makeDeps({
+      findBanned: vi.fn(async () => [{ ...banned, createdAt: new Date(NOW.getTime() - 60 * 24 * HOUR_MS) }]),
+    });
+
+    expect(await checkDeviceLink('new-user', deps)).toEqual({ status: 'skipped', reason: 'uncorroborated' });
+  });
+
+  it('is off when the config is off', async () => {
+    const deps = makeDeps({ loadConfig: vi.fn(async () => null) });
+
+    expect(await checkDeviceLink('new-user', deps)).toEqual({ status: 'skipped', reason: 'disabled' });
+    expect(deps.loadAccounts).not.toHaveBeenCalled();
+  });
+
+  it('records an account once', async () => {
+    const deps = makeDeps({ claimOnce: vi.fn(async () => false) });
+
+    expect(await checkDeviceLink('new-user', deps)).toEqual({ status: 'skipped', reason: 'already_recorded' });
+    expect(deps.recordDetection).not.toHaveBeenCalled();
+  });
+
+  it('releases the claim when recording fails, so a later pass retries', async () => {
+    const deps = makeDeps({ recordDetection: vi.fn(async () => Promise.reject(new Error('write failed'))) });
+
+    await expect(checkDeviceLink('new-user', deps)).rejects.toThrow('write failed');
+    expect(deps.releaseClaim).toHaveBeenCalledWith('new-user');
+  });
+
+  it('keeps the claim when assessment fails after the detection is recorded', async () => {
+    const deps = makeDeps({ assessAndContain: vi.fn(async () => Promise.reject(new Error('model down'))) });
+
+    await expect(checkDeviceLink('new-user', deps)).rejects.toThrow('model down');
+    expect(deps.recordDetection).toHaveBeenCalledTimes(1);
+    expect(deps.releaseClaim).not.toHaveBeenCalled();
+  });
+});
+
+describe('sweepDeviceLinks', () => {
+  it('leaves remaining linked accounts unrecorded when the time budget is reached', async () => {
+    const deps = makeDeps();
+    const shouldStop = vi
+      .fn()
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(false)
+      .mockReturnValue(true);
+
+    const report = await sweepDeviceLinks({
+      ...deps,
+      shouldStop,
+      loadRecent: vi.fn(async () => ({ rows: [newcomer, row('second-user')], truncated: false })),
+    });
+
+    expect(report).toMatchObject({ recorded: 1, skipped: 1, linked: 2, status: 'stopped' });
+    expect(deps.recordDetection).toHaveBeenCalledTimes(1);
+    expect(deps.claimOnce).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops before reading recent accounts when the time budget is reached', async () => {
+    const deps = makeDeps();
+    const loadRecent = vi.fn();
+    const report = await sweepDeviceLinks({ ...deps, loadRecent, shouldStop: () => true });
+
+    expect(report).toMatchObject({ status: 'stopped', recorded: 0, skipped: 0 });
+    expect(loadRecent).not.toHaveBeenCalled();
+  });
+
+  it('stops before evaluation when the recent-account read uses the remaining budget', async () => {
+    const deps = makeDeps();
+    const shouldStop = vi.fn().mockReturnValueOnce(false).mockReturnValue(true);
+    const report = await sweepDeviceLinks({
+      ...deps,
+      shouldStop,
+      loadRecent: vi.fn(async () => ({ rows: [newcomer], truncated: false })),
+    });
+
+    expect(report).toMatchObject({ status: 'stopped', scanned: 1, recorded: 0 });
+    expect(deps.findBanned).not.toHaveBeenCalled();
+  });
+
+  it('counts linked, recorded and failed accounts and keeps going after a failure', async () => {
+    const second = row('second-user');
+    const onError = vi.fn();
+    const deps = makeDeps({
+      recordDetection: vi.fn(async input =>
+        input.userIds[0] === 'second-user' ? Promise.reject(new Error('write failed')) : 'detection-1'
+      ),
+    });
+
+    const report = await sweepDeviceLinks({
+      ...deps,
+      loadRecent: vi.fn(async () => ({
+        rows: [newcomer, second, row('oauth-user', { devices: [] })],
+        truncated: false,
+      })),
+      onError,
+    });
+
+    expect(report).toEqual({
+      status: 'done',
+      scanned: 3,
+      scanTruncated: false,
+      linked: 2,
+      recorded: 1,
+      alreadyRecorded: 0,
+      skipped: 0,
+      assessFailed: 0,
+      failed: 1,
+    });
+    expect(onError).toHaveBeenCalledWith('second-user', expect.any(Error));
+  });
+
+  it('counts an assessment failure separately from a record failure and still processes later accounts', async () => {
+    const assessAndContain = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('model down'))
+      .mockResolvedValue({ assessed: true, containment: null });
+    const deps = makeDeps({ assessAndContain });
+
+    const onError = vi.fn();
+    const report = await sweepDeviceLinks({
+      ...deps,
+      onError,
+      loadRecent: vi.fn(async () => ({ rows: [newcomer, row('second-user')], truncated: false })),
+    });
+
+    expect(report).toMatchObject({ linked: 2, recorded: 1, assessFailed: 1, failed: 0 });
+    expect(onError).toHaveBeenCalledWith('new-user', expect.any(DeviceLinkAssessError));
+    expect(deps.recordDetection).toHaveBeenCalledTimes(2);
+    expect(deps.releaseClaim).not.toHaveBeenCalled();
+  });
+
+  it('reads nothing when disabled', async () => {
+    const loadRecent = vi.fn();
+    const report = await sweepDeviceLinks({ ...makeDeps({ loadConfig: vi.fn(async () => null) }), loadRecent });
+
+    expect(report.status).toBe('disabled');
+    expect(loadRecent).not.toHaveBeenCalled();
+  });
+});
+
+describe('evaluateDeviceLinks', () => {
+  it('still evaluates an account that is banned itself', async () => {
+    const results = await evaluateDeviceLinks(
+      [{ ...newcomer, isBanned: true }],
+      { windowHours: 168, commonNetworks: 5 },
+      {
+        ...makeDeps(),
+        now: () => NOW,
+      }
+    );
+
+    expect(results.get('new-user')?.linked).toBe(true);
+  });
+
+  const config = { windowHours: 168, commonNetworks: 5 };
+  const phoneBaseline = [64510, 64511, 64512, 64513, 64514].map(asn =>
+    row(`phone-${asn}`, { devices: [PHONE_DEVICE], asn })
+  );
+  // The newcomer and the banned account share both a mainstream phone and the rare device.
+  const both = { devices: [PHONE_DEVICE, RARE_DEVICE] };
+
+  it('re-reads a truncated chunk per user agent, so a mainstream agent cannot hide a rare one', async () => {
+    const findBaseline = vi.fn(async (userAgents: string[]) =>
+      userAgents.length > 1
+        ? { rows: phoneBaseline, truncated: true }
+        : userAgents[0] === PHONE_UA
+          ? { rows: phoneBaseline, truncated: true }
+          : { rows: [], truncated: false }
+    );
+    const results = await evaluateDeviceLinks([row('new-user', both)], config, {
+      ...makeDeps({ findBanned: vi.fn(async () => [{ ...banned, ...both }]) }),
+      findBaseline,
+    });
+
+    expect(findBaseline).toHaveBeenCalledWith([RARE_UA], expect.any(Date));
+    expect(results.get('new-user')).toMatchObject({ linked: true, deviceNetworkSpread: 0 });
+  });
+
+  it('treats a device as common when its user agent read stays truncated', async () => {
+    const results = await evaluateDeviceLinks([row('new-user', both)], config, {
+      ...makeDeps({ findBanned: vi.fn(async () => [{ ...banned, ...both }]) }),
+      findBaseline: vi.fn(async () => ({ rows: [], truncated: true })),
+    });
+
+    expect(results.get('new-user')).toEqual({ linked: false, reason: 'common_device_only' });
+  });
+
+  it('fails closed for user agents past the single-agent re-read cap', async () => {
+    const agents = Array.from({ length: 12 }, (_, index) => `${RARE_UA} Build/${index}`);
+    const devices = agents.map(userAgent => ({ ...RARE_DEVICE, userAgent }));
+    // Each re-read agent measures as common; only the two past the cap are left, with no rows at all.
+    const commonFor = (userAgent: string) =>
+      [64510, 64511, 64512, 64513, 64514].map(asn =>
+        row(`seen-${asn}-${userAgent}`, { devices: [{ ...RARE_DEVICE, userAgent }], asn })
+      );
+    const findBaseline = vi.fn(async (userAgents: string[]) =>
+      userAgents.length > 1 ? { rows: [], truncated: true } : { rows: commonFor(userAgents[0]), truncated: false }
+    );
+    const results = await evaluateDeviceLinks([row('new-user', { devices })], config, {
+      ...makeDeps({ findBanned: vi.fn(async () => [{ ...banned, devices }]) }),
+      findBaseline,
+    });
+
+    // One chunk read plus ten single-agent reads; without the fail-closed rule the last two would link.
+    expect(findBaseline).toHaveBeenCalledTimes(11);
+    expect(results.get('new-user')).toEqual({ linked: false, reason: 'common_device_only' });
+  });
+});
+
+describe('liveDeviceLinkDeps.loadConfig', () => {
+  const load = () => liveDeviceLinkDeps({} as unknown as Logger).loadConfig();
+  const withSettings = (value: boolean | undefined) =>
+    vi
+      .mocked(getSettingsMap)
+      .mockResolvedValue(
+        (value === undefined ? {} : { shadowDetectionRecordingEnabled: value }) as Awaited<
+          ReturnType<typeof getSettingsMap>
+        >
+      );
+  const containment = { mode: 'shadow', deviceLinkWindowHours: 168, deviceLinkCommonNetworks: 5 };
+
+  it('returns null when shadow detection recording is off', async () => {
+    withSettings(false);
+    vi.mocked(loadAutoContainmentConfig).mockResolvedValue(containment as never);
+    expect(await load()).toBeNull();
+  });
+
+  it('returns null when the device-link window is 0', async () => {
+    withSettings(true);
+    vi.mocked(loadAutoContainmentConfig).mockResolvedValue({ ...containment, deviceLinkWindowHours: 0 } as never);
+    expect(await load()).toBeNull();
+  });
+
+  it('returns the configured policy when recording is on', async () => {
+    withSettings(true);
+    vi.mocked(loadAutoContainmentConfig).mockResolvedValue(containment as never);
+    expect(await load()).toEqual({ windowHours: 168, commonNetworks: 5 });
+  });
+});

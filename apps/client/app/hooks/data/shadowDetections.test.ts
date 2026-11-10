@@ -4,7 +4,7 @@ import { act, renderHook } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AxiosError, AxiosHeaders, type AxiosResponse } from 'axios';
 import { api } from '@client/app/contexts/ApiContext';
-import { useShadowDetectionVerdict, type ShadowDetectionRow } from './shadowDetections';
+import { useShadowDetectionBulkVerdict, useShadowDetectionVerdict, type ShadowDetectionRow } from './shadowDetections';
 
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: vi.fn() } }));
 
@@ -56,6 +56,33 @@ const submit = async () => {
 };
 
 describe('useShadowDetectionVerdict', () => {
+  it('recovers a stale synchronized observation including serialized scan timestamps', async () => {
+    const current = row({
+      detector: 'completionSynchrony',
+      revision: 2,
+      completionSynchrony: {
+        source: 'api_key_request_starts',
+        windowHours: 24,
+        eventsScanned: 9,
+        legacyRows: 0,
+        scanTruncated: false,
+        bursts: 3,
+        synchronizedModelSwitches: 1,
+        distinctRequestedModels: 2,
+        maxStartSkewMilliseconds: 400,
+        completedRequests: 6,
+        dailyCapRejectedRequests: 3,
+        otherRejectedRequests: 0,
+        interruptedOrUnknownRequests: 0,
+        scannedAt: '2026-01-01T12:00:00Z',
+        firstObservedAt: '2026-01-01T11:50:00Z',
+        lastObservedAt: '2026-01-01T11:59:00Z',
+      },
+    });
+    post.mockRejectedValue(httpError(409, { error: 'Evidence refreshed', item: current }));
+    expect(await submit()).toEqual({ status: 'conflict', item: current, message: 'Evidence refreshed' });
+  });
+
   it('recovers a stale verdict with serialized sequence evidence', async () => {
     const current = row({
       detector: 'completionSequence',
@@ -122,5 +149,65 @@ describe('useShadowDetectionVerdict', () => {
     post.mockRejectedValue(error);
 
     await expect(submit()).rejects.toBe(error);
+  });
+});
+
+describe('useShadowDetectionBulkVerdict', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it('sends a large selection in batches of the server limit and merges the results', async () => {
+    const items = Array.from({ length: 150 }, (_, index) => ({
+      id: index.toString(16).padStart(24, '0'),
+      expectedRevision: 0,
+    }));
+    post.mockResolvedValueOnce({ data: { updated: [row()], conflicts: [], notFound: ['x'] } }).mockResolvedValueOnce({
+      data: { updated: [], conflicts: [row({ verdict: 'legitimate_human' })], notFound: [] },
+    });
+    const { result } = renderHook(() => useShadowDetectionBulkVerdict(), { wrapper: createWrapper() });
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.mutateAsync({ items, verdict: 'confirmed_abuse', reason: 'Same cohort' });
+    });
+
+    expect(post).toHaveBeenCalledTimes(2);
+    expect(post.mock.calls[0]).toEqual([
+      '/api/admin/shadow-detections/verdicts',
+      { items: items.slice(0, 100), verdict: 'confirmed_abuse', reason: 'Same cohort' },
+    ]);
+    expect(post.mock.calls[1][1].items).toEqual(items.slice(100));
+    expect(outcome).toMatchObject({
+      updated: [{ id: DETECTION_ID }],
+      conflicts: [{ verdict: 'legitimate_human' }],
+      notFound: ['x'],
+    });
+  });
+
+  it('preserves completed batches and reports the failed and unattempted ids for retry', async () => {
+    const items = Array.from({ length: 250 }, (_, index) => ({
+      id: index.toString(16).padStart(24, '0'),
+      expectedRevision: 0,
+    }));
+    post
+      .mockResolvedValueOnce({ data: { updated: [row()], conflicts: [], notFound: [], failed: ['server-failed'] } })
+      .mockRejectedValueOnce(new Error('Connection lost'));
+    const { result } = renderHook(() => useShadowDetectionBulkVerdict(), { wrapper: createWrapper() });
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.mutateAsync({ items, verdict: 'confirmed_abuse', reason: 'Reviewed cohort' });
+    });
+
+    expect(post).toHaveBeenCalledTimes(2);
+    expect(post.mock.calls[1][1].items).toEqual(items.slice(100, 200));
+    expect(outcome).toEqual({
+      updated: [row()],
+      conflicts: [],
+      notFound: [],
+      failed: ['server-failed', ...items.slice(100).map(item => item.id)],
+      failureMessage: 'Connection lost',
+    });
   });
 });

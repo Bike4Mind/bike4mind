@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { accountCampaignGroupSchema } from './accountCampaign';
+import { completionSynchronyEvidenceSchema } from './completionSynchrony';
 import { completionSequenceEvidenceSchema } from './completionSequence';
 
 /**
@@ -14,11 +15,16 @@ export const SHADOW_DETECTORS = [
   'signupNetworkBurst',
   'accountCampaign',
   'completionSequence',
+  'completionSynchrony',
   'youngAccountSpend',
   'paymentRisk',
   /** A new account that signed up from the same IP as a blocked account, close in time. */
   'signupIpLinkedToBlocked',
   'signupDomainHold',
+  /** A new account used from the same uncommon device as a banned account, with a corroborating signal. */
+  'deviceLinkedToBlocked',
+  /** A fresh account that ran the scripted grant-drain sequence (usage pattern signals). */
+  'scriptedGrantDrain',
 ] as const;
 export type ShadowDetector = (typeof SHADOW_DETECTORS)[number];
 
@@ -59,6 +65,44 @@ export const shadowDetectionSignalSchema = z.object({
   threshold: z.number().nullable(),
 });
 export type ShadowDetectionSignal = z.infer<typeof shadowDetectionSignalSchema>;
+
+/** How a signal is compared with its threshold when it trips its detector. */
+export type ShadowDetectionSignalRule = 'above' | 'atLeast' | 'below' | 'atMost';
+
+/**
+ * The comparison each producer applies, keyed by signal key. Must stay in sync with the producers:
+ * signupNetworkAlerts (ipSignups, asnSignups), paymentRisk (youngAccount, sharedCard, manyCards*),
+ * strongLink (blockedSignupIpLinks, hoursToBlockedLink), accountCampaignSignals (directMembers, axes)
+ * and signupDomainHoldAssessment (confidence). A key not listed here is shown as context, never as
+ * the reason a detector fired.
+ */
+export const SHADOW_DETECTION_SIGNAL_RULES: Readonly<Record<string, ShadowDetectionSignalRule>> = {
+  ipSignups: 'above',
+  asnSignups: 'above',
+  sharedCard: 'above',
+  manyCardsPerAccount: 'above',
+  manyCardsPerNetwork: 'above',
+  youngAccount: 'below',
+  blockedSignupIpLinks: 'atLeast',
+  hoursToBlockedLink: 'atMost',
+  directMembers: 'atLeast',
+  axes: 'atLeast',
+  confidence: 'atLeast',
+};
+
+/** The signal's rule when it has one and its observed value met it; null otherwise. */
+export function shadowDetectionSignalTrip(signal: ShadowDetectionSignal): ShadowDetectionSignalRule | null {
+  const rule = SHADOW_DETECTION_SIGNAL_RULES[signal.key];
+  const { observed, threshold } = signal;
+  if (!rule || observed === null || threshold === null) return null;
+  const met = {
+    above: observed > threshold,
+    atLeast: observed >= threshold,
+    below: observed < threshold,
+    atMost: observed <= threshold,
+  }[rule];
+  return met ? rule : null;
+}
 
 export const shadowDetectionNetworkSchema = z.object({
   ip: z.string().nullable(),
@@ -122,6 +166,7 @@ export const shadowDetectionItemSchema = z.object({
   group: accountCampaignGroupSchema.nullable(),
   /** Optional for older records. Participants follow userIds order. Observation only. */
   completionSequence: completionSequenceEvidenceSchema.optional(),
+  completionSynchrony: completionSynchronyEvidenceSchema.optional(),
   /** The screened payment of a paymentRisk detection; null for detectors that do not watch payments. */
   payment: shadowDetectionPaymentSchema.nullable(),
   detectedAt: z.date(),
@@ -150,10 +195,51 @@ export const shadowDetectionSummaryRowSchema = z.object({
 });
 export type ShadowDetectionSummaryRow = z.infer<typeof shadowDetectionSummaryRowSchema>;
 
+export const SHADOW_DETECTION_ACCOUNT_STATUSES = ['active', 'suspended', 'deleted', 'missing'] as const;
+export type ShadowDetectionAccountStatus = (typeof SHADOW_DETECTION_ACCOUNT_STATUSES)[number];
+
+/**
+ * An account a listed detection names, as it is now, so a reviewer sees a suspended or drained account
+ * without opening its profile. `missing` is an id with no user record.
+ */
+export const shadowDetectionAccountSchema = z.object({
+  userId: z.string(),
+  status: z.enum(SHADOW_DETECTION_ACCOUNT_STATUSES),
+  signupMethod: z.string().nullable(),
+  currentCredits: z.number().nullable(),
+});
+export type ShadowDetectionAccount = z.infer<typeof shadowDetectionAccountSchema>;
+
+/** A reviewer named in the listed detections' verdict histories; `name` is null for a missing account. */
+export const shadowDetectionReviewerSchema = z.object({
+  userId: z.string(),
+  name: z.string().nullable(),
+});
+export type ShadowDetectionReviewer = z.infer<typeof shadowDetectionReviewerSchema>;
+
+/** Burst peers listed per detection; `truncated` says more accounts signed up in the window. */
+export const SHADOW_DETECTION_BURST_PEER_LIMIT = 10;
+
+/**
+ * The other accounts that signed up from a signupNetworkBurst detection's IP inside its window. The
+ * detection names only the signup that tripped it; these are read from the users at list time.
+ */
+export const shadowDetectionBurstPeersSchema = z.object({
+  detectionId: z.string(),
+  userIds: z.array(z.string()),
+  truncated: z.boolean(),
+});
+export type ShadowDetectionBurstPeers = z.infer<typeof shadowDetectionBurstPeersSchema>;
+
 export const shadowDetectionListSchema = z.object({
   data: z.array(shadowDetectionItemSchema),
   truncated: z.boolean(),
   summary: z.array(shadowDetectionSummaryRowSchema),
+  /** Every account the listed detections and their burst peers name. */
+  accounts: z.array(shadowDetectionAccountSchema),
+  burstPeers: z.array(shadowDetectionBurstPeersSchema),
+  /** Everyone who recorded a verdict on the listed detections, so the page can name them. */
+  reviewers: z.array(shadowDetectionReviewerSchema),
 });
 export type ShadowDetectionList = z.infer<typeof shadowDetectionListSchema>;
 
@@ -171,6 +257,30 @@ export const shadowDetectionVerdictRequestSchema = z.object({
   reason: z.unknown(),
 });
 export type ShadowDetectionVerdictRequest = z.infer<typeof shadowDetectionVerdictRequestSchema>;
+
+/** Detections one bulk verdict may grade. */
+export const SHADOW_DETECTION_BULK_VERDICT_LIMIT = 100;
+
+/** One verdict and reason for several detections, each named with the revision it was decided against. */
+export const shadowDetectionBulkVerdictRequestSchema = z.object({
+  items: z
+    .array(z.object({ id: ObjectIdStringSchema, expectedRevision: z.number().int().min(0) }))
+    .min(1)
+    .max(SHADOW_DETECTION_BULK_VERDICT_LIMIT),
+  verdict: z.enum(SHADOW_DETECTION_VERDICTS),
+  reason: z.unknown(),
+});
+export type ShadowDetectionBulkVerdictRequest = z.infer<typeof shadowDetectionBulkVerdictRequestSchema>;
+
+/** `conflicts` moved since the reviewer read them and were left alone; they come back as they are now. */
+export const shadowDetectionBulkVerdictResponseSchema = z.object({
+  updated: z.array(shadowDetectionItemSchema),
+  conflicts: z.array(shadowDetectionItemSchema),
+  notFound: z.array(z.string()),
+  /** Writes whose outcome could not be confirmed; refresh before retrying them. */
+  failed: z.array(z.string()).optional(),
+});
+export type ShadowDetectionBulkVerdictResponse = z.infer<typeof shadowDetectionBulkVerdictResponseSchema>;
 
 /**
  * Suspension reasons that mean the admin judged the account abusive, so its open detections are graded
@@ -194,4 +304,32 @@ export function shadowDetectionPrecision(row: ShadowDetectionSummaryRow): number
   const falsePositives = row.legitimateHuman + row.legitimateAutomation;
   const conclusive = row.confirmedAbuse + falsePositives;
   return conclusive === 0 ? null : row.confirmedAbuse / conclusive;
+}
+
+/**
+ * The bar a detector version should clear before an admin moves autoContainmentConfig.mode from shadow
+ * to enforce: enough conclusive verdicts to trust the ratio, and precision at or above the floor. It
+ * is guidance shown on the Detections page; nothing enforces it, and the mode is one setting for every
+ * detector.
+ */
+export const SHADOW_DETECTION_ENFORCE_BAR = { minConclusive: 50, minPrecision: 0.95 } as const;
+
+export type ShadowDetectionReadiness = {
+  /** collecting: too few conclusive verdicts yet; below_bar / ready: enough, judged by precision. */
+  status: 'collecting' | 'below_bar' | 'ready';
+  conclusive: number;
+  precision: number | null;
+};
+
+export function shadowDetectionReadiness(row: ShadowDetectionSummaryRow): ShadowDetectionReadiness {
+  const conclusive = row.confirmedAbuse + row.legitimateHuman + row.legitimateAutomation;
+  const precision = shadowDetectionPrecision(row);
+  if (conclusive < SHADOW_DETECTION_ENFORCE_BAR.minConclusive || precision === null) {
+    return { status: 'collecting', conclusive, precision };
+  }
+  return {
+    status: precision >= SHADOW_DETECTION_ENFORCE_BAR.minPrecision ? 'ready' : 'below_bar',
+    conclusive,
+    precision,
+  };
 }

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Types } from 'mongoose';
 import { setupMongoTest } from '../../../__test__/utils';
 import { User } from '../../auth/UserModel';
@@ -34,6 +34,10 @@ const grade = (id: string, expectedRevision: number, verdict: 'confirmed_abuse' 
 
 describe('shadowDetectionRepository', () => {
   setupMongoTest();
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
 
   beforeEach(async () => {
     await ShadowDetectionModel.deleteMany({});
@@ -410,5 +414,133 @@ describe('shadowDetectionRepository', () => {
       expect(await reinstate()).toEqual([]);
       expect((await stored(id)).verdicts).toHaveLength(1);
     });
+  });
+
+  describe('list context', () => {
+    const at = (iso: string) => new Date(iso);
+    const insertUser = (fields: Record<string, unknown>) => {
+      const _id = new Types.ObjectId();
+      return User.collection.insertOne({ _id, ...fields }).then(() => _id.toString());
+    };
+
+    beforeEach(async () => {
+      await User.collection.deleteMany({});
+    });
+
+    it('reports each named account status, signup method and balance', async () => {
+      const active = await insertUser({ currentCredits: 120, acquisition: { signupMethod: 'google' } });
+      const suspended = await insertUser({
+        isBanned: true,
+        currentCredits: 0,
+        authProviders: [{ strategy: 'github' }],
+      });
+      const deleted = await insertUser({ deletedAt: new Date() });
+      const missing = new Types.ObjectId().toString();
+      const id = await shadowDetectionRepository.record(
+        detection({ detector: 'youngAccountSpend', network: null, userIds: [active, suspended, deleted, missing] })
+      );
+
+      const { accounts } = await shadowDetectionRepository.listContext([
+        (await shadowDetectionRepository.findById(id))!,
+      ]);
+
+      expect(accounts).toEqual([
+        { userId: active, status: 'active', signupMethod: 'google', currentCredits: 120 },
+        { userId: suspended, status: 'suspended', signupMethod: 'github', currentCredits: 0 },
+        { userId: deleted, status: 'deleted', signupMethod: 'email', currentCredits: null },
+        { userId: missing, status: 'missing', signupMethod: null, currentCredits: null },
+      ]);
+    });
+
+    it('lists the other signups from a burst IP inside its window, with their accounts', async () => {
+      const ip = '203.0.113.7';
+      const actor = await insertUser({ signupMeta: { ip }, createdAt: at('2026-10-01T00:00:00Z') });
+      const peer = await insertUser({ signupMeta: { ip }, createdAt: at('2026-09-30T23:00:00Z') });
+      await insertUser({ signupMeta: { ip }, createdAt: at('2026-09-29T00:00:00Z') });
+      await insertUser({ signupMeta: { ip: '198.51.100.1' }, createdAt: at('2026-09-30T23:30:00Z') });
+      const id = await shadowDetectionRepository.record(detection({ userIds: [actor], windowMinutes: 180 }));
+
+      const context = await shadowDetectionRepository.listContext([(await shadowDetectionRepository.findById(id))!]);
+
+      expect(context.burstPeers).toEqual([{ detectionId: id, userIds: [peer], truncated: false }]);
+      expect(context.accounts.map(account => account.userId)).toEqual([actor, peer]);
+    });
+
+    it('names the reviewers of the listed detections, falling back from name to username to email', async () => {
+      const named = await insertUser({ name: 'Test Admin' });
+      const emailOnly = await insertUser({ email: 'reviewer@example.test' });
+      const gone = new Types.ObjectId().toString();
+      const id = await shadowDetectionRepository.record(detection());
+      for (const [revision, reviewerId] of [named, emailOnly, gone].entries()) {
+        await shadowDetectionRepository.addVerdict({
+          id,
+          expectedRevision: revision,
+          verdict: 'insufficient_evidence',
+          reason: 'Not enough data to decide',
+          reviewerId,
+        });
+      }
+
+      const { reviewers } = await shadowDetectionRepository.listContext([
+        (await shadowDetectionRepository.findById(id))!,
+      ]);
+
+      expect(reviewers).toEqual([
+        { userId: named, name: 'Test Admin' },
+        { userId: emailOnly, name: 'reviewer@example.test' },
+        { userId: gone, name: null },
+      ]);
+    });
+  });
+
+  it('grades several detections with one verdict and reports the ones that moved', async () => {
+    const fresh = await shadowDetectionRepository.record(detection());
+    const moved = await shadowDetectionRepository.record(detection());
+    await grade(moved, 0, 'legitimate_human');
+    const missing = 'f'.repeat(24);
+
+    const result = await shadowDetectionRepository.addVerdicts({
+      items: [
+        { id: fresh, expectedRevision: 0 },
+        { id: fresh, expectedRevision: 0 },
+        { id: moved, expectedRevision: 0 },
+        { id: missing, expectedRevision: 0 },
+      ],
+      verdict: 'confirmed_abuse',
+      reason: 'Same cohort',
+      reviewerId: 'admin1',
+    });
+
+    expect(result.updated.map(item => [item.id, item.verdict])).toEqual([[fresh, 'confirmed_abuse']]);
+    expect(result.conflicts.map(item => [item.id, item.verdict])).toEqual([[moved, 'legitimate_human']]);
+    expect(result.notFound).toEqual([missing]);
+  });
+
+  it('retains committed verdicts and continues grading after an item write fails', async () => {
+    const first = await shadowDetectionRepository.record(detection());
+    const failed = await shadowDetectionRepository.record(detection());
+    const last = await shadowDetectionRepository.record(detection());
+    const error = new Error('Temporary database failure');
+    const addVerdict = shadowDetectionRepository.addVerdict.bind(shadowDetectionRepository);
+    vi.spyOn(shadowDetectionRepository, 'addVerdict').mockImplementation(async input => {
+      if (input.id === failed) throw error;
+      return addVerdict(input);
+    });
+
+    const result = await shadowDetectionRepository.addVerdicts({
+      items: [first, failed, last].map(id => ({ id, expectedRevision: 0 })),
+      verdict: 'confirmed_abuse',
+      reason: 'Checked each detection',
+      reviewerId: 'admin1',
+    });
+
+    expect(result.updated.map(item => item.id)).toEqual([first, last]);
+    expect(result.failed).toEqual([{ id: failed, error }]);
+    expect(result.conflicts).toEqual([]);
+    expect(result.notFound).toEqual([]);
+    for (const id of [first, last]) {
+      expect(await shadowDetectionRepository.findById(id)).toMatchObject({ verdict: 'confirmed_abuse', revision: 1 });
+    }
+    expect(await shadowDetectionRepository.findById(failed)).toMatchObject({ verdict: null, revision: 0 });
   });
 });

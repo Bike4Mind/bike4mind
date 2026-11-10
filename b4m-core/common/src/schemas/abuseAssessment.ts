@@ -8,6 +8,7 @@ import {
 } from './accountCampaign';
 import { RISK_EVIDENCE_MISSING_REASONS, RISK_EVIDENCE_VERSION, riskEvidenceFactValueSchemas } from './riskEvidence';
 import { SHADOW_DETECTION_VERDICTS, SHADOW_DETECTORS } from './shadowDetection';
+import { completionSynchronyEvidenceSchema } from './completionSynchrony';
 import { completionSequenceEvidenceSchema } from './completionSequence';
 
 /**
@@ -20,7 +21,7 @@ import { completionSequenceEvidenceSchema } from './completionSequence';
  */
 
 /** Bump when the question, its choices or the summary's meaning changes; cached results key on it. */
-export const ABUSE_ASSESSMENT_POLICY_VERSION = 4;
+export const ABUSE_ASSESSMENT_POLICY_VERSION = 5;
 
 /** What the model may answer. */
 export const ABUSE_ASSESSMENT_JUDGMENTS = ['abuse', 'legitimate_automation', 'insufficient_evidence'] as const;
@@ -43,7 +44,7 @@ export const ABUSE_ASSESSMENT_FAILURE_CODES = [
 ] as const;
 export type AbuseAssessmentFailureCode = (typeof ABUSE_ASSESSMENT_FAILURE_CODES)[number];
 
-/** strong_link: assessed at signup by the strong-link rule (autoContainment/strongLink.ts), not the sweep. */
+/** strong_link: assessed at once by a link rule (autoContainment/strongLink.ts, deviceLink.ts), not the sweep. */
 export const ABUSE_ASSESSMENT_TRIGGERS = ['admin', 'sweep', 'strong_link'] as const;
 export type AbuseAssessmentTrigger = (typeof ABUSE_ASSESSMENT_TRIGGERS)[number];
 
@@ -181,6 +182,22 @@ export const assessmentCompletionSequenceSchema = z.discriminatedUnion('status',
   }),
 ]);
 
+export const assessmentCompletionSynchronySchema = z.discriminatedUnion('status', [
+  completionSynchronyEvidenceSchema
+    .omit({ firstObservedAt: true, lastObservedAt: true, scannedAt: true })
+    .extend({
+      status: z.literal('observed'),
+      reviewOnly: z.literal(true),
+      memberRefs: z.array(accountRefSchema).min(3).max(10),
+    })
+    .strict(),
+  z.strictObject({
+    status: z.literal('incomplete'),
+    reviewOnly: z.literal(true),
+    reason: z.enum(['members_omitted', 'source_missing']),
+  }),
+]);
+
 /** Exactly what the provider receives. Strict, so a field added upstream never rides along. */
 export const abuseAssessmentFeatureSummarySchema = z.strictObject({
   evidenceVersion: z.literal(RISK_EVIDENCE_VERSION),
@@ -202,6 +219,7 @@ export const abuseAssessmentFeatureSummarySchema = z.strictObject({
   accountsOmitted: z.number().int().nonnegative(),
   group: abuseAssessmentGroupEvidenceSchema.nullable(),
   completionSequence: assessmentCompletionSequenceSchema.optional(),
+  completionSynchrony: assessmentCompletionSynchronySchema.optional(),
 });
 export type AbuseAssessmentFeatureSummary = z.infer<typeof abuseAssessmentFeatureSummarySchema>;
 

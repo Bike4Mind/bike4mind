@@ -114,6 +114,11 @@ export const ABUSE_ASSESSMENT_QUESTION: DecisionQuestion = {
     'Do not infer a shared device, IP or operator from ordering. Require independent evidence of misuse',
     'before choosing abuse; otherwise choose insufficient_evidence or legitimate_automation when supported.',
     'Sequence coverage is partial. Missing, omitted or capped observations are not evidence that nothing happened.',
+    'Synchronized request-start bursts and shared requested-model switches are also correlated coordination evidence.',
+    'Model choices are caller requests, not proof of the same prompt, device, person or intent. Daily-cap rejections',
+    'mean an existing control stopped those calls, not successful model usage. Distinguish transport status from',
+    'completion outcome. Grant-funded spend includes rewards and other grants, not only signup credits.',
+    'Unknown funding or unavailable cohort spending must not be inferred to be free-credit misuse. Legacy rows, interrupted calls and missing outcomes remain unknown. Require independent misuse evidence.',
     'Sequence detections are review-only. Never treat the detector name or an earlier AI guess as a ground-truth label.',
   ].join(' '),
   choices: [

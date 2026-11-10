@@ -16,6 +16,7 @@ export * from './refreshSignupRiskScore';
 export * from './riskEvidence';
 export * from './accountCampaigns';
 export * from './completionSequences';
+export * from './deviceLinkage';
 export * from './sourceTag';
 export * from './recordPolicyAcceptance';
 export * from './adminDelete';
@@ -49,3 +50,5 @@ export * from './heldSignupGrants';
 export * from './signupGrantActionClassifier';
 export * from './signupGrantAdminActions';
 export * from './bulkSignupGrantActions';
+
+export * from './completionSynchrony';

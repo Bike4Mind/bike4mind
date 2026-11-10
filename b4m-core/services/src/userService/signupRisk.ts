@@ -6,6 +6,9 @@ export const SIGNUP_RISK_SIGNALS = [
   'canonicalEmailCollision',
   'disposableDomain',
   'blockedDomain',
+  // A +tag at a provider that delivers it to the untagged inbox, and one that looks machine-generated.
+  'plusAddressTag',
+  'randomPlusAddressTag',
   'challengeVerified',
   'ipSignups',
   'asnSignups',

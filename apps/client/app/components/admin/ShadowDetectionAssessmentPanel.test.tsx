@@ -97,6 +97,59 @@ describe('ShadowDetectionAssessmentPanel', () => {
     expect(explanation).toContain('reached a cap');
   });
 
+  it('explains synchronized request-start evidence and incomplete coverage', () => {
+    hooks.useAbuseAssessments.mockReturnValue({
+      data: [
+        makeItem({
+          featureSummary: {
+            accounts: [],
+            completionSynchrony: {
+              status: 'observed',
+              reviewOnly: true,
+              source: 'api_key_request_starts',
+              windowHours: 24,
+              eventsScanned: 9,
+              legacyRows: 1,
+              scanTruncated: false,
+              memberRefs: ['acct_1', 'acct_2', 'acct_3'],
+              bursts: 4,
+              synchronizedModelSwitches: 2,
+              distinctRequestedModels: 2,
+              maxStartSkewMilliseconds: 400,
+              completedRequests: 6,
+              dailyCapRejectedRequests: 3,
+              otherRejectedRequests: 0,
+              interruptedOrUnknownRequests: 0,
+            },
+          },
+        }),
+      ],
+      isPending: false,
+      error: null,
+    });
+    const { unmount } = renderPanel();
+    const observed = screen.getByTestId('assessment-completion-synchrony').textContent;
+    expect(observed).toContain('3 accounts shared 4 request-start bursts and 2 requested-model switches');
+    expect(observed).toContain('3 matched requests were stopped by daily free-tier caps');
+    expect(observed).toContain('Coverage is incomplete');
+    unmount();
+
+    hooks.useAbuseAssessments.mockReturnValue({
+      data: [
+        makeItem({
+          featureSummary: {
+            accounts: [],
+            completionSynchrony: { status: 'incomplete', reviewOnly: true, reason: 'members_omitted' },
+          },
+        }),
+      ],
+      isPending: false,
+      error: null,
+    });
+    renderPanel();
+    expect(screen.getByTestId('assessment-completion-synchrony').textContent).toContain('could not be fully included');
+  });
+
   it('renders the latest result and its probabilities', () => {
     renderPanel();
     expect(screen.getByTestId('shadow-detection-assessment-result').textContent).toContain('Abuse');

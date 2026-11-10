@@ -108,6 +108,7 @@ describe('AdminSchemaSettingField', () => {
       regularCadence: 25,
       creditPolling: 40,
       quickApiKey: 25,
+      scriptedGrantDrain: 50,
     });
   });
 

@@ -14,13 +14,16 @@ import type {
 const m = vi.hoisted(() => ({
   useShadowDetections: vi.fn(),
   mutateAsync: vi.fn(),
+  bulkMutateAsync: vi.fn(),
   search: {} as Record<string, unknown>,
   navigate: vi.fn(),
   verdictError: null as Error | null,
+  realWatch: false,
 }));
 vi.mock('@client/app/hooks/data/shadowDetections', () => ({
   useShadowDetections: m.useShadowDetections,
   useShadowDetectionVerdict: () => ({ mutateAsync: m.mutateAsync, isPending: false, error: m.verdictError }),
+  useShadowDetectionBulkVerdict: () => ({ mutateAsync: m.bulkMutateAsync, isPending: false, error: null }),
   useAbuseAssessments: () => ({ data: [], isPending: false, error: null }),
   useRequestAbuseAssessment: () => ({ mutateAsync: vi.fn(), isPending: false, error: null }),
   useVerdictEval: () => ({ data: undefined, isPending: true, error: null, refetch: vi.fn() }),
@@ -45,13 +48,24 @@ vi.mock('@tanstack/react-router', () => ({
   ),
 }));
 
-import ShadowDetectionsTab, { formatPaymentAmount } from './ShadowDetectionsTab';
+import ShadowDetectionsTab, { formatPaymentAmount, relatedUnreviewed } from './ShadowDetectionsTab';
 vi.mock('./CampaignWatches/CampaignWatchesPanel', () => ({ CampaignWatchesPanel: () => null }));
-vi.mock('./CampaignWatches/WatchAccountsButton', () => ({
-  WatchAccountsButton: ({ incomplete }: { incomplete?: boolean }) => (
-    <button disabled={incomplete}>Watch cohort</button>
-  ),
+vi.mock('./CampaignWatches/WatchAccountsButton', async importOriginal => {
+  const actual = await importOriginal<typeof import('./CampaignWatches/WatchAccountsButton')>();
+  return {
+    WatchAccountsButton: (props: React.ComponentProps<typeof actual.WatchAccountsButton>) =>
+      m.realWatch ? (
+        <actual.WatchAccountsButton {...props} />
+      ) : (
+        <button disabled={props.incomplete}>Watch cohort</button>
+      ),
+  };
+});
+vi.mock('@client/app/hooks/data/campaignWatches', () => ({
+  useCreateCampaignWatch: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  watchErrorMessage: () => 'Could not create watch',
 }));
+import { DETECTIONS_INTRO_DISMISSED_KEY } from './shadowDetectionExplainer';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
@@ -99,6 +113,9 @@ const list = (over: Partial<ShadowDetectionListResponse> = {}): ShadowDetectionL
   data: [detection()],
   truncated: false,
   summary: [summaryRow()],
+  accounts: [],
+  burstPeers: [],
+  reviewers: [],
   ...over,
 });
 
@@ -112,8 +129,10 @@ const queryResult = (data: ShadowDetectionListResponse) => ({
 describe('ShadowDetectionsTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.localStorage.clear();
     m.search = {};
     m.verdictError = null;
+    m.realWatch = false;
     m.useShadowDetections.mockReturnValue(queryResult(list()));
   });
 
@@ -124,6 +143,57 @@ describe('ShadowDetectionsTab', () => {
     for (const side of [style.paddingTop, style.paddingRight, style.paddingBottom, style.paddingLeft]) {
       expect(parseFloat(side || '0')).toBe(0);
     }
+  });
+
+  it('explains synchronized starts, stopped calls and cohort funding before an AI assessment', () => {
+    m.useShadowDetections.mockReturnValue(
+      queryResult(
+        list({
+          data: [
+            detection({
+              detector: 'completionSynchrony',
+              wouldAction: 'none',
+              userIds: ['a'.repeat(24), 'b'.repeat(24), 'c'.repeat(24)],
+              completionSynchrony: {
+                source: 'api_key_request_starts',
+                windowHours: 24,
+                eventsScanned: 9,
+                legacyRows: 2,
+                scanTruncated: false,
+                bursts: 3,
+                synchronizedModelSwitches: 1,
+                distinctRequestedModels: 2,
+                maxStartSkewMilliseconds: 400,
+                completedRequests: 5,
+                dailyCapRejectedRequests: 2,
+                otherRejectedRequests: 1,
+                interruptedOrUnknownRequests: 1,
+                scannedAt: '2026-01-01T12:00:00Z',
+                firstObservedAt: '2026-01-01T11:50:00Z',
+                lastObservedAt: '2026-01-01T11:59:00Z',
+                creditExposure: {
+                  scope: 'cohort_completion_api_24h',
+                  creditsCharged: 15,
+                  grantFundedCredits: 10,
+                  unknownFundingCredits: 5,
+                  scanTruncated: false,
+                },
+              },
+            }),
+          ],
+        })
+      )
+    );
+    renderTab();
+    fireEvent.click(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`));
+    const evidence = screen.getByTestId('completion-synchrony-observation');
+    expect(evidence).toHaveTextContent('3 repeated request-start bursts');
+    expect(evidence).toHaveTextContent('2 stopped by daily free-tier caps');
+    expect(evidence).toHaveTextContent('1 other rejected or failed');
+    expect(evidence).toHaveTextContent('10 grant-funded');
+    expect(evidence).toHaveTextContent('not proof of one operator');
+    expect(evidence).toHaveTextContent('Coverage is incomplete');
+    expect(m.mutateAsync).not.toHaveBeenCalled();
   });
 
   it('explains a capped sequence before AI assessment and keeps exact-account watches available', () => {
@@ -166,8 +236,8 @@ describe('ShadowDetectionsTab', () => {
   it('defaults to unreviewed detections and renders rows and stats', () => {
     renderTab();
 
-    expect(screen.getByTestId('detections-start-here')).toHaveTextContent('Open Review evidence');
-    expect(screen.getByTestId('detections-start-here')).toHaveTextContent('does not change account access');
+    expect(screen.getByTestId('shadow-detection-intro')).toHaveTextContent('Open Review evidence');
+    expect(screen.getByTestId('shadow-detection-intro')).toHaveTextContent('does not change account access');
     expect(screen.getByText('Suggested response')).toBeInTheDocument();
 
     expect(m.useShadowDetections).toHaveBeenCalledWith({ detector: undefined, verdict: 'unreviewed' });
@@ -303,8 +373,18 @@ describe('ShadowDetectionsTab', () => {
     renderTab();
     fireEvent.click(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`));
     const signals = await screen.findByTestId('shadow-detection-signals');
-    expect(signals.textContent).toContain('Signups from one IP: - observed, threshold 1');
+    expect(screen.getByTestId('shadow-detection-signal-context').textContent).toContain(
+      'Signups from one IP: - (threshold 1)'
+    );
     expect(signals.textContent).not.toContain('n/a');
+  });
+
+  it('opens the verdict dialog from a row click and labels the review action', async () => {
+    m.useShadowDetections.mockReturnValue(queryResult(list({ data: [detection()] })));
+    renderTab();
+    expect(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`)).toHaveTextContent('Review evidence');
+    fireEvent.click(within(screen.getByTestId(`shadow-detection-row-${DETECTION_ID}`)).getByText(detection().summary));
+    expect(await screen.findByTestId('shadow-detection-signals')).toBeTruthy();
   });
 
   it('links every account the detection names in the verdict dialog', async () => {
@@ -470,6 +550,22 @@ describe('ShadowDetectionsTab', () => {
     expect(screen.queryByTestId('shadow-detection-campaign-truncated')).toBeNull();
   });
 
+  it('ignores verdict shortcuts from the nested Watch campaign dialog', async () => {
+    m.realWatch = true;
+    await openCampaignDialog(campaignGroup());
+    const dialog = screen.getByTestId('shadow-detection-verdict-dialog');
+    const selected = within(dialog).getByTestId('shadow-detection-verdict-option-confirmed_abuse');
+    fireEvent.click(selected);
+    fireEvent.click(within(dialog).getByTestId('watch-accounts-open-btn'));
+    const watchDialog = await screen.findByTestId('watch-accounts-dialog');
+    const cancel = within(watchDialog).getByTestId('watch-accounts-dialog-cancel-btn');
+    cancel.focus();
+    expect(cancel).toHaveFocus();
+    fireEvent.keyDown(cancel, { key: '2' });
+    expect(selected).toBeChecked();
+    expect(within(dialog).getByTestId('shadow-detection-verdict-option-legitimate_human')).not.toBeChecked();
+  });
+
   it('notes a truncated campaign group and hides empty ignored and unknown lists', async () => {
     await openCampaignDialog({
       ...campaignGroup(),
@@ -526,6 +622,7 @@ describe('ShadowDetectionsTab', () => {
           reason: 'Known customer or integration',
           reviewerId: 'dddddddddddddddddddddddd',
           reviewedAt: '2026-10-31T09:00:00.000Z',
+          source: 'reinstatement',
         },
       ],
     });
@@ -540,6 +637,9 @@ describe('ShadowDetectionsTab', () => {
     expect(
       within(screen.getByTestId('shadow-detection-history')).getByText('Known customer or integration')
     ).toBeTruthy();
+    expect(screen.getByTestId('shadow-detection-history-source').textContent).toBe(
+      'Automatic: account reinstated by reviewer dddddddddddddddddddddddd'
+    );
 
     // Re-deciding sends the revision the admin now sees.
     m.mutateAsync.mockResolvedValueOnce({ status: 'recorded', item: graded });
@@ -555,5 +655,735 @@ describe('ShadowDetectionsTab', () => {
     expect((await screen.findByTestId('shadow-detection-verdict-conflict')).textContent).toContain(
       'Another admin graded this detection first.'
     );
+  });
+
+  describe('triage', () => {
+    const ACTOR = 'bbbbbbbbbbbbbbbbbbbbbbbb';
+    const PEER = 'cccccccccccccccccccccccc';
+    const SPEND_ID = 'eeeeeeeeeeeeeeeeeeeeeeee';
+    const OTHER_ID = 'ffffffffffffffffffffffff';
+    const burst = detection({ userIds: [ACTOR] });
+    const spend = detection({
+      id: SPEND_ID,
+      detector: 'youngAccountSpend',
+      userIds: [ACTOR],
+      network: null,
+      summary: 'Spent 900 credits in its first day',
+      revision: 1,
+    });
+    const other = detection({ id: OTHER_ID, userIds: ['dddddddddddddddddddddddd'], revision: 2 });
+    const triageList = () =>
+      list({
+        data: [burst, spend, other],
+        accounts: [
+          { userId: ACTOR, status: 'suspended', signupMethod: 'google', currentCredits: 0 },
+          { userId: PEER, status: 'active', signupMethod: 'email', currentCredits: 1500 },
+        ],
+        burstPeers: [{ detectionId: DETECTION_ID, userIds: [PEER], truncated: false }],
+      });
+
+    beforeEach(() => {
+      m.useShadowDetections.mockReturnValue(queryResult(triageList()));
+    });
+
+    const openDialog = async (id = DETECTION_ID) => {
+      fireEvent.click(screen.getByTestId(`shadow-detection-grade-btn-${id}`));
+      return screen.findByTestId('shadow-detection-verdict-dialog');
+    };
+
+    it("shows each account's status, signup method and balance in the row and the dialog", async () => {
+      renderTab();
+      const account = `shadow-detection-account-${DETECTION_ID}-${ACTOR}`;
+      expect(screen.getByTestId(`${account}-status`).textContent).toBe('Suspended');
+      expect(screen.getByTestId(`${account}-facts`).textContent).toBe('google / 0 credits');
+
+      const dialog = await openDialog();
+      expect(within(dialog).getByTestId(`shadow-detection-dialog-account-${ACTOR}-status`).textContent).toBe(
+        'Suspended'
+      );
+    });
+
+    it("lists a burst's other signups in the row and the dialog", async () => {
+      renderTab();
+      const peers = screen.getByTestId(`shadow-detection-burst-peers-${DETECTION_ID}`);
+      expect(peers.textContent).toContain('1 other account');
+      expect(
+        within(peers).getByTestId(`shadow-detection-burst-peer-link-${DETECTION_ID}-${PEER}`).getAttribute('href')
+      ).toBe(`/admin/users/${PEER}`);
+
+      const dialog = await openDialog();
+      const dialogPeers = within(dialog).getByTestId('shadow-detection-dialog-burst-peers');
+      expect(within(dialogPeers).getByTestId(`shadow-detection-dialog-account-${PEER}-facts`).textContent).toBe(
+        'email / 1,500 credits'
+      );
+    });
+
+    it("badges an account's open detections and grades them together by default", async () => {
+      m.bulkMutateAsync.mockResolvedValue({ updated: [burst, spend], conflicts: [], notFound: [] });
+      renderTab();
+      expect(screen.getByTestId(`shadow-detection-related-${DETECTION_ID}`).textContent).toBe('2 open detections');
+      expect(screen.queryByTestId(`shadow-detection-related-${OTHER_ID}`)).toBeNull();
+
+      const dialog = await openDialog();
+      expect(within(dialog).getByTestId('shadow-detection-apply-related-checkbox')).toBeChecked();
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-verdict-option-confirmed_abuse'));
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-verdict-dialog-reason-input-preset-0'));
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-verdict-dialog-confirm-btn'));
+
+      await waitFor(() =>
+        expect(m.bulkMutateAsync).toHaveBeenCalledWith({
+          items: [
+            { id: DETECTION_ID, expectedRevision: 4 },
+            { id: SPEND_ID, expectedRevision: 1 },
+          ],
+          verdict: 'confirmed_abuse',
+          reason: 'Reviewed account activity',
+        })
+      );
+      expect(m.mutateAsync).not.toHaveBeenCalled();
+      await waitFor(() => expect(screen.queryByTestId('shadow-detection-verdict-dialog')).toBeNull());
+    });
+
+    it("never relates a multi-account row, so one account's verdict cannot grade another's", () => {
+      const CAMPAIGN_ID = '111111111111111111111111';
+      const campaign = detection({ id: CAMPAIGN_ID, detector: 'accountCampaign', userIds: [ACTOR, PEER], revision: 3 });
+      const related = relatedUnreviewed([burst, spend, campaign, other]);
+
+      expect(related.get(DETECTION_ID)?.map(row => row.id)).toEqual([SPEND_ID]);
+      expect(related.get(SPEND_ID)?.map(row => row.id)).toEqual([DETECTION_ID]);
+      expect(related.has(CAMPAIGN_ID)).toBe(false);
+      expect(related.has(OTHER_ID)).toBe(false);
+    });
+
+    it("hides the campaign row from an account's apply-to-all in the dialog", async () => {
+      const CAMPAIGN_ID = '111111111111111111111111';
+      const campaign = detection({ id: CAMPAIGN_ID, detector: 'accountCampaign', userIds: [ACTOR, PEER], revision: 3 });
+      m.useShadowDetections.mockReturnValue(queryResult({ ...triageList(), data: [burst, campaign, other] }));
+      renderTab();
+      expect(screen.queryByTestId(`shadow-detection-related-${DETECTION_ID}`)).toBeNull();
+      expect(screen.queryByTestId(`shadow-detection-related-${CAMPAIGN_ID}`)).toBeNull();
+
+      const dialog = await openDialog(CAMPAIGN_ID);
+      expect(within(dialog).queryByTestId('shadow-detection-apply-related-checkbox')).toBeNull();
+    });
+
+    it('counts a graded row only by the open detections beside it', () => {
+      m.useShadowDetections.mockReturnValue(
+        queryResult({ ...triageList(), data: [{ ...burst, verdict: 'legitimate_human' }, spend, other] })
+      );
+      renderTab();
+      expect(screen.getByTestId(`shadow-detection-related-${DETECTION_ID}`).textContent).toBe('1 open detection');
+    });
+
+    it('shows a truncated burst even when the scan returned no peer ids', () => {
+      m.useShadowDetections.mockReturnValue(
+        queryResult({ ...triageList(), burstPeers: [{ detectionId: DETECTION_ID, userIds: [], truncated: true }] })
+      );
+      renderTab();
+      expect(screen.getByTestId(`shadow-detection-burst-peers-${DETECTION_ID}`).textContent).toContain('0+ other');
+    });
+
+    it('drops a selected row that leaves the list from the bulk bar', () => {
+      const { rerender } = renderTab();
+      fireEvent.click(within(screen.getByTestId(`admin-table-select-${SPEND_ID}`)).getByRole('checkbox'));
+      expect(screen.getByTestId('admin-bulk-action-bar').textContent).toContain('1 selected');
+
+      m.useShadowDetections.mockReturnValue(queryResult({ ...triageList(), data: [burst, other] }));
+      rerender(
+        <CssVarsProvider theme={appTheme}>
+          <ShadowDetectionsTab />
+        </CssVarsProvider>
+      );
+      expect(screen.queryByTestId('admin-bulk-action-bar')).toBeNull();
+      expect(screen.queryByTestId('shadow-detection-bulk-verdict-dialog')).toBeNull();
+    });
+
+    it.each([{ detectionDetector: 'youngAccountSpend' }, { detectionVerdict: 'all' }])(
+      'clears all-matching selection and dialogs on URL filter changes and back navigation: %j',
+      async search => {
+        const { rerender } = renderTab();
+        const rerenderTab = () =>
+          rerender(
+            <CssVarsProvider theme={appTheme}>
+              <ShadowDetectionsTab />
+            </CssVarsProvider>
+          );
+        fireEvent.click(within(screen.getByTestId(`admin-table-select-${SPEND_ID}`)).getByRole('checkbox'));
+        fireEvent.click(screen.getByTestId('admin-select-all-matching-btn'));
+        expect(screen.getByTestId('admin-bulk-action-bar')).toHaveTextContent('3 selected');
+        fireEvent.click(screen.getByTestId('shadow-detection-bulk-grade-btn'));
+        expect(screen.getByTestId('shadow-detection-bulk-verdict-dialog')).toBeTruthy();
+
+        m.search = search;
+        m.useShadowDetections.mockReturnValue({ ...queryResult(list({ data: [spend] })), isPlaceholderData: true });
+        rerenderTab();
+        expect(screen.queryByTestId('admin-bulk-action-bar')).toBeNull();
+        expect(screen.queryByTestId('shadow-detection-bulk-verdict-dialog')).toBeNull();
+
+        fireEvent.click(within(screen.getByTestId(`admin-table-select-${SPEND_ID}`)).getByRole('checkbox'));
+        expect(screen.getByTestId('admin-bulk-action-bar')).toHaveTextContent('1 selected');
+        m.useShadowDetections.mockReturnValue({ ...queryResult(list({ data: [spend] })), isPlaceholderData: false });
+        rerenderTab();
+        expect(screen.queryByTestId('admin-bulk-action-bar')).toBeNull();
+
+        fireEvent.click(within(screen.getByTestId(`admin-table-select-${SPEND_ID}`)).getByRole('checkbox'));
+        fireEvent.click(screen.getByTestId('shadow-detection-bulk-grade-btn'));
+        m.search = {};
+        m.useShadowDetections.mockReturnValue(queryResult(triageList()));
+        rerenderTab();
+        expect(screen.queryByTestId('admin-bulk-action-bar')).toBeNull();
+        expect(screen.queryByTestId('shadow-detection-bulk-verdict-dialog')).toBeNull();
+        expect(m.bulkMutateAsync).not.toHaveBeenCalled();
+
+        m.bulkMutateAsync.mockResolvedValueOnce({ updated: [other], conflicts: [], notFound: [] });
+        fireEvent.click(within(screen.getByTestId(`admin-table-select-${OTHER_ID}`)).getByRole('checkbox'));
+        fireEvent.click(screen.getByTestId('shadow-detection-bulk-grade-btn'));
+        const dialog = screen.getByTestId('shadow-detection-bulk-verdict-dialog');
+        fireEvent.keyDown(document.body, { key: '1' });
+        fireEvent.click(within(dialog).getByTestId('shadow-detection-bulk-verdict-dialog-reason-input-preset-0'));
+        fireEvent.click(within(dialog).getByTestId('shadow-detection-bulk-verdict-dialog-confirm-btn'));
+        await waitFor(() =>
+          expect(m.bulkMutateAsync).toHaveBeenCalledWith(
+            expect.objectContaining({
+              items: [{ id: OTHER_ID, expectedRevision: other.revision }],
+            })
+          )
+        );
+      }
+    );
+
+    it('keeps the opened bulk targets and revisions when a background refresh changes the list', async () => {
+      const revised = { ...spend, revision: 2, verdict: 'legitimate_human' as const };
+      const added = detection({ id: '999999999999999999999999' });
+      m.bulkMutateAsync.mockResolvedValueOnce({ updated: [burst, other], conflicts: [revised], notFound: [] });
+      const { rerender } = renderTab();
+      fireEvent.click(within(screen.getByTestId(`admin-table-select-${SPEND_ID}`)).getByRole('checkbox'));
+      fireEvent.click(screen.getByTestId('admin-select-all-matching-btn'));
+      fireEvent.click(screen.getByTestId('shadow-detection-bulk-grade-btn'));
+      m.useShadowDetections.mockReturnValue(queryResult(list({ data: [burst, revised, other, added] })));
+      rerender(
+        <CssVarsProvider theme={appTheme}>
+          <ShadowDetectionsTab />
+        </CssVarsProvider>
+      );
+      const dialog = screen.getByTestId('shadow-detection-bulk-verdict-dialog');
+      expect(dialog).toHaveTextContent('Record verdict on 3 detections');
+      fireEvent.keyDown(document.body, { key: '1' });
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-bulk-verdict-dialog-reason-input-preset-0'));
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-bulk-verdict-dialog-confirm-btn'));
+      await waitFor(() =>
+        expect(m.bulkMutateAsync).toHaveBeenCalledWith(
+          expect.objectContaining({
+            items: [
+              { id: burst.id, expectedRevision: burst.revision },
+              { id: spend.id, expectedRevision: 1 },
+              { id: other.id, expectedRevision: other.revision },
+            ],
+          })
+        )
+      );
+      expect(screen.getByTestId('shadow-detection-bulk-notice')).toHaveTextContent(
+        '1 detection changed since this page loaded'
+      );
+    });
+
+    it('keeps related account targets and revisions as reviewed while its dialog is open', async () => {
+      const revised = { ...spend, revision: 2, verdict: 'legitimate_human' as const };
+      const added = detection({ id: '999999999999999999999999', userIds: [ACTOR] });
+      m.bulkMutateAsync.mockResolvedValueOnce({ updated: [burst], conflicts: [revised], notFound: [] });
+      const { rerender } = renderTab();
+      await openDialog();
+      m.useShadowDetections.mockReturnValue(queryResult(list({ data: [burst, revised, other, added] })));
+      rerender(
+        <CssVarsProvider theme={appTheme}>
+          <ShadowDetectionsTab />
+        </CssVarsProvider>
+      );
+      const dialog = screen.getByTestId('shadow-detection-verdict-dialog');
+      fireEvent.keyDown(document.body, { key: '1' });
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-verdict-dialog-reason-input-preset-0'));
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-verdict-dialog-confirm-btn'));
+      await waitFor(() =>
+        expect(m.bulkMutateAsync).toHaveBeenCalledWith(
+          expect.objectContaining({
+            items: [
+              { id: burst.id, expectedRevision: burst.revision },
+              { id: spend.id, expectedRevision: 1 },
+            ],
+          })
+        )
+      );
+    });
+
+    it.each(['conflict', 'failed'] as const)(
+      'prunes completed related targets before retrying an own-row %s',
+      async status => {
+        const retained = detection({ id: '999999999999999999999999', userIds: [ACTOR], revision: 2 });
+        const revised = { ...retained, revision: 3 };
+        const own = { ...burst, revision: 5 };
+        m.useShadowDetections.mockReturnValue(queryResult(list({ data: [burst, spend, retained] })));
+        m.bulkMutateAsync
+          .mockResolvedValueOnce({
+            updated: [spend],
+            conflicts: status === 'conflict' ? [own, revised] : [revised],
+            notFound: [],
+            failed: status === 'failed' ? [burst.id] : [],
+          })
+          .mockResolvedValueOnce({ updated: [own, revised], conflicts: [], notFound: [] });
+        renderTab();
+        const dialog = await openDialog();
+        fireEvent.click(within(dialog).getByTestId('shadow-detection-verdict-option-confirmed_abuse'));
+        fireEvent.click(within(dialog).getByTestId('shadow-detection-verdict-dialog-reason-input-preset-0'));
+        const save = within(dialog).getByTestId('shadow-detection-verdict-dialog-confirm-btn');
+        fireEvent.click(save);
+        await screen.findByTestId(`shadow-detection-verdict-${status === 'conflict' ? 'conflict' : 'error'}`);
+        await waitFor(() => expect(save).toBeEnabled());
+        fireEvent.click(save);
+        await waitFor(() => expect(m.bulkMutateAsync).toHaveBeenCalledTimes(2));
+        expect(m.bulkMutateAsync.mock.calls[1][0].items).toEqual([
+          { id: burst.id, expectedRevision: status === 'conflict' ? own.revision : burst.revision },
+          { id: retained.id, expectedRevision: revised.revision },
+        ]);
+      }
+    );
+
+    it('grades only the open detection when the account box is cleared', async () => {
+      m.mutateAsync.mockResolvedValue({ status: 'recorded', item: burst });
+      renderTab();
+      const dialog = await openDialog();
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-apply-related-checkbox'));
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-verdict-option-legitimate_human'));
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-verdict-dialog-reason-input-preset-0'));
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-verdict-dialog-confirm-btn'));
+
+      await waitFor(() =>
+        expect(m.mutateAsync).toHaveBeenCalledWith(
+          expect.objectContaining({ id: DETECTION_ID, verdict: 'legitimate_human' })
+        )
+      );
+      expect(m.bulkMutateAsync).not.toHaveBeenCalled();
+    });
+
+    it('picks a verdict with the number keys, but not while typing a note', async () => {
+      renderTab();
+      const dialog = await openDialog();
+
+      fireEvent.keyDown(document.body, { key: '2' });
+      expect(within(dialog).getByTestId('shadow-detection-verdict-option-legitimate_human')).toBeChecked();
+
+      const note = within(dialog).getByRole('textbox');
+      fireEvent.keyDown(note, { key: '4' });
+      expect(within(dialog).getByTestId('shadow-detection-verdict-option-legitimate_human')).toBeChecked();
+
+      fireEvent.keyDown(document.body, { key: '1' });
+      expect(within(dialog).getByTestId('shadow-detection-verdict-option-confirmed_abuse')).toBeChecked();
+    });
+
+    it('saves and opens the next unreviewed detection, keeping the reason', async () => {
+      m.mutateAsync.mockResolvedValue({ status: 'recorded', item: other });
+      renderTab();
+      const dialog = await openDialog(OTHER_ID);
+      fireEvent.keyDown(document.body, { key: '3' });
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-verdict-dialog-reason-input-preset-0'));
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-verdict-dialog-secondary-btn'));
+
+      await waitFor(() =>
+        expect(m.mutateAsync).toHaveBeenCalledWith(
+          expect.objectContaining({ id: OTHER_ID, verdict: 'legitimate_automation' })
+        )
+      );
+      // Wraps to the first unreviewed row; its verdict starts blank.
+      const next = await screen.findByTestId('shadow-detection-verdict-dialog');
+      await waitFor(() => expect(within(next).getByText(burst.summary)).toBeTruthy());
+      expect(within(next).getByTestId('shadow-detection-verdict-option-legitimate_automation')).not.toBeChecked();
+      expect(within(next).getByTestId('shadow-detection-verdict-dialog-hint').textContent).toContain('Pick a verdict');
+    });
+
+    it('records one verdict on the selected detections and reports the ones that moved', async () => {
+      m.bulkMutateAsync.mockResolvedValue({
+        updated: [other],
+        conflicts: [{ ...spend, verdict: 'legitimate_human' }],
+        notFound: [],
+      });
+      renderTab();
+      fireEvent.click(within(screen.getByTestId(`admin-table-select-${SPEND_ID}`)).getByRole('checkbox'));
+      fireEvent.click(within(screen.getByTestId(`admin-table-select-${OTHER_ID}`)).getByRole('checkbox'));
+      fireEvent.click(screen.getByTestId('shadow-detection-bulk-grade-btn'));
+
+      const dialog = await screen.findByTestId('shadow-detection-bulk-verdict-dialog');
+      expect(within(dialog).getByText('Record verdict on 2 detections')).toBeTruthy();
+      fireEvent.keyDown(document.body, { key: '1' });
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-bulk-verdict-dialog-reason-input-preset-1'));
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-bulk-verdict-dialog-confirm-btn'));
+
+      await waitFor(() =>
+        expect(m.bulkMutateAsync).toHaveBeenCalledWith({
+          items: [
+            { id: SPEND_ID, expectedRevision: 1 },
+            { id: OTHER_ID, expectedRevision: 2 },
+          ],
+          verdict: 'confirmed_abuse',
+          reason: 'Matches a known abuse pattern',
+        })
+      );
+      expect((await screen.findByTestId('shadow-detection-bulk-notice')).textContent).toContain(
+        '1 detection changed since this page loaded'
+      );
+      expect(screen.queryByTestId('shadow-detection-bulk-verdict-dialog')).toBeNull();
+    });
+
+    it('keeps only failed bulk targets selected so retry does not grade completed targets again', async () => {
+      m.bulkMutateAsync
+        .mockResolvedValueOnce({ updated: [other], conflicts: [], notFound: [], failed: [SPEND_ID] })
+        .mockResolvedValueOnce({ updated: [spend], conflicts: [], notFound: [] });
+      renderTab();
+      fireEvent.click(within(screen.getByTestId(`admin-table-select-${SPEND_ID}`)).getByRole('checkbox'));
+      fireEvent.click(within(screen.getByTestId(`admin-table-select-${OTHER_ID}`)).getByRole('checkbox'));
+      fireEvent.click(screen.getByTestId('shadow-detection-bulk-grade-btn'));
+      const dialog = await screen.findByTestId('shadow-detection-bulk-verdict-dialog');
+      fireEvent.keyDown(document.body, { key: '1' });
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-bulk-verdict-dialog-reason-input-preset-0'));
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-bulk-verdict-dialog-confirm-btn'));
+
+      await waitFor(() => expect(screen.queryByTestId('shadow-detection-bulk-verdict-dialog')).toBeNull());
+      expect(screen.getByTestId('shadow-detection-bulk-notice').textContent).toContain(
+        'Refresh and review them before retrying'
+      );
+      expect(screen.getByTestId('admin-bulk-action-bar').textContent).toContain('1 selected');
+      fireEvent.click(screen.getByTestId('shadow-detection-bulk-grade-btn'));
+      const retry = await screen.findByTestId('shadow-detection-bulk-verdict-dialog');
+      fireEvent.keyDown(document.body, { key: '1' });
+      fireEvent.click(within(retry).getByTestId('shadow-detection-bulk-verdict-dialog-reason-input-preset-0'));
+      fireEvent.click(within(retry).getByTestId('shadow-detection-bulk-verdict-dialog-confirm-btn'));
+
+      await waitFor(() =>
+        expect(m.bulkMutateAsync).toHaveBeenLastCalledWith({
+          items: [{ id: SPEND_ID, expectedRevision: spend.revision }],
+          verdict: 'confirmed_abuse',
+          reason: 'Reviewed account activity',
+        })
+      );
+    });
+
+    it('saves and moves to the next row in the displayed sort order', async () => {
+      m.useShadowDetections.mockReturnValue(
+        queryResult(
+          list({
+            data: [
+              { ...burst, detectedAt: '2026-10-03T00:00:00.000Z' },
+              { ...spend, detectedAt: '2026-10-02T00:00:00.000Z' },
+              { ...other, detectedAt: '2026-10-01T00:00:00.000Z' },
+            ],
+          })
+        )
+      );
+      m.mutateAsync.mockResolvedValueOnce({ status: 'recorded', item: other });
+      renderTab();
+      fireEvent.click(screen.getByTestId('admin-table-sort-detectedAt-btn'));
+      expect(screen.getAllByTestId(/^shadow-detection-row-/).map(row => row.dataset.testid)).toEqual([
+        `shadow-detection-row-${OTHER_ID}`,
+        `shadow-detection-row-${SPEND_ID}`,
+        `shadow-detection-row-${DETECTION_ID}`,
+      ]);
+      const dialog = await openDialog(OTHER_ID);
+      fireEvent.keyDown(document.body, { key: '3' });
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-verdict-dialog-reason-input-preset-0'));
+      fireEvent.click(within(dialog).getByTestId('shadow-detection-verdict-dialog-secondary-btn'));
+
+      await waitFor(() =>
+        expect(within(screen.getByTestId('shadow-detection-verdict-dialog')).getByText(spend.summary)).toBeTruthy()
+      );
+    });
+
+    it('labels the visible and total account-group counts on each page', () => {
+      m.useShadowDetections.mockReturnValue(
+        queryResult(
+          list({
+            data: Array.from({ length: 30 }, (_, index) =>
+              detection({ id: index.toString(16).padStart(24, '0'), userIds: [ACTOR] })
+            ),
+          })
+        )
+      );
+      renderTab();
+      fireEvent.click(screen.getByTestId('shadow-detection-group-toggle'));
+      expect(screen.getByTestId(`admin-table-group-${ACTOR}`).textContent).toContain(
+        '25 of 30 detections on this page'
+      );
+      fireEvent.click(screen.getByTestId('admin-table-next-btn'));
+      expect(screen.getByTestId(`admin-table-group-${ACTOR}`).textContent).toContain('5 of 30 detections on this page');
+    });
+
+    it("groups an account's detections together under its account line", () => {
+      renderTab();
+      fireEvent.click(screen.getByTestId('shadow-detection-group-toggle'));
+
+      const group = screen.getByTestId(`admin-table-group-${ACTOR}`);
+      expect(within(group).getByTestId(`shadow-detection-group-account-${ACTOR}-status`).textContent).toBe('Suspended');
+      expect(within(group).getByText('2 detections')).toBeTruthy();
+      const rowIds = screen.getAllByTestId(/^shadow-detection-row-/).map(row => row.dataset.testid);
+      expect(rowIds).toEqual([
+        `shadow-detection-row-${DETECTION_ID}`,
+        `shadow-detection-row-${SPEND_ID}`,
+        `shadow-detection-row-${OTHER_ID}`,
+      ]);
+    });
+  });
+});
+
+describe('ShadowDetectionsTab explanations', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    window.localStorage.clear();
+    m.search = {};
+    m.verdictError = null;
+    m.useShadowDetections.mockReturnValue(queryResult(list()));
+  });
+
+  it('explains the page until dismissed, remembers that, and reopens on request', () => {
+    const { unmount } = renderTab();
+    expect(screen.getByTestId('shadow-detection-intro').textContent).toContain('shadow mode');
+    expect(screen.queryByTestId('detections-start-here')).toBeNull();
+    expect(screen.getAllByText('How this page works')).toHaveLength(1);
+    expect(screen.getByTestId('shadow-detection-intro')).toHaveTextContent('Open Review evidence');
+    expect(screen.getByTestId('shadow-detection-intro')).toHaveTextContent('watch the campaign');
+    expect(screen.getByTestId('shadow-detection-intro')).toHaveTextContent('do not enable automatic alerts');
+
+    fireEvent.click(screen.getByTestId('shadow-detection-intro-dismiss-btn'));
+    expect(screen.queryByTestId('shadow-detection-intro')).toBeNull();
+    expect(window.localStorage.getItem(DETECTIONS_INTRO_DISMISSED_KEY)).toBe('true');
+    unmount();
+
+    renderTab();
+    expect(screen.queryByTestId('shadow-detection-intro')).toBeNull();
+    fireEvent.click(screen.getByTestId('shadow-detection-intro-show-btn'));
+    expect(screen.getByTestId('shadow-detection-intro')).toBeTruthy();
+    expect(window.localStorage.getItem(DETECTIONS_INTRO_DISMISSED_KEY)).toBeNull();
+  });
+
+  it('defines the terms on the summary and the Suggested response column', () => {
+    renderTab();
+    for (const term of ['policy', 'recorded', 'graded', 'precision', 'falsePositives', 'enforceBar', 'would']) {
+      expect(screen.getAllByTestId(`shadow-detection-help-${term}`).length).toBeGreaterThan(0);
+    }
+  });
+
+  it.each(['completionSequence', 'completionSynchrony'] as const)(
+    'shows %s as review only instead of progress toward enforcement',
+    detector => {
+      m.useShadowDetections.mockReturnValue(
+        queryResult(
+          list({
+            data: [],
+            summary: [
+              summaryRow({
+                detector,
+                recorded: 2,
+                noAction: 2,
+                confirmedAbuse: 0,
+                legitimateHuman: 0,
+                legitimateAutomation: 0,
+              }),
+            ],
+          })
+        )
+      );
+      renderTab();
+      const summary = screen.getByTestId(`shadow-detection-summary-${detector}-v1`);
+      const status = within(summary).getByTestId(`shadow-detection-summary-${detector}-v1-enforce-bar`);
+      expect(status).toHaveTextContent('Review only');
+      expect(status).toHaveAttribute('data-status', 'review_only');
+      expect(summary).toHaveTextContent('No automatic containment');
+      expect(within(summary).queryByRole('progressbar')).toBeNull();
+      expect(summary).not.toHaveTextContent('more conclusive to go');
+    }
+  );
+
+  it('shows conclusive verdicts toward the enforce bar', () => {
+    renderTab();
+    // 12 conclusive of the 50 needed.
+    const bar = screen.getByTestId('shadow-detection-summary-signupNetworkBurst-v1-enforce-bar');
+    expect(bar.textContent).toBe('12 / 50');
+    expect(bar.getAttribute('data-status')).toBe('collecting');
+    expect(screen.getByText('38 more conclusive to go')).toBeTruthy();
+  });
+
+  it('marks a detector that cleared the bar as ready', () => {
+    m.useShadowDetections.mockReturnValue(
+      queryResult(list({ summary: [summaryRow({ confirmedAbuse: 60, legitimateHuman: 1, legitimateAutomation: 0 })] }))
+    );
+    renderTab();
+    const bar = screen.getByTestId('shadow-detection-summary-signupNetworkBurst-v1-enforce-bar');
+    expect(bar.textContent).toBe('50 / 50');
+    expect(bar.getAttribute('data-status')).toBe('ready');
+  });
+
+  it('guides each verdict and points to the user page for acting on abuse', () => {
+    m.useShadowDetections.mockReturnValue(
+      queryResult(list({ data: [detection({ userIds: ['bbbbbbbbbbbbbbbbbbbbbbbb'] })] }))
+    );
+    renderTab();
+    fireEvent.click(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`));
+    expect(screen.getByTestId('shadow-detection-verdict-guide-insufficient_evidence').textContent).toContain(
+      'two signups from one home IP'
+    );
+    expect(screen.getByTestId('shadow-detection-next-step-link').getAttribute('href')).toBe(
+      '/admin/users/bbbbbbbbbbbbbbbbbbbbbbbb'
+    );
+  });
+
+  it('sends a reviewer to each account page when the detection names several', () => {
+    renderTab();
+    fireEvent.click(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`));
+    expect(screen.getByTestId('shadow-detection-next-step').textContent).toContain(
+      'Suspend each account from its user page'
+    );
+    expect(screen.queryByTestId('shadow-detection-next-step-link')).toBeNull();
+  });
+});
+
+describe('ShadowDetectionsTab why explanations', () => {
+  const REVIEWER_ID = 'dddddddddddddddddddddddd';
+  const graded = (source: 'review' | 'suspension') =>
+    detection({
+      verdict: 'confirmed_abuse',
+      verdicts: [
+        {
+          verdict: 'insufficient_evidence',
+          reason: 'Earlier look',
+          reviewerId: REVIEWER_ID,
+          reviewedAt: '2026-10-30T12:00:00.000Z',
+        },
+        {
+          verdict: 'confirmed_abuse',
+          reason: 'Signup farm',
+          reviewerId: REVIEWER_ID,
+          reviewedAt: '2026-10-31T09:00:00.000Z',
+          source,
+        },
+      ],
+    });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    window.localStorage.clear();
+    m.search = {};
+    m.verdictError = null;
+  });
+
+  it('names the signal that crossed its rule and keeps the rest as context', () => {
+    m.useShadowDetections.mockReturnValue(
+      queryResult(
+        list({
+          data: [
+            detection({
+              signals: [
+                { key: 'ipSignups', label: 'Self-serve signups from this IP', observed: 3, threshold: 2 },
+                { key: 'asnSignups', label: 'Signups from this network', observed: 3, threshold: 10 },
+                { key: 'hostingNetwork', label: 'Hosting network', observed: 1, threshold: null },
+              ],
+            }),
+          ],
+        })
+      )
+    );
+    renderTab();
+    fireEvent.click(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`));
+    expect(screen.getByTestId('shadow-detection-trigger-ipSignups').textContent).toBe(
+      'Self-serve signups from this IP: 3 within 180 minutes (rule: more than 2)'
+    );
+    expect(screen.queryByTestId('shadow-detection-trigger-asnSignups')).toBeNull();
+    const context = screen.getByTestId('shadow-detection-signal-context').textContent;
+    expect(context).toContain('Signups from this network: 3 (threshold 10)');
+    expect(context).toContain('Hosting network: 1');
+  });
+
+  it('falls back to the summary when no signal has a known rule', () => {
+    m.useShadowDetections.mockReturnValue(queryResult(list()));
+    renderTab();
+    fireEvent.click(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`));
+    expect(screen.getByTestId('shadow-detection-trigger').textContent).toContain(
+      'Flagged: 3 signups from one IP in 180 minutes'
+    );
+  });
+
+  it('attributes a manual verdict to its reviewer in the row, the dialog and the history', () => {
+    m.useShadowDetections.mockReturnValue(
+      queryResult(list({ data: [graded('review')], reviewers: [{ userId: REVIEWER_ID, name: 'Test Admin' }] }))
+    );
+    renderTab();
+    expect(screen.getByTestId(`shadow-detection-verdict-by-${DETECTION_ID}`).textContent).toBe('By Test Admin');
+    fireEvent.click(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`));
+    const attribution = screen.getByTestId('shadow-detection-dialog-verdict-attribution').textContent;
+    expect(attribution).toContain('By Test Admin on');
+    expect(attribution).toContain('Signup farm');
+    expect(screen.getAllByTestId('shadow-detection-history-source').map(node => node.textContent)).toEqual([
+      'By Test Admin',
+      'By Test Admin',
+    ]);
+  });
+
+  it('attributes equal-timestamp verdicts to the last appended reviewer and reason', () => {
+    const latestReviewer = 'eeeeeeeeeeeeeeeeeeeeeeee';
+    m.useShadowDetections.mockReturnValue(
+      queryResult(
+        list({
+          data: [
+            detection({
+              verdict: 'confirmed_abuse',
+              verdicts: [
+                {
+                  verdict: 'insufficient_evidence',
+                  reason: 'Earlier review',
+                  reviewerId: REVIEWER_ID,
+                  reviewedAt: '2026-10-31T09:00:00.000Z',
+                },
+                {
+                  verdict: 'confirmed_abuse',
+                  reason: 'Latest review',
+                  reviewerId: latestReviewer,
+                  reviewedAt: '2026-10-31T09:00:00.000Z',
+                },
+              ],
+            }),
+          ],
+          reviewers: [
+            { userId: REVIEWER_ID, name: 'Earlier Admin' },
+            { userId: latestReviewer, name: 'Latest Admin' },
+          ],
+        })
+      )
+    );
+    renderTab();
+    expect(screen.getByTestId(`shadow-detection-verdict-by-${DETECTION_ID}`)).toHaveTextContent('By Latest Admin');
+    fireEvent.click(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`));
+    const attribution = screen.getByTestId('shadow-detection-dialog-verdict-attribution');
+    expect(attribution).toHaveTextContent('By Latest Admin');
+    expect(attribution).toHaveTextContent('Latest review');
+    expect(attribution).not.toHaveTextContent('Earlier review');
+    const history = screen.getByTestId('shadow-detection-history');
+    expect(
+      within(history)
+        .getAllByTestId('shadow-detection-history-source')
+        .map(entry => entry.textContent)
+    ).toEqual(['By Latest Admin', 'By Earlier Admin']);
+  });
+
+  it('marks a verdict recorded by a suspension as automatic', () => {
+    m.useShadowDetections.mockReturnValue(
+      queryResult(list({ data: [graded('suspension')], reviewers: [{ userId: REVIEWER_ID, name: null }] }))
+    );
+    renderTab();
+    expect(screen.getByTestId(`shadow-detection-verdict-by-${DETECTION_ID}`).textContent).toBe('Automatic');
+    fireEvent.click(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`));
+    expect(screen.getByTestId('shadow-detection-dialog-verdict-attribution').textContent).toContain(
+      `Automatic: account suspended by reviewer ${REVIEWER_ID} on`
+    );
+  });
+
+  it('shows no attribution on an unreviewed detection', () => {
+    m.useShadowDetections.mockReturnValue(queryResult(list()));
+    renderTab();
+    expect(screen.queryByTestId(`shadow-detection-verdict-by-${DETECTION_ID}`)).toBeNull();
   });
 });

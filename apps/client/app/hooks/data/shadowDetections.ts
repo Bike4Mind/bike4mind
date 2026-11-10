@@ -1,16 +1,20 @@
 import {
   abuseAssessmentStoredItemSchema,
   completionSequenceEvidenceSchema,
+  completionSynchronyEvidenceSchema,
   accountCampaignGroupSchema,
   accountCampaignMemberSchema,
   shadowDetectionItemSchema,
   shadowDetectionVerdictEntrySchema,
   type AbuseAssessmentRunResponse,
+  SHADOW_DETECTION_BULK_VERDICT_LIMIT,
+  type ShadowDetectionBulkVerdictRequest,
   type ShadowDetectionList,
   type ShadowDetectionListQuery,
   type ShadowDetectionVerdictRequest,
 } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
+import { getErrorMessage } from '@client/app/utils/error';
 import { verdictEvalReportSchema, type VerdictEvalWindowDays } from '@client/app/utils/verdictEval';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
@@ -30,6 +34,9 @@ export type CampaignGroupRow = z.infer<typeof campaignGroupRowSchema>;
 /** A detection as it arrives over JSON: the dates are ISO strings. */
 export const shadowDetectionRowSchema = shadowDetectionItemSchema.extend({
   detectedAt: z.string(),
+  completionSynchrony: completionSynchronyEvidenceSchema
+    .extend({ firstObservedAt: z.string(), lastObservedAt: z.string(), scannedAt: z.string() })
+    .optional(),
   completionSequence: completionSequenceEvidenceSchema
     .extend({ firstObservedAt: z.string(), lastObservedAt: z.string() })
     .optional(),
@@ -75,6 +82,51 @@ export function useShadowDetectionVerdict() {
       }
     },
     // A conflict also means the list is stale.
+    onSettled: () => queryClient.invalidateQueries({ queryKey: SHADOW_DETECTIONS_QUERY_KEY }),
+  });
+}
+
+export type ShadowDetectionBulkVerdictResult = {
+  updated: ShadowDetectionRow[];
+  /** Moved since the reviewer read them; left alone and returned as they are now. */
+  conflicts: ShadowDetectionRow[];
+  notFound: string[];
+  failed?: string[];
+  failureMessage?: string;
+};
+
+/**
+ * One verdict and reason for several detections. Selections larger than the server's per-request
+ * limit go out in sequential batches and their results are merged.
+ */
+export function useShadowDetectionBulkVerdict() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (
+      request: Omit<ShadowDetectionBulkVerdictRequest, 'reason'> & { reason: string }
+    ): Promise<ShadowDetectionBulkVerdictResult> => {
+      const merged: ShadowDetectionBulkVerdictResult = { updated: [], conflicts: [], notFound: [] };
+      for (let start = 0; start < request.items.length; start += SHADOW_DETECTION_BULK_VERDICT_LIMIT) {
+        const items = request.items.slice(start, start + SHADOW_DETECTION_BULK_VERDICT_LIMIT);
+        try {
+          const { data } = await api.post<ShadowDetectionBulkVerdictResult>(`${ENDPOINT}/verdicts`, {
+            ...request,
+            items,
+          });
+          merged.updated.push(...data.updated);
+          merged.conflicts.push(...data.conflicts);
+          merged.notFound.push(...data.notFound);
+          if (data.failed?.length) merged.failed = [...(merged.failed ?? []), ...data.failed];
+        } catch (error) {
+          return {
+            ...merged,
+            failed: [...(merged.failed ?? []), ...request.items.slice(start).map(item => item.id)],
+            failureMessage: getErrorMessage(error),
+          };
+        }
+      }
+      return merged;
+    },
     onSettled: () => queryClient.invalidateQueries({ queryKey: SHADOW_DETECTIONS_QUERY_KEY }),
   });
 }
