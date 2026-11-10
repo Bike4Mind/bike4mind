@@ -3,10 +3,7 @@ import type { APIRequestContext } from '@playwright/test';
 import { apiCreateTestUser, apiDeleteInviteCode, apiGetOtcCode } from './helpers/api';
 import { getE2ETestId, getTestRunId, getTestUsers } from './helpers/test-users';
 
-// Referral invites: quota reservation, invite redemption during email-code signup, and the saved
-// inviter. Its own Playwright project (`referrals`) so it stays out of the core deploy-gate run,
-// which runs `unauthenticated`: each run signs up a real account, and the per-IP/ASN signup caps
-// are not skipped under E2E (see server/auth/signupNetworkLimits.ts). Runs in the full suite.
+// Referral invites: quota reservation, invite redemption during email-code signup, and the saved inviter.
 interface RegInviteRow {
   id?: string;
   _id?: string;
@@ -78,7 +75,7 @@ test.describe('Referrals & invites', () => {
     const inviterId = (inviter.user.id || inviter.user._id) as string;
     const inviterToken = inviter.accessToken;
 
-    let inviteId: string | undefined;
+    const inviteIds: string[] = [];
     try {
       // --- Invite quota reserved ---
       const before = await readReferralState(request, inviterToken, inviterId);
@@ -93,9 +90,11 @@ test.describe('Referrals & invites', () => {
       const afterRefer = await readReferralState(request, inviterToken, inviterId);
       expect(afterRefer.numReferralsAvailable).toBe(startQuota - 1);
 
-      const [invite, ...extra] = await findReferralInvites(request, inviterId, inviteeEmail);
-      expect(extra).toHaveLength(0);
-      inviteId = (invite.id || invite._id) as string;
+      const invites = await findReferralInvites(request, inviterId, inviteeEmail);
+      inviteIds.push(...invites.map(r => (r.id || r._id) as string));
+      expect(invites).toHaveLength(1);
+      const [invite] = invites;
+      const inviteId = inviteIds[0];
       expect(invite.source).toBe('referral');
       expect(invite.status).toBe('open');
       expect(invite.used).toBeFalsy();
@@ -114,7 +113,7 @@ test.describe('Referrals & invites', () => {
       // --- Invite redeemed during email-code signup ---
       await basePage.clearAllStorage();
       await signupPage.goto();
-      await signupPage.fillUsername(`refinvitee${stamp}`);
+      await signupPage.fillUsername(`refinvitee${stamp}-${idSuffix}`);
       await signupPage.fillEmail(inviteeEmail);
       await signupPage.fillInviteCode(invite.code);
       await signupPage.acceptPolicies();
@@ -146,7 +145,11 @@ test.describe('Referrals & invites', () => {
       expect((await readReferralState(request, inviteeToken, invitee.id)).referredByUserId).toBe(inviterId);
     } finally {
       // The cleanup sweep removes the -e2e accounts but not the invite rows they point at.
-      if (inviteId) await apiDeleteInviteCode(request, getTestUsers().admin.accessToken, inviteId);
+      for (const id of inviteIds) {
+        await apiDeleteInviteCode(request, getTestUsers().admin.accessToken, id).catch(err => {
+          console.warn(`Failed to delete referral invite ${id}:`, err);
+        });
+      }
     }
   });
 });
