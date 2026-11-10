@@ -70,7 +70,7 @@ import {
   type SignupDomainHoldFeatureSummary,
   type SiteProbe,
 } from './featureSummary';
-import { countHeldSignups, type HeldSignupCreditRelease, releaseHeldSignupCredits } from './releaseHeldSignupCredits';
+import { type HeldSignupCreditRelease, listHeldSignupIds, releaseHeldSignupCredits } from './releaseHeldSignupCredits';
 
 // Namespaces this feature's budget, call cap and concurrency in the shared platform policy.
 const KEY_PREFIX = 'signupDomainHoldAssessment';
@@ -153,10 +153,10 @@ export type SignupDomainHoldAssessmentDeps = {
   probeSite: (domain: string) => Promise<SiteProbe>;
   /** Takes one slot of the auto-release cap (per 24h window); null when the cap is spent. */
   reserveAutoRelease: (maxPerDay: number) => Promise<AutoReleaseSlot | null>;
-  /** Verified accounts on the domain whose credits are held right now (not the hold's fixed signupCount). */
-  countHeldSignups: (domain: string) => Promise<number>;
-  /** Pays out up to `limit` held accounts on a released hold's domain, within the daily free-grant budget. */
-  releaseCredits: (domain: string, limit: number) => Promise<HeldSignupCreditRelease>;
+  /** Up to `limit` verified accounts on the domain whose credits are held right now (not the hold's fixed cohort). */
+  listHeldSignupIds: (domain: string, limit: number) => Promise<string[]>;
+  /** Pays out the given held accounts on a released hold's domain, within the daily free-grant budget. */
+  releaseCredits: (domain: string, userIds: string[]) => Promise<HeldSignupCreditRelease>;
   /** Runs the confirm and its audit entry atomically, so an unrecorded confirmation rolls back. */
   inTransaction: <T>(fn: () => Promise<T>) => Promise<T>;
   recordAudit: (input: adminAuditService.RecordAdminActionInput) => Promise<unknown>;
@@ -197,13 +197,13 @@ export const defaultSignupDomainHoldAssessmentDeps = (
       },
     };
   },
-  countHeldSignups,
-  releaseCredits: (domain, limit) =>
+  listHeldSignupIds,
+  releaseCredits: (domain, userIds) =>
     releaseHeldSignupCredits(domain, {
       reason: 'Signup domain hold released by the advisory assessment',
       bypassBudget: false,
       logger,
-      limit,
+      onlyUserIds: userIds,
     }),
   inTransaction: fn => withTransaction(() => fn(), { logger }),
   recordAudit: input =>
@@ -415,9 +415,12 @@ async function applyRelease(
 ): Promise<Applied> {
   const recordOnly = async (): Promise<Applied> =>
     (await deps.holds.recordAssessment(hold.domain, assessment)) ? 'recorded' : 'stale';
-  // The summary's count is the hold's, fixed at creation; later signups join the hold without raising it.
-  const held = await deps.countHeldSignups(hold.domain);
-  if (held < 1 || held > config.maxAutoReleaseSignups) return recordOnly();
+  // The guards judged the hold's cohort, fixed at creation, while later signups join the hold without entering
+  // it. Release only when every account still held is one the guards judged, and pay only those.
+  const held = await deps.listHeldSignupIds(hold.domain, config.maxAutoReleaseSignups + 1);
+  const judged = new Set(hold.cohortUserIds);
+  if (held.length < 1 || held.length > config.maxAutoReleaseSignups || !held.every(id => judged.has(id)))
+    return recordOnly();
   const slot = await deps.reserveAutoRelease(config.maxAutoReleasesPerDay);
   if (!slot) return recordOnly();
   // The slot is taken before the conditional transition so two runs cannot both pass the cap; a release that
@@ -439,8 +442,8 @@ async function applyRelease(
     return applied;
   }
   try {
-    // Capped again at payout time, so accounts that joined since the count stay pending for an admin.
-    const payout = await deps.releaseCredits(hold.domain, config.maxAutoReleaseSignups);
+    // Only the judged accounts read above; anyone who joined since stays pending for an admin.
+    const payout = await deps.releaseCredits(hold.domain, held);
     deps.logger.info('Signup domain hold auto-released', { domain: hold.domain, ...payout });
   } catch (error) {
     deps.logger.error('Signup domain hold auto-released but its credits were not paid out', {

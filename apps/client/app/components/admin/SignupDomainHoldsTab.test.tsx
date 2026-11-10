@@ -455,7 +455,7 @@ describe('SignupDomainHoldsTab', () => {
     fireEvent.click(await screen.findByTestId('signup-domain-release-alpha.test'));
     const body = await screen.findByTestId('signup-domain-release-dialog-body');
     expect(body).toHaveTextContent('alpha.test');
-    expect(body).toHaveTextContent('5 signups');
+    expect(body).toHaveTextContent('every verified account still waiting');
     expect(body).toHaveTextContent('cannot be undone');
     fireEvent.click(screen.getByTestId('signup-domain-release-dialog-cancel-btn'));
     await waitFor(() => expect(screen.queryByTestId('signup-domain-release-dialog-body')).not.toBeInTheDocument());
@@ -491,7 +491,7 @@ describe('SignupDomainHoldsTab', () => {
     renderTab();
     await releaseThroughDialog('alpha.test');
     expect(await screen.findByTestId('signup-domain-holds-release-result')).toHaveTextContent(
-      /^Released 1,000 credits to 5 accounts\.$/
+      /^Released 1,000 credits\.$/
     );
   });
 

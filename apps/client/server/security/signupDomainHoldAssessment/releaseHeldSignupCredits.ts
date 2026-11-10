@@ -14,10 +14,13 @@ const pendingSignupsQuery = (domain: string) => ({
 });
 
 /**
- * Verified accounts on the domain whose free credits are still held. Read live: a hold's own
- * signupCount is fixed when the hold is created, while later signups keep joining it.
+ * Ids of up to `limit` verified accounts on the domain whose free credits are still held. Read live: a
+ * hold's own cohort and signupCount are fixed when the hold is created, while later signups keep joining it.
  */
-export const countHeldSignups = (domain: string): Promise<number> => User.countDocuments(pendingSignupsQuery(domain));
+export async function listHeldSignupIds(domain: string, limit: number): Promise<string[]> {
+  const users = await User.find(pendingSignupsQuery(domain), { _id: 1 }).sort({ _id: 1 }).limit(limit).lean();
+  return users.map(user => String(user._id));
+}
 
 export type HeldSignupCreditRelease = { creditsReleased: number; remaining: number; nextCursor: string | null };
 
@@ -34,17 +37,21 @@ export async function releaseHeldSignupCredits(
     reason: string;
     bypassBudget: boolean;
     logger: Logger;
-    /** Most accounts to pay in this call (default and ceiling 100); the rest stay pending. */
-    limit?: number;
+    /** Pays only these accounts (still subject to the pending query); the rest of the domain stays pending. */
+    onlyUserIds?: string[];
     /** Accounts this caller may not pay out; they stay pending and count toward `remaining`. */
     skipUser?: (user: IUser & { _id: unknown }) => boolean;
   }
 ): Promise<HeldSignupCreditRelease> {
   const pendingQuery = pendingSignupsQuery(domain);
-  const pageSize = Math.min(PAGE_SIZE, options.limit ?? PAGE_SIZE);
+  const pageSize = Math.min(PAGE_SIZE, options.onlyUserIds?.length ?? PAGE_SIZE);
+  const idFilter = {
+    ...(options.afterUserId ? { $gt: options.afterUserId } : {}),
+    ...(options.onlyUserIds ? { $in: options.onlyUserIds } : {}),
+  };
   const users = await User.find({
     ...pendingQuery,
-    ...(options.afterUserId ? { _id: { $gt: options.afterUserId } } : {}),
+    ...(Object.keys(idFilter).length ? { _id: idFilter } : {}),
   })
     .sort({ _id: 1 })
     .limit(pageSize);

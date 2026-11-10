@@ -51,12 +51,10 @@ const EMPTY_LABELS: Record<SignupDomainHoldStatusFilter, string> = {
   all: 'No signup domains are held.',
 };
 
-// signupCount stays client-side: it only words the release result.
 type DecisionInput = {
   domain: string;
   action: 'confirm' | 'release';
   afterUserId?: string;
-  signupCount?: number;
   // Only the explicit Release dialog sends this, so a payout retry never takes over an automated release.
   overrideAutoDecision?: boolean;
 };
@@ -103,12 +101,11 @@ const assessmentCaption = (assessment: SignupDomainHoldAssessment): string =>
     ? `Advisory verdict: ${JUDGMENT_LABELS[assessment.judgment]} (${Math.round(assessment.confidence * 100)}% confidence)`
     : `Advisory assessment failed (${assessment.failure.replace(/_/g, ' ')}, attempt ${assessment.attempts})`;
 
-const releaseMessage = ({ creditsReleased, remaining, nextCursor }: DecisionResult, signupCount?: number): string =>
+// The hold's signupCount is fixed when it is created, so it is not the number of accounts a release pays.
+const releaseMessage = ({ creditsReleased, remaining, nextCursor }: DecisionResult): string =>
   remaining > 0 || nextCursor
     ? `Released ${creditsReleased.toLocaleString()} credits. ${remaining.toLocaleString()} pending grants remain; switch the status filter to Released and use Retry pending grants to continue or retry failures.`
-    : signupCount === undefined
-      ? `Released ${creditsReleased.toLocaleString()} credits.`
-      : `Released ${creditsReleased.toLocaleString()} credits to ${signupCount.toLocaleString()} accounts.`;
+    : `Released ${creditsReleased.toLocaleString()} credits.`;
 
 const isJudgedAbuse = (assessment: SignupDomainHoldAssessment | undefined): boolean =>
   assessment?.outcome === 'judged' && assessment.judgment === 'abuse';
@@ -162,8 +159,7 @@ export default function SignupDomainHoldsTab() {
   if (!query.isPlaceholderData && total !== undefined && page > 1 && (page - 1) * PAGE_SIZE >= total)
     setPage(Math.max(1, Math.ceil(total / PAGE_SIZE)));
   const decision = useMutation({
-    mutationFn: async ({ signupCount: _signupCount, ...body }: DecisionInput) =>
-      (await api.post<DecisionResult>(ENDPOINT, body)).data,
+    mutationFn: async (body: DecisionInput) => (await api.post<DecisionResult>(ENDPOINT, body)).data,
     onSuccess: (result, input) => {
       if (result.status === 'released')
         setCursors(current => ({ ...current, [input.domain]: result.nextCursor ?? undefined }));
@@ -269,7 +265,7 @@ export default function SignupDomainHoldsTab() {
       )}
       {decision.data?.status === 'released' && (
         <Alert color="success" data-testid="signup-domain-holds-release-result">
-          {releaseMessage(decision.data, decision.variables?.signupCount)}
+          {releaseMessage(decision.data)}
         </Alert>
       )}
       <Stack direction="row" spacing={1}>
@@ -409,9 +405,8 @@ export default function SignupDomainHoldsTab() {
         {releaseTarget && (
           <>
             <DialogContent data-testid="signup-domain-release-dialog-body">
-              Release {releaseTarget.domain}? This pays out the held free signup credits of{' '}
-              {releaseTarget.signupCount.toLocaleString()} signups and exempts the domain from holds permanently. This
-              cannot be undone.
+              Release {releaseTarget.domain}? This pays out the held free signup credits of every verified account still
+              waiting on this domain and exempts the domain from holds permanently. This cannot be undone.
             </DialogContent>
             <AdminDialogFooter>
               <Button
@@ -428,7 +423,6 @@ export default function SignupDomainHoldsTab() {
                     domain: releaseTarget.domain,
                     action: 'release',
                     afterUserId: cursors[releaseTarget.domain],
-                    signupCount: releaseTarget.signupCount,
                     overrideAutoDecision: true,
                   });
                   setReleaseTarget(null);

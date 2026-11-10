@@ -5856,14 +5856,14 @@ export const settingsMap = {
     category: 'Users',
     group: API_SERVICE_GROUPS.CREDITS.id,
     description:
-      'Lets a Decisions model judge pending young-domain Signup Domain Holds (abuse, legitimate or insufficient evidence) from a summary of counts and flags: domain age, mail provider class, whether the site answers with content, signup timing and network spread. It never sees emails, IPs, the domain name or site text. It only ever confirms a hold (keeps free credits held) on a confident abuse verdict, recorded in the Admin Audit Log as a system action; it never releases one, and every other verdict leaves the hold for an admin. Paid from the platform key and budget. Off means no provider calls.',
+      'Lets a Decisions model judge pending young-domain Signup Domain Holds (abuse, legitimate or insufficient evidence) from a summary of counts and flags: domain age, mail provider class, whether the site answers with content, signup timing and network spread. It never sees emails, IPs, the domain name or site text. A confident abuse verdict confirms the hold (keeps free credits held). A confident legitimate verdict releases it only when auto-release is on and every code guard passes; an auto-released domain stays watched and is re-held on a new risk signal. Each decision is recorded in the Admin Audit Log as a system action, and every other verdict leaves the hold for an admin. Paid from the platform key and budget. Off means no provider calls.',
   }),
   signupDomainHoldAssessmentConfig: makeObjectSetting({
     key: 'signupDomainHoldAssessmentConfig',
     name: 'Advisory Assessment of Young-Domain Holds: Model and Limits',
     defaultValue: SignupDomainHoldAssessmentConfigSchema.parse({}),
     description:
-      'The Decisions model to ask (it must have a platform key), the daily USD budget and call cap, concurrent calls, holds per 10-minute run, and the least confidence in an abuse verdict that confirms a hold. The defaults make no calls. The assessment only ever confirms; it never releases a hold.',
+      'The Decisions model to ask (it must have a platform key), the daily USD budget and call cap, concurrent calls, holds per 10-minute run, the least confidence in an abuse verdict that confirms a hold, and the auto-release switch, confidence and caps. The defaults make no calls and never release.',
     category: 'Users',
     group: API_SERVICE_GROUPS.CREDITS.id,
     dependsOn: 'signupDomainHoldAssessmentEnabled',

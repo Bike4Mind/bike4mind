@@ -103,12 +103,15 @@ A `legitimate` verdict releases the hold only when **Auto-release legitimate hol
 confidence is at or above `minReleaseConfidence` (default 0.95), and every code guard passes: the site has real
 content and no disposable-mail wording, mail runs on Google Workspace or Microsoft, every summarized signup has known
 network data and none came from a datacenter, and the domain has between 1 and `maxAutoReleaseSignups` (default 2)
-verified accounts still waiting, counted live (a hold's own signup count is fixed when it is created). The payout is
-capped at that same number. At most `maxAutoReleasesPerDay` holds (default 5) are released per 24 hours, a window
+verified accounts still waiting, read live, every one of them in the hold's cohort. The guards judged that cohort,
+fixed when the hold was created, so an account that joined the hold later keeps it pending for an admin. The payout
+covers only the accounts read. At most `maxAutoReleasesPerDay` holds (default 5) are released per 24 hours, a window
 opened by the first release, and a release an admin decided first does not use up a slot; the rest wait for an
-admin. Unlike an admin release, an automated release does not exempt the domain for good: it stays under burst
-detection whatever **Auto-hold Signup Bursts** says, and a burst re-holds it for an admin with the detector's reason
-(which starts `Verified signup burst with generated local parts`), dropping the old verdict. An admin can overrule an
+admin. Unlike an admin release, an automated release does not exempt the domain for good. A later signup that would
+trip a domain-intelligence hold (the domain is still young, for example) re-holds it with that reason, so the next
+signups are not paid until the hold is decided again; the domain also stays under burst detection whatever
+**Auto-hold Signup Bursts** says, and a burst re-holds it with the detector's reason (which starts
+`Verified signup burst with generated local parts`). Either re-hold drops the old verdict. An admin can overrule an
 automated release: Confirm blocks the domain (credits already paid stay paid), and Release takes the release over,
 making the exemption permanent like any admin release. A release writes a strict `signup_domain_hold.auto_released` system audit entry in the same
 transaction as the status change, then pays out the held credits within the daily free-grant budget (an admin
@@ -127,8 +130,8 @@ Last, the job rechecks pending `young-domain` holds (`apps/workers/src/cron/sign
 created once and never re-evaluated at signup, so the job reads the domain's registration date from the cached RDAP
 intel (at most 50 lookups a run; a lookup with no date retries after a day), stores it on the row, and stamps
 `domainAgedAt` once the domain is at least **Hold Signups From Domains Younger Than (days)** old. The row then reads
-"Domain now aged" and its Release button is highlighted. It never releases: a released domain is exempt for good and
-cannot be re-blocked, so that call stays with an admin.
+"Domain now past the young-domain age". It never releases: an admin release exempts the domain for good, so that call
+stays with an admin.
 
 ## Disposable lists and domain intelligence
 

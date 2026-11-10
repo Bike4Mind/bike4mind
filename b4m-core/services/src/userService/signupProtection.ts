@@ -66,7 +66,8 @@ export async function protectSignupCredits(
     return false;
 
   // An admin release exempts a domain for good. An automated release only pays out the cohort it judged,
-  // so the domain stays under burst detection (below) and a burst re-holds it for an admin.
+  // so the domain stays watched: a signup that still trips a domain-intel hold (a young domain, below)
+  // or a burst re-holds it for review instead of being paid.
   const watched =
     existing?.status === 'released' &&
     existing.autoDecision?.policy === 'advisory-decision' &&
@@ -116,7 +117,7 @@ export async function protectSignupCredits(
   };
 
   // Independent of signupBurstAutoHold, which only governs the burst detector below.
-  if (!watched && settingsMap.enableDomainIntelligence.schema.parse(valueOf('enableDomainIntelligence') ?? true)) {
+  if (settingsMap.enableDomainIntelligence.schema.parse(valueOf('enableDomainIntelligence') ?? true)) {
     const reason = await domainHoldReason(user.email, {
       repository,
       youngerThanDays: settingsMap.holdSignupsFromDomainsYoungerThanDays.schema.parse(
@@ -125,7 +126,7 @@ export async function protectSignupCredits(
       timeoutMs: settingsMap.domainIntelligenceTimeoutMs.schema.parse(valueOf('domainIntelligenceTimeoutMs') ?? 2000),
       adminBlockedDomains: blockedDomainsFrom(valueOf('blockedEmailDomains')),
     });
-    if (reason) return hold(reason, 1, [{ userId, email: user.email }]);
+    if (reason) return (watched ? rehold : hold)(reason, 1, [{ userId, email: user.email }]);
   }
 
   // A watched domain is checked for bursts whatever signupBurstAutoHold says.

@@ -7,6 +7,11 @@ import {
 import { DecisionProviderError } from '@bike4mind/utils/decisionProviders';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const COHORT_ID_1 = '65f0000000000000000000a1';
+const COHORT_ID_2 = '65f0000000000000000000a2';
+/** Verified on the domain after the hold was created, so never in its judged cohort. */
+const JOINER_ID = '65f0000000000000000000b1';
+
 const mocks = vi.hoisted(() => ({
   providerDecide: vi.fn(),
   platformKey: vi.fn(),
@@ -55,7 +60,7 @@ const hold = (overrides: Partial<SignupDomainReview> = {}): SignupDomainReview =
   status: 'held_pending_review',
   reason: YOUNG,
   triggeredAt: new Date('2026-11-01T10:00:00Z'),
-  cohortUserIds: ['65f0000000000000000000a1', '65f0000000000000000000a2'],
+  cohortUserIds: [COHORT_ID_1, COHORT_ID_2],
   sampleEmails: [SECRET_EMAIL],
   signupCount: 4,
   ...overrides,
@@ -158,7 +163,7 @@ const makeDeps = (store: Store, overrides: Partial<SignupDomainHoldAssessmentDep
         ? { refund: async () => void counters.set('autoReleases', (counters.get('autoReleases') ?? 1) - 1) }
         : null
     ),
-    countHeldSignups: vi.fn(async () => 1),
+    listHeldSignupIds: vi.fn(async () => [COHORT_ID_1]),
     releaseCredits: vi.fn(async () => ({ creditsReleased: 1000, remaining: 0, nextCursor: null })),
     inTransaction: async fn => {
       const snapshot = new Map(store);
@@ -603,7 +608,7 @@ describe('runSignupDomainHoldAssessments', () => {
           changes: [{ field: 'status', before: 'held_pending_review', after: 'released' }],
         })
       );
-      expect(deps.releaseCredits).toHaveBeenCalledWith('fresh.example', 2);
+      expect(deps.releaseCredits).toHaveBeenCalledWith('fresh.example', [COHORT_ID_1]);
       expect(deps.recordShadowDetection).toHaveBeenCalledWith(expect.objectContaining({ wouldAction: 'releaseHold' }));
     });
 
@@ -623,18 +628,19 @@ describe('runSignupDomainHoldAssessments', () => {
       expect(pending?.assessment).toMatchObject({ confidence: expect.closeTo(0.949, 6) });
     });
 
-    it.each<[string, Partial<SignupDomainReview>, number]>([
-      ['a hold of exactly the most accounts', { signupCount: 2 }, 1],
-      ['a live count of exactly the most accounts', { signupCount: 1 }, 2],
-      ['a live count of exactly 1', { signupCount: 1 }, 1],
-    ])('releases %s', async (_case, holdOverrides, live) => {
+    it.each<[string, Partial<SignupDomainReview>, string[]]>([
+      ['a hold of exactly the most accounts', { signupCount: 2 }, [COHORT_ID_1]],
+      ['a live count of exactly the most accounts', { signupCount: 1 }, [COHORT_ID_1, COHORT_ID_2]],
+      ['a live count of exactly 1', { signupCount: 1 }, [COHORT_ID_2]],
+    ])('releases %s and pays only the accounts it read', async (_case, holdOverrides, live) => {
       enableAutoRelease({ maxAutoReleaseSignups: 2 });
       mocks.providerDecide.mockResolvedValue(answer('legitimate', 0.99));
       const store = storeWith(hold(holdOverrides));
-      const deps = legitimateDeps(store, { countHeldSignups: vi.fn(async () => live) });
+      const deps = legitimateDeps(store, { listHeldSignupIds: vi.fn(async () => live) });
 
       expect(await runSignupDomainHoldAssessments(deps)).toMatchObject({ released: 1 });
-      expect(deps.releaseCredits).toHaveBeenCalledWith('fresh.example', 2);
+      expect(deps.listHeldSignupIds).toHaveBeenCalledWith('fresh.example', 3);
+      expect(deps.releaseCredits).toHaveBeenCalledWith('fresh.example', live);
     });
 
     it('never releases while auto-release is off, whatever the verdict', async () => {
@@ -692,8 +698,18 @@ describe('runSignupDomainHoldAssessments', () => {
         {},
       ],
       ['there are more signups than the cap', {}, { signupCount: 3 }],
-      ['more accounts joined the hold than the cap', { countHeldSignups: vi.fn(async () => 3) }, {}],
-      ['no account is waiting any more', { countHeldSignups: vi.fn(async () => 0) }, {}],
+      [
+        'more accounts joined the hold than the cap',
+        { listHeldSignupIds: vi.fn(async () => [COHORT_ID_1, COHORT_ID_2, JOINER_ID]) },
+        {},
+      ],
+      // The guards judged only the cohort, so a joiner inside the cap was never checked.
+      [
+        'an account joined the hold after it was judged',
+        { listHeldSignupIds: vi.fn(async () => [COHORT_ID_1, JOINER_ID]) },
+        {},
+      ],
+      ['no account is waiting any more', { listHeldSignupIds: vi.fn(async () => []) }, {}],
       [
         'the mail host is an unclassified third party',
         {

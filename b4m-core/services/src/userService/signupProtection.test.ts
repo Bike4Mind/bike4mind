@@ -342,6 +342,18 @@ describe('domains the advisory assessment auto-released', () => {
     expect(fixture.notifyHold).toHaveBeenCalledTimes(1);
   });
 
+  it('re-holds an auto-released domain that still trips a domain-intel hold, instead of paying', async () => {
+    const fixture = watchedFixture(released({ policy: 'advisory-decision', decidedAt: new Date() }));
+    Object.assign(fixture.repository, { disposableSources: vi.fn(async () => ['aggregate']) });
+    const user = fixture.user(1);
+    expect(await protectSignupCredits(user.id, fixture.db)).toBe(true);
+    expect(fixture.repository.reholdWatched).toHaveBeenCalledWith(
+      expect.objectContaining({ domain: 'example.net', status: 'held_pending_review', cohortUserIds: [user.id] })
+    );
+    expect(fixture.repository.createHold).not.toHaveBeenCalled();
+    expect(fixture.notifyHold).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps an admin release exempt for good, bursts included', async () => {
     const fixture = watchedFixture(released());
     for (const index of [1, 2, 3, 4, 5])
