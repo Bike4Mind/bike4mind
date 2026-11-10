@@ -5,7 +5,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
 
 let serverSettings: { settingName: string; settingValue: unknown }[] | undefined = [];
-const mocks = vi.hoisted(() => ({ mutateAsync: vi.fn(), refetch: vi.fn() }));
+const mocks = vi.hoisted(() => ({ mutateAsync: vi.fn(), refetch: vi.fn(), sendLimitsLive: false }));
+vi.mock('./scheduleSummary', async importOriginal => ({
+  ...(await importOriginal<typeof import('./scheduleSummary')>()),
+  get INVITE_SEND_LIMITS_LIVE() {
+    return mocks.sendLimitsLive;
+  },
+}));
 vi.mock('@client/app/hooks/data/settings', () => ({
   useSettingsFromServer: () => ({
     data: serverSettings,
@@ -37,6 +43,7 @@ const seed = (rows: Record<string, unknown>) => {
 beforeEach(() => {
   serverSettings = [];
   mocks.mutateAsync.mockReset().mockResolvedValue(undefined);
+  mocks.sendLimitsLive = false;
 });
 
 describe('ScheduleSection', () => {
@@ -77,10 +84,21 @@ describe('ScheduleSection', () => {
     expect(screen.getByTestId('invite-center-schedule-invite-bonus-warning')).toBeTruthy();
   });
 
-  it('keeps the summary on saved values while an edit is staged', () => {
-    seed({ signupGrantDailyCredits: 100, signupGrantDripCap: 500 });
+  it('drops the invite bonus warning once send limits are live', () => {
+    mocks.sendLimitsLive = true;
+    seed({ signupGrantInviteBonusCredits: 500 });
     renderSection();
+    expect(screen.queryByTestId('invite-center-schedule-invite-bonus-warning')).toBeNull();
+  });
+
+  it('keeps the summary on saved values while an edit is staged', () => {
+    const rows = { signupGrantDailyCredits: 100, signupGrantDripCap: 500 };
+    seed(rows);
+    renderSection();
+    const saved = describeNewAccountGrant(readScheduleValues(new Map(Object.entries(rows))));
+    expect(screen.getByTestId('invite-center-schedule-summary').textContent).toBe(saved);
     fireEvent.change(screen.getByTestId('admin-setting-signupGrantDripCap-input'), { target: { value: '50' } });
+    expect(screen.getByTestId('invite-center-schedule-summary').textContent).toBe(saved);
     expect(screen.queryByTestId('invite-center-schedule-drip-warning')).toBeNull();
   });
 

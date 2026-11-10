@@ -77,6 +77,14 @@ describe('describeNewAccountGrant', () => {
       'so daily activity grants are skipped and rewards are held.'
     );
   });
+
+  it('does not mention skipped activity grants when nothing drips', () => {
+    const summary = describeNewAccountGrant(
+      read({ ...live, signupGrantDailyCredits: 0, signupGrantTricklePoolDaily: 0 })
+    );
+    expect(summary).toContain('Paused: the trickle pool has no daily budget, so rewards are held.');
+    expect(summary).not.toContain('skipped');
+  });
 });
 
 describe('dripCapWarning', () => {

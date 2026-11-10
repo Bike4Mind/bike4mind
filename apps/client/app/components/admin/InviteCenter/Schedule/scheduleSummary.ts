@@ -61,8 +61,9 @@ export function describeNewAccountGrant(v: ScheduleValues): string {
     summary += ' Paused: the signup pool has no daily budget, so initial grants and invite bonuses are held.';
   }
   if (!positive(v.signupGrantTricklePoolDaily)) {
-    summary +=
-      ' Paused: the trickle pool has no daily budget, so daily activity grants are skipped and rewards are held.';
+    summary += drips
+      ? ' Paused: the trickle pool has no daily budget, so daily activity grants are skipped and rewards are held.'
+      : ' Paused: the trickle pool has no daily budget, so rewards are held.';
   }
   return summary;
 }
