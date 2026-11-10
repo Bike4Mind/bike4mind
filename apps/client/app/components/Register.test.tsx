@@ -1,5 +1,5 @@
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, within, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
@@ -78,9 +78,16 @@ vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => mocks.navigate,
   useRouter: () => ({ history: {} }),
 }));
-vi.mock('@client/app/utils/authRedirect', () => ({
+vi.mock('@client/app/utils/authRedirect', async importOriginal => ({
+  ...(await importOriginal<typeof import('@client/app/utils/authRedirect')>()),
   applyRedirect: vi.fn(),
   appendRedirectTo: (url: string) => url,
+}));
+const premiumNav = vi.hoisted(() => ({ items: [] as import('@client/app/premiumContract').PremiumNavDescriptor[] }));
+vi.mock('@client/app/premium-generated/premiumNavItems.generated', () => ({
+  get premiumNavItems() {
+    return premiumNav.items;
+  },
 }));
 vi.mock('@client/app/utils/sessionBootstrap', () => ({ resetSessionBootstrap: vi.fn() }));
 vi.mock('@client/app/utils/refreshCoordinator', () => ({ resetRefreshCoordinator: vi.fn() }));
@@ -449,5 +456,26 @@ describe('Register - signup bot checks', () => {
     await fillAndSubmit(userEvent.setup());
     expect(mocks.formToken.refetch).not.toHaveBeenCalled();
     expect(mocks.sendOTC).toHaveBeenCalledWith({ email: 'new@test.com', formToken: undefined, formExtra: '' });
+  });
+});
+
+describe('Register - product hint from redirectTo', () => {
+  afterEach(() => {
+    premiumNav.items = [];
+    window.history.replaceState(null, '', '/');
+  });
+
+  it('names the product on the form step', () => {
+    premiumNav.items = [{ path: '/product', label: 'Product' }];
+    window.history.replaceState(null, '', '/register?redirectTo=%2Fproduct');
+    renderRegister();
+    expect(screen.getByTestId('auth-redirect-product-hint')).toHaveTextContent('auth.signUpToContinueTo');
+  });
+
+  it('shows nothing without a product redirect', () => {
+    premiumNav.items = [{ path: '/product', label: 'Product' }];
+    window.history.replaceState(null, '', '/register');
+    renderRegister();
+    expect(screen.queryByTestId('auth-redirect-product-hint')).toBeNull();
   });
 });
