@@ -2073,7 +2073,7 @@ export function ChatShell({
               // Chat: for a frame after a mode switch, the open session is still the old mode's.
               addFolder={
                 mode === 'chat' && (conversation.session?.mode ?? 'chat') === 'chat'
-                  ? { onClick: () => void addFolder(), disabled: opening }
+                  ? { onClick: () => void addFolder(), disabled: opening || openFailed }
                   : null
               }
               sessionMode={conversation.session?.mode ?? 'chat'}

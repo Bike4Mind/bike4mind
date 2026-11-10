@@ -261,12 +261,14 @@ describe('Composer chat settings across a chat switch', () => {
     expect(input.placeholder).toBe('This conversation could not be opened');
     await act(async () => el('chat-send-btn').click());
     expect(sendMessage).not.toHaveBeenCalled();
+    expect((el('composer-plus-btn') as HTMLButtonElement).disabled).toBe(true);
 
     await act(async () => document.querySelectorAll<HTMLElement>('[data-testid="chat-session-item"]')[0].click());
     await act(async () => undefined);
     if (!find('generation-settings-btn')) await act(async () => el('composer-tune-btn').click());
     for (const testId of CONTROLS) expect(disabled(testId), testId).toBe(false);
     expect((el('chat-composer-input') as HTMLTextAreaElement).disabled).toBe(false);
+    expect((el('composer-plus-btn') as HTMLButtonElement).disabled).toBe(false);
   });
 
   const SETTERS = [

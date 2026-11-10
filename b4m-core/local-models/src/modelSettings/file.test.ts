@@ -87,6 +87,34 @@ describe('parseModelSettingsJson', () => {
     expect(modelSettingsJsonProblem(thrown)).toBe('is saved as UTF-32, which cannot be read. Save it as UTF-8');
   });
 
+  it.each([
+    ['a file of NUL bytes', '\u0000'.repeat(64)],
+    ['UTF-8 JSON followed by NUL padding', `${text}${'\u0000'.repeat(8)}`],
+    ['truncated UTF-8 followed by one NUL', `${text.slice(0, 20)}\u0000`],
+  ])('reports %s as not valid JSON, not as another encoding', (_name, damaged) => {
+    let thrown: unknown;
+    try {
+      parseModelSettingsJson(damaged);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(SyntaxError);
+    expect(thrown).not.toBeInstanceOf(ModelSettingsEncodingError);
+    expect(modelSettingsJsonProblem(thrown)).toBe('is not valid JSON');
+  });
+
+  it('names UTF-16, not UTF-32, for UTF-16 LE text with a wide character right after an ASCII one', () => {
+    const decoded = Buffer.from('{\u{4E00}: 1}', 'utf16le').toString('utf8');
+    let thrown: unknown;
+    try {
+      parseModelSettingsJson(decoded);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(ModelSettingsEncodingError);
+    expect(modelSettingsJsonProblem(thrown)).toBe('is saved as UTF-16, which cannot be read. Save it as UTF-8');
+  });
+
   it('reports ordinary bad JSON as not valid JSON, including a single replacement character', () => {
     for (const bad of ['{"models": ', '\u{FFFD}{}', `{"a": "\u{FFFD}\u{FFFD}"`]) {
       let thrown: unknown;

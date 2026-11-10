@@ -229,10 +229,13 @@ const REPLACEMENT = '\ufffd';
 
 function wideEncoding(text: string): 'UTF-16' | 'UTF-32' | null {
   // FF FE or FE FF read as UTF-8 is two U+FFFD; read as UTF-16 LE, FF FE is U+FEFF and FE FF is U+FFFE.
-  const marked = text.startsWith(REPLACEMENT + REPLACEMENT) || text.charCodeAt(0) === 0xfffe;
-  // Valid JSON never holds U+0000; ASCII in UTF-16 alternates it with text, in UTF-32 it runs in threes.
-  if (text.includes('\u0000\u0000')) return 'UTF-32';
-  if (marked || text.includes('\u0000')) return 'UTF-16';
+  const mark = REPLACEMENT + REPLACEMENT;
+  if (text.startsWith(mark + '\u0000\u0000') || text.startsWith('\u0000\u0000' + mark)) return 'UTF-32';
+  if (text.startsWith(mark) || text.charCodeAt(0) === 0xfffe) return 'UTF-16';
+  // JSON opens with an ASCII character: UTF-16 puts a NUL beside it, UTF-32 three. NULs elsewhere are damage.
+  const [a, b, c, d] = [0, 1, 2, 3].map(index => text.charCodeAt(index) === 0);
+  if ((!a && b && c && d) || (a && b && c && !d)) return 'UTF-32';
+  if (a !== b) return 'UTF-16';
   return null;
 }
 
