@@ -15,9 +15,10 @@ import {
   MODEL_PRICE_UNITS,
   ModelPriceTier,
   PRICE_ROW_BILLED_MODEL_TYPES,
+  billableRealtimeVoiceTier,
   type ModelPriceUnit,
 } from '@bike4mind/common';
-import { resolveCatalogRecords, staticAdapterModels } from '@bike4mind/llm-adapters';
+import { REALTIME_VOICE_PRICING, resolveCatalogRecords, staticAdapterModels } from '@bike4mind/llm-adapters';
 import { BadRequestError, UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
 import { bumpModelListRevision } from '@bike4mind/server-utils/modelDiscovery/modelListRevision';
 import { requireFullAdmin } from '@server/admin/models/requireFullAdmin';
@@ -343,6 +344,14 @@ const handler = adminApi({
       throw new UnprocessableEntityError(NON_TEXT_PRICE_MESSAGE);
     }
     if (!knownModel) assertFirstPriceAllowed(modelId, unit, type);
+    // Voice settlement skips a row whose lowest tier lacks audio rates (pickRealtimeVoiceTier), so refuse writing one.
+    const realtimeVoice = type === 'realtime-voice' || Object.hasOwn(REALTIME_VOICE_PRICING, modelId);
+    if (realtimeVoice && !billableRealtimeVoiceTier(pricing)) {
+      throw new BadRequestError(
+        `${modelId} is a realtime voice model: its lowest tier needs input, output, audio_input and audio_output ` +
+          'rates above zero, or voice settlement ignores the row'
+      );
+    }
 
     // Idempotency: a resubmit of the identical reprice (double-click, network
     // retry, second tab) returns the existing row instead of appending a

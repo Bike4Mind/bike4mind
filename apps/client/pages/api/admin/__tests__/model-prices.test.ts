@@ -62,6 +62,7 @@ import handler, {
 } from '../model-prices';
 
 const TIER = { input: 4e-6, output: 16e-6 };
+const VOICE_TIER = { ...TIER, audio_input: 32e-6, audio_output: 64e-6 };
 
 /** The in-force row the magnitude band compares a submitted reprice against. */
 const inForceRow = { modelId: 'gpt-x', unit: 'per_token', pricing: { '0': TIER }, note: 'invoice A' };
@@ -239,16 +240,34 @@ describe('POST /api/admin/model-prices first price', () => {
   it('still reprices a realtime voice model, whose per-token rows voice settlement bills', async () => {
     mockCatalogRowsInForce.mockResolvedValue([discoveredRow('gpt-realtime-new', 'realtime-voice')]);
     mockRowsInForce.mockResolvedValue([
-      { modelId: 'gpt-realtime-new', unit: 'per_token', pricing: { '0': TIER }, note: 'invoice V' },
+      { modelId: 'gpt-realtime-new', unit: 'per_token', pricing: { '0': VOICE_TIER }, note: 'invoice V' },
     ]);
     const { run } = call({
       method: 'POST',
-      body: { modelId: 'gpt-realtime-new', unit: 'per_token', pricing: { '0': TIER }, note: 'invoice W' },
+      body: { modelId: 'gpt-realtime-new', unit: 'per_token', pricing: { '0': VOICE_TIER }, note: 'invoice W' },
     });
     await run();
 
     expect(mockAppend).toHaveBeenCalledTimes(1);
     expect(mockAppend.mock.calls[0][0]).toMatchObject({ modelId: 'gpt-realtime-new', unit: 'per_token' });
+  });
+
+  it('refuses a realtime voice price without audio rates, which voice settlement would skip', async () => {
+    mockCatalogRowsInForce.mockResolvedValue([discoveredRow('gpt-realtime-new', 'realtime-voice')]);
+    mockRowsInForce.mockResolvedValue([
+      { modelId: 'gpt-realtime-new', unit: 'per_token', pricing: { '0': VOICE_TIER }, note: 'invoice V' },
+    ]);
+    mockGenerateSeed.mockResolvedValue([
+      { modelId: 'gpt-realtime-1.5', unit: 'per_token', pricing: { '0': VOICE_TIER } },
+    ]);
+    for (const modelId of ['gpt-realtime-new', 'gpt-realtime-1.5']) {
+      const err = await post({ modelId, unit: 'per_token', pricing: { '0': TIER }, note: 'text rates only' });
+      expect(err.statusCode).toBe(400);
+      expect(err.message).toMatch(
+        /realtime voice model: its lowest tier needs input, output, audio_input and audio_output/
+      );
+    }
+    expect(mockAppend).not.toHaveBeenCalled();
   });
 
   it('refuses a first price for a text model in any unit but per_token', async () => {
