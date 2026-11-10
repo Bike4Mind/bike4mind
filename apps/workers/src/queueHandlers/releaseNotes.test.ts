@@ -180,12 +180,34 @@ describe('releaseNotes queue handler', () => {
     expect(h.upsertGenerated).toHaveBeenCalledWith(expect.objectContaining({ headline: 'Faster search' }));
   });
 
-  it('throws and emits a failure metric when the rewrite still hits the denylist', async () => {
+  it('builds the headline from the items when the rewrite still hits the denylist', async () => {
     setConfig(enabledConfig);
     h.writeReleaseNotes.mockResolvedValue(draft('Built for Acme'));
-    await expect(run(JSON.stringify(validPayload))).rejects.toThrow(/denylist/);
-    expect(h.upsertGenerated).not.toHaveBeenCalled();
-    expect(metricNames()).toEqual(['Failure']);
+    await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
+    expect(h.writeReleaseNotes).toHaveBeenCalledTimes(2);
+    expect(h.upsertGenerated).toHaveBeenCalledWith(
+      expect.objectContaining({ headline: 'Search is faster', summary: '', status: 'scheduled' })
+    );
+    const { text } = JSON.parse(slackPosts()[0][1].body);
+    expect(text).toContain('Goes live in');
+    expect(text).not.toMatch(/acme/i);
+    expect(metricNames()).not.toContain('Failure');
+  });
+
+  it('stores the note hidden for review when no item survives the denylist either', async () => {
+    setConfig(enabledConfig);
+    const blocked = draft('Built for Acme');
+    blocked.draft.items = [{ category: 'improved', text: 'Exports for Acme', importance: 1, sourcePrs: [1] }];
+    h.writeReleaseNotes.mockResolvedValue(blocked);
+    await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
+    expect(h.upsertGenerated).toHaveBeenCalledWith(
+      expect.objectContaining({ headline: '', summary: '', items: [], status: 'hidden' })
+    );
+    const { text } = JSON.parse(slackPosts()[0][1].body);
+    expect(text).toContain('admin Release Notes tab');
+    expect(text).not.toMatch(/acme/i);
+    expect(metricNames()).toContain('Success');
+    expect(metricNames()).not.toContain('Failure');
   });
 
   it('rewrites once when the headline is generic, feeding the reason back', async () => {
@@ -212,14 +234,16 @@ describe('releaseNotes queue handler', () => {
     expect(metricNames()).not.toContain('Failure');
   });
 
-  it('names both drafts denylist hits when the rewrite and the earlier draft both fail', async () => {
+  it('rebuilds the rewrite from its items when the rewrite and the earlier draft both hit the denylist', async () => {
     setConfig({ ...enabledConfig, denylist: ['acme', 'globex'] });
-    h.writeReleaseNotes.mockResolvedValueOnce(draft('Built for Acme')).mockResolvedValueOnce(draft('Built for Globex'));
-    await expect(run(JSON.stringify(validPayload))).rejects.toThrow(
-      /the headline must not mention "globex"; the headline must not mention "acme"/
+    const rewrite = draft('Built for Globex');
+    rewrite.draft.items = [{ category: 'new', text: 'Exports are quicker', importance: 1, sourcePrs: [1] }];
+    h.writeReleaseNotes.mockResolvedValueOnce(draft('Built for Acme')).mockResolvedValueOnce(rewrite);
+    await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
+    expect(h.upsertGenerated).toHaveBeenCalledTimes(1);
+    expect(h.upsertGenerated).toHaveBeenCalledWith(
+      expect.objectContaining({ headline: 'Exports are quicker', status: 'scheduled' })
     );
-    expect(h.upsertGenerated).not.toHaveBeenCalled();
-    expect(metricNames()).toEqual(['Failure']);
   });
 
   it('keeps the earlier generic draft when the rewrite introduces a denylist hit', async () => {

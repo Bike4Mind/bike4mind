@@ -61,10 +61,11 @@ const CATEGORY_LABEL: Record<ReleaseNote['items'][number]['category'], string> =
 // Slack mrkdwn control characters; escaping them keeps model output from forming <!channel> or links.
 const escapeSlack = (text: string): string => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-function buildSlackText(note: ReleaseNote, releaseUrl: string, omittedPrs: number[]): string {
+function buildSlackText(note: ReleaseNote, releaseUrl: string, omittedPrs: number[], heldForReview: boolean): string {
   const hours = Math.max(0, Math.round((note.publishAt.getTime() - Date.now()) / MS_PER_HOUR));
-  const status =
-    note.status === 'hidden'
+  const status = heldForReview
+    ? 'The generated headline and summary hit the release-notes denylist, so the note is stored hidden. Finish it in the admin Release Notes tab to publish it.'
+    : note.status === 'hidden'
       ? 'No customer-facing changes; stored hidden and will not publish.'
       : `Goes live in ${hours}h (${note.publishAt.toISOString()}). Edit it before then to change or hide it.`;
   const lines = [`*Release notes for <${releaseUrl}|${escapeSlack(note.releaseTag)}>*`, status];
@@ -86,6 +87,7 @@ async function postToSlack(
   note: ReleaseNote,
   releaseUrl: string,
   omittedPrs: number[],
+  heldForReview: boolean,
   config: ReleaseNotesConfig,
   logger: Logger
 ): Promise<void> {
@@ -104,7 +106,7 @@ async function postToSlack(
       headers: { Authorization: `Bearer ${workspace.slackBotToken}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         channel: config.slackChannelId,
-        text: buildSlackText(note, releaseUrl, omittedPrs),
+        text: buildSlackText(note, releaseUrl, omittedPrs, heldForReview),
         unfurl_links: false,
         unfurl_media: false,
       }),
@@ -119,17 +121,27 @@ async function postToSlack(
   }
 }
 
+type GenerationOutcome = {
+  note: ReleaseNote;
+  preserved: boolean;
+  heldForReview: boolean;
+  omittedPrs: number[];
+  usage: TokenUsage;
+  modelId: string;
+};
+
 /**
  * Generates, finalizes and stores the note. A denylist hit or generic copy in the headline or summary gets
  * one editorial rewrite; triage is not repeated. A rewrite can introduce a denylist hit the previous draft
  * did not have, in which case the previous draft is finalized instead (with its generic headline replaced).
- * Fails only when both the rewrite and the previous draft hit the denylist.
+ * When both drafts hit the denylist, the rewrite's headline is rebuilt from its surviving items, or the
+ * note is stored hidden for an admin to finish, so one blocked sentence never costs the release its note.
  */
 async function generateAndStore(
   payload: ReleaseNotesJobPayload,
   config: ReleaseNotesConfig,
   logger: Logger
-): Promise<{ note: ReleaseNote; preserved: boolean; omittedPrs: number[]; usage: TokenUsage; modelId: string }> {
+): Promise<GenerationOutcome> {
   const deadline = Date.now() + GENERATION_BUDGET_MS;
   const { complete, modelId } = await createReleaseNotesCompleter(config, logger, deadline);
   const triage = await triageReleaseNotes(payload.prs, complete, { logger });
@@ -151,18 +163,30 @@ async function generateAndStore(
     // The rewrite can hit the denylist even though the earlier draft did not. Keep the earlier draft
     // (finalized with the generic-headline fallback) rather than losing the note it could have produced.
     if (result.kind === 'repair' && lastAttempt && previousDraft) {
-      const rewriteReasons = result.reasons;
       result = finalizeReleaseNote(previousDraft, payload, config, logger, { lastAttempt: true });
-      // Name both drafts' hits: the rewrite's are what sent us back to the earlier one.
-      if (result.kind === 'repair') feedback = [...rewriteReasons, ...result.reasons];
+    }
+    // Both drafts hit the denylist: build the copy from the rewrite's items rather than fail the release.
+    if (result.kind === 'repair' && lastAttempt) {
+      result = finalizeReleaseNote(generated.draft, payload, config, logger, {
+        lastAttempt: true,
+        rebuildDeniedCopy: true,
+      });
     }
     if (result.kind === 'ok') {
       const { note, preserved } = await releaseNoteRepository.upsertGenerated(result.note);
-      return { note: preserved ? note : result.note, preserved, omittedPrs: triage.omitted, usage, modelId };
+      return {
+        note: preserved ? note : result.note,
+        preserved,
+        heldForReview: result.heldForReview,
+        omittedPrs: triage.omitted,
+        usage,
+        modelId,
+      };
     }
     previousDraft = generated.draft;
   }
-  throw new Error(`[releaseNotes] headline or summary still hit the denylist after a rewrite: ${feedback.join('; ')}`);
+  // Unreachable: the last attempt always finalizes with rebuildDeniedCopy, which never asks for a repair.
+  throw new Error(`[releaseNotes] no note was finalized for ${payload.releaseTag}`);
 }
 
 export async function runReleaseNotesJob(payload: ReleaseNotesJobPayload, logger: Logger): Promise<void> {
@@ -177,7 +201,7 @@ export async function runReleaseNotesJob(payload: ReleaseNotesJobPayload, logger
   // Dimension keys match the retired What's New generator so its dashboards keep their series.
   const environment = Resource.App.stage;
   const startedAt = Date.now();
-  let outcome: Awaited<ReturnType<typeof generateAndStore>>;
+  let outcome: GenerationOutcome;
   try {
     outcome = await generateAndStore(payload, config, logger);
   } catch (err) {
@@ -196,11 +220,11 @@ export async function runReleaseNotesJob(payload: ReleaseNotesJobPayload, logger
     throw err;
   }
 
-  const { note, preserved, omittedPrs, usage, modelId } = outcome;
+  const { note, preserved, heldForReview, omittedPrs, usage, modelId } = outcome;
   if (preserved) {
     logger.info('[releaseNotes] stored note was edited by a human; kept it and skipped the announcement');
   } else {
-    await postToSlack(note, payload.releaseUrl, omittedPrs, config, logger);
+    await postToSlack(note, payload.releaseUrl, omittedPrs, heldForReview, config, logger);
   }
 
   await emitModalGenerationMetrics([
