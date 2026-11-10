@@ -11,7 +11,11 @@ import {
 import { Logger } from '@bike4mind/observability';
 import { ImageModels, type ImageOutputFormat } from '@bike4mind/common';
 import { v4 as uuidv4 } from 'uuid';
-import { ExpectedImageGenerationError, ImageModerationBlockedError } from './imageGenerationErrors';
+import {
+  ExpectedImageGenerationError,
+  ImageInputRejectedError,
+  ImageModerationBlockedError,
+} from './imageGenerationErrors';
 
 /**
  * Finish reasons meaning Gemini withheld the output on policy grounds, rather than failing. String
@@ -219,7 +223,7 @@ export class GeminiImageService extends AIImageService {
     if (!imagePart?.inlineData?.data) {
       this.logger.error('[DEBUG] No image inline data in Gemini generateContent response.', candidate.content.parts);
       if (textMessage) {
-        throw new Error(textMessage);
+        throw new ImageInputRejectedError(textMessage, { provider: 'gemini', reason: 'text_only_response' });
       }
       throw new Error('No image data in Gemini response');
     }
