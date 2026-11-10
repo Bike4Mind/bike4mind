@@ -112,10 +112,9 @@ const PendingHeader = () => {
       <StatTile
         label="Drip due today (UTC)"
         value={drip ? credits(drip.committed) : drip === null ? UNAVAILABLE : blank}
-        valueColor={drip && poolLeft !== null && drip.committed > poolLeft ? 'admin.status.warn.foreground' : undefined}
         comparison={
           drip
-            ? `Upper bound if all ${drip.accounts} are active${poolLeft !== null ? `; ${credits(poolLeft)} left in the pool` : ''}`
+            ? `Upper bound if all ${drip.accounts} are active${poolLeft !== null ? `; ${credits(poolLeft)} left in the pool` : ''}${poolLeft !== null && drip.committed > poolLeft ? ` (${credits(drip.committed - poolLeft)} over)` : ''}`
             : undefined
         }
       />

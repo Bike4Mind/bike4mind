@@ -121,6 +121,13 @@ describe('PendingSection', () => {
     expect(queue).toContain('3');
   });
 
+  it('states how far the drip upper bound runs past the pool', () => {
+    mocks.summary = { data: { ...SUMMARY, drip: { ...SUMMARY.drip!, committed: 1000 } }, isError: false };
+    render(<PendingSection />, { wrapper: Wrapper });
+    const [, , , dueToday] = tiles();
+    expect(dueToday).toContain('850 left in the pool (150 over)');
+  });
+
   it('leaves the pool out of the drip tile when no trickle pool is set', () => {
     mocks.summary = { data: { ...SUMMARY, trickle: { ...SUMMARY.trickle!, missing: true } }, isError: false };
     render(<PendingSection />, { wrapper: Wrapper });
