@@ -224,9 +224,15 @@ describe('requestAccountDeletion', () => {
     expect(user!.slackSettings.notebookNamePrefix).toBe('Kept Prefix');
   });
 
-  it('refuses an organization owner with the organizations to transfer, and changes nothing', async () => {
+  it('refuses an owner of an organization with other members, listing it, and changes nothing', async () => {
     const userId = await seedAccount();
-    const org = await Organization.create({ name: 'Acme', userId, personal: false });
+    const memberId = new mongoose.Types.ObjectId().toString();
+    const org = await Organization.create({
+      name: 'Acme',
+      userId,
+      personal: false,
+      users: [{ userId: memberId, permissions: ['read'] }],
+    });
 
     await expect(requestAccountDeletion(requestFor(userId))).rejects.toMatchObject({
       statusCode: 409,
@@ -238,6 +244,27 @@ describe('requestAccountDeletion', () => {
     expect((await User.findById(userId).lean<{ deletion?: unknown }>())!.deletion).toBeUndefined();
     expect(await AuthSessionModel.countDocuments({ userId, revokedAt: null })).toBe(2);
     expect(h.cancelSubscriptions).not.toHaveBeenCalled();
+  });
+
+  it('does not let an organization the owner belongs to alone block the request', async () => {
+    const userId = await seedAccount();
+    await Organization.create({ name: 'Solo', userId, personal: false });
+
+    await requestAccountDeletion(requestFor(userId));
+
+    expect((await User.findById(userId).lean<{ deletion?: unknown }>())!.deletion).toBeDefined();
+  });
+
+  it('refuses an owner whose only other person is a manager without a member row', async () => {
+    const userId = await seedAccount();
+    await Organization.create({
+      name: 'Managed',
+      userId,
+      personal: false,
+      adminUserIds: [new mongoose.Types.ObjectId().toString()],
+    });
+
+    await expect(requestAccountDeletion(requestFor(userId))).rejects.toMatchObject({ statusCode: 409 });
   });
 
   it('does not let a personal workspace block the request', async () => {
@@ -386,15 +413,20 @@ describe('support-scheduled deletion', () => {
     );
   });
 
-  it('refuses a support schedule for an organization owner with support wording', async () => {
+  it('refuses a support schedule for an owner of a shared organization with support wording', async () => {
     const userId = await seedAccount();
-    await Organization.create({ name: 'Acme', userId, personal: false });
+    await Organization.create({
+      name: 'Acme',
+      userId,
+      personal: false,
+      users: [{ userId: new mongoose.Types.ObjectId().toString(), permissions: ['read'] }],
+    });
 
     await expect(
       scheduleAccountDeletion(requestFor('admin-1'), { userId, source: 'support', requestedAt: received })
     ).rejects.toMatchObject({
       statusCode: 409,
-      message: 'Transfer or delete the organizations this user owns before scheduling deletion.',
+      message: 'Transfer ownership of the organizations this user shares with other people before scheduling deletion.',
     });
   });
 
