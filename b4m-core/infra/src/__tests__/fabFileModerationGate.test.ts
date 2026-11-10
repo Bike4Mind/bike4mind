@@ -178,6 +178,10 @@ const ALLOWLIST: Record<string, string> = {
     'DI passthrough - generateSignedUrl closure consumed by fabFileService.getFabFile and, on the data-lake fallback, fabFileService.generateSignedUrl directly; both return through the generateSignedUrl choke in fabFileService/get.ts',
   'apps/client/pages/api/data-lakes/[id]/articles.ts':
     'DI passthrough — generateSignedUrl closure consumed by fabFileService.search, gated via the generateSignedUrl choke in fabFileService/get.ts',
+  'apps/client/pages/api/[type]/[id]/updateSharing.ts':
+    'DI passthrough - generateSignedUrl closure consumed by sharingService.updateDocumentSharing, which returns the file through the generateSignedUrl choke in fabFileService/get.ts',
+  'apps/client/pages/api/research/agents/[id]/tasks/[taskId]/index.ts':
+    'DI passthrough - generateSignedUrl closure consumed by researchTaskService.get, which signs each joined FabFile through the generateSignedUrl choke in fabFileService/get.ts',
   'apps/client/pages/api/files/createFabFileURL.ts':
     'DI passthrough to fabFileService.createFabFileByUrl -> createFabFile (create.ts), which skips minting fileUrl for images at creation time (root-cause fix, commit 63cc8f9d3e)',
   'apps/client/server/dataLakes/proposalAdmissionDeps.ts':

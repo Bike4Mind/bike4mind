@@ -54,14 +54,17 @@ it('signs the browser response with the SDK, ignoring a stored URL, without writ
   expect(h.update).not.toHaveBeenCalled();
 });
 
-it('preserves URL-less upload metadata without minting a GET', async () => {
+it('drops the upload PUT URL and mints no GET for URL-less upload metadata', async () => {
   const input = {
     id: 'upload',
     filePath: 'owned/upload.txt',
     presignedUrl: '/api/files/upload/upload',
   } as IFabFileDocument;
+  const original = { ...input };
   const response = await signBrowserFileResponse(input);
-  expect(response).toEqual(input);
+  expect(response.presignedUrl).toBeUndefined();
+  expect(response).toMatchObject({ id: 'upload', filePath: 'owned/upload.txt' });
+  expect(input).toEqual(original);
   expect(response).not.toBe(input);
   expect(h.signUrl).not.toHaveBeenCalled();
   expect(h.update).not.toHaveBeenCalled();
@@ -100,7 +103,7 @@ it.each(['pending', 'blocked'])('withholds a %s image before signing', async mod
   expect(h.update).not.toHaveBeenCalled();
 });
 
-it('preserves real hydrated upload fields without exposing document internals', async () => {
+it('drops the upload PUT URL from a hydrated upload without exposing document internals', async () => {
   const { FabFile } = await vi.importActual<typeof import('@bike4mind/database')>('@bike4mind/database');
   const input = new FabFile({
     fileName: 'upload.txt',
@@ -109,7 +112,8 @@ it('preserves real hydrated upload fields without exposing document internals', 
   });
   const original = input.toJSON();
   const response = await signBrowserFileResponse(input);
-  expect(response).toMatchObject({ id: original.id, fileName: 'upload.txt', presignedUrl: '/api/files/upload/owned' });
+  expect(response).toMatchObject({ id: original.id, fileName: 'upload.txt' });
+  expect(response.presignedUrl).toBeUndefined();
   expect(response).not.toHaveProperty('_doc');
   expect(response).not.toHaveProperty('$__');
   expect(input.toJSON()).toEqual(original);
