@@ -1,4 +1,4 @@
-import { AdminSettings, cacheRepository, withTransaction } from '@bike4mind/database';
+import { AdminSettings, Cache, cacheRepository, withTransaction } from '@bike4mind/database';
 import { invalidateSettingsCache } from '@bike4mind/utils';
 import { recordAdminSettingChange } from '@bike4mind/server-utils/utils/adminSettingsAudit';
 import {
@@ -16,12 +16,6 @@ export async function readAccessEntries(): Promise<Map<string, StoredAccessEntry
   return indexEntries((doc as { settingValue?: unknown } | null)?.settingValue);
 }
 
-/** Marks a dry-run token spent; true for the one caller that claims it. The row outlives the token it covers. */
-export async function claimDryRun(jti: string, actor: string, ttlMs: number): Promise<boolean> {
-  const { claimed } = await cacheRepository.claimDedup(`model-access-dry-run:${jti}`, { actor }, ttlMs);
-  return claimed;
-}
-
 class StaleAccessEntryError extends Error {
   constructor() {
     super('access entry stamp moved');
@@ -31,6 +25,20 @@ class StaleAccessEntryError extends Error {
 
 const isDuplicateKey = (error: unknown): boolean =>
   typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 11000;
+
+/** Marks a dry-run token spent; true for the one caller that claims it. The row outlives the token it covers. */
+export async function claimDryRun(jti: string, actor: string, ttlMs: number): Promise<boolean> {
+  // autoIndex builds lazily; the unique key index must exist before two claims can race.
+  await Cache.init();
+  try {
+    const { claimed } = await cacheRepository.claimDedup(`model-access-dry-run:${jti}`, { actor }, ttlMs);
+    return claimed;
+  } catch (error) {
+    // A store that does not retry the racing upsert fails the loser with a duplicate key instead.
+    if (isDuplicateKey(error)) return false;
+    throw error;
+  }
+}
 
 // The whole access list is one document, so each write reaches one entry by id and stamp. The stamp sits in
 // the query filter: in arrayFilters alone a stale write still matches the document and reports matched 1.

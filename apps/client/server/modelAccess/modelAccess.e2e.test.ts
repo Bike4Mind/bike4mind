@@ -7,7 +7,7 @@ import {
   settleAutoIndexBuilds,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
-import { AdminAuditLogModel, AdminSettings, Cache, User } from '@bike4mind/database';
+import { AdminAuditLogModel, AdminSettings, Cache, User, cacheRepository } from '@bike4mind/database';
 import { resolveAdminModelFilterIds } from '@server/admin/models/adminModelFilter';
 import { commitAccessEntry } from './modelAccessStore';
 
@@ -471,6 +471,26 @@ describe('POST /api/admin/models/access/bulk', () => {
       additionalInfo: { dryRun: { ids: ['model-0', 'model-1'] } },
     });
     expect(await storedValue()).toEqual([]);
+  });
+
+  it('answers a claim that loses on a duplicate key with the same 409, not a 500', async () => {
+    await seed(ids.map(id => entry(id)));
+    const preview = await dryRun(ids, { enabled: false });
+    const claim = vi
+      .spyOn(cacheRepository, 'claimDedup')
+      .mockRejectedValueOnce(Object.assign(new Error('E11000 duplicate key error'), { code: 11000 }));
+
+    try {
+      await expect(apply(ids, { enabled: false }, preview.token)).rejects.toMatchObject({
+        statusCode: 409,
+        message: 'This preview was already applied. Review the new one and apply again.',
+        additionalInfo: { dryRun: { ids } },
+      });
+    } finally {
+      claim.mockRestore();
+    }
+    expect(await audits()).toHaveLength(0);
+    expect(await stored('model-0')).toMatchObject({ enabled: true });
   });
 
   it('applies a preview submitted twice at once exactly once', async () => {
