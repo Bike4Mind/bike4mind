@@ -21,6 +21,7 @@ import {
   prepareShareMeta,
   recordGatedView,
   renderBundleLoaderShell,
+  renderNotFoundPage,
   renderSandboxedBundle,
   encodeBundlePath,
   isBundlePagePath,
@@ -286,6 +287,29 @@ const NOINDEX_META = '<meta name="robots" content="noindex,nofollow">';
 // Referrer-Policy header, so meta and header always agree.
 const NO_REFERRER_META = '<meta name="referrer" content="no-referrer">';
 
+// The not-found answer for a link that resolves to nothing. A browser navigation gets a
+// readable page instead of a bare JSON body; every other caller keeps the JSON. Unknown,
+// revoked and lapsed share tokens all land here, so both forms must stay identical across
+// those cases (no enumeration signal).
+function sendLinkNotFound(req: Request, res: Response) {
+  res.setHeader('Vary', 'Accept');
+  // Neither form may be stored by an edge cache that does not key on Accept: a cached JSON
+  // 404 would otherwise be handed to the next browser navigation of the same link.
+  res.setHeader('Cache-Control', 'no-store');
+  if (!String(req.headers.accept ?? '').includes('text/html')) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"
+  );
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  return res.status(404).send(renderNotFoundPage());
+}
+
 const handler = baseApi({ auth: false }).get(async (req: Request, res: Response) => {
   // Cache keys may omit Host; denials must not be reused on another artifact's origin either.
   if (isUsercontentHost(req.headers.host) || req.query.__uc === '1') {
@@ -303,7 +327,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
 
   const resolved = parsePublishPath(segments);
   if (!resolved) {
-    return res.status(404).json({ error: 'Not found' });
+    return sendLinkNotFound(req, res);
   }
 
   // No-sign-in share link (`/a/<shareToken>`). Possession of the token IS the read
@@ -385,7 +409,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   if (!artifact) {
     // Unknown OR revoked token -> plain 404 (never 401/403), so a prober can't
     // distinguish a revoked/never-existed token from a private artifact.
-    return res.status(404).json({ error: 'Not found' });
+    return sendLinkNotFound(req, res);
   }
   if (
     isIsolated &&
@@ -398,7 +422,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // purgeUserPublishedArtifacts; also supplies the "Shared by" name for the viewer page.
   const owner = await loadLiveOwner(artifact.ownerId);
   if (!owner) {
-    return res.status(404).json({ error: 'Not found' });
+    return sendLinkNotFound(req, res);
   }
 
   const storage = getPublishedArtifactsStorage();

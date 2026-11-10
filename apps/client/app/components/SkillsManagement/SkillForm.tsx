@@ -86,6 +86,7 @@ export const SkillForm: FC<SkillFormProps> = ({
   const [argumentHint, setArgumentHint] = useState(initialValue?.argumentHint ?? '');
   const [disableModelInvocation, setDisableModelInvocation] = useState(Boolean(initialValue?.disableModelInvocation));
   const [claudeCodeAllowedTools, setClaudeCodeAllowedTools] = useState(initialValue?.claudeCodeAllowedTools ?? []);
+  const [claudeCodeModel, setClaudeCodeModel] = useState(initialValue?.claudeCodeModel ?? '');
   const [importResult, setImportResultState] = useState<ParseSkillMdResult | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -123,6 +124,7 @@ export const SkillForm: FC<SkillFormProps> = ({
     if (fields.body !== undefined && include('body')) setBody(fields.body);
     if (include('model-invocation')) setDisableModelInvocation(fields.disableModelInvocation ?? false);
     if (include('claude-code-tools')) setClaudeCodeAllowedTools(fields.claudeCodeAllowedTools ?? []);
+    if (include('claude-code-model')) setClaudeCodeModel(fields.claudeCodeModel ?? '');
     if (bundle && include('files')) {
       setFiles(bundle.files);
       setSkippedFiles(bundle.skipped);
@@ -149,7 +151,16 @@ export const SkillForm: FC<SkillFormProps> = ({
     if (!result.ok) return false;
     const { fields } = result;
     if (updateFromSkillMd) {
-      const current = { name, description, body, argumentHint, disableModelInvocation, claudeCodeAllowedTools, files };
+      const current = {
+        name,
+        description,
+        body,
+        argumentHint,
+        disableModelInvocation,
+        claudeCodeAllowedTools,
+        claudeCodeModel,
+        files,
+      };
       setPendingUpdate({ fields, bundle, preview: diffSkillUpdate(current, fields, bundle) });
     } else {
       applyFields(fields, bundle);
@@ -284,6 +295,7 @@ export const SkillForm: FC<SkillFormProps> = ({
       ...(argumentHint.trim() && { argumentHint: argumentHint.trim() }),
       // Always sent, so re-importing a file without allowed-tools clears it on edit.
       claudeCodeAllowedTools,
+      claudeCodeModel,
       disableModelInvocation,
       files,
     });
@@ -564,6 +576,22 @@ export const SkillForm: FC<SkillFormProps> = ({
               onClick={() => setClaudeCodeAllowedTools([])}
               disabled={submitting}
               data-testid="skill-form-claude-code-tools-remove"
+            >
+              Remove
+            </Link>
+          </Typography>
+        ) : null}
+
+        {claudeCodeModel ? (
+          <Typography level="body-sm" textColor="text.tertiary" data-testid="skill-form-claude-code-model">
+            Claude Code model: {claudeCodeModel}. Kept for Claude Code exports; not used in Bike4Mind.{' '}
+            <Link
+              component="button"
+              type="button"
+              level="body-sm"
+              onClick={() => setClaudeCodeModel('')}
+              disabled={submitting}
+              data-testid="skill-form-claude-code-model-remove"
             >
               Remove
             </Link>

@@ -16,6 +16,11 @@ import { readFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { ACCOUNT_DATA_EXPORT_TTL_MS } from '../../packages/server-utils/src/utils/accountDataExport';
+import {
+  NOTEBOOK_DOWNLOAD_URL_TTL_SECONDS,
+  notebookConvertedDownloadKey,
+  notebookZipDownloadKey,
+} from '../../apps/client/server/notebooks/downloadCopyKeys';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const read = (file: string) => readFileSync(path.join(REPO_ROOT, file), 'utf8');
@@ -109,6 +114,16 @@ describe('fab-file bucket notebook export lifecycle', () => {
     expect(ruleDays).toBe(1);
     // S3 rounds expiry up to the next UTC midnight, so an object can outlive the rule by a day.
     expect(ACCOUNT_DATA_EXPORT_TTL_MS).toBeLessThanOrEqual(2 * 86400000);
+  });
+
+  // The download route's zip and converted copies are never deleted by the app either.
+  it('keeps notebook download copies under the expiring exports prefix, signed for less than the rule', () => {
+    const keys = [notebookZipDownloadKey('u1', 'id'), notebookConvertedDownloadKey('u1', 's1', 'id', '.html')];
+
+    expect(rulePrefix).toBeDefined();
+    for (const key of keys) expect(key.startsWith(rulePrefix ?? '<missing>')).toBe(true);
+    expect(NOTEBOOK_DOWNLOAD_URL_TTL_SECONDS).toBeGreaterThan(0);
+    expect(NOTEBOOK_DOWNLOAD_URL_TTL_SECONDS).toBeLessThan(ruleDays * 86400);
   });
 
   // Audit exports hold actor emails and IPs, so they must land somewhere this rule reaps.

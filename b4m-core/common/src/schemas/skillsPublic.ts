@@ -23,7 +23,7 @@ const skillMdField = z
   .max(SKILL_MD_MAX_CHARS)
   .describe(
     'The full text of a SKILL.md: a YAML frontmatter block (`name`, `description`, and optionally ' +
-      '`argument-hint`, `allowed-tools`, `disable-model-invocation`) followed by the markdown body. ' +
+      '`argument-hint`, `allowed-tools`, `model`, `disable-model-invocation`) followed by the markdown body. ' +
       'The same rules as the Skills page import apply: name in kebab-case up to 64 characters, ' +
       'description up to 500 characters, body up to 50,000 characters.'
   );
@@ -59,7 +59,7 @@ export const UpdateSkillRequestSchema = z
   .object({
     skill_md: skillMdField.describe(
       'The full replacement SKILL.md. Fields the frontmatter leaves out are cleared (`argument-hint`, ' +
-        '`allowed-tools`, `disable-model-invocation`); `name` may be left out to keep the current one.'
+        '`allowed-tools`, `model`, `disable-model-invocation`); `name` may be left out to keep the current one.'
     ),
     files: filesField
       .optional()
@@ -79,6 +79,10 @@ export const PublicSkillSummarySchema = z.object({
   description: z.string(),
   argument_hint: z.string().nullable(),
   claude_code_allowed_tools: z.array(z.string()).describe('The SKILL.md `allowed-tools`, kept verbatim.'),
+  claude_code_model: z
+    .string()
+    .optional()
+    .describe('The SKILL.md `model`, kept verbatim for Claude Code exports. Absent when the SKILL.md sets none.'),
   disable_model_invocation: z.boolean(),
   scope: z.enum(['user', 'organization', 'system']),
   organization_id: z.string().nullable(),

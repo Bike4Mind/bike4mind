@@ -8,6 +8,7 @@ export interface SkillFormValues {
   argumentHint: string;
   disableModelInvocation: boolean;
   claudeCodeAllowedTools: string[];
+  claudeCodeModel: string;
   files: ISkillFile[];
 }
 
@@ -32,7 +33,7 @@ const showList = (list: string[]) => (list.length ? list.join(', ') : '(none)');
 
 /**
  * What applying an imported SKILL.md (and, for a folder or zip, its supporting files) would change.
- * Mirrors how SkillForm applies an import: argument hint, Claude Code tools and the invocation flag
+ * Mirrors how SkillForm applies an import: argument hint, Claude Code tools and model, and the invocation flag
  * take the file's value or reset, description and body change only when the file sets them.
  */
 export function diffSkillUpdate(
@@ -67,6 +68,16 @@ export function diffSkillUpdate(
       label: 'Claude Code tools',
       before: showList(current.claudeCodeAllowedTools),
       after: showList(tools),
+    });
+  }
+
+  const model = fields.claudeCodeModel ?? '';
+  if (model !== current.claudeCodeModel) {
+    changes.push({
+      key: 'claude-code-model',
+      label: 'Claude Code model',
+      before: show(current.claudeCodeModel),
+      after: show(model),
     });
   }
 

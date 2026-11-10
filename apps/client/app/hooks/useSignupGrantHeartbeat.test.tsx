@@ -43,6 +43,8 @@ const setHidden = (hidden: boolean) =>
 describe('useSignupGrantHeartbeat', () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    // Midday UTC: the hook pauses until the next UTC midnight, so a wall clock near it would flake.
+    vi.setSystemTime(new Date('2026-03-01T12:00:00Z'));
     localStorage.clear();
     h.post.mockReset().mockResolvedValue(response());
     h.invalidate.mockReset();
