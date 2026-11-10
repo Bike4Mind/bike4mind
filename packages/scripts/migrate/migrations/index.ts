@@ -302,6 +302,7 @@ import EnsureStripeDisputeIndexes from './20260921239980_ensure-stripe-dispute-i
 import EnsureAdminSearchIndexes from './20260921239987_ensure-admin-search-indexes';
 import EnsureAdminActionCountIndexes from './20260921240050_ensure-admin-action-count-indexes';
 import EnsureGeneratedMediaPurgeIndexes from './20260921240060_ensure-generated-media-purge-indexes';
+import EnsureSessionGroupReadIndex from './20260921240080_ensure-session-group-read-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import ResearchConfigSourceTiers from './20260921240100_research-config-source-tiers';
 import ConvertLegacyQuestPlansToFiles from './20260921239990_convert-legacy-quest-plans-to-files';
@@ -554,6 +555,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureAdminSearchIndexes,
   EnsureAdminActionCountIndexes,
   EnsureGeneratedMediaPurgeIndexes,
+  EnsureSessionGroupReadIndex,
   ResealOAuthProviderTokens,
   ResearchConfigSourceTiers,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
