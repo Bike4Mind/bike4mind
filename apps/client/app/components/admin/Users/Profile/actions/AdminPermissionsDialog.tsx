@@ -82,7 +82,7 @@ export const AdminPermissionsDialog: React.FC<ProfileDialogProps> = ({ user, onC
       </Stack>
       {!unchanged && (
         <Typography level="body-xs" data-testid="admin-permissions-dialog-preview">
-          {describeSet(before)} {'→'} {describeSet(selected)}
+          {describeSet(before)} {'\u2192'} {describeSet(selected)}
         </Typography>
       )}
     </ActionDialog>

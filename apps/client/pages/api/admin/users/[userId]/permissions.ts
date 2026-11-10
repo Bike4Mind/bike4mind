@@ -85,7 +85,7 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PUT: 'settings:m
         target: { kind: 'user', id: userId, displayName: user.name || user.username || userId },
         summary: describeChange(granted, revoked),
         reason,
-        changes: [{ field: 'adminPermissions', before, after }],
+        changes: [{ field: 'adminPermissions', before: [...stored], after }],
         details: { granted, revoked },
       });
       return after;
