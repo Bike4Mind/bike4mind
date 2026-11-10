@@ -1,9 +1,8 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { cacheRepository, userRepository, withTransaction } from '@bike4mind/database';
 import { fileEmbeddingService } from '@bike4mind/services';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
@@ -15,15 +14,14 @@ interface RequestQuery {
  * Admin-only: empty one user's file embedding window (fileEmbeddingService) so their non-lake
  * file indexing resumes before the window rolls over, without raising the limit for everyone.
  * Admin-only for the same reason as the data-lake meter reset: the window is a platform control.
+ * Gated on settings:manage, the permission that already sets this window's limits (including the
+ * per-user override) through /api/admin/scoped-settings: resetting the window grants no more than
+ * raising that user's limit would.
  */
-const handler = baseApi({ auth: 'jwtOnly' })
+const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'settings:manage' } })
   .use(csrfProtection())
   .post(
     asyncHandler(async (req, res) => {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const { userId } = req.query as RequestQuery;
       if (typeof userId !== 'string' || !userId) {
         throw new BadRequestError('Invalid user ID');
