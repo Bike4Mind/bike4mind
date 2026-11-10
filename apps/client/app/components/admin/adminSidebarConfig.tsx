@@ -308,7 +308,13 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
     Icon: Sparkles,
     label: 'AI',
     items: [
-      { Icon: Brain, tab: AdminTab.Models, label: 'Models', badge: 'modelLifecycle' },
+      {
+        Icon: Brain,
+        tab: AdminTab.Models,
+        label: 'Models',
+        testid: 'admin-models-tab-btn',
+        badge: 'modelLifecycle',
+      },
       { Icon: Bot, tab: AdminTab.AgentOps, label: 'Agents' },
       { Icon: FileText, tab: AdminTab.SystemPrompts, label: 'System prompts' },
       { Icon: Wrench, tab: AdminTab.ToolDefinitions, label: 'Tools' },

@@ -13,12 +13,18 @@ import {
 } from '@tanstack/react-router';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
-import { AdminLayoutRoute, isAdminSubscriptionDetailPath, isAdminUserProfilePath } from './AdminLayout';
+import {
+  AdminLayoutRoute,
+  isAdminModelsDetailPath,
+  isAdminSubscriptionDetailPath,
+  isAdminUserProfilePath,
+} from './AdminLayout';
 import { AdminTab } from './adminSidebarConfig';
 import { useAdminModal } from './useAdminModal';
 
 const mockUseUser = vi.fn();
 const profileRendered = vi.fn();
+const modelRendered = vi.fn();
 
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => mockUseUser() }));
 vi.mock('@client/app/utils/user', () => ({ userIsDeveloper: () => false }));
@@ -64,13 +70,21 @@ const renderAt = async (path: string) => {
       return <div data-testid="profile-page">profile</div>;
     },
   });
+  const modelRoute = createRoute({
+    getParentRoute: () => layoutRoute,
+    path: '/admin/models/$',
+    component: () => {
+      modelRendered();
+      return <div data-testid="model-page">model</div>;
+    },
+  });
   const newRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: '/new',
     component: () => <div data-testid="new-page">new</div>,
   });
   const router = createRouter({
-    routeTree: rootRoute.addChildren([layoutRoute.addChildren([consoleRoute, profileRoute]), newRoute]),
+    routeTree: rootRoute.addChildren([layoutRoute.addChildren([consoleRoute, profileRoute, modelRoute]), newRoute]),
     history: createMemoryHistory({ initialEntries: [path] }),
   });
   await act(async () => {
@@ -165,6 +179,27 @@ describe('AdminLayoutRoute', () => {
       // Never rendered, not just hidden: a mounted profile fires admin requests.
       expect(profileRendered).not.toHaveBeenCalled();
     });
+
+    it('cannot open a model page, whose Models tab is for full admins only', async () => {
+      mockUseUser.mockReturnValue(delegate(['settings:manage']));
+
+      await renderAt('/admin/models/example-text-1');
+
+      expect(await screen.findByTestId('admin-missing-permission-state')).toHaveTextContent(
+        'Full admin access required'
+      );
+      expect(modelRendered).not.toHaveBeenCalled();
+    });
+  });
+
+  it('keeps the sidebar on a model page, with Models active', async () => {
+    mockUseUser.mockReturnValue({ currentUser: { id: 'u1', isAdmin: true, tags: [] } });
+
+    await renderAt('/admin/models/example-text-1');
+
+    const layout = await screen.findByTestId('admin-layout');
+    expect(within(layout).getByTestId('model-page')).toBeInTheDocument();
+    expect(within(desktopSidebar()).getByTestId('admin-models-tab-btn')).toHaveAttribute('aria-current', 'page');
   });
 
   it('renders the console inside the shell for an admin', async () => {
@@ -252,6 +287,14 @@ describe('isAdminUserProfilePath', () => {
     expect(isAdminUserProfilePath('/admin/users/abc')).toBe(true);
     expect(isAdminUserProfilePath('/admin')).toBe(false);
     expect(isAdminUserProfilePath('/admin/users')).toBe(false);
+  });
+});
+
+describe('isAdminModelsDetailPath', () => {
+  it('matches model detail and run pages, not the console', () => {
+    expect(isAdminModelsDetailPath('/admin/models/example-text-1')).toBe(true);
+    expect(isAdminModelsDetailPath('/admin/models/runs/run-1')).toBe(true);
+    expect(isAdminModelsDetailPath('/admin')).toBe(false);
   });
 });
 
