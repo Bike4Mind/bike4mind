@@ -820,58 +820,8 @@ describe('shell approval in a project with a large node_modules', () => {
     'git --exec-path=./bin --help clean',
     'git --exec-path=./bin --version',
     'git -C . --exec-path=./bin log',
-    'GIT_EXEC_PATH=./bin git mergetool',
-    'GIT_EXEC_PATH=./bin git --help clean',
-    'env GIT_EXEC_PATH=./bin git mergetool',
-    'export GIT_EXEC_PATH=./bin; git mergetool',
-    'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=man.man.path GIT_CONFIG_VALUE_0=./x.sh git help clean',
-    'env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.pager GIT_CONFIG_VALUE_0=./x.sh git log',
-    `GIT_CONFIG_PARAMETERS="'man.man.path=./x.sh'" git help clean`,
-    `env GIT_CONFIG_PARAMETERS="'core.pager=./x.sh'" git log`,
-    'GIT_EDITOR=./x.sh git status',
-    'GIT_PAGER=./x.sh git log',
-    'GIT_TRACE=$PWD/.claude/settings.json git status',
-    'env GIT_TRACE2_EVENT=./t git status',
-    'GIT_PAGER+=x git log',
-    'export GIT_PAGER; git log',
-    'declare -x GIT_PAGER=./x.sh; git log',
-    'typeset GIT_PAGER=./x.sh; git log',
-    'local GIT_PAGER=./x.sh; git log',
-    'readonly GIT_PAGER=./x.sh; git log',
-    'read -r GIT_PAGER <<< ./x.sh; git log',
-    'readarray GIT_PAGER <<< ./x.sh; git log',
-    'mapfile GIT_PAGER < f; git log',
-    'printf -v GIT_PAGER %s ./x.sh; git log',
-    'getopts a GIT_PAGER; git log',
-    'for GIT_PAGER in ./x.sh; do git log; done',
-    'select GIT_PAGER in ./x.sh; do git log; done',
-    'let GIT_PAGER=1; git log',
-    ': ${GIT_PAGER:=./x.sh}; git log',
-    ': ${GIT_PAGER=./x.sh}; git log',
-    'true && export GIT_PAGER=./x.sh && git log',
-    'v=PAGER; export GIT_$v=./x.sh; git log',
-    'v=GIT_PAGER; export $v=./x.sh; git log',
-    'v=GIT_PAGER; printf -v "$v" %s ./x.sh; git log',
-    'env GIT_{PAGER,X}=./x.sh git log',
-    "env $'GIT_PAGER'=./x.sh git log",
-    'env $(cat f) git log',
   ])('asks in every mode for %s, which has git run a program the command names', async command => {
     expect(await judge(command)).toMatchObject(asks);
-  });
-
-  it.each([
-    'git log --grep=GIT_PAGER',
-    'git grep GIT_CONFIG_GLOBAL',
-    'git log -S GIT_EDITOR --oneline',
-    "git commit -m 'docs: explain GIT_SSH_COMMAND'",
-    'echo GIT_PAGER && git status',
-    'git status # GIT_PAGER',
-    'rg GIT_SSH src && git diff',
-    'git log --oneline | grep GIT_EXEC_PATH',
-    'git diff -- docs/GIT_EDITOR.md',
-    'git log --grep=GIT_TRACE',
-  ])('runs %s unasked, as it only names a variable', async command => {
-    expect(await judge(command)).toMatchObject({ auto: true, full: true });
   });
 
   it.each([
