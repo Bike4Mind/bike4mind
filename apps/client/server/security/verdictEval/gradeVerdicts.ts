@@ -8,6 +8,7 @@ import {
 } from '@bike4mind/common';
 import {
   EVAL_COHORTS,
+  SPEND_LOOKBACK_DAYS,
   VERDICT_EVAL_LABEL_SOURCES,
   type VerdictEvalCohortRow,
   type VerdictEvalDisagreement,
@@ -84,7 +85,7 @@ export type GradeVerdictsInput = {
   signupVerdicts: ReadonlyMap<string, SignupChartVerdict>;
   /** When each account signed up; the signup verdict's disagreements are dated by it. */
   signedUpAt: ReadonlyMap<string, Date>;
-  /** Credits per account for the members of detections labelled abuse. */
+  /** Credits per account for the members of detections labelled abuse, from SPEND_LOOKBACK_DAYS before their detection. */
   spend: ReadonlyMap<string, readonly EvalSpendBucket[]>;
   /** The earliest suspension or Contain by an admin, per account. */
   suspendedAt: ReadonlyMap<string, Date>;
@@ -271,6 +272,7 @@ export function labelAccountsAndDetections(
 
 const round1 = (value: number) => Math.round(value * 10) / 10;
 const HOUR_MS = 60 * 60 * 1000;
+const SPEND_LOOKBACK_MS = SPEND_LOOKBACK_DAYS * 24 * HOUR_MS;
 
 /** Nearest-rank percentile of an ascending list. */
 const percentile = (sorted: readonly number[], fraction: number) =>
@@ -298,9 +300,8 @@ function operationsRows(
       const abuseDetections = detections.filter(detection => detectionLabels.get(detection.id)?.label === 'abuse');
 
       const hours: number[] = [];
-      let accounts = 0;
-      let creditsBefore = 0;
-      let creditsAfter = 0;
+      // Each account counts once per detector, at its earliest abuse-labelled detection.
+      const detectedAt = new Map<string, Date>();
       for (const detection of abuseDetections) {
         const signups = detection.userIds.flatMap(id => {
           const signedUp = input.signedUpAt.get(id);
@@ -311,15 +312,20 @@ function operationsRows(
           if (elapsed >= 0) hours.push(elapsed / HOUR_MS);
         }
         for (const userId of detection.userIds) {
-          accounts += 1;
-          const signedUp = input.signedUpAt.get(userId);
-          const end = input.suspendedAt.get(userId) ?? input.now;
-          for (const bucket of input.spend.get(userId) ?? []) {
-            if (signedUp && bucket.at < signedUp) continue;
-            // Buckets are an hour wide: one straddling the detection counts by its start.
-            if (bucket.at < detection.detectedAt) creditsBefore += bucket.credits;
-            else if (bucket.at < end) creditsAfter += bucket.credits;
-          }
+          const current = detectedAt.get(userId);
+          if (!current || detection.detectedAt < current) detectedAt.set(userId, detection.detectedAt);
+        }
+      }
+      let creditsBefore = 0;
+      let creditsAfter = 0;
+      for (const [userId, at] of detectedAt) {
+        const lookbackStart = at.getTime() - SPEND_LOOKBACK_MS;
+        const end = input.suspendedAt.get(userId) ?? input.now;
+        for (const bucket of input.spend.get(userId) ?? []) {
+          // Buckets are an hour wide: one straddling the detection counts by its start.
+          if (bucket.at < at) {
+            if (bucket.at.getTime() >= lookbackStart) creditsBefore += bucket.credits;
+          } else if (bucket.at < end) creditsAfter += bucket.credits;
         }
       }
       const sortedHours = hours.sort((a, b) => a - b);
@@ -340,7 +346,7 @@ function operationsRows(
         spend:
           abuseDetections.length > 0
             ? {
-                accounts,
+                accounts: detectedAt.size,
                 creditsBeforeDetection: Math.round(creditsBefore * 100) / 100,
                 creditsAfterDetection: Math.round(creditsAfter * 100) / 100,
               }

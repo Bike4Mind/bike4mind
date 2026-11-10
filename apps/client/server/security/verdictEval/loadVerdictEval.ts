@@ -15,7 +15,7 @@ import {
   mongoose,
 } from '@bike4mind/database';
 import type { SignupTimeseriesRange } from '@bike4mind/server-utils/app/utils/signupSignals';
-import type { VerdictEvalReport, VerdictEvalWindowDays } from '@client/app/utils/verdictEval';
+import { SPEND_LOOKBACK_DAYS, type VerdictEvalReport, type VerdictEvalWindowDays } from '@client/app/utils/verdictEval';
 import {
   ACCOUNT_STATUS_ACTIONS_FILTER,
   REINSTATED_ENTRIES,
@@ -47,7 +47,7 @@ export const VERDICT_EVAL_ACCOUNT_LIMIT = 5_000;
 const IN_CHUNK = 500;
 export const VERDICT_EVAL_SPEND_ACCOUNT_LIMIT = 500;
 export const VERDICT_EVAL_SPEND_ROW_LIMIT = 50_000;
-const SPEND_LOOKBACK_MS = 30 * DAY_MS;
+const SPEND_LOOKBACK_MS = SPEND_LOOKBACK_DAYS * DAY_MS;
 const API_AGENT_SOURCES = ['api', 'agent', 'cli'];
 
 const LABEL_REVIEW_STATES: SignupRiskReviewState[] = ['approved', 'banned'];
@@ -128,8 +128,13 @@ export type LoadedAccounts = {
   signedUpAt: Map<string, Date>;
   /** The earliest suspension or Contain by an admin, per account. */
   suspendedAt: Map<string, Date>;
-  /** The signup chart verdict for accounts that signed up in the window. */
+  /** The signup chart verdict for accounts that signed up in the window; empty when skipped. */
   signupVerdicts: Map<string, SignupChartVerdict>;
+};
+
+export type LoadAccountOutcomesOptions = {
+  /** Skip the signup chart verdicts, for callers that do not grade them. */
+  skipSignupVerdicts?: boolean;
 };
 
 /**
@@ -141,7 +146,8 @@ export async function loadAccountOutcomes(
   userIds: string[],
   deps: VerdictEvalDeps = liveVerdictEvalDeps,
   now = new Date(),
-  days: VerdictEvalWindowDays = 30
+  days: VerdictEvalWindowDays = 30,
+  options: LoadAccountOutcomesOptions = {}
 ): Promise<LoadedAccounts> {
   const since = new Date(now.getTime() - days * DAY_MS);
   const [audits, users] = await Promise.all([
@@ -201,7 +207,9 @@ export async function loadAccountOutcomes(
     };
   });
 
-  const inWindow = [...signedUpAt].filter(([, createdAt]) => createdAt >= since).map(([userId]) => userId);
+  const inWindow = options.skipSignupVerdicts
+    ? []
+    : [...signedUpAt].filter(([, createdAt]) => createdAt >= since).map(([userId]) => userId);
   const signupVerdicts =
     inWindow.length > 0
       ? await deps.signupVerdicts({ range: RANGE_FOR_WINDOW[days], userIds: inWindow, signedUpAt, now })
@@ -264,7 +272,11 @@ export async function loadCohortSignals(userIds: string[]): Promise<Map<string, 
   );
 }
 
-/** Credits per account and hour bucket from `from`; `truncated` when the row cap cut the read short. */
+/**
+ * Credits per account and hour bucket from `from`; `truncated` when the row cap cut the read short.
+ * creditsCharged already includes any writtenOffCredits (the uncollected part of a capped turn), so
+ * consumed-but-unpaid credits count once without adding that field.
+ */
 async function loadSpend(
   userIds: string[],
   from: Date
@@ -278,6 +290,7 @@ async function loadSpend(
           credits: { $sum: '$creditsCharged' },
         },
       },
+      { $sort: { '_id.userId': 1, '_id.at': 1 } },
       { $limit: VERDICT_EVAL_SPEND_ROW_LIMIT + 1 },
     ])
       .option({ maxTimeMS: MAX_TIME_MS })
@@ -370,25 +383,21 @@ export async function loadVerdictEvalInput(
   const userIds = allUserIds.slice(0, VERDICT_EVAL_ACCOUNT_LIMIT);
 
   const { accounts, signedUpAt, suspendedAt, signupVerdicts } = await loadAccountOutcomes(userIds, deps, now, days);
-  const detectionMembers = [...new Set(detections.flatMap(detection => detection.userIds))].filter(id =>
+  const allDetectionMembers = [...new Set(detections.flatMap(detection => detection.userIds))].filter(id =>
     OBJECT_ID.test(id)
   );
+  if (allDetectionMembers.length > VERDICT_EVAL_ACCOUNT_LIMIT) truncated = true;
+  const detectionMembers = allDetectionMembers.slice(0, VERDICT_EVAL_ACCOUNT_LIMIT);
   const { detectionLabels } = labelAccountsAndDetections(detections, accounts);
-  const abuseMembers = [
-    ...new Set(
-      detections.flatMap(detection => (detectionLabels.get(detection.id)?.label === 'abuse' ? detection.userIds : []))
-    ),
-  ].filter(id => OBJECT_ID.test(id));
+  const abuseDetections = detections.filter(detection => detectionLabels.get(detection.id)?.label === 'abuse');
+  const abuseMembers = [...new Set(abuseDetections.flatMap(detection => detection.userIds))].filter(id =>
+    OBJECT_ID.test(id)
+  );
   if (abuseMembers.length > VERDICT_EVAL_SPEND_ACCOUNT_LIMIT) truncated = true;
   const spendMembers = abuseMembers.slice(0, VERDICT_EVAL_SPEND_ACCOUNT_LIMIT);
+  // Spend is only counted from SPEND_LOOKBACK_DAYS before an account's detection.
   const spendFrom = new Date(
-    Math.min(
-      since.getTime() - SPEND_LOOKBACK_MS,
-      ...spendMembers.flatMap(id => {
-        const signedUp = signedUpAt.get(id);
-        return signedUp ? [signedUp.getTime()] : [];
-      })
-    )
+    Math.min(now.getTime(), ...abuseDetections.map(detection => detection.detectedAt.getTime())) - SPEND_LOOKBACK_MS
   );
   const [cohortSignals, loadedSpend] = await Promise.all([
     loadCohortSignals(detectionMembers),

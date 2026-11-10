@@ -11,7 +11,9 @@ const m = vi.hoisted(() => ({
   create: vi.fn(),
   verdict: vi.fn(),
   run: vi.fn(),
+  currentUser: { isAdmin: true } as { isAdmin: boolean; adminPermissions?: string[] },
 }));
+vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: m.currentUser }) }));
 vi.mock('@client/app/hooks/data/verdictEvalSets', () => ({
   useEvalSets: m.useEvalSets,
   useEvalSet: m.useEvalSet,
@@ -80,8 +82,8 @@ const score = (precision: number) => ({
   abstained: 0,
   precision,
   precisionLowerBound: 0.4,
-  hitRate: 0.8,
-  falsePositiveRate: 0.143,
+  hitRate: null,
+  falsePositiveRate: null,
 });
 const runOf = (precision: number): EvalSetRun => ({
   ranAt: WHEN,
@@ -93,12 +95,19 @@ const runOf = (precision: number): EvalSetRun => ({
     labelled: 3,
     scores: [score(precision)],
     recall: {
+      flaggedExamples: 5,
+      flaggedReviewed: 5,
       flaggedAbuse: 4,
-      sampledUnflaggedAbuse: 1,
-      sampledUnflagged: 2,
+      flaggedPopulation: 5,
+      unflaggedExamples: 2,
+      unflaggedReviewed: 2,
+      unflaggedAbuse: 1,
       unflaggedPopulation: 450,
+      minimumReviewed: 30,
+      estimatedFlaggedAbuse: 4,
       estimatedMissedAbuse: 225,
       estimatedRecall: 0.017,
+      recallWithheld: null,
     },
     cohorts: [
       {
@@ -149,14 +158,28 @@ const detail: EvalSetDetail = {
   createdAt: WHEN,
   examples: [
     example('labelled-flagged', { kind: 'flagged', currentLabel: { label: 'abuse', source: 'frozen' } }),
-    example('needs-label'),
+    example('needs-label', { revision: 3 }),
+    example('inconclusive', {
+      latestVerdict: {
+        verdict: 'insufficient_evidence',
+        reason: 'not enough',
+        reviewerId: 'rev-1',
+        reviewedAt: WHEN,
+      },
+    }),
+    example('conclusive', {
+      currentLabel: { label: 'legit', source: 'verdict' },
+      latestVerdict: { verdict: 'legitimate_human', reason: 'real person', reviewerId: 'rev-2', reviewedAt: WHEN },
+    }),
+    example('tuning-unlabelled', { split: 'tuning' }),
   ],
   runs: [runOf(0.7), runOf(0.8)],
   runCount: 2,
 };
 
 beforeEach(() => {
-  Object.values(m).forEach(fn => fn.mockReset());
+  m.currentUser = { isAdmin: true };
+  [m.useEvalSets, m.useEvalSet, m.create, m.verdict, m.run].forEach(fn => fn.mockReset());
   m.useEvalSets.mockReturnValue({ data: [summary], isPending: false, error: null, refetch: vi.fn() });
   m.useEvalSet.mockReturnValue({ data: detail, isPending: false, error: null, refetch: vi.fn() });
 });
@@ -209,30 +232,139 @@ describe('VerdictEvalSetsPanel', () => {
       open();
       const scores = screen.getByTestId('eval-sets-run-scores');
       expect(within(scores).getByText('80% (40%) (+10 pts)')).toBeTruthy();
-      expect(within(scores).getByText('80% of 5 (+0 pts)')).toBeTruthy();
       expect(screen.getByText('Estimated recall')).toBeTruthy();
-      expect(screen.getByText(/1 abuse in 2 labelled unflagged, scaled to 450 accounts/)).toBeTruthy();
+      expect(
+        screen.getByText(/1 abuse in 2 reviewed unflagged held-out examples, scaled to 450 accounts/)
+      ).toBeTruthy();
+      expect(screen.getByTestId('eval-sets-scores-note').textContent).toContain('Recall comes from the estimate');
+      expect(within(scores).queryByText('Hit rate (of abuse)')).toBeNull();
       expect(
         within(screen.getByTestId('eval-sets-cohorts')).getByText('Not measurable: no stored signal')
       ).toBeTruthy();
     });
 
-    it('lists unlabelled examples first with a link to the account', () => {
+    it('orders held-out unflagged examples without a conclusive verdict first, with a link to the account', () => {
       open();
       const rows = within(screen.getByTestId('eval-sets-examples')).getAllByRole('row');
-      expect(rows[1].textContent).toContain('needs-label');
-      expect(rows[2].textContent).toContain('abuse (frozen at draw)');
+      const order = rows.slice(1).map(row => row.textContent ?? '');
+      expect(order[0]).toContain('needs-label');
+      expect(order[1]).toContain('inconclusive');
+      expect(order[2]).toContain('tuning-unlabelled');
+      expect(order[3]).toContain('abuse (frozen at draw)');
+      expect(order[4]).toContain('legit (verdict)');
       expect(screen.getByTestId('eval-sets-user-link-needs-label').getAttribute('href')).toBe(
         '/admin/users/needs-label'
       );
     });
 
-    it('keeps the save button off until there is a verdict and a reason', () => {
+    it('shows the latest verdict and says insufficient evidence leaves the example unlabelled', () => {
       open();
-      const save = screen.getByTestId('eval-sets-verdict-btn-needs-label') as HTMLButtonElement;
-      expect(save.disabled).toBe(true);
-      fireEvent.change(screen.getByTestId('eval-sets-reason-input-needs-label'), { target: { value: 'looks real' } });
-      expect(save.disabled).toBe(true);
+      const table = screen.getByTestId('eval-sets-examples');
+      expect(within(table).getByText(/Legitimate human, by rev-2/)).toBeTruthy();
+      expect(
+        within(table).getByText(/Leaves the example unlabelled, overriding any label frozen at draw/)
+      ).toBeTruthy();
+    });
+
+    it('explains a withheld recall estimate', () => {
+      const withheld = runOf(0.8);
+      withheld.report.recall = {
+        ...withheld.report.recall,
+        estimatedRecall: null,
+        estimatedMissedAbuse: null,
+        recallWithheld: 'too_few_unflagged_reviews',
+        unflaggedReviewed: 12,
+      };
+      m.useEvalSet.mockReturnValue({
+        data: { ...detail, runs: [withheld] },
+        isPending: false,
+        error: null,
+        refetch: vi.fn(),
+      });
+      open();
+      expect(screen.getByText('Needs at least 30 reviewed unflagged held-out examples; 12 so far.')).toBeTruthy();
+    });
+
+    const openLabelDialog = async (userId: string) => {
+      open();
+      fireEvent.click(screen.getByTestId(`eval-sets-label-btn-${userId}`));
+      return screen.findByTestId('eval-sets-label-dialog');
+    };
+
+    it('labels an example with the verdict, the reason and the revision it was read at', async () => {
+      m.verdict.mockResolvedValue(undefined);
+      const dialog = await openLabelDialog('needs-label');
+      fireEvent.click(within(dialog).getByTestId('eval-sets-verdict-option-confirmed_abuse'));
+      fireEvent.change(within(dialog).getByTestId('eval-sets-label-dialog-reason-input'), {
+        target: { value: 'looks like a farm' },
+      });
+      fireEvent.click(within(dialog).getByTestId('eval-sets-label-dialog-confirm-btn'));
+      await waitFor(() =>
+        expect(m.verdict).toHaveBeenCalledWith({
+          userId: 'needs-label',
+          verdict: 'confirmed_abuse',
+          reason: 'looks like a farm',
+          expectedRevision: 3,
+        })
+      );
+      await waitFor(() => expect(screen.queryByTestId('eval-sets-label-dialog')).toBeNull());
+    });
+
+    it('does not record a label whose reason is too short', async () => {
+      const dialog = await openLabelDialog('needs-label');
+      fireEvent.click(within(dialog).getByTestId('eval-sets-verdict-option-confirmed_abuse'));
+      fireEvent.change(within(dialog).getByTestId('eval-sets-label-dialog-reason-input'), { target: { value: 'no' } });
+      expect((within(dialog).getByTestId('eval-sets-label-dialog-confirm-btn') as HTMLButtonElement).disabled).toBe(
+        true
+      );
+      expect(m.verdict).not.toHaveBeenCalled();
+    });
+
+    it('names the account when someone else labelled it first and keeps the dialog open', async () => {
+      m.verdict.mockRejectedValue({
+        isAxiosError: true,
+        response: { status: 409, data: { message: 'This example was labelled by someone else. Review it again.' } },
+      });
+      const dialog = await openLabelDialog('needs-label');
+      fireEvent.click(within(dialog).getByTestId('eval-sets-verdict-option-legitimate_human'));
+      fireEvent.change(within(dialog).getByTestId('eval-sets-label-dialog-reason-input'), {
+        target: { value: 'real person' },
+      });
+      fireEvent.click(within(dialog).getByTestId('eval-sets-label-dialog-confirm-btn'));
+      const conflict = await screen.findByTestId('eval-sets-conflict');
+      expect(conflict.textContent).toContain('needs-label');
+      expect(conflict.textContent).toContain('labelled by someone else');
+      expect(screen.getByTestId('eval-sets-label-dialog')).toBeTruthy();
+    });
+
+    it('shows the server message for other failures', async () => {
+      m.verdict.mockRejectedValue({
+        isAxiosError: true,
+        response: { status: 404, data: { message: 'Example not found' } },
+      });
+      const dialog = await openLabelDialog('needs-label');
+      fireEvent.click(within(dialog).getByTestId('eval-sets-verdict-option-legitimate_human'));
+      fireEvent.change(within(dialog).getByTestId('eval-sets-label-dialog-reason-input'), {
+        target: { value: 'real person' },
+      });
+      fireEvent.click(within(dialog).getByTestId('eval-sets-label-dialog-confirm-btn'));
+      expect((await screen.findByTestId('eval-sets-verdict-error')).textContent).toBe('Example not found');
+    });
+
+    it('opens the dialog for the clicked account only', async () => {
+      const dialog = await openLabelDialog('inconclusive');
+      expect(within(dialog).getByText(/Latest verdict: Insufficient evidence/)).toBeTruthy();
+      expect(within(dialog).getAllByText('inconclusive').length).toBeGreaterThan(0);
+      expect(within(dialog).queryByText('needs-label')).toBeNull();
+    });
+
+    it('disables every write control without the moderate permission', () => {
+      m.currentUser = { isAdmin: false, adminPermissions: ['support:read'] };
+      open();
+      expect((screen.getByTestId('eval-sets-label-btn-needs-label') as HTMLButtonElement).disabled).toBe(true);
+      expect((screen.getByTestId('eval-sets-run-btn') as HTMLButtonElement).disabled).toBe(true);
+      fireEvent.change(screen.getByTestId('eval-sets-name-input'), { target: { value: 'Week 45' } });
+      expect((screen.getByTestId('eval-sets-create-btn') as HTMLButtonElement).disabled).toBe(true);
     });
 
     it('runs the set with its note', async () => {

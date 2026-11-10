@@ -28,6 +28,9 @@ export type VerdictEvalLabel = (typeof VERDICT_EVAL_LABELS)[number];
 export const VERDICT_EVAL_LABEL_SOURCES = ['adminVerdict', 'reinstated', 'adminSuspended', 'riskReview'] as const;
 export type VerdictEvalLabelSource = (typeof VERDICT_EVAL_LABEL_SOURCES)[number];
 
+/** How far before its detection an account's spend counts as "before detection". */
+export const SPEND_LOOKBACK_DAYS = 30;
+
 export const verdictEvalScoreSchema = z.object({
   grader: z.enum(VERDICT_EVAL_GRADERS),
   /** The model for an assessment, the mode for a containment decision, 'chart' for the signup verdict. */
@@ -95,11 +98,16 @@ export const verdictEvalOperationsRowSchema = z.object({
   reviewYield: z.number().min(0).max(1).nullable(),
   /** Hours from the earliest member signup to detection, over detections labelled abuse. */
   timeToDetection: z.object({ n: z.number().int().min(1), medianHours: z.number(), p90Hours: z.number() }).nullable(),
-  /** Credits charged to members of detections labelled abuse, split at the detection time. */
+  /**
+   * Credits charged to members of detections labelled abuse, each account once, at its earliest such
+   * detection of this detector.
+   */
   spend: z
     .object({
       accounts: z.number().int().min(0),
+      /** In the SPEND_LOOKBACK_DAYS before the detection. */
       creditsBeforeDetection: z.number(),
+      /** From the detection until the account's earliest admin suspension, or now. */
       creditsAfterDetection: z.number(),
     })
     .nullable(),

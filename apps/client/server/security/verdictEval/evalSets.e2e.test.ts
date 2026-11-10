@@ -1,7 +1,7 @@
 /**
  * Real-Mongo check of the evaluation sets: a draw freezes labels and keeps linked accounts on one
- * split, the sample is reproducible, and drawing, labelling and running never write to users, credits
- * or usage.
+ * split, the unflagged sample is frozen in the set, and drawing, labelling and running never write to
+ * users, credits or usage.
  *
  * Consumes the built dist (`pnpm turbo:core:build`); integration lane only.
  */
@@ -72,13 +72,14 @@ async function seedUser(fields: Record<string, unknown>): Promise<string> {
   return _id.toString();
 }
 
-async function seedDetection(userIds: string[], verdict: string | null): Promise<string> {
+async function seedDetection(userIds: string[], verdict: string | null, groupMembers: string[] = []): Promise<string> {
   const _id = new mongoose.Types.ObjectId();
   await ShadowDetectionModel.collection.insertOne({
     _id,
     detector: 'deviceLinkedToBlocked',
     policyVersion: 1,
     userIds,
+    ...(groupMembers.length > 0 ? { group: { members: groupMembers.map(userId => ({ userId })) } } : {}),
     detectedAt: daysAgo(2),
     verdict,
   });
@@ -148,22 +149,44 @@ describe('drawEvalSet', () => {
       );
     }
     expect([...splitsByCampaign.values()].every(splits => splits.size === 1)).toBe(true);
+    const userIds = new Set(set.examples.map(example => example.userId));
+    expect(set.examples.some(example => userIds.has(example.campaignKey))).toBe(false);
   });
 
-  it('draws the same sample for the same seed and a different one for another', async () => {
-    await seedWorld();
-    const sample = async (seed: string) => {
-      const id = await drawEvalSet({ ...request, unflaggedSample: 10 }, ADMIN_ID, deps(seed), NOW);
-      const set = await abuseEvalSetRepository.findById(id);
-      return (set?.examples ?? [])
-        .filter(example => example.kind === 'unflagged')
-        .map(example => example.userId)
-        .sort();
-    };
-    const first = await sample('seed-a');
-    expect(first).toHaveLength(10);
-    expect(await sample('seed-a')).toEqual(first);
-    expect(await sample('seed-b')).not.toEqual(first);
+  it('freezes a sample of the requested size that excludes flagged accounts', async () => {
+    const world = await seedWorld();
+    const flagged = new Set([...world.farm, world.legitFlagged]);
+    const id = await drawEvalSet({ ...request, unflaggedSample: 10 }, ADMIN_ID, deps('seed-a'), NOW);
+    const set = await abuseEvalSetRepository.findById(id);
+    if (!set) throw new Error('set was not stored');
+
+    const unflagged = set.examples.filter(example => example.kind === 'unflagged').map(example => example.userId);
+    expect(unflagged).toHaveLength(10);
+    expect(new Set(unflagged).size).toBe(10);
+    expect(unflagged.some(userId => flagged.has(userId))).toBe(false);
+    expect(set.population).toEqual({ flagged: 4, unflagged: 41 });
+    // The drawn ids are the set: reading it again gives the same examples.
+    const reread = await abuseEvalSetRepository.findById(id);
+    expect(reread?.examples.map(example => example.userId)).toEqual(set.examples.map(example => example.userId));
+  });
+
+  it('links a campaign member that the detection does not name without flagging it', async () => {
+    const world = await seedWorld();
+    const transitive = await seedUser({});
+    await seedDetection([world.legitFlagged], 'confirmed_abuse', [world.legitFlagged, transitive]);
+
+    const id = await drawEvalSet(request, ADMIN_ID, deps('seed-a'), NOW);
+    const set = await abuseEvalSetRepository.findById(id);
+    if (!set) throw new Error('set was not stored');
+
+    expect(set.population).toEqual({ flagged: 4, unflagged: 42 });
+    const byUser = new Map(set.examples.map(example => [example.userId, example]));
+    const member = byUser.get(transitive);
+    if (!member) throw new Error('the campaign member was not sampled');
+    expect(member).toMatchObject({ kind: 'unflagged', detectionIds: [], frozenLabel: null });
+    const direct = byUser.get(world.legitFlagged);
+    expect(member.campaignKey).toBe(direct?.campaignKey);
+    expect(member.split).toBe(direct?.split);
   });
 });
 

@@ -2,8 +2,10 @@ import type { DataHolderRegistry } from '../types';
 import { AUDIT_LOG, EMAIL_SUPPRESSION, expiresAfterTtl } from './retention';
 
 export const infraHolders = {
-  // A frozen evaluation set of accounts for measuring abuse detection. Account deletion removes the person's
-  // example; admin attribution is anonymized.
+  // A frozen evaluation set of accounts for measuring abuse detection. Account deletion
+  // (abuseEvalSetRepository.removeUser) pulls the person's own example, with its verdicts, from every set.
+  // Campaign keys are opaque hashes, so no other example names the person. The admin references below
+  // are classified for export; deletion does not rewrite them.
   AbuseEvalSet: {
     kind: 'holder',
     references: [

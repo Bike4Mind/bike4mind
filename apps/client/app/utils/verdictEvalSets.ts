@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { SHADOW_DETECTION_VERDICTS } from '@bike4mind/common';
+import { AdminActionReasonSchema, SHADOW_DETECTION_VERDICTS } from '@bike4mind/common';
 import {
   VERDICT_EVAL_LABELS,
   VERDICT_EVAL_WINDOWS,
@@ -24,6 +24,9 @@ export const EVAL_SET_UNFLAGGED_SAMPLE_MAX = 500;
 export const EVAL_SET_HELD_OUT_SHARE_MIN = 0.2;
 export const EVAL_SET_HELD_OUT_SHARE_MAX = 0.8;
 export const EVAL_SET_NOTE_MAX = 500;
+/** Conclusive verdicts on held-out unflagged examples a run needs before it estimates recall. */
+export const EVAL_SET_MIN_REVIEWED = 30;
+export const EVAL_SET_RECALL_WITHHELD_REASONS = ['too_few_unflagged_reviews', 'no_flagged_reviews'] as const;
 
 const objectIdStringSchema = z.string().regex(/^[a-f0-9]{24}$/i, 'Not a valid id');
 const windowDaysSchema = z.coerce
@@ -45,7 +48,7 @@ export type EvalSetCreateInput = z.input<typeof evalSetCreateRequestSchema>;
 export const evalSetExampleVerdictRequestSchema = z.object({
   userId: objectIdStringSchema,
   verdict: z.enum(SHADOW_DETECTION_VERDICTS),
-  reason: z.string().trim().min(1).max(500),
+  reason: AdminActionReasonSchema,
   expectedRevision: z.number().int().min(0),
 });
 export type EvalSetExampleVerdictRequest = z.infer<typeof evalSetExampleVerdictRequestSchema>;
@@ -80,6 +83,12 @@ export type EvalSetSummary = z.infer<typeof evalSetSummarySchema>;
 export const evalSetScoreSchema = verdictEvalScoreSchema.extend({
   /** Wilson 95% lower bound on precision; null with none called abuse. */
   precisionLowerBound: z.number().min(0).max(1).nullable(),
+  /**
+   * Always null on a set: flagged examples are a census and unflagged ones a small sample, so a
+   * rate over both would mix the two. The recall estimate is the set's rate.
+   */
+  hitRate: z.null(),
+  falsePositiveRate: z.null(),
 });
 export type EvalSetScore = z.infer<typeof evalSetScoreSchema>;
 
@@ -90,14 +99,32 @@ export const evalSetRunReportSchema = z.object({
   /** Of those, the ones with a label. */
   labelled: countSchema,
   scores: z.array(evalSetScoreSchema),
+  /**
+   * Recall over accounts created in the set window, held-out split only. Each side is its abuse rate
+   * among reviewed examples times the population its examples stand for.
+   */
   recall: z.object({
+    /** Held-out flagged examples that signed up in the window. */
+    flaggedExamples: countSchema,
+    /** Of those, the ones with a label (verdict or frozen). */
+    flaggedReviewed: countSchema,
     flaggedAbuse: countSchema,
-    sampledUnflaggedAbuse: countSchema,
-    sampledUnflagged: countSchema,
-    /** The unflagged accounts the sampled held-out ones stand for. */
+    /** The flagged accounts those examples stand for (undoes the flagged cap). */
+    flaggedPopulation: countSchema,
+    /** Held-out unflagged examples. */
+    unflaggedExamples: countSchema,
+    /** Of those, the ones whose latest evaluation-set verdict is conclusive; frozen labels never count. */
+    unflaggedReviewed: countSchema,
+    unflaggedAbuse: countSchema,
+    /** The unflagged accounts those examples stand for. */
     unflaggedPopulation: countSchema,
+    /** EVAL_SET_MIN_REVIEWED when the run was graded. */
+    minimumReviewed: countSchema,
+    estimatedFlaggedAbuse: z.number().min(0).nullable(),
     estimatedMissedAbuse: z.number().min(0).nullable(),
+    /** Null when withheld; `recallWithheld` says why. */
     estimatedRecall: z.number().min(0).max(1).nullable(),
+    recallWithheld: z.enum(EVAL_SET_RECALL_WITHHELD_REASONS).nullable(),
   }),
   /** Flagged held-out examples by cohort. */
   cohorts: z.array(verdictEvalCohortRowSchema),
@@ -127,7 +154,7 @@ export const evalSetExampleSchema = z.object({
   campaignKey: z.string(),
   cohorts: z.array(evalCohortSchema),
   signedUpAt: z.coerce.date().nullable(),
-  /** The verdict wins over the label frozen at draw. */
+  /** The verdict wins over the label frozen at draw; an unflagged example has only verdict labels. */
   currentLabel: z.object({ label: z.enum(VERDICT_EVAL_LABELS), source: z.enum(['frozen', 'verdict']) }).nullable(),
   latestVerdict: z
     .object({

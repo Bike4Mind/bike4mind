@@ -3,6 +3,7 @@ import { Types } from 'mongoose';
 import { setupMongoTest } from '../../../__test__/utils';
 import {
   ABUSE_EVAL_MAX_RUNS,
+  ABUSE_EVAL_MAX_VERDICTS_PER_EXAMPLE,
   AbuseEvalSetModel,
   abuseEvalSetRepository,
   type CreateAbuseEvalSetInput,
@@ -142,6 +143,48 @@ describe('abuseEvalSetRepository', () => {
       ['legitimate_human', adminId],
     ]);
     expect(found?.examples.find(e => e.userId === unflaggedUser)?.revision).toBe(0);
+  });
+
+  it('writes a verdict on the second example without touching the first', async () => {
+    const id = await abuseEvalSetRepository.create(evalSet());
+
+    expect(
+      await abuseEvalSetRepository.addExampleVerdict({
+        setId: id,
+        userId: unflaggedUser,
+        reviewerId: adminId,
+        reason: 'Checked',
+        expectedRevision: 0,
+        verdict: 'legitimate_human',
+      })
+    ).toBe('updated');
+
+    const found = await abuseEvalSetRepository.findById(id);
+    expect(found?.examples[0]).toMatchObject({ userId: flaggedUser, revision: 0, verdicts: [] });
+    expect(found?.examples[1]).toMatchObject({ userId: unflaggedUser, revision: 1 });
+    expect(found?.examples[1].verdicts.map(v => v.verdict)).toEqual(['legitimate_human']);
+  });
+
+  it('refuses a verdict past the per-example cap and writes nothing', async () => {
+    const id = await abuseEvalSetRepository.create(evalSet());
+    await AbuseEvalSetModel.updateOne(
+      { _id: id },
+      { $set: { 'examples.0.revision': ABUSE_EVAL_MAX_VERDICTS_PER_EXAMPLE } }
+    );
+
+    const result = await abuseEvalSetRepository.addExampleVerdict({
+      setId: id,
+      userId: flaggedUser,
+      reviewerId: adminId,
+      reason: 'Checked',
+      expectedRevision: ABUSE_EVAL_MAX_VERDICTS_PER_EXAMPLE,
+      verdict: 'confirmed_abuse',
+    });
+
+    expect(result).toBe('limit_reached');
+    const found = await abuseEvalSetRepository.findById(id);
+    expect(found?.examples[0].verdicts).toEqual([]);
+    expect(found?.examples[0].revision).toBe(ABUSE_EVAL_MAX_VERDICTS_PER_EXAMPLE);
   });
 
   it('reports a stale revision as a conflict and writes nothing', async () => {

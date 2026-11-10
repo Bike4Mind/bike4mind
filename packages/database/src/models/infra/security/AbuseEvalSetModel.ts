@@ -88,7 +88,7 @@ export type AddAbuseEvalExampleVerdictInput = {
   reviewerId: string;
 };
 
-export type AddAbuseEvalExampleVerdictResult = 'updated' | 'conflict' | 'not_found';
+export type AddAbuseEvalExampleVerdictResult = 'updated' | 'conflict' | 'not_found' | 'limit_reached';
 
 type MongoExample = Omit<AbuseEvalExample, 'userId' | 'detectionIds' | 'verdicts'> & {
   userId: Types.ObjectId;
@@ -117,6 +117,9 @@ const RETENTION_SECONDS = 365 * 24 * 60 * 60;
 
 /** Newest runs kept per set; older ones are sliced off on append. */
 export const ABUSE_EVAL_MAX_RUNS = 50;
+
+/** Verdicts one example may carry; a verdict past it is refused, so the history stays bounded. */
+export const ABUSE_EVAL_MAX_VERDICTS_PER_EXAMPLE = 50;
 
 const VerdictSchema = new Schema(
   {
@@ -184,7 +187,8 @@ export const AbuseEvalSetSchema: Schema<IAbuseEvalSetDocument> = new Schema<IAbu
   { timestamps: true, versionKey: false, collection: 'AbuseEvalSet' }
 );
 
-// Retention matches ShadowDetection, whose records the examples point at.
+// A set lives 365 days from its draw. The detections it references may expire earlier; after that
+// their examples abstain in new runs.
 AbuseEvalSetSchema.index({ createdAt: 1 }, { expireAfterSeconds: RETENTION_SECONDS });
 AbuseEvalSetSchema.index({ 'examples.userId': 1 });
 
@@ -313,14 +317,24 @@ class AbuseEvalSetRepository {
 
   /**
    * Appends a verdict to one example, conditional on the revision the admin saw. 'conflict' means the
-   * example exists at another revision; 'not_found' means the set or the example does not exist.
+   * example exists at another revision; 'limit_reached' means it already carries
+   * ABUSE_EVAL_MAX_VERDICTS_PER_EXAMPLE verdicts; 'not_found' means the set or the example does not exist.
    */
   async addExampleVerdict(input: AddAbuseEvalExampleVerdictInput): Promise<AddAbuseEvalExampleVerdictResult> {
     if (!Types.ObjectId.isValid(input.setId) || !Types.ObjectId.isValid(input.userId)) return 'not_found';
     const setId = new Types.ObjectId(input.setId);
     const userId = new Types.ObjectId(input.userId);
     const result = await AbuseEvalSetModel.updateOne(
-      { _id: setId, examples: { $elemMatch: { userId, revision: input.expectedRevision } } },
+      {
+        _id: setId,
+        examples: {
+          $elemMatch: {
+            userId,
+            // revision counts the verdicts, so this bounds them.
+            revision: { $eq: input.expectedRevision, $lt: ABUSE_EVAL_MAX_VERDICTS_PER_EXAMPLE },
+          },
+        },
+      },
       {
         $push: {
           'examples.$.verdicts': {
@@ -334,6 +348,11 @@ class AbuseEvalSetRepository {
       }
     );
     if (result.matchedCount === 1) return 'updated';
+    const full = await AbuseEvalSetModel.exists({
+      _id: setId,
+      examples: { $elemMatch: { userId, revision: { $gte: ABUSE_EVAL_MAX_VERDICTS_PER_EXAMPLE } } },
+    });
+    if (full) return 'limit_reached';
     const exists = await AbuseEvalSetModel.exists({ _id: setId, 'examples.userId': userId });
     return exists ? 'conflict' : 'not_found';
   }
@@ -359,10 +378,8 @@ class AbuseEvalSetRepository {
   async removeUser(userId: string): Promise<number> {
     if (!Types.ObjectId.isValid(userId)) return 0;
     const id = new Types.ObjectId(userId);
-    const sets = await AbuseEvalSetModel.find({ 'examples.userId': id }, { _id: 1 }).lean<{ _id: Types.ObjectId }[]>();
-    if (sets.length === 0) return 0;
     const result = await AbuseEvalSetModel.updateMany(
-      { _id: { $in: sets.map(set => set._id) } },
+      { 'examples.userId': id },
       { $pull: { examples: { userId: id } } }
     );
     return result.modifiedCount;

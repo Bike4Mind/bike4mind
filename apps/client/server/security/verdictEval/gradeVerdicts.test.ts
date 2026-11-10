@@ -393,8 +393,8 @@ describe('gradeVerdicts', () => {
             ['f1', [hourBucket('5T12:00:00', 10), hourBucket('5T16:00:00', 7)]],
             ['f2', [hourBucket('5T14:00:00', 5), hourBucket('5T15:00:00', 3)]],
             ['f3', [hourBucket('5T18:00:00', 2), hourBucket('5T21:00:00', 4), hourBucket('5T23:00:00', 9)]],
-            // Before signup: not counted.
-            ['d1', [hourBucket('5T05:00:00', 99)]],
+            // More than SPEND_LOOKBACK_DAYS before its detection: not counted.
+            ['d1', [{ at: new Date('2026-10-05T12:00:00Z'), credits: 99 }]],
           ]),
           suspendedAt: new Map([['f3', at('5T22:00:00')]]),
         })
@@ -431,6 +431,42 @@ describe('gradeVerdicts', () => {
           spend: expect.objectContaining({ accounts: 1 }),
         }),
       ]);
+    });
+
+    it('counts the hour bucket of a signup that is not hour-aligned', () => {
+      // Signed up at 10:30; a 10:45 charge lands in the bucket starting 10:00, before the signup.
+      const report = gradeVerdicts(
+        input({
+          detections: [
+            detection({ id: 'farm', userIds: ['f1'], detectedAt: at('5T15:00:00'), verdict: 'confirmed_abuse' }),
+          ],
+          signedUpAt: new Map([['f1', at('5T10:30:00')]]),
+          spend: new Map([['f1', [hourBucket('5T10:00:00', 6)]]]),
+        })
+      );
+      expect(report.operations[0].spend).toEqual({ accounts: 1, creditsBeforeDetection: 6, creditsAfterDetection: 0 });
+    });
+
+    it('counts an account in two abuse detections of one detector once, split at the earlier one', () => {
+      const report = gradeVerdicts(
+        input({
+          detections: [
+            detection({ id: 'first', userIds: ['f1'], detectedAt: at('5T12:00:00'), verdict: 'confirmed_abuse' }),
+            detection({
+              id: 'second',
+              userIds: ['f1', 'f2'],
+              detectedAt: at('5T18:00:00'),
+              verdict: 'confirmed_abuse',
+            }),
+          ],
+          spend: new Map([
+            ['f1', [hourBucket('5T10:00:00', 1), hourBucket('5T14:00:00', 2), hourBucket('5T19:00:00', 4)]],
+            ['f2', [hourBucket('5T14:00:00', 8)]],
+          ]),
+        })
+      );
+      // f1 splits at 12:00 (before 1, after 2 + 4); f2 at 18:00 (before 8).
+      expect(report.operations[0].spend).toEqual({ accounts: 2, creditsBeforeDetection: 9, creditsAfterDetection: 6 });
     });
   });
 

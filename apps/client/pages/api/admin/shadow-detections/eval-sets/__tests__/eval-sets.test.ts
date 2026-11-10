@@ -41,10 +41,7 @@ vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
     return vi.fn();
   },
 }));
-vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
-  recordAdminActionFromRequest: h.audit,
-  parseAdminActionReason: (value: string) => value,
-}));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 vi.mock('@bike4mind/database', () => ({ abuseEvalSetRepository: h.repo }));
 vi.mock('@server/security/verdictEval/evalSets', () => ({
   drawEvalSet: h.drawEvalSet,
@@ -210,7 +207,7 @@ describe('eval-sets [id]', () => {
 });
 
 describe('eval-sets [id]/verdict', () => {
-  const body = { userId: USER_ID, verdict: 'confirmed_abuse', reason: 'farm', expectedRevision: 0 };
+  const body = { userId: USER_ID, verdict: 'confirmed_abuse', reason: 'farm accounts', expectedRevision: 0 };
   const loadVerdict = () => load('verdict', '@pages/api/admin/shadow-detections/eval-sets/[id]/verdict');
 
   it('needs users:moderate', async () => {
@@ -228,12 +225,12 @@ describe('eval-sets [id]/verdict', () => {
       userId: USER_ID,
       expectedRevision: 0,
       verdict: 'confirmed_abuse',
-      reason: 'farm',
+      reason: 'farm accounts',
       reviewerId: REVIEWER,
     });
     expect(h.audit).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ action: 'abuse.eval_set.verdict_recorded', reason: 'farm' })
+      expect.objectContaining({ action: 'abuse.eval_set.verdict_recorded', reason: 'farm accounts' })
     );
     expect(JSON.parse(res._getData())).toEqual({ ok: true });
   });
@@ -246,6 +243,24 @@ describe('eval-sets [id]/verdict', () => {
     const second = reqFor({ method: 'POST', query: { id: SET_ID }, body });
     await expect(post!(second.req, second.res)).rejects.toMatchObject({ statusCode: 404 });
     expect(h.audit).not.toHaveBeenCalled();
+  });
+
+  it('answers 409 when the example has reached its verdict cap, without auditing', async () => {
+    const { post } = await loadVerdict();
+    h.repo.addExampleVerdict.mockResolvedValue('limit_reached');
+    const { req, res } = reqFor({ method: 'POST', query: { id: SET_ID }, body });
+    await expect(post!(req, res)).rejects.toMatchObject({
+      statusCode: 409,
+      message: 'This example already has the maximum number of verdicts.',
+    });
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+
+  it('rejects a reason shorter than the shared admin reason rule', async () => {
+    const { post } = await loadVerdict();
+    const { req, res } = reqFor({ method: 'POST', query: { id: SET_ID }, body: { ...body, reason: 'farm' } });
+    await expect(post!(req, res)).rejects.toThrow('at least 5 characters');
+    expect(h.repo.addExampleVerdict).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -268,12 +283,19 @@ describe('eval-sets [id]/runs', () => {
     labelled: 1,
     scores: [],
     recall: {
+      flaggedExamples: 0,
+      flaggedReviewed: 0,
       flaggedAbuse: 0,
-      sampledUnflaggedAbuse: 0,
-      sampledUnflagged: 0,
+      flaggedPopulation: 0,
+      unflaggedExamples: 0,
+      unflaggedReviewed: 0,
+      unflaggedAbuse: 0,
       unflaggedPopulation: 0,
+      minimumReviewed: 30,
+      estimatedFlaggedAbuse: null,
       estimatedMissedAbuse: null,
       estimatedRecall: null,
+      recallWithheld: 'too_few_unflagged_reviews',
     },
     cohorts: [],
     labelSources: {},

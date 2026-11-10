@@ -2,25 +2,18 @@ import React, { useState } from 'react';
 import { Alert, Button, ButtonGroup, Stack, Typography } from '@mui/joy';
 import { useVerdictEval } from '@client/app/hooks/data/shadowDetections';
 import {
+  SPEND_LOOKBACK_DAYS,
   VERDICT_EVAL_WINDOWS,
-  type EvalCohort,
   type VerdictEvalCohortRow,
   type VerdictEvalDisagreement,
-  type VerdictEvalGrader,
   type VerdictEvalLabelSource,
   type VerdictEvalOperationsRow,
   type VerdictEvalScore,
   type VerdictEvalWindowDays,
 } from '@client/app/utils/verdictEval';
 import { VerdictEvalSetsPanel } from './VerdictEvalSetsPanel';
+import { COHORT_LABELS, GRADER_LABELS } from './verdictEvalLabels';
 import { DataTable, StatStrip, StatTile, formatUtc, type DataColumn } from './shared';
-
-const GRADER_LABELS: Record<VerdictEvalGrader, string> = {
-  assessment: 'AI assessment',
-  containment: 'Auto-containment',
-  signupVerdict: 'Signup verdict',
-  detectors: 'Detectors',
-};
 
 const SOURCE_LABELS: Record<VerdictEvalLabelSource, string> = {
   adminVerdict: 'Detection verdict',
@@ -28,16 +21,6 @@ const SOURCE_LABELS: Record<VerdictEvalLabelSource, string> = {
   adminSuspended: 'Suspended by an admin',
   riskReview: 'Risk review',
 };
-
-const COHORT_LABELS: Record<EvalCohort, string> = {
-  mobile: 'Mobile or tablet',
-  sharedNetwork: 'Shared signup network',
-  apiAgent: 'API, agent or CLI use',
-  assistive: 'Assistive technology',
-};
-
-const hours = (value: number) => `${value.toLocaleString()} h`;
-const credits = (value: number) => `${value.toLocaleString()} credits`;
 
 const operationsColumns: readonly DataColumn<VerdictEvalOperationsRow>[] = [
   { id: 'detector', label: 'Detector', render: row => row.detector },
@@ -57,19 +40,19 @@ const operationsColumns: readonly DataColumn<VerdictEvalOperationsRow>[] = [
   },
   {
     id: 'time',
-    label: 'Time to detection (abuse, median / p90)',
+    label: 'Time to detection (hours, abuse: median / p90, accounts)',
     render: row =>
       row.timeToDetection
-        ? `${hours(row.timeToDetection.medianHours)} / ${hours(row.timeToDetection.p90Hours)} (${row.timeToDetection.n.toLocaleString()})`
+        ? `${row.timeToDetection.medianHours.toLocaleString()} / ${row.timeToDetection.p90Hours.toLocaleString()} (${row.timeToDetection.n.toLocaleString()})`
         : '-',
     numeric: true,
   },
   {
     id: 'spend',
-    label: 'Spend before / after detection (abuse accounts)',
+    label: `Spend (credits, abuse accounts each once): ${SPEND_LOOKBACK_DAYS} days before / after detection`,
     render: row =>
       row.spend
-        ? `${credits(row.spend.creditsBeforeDetection)} / ${credits(row.spend.creditsAfterDetection)} (${row.spend.accounts.toLocaleString()} accounts)`
+        ? `${row.spend.creditsBeforeDetection.toLocaleString()} / ${row.spend.creditsAfterDetection.toLocaleString()} (${row.spend.accounts.toLocaleString()} accounts)`
         : '-',
     numeric: true,
   },

@@ -113,8 +113,8 @@ describe('VerdictEvalPanel', () => {
     const operations = screen.getByTestId('verdict-eval-operations');
     expect(within(operations).getByText('accountCampaign')).toBeTruthy();
     expect(within(operations).getByText('50% of 2')).toBeTruthy();
-    expect(within(operations).getByText('5 h / 6 h (2)')).toBeTruthy();
-    expect(within(operations).getByText('17 credits / 14 credits (3 accounts)')).toBeTruthy();
+    expect(within(operations).getByText('5 / 6 (2)')).toBeTruthy();
+    expect(within(operations).getByText('17 / 14 (3 accounts)')).toBeTruthy();
     const cohorts = screen.getByTestId('verdict-eval-cohorts');
     expect(within(cohorts).getByText('Mobile or tablet')).toBeTruthy();
     expect(within(cohorts).getByText('2 of 4')).toBeTruthy();

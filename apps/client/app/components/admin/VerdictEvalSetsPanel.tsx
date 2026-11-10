@@ -1,8 +1,21 @@
 import React, { useRef, useState } from 'react';
-import { Alert, Button, FormControl, FormLabel, Input, Option, Select, Stack, Typography } from '@mui/joy';
-import { SHADOW_DETECTION_VERDICTS, type ShadowDetectionVerdict } from '@bike4mind/common';
+import {
+  Alert,
+  Button,
+  FormControl,
+  FormLabel,
+  Input,
+  Option,
+  Radio,
+  RadioGroup,
+  Select,
+  Stack,
+  Typography,
+} from '@mui/joy';
+import { SHADOW_DETECTION_VERDICTS, isValidAdminActionReason, type ShadowDetectionVerdict } from '@bike4mind/common';
 import { Link } from '@tanstack/react-router';
 import { isAxiosError } from 'axios';
+import { getErrorMessage } from '@client/app/utils/error';
 import {
   useCreateEvalSet,
   useEvalSet,
@@ -13,6 +26,7 @@ import {
 import {
   EVAL_SET_HELD_OUT_SHARE_MAX,
   EVAL_SET_HELD_OUT_SHARE_MIN,
+  EVAL_SET_MIN_REVIEWED,
   EVAL_SET_UNFLAGGED_SAMPLE_MAX,
   EVAL_SET_UNFLAGGED_SAMPLE_MIN,
   type EvalSetDetail,
@@ -23,26 +37,22 @@ import {
 } from '@client/app/utils/verdictEvalSets';
 import {
   VERDICT_EVAL_WINDOWS,
-  type EvalCohort,
   type VerdictEvalCohortRow,
-  type VerdictEvalGrader,
   type VerdictEvalWindowDays,
 } from '@client/app/utils/verdictEval';
-import { DataTable, EmptyState, StatStrip, StatTile, formatUtc, type DataColumn } from './shared';
-
-const GRADER_LABELS: Record<VerdictEvalGrader, string> = {
-  assessment: 'AI assessment',
-  containment: 'Auto-containment',
-  signupVerdict: 'Signup verdict',
-  detectors: 'Detectors',
-};
-
-const COHORT_LABELS: Record<EvalCohort, string> = {
-  mobile: 'Mobile or tablet',
-  sharedNetwork: 'Shared signup network',
-  apiAgent: 'API, agent or CLI use',
-  assistive: 'Assistive technology',
-};
+import {
+  ActionDialog,
+  ADMIN_REASON_PRESETS,
+  AdminPermissionAction,
+  DataTable,
+  EmptyState,
+  StatStrip,
+  StatTile,
+  formatUtc,
+  useMissingAdminPermission,
+  type DataColumn,
+} from './shared';
+import { COHORT_LABELS, GRADER_LABELS } from './verdictEvalLabels';
 
 const VERDICT_LABELS: Record<ShadowDetectionVerdict, string> = {
   confirmed_abuse: 'Confirmed abuse',
@@ -51,12 +61,10 @@ const VERDICT_LABELS: Record<ShadowDetectionVerdict, string> = {
   insufficient_evidence: 'Insufficient evidence',
 };
 
-const STALE_MESSAGE = 'Someone else labelled that account first. The set was reloaded; review it again.';
-
 const count = (value: number) => value.toLocaleString();
 const percent = (value: number | null) => (value === null ? '-' : `${Math.round(value * 100)}%`);
 
-/** Percentage points from the previous run, signed; a dash when either run has no value. */
+/** Percentage points from the previous run, signed; empty when either run has no value. */
 const delta = (current: number | null, previous: number | null | undefined) =>
   current === null || previous === null || previous === undefined
     ? ''
@@ -136,6 +144,12 @@ function scoreColumns(previous: EvalSetRun | null): readonly DataColumn<EvalSetS
       numeric: true,
     },
     {
+      id: 'called',
+      label: 'Called abuse (right of called)',
+      render: score => `${count(score.truePositive)} of ${count(score.truePositive + score.falsePositive)}`,
+      numeric: true,
+    },
+    {
       id: 'precision',
       label: 'Precision (95% lower bound)',
       render: score =>
@@ -144,39 +158,43 @@ function scoreColumns(previous: EvalSetRun | null): readonly DataColumn<EvalSetS
           : `${percent(score.precision)} (${percent(score.precisionLowerBound)})${delta(score.precision, before(score)?.precision)}`,
       numeric: true,
     },
-    {
-      id: 'hit',
-      label: 'Hit rate (of abuse)',
-      render: score =>
-        score.hitRate === null
-          ? '-'
-          : `${percent(score.hitRate)} of ${count(score.truePositive + score.falseNegative)}${delta(score.hitRate, before(score)?.hitRate)}`,
-      numeric: true,
-    },
-    {
-      id: 'fpr',
-      label: 'False positive rate (of legit)',
-      render: score =>
-        score.falsePositiveRate === null
-          ? '-'
-          : `${percent(score.falsePositiveRate)} of ${count(score.falsePositive + score.trueNegative)}${delta(score.falsePositiveRate, before(score)?.falsePositiveRate)}`,
-      numeric: true,
-    },
   ];
 }
 
-type Draft = { verdict: ShadowDetectionVerdict | null; reason: string };
-const EMPTY_DRAFT: Draft = { verdict: null, reason: '' };
+type RunRecall = EvalSetRun['report']['recall'];
 
-/** Unlabelled accounts nobody flagged first: they decide the recall estimate. */
-const reviewPriority = (example: EvalSetExample) =>
-  example.currentLabel === null ? (example.kind === 'unflagged' ? 0 : 1) : 2;
+const withheldMessage = (recall: RunRecall): string | null => {
+  if (recall.recallWithheld === 'too_few_unflagged_reviews') {
+    return `Needs at least ${count(recall.minimumReviewed || EVAL_SET_MIN_REVIEWED)} reviewed unflagged held-out examples; ${count(recall.unflaggedReviewed)} so far.`;
+  }
+  if (recall.recallWithheld === 'no_flagged_reviews') {
+    return 'Needs at least one reviewed flagged held-out example; none so far.';
+  }
+  return null;
+};
 
-const CreateForm: React.FC<{ onCreated: (id: string) => void; nameRef: React.RefObject<HTMLInputElement | null> }> = ({
-  onCreated,
-  nameRef,
-}) => {
+type Draft = { verdict: ShadowDetectionVerdict | null };
+
+/** The latest evaluation-set verdict settles an example; insufficient evidence leaves it open. */
+const hasConclusiveVerdict = (example: EvalSetExample) =>
+  example.latestVerdict !== null && example.latestVerdict.verdict !== 'insufficient_evidence';
+
+/**
+ * Held-out unflagged examples without a conclusive evaluation-set verdict first (they decide the
+ * recall estimate), then the other unlabelled ones.
+ */
+const reviewPriority = (example: EvalSetExample) => {
+  if (example.split === 'heldOut' && example.kind === 'unflagged' && !hasConclusiveVerdict(example)) return 0;
+  return example.currentLabel === null ? 1 : 2;
+};
+
+const CreateForm: React.FC<{
+  onCreated: (id: string) => void;
+  nameRef: React.RefObject<HTMLInputElement | null>;
+  primary: boolean;
+}> = ({ onCreated, nameRef, primary }) => {
   const create = useCreateEvalSet();
+  const missingPermission = useMissingAdminPermission('users:moderate');
   const [name, setName] = useState('');
   const [days, setDays] = useState<VerdictEvalWindowDays>(30);
   const [unflaggedSample, setUnflaggedSample] = useState(200);
@@ -191,10 +209,14 @@ const CreateForm: React.FC<{ onCreated: (id: string) => void; nameRef: React.Ref
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!valid) return;
-    const id = await create.mutateAsync({ name: name.trim(), days, unflaggedSample, heldOutShare });
-    setName('');
-    onCreated(id);
+    if (!valid || missingPermission) return;
+    try {
+      const id = await create.mutateAsync({ name: name.trim(), days, unflaggedSample, heldOutShare });
+      setName('');
+      onCreated(id);
+    } catch {
+      // Shown below from the mutation's error state.
+    }
   };
 
   return (
@@ -203,7 +225,7 @@ const CreateForm: React.FC<{ onCreated: (id: string) => void; nameRef: React.Ref
         <FormControl sx={{ minWidth: 240 }}>
           <FormLabel>Name</FormLabel>
           <Input
-            slotProps={{ input: { ref: nameRef, 'data-testid': 'eval-sets-name-input' } }}
+            slotProps={{ input: { ref: nameRef, maxLength: 120, 'data-testid': 'eval-sets-name-input' } }}
             value={name}
             onChange={event => setName(event.target.value)}
           />
@@ -253,9 +275,19 @@ const CreateForm: React.FC<{ onCreated: (id: string) => void; nameRef: React.Ref
             }}
           />
         </FormControl>
-        <Button type="submit" loading={create.isPending} disabled={!valid} data-testid="eval-sets-create-btn">
-          Draw evaluation set
-        </Button>
+        <AdminPermissionAction requirement="users:moderate">
+          {disabled => (
+            <Button
+              type="submit"
+              variant={primary ? 'solid' : 'outlined'}
+              loading={create.isPending}
+              disabled={!valid || disabled}
+              data-testid="eval-sets-create-btn"
+            >
+              Draw evaluation set
+            </Button>
+          )}
+        </AdminPermissionAction>
       </Stack>
       <Typography level="body-xs" sx={{ color: 'admin.inkMuted', mt: 0.5 }}>
         Needs a name, a sample of {EVAL_SET_UNFLAGGED_SAMPLE_MIN} to {EVAL_SET_UNFLAGGED_SAMPLE_MAX} and a held-out
@@ -263,16 +295,21 @@ const CreateForm: React.FC<{ onCreated: (id: string) => void; nameRef: React.Ref
       </Typography>
       {create.error && (
         <Alert color="danger" sx={{ mt: 1 }} data-testid="eval-sets-create-error">
-          Couldn&apos;t draw the set.
+          {getErrorMessage(create.error)}
         </Alert>
       )}
     </form>
   );
 };
 
-const RunReport: React.FC<{ run: EvalSetRun; previous: EvalSetRun | null }> = ({ run, previous }) => {
+const RunReport: React.FC<{ run: EvalSetRun; previous: EvalSetRun | null; onRetry: () => void }> = ({
+  run,
+  previous,
+  onRetry,
+}) => {
   const { report } = run;
   const { recall } = report;
+  const withheld = withheldMessage(recall);
   return (
     <Stack gap={2} data-testid="eval-sets-run">
       <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
@@ -289,19 +326,33 @@ const RunReport: React.FC<{ run: EvalSetRun; previous: EvalSetRun | null }> = ({
         label="Run scores"
         getRowId={scoreKey}
         testId="eval-sets-run-scores"
-        onRetry={() => undefined}
+        onRetry={onRetry}
         empty={<Typography level="body-sm">Label some held-out examples, then run again.</Typography>}
       />
+      <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }} data-testid="eval-sets-scores-note">
+        A run mixes every flagged account with a small unflagged sample, so hit rate and false positive rate are not
+        reported here. Recall comes from the estimate below.
+      </Typography>
       <StatStrip aria-label="Recall estimate">
         <StatTile
           label="Estimated recall"
           value={percent(recall.estimatedRecall)}
-          comparison={`${count(recall.flaggedAbuse)} flagged abuse in the held-out half`}
+          comparison={
+            withheld ??
+            `${count(recall.flaggedReviewed)} flagged and ${count(recall.unflaggedReviewed)} unflagged held-out examples reviewed`
+          }
         />
         <StatTile
           label="Estimated missed abuse"
-          value={recall.estimatedMissedAbuse === null ? '-' : recall.estimatedMissedAbuse.toLocaleString()}
-          comparison={`${count(recall.sampledUnflaggedAbuse)} abuse in ${count(recall.sampledUnflagged)} labelled unflagged, scaled to ${count(recall.unflaggedPopulation)} accounts`}
+          value={recall.estimatedMissedAbuse === null ? '-' : Math.round(recall.estimatedMissedAbuse).toLocaleString()}
+          comparison={`${count(recall.unflaggedAbuse)} abuse in ${count(recall.unflaggedReviewed)} reviewed unflagged held-out examples, scaled to ${count(recall.unflaggedPopulation)} accounts`}
+        />
+        <StatTile
+          label="Estimated flagged abuse"
+          value={
+            recall.estimatedFlaggedAbuse === null ? '-' : Math.round(recall.estimatedFlaggedAbuse).toLocaleString()
+          }
+          comparison={`${count(recall.flaggedAbuse)} abuse in ${count(recall.flaggedReviewed)} reviewed of ${count(recall.flaggedExamples)} flagged held-out examples, scaled to ${count(recall.flaggedPopulation)} accounts`}
         />
       </StatStrip>
       <DataTable
@@ -310,39 +361,131 @@ const RunReport: React.FC<{ run: EvalSetRun; previous: EvalSetRun | null }> = ({
         label="Held-out cohorts"
         getRowId={row => row.cohort}
         testId="eval-sets-cohorts"
-        onRetry={() => undefined}
+        onRetry={onRetry}
+        empty={<Typography level="body-sm">No held-out cohorts.</Typography>}
       />
+    </Stack>
+  );
+};
+
+type LabelDialogProps = {
+  setId: string;
+  example: EvalSetExample;
+  onClose: () => void;
+};
+
+const LabelDialog: React.FC<LabelDialogProps> = ({ setId, example, onClose }) => {
+  const mutation = useEvalSetVerdict(setId);
+  const [draft, setDraft] = useState<Draft>({ verdict: null });
+  const [conflict, setConflict] = useState<string | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+
+  const submit = async (reason: string) => {
+    if (!draft.verdict || !isValidAdminActionReason(reason)) return;
+    setConflict(null);
+    setFailure(null);
+    try {
+      await mutation.mutateAsync({
+        userId: example.userId,
+        verdict: draft.verdict,
+        reason,
+        expectedRevision: example.revision,
+      });
+      onClose();
+    } catch (error) {
+      const message = getErrorMessage(error);
+      if (isAxiosError(error) && error.response?.status === 409) {
+        setConflict(`Account ${example.userId}: ${message} The list was reloaded.`);
+        return;
+      }
+      setFailure(message);
+    }
+  };
+
+  return (
+    <ActionDialog
+      open
+      onClose={() => {
+        if (!mutation.isPending) onClose();
+      }}
+      title="Label example"
+      description="Records an evaluation-set verdict on this account. It changes nothing on the account. Every verdict stays in the history; to correct one, record another."
+      reasonPresets={ADMIN_REASON_PRESETS.shadowDetectionVerdict}
+      confirmLabel={draft.verdict ? `Record ${VERDICT_LABELS[draft.verdict].toLowerCase()}` : 'Record verdict'}
+      blockedReason={draft.verdict ? null : 'Pick a verdict.'}
+      pending={mutation.isPending}
+      onConfirm={submit}
+      data-testid="eval-sets-label-dialog"
+    >
+      <Stack gap={0.5}>
+        <UserLink userId={example.userId} />
+        <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+          {example.latestVerdict
+            ? `Latest verdict: ${VERDICT_LABELS[example.latestVerdict.verdict]}`
+            : 'No evaluation-set verdict yet'}
+        </Typography>
+      </Stack>
+      {conflict && (
+        <Alert color="warning" data-testid="eval-sets-conflict">
+          {conflict}
+        </Alert>
+      )}
+      {failure && (
+        <Alert color="danger" data-testid="eval-sets-verdict-error">
+          {failure}
+        </Alert>
+      )}
+      <FormControl>
+        <FormLabel>Verdict</FormLabel>
+        <RadioGroup
+          name="eval-sets-verdict"
+          value={draft.verdict ?? ''}
+          onChange={event => setDraft({ verdict: event.target.value as ShadowDetectionVerdict })}
+        >
+          {SHADOW_DETECTION_VERDICTS.map(option => (
+            <Radio
+              key={option}
+              value={option}
+              label={VERDICT_LABELS[option]}
+              slotProps={{ input: { 'data-testid': `eval-sets-verdict-option-${option}` } }}
+            />
+          ))}
+        </RadioGroup>
+      </FormControl>
+    </ActionDialog>
+  );
+};
+
+const latestVerdictCell = (example: EvalSetExample) => {
+  const latest = example.latestVerdict;
+  if (!latest) return '-';
+  return (
+    <Stack gap={0.25}>
+      <Typography level="body-sm">
+        {VERDICT_LABELS[latest.verdict]}, by {latest.reviewerId}, {formatUtc(latest.reviewedAt)}
+      </Typography>
+      {latest.verdict === 'insufficient_evidence' && (
+        <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+          Leaves the example unlabelled, overriding any label frozen at draw.
+        </Typography>
+      )}
     </Stack>
   );
 };
 
 const SetDetail: React.FC<{ summary: EvalSetSummary }> = ({ summary }) => {
   const detail = useEvalSet(summary.id);
-  const verdict = useEvalSetVerdict(summary.id);
   const run = useRunEvalSet(summary.id);
-  const [drafts, setDrafts] = useState<Record<string, Draft>>({});
-  const [stale, setStale] = useState(false);
+  const [labellingUserId, setLabellingUserId] = useState<string | null>(null);
   const [runNote, setRunNote] = useState('');
   const set: EvalSetDetail | undefined = detail.data;
 
-  const draftOf = (userId: string) => drafts[userId] ?? EMPTY_DRAFT;
-  const setDraft = (userId: string, next: Partial<Draft>) =>
-    setDrafts(current => ({ ...current, [userId]: { ...(current[userId] ?? EMPTY_DRAFT), ...next } }));
-
-  const submitVerdict = async (example: EvalSetExample) => {
-    const draft = draftOf(example.userId);
-    if (!draft.verdict || draft.reason.trim().length === 0) return;
-    setStale(false);
+  const startRun = async () => {
     try {
-      await verdict.mutateAsync({
-        userId: example.userId,
-        verdict: draft.verdict,
-        reason: draft.reason.trim(),
-        expectedRevision: example.revision,
-      });
-      setDrafts(current => ({ ...current, [example.userId]: EMPTY_DRAFT }));
-    } catch (error) {
-      if (isAxiosError(error) && error.response?.status === 409) setStale(true);
+      await run.mutateAsync({ note: runNote.trim() || undefined });
+      setRunNote('');
+    } catch {
+      // Shown below from the mutation's error state.
     }
   };
 
@@ -363,57 +506,32 @@ const SetDetail: React.FC<{ summary: EvalSetSummary }> = ({ summary }) => {
           ? `${example.currentLabel.label} (${example.currentLabel.source === 'verdict' ? 'verdict' : 'frozen at draw'})`
           : 'Unlabelled',
     },
+    { id: 'latest', label: 'Latest verdict (reviewer, time)', render: latestVerdictCell },
     {
-      id: 'verdict',
-      label: 'Label this account (verdict and a reason)',
-      render: example => {
-        const draft = draftOf(example.userId);
-        return (
-          <Stack direction="row" gap={1} alignItems="center" data-testid={`eval-sets-verdict-form-${example.userId}`}>
-            <Select
-              size="sm"
-              placeholder="Verdict"
-              value={draft.verdict}
-              onChange={(_event, value) => setDraft(example.userId, { verdict: value })}
-              slotProps={{ button: { 'aria-label': `Verdict for ${example.userId}` } }}
-              data-testid={`eval-sets-verdict-select-${example.userId}`}
-            >
-              {SHADOW_DETECTION_VERDICTS.map(option => (
-                <Option key={option} value={option}>
-                  {VERDICT_LABELS[option]}
-                </Option>
-              ))}
-            </Select>
-            <Input
-              size="sm"
-              placeholder="Reason (required)"
-              value={draft.reason}
-              onChange={event => setDraft(example.userId, { reason: event.target.value })}
-              slotProps={{
-                input: {
-                  maxLength: 500,
-                  'aria-label': `Reason for ${example.userId}`,
-                  'data-testid': `eval-sets-reason-input-${example.userId}`,
-                },
-              }}
-            />
+      id: 'action',
+      label: 'Label',
+      render: example => (
+        <AdminPermissionAction requirement="users:moderate">
+          {disabled => (
             <Button
               size="sm"
-              variant="outlined"
-              disabled={!draft.verdict || draft.reason.trim().length === 0}
-              loading={verdict.isPending && verdict.variables?.userId === example.userId}
-              onClick={() => void submitVerdict(example)}
-              data-testid={`eval-sets-verdict-btn-${example.userId}`}
+              variant="plain"
+              color="neutral"
+              disabled={disabled}
+              onClick={() => setLabellingUserId(example.userId)}
+              aria-label={`Label ${example.userId}`}
+              data-testid={`eval-sets-label-btn-${example.userId}`}
             >
-              Save label
+              {example.latestVerdict ? 'Change label' : 'Label'}
             </Button>
-          </Stack>
-        );
-      },
+          )}
+        </AdminPermissionAction>
+      ),
     },
   ];
 
   const examples = set ? [...set.examples].sort((a, b) => reviewPriority(a) - reviewPriority(b)) : [];
+  const labelling = set?.examples.find(example => example.userId === labellingUserId) ?? null;
   const [latest, previous] = set ? [set.runs.at(-1) ?? null, set.runs.length > 1 ? set.runs[0] : null] : [null, null];
   const heldOut = summary.heldOutExamples;
   const unflagged = summary.unflaggedExamples;
@@ -455,35 +573,30 @@ const SetDetail: React.FC<{ summary: EvalSetSummary }> = ({ summary }) => {
             slotProps={{ input: { maxLength: 500, 'data-testid': 'eval-sets-run-note-input' } }}
           />
         </FormControl>
-        <Button
-          loading={run.isPending}
-          onClick={() => void run.mutateAsync({ note: runNote.trim() || undefined }).then(() => setRunNote(''))}
-          data-testid="eval-sets-run-btn"
-        >
-          Run on held-out examples
-        </Button>
+        <AdminPermissionAction requirement="users:moderate">
+          {disabled => (
+            <Button
+              loading={run.isPending}
+              disabled={disabled}
+              onClick={() => void startRun()}
+              data-testid="eval-sets-run-btn"
+            >
+              Run on held-out examples
+            </Button>
+          )}
+        </AdminPermissionAction>
       </Stack>
       {run.error && (
         <Alert color="danger" data-testid="eval-sets-run-error">
-          Couldn&apos;t run the set.
+          {getErrorMessage(run.error)}
         </Alert>
       )}
       {latest ? (
-        <RunReport run={latest} previous={previous} />
+        <RunReport run={latest} previous={previous} onRetry={() => void detail.refetch()} />
       ) : (
         <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }} data-testid="eval-sets-no-run">
           Not run yet. A run grades the automated verdicts on the held-out examples as they stand now.
         </Typography>
-      )}
-      {stale && (
-        <Alert color="warning" data-testid="eval-sets-conflict">
-          {STALE_MESSAGE}
-        </Alert>
-      )}
-      {verdict.error && !stale && (
-        <Alert color="danger" data-testid="eval-sets-verdict-error">
-          Couldn&apos;t save the label.
-        </Alert>
       )}
       <DataTable
         rows={examples}
@@ -497,14 +610,22 @@ const SetDetail: React.FC<{ summary: EvalSetSummary }> = ({ summary }) => {
         pageResetKey={summary.id}
         minWidth="64rem"
       />
+      {labelling && (
+        <LabelDialog
+          key={labelling.userId}
+          setId={summary.id}
+          example={labelling}
+          onClose={() => setLabellingUserId(null)}
+        />
+      )}
     </Stack>
   );
 };
 
 /**
  * Frozen evaluation sets: draw one from a window, label the unflagged sample, and run the automated
- * verdicts against its held-out half to estimate precision and recall. Shadow mode: nothing here acts
- * on an account.
+ * verdicts against its held-out examples to estimate precision and recall. Shadow mode: nothing here
+ * acts on an account.
  */
 export const VerdictEvalSetsPanel: React.FC = () => {
   const sets = useEvalSets();
@@ -519,10 +640,10 @@ export const VerdictEvalSetsPanel: React.FC = () => {
       </Typography>
       <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
         A frozen set holds every flagged account in a window plus a random sample of accounts no detector flagged.
-        Linked accounts share a split, so tuning never sees a campaign the held-out half is graded on. Labelling the
-        unflagged sample is what makes recall measurable.
+        Linked accounts share a split, so tuning never sees a campaign the held-out examples are graded on. Labelling
+        the unflagged sample is what makes recall measurable.
       </Typography>
-      <CreateForm onCreated={setSelectedId} nameRef={nameRef} />
+      <CreateForm onCreated={setSelectedId} nameRef={nameRef} primary={selected === null} />
       <DataTable
         rows={sets.data ?? []}
         columns={setColumns}

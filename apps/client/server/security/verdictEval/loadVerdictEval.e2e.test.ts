@@ -231,7 +231,14 @@ describe('buildVerdictEvalReport', () => {
       source: 'web',
       createdAt: ago(hoursAgo),
     });
-    await UsageEvent.collection.insertMany([usage(25.5, 4), usage(25.2, 1), usage(10.5, 6), usage(2.5, 3)]);
+    await UsageEvent.collection.insertMany([
+      // More than SPEND_LOOKBACK_DAYS before the detection: outside the read.
+      usage(20 + 31 * 24, 50),
+      usage(25.5, 4),
+      usage(25.2, 1),
+      usage(10.5, 6),
+      usage(2.5, 3),
+    ]);
     await audit('user.suspended', member, 'user', ago(5));
 
     const report = await buildVerdictEvalReport(7, { signupVerdicts: async () => new Map() }, NOW);

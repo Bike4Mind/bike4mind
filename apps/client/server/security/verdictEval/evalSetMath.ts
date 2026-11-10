@@ -7,6 +7,7 @@ import {
   type VerdictEvalWindowDays,
 } from '@client/app/utils/verdictEval';
 import {
+  EVAL_SET_MIN_REVIEWED,
   evalSetRunSchema,
   type EvalSetDetail,
   type EvalSetExample,
@@ -38,9 +39,14 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /**
  * Connected components of `userIds` linked by the groups (members of one detection, or accounts
  * sharing a signup IP). An account in a group but outside `userIds` still joins its group's
- * components. A component's key is its smallest id, so it is stable for the same links.
+ * components. A component's key is an opaque hash of the seed and its smallest id, so it is stable
+ * for the same links and never exposes an account id.
  */
-export function campaignKeys(userIds: readonly string[], groups: readonly (readonly string[])[]): Map<string, string> {
+export function campaignKeys(
+  seed: string,
+  userIds: readonly string[],
+  groups: readonly (readonly string[])[]
+): Map<string, string> {
   const parent = new Map<string, string>();
   const find = (id: string): string => {
     const next = parent.get(id) ?? id;
@@ -65,7 +71,8 @@ export function campaignKeys(userIds: readonly string[], groups: readonly (reado
     for (const id of group) find(id);
     for (let index = 1; index < group.length; index += 1) union(group[0], group[index]);
   }
-  return new Map(userIds.map(id => [id, find(id)]));
+  const keyOf = (root: string) => sha256Hex(`${seed}:${root}`).slice(0, 16);
+  return new Map(userIds.map(id => [id, keyOf(find(id))]));
 }
 
 /** A campaign lands wholly on one split, chosen by the seed and its key. */
@@ -90,7 +97,8 @@ export function wilsonLowerBound(successes: number, trials: number, z = 1.96): n
   const z2 = z * z;
   const centre = p + z2 / (2 * trials);
   const margin = z * Math.sqrt((p * (1 - p) + z2 / (4 * trials)) / trials);
-  return Math.max(0, Math.round(((centre - margin) / (1 + z2 / trials)) * 1000) / 1000);
+  // Floored so the rounding never overstates a lower bound.
+  return Math.max(0, Math.floor(((centre - margin) / (1 + z2 / trials)) * 1000) / 1000);
 }
 
 /** The smallest report window that reaches back to `since`, or null when none does. */
@@ -104,15 +112,16 @@ const isLabelSource = (source: string): source is VerdictEvalLabelSource =>
 
 /**
  * The example's label: its latest verdict when it has one (insufficient evidence means no label),
- * otherwise the label frozen at draw.
+ * otherwise, for a flagged example, the label frozen at draw. An unflagged account carries a frozen
+ * label only where an admin already acted on it, so those are no random sample and never count.
  */
-export function exampleLabel(example: Pick<AbuseEvalExample, 'verdicts' | 'frozenLabel'>): Label | null {
+export function exampleLabel(example: Pick<AbuseEvalExample, 'kind' | 'verdicts' | 'frozenLabel'>): Label | null {
   const latest = example.verdicts.at(-1);
   if (latest) {
     const label = ADMIN_VERDICT_LABELS[latest.verdict];
     return label ? { label, source: 'adminVerdict' } : null;
   }
-  if (example.frozenLabel && isLabelSource(example.frozenLabel.source)) {
+  if (example.kind === 'flagged' && example.frozenLabel && isLabelSource(example.frozenLabel.source)) {
     return { label: example.frozenLabel.label, source: example.frozenLabel.source };
   }
   return null;
@@ -156,18 +165,84 @@ function latestPredictions<Row extends { detectionId: string }>(
   );
 }
 
+const round1 = (value: number) => Math.round(value * 10) / 10;
+
+type LabelledExample = { example: AbuseEvalExample; label: Label };
+
+/**
+ * Recall over the accounts created in the set window, held-out split only. Each side is its abuse
+ * rate among reviewed examples times the population its examples stand for: flagged examples scale
+ * by the flagged cap, unflagged ones by the sample. Withheld until both sides have enough reviews.
+ */
+function estimateRecall(
+  set: Pick<AbuseEvalSetItem, 'examples' | 'population' | 'window'>,
+  labelled: readonly LabelledExample[]
+): EvalSetRunReport['recall'] {
+  const inWindow = (example: AbuseEvalExample) =>
+    example.signedUpAt !== null && example.signedUpAt >= set.window.since && example.signedUpAt <= set.window.until;
+  const heldOut = (example: AbuseEvalExample) => example.split === 'heldOut';
+
+  const flaggedDrawn = set.examples.filter(example => example.kind === 'flagged').length;
+  const flaggedExamples = set.examples.filter(
+    example => example.kind === 'flagged' && heldOut(example) && inWindow(example)
+  ).length;
+  const flaggedLabels = labelled.filter(
+    ({ example }) => example.kind === 'flagged' && heldOut(example) && inWindow(example)
+  );
+  const flaggedAbuse = flaggedLabels.filter(({ label }) => label.label === 'abuse').length;
+  const flaggedPopulation = flaggedDrawn === 0 ? 0 : (flaggedExamples * set.population.flagged) / flaggedDrawn;
+
+  const unflaggedDrawn = set.examples.filter(example => example.kind === 'unflagged').length;
+  const unflaggedExamples = set.examples.filter(example => example.kind === 'unflagged' && heldOut(example)).length;
+  // exampleLabel gives an unflagged example only its evaluation-set verdict.
+  const unflaggedLabels = labelled.filter(({ example }) => example.kind === 'unflagged' && heldOut(example));
+  const unflaggedAbuse = unflaggedLabels.filter(({ label }) => label.label === 'abuse').length;
+  const unflaggedPopulation =
+    unflaggedDrawn === 0 ? 0 : (set.population.unflagged * unflaggedExamples) / unflaggedDrawn;
+
+  const estimatedFlaggedAbuse =
+    flaggedLabels.length === 0 ? null : (flaggedAbuse / flaggedLabels.length) * flaggedPopulation;
+  const estimatedMissedAbuse =
+    unflaggedLabels.length === 0 ? null : (unflaggedAbuse / unflaggedLabels.length) * unflaggedPopulation;
+  const recallWithheld =
+    unflaggedLabels.length < EVAL_SET_MIN_REVIEWED
+      ? ('too_few_unflagged_reviews' as const)
+      : flaggedLabels.length === 0
+        ? ('no_flagged_reviews' as const)
+        : null;
+  const estimatedRecall =
+    recallWithheld !== null || estimatedFlaggedAbuse === null || estimatedMissedAbuse === null
+      ? null
+      : ratio(estimatedFlaggedAbuse, estimatedFlaggedAbuse + estimatedMissedAbuse);
+
+  return {
+    flaggedExamples,
+    flaggedReviewed: flaggedLabels.length,
+    flaggedAbuse,
+    flaggedPopulation: Math.round(flaggedPopulation),
+    unflaggedExamples,
+    unflaggedReviewed: unflaggedLabels.length,
+    unflaggedAbuse,
+    unflaggedPopulation: Math.round(unflaggedPopulation),
+    minimumReviewed: EVAL_SET_MIN_REVIEWED,
+    estimatedFlaggedAbuse: estimatedFlaggedAbuse === null ? null : round1(estimatedFlaggedAbuse),
+    estimatedMissedAbuse: estimatedMissedAbuse === null ? null : round1(estimatedMissedAbuse),
+    estimatedRecall,
+    recallWithheld,
+  };
+}
+
 /**
  * Grades the automated verdicts on the held-out half of a set, against the examples' labels.
  * Unflagged examples count as negatives for the assessment and containment graders: no detection
- * means the system did not act. The recall estimate scales the labelled unflagged sample up to the
- * unflagged accounts the held-out half stands for.
+ * means the system did not act.
  */
 export function gradeEvalSet(
   set: Pick<AbuseEvalSetItem, 'examples' | 'population' | 'window'>,
   predictions: EvalSetPredictions
 ): EvalSetRunReport {
   const heldOut = set.examples.filter(example => example.split === 'heldOut');
-  const labelled = heldOut.flatMap(example => {
+  const labelled: LabelledExample[] = heldOut.flatMap(example => {
     const label = exampleLabel(example);
     return label ? [{ example, label }] : [];
   });
@@ -242,20 +317,6 @@ export function gradeEvalSet(
     }
   }
 
-  const flaggedAbuse = labelled.filter(({ example, label }) => example.kind === 'flagged' && label.label === 'abuse');
-  const unflagged = labelled.filter(({ example }) => example.kind === 'unflagged');
-  const sampledUnflaggedAbuse = unflagged.filter(({ label }) => label.label === 'abuse').length;
-  const unflaggedSampled = set.examples.filter(example => example.kind === 'unflagged').length;
-  const heldOutUnflagged = heldOut.filter(example => example.kind === 'unflagged').length;
-  const unflaggedPopulation =
-    unflaggedSampled === 0 ? 0 : Math.round((set.population.unflagged * heldOutUnflagged) / unflaggedSampled);
-  const estimatedMissedAbuse =
-    unflagged.length === 0
-      ? null
-      : Math.round((sampledUnflaggedAbuse * unflaggedPopulation * 100) / unflagged.length) / 100;
-  const estimatedRecall =
-    estimatedMissedAbuse === null ? null : ratio(flaggedAbuse.length, flaggedAbuse.length + estimatedMissedAbuse);
-
   const labels = new Map(labelled.map(({ example, label }) => [example.userId, label]));
   const flaggedHeldOut = heldOut.filter(example => example.kind === 'flagged');
   const cohortsByUser = new Map(flaggedHeldOut.map(example => [example.userId, example.cohorts]));
@@ -269,15 +330,11 @@ export function gradeEvalSet(
     scores: board.scores().map(score => ({
       ...score,
       precisionLowerBound: wilsonLowerBound(score.truePositive, score.truePositive + score.falsePositive),
+      // A flagged census next to a small unflagged sample has no meaningful rate; see estimateRecall.
+      hitRate: null,
+      falsePositiveRate: null,
     })),
-    recall: {
-      flaggedAbuse: flaggedAbuse.length,
-      sampledUnflaggedAbuse,
-      sampledUnflagged: unflagged.length,
-      unflaggedPopulation,
-      estimatedMissedAbuse,
-      estimatedRecall,
-    },
+    recall: estimateRecall(set, labelled),
     cohorts: cohortRowsFrom(cohortsByUser.keys(), labels, userId => cohortsByUser.get(userId) ?? []),
     labelSources,
   };
@@ -303,10 +360,12 @@ export function toEvalSetExample(example: AbuseEvalExample): EvalSetExample {
 
 /** A stored set as the detail response: examples with their labels, and the last two runs that still parse. */
 export function toEvalSetDetail(set: AbuseEvalSetItem): EvalSetDetail {
-  const runs = set.runs.slice(-2).flatMap(run => {
-    const parsed = evalSetRunSchema.safeParse(run);
-    return parsed.success ? [parsed.data] : [];
-  });
+  const runs = set.runs
+    .flatMap(run => {
+      const parsed = evalSetRunSchema.safeParse(run);
+      return parsed.success ? [parsed.data] : [];
+    })
+    .slice(-2);
   return {
     id: set.id,
     name: set.name,

@@ -50,7 +50,8 @@ import {
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_TIME_MS = 20_000;
 export const EVAL_SET_FLAGGED_LIMIT = 500;
-export const EVAL_SET_CANDIDATE_LIMIT = 20_000;
+/** Most accounts one `$sample` draws for the unflagged examples, before flagged ones are dropped. */
+export const EVAL_SET_SAMPLE_DRAW_LIMIT = 5_000;
 const OBJECT_ID = /^[0-9a-f]{24}$/;
 
 export type EvalSetDeps = VerdictEvalDeps & {
@@ -76,7 +77,10 @@ type LeanIpUser = { _id: { toString(): string }; signupMeta?: { ip?: string | nu
 
 const toObjectIds = (ids: readonly string[]) => ids.map(id => new mongoose.Types.ObjectId(id));
 
-/** Detections in the window, with every account each one names (its userIds and its campaign members). */
+/**
+ * Detections in the window. A detection flags only its own userIds; `linkGroups` adds its campaign
+ * members, which link accounts into one campaign without flagging them.
+ */
 async function loadWindowDetections(since: Date) {
   const rows = await ShadowDetectionModel.find(
     { detectedAt: { $gte: since } },
@@ -87,17 +91,21 @@ async function loadWindowDetections(since: Date) {
     .maxTimeMS(MAX_TIME_MS)
     .lean<LeanDetection[]>()
     .exec();
-  const detections: EvalDetection[] = rows.slice(0, VERDICT_EVAL_DETECTION_LIMIT).map(row => ({
+  const kept = rows.slice(0, VERDICT_EVAL_DETECTION_LIMIT);
+  const detections: EvalDetection[] = kept.map(row => ({
     id: row._id.toString(),
     detector: row.detector,
     policyVersion: row.policyVersion,
-    userIds: [...new Set([...row.userIds, ...(row.group?.members ?? []).map(member => member.userId)])].filter(id =>
-      OBJECT_ID.test(id)
-    ),
+    userIds: [...new Set(row.userIds)].filter(id => OBJECT_ID.test(id)),
     detectedAt: row.detectedAt,
     verdict: row.verdict ?? null,
   }));
-  return { detections, truncated: rows.length > VERDICT_EVAL_DETECTION_LIMIT };
+  const linkGroups = kept.map(row =>
+    [...new Set([...row.userIds, ...(row.group?.members ?? []).map(member => member.userId)])].filter(id =>
+      OBJECT_ID.test(id)
+    )
+  );
+  return { detections, linkGroups, truncated: rows.length > VERDICT_EVAL_DETECTION_LIMIT };
 }
 
 /** Accounts that share a signup IP with another account in `userIds`, as groups. */
@@ -117,8 +125,43 @@ async function sharedSignupIpGroups(userIds: string[]): Promise<string[][]> {
 }
 
 /**
+ * A random sample of up to `size` accounts created in the window that no detection flagged. `$sample`
+ * is not reproducible; the drawn ids are frozen in the set instead.
+ */
+async function sampleUnflagged(
+  window: { since: Date; until: Date },
+  flagged: ReadonlySet<string>,
+  flaggedInWindow: number,
+  size: number
+): Promise<string[]> {
+  const rows = await User.aggregate<{ _id: { toString(): string } }>([
+    { $match: { createdAt: { $gte: window.since, $lte: window.until } } },
+    // Oversampled so dropping the flagged accounts still leaves `size`.
+    { $sample: { size: Math.min(size * 2 + flaggedInWindow, EVAL_SET_SAMPLE_DRAW_LIMIT) } },
+    { $project: { _id: 1 } },
+  ])
+    .option({ maxTimeMS: MAX_TIME_MS })
+    .exec();
+  const ids = [...new Set(rows.map(row => row._id.toString()))];
+  return ids.filter(id => !flagged.has(id)).slice(0, size);
+}
+
+/** Flagged accounts created inside the window; they are part of the window's signups but not unflagged. */
+async function countCreatedInWindow(userIds: string[], window: { since: Date; until: Date }): Promise<number> {
+  const counts = await inChunks(userIds, async chunk => [
+    await User.countDocuments({
+      _id: { $in: toObjectIds(chunk) },
+      createdAt: { $gte: window.since, $lte: window.until },
+    })
+      .maxTimeMS(MAX_TIME_MS)
+      .exec(),
+  ]);
+  return counts.reduce((sum, count) => sum + count, 0);
+}
+
+/**
  * Draws a set: every flagged account in the window (a seeded sample of them past the cap) plus a
- * seeded sample of accounts created in it that no detection flagged. Labels are frozen as they stand;
+ * random sample of accounts created in it that no detection flagged. Labels are frozen as they stand;
  * each campaign lands on one split.
  */
 export async function drawEvalSet(
@@ -127,37 +170,30 @@ export async function drawEvalSet(
   deps: EvalSetDeps = liveEvalSetDeps,
   now = new Date()
 ): Promise<string> {
-  const since = new Date(now.getTime() - request.days * DAY_MS);
+  const window = { since: new Date(now.getTime() - request.days * DAY_MS), until: now };
   const seed = deps.newSeed();
 
-  const { detections, truncated: detectionsTruncated } = await loadWindowDetections(since);
+  const { detections, linkGroups, truncated: detectionsTruncated } = await loadWindowDetections(window.since);
   const flaggedAll = [...new Set(detections.flatMap(detection => detection.userIds))].sort();
   const flagged =
     flaggedAll.length > EVAL_SET_FLAGGED_LIMIT ? seededSample(flaggedAll, seed, EVAL_SET_FLAGGED_LIMIT) : flaggedAll;
 
-  const unflaggedFilter = {
-    createdAt: { $gte: since, $lte: now },
-    _id: { $nin: toObjectIds(flaggedAll) },
-  };
-  const [unflaggedPopulation, candidateRows] = await Promise.all([
-    User.countDocuments(unflaggedFilter).maxTimeMS(MAX_TIME_MS).exec(),
-    User.find(unflaggedFilter, { _id: 1 })
-      .limit(EVAL_SET_CANDIDATE_LIMIT + 1)
+  const [createdInWindow, flaggedInWindow] = await Promise.all([
+    User.countDocuments({ createdAt: { $gte: window.since, $lte: window.until } })
       .maxTimeMS(MAX_TIME_MS)
-      .lean<{ _id: { toString(): string } }[]>()
       .exec(),
+    countCreatedInWindow(flaggedAll, window),
   ]);
-  const candidates = candidateRows.slice(0, EVAL_SET_CANDIDATE_LIMIT).map(row => row._id.toString());
-  const unflagged = seededSample(candidates, seed, request.unflaggedSample);
+  const unflagged = await sampleUnflagged(window, new Set(flaggedAll), flaggedInWindow, request.unflaggedSample);
 
   const members = [...flagged, ...unflagged];
   const [{ accounts, signedUpAt }, signals, ipGroups] = await Promise.all([
-    loadAccountOutcomes(members, deps, now, request.days),
+    loadAccountOutcomes(members, deps, now, request.days, { skipSignupVerdicts: true }),
     loadCohortSignals(members),
     sharedSignupIpGroups(members),
   ]);
   const { signupLabels } = labelAccountsAndDetections(detections, accounts);
-  const keys = campaignKeys(members, [...detections.map(detection => detection.userIds), ...ipGroups]);
+  const keys = campaignKeys(seed, members, [...linkGroups, ...ipGroups]);
 
   const detectionsOf = new Map<string, string[]>();
   for (const detection of detections) {
@@ -165,7 +201,8 @@ export async function drawEvalSet(
       detectionsOf.set(userId, [...(detectionsOf.get(userId) ?? []), detection.id]);
   }
   const example = (userId: string, kind: AbuseEvalExample['kind']) => {
-    const campaignKey = keys.get(userId) ?? userId;
+    const campaignKey = keys.get(userId);
+    if (!campaignKey) throw new Error('An evaluation example has no campaign key');
     const accountSignals = signals.get(userId);
     return {
       userId,
@@ -183,14 +220,11 @@ export async function drawEvalSet(
     name: request.name,
     note: request.note ?? null,
     createdBy: adminId,
-    window: { since, until: now },
+    window,
     seed,
     heldOutShare: request.heldOutShare,
-    population: { flagged: flaggedAll.length, unflagged: unflaggedPopulation },
-    truncated:
-      detectionsTruncated ||
-      flaggedAll.length > EVAL_SET_FLAGGED_LIMIT ||
-      candidateRows.length > EVAL_SET_CANDIDATE_LIMIT,
+    population: { flagged: flaggedAll.length, unflagged: Math.max(0, createdInWindow - flaggedInWindow) },
+    truncated: detectionsTruncated || flaggedAll.length > EVAL_SET_FLAGGED_LIMIT,
     examples: [
       ...flagged.map(userId => example(userId, 'flagged')),
       ...unflagged.map(userId => example(userId, 'unflagged')),
