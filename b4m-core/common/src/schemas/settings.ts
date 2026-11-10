@@ -2529,26 +2529,17 @@ export const API_SERVICE_GROUPS = {
     description: 'Credit system and pricing configuration',
     icon: 'Payments',
     // Signup, starter-credit, pricing and team-plan keys are edited only on the admin Growth and
-    // Pricing tab (AdminGrowthPricingTab); this group links there instead of repeating them.
+    // Pricing tab, and the signup schedule, free-tier limits and rewards only in the Invite Center
+    // (settingHomes.ts in the admin components); this group links there instead of repeating them.
     settings: [
-      { key: 'billOperationalUsage', order: 1 },
       { key: 'blockDisposableEmails', order: 2 },
       { key: 'blockedEmailDomains', order: 3 },
-      { key: 'signupGrantSignupPoolDaily', order: 7.1 },
-      { key: 'signupGrantTricklePoolDaily', order: 7.2 },
       { key: 'signupGrantRiskPolicy', order: 8 },
       { key: 'signupGrantActivityMinActiveSeconds', order: 11.5 },
       { key: 'signupGrantActivityPreviewTestMode', order: 14.5 },
       { key: 'signupUnlockPaymentHoldHours', order: 14.6 },
-      { key: 'signupGrantInitialCredits', order: 14.7 },
-      { key: 'signupGrantDailyCredits', order: 14.8 },
-      { key: 'signupGrantDripCap', order: 14.9 },
-      { key: 'signupGrantInviteBonusCredits', order: 14.95 },
       { key: 'maxSignupsPerIpPerDay', order: 15 },
       { key: 'maxSignupsPerAsnPerHour', order: 16 },
-      { key: 'freeTierDailySpendCapCredits', order: 17 },
-      { key: 'freeTierDay1SpendCapCredits', order: 18 },
-      { key: 'freeTierDays2To7SpendCapCredits', order: 19 },
       { key: 'newAccountSpendCapDays', order: 19.1 },
       { key: 'newAccountHourlySpendCapCredits', order: 19.2 },
       { key: 'newAccountDailySpendCapCredits', order: 19.3 },
@@ -4620,11 +4611,11 @@ export const settingsMap = {
     name: 'Bill Operational Usage',
     // Default OFF on hosted and self-host alike: free-tier accounts are billed for this spend
     // whenever Enforce Credits is on (isOperationalBillingEnabled), so the toggle only decides
-    // whether paying accounts are billed for it too, and turning it on is a pricing change.
+    // whether paying accounts are billed for it too, and turning it on is a pricing change. Edited on
+    // the admin Growth and Pricing tab (GROWTH_PRICING_SECTIONS), not in a settings group.
     defaultValue: false,
     description:
       'Whether operational-model and embedding usage (auto-naming, summarization, tagging, KB search embeddings, file indexing) is billed to every user/org. Off = billed only to free-tier users paying for themselves (no credit purchase or active plan) and recorded as platform cost for everyone else. Requires Enforce Credits.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   enableTeamPlan: makeBooleanSetting({
@@ -5144,7 +5135,6 @@ export const settingsMap = {
     int: true,
     description:
       'Absolute free credits paid per UTC day for initial signup grants and invite bonuses. Grants past it are held until a later day. 0 pauses these grants; there is no unlimited mode, and a missing or invalid value also pauses them and alerts.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   signupGrantTricklePoolDaily: makeNumberSetting({
@@ -5155,7 +5145,6 @@ export const settingsMap = {
     int: true,
     description:
       'Absolute free credits paid per UTC day for daily activity grants and gear and referral rewards. Activity grants past it are skipped for the day; rewards past it are queued and paid oldest first on a later day. 0 pauses all of them; there is no unlimited mode, and a missing or invalid value also pauses them and alerts.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   signupGrantRiskPolicy: makeObjectSetting<Record<string, unknown>>({
@@ -5212,7 +5201,6 @@ export const settingsMap = {
     int: true,
     userReadable: true,
     description: 'Credits a new account receives after email verification. Unset means 0.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   signupGrantDailyCredits: makeNumberSetting({
@@ -5224,7 +5212,6 @@ export const settingsMap = {
     userReadable: true,
     description:
       'Credits paid for each day of qualifying activity until the drip cap is reached. Zero or unset disables the drip.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   signupGrantDripCap: makeNumberSetting({
@@ -5236,7 +5223,6 @@ export const settingsMap = {
     userReadable: true,
     description:
       'Total credits the daily drip may pay per account. Changes apply to enrolled accounts on their next drip, including accounts the drip already completed, but not accounts a verification unlock completed. Zero disables the drip and pays an invite in full at signup. While unset, nothing drips and an invite pays its initial share at signup, the rest on unlock.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   signupGrantInviteBonusCredits: makeNumberSetting({
@@ -5248,7 +5234,6 @@ export const settingsMap = {
     userReadable: true,
     description:
       'Credits paid once, from the signup pool and outside the drip cap, to an account that signed up through a refer-a-friend invite or a paying organization invite, after its initial tranche is paid in full. 0 pays no bonus, and an account that becomes due its bonus while it is 0 is not paid if it is raised later.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   maxSignupsPerIpPerDay: makeNumberSetting({
@@ -5361,7 +5346,6 @@ export const settingsMap = {
     min: 0,
     description:
       'Daily credit allowance for a free-tier account older than 7 days, counted per UTC calendar day. Once spend for the day reaches this cap, new requests are refused with a 429 until the next UTC midnight; the request that crosses the cap is not cut off, so a day can end slightly over it. Set to 0 to disable the cap for every free-tier account, including the day-1 and days 2-7 tiers.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   freeTierDay1SpendCapCredits: makeNumberSetting({
@@ -5372,7 +5356,6 @@ export const settingsMap = {
     min: 0,
     description:
       'Daily spend cap for a free-tier account during its first 24 hours (by account age; spend still resets at UTC midnight). Higher than the steady-state cap to let genuine new users explore. Set to 0 to fall back to the steady-state cap.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   freeTierDays2To7SpendCapCredits: makeNumberSetting({
@@ -5383,7 +5366,6 @@ export const settingsMap = {
     min: 0,
     description:
       'Daily spend cap for a free-tier account aged 24 hours to 7 days. Intermediate ramp between the day-1 allowance and the steady-state cap. Set to 0 to fall back to the steady-state cap.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   // Enforced at every credit hold by assertNewAccountSpendWithinCap

@@ -19,7 +19,7 @@ describe('signup grant schedule settings', () => {
     ['signupGrantDailyCredits', 0],
     ['signupGrantDripCap', 0],
     ['signupGrantInviteBonusCredits', 0],
-  ] as const)('registers %s as a user-readable credits setting defaulting to %s', (key, fallback) => {
+  ] as const)('registers %s as a user-readable setting defaulting to %s', (key, fallback) => {
     const setting = settingsMap[key];
     expect(setting.schema.parse(undefined)).toBe(fallback);
     expect(setting.schema.parse('0')).toBe(0);
@@ -27,7 +27,9 @@ describe('signup grant schedule settings', () => {
     expect(setting.schema.safeParse(1.5).success).toBe(false);
     expect(setting.userReadable).toBe(true);
     expect(SettingKeySchema.parse(key)).toBe(key);
-    expect(API_SERVICE_GROUPS.CREDITS.settings).toContainEqual(expect.objectContaining({ key }));
+    // Edited in the Invite Center Schedule section, not the Credits System group.
+    expect(API_SERVICE_GROUPS.CREDITS.settings).not.toContainEqual(expect.objectContaining({ key }));
+    expect('group' in setting ? setting.group : undefined).toBeUndefined();
   });
 });
 

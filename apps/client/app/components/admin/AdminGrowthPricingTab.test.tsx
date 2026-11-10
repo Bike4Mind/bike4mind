@@ -42,6 +42,7 @@ import { MIN_PRICE_PER_CREDIT_USD, formatUsdAmount, formatUsdPerCredit, settings
 import { fakeAdminRouter } from './__tests__/fakeAdminRouter';
 import { AdminTab } from './adminSidebarConfig';
 import { useAdminModal } from './useAdminModal';
+import { REWARD_KEYS } from './settingHomes';
 import { useCreditAnalysisStore } from './CreditAnalysis/store';
 import AdminGrowthPricingTab, {
   describeDerivedValue,
@@ -92,14 +93,9 @@ describe('AdminGrowthPricingTab', () => {
       expect.arrayContaining([
         'allowOpenRegistration',
         'ReferralCreditsAmount',
-        'ReferralFirstAnswerCredits',
-        'ReferralFirstPaymentCredits',
-        'ReferralSecondPaymentCredits',
-        'ReferralHoldDays',
-        'ReferralInvitesPerUser',
-        'ReferralAlertRewardsPerDay',
         'enableTeamPlan',
         'enforceCredits',
+        'billOperationalUsage',
         'pricePerCredit',
         'teamPlanMinSeats',
         'teamPlanMaxSeats',
@@ -110,6 +106,9 @@ describe('AdminGrowthPricingTab', () => {
     for (const key of keys) {
       expect(screen.getByTestId(`admin-setting-${key}-helper`)).toBeTruthy();
     }
+    // Inviter rewards are edited in the Invite Center Rewards section.
+    for (const key of REWARD_KEYS.referral) expect(keys, key).not.toContain(key);
+    expect(screen.queryByTestId('admin-growth-pricing-section-referral-rewards')).toBeNull();
   });
 
   it('opens with the page header', () => {
@@ -165,14 +164,14 @@ describe('AdminGrowthPricingTab', () => {
     expect(screen.getByTestId('admin-save-bar').textContent).toContain('1 unsaved change');
     expect(mocks.mutateAsync).not.toHaveBeenCalled();
 
-    fireEvent.change(screen.getByTestId('admin-setting-ReferralHoldDays-input'), { target: { value: '21' } });
+    fireEvent.change(screen.getByTestId('admin-setting-teamPlanCreditsPerSeat-input'), { target: { value: '1234' } });
     expect(screen.getByTestId('admin-save-bar').textContent).toContain('2 unsaved changes');
 
     fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
     await waitFor(() => expect(screen.queryByTestId('admin-save-bar')).toBeNull());
     expect(mocks.mutateAsync).toHaveBeenCalledTimes(2);
     expect(mocks.mutateAsync).toHaveBeenCalledWith({ key: 'teamPlanMaxSeats', value: 300 });
-    expect(mocks.mutateAsync).toHaveBeenCalledWith({ key: 'ReferralHoldDays', value: 21 });
+    expect(mocks.mutateAsync).toHaveBeenCalledWith({ key: 'teamPlanCreditsPerSeat', value: 1234 });
   });
 
   it('discards staged edits without saving', () => {
@@ -260,22 +259,6 @@ describe('AdminGrowthPricingTab', () => {
     );
   });
 
-  it('keeps every inviter reward off by default and values a stored reward in dollars', () => {
-    serverSettings = [{ settingName: 'ReferralFirstPaymentCredits', settingValue: 6000 }];
-    renderTab();
-
-    expect(screen.getByTestId('admin-growth-pricing-current-ReferralFirstAnswerCredits').textContent).toBe(
-      'Current: 0 (default)'
-    );
-    expect(screen.getByTestId('admin-growth-pricing-current-ReferralHoldDays').textContent).toBe(
-      'Current: 14 (default)'
-    );
-    const floor = formatUsdPerCredit(MIN_PRICE_PER_CREDIT_USD);
-    expect(screen.getByTestId('admin-growth-pricing-derived-ReferralFirstPaymentCredits').textContent).toBe(
-      `6,000 credits = ${formatUsdAmount(6000 * MIN_PRICE_PER_CREDIT_USD)} at the floor ${floor} per credit`
-    );
-  });
-
   it('shows the unit and floor for the price per credit', () => {
     renderTab();
     expect(screen.getByTestId('admin-growth-pricing-derived-pricePerCredit').textContent).toBe(
@@ -290,7 +273,7 @@ describe('AdminGrowthPricingTab', () => {
     expect(describeDerivedValue('pricePerCredit', undefined)).toMatch(/^USD per credit - floor /);
   });
 
-  it('links to the model pricing catalog and the tier rate-limit settings', () => {
+  it('links to the model pricing catalog, the tier rate-limit settings and the Invite Center rewards', () => {
     renderTab();
 
     for (const link of GROWTH_PRICING_LINKS) {
@@ -351,6 +334,13 @@ describe('AdminGrowthPricingTab', () => {
 
     expect(useCreditAnalysisStore.getState().activeTab).toBe('pricing');
     expect(useAdminModal.getState().activeTab).toBe(AdminTab.CreditAnalytics);
+  });
+
+  it('opens the Invite Center on its Rewards section', () => {
+    renderTab();
+    fireEvent.click(screen.getByTestId('admin-growth-pricing-link-invite-center-rewards'));
+
+    expect(fakeAdminRouter.search).toEqual({ tab: 'waitlist', inviteSection: 'rewards' });
   });
 
   it('opens Admin Settings filtered to the rate-limit group', () => {
