@@ -26,6 +26,48 @@ describe('git write scan on a subcommand word that is not plain text', () => {
     }
   );
 
+  it.each([
+    ['--git-dir', 'main'],
+    ['--work-tree', 'main'],
+    ['--namespace', 'main'],
+    ['--config-env', 'core.x=main'],
+    ['--attr-source', 'main'],
+    ['--attr-source', 'HEAD'],
+    ['--super-prefix', 'main'],
+    ['--shallow-file', 'main'],
+  ])(
+    'leaves the paths of `git %s %s clean -fdx` unread, as a separate value and as a glued one',
+    async (option, value) => {
+      for (const words of [
+        [option, value],
+        [`${option}=${value}`],
+        ['-C', '.', option, value],
+        ['-c', 'core.x=y', option, value],
+      ]) {
+        const writes = await inPlaceWrites(['git', ...words, 'clean', '-fdx'], noNode, '/nonexistent/project');
+        expect(writes.unread).toBe(true);
+      }
+    }
+  );
+
+  it.each([
+    ['--future-option', 'main'],
+    ['--no-pager', 'HEAD'],
+    ['--no-pager', './x'],
+    ['--bare', 'Main'],
+  ])('leaves the paths of `git %s %s clean -fdx` unread, as a word that is no command name', async (option, word) => {
+    const writes = await inPlaceWrites(['git', option, word, 'clean', '-fdx'], noNode, '/nonexistent/project');
+    expect(writes.unread).toBe(true);
+  });
+
+  it.each([['--no-pager'], ['-C', '.'], ['-c', 'core.x=y'], ['--exec-path']])(
+    'reads `git %s status` as writing nothing',
+    async (...words) => {
+      const writes = await inPlaceWrites(['git', ...words, 'status'], noNode, '/nonexistent/project');
+      expect(writes.unread).toBeUndefined();
+    }
+  );
+
   it.each(['status', 'log', 'diff'])('reads `git %s` as writing nothing', async sub => {
     const writes = await inPlaceWrites(['git', sub], noNode, '/nonexistent/project');
     expect(writes.unread).toBeUndefined();

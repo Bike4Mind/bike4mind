@@ -34,6 +34,7 @@ import {
   findLinks,
   findOddPaths,
   findSettings,
+  GIT_VALUED_OPTIONS,
   gitToplevel,
   indexListed,
   inPlaceWrites,
@@ -4404,7 +4405,9 @@ function tarListsOrRuns(arg: string): boolean {
 }
 
 /** git's global options other than `-c` and `--config-env` whose value is the next word. */
-const GIT_GLOBAL_VALUED = new Set(['-C', '--git-dir', '--work-tree', '--namespace', '--attr-source']);
+const GIT_GLOBAL_VALUED: ReadonlySet<string> = new Set(
+  [...GIT_VALUED_OPTIONS].filter(option => option !== '-c' && option !== '--config-env')
+);
 
 /**
  * Whether `git -c key=value` or `--config-env key=VAR` before the subcommand sets a key that runs a program, or
@@ -4440,7 +4443,7 @@ function gitSubcommandSpelled(raw: readonly string[]): boolean {
     const word = raw[at] as string;
     const arg = optionStandIn(word, 'Cc');
     if (arg === null || !arg.startsWith('-')) return SPELLED_PROGRAM.test(word);
-    if (arg === '-c' || arg === '--config-env' || GIT_GLOBAL_VALUED.has(arg)) at++;
+    if (GIT_VALUED_OPTIONS.has(arg)) at++;
   }
   return false;
 }

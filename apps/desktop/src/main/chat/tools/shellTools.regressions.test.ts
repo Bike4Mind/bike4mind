@@ -733,7 +733,7 @@ describe('shell approval in a project with a large node_modules', () => {
     "git -C . -c a=b cle''an -fdx",
     "git --git-dir=.git cle''an -fdx",
     "command git cle''an -fdx",
-    "builtin git cle''an -fdx",
+    "command -- git cle''an -fdx",
     "nohup git cle''an -fdx",
     "time git cle''an -fdx",
     "sudo git cle''an -fdx",
@@ -747,6 +747,39 @@ describe('shell approval in a project with a large node_modules', () => {
     "git --no-pager ''status",
   ])('asks in every mode for %s, whose git subcommand bash rewrites', async command => {
     expect(await judge(command)).toMatchObject(asks);
+  });
+
+  const VALUED_GIT_OPTIONS = [
+    '--git-dir',
+    '--work-tree',
+    '--namespace',
+    '--config-env',
+    '--attr-source',
+    '--super-prefix',
+    '--shallow-file',
+  ];
+
+  it.each([
+    ...VALUED_GIT_OPTIONS.flatMap(option => [
+      `git ${option} main clean -fdx`,
+      `git ${option} HEAD clean -fdx`,
+      `git ${option}=main clean -fdx`,
+      `git -C . ${option} main clean -fdx`,
+      `git -c core.x=y ${option} main clean -fdx`,
+      `git ${option} main -C . clean -fdx`,
+    ]),
+    'git -C . clean -fdx',
+    'git -c core.x=y clean -fdx',
+    'git --no-pager --attr-source main clean -fdx',
+    'git --exec-path clean -fdx',
+    'git --exec-path=x clean -fdx',
+    'git --list-cmds=main clean -fdx',
+    'git --bare clean -fdx',
+    'git --future-option main clean -fdx',
+    'git --no-pager HEAD clean -fdx',
+    'git --no-pager ./x clean -fdx',
+  ])('asks in every mode for %s, which git reads past its global options', async command => {
+    expect(await judge(command, 'brepo')).toMatchObject(asks);
   });
 
   it.each([

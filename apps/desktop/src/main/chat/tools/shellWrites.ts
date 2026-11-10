@@ -1795,22 +1795,75 @@ function gitRestored(sub: string, args: readonly string[]): { paths: string[]; s
 const PLAIN_GIT_OPTIONS = new Set(['--no-pager', '-P', '-p', '--paginate', '--no-optional-locks']);
 
 /**
+ * git's global options that take their value as the next word (`--attr-source HEAD`); each also takes `--name=value`
+ * except `-C` and `-c`. Shared with the shell scan so both read where the subcommand starts alike.
+ */
+export const GIT_VALUED_OPTIONS: ReadonlySet<string> = new Set([
+  '-C',
+  '-c',
+  '--git-dir',
+  '--work-tree',
+  '--namespace',
+  '--config-env',
+  '--attr-source',
+  '--super-prefix',
+  '--shallow-file',
+]);
+
+/** git's global options that take no value; `--exec-path` and `--list-cmds` take one only as `--name=value`. */
+const GIT_VALUELESS_OPTIONS: ReadonlySet<string> = new Set([
+  ...PLAIN_GIT_OPTIONS,
+  '--bare',
+  '--no-replace-objects',
+  '--no-lazy-fetch',
+  '--no-advice',
+  '--literal-pathspecs',
+  '--glob-pathspecs',
+  '--noglob-pathspecs',
+  '--icase-pathspecs',
+  '--exec-path',
+  '--html-path',
+  '--man-path',
+  '--info-path',
+  '--version',
+  '--help',
+  '-v',
+  '-h',
+]);
+
+/** Whether `arg` is a global option git knows, in its separate or `--name=value` form. */
+const knownGitOption = (arg: string): boolean => {
+  const name = arg.split('=')[0] as string;
+  return (
+    GIT_VALUELESS_OPTIONS.has(arg) ||
+    GIT_VALUED_OPTIONS.has(arg) ||
+    (arg.startsWith('--') && (GIT_VALUED_OPTIONS.has(name) || ['--exec-path', '--list-cmds'].includes(name)))
+  );
+};
+
+/**
  * `git [-C dir] [-c k=v] <sub> ...`: the subcommand, its arguments, the folder git runs in, and whether a global
- * option other than `-C` and the pager ones may point git at another repository or work tree.
+ * option other than `-C` and the pager ones may point git at another repository or work tree. `unread` is set when
+ * a global option is one the scan does not know, which leaves where the subcommand starts open.
  */
 function gitSubcommand(
   args: readonly string[],
   cwd: string
-): { sub: string; rest: string[]; cwd: string; moved: boolean } | null {
+): { sub: string; rest: string[]; cwd: string; moved: boolean; unread?: true } | null {
   let directory = cwd;
   let moved = false;
   for (let index = 0; index < args.length; index++) {
     const arg = args[index] as string;
     if (arg === '-C') directory = resolveOperand(directory, args[++index] ?? '.');
-    else if (!arg.startsWith('-')) return { sub: arg, rest: args.slice(index + 1), cwd: directory, moved };
+    else if (!arg.startsWith('-')) {
+      // After a global option, a word that is no command name (`HEAD`, a path) means an option took it as a value.
+      if (index > 0 && !/^[a-z][a-z0-9-]*$/.test(arg))
+        return { sub: '', rest: [], cwd: directory, moved: true, unread: true };
+      return { sub: arg, rest: args.slice(index + 1), cwd: directory, moved };
+    } else if (!knownGitOption(arg)) return { sub: '', rest: [], cwd: directory, moved: true, unread: true };
     else if (!PLAIN_GIT_OPTIONS.has(arg)) {
       moved = true;
-      if (['-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--exec-path'].includes(arg)) index++;
+      if (GIT_VALUED_OPTIONS.has(arg)) index++;
     }
   }
   return null;
@@ -1883,6 +1936,7 @@ async function writesOf(
   if (program === 'git') {
     const git = gitSubcommand(args, cwd);
     if (!git) return none;
+    if (git.unread) return { files: [], trees: [], unread: true };
     const script = context.script;
     const moved = git.moved || context.env || script.refsMoved === true;
     const { writes, restores } = await gitWrites(git, node, moved, script);
