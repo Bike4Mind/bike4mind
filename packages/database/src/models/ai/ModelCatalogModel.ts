@@ -144,6 +144,27 @@ export class ModelCatalogRepository
     const docs = await this.model.find({ modelId }).sort({ effectiveFrom: -1 }).lean();
     return parseRows(docs).rows;
   }
+
+  /** Per model, its first discovery row and the first discovery row that made it active (the admin model list). */
+  async discoveryMilestones(): Promise<Map<string, { firstSeenAt: Date; activatedAt?: Date }>> {
+    const groups = await this.model.aggregate<{ _id: string; firstSeenAt: Date; activatedAt: Date | null }>([
+      { $match: { source: 'discovery' } },
+      {
+        $group: {
+          _id: '$modelId',
+          firstSeenAt: { $min: '$effectiveFrom' },
+          // $min skips nulls, so a model never activated by discovery gets null.
+          activatedAt: { $min: { $cond: [{ $eq: ['$patch.lifecycle.status', 'active'] }, '$effectiveFrom', null] } },
+        },
+      },
+    ]);
+    return new Map(
+      groups.map(group => [
+        group._id,
+        { firstSeenAt: group.firstSeenAt, ...(group.activatedAt ? { activatedAt: group.activatedAt } : {}) },
+      ])
+    );
+  }
 }
 
 /** Newest first, modelId breaking the ties one run creates (a run stamps every
