@@ -35,11 +35,12 @@ export interface DlqReplayLogEntry {
   id: string;
   queueLabel: string;
   messageId: string;
-  messageBody: string;
   sourceQueue: string;
   status: 'success' | 'failed' | 'skipped';
   errorMessage?: string;
   replayedBy: string;
+  /** Email or username of the admin; falls back to the id when the user no longer exists. */
+  replayedByName: string;
   createdAt: string;
 }
 
