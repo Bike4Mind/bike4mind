@@ -581,36 +581,16 @@ export const NO_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
   ChatModels.DEEPSEEK_V4_PRO,
 ]);
 
-// Matches the native, Bedrock (any region prefix), gateway (`anthropic/`), context-suffixed (`[1m]`)
-// and catalog spellings alike, so a catalog-only id is covered without a ChatModels entry first.
-// Deliberately a permissive deny-list, not claudeFamilyVersion: an unreviewed spelling of these models (a patch
-// version, a vendor prefix) must still read as unsupported. Keep in sync with TOOL_CHANGES_VERSIONS in
-// claudeToolCapabilities.ts when a new 5.x ships.
-const NO_FORCED_TOOL_CHOICE_FAMILY = /(?:^|[./])claude-(?:opus-5-5|sonnet-5-5|fable-5-1|mythos-5-1)(?=$|[-:@[])/;
-
 /**
- * Whether the model accepts forced tool use. Claude Opus 5.5, Sonnet 5.5, Fable 5.1 and Mythos 5.1
- * return 400 for `tool_choice` `{type:'any'}` and `{type:'tool'}` (Messages, count_tokens and Batches
- * alike); `auto` and `none` still work. Adapters route json_schema through `output_config.format` and
- * downgrade a caller's required/named choice to `auto` + `strict` for these models. Haiku 5.5 is
- * deliberately absent: it accepts forced `any`/`tool` (raw Bedrock API probe, adaptive thinking on;
- * native API: forced `tool` observed via json_schema, forced `any` not probed) and its response
- * just carries no thinking block.
- */
-export function supportsForcedToolChoice(modelId: string): boolean {
-  return !NO_FORCED_TOOL_CHOICE_FAMILY.test(modelId);
-}
-
-/**
- * Models whose safety classifiers can decline a request with `stop_reason: 'refusal'`
- * (HTTP 200, empty or partial content) - Claude Fable 5's GA classifiers target research
- * biology and most cybersecurity content and occasionally false-positive on benign adjacent
- * work. Per Anthropic's GA guidance a refusal from these is opt-in recoverable: rather than
- * surfacing a hard refusal, the backend throws so the completion loop's existing fallback
- * machinery continues the request on Opus 5 (whose classifiers intervene far less often).
- * A refusal from any *other* model is a genuine decline and surfaces unchanged. Keep in
- * sync with the `claude-fable-5` and Bedrock Fable fallback preference chains in
- * `adminSettings/fallback.ts`.
+ * Seed for the catalog's `refusalFallback` flag (see resolveApiSurface): models whose safety
+ * classifiers can decline a request with `stop_reason: 'refusal'` (HTTP 200, empty or partial
+ * content) - Claude Fable 5's GA classifiers target research biology and most cybersecurity
+ * content and occasionally false-positive on benign adjacent work. Per Anthropic's GA guidance a
+ * refusal from these is opt-in recoverable: rather than surfacing a hard refusal, the backend
+ * throws so the completion loop's existing fallback machinery continues the request on Opus 5
+ * (whose classifiers intervene far less often). A refusal from a model whose flag resolves false
+ * is a genuine decline and surfaces unchanged. Keep in sync with the `claude-fable-5` and Bedrock
+ * Fable fallback preference chains in `adminSettings/fallback.ts`.
  */
 export const REFUSAL_FALLBACK_MODELS: ReadonlySet<string> = new Set([
   ChatModels.CLAUDE_FABLE_5,
@@ -816,6 +796,16 @@ export type ModelInfo = {
    * id tables, and reproduces today's behavior exactly when it is absent.
    */
   dispatchProfile?: ModelDispatchProfile;
+  /**
+   * The catalog's `apiSurface` flags (see ModelRecord). Present only where a catalog row states them;
+   * read them through resolveApiSurface (claudeToolCapabilities.ts), which supplies the seed and default.
+   */
+  forcedToolChoice?: boolean;
+  assistantPrefill?: boolean;
+  toolSearch?: boolean;
+  toolChanges?: boolean;
+  deferredToolAddition?: boolean;
+  refusalFallback?: boolean;
   /**
    * Size rules and supported params of an image model. Attached by GET /api/models (see
    * getImageModelCapabilities), not by the backends, so every image row derives it the same way.

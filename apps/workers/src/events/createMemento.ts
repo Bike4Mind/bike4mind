@@ -178,7 +178,7 @@ export const handler = withEventContext(async (event, logger) => {
   let updatedCount = 0;
 
   for (const evaluation of evaluations) {
-    console.debug('Processing evaluation', { importance: evaluation.importance });
+    logger.debug('Processing evaluation', { importance: evaluation.importance });
 
     // V2 persists the fact on its own terms - its own subject resolution and its own semantic de-dup
     // against its own ledger, in the 3-small space. It does not wait on, or read, anything V1 does below.
@@ -213,7 +213,7 @@ export const handler = withEventContext(async (event, logger) => {
 
       // STEP 5: Handle similar personal information - update existing memento
       if (highestSimilarity >= SIMILARITY_THRESHOLD && mostSimilarMemento) {
-        console.info('Similar personal information found, updating existing memento', {
+        logger.info('Similar personal information found, updating existing memento', {
           existingMementoId: mostSimilarMemento.id,
           similarity: highestSimilarity.toFixed(3),
         });
@@ -238,7 +238,7 @@ export const handler = withEventContext(async (event, logger) => {
           }
         );
 
-        console.info('Successfully updated existing memento with new information', {
+        logger.info('Successfully updated existing memento with new information', {
           mementoId: mostSimilarMemento.id,
           newWeight,
         });
@@ -247,7 +247,7 @@ export const handler = withEventContext(async (event, logger) => {
         continue;
       }
 
-      console.debug(
+      logger.debug(
         `No similar personal information found (highest similarity: ${highestSimilarity.toFixed(3)}), creating new memento`
       );
     }

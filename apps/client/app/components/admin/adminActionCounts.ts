@@ -1,4 +1,4 @@
-import type { AdminPermissionId } from '@bike4mind/common';
+import type { AdminPermissionRequirement } from '@bike4mind/common';
 
 /**
  * The admin queues the sidebar counts: one key per page whose items wait for an admin to act.
@@ -54,5 +54,5 @@ export const ADMIN_ACTION_COUNT_LABELS: Record<AdminActionCountKey, string> = {
 export const formatAdminActionCount = (count: number): string =>
   count >= ADMIN_ACTION_COUNT_CAP ? `${ADMIN_ACTION_COUNT_CAP - 1}+` : String(count);
 
-/** Who may see a count: a full admin, or a delegate holding the permission that acts on the queue. */
-export type AdminActionCountAccess = 'fullAdmin' | AdminPermissionId;
+/** Who may see a count: a full admin, or a delegate meeting the queue read requirement. */
+export type AdminActionCountAccess = 'fullAdmin' | AdminPermissionRequirement;

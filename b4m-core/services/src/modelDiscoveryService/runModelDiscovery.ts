@@ -849,6 +849,7 @@ async function planPass(input: PassInput): Promise<PassPlan> {
     resolveDispatch: adapters.resolveDispatch,
     probedProfiles: input.probedProfiles,
     base,
+    inForce: resolvedInForce,
     coveredBackends,
     priorDiscoveryGroups,
     priorContributors,

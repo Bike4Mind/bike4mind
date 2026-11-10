@@ -9,6 +9,7 @@ import { SECRET_ROTATION_GRACE_MS } from '@bike4mind/server-utils/auth/secretRot
 import { isAccessReviewReminderDay } from '@bike4mind/server-utils/security/accessReview/accessReview';
 import { sendAccessReviewReminder } from '@bike4mind/server-utils/security/accessReview/accessReviewData';
 import { Resource } from 'sst';
+import { Logger } from '@bike4mind/observability';
 
 // Contained so a failed reminder neither blocks the secrets post nor makes a retry repost it.
 async function remindAccessReview(now: Date, slackWebhookUrl: string): Promise<string | undefined> {
@@ -18,7 +19,7 @@ async function remindAccessReview(now: Date, slackWebhookUrl: string): Promise<s
       if (!posted) throw new Error('Access review reminder was not accepted by Slack');
     });
   } catch (error) {
-    console.error('Access review reminder failed:', error);
+    Logger.error('Access review reminder failed', { error });
     return undefined;
   }
 }
@@ -49,7 +50,7 @@ export async function handler() {
     const accessReviewDue = Resource.App.stage === 'production' && isAccessReviewReminderDay(now);
 
     if (dueSecrets.length === 0 && !accessReviewDue) {
-      console.log('No secrets due for rotation');
+      Logger.info('No secrets due for rotation');
       return { status: 'OK', message: 'No secrets due for rotation' };
     }
 
@@ -75,7 +76,7 @@ export async function handler() {
     // resolveSlackWebhookUrl already normalizes unset/placeholder/whitespace values to '',
     // so a falsy result is the only "not configured" signal we need to check.
     if (!slackWebhookUrl) {
-      console.log('Slack webhook not configured - skipping notification');
+      Logger.info('Slack webhook not configured - skipping notification');
       return { status: 'OK', notified: 0, skipped: true, reason: 'Slack webhook not configured' };
     }
 
@@ -84,7 +85,7 @@ export async function handler() {
 
     return { status: 'OK', notified: dueSecrets.length, ...(accessReviewQuarter && { accessReviewQuarter }) };
   } catch (error) {
-    console.error('Error in secret rotation notifier:', error);
+    Logger.error('Error in secret rotation notifier', { error });
     throw error;
   }
 }

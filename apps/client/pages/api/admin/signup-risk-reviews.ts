@@ -1,5 +1,8 @@
 import {
   ApiKeyScope,
+  MODERATION_PAGE_READ,
+  assertCanActOnAdminTarget,
+  isFullAdmin,
   SIGNUP_RISK_AUTO_APPROVAL_LIST_DAYS,
   SIGNUP_RISK_AUTO_APPROVAL_LIST_LIMIT,
   SIGNUP_RISK_REVIEW_LIST_LIMIT,
@@ -22,11 +25,11 @@ import {
 } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
-import { BadRequestError, ensureAdmin } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi, requireAdminPermission } from '@server/middlewares/adminApi';
 import { releaseRiskReviewedSignupGrant } from '@server/credits/riskReviewGrantRelease';
 import { findRiskReviewAdvisories } from '@server/security/abuseAssessment/riskReviewAdvisory';
 import {
@@ -74,13 +77,16 @@ const domainOf = (email: string | null | undefined) => {
  * per user. Approving also pays a signup tranche the signup grant policy withheld, which reopening
  * does not take back. Suspending goes through the bulk abuse response routes instead (admin/abuse/bulk-*).
  */
-const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  auth: 'jwtOnly',
+  requiredScopes: [ApiKeyScope.ADMIN],
+  adminPermissions: { GET: MODERATION_PAGE_READ, POST: 'users:moderate' },
+})
   .use(
     rateLimit({ limit: SIGNUP_RISK_REVIEWS_RATE_LIMIT, windowMs: ONE_MINUTE_MS, bucket: 'admin-signup-risk-reviews' })
   )
   .get(
     asyncHandler(async (req, res) => {
-      ensureAdmin(req.user?.isAdmin);
       const [users, autoApprovedUsers] = await Promise.all([
         userRepository.findPendingRiskReviews(SIGNUP_RISK_REVIEW_LIST_LIMIT + 1),
         userRepository.findRiskAutoApprovals({
@@ -146,11 +152,12 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
   )
   .post(
     asyncHandler(async (req, res) => {
-      ensureAdmin(req.user?.isAdmin);
       const parsed = signupRiskReviewDecisionSchema.safeParse(req.body);
       if (!parsed.success) throw new BadRequestError('Expected approve or reopen and 1 to 200 user ids');
       const reason = parseAdminActionReason(parsed.data.reason);
       const transition = TRANSITIONS[parsed.data.action];
+      // Approving pays out any signup grant the policy withheld.
+      if (parsed.data.action === 'approve') requireAdminPermission(req, 'credits:adjust');
       const userIds = [...new Set(parsed.data.userIds)];
 
       const self = userIds.find(userId => isSelfOrImpersonator(req.user, userId));
@@ -161,6 +168,11 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
           target: await userAuditTarget(self),
           message: 'Admins cannot review their own account.',
         });
+      }
+      if (!isFullAdmin(req.user)) {
+        for (const target of await userRepository.find({ _id: { $in: userIds } })) {
+          assertCanActOnAdminTarget(req.user, target, 'review the signup of');
+        }
       }
 
       const updatedUserIds: string[] = [];

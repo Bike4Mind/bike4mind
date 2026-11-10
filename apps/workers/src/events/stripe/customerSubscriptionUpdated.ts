@@ -25,6 +25,7 @@ import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { Resource } from 'sst';
 import { withEventContext } from '@workers/utils/eventContext';
+import { Logger } from '@bike4mind/observability';
 
 export const handler = withEventContext(async (event, logger) => {
   const { subscriptionId } = StripeEvents.CustomerSubscriptionUpdated.schema.parse(event.properties);
@@ -248,6 +249,6 @@ async function emitSubscriptionChangeEvents(before: ISubscription, subscription:
 
     await Promise.all(sends);
   } catch {
-    console.warn('[b4m-analytics] subscription change events failed');
+    Logger.warn('[b4m-analytics] subscription change events failed');
   }
 }

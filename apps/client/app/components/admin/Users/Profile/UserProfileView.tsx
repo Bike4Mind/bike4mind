@@ -9,6 +9,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { openHelpPanel } from '@client/app/hooks/useHelpPanel';
 import { AdminCommandPalette, type AdminCommand } from '../../shared/AdminCommandPalette';
 import { Kbd } from '../../shared';
+import { AdminPermissionAction } from '../../shared/MissingPermission';
 import { AdjustCreditsDialog } from './actions/AdjustCreditsDialog';
 import { ReinstateDialog, SuspendDialog } from './actions/SuspendDialog';
 import { EditProfileDialog } from './actions/EditProfileDialog';
@@ -28,7 +29,7 @@ import {
   ShadowTierDialog,
 } from './actions/accountDialogs';
 import type { ProfileAction, ProfileDialogProps } from './actions/profileActions';
-import { UserProfileHeader, deletionBlockedReason } from './UserProfileHeader';
+import { UserProfileHeader, deletionBlockedReason, moderationBlockedReason } from './UserProfileHeader';
 import { UserProfileStats } from './UserProfileStats';
 import { UserProfileTabs } from './UserProfileTabs';
 import { UserRiskBadges } from './UserRiskBadges';
@@ -186,8 +187,23 @@ const StatusBanner: React.FC<{ user: AdminUserProfile; onReinstate: () => void; 
   onReinstate,
   onLiftRestriction,
 }) => {
+  const { currentUser } = useUser();
   if (!user.isBanned && !user.isModerated) return null;
   const tone = user.isBanned ? 'bad' : 'warn';
+  const blocked = moderationBlockedReason(currentUser, user);
+  const liftButton = (
+    <Button
+      size="sm"
+      variant="outlined"
+      color="neutral"
+      disabled={!!blocked}
+      onClick={user.isBanned ? onReinstate : onLiftRestriction}
+      sx={{ bgcolor: 'admin.surface' }}
+      data-testid="user-profile-reinstate-btn"
+    >
+      {user.isBanned ? 'Reinstate' : 'Lift restriction'}
+    </Button>
+  );
   return (
     <Stack
       role="status"
@@ -219,16 +235,9 @@ const StatusBanner: React.FC<{ user: AdminUserProfile; onReinstate: () => void; 
           </>
         )}
       </Typography>
-      <Button
-        size="sm"
-        variant="outlined"
-        color="neutral"
-        onClick={user.isBanned ? onReinstate : onLiftRestriction}
-        sx={{ bgcolor: 'admin.surface' }}
-        data-testid="user-profile-reinstate-btn"
-      >
-        {user.isBanned ? 'Reinstate' : 'Lift restriction'}
-      </Button>
+      <AdminPermissionAction requirement="users:moderate" blockedReason={blocked}>
+        {() => liftButton}
+      </AdminPermissionAction>
     </Stack>
   );
 };

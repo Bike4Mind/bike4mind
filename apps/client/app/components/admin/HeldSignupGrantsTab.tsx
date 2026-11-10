@@ -6,6 +6,7 @@ import { api } from '@client/app/contexts/ApiContext';
 import { getErrorMessage } from '@client/app/utils/error';
 import { AdminDialog } from './shared/AdminDialog';
 import { DataTable } from './shared/DataTable';
+import { AdminPermissionAction } from './shared/MissingPermission';
 
 const QUERY_KEY = ['held-signup-grants'];
 const ENDPOINT = '/api/admin/held-signup-grants';
@@ -161,15 +162,19 @@ export default function HeldSignupGrantsTab() {
           <Option value="all">All reasons</Option>
           <Option value="budget_exhausted">{REASON_LABELS.budget_exhausted}</Option>
         </Select>
-        <Button
-          size="sm"
-          data-testid="held-signup-grants-release-btn"
-          disabled={busy || selected.size === 0}
-          loading={release.isPending}
-          onClick={() => release.mutate([...selected])}
-        >
-          Release selected ({selected.size})
-        </Button>
+        <AdminPermissionAction requirement="credits:adjust">
+          {missingPermission => (
+            <Button
+              size="sm"
+              data-testid="held-signup-grants-release-btn"
+              disabled={missingPermission || busy || selected.size === 0}
+              loading={release.isPending}
+              onClick={() => release.mutate([...selected])}
+            >
+              Release selected ({selected.size})
+            </Button>
+          )}
+        </AdminPermissionAction>
         <Button
           size="sm"
           variant="outlined"

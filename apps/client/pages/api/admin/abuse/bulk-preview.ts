@@ -1,9 +1,15 @@
-import { ApiKeyScope, BulkAbusePreviewRequestSchema, type BulkAbusePreview } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  bulkAbuseActionPermissions,
+  isFullAdmin,
+  BulkAbusePreviewRequestSchema,
+  type BulkAbusePreview,
+} from '@bike4mind/common';
 import { AdminSettings } from '@bike4mind/database/infra';
 import { abuseService } from '@bike4mind/services';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi, requireAdminPermission } from '@server/middlewares/adminApi';
 import {
   bulkAbuseCohortAdapters,
   bulkAbusePreviewAdapters,
@@ -16,10 +22,14 @@ import { signBulkAbusePreviewToken } from '@server/admin/bulkAbuse/previewToken'
  * Dry run of a bulk abuse response: who would be actioned, who is skipped and why, and what it
  * would change. Writes nothing. The returned previewToken is what bulk-execute.ts acts on.
  */
-const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }).post(
+const handler = adminApi({
+  auth: 'jwtOnly',
+  requiredScopes: [ApiKeyScope.ADMIN],
+  adminPermissions: { POST: 'users:moderate' },
+}).post(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) throw new ForbiddenError('Unauthorized. Admin access required.');
     const { target, actions } = BulkAbusePreviewRequestSchema.parse(req.body);
+    for (const permission of bulkAbuseActionPermissions(actions)) requireAdminPermission(req, permission);
     await denySelfInBulkAbuseTarget(req, req.user, target);
     const domain = target.kind === 'domain' ? assertOwnedDomain(target.domain) : null;
     // A domain ban writes blockedEmailDomains, so it needs the settings route's permission too.
@@ -27,7 +37,9 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
       throw new ForbiddenError('Banning a domain needs permission to edit admin settings.');
     }
 
-    const cohort = await abuseService.resolveBulkAbuseCohort(target, req.user.id, bulkAbuseCohortAdapters);
+    const cohort = await abuseService.resolveBulkAbuseCohort(target, req.user.id, bulkAbuseCohortAdapters, {
+      actorIsFullAdmin: isFullAdmin(req.user),
+    });
     const counts = await abuseService.previewBulkAbuseCounts(cohort.included, bulkAbusePreviewAdapters);
     const fingerprint = abuseService.bulkAbuseFingerprint(
       target,

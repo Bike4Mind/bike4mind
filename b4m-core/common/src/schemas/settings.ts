@@ -699,6 +699,7 @@ export const SettingKeySchema = z.enum([
 
   // HELP CENTER SETTINGS
   'EnableHelpChat',
+  'EnableCoreTutorials',
 
   // B4M PI SETTINGS
   'EnableBmPi',
@@ -2486,6 +2487,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableResearchEngineDefault', order: 111 },
       // Admin-only features
       { key: 'EnableHelpChat', order: 200 },
+      { key: 'EnableCoreTutorials', order: 205 },
       { key: 'EnableKnowledgeBaseSearch', order: 210 },
       { key: 'EnableMcpToolFiltering', order: 220 },
       { key: 'McpToolFilteringMaxTools', order: 221 },
@@ -4017,7 +4019,7 @@ export const settingsMap = {
     min: 1,
     int: true,
     description:
-      'Score at which an actor is reported. Each refused fetch scores 10, each failed webhook signature 5 and each invalid-id lookup 2. A 404, or a 401 or 403 from an API handler, scores 1, but only from an IP and account pair that also failed on 10 or more distinct paths in the window. Webhook failures carry no account, so 5 from one Stripe IP (for example after a signing-secret rotation) is enough at the default threshold.',
+      'Score at which an actor is reported, and at which each of its accounts, scored on its own, is recorded as an API probing detection. Each refused fetch scores 10, each failed webhook signature or refused ingest token 5 and each invalid-id lookup 2. Each distinct admin route answered 401 or 403 scores 3, once there are 5 or more. A 404, or a 401 or 403 from an API handler, scores 1, but only from an IP and account pair that also failed on 10 or more distinct paths in the window. Webhook failures carry no account, so 5 from one Stripe IP (for example after a signing-secret rotation) is enough at the default threshold, as are 5 calls with a stale ingest token after one is rotated.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.PROBE_DETECTION.id,
     order: 2,
@@ -7583,6 +7585,16 @@ export const settingsMap = {
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 200,
+  }),
+  EnableCoreTutorials: makeBooleanSetting({
+    key: 'EnableCoreTutorials',
+    name: 'Enable Core Tutorials',
+    defaultValue: false,
+    description: 'Serve the guided tutorials that ship with the app. Premium tutorials have their own switches.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 205,
+    userReadable: true,
   }),
   // B4M Pi (Project Intelligence) Settings
   EnableBmPi: makeBooleanSetting({

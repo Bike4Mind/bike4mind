@@ -16,6 +16,7 @@ import { PENDING_GRANTS_QUERY_KEY } from '@client/app/hooks/data/adminSignupGran
 import { api } from '@client/app/contexts/ApiContext';
 import { getErrorMessage } from '@client/app/utils/error';
 import { DataTable } from './shared/DataTable';
+import { AdminPermissionAction } from './shared/MissingPermission';
 import { AdminPageHeader } from './shared/AdminPageHeader';
 import { FilterBar } from './shared/FilterBar';
 import { ViewTabs } from './shared/ViewTabs';
@@ -289,26 +290,34 @@ export default function SignupDomainHoldsTab() {
             label: 'Review',
             render: review => (
               <Stack direction="row" spacing={1}>
-                <Button
-                  size="sm"
-                  color="danger"
-                  data-testid={`signup-domain-confirm-${review.domain}`}
-                  disabled={decision.isPending || review.status !== 'held_pending_review'}
-                  onClick={() => decide({ domain: review.domain, action: 'confirm' })}
-                >
-                  Confirm
-                </Button>
-                <Button
-                  size="sm"
-                  color={review.status === 'held_pending_review' && review.domainAgedAt ? 'success' : 'primary'}
-                  data-testid={`signup-domain-release-${review.domain}`}
-                  disabled={decision.isPending}
-                  onClick={() =>
-                    decide({ domain: review.domain, action: 'release', afterUserId: cursors[review.domain] })
-                  }
-                >
-                  {review.status === 'released' ? 'Retry pending grants' : 'Release'}
-                </Button>
+                <AdminPermissionAction requirement="users:moderate">
+                  {missing => (
+                    <Button
+                      size="sm"
+                      color="danger"
+                      data-testid={`signup-domain-confirm-${review.domain}`}
+                      disabled={missing || decision.isPending || review.status !== 'held_pending_review'}
+                      onClick={() => decide({ domain: review.domain, action: 'confirm' })}
+                    >
+                      Confirm
+                    </Button>
+                  )}
+                </AdminPermissionAction>
+                <AdminPermissionAction requirement={{ allOf: ['users:moderate', 'credits:adjust'] }}>
+                  {missing => (
+                    <Button
+                      size="sm"
+                      color={review.status === 'held_pending_review' && review.domainAgedAt ? 'success' : 'primary'}
+                      data-testid={`signup-domain-release-${review.domain}`}
+                      disabled={missing || decision.isPending}
+                      onClick={() =>
+                        decide({ domain: review.domain, action: 'release', afterUserId: cursors[review.domain] })
+                      }
+                    >
+                      {review.status === 'released' ? 'Retry pending grants' : 'Release'}
+                    </Button>
+                  )}
+                </AdminPermissionAction>
               </Stack>
             ),
           },

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 import { __resetAlarmMentionCacheForTesting, readAlarmMention, type MentionReader } from './alarmSlackMention';
 
 const reader = (
@@ -32,7 +33,7 @@ describe('readAlarmMention', () => {
   });
 
   it('is off, and quiet, when the parameter does not exist', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
     const ssm = reader(async () => {
       throw Object.assign(new Error('nope'), { name: 'ParameterNotFound' });
     });
@@ -42,7 +43,7 @@ describe('readAlarmMention', () => {
   });
 
   it('is off, and logs, when the read fails for any other reason', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
     const ssm = reader(async () => {
       throw Object.assign(new Error('denied'), { name: 'AccessDeniedException' });
     });

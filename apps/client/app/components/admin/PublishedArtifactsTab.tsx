@@ -18,6 +18,7 @@ import BlockIcon from '@mui/icons-material/Block';
 import RestoreIcon from '@mui/icons-material/Restore';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
+import { AdminPermissionAction } from './shared/MissingPermission';
 
 /**
  * Admin moderation queue for published `/p/...` pages. Lists artifacts
@@ -231,31 +232,37 @@ const PublishedArtifactsTab: React.FC = () => {
                     )}
                   </td>
                   <td>
-                    {a.moderationStatus === 'taken_down' ? (
-                      <Button
-                        size="sm"
-                        variant="soft"
-                        color="neutral"
-                        startDecorator={<RestoreIcon />}
-                        loading={restore.isPending}
-                        onClick={() => restore.mutate(a.publicId)}
-                        data-testid={`admin-published-restore-${a.publicId}`}
-                      >
-                        Restore
-                      </Button>
-                    ) : (
-                      <Button
-                        size="sm"
-                        variant="soft"
-                        color="danger"
-                        startDecorator={<BlockIcon />}
-                        loading={takedown.isPending}
-                        onClick={() => takedown.mutate(a.publicId)}
-                        data-testid={`admin-published-takedown-${a.publicId}`}
-                      >
-                        Take down
-                      </Button>
-                    )}
+                    <AdminPermissionAction requirement="users:moderate">
+                      {missing =>
+                        a.moderationStatus === 'taken_down' ? (
+                          <Button
+                            size="sm"
+                            variant="soft"
+                            color="neutral"
+                            startDecorator={<RestoreIcon />}
+                            loading={restore.isPending}
+                            disabled={missing}
+                            onClick={() => restore.mutate(a.publicId)}
+                            data-testid={`admin-published-restore-${a.publicId}`}
+                          >
+                            Restore
+                          </Button>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant="soft"
+                            color="danger"
+                            startDecorator={<BlockIcon />}
+                            loading={takedown.isPending}
+                            disabled={missing}
+                            onClick={() => takedown.mutate(a.publicId)}
+                            data-testid={`admin-published-takedown-${a.publicId}`}
+                          >
+                            Take down
+                          </Button>
+                        )
+                      }
+                    </AdminPermissionAction>
                   </td>
                 </tr>
                 {expanded === a.publicId && <ReportsRow publicId={a.publicId} />}
