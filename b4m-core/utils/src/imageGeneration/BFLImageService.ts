@@ -419,6 +419,8 @@ export class BFLImageService extends AIImageService {
   async submitTask(model: string, body: Record<string, unknown>, signal?: AbortSignal): Promise<BflTask> {
     const response = await axios.post(`${this.baseUrl}/${model}`, body, {
       headers: { ...this.headers(), 'Content-Type': 'application/json' },
+      // The key header would follow a redirect off our host.
+      maxRedirects: 0,
       ...(signal && { signal }),
     });
     const id: unknown = response.data?.id;
@@ -435,7 +437,11 @@ export class BFLImageService extends AIImageService {
 
   /** One poll of a task. Throws the axios error on an HTTP failure; the status mapping never throws. */
   async checkTask(task: BflTask, signal?: AbortSignal): Promise<BflTaskStatus> {
-    const response = await axios.get(task.pollingUrl, { headers: this.headers(), ...(signal && { signal }) });
+    const response = await axios.get(task.pollingUrl, {
+      headers: this.headers(),
+      maxRedirects: 0,
+      ...(signal && { signal }),
+    });
     const { status, result } = (response.data ?? {}) as {
       status?: unknown;
       result?: { sample?: unknown; error?: unknown };
