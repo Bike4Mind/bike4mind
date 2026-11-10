@@ -3,6 +3,7 @@ import { agentExecutionRepository, sessionRepository } from '@bike4mind/database
 import type { Logger } from '@bike4mind/observability';
 import {
   createLiveActivityThrottle,
+  isTopLevelRun,
   LIVE_ACTIVITY_STAGE_LABEL_MAX,
   publishLiveActivityUpdate,
   type LiveActivityThrottle,
@@ -72,7 +73,7 @@ export async function publishAgentTerminalPush(
   if (!isPushDeliveryConfigured()) return;
   try {
     const execution = await deps.findExecution(args.executionId);
-    if (!execution || execution.parentExecutionId || execution.spawnedByExecutionId || execution.dagNodeId) return;
+    if (!execution || !isTopLevelRun(execution)) return;
 
     const sessionName = (await deps.findSessionName(execution.sessionId))?.trim();
     const where = sessionName ? ` in "${truncateForPush(sessionName, 60)}"` : '';
@@ -101,7 +102,7 @@ type LiveActivityTarget = { userId: string; questId: string };
 async function resolveLiveActivityTarget(executionId: string, deps: AgentPushDeps): Promise<LiveActivityTarget | null> {
   const execution = await deps.findExecution(executionId);
   if (!execution?.linkedQuestId) return null;
-  if (execution.parentExecutionId || execution.spawnedByExecutionId || execution.dagNodeId) return null;
+  if (!isTopLevelRun(execution)) return null;
   return { userId: execution.userId, questId: execution.linkedQuestId };
 }
 

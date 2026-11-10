@@ -30,6 +30,15 @@ export async function publishLiveActivityUpdate(
   }
 }
 
+/** A run with no parent, spawner or DAG node: the only kind that owns a live activity or a terminal push. */
+export function isTopLevelRun(execution: {
+  parentExecutionId?: unknown;
+  spawnedByExecutionId?: unknown;
+  dagNodeId?: string;
+}): boolean {
+  return !execution.parentExecutionId && !execution.spawnedByExecutionId && !execution.dagNodeId;
+}
+
 export async function endAgentRunLiveActivity(
   execution: {
     userId: string;
@@ -41,14 +50,7 @@ export async function endAgentRunLiveActivity(
   contentState: LiveActivityPushEvent['contentState'],
   logger: Pick<Logger, 'warn'>
 ): Promise<void> {
-  if (
-    !execution.linkedQuestId ||
-    execution.parentExecutionId ||
-    execution.spawnedByExecutionId ||
-    execution.dagNodeId
-  ) {
-    return;
-  }
+  if (!execution.linkedQuestId || !isTopLevelRun(execution)) return;
   await publishLiveActivityUpdate(
     { userId: execution.userId, questId: execution.linkedQuestId, event: 'end', contentState },
     logger
