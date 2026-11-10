@@ -4,6 +4,6 @@
     "types": ["node", "@playwright/test"],
     "resolveJsonModule": true
   },
-  "include": ["./**/*.ts", "./**/*.tsx"],
+  "include": ["./**/*.ts", "./**/*.tsx", "../sst-env.d.ts"],
   "exclude": []
 }

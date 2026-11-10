@@ -156,15 +156,17 @@ export async function apiCreateThrowawayUser(request: APIRequestContext, label: 
   const { retry, repeatEachIndex } = test.info();
   const slug = `auth-${label}${retry}r${repeatEachIndex}`;
   const email = `${slug}-${idSuffix}-e2e@test.com`;
+  const password = `E2eAuth${label}Pass123!`;
   const result = await apiCreateTestUser(request, {
     username: `${slug}-${idSuffix}`,
     email,
     name: `Auth ${label} ${idSuffix}`,
-    password: `E2eAuth${label}Pass123!`,
+    password,
     isAdmin: false,
   });
   return {
     email,
+    password,
     userId: (result.user.id || result.user._id) as string,
     accessToken: result.accessToken,
     refreshToken: result.refreshToken,
@@ -209,6 +211,31 @@ export async function apiGetOtcCode(request: APIRequestContext, email: string): 
 }
 
 /**
+ * /api/otc/send for a test address, then read the emailed code back: the first half of every OTC
+ * sign-in or registration. `email` must already be normalized. Non-prod only (see apiGetOtcCode).
+ */
+export async function apiSendOtcAndReadCode(
+  request: APIRequestContext,
+  email: string
+): Promise<{ pendingToken: string; code: string }> {
+  const baseURL = process.env.API_URL || 'http://localhost:3000';
+  const secret = process.env.E2E_CLEANUP_SECRET || Resource.E2E_CLEANUP_SECRET?.value;
+  if (!secret) {
+    throw new Error('E2E_CLEANUP_SECRET must be set in .env.e2e');
+  }
+  // The secret header lets a -e2e@test.com send skip the Turnstile challenge (see requireTurnstile).
+  const sendResponse = await request.post(`${baseURL}/api/otc/send`, {
+    data: { email },
+    headers: { ...wafBypassHeaders(), 'x-e2e-cleanup-secret': secret },
+  });
+  if (!sendResponse.ok()) {
+    throw new Error(`OTC send failed: ${sendResponse.status()} ${sendResponse.statusText()}`);
+  }
+  const { pendingToken } = (await sendResponse.json()) as { pendingToken: string };
+  return { pendingToken, code: await apiGetOtcCode(request, email) };
+}
+
+/**
  * Full passwordless re-login for an existing test account: /api/otc/send to mint a pending token,
  * read the emailed code back via the non-prod test endpoint, then /api/otc/verify for fresh tokens.
  * Use when a test needs a genuinely NEW, independent session - e.g. after logging out the seeded
@@ -222,21 +249,7 @@ export async function apiLoginViaOtc(
   const baseURL = process.env.API_URL || 'http://localhost:3000';
   const normalizedEmail = email.toLowerCase().trim();
 
-  const secret = process.env.E2E_CLEANUP_SECRET || Resource.E2E_CLEANUP_SECRET?.value;
-  if (!secret) {
-    throw new Error('E2E_CLEANUP_SECRET must be set in .env.e2e');
-  }
-  // The secret header lets a -e2e@test.com send skip the Turnstile challenge (see requireTurnstile).
-  const sendResponse = await request.post(`${baseURL}/api/otc/send`, {
-    data: { email: normalizedEmail },
-    headers: { ...wafBypassHeaders(), 'x-e2e-cleanup-secret': secret },
-  });
-  if (!sendResponse.ok()) {
-    throw new Error(`OTC send failed: ${sendResponse.status()} ${sendResponse.statusText()}`);
-  }
-  const { pendingToken } = (await sendResponse.json()) as { pendingToken: string };
-
-  const code = await apiGetOtcCode(request, normalizedEmail);
+  const { pendingToken, code } = await apiSendOtcAndReadCode(request, normalizedEmail);
 
   const verifyResponse = await request.post(`${baseURL}/api/otc/verify`, {
     data: { email: normalizedEmail, code, pendingToken },

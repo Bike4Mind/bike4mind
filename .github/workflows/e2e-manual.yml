@@ -40,6 +40,7 @@ on:
           - Studio
           - WebSocket Auth
           - Static Asset
+          - Launch Readiness
         default: All tests
       pr_number:
         description: 'PR number for preview env (overrides stage, e.g. 123)'
@@ -100,6 +101,8 @@ jobs:
             "Studio")           ARGS="--project=studio" ;;
             "WebSocket Auth")   ARGS="--project=websocket-auth" ;;
             "Static Asset")     ARGS="--project=static-asset" ;;
+            # One worker: two gates hold a stage-wide signup setting and skip when another test could run beside them.
+            "Launch Readiness") ARGS="--project=launch-readiness --workers=1" ;;
             *)                  ARGS="" ; echo "Unknown selection '$TEST_PROJECT' — running full suite" ;;
           esac
           echo "playwright_args=$ARGS" >> "$GITHUB_OUTPUT"

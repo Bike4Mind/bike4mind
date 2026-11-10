@@ -158,6 +158,8 @@ export default defineConfig({
   // gives Playwright time to run teardown and write artifacts before the job is killed.
   globalTimeout: process.env.CI && process.env.AI_LATENCY_RUN !== 'true' ? 30 * 60_000 : undefined,
   expect: { timeout: TIMEOUTS.VISIBLE },
+  // Read back from pw-results.json by the launch-readiness checker to name the stage a run covered.
+  metadata: { apiUrl: process.env.API_URL || '' },
   globalSetup: './e2e/global-setup.ts',
   globalTeardown: './e2e/global-teardown.ts',
   outputDir: 'e2e/test-results',
@@ -225,6 +227,14 @@ export default defineConfig({
       name: 'websocket-auth',
       use: { ...devices['Desktop Chrome'] },
       testMatch: [/(?:^|\/)websocket-auth\.spec\.ts$/],
+      dependencies: ['setup-core'],
+    },
+    // RDY CHK launch-readiness gates: each test title leads with its gate id, which is how the checker
+    // reads pw-results.json. Mints its own accounts, so it needs only core setup.
+    {
+      name: 'launch-readiness',
+      use: { ...devices['Desktop Chrome'] },
+      testMatch: /(?:^|\/)e2e\/launch-readiness\/[^/]+\.spec\.ts$/,
       dependencies: ['setup-core'],
     },
     // Admin specs

@@ -301,6 +301,15 @@ jobs:
           path: apps/client/playwright-report/
           retention-days: 7
 
+      # The launch-readiness checker downloads this by name and reads the gate results from the JSON report.
+      - name: Upload launch-readiness report
+        if: always() && steps.e2e.outputs.preview_skipped != 'true' && steps.scrub.outcome == 'success' && hashFiles('apps/client/pw-results.json') != ''
+        uses: actions/upload-artifact@v6
+        with:
+          name: launch-readiness-report
+          path: apps/client/pw-results.json
+          retention-days: 14
+
       - name: Parse test results
         id: results
         if: always()
