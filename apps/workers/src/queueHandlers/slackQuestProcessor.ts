@@ -100,11 +100,11 @@ let cachedDbConnection: typeof mongoose.connection | null = null;
 
 export const getStaticOptions = () => {
   if (cachedStaticOptions) {
-    console.log('♻️ [PERFORMANCE] Reusing cached static ChatCompletion options');
+    Logger.info('[PERFORMANCE] Reusing cached static ChatCompletion options');
     return cachedStaticOptions;
   }
 
-  console.log('🔧 [PERFORMANCE] Initializing static ChatCompletion options (first invocation)');
+  Logger.info('[PERFORMANCE] Initializing static ChatCompletion options (first invocation)');
   cachedStaticOptions = {
     db: {
       sessions: sessionRepository,
@@ -381,7 +381,7 @@ async function deliverSlackProcessingFailure(questId: string, logger: Logger): P
  */
 export const handler = withEventContext(async (event, logger) => {
   const handlerStartTime = Date.now();
-  console.log('🌍 [SERVER] slack quest processor handler start:', new Date().toISOString());
+  logger.info('[SERVER] slack quest processor handler start');
 
   const params = LLMEvents.SlackCompletionStart.schema.parse(event.properties as unknown);
 
@@ -389,9 +389,9 @@ export const handler = withEventContext(async (event, logger) => {
     const dbStartTime = Date.now();
     await connectDB(Config.MONGODB_URI.replace('%STAGE%', Config.STAGE), logger);
     cachedDbConnection = mongoose.connection;
-    console.log(`⏱️ [TIMING] MongoDB connected (new): ${Date.now() - dbStartTime}ms`);
+    logger.info(`[TIMING] MongoDB connected (new): ${Date.now() - dbStartTime}ms`);
   } else {
-    console.log(`♻️ [PERFORMANCE] Reusing existing DB connection (readyState: ${mongoose.connection.readyState})`);
+    logger.info(`[PERFORMANCE] Reusing existing DB connection (readyState: ${mongoose.connection.readyState})`);
   }
 
   const queryStartTime = Date.now();
@@ -399,7 +399,7 @@ export const handler = withEventContext(async (event, logger) => {
     User.findById(params.userId),
     sessionRepository.findById(params.sessionId),
   ]);
-  console.log(`⏱️ [TIMING] User and session queries completed: ${Date.now() - queryStartTime}ms`);
+  logger.info(`[TIMING] User and session queries completed: ${Date.now() - queryStartTime}ms`);
 
   if (!user) throw new NotFoundError('User not found');
 
@@ -446,11 +446,11 @@ export const handler = withEventContext(async (event, logger) => {
     createCompletionMeter: ({ organizationId, featureLabel }) =>
       createCompletionMeter(user, logger, featureLabel, { sessionId: params.sessionId, organizationId }),
   });
-  console.log(`⏱️ [TIMING] ChatCompletionProcess instantiation: ${Date.now() - optionsStartTime}ms`);
+  logger.info(`[TIMING] ChatCompletionProcess instantiation: ${Date.now() - optionsStartTime}ms`);
 
   const timeToProcess = Date.now() - handlerStartTime;
-  console.log('🌍 [SERVER] slack quest processor call chatCompletion.process:', new Date().toISOString());
-  console.log(`⏱️ [TIMING] Handler start to chatCompletion.process: ${timeToProcess}ms`);
+  logger.info('[SERVER] slack quest processor call chatCompletion.process');
+  logger.info(`[TIMING] Handler start to chatCompletion.process: ${timeToProcess}ms`);
 
   // Slack completions always get Slack tools - no enableSlackTools flag needed
   const baseTools: Record<string, ToolDefinition> = { ...slackToolDefinitions };

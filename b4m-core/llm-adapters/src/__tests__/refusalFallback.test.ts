@@ -11,7 +11,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { AnthropicBackend } from '../anthropicBackend';
-import { ChatModels } from '@bike4mind/common';
+import { ChatModels, ModelBackend, type ModelInfo } from '@bike4mind/common';
 
 function asyncIterable(events: unknown[]) {
   return {
@@ -74,5 +74,48 @@ describe('AnthropicBackend — safety-classifier refusal fallback', () => {
         async () => {}
       )
     ).resolves.not.toThrow();
+  });
+});
+
+describe('AnthropicBackend refusal fallback read from the catalog', () => {
+  const record = (id: string, patch: Partial<ModelInfo>) =>
+    ({
+      id,
+      type: 'text',
+      name: id,
+      backend: ModelBackend.Anthropic,
+      contextWindow: 1_000_000,
+      max_tokens: 128_000,
+      pricing: {},
+      can_stream: true,
+      supportsImageVariation: false,
+      thinkingStyle: 'adaptive',
+      ...patch,
+    }) as ModelInfo;
+  const complete = (backend: AnthropicBackend, model: string) =>
+    backend.complete(model, [{ role: 'user', content: 'a request' }], { stream: true }, async () => {});
+
+  it('surfaces a decline from a catalog-only model whose row states no refusalFallback', async () => {
+    const { backend, enqueue } = buildBackend();
+    backend.setDispatchModel(record('claude-fable-5-2', {}));
+    enqueue(refusalTurn());
+
+    await expect(complete(backend, 'claude-fable-5-2')).resolves.not.toThrow();
+  });
+
+  it('throws into the fallback chain when the row states refusalFallback', async () => {
+    const { backend, enqueue } = buildBackend();
+    backend.setDispatchModel(record('claude-fable-5-2', { refusalFallback: true }));
+    enqueue(refusalTurn());
+
+    await expect(complete(backend, 'claude-fable-5-2')).rejects.toThrow(/safety classifier refusal/i);
+  });
+
+  it('lets an operator row turn the seeded fallback off for a listed model', async () => {
+    const { backend, enqueue } = buildBackend();
+    backend.setDispatchModel(record(ChatModels.CLAUDE_FABLE_5, { refusalFallback: false }));
+    enqueue(refusalTurn());
+
+    await expect(complete(backend, ChatModels.CLAUDE_FABLE_5)).resolves.not.toThrow();
   });
 });

@@ -4,6 +4,7 @@ import {
   meetsAdminPermissionRequirement,
   MODERATION_PAGE_READ,
   SETTINGS_PAGE_READ,
+  CREDITS_PAGE_READ,
   type AdminPermissionRequirement,
 } from '@bike4mind/common';
 import { AdminTab } from './adminSidebarConfig';
@@ -39,6 +40,8 @@ export const DELEGATED_ADMIN_TAB_PERMISSIONS: Readonly<Partial<Record<AdminTab, 
   [AdminTab.ManageGears]: SETTINGS_PAGE_READ,
   [AdminTab.AgentExecutions]: SETTINGS_PAGE_READ,
 
+  // Subscriptions: writes need credits:adjust and its GET routes declare the same CREDITS_PAGE_READ.
+  [AdminTab.Subscriptions]: CREDITS_PAGE_READ,
   // Its list, release and revoke routes all declare credits:adjust.
   [AdminTab.HeldSignupGrants]: 'credits:adjust',
   // Pages whose writes need users:moderate; their GET routes declare the same MODERATION_PAGE_READ.

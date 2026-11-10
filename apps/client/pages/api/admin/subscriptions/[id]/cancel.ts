@@ -4,14 +4,18 @@ import { isScheduledToCancel } from '@client/app/utils/adminSubscriptionDetail';
 import { runAdminStripeWrite } from '@server/admin/stripeWrite/adminStripeWrite';
 import { assertLiveStripeRow, cancelScheduleChanges } from '@server/admin/stripeWrite/cancelResumeShared';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 
 /**
  * POST /api/admin/subscriptions/[id]/cancel: schedules the Stripe subscription to cancel at the end of the paid
  * period. Access and credits continue until then; resume reverses it. Nothing is refunded.
  */
-const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  auth: 'jwtOnly',
+  requiredScopes: [ApiKeyScope.ADMIN],
+  adminPermissions: { POST: 'credits:adjust' },
+})
   .use(rateLimit({ limit: 10, windowMs: 60_000, bucket: 'admin-stripe-write' }))
   .post(
     asyncHandler<{}, unknown, unknown, { id: string }>(async (req, res) => {

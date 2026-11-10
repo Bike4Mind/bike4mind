@@ -108,6 +108,10 @@ export const RESEARCH_RECENCY_DAYS_LIMIT = 366;
 /** How many domains an allow or deny list may hold. Bounded so one config cannot become a corpus. */
 export const RESEARCH_DOMAIN_LIST_MAX = 50;
 
+/** What a run does with a hit that matches no listed site: queue it for review, or drop it. */
+export const RESEARCH_UNLISTED_SOURCES = ['review', 'drop'] as const;
+export type ResearchUnlistedSources = (typeof RESEARCH_UNLISTED_SOURCES)[number];
+
 /**
  * How long a `queued` or `running` run keeps holding the one-at-a-time guard before it is read as
  * abandoned rather than in flight.
@@ -221,11 +225,21 @@ export interface ResearchRunLevers {
    */
   recencyDays?: number;
   /**
-   * When non-empty, ONLY these domains are considered; every other hit is dropped before it costs
-   * anything. Matched on registrable-suffix (`docs.example.com` matches an `example.com` entry).
+   * Sites whose hits are queued for review tagged as trusted. Not settable through the API yet;
+   * matched on a label-boundary suffix (`docs.example.com` matches an `example.com` entry).
+   */
+  trustedDomains: string[];
+  /** Sites whose hits are queued for review. Same matching as `trustedDomains`. */
+  reviewDomains: string[];
+  /** What happens to a hit that matches neither list. `drop` makes the lists an allow list. */
+  unlistedSources: ResearchUnlistedSources;
+  /**
+   * Derived on every write: the trusted plus review lists when `unlistedSources` is `drop`, else
+   * empty. Read by no new code path except the legacy-mismatch rule; kept for readers that predate
+   * the tiers.
    */
   allowedDomains: string[];
-  /** Always dropped, and applied AFTER the allow list so a deny entry can carve out a subdomain. */
+  /** Always dropped. A blocked match wins over every other list, so it can carve out a subdomain. */
   blockedDomains: string[];
   /** 0..1. See RESEARCH_MIN_RELEVANCE_DEFAULT - a producer-side filter, never an admission gate. */
   minRelevance: number;
@@ -234,6 +248,16 @@ export interface ResearchRunLevers {
   /** Advisory tags the run suggests for anything it proposes. The queue sanitizes them. */
   proposedTags: string[];
 }
+
+/**
+ * A lever set as it may sit in storage: written before the tiers existed, or by code that still
+ * writes `allowedDomains`. Read it through `upgradeLegacyResearchLevers`.
+ */
+export type LegacyResearchRunLevers = Omit<
+  ResearchRunLevers,
+  'trustedDomains' | 'reviewDomains' | 'unlistedSources' | 'allowedDomains'
+> &
+  Partial<Pick<ResearchRunLevers, 'trustedDomains' | 'reviewDomains' | 'unlistedSources' | 'allowedDomains'>>;
 
 // -- Schedule ----------------------------------------------------------------------------------
 //
@@ -371,7 +395,7 @@ export interface IDataLakeResearchRun {
    * levers were THEN. Reading them off the live config would attribute the run to settings it never
    * ran with - the same reason the queue records provenance instead of recomputing it.
    */
-  levers: ResearchRunLevers;
+  levers: LegacyResearchRunLevers;
   trigger: ResearchRunTrigger;
   /** Who started it. Absent for a scheduled run, which has no human behind it. */
   startedByUserId?: string | null;

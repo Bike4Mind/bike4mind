@@ -1,6 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import type Stripe from 'stripe';
-import { BadRequestError, NotFoundError, type AuditChange } from '@bike4mind/common';
+import {
+  BadRequestError,
+  hasAdminPermission,
+  missingAdminPermissionMessage,
+  NotFoundError,
+  type AuditChange,
+} from '@bike4mind/common';
 import { cacheRepository, withTransaction } from '@bike4mind/database';
 import { ConflictError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { Config, isProduction } from '@bike4mind/server-utils/utils/config';
@@ -19,6 +25,7 @@ import {
 } from '@client/app/utils/adminSubscriptionDetail';
 import { subscriptionPlanCatalog } from '@server/admin/subscriptionsList/adminSubscriptionsQuery';
 import { toAdminSubscriptionRows, type SubscriptionDoc } from '@server/admin/subscriptionsList/listAdminSubscriptions';
+import { assertDelegateCanChangeSubscription } from '@server/admin/creditGrants/delegateTargets';
 import { resolveSubscriptionOwner } from '@server/admin/subscriptionDetail/resolveSubscriptionOwner';
 import {
   denySelfAdminAction,
@@ -51,7 +58,7 @@ export const isUnknownStripeOutcome = (error: unknown): boolean => {
 export type AdminStripeWriteAction = 'billing.subscription.cancel_scheduled' | 'billing.subscription.resumed';
 
 type GuardRequest = Parameters<typeof recordAdminActionFromRequest>[0] & {
-  user?: { id: string; isAdmin?: boolean; impersonatedBy?: string };
+  user?: { id: string; isAdmin?: boolean; adminPermissions?: readonly string[] | null; impersonatedBy?: string };
   body?: unknown;
   logger: { error: (message: string, ...meta: unknown[]) => void };
 };
@@ -117,7 +124,7 @@ const notifyOwner = async (req: GuardRequest, ids: { notifyUserId: string | null
 };
 
 /**
- * The one path for an admin write to Stripe (docs/admin-subscriptions-spec.md section 7). Guards, in order: admin
+ * The one path for an admin write to Stripe (docs/admin-subscriptions-spec.md section 7). Guards, in order: credits:adjust
  * only, no impersonation, live-key refusal off production, a required body and reason, the subscription lookup,
  * no self-target, an idempotency claim (a repeat of a finished write replays its response with no Stripe call), the
  * business-state concurrency check, then the Stripe call and, in one transaction, the mirror write plus its strict
@@ -145,7 +152,9 @@ export const runAdminStripeWrite = async ({
   changes,
 }: AdminStripeWriteArgs): Promise<AdminStripeWriteResponse> => {
   const admin = req.user;
-  if (!admin?.isAdmin) throw new ForbiddenError('Unauthorized. Admin access required.');
+  if (!admin || !hasAdminPermission(admin, 'credits:adjust')) {
+    throw new ForbiddenError(missingAdminPermissionMessage('credits:adjust'));
+  }
   if (admin.impersonatedBy) throw new ForbiddenError('Stripe writes are not available while impersonating.');
 
   assertStripeKeyMatchesStage({
@@ -170,6 +179,8 @@ export const runAdminStripeWrite = async ({
       target: owner.target,
     });
   }
+
+  await assertDelegateCanChangeSubscription(admin, subscription, 'change the subscription of');
 
   const claimKey = `admin-stripe-write:${admin.id}:${id}:${action}:${idempotencyKey}`;
   // Scoped like the claim, so one client key reused for another action or subscription is never a Stripe conflict.

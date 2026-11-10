@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ADMIN_LEDGER_EXPORT_MAX_ROWS, BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/common';
+import { ADMIN_LEDGER_EXPORT_MAX_ROWS, BadRequestError, CREDITS_PAGE_READ, NotFoundError } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   findLedgerPage: vi.fn(),
@@ -11,8 +11,8 @@ const h = vi.hoisted(() => ({
   inSnapshot: false,
 }));
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: (config?: unknown) => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: (config?: unknown) => {
     const handlers: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign(
       (req: unknown, res: unknown) => handlers[(req as { method?: string }).method ?? 'GET']?.(req, res),
@@ -74,9 +74,11 @@ beforeEach(() => {
 });
 
 describe('GET /api/admin/users/[userId]/credit-ledger-export', () => {
-  it('requires the ADMIN scope and rejects non-admins and bad input before any read', async () => {
-    expect((handler as unknown as { _config?: unknown })._config).toEqual({ auth: 'jwtOnly' });
-    await expect(run({}, { id: 'u2', isAdmin: false }).promise).rejects.toBeInstanceOf(ForbiddenError);
+  it('is jwt-only, gated on the credits page permissions, and rejects bad input before any read', async () => {
+    expect((handler as unknown as { _config?: unknown })._config).toEqual({
+      auth: 'jwtOnly',
+      adminPermissions: { GET: CREDITS_PAGE_READ },
+    });
     await expect(run({ kind: 'bogus' }).promise).rejects.toBeInstanceOf(BadRequestError);
     await expect(run({ userId: 'ghost' }).promise).rejects.toBeInstanceOf(NotFoundError);
     expect(h.findLedgerPage).not.toHaveBeenCalled();

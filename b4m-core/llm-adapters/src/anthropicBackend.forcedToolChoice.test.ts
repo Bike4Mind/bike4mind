@@ -7,7 +7,13 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { APIConnectionError, APIError } from '@anthropic-ai/sdk';
-import { ChatModels, supportsForcedToolChoice, type ModelInfo, type ResponseFormat } from '@bike4mind/common';
+import {
+  ChatModels,
+  ModelBackend,
+  supportsForcedToolChoice as supportsForcedToolChoiceFor,
+  type ModelInfo,
+  type ResponseFormat,
+} from '@bike4mind/common';
 import { AnthropicBackend } from './anthropicBackend';
 import type { CompletionInfo, ICompletionOptions, ICompletionOptionTools } from './backend';
 import {
@@ -180,6 +186,8 @@ function systemText(system: unknown): string {
 function expectNoForcedChoice(params: Params) {
   expect(['any', 'tool']).not.toContain(params.tool_choice?.type);
 }
+
+const supportsForcedToolChoice = (id: string) => supportsForcedToolChoiceFor({ id, backend: ModelBackend.Anthropic });
 
 describe('supportsForcedToolChoice', () => {
   it.each(NO_FORCED_MODELS)('is false for %s', model => {
@@ -1356,5 +1364,46 @@ describe('isStrictCompatibleSchema', () => {
     ['a $ref', { $ref: '#/$defs/node' }],
   ])('rejects %s', (_label, schema) => {
     expect(isStrictCompatibleSchema(schema)).toBe(false);
+  });
+});
+
+describe('AnthropicBackend on a model only the catalog knows', () => {
+  const fable52 = {
+    id: 'claude-fable-5-2',
+    type: 'text',
+    name: 'Claude Fable 5.2',
+    backend: ModelBackend.Anthropic,
+    contextWindow: 1_000_000,
+    max_tokens: 128_000,
+    pricing: {},
+    can_stream: true,
+    supportsTools: true,
+    supportsImageVariation: false,
+    thinkingStyle: 'adaptive',
+    adapterFamily: 'anthropic-messages',
+    dispatchProfile: { maxTokensParam: 'max_tokens', toolTransport: 'native' },
+  } as ModelInfo;
+
+  it.each([
+    ['states no apiSurface flag', {}],
+    [
+      'carries the flags inherited from Fable 5.1',
+      { forcedToolChoice: false, assistantPrefill: false, toolSearch: true },
+    ],
+  ])("downgrades 'required' to auto when its row %s", async (_label, flags) => {
+    const { backend, captured } = buildBackend(() => textResponse('ok'));
+    backend.setDispatchModel({ ...fable52, ...flags });
+    await run(backend, fable52.id, { stream: false, tools: [weatherTool(STRICT_PARAMS)], tool_choice: 'required' });
+
+    expectNoForcedChoice(captured[0]);
+    expect(captured[0].tool_choice).toEqual({ type: 'auto' });
+  });
+
+  it('forwards a forced choice once an operator row states the model takes one', async () => {
+    const { backend, captured } = buildBackend(() => textResponse('ok'));
+    backend.setDispatchModel({ ...fable52, forcedToolChoice: true });
+    await run(backend, fable52.id, { stream: false, tools: [weatherTool(STRICT_PARAMS)], tool_choice: 'required' });
+
+    expect(captured[0].tool_choice).toEqual({ type: 'any' });
   });
 });
