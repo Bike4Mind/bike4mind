@@ -1,16 +1,11 @@
 import { ForbiddenError, isFullAdmin } from '@bike4mind/common';
 import { userRepository } from '@bike4mind/database';
-import { AdminSettings } from '@bike4mind/database/infra';
-import {
-  AdminUsersBulkExecuteRequestSchema,
-  adminUsersBulkActionPermissions,
-  blocksEmailDomains,
-} from '@client/app/utils/adminUsersBulk';
-import { requireAdminPermission } from '@server/middlewares/adminApi';
+import { AdminUsersBulkExecuteRequestSchema, blocksEmailDomains } from '@client/app/utils/adminUsersBulk';
 import { approvalAuditWriter } from '@server/admin/approvals/auditWriter';
 import type { ApprovalExecutor } from '@server/admin/approvals/executors';
 import { selfIdsOf } from './actor';
 import { usersBulkExecuteDepsFor } from './adapters';
+import { assertCanRunUsersBulkAction } from './authorize';
 import { executeAdminUsersBulk } from './execute';
 
 /**
@@ -20,10 +15,7 @@ import { executeAdminUsersBulk } from './execute';
 export const executeApprovedUsersBulk: ApprovalExecutor = async (params, { req, approval }) => {
   const request = AdminUsersBulkExecuteRequestSchema.parse(params);
   if (!req.user) throw new ForbiddenError('Unauthorized. Admin access required.');
-  for (const permission of adminUsersBulkActionPermissions(request.action)) requireAdminPermission(req, permission);
-  if (blocksEmailDomains(request.action) && !req.ability?.can('update', AdminSettings)) {
-    throw new ForbiddenError('Blocking email domains needs permission to edit admin settings.');
-  }
+  assertCanRunUsersBulkAction(req, request.action.type, { blocks: blocksEmailDomains(request.action) });
   const selfIds = [...new Set([...selfIdsOf(req.user), ...approval.requestedBy.selfIds])];
   // Delegated-admin accounts stay in the cohort only when both admins could act on them; a cohort the
   // requester's preview resolved differently is then a 409, as for any cohort that changed.

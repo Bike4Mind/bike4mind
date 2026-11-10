@@ -1,18 +1,16 @@
 import { ApiKeyScope, isFullAdmin } from '@bike4mind/common';
-import { AdminSettings } from '@bike4mind/database/infra';
 import type { Request } from 'express';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { adminApi, requireAdminPermission } from '@server/middlewares/adminApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { selfIdsOf } from '@server/admin/usersBulk/actor';
 import { usersBulkExecuteDeps } from '@server/admin/usersBulk/adapters';
+import { assertCanRunUsersBulkAction } from '@server/admin/usersBulk/authorize';
 import { requestUsersBulkApprovalIfNeeded } from '@server/admin/usersBulk/approvalGate';
 import { executeAdminUsersBulk } from '@server/admin/usersBulk/execute';
 import {
   ADMIN_USERS_BULK_ROUTE_PERMISSIONS,
   AdminUsersBulkExecuteRequestSchema,
-  adminUsersBulkActionPermissions,
   blocksEmailDomains,
   type AdminUsersBulkResult,
 } from '@client/app/utils/adminUsersBulk';
@@ -35,11 +33,7 @@ const handler = adminApi({
   .post(
     asyncHandler(async (req, res) => {
       const request = AdminUsersBulkExecuteRequestSchema.parse(req.body);
-      for (const permission of adminUsersBulkActionPermissions(request.action)) requireAdminPermission(req, permission);
-      // Blocking domains writes blockedEmailDomains, so it needs the settings route's permission too.
-      if (blocksEmailDomains(request.action) && !req.ability?.can('update', AdminSettings)) {
-        throw new ForbiddenError('Blocking email domains needs permission to edit admin settings.');
-      }
+      assertCanRunUsersBulkAction(req, request.action.type, { blocks: blocksEmailDomains(request.action) });
       const gate = await requestUsersBulkApprovalIfNeeded(req as unknown as Request, request);
       if (gate.pending) return res.status(202).json(gate.pending);
       try {

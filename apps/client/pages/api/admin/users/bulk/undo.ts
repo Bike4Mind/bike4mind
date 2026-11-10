@@ -1,9 +1,9 @@
 import { ApiKeyScope, ForbiddenError } from '@bike4mind/common';
-import { AdminSettings } from '@bike4mind/database/infra';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { adminApi, requireAdminPermission } from '@server/middlewares/adminApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { usersBulkUndoDeps } from '@server/admin/usersBulk/adapters';
+import { assertCanRunUsersBulkAction } from '@server/admin/usersBulk/authorize';
 import { undoAdminUsersBulk } from '@server/admin/usersBulk/undo';
 import {
   ADMIN_USERS_BULK_ACTION_PERMISSIONS,
@@ -37,11 +37,9 @@ const handler = adminApi({
           if (!Object.hasOwn(ADMIN_USERS_BULK_ACTION_PERMISSIONS, record.action)) {
             throw new ForbiddenError('This bulk action cannot be undone here.');
           }
-          const type = record.action as AdminUsersBulkActionType;
-          for (const permission of ADMIN_USERS_BULK_ACTION_PERMISSIONS[type]) requireAdminPermission(req, permission);
-          if (record.blockedDomains?.length && !req.ability?.can('update', AdminSettings)) {
-            throw new ForbiddenError('Unblocking email domains needs permission to edit admin settings.');
-          }
+          assertCanRunUsersBulkAction(req, record.action as AdminUsersBulkActionType, {
+            unblocks: Boolean(record.blockedDomains?.length),
+          });
         }
       );
       return res.json(result);
