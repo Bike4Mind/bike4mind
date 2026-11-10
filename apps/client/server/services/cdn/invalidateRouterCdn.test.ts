@@ -38,6 +38,18 @@ beforeEach(() => {
 });
 
 describe('invalidateRouterPaths', () => {
+  it('gives same-label requests in the same millisecond distinct CallerReferences', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
+    await invalidateRouterPaths(['/generated/a.png'], { label: 'same' });
+    await invalidateRouterPaths(['/generated/b.png'], { label: 'same' });
+    vi.restoreAllMocks();
+    const refs = sendMock.mock.calls.map(
+      ([cmd]) => (cmd as { input: SentInput }).input.InvalidationBatch.CallerReference
+    );
+    expect(refs).toHaveLength(2);
+    expect(new Set(refs).size).toBe(2);
+  });
+
   it('dedupes and drops wildcards and non-absolute paths', async () => {
     await invalidateRouterPaths(['/generated/a.png', '/generated/a.png', '/generated/*', 'generated/b.png'], {
       label: 't',

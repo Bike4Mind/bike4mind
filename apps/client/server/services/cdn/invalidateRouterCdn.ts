@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { CloudFrontClient, CreateInvalidationCommand } from '@aws-sdk/client-cloudfront';
 import { resolveRouterDistributionId } from '@bike4mind/server-utils/security/wafSharedHelpers';
 import { appFileKeyToCdnPath, resolveProxyTarget } from '@bike4mind/server-utils/utils/appFileProxy';
@@ -49,7 +50,7 @@ export async function sendInvalidation(
       new CreateInvalidationCommand({
         DistributionId: distributionId,
         InvalidationBatch: {
-          CallerReference: `${referencePrefix}-${label}-${Date.now()}`,
+          CallerReference: `${referencePrefix}-${label}-${Date.now()}-${randomUUID()}`,
           Paths: { Quantity: paths.length, Items: paths },
         },
       })
