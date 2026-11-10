@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { User } from '@bike4mind/database';
@@ -10,11 +10,13 @@ import {
 import { assertDelegateCanCreditUsers } from './delegateTargets';
 
 const delegate = { id: '111111111111111111111111', adminPermissions: ['credits:adjust'] };
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
+
 let server: MongoMemoryServer;
 beforeAll(async () => {
   server = await createMongoServer();
   await mongoose.connect(server.getUri());
-}, MONGO_TEST_TIMEOUT_MS);
+});
 afterAll(async () => {
   await mongoose.disconnect();
   await server?.stop();
