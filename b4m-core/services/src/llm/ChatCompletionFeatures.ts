@@ -2438,13 +2438,13 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     }
     if (coverage.filesWithheldReindexing > 0) {
       // Names TIME as the remedy, matching describeRetrievalUnavailable's wording rule: the reader
-      // must not be sent to re-embed a document that is already re-embedding.
+      // must not be sent to re-embed a document that is already being indexed.
       reasons.push(
-        `${coverage.filesWithheldReindexing} document(s) are being re-indexed right now and were withheld - ` +
-          'their passages are being replaced and the replacements are not searchable yet; they return on their own'
+        `${coverage.filesWithheldReindexing} document(s) are still being indexed and were withheld - ` +
+          'their passages are not searchable yet; they return on their own'
       );
       readerReasons.push(
-        `${coverage.filesWithheldReindexing} document(s) are being re-indexed right now and were skipped. ` +
+        `${coverage.filesWithheldReindexing} document(s) are still being indexed and were skipped. ` +
           'They return on their own.'
       );
     }
