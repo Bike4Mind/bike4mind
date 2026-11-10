@@ -1040,6 +1040,14 @@ export interface IUserRepository
    * (now or from an earlier attempt), false when another account already does.
    */
   claimFreeCreditGrant: (userId: string) => Promise<boolean>;
+  /**
+   * Reapplies a reversed grant release's saved fields only while signupGrant.creditsReleased still equals
+   * `creditsReleased` (or signupGrant is absent when null). False when nothing matched.
+   */
+  restoreReleasedGrantState: (
+    userId: string,
+    input: { creditsReleased: number | null; set: Partial<IUserDocument>; unset: (keyof IUserDocument)[] }
+  ) => Promise<boolean>;
   /** Sets signupGrant.inviteBonusPaid only where it is unset; false when another write set it first. */
   markInviteBonusPaid: (userId: string, credits: number) => Promise<boolean>;
   /**
