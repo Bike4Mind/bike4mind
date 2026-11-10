@@ -78,6 +78,7 @@ class DlqReplayLogRepository extends BaseRepository<IDlqReplayLog> {
       endDate?: Date;
       search?: string;
       limit?: number;
+      includeBody?: boolean;
     } = {}
   ): Promise<IDlqReplayLog[]> {
     const query: Record<string, unknown> = {};
@@ -91,12 +92,13 @@ class DlqReplayLogRepository extends BaseRepository<IDlqReplayLog> {
     if (filters.search) {
       const escaped = filters.search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       query.$or = [
-        { messageBody: { $regex: escaped, $options: 'i' } },
+        { messageId: { $regex: escaped, $options: 'i' } },
         { errorMessage: { $regex: escaped, $options: 'i' } },
       ];
     }
+    const projection = filters.includeBody ? undefined : { messageBody: 0 };
     const results = await this.model
-      .find(query)
+      .find(query, projection)
       .sort({ createdAt: -1 })
       .limit(filters.limit ?? 50);
     return results.map(doc => doc.toObject());

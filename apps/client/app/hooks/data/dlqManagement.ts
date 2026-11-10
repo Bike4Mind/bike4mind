@@ -35,7 +35,6 @@ export interface DlqReplayLogEntry {
   id: string;
   queueLabel: string;
   messageId: string;
-  messageBody: string;
   sourceQueue: string;
   status: 'success' | 'failed' | 'skipped';
   errorMessage?: string;

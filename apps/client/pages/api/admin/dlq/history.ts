@@ -53,6 +53,7 @@ const handler = adminApi({
     endDate: endDate ? new Date(endDate) : undefined,
     search,
     limit,
+    includeBody: false,
   });
 
   Logger.info(`[DLQ History] Returned ${history.length} entries`, { adminUserId, queue });
