@@ -316,6 +316,26 @@ describe('shell expansions reaching a protected location', () => {
     });
     expect(printed.split('\n').slice(0, -1)).toEqual(expected);
   });
+
+  const BRACED = '"`echo "{a,b}"`"';
+
+  it.each([
+    ['4000 negations', '! '.repeat(4000), '! ', '', ''],
+    ['4001 negations', '! '.repeat(4001), '! ', '', ''],
+    ['2500 -a terms', 'x -a '.repeat(2500), 'x -a ', '', ''],
+    ['2500 -o terms', 'x -o '.repeat(2500), 'x -o ', '', ''],
+    ['2000 nested parentheses', '( '.repeat(2000), '( ', ' )'.repeat(2000), ' )'],
+  ])('reads a `[` test of %s as it reads a short one', async (_label, prefix, short, close, shortClose) => {
+    for (const leaf of ['x', BRACED]) {
+      const deep = `[ ${prefix}${leaf}${close} ]`;
+      const reference = `[ ${short}${leaf}${shortClose} ]`;
+      const expected = leaf === 'x' ? { auto: true, full: true } : { auto: false, full: false };
+      expect(await decide(reference)).toEqual(expected);
+      expect(await decide(deep)).toEqual(expected);
+      const deepScan = await scanShell(deep, project, [project]);
+      expect(deepScan?.unread).toBe((await scanShell(reference, project, [project]))?.unread);
+    }
+  });
 });
 
 describe('conservative POSIX bracket matching', () => {

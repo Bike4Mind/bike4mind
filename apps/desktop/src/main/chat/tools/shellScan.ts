@@ -4804,10 +4804,23 @@ const TEST_EXPRESSIONS = new Set([
  */
 function braceExpandedWords(node: Node): Node[] {
   const named = node.namedChildren.filter((child): child is Node => child !== null && child.type !== 'comment');
-  const leaves = (expression: Node): Node[] =>
-    TEST_EXPRESSIONS.has(expression.type)
-      ? expression.namedChildren.flatMap(child => (child === null ? [] : leaves(child)))
-      : [expression];
+  // Iterative, in source order: a long `! ! ! x` or `-a` chain would overflow the stack if recursed.
+  const leaves = (root: Node): Node[] => {
+    const found: Node[] = [];
+    const pending: Node[] = [root];
+    for (let top = pending.pop(); top !== undefined; top = pending.pop()) {
+      if (!TEST_EXPRESSIONS.has(top.type)) {
+        found.push(top);
+        continue;
+      }
+      const children = top.namedChildren;
+      for (let at = children.length - 1; at >= 0; at--) {
+        const child = children[at];
+        if (child !== null && child !== undefined) pending.push(child);
+      }
+    }
+    return found;
+  };
   switch (node.type) {
     case 'command':
       return named.filter(child => child.type !== 'variable_assignment' && !child.type.endsWith('redirect'));
