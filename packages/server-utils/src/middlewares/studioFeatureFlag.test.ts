@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 import type { Request, Response } from 'express';
 
 const { getSettingByNameMock } = vi.hoisted(() => ({ getSettingByNameMock: vi.fn() }));
@@ -84,7 +85,7 @@ describe('requireStudioFeature', () => {
 
   it('fails closed with 500 when the settings read throws', async () => {
     getSettingByNameMock.mockRejectedValueOnce(new Error('db down'));
-    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(Logger, 'error').mockImplementation(() => undefined);
     const { req, res, next, json } = mkCtx({ isAdmin: true });
     await requireStudioFeature('createV2')(req, res, next);
     expect(next).not.toHaveBeenCalled();

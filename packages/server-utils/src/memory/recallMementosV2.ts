@@ -6,6 +6,7 @@ import { createLedgerMemoryStore } from './ledgerMemoryStore';
 import { createUserMementoMemoryStore } from './userMementoMemoryStore';
 import { isMementosV2Enabled } from './mementoLedgerMirror';
 import { embedMementoQuery } from './mementoQueryEmbedding';
+import { Logger } from '@bike4mind/observability';
 
 /**
  * How many beliefs V2 injects into the prompt at most.
@@ -70,7 +71,7 @@ export async function recallMementosV2(
       // Falling back to lexical is the right call - never fail a chat turn over recall - but do it
       // LOUDLY. Silently, an embedding-provider outage just makes memory quietly worse: the model
       // still answers, so nothing looks broken while retrieval quality has collapsed to token overlap.
-      console.warn(
+      Logger.warn(
         `[Mementos V2] query embedding failed; recall degraded to lexical for this turn: ${
           err instanceof Error ? err.message : String(err)
         }`

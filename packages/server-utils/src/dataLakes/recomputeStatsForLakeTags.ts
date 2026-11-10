@@ -46,7 +46,7 @@ export const recomputeStatsForLakeTags = async (
     /**
      * `warn` as well as `error`, and both are forwarded into the adapters below: the audit write
      * inside `recordLakeConfigChange` is best-effort and reports a failure through `warn`, so an
-     * unforwarded logger sends an audit going dark to `console.warn`, where log-based alerting
+     * unforwarded logger sends an audit going dark to the unscoped global logger, where log-based alerting
      * cannot see it. Optional so the existing callers that supply only `error` still compile.
      */
     logger: {

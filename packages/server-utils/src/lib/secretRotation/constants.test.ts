@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 
 const ROTATION = {
   secret: 'EXAMPLE_API_TOKEN',
@@ -24,7 +25,7 @@ async function load(
 describe('secret rotation registry', () => {
   beforeEach(() => {
     vi.resetModules();
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(Logger, 'warn').mockImplementation(() => {});
   });
 
   afterEach(() => {

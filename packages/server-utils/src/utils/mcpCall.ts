@@ -2,6 +2,7 @@ import { ExpectedToolError } from '@bike4mind/common';
 import { MCPClient, McpServerConfigError } from '@bike4mind/mcp';
 import { Resource } from 'sst';
 import { resolveMcpTenantKey } from './mcpTenantKey';
+import { Logger } from '@bike4mind/observability';
 
 const STDERR_TAIL_LINES = 5;
 const STDERR_LINE_MAX_CHARS = 500;
@@ -17,7 +18,7 @@ export const handler = async (params: any) => {
   const { envVariables, name, toolName, toolArgs, action, userId } = params;
 
   // Capture rate limit events from the MCP server's stderr stream.
-  // All rate limit logging uses console.error in the child process (stderr),
+  // All rate limit logging writes to stderr in the child process,
   // because MCP uses stdout for JSON-RPC protocol.
   const rateLimitEvents: Record<string, unknown>[] = [];
   // A child that exits during the handshake surfaces only as "Connection closed"; its own last
@@ -57,7 +58,7 @@ export const handler = async (params: any) => {
         if (Array.isArray(tools)) {
           payload = tools;
         } else {
-          console.error(`❌ MCP Handler: Tools is not an array for ${name}:`, tools);
+          Logger.error(`MCP Handler: Tools is not an array for ${name}`, { toolsType: typeof tools });
           payload = [];
         }
       } else if (action === 'callTool') {
@@ -76,7 +77,7 @@ export const handler = async (params: any) => {
       } else {
         throw new Error(`Invalid action: ${action}`);
       }
-      console.log(`✅ MCP Handler: ${action} completed successfully for ${name}`);
+      Logger.info(`MCP Handler: ${action} completed successfully for ${name}`);
 
       // Child process's stderr stream may still have buffered data events queued in the event
       // loop after callTool() resolves. Yielding a tick flushes those callbacks so
@@ -104,9 +105,9 @@ export const handler = async (params: any) => {
             throw new Error(`HTTP ${resp.status}: ${await resp.text().catch(() => 'no body')}`);
           }
           const result = (await resp.json()) as { persisted?: number };
-          console.log(`[RateLimit] Persisted ${result.persisted}/${rateLimitEvents.length} events for ${name}`);
+          Logger.info(`[RateLimit] Persisted ${result.persisted}/${rateLimitEvents.length} events for ${name}`);
         } catch (err) {
-          console.error(`[RateLimit] Failed to persist events for ${name}:`, err);
+          Logger.error(`[RateLimit] Failed to persist events for ${name}`, { error: err });
           // Fallback: attach events to payload for upstream persistence via invokeMcpHandler
           payload = { ...payload, _rateLimitEvents: rateLimitEvents };
         }
@@ -123,7 +124,7 @@ export const handler = async (params: any) => {
         lastError.message.includes('ECONNRESET');
 
       if (isConnectionError && attempt < MAX_RETRIES) {
-        console.warn(`⚠️ MCP Handler: Connection error on attempt ${attempt}/${MAX_RETRIES} for ${name}, retrying...`);
+        Logger.warn(`MCP Handler: Connection error on attempt ${attempt}/${MAX_RETRIES} for ${name}, retrying...`);
         await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
         continue;
       }
@@ -131,7 +132,7 @@ export const handler = async (params: any) => {
       // The user's integration setup, not a platform fault. Callers check this before invoking
       // (invokeMcpHandler), so reaching it here means one skipped that check.
       if (lastError instanceof McpServerConfigError) {
-        console.warn(`MCP Handler: ${action} refused for ${name}: ${lastError.message}`);
+        Logger.warn(`MCP Handler: ${action} refused for ${name}: ${lastError.message}`);
         throw lastError;
       }
 
@@ -141,7 +142,7 @@ export const handler = async (params: any) => {
       const enhancedError = new FailureError(`MCP Handler failed for ${name} (action: ${action}): ${errorMessage}`);
       // Retries are exhausted, so a server that keeps failing (e.g. crashes on start) still pages
       // here. The typed ExpectedToolError only lets the calling adapter log its own line at warn.
-      console.error(
+      Logger.error(
         `MCP Handler Error for ${name}:`,
         enhancedError,
         ...(stderrTail.length ? ['\nchild stderr:', stderrTail.join('\n')] : [])
@@ -153,7 +154,7 @@ export const handler = async (params: any) => {
           await withTimeout(mcp.disconnect(), 5000, `MCP disconnect timeout for ${name}`);
         } catch (disconnectError) {
           // Disconnect errors aren't critical - log and continue
-          console.warn(`⚠️ MCP Handler: Error disconnecting from ${name}:`, disconnectError);
+          Logger.warn(`MCP Handler: Error disconnecting from ${name}`, { error: disconnectError });
         }
         isConnected = false;
       }

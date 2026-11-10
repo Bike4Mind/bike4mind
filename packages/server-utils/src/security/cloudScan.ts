@@ -24,6 +24,7 @@ import { resolveStage } from './resolveStage';
 import { computeStatusScoreAndSummary } from './securityDashboardScoring';
 import { Config } from '../utils/config';
 import { Resource } from 'sst';
+import { Logger } from '@bike4mind/observability';
 
 type CloudSeverity = 'critical' | 'high' | 'medium' | 'low';
 
@@ -532,7 +533,7 @@ export const handler = async (): Promise<void> => {
 
     await securityDashboardSnapshotRepository.create(snapshotInput);
   } catch (error) {
-    console.error('Cloud security scan failed', {
+    Logger.error('Cloud security scan failed', {
       message: error instanceof Error ? error.message : 'Unknown error',
     });
     throw error;

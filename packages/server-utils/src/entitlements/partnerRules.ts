@@ -1,3 +1,4 @@
+import { Logger } from '@bike4mind/observability';
 /**
  * DB-backed partner signup rules (issue #293) - the runtime, admin-managed
  * source of domain-grant entitlements + one-time signup credits, replacing the
@@ -87,7 +88,7 @@ async function getRulesMap(): Promise<Map<string, ResolvedRule>> {
       // Fail closed, but never silently: a DB outage degrades every partner to zero grants,
       // so surface it for alerting. No req-scoped logger here (module-level cache) - console
       // is picked up by the Lambda log pipeline.
-      console.error('[partnerRules] failed to load signup rules; failing closed to no grants', error);
+      Logger.error('[partnerRules] failed to load signup rules; failing closed to no grants', { error });
       return new Map<string, ResolvedRule>();
     })
     .finally(() => {

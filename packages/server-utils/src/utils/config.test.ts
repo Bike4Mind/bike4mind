@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 
 // Real SST throws in the Resource property getter itself when a resource
 // isn't linked/provisioned on the current stage - simulate that here instead
@@ -58,7 +59,7 @@ describe('Config eager-read hardening', () => {
 
   it('resolves unlinked premium-overlay secrets to undefined instead of throwing on import', async () => {
     mockResourceWithUnlinked();
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
 
     const { Config } = await import('./config');
 
@@ -116,7 +117,7 @@ describe('Config eager-read hardening', () => {
       OPTIHASHI_API_URL: { value: 'https://optihashi.example.com' },
       OVERWATCH_INGEST_ENABLED: { value: 'true' },
     });
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
 
     const { Config } = await import('./config');
 

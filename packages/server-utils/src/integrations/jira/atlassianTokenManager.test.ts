@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 
 const { findById, userUpdate, mcpFindOne, mcpUpdate } = vi.hoisted(() => ({
   findById: vi.fn(),
@@ -44,8 +45,8 @@ function mockTokenResponse(body: Record<string, unknown>) {
 describe('AtlassianTokenManager.getValidTokens refresh', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.spyOn(console, 'log').mockImplementation(() => {});
-    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(Logger, 'info').mockImplementation(() => {});
+    vi.spyOn(Logger, 'error').mockImplementation(() => {});
     findById.mockResolvedValue(expiringUser);
     mcpFindOne.mockResolvedValue(null);
   });

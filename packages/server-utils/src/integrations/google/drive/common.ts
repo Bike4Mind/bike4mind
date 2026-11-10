@@ -10,6 +10,7 @@ import { createStateToken } from '../../../auth/jwtStateStore';
 import { issueStateNonce, NONCE_SLOT } from '../../../auth/oauthFlowCookie';
 import { DRIVE_RECONNECT_REQUIRED_MESSAGE } from './driveClient';
 import { isInvalidGrantError, isTerminalDriveGrantError } from './driveGrantErrors';
+import { Logger } from '@bike4mind/observability';
 
 export { isInvalidGrantError, isTerminalDriveGrantError };
 
@@ -93,7 +94,7 @@ export async function revokeDriveGrant(
   context: string
 ): Promise<RevokeOutcome> {
   if (!encryptedToken) {
-    console.warn(`[googleDrive] revoke skipped (${context}): no stored credential`);
+    Logger.warn(`[googleDrive] revoke skipped (${context}): no stored credential`);
     return 'no_credential';
   }
 
@@ -103,11 +104,11 @@ export async function revokeDriveGrant(
   } catch (e) {
     // Undecryptable (post key-rotation / partial restore): the grant is unreachable from here, so
     // say so loudly rather than reporting a revoke that never happened.
-    console.error(`[googleDrive] revoke failed (${context}): stored credential is unreadable`, e);
+    Logger.error(`[googleDrive] revoke failed (${context}): stored credential is unreadable`, { error: e });
     return 'failed';
   }
   if (!token) {
-    console.warn(`[googleDrive] revoke skipped (${context}): stored credential decrypted to empty`);
+    Logger.warn(`[googleDrive] revoke skipped (${context}): stored credential decrypted to empty`);
     return 'no_credential';
   }
 
@@ -118,16 +119,16 @@ export async function revokeDriveGrant(
       revokeToken(token),
       new Promise<never>((_, reject) => timeout.addEventListener('abort', () => reject(timeout.reason))),
     ]);
-    console.log(`[googleDrive] revoked grant at Google (${context})`);
+    Logger.info(`[googleDrive] revoked grant at Google (${context})`);
     return 'revoked';
   } catch (e) {
     // A token Google no longer recognises (already revoked, or expired past its grant) leaves nothing
     // live - the desired end state, not a failure to retry.
     if (isUnknownTokenError(e)) {
-      console.log(`[googleDrive] revoke no-op (${context}): Google no longer recognises the token`);
+      Logger.info(`[googleDrive] revoke no-op (${context}): Google no longer recognises the token`);
       return 'already_invalid';
     }
-    console.error(`[googleDrive] revoke failed (${context}) - the grant may still be live at Google`, e);
+    Logger.error(`[googleDrive] revoke failed (${context}) - the grant may still be live at Google`, { error: e });
     return 'failed';
   }
 }
@@ -197,7 +198,7 @@ export async function releaseDriveConnection(connectionId: string, owner: LakeCo
   const connectionToken = decryptStoredToken(connection.oauthRefreshToken);
   const isBorrowed = !!connectionToken && connectionToken === (await personalRefreshTokenOf(connection.connectedBy));
   if (isBorrowed) {
-    console.log(
+    Logger.info(
       `[googleDrive] revoke skipped (org connection ${connectionId}): credential is the connecting user's own personal Drive token - dropping the org copy only`
     );
   } else {
@@ -306,7 +307,7 @@ export async function getValidUserDriveAccessToken(
     // handing it to the browser, whose grant check then never sends the user to consent. Best-effort:
     // a write failure must not mask the reconnect verdict below.
     await User.updateOne({ _id: userId }, { 'googleDrive.expiresAt': new Date(0) }).catch((writeError: unknown) =>
-      console.warn('[googleDrive] could not expire a revoked access token', writeError)
+      Logger.warn('[googleDrive] could not expire a revoked access token', { error: writeError })
     );
     // A revoked/expired grant is a reconnect (400), not a server fault: left raw, drive-sync 500s on it.
     throw new BadRequestError(DRIVE_RECONNECT_REQUIRED_MESSAGE);

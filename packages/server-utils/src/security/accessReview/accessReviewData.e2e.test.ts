@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 import mongoose from 'mongoose';
 import {
   AuthSessionModel,
@@ -371,7 +372,7 @@ describe('collectAccessReview', () => {
 
 describe('sendAccessReviewReminder', () => {
   it('logs the counts as one JSON line and posts the reminder', async () => {
-    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const log = vi.spyOn(Logger, 'info').mockImplementation(() => undefined);
     const post = vi.fn().mockResolvedValue(undefined);
 
     await expect(sendAccessReviewReminder(now, post)).resolves.toBe('2027-Q1');

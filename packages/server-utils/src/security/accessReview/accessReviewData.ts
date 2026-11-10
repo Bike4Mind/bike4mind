@@ -20,6 +20,7 @@ import {
   type AccessReviewDelegation,
   type AccessReviewSnapshot,
 } from './accessReview';
+import { Logger } from '@bike4mind/observability';
 
 /** Reads for the quarterly access review. Read-only: every query is a find, count or $match/$group. */
 
@@ -359,7 +360,7 @@ export async function collectAccessReview(options: CollectAccessReviewOptions = 
 export async function sendAccessReviewReminder(now: Date, post: (text: string) => Promise<unknown>): Promise<string> {
   const quarter = reviewQuarter(now);
   const counts = await collectAccessReviewCounts(now);
-  console.log(JSON.stringify({ report: 'access-review', quarter, generatedAt: now.toISOString(), counts }));
+  Logger.info(JSON.stringify({ report: 'access-review', quarter, generatedAt: now.toISOString(), counts }));
   await post(formatAccessReviewSlackMessage({ quarter, counts }));
   return quarter;
 }

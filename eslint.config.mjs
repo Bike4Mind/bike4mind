@@ -791,6 +791,20 @@ export default defineConfig([
     },
   },
 
+  // Server code logs through the structured Logger (redaction + metadata), never console.* directly;
+  // see b4m-core/observability. Its own rule id, so the no-restricted-imports blocks above are untouched.
+  // server-utils/src/bootstrap patches console by design, so it is exempt.
+  {
+    files: ['packages/server-utils/src/**/*.{ts,tsx,mts,cts}'],
+    ignores: [
+      '**/*.{test,spec}.{ts,tsx}',
+      '**/__tests__/**',
+      '**/__test__/**',
+      'packages/server-utils/src/bootstrap/**',
+    ],
+    rules: { 'no-console': 'error' },
+  },
+
   // #9627 — ban filesystem tree-walking in test files anywhere under apps/client/pages/**. Uses
   // no-restricted-syntax (a different rule id than no-restricted-imports), so the apps/client
   // Next.js block's import restrictions still apply to these files unchanged. See

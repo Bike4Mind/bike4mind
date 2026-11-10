@@ -1,6 +1,7 @@
 import { logEvent } from './analyticsLog';
 import { AuthEvents } from '@bike4mind/common';
 import { AdminConfigAuditEvents, AdminOrgAuditEvents, DataLakeAuditEvents, EmailAuditEvents } from './auditLogEvents';
+import { Logger } from '@bike4mind/observability';
 
 // Re-export so existing call sites continue to import these names from `auditLog`.
 // The canonical definitions live in `auditLogEvents.ts` to avoid an import cycle
@@ -89,7 +90,7 @@ export async function logAuditEvent(metadata: AuditLogMetadata, logger?: AuditLo
     if (logger) {
       logger.error('Failed to log audit event', payload);
     } else {
-      console.error('Failed to log audit event', payload);
+      Logger.error('Failed to log audit event', { payload });
     }
   }
 }
