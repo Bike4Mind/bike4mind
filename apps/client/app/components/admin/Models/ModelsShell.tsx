@@ -56,7 +56,7 @@ export function ModelsShell() {
         description="Models users can pick, why the others are hidden, and what each one costs."
         actions={
           <Stack direction="row" gap={1} alignItems="center">
-            <ContextHelpButton helpId="admin/llm-dashboard" tooltipText="Models help" />
+            <ContextHelpButton helpId="admin/models" tooltipText="Models help" />
             <RunDiscoveryButton data-testid="models-run-discovery-btn" />
           </Stack>
         }
