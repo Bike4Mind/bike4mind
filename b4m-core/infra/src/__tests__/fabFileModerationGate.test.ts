@@ -212,6 +212,12 @@ const ALLOWLIST: Record<string, string> = {
   'apps/client/server/slack/dataLakeIngestDeps.ts':
     'DI passthrough to the already-gated fabFileService.createFabFile, which withholds fileUrl for images; the adapter only forwards the mode createFabFile asks for',
 
+  // --- Permanent modal copies: upload moderation runs before promotion. ---
+  'apps/client/pages/api/modal-images/[name].ts':
+    'signs only modal-images/<uuid>.<ext> keys referenced by a Modal row, not uploaded FabFile keys; ModalImageHandler checks isImageServeable before promoting an uploaded image into this prefix',
+  'apps/client/server/tools/modalImageUrls.ts':
+    'signs only the modal-images/ prefix of permanent modal copies, not uploaded FabFile keys; ModalImageHandler checks isImageServeable before promoting an uploaded image into this prefix',
+
   // --- Generated output: delivery and the saveGeneratedAsset passthrough. ---
   'apps/client/server/utils/generatedAudioDelivery.ts':
     'audio-only - signs a GET for oversized generated audio it just uploaded under generated-audio-offload/ (no FabFile row, audio/* only); a saved copy is served by the fileUrl the already-gated createFabFile minted, so isImageServeable is inapplicable',
