@@ -1,9 +1,8 @@
 import { Request } from 'express';
 import { z } from 'zod';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { deletePublishThumbnail, enqueuePublishThumbnail } from '@bike4mind/server-utils/utils/publishThumbnails';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { PublishedArtifact, PublishedArtifactReport, withTransaction } from '@bike4mind/database';
 import { invalidatePublishCdn, toCacheTarget } from '@server/services/publish';
 import { recordAdminActionFromRequest, userAuditTarget } from '@bike4mind/server-utils/utils/adminAudit';
@@ -35,11 +34,11 @@ const auditDetails = (artifact: { publicId: string; tier: string; scopeId: strin
 /** Strip CR/LF from admin-supplied free text before it reaches the log line. */
 const oneLine = (s: string) => s.replace(/[\r\n]+/g, ' ').trim();
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  requiredScopes: [ApiKeyScope.ADMIN],
+  adminPermissions: { POST: 'users:moderate', DELETE: 'users:moderate' },
+})
   .post(async (req: Request, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
     const publicId = String(req.query.id);
     const parsed = TakedownSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
@@ -101,9 +100,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     return res.status(200).json({ ok: true });
   })
   .delete(async (req: Request, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
     const publicId = String(req.query.id);
 
     // Restore only a previously taken-down page, atomically. Un-deleting clears

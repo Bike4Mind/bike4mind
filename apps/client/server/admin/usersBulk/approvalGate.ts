@@ -1,4 +1,4 @@
-import { ForbiddenError, type AdminPermissionId } from '@bike4mind/common';
+import { ForbiddenError, isFullAdmin, type AdminPermissionId } from '@bike4mind/common';
 import { adminAuditLogRepository } from '@bike4mind/database';
 import type { Request } from 'express';
 import type { AdminUsersBulkAction, AdminUsersBulkExecuteRequest } from '@client/app/utils/adminUsersBulk';
@@ -44,7 +44,12 @@ export async function requestUsersBulkApprovalIfNeeded(
   if (!req.user) throw new ForbiddenError('Unauthorized. Admin access required.');
   const actorId = req.user.id;
 
-  const users = await confirmedCohort(request, { id: actorId, selfIds: selfIdsOf(req.user) }, deps, new Date());
+  const users = await confirmedCohort(
+    request,
+    { id: actorId, selfIds: selfIdsOf(req.user), fullAdmin: isFullAdmin(req.user) },
+    deps,
+    new Date()
+  );
   const windowMs = policy.expiryHours * HOUR_MS;
   const since = new Date(Date.now() - windowMs);
   const releaseUsers = await reserveWithinWindow(

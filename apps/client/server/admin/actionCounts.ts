@@ -100,11 +100,11 @@ export const ADMIN_ACTION_COUNTERS: Record<AdminActionCountKey, AdminActionCount
     count: ({ cap }) => signupGrantReleaseRepository.countHeld(undefined, { limit: cap }),
   },
   signupDomainHolds: {
-    access: 'fullAdmin',
+    access: 'users:moderate',
     count: ({ cap }) => signupDomainHoldListRepository.countPending({ limit: cap }),
   },
   signupRiskReview: {
-    access: 'fullAdmin',
+    access: 'users:moderate',
     count: ({ cap }) => userRepository.countPendingRiskReviews({ limit: cap }),
   },
   approvals: {
@@ -119,7 +119,7 @@ export const ADMIN_ACTION_COUNTERS: Record<AdminActionCountKey, AdminActionCount
       }),
   },
   publishedPages: {
-    access: 'fullAdmin',
+    access: 'users:moderate',
     count: ({ cap }) => publishedArtifactRepository.countReported({ limit: cap }),
   },
   stripeDisputes: {

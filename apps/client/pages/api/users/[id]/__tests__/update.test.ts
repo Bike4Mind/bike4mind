@@ -91,6 +91,7 @@ vi.mock('@bike4mind/services', async orig => ({
     accountBlockReasons: (await orig<typeof import('@bike4mind/services')>()).userService.accountBlockReasons,
     entersSuspension: (await orig<typeof import('@bike4mind/services')>()).userService.entersSuspension,
     adminUpdateUser: (...a: unknown[]) => mockAdminUpdateUser(...a),
+    MODERATION_UPDATE_FIELDS: (await orig<typeof import('@bike4mind/services')>()).userService.MODERATION_UPDATE_FIELDS,
     setThrottleTier: (...a: unknown[]) => mockSetThrottleTier(...a),
     updateUser: (...a: unknown[]) => mockUpdateUser(...a),
     // Both stand-ins are real allowlists (not passthrough) so the discarded-field
@@ -1483,5 +1484,97 @@ describe('PUT /api/users/:id/update - restricted tier', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData().ignoredFields).toContain('throttleTier');
     expect(mockSetThrottleTier).not.toHaveBeenCalled();
+  });
+});
+
+describe('PUT /api/users/:id/update - users:moderate delegate', () => {
+  const MODERATOR = { id: 'mod1', isAdmin: false, adminPermissions: ['users:moderate'] };
+  const target = (overrides: Record<string, unknown> = {}) => ({
+    id: 'other-user',
+    name: 'Other',
+    isAdmin: false,
+    adminPermissions: [],
+    ...overrides,
+  });
+  const forbidden = async (promise: Promise<void>) => {
+    const error = await promise.catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ForbiddenError);
+    return error as ForbiddenError;
+  };
+
+  it.each([
+    ['suspends', { isBanned: true, statusChangeReason: 'Abuse' }],
+    ['restricts', { isModerated: true, statusChangeReason: 'Abuse' }],
+    ['moves to the limited tier', { throttleTier: 'shadow', throttleReason: 'Abuse' }],
+  ])('%s another account through the admin branch', async (_label, body) => {
+    mockUserFindById.mockReturnValue(target());
+    const { res, promise } = run({ user: MODERATOR, userId: 'other-user', body });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockAdminUpdateUser).toHaveBeenCalledWith(MODERATOR.id, expect.objectContaining(body), expect.anything());
+  });
+
+  it.each([
+    [
+      'credits',
+      { isBanned: true, statusChangeReason: 'Abuse', currentCredits: 0, creditReason: 'Abuse' },
+      'currentCredits',
+    ],
+    ['the admin role', { isAdmin: true, roleChangeReason: 'Promote' }, 'isAdmin'],
+    ['the email', { email: 'new@example.com' }, 'email'],
+    ['tags', { tags: ['vip'] }, 'tags'],
+  ])('refuses %s, which stay full-admin', async (_label, body, field) => {
+    mockUserFindById.mockReturnValue(target());
+    const error = await forbidden(run({ user: MODERATOR, userId: 'other-user', body }).promise);
+
+    expect(error.message).toContain(field);
+    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a full admin', { isAdmin: true }],
+    ['a delegated admin', { adminPermissions: ['support:read'] }],
+  ])('cannot suspend %s', async (_label, overrides) => {
+    mockUserFindById.mockReturnValue(target(overrides));
+    const error = await forbidden(
+      run({ user: MODERATOR, userId: 'other-user', body: { isBanned: true, statusChangeReason: 'Abuse' } }).promise
+    );
+
+    expect(error.message).toBe('Only full administrators can suspend or restrict users with admin access');
+    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+  });
+
+  it('lets a full admin suspend a delegated admin', async () => {
+    mockUserFindById.mockReturnValue(target({ adminPermissions: ['support:read'] }));
+    const { res, promise } = run({
+      user: ADMIN,
+      userId: 'other-user',
+      body: { isBanned: true, statusChangeReason: 'Abuse' },
+    });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockAdminUpdateUser).toHaveBeenCalled();
+  });
+
+  it('refuses a delegate without users:moderate as it does any non-admin', async () => {
+    const { res, promise } = run({
+      user: { id: 'd1', isAdmin: false, adminPermissions: ['support:read'] },
+      userId: 'other-user',
+      body: { isBanned: true, statusChangeReason: 'Abuse' },
+    });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+  });
+
+  it('sends a delegate editing their own profile through self-service', async () => {
+    const { promise } = run({ user: MODERATOR, userId: MODERATOR.id, body: { name: 'New Name' } });
+    await promise;
+
+    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+    expect(mockUpdateUser).toHaveBeenCalled();
   });
 });

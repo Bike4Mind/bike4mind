@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { UserModerationStatus } from '@bike4mind/common';
+import { canAccessAdmin, type UserModerationStatus } from '@bike4mind/common';
 import {
   ADMIN_USERS_BULK_MAX,
   ADMIN_USERS_BULK_MAX_CREDIT_TOTAL,
@@ -18,6 +18,7 @@ export type BulkUser = {
   email: string | null;
   username: string | null;
   isAdmin: boolean;
+  adminPermissions?: readonly string[];
   isBanned: boolean;
   isModerated: boolean;
   tags: string[];
@@ -54,31 +55,33 @@ const SAMPLE_SIZE = 5;
 
 type Classified = { eligible: BulkUser[]; excluded: { self: number; admins: number } };
 
-function classify(users: BulkUser[], selfIds: ReadonlySet<string>, into: Classified): void {
+function classify(users: BulkUser[], selfIds: ReadonlySet<string>, actorIsFullAdmin: boolean, into: Classified): void {
   for (const user of users) {
     if (selfIds.has(user.id)) into.excluded.self += 1;
-    else if (user.isAdmin) into.excluded.admins += 1;
+    // A delegated admin must not reach an account with admin access (assertCanActOnAdminTarget).
+    else if (user.isAdmin || (!actorIsFullAdmin && canAccessAdmin(user))) into.excluded.admins += 1;
     else into.eligible.push(user);
   }
 }
 
 /**
  * The users a bulk action targets, minus the calling admin (and the account they impersonate) and
- * every admin. A filter target is read in `_id` pages and stops as soon as the cap is exceeded, so
+ * every admin (see classify for delegated admins). A filter target is read in `_id` pages and stops as soon as the cap is exceeded, so
  * resolving never reads more than RESOLVE_MAX_PAGES pages.
  */
 export async function resolveAdminUsersBulk(
   target: AdminUsersBulkTarget,
   selfIds: readonly string[],
   deps: ResolveDeps,
-  now: Date
+  now: Date,
+  { actorIsFullAdmin = false }: { actorIsFullAdmin?: boolean } = {}
 ): Promise<ResolvedCohort> {
   const self = new Set(selfIds.map(id => id.toLowerCase()));
   const result: Classified = { eligible: [], excluded: { self: 0, admins: 0 } };
 
   if (target.kind === 'ids') {
     const users = await deps.findUsersByIds([...new Set(target.userIds)]);
-    classify(users, self, result);
+    classify(users, self, actorIsFullAdmin, result);
     return { matched: users.length, ...result, overCap: result.eligible.length > ADMIN_USERS_BULK_MAX };
   }
 
@@ -89,7 +92,7 @@ export async function resolveAdminUsersBulk(
   for (let page = 0; page < RESOLVE_MAX_PAGES; page++) {
     const rows = await readPage(afterId, RESOLVE_PAGE_SIZE);
     matched += rows.length;
-    classify(rows, self, result);
+    classify(rows, self, actorIsFullAdmin, result);
     if (rows.length < RESOLVE_PAGE_SIZE) {
       exhausted = true;
       break;

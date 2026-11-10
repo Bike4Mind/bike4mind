@@ -1,10 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ApiKeyScope, SIGNUP_RISK_REVIEW_LIST_LIMIT } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  ForbiddenError,
+  MODERATION_PAGE_READ,
+  SIGNUP_RISK_REVIEW_LIST_LIMIT,
+  meetsAdminPermissionRequirement,
+  missingAdminPermissionMessage,
+  type AdminPermissionRequirement,
+} from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   handlers: {} as Record<string, (req: unknown, res: unknown) => Promise<void>>,
   baseOptions: vi.fn(),
+  find: vi.fn(),
   findPending: vi.fn(),
   findAutoApprovals: vi.fn(),
   setState: vi.fn(),
@@ -23,17 +32,34 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   getSettingsMap: h.settings,
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: (options: unknown) => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  requireAdminPermission: (
+    req: { user?: Parameters<typeof meetsAdminPermissionRequirement>[0] },
+    requirement: AdminPermissionRequirement
+  ) => {
+    if (!meetsAdminPermissionRequirement(req.user, requirement)) {
+      throw new ForbiddenError(missingAdminPermissionMessage(requirement));
+    }
+  },
+  adminApi: (options: { adminPermissions: Partial<Record<string, AdminPermissionRequirement>> }) => {
     h.baseOptions(options);
+    const gated =
+      (method: string, fn: (req: unknown, res: unknown) => Promise<void>) => async (req: unknown, res: unknown) => {
+        const requirement = options.adminPermissions[method];
+        const { user } = req as { user?: Parameters<typeof meetsAdminPermissionRequirement>[0] };
+        if (requirement && !meetsAdminPermissionRequirement(user, requirement)) {
+          throw new ForbiddenError(missingAdminPermissionMessage(requirement));
+        }
+        return fn(req, res);
+      };
     const chain = {
       use: () => chain,
       get: (fn: (req: unknown, res: unknown) => Promise<void>) => {
-        h.handlers.get = fn;
+        h.handlers.get = gated('GET', fn);
         return chain;
       },
       post: (fn: (req: unknown, res: unknown) => Promise<void>) => {
-        h.handlers.post = fn;
+        h.handlers.post = gated('POST', fn);
         return chain;
       },
     };
@@ -45,6 +71,7 @@ vi.mock('@bike4mind/database', () => ({
     findPendingRiskReviews: h.findPending,
     findRiskAutoApprovals: h.findAutoApprovals,
     setRiskReviewState: h.setState,
+    find: h.find,
   },
   usageEventRepository: { creditsSpentByUsers: h.creditsSpent },
   userApiKeyRepository: { countCreatedByUserIds: h.keysCreated },
@@ -73,9 +100,16 @@ const USER_A = '1'.repeat(24);
 const USER_B = '2'.repeat(24);
 const REASON = 'Spam or bot cohort';
 
-const request = (method: 'GET' | 'POST', body?: unknown, isAdmin = true) => {
+const DELEGATE = { id: ADMIN_ID, isAdmin: false, adminPermissions: ['users:moderate', 'credits:adjust'] };
+const MODERATOR = { id: ADMIN_ID, isAdmin: false, adminPermissions: ['users:moderate'] };
+
+const request = (
+  method: 'GET' | 'POST',
+  body?: unknown,
+  user: Record<string, unknown> = { id: ADMIN_ID, isAdmin: true }
+) => {
   const { req, res } = createMocks({ method, body });
-  Object.assign(req, { user: { id: ADMIN_ID, isAdmin }, logger: { warn: h.warn } });
+  Object.assign(req, { user, logger: { warn: h.warn } });
   return { req, res };
 };
 
@@ -98,6 +132,7 @@ beforeEach(() => {
   h.findPending.mockReset().mockResolvedValue([]);
   h.findAutoApprovals.mockReset().mockResolvedValue([]);
   h.setState.mockReset().mockResolvedValue(true);
+  h.find.mockReset().mockResolvedValue([]);
   h.settings.mockReset().mockResolvedValue({});
   h.creditsSpent.mockReset().mockResolvedValue({});
   h.keysCreated.mockReset().mockResolvedValue({});
@@ -109,16 +144,86 @@ beforeEach(() => {
 const NO_GRANT_RELEASES = { grantReleasedUserIds: [] };
 
 describe('signup risk review queue', () => {
-  it('is session-only and admin-only for both reads and decisions', async () => {
-    expect(h.baseOptions).toHaveBeenCalledWith({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] });
+  it('is session-only and declares a moderation read for the queue and users:moderate for decisions', () => {
+    expect(h.baseOptions).toHaveBeenCalledWith({
+      auth: 'jwtOnly',
+      requiredScopes: [ApiKeyScope.ADMIN],
+      adminPermissions: { GET: MODERATION_PAGE_READ, POST: 'users:moderate' },
+    });
+  });
 
-    const get = request('GET', undefined, false);
-    await expect(h.handlers.get(get.req, get.res)).rejects.toThrow(/admin access required/i);
-    const post = request('POST', { action: 'approve', userIds: [USER_A], reason: REASON }, false);
-    await expect(h.handlers.post(post.req, post.res)).rejects.toThrow(/admin access required/i);
+  it('refuses a delegate without the needed permission for reads and decisions', async () => {
+    const outsider = { id: ADMIN_ID, isAdmin: false, adminPermissions: ['credits:adjust'] };
+    const get = request('GET', undefined, outsider);
+    await expect(h.handlers.get(get.req, get.res)).rejects.toThrow(missingAdminPermissionMessage(MODERATION_PAGE_READ));
+    const reader = { id: ADMIN_ID, isAdmin: false, adminPermissions: ['support:read'] };
+    const post = request('POST', { action: 'approve', userIds: [USER_A], reason: REASON }, reader);
+    await expect(h.handlers.post(post.req, post.res)).rejects.toThrow(missingAdminPermissionMessage('users:moderate'));
 
     expect(h.findPending).not.toHaveBeenCalled();
     expect(h.setState).not.toHaveBeenCalled();
+  });
+
+  it('admits a support:read delegate to the queue', async () => {
+    const { req, res } = request('GET', undefined, {
+      id: ADMIN_ID,
+      isAdmin: false,
+      adminPermissions: ['support:read'],
+    });
+
+    await h.handlers.get(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+  });
+
+  it.each([
+    ['a full administrator', { isAdmin: true }],
+    ['a delegate with admin permissions', { adminPermissions: ['support:read'] }],
+  ])('refuses a users:moderate delegate deciding on %s and writes nothing', async (_label, adminFields) => {
+    h.find.mockResolvedValue([{ id: USER_B, ...adminFields }]);
+    const { req, res } = request('POST', { action: 'approve', userIds: [USER_A, USER_B], reason: REASON }, DELEGATE);
+
+    await expect(h.handlers.post(req, res)).rejects.toThrow(
+      'Only full administrators can review the signup of users with admin access'
+    );
+    expect(h.find).toHaveBeenCalledWith({ _id: { $in: [USER_A, USER_B] } });
+    expect(h.setState).not.toHaveBeenCalled();
+    expect(h.record).not.toHaveBeenCalled();
+  });
+
+  it('needs credits:adjust to approve, since approving pays a withheld grant', async () => {
+    const { req, res } = request('POST', { action: 'approve', userIds: [USER_A], reason: REASON }, MODERATOR);
+
+    await expect(h.handlers.post(req, res)).rejects.toThrow('Missing permission: credits:adjust');
+    expect(h.setState).not.toHaveBeenCalled();
+  });
+
+  it('lets a users:moderate delegate reopen without credits:adjust', async () => {
+    h.find.mockResolvedValue([{ id: USER_A }]);
+    const { req, res } = request('POST', { action: 'reopen', userIds: [USER_A], reason: REASON }, MODERATOR);
+
+    await h.handlers.post(req, res);
+
+    expect(h.setState).toHaveBeenCalledWith(USER_A, 'approved', 'pending');
+  });
+
+  it('lets a delegate decide on ordinary accounts', async () => {
+    h.find.mockResolvedValue([{ id: USER_A }]);
+    const { req, res } = request('POST', { action: 'approve', userIds: [USER_A], reason: REASON }, DELEGATE);
+
+    await h.handlers.post(req, res);
+
+    expect(h.setState).toHaveBeenCalledWith(USER_A, 'pending', 'approved');
+  });
+
+  it('lets a full admin decide on an admin account without loading the targets', async () => {
+    h.find.mockResolvedValue([{ id: USER_A, isAdmin: true }]);
+    const { req, res } = request('POST', { action: 'approve', userIds: [USER_A], reason: REASON });
+
+    await h.handlers.post(req, res);
+
+    expect(h.find).not.toHaveBeenCalled();
+    expect(h.setState).toHaveBeenCalledWith(USER_A, 'pending', 'approved');
   });
 
   it('lists recent automatic approvals so a reviewer can reopen them', async () => {

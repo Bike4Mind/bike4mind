@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, type AdminPermissionId } from '@bike4mind/common';
+import { ADMIN_USERS_BULK_ROUTE_PERMISSIONS } from '@client/app/utils/adminUsersBulk';
 
-vi.mock('@server/middlewares/baseApi', async () =>
-  (await import('@server/admin/bulkAbuse/__tests__/bulkAbuseRouteMocks')).baseApiMock()
+vi.mock('@server/middlewares/adminApi', async () =>
+  (await import('@server/admin/bulkAbuse/__tests__/bulkAbuseRouteMocks')).adminApiMock()
 );
 vi.mock('@server/middlewares/asyncHandler', async () =>
   (await import('@server/admin/bulkAbuse/__tests__/bulkAbuseRouteMocks')).asyncHandlerMock()
@@ -29,6 +30,7 @@ const UNDO_RESULT = {
 import handler from '../undo';
 
 const ADMIN = { id: 'a'.repeat(24), isAdmin: true };
+const delegate = (...adminPermissions: AdminPermissionId[]) => ({ ...ADMIN, isAdmin: false, adminPermissions });
 const BATCH_ID = '7b1f3c52-9a3e-4b8e-8f43-2f4a1c9d0e11';
 
 async function call(body: unknown, user: Record<string, unknown> = ADMIN) {
@@ -48,13 +50,20 @@ describe('POST /api/admin/users/bulk/undo', () => {
     expect((handler as unknown as { _config: unknown })._config).toEqual({
       auth: 'jwtOnly',
       requiredScopes: [ApiKeyScope.ADMIN],
+      adminPermissions: { POST: ADMIN_USERS_BULK_ROUTE_PERMISSIONS },
     });
     expect(rateLimitOptions).toContainEqual(expect.objectContaining({ limit: 10, windowMs: 60_000 }));
   });
 
-  it('refuses a non-admin', async () => {
-    await expect(call({ batchId: BATCH_ID }, { ...ADMIN, isAdmin: false })).rejects.toThrow('Admin access required');
+  it('refuses a delegate holding none of the bulk permissions', async () => {
+    await expect(call({ batchId: BATCH_ID }, delegate('support:read'))).rejects.toThrow('Missing permission:');
     expect(mockUndo).not.toHaveBeenCalled();
+  });
+
+  it('admits a delegate holding one of the bulk permissions', async () => {
+    const res = await call({ batchId: BATCH_ID }, delegate('keys:revoke'));
+
+    expect(res._getStatusCode()).toBe(200);
   });
 
   it('rejects a malformed batch id', async () => {
@@ -66,6 +75,28 @@ describe('POST /api/admin/users/bulk/undo', () => {
     const res = await call({ batchId: BATCH_ID });
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual(UNDO_RESULT);
-    expect(mockUndo).toHaveBeenCalledWith(BATCH_ID, ADMIN.id, { deps: true });
+    expect(mockUndo).toHaveBeenCalledWith(BATCH_ID, ADMIN.id, { deps: true }, expect.any(Function));
+  });
+
+  describe('re-checks the batch action at undo time', () => {
+    const authorizeAs = async (user: Record<string, unknown>) => {
+      await call({ batchId: BATCH_ID }, user);
+      return mockUndo.mock.calls[0][3] as (record: { action: string; blockedDomains?: string[] }) => void;
+    };
+
+    it('refuses a delegate who no longer holds the permission the batch needed', async () => {
+      const authorize = await authorizeAs(delegate('keys:revoke'));
+      expect(() => authorize({ action: 'suspend' })).toThrow('Missing permission: users:moderate');
+    });
+
+    it('admits a delegate who still holds it', async () => {
+      const authorize = await authorizeAs(delegate('users:moderate'));
+      expect(() => authorize({ action: 'suspend' })).not.toThrow();
+    });
+
+    it('refuses an unknown recorded action', async () => {
+      const authorize = await authorizeAs(ADMIN);
+      expect(() => authorize({ action: 'bogus' })).toThrow('This bulk action cannot be undone here.');
+    });
   });
 });

@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Box, Button, Link, Stack, Typography } from '@mui/joy';
+import { Box, Button, Link, Stack, Tooltip, Typography } from '@mui/joy';
 import { useQueryClient } from '@tanstack/react-query';
 import BlockIcon from '@mui/icons-material/Block';
 import { useComplianceModal } from '../ComplianceModal';
@@ -11,6 +11,7 @@ import { AdminCommandPalette, type AdminCommand } from '../../shared/AdminComman
 import { Kbd } from '../../shared';
 import { AdjustCreditsDialog } from './actions/AdjustCreditsDialog';
 import { ReinstateDialog, SuspendDialog } from './actions/SuspendDialog';
+import { moderationBlockedReason } from './UserProfileHeader';
 import { EditProfileDialog } from './actions/EditProfileDialog';
 import { ChangeRoleDialog, ManageTagsDialog, ProductAccessDialog } from './actions/accessDialogs';
 import {
@@ -186,8 +187,23 @@ const StatusBanner: React.FC<{ user: AdminUserProfile; onReinstate: () => void; 
   onReinstate,
   onLiftRestriction,
 }) => {
+  const { currentUser } = useUser();
   if (!user.isBanned && !user.isModerated) return null;
   const tone = user.isBanned ? 'bad' : 'warn';
+  const blocked = moderationBlockedReason(currentUser, user);
+  const liftButton = (
+    <Button
+      size="sm"
+      variant="outlined"
+      color="neutral"
+      disabled={!!blocked}
+      onClick={user.isBanned ? onReinstate : onLiftRestriction}
+      sx={{ bgcolor: 'admin.surface' }}
+      data-testid="user-profile-reinstate-btn"
+    >
+      {user.isBanned ? 'Reinstate' : 'Lift restriction'}
+    </Button>
+  );
   return (
     <Stack
       role="status"
@@ -219,16 +235,14 @@ const StatusBanner: React.FC<{ user: AdminUserProfile; onReinstate: () => void; 
           </>
         )}
       </Typography>
-      <Button
-        size="sm"
-        variant="outlined"
-        color="neutral"
-        onClick={user.isBanned ? onReinstate : onLiftRestriction}
-        sx={{ bgcolor: 'admin.surface' }}
-        data-testid="user-profile-reinstate-btn"
-      >
-        {user.isBanned ? 'Reinstate' : 'Lift restriction'}
-      </Button>
+      {blocked ? (
+        <Tooltip title={blocked}>
+          {/* A disabled button fires no pointer events, so the tooltip needs a focusable wrapper. */}
+          <span tabIndex={0}>{liftButton}</span>
+        </Tooltip>
+      ) : (
+        liftButton
+      )}
     </Stack>
   );
 };

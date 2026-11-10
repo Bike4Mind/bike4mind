@@ -814,3 +814,37 @@ describe('adminUpdateUser storage overrides', () => {
     expect(adminUpdateUserSchema.safeParse({ id: TARGET_ID, storageLimitOverride: value }).success).toBe(false);
   });
 });
+
+describe('adminUpdateUser - users:moderate delegate', () => {
+  const MODERATOR_ID = 'moderator-1';
+  const withActor = (actor: Record<string, unknown>) => {
+    const made = makeAdapters(100);
+    const findById = made.adapters.db.users.findById;
+    made.adapters.db.users.findById = vi.fn(async (id: string) =>
+      id === MODERATOR_ID ? { id: MODERATOR_ID, ...actor } : findById(id)
+    );
+    return made;
+  };
+
+  it('lets a users:moderate delegate suspend', async () => {
+    const { adapters, update } = withActor({ isAdmin: false, adminPermissions: ['users:moderate'] });
+    await adminUpdateUser(MODERATOR_ID, { id: TARGET_ID, isBanned: true }, adapters);
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ id: TARGET_ID, isBanned: true }));
+  });
+
+  it('refuses a delegate any field outside moderation', async () => {
+    const { adapters, update, incrementCredits } = withActor({ isAdmin: false, adminPermissions: ['users:moderate'] });
+    await expect(
+      adminUpdateUser(MODERATOR_ID, { id: TARGET_ID, isBanned: true, currentCredits: 0 }, adapters)
+    ).rejects.toThrow('Unauthorized');
+    expect(update).not.toHaveBeenCalled();
+    expect(incrementCredits).not.toHaveBeenCalled();
+  });
+
+  it('refuses a delegate without users:moderate', async () => {
+    const { adapters } = withActor({ isAdmin: false, adminPermissions: ['support:read'] });
+    await expect(adminUpdateUser(MODERATOR_ID, { id: TARGET_ID, isBanned: true }, adapters)).rejects.toThrow(
+      'Unauthorized'
+    );
+  });
+});

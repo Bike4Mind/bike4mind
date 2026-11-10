@@ -1,5 +1,5 @@
 import { Request } from 'express';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, MODERATION_PAGE_READ } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { PublishedArtifactReport } from '@bike4mind/database';
 
@@ -9,7 +9,7 @@ import { PublishedArtifactReport } from '@bike4mind/database';
  * before deciding on a takedown.
  */
 
-const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const handler = adminApi({ adminPermissions: { GET: MODERATION_PAGE_READ }, requiredScopes: [ApiKeyScope.ADMIN] }).get(
   async (req: Request, res) => {
     const publicId = String(req.query.id);
     const limit = Math.min(200, Math.max(1, parseInt(String(req.query.limit ?? 50), 10) || 50));

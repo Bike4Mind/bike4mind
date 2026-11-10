@@ -1,20 +1,42 @@
 // Shared vi.mock factories for pages/api/admin/abuse/__tests__. Kept out of pages/ so Next does not
 // build it as an API route.
 
-export const baseApiMock = () => ({
-  baseApi: (config?: unknown) => {
-    const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
-    const chain = Object.assign(
-      (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'POST']?.(req, res),
-      {
-        use: () => chain,
-        post: (fn: (req: unknown, res: unknown) => unknown) => ((h.POST = fn), chain),
-        _config: config,
-      }
-    );
-    return chain;
-  },
-});
+// The gate is adminApi's (covered by its own tests): this stand-in applies the route's declared
+// permission with the real checks, before the handler, as the real chain does.
+export const adminApiMock = async () => {
+  const { ForbiddenError, meetsAdminPermissionRequirement, missingAdminPermissionMessage } =
+    await import('@bike4mind/common');
+  type Requirement = Parameters<typeof meetsAdminPermissionRequirement>[1];
+  type Req = { method?: string; user?: Parameters<typeof meetsAdminPermissionRequirement>[0] };
+
+  const requireAdminPermission = (req: Req, requirement: Requirement) => {
+    if (!meetsAdminPermissionRequirement(req.user, requirement)) {
+      throw new ForbiddenError(missingAdminPermissionMessage(requirement));
+    }
+  };
+
+  return {
+    requireAdminPermission,
+    adminApi: (config: { adminPermissions: Partial<Record<string, Requirement>> }) => {
+      const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
+      const chain = Object.assign(
+        async (req: Req, res: unknown) => {
+          const method = req.method ?? 'POST';
+          const requirement = config.adminPermissions[method];
+          if (requirement) requireAdminPermission(req, requirement);
+          return h[method]?.(req, res);
+        },
+        {
+          use: () => chain,
+          post: (fn: (req: unknown, res: unknown) => unknown) => ((h.POST = fn), chain),
+          delete: (fn: (req: unknown, res: unknown) => unknown) => ((h.DELETE = fn), chain),
+          _config: config,
+        }
+      );
+      return chain;
+    },
+  };
+};
 
 export const asyncHandlerMock = () => ({
   asyncHandler: (fn: (req: unknown, res: unknown) => unknown) => fn,

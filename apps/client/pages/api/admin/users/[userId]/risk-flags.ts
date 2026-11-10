@@ -1,8 +1,8 @@
-import { adminUserRiskFlagsSchema, ApiKeyScope, CreditHolderType } from '@bike4mind/common';
+import { adminUserRiskFlagsSchema, ApiKeyScope, CreditHolderType, MODERATION_PAGE_READ } from '@bike4mind/common';
 import { creditTransactionRepository, ImageModerationIncident, userRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
-import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ensureAdmin, NotFoundError } from '@server/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import { respond } from '@server/utils/respond';
 import { evaluateUserRisk, RISK_RULE_CONFIG, type RiskModerationIncident } from '@server/utils/userRiskFlags';
 import { listUserRiskSignIns } from '@server/utils/userSignIns';
@@ -34,9 +34,11 @@ const listModerationIncidents = async (userId: string, now: Date): Promise<RiskM
  * Rule-based risk flags for one user. JWT-only: the evidence includes IP addresses, so an API key must
  * never reach it.
  */
-const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  ensureAdmin(req.user?.isAdmin);
-
+const handler = adminApi({
+  auth: 'jwtOnly',
+  requiredScopes: [ApiKeyScope.ADMIN],
+  adminPermissions: { GET: MODERATION_PAGE_READ },
+}).get(async (req, res) => {
   const { userId } = req.query;
   if (typeof userId !== 'string' || !OBJECT_ID_PATTERN.test(userId)) throw new BadRequestError('Invalid user id');
 

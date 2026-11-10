@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { ApiKeyScope, missingAdminPermissionMessage } from '@bike4mind/common';
 
 const { mockFindOneAndUpdate, mockReportUpdateMany, mockUserFindById } = vi.hoisted(() => ({
   mockUserFindById: vi.fn(),
@@ -15,21 +16,9 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   },
 }));
 
-// baseApi mock: callable chain routed by req.method; .use() no-op; last fn per verb is the handler.
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
-    const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
-    const chain = Object.assign(
-      (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'GET']?.(req, res),
-      {
-        use: () => chain,
-        post: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((h.POST = fns[fns.length - 1]), chain),
-        delete: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((h.DELETE = fns[fns.length - 1]), chain),
-      }
-    );
-    return chain;
-  },
-}));
+vi.mock('@server/middlewares/adminApi', async () =>
+  (await import('@server/admin/bulkAbuse/__tests__/bulkAbuseRouteMocks')).adminApiMock()
+);
 
 // ForbiddenError: a throwable the handler propagates; we assert it's thrown (the real
 // baseApi error middleware maps it to 403, out of scope for a unit test).
@@ -202,10 +191,28 @@ describe('takedown and restore - owner-only thumbnails', () => {
 });
 
 describe('POST /api/admin/published-artifacts/:id/takedown', () => {
-  it('rejects non-admins', async () => {
-    const { promise } = run({ method: 'POST', user: { id: 'u1', isAdmin: false } });
-    await expect(promise).rejects.toThrow();
+  it('declares users:moderate for POST and DELETE', () => {
+    expect((handler as unknown as { _config: unknown })._config).toEqual({
+      requiredScopes: [ApiKeyScope.ADMIN],
+      adminPermissions: { POST: 'users:moderate', DELETE: 'users:moderate' },
+    });
+  });
+
+  it('refuses a delegate without users:moderate', async () => {
+    const { promise } = run({ method: 'POST', user: { id: 'u1', isAdmin: false, adminPermissions: ['support:read'] } });
+    await expect(promise).rejects.toThrow(missingAdminPermissionMessage('users:moderate'));
     expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('admits a delegate holding users:moderate', async () => {
+    mockFindOneAndUpdate.mockResolvedValue(updatedDoc());
+    const { res, promise } = run({
+      method: 'POST',
+      user: { id: 'u1', isAdmin: false, adminPermissions: ['users:moderate'] },
+      body: { reason: 'phishing host' },
+    });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
   });
 
   it('takes a page down atomically, resolves reports, and purges the CDN', async () => {
@@ -239,10 +246,23 @@ describe('POST /api/admin/published-artifacts/:id/takedown', () => {
 });
 
 describe('DELETE /api/admin/published-artifacts/:id/takedown — restore', () => {
-  it('rejects non-admins', async () => {
-    const { promise } = run({ method: 'DELETE', user: { id: 'u1', isAdmin: false } });
-    await expect(promise).rejects.toThrow();
+  it('refuses a delegate without users:moderate', async () => {
+    const { promise } = run({
+      method: 'DELETE',
+      user: { id: 'u1', isAdmin: false, adminPermissions: ['support:read'] },
+    });
+    await expect(promise).rejects.toThrow(missingAdminPermissionMessage('users:moderate'));
     expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('admits a delegate holding users:moderate', async () => {
+    mockFindOneAndUpdate.mockResolvedValue(updatedDoc());
+    const { res, promise } = run({
+      method: 'DELETE',
+      user: { id: 'u1', isAdmin: false, adminPermissions: ['users:moderate'] },
+    });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
   });
 
   it('restores a taken-down page back to active and purges the cached 404', async () => {
