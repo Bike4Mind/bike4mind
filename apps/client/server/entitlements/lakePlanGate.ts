@@ -18,6 +18,7 @@ export const LAKE_PLAN_REQUIRED_MESSAGE =
 
 const SETTING_TTL_MS = 30_000;
 let cachedSetting: { value: boolean; expiresAt: number } | undefined;
+let settingRead: Promise<boolean> | undefined;
 
 /** Drops the cached setting in this process. */
 export function clearLakePlanGateCache(): void {
@@ -26,13 +27,23 @@ export function clearLakePlanGateCache(): void {
 
 async function isGateOn(): Promise<boolean> {
   if (cachedSetting && cachedSetting.expiresAt > Date.now()) return cachedSetting.value;
-  const settings = await getSettingsMap(
-    { adminSettings: adminSettingsRepository },
-    { skipCache: true, names: [SETTING_KEY] }
-  );
-  const value = getSettingsValue(SETTING_KEY, settings) === true;
-  cachedSetting = { value, expiresAt: Date.now() + SETTING_TTL_MS };
-  return value;
+  if (settingRead) return settingRead;
+
+  // Single-flight the refresh; an expired value is never served on a failed read.
+  settingRead = (async () => {
+    const settings = await getSettingsMap(
+      { adminSettings: adminSettingsRepository },
+      { skipCache: true, names: [SETTING_KEY] }
+    );
+    const value = getSettingsValue(SETTING_KEY, settings) === true;
+    cachedSetting = { value, expiresAt: Date.now() + SETTING_TTL_MS };
+    return value;
+  })();
+  try {
+    return await settingRead;
+  } finally {
+    settingRead = undefined;
+  }
 }
 
 /**

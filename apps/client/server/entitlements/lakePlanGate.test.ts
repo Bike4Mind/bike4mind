@@ -56,7 +56,26 @@ describe('lake plan gate', () => {
   it('admits paid standing (subscription, org seat or credit purchase) once on', async () => {
     h.settingValue = true;
     h.holdsPaidStanding.mockReturnValue(true);
-    await expect(isLakePlanAllowed(req())).resolves.toBe(true);
+    const subscriptions = [{ priceId: 'price_paid' }];
+    h.getRequestActiveSubscriptions.mockResolvedValue(subscriptions);
+    const request = req();
+    await expect(isLakePlanAllowed(request)).resolves.toBe(true);
+    expect(h.holdsPaidStanding).toHaveBeenCalledWith(request.user, subscriptions);
+  });
+
+  it('fails closed: a failed settings or subscription read rejects instead of admitting', async () => {
+    h.getSettingsMap.mockRejectedValueOnce(new Error('settings down'));
+    await expect(isLakePlanAllowed(req())).rejects.toThrow('settings down');
+
+    h.settingValue = true;
+    h.getRequestActiveSubscriptions.mockRejectedValueOnce(new Error('subscriptions down'));
+    await expect(isLakePlanAllowed(req())).rejects.toThrow('subscriptions down');
+  });
+
+  it('reads the setting once per TTL', async () => {
+    await isLakePlanAllowed(req());
+    await isLakePlanAllowed(req());
+    expect(h.getSettingsMap).toHaveBeenCalledTimes(1);
   });
 
   it('admits an org lake when the organization holds paid standing, and only for an org lake', async () => {
@@ -67,7 +86,7 @@ describe('lake plan gate', () => {
     await expect(isLakePlanAllowed(req())).resolves.toBe(false);
   });
 
-  it('refuses a request with no authenticated user once on', async () => {
+  it('refuses a request with no authenticated user', async () => {
     h.settingValue = true;
     await expect(isLakePlanAllowed({} as Parameters<typeof isLakePlanAllowed>[0])).resolves.toBe(false);
   });

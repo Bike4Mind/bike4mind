@@ -15,7 +15,11 @@ import {
 } from './spendNotificationKeys';
 import type { DataLakeSpendNotificationEvent } from './sendDataLakeSpendNotification';
 import { scopeForLake } from '../settings/resolveScopedSetting';
-import { reserveOwnerEmbeddingSpend, type LakeSpendOwner } from './reserveOwnerEmbeddingSpend';
+import {
+  releaseReservationsAfterOwnerDenial,
+  reserveOwnerEmbeddingSpend,
+  type LakeSpendOwner,
+} from './reserveOwnerEmbeddingSpend';
 
 /** Cache keys for the platform-wide meters. One period window, two throughput windows. */
 export const EMBEDDING_SPEND_PERIOD_KEY = 'dataLakeEmbeddingSpend:period';
@@ -77,8 +81,8 @@ export class EmbeddingSpendDeniedError extends Error {
 export interface SpendGateDb {
   adminSettings: Pick<IAdminSettingsRepository, 'findBySettingNames' | 'findAll'>;
   cache: Pick<ICacheRepository, 'tryAddWithinLimitFixedWindow'>;
-  dataLakes: Pick<IDataLakeRepository, 'tryAddEmbeddingSpendMetered' | 'findById'>;
-  dataLakeBatches: Pick<IDataLakeBatchRepository, 'tryAddEmbeddingSpend'>;
+  dataLakes: Pick<IDataLakeRepository, 'tryAddEmbeddingSpendMetered' | 'releaseEmbeddingSpend' | 'findById'>;
+  dataLakeBatches: Pick<IDataLakeBatchRepository, 'tryAddEmbeddingSpend' | 'releaseEmbeddingSpend'>;
 }
 
 /**
@@ -128,7 +132,10 @@ export interface SpendGateDb {
  * Reservations are made narrowest-first and NOT rolled back when a later check denies: a
  * denial fails the file anyway, so a stranded reservation only makes the wider meters read
  * slightly high - never low. Bounded by one message's cost, and overcounting is the safe
- * direction for a spend meter.
+ * direction for a spend meter. The one exception is the per-owner window: it denies far more
+ * often than the platform window, and each denied message would otherwise strand its estimate
+ * on the LIFETIME per-lake meter, so an owner denial releases the run and lake reservations
+ * (releaseReservationsAfterOwnerDenial) before it throws.
  *
  * That non-rollback argument covers DENIALS only. A granted reservation whose provider call
  * then FAILS is a different case: the money was never spent, and under SQS redelivery the
@@ -367,6 +374,14 @@ export async function enforceEmbeddingSpendGate(params: {
           periodHours: levers.periodHours,
           windowEndsAt: reservation.stuck ? undefined : reservation.windowEndsAt,
         },
+      });
+      await releaseReservationsAfterOwnerDenial({
+        estimatedMicroUsd,
+        batchId,
+        dataLakeId,
+        dataLakes: db.dataLakes,
+        dataLakeBatches: db.dataLakeBatches,
+        logger,
       });
       throw new EmbeddingSpendDeniedError(
         `this lake owner's embedding budget ($${levers.perOwnerPeriodBudgetMicroUsd / 1e6} per ${levers.periodHours}h) ` +

@@ -43,6 +43,11 @@ describe('classifyUploadError', () => {
     expect(classifyUploadError(axiosError(403, data), CREATE)).toEqual({ kind: 'entitlement', message: data.error });
   });
 
+  it('marks a coded plan refusal as an entitlement failure too', () => {
+    const data = { error: 'Data lakes need a paid plan.', code: 'DATA_LAKE_PLAN_REQUIRED' };
+    expect(classifyUploadError(axiosError(403, data), CREATE)).toEqual({ kind: 'entitlement', message: data.error });
+  });
+
   it('keeps an uncoded 403 on the generic server path', () => {
     expect(classifyUploadError(axiosError(403, { error: 'Forbidden' }), CREATE).kind).toBe('server');
   });

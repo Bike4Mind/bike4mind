@@ -1,4 +1,5 @@
-import type { ICacheRepository, SettingScope } from '@bike4mind/common';
+import type { ICacheRepository, IDataLakeBatchRepository, IDataLakeRepository, SettingScope } from '@bike4mind/common';
+import type { Logger } from '@bike4mind/observability';
 
 /** The lake owner a period reservation is charged to - the shape `scopeForLake` derives. */
 export type LakeSpendOwner = NonNullable<SettingScope['owner']>;
@@ -20,7 +21,7 @@ export type OwnerSpendReservation =
 
 /**
  * Reserve-first against one lake owner's share of the period window. Same window length as the
- * platform period meter, so an owner's share and the platform budget reset on the same cadence.
+ * platform period meter (each fixed window starts at its own key's first write).
  *
  * The owner is the lake's owner, never the actor who triggered the run: an upload into an org lake
  * draws on the org's share, matching the cost tier the gate already applies (see scopeForLake).
@@ -46,4 +47,27 @@ export async function reserveOwnerEmbeddingSpend(params: {
     stuck: budgetMicroUsd <= 0 || estimatedMicroUsd > budgetMicroUsd,
     windowEndsAt: window.expiresAt,
   };
+}
+
+/**
+ * Gives back the run and lake reservations a message made before the owner window denied it. The
+ * owner window resets, but the per-lake meter is lifetime, so without this a paused owner's lake
+ * would fill up with spend that never ran and stay blocked after the window resets. Best-effort,
+ * like the worker's release after a provider failure (fabFileVectorize).
+ */
+export async function releaseReservationsAfterOwnerDenial(params: {
+  estimatedMicroUsd: number;
+  batchId?: string;
+  dataLakeId?: string;
+  dataLakes: Pick<IDataLakeRepository, 'releaseEmbeddingSpend'>;
+  dataLakeBatches: Pick<IDataLakeBatchRepository, 'releaseEmbeddingSpend'>;
+  logger?: Logger;
+}): Promise<void> {
+  const { estimatedMicroUsd, batchId, dataLakeId, dataLakes, dataLakeBatches, logger } = params;
+  try {
+    if (batchId) await dataLakeBatches.releaseEmbeddingSpend(batchId, estimatedMicroUsd);
+    if (dataLakeId) await dataLakes.releaseEmbeddingSpend(dataLakeId, estimatedMicroUsd);
+  } catch (error) {
+    logger?.warn?.('[spendGate] could not release reservations after an owner-window denial:', error);
+  }
 }

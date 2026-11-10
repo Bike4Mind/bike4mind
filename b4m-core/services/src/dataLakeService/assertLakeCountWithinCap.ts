@@ -35,8 +35,7 @@ export async function resolveMaxLakesPerUser(
 /**
  * Refuses a create once the user already has `dataLakeMaxLakesPerUser` lakes that still count (see
  * LAKE_UNCOUNTED_STATUSES). Counted by CREATOR, so a lake made in an org counts for the person
- * who made it. Read-then-write: two creates racing at the boundary can both pass, which overshoots
- * the cap by at most the number of concurrent requests - acceptable for a resource-count limit.
+ * who made it.
  */
 export async function assertLakeCountWithinCap(
   db: {

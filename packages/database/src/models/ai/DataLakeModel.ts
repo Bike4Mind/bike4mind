@@ -912,6 +912,15 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     return this.dataLakeModel.countDocuments(filter);
   }
 
+  /** Served by the { createdByUserId: 1 } index; see IDataLakeRepository for the contract. */
+  async countCountedCreatedBy(userId: string): Promise<number> {
+    if (!userId) return 0;
+    return this.dataLakeModel.countDocuments({
+      createdByUserId: userId,
+      status: { $nin: [...LAKE_UNCOUNTED_STATUSES] },
+    });
+  }
+
   /**
    * Ids of every lake this user CREATED, in any status - the candidate set for resolving which of
    * them their ownership has since moved off (see `supersededOwnLakeIdsFor`). Creator provenance is
@@ -922,14 +931,6 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
    * never reads a field off them, and the inherited `find` override would otherwise hand back whole
    * documents on a query that runs on every lake list. Served by the { createdByUserId: 1 } index.
    */
-  async countCountedCreatedBy(userId: string): Promise<number> {
-    if (!userId) return 0;
-    return this.dataLakeModel.countDocuments({
-      createdByUserId: userId,
-      status: { $nin: [...LAKE_UNCOUNTED_STATUSES] },
-    });
-  }
-
   async findIdsCreatedBy(userId: string): Promise<string[]> {
     // A blank id is not a caller, and `{ createdByUserId: '' }` is a real query that would return
     // every lake stored with a blank creator - none of which belong to whoever asked.

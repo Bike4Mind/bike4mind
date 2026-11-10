@@ -1,3 +1,4 @@
+import { ForbiddenError } from '@bike4mind/utils';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { BadRequestError } from '@bike4mind/utils';
 import { readFileSync } from 'node:fs';
@@ -43,6 +44,7 @@ import { deleteDataLake } from './deleteDataLake';
 import type { RetrievalIndexRemoval } from './ports';
 import { unarchiveDataLake } from './unarchiveDataLake';
 import { restoreDeletedDataLake } from './restoreDeletedDataLake';
+import { assertLakeCountWithinCap } from './assertLakeCountWithinCap';
 import { cleanupDeletedDataLake } from './cleanupDeletedDataLake';
 import { acceptDataLakePurge } from './acceptDataLakePurge';
 import { removeFileFromDataLake } from './removeFileFromDataLake';
@@ -3455,6 +3457,21 @@ describe('restoreDeletedDataLake - deleted→active with dedup', () => {
     await expect(
       restoreDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { db: { dataLakes, fabFiles } })
     ).rejects.toThrow(/'active' status/i);
+  });
+
+  it('checks the per-user lake cap for the creator and restores nothing when it refuses', async () => {
+    const refusal = new ForbiddenError('limit reached', { code: 'DATA_LAKE_LIMIT_REACHED' });
+    vi.mocked(assertLakeCountWithinCap).mockRejectedValueOnce(refusal);
+    const dataLakes = {
+      findById: vi.fn().mockResolvedValue(lake({ status: 'deleted' })),
+      claimRestoring: vi.fn(),
+    };
+    const db = { dataLakes, fabFiles: {} };
+    await expect(restoreDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { db } as never)).rejects.toBe(
+      refusal
+    );
+    expect(assertLakeCountWithinCap).toHaveBeenCalledWith(db, lake().createdByUserId);
+    expect(dataLakes.claimRestoring).not.toHaveBeenCalled();
   });
 
   it('un-deletes non-duplicates and excludes live-re-upload duplicates', async () => {

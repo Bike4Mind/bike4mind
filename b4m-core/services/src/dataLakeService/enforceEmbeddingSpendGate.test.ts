@@ -45,9 +45,13 @@ const grantAll = () => ({
   },
   dataLakes: {
     tryAddEmbeddingSpendMetered: vi.fn().mockResolvedValue({ granted: true, spendMicroUsd: 1_000 }),
+    releaseEmbeddingSpend: vi.fn().mockResolvedValue(true),
     findById: vi.fn().mockResolvedValue(lakeDoc()),
   },
-  dataLakeBatches: { tryAddEmbeddingSpend: vi.fn().mockResolvedValue(true) },
+  dataLakeBatches: {
+    tryAddEmbeddingSpend: vi.fn().mockResolvedValue(true),
+    releaseEmbeddingSpend: vi.fn().mockResolvedValue(true),
+  },
 });
 
 const gate = (
@@ -662,6 +666,32 @@ describe('enforceEmbeddingSpendGate per-owner window', () => {
 
     await expect(gateFor(db, 'lakeA', 1_500)).rejects.toThrow(EmbeddingSpendDeniedError);
     expect(cache.counts.has(EMBEDDING_SPEND_PERIOD_KEY)).toBe(false);
+  });
+
+  it('gives the run and lake reservations back when the owner window denies', async () => {
+    mockedLevers.mockResolvedValue(levers({ perOwnerPeriodBudgetMicroUsd: 1_000 }));
+    const { db } = meteredDb();
+
+    await expect(
+      enforceEmbeddingSpendGate({
+        estimatedMicroUsd: 1_500,
+        estimatedTokens: 1_000,
+        batchId: 'batch1',
+        dataLakeId: 'lakeA',
+        db,
+        sleep: vi.fn().mockResolvedValue(undefined),
+      })
+    ).rejects.toThrow(/lake owner's embedding budget/);
+    expect(db.dataLakes.releaseEmbeddingSpend).toHaveBeenCalledWith('lakeA', 1_500);
+    expect(db.dataLakeBatches.releaseEmbeddingSpend).toHaveBeenCalledWith('batch1', 1_500);
+  });
+
+  it('keeps the reservations when the owner window grants', async () => {
+    mockedLevers.mockResolvedValue(levers({ perOwnerPeriodBudgetMicroUsd: 2_000 }));
+    const { db } = meteredDb();
+
+    await gateFor(db, 'lakeA', 1_500);
+    expect(db.dataLakes.releaseEmbeddingSpend).not.toHaveBeenCalled();
   });
 
   it('notifies owner/budget_exhausted keyed on the window, carrying when it ends', async () => {
