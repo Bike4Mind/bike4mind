@@ -84,8 +84,8 @@ describe('AccountService', () => {
       warning: expect.stringContaining('notify'),
     });
     await expect(account.sendFeedback('hello', user)).resolves.toMatchObject({
-      ok: true,
-      warning: expect.stringContaining('save'),
+      ok: false,
+      error: expect.stringContaining('save'),
     });
   });
 

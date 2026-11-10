@@ -83,8 +83,8 @@ export class AccountService {
       const deliveryFailed = feedbackDeliveryFailed(response.delivery);
       if (response.contentStored === false) {
         return {
-          ok: true,
-          warning: 'Your feedback was received, but we could not save the message text - please try again.',
+          ok: false,
+          error: 'Your feedback was received, but we could not save the message text - please try again.',
         };
       }
       if (response.contentTruncated && deliveryFailed) {
