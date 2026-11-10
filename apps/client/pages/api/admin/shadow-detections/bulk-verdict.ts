@@ -45,7 +45,13 @@ const handler = adminApi({
       const reason = parseAdminActionReason(parsed.data.reason);
       const { items, verdict } = parsed.data;
 
-      const result = await shadowDetectionRepository.addVerdicts({ items, verdict, reason, reviewerId: req.user.id });
+      const result = await shadowDetectionRepository.addVerdicts({
+        items,
+        verdict,
+        reason,
+        reviewerId: req.user.id,
+        onError: (id, error) => req.logger.error(`Bulk verdict failed for shadow detection ${id}`, error),
+      });
 
       // Verdicts have committed: an audit failure is logged, never turned into a 500 the reviewer would
       // retry into conflicts against their own verdicts.

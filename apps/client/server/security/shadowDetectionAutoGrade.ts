@@ -17,14 +17,20 @@ import { ACCOUNT_STATUS_ACTIONS_FILTER } from './accountStatusAuditActions';
 
 export const AUTO_GRADED_DETECTOR: ShadowDetector = 'signupNetworkBurst';
 const AUTO_GRADE_VERDICT: ShadowDetectionVerdict = 'insufficient_evidence';
-/** Detections considered per run; the hourly run drains a larger backlog over several runs. */
+/** Detections read per page. */
 export const AUTO_GRADE_BATCH_LIMIT = 500;
+/**
+ * Detections considered per run. Skipped records stay ungraded, so a run pages past them instead of
+ * re-reading the same oldest page; the hourly run drains a larger backlog over several runs.
+ */
+export const AUTO_GRADE_SCAN_LIMIT = 5_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_TIME_MS = 20_000;
 const OBJECT_ID = /^[0-9a-f]{24}$/i;
 
 export type StaleDetectionGradeDeps = {
-  listStale: (before: Date, limit: number) => Promise<ShadowDetectionItem[]>;
+  /** Ungraded detections before `before`, oldest first by (detectedAt, id), starting after `after`. */
+  listStale: (before: Date, limit: number, after?: { detectedAt: Date; id: string }) => Promise<ShadowDetectionItem[]>;
   /** Of these users, those banned now; containing an account also sets isBanned (admin/usersBulk/execute.ts). */
   suspendedUserIds: (userIds: string[]) => Promise<Set<string>>;
   /** Each user's latest suspend or reinstate at or after `since`; users with none are absent. */
@@ -48,6 +54,8 @@ export type StaleDetectionGradeReport = {
   graded: number;
   skipped: { accountActioned: number; otherDetector: number; assessment: number; changedMeanwhile: number };
   failed: number;
+  /** True when the run stopped at the scan limit with more ungraded detections possibly left. */
+  scanLimitReached: boolean;
 };
 
 export const autoGradeReason = (afterDays: number) =>
@@ -80,24 +88,44 @@ export async function gradeStaleSignupBursts({
   now,
   deps,
   limit = AUTO_GRADE_BATCH_LIMIT,
+  scanLimit = AUTO_GRADE_SCAN_LIMIT,
 }: {
   afterDays: number;
   now: Date;
   deps: StaleDetectionGradeDeps;
   limit?: number;
+  scanLimit?: number;
 }): Promise<StaleDetectionGradeReport> {
   const report: StaleDetectionGradeReport = {
     considered: 0,
     graded: 0,
     skipped: { accountActioned: 0, otherDetector: 0, assessment: 0, changedMeanwhile: 0 },
     failed: 0,
+    scanLimitReached: false,
   };
   if (!Number.isInteger(afterDays) || afterDays <= 0) return report;
 
-  const stale = await deps.listStale(new Date(now.getTime() - afterDays * DAY_MS), limit);
-  report.considered = stale.length;
-  if (stale.length === 0) return report;
+  const before = new Date(now.getTime() - afterDays * DAY_MS);
+  const reason = autoGradeReason(afterDays);
+  let after: { detectedAt: Date; id: string } | undefined;
+  while (report.considered < scanLimit) {
+    const page = await deps.listStale(before, Math.min(limit, scanLimit - report.considered), after);
+    if (page.length === 0) return report;
+    report.considered += page.length;
+    const last = page[page.length - 1];
+    after = { detectedAt: last.detectedAt, id: last.id };
+    await gradePage(page, reason, deps, report);
+  }
+  report.scanLimitReached = true;
+  return report;
+}
 
+async function gradePage(
+  stale: ShadowDetectionItem[],
+  reason: string,
+  deps: StaleDetectionGradeDeps,
+  report: StaleDetectionGradeReport
+): Promise<void> {
   const userIds = [...new Set(stale.flatMap(detection => detection.userIds))];
   const earliest = new Date(Math.min(...stale.map(detection => detection.detectedAt.getTime())));
   const [suspended, statusChanges, flagged, assessments] = await Promise.all([
@@ -107,7 +135,6 @@ export async function gradeStaleSignupBursts({
     deps.latestAssessments(stale.map(detection => detection.id)),
   ]);
 
-  const reason = autoGradeReason(afterDays);
   for (const detection of stale) {
     const skip = skipReason(detection, { suspended, statusChanges, flagged, assessments });
     if (skip) {
@@ -152,7 +179,6 @@ export async function gradeStaleSignupBursts({
       deps.logger.error(`Audit entry failed for shadow detection verdict ${graded.id}`, error);
     }
   }
-  return report;
 }
 
 const validObjectIds = (userIds: string[]) => userIds.filter(id => OBJECT_ID.test(id));
@@ -162,8 +188,8 @@ export const liveStaleDetectionGradeDeps = (
   deps: Pick<StaleDetectionGradeDeps, 'writeAudit' | 'logger'>
 ): StaleDetectionGradeDeps => ({
   ...deps,
-  listStale: (before, limit) =>
-    shadowDetectionRepository.listUngradedBefore({ detector: AUTO_GRADED_DETECTOR, before, limit }),
+  listStale: (before, limit, after) =>
+    shadowDetectionRepository.listUngradedBefore({ detector: AUTO_GRADED_DETECTOR, before, limit, after }),
   suspendedUserIds: async userIds => {
     const ids = validObjectIds(userIds);
     if (ids.length === 0) return new Set();

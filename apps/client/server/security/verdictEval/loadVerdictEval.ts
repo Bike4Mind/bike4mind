@@ -2,6 +2,7 @@ import type {
   AbuseAssessmentResult,
   AutoContainmentOutcome,
   ShadowDetectionVerdict,
+  ShadowDetectionVerdictSource,
   SignupRiskReviewState,
 } from '@bike4mind/common';
 import {
@@ -81,6 +82,7 @@ type LeanDetection = {
   userIds: string[];
   detectedAt: Date;
   verdict: ShadowDetectionVerdict | null;
+  verdicts?: { source?: ShadowDetectionVerdictSource }[];
 };
 type LeanAssessment = {
   detectionId: string;
@@ -114,7 +116,7 @@ export async function loadVerdictEvalInput(
 
   const fetched = await ShadowDetectionModel.find(
     { detectedAt: { $gte: since } },
-    { userIds: 1, detectedAt: 1, verdict: 1 }
+    { userIds: 1, detectedAt: 1, verdict: 1, verdicts: { $slice: -1 } }
   )
     .sort({ detectedAt: -1 })
     .limit(VERDICT_EVAL_DETECTION_LIMIT + 1)
@@ -127,6 +129,7 @@ export async function loadVerdictEvalInput(
     userIds: row.userIds,
     detectedAt: row.detectedAt,
     verdict: row.verdict ?? null,
+    verdicts: row.verdicts ?? [],
   }));
   const detectionIds = detections.map(detection => detection.id);
 

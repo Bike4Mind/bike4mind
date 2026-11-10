@@ -289,6 +289,7 @@ describe('POST /api/admin/shadow-detections/bulk-verdict', () => {
       verdict: 'insufficient_evidence',
       reason: REASON,
       reviewerId: ADMIN_ID,
+      onError: expect.any(Function),
     });
     expect(res._getStatusCode()).toBe(200);
     const body = res._getJSONData();
@@ -308,12 +309,16 @@ describe('POST /api/admin/shadow-detections/bulk-verdict', () => {
     expect(h.userWrite).not.toHaveBeenCalled();
   });
 
-  it('audits the graded records and reports the ids that failed', async () => {
-    h.addVerdicts.mockResolvedValue({
-      graded: [item({ verdict: 'insufficient_evidence', revision: 1 })],
-      conflicts: [],
-      missing: [],
-      failed: [OTHER_ID],
+  it('audits the graded records, logs and reports the ids that failed', async () => {
+    const writeError = new Error('cast failed');
+    h.addVerdicts.mockImplementation(async (input: { onError: (id: string, error: unknown) => void }) => {
+      input.onError(OTHER_ID, writeError);
+      return {
+        graded: [item({ verdict: 'insufficient_evidence', revision: 1 })],
+        conflicts: [],
+        missing: [],
+        failed: [OTHER_ID],
+      };
     });
     const { req, res } = request('POST', { body: bulkBody() });
 
@@ -322,6 +327,10 @@ describe('POST /api/admin/shadow-detections/bulk-verdict', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData().failed).toEqual([OTHER_ID]);
     expect(h.record).toHaveBeenCalledTimes(1);
+    expect((req as unknown as { logger: { error: ReturnType<typeof vi.fn> } }).logger.error).toHaveBeenCalledWith(
+      expect.stringContaining(OTHER_ID),
+      writeError
+    );
   });
 
   it('keeps the response when one audit write throws, and audits the rest', async () => {

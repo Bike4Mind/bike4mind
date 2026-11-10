@@ -46,8 +46,20 @@ const makeDeps = (
     assessments?: [string, AbuseAssessmentResult][];
   } = {}
 ) => {
+  const ordered = [...stale].sort(
+    (a, b) => a.detectedAt.getTime() - b.detectedAt.getTime() || a.id.localeCompare(b.id)
+  );
   const deps = {
-    listStale: vi.fn(async () => stale),
+    listStale: vi.fn(async (_before: Date, limit: number, after?: { detectedAt: Date; id: string }) =>
+      ordered
+        .filter(
+          item =>
+            !after ||
+            item.detectedAt > after.detectedAt ||
+            (item.detectedAt.getTime() === after.detectedAt.getTime() && item.id > after.id)
+        )
+        .slice(0, limit)
+    ),
     suspendedUserIds: vi.fn(async () => new Set(facts.suspended ?? [])),
     latestStatusChanges: vi.fn(async () => new Map(facts.statusChanges ?? [])),
     flaggedByOtherDetectors: vi.fn(async () => new Set(facts.flagged ?? [])),
@@ -63,7 +75,8 @@ const makeDeps = (
   return deps satisfies StaleDetectionGradeDeps;
 };
 
-const run = (deps: StaleDetectionGradeDeps, afterDays = 7) => gradeStaleSignupBursts({ afterDays, now: NOW, deps });
+const run = (deps: StaleDetectionGradeDeps, afterDays = 7, limits: { limit?: number; scanLimit?: number } = {}) =>
+  gradeStaleSignupBursts({ afterDays, now: NOW, deps, ...limits });
 
 describe('gradeStaleSignupBursts', () => {
   it('grades an uncorroborated stale burst insufficient evidence as automation and audits it', async () => {
@@ -71,7 +84,7 @@ describe('gradeStaleSignupBursts', () => {
 
     const report = await run(deps);
 
-    expect(deps.listStale).toHaveBeenCalledWith(new Date(NOW.getTime() - 7 * DAY_MS), 500);
+    expect(deps.listStale).toHaveBeenCalledWith(new Date(NOW.getTime() - 7 * DAY_MS), 500, undefined);
     expect(deps.grade).toHaveBeenCalledWith({
       id: 'd1',
       expectedRevision: 0,
@@ -85,7 +98,31 @@ describe('gradeStaleSignupBursts', () => {
         details: expect.objectContaining({ verdict: 'insufficient_evidence', source: 'automation' }),
       })
     );
-    expect(report).toMatchObject({ considered: 1, graded: 1, failed: 0 });
+    expect(report).toMatchObject({ considered: 1, graded: 1, failed: 0, scanLimitReached: false });
+  });
+
+  it('pages past a full page of skipped detections to grade the one after it', async () => {
+    const deps = makeDeps([detection('d1', ['u1']), detection('d2', ['u2']), detection('d3', ['u3'])], {
+      flagged: ['u1', 'u2'],
+    });
+
+    const report = await run(deps, 7, { limit: 2 });
+
+    expect(deps.grade).toHaveBeenCalledTimes(1);
+    expect(deps.grade).toHaveBeenCalledWith(expect.objectContaining({ id: 'd3' }));
+    expect(deps.listStale).toHaveBeenNthCalledWith(2, expect.any(Date), 2, { detectedAt: DETECTED_AT, id: 'd2' });
+    expect(report).toMatchObject({ considered: 3, graded: 1, skipped: { otherDetector: 2 }, scanLimitReached: false });
+  });
+
+  it('stops at the scan limit and reports it', async () => {
+    const deps = makeDeps([detection('d1', ['u1']), detection('d2', ['u2']), detection('d3', ['u3'])], {
+      flagged: ['u1', 'u2', 'u3'],
+    });
+
+    const report = await run(deps, 7, { limit: 2, scanLimit: 3 });
+
+    expect(deps.listStale).toHaveBeenNthCalledWith(2, expect.any(Date), 1, { detectedAt: DETECTED_AT, id: 'd2' });
+    expect(report).toMatchObject({ considered: 3, graded: 0, scanLimitReached: true });
   });
 
   it('grades when the latest assessment is insufficient evidence', async () => {

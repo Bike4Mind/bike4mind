@@ -546,13 +546,15 @@ class ShadowDetectionRepository {
   /**
    * One reviewer's verdict on many records, each appended exactly as addVerdict would (own history
    * entry, own revision check), so a record graded by someone else since it was selected comes back
-   * in `conflicts` instead of being overwritten.
+   * in `conflicts` instead of being overwritten. A write that throws lands in `failed` and is
+   * handed to `onError`, since this repository has no logger of its own.
    */
   async addVerdicts(input: {
     items: { id: string; expectedRevision: number }[];
     verdict: ShadowDetectionVerdict;
     reason: string;
     reviewerId: string;
+    onError: (id: string, error: unknown) => void;
   }): Promise<BulkShadowDetectionVerdictResult> {
     const result: BulkShadowDetectionVerdictResult = { graded: [], conflicts: [], missing: [], failed: [] };
     for (const { id, expectedRevision } of input.items) {
@@ -561,23 +563,35 @@ class ShadowDetectionRepository {
         if (outcome.status === 'updated') result.graded.push(outcome.item);
         else if (outcome.status === 'conflict') result.conflicts.push(outcome.item);
         else result.missing.push(id);
-      } catch {
+      } catch (error) {
         result.failed.push(id);
+        input.onError(id, error);
       }
     }
     return result;
   }
 
-  /** Ungraded records of one detector detected before `before`, oldest first, at most `limit`. */
+  /**
+   * Ungraded records of one detector detected before `before`, oldest first, at most `limit`. Pass
+   * the last record of a page as `after` to read the next one.
+   */
   async listUngradedBefore(query: {
     detector: ShadowDetector;
     before: Date;
     limit: number;
+    after?: { detectedAt: Date; id: string };
   }): Promise<ShadowDetectionItem[]> {
+    const { after } = query;
     const docs = await ShadowDetectionModel.find({
       detector: query.detector,
       verdict: null,
       detectedAt: { $lt: query.before },
+      ...(after && {
+        $or: [
+          { detectedAt: { $gt: after.detectedAt } },
+          { detectedAt: after.detectedAt, _id: { $gt: new Types.ObjectId(after.id) } },
+        ],
+      }),
     })
       .sort({ detectedAt: 1, _id: 1 })
       .limit(query.limit)

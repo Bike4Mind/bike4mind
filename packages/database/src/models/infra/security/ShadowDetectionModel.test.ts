@@ -433,6 +433,7 @@ describe('shadowDetectionRepository', () => {
         verdict: 'insufficient_evidence',
         reason: 'Two signups from one residential IP',
         reviewerId: 'admin2',
+        onError: vi.fn(),
       });
 
       expect(result.graded.map(item => item.id)).toEqual([fresh]);
@@ -456,16 +457,20 @@ describe('shadowDetectionRepository', () => {
         return original(input);
       });
 
+      const onError = vi.fn();
+
       const result = await shadowDetectionRepository.addVerdicts({
         items: [a, b, c].map(id => ({ id, expectedRevision: 0 })),
         verdict: 'insufficient_evidence',
         reason: 'Two signups from one residential IP',
         reviewerId: 'admin2',
+        onError,
       });
       spy.mockRestore();
 
       expect(result.graded.map(item => item.id)).toEqual([a, c]);
       expect(result.failed).toEqual([b]);
+      expect(onError).toHaveBeenCalledExactlyOnceWith(b, expect.objectContaining({ message: 'write failed' }));
     });
   });
 
@@ -545,6 +550,25 @@ describe('shadowDetectionRepository', () => {
         limit: 10,
       });
       expect(stale.map(item => item.id)).toEqual([older, newer]);
+    });
+
+    it('pages ungraded records by (detectedAt, id) after a cursor, ties included', async () => {
+      const tiedAt = new Date('2026-09-01T00:00:00Z');
+      const ids = [];
+      for (const detectedAt of [tiedAt, tiedAt, new Date('2026-09-02T00:00:00Z')]) {
+        ids.push(await shadowDetectionRepository.record(detection({ detectedAt })));
+      }
+      const query = { detector: 'signupNetworkBurst' as const, before: new Date('2026-10-01T00:00:00Z'), limit: 1 };
+
+      const pages = [];
+      let after: { detectedAt: Date; id: string } | undefined;
+      for (let page = await shadowDetectionRepository.listUngradedBefore(query); page.length > 0;) {
+        pages.push(page.map(item => item.id));
+        after = { detectedAt: page[0].detectedAt, id: page[0].id };
+        page = await shadowDetectionRepository.listUngradedBefore({ ...query, after });
+      }
+
+      expect(pages).toEqual([[ids[0]], [ids[1]], [ids[2]]]);
     });
 
     it('finds the users another detector has flagged', async () => {
