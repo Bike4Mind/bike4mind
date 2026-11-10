@@ -79,9 +79,9 @@ export type FinalizeResult =
  * Generic or hype copy also returns `repair`, except on the `lastAttempt`, where a generic headline is
  * rebuilt from the items and a hype summary is dropped, so the release still gets a note.
  *
- * With `rebuildDeniedCopy`, a denylist hit in the headline or summary never returns `repair`: both are
- * rebuilt from the surviving items instead, and when that is impossible or still hits the denylist the
- * note is stored hidden with a blank headline, for an admin to finish. Denylisted text is never kept.
+ * With `rebuildDeniedCopy`, a denylist hit in the headline or summary never returns `repair`: the headline
+ * is rebuilt from the surviving items and the summary is dropped, and when no clean headline can be built
+ * the note is stored hidden with a blank headline, for an admin to finish. Denylisted text is never kept.
  */
 export function finalizeReleaseNote(
   draft: ReleaseNoteDraft,
