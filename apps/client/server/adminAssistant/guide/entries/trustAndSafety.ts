@@ -1,0 +1,342 @@
+import type { AdminGuideEntry } from '../types';
+
+export const TRUST_AND_SAFETY_GUIDE: readonly AdminGuideEntry[] = [
+  {
+    id: 'admin-dashboard',
+    title: 'Admin dashboard',
+    summary:
+      'The landing page of the admin console: new signups, client usage, recent activity, shortcuts to the analytics pages, and the AI advisory card while flagged accounts await review.',
+    views: ['admin.dashboard'],
+    settings: [],
+    howTo: [
+      'Open Admin; the dashboard is the first page. The Signups tile has a review button that opens the Users list.',
+      'Use the shortcut cards (Feature activity, User activity & reports, Model performance, Credits & costs, Users, System health) to jump to the page behind a number.',
+      'Recent activity covers the last 7 UTC calendar days; use its refresh button to reload only that summary.',
+      'For queues that need decisions (risk review, held grants, domain holds) use the Security Dashboard Incident view.',
+    ],
+    keywords: ['home', 'landing page', 'overview', 'signups tile', 'client usage', 'recent activity'],
+  },
+  {
+    id: 'ai-advisory',
+    title: 'AI advisory',
+    summary:
+      'A model-written second opinion on abuse detections. It is advisory only: nothing is suspended or blocked until an admin acts. It appears on the Dashboard, the Users list and each detection.',
+    views: ['admin.dashboard', 'admin.users', 'admin.shadow_detections'],
+    settings: ['abuseAssessmentEnabled', 'abuseAssessmentConfig'],
+    howTo: [
+      'Dashboard: the AI advisory card shows only while flagged accounts await review. Review opens Users with the AI advisory chip (option "Likely abuse"), where bulk Contain acts on the selected accounts.',
+      "The card can also offer IP and domain suggestions. A Block IP button opens the existing block-IP dialog; a Domain button opens that domain's accounts, where Contain can also block it.",
+      'Users list: flagged accounts carry an AI badge. The AI advisory chip is not in the filter menu; it appears when you arrive via Review on the dashboard card.',
+      'Detections tab: open a detection to see the Advisory assessment panel. Assess now requests a fresh assessment and needs the users:moderate permission.',
+      'To turn it on, go to Admin Settings and open the Advisory Abuse Assessment group.',
+    ],
+    keywords: [
+      'ai advisories',
+      'flagged accounts',
+      'assess now',
+      'advisory assessment',
+      'model verdict',
+      'abuse assessment',
+    ],
+  },
+  {
+    id: 'shadow-detections',
+    title: 'Detections',
+    summary:
+      'A log of what abuse detectors would have done, recorded without acting. Admins grade each detection so the detector can be measured. Grading never changes an account.',
+    views: ['admin.shadow_detections'],
+    settings: ['shadowDetectionRecordingEnabled'],
+    howTo: [
+      'Filter the list by Detector and Verdict; it opens on Unreviewed. Each row shows the detector, a summary, the action it would have taken, and the actor.',
+      'Click Record verdict (or Change verdict) on a row, pick Confirmed abuse, Legitimate human use, Legitimate automation or Insufficient evidence, and give a reason. Needs the users:moderate permission.',
+      'There is no undo. To correct a verdict, record another one; every verdict stays in the history.',
+      'Opening a detection also shows its Advisory assessment panel (see AI advisory). Delegated admins with support:read can view this tab.',
+    ],
+    keywords: ['shadow detections', 'grade detections', 'precision', 'false positives', 'record verdict', 'detector'],
+  },
+  {
+    id: 'signup-domain-holds',
+    title: 'Signup domain holds',
+    summary:
+      'Email domains whose new accounts had their free signup credits held. Admins confirm or release each hold. These actions change only free signup credits, never the account itself.',
+    views: ['admin.signup_domain_holds'],
+    settings: [
+      'signupDomainHoldAssessmentEnabled',
+      'signupDomainHoldAssessmentConfig',
+      'autoConfirmDisposableAggregateHolds',
+      'signupDomainHoldsSettledVisibleDays',
+    ],
+    howTo: [
+      'Use the Pending, Blocked, Released and All tabs and the Reason filter to find holds. Settled holds older than the visible window are hidden, not deleted; turn on Include older settled holds to see them.',
+      'Confirm keeps pending credits held and gives future signups from the domain none. A confirmed hold can still be released later.',
+      'Release pays out the held grants and exempts the domain from holds for good; it cannot be re-blocked. If it stops partway, switch to Released and use Retry pending grants.',
+      'An advisory verdict may be shown on a hold. Automated rules can confirm some holds (recorded in the Audit log as system actions) but never release one. Full admin access is required.',
+    ],
+    keywords: ['domain holds', 'held credits', 'confirm hold', 'release hold', 'free credits', 'email domain'],
+  },
+  {
+    id: 'signup-risk-review',
+    title: 'Risk review',
+    summary:
+      'New accounts whose AI access is on hold pending review. They can still sign in and see their data. Admins approve legitimate accounts or suspend abusive ones.',
+    views: ['admin.signup_risk_review'],
+    settings: ['signupRiskScoring', 'signupRiskAutoApproval'],
+    howTo: [
+      'Search by email or domain, or use the Domain and Signal filters. Click a row to open the user profile.',
+      'Approve account (row menu) or Approve accounts (bulk bar) lifts the review hold and removes the account from the queue. A reason is required. An Undo toast stays for 30 seconds and restores the hold.',
+      'If the signup credits were held, approving pays them, and Undo does not take them back. Separate admin restrictions still apply after approval.',
+      'Suspend account or Suspend accounts opens the bulk abuse response dialog. Select rows first to use the bulk bar. Full admin access is required.',
+    ],
+    keywords: ['risk queue', 'suspicious signups', 'approve account', 'suspend account', 'review hold', 'new accounts'],
+  },
+  {
+    id: 'held-signup-grants',
+    title: 'Held signup grants',
+    summary:
+      'Free credits withheld from new accounts, oldest first. Admins can release selected grants in bulk and revoke a release.',
+    views: ['admin.held_signup_grants'],
+    settings: ['signupGrantSignupPoolDaily', 'signupGrantTricklePoolDaily'],
+    howTo: [
+      'Tick the accounts to pay, then click Release selected. Use the reason select to narrow the list and Previous/Next to page.',
+      "A release pays the original grant without drawing the daily budget. Grants held by the budget are also paid automatically when a new day's budget opens.",
+      'After a release, a Revoke button appears on the result banner. It opens "Revoke this release?"; Revoke credits permanently debits the credits that release paid (balances already spent are skipped) and the account is not paid this grant again.',
+      'Full admin access is required.',
+    ],
+    keywords: ['signup budget', 'free credits', 'release credits', 'bulk release', 'revoke release', 'held grants'],
+  },
+  {
+    id: 'stripe-disputes',
+    title: 'Disputes',
+    summary:
+      "Stripe disputes. Lost disputes on a user's payment are resolved automatically and contain the account; organization and unmatched disputes wait here for an admin.",
+    views: ['admin.stripe_disputes'],
+    settings: [],
+    howTo: [
+      'Filter by State (Open, Resolved) and Subject (User, Organization, No match). Each row shows the amount, reason, Stripe status and a Contain chip.',
+      'Resolve closes an organization or unmatched dispute record. It does not change any account, flag or credits. Needs the users:moderate permission.',
+      'Undo contain (on rows showing Contained) needs both credits:adjust and users:moderate. The dispute flag stays set, so the account remains blocked until the flag is cleared by hand.',
+      'Delegated admins with support:read can view the tab; buttons name the permission they need when disabled.',
+    ],
+    keywords: ['chargebacks', 'stripe disputes', 'lost dispute', 'contain', 'undo contain', 'resolve dispute'],
+  },
+  {
+    id: 'moderation-review',
+    title: 'Moderation review',
+    summary:
+      'Image moderation incidents waiting for a verdict, oldest first, plus a Closed list of past verdicts. Opening an incident records a view in the audit log.',
+    views: ['admin.moderation_incidents'],
+    settings: ['ImageModerationEnabled', 'ImageModerationReviewerEmails'],
+    howTo: [
+      'Switch between Needs review and Closed. Click an incident to open it; reviewers are alerted by email when one needs a verdict.',
+      'Close as correctly blocked records that the block was right and nothing needs reporting. It leaves the queue and its reminders stop.',
+      'Mark false positive records that the classifier was wrong. It closes the incident without a report and keeps it on file.',
+      'Record report stores the id of a report you filed on the external reporting form first; it cannot be undone. Full admin access is required.',
+    ],
+    keywords: [
+      'image moderation',
+      'incident review',
+      'flagged images',
+      'false positive',
+      'moderation queue',
+      'verdict',
+    ],
+  },
+  {
+    id: 'audit-log',
+    title: 'Audit log',
+    summary:
+      'Recorded admin and system changes with their actors and reasons. Critical entries by other admins wait in a Needs review panel until another admin signs off.',
+    views: ['admin.audit_log'],
+    settings: ['SlackSecurityAlertsWebhookUrl'],
+    howTo: [
+      'Use the saved view chips (Credit grants, Permission changes, Impersonation, Deletions, Settings) or the filter bar (Actor, Target, Category, Severity, Source, action). Click a row to open its detail drawer.',
+      'Export CSV downloads the filtered rows; if the export is truncated, narrow the filters.',
+      'Needs review has To review and All critical views. Open a critical entry and click Mark as reviewed (optional note). Only full admins can sign off, and not on their own actions or entries about their own account.',
+      'A banner appears if critical entries are not posted to Slack; set the Security Alerts Channel Webhook URL in Admin Settings. Delegated admins with support:read can read the log.',
+    ],
+    keywords: [
+      'audit trail',
+      'who changed',
+      'change history',
+      'activity log',
+      'compliance',
+      'sign off',
+      'needs review',
+    ],
+  },
+  {
+    id: 'admin-approvals',
+    title: 'Approvals',
+    summary:
+      'Sensitive admin actions wait here until a second admin approves them. The requester can withdraw their own request.',
+    views: ['admin.approvals'],
+    settings: [
+      'AdminApprovalsEnabled',
+      'AdminApprovalBulkUserThreshold',
+      'AdminApprovalCreditThreshold',
+      'AdminApprovalExpiryHours',
+    ],
+    howTo: [
+      'Use the status filter (pending, approved, executing, executed, rejected, expired, failed, all) to find requests; Details shows the request parameters and result.',
+      'Approve runs the request. Reject closes it without running it. You cannot decide your own request, and Approve is disabled with a hint if you lack the permission the request needs.',
+      'The requester sees Withdraw instead of Reject. For an approved admin-impersonation request, the requester sees Start impersonation.',
+      'Turn the feature on in Admin Settings with Require Second-Admin Approval. Pending requests expire after the configured number of hours.',
+    ],
+    keywords: ['two-person', 'second admin', 'pending admin actions', 'approve request', 'withdraw', 'dual control'],
+  },
+  {
+    id: 'security-dashboard',
+    title: 'Security Dashboard',
+    summary:
+      'One place to check whether signups, spend, firewall traffic and payments look normal. It has three views: Incident, Firewall and Scans. Full admin access is required.',
+    views: ['admin.security_dashboard'],
+    settings: [],
+    howTo: [
+      'Incident (default): pick a range (last hour, 24 hours, 7 days). Key numbers sit on top; the Queues card has Open buttons to Risk review, Held grants (budget) and Signup domain holds. Alarms and Payments cards sit below.',
+      'A banner may offer Review cluster, which opens the Users list filtered to the last hour and grouped by email domain.',
+      'Firewall: live traffic, top rules, logs insights and recently blocked requests, with preset or custom time ranges. It loads only while open.',
+      'Scans: a table of Website, Cloud baseline, Prowler and Active defense scans. Select a row to open its panel and run it; a button is disabled during its cooldown.',
+    ],
+    keywords: ['security', 'threats', 'firewall', 'waf', 'security scans', 'alarms', 'incident view', 'payments'],
+  },
+  {
+    id: 'secops-triage',
+    title: 'SecOps triage',
+    summary:
+      'Settings for the pipeline that turns critical and high security scan findings into GitHub issues and Slack alerts.',
+    views: ['admin.secops_triage'],
+    settings: ['secopsTriageConfig'],
+    howTo: [
+      'Under Master controls, Enabled is the kill switch: when off, findings are still ingested but no GitHub issues are created. Turn on Dry run first to log actions without creating issues or posting to Slack.',
+      'GitHub settings: set the Repository, Severity Threshold, the Critical and High priority labels, and Max Issues Per Scan.',
+      'Slack notifications: pick a Workspace and enter the Slack Channel ID.',
+      'LLM enrichment optionally adds a "Where It Was Found" and "How to Fix" section to each new issue; choose a Model. Save with the save bar. Full admin access is required.',
+    ],
+    keywords: [
+      'secops',
+      'security triage',
+      'security alerts',
+      'vulnerabilities',
+      'security issues',
+      'dry run',
+      'github issues',
+    ],
+  },
+  {
+    id: 'partner-signup-rules',
+    title: 'Partner Signup Rules',
+    summary:
+      "Rules keyed on a partner email domain. When someone verifies an email on that domain they receive the rule's entitlements, tags, subscription, one-time credit bonus and optional organization membership.",
+    views: ['admin.partner_signups'],
+    settings: [],
+    howTo: [
+      'Click Add rule: enter the bare Domain, then optionally a Label, Entitlements, User tags, Subscription, Signup credits (or a grant package), Organization and Notes. Search by domain or label above the list.',
+      'Rules apply at email verification. Use the row toggle to enable or disable one; a disabled rule confers nothing. Domain cannot be edited; delete and re-add to change it.',
+      'Delete rule stops future signups getting its grants. Existing users keep what they already have.',
+      'Backfill into organization shows only on rules with an Organization. It previews how many existing verified users on the domain will be added, then confirms. Nobody is removed.',
+      'For a Stripe-billed organization the seat count stays and candidates past it are skipped; otherwise it may be raised to fit. Full admin access is required in the console.',
+    ],
+    keywords: [
+      'partner',
+      'partner signups',
+      'email domain',
+      'auto-join',
+      'domain rules',
+      'backfill',
+      'organization signup',
+    ],
+  },
+  {
+    id: 'rate-limits',
+    title: 'Rate limits',
+    summary:
+      'Rate-limit snapshots from third-party integrations (GitHub, Jira, Confluence), recorded on each MCP tool call. Per-plan API request limits are set in Admin Settings, not here.',
+    views: ['admin.rate_limits'],
+    settings: [],
+    howTo: [
+      'The header tiles show Snapshots, Throttled and Average usage. Use Refresh to reload.',
+      'Filter by date range and Integration, or switch on Throttled only. The Overview tab shows each integration with Near limit and Throttled chips.',
+      'To change per-plan API limits, open Admin Settings instead.',
+    ],
+    keywords: ['rate limit', 'throttle', 'throttling', 'quota', 'requests per minute', '429', 'integration limits'],
+  },
+  {
+    id: 'api-key-scope-preflight',
+    title: 'API key scope preflight',
+    summary:
+      'A read-only check, run before requiring a new scope on an endpoint, that lists which existing API keys would start getting 403 errors.',
+    views: ['admin.api_key_scopes'],
+    settings: [],
+    howTo: [
+      'Enter an Endpoint prefix (matched as a plain string prefix, so /api/chat also matches /api/chatbots), pick the scopes the routes would require (any one passes) and a Window, then click Run.',
+      'Results show each key as would 403, staged only or passes, with counts at the top. Keys must be re-minted with the new scope before enforcement.',
+      'The result can be partial; check the warnings shown.',
+      'Delegated admins with support:read can open this tab.',
+    ],
+    keywords: ['api key scopes', 'scopes', 'api keys', 'preflight', 'scope migration', 'requiredScopes', '403'],
+  },
+  {
+    id: 'oauth-clients',
+    title: 'OAuth clients',
+    summary:
+      'Apps registered to use "Sign in with Bike4Mind". Each client has a client ID and secret and may only redirect to its registered URIs (exact match).',
+    views: ['admin.oauth_clients'],
+    settings: [],
+    howTo: [
+      'Register: click Register client, enter a unique Name and one https Redirect URI per line (http only for localhost). The client secret is shown once; copy it then.',
+      'Edit changes redirect URIs and scopes. Removing a scope or turning off federation asks for confirmation; it applies to every user of the client, and turning off federation stops their AI-token exchange.',
+      'Rotate secret (confidential clients only) makes the current secret stop working immediately. Deactivate client stops sign-ins and code exchanges without deleting it; the row toggle reactivates it.',
+      'Full admin access is required in the console.',
+    ],
+    keywords: [
+      'oauth',
+      'client id',
+      'client secret',
+      'redirect uri',
+      'third-party apps',
+      'sign in with bike4mind',
+      'rotate secret',
+    ],
+  },
+  {
+    id: 'embed-keys',
+    title: 'Embed keys',
+    summary:
+      'Scoped credentials that let an external site embed a chat widget for one agent. Each key has allowed origins and optional branding.',
+    views: ['admin.embed_keys'],
+    settings: [],
+    howTo: [
+      'Click Create embed key: enter a Name, choose the owning organization, the Agent (the key can only talk to that agent), and Allowed origins. Branding (display name, color, logo) is optional. The key is shown once.',
+      "Row menu > Configure edits the agent, origins and branding. Hide Bike4Mind branding applies only if the owner's plan includes white-label.",
+      'Rotate key issues a new secret; the old one stops working at once, so sites fail until they use the new key.',
+      'Revoke key is permanent and cannot be restored; type the key name to confirm and give a reason. The Status column then shows Revoked.',
+    ],
+    keywords: ['embed', 'widget', 'allowed origins', 'iframe', 'embedding', 'rotate key', 'revoke key', 'white-label'],
+  },
+  {
+    id: 'delegated-admin-permissions',
+    title: 'Delegated admin permissions',
+    summary:
+      'A delegated admin holds named permissions instead of full admin access and sees only the console tabs those permissions open. Full administrators have every permission implicitly.',
+    views: ['admin.users'],
+    settings: [],
+    howTo: [
+      'Permissions: support:read, credits:adjust, users:moderate, users:impersonate, keys:revoke, users:delete, settings:manage and models:curate.',
+      'support:read is read-only and opens Audit log, Approvals, Stripe disputes, Shadow detections, API key scopes and the Retrieval, Webhook logs, Help analytics and Integration demand tabs.',
+      'Tools, Gears and Stuck executions open with support:read (read-only) or settings:manage. Only Modals needs settings:manage.',
+      'Disabled buttons name the missing permission, for example "Missing permission: users:moderate". Delegated admins cannot act on accounts that themselves have admin access.',
+      'The console has no editor for delegated permissions. Full admin access is granted on a user profile: the "More actions" icon button > Change role > Super Admin, with a reason. Only a full admin can do this.',
+      'You cannot change your own role, and demoting the last Super Admin is refused.',
+    ],
+    keywords: [
+      'delegated admin',
+      'admin permissions',
+      'support:read',
+      'users:moderate',
+      'credits:adjust',
+      'settings:manage',
+      'super admin',
+      'roles',
+    ],
+  },
+];

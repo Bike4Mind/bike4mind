@@ -1,0 +1,301 @@
+import type { AdminGuideEntry } from '../types';
+
+export const AI_AND_CONTENT_GUIDE: readonly AdminGuideEntry[] = [
+  {
+    id: 'admin-settings',
+    title: 'Admin Settings',
+    summary:
+      'The page for platform-wide configuration values. Settings are grouped into category tabs, and each tab holds service group cards with related fields.',
+    views: ['admin.settings'],
+    settings: [],
+    howTo: [
+      'Pick a category tab (for example AI Configuration, Features or Communications), then find the service group card that holds the field.',
+      'Type in the search box to match setting names, descriptions or non-sensitive values. Tick All Tabs to search every tab at once.',
+      'Edits are held as a draft. A save bar shows the number of unsaved changes with Discard and Save (Cmd+S) buttons.',
+      'Leaving the page with unsaved changes asks whether to discard them. Sensitive values such as API keys are masked.',
+      'To read the current value of any setting without opening the page, ask the assistant to run admin_get_setting with the setting key or search words.',
+    ],
+    keywords: ['configuration', 'system settings', 'feature flags', 'api keys', 'save bar', 'setting value', 'toggle'],
+  },
+  {
+    id: 'llm-model-dashboard',
+    title: 'LLM Dashboard',
+    summary:
+      'The Models page. It turns LLM models on or off, sets each model rank and fallback, and chooses which user tags and entitlements can use each model.',
+    views: ['admin.llm_dashboard'],
+    settings: [],
+    howTo: [
+      'Use the search box and the Type, Backend and Status filters to narrow the Models table; Clear filters resets them.',
+      'Flip the Status switch to enable or disable a model. A disabled model is unavailable to every user.',
+      'Set Rank (lower means higher priority, empty means automatic) and pick a Fallback model of the same type.',
+      'Tick the tag and entitlement columns to say who may use an enabled model. Admins always keep access.',
+      'Select rows and use Enable selected or Disable selected for bulk changes, then save from the bar at the bottom of the page.',
+    ],
+    keywords: [
+      'enable model',
+      'disable model',
+      'model access',
+      'model rank',
+      'fallback model',
+      'user tags',
+      'entitlements',
+      'models',
+    ],
+  },
+  {
+    id: 'tool-definitions',
+    title: 'Tool Definitions',
+    summary:
+      'Lists the tools the AI can call and records per-tool overrides (description edits, disable). Saved overrides are not currently applied to the tools the AI sees, so this is not a way to turn a tool off.',
+    views: ['admin.tool_definitions'],
+    settings: [],
+    howTo: [
+      'Search by name, description or tags, and filter by Category or Status. The table shows Source (Code or DB override), Version, Usage and Success.',
+      'Use View Details to read the full tool definition before changing anything.',
+      'Use Edit to change the Short Description, the Full Description or the Enabled switch. Each save creates a new version and records the override; it is not currently applied to the tools the AI sees.',
+      'On a tool with a database override, Revert to Code Defaults clears the stored override and shows the built-in definition again.',
+    ],
+    keywords: ['llm tools', 'functions', 'tool description', 'disable tool', 'tool override', 'tool success rate'],
+  },
+  {
+    id: 'agent-operations',
+    title: 'Agent Operations',
+    summary:
+      'Manages the meta-prompt that generates system prompts for agents: its versions, which one is active, the generation model and the rate limit.',
+    views: ['admin.agent_ops'],
+    settings: [],
+    howTo: [
+      'Use Create Meta-prompt Version to author a new version with a description and the Meta-prompt Content.',
+      'Press Activate on an inactive version in the versions list to make it the current one.',
+      'Use Edit Settings to set Enable system prompt generation, the LLM Model for Generation and the Rate Limit (seconds).',
+      'Repair Database is the button to use when meta-prompt versions look missing or corrupted.',
+    ],
+    keywords: [
+      'meta-prompt',
+      'agent prompt generation',
+      'agent system prompt',
+      'meta-prompt versions',
+      'activate version',
+      'generation model',
+    ],
+  },
+  {
+    id: 'system-prompts',
+    title: 'System Prompts',
+    summary:
+      'Edit system prompts as versioned overrides of the prompts built into the code, and manage the Global Knowledge Files that are sent with every chat.',
+    views: ['admin.system_prompts'],
+    settings: ['SystemFiles'],
+    howTo: [
+      'In the prompt editor, search for a prompt, open it and edit the Prompt Content, then use Save as New Version.',
+      'Use the version selector to compare older versions with Default (Code); Use Default adopts the code version.',
+      'A warning appears when the code default has changed since an override was written; View code default opens it for comparison.',
+      'Under Global Knowledge Files, use Add System File to pick files included in every chat, and the remove button to drop one (the file itself is kept).',
+    ],
+    keywords: [
+      'prompt override',
+      'prompt history',
+      'revert prompt',
+      'global files',
+      'system files',
+      'ai instructions',
+      'prompt version',
+    ],
+  },
+  {
+    id: 'modals-and-banners',
+    title: 'Modals',
+    summary:
+      "Creates and manages modals and banners shown to users in the app. What's New announcements have their own tab.",
+    views: ['admin.modals'],
+    settings: [],
+    howTo: [
+      'Use the search box to find a modal, and the table columns to see its Status, Description and Targeting.',
+      'Create a modal with the create button (or New modal on the empty state); the form walks through the content and who sees it.',
+      'Use the row actions to Edit, Preview or Delete a modal.',
+      'Targeting shows the user tags a modal is limited to; with no tags it is shown to everyone.',
+    ],
+    keywords: ['popups', 'dialogs', 'banner', 'announcement', 'user tags targeting', 'notice', 'in-app message'],
+  },
+  {
+    id: 'whats-new-modals',
+    title: "What's New",
+    summary:
+      "Manages the What's New announcement modals users see, split into Active and Archived, and the weekly highlights post to Slack.",
+    views: ['admin.whats_new'],
+    settings: [],
+    howTo: [
+      'Use New Modal to write a Title, Subtitle and Description (Markdown is supported) with an expiry date.',
+      'Each row has View, Edit, enable or disable and Delete actions; the Status and Expiry columns show whether a modal is live.',
+      'Under Weekly Highlights to Slack, set the Slack Channel ID and Slack Team ID, choose the model and an optional Custom Prompt Template, then Save Changes.',
+      'The Slack section also has a button that generates and posts highlights immediately.',
+    ],
+    keywords: [
+      'whats new',
+      'announcement modal',
+      'weekly highlights',
+      'slack highlights',
+      'product updates',
+      'archived modals',
+    ],
+  },
+  {
+    id: 'rapid-reply',
+    title: 'Rapid Reply',
+    summary:
+      'Configures Rapid Reply, a fast model that answers while the main model is still working: model mappings, fallback behavior, performance thresholds and a test run.',
+    views: ['admin.rapid_reply'],
+    settings: ['EnableRapidReply', 'RapidReplySettings'],
+    howTo: [
+      'On the Models tab, review General Settings and Model Mappings. A mapping pairs a Main Model with a Rapid Model, a System Prompt, Max Tokens and Max Latency Before Timeout.',
+      'Use Fallback Priority on a mapping and the Fallback Behavior setting to control what happens when the rapid model is unavailable.',
+      'On the Metrics tab, review latency and set the Performance Thresholds.',
+      'On the Test tab, choose a Select Model to Test, enter a message or use a Quick Test Message, press Run Test, and read the results and Recommendations.',
+    ],
+    keywords: ['quick responses', 'fast model', 'model mapping', 'ttfvt', 'first token', 'acknowledgment', 'latency'],
+  },
+  {
+    id: 'model-logs',
+    title: 'Model Logs',
+    summary: 'Shows logs of individual LLM responses for debugging: model, timing, token use and execution steps.',
+    views: ['admin.model_logs'],
+    settings: [],
+    howTo: [
+      'Filter by date range and by model (Filter by Model, or All Models), or type in Search logs.',
+      'Expand a log entry to see its details, such as response time, tokens in and out, and execution steps.',
+      'Use Refresh in the header to reload with the current filters.',
+    ],
+    keywords: ['llm logs', 'request logs', 'response logs', 'debugging', 'api logs', 'token usage'],
+  },
+  {
+    id: 'model-metrics',
+    title: 'Model Metrics',
+    summary: 'Per-call performance, token use and cost across models, shown on four tabs.',
+    views: ['admin.model_metrics'],
+    settings: [],
+    howTo: [
+      'Use the Model names control to choose which models to include.',
+      'The Overview tab shows totals such as requests, average response time and error rate.',
+      'The Analytics tab shows timing detail such as time to first token, and the Spend tab shows credits and estimated cost.',
+      'The Raw data tab lists individual requests with their request ID, user and timing breakdown.',
+    ],
+    keywords: ['performance', 'latency', 'tokens', 'model usage', 'cost', 'spend', 'error rate', 'ttft'],
+  },
+  {
+    id: 'model-lifecycle',
+    title: 'Model lifecycle',
+    summary:
+      'Reviews LLM model deprecations that were detected, lets an admin accept a successor model, and reports places that still point at deprecated or retired models.',
+    views: ['admin.model_lifecycle'],
+    settings: [],
+    howTo: [
+      'The Deprecation queue lists models awaiting a decision, with their dates and a suggested successor.',
+      'Press Accept to confirm a deprecation; you can add a Note for the audit trail and override the Successor.',
+      'Press Dismiss to drop a suggestion you do not agree with.',
+      'The Stale references list is a report only; it shows which surfaces point at a deprecated, retired or unknown model, and what each points at.',
+    ],
+    keywords: [
+      'deprecation',
+      'deprecated models',
+      'model retirement',
+      'successor model',
+      'end of life',
+      'stale model references',
+    ],
+  },
+  {
+    id: 'retrieval-rate',
+    title: 'Retrieval',
+    summary:
+      'Shows how often the model chooses to call the knowledge-retrieval tools when they are offered rather than forced.',
+    views: ['admin.retrieval'],
+    settings: [],
+    howTo: [
+      'The page shows the optional-path retrieval rate, with a split by whether the corpus could have answered the question.',
+      'It compares turns with and without the when-to-retrieve guidance, so you can see whether the guidance helps.',
+      'Counts appear once users chat with the knowledge tools on offer; otherwise the page says there are no turns in the window.',
+    ],
+    keywords: ['retrieval rate', 'rag', 'knowledge tools', 'search usage', 'missed retrievals', 'forced retrieval'],
+  },
+  {
+    id: 'context-inspector',
+    title: 'Context inspector',
+    summary:
+      'Inspects per-request LLM context telemetry: prompt size, context health and anomalies, with alert settings for Slack and GitHub.',
+    views: ['admin.context_inspector'],
+    settings: ['EnableContextTelemetry', 'contextTelemetryAlerts'],
+    howTo: [
+      'Review the per-request telemetry to see how large each prompt was and how full the context window was.',
+      'Open Alert settings to choose the Slack workspace and channel and the GitHub owner and repository used for anomaly alerts.',
+      'Alert settings also hold the performance targets, the analysis model and a dry run test; changes are saved from the save bar.',
+    ],
+    keywords: [
+      'context window',
+      'prompt size',
+      'telemetry',
+      'context health',
+      'anomaly alerts',
+      'context utilization',
+      'slo',
+    ],
+  },
+  {
+    id: 'gears',
+    title: 'Gears',
+    summary:
+      'Overrides the Gears progression system live: switch gears on or off, change credit rewards and reword their cards and calls to action. Anything saved overrides the code defaults with no deploy.',
+    views: ['admin.gears'],
+    settings: [],
+    howTo: [
+      'Each gear is a row showing its Credits, Copy (title, tagline, intro) and CTA (label and action).',
+      'Edit the fields and save; the save takes effect immediately.',
+      'To stop a reward, disable the gear or set its credits to 0.',
+      'Use Reset to code defaults on a gear to drop your override.',
+    ],
+    keywords: ['progression', 'rewards', 'gamification', 'achievements', 'onboarding rewards', 'credit rewards'],
+  },
+  {
+    id: 'voice-agents',
+    title: 'Voice Settings',
+    summary:
+      'Creates ElevenLabs voice assistant agents and exposes them to all users on the agents page, with one marked as the default for users without a personal choice.',
+    views: ['admin.voice'],
+    settings: [],
+    howTo: [
+      'Press New voice agent and fill in Name, Description, Voice, First message and System prompt, plus Turn eagerness and Turn timeout (seconds).',
+      'Use the Default switch on an agent to make it the voice assistant for users with no personal selection.',
+      'The download button saves the ElevenLabs agent config as JSON; the edit and delete buttons change or remove an agent (delete also removes it in ElevenLabs).',
+      'If the list fails to load, check that Voice v2 is enabled and the ElevenLabs server API key is set in Admin Settings.',
+    ],
+    keywords: ['voice agent', 'speech', 'elevenlabs', 'voice assistant', 'default voice', 'conversational ai'],
+  },
+  {
+    id: 'app-files',
+    title: 'Files',
+    summary:
+      'Manages app-level file uploads and their tags, including the Gated tag. Admins can upload, retag and delete files.',
+    views: ['admin.files'],
+    settings: [],
+    howTo: [
+      'Drag files onto the upload area or use Browse to pick them; the table below lists File Name, File Path, File Size, Tags, Uploaded By, Uploaded At and Upload Status.',
+      'Use the edit button next to a file Tags to open the tag editor: add tags, pick a pre-defined tag, switch Gated on or off and write a Description.',
+      'Use the row delete action to remove a file; a confirmation says it cannot be undone.',
+    ],
+    keywords: ['uploads', 'storage', 'documents', 'file management', 'gated tag', 'file tags', 'app files'],
+  },
+  {
+    id: 'release-notes',
+    title: 'Release notes',
+    summary:
+      "Write, edit and publish customer-facing product release notes. Notes are generated from each production release and served by the whats-new API, separate from What's new modals.",
+    views: ['admin.release_notes'],
+    settings: ['releaseNotesConfig'],
+    howTo: [
+      'Use the Scheduled, Published and Hidden filters to find a note. A scheduled note shows when it will publish.',
+      'Use Edit to change the headline, summary and items. A note needs at least one customer-facing item before it can go live.',
+      'Use Publish now on a scheduled note, Hide to pull a note from the feed and Unhide to restore it.',
+      'The settings editor covers the Embargo (hours), the Denylist of terms that must not appear in customer copy, the model, and the Slack channel and team IDs.',
+    ],
+    keywords: ['changelog', 'what changed', 'product updates', 'releases', 'embargo', 'publish release notes'],
+  },
+];
