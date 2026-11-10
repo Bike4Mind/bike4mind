@@ -2859,6 +2859,8 @@ async function processExecution(
       lastIterationConfidenceState = null;
     };
     const selfReportEnabled = orchestrationProfile?.confidenceGateSelfReport ?? DEFAULT_CONFIDENCE_GATE_SELF_REPORT;
+    const confidenceGateThreshold = orchestrationProfile?.confidenceGateThreshold ?? DEFAULT_CONFIDENCE_GATE_THRESHOLD;
+    const gateMode = orchestrationProfile?.confidenceGateMode ?? DEFAULT_CONFIDENCE_GATE_MODE;
     const confidenceGate = !selfReportEnabled
       ? undefined
       : (iterationConfidence: number, agentIterationIndex: number) => {
@@ -2936,7 +2938,7 @@ async function processExecution(
           approvedToolCallId: approvedPause.toolCallId,
           approvedTools,
           deniedTools,
-          confidenceGateThreshold: orchestrationProfile?.confidenceGateThreshold ?? DEFAULT_CONFIDENCE_GATE_THRESHOLD,
+          confidenceGateThreshold,
           confidenceOverrides: execution.confidenceOverrides,
           guardedToolNames: customToolNameSet,
         },
@@ -3510,26 +3512,22 @@ async function processExecution(
       // reached the client mid-iteration.
 
       // Confidence gate - pause low-confidence runs for human review.
-      // `confidenceGateMode` controls which sites are active: `iteration` and `both`
-      // enable this site; `answer` and `off` skip it.
-      const confidenceGateThreshold =
-        orchestrationProfile?.confidenceGateThreshold ?? DEFAULT_CONFIDENCE_GATE_THRESHOLD;
-      const gateMode = orchestrationProfile?.confidenceGateMode ?? DEFAULT_CONFIDENCE_GATE_MODE;
-      const iterationGateEnabled = gateMode === 'iteration' || gateMode === 'both';
-      const gate = iterationGateEnabled
-        ? evaluateConfidenceGate({
-            gate: readLastIterationConfidence(),
-            isComplete: iterationResult.isComplete,
-            reachedMaxIterations: iterationResult.reachedMaxIterations,
-            threshold: confidenceGateThreshold,
-            iterationSteps: iterationResult.allSteps,
-            confidenceOverrides: execution.confidenceOverrides,
-          })
-        : null;
+      // Always evaluate + record: the streak must advance even when only
+      // the answer-site gate is active, otherwise gateMode 'answer' is dead.
+      // `gateMode` controls which site actually pauses.
+      const gate = evaluateConfidenceGate({
+        gate: readLastIterationConfidence(),
+        isComplete: iterationResult.isComplete,
+        reachedMaxIterations: iterationResult.reachedMaxIterations,
+        threshold: confidenceGateThreshold,
+        iterationSteps: iterationResult.allSteps,
+        confidenceOverrides: execution.confidenceOverrides,
+      });
       const decision = await decideIterationConfidencePause(gate, (confidence, options) =>
         agentExecutionRepository.recordIterationConfidence(executionId, confidence, options)
       );
-      if (gate !== null && decision?.pause) {
+      const iterationGateEnabled = gateMode === 'iteration' || gateMode === 'both';
+      if (iterationGateEnabled && gate !== null && decision?.pause) {
         // 0-indexed wire convention: the agent reports 1-indexed
         // `this.iterations`, but the client's `IterationStream` and
         // `permission_request` use 0-indexed (see the matching subtraction
@@ -3591,8 +3589,7 @@ async function processExecution(
     // apps/client/server/websocket/agentExecute.ts).
     const completedOnAnswer =
       iterationResult?.isComplete && !iterationResult.reachedMaxIterations && !iterationResult.reachedMaxTotalTokens;
-    const answerGateMode = orchestrationProfile?.confidenceGateMode ?? DEFAULT_CONFIDENCE_GATE_MODE;
-    const answerGateEnabled = answerGateMode === 'answer' || answerGateMode === 'both';
+    const answerGateEnabled = gateMode === 'answer' || gateMode === 'both';
     const lowConfidenceCompletion =
       answerGateEnabled && completedOnAnswer && (updatedExecution?.lowConfidenceStreak ?? 0) > 0
         ? evaluateLowConfidenceCompletion({
@@ -3609,7 +3606,7 @@ async function processExecution(
               DEFAULT_LOW_CONFIDENCE_COMPLETION,
             lowConfidenceStreak: updatedExecution?.lowConfidenceStreak,
             lastConfidence: updatedExecution?.lastConfidence,
-            threshold: orchestrationProfile?.confidenceGateThreshold ?? DEFAULT_CONFIDENCE_GATE_THRESHOLD,
+            threshold: confidenceGateThreshold,
           })
         : null;
     if (lowConfidenceCompletion) {
