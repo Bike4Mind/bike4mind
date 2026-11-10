@@ -3,7 +3,8 @@
  *
  * Structural guard: every `new sst.aws.Bucket` in infra/ must pass the shared BLOCK_ALL_PUBLIC_ACCESS as
  * `transform.publicAccessBlock`, be followed by `encryptBucketAtRest(<name>, <bucketVar>)`, and not be public.
- * Files are parsed (not imported) because infra/ uses SST globals at module scope.
+ * Files are parsed (not imported) because infra/ uses SST globals at module scope. Only `sst.aws.Bucket` is
+ * matched; a raw `aws.s3.BucketV2` would escape the guard.
  */
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync } from 'fs';
@@ -76,8 +77,8 @@ const analyze = (src: string) => {
   return { buckets, unattributed, problems: () => buckets.map(problem).filter((p): p is string => p !== null) };
 };
 
-const found = readdirSync(INFRA_DIR)
-  .filter(f => f.endsWith('.ts'))
+const found = readdirSync(INFRA_DIR, { recursive: true, encoding: 'utf8' })
+  .filter(f => f.endsWith('.ts') && !f.split(path.sep).includes('__tests__'))
   .map(f => ({ file: f, ...analyze(readFileSync(path.join(INFRA_DIR, f), 'utf8')) }));
 const all = found.flatMap(f => f.buckets);
 
@@ -100,13 +101,6 @@ describe('S3 buckets state encryption and public-access blocking', () => {
   it('attributes every `new sst.aws.Bucket(` to a variable declaration', () => {
     expect(found.filter(f => f.unattributed !== 0).map(f => f.file)).toEqual([]);
   });
-
-  it.each(found.flatMap(f => (f.problems().length === 0 ? [] : [[f.file, f.problems()] as const])))(
-    '%s has no problems',
-    (_file, problems) => {
-      expect(problems).toEqual([]);
-    }
-  );
 
   it('passes on every bucket in infra/', () => {
     expect(found.flatMap(f => f.problems())).toEqual([]);
