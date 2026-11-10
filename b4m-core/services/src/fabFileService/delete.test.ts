@@ -189,7 +189,7 @@ describe('deleteFabFile', () => {
       mockAdapter.db.fabFiles.update.mockResolvedValue(generatedFile);
       const generatedCopies = {
         storage: { delete: vi.fn().mockResolvedValue(undefined) },
-        quests: { findSessionIdsByImage: vi.fn().mockResolvedValue(['s1']) },
+        quests: { findSessionIdsByMedia: vi.fn().mockResolvedValue(['s1']) },
       };
 
       await deleteFabFile(mockUserId, { id: mockFileId }, { ...mockAdapter, generatedCopies });
