@@ -10,7 +10,7 @@ import { type MigrationFile } from './index';
  * 20260909000000_ensure-quest-images-index. Idempotent: createIndexes skips existing indexes.
  */
 const migration: MigrationFile = {
-  id: 20261110000000,
+  id: 20260921240060,
   name: 'ensure generated media purge indexes',
 
   up: async () => {
