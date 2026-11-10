@@ -3,7 +3,7 @@ import { modelDiscoveryService } from '@bike4mind/services';
 
 const h = vi.hoisted(() => ({ catalogRows: vi.fn(async (): Promise<unknown[]> => []) }));
 vi.mock('@bike4mind/database', () => ({
-  adminSettingsRepository: { findOne: async () => null },
+  adminSettingsRepository: { findOne: async () => null, getSettingsValue: async () => undefined },
   apiKeyRepository: {},
   modelCatalogRepository: { rowsInForce: () => h.catalogRows(), discoveryMilestones: async () => new Map() },
   modelDiscoveryStateRepository: { pendingSuggestions: async () => [] },
@@ -50,15 +50,29 @@ describe('resolveAdminModelFilterIds', () => {
         disabledReason: 'not invocable on demand; use its region-prefixed inference profile id',
       }),
       row('anthropic.claude-entitled-v1:0', { disabled: true, disabledReason: 'not entitled in this AWS account' }),
+      row('Anthropic.Claude_Mixed-v1:0', { disabled: true, disabledReason: 'not entitled in this AWS account' }),
+      row('anthropic.claude_under-v1:0', { disabled: true, disabledReason: 'not entitled in this AWS account' }),
     ]);
   });
 
   it('selects exactly the ids the list shows for the same filter, across every page', async () => {
-    for (const filter of [{}, { view: 'hidden' as const }, { providers: ['bedrock'], view: 'hidden' as const }]) {
+    const filters = [
+      {},
+      { view: 'hidden' as const },
+      { view: 'needs-review' as const },
+      { view: 'retiring' as const },
+      { providers: ['bedrock'], view: 'hidden' as const },
+    ];
+    for (const filter of filters) {
       const page = modelDiscoveryService.adminModelListPage(await loadAdminModelRows(), { filter, pageSize: 500 });
       expect(page.total).toBeLessThan(500);
-      expect(await resolveAdminModelFilterIds(filter)).toEqual(page.models.map(model => model.id).sort());
+      expect(await resolveAdminModelFilterIds(filter)).toEqual(
+        page.models.map(model => model.id).sort(modelDiscoveryService.compareAdminModelIds)
+      );
     }
+    expect(await resolveAdminModelFilterIds({ view: 'hidden', providers: ['bedrock'] })).toEqual(
+      expect.arrayContaining(['Anthropic.Claude_Mixed-v1:0', 'anthropic.claude_under-v1:0'])
+    );
   });
 
   it('leaves out profile-only foundation ids unless the filter restores them', async () => {

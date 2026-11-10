@@ -27,9 +27,10 @@ const h = vi.hoisted(() => ({
   priceRows: vi.fn(async (): Promise<unknown[]> => []),
   accessSetting: vi.fn(async (): Promise<unknown> => null),
   keys: vi.fn(async (): Promise<Record<string, string | null>> => ({})),
+  settings: vi.fn(async (_name: string): Promise<unknown> => undefined),
 }));
 vi.mock('@bike4mind/database', () => ({
-  adminSettingsRepository: { findOne: () => h.accessSetting() },
+  adminSettingsRepository: { findOne: () => h.accessSetting(), getSettingsValue: (name: string) => h.settings(name) },
   apiKeyRepository: {},
   modelCatalogRepository: { rowsInForce: () => h.catalogRows(), discoveryMilestones: async () => new Map() },
   modelDiscoveryStateRepository: { pendingSuggestions: async () => [] },
@@ -113,6 +114,7 @@ describe('GET /api/admin/models', () => {
     h.priceRows.mockResolvedValue([]);
     h.accessSetting.mockResolvedValue(null);
     h.keys.mockResolvedValue(ALL_KEYS);
+    h.settings.mockImplementation(async name => (name === 'modelDiscoveryMode' ? 'write' : undefined));
   });
 
   it('refuses a user without admin access, and serves a support:read delegate', async () => {
@@ -167,6 +169,37 @@ describe('GET /api/admin/models', () => {
     ]);
     const listed = (await list({ view: 'listed', search: 'gpt-admin-list' })).models;
     expect(listed).toEqual([expect.objectContaining({ id: 'gpt-admin-list', status: 'listed', reasons: [] })]);
+  });
+
+  it('words a priced model for the discovery mode it waits on', async () => {
+    h.priceRows.mockResolvedValue([
+      {
+        modelId: 'gpt-admin-list',
+        unit: 'per_token',
+        pricing: { '0': { input: 1e-6, output: 4e-6 } },
+        effectiveFrom: new Date('2026-07-02T00:00:00Z'),
+        createdAt: new Date('2026-07-02T00:00:00Z'),
+        updatedAt: new Date('2026-07-02T00:00:00Z'),
+      },
+    ]);
+    const reasons = async () =>
+      (await list({ search: 'gpt-admin-list' })).models.find(model => model.id === 'gpt-admin-list')?.reasons;
+
+    h.settings.mockImplementation(async () => undefined);
+    expect(await reasons()).toEqual([
+      {
+        code: 'awaiting-discovery-run',
+        message: 'Priced. Discovery only reports right now, so it lists after a run in write mode.',
+      },
+    ]);
+
+    h.settings.mockImplementation(async name => (name === 'enableModelDiscovery' ? false : 'write'));
+    expect(await reasons()).toEqual([
+      {
+        code: 'awaiting-discovery-run',
+        message: 'Priced. Model discovery is off, so it lists after a run in write mode.',
+      },
+    ]);
   });
 
   it('reads the access entries an admin saved', async () => {

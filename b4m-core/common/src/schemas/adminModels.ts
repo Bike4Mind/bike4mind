@@ -5,7 +5,7 @@ import type { IModelPriceTier, ModelPriceUnit } from '../types/entities/ModelPri
 export const ADMIN_MODEL_STATUSES = ['listed', 'limited', 'needs-review', 'hidden', 'retiring', 'retired'] as const;
 export type AdminModelStatus = (typeof ADMIN_MODEL_STATUSES)[number];
 
-/** Listed covers Limited, and Retiring covers Retired. */
+/** Listed covers Limited, Retiring covers Retired, and Needs review covers any pending lifecycle suggestion. */
 export const ADMIN_MODEL_VIEWS = ['all', 'needs-review', 'listed', 'hidden', 'retiring'] as const;
 export type AdminModelView = (typeof ADMIN_MODEL_VIEWS)[number];
 
@@ -150,9 +150,12 @@ export interface AdminModelRow {
   freeToRun: boolean;
   status: AdminModelStatus;
   reasons: AdminModelReason[];
-  /** The rank the web picker sorts by: the access entry's, else the catalog's, else the family median. */
-  rank: number;
-  /** Neither the access entry nor the catalog ranks it; `rank` is the family median. */
+  /**
+   * Its rank in the web picker's provider section (pickerProviderGroup): the access entry's, else the catalog's, else
+   * provisionalRank over the section's pickable models. Null for an unranked model the picker does not offer.
+   */
+  rank: number | null;
+  /** Neither the access entry nor the catalog ranks it; `rank` is provisional, or null. */
   rankProvisional: boolean;
   /** `default`: an adapter literal or seed row ships it; `discovered`: only discovery knows it; `admin`: only operator rows. */
   origin: AdminModelSource;
@@ -178,6 +181,8 @@ export interface AdminModelListResponse {
   pageSize: number;
   /** Per status, over every filter except the view. */
   counts: Record<AdminModelStatus, number>;
+  /** Per view tab, over every filter except the view; a view can span statuses. */
+  viewCounts: Record<AdminModelView, number>;
   /** Profile-only Bedrock foundation ids matching the other filters: what the foundation-ids chip shows or restores. */
   foundationIds: number;
   /** Values present across every model, for the filter menus. */
