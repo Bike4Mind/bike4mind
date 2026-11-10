@@ -4400,19 +4400,9 @@
       "count": 5
     }
   },
-  "b4m-core/slack/src/handlers/globalShortcutHandlers.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 13
-    }
-  },
   "b4m-core/slack/src/handlers/modelConfigHandlers.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 8
-    }
-  },
-  "b4m-core/slack/src/handlers/notebook-manager.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 17
     }
   },
   "b4m-core/slack/src/handlers/notebook-messaging.ts": {
