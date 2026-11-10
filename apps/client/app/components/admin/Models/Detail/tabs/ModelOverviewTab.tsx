@@ -1,5 +1,5 @@
 import { Box } from '@mui/joy';
-import type { AdminModelRowWire } from '@client/app/hooks/data/adminModels';
+import type { AdminModelRow } from '@bike4mind/common';
 import { Fact, RelativeTime, SectionCard } from '../../../shared';
 import { MODEL_SOURCE_LABEL, modelTypeLabel, priceSummary } from '../../modelPresentation';
 
@@ -10,7 +10,7 @@ const formatDate = (value: string | undefined | null) => {
 };
 
 /** What the server knows about the model, read-only in this phase (docs/admin-models-spec.md 5.2). */
-export function ModelOverviewTab({ model }: { model: AdminModelRowWire }) {
+export function ModelOverviewTab({ model }: { model: AdminModelRow }) {
   const { lifecycle, lifecycleSuggestion: suggestion } = model;
   return (
     <Box

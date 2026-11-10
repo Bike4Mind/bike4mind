@@ -12,9 +12,9 @@ import {
   Stack,
   Typography,
 } from '@mui/joy';
-import { normalizeEntitlementKey, type ModelAccessChange } from '@bike4mind/common';
+import { normalizeEntitlementKey, type AdminModelRow, type ModelAccessChange } from '@bike4mind/common';
 import { KNOWN_ENTITLEMENT_KEYS } from '@bike4mind/server-utils/lib/entitlements/registry';
-import { useAdminModelsOfType, useAdminUserTags, type AdminModelRowWire } from '@client/app/hooks/data/adminModels';
+import { useAdminModelsOfType, useAdminUserTags } from '@client/app/hooks/data/adminModels';
 import { Fact, SectionCard } from '../../../shared';
 import { ModelAccessDialog, ModelToggleDialog } from '../../Access/ModelAccessDialog';
 import { diffAccess, effectiveAccess } from '../../Access/modelAccessChange';
@@ -56,7 +56,7 @@ function EditButton({ label, onClick, testId }: { label: string; onClick: () => 
   );
 }
 
-function AudienceEditor({ model, onClose }: { model: AdminModelRowWire; onClose: () => void }) {
+function AudienceEditor({ model, onClose }: { model: AdminModelRow; onClose: () => void }) {
   const before = effectiveAccess(model.access.entry);
   const [tags, setTags] = useState<string[]>(before.allowedUserTags);
   const [entitlements, setEntitlements] = useState<string[]>(before.allowedEntitlements);
@@ -109,7 +109,7 @@ function AudienceEditor({ model, onClose }: { model: AdminModelRowWire; onClose:
   );
 }
 
-function RankingEditor({ model, onClose }: { model: AdminModelRowWire; onClose: () => void }) {
+function RankingEditor({ model, onClose }: { model: AdminModelRow; onClose: () => void }) {
   const before = effectiveAccess(model.access.entry);
   const [rankText, setRankText] = useState(before.rank === null ? '' : String(before.rank));
   const [fallback, setFallback] = useState(before.fallbackModel);
@@ -166,9 +166,9 @@ function RankingEditor({ model, onClose }: { model: AdminModelRowWire; onClose: 
 }
 
 /** Access: on/off, who can pick it, rank and fallback; each change is one audited write with Undo. */
-export function ModelAccessTab({ model }: { model: AdminModelRowWire }) {
+export function ModelAccessTab({ model }: { model: AdminModelRow }) {
   // Each editor works on the row as it was when it opened, so a refetch cannot re-base its change or its stamp.
-  const [editor, setEditor] = useState<{ kind: Editor; model: AdminModelRowWire } | null>(null);
+  const [editor, setEditor] = useState<{ kind: Editor; model: AdminModelRow } | null>(null);
   const open = (kind: Editor) => setEditor({ kind, model });
   const { openSection } = useModelsNavigation();
   const before = effectiveAccess(model.access.entry);

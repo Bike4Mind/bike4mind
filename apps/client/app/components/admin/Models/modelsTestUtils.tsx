@@ -11,9 +11,8 @@ import {
   useParams,
   useSearch,
 } from '@tanstack/react-router';
-import type { AdminModelListResponse, AdminModelStatus, AdminModelView } from '@bike4mind/common';
+import type { AdminModelListResponse, AdminModelRow, AdminModelStatus, AdminModelView } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
-import type { AdminModelListWire, AdminModelRowWire } from '@client/app/hooks/data/adminModels';
 import { parseAdminSearch } from '../adminTabParams';
 import { UndoToastProvider } from '../shared';
 import { parseModelDetailSearch } from './modelDetailSearch';
@@ -25,7 +24,7 @@ import { parseModelDetailSearch } from './modelDetailSearch';
 
 const theme = extendTheme({ ...getThemeConfig() });
 
-export const modelRow = (overrides: Partial<AdminModelRowWire> = {}): AdminModelRowWire => ({
+export const modelRow = (overrides: Partial<AdminModelRow> = {}): AdminModelRow => ({
   id: 'example-text-1',
   name: 'Example Text 1',
   type: 'text',
@@ -57,12 +56,12 @@ const zeroCounts = <K extends string>(keys: readonly K[]) =>
   Object.fromEntries(keys.map(key => [key, 0])) as Record<K, number>;
 
 export const listResponse = (
-  models: AdminModelRowWire[],
-  overrides: Partial<Omit<AdminModelListWire, 'models'>> & {
+  models: AdminModelRow[],
+  overrides: Partial<Omit<AdminModelListResponse, 'models' | 'counts' | 'viewCounts'>> & {
     counts?: Partial<AdminModelListResponse['counts']>;
     viewCounts?: Partial<Record<AdminModelView, number>>;
   } = {}
-): AdminModelListWire => {
+): AdminModelListResponse => {
   const statuses: AdminModelStatus[] = ['listed', 'limited', 'needs-review', 'hidden', 'retiring', 'retired'];
   const views: AdminModelView[] = ['all', 'needs-review', 'listed', 'hidden', 'retiring'];
   return {

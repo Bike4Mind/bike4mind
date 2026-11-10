@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Alert, Box, Button, Link, Stack, Tab, TabList, Tabs, Typography } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
-import type { AdminModelRowWire } from '@client/app/hooks/data/adminModels';
+import type { AdminModelRow } from '@bike4mind/common';
 import { EntityHeader, StatStrip, StatTile, StatusChip } from '../../shared';
 import { ADMIN_MODEL_LOGS_TAB_SLUG, ADMIN_MODEL_METRICS_TAB_SLUG } from '../../adminTabParams';
 import { MODEL_LOGS_MODEL_PARAM } from '../../modelLogsTabSearch';
@@ -61,13 +61,13 @@ export function ModelDetailView({
   tab,
   onTabChange,
 }: {
-  model: AdminModelRowWire;
+  model: AdminModelRow;
   tab: ModelDetailTab;
   onTabChange: (tab: ModelDetailTab) => void;
 }) {
   const navigate = useNavigate();
   const { openSection } = useModelsNavigation();
-  const [toggling, setToggling] = useState<AdminModelRowWire | null>(null);
+  const [toggling, setToggling] = useState<AdminModelRow | null>(null);
   const access = effectiveAccess(model.access.entry);
   const summary = accessSummary(model.access);
   const verb = access.enabled ? 'Turn off' : 'Turn on';

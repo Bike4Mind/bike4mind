@@ -5,7 +5,6 @@ import type {
   AdminModelListResponse,
   AdminModelRow,
   AdminModelSort,
-  AdminModelView,
   AuditEntry,
   AuditLogPage,
   ModelAccessBulkDryRun,
@@ -24,16 +23,6 @@ import { reviveAuditEntry, type WireAuditEntry } from './adminAuditLog';
  * The admin model console's reads and writes (apps/client/pages/api/admin/models/*). Wire types live in
  * @bike4mind/common (schemas/adminModels.ts, modelAccess.ts).
  */
-
-/**
- * Wire shapes from the catalog fix round, which this branch's base predates: an unranked model has a null rank,
- * and the view tabs carry their own counts. Equal to the common types once the base includes that change.
- */
-export type AdminModelRowWire = Omit<AdminModelRow, 'rank'> & { rank: number | null };
-export type AdminModelListWire = Omit<AdminModelListResponse, 'models'> & {
-  models: AdminModelRowWire[];
-  viewCounts?: Record<AdminModelView, number>;
-};
 
 /** Every admin model query sits under this key, so one invalidation refreshes the list, a detail and the counts. */
 export const ADMIN_MODELS_QUERY_KEY = ['admin', 'models'] as const;
@@ -62,8 +51,8 @@ export const adminModelListParams = ({ filter, sort, dir, page, pageSize }: Admi
   return params;
 };
 
-const fetchAdminModels = async (query: AdminModelListQuery): Promise<AdminModelListWire> =>
-  (await api.get<AdminModelListWire>('/api/admin/models', { params: adminModelListParams(query) })).data;
+const fetchAdminModels = async (query: AdminModelListQuery): Promise<AdminModelListResponse> =>
+  (await api.get<AdminModelListResponse>('/api/admin/models', { params: adminModelListParams(query) })).data;
 
 export const useAdminModelList = (query: AdminModelListQuery, options: { enabled?: boolean } = {}) =>
   useQuery({
@@ -81,7 +70,7 @@ const LOOKUP_PAGE_SIZE = 500;
 export const useAdminModelRow = (id: string) =>
   useQuery({
     queryKey: [...ADMIN_MODELS_QUERY_KEY, 'row', id],
-    queryFn: async (): Promise<AdminModelRowWire | null> => {
+    queryFn: async (): Promise<AdminModelRow | null> => {
       const response = await fetchAdminModels({
         filter: { view: 'all', search: id.slice(0, SEARCH_MAX), showFoundationIds: true },
         pageSize: LOOKUP_PAGE_SIZE,

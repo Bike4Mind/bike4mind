@@ -20,6 +20,7 @@ import {
   ADMIN_MODEL_STATUSES,
   ADMIN_MODEL_VIEWS,
   type AdminModelFilter,
+  type AdminModelRow,
   type AdminModelSort,
   type AdminModelSource,
   type AdminModelView,
@@ -28,12 +29,7 @@ import {
   type ModelAccessSelection,
 } from '@bike4mind/common';
 import { getErrorMessage } from '@client/app/utils/error';
-import {
-  postModelAccessBulk,
-  useAdminModelList,
-  useInvalidateModelAccess,
-  type AdminModelRowWire,
-} from '@client/app/hooks/data/adminModels';
+import { postModelAccessBulk, useAdminModelList, useInvalidateModelAccess } from '@client/app/hooks/data/adminModels';
 import {
   AdminSearchInput,
   BulkActionBar,
@@ -101,7 +97,7 @@ type AccessEdit = { target: ModelAccessTarget; change: ModelAccessChange; title:
 /** Models a bulk apply or its undo could not write; `retry` is the apply to rerun on just those. */
 type BulkOutcome = { summary: string; failed: ReturnType<typeof failedResults>; retry?: ModelBulkApplied };
 
-const toggleEdit = (row: AdminModelRowWire): AccessEdit => {
+const toggleEdit = (row: AdminModelRow): AccessEdit => {
   const on = effectiveAccess(row.access.entry).enabled;
   const verb = on ? 'Turn off' : 'Turn on';
   return { target: row, change: { enabled: !on }, title: `${verb} ${row.name}`, confirmLabel: verb };
@@ -146,7 +142,7 @@ export function ModelListSection() {
   };
   const list = useAdminModelList({ filter: { ...baseFilter, view }, sort, dir, page, pageSize });
   const data = list.data;
-  const fetchedNeedsReview = data ? (data.viewCounts?.['needs-review'] ?? data.counts['needs-review']) : undefined;
+  const fetchedNeedsReview = data?.viewCounts['needs-review'];
   if (fetchedNeedsReview !== undefined && fetchedNeedsReview !== needsReviewCount) {
     setNeedsReviewCount(fetchedNeedsReview);
   }
@@ -230,7 +226,7 @@ export function ModelListSection() {
     });
   };
 
-  const columns: DataColumn<AdminModelRowWire>[] = [
+  const columns: DataColumn<AdminModelRow>[] = [
     {
       id: 'model',
       label: 'Model',
