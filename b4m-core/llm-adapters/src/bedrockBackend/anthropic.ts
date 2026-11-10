@@ -295,10 +295,18 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     return true;
   }
 
+  protected override closeOpenReasoning(): { index: number; text: string } | undefined {
+    if (!this.isInThinkingBlock) return undefined;
+    this.isInThinkingBlock = false;
+    const text = closeThinkMarker(this.reasoningEscaper.flush(), this.thinkMarkerOpened);
+    return text ? { index: this.thinkingBlockIndex, text } : undefined;
+  }
+
   // Track thinking block state
   private isInThinkingBlock = false;
   // Waits for the first reasoning text; see closeThinkMarker.
   private thinkMarkerOpened = false;
+  private thinkingBlockIndex = 0;
   private reasoningEscaper = createThinkMarkerEscaper();
   /**
    * Blocks of the assistant turn currently being translated, indexed by the stream's
@@ -1478,6 +1486,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         } else if (isThinkingContentBlock(contentBlock)) {
           this.isInThinkingBlock = true;
           this.thinkMarkerOpened = false;
+          this.thinkingBlockIndex = chunk.index;
           // thinking_delta / signature_delta accumulate into this block for the replay.
           this.assistantContent[chunk.index] = { ...contentBlock, thinking: contentBlock.thinking ?? '' };
           choice.channel = 'reasoning';

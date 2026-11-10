@@ -208,6 +208,73 @@ describe('BaseBedrockBackend truncated-stream guard', () => {
     expect(message).not.toContain('without a terminal event');
   });
 
+  describe('an Anthropic turn cut or emptied inside a thinking block', () => {
+    const messageStart = { type: 'message_start', message: { usage: { input_tokens: 5, output_tokens: 1 } } };
+    const thinkingStart = { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } };
+    const thinkingDelta = (thinking: string) => ({
+      type: 'content_block_delta',
+      index: 0,
+      delta: { type: 'thinking_delta', thinking },
+    });
+    const signature = { type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 's' } };
+    const blockStop = { type: 'content_block_stop', index: 0 };
+    const finish = [
+      { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 9 } },
+      { type: 'message_stop' },
+    ];
+
+    const complete = async (events: unknown[]) => {
+      const body = streamBody(events);
+      const backend = new (class extends AnthropicBedrockBackend {
+        protected override async invokeModelStream() {
+          return { body };
+        }
+      })();
+      const texts: string[] = [];
+      const err = await backend
+        .complete(
+          ChatModels.CLAUDE_4_5_SONNET_BEDROCK,
+          [{ role: 'user', content: 'hi' }],
+          { stream: true },
+          async text => {
+            for (const t of text) if (t) texts.push(t);
+          }
+        )
+        .catch((e: Error) => e);
+      return { streamed: texts.join(''), message: (err as Error | undefined)?.message ?? '' };
+    };
+
+    it.each([
+      ['reasoning already streamed', ['hmm'], '<think>hmm</think>'],
+      ['reasoning the escaper still held', ['<th'], '<think><th</think>'],
+      ['no reasoning at all', [], ''],
+    ])('closes the open marker when the stream stalls mid-block with %s', async (_name, deltas, expected) => {
+      const { streamed, message } = await complete([messageStart, thinkingStart, ...deltas.map(thinkingDelta)]);
+
+      expect(streamed).toBe(expected);
+      expect(message).toMatch(/stream timeout/);
+    });
+
+    it('does not blame the inference profile for a finished turn of hidden thinking only', async () => {
+      const { streamed, message } = await complete([messageStart, thinkingStart, signature, blockStop, ...finish]);
+
+      expect(streamed).toBe('');
+      expect(message).toMatch(/EMPTY response/i);
+      expect(message).toMatch(/thinking block/);
+      expect(message).not.toMatch(/stream timeout/i);
+      expect(message).not.toContain('If every call on this model is empty');
+    });
+
+    it('keeps a stalled turn of hidden thinking only in the retry classification', async () => {
+      const { message } = await complete([messageStart, thinkingStart, signature, blockStop]);
+
+      expect(message).toMatch(/EMPTY response/i);
+      expect(message).toMatch(/stream timeout/);
+      expect(message).not.toContain('without a terminal event');
+      expect(message).not.toContain('If every call on this model is empty');
+    });
+  });
+
   // The retry and fallback downstream log the failure at WARN, so this backend log is the ERROR
   // signal a persistent misroute (every call empty) still raises.
   it('logs a stalled empty stream at ERROR before it is retried', async () => {
