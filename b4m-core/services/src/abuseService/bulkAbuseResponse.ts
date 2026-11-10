@@ -5,6 +5,7 @@ import {
   CreditHolderType,
   MAX_BULK_ABUSE_BATCH,
   ORG_MEMBERSHIP_ACL_PERMISSIONS,
+  canAccessAdmin,
   isEmailInDomains,
   normalizeEmailDomain,
   type AdminAuditAction,
@@ -89,9 +90,10 @@ function escapeRegExp(literal: string): string {
 // A dot, or the ideographic and fullwidth stops emailDomainOf reads as dots.
 const DOT_CLASS = '[.\u3002\uff0e\uff61]';
 
-function exclusionFor(user: IUser, actorId: string): BulkAbuseExclusionReason | null {
+function exclusionFor(user: IUser, actorId: string, actorIsFullAdmin: boolean): BulkAbuseExclusionReason | null {
   if (user.id === actorId) return 'self';
-  if (user.isAdmin) return 'admin';
+  // A delegated admin must not reach an account with admin access (assertCanActOnAdminTarget).
+  if (user.isAdmin || (!actorIsFullAdmin && canAccessAdmin(user))) return 'admin';
   if (user.isSystem) return 'system';
   return isPaidAccount(user) ? 'paid' : null;
 }
@@ -180,7 +182,8 @@ async function purchaserIds(userIds: string[], { db }: BulkAbuseCohortAdapters):
 }
 
 /**
- * The users a bulk action would touch, and the ones it skips with why. Admins, system accounts,
+ * The users a bulk action would touch, and the ones it skips with why. Admins (for a delegated
+ * actor, any account with admin access; pass `actorIsFullAdmin` for a full admin), system accounts,
  * org owners, managers and members, paid accounts and the acting admin are never actioned. A domain target
  * returns at most MAX_BULK_ABUSE_BATCH users in id order, with a cursor for the rest. Pass the
  * preview's `upToUserId` back on execute so both resolve the same users.
@@ -189,7 +192,7 @@ export async function resolveBulkAbuseCohort(
   target: BulkAbuseTarget,
   actorId: string,
   adapters: BulkAbuseCohortAdapters,
-  options: { upToUserId?: string } = {}
+  options: { upToUserId?: string; actorIsFullAdmin?: boolean } = {}
 ): Promise<BulkAbuseCohort> {
   const upToUserId = options.upToUserId ?? userIdUpperBound(new Date());
   const { users, missingIds, hasMore, lastScannedId } = await findTargetUsers(target, upToUserId, adapters);
@@ -197,7 +200,7 @@ export async function resolveBulkAbuseCohort(
 
   const candidates: IUser[] = [];
   for (const user of users) {
-    const reason = exclusionFor(user, actorId);
+    const reason = exclusionFor(user, actorId, options.actorIsFullAdmin === true);
     if (reason) excluded.push({ userId: user.id, email: user.email, reason });
     else candidates.push(user);
   }

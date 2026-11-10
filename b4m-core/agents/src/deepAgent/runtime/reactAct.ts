@@ -208,11 +208,11 @@ export function createReActRunAct(config: ReActRunActConfig): (ctx: ActContext) 
       // Stream the trajectory to the logs so a wake is watchable live.
       agent.on('action', step =>
         config.logger.info(`[deepAgent.act] → tool ${step.metadata?.toolName ?? '?'}`, {
-          input: JSON.stringify(step.metadata?.toolInput ?? {}).slice(0, 300),
+          inputLength: JSON.stringify(step.metadata?.toolInput ?? {}).length,
         })
       );
       agent.on('observation', step =>
-        config.logger.info('[deepAgent.act] ← observation', { result: String(step.content).slice(0, 300) })
+        config.logger.info('[deepAgent.act] <- observation', { resultLength: String(step.content).length })
       );
 
       const result = await agent.run(buildActQuery(ctx));

@@ -42,6 +42,19 @@ describe('AdminSubscriptionByStripeId', () => {
     expect(mockNavigate).not.toHaveBeenCalled();
   });
 
+  it('uses the shared page frame while looking up a subscription', () => {
+    renderPage();
+    const root = getComputedStyle(screen.getByTestId('subscription-by-stripe-page'));
+    expect(root.paddingBottom).toBe('64px');
+    expect(root.minHeight).not.toBe('100vh');
+    const content = screen.getByTestId('subscription-by-stripe-loading').parentElement;
+    expect(content).not.toBeNull();
+    if (!content) throw new Error('The lookup must render inside its content frame.');
+    const style = getComputedStyle(content);
+    expect(style.maxWidth).toBe('1280px');
+    expect(style.marginLeft).not.toBe('auto');
+  });
+
   it('renders the error state and retries through refetch on a generic failure', () => {
     const refetch = vi.fn();
     mockLookup.mockReturnValue({

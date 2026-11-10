@@ -1,106 +1,56 @@
 import React from 'react';
-import { Card, Stack, Typography, Chip, Button, Box } from '@mui/joy';
-import SettingsIcon from '@mui/icons-material/Settings';
-import AccountTreeIcon from '@mui/icons-material/AccountTree';
-import CodeIcon from '@mui/icons-material/Code';
-import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
-import ApiIcon from '@mui/icons-material/Api';
+import { Button, Chip, Stack, Typography } from '@mui/joy';
 import LaunchIcon from '@mui/icons-material/Launch';
-import LocalOfferIcon from '@mui/icons-material/LocalOffer';
 
-import { DocumentationItem, DocumentationCategory } from '../utils/docData';
+import { DocumentationItem, documentationCategoryLabel } from '../utils/docData';
 import { openInNewTab } from '@client/app/utils/externalLinks';
+import { SectionCard } from '../../shared';
 
 interface DocSectionProps {
   doc: DocumentationItem;
 }
 
-const categoryConfig: Record<DocumentationCategory, { icon: React.ReactNode; color: any }> = {
-  'admin-settings': { icon: <SettingsIcon />, color: 'primary' },
-  architecture: { icon: <AccountTreeIcon />, color: 'success' },
-  development: { icon: <CodeIcon />, color: 'warning' },
-  migration: { icon: <SwapHorizIcon />, color: 'danger' },
-  api: { icon: <ApiIcon />, color: 'info' },
-  agents: { icon: <CodeIcon />, color: 'primary' },
-  features: { icon: <SettingsIcon />, color: 'success' },
-  'client-side': { icon: <CodeIcon />, color: 'warning' },
-  aws: { icon: <AccountTreeIcon />, color: 'info' },
-  artifacts: { icon: <SettingsIcon />, color: 'primary' },
-  security: { icon: <SwapHorizIcon />, color: 'danger' },
-  databases: { icon: <ApiIcon />, color: 'info' },
-  testing: { icon: <CodeIcon />, color: 'warning' },
-  onboarding: { icon: <SettingsIcon />, color: 'success' },
-  files: { icon: <AccountTreeIcon />, color: 'neutral' },
-  tags: { icon: <LocalOfferIcon />, color: 'info' },
-  general: { icon: <SettingsIcon />, color: 'neutral' },
-};
+const VISIBLE_TAGS = 3;
 
-export const DocSection: React.FC<DocSectionProps> = ({ doc }) => {
-  const categoryInfo = categoryConfig[doc.category];
-
-  const handleOpenDocumentation = () => {
-    openInNewTab(doc.docusaurusUrl);
-  };
-
-  return (
-    <Card
-      variant="outlined"
-      sx={{
-        height: '100%',
-        transition: 'all 0.2s',
-        '&:hover': {
-          boxShadow: 'md',
-          transform: 'translateY(-2px)',
-        },
-      }}
-    >
-      <Stack spacing={2} sx={{ height: '100%' }}>
-        {/* Header */}
-        <Stack direction="row" alignItems="flex-start" spacing={2}>
-          <Box sx={{ color: `${categoryInfo.color}.500` }}>{categoryInfo.icon}</Box>
-          <Box sx={{ flex: 1 }}>
-            <Typography level="title-md">{doc.title}</Typography>
-            <Chip
-              size="sm"
-              variant="soft"
-              color={categoryInfo.color}
-              startDecorator={categoryInfo.icon}
-              sx={{ mt: 0.5 }}
-            >
-              {doc.category
-                .split('-')
-                .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-                .join(' ')}
-            </Chip>
-          </Box>
-        </Stack>
-
-        {/* Description */}
-        <Typography level="body-sm" sx={{ flex: 1, color: 'text.secondary' }}>
-          {doc.description}
-        </Typography>
-
-        {/* Tags */}
-        {doc.tags.length > 0 && (
-          <Stack direction="row" spacing={0.5} flexWrap="wrap" sx={{ gap: 0.5 }}>
-            {doc.tags.slice(0, 3).map(tag => (
-              <Chip key={tag} size="sm" variant="outlined" color="neutral">
-                {tag}
-              </Chip>
-            ))}
-            {doc.tags.length > 3 && (
-              <Chip size="sm" variant="outlined" color="neutral">
-                +{doc.tags.length - 3} more
-              </Chip>
-            )}
-          </Stack>
+export const DocSection: React.FC<DocSectionProps> = ({ doc }) => (
+  <SectionCard
+    title={doc.title}
+    body="custom"
+    data-testid={`documentation-doc-${doc.id}`}
+    action={
+      <Button
+        size="sm"
+        variant="plain"
+        color="neutral"
+        endDecorator={<LaunchIcon />}
+        onClick={() => openInNewTab(doc.docusaurusUrl)}
+        aria-label={`Open ${doc.title} in Docusaurus`}
+        data-testid={`documentation-doc-${doc.id}-open-btn`}
+        sx={{ whiteSpace: 'nowrap' }}
+      >
+        Open
+      </Button>
+    }
+  >
+    <Stack gap={1.5} sx={{ p: 2 }}>
+      <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
+        {doc.description}
+      </Typography>
+      <Stack direction="row" flexWrap="wrap" gap={0.5}>
+        <Chip size="sm" variant="soft" color="neutral" data-testid={`documentation-doc-${doc.id}-category`}>
+          {documentationCategoryLabel(doc.category)}
+        </Chip>
+        {doc.tags.slice(0, VISIBLE_TAGS).map(tag => (
+          <Chip key={tag} size="sm" variant="outlined" color="neutral">
+            {tag}
+          </Chip>
+        ))}
+        {doc.tags.length > VISIBLE_TAGS && (
+          <Chip size="sm" variant="outlined" color="neutral">
+            +{doc.tags.length - VISIBLE_TAGS} more
+          </Chip>
         )}
-
-        {/* Action Button */}
-        <Button variant="soft" size="sm" startDecorator={<LaunchIcon />} onClick={handleOpenDocumentation}>
-          Open in Docusaurus
-        </Button>
       </Stack>
-    </Card>
-  );
-};
+    </Stack>
+  </SectionCard>
+);

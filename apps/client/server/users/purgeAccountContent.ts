@@ -26,6 +26,11 @@ import { buildPublishS3KeyPrefix } from '@server/services/publish/paths';
 import { withdrawAuthorListings } from '@bike4mind/server-utils/skillMarket/market';
 import { retainDeletedSignupTraces } from '@server/auth/signupNetworkLimits';
 import { purgeUserPublishedArtifacts } from '@server/services/publish/purgeUserPublishedArtifacts';
+import {
+  type CdnInvalidationBatch,
+  createCdnInvalidationBatch,
+  generatedCdnPath,
+} from '@server/services/cdn/invalidateRouterCdn';
 
 type PurgeOptions = { logger: Pick<Logger, 'info' | 'warn' | 'error'>; assertLease: () => Promise<void> };
 const BATCH_SIZE = 100;
@@ -63,7 +68,8 @@ async function purgeNotebookMedia(
   userId: string,
   personalOrganizationIds: readonly string[],
   sessionId: string,
-  assertLease: () => Promise<void>
+  assertLease: () => Promise<void>,
+  cdn: CdnInvalidationBatch
 ) {
   const quests = collectionFor(Quest.modelName);
   const cursor = quests.find({ sessionId }, { projection: { images: 1, videos: 1 } });
@@ -92,6 +98,7 @@ async function purgeNotebookMedia(
       if (retained || (await collectionFor(FabFile.modelName).findOne({ 'sourceMetadata.generatedCopyKey': key })))
         continue;
       await getGeneratedImageStorage().deletePermanently(key);
+      cdn.add(generatedCdnPath(key));
     }
   }
 }
@@ -99,7 +106,8 @@ async function purgeNotebookMedia(
 async function purgeNotebooks(
   userId: string,
   personalOrganizationIds: readonly string[],
-  assertLease: () => Promise<void>
+  assertLease: () => Promise<void>,
+  cdn: CdnInvalidationBatch
 ) {
   const sessions = collectionFor(Session.modelName);
   while (true) {
@@ -111,7 +119,7 @@ async function purgeNotebooks(
     for (const notebook of batch) {
       await assertLease();
       const sessionId = String(notebook._id);
-      await purgeNotebookMedia(userId, personalOrganizationIds, sessionId, assertLease);
+      await purgeNotebookMedia(userId, personalOrganizationIds, sessionId, assertLease, cdn);
       // The parent survives every failure, so a retry retains the key to all dependent messages.
       await collectionFor(Quest.modelName).deleteMany({ sessionId });
       for (const model of ['SessionAgentConfig', 'SessionToolApproval']) {
@@ -468,7 +476,13 @@ export async function purgeAccountContent(userId: string, { logger, assertLease 
   await withdrawAuthorListings(userId);
   await purgePublishedOriginals(userId, personalOrganizationIds, assertLease);
   await purgePersonalSkills(userId, personalOrganizationIds, assertLease);
-  await purgeNotebooks(userId, personalOrganizationIds, assertLease);
+  // Flushed even when a later notebook throws: the media already erased is gone either way.
+  const cdn = createCdnInvalidationBatch('account-notebook-media', logger);
+  try {
+    await purgeNotebooks(userId, personalOrganizationIds, assertLease, cdn);
+  } finally {
+    await cdn.flush();
+  }
   await purgeArtifacts(userId, personalOrganizationIds, assertLease);
   await purgePersonalMemory(userId, personalOrganizationIds, assertLease);
   await purgeDeepAgentRecords(userId, assertLease);

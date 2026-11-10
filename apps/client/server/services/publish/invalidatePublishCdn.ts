@@ -1,6 +1,9 @@
-import { CloudFrontClient, CreateInvalidationCommand } from '@aws-sdk/client-cloudfront';
 import type { PublishScopeTier, PublishSourceKind } from '@bike4mind/common';
-import { resolveRouterDistributionId } from '@bike4mind/server-utils/security/wafSharedHelpers';
+import {
+  MAX_PATHS_PER_BATCH,
+  getRouterDistributionId as getDistributionId,
+  sendInvalidation as send,
+} from '../cdn/invalidateRouterCdn';
 import type { MinimalLogger } from './minimalLogger';
 import { buildPublishUrlPath } from './paths';
 
@@ -18,8 +21,6 @@ import { buildPublishUrlPath } from './paths';
  * scoped to the Router distribution (infra/web.ts), but we never throw - a failed
  * invalidation must not fail the takedown; the short TTL still bounds exposure.
  */
-
-const cfClient = new CloudFrontClient({});
 
 export interface PublishCacheTarget {
   publicId: string;
@@ -66,24 +67,19 @@ export function publishCachePaths(t: PublishCacheTarget): string[] {
   return [base, `${base}*`, `${base}/*`, ucBase, `${ucBase}*`, `${ucBase}/*`];
 }
 
-/**
- * The Router CloudFront distribution id, via the canonical resolver (which reads
- * the `RouterDistributionId` Linkable's `.id`). Returns undefined when the
- * resource isn't linked (local/test) so invalidation cleanly no-ops rather than
- * throwing - this is a best-effort path.
- */
+const LOG_TAG = '[PUBLISH]';
+
 function getRouterDistributionId(logger?: MinimalLogger): string | undefined {
-  try {
-    return resolveRouterDistributionId();
-  } catch (err) {
-    // resolveRouterDistributionId throws for TWO reasons: the Linkable is absent
-    // (legitimate local/test no-op) OR the id is malformed (e.g. a bad
-    // DEV_ROUTER_DISTRIBUTION_ID). Both skip invalidation, but we WARN with the
-    // message rather than swallow silently - otherwise a malformed env var would
-    // disable takedown immediacy on the shared dev router with no operator signal.
-    logger?.warn(`[PUBLISH] CDN invalidation skipped — ${err instanceof Error ? err.message : String(err)}`);
-    return undefined;
-  }
+  return getDistributionId(LOG_TAG, logger);
+}
+
+function sendInvalidation(
+  distributionId: string,
+  label: string,
+  paths: string[],
+  logger?: MinimalLogger
+): Promise<boolean> {
+  return send(distributionId, label, paths, { logTag: LOG_TAG, referencePrefix: 'publish', logger });
 }
 
 /** Invalidate a published page's CDN paths so a removed page stops serving immediately. Never throws. */
@@ -98,9 +94,6 @@ export async function invalidatePublishCdn(target: PublishCacheTarget, logger?: 
   await sendInvalidation(distributionId, target.publicId, exact, logger);
   if (wild.length) await sendInvalidation(distributionId, `${target.publicId}-variants`, wild, logger);
 }
-
-// Well under CloudFront's cap on paths in flight per distribution.
-const MAX_PATHS_PER_BATCH = 1000;
 
 // CloudFront allows only ~15 wildcard paths in flight per distribution (versus thousands of plain
 // paths), shared with every concurrent single-page purge. This budgets the reply/file variant
@@ -151,28 +144,4 @@ export async function invalidatePublishCdnMany(targets: PublishCacheTarget[], lo
     logger
   );
   if (!sent && perPage) await sendInvalidation(distributionId, 'variants-kind', [...kindWildcards], logger);
-}
-
-async function sendInvalidation(
-  distributionId: string,
-  label: string,
-  paths: string[],
-  logger?: MinimalLogger
-): Promise<boolean> {
-  try {
-    await cfClient.send(
-      new CreateInvalidationCommand({
-        DistributionId: distributionId,
-        InvalidationBatch: {
-          CallerReference: `publish-${label}-${Date.now()}`,
-          Paths: { Quantity: paths.length, Items: paths },
-        },
-      })
-    );
-    logger?.info(`[PUBLISH] CDN invalidation issued for ${label}: ${paths.join(', ')}`);
-    return true;
-  } catch (err) {
-    logger?.warn(`[PUBLISH] CDN invalidation failed for ${label}: ${err instanceof Error ? err.message : String(err)}`);
-    return false;
-  }
 }

@@ -58,11 +58,7 @@ export default function AdminDashboardTab({ onNavigate }: AdminDashboardTabProps
 
   return (
     // overflowX clip: the Joy Grid negative gutters stick out of this wrapper
-    <Stack
-      spacing={ADMIN_REGION_GAP}
-      sx={{ maxWidth: 1440, mx: 'auto', overflowX: 'clip' }}
-      data-testid="admin-dashboard"
-    >
+    <Stack spacing={ADMIN_REGION_GAP} sx={{ overflowX: 'clip' }} data-testid="admin-dashboard">
       <Box>
         <Typography level="h1">Admin dashboard</Typography>
         <Typography level="body-md" sx={{ mt: 1 }}>

@@ -305,17 +305,19 @@ export const VIEW_REGISTRY: NavigableView[] = [
     id: 'admin.users',
     section: 'admin',
     label: 'User Management',
-    description: 'View and manage user accounts, roles, and permissions',
+    description:
+      'View and manage user accounts, roles, and permissions; the AI advisory filter lists accounts the AI advisory flagged, with bulk Contain',
     navigationType: 'tab',
     target: '0', // AdminTab.Users
-    keywords: ['users', 'accounts', 'roles', 'permissions', 'manage users'],
+    keywords: ['users', 'accounts', 'roles', 'permissions', 'manage users', 'ai advisories', 'flagged accounts'],
     requiresAdmin: true,
   },
   {
     id: 'admin.credit_analytics',
     section: 'admin',
     label: 'Credit Analytics',
-    description: 'View credit usage, add credits to users, billing analytics',
+    description:
+      'Credits per user and adjustments, the model pricing catalog, margins against provider invoices, org and API usage, and the transaction ledger',
     navigationType: 'tab',
     target: '15', // AdminTab.CreditAnalytics
     keywords: ['credits', 'billing', 'usage', 'add credits', 'balance', 'cost'],
@@ -335,20 +337,22 @@ export const VIEW_REGISTRY: NavigableView[] = [
     id: 'admin.system_health',
     section: 'admin',
     label: 'System Health',
-    description: 'Monitor system health, uptime, and performance metrics',
+    description:
+      'Check configuration and connectivity: test email, database and OAuth providers, probe integrations, override circuit breakers',
     navigationType: 'tab',
     target: '29', // AdminTab.SystemHealth
-    keywords: ['health', 'uptime', 'monitoring', 'performance', 'status'],
+    keywords: ['health', 'monitoring', 'status'],
     requiresAdmin: true,
   },
   {
     id: 'admin.llm_dashboard',
     section: 'admin',
     label: 'LLM Dashboard',
-    description: 'LLM model usage, costs, and performance monitoring',
+    description:
+      'Enable or disable LLM models, set model rank and fallback, and choose which user tags and entitlements can use each model',
     navigationType: 'tab',
     target: '24', // AdminTab.LLMDashboard
-    keywords: ['llm', 'model', 'ai', 'costs', 'tokens', 'dashboard'],
+    keywords: ['llm', 'model', 'ai', 'enable model', 'model access', 'entitlements'],
     requiresAdmin: true,
   },
   {
@@ -365,7 +369,8 @@ export const VIEW_REGISTRY: NavigableView[] = [
     id: 'admin.organizations',
     section: 'admin',
     label: 'Organizations',
-    description: 'Manage organizations, teams, and multi-tenant settings',
+    description:
+      'List, create and edit organizations: members, top up credits, adjust seats, sync from Stripe, grant a free org, convert a granted org to paid or revoke the grant',
     navigationType: 'tab',
     target: '14', // AdminTab.Organizations
     keywords: ['organizations', 'teams', 'tenants', 'companies'],
@@ -405,10 +410,11 @@ export const VIEW_REGISTRY: NavigableView[] = [
     id: 'admin.subscriptions',
     section: 'admin',
     label: 'Subscriptions',
-    description: 'Manage subscription plans, tiers, and billing',
+    description:
+      'Look up customer subscriptions (past due, mismatched, canceling, comped, churned); cancel, resume, sync from Stripe, edit credits per cycle, extend or end comps',
     navigationType: 'tab',
     target: '13', // AdminTab.Subscriptions
-    keywords: ['subscriptions', 'plans', 'tiers', 'billing', 'pricing'],
+    keywords: ['subscriptions', 'billing', 'past due', 'comped', 'sync from stripe'],
     requiresAdmin: true,
   },
   {
@@ -425,27 +431,30 @@ export const VIEW_REGISTRY: NavigableView[] = [
     id: 'admin.agent_ops',
     section: 'admin',
     label: 'Agent Operations',
-    description: 'Monitor and manage AI agent operations and tasks',
+    description:
+      'Manage the meta-prompt that generates agent system prompts: versions, activation, generation model and rate limit',
     navigationType: 'tab',
     target: '23', // AdminTab.AgentOps
-    keywords: ['agents', 'operations', 'tasks', 'agent ops'],
+    keywords: ['agents', 'agent ops', 'meta-prompt', 'agent prompt generation'],
     requiresAdmin: true,
   },
   {
     id: 'admin.security_dashboard',
     section: 'admin',
     label: 'Security Dashboard',
-    description: 'Security monitoring, threat detection, and audit logs',
+    description:
+      'Security views: Incident (queues, alarms, payments), Firewall (traffic and blocked requests) and Scans (scheduled security scan results)',
     navigationType: 'tab',
     target: '26', // AdminTab.SecurityDashboard
-    keywords: ['security', 'threats', 'audit', 'logs', 'vulnerabilities'],
+    keywords: ['security', 'threats', 'firewall', 'waf', 'security scans'],
     requiresAdmin: true,
   },
   {
     id: 'admin.system_prompts',
     section: 'admin',
     label: 'System Prompts',
-    description: 'Edit and manage system prompts for AI models',
+    description:
+      'Edit system prompts as versioned overrides of the code defaults (history, revert), see usage, and manage Global Knowledge Files sent with every chat',
     navigationType: 'tab',
     target: '21', // AdminTab.SystemPrompts
     keywords: ['prompts', 'system prompts', 'instructions', 'AI prompts'],
@@ -465,20 +474,21 @@ export const VIEW_REGISTRY: NavigableView[] = [
     id: 'admin.whats_new',
     section: 'admin',
     label: "What's New",
-    description: "Manage What's New release notes and changelogs",
+    description: "Manage the What's New modals and the weekly highlights Slack post",
     navigationType: 'tab',
     target: '32', // AdminTab.WhatsNewModals
-    keywords: ['whats new', 'release notes', 'changelog', 'updates'],
+    keywords: ['whats new', 'updates', 'announcement modal', 'weekly highlights'],
     requiresAdmin: true,
   },
   {
     id: 'admin.rapid_reply',
     section: 'admin',
     label: 'Rapid Reply',
-    description: 'Configure rapid reply templates and shortcuts',
+    description:
+      'Configure Rapid Reply, a fast model that answers while the main model works: model mappings, fallback, thresholds, metrics and a test run',
     navigationType: 'tab',
     target: '25', // AdminTab.RapidReply
-    keywords: ['rapid reply', 'templates', 'shortcuts', 'quick responses'],
+    keywords: ['rapid reply', 'quick responses', 'fast model', 'model mapping'],
     requiresAdmin: true,
   },
   {
@@ -502,16 +512,6 @@ export const VIEW_REGISTRY: NavigableView[] = [
     requiresAdmin: true,
   },
   {
-    id: 'admin.bulk_import',
-    section: 'admin',
-    label: 'Bulk Import',
-    description: 'Bulk import users and data from CSV or other formats',
-    navigationType: 'tab',
-    target: '17', // AdminTab.BulkImport
-    keywords: ['bulk', 'import', 'CSV', 'migration', 'data import'],
-    requiresAdmin: true,
-  },
-  {
     id: 'admin.feedback',
     section: 'admin',
     label: 'Feedback',
@@ -525,7 +525,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
     id: 'admin.files',
     section: 'admin',
     label: 'Files',
-    description: 'Manage uploaded files across all users, storage analytics',
+    description: 'Manage app-level file uploads and their tags, including the Gated tag',
     navigationType: 'tab',
     target: '8', // AdminTab.Files
     keywords: ['files', 'uploads', 'storage', 'documents', 'file management'],
@@ -605,10 +605,10 @@ export const VIEW_REGISTRY: NavigableView[] = [
     id: 'admin.team',
     section: 'admin',
     label: 'Team',
-    description: 'Manage team members, roles, and team settings',
+    description: 'Internal team contact directory',
     navigationType: 'tab',
     target: '28', // AdminTab.Team
-    keywords: ['team', 'members', 'roles', 'team management', 'staff'],
+    keywords: ['team', 'staff', 'contacts', 'directory'],
     requiresAdmin: true,
   },
   {
@@ -635,7 +635,8 @@ export const VIEW_REGISTRY: NavigableView[] = [
     id: 'admin.liveops_triage',
     section: 'admin',
     label: 'LiveOps Triage',
-    description: 'Real-time error triage, production issue monitoring, and incident response',
+    description:
+      'Triage configs that turn Slack error alerts into GitHub or Jira issues: dry run, run now, run history',
     navigationType: 'tab',
     target: '35', // AdminTab.LiveOpsTriage
     keywords: ['liveops', 'triage', 'errors', 'incidents', 'production issues', 'monitoring'],
@@ -645,10 +646,11 @@ export const VIEW_REGISTRY: NavigableView[] = [
     id: 'admin.dashboard',
     section: 'admin',
     label: 'Dashboard',
-    description: 'Admin landing overview: signups, active users, client mix and links to the other dashboards',
+    description:
+      'Admin landing overview: signups, active users, client mix, links to the other dashboards, and the AI advisory strip (shown while flags await review) with flagged accounts, shared IPs and domains',
     navigationType: 'tab',
     target: '67', // AdminTab.Dashboard
-    keywords: ['dashboard', 'overview', 'home', 'summary', 'signups', 'kpis'],
+    keywords: ['dashboard', 'overview', 'home', 'summary', 'signups', 'kpis', 'ai advisories', 'flagged accounts'],
     requiresAdmin: true,
   },
   {
@@ -675,10 +677,19 @@ export const VIEW_REGISTRY: NavigableView[] = [
     id: 'admin.signup_domain_holds',
     section: 'admin',
     label: 'Signup domain holds',
-    description: 'Review email domains whose free signup credits are held as suspicious; confirm or release them',
+    description:
+      'Review email domains whose free signup credits are held as suspicious; confirm or release them, with the AI advisory verdict on each hold',
     navigationType: 'tab',
     target: '68', // AdminTab.SignupDomainHolds
-    keywords: ['domain holds', 'suspicious signups', 'disposable email', 'signup abuse', 'held credits', 'fraud'],
+    keywords: [
+      'domain holds',
+      'suspicious signups',
+      'disposable email',
+      'signup abuse',
+      'held credits',
+      'fraud',
+      'ai advisory',
+    ],
     requiresAdmin: true,
   },
   {
@@ -712,10 +723,18 @@ export const VIEW_REGISTRY: NavigableView[] = [
     id: 'admin.shadow_detections',
     section: 'admin',
     label: 'Detections',
-    description: 'Grade what abuse detectors would have done, without acting, to measure their precision',
+    description:
+      'Grade what abuse detectors would have done, without acting, to measure their precision; each detection shows its AI advisory assessment',
     navigationType: 'tab',
     target: '73', // AdminTab.ShadowDetections
-    keywords: ['detections', 'shadow detections', 'detector precision', 'false positives', 'abuse detection'],
+    keywords: [
+      'detections',
+      'shadow detections',
+      'detector precision',
+      'false positives',
+      'abuse detection',
+      'ai advisory assessment',
+    ],
     requiresAdmin: true,
   },
   {
@@ -797,7 +816,8 @@ export const VIEW_REGISTRY: NavigableView[] = [
     id: 'admin.audit_log',
     section: 'admin',
     label: 'Audit log',
-    description: 'Review recorded admin and system changes with their actors and reasons',
+    description:
+      'Review recorded admin and system changes with their actors and reasons; filter, export CSV, and sign off critical actions in the Needs review queue',
     navigationType: 'tab',
     target: '66', // AdminTab.AuditLog
     keywords: ['audit log', 'audit trail', 'who changed', 'change history', 'activity log', 'compliance'],
@@ -1214,13 +1234,31 @@ export function getViewSummaryForLLM(options?: { section?: ViewSection; isAdmin?
   ].join('\n');
 }
 
+// Whole-word match, so a short keyword like "ai" is not hidden by "email" or "domain".
+const containsWholeWords = (text: string, phrase: string): boolean => {
+  const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|\\W)${escaped}(\\W|$)`, 'i').test(text);
+};
+
+// Keywords already spelled out in the label or description add tokens without adding meaning.
+const extraKeywordsOf = (view: NavigableView): string[] => {
+  const shown = `${view.label} ${view.description}`;
+  return view.keywords.filter(keyword => !containsWholeWords(shown, keyword));
+};
+
+const adminViewLine = (view: NavigableView): string => {
+  const extra = extraKeywordsOf(view);
+  const keywords = extra.length > 0 ? ` (also: ${extra.join(', ')})` : '';
+  return `- ${view.id}: ${view.label} \u2014 ${view.description}${keywords}`;
+};
+
 /**
  * The admin-only views, as an appendix to the non-admin `getViewSummaryForLLM()` text. Kept
  * separate so the base summary is byte-identical for every user and can sit in the
  * deployment-wide cached prompt prefix; this appendix rides in the per-caller tail instead.
  */
 export function getAdminViewSummaryForLLM(): string {
-  const lines = VIEW_REGISTRY.filter(v => v.requiresAdmin).map(v => `- ${v.id}: ${v.label} \u2014 ${v.description}`);
+  const lines = VIEW_REGISTRY.filter(v => v.requiresAdmin).map(adminViewLine);
   return [
     '# Admin views for navigate_view',
     '',

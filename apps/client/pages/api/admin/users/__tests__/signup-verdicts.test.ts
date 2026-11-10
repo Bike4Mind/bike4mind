@@ -1,10 +1,29 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import {
+  ForbiddenError,
+  MODERATION_PAGE_READ,
+  meetsAdminPermissionRequirement,
+  missingAdminPermissionMessage,
+  type AdminPermissionRequirement,
+} from '@bike4mind/common';
 
 const mocks = vi.hoisted(() => ({ getSignupVerdicts: vi.fn() }));
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
-    const chain = { use: () => chain, get: (handler: unknown) => handler };
+const h = vi.hoisted(() => ({ options: null as unknown }));
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: (options: { adminPermissions: Partial<Record<string, AdminPermissionRequirement>> }) => {
+    h.options = options;
+    const chain = {
+      use: () => chain,
+      get: (fn: (req: unknown, res: unknown) => Promise<unknown>) => async (req: unknown, res: unknown) => {
+        const requirement = options.adminPermissions.GET;
+        const { user } = req as { user?: Parameters<typeof meetsAdminPermissionRequirement>[0] };
+        if (requirement && !meetsAdminPermissionRequirement(user, requirement)) {
+          throw new ForbiddenError(missingAdminPermissionMessage(requirement));
+        }
+        return fn(req, res);
+      },
+    };
     return chain;
   },
 }));
@@ -16,9 +35,11 @@ const ID_A = 'aaaaaaaaaaaaaaaaaaaaaaaa';
 const ID_B = 'bbbbbbbbbbbbbbbbbbbbbbbb';
 const AS_OF = () => new Date(Date.now() - 5 * 60 * 1000).toISOString();
 
-const run = async (query: Record<string, string>, isAdmin = true) => {
+const FULL_ADMIN = { id: 'admin-1', isAdmin: true };
+
+const run = async (query: Record<string, string>, user: unknown = FULL_ADMIN) => {
   const { req, res } = createMocks({ method: 'GET', query });
-  Object.assign(req, { user: { id: 'admin-1', isAdmin } });
+  Object.assign(req, { user });
   await (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(req, res);
   return res;
 };
@@ -28,10 +49,27 @@ beforeEach(() => {
 });
 
 describe('signup verdicts route', () => {
-  it('rejects non-admins before classifying anything', async () => {
-    const res = await run({ range: '7d', asOf: AS_OF(), ids: ID_A }, false);
-    expect(res._getStatusCode()).toBe(403);
+  it('declares MODERATION_PAGE_READ for GET', () => {
+    expect(h.options).toEqual(expect.objectContaining({ adminPermissions: { GET: MODERATION_PAGE_READ } }));
+  });
+
+  it('refuses a delegate without a moderation read permission before classifying anything', async () => {
+    const delegate = { id: 'admin-2', isAdmin: false, adminPermissions: ['credits:adjust'] };
+
+    await expect(run({ range: '7d', asOf: AS_OF(), ids: ID_A }, delegate)).rejects.toThrow(
+      missingAdminPermissionMessage(MODERATION_PAGE_READ)
+    );
     expect(mocks.getSignupVerdicts).not.toHaveBeenCalled();
+  });
+
+  it.each(['support:read', 'users:moderate'])('admits a delegate holding %s', async permission => {
+    const res = await run(
+      { range: '7d', asOf: AS_OF(), ids: ID_A },
+      { id: 'admin-2', isAdmin: false, adminPermissions: [permission] }
+    );
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.getSignupVerdicts).toHaveBeenCalledTimes(1);
   });
 
   it("classifies the requested ids at the chart's instant, range and offset, uncached", async () => {

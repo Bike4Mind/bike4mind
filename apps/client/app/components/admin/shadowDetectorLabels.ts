@@ -12,4 +12,5 @@ export const DETECTOR_LABELS: Record<ShadowDetector, string> = {
   signupDomainHold: 'Signup domain hold assessment',
   deviceLinkedToBlocked: 'Device linked to banned account',
   scriptedGrantDrain: 'Scripted grant drain',
+  apiProbe: 'API probing',
 };

@@ -9,7 +9,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: {} }));
 vi.mock('../middlewares/rateLimit', () => ({ rateLimit: vi.fn() }));
 
-import { loadMarketSettings, meetsPublicAccountAge, numericSetting } from './market';
+import { isSelfApproved, loadMarketSettings, meetsPublicAccountAge, numericSetting, publicVersionView } from './market';
 
 describe('numericSetting', () => {
   it.each([undefined, null, '', 'abc', NaN, Infinity, -Infinity])('falls back on %s', value => {
@@ -91,5 +91,30 @@ describe('loadMarketSettings', () => {
       publicMinAccountAgeDays: 0,
       maxListingsPerUser: 5,
     });
+  });
+});
+
+describe('isSelfApproved', () => {
+  it('is true only when the author is the approving reviewer', () => {
+    expect(isSelfApproved({ reviewStatus: 'approved', reviewerUserId: 'u1' }, 'u1')).toBe(true);
+    expect(isSelfApproved({ reviewStatus: 'approved', reviewerUserId: 'u2' }, 'u1')).toBe(false);
+  });
+
+  it('is false for an auto-approved or unreviewed version', () => {
+    expect(isSelfApproved({ reviewStatus: 'auto_approved' }, 'u1')).toBe(false);
+    expect(isSelfApproved({ reviewStatus: 'auto_approved', reviewerUserId: 'u1' }, 'u1')).toBe(false);
+  });
+});
+
+describe('publicVersionView', () => {
+  it('exposes selfApproved without leaking the reviewer id', () => {
+    const view = publicVersionView(
+      { id: 'v1', version: 1, reviewStatus: 'approved', reviewerUserId: 'u1' } as Parameters<
+        typeof publicVersionView
+      >[0],
+      'u1'
+    );
+    expect(view.selfApproved).toBe(true);
+    expect(view).not.toHaveProperty('reviewerUserId');
   });
 });

@@ -82,8 +82,9 @@ Located in the AI category, the Operations Model setting allows administrators t
 
 ### Operational Usage Billing
 
-In User Management, search for **Bill Operational Usage**. With **Enforce Credits** on,
-automatic naming, summaries, tagging, knowledge-base query embeddings and file indexing outside
+Open **Money > Pricing** (the Growth and pricing page) and find **Bill Operational Usage** under
+**Credits and pricing**.
+With **Enforce Credits** on, automatic naming, summaries, tagging, knowledge-base query embeddings and file indexing outside
 data lakes debit credits for free-tier users paying for themselves. A user is free tier when
 they have no credit purchase and no active plan, including a plan granted through an organization
 seat.

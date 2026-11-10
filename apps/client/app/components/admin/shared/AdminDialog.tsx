@@ -1,5 +1,5 @@
 import React, { useId } from 'react';
-import { DialogTitle, Modal, ModalClose, ModalDialog, dialogContentClasses } from '@mui/joy';
+import { DialogTitle, Modal, ModalClose, ModalDialog, Stack, dialogContentClasses } from '@mui/joy';
 import { adminFocusScope } from './adminStyles';
 
 export type AdminDialogProps = {
@@ -50,5 +50,21 @@ export function AdminDialog({
         {children}
       </ModalDialog>
     </Modal>
+  );
+}
+
+/** The button row under a dialog's content, the commit button last. ActionDialog's footer is this row. */
+export function AdminDialogFooter({ children }: { children: React.ReactNode }) {
+  return (
+    <Stack
+      direction="row"
+      alignItems="center"
+      justifyContent="flex-end"
+      gap={1}
+      flexWrap="wrap"
+      sx={{ pt: 2, mt: 1, borderTop: '1px solid', borderColor: 'admin.border' }}
+    >
+      {children}
+    </Stack>
   );
 }

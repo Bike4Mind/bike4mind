@@ -76,7 +76,7 @@ export interface GpuQueries {
 type Environment = Record<string, string | undefined>;
 
 const EXEC_TIMEOUT_MS = 5_000;
-const LISTING_TIMEOUT_MS = VERSION_TIMEOUT_MS + EXEC_TIMEOUT_MS;
+export const LISTING_TIMEOUT_MS = VERSION_TIMEOUT_MS + EXEC_TIMEOUT_MS;
 const MIB = 1024 * 1024;
 
 export const defaultExec: ExecLike = (command, args) =>

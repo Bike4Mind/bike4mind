@@ -81,6 +81,24 @@ describe('analyzeRouteSource', () => {
     ).toEqual(['admin:*']);
   });
 
+  it('reads the permission each adminApi verb declares', () => {
+    expect(analyze(`adminApi({ adminPermissions: { POST: 'credits:adjust' } }).post(a)`).permissions).toEqual([
+      { method: 'POST', requirement: 'credits:adjust' },
+    ]);
+    expect(
+      analyze(`adminApi({ adminPermissions: { GET: ['support:read', 'credits:adjust'], POST: 'credits:adjust' } })`)
+        .permissions
+    ).toEqual([
+      { method: 'GET', requirement: 'support:read | credits:adjust' },
+      { method: 'POST', requirement: 'credits:adjust' },
+    ]);
+    expect(analyze(`adminApi({ adminPermissions: { GET: SETTINGS_PAGE_READ } }).get(a)`).permissions).toEqual([
+      { method: 'GET', requirement: '?' },
+    ]);
+    expect(analyze(`adminApi({ adminPermissions }).get(a)`).permissions).toEqual([{ method: '*', requirement: '?' }]);
+    expect(analyze(`baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(a)`).permissions).toBeUndefined();
+  });
+
   it('resolves inline, imported and spread scope arrays to scope strings', () => {
     expect(analyze(`baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(a)`).scopes).toEqual(['admin:*']);
     expect(analyze(`baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES }).get(a)`).scopes).toEqual([
@@ -295,7 +313,7 @@ describe('renderInventoryMarkdown', () => {
     expect(markdown).toBe(renderInventoryMarkdown([...records].reverse()));
     expect(markdown).toContain('3 routes: 0 contracted, 1 aliases of another route, 2 with no static caller');
     expect(markdown.indexOf('### quests')).toBeLessThan(markdown.indexOf('### sessions'));
-    expect(markdown).toContain('| `/api/quests/[id]` | GET | jwt+key | - | yes | `/api/v1/quests/[id]` | 0 |');
+    expect(markdown).toContain('| `/api/quests/[id]` | GET | jwt+key | - | - | yes | `/api/v1/quests/[id]` | 0 |');
     expect(markdown).toContain('| `/api/sessions` | any |');
     expect(markdown).toContain('4: `a.ts`, `b.ts`, `c.ts` +1 more');
     expect(markdown).toContain('| quests | 1 | 0 |');
@@ -313,6 +331,22 @@ describe('renderInventoryMarkdown', () => {
       }),
     ]);
     expect(markdown).toContain('| GET: `files:read`; DELETE: `files:write` |');
+  });
+
+  it('shows the admin permission per verb, and a dash for a route that declares none', () => {
+    const markdown = renderInventoryMarkdown([
+      record({
+        route: '/api/admin/held',
+        permissions: [
+          { method: 'GET', requirement: 'support:read | credits:adjust' },
+          { method: 'POST', requirement: '?' },
+        ],
+      }),
+      record({ route: '/api/plain' }),
+    ]);
+    expect(markdown).toContain('| GET: `support:read` or `credits:adjust`; POST: ? |');
+    expect(markdown).toContain('| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |');
+    expect(markdown).toMatch(/\| `\/api\/plain` \|[^\n]*\| - \| - \| no \|/);
   });
 
   it('lists client paths with no route once each', () => {

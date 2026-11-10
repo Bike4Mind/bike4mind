@@ -134,9 +134,8 @@ const handler = baseApi()
   )
   // GET - Get Jira webhook config
   .get(
-    asyncHandler<object, IJiraWebhookConfigResponse | null, unknown, { revealSecret?: string }>(async (req, res) => {
+    asyncHandler<object, IJiraWebhookConfigResponse | null>(async (req, res) => {
       const user = req.user!;
-      const revealSecret = req.query.revealSecret === 'true';
 
       let tokens;
       try {
@@ -161,16 +160,11 @@ const handler = baseApi()
 
       const subscriberCount = await jiraWebhookSubscriptionRepository.countByWebhookConfig(webhookConfig.id);
 
-      const canRevealSecret = revealSecret && canManageConfig(webhookConfig, user);
-
-      // Decrypt and optionally reveal secret
+      // Decrypt only to build the masked preview
       let secretDisplay: string;
       const encryptionKey = Config.SECRET_ENCRYPTION_KEY;
 
-      if (canRevealSecret && encryptionKey) {
-        const decryptedSecret = decryptSecret(webhookConfig.secret, encryptionKey);
-        secretDisplay = decryptedSecret;
-      } else if (encryptionKey) {
+      if (encryptionKey) {
         const decryptedSecret = decryptSecret(webhookConfig.secret, encryptionKey);
         secretDisplay = maskSecret(decryptedSecret);
       } else {
@@ -195,8 +189,7 @@ const handler = baseApi()
         createdAt: webhookConfig.createdAt,
         updatedAt: webhookConfig.updatedAt,
         webhookUrl: getWebhookUrl(webhookConfig.routingToken),
-        secret: canRevealSecret ? secretDisplay : undefined,
-        secretMasked: canRevealSecret ? undefined : secretDisplay,
+        secretMasked: secretDisplay,
         subscriberCount,
         isRotating,
         previousSecretExpiresAt: isRotating ? webhookConfig.previousSecretExpiresAt : undefined,

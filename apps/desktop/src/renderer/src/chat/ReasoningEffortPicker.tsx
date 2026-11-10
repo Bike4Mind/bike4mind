@@ -82,7 +82,8 @@ function supportState(option: ChatModelOption | undefined): { supported: boolean
  * lists only the levels its `controls.effort` names. A hosted model that takes none shows the
  * control disabled and says why, rather than quietly accepting a choice the next turn would drop
  * on the floor; a local one shows nothing. A local model that can think but names no levels
- * (`thinkingToggle`) gets a thinking On/Off switch instead.
+ * (`thinkingToggle`) gets a thinking On/Off switch instead, and a hosted one that cannot stop
+ * thinking (`thinkingAlwaysOn`) says so in place of the disabled effort.
  *
  * `compact` is the composer row with the tune tray closed: the picker renders nothing while it
  * sits at its default, and otherwise a tinted chip with a reset beside it.
@@ -170,6 +171,7 @@ export function ReasoningEffortPicker({
   if (unsupported && option && isLocalModel(option.id)) return null;
 
   if (unsupported) {
+    const alwaysThinks = option?.thinkingAlwaysOn === true;
     return (
       <Tooltip
         placement="top"
@@ -177,9 +179,11 @@ export function ReasoningEffortPicker({
         size="sm"
         sx={{ maxWidth: 280 }}
         title={
-          option?.controls?.thinkingBudgetTokens
-            ? `${modelId} thinks with a token budget instead of an effort. Set it under Params.`
-            : `${modelId} does not take a reasoning effort.`
+          alwaysThinks
+            ? `${modelId} always thinks before answering. Its thinking cannot be switched off.`
+            : option?.controls?.thinkingBudgetTokens
+              ? `${modelId} thinks with a token budget instead of an effort. Set it under Params.`
+              : `${modelId} does not take a reasoning effort.`
         }
       >
         {/* A disabled control fires no pointer events, so the tooltip needs something that does.
@@ -195,7 +199,7 @@ export function ReasoningEffortPicker({
             slotProps={{ root: { 'data-testid': 'effort-picker-btn' } }}
           >
             <Typography level="body-xs" noWrap textColor="inherit">
-              Effort: n/a
+              {alwaysThinks ? 'Thinking: Always on' : 'Effort: n/a'}
             </Typography>
           </Button>
         </Box>

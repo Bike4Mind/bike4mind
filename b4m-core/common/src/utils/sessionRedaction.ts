@@ -21,6 +21,12 @@ import type { ISession } from '../types/entities/SessionTypes';
  */
 export const SERVER_OWNED_SESSION_FIELDS = ['systemPromptText', 'preauthorizedLakeIds'] as const;
 
+/**
+ * Keys of `session.origin` that are server-owned. `origin.channel` is display data the sidebar
+ * reads; `apiKeyId` names the creating key. Shared with the WS data-subscribe projection.
+ */
+export const SERVER_OWNED_SESSION_ORIGIN_FIELDS = ['apiKeyId'] as const;
+
 export type ServerOwnedSessionField = (typeof SERVER_OWNED_SESSION_FIELDS)[number];
 
 /** A session shape safe to serialize to a client - server-owned fields removed. */
@@ -56,11 +62,12 @@ export function redactSessionForClient<T extends Partial<ISession>>(
   for (const field of SERVER_OWNED_SESSION_FIELDS) {
     delete clientSession[field];
   }
-  // origin.channel is display data the sidebar reads; origin.apiKeyId names the creating key and
-  // is stripped like a server-owned field. Copied, not mutated, for the same reason as above.
   const origin = clientSession.origin as Record<string, unknown> | null | undefined;
-  if (origin && typeof origin === 'object' && 'apiKeyId' in origin) {
-    const { apiKeyId: _apiKeyId, ...publicOrigin } = origin;
+  if (origin && typeof origin === 'object') {
+    const publicOrigin = { ...origin };
+    for (const field of SERVER_OWNED_SESSION_ORIGIN_FIELDS) {
+      delete publicOrigin[field];
+    }
     clientSession.origin = publicOrigin;
   }
   return clientSession as ClientSession<T>;

@@ -59,7 +59,7 @@ import type {
 import { api } from '@client/app/contexts/ApiContext';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { toast } from 'sonner';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { invalidateGearsStatusWhileLocked } from '@client/app/hooks/useGearsStatus';
@@ -1218,15 +1218,18 @@ export type DataLakeMemberFile = IFabFileDocument & { membershipArm?: DataLakeMe
 /**
  * Hook: Fetch files belonging to a specific data lake by ID.
  * One lake's own file list (GET /api/data-lakes/{id}/articles) - not the cross-lake browse
- * query; see useGetDataLakeArticles.
+ * query; see useGetDataLakeArticles. `tag` narrows it to the members carrying that exact tag
+ * (one folder of the lake's tree). The route caps a page at 100 files.
  */
-export function useDataLakeFiles(dataLakeId: string | null, params?: { limit?: number }) {
+export function useDataLakeFiles(dataLakeId: string | null, params?: { limit?: number; tag?: string }) {
   return useQuery({
     queryKey: dataLakeKeys.files(dataLakeId, params),
     queryFn: async () => {
+      // One tag as a plain string: axios would write an array as `tags[]=`, which the route
+      // does not read (see useGetDataLakeArticles).
       const response = await api.get<{ data: DataLakeMemberFile[]; total: number; hasMore: boolean }>(
         `/api/data-lakes/${dataLakeId}/articles`,
-        { params: { limit: params?.limit ?? 100 } }
+        { params: { limit: params?.limit ?? 100, ...(params?.tag ? { tags: params.tag } : {}) } }
       );
       return response.data;
     },
@@ -2237,6 +2240,25 @@ export function useGetScopedDataLakeTagCounts(source: DataLakeBrowseSource, lake
     refetchOnWindowFocus: false,
     staleTime: 1000 * 60 * 5,
   });
+}
+
+/**
+ * Refreshes the Data Lake mode picker's reads: the labelled lake list (names) and the tag counts of
+ * `source` (the per-lake counts and the browse tree's, scoped ones included). For when the picker opens: both cache for minutes,
+ * and a connector sync renames a lake and adds files server-side, which only the sync poll sees -
+ * and that is mounted by the manager surfaces, not the picker. Rows stay on screen while it runs.
+ * `cancelRefetch: false` lets a read already in flight finish instead of restarting it.
+ */
+export function useRefreshLakePickerReads(sessionId: string | null | undefined, source: DataLakeBrowseSource) {
+  const queryClient = useQueryClient();
+  const sid = sessionId || null;
+  return useCallback(() => {
+    void queryClient.invalidateQueries(
+      { queryKey: dataLakeKeys.listWithRetrievability(sid), exact: true },
+      { cancelRefetch: false }
+    );
+    void queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCounts(source) }, { cancelRefetch: false });
+  }, [queryClient, sid, source]);
 }
 
 /**

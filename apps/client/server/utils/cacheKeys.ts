@@ -23,7 +23,8 @@ const PAYLOAD_VERSIONS = {
   // Bumped for the degenerateRate KPI: a stale v1 payload would hide the new field for
   // up to the cache's 12h TTL after deploy.
   // Bumped to 3 for the per-account errorRate/p95LatencyMs/flags fields.
-  spend: 3,
+  // Bumped to 4 for executed-model rows in byModel.
+  spend: 4,
   eventMetrics: 1,
   modelStats: 1,
 } as const;

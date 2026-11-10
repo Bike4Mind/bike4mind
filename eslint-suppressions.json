@@ -489,21 +489,6 @@
       "count": 1
     }
   },
-  "apps/client/app/components/admin/DocumentationTab/components/DocSection.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
-  "apps/client/app/components/admin/DocumentationTab/index.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
-  "apps/client/app/components/admin/DocumentationTab/utils/docData.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
   "apps/client/app/components/admin/EmbedKeysTab.test.tsx": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
@@ -574,24 +559,9 @@
       "count": 1
     }
   },
-  "apps/client/app/components/admin/RapidReplyMetrics.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 2
-    }
-  },
-  "apps/client/app/components/admin/RapidReplyTab.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 11
-    }
-  },
   "apps/client/app/components/admin/SlackWorkspacesTab.tsx": {
     "@typescript-eslint/no-explicit-any": {
       "count": 4
-    }
-  },
-  "apps/client/app/components/admin/SystemPromptsManager.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 2
     }
   },
   "apps/client/app/components/admin/Users/CreateUserModal.tsx": {
@@ -1496,7 +1466,7 @@
   },
   "apps/client/pages/api/admin/users/__tests__/email-verification.test.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 5
+      "count": 3
     }
   },
   "apps/client/pages/api/admin/users/email-verification.ts": {
@@ -1745,7 +1715,7 @@
   },
   "apps/client/pages/api/auth/mfa/__tests__/trustedDeviceRevocation.test.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 32
+      "count": 30
     }
   },
   "apps/client/pages/api/auth/mfa/__tests__/verify-setup.signIn.test.ts": {
@@ -1769,11 +1739,6 @@
     }
   },
   "apps/client/pages/api/auth/mfa/disable.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/auth/mfa/force-reset.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
     }
@@ -1806,11 +1771,6 @@
   "apps/client/pages/api/auth/saml/callback.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 4
-    }
-  },
-  "apps/client/pages/api/blog-integration/__tests__/index.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 5
     }
   },
   "apps/client/pages/api/blog/__tests__/presign-image-upload.test.ts": {
@@ -2570,11 +2530,6 @@
       "count": 13
     }
   },
-  "apps/client/pages/api/security/__tests__/blocked-ips.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 11
-    }
-  },
   "apps/client/pages/api/security/__tests__/user-recent.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 10
@@ -2583,11 +2538,6 @@
   "apps/client/pages/api/security/blocked-ips.ts": {
     "b4m/no-raw-entity-response": {
       "count": 3
-    }
-  },
-  "apps/client/pages/api/security/blocked-ips/__tests__/evaluate.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 5
     }
   },
   "apps/client/pages/api/sessions/[id]/__tests__/correction-pairs.test.ts": {
@@ -4380,19 +4330,9 @@
       "count": 5
     }
   },
-  "b4m-core/slack/src/handlers/globalShortcutHandlers.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 13
-    }
-  },
   "b4m-core/slack/src/handlers/modelConfigHandlers.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 8
-    }
-  },
-  "b4m-core/slack/src/handlers/notebook-manager.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 17
     }
   },
   "b4m-core/slack/src/handlers/notebook-messaging.ts": {

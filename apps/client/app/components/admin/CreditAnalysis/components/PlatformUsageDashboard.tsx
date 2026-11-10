@@ -27,7 +27,7 @@ import {
   type UsageOwnerType,
 } from '@bike4mind/common';
 import { BreakdownTable } from '@client/app/components/common/BreakdownTable';
-import { formatCredits, formatUsd, numberCell } from '../utils/format';
+import { formatCredits, formatUsd, modelKey, modelLabel, numberCell } from '../utils/format';
 import { zeroFillDailySeries } from '../utils/dailySeries';
 import { useEndpointUsage } from '../hooks/useEndpointUsage';
 import { usePlatformUsage } from '../hooks/usePlatformUsage';
@@ -422,8 +422,8 @@ export const PlatformUsageDashboard: React.FC = () => {
               testid="platform-usage-model-table"
               keyLabel="Model"
               rows={data.byModel.map(r => ({
-                key: `${r.provider}-${r.model}`,
-                label: `${r.provider} / ${r.model}`,
+                key: modelKey(r),
+                label: modelLabel(r),
                 requests: r.requests,
                 cogsUsd: r.cogsUsd,
                 creditsCharged: r.creditsCharged,

@@ -11,6 +11,8 @@ import {
 } from '@bike4mind/common';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import {
+  AdminPermissionAction,
+  useMissingAdminPermission,
   ADMIN_REASON_PRESETS,
   ActionDialog,
   AdminPageHeader,
@@ -25,6 +27,7 @@ import {
   type AdminSelection,
   type DataColumn,
 } from './shared';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
 import { SIGNUP_RISK_REVIEW_SEARCH_KEYS } from './signupRiskReviewSearch';
 import BulkAbuseResponseModal from './Users/BulkAbuseResponseModal';
 import { SignupRiskAutoApprovals } from './SignupRiskAutoApprovals';
@@ -287,43 +290,52 @@ export const SignupRiskReviewTab: React.FC = () => {
     },
   ];
 
+  // Approving pays out a withheld signup grant, so it needs credits:adjust beside users:moderate.
+  const approveMissing = useMissingAdminPermission('credits:adjust');
   const rowActions = (row: SignupRiskReviewRow) => (
-    <Dropdown>
-      <MenuButton
-        slots={{ root: IconButton }}
-        slotProps={{
-          root: { variant: 'plain', size: 'sm', 'aria-label': `Actions for ${row.email ?? row.userId}` },
-        }}
-        data-testid={`signup-risk-actions-${row.userId}`}
-      >
-        <MoreHorizontal size={16} />
-      </MenuButton>
-      <Menu placement="bottom-end">
-        <MenuItem
-          data-testid={`signup-risk-approve-${row.userId}`}
-          onClick={() => {
-            decision.reset();
-            setApproving([row]);
-          }}
-        >
-          Approve account
-        </MenuItem>
-        <MenuItem
-          color="danger"
-          data-testid={`signup-risk-suspend-${row.userId}`}
-          onClick={() => setSuspending([row.userId])}
-        >
-          Suspend account
-        </MenuItem>
-      </Menu>
-    </Dropdown>
+    <AdminPermissionAction requirement="users:moderate">
+      {missing => (
+        <Dropdown>
+          <MenuButton
+            slots={{ root: IconButton }}
+            slotProps={{
+              root: { variant: 'plain', size: 'sm', 'aria-label': `Actions for ${row.email ?? row.userId}` },
+            }}
+            disabled={missing}
+            data-testid={`signup-risk-actions-${row.userId}`}
+          >
+            <MoreHorizontal size={16} />
+          </MenuButton>
+          <Menu placement="bottom-end">
+            <MenuItem
+              disabled={!!approveMissing}
+              title={approveMissing ?? undefined}
+              data-testid={`signup-risk-approve-${row.userId}`}
+              onClick={() => {
+                decision.reset();
+                setApproving([row]);
+              }}
+            >
+              Approve account
+            </MenuItem>
+            <MenuItem
+              color="danger"
+              data-testid={`signup-risk-suspend-${row.userId}`}
+              onClick={() => setSuspending([row.userId])}
+            >
+              Suspend account
+            </MenuItem>
+          </Menu>
+        </Dropdown>
+      )}
+    </AdminPermissionAction>
   );
 
   const filtered = needle !== '' || Object.values(view.filters).some(Boolean);
 
   return (
     <Stack
-      spacing={2}
+      spacing={ADMIN_REGION_GAP}
       sx={{ bgcolor: 'admin.canvas', color: 'admin.ink', borderRadius: 'md' }}
       data-testid="admin-signup-risk-review-tab"
     >
@@ -412,26 +424,34 @@ export const SignupRiskReviewTab: React.FC = () => {
         onSelectAllMatching={() => setSelection({ mode: 'allMatching' })}
         onClear={clearSelection}
       >
-        <Button
-          variant="outlined"
-          data-testid="signup-risk-bulk-approve-btn"
-          disabled={selectedRows.length === 0}
-          onClick={() => {
-            decision.reset();
-            setApproving(selectedRows);
-          }}
-        >
-          Approve accounts
-        </Button>
-        <Button
-          variant="outlined"
-          color="danger"
-          data-testid="signup-risk-bulk-suspend-btn"
-          disabled={selectedRows.length === 0}
-          onClick={() => setSuspending(selectedRows.map(row => row.userId))}
-        >
-          Suspend accounts
-        </Button>
+        <AdminPermissionAction requirement={{ allOf: ['users:moderate', 'credits:adjust'] }}>
+          {missing => (
+            <Button
+              variant="outlined"
+              data-testid="signup-risk-bulk-approve-btn"
+              disabled={missing || selectedRows.length === 0}
+              onClick={() => {
+                decision.reset();
+                setApproving(selectedRows);
+              }}
+            >
+              Approve accounts
+            </Button>
+          )}
+        </AdminPermissionAction>
+        <AdminPermissionAction requirement="users:moderate">
+          {missing => (
+            <Button
+              variant="outlined"
+              color="danger"
+              data-testid="signup-risk-bulk-suspend-btn"
+              disabled={missing || selectedRows.length === 0}
+              onClick={() => setSuspending(selectedRows.map(row => row.userId))}
+            >
+              Suspend accounts
+            </Button>
+          )}
+        </AdminPermissionAction>
       </BulkActionBar>
       <SignupRiskAutoApprovals
         rows={reviews.data?.autoApproved ?? []}

@@ -58,6 +58,7 @@ import {
   type DataTableGroup,
   type DataTableSort,
 } from './shared';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
 import {
   ALL_VERDICTS_FILTER,
   SHADOW_DETECTION_SEARCH_KEYS,
@@ -1385,7 +1386,7 @@ export const ShadowDetectionsTab: React.FC = () => {
 
   return (
     <Stack
-      spacing={2}
+      spacing={ADMIN_REGION_GAP}
       sx={{ bgcolor: 'admin.canvas', color: 'admin.ink', borderRadius: 'md', minWidth: 0 }}
       data-testid="admin-shadow-detections-tab"
     >

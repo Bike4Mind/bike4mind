@@ -40,12 +40,11 @@ export const offeredToolCount = (connection: Pick<IMcpConnectionPublic, 'tools'>
   connection.tools.filter(tool => tool.enabled && tool.state === 'active').length;
 
 /**
- * Same rule as the server's approval gate: only `readOnlyHint` without `destructiveHint` runs
- * without asking; a missing or contradictory hint counts as a write. Keep in sync with the
- * read-only classification of custom connector tools in @bike4mind/services.
+ * Connectors the composer can switch per chat: connected, switched on in Integrations, and with at
+ * least one reviewed tool on. Anything else contributes no tools, so a row for it would toggle nothing.
  */
-export const isReadOnlyTool = (tool: Pick<McpConnectionTool, 'annotations'>): boolean =>
-  tool.annotations?.readOnlyHint === true && tool.annotations.destructiveHint !== true;
+export const composerConnections = (connections: readonly IMcpConnectionPublic[]): IMcpConnectionPublic[] =>
+  connections.filter(c => c.status === 'connected' && c.enabled && offeredToolCount(c) > 0);
 
 /** Needs a browser sign-in: waiting for the first one, or the grant expired. API keys are re-entered instead. */
 export const needsSignIn = (connection: IMcpConnectionPublic): boolean =>

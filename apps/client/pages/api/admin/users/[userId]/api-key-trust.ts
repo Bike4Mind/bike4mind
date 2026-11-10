@@ -1,9 +1,9 @@
 import { z } from 'zod';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { userRepository, withTransaction } from '@bike4mind/database';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
+import { assertCanActOnAdminTarget } from '@bike4mind/common';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
@@ -13,16 +13,12 @@ interface RequestQuery {
 
 const bodySchema = z.object({ approved: z.boolean() });
 
-// Admin-only endpoint to trust (or stop trusting) an account for minting personal API keys
+// Admin endpoint (keys:revoke) to trust (or stop trusting) an account for minting personal API keys
 // without waiting for the account-age or purchase requirement. Email must still be verified.
-const handler = baseApi({ auth: 'jwtOnly' })
+const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'keys:revoke' } })
   .use(csrfProtection())
   .post(
     asyncHandler(async (req, res) => {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const { userId } = req.query as RequestQuery;
 
       if (typeof userId !== 'string' || !userId) {
@@ -42,6 +38,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
         if (!user) {
           throw new BadRequestError('User not found');
         }
+        assertCanActOnAdminTarget(req.user, user, 'change API key trust for');
 
         const before = user.apiKeyTrustApproved === true;
         // Unchanged is a no-op: no write and no audit entry, like verify-email on an already-verified user.

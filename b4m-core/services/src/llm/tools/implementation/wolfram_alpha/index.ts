@@ -61,7 +61,7 @@ export async function wolframAlphaQuery(
   const timeoutId = setTimeout(() => controller.abort(), 30000);
 
   try {
-    logger?.log('🔢 Wolfram Alpha: Querying:', params.query);
+    logger?.log('Wolfram Alpha: Querying', { queryLength: params.query.length });
 
     const response = await fetch(url.toString(), {
       method: 'GET',

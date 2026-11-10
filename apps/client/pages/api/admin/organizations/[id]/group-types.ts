@@ -1,7 +1,7 @@
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { BadRequestError, ensureAdmin } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { organizationRepository, userRepository, withTransaction } from '@bike4mind/database';
 import { groupRepository } from '@bike4mind/database/social';
 import { organizationService } from '@bike4mind/services';
@@ -9,7 +9,7 @@ import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/admi
 import { z } from 'zod';
 
 /**
- * PUT /api/admin/organizations/[id]/group-types - platform-admin only.
+ * PUT /api/admin/organizations/[id]/group-types - needs settings:manage.
  * Sets an org's allowed group types (org-groups #1172, Phase 3): provisions a Group instance for
  * each newly-allowed type, and on revocation soft-deletes the instance and purges its id from
  * every member. All validation + the revoke purge live in `setOrganizationGroupTypes` (tested).
@@ -22,9 +22,8 @@ const bodySchema = z.object({
   allowedGroupTypes: z.array(z.string()).max(20),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).put(
+const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions: { PUT: 'settings:manage' } }).put(
   asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
     const organizationId = req.query.id;
     if (!organizationId) throw new BadRequestError('Organization id is required');
 

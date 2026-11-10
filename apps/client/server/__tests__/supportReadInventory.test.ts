@@ -28,14 +28,18 @@ const routeFiles = (dir: string): string[] =>
     return entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts') ? [full] : [];
   });
 
+const SUPPORT_READ_CONSTANTS = new Set(['SETTINGS_PAGE_READ', 'MODERATION_PAGE_READ']);
+// ADMIN_USERS_BULK_ROUTE_PERMISSIONS is the union of the bulk action permissions and holds no support:read.
+const KNOWN_PERMISSION_CONSTANTS = new Set([...SUPPORT_READ_CONSTANTS, 'ADMIN_USERS_BULK_ROUTE_PERMISSIONS']);
+
 /** The methods a route's `adminApi` declarations put on support:read, alone or in an any-of list. */
 const supportReadMethods = (source: string): string[] =>
   [...source.matchAll(/adminPermissions:\s*\{([^}]*)\}/g)].flatMap(([, declaration]) =>
     [...declaration.matchAll(/(\w+):\s*(\[[^\]]*\]|'[^']*'|\w+)/g)].flatMap(([, method, value]) => {
-      if (/^\w+$/.test(value) && value !== 'SETTINGS_PAGE_READ') {
+      if (/^\w+$/.test(value) && !KNOWN_PERMISSION_CONSTANTS.has(value)) {
         throw new Error(`Unrecognised permission constant ${value}: teach this test whether it includes support:read`);
       }
-      return value.includes("'support:read'") || value === 'SETTINGS_PAGE_READ' ? [method] : [];
+      return value.includes("'support:read'") || SUPPORT_READ_CONSTANTS.has(value) ? [method] : [];
     })
   );
 

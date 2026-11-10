@@ -17,9 +17,9 @@ describe('canRenderAdminTab', () => {
     expect(canRenderAdminTab(AdminTab.LiveOpsTriage, { user: admin, liveOpsTriage: false })).toBe(false);
   });
 
-  it('rejects legacy tabs that have no panel', () => {
-    for (const tab of [AdminTab.Accounts, AdminTab.Analysts, AdminTab.BulkImport]) {
-      expect(canRenderAdminTab(tab, { user: admin })).toBe(false);
+  it('rejects a retired tab id', () => {
+    for (const retired of [4, 11, 17]) {
+      expect(canRenderAdminTab(retired as AdminTab, { user: admin })).toBe(false);
     }
   });
 

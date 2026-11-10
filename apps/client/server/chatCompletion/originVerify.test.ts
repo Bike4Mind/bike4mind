@@ -45,4 +45,15 @@ describe('requireOriginVerify', () => {
     expect(res.status).toHaveBeenCalledWith(403);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('POST /api/ai/v1/completions'));
   });
+
+  it('redacts a share-link token in the refusal log', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const token = 'synthetic-share-token-0123456789';
+    const req = { method: 'GET', path: `/api/publish/serve/a/${token}/index.html`, headers: {} } as unknown as Request;
+
+    requireOriginVerify(req, makeResponse() as unknown as Response, vi.fn());
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('GET /api/publish/serve/a/[redacted]/index.html'));
+    expect(String(warn.mock.calls)).not.toContain(token);
+  });
 });

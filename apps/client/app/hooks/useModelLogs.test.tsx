@@ -29,6 +29,7 @@ describe('useModelLogs', () => {
           endDate: '2026-10-07',
           model: 'gpt-4',
           search: 'retry',
+          supportCase: 'ZD-4821',
           page: 3,
           limit: 25,
         }),
@@ -44,7 +45,15 @@ describe('useModelLogs', () => {
       endDate: '2026-10-07',
       model: 'gpt-4',
       search: 'retry',
+      supportCase: 'ZD-4821',
     });
+  });
+
+  it('sends the support case only together with a search', async () => {
+    renderHook(() => useModelLogs({ supportCase: 'ZD-4821', page: 1, limit: 10 }), { wrapper });
+
+    await waitFor(() => expect(get).toHaveBeenCalled());
+    expect(Object.fromEntries(requestedParams())).toEqual({ page: '1', limit: '10' });
   });
 
   it('leaves unset filters out of the query string', async () => {
@@ -74,16 +83,23 @@ describe('useModelLogDetail', () => {
   });
 
   it('does not fetch while disabled', async () => {
-    const { result } = renderHook(() => useModelLogDetail('log-1', false), { wrapper });
+    const { result } = renderHook(() => useModelLogDetail('log-1', 'ZD-4821', false), { wrapper });
 
     await waitFor(() => expect(result.current.fetchStatus).toBe('idle'));
     expect(get).not.toHaveBeenCalled();
   });
 
-  it('fetches the encoded id once enabled', async () => {
-    const { result } = renderHook(() => useModelLogDetail('a/b', true), { wrapper });
+  it('fetches the encoded id with the support case once enabled', async () => {
+    const { result } = renderHook(() => useModelLogDetail('a/b', 'ZD-4821', true), { wrapper });
 
     await waitFor(() => expect(result.current.data).toEqual({ id: 'a/b' }));
-    expect(get).toHaveBeenCalledWith('/api/admin/model-logs/a%2Fb');
+    expect(get).toHaveBeenCalledWith('/api/admin/model-logs/a%2Fb?supportCase=ZD-4821');
+  });
+
+  it.each(['', '  ', 'ab'])('does not fetch with the unusable support case %j', async supportCase => {
+    const { result } = renderHook(() => useModelLogDetail('log-1', supportCase, true), { wrapper });
+
+    await waitFor(() => expect(result.current.fetchStatus).toBe('idle'));
+    expect(get).not.toHaveBeenCalled();
   });
 });

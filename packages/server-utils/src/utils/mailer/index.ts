@@ -1,20 +1,39 @@
-import nodemailer, { type Transporter } from 'nodemailer';
-import type SMTPTransport from 'nodemailer/lib/smtp-transport';
 import { isPlaceholderValue } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '../config';
 import { postEmailMirrorToSlack } from '../../integrations/slack/slack';
 import { extractBodyPreview, inferEmailType } from '../../integrations/slack/emailMirror';
+import { SmtpTransport } from './smtpTransport';
+import { SesTransport } from './sesTransport';
+import {
+  resolveMailTransportKind,
+  type MailCategory,
+  type MailSendResult,
+  type MailTransport,
+  type MailTransportKind,
+} from './transport';
+
+export {
+  SMTP_DNS_TIMEOUT_MS,
+  SMTP_CONNECTION_TIMEOUT_MS,
+  SMTP_GREETING_TIMEOUT_MS,
+  SMTP_SOCKET_TIMEOUT_MS,
+} from './smtpTransport';
+export { resolveMailTransportKind } from './transport';
+export type { MailCategory, MailSendContext, MailSendResult, MailTransport, MailTransportKind } from './transport';
 
 export interface SendEmailOptions {
   /** Post the redacted copy to the email-audit Slack channel. Default true. */
   mirror?: boolean;
   /** Name the recipient in the delivery log lines. Default true. */
   logRecipient?: boolean;
+  /** Lets the transport route the category through its own SES configuration set. */
+  category?: MailCategory;
 }
 
 export interface EmailConfigStatus {
   configured: boolean;
+  transport: MailTransportKind;
   missingSecrets: string[];
   secrets: {
     MAIL_HOST: boolean;
@@ -31,11 +50,23 @@ export interface TestEmailResult {
   error?: string;
 }
 
-export const SMTP_DNS_TIMEOUT_MS = 5_000;
-export const SMTP_CONNECTION_TIMEOUT_MS = 10_000;
-export const SMTP_GREETING_TIMEOUT_MS = 10_000;
-/** Inactivity, not total: resets on every SMTP exchange, so a slow-but-live server still completes. */
-export const SMTP_SOCKET_TIMEOUT_MS = 15_000;
+/**
+ * Builds the transport the process should send through. Both configuration sets come from the
+ * Lambda environment (infra/eventBus.ts); the SMTP settings are the MAIL_* secrets.
+ */
+export function createMailTransport(kind: MailTransportKind = resolveMailTransportKind()): MailTransport {
+  const otcConfigurationSet = process.env.OTC_SES_CONFIGURATION_SET || undefined;
+  if (kind === 'ses') {
+    return new SesTransport({ configurationSet: process.env.SES_CONFIGURATION_SET || undefined, otcConfigurationSet });
+  }
+  return new SmtpTransport({
+    host: Config.MAIL_HOST,
+    port: Config.MAIL_PORT,
+    username: Config.MAIL_USERNAME,
+    password: Config.MAIL_PASSWORD,
+    otcConfigurationSet,
+  });
+}
 
 export class MailService {
   defaultFrom = Config.MAIL_FROM;
@@ -43,50 +74,34 @@ export class MailService {
   // Undefined when unset/placeholder so consumers never receive the 'not-configured' default.
   supportEmail = isPlaceholderValue(Config.SUPPORT_EMAIL) ? undefined : Config.SUPPORT_EMAIL;
 
-  transporter: Transporter<SMTPTransport.SentMessageInfo>;
+  readonly transport: MailTransport;
 
-  constructor() {
-    // Implicit TLS on 465; mandatory STARTTLS on the 587 submission port so a
-    // MITM cannot strip the upgrade. Other ports (e.g. a local Mailpit on
-    // 1025) negotiate STARTTLS opportunistically or stay plain.
-    const port = parseInt(Config.MAIL_PORT);
-    this.transporter = nodemailer.createTransport({
-      port,
-      host: Config.MAIL_HOST,
-      auth: {
-        user: Config.MAIL_USERNAME,
-        pass: Config.MAIL_PASSWORD,
-      },
-      secure: port === 465,
-      requireTLS: port === 587,
-      // nodemailer's defaults (2 min connect, 30s greeting, 10 min socket idle) all outlive the 60s
-      // web Lambda (infra/web.ts), and every route awaits sendEmail inline, so a stalled SMTP host
-      // would 504 a request whose work had already committed. Keep the whole send well under that.
-      dnsTimeout: SMTP_DNS_TIMEOUT_MS,
-      connectionTimeout: SMTP_CONNECTION_TIMEOUT_MS,
-      greetingTimeout: SMTP_GREETING_TIMEOUT_MS,
-      socketTimeout: SMTP_SOCKET_TIMEOUT_MS,
-    });
-
+  constructor(transport: MailTransport = createMailTransport()) {
+    this.transport = transport;
     this.validateConfig();
   }
 
-  private validateConfig() {
-    const requiredFields: Record<string, string> = {
+  /** The secrets this transport needs; SES authenticates with the execution role, so only the sender. */
+  private requiredSecrets(): Record<string, string> {
+    const sender = { MAIL_FROM: Config.MAIL_FROM };
+    if (this.transport.kind === 'ses') return sender;
+    return {
       MAIL_HOST: Config.MAIL_HOST,
       MAIL_PORT: Config.MAIL_PORT,
       MAIL_USERNAME: Config.MAIL_USERNAME,
       MAIL_PASSWORD: Config.MAIL_PASSWORD,
-      MAIL_FROM: Config.MAIL_FROM,
+      ...sender,
     };
+  }
 
-    const missing = Object.entries(requiredFields)
+  private validateConfig() {
+    const missing = Object.entries(this.requiredSecrets())
       .filter(([_, value]) => isPlaceholderValue(value))
       .map(([key]) => key);
 
     if (missing.length > 0) {
       Logger.warn(
-        'Mail configuration incomplete - emails will fail. ' +
+        `Mail configuration incomplete (${this.transport.kind}) - emails will fail. ` +
           `Missing or placeholder values: ${missing.join(', ')}. ` +
           'Set MAIL_* secrets via: ./for-env {stage} npx sst secret set MAIL_HOST ...'
       );
@@ -98,22 +113,15 @@ export class MailService {
    * Used by admin system health panel to show config status without CloudWatch.
    */
   getConfigStatus(): EmailConfigStatus {
-    const requiredFields: Record<string, string> = {
-      MAIL_HOST: Config.MAIL_HOST,
-      MAIL_PORT: Config.MAIL_PORT,
-      MAIL_USERNAME: Config.MAIL_USERNAME,
-      MAIL_PASSWORD: Config.MAIL_PASSWORD,
-      MAIL_FROM: Config.MAIL_FROM,
-    };
-
     const isConfigured = (value: string): boolean => !isPlaceholderValue(value);
 
-    const missingSecrets = Object.entries(requiredFields)
+    const missingSecrets = Object.entries(this.requiredSecrets())
       .filter(([_, value]) => !isConfigured(value))
       .map(([key]) => key);
 
     return {
       configured: missingSecrets.length === 0,
+      transport: this.transport.kind,
       missingSecrets,
       secrets: {
         MAIL_HOST: isConfigured(Config.MAIL_HOST),
@@ -126,14 +134,14 @@ export class MailService {
   }
 
   /**
-   * Send a test email to verify SMTP connectivity.
+   * Send a test email to verify the transport can deliver.
    * Used by admin system health panel.
    */
   async sendTestEmail(to: string): Promise<TestEmailResult> {
     try {
-      await this.transporter.verify();
+      await this.transport.verify();
 
-      const result = await this.transporter.sendMail({
+      const result = await this.transport.send({
         from: this.defaultFrom,
         to,
         subject: 'System Health Test Email',
@@ -153,14 +161,9 @@ export class MailService {
         messageId: result.messageId,
       };
     } catch (e: unknown) {
-      const error = e as Error & { code?: string; command?: string };
-      const errorMessage = `${error.message}${error.code ? ` (SMTP code: ${error.code})` : ''}`;
+      const errorMessage = describeTransportError(e, this.transport.kind);
 
-      Logger.error(
-        `Test email failed to ${to}. ` +
-          `SMTP config: host=${Config.MAIL_HOST}, port=${Config.MAIL_PORT}. ` +
-          `Error: ${errorMessage}`
-      );
+      Logger.error(`Test email failed to ${to}. Transport: ${this.transport.describe()}. Error: ${errorMessage}`);
 
       return {
         success: false,
@@ -177,19 +180,22 @@ export class MailService {
     to: string | string[],
     data: unknown,
     options: SendEmailOptions = {}
-  ): Promise<SMTPTransport.SentMessageInfo | false> {
-    const { mirror = true, logRecipient = true } = options;
+  ): Promise<MailSendResult | false> {
+    const { mirror = true, logRecipient = true, category } = options;
     const recipient = to instanceof Array ? to.join(', ') : to;
     const loggedRecipient = logRecipient ? recipient : '[redacted]';
     const subject = (data as { subject?: string })?.subject || 'unknown';
 
     // try/catch here (not delegating the error) so the API call still succeeds even when mail fails
     try {
-      const result = await this.transporter.sendMail({
-        from: this.defaultFrom,
-        to: recipient,
-        ...(typeof data === 'object' && data),
-      });
+      const result = await this.transport.send(
+        {
+          from: this.defaultFrom,
+          to: recipient,
+          ...(typeof data === 'object' && data),
+        },
+        { category }
+      );
 
       Logger.info(`Email sent successfully to ${loggedRecipient} (messageId: ${result.messageId})`);
 
@@ -210,17 +216,25 @@ export class MailService {
       return result;
       // eslint-disable-next-line
     } catch (e: any) {
+      // "Email delivery failed" is the metric filter pattern in infra/mailAlarms.ts.
       Logger.error(
         `Email delivery failed to ${loggedRecipient} (subject: ${subject}). ` +
-          `SMTP config: host=${Config.MAIL_HOST}, port=${Config.MAIL_PORT}. ` +
+          `Transport: ${this.transport.describe()}. ` +
           `Error: ${e.message}`,
-        e.code ? `SMTP code: ${e.code}` : '',
+        e.code ? `SMTP code: ${e.code}` : e.name && e.name !== 'Error' ? `Error: ${e.name}` : '',
         e.command ? `SMTP command: ${e.command}` : '',
         e.stack ? `\nStack: ${e.stack}` : ''
       );
       return false;
     }
   }
+}
+
+function describeTransportError(e: unknown, kind: MailTransportKind): string {
+  const error = e as Error & { code?: string; name?: string };
+  if (error.code) return `${error.message} (SMTP code: ${error.code})`;
+  if (kind === 'ses' && error.name && error.name !== 'Error') return `${error.message} (SES error: ${error.name})`;
+  return error.message;
 }
 
 const mailer = new MailService();

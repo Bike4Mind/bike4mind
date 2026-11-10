@@ -9,7 +9,13 @@
 
 import { createHash } from 'node:crypto';
 import { escapeSlackText, toAbsoluteUrl } from '@bike4mind/common';
-import { adminSettingsRepository, cacheRepository, connectDB, userRepository } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  cacheRepository,
+  connectDB,
+  shadowDetectionRepository,
+  userRepository,
+} from '@bike4mind/database';
 import type { UserLinkState } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { postMessageToSlackWithOutcome } from '@bike4mind/server-utils/integrations/slack/slack';
@@ -24,6 +30,7 @@ import { runLogsInsightsQuery } from '../utils/logsInsights';
 import {
   BREADTH_GATE_PATHS,
   PROBE_QUERY,
+  PROBE_SIGNAL_LABELS,
   QUERY_ROW_LIMIT,
   actorsOverThreshold,
   groupProbeActors,
@@ -31,6 +38,7 @@ import {
   type ProbeActor,
   type ProbeSignal,
 } from './apiProbeScoring';
+import { buildApiProbeShadowDetection } from './apiProbeShadowDetections';
 
 /** Set by infra/apiProbeDetector.ts; the Next.js server function's log group. */
 export const API_SERVER_LOG_GROUP_ENV = 'API_SERVER_LOG_GROUP';
@@ -57,14 +65,6 @@ export type ProbeDetectorPolicy = {
   dedupeMs: number;
 };
 
-const SIGNAL_LABELS: Record<ProbeSignal, string> = {
-  refusedFetch: 'refused fetch targets',
-  webhookSignature: 'failed Stripe webhook signatures',
-  invalidId: 'invalid-id lookups',
-  denied: '401/403 denials from API handlers',
-  notFound: '404s',
-};
-
 export async function loadProbeDetectorPolicy(): Promise<ProbeDetectorPolicy> {
   // Fresh read so the kill switch applies on the next run, not after a cache TTL.
   const settings = await getSettingsMap(
@@ -80,13 +80,11 @@ export async function loadProbeDetectorPolicy(): Promise<ProbeDetectorPolicy> {
 }
 
 const hashIp = (ip: string) => createHash('sha256').update(ip).digest('hex').slice(0, 32);
+const userDedupeKey = (userId: string) => `${DEDUPE_KEY_PREFIX}:user:${userId}`;
 
 /** One key per identifier, so an actor is recognised again from either its IP or its account. IPs are hashed so the Cache row holds no raw address. */
 export function probeDedupeKeys(actor: Pick<ProbeActor, 'ips' | 'userIds'>): string[] {
-  return [
-    ...actor.ips.map(ip => `${DEDUPE_KEY_PREFIX}:ip:${hashIp(ip)}`),
-    ...actor.userIds.map(userId => `${DEDUPE_KEY_PREFIX}:user:${userId}`),
-  ];
+  return [...actor.ips.map(ip => `${DEDUPE_KEY_PREFIX}:ip:${hashIp(ip)}`), ...actor.userIds.map(userDedupeKey)];
 }
 
 /**
@@ -142,9 +140,9 @@ export function formatProbeAlert(input: {
   appUrl: string | undefined;
 }): string {
   const { actor, users, threshold, window, stage, appUrl } = input;
-  const signalLines = (Object.keys(SIGNAL_LABELS) as ProbeSignal[])
+  const signalLines = (Object.keys(PROBE_SIGNAL_LABELS) as ProbeSignal[])
     .filter(signal => actor.counts[signal] > 0)
-    .map(signal => `- ${actor.counts[signal]} ${SIGNAL_LABELS[signal]}`);
+    .map(signal => `- ${actor.counts[signal]} ${PROBE_SIGNAL_LABELS[signal]}`);
   const userLines =
     actor.userIds.length > 0
       ? listWithOverflow(
@@ -172,7 +170,10 @@ export function formatProbeAlert(input: {
     ).join(', ')}`,
   ];
   if (actor.userIds.length > 0) {
-    lines.push('To contain: Admin > Users, select the accounts above, then bulk Contain (reversible with Undo).');
+    lines.push(
+      'Accounts that scored the threshold on their own go to Admin > Detections for review and automated ' +
+        'containment. To contain now: Admin > Users, select the accounts above, then bulk Contain.'
+    );
   }
   return lines.join('\n');
 }
@@ -181,7 +182,36 @@ const scheduledEventSchema = z.object({ time: z.iso.datetime() });
 
 export type ProbeDetectorResult =
   | { status: 'skipped'; reason: string }
-  | { status: 'ok'; actors: number; alerted: number; suppressed: number; deferred: number; truncated: boolean };
+  | {
+      status: 'ok';
+      actors: number;
+      alerted: number;
+      /** Alerted actors whose shadow detection was written. */
+      recorded: number;
+      suppressed: number;
+      deferred: number;
+      truncated: boolean;
+    };
+
+/**
+ * Writes the actor's shadow detection once its alert is out, for the accounts whose own claim is new:
+ * an account already claimed in the dedupe window (re-alerted from a new IP) is not recorded again.
+ * Never throws: a failed write is logged and the alert stands on its own.
+ */
+async function recordProbeShadowDetection(
+  input: Parameters<typeof buildApiProbeShadowDetection>[0],
+  logger: Pick<Logger, 'error'>
+): Promise<boolean> {
+  const detection = buildApiProbeShadowDetection(input);
+  if (!detection) return false;
+  try {
+    await shadowDetectionRepository.record(detection);
+    return true;
+  } catch (error) {
+    logger.error('api-probe-shadow-detection-not-recorded', { score: input.actor.score, error });
+    return false;
+  }
+}
 
 export async function handler(event: unknown): Promise<ProbeDetectorResult> {
   const logger = new Logger().withMetadata({ cron: 'apiProbeDetector', stage: Resource.App.stage });
@@ -220,6 +250,7 @@ export async function handler(event: unknown): Promise<ProbeDetectorResult> {
 
   const appUrl = appUrlFromEnv();
   let alerted = 0;
+  let recorded = 0;
   let suppressed = 0;
   let deferred = 0;
   for (const actor of actors) {
@@ -252,8 +283,12 @@ export async function handler(event: unknown): Promise<ProbeDetectorResult> {
       continue;
     }
     alerted++;
+    const newUserIds = new Set(actor.userIds.filter(userId => claimed.includes(userDedupeKey(userId))));
+    if (await recordProbeShadowDetection({ actor, threshold: policy.threshold, window, newUserIds }, logger)) {
+      recorded++;
+    }
   }
   if (deferred > 0) logger.error('api-probe-alerts-deferred', { deferred });
 
-  return { status: 'ok', actors: actors.length, alerted, suppressed, deferred, truncated };
+  return { status: 'ok', actors: actors.length, alerted, recorded, suppressed, deferred, truncated };
 }

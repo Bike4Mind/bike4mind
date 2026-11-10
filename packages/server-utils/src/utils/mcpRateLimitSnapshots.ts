@@ -6,6 +6,7 @@ import {
   RATE_LIMIT_INTEGRATIONS,
   type RateLimitIntegrationType,
 } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 
 /**
  * Per-tenant MCP rate-limit snapshots. Both writers - invokeMcpHandler (events returned in the
@@ -41,15 +42,19 @@ export async function throttleIfNearRateLimit(tenantKey: string, serverName: str
       if (latest.usagePercent >= THROTTLE_USAGE_PERCENT && latest.resetAt && latest.resetAt > new Date()) {
         const delayMs = Math.min(latest.resetAt.getTime() - Date.now(), MAX_THROTTLE_DELAY_MS);
         if (delayMs > 0) {
-          console.warn(
-            `[RateLimit] Throttling ${integration} for tenant ${tenantKey} for ${delayMs}ms (${latest.usagePercent}% usage, resets at ${latest.resetAt.toISOString()})`
-          );
+          Logger.warn('[RateLimit] Throttling integration', {
+            integration,
+            tenantKey,
+            delayMs,
+            usagePercent: latest.usagePercent,
+            resetAt: latest.resetAt.toISOString(),
+          });
           await new Promise(resolve => setTimeout(resolve, delayMs));
         }
       }
     }
   } catch (err) {
-    console.error('[RateLimit] Pre-call throttle check failed', err);
+    Logger.error('[RateLimit] Pre-call throttle check failed', { error: err });
   }
 }
 
@@ -81,7 +86,7 @@ function parseRateLimitEvent(raw: unknown): RateLimitEvent | null {
 
   const event = raw as Record<string, unknown>;
   if (!isRateLimitIntegration(event.integration)) {
-    console.warn(`[RateLimit] Skipping event with invalid integration: ${String(event.integration)}`);
+    Logger.warn(`[RateLimit] Skipping event with invalid integration: ${String(event.integration)}`);
     return null;
   }
 
@@ -125,11 +130,11 @@ export async function persistRateLimitEvents(rawEvents: readonly unknown[], tena
       });
       persisted++;
     } catch (err) {
-      console.error('[RateLimit] Failed to persist snapshot to MongoDB', err);
+      Logger.error('[RateLimit] Failed to persist snapshot to MongoDB', { error: err });
     }
 
     if (isNearLimit({ limit, remaining, resetAt, retryAfterMs, usagePercent })) {
-      console.warn(`[RateLimit] WARNING: ${integration} at ${usagePercent}% usage (${remaining}/${limit} remaining)`);
+      Logger.warn(`[RateLimit] WARNING: ${integration} at ${usagePercent}% usage (${remaining}/${limit} remaining)`);
     }
 
     // Separate try-catch so a metric failure doesn't affect the DB write above
@@ -137,7 +142,7 @@ export async function persistRateLimitEvents(rawEvents: readonly unknown[], tena
       const normalizedEndpoint = normalizeEndpoint(endpoint);
       await recordRateLimitEvent(integration, usagePercent, wasThrottled, normalizedEndpoint || undefined);
     } catch (err) {
-      console.error('[RateLimit] Failed to emit CloudWatch metric', err);
+      Logger.error('[RateLimit] Failed to emit CloudWatch metric', { error: err });
     }
   }
 

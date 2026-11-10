@@ -620,6 +620,28 @@ lifecycle changes. Metrics follow CloudWatch retention, and logs follow the
 deployment's configured log retention. This operational monitoring does not send
 product usage events to third-party analytics services.
 
+## API request and web-fetch diagnostics
+
+Outside development mode, `req-timing` records request duration, database-connect
+duration, whether the container is cold, response status, whether headers were
+sent, and whether the response ended before completion. It includes `userId`
+when the request has a user. Treat these records as account-associated operational
+data. A status is only a sent response status when `headersSent` is true.
+
+After input validation, the `web-fetch` API route records the target hostname and
+an outcome of `ok`, `refused`, or `error`. The target's user information, port,
+path, query, and fragment are excluded. Validation failures emit no `web-fetch`
+line, and insufficient credits count as `error`. These lines inherit the request
+logger's request id, method, API route path, deployment stage, client IP, and
+trace id when present; the API route path is distinct from the fetched URL.
+
+You use these logs to diagnose request latency, response failures, and fetch
+outcomes. They are operational logs rather than consent-gated product analytics
+events. Hosted API logs go to CloudWatch with one-week retention configured by
+the deployment. Self-hosted logs go to the runtime's console output; you control
+their collection and retention. These log additions do not send events to
+third-party analytics services.
+
 ## Credit hold monitoring
 
 Credit reservations write structured operational logs with the billing owner id

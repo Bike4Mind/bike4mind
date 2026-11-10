@@ -1,7 +1,6 @@
-import React, { useState, useMemo } from 'react';
-import { Card, CardContent, Typography, Stack, Grid, Alert, Sheet, Table, Chip, IconButton } from '@mui/joy';
-import KeyboardArrowUp from '@mui/icons-material/KeyboardArrowUp';
-import KeyboardArrowDown from '@mui/icons-material/KeyboardArrowDown';
+import React from 'react';
+import { Button, Stack, Typography } from '@mui/joy';
+import { AdminPageHeader, DataTable, EmptyState, StatStrip, StatTile, StatusChip, type DataColumn } from './shared';
 
 interface MetricData {
   totalRequests: number;
@@ -24,345 +23,151 @@ interface ModelMetric {
   tokensSaved?: number;
 }
 
+export interface RapidReplyMetricsData {
+  metrics?: MetricData;
+  activeMappings?: number;
+  modelBreakdown?: ModelMetric[];
+}
+
 interface RapidReplyMetricsProps {
-  metrics?: {
-    metrics?: MetricData;
-    activeMappings?: number;
-    modelBreakdown?: ModelMetric[];
-  } | null;
-  thresholds?: {
+  metrics?: RapidReplyMetricsData | null;
+  thresholds: {
     maxLatency: number;
     minSuccessRate: number;
   };
+  /** The empty state's next step: mappings are what produce rapid replies. */
+  onOpenModels: () => void;
 }
 
-type SortField =
-  'mainModel' | 'rapidModel' | 'usageCount' | 'avgLatency' | 'avgTtfvtSavings' | 'avgTtfvt' | 'successRate';
-type SortDirection = 'asc' | 'desc';
+const ms = (value: number | null | undefined) =>
+  value === null || value === undefined ? undefined : `${Math.round(value).toLocaleString()} ms`;
 
-// Module-level component for sortable table headers
-const SortableHeader = ({
-  field,
-  children,
-  onSort,
-  currentSortField,
-  currentSortDirection,
-}: {
-  field: SortField;
-  children: React.ReactNode;
-  onSort: (field: SortField) => void;
-  currentSortField: SortField;
-  currentSortDirection: 'asc' | 'desc';
-}) => (
-  <th>
-    <Stack direction="row" alignItems="center" spacing={1} sx={{ cursor: 'pointer' }} onClick={() => onSort(field)}>
-      <Typography level="body-sm" fontWeight="md">
-        {children}
-      </Typography>
-      {currentSortField === field && (
-        <IconButton size="sm" variant="plain" color="neutral">
-          {currentSortDirection === 'asc' ? (
-            <KeyboardArrowUp fontSize="small" />
-          ) : (
-            <KeyboardArrowDown fontSize="small" />
-          )}
-        </IconButton>
-      )}
-    </Stack>
-  </th>
+const percent = (value: number | null | undefined) =>
+  value === null || value === undefined ? undefined : `${value.toFixed(1)}%`;
+
+const Dash = () => (
+  <Typography component="span" sx={{ color: 'admin.inkMuted' }}>
+    -
+  </Typography>
 );
 
-export const RapidReplyMetrics: React.FC<RapidReplyMetricsProps> = ({ metrics, thresholds }) => {
-  const [sortField, setSortField] = useState<SortField>('avgLatency');
-  const [sortDirection, setSortDirection] = useState<SortDirection>('asc'); // Default to lowest latency first
+export const RapidReplyMetrics: React.FC<RapidReplyMetricsProps> = ({ metrics, thresholds, onOpenModels }) => {
+  const metricData = metrics?.metrics;
+  // Fastest first until an admin sorts by a column.
+  const modelBreakdown = [...(metrics?.modelBreakdown ?? [])].sort((a, b) => a.avgLatency - b.avgLatency);
 
-  const { metrics: metricData, activeMappings, modelBreakdown } = metrics || {};
-
-  const handleSort = (field: SortField) => {
-    if (sortField === field) {
-      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
-    } else {
-      setSortField(field);
-      setSortDirection('asc');
-    }
-  };
-
-  const sortedModelBreakdown = useMemo(() => {
-    if (!modelBreakdown) return [];
-
-    return [...modelBreakdown].sort((a, b) => {
-      let aValue: any = a[sortField];
-      let bValue: any = b[sortField];
-
-      if (typeof aValue === 'string') {
-        aValue = aValue.toLowerCase();
-        bValue = bValue.toLowerCase();
-      }
-
-      // Handle null values for TTFVT - put them at the end
-      if (aValue === null && bValue === null) return 0;
-      if (aValue === null) return 1;
-      if (bValue === null) return -1;
-
-      if (sortDirection === 'asc') {
-        return aValue < bValue ? -1 : aValue > bValue ? 1 : 0;
-      } else {
-        return aValue > bValue ? -1 : aValue < bValue ? 1 : 0;
-      }
-    });
-  }, [modelBreakdown, sortField, sortDirection]);
-
-  if (!metrics) {
+  if (!metricData || !metricData.totalRequests) {
     return (
-      <Grid xs={12}>
-        <Alert color="neutral" data-testid="no-metrics-alert">
-          <Typography>No metrics data available yet. Metrics will appear once rapid replies are being used.</Typography>
-        </Alert>
-      </Grid>
+      <EmptyState
+        title="No rapid replies yet"
+        description="Metrics appear once a model mapping is enabled and users get rapid replies."
+        action={
+          <Button variant="outlined" onClick={onOpenModels} data-testid="rapid-reply-metrics-open-models-btn">
+            Review model mappings
+          </Button>
+        }
+      />
     );
   }
 
+  const activeMappings = metrics?.activeMappings ?? metricData.activeMappings ?? 0;
+
+  const columns: DataColumn<ModelMetric>[] = [
+    { id: 'mainModel', label: 'Main model', render: row => row.mainModel, sortValue: row => row.mainModel },
+    { id: 'rapidModel', label: 'Rapid model', render: row => row.rapidModel, sortValue: row => row.rapidModel },
+    {
+      id: 'usageCount',
+      label: 'Requests',
+      numeric: true,
+      render: row => row.usageCount.toLocaleString(),
+      sortValue: row => row.usageCount,
+    },
+    {
+      id: 'avgLatency',
+      label: 'Avg latency (ms)',
+      numeric: true,
+      render: row => (
+        <Stack direction="row" gap={1} alignItems="center" justifyContent="flex-end">
+          {row.avgLatency > thresholds.maxLatency && <StatusChip tone="bad" label="Slow" />}
+          <span>{Math.round(row.avgLatency).toLocaleString()}</span>
+        </Stack>
+      ),
+      sortValue: row => row.avgLatency,
+    },
+    {
+      id: 'avgTtfvt',
+      label: 'Avg TTFVT (ms)',
+      numeric: true,
+      render: row => (row.avgTtfvt ? Math.round(row.avgTtfvt).toLocaleString() : <Dash />),
+      sortValue: row => row.avgTtfvt ?? Number.MAX_SAFE_INTEGER,
+    },
+    {
+      id: 'avgTtfvtSavings',
+      label: 'Avg TTFVT savings (ms)',
+      numeric: true,
+      render: row => (row.avgTtfvtSavings ? Math.round(row.avgTtfvtSavings).toLocaleString() : <Dash />),
+      sortValue: row => row.avgTtfvtSavings ?? Number.MIN_SAFE_INTEGER,
+    },
+    {
+      id: 'successRate',
+      label: 'Success rate',
+      numeric: true,
+      render: row => (
+        <Stack direction="row" gap={1} alignItems="center" justifyContent="flex-end">
+          {row.successRate < thresholds.minSuccessRate && <StatusChip tone="bad" label="Below target" />}
+          <span>{row.successRate.toFixed(1)}%</span>
+        </Stack>
+      ),
+      sortValue: row => row.successRate,
+    },
+  ];
+
   return (
-    <Grid container spacing={3}>
-      {/* Summary Cards */}
-      <Grid xs={12} md={2}>
-        <Card data-testid="total-requests-card" sx={{ height: '100%' }}>
-          <CardContent>
-            <Stack style={{ justifyContent: 'space-between', height: '100%' }}>
-              <Typography level="body-sm" textColor="text.secondary">
-                Total Requests
-              </Typography>
-              <Typography level="h3">{metricData?.totalRequests?.toLocaleString() || 0}</Typography>
-            </Stack>
-          </CardContent>
-        </Card>
-      </Grid>
+    <Stack sx={{ gap: 3 }} data-testid="rapid-reply-metrics">
+      <StatStrip aria-label="Rapid reply metrics">
+        <StatTile
+          label="Requests"
+          value={metricData.totalRequests}
+          comparison={`Across ${activeMappings.toLocaleString()} active mapping${activeMappings === 1 ? '' : 's'}`}
+        />
+        <StatTile
+          label="Success rate"
+          value={percent(metricData.successRate) ?? '-'}
+          comparison={`Target ${thresholds.minSuccessRate}% or more`}
+        />
+        <StatTile
+          label="Avg latency"
+          value={ms(metricData.averageLatency) ?? '-'}
+          comparison={`Target ${thresholds.maxLatency.toLocaleString()} ms or less`}
+        />
+        <StatTile
+          label="Avg TTFVT"
+          value={ms(metricData.averageTtfvt) ?? '-'}
+          comparison="Time to first visible token"
+        />
+        <StatTile
+          label="Avg TTFVT savings"
+          value={ms(metricData.averageTtfvtSavings) ?? '-'}
+          comparison="Ahead of the main model"
+        />
+      </StatStrip>
 
-      <Grid xs={12} md={2}>
-        <Card data-testid="success-rate-card" sx={{ height: '100%' }}>
-          <CardContent>
-            <Stack style={{ justifyContent: 'space-between', height: '100%' }}>
-              <Typography level="body-sm" textColor="text.secondary">
-                Success Rate
-              </Typography>
-              <Typography
-                level="h3"
-                color={
-                  metricData?.successRate && metricData.successRate >= (thresholds?.minSuccessRate || 90)
-                    ? 'success'
-                    : 'danger'
-                }
-              >
-                {metricData?.successRate?.toFixed(1) || 0}%
-              </Typography>
-            </Stack>
-          </CardContent>
-        </Card>
-      </Grid>
-
-      <Grid xs={12} md={2}>
-        <Card data-testid="avg-latency-card" sx={{ height: '100%' }}>
-          <CardContent>
-            <Stack style={{ justifyContent: 'space-between', height: '100%' }}>
-              <Typography level="body-sm" textColor="text.secondary">
-                Avg Latency
-              </Typography>
-              {/* helper text */}
-              <Typography level="body-xs" textColor="text.secondary">
-                How long it takes for the rapid reply to be generated
-              </Typography>
-
-              <Typography
-                level="h3"
-                color={
-                  metricData?.averageLatency && metricData.averageLatency <= (thresholds?.maxLatency || 2000)
-                    ? 'success'
-                    : 'danger'
-                }
-              >
-                {metricData?.averageLatency?.toFixed(0) || 0}ms
-              </Typography>
-            </Stack>
-          </CardContent>
-        </Card>
-      </Grid>
-
-      <Grid xs={12} md={2}>
-        <Card data-testid="avg-ttfvt-card" sx={{ height: '100%' }}>
-          <CardContent>
-            <Stack style={{ justifyContent: 'space-between', height: '100%' }}>
-              <Typography level="body-sm" textColor="text.secondary">
-                Avg TTFVT
-              </Typography>
-              <Typography level="body-xs" textColor="text.secondary">
-                How long it takes for the first token to be received
-              </Typography>
-              <Typography level="h3">
-                {metricData?.averageTtfvt ? `${metricData.averageTtfvt.toFixed(0)}ms` : 'N/A'}
-              </Typography>
-            </Stack>
-          </CardContent>
-        </Card>
-      </Grid>
-
-      <Grid xs={12} md={2}>
-        <Card data-testid="avg-ttfvt-savings-card" sx={{ height: '100%' }}>
-          <CardContent>
-            <Stack style={{ justifyContent: 'space-between', height: '100%' }}>
-              <Typography level="body-sm" textColor="text.secondary">
-                Avg TTFVT Savings
-              </Typography>
-              <Typography level="body-xs" textColor="text.secondary">
-                How much faster rapid reply is vs main completion
-              </Typography>
-              <Typography level="h3">
-                {metricData?.averageTtfvtSavings ? `${metricData.averageTtfvtSavings.toFixed(0)}ms` : 'N/A'}
-              </Typography>
-            </Stack>
-          </CardContent>
-        </Card>
-      </Grid>
-
-      <Grid xs={12} md={2}>
-        <Card data-testid="active-mappings-card" sx={{ height: '100%' }}>
-          <CardContent>
-            <Stack style={{ justifyContent: 'space-between', height: '100%' }}>
-              <Typography level="body-sm" textColor="text.secondary">
-                Active Mappings
-              </Typography>
-              <Typography level="body-xs" textColor="text.secondary">
-                Number of enabled model mappings
-              </Typography>
-              <Typography level="h3">{activeMappings || 0}</Typography>
-            </Stack>
-          </CardContent>
-        </Card>
-      </Grid>
-
-      {/* Model Performance Breakdown */}
-      {modelBreakdown && modelBreakdown.length > 0 && (
-        <Grid xs={12}>
-          <Card data-testid="model-breakdown-card">
-            <CardContent>
-              <Typography level="title-lg" sx={{ mb: 2 }}>
-                Model Performance Breakdown
-              </Typography>
-              <Sheet variant="outlined" sx={{ borderRadius: 'sm' }}>
-                <Table data-testid="model-breakdown-table" hoverRow>
-                  <thead>
-                    <tr>
-                      <SortableHeader
-                        field="mainModel"
-                        onSort={handleSort}
-                        currentSortField={sortField}
-                        currentSortDirection={sortDirection}
-                      >
-                        Main Model
-                      </SortableHeader>
-                      <SortableHeader
-                        field="rapidModel"
-                        onSort={handleSort}
-                        currentSortField={sortField}
-                        currentSortDirection={sortDirection}
-                      >
-                        Rapid Model
-                      </SortableHeader>
-                      <SortableHeader
-                        field="usageCount"
-                        onSort={handleSort}
-                        currentSortField={sortField}
-                        currentSortDirection={sortDirection}
-                      >
-                        Requests
-                      </SortableHeader>
-                      <SortableHeader
-                        field="avgLatency"
-                        onSort={handleSort}
-                        currentSortField={sortField}
-                        currentSortDirection={sortDirection}
-                      >
-                        Avg Latency
-                      </SortableHeader>
-                      <SortableHeader
-                        field="avgTtfvtSavings"
-                        onSort={handleSort}
-                        currentSortField={sortField}
-                        currentSortDirection={sortDirection}
-                      >
-                        Avg TTFVT Savings
-                      </SortableHeader>
-                      <SortableHeader
-                        field="avgTtfvt"
-                        onSort={handleSort}
-                        currentSortField={sortField}
-                        currentSortDirection={sortDirection}
-                      >
-                        Avg TTFVT
-                      </SortableHeader>
-                      <SortableHeader
-                        field="successRate"
-                        onSort={handleSort}
-                        currentSortField={sortField}
-                        currentSortDirection={sortDirection}
-                      >
-                        Success Rate
-                      </SortableHeader>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sortedModelBreakdown.map((model, index) => (
-                      <tr key={`breakdown-${model.mainModel}-${model.rapidModel}-${index}`}>
-                        <td>
-                          <Typography level="body-sm" fontWeight="md">
-                            {model.mainModel}
-                          </Typography>
-                        </td>
-                        <td>
-                          <Typography level="body-sm" textColor="text.secondary">
-                            {model.rapidModel}
-                          </Typography>
-                        </td>
-                        <td>{model.usageCount.toLocaleString()}</td>
-                        <td>
-                          <Stack direction="row" spacing={1} alignItems="center">
-                            <Typography level="body-sm">{model.avgLatency.toFixed(0)}ms</Typography>
-                            <Chip
-                              size="sm"
-                              color={model.avgLatency <= (thresholds?.maxLatency || 2000) ? 'success' : 'danger'}
-                              variant="outlined"
-                            >
-                              {model.avgLatency <= (thresholds?.maxLatency || 2000) ? 'Fast' : 'Slow'}
-                            </Chip>
-                          </Stack>
-                        </td>
-                        <td>
-                          <Typography level="body-sm">
-                            {model.avgTtfvtSavings ? `${model.avgTtfvtSavings.toFixed(0)}ms` : 'N/A'}
-                          </Typography>
-                        </td>
-                        <td>
-                          <Typography level="body-sm">
-                            {model.avgTtfvt ? `${model.avgTtfvt.toFixed(0)}ms` : 'N/A'}
-                          </Typography>
-                        </td>
-                        <td>
-                          <Chip
-                            size="sm"
-                            color={model.successRate >= (thresholds?.minSuccessRate || 90) ? 'success' : 'danger'}
-                            variant="soft"
-                          >
-                            {model.successRate.toFixed(1)}%
-                          </Chip>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </Table>
-              </Sheet>
-            </CardContent>
-          </Card>
-        </Grid>
+      {modelBreakdown.length > 0 && (
+        <Stack sx={{ gap: 2 }}>
+          <AdminPageHeader level="section" title="By model" />
+          <DataTable
+            rows={modelBreakdown}
+            columns={columns}
+            getRowId={row => `${row.mainModel}::${row.rapidModel}`}
+            label="Rapid reply metrics by model"
+            onRetry={() => undefined}
+            pagination={false}
+            minWidth="56rem"
+            maxHeight="none"
+            testId="rapid-reply-model-breakdown-table"
+          />
+        </Stack>
       )}
-    </Grid>
+    </Stack>
   );
 };

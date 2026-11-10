@@ -257,7 +257,14 @@ export function DataTable<Row>({
     : Math.min((currentPage + 1) * pageSize, total);
   return (
     <Box
-      sx={{ ...adminSurface, ...adminFocusScope, borderWidth: 1, borderStyle: 'solid', overflow: 'hidden' }}
+      sx={{
+        ...adminSurface,
+        ...adminFocusScope,
+        borderWidth: 1,
+        borderStyle: 'solid',
+        borderRadius: 'lg',
+        overflow: 'hidden',
+      }}
       data-testid={`${testId}-frame`}
     >
       <Box

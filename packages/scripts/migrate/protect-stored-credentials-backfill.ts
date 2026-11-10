@@ -14,12 +14,15 @@ import {
 } from '@bike4mind/utils/security';
 import { resolveMasterKey, rewrapLegacyDek } from '@bike4mind/server-utils/memory/factCipher';
 
-const slackFields = [
+export const slackFields = [
   'slackClientSecret',
   'slackOAuthSigningSecret',
   'slackVerificationToken',
   'appConfigurationToken',
 ] as const;
+
+/** bcrypt hash as stored for security answers; anything else is an unhashed legacy value. */
+export const BCRYPT_HASH_PATTERN = /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/;
 
 /**
  * A row this run could not convert. Rows are independent, so one bad value must not stop the
@@ -106,13 +109,11 @@ export async function protectStoredCredentials(): Promise<void> {
     const questions = z
       .array(z.object({ question: z.string(), answer: z.string() }))
       .parse(row.securityQuestions ?? []);
-    if (questions.every(question => /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(question.answer))) continue;
+    if (questions.every(question => BCRYPT_HASH_PATTERN.test(question.answer))) continue;
     const securityQuestions = await Promise.all(
       questions.map(async question => ({
         question: question.question,
-        answer: /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(question.answer)
-          ? question.answer
-          : await bcrypt.hash(question.answer, 12),
+        answer: BCRYPT_HASH_PATTERN.test(question.answer) ? question.answer : await bcrypt.hash(question.answer, 12),
       }))
     );
     await User.collection.updateOne(

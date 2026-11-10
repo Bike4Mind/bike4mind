@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { useUser } from '@client/app/contexts/UserContext';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ReinstateDialog, SuspendDialog } from './SuspendDialog';
 import { LiveProfile, ProfileTestWrapper, buildProfile } from '../profileTestUtils';
@@ -31,6 +32,7 @@ const confirmButton = () => screen.getByTestId('suspend-dialog-confirm-btn');
 
 describe('SuspendDialog', () => {
   beforeEach(() => {
+    useUser.setState({ currentUser: { id: 'admin-1', isAdmin: true } as never });
     vi.clearAllMocks();
     mocks.update.mockResolvedValue(undefined);
   });
@@ -175,6 +177,13 @@ describe('SuspendDialog', () => {
         creditReason: 'Undo: Abuse / automated signups',
       })
     );
+  });
+
+  it('offers the credit wipe to a delegate only as a disabled option', async () => {
+    useUser.setState({ currentUser: { id: 'd1', isAdmin: false, adminPermissions: ['users:moderate'] } as never });
+    setup();
+    await waitFor(() => expect(screen.getByTestId('suspend-dialog-zero-credits-checkbox')).toBeDisabled());
+    expect(screen.getByText('Only full administrators can change credits while suspending.')).toBeInTheDocument();
   });
 
   it('stays open when the write fails', async () => {

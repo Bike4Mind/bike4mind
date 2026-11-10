@@ -15,7 +15,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 export type RewardParty = {
   isSynthetic?: boolean | null;
   deletedAt?: Date | null;
-  signupGrant?: Pick<SignupGrant, 'blocked'> | null;
+  signupGrant?: Pick<SignupGrant, 'blocked' | 'unlockForfeited'> | null;
 } & AccountStateFields;
 
 // Shared with the release-time gate in creditService.payCreditReward, so a queued reward is never looser.
@@ -50,7 +50,9 @@ export async function rewardInviterForFirstAnswer(friendId: string): Promise<voi
 
     const inviterId = String(friend.referredByUserId);
     const inviter = await User.findById(inviterId)
-      .select('isSynthetic deletedAt isBanned disputePending moderation.status signupGrant.blocked')
+      .select(
+        'isSynthetic deletedAt isBanned disputePending moderation.status signupGrant.blocked signupGrant.unlockForfeited'
+      )
       .lean<RewardParty>();
     if (!inviter || isBlockedInviter(inviter)) return;
 

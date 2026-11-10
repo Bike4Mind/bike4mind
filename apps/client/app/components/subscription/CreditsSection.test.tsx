@@ -7,10 +7,12 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { ICreditTransaction } from '@bike4mind/common';
 
-const { navigate, account, purchaseToast } = vi.hoisted(() => ({
+const { navigate, account, purchaseToast, user, orgs } = vi.hoisted(() => ({
   navigate: vi.fn(),
   purchaseToast: vi.fn(),
-  account: { selectedAccount: null as null | { personal: boolean } },
+  account: { selectedAccount: null as null | { id: string; personal: boolean } },
+  user: { current: { id: 'u1', isAdmin: false } as { id: string; isAdmin: boolean } },
+  orgs: { list: undefined as undefined | { id: string; userId: string }[] },
 }));
 
 vi.mock('sonner', () => ({ toast: { success: purchaseToast } }));
@@ -28,6 +30,8 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 vi.mock('@client/app/components/Credits/AccountSelector', () => ({ useSelectedAccount: () => account }));
+vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: user.current }) }));
+vi.mock('@client/app/hooks/data/organizations', () => ({ useGetUserOrganizations: () => ({ data: orgs.list }) }));
 vi.mock('../Credits/PaymentButton', () => ({
   default: ({
     label,
@@ -69,6 +73,8 @@ describe('CreditsSection', () => {
     navigate.mockClear();
     purchaseToast.mockClear();
     account.selectedAccount = null;
+    user.current = { id: 'u1', isAdmin: false };
+    orgs.list = undefined;
   });
 
   it('keeps pending separate from successful purchases and success notifications', () => {
@@ -90,6 +96,50 @@ describe('CreditsSection', () => {
     fireEvent.click(screen.getByTestId('credits-modal-see-usage-link'));
     expect(onClose).toHaveBeenCalled();
     expect(navigate).toHaveBeenCalledWith({ to: '/profile', search: { tab: 'usage' } });
+  });
+
+  describe('with a team account selected', () => {
+    const teamUsage = { to: '/organizations/$id', params: { id: 'org1' }, search: { tab: 'usage' } };
+    const personalUsage = { to: '/profile', search: { tab: 'usage' } };
+    const clickUsage = () => {
+      account.selectedAccount = { id: 'org1', personal: false };
+      renderSection();
+      fireEvent.click(screen.getByTestId('credits-modal-see-usage-link'));
+    };
+
+    it('opens the team usage tab for the org owner', () => {
+      orgs.list = [{ id: 'org1', userId: 'u1' }];
+      clickUsage();
+      expect(navigate).toHaveBeenCalledWith(teamUsage);
+    });
+
+    it('opens the team usage tab for a platform admin who is not the owner', () => {
+      user.current = { id: 'u2', isAdmin: true };
+      orgs.list = [{ id: 'org1', userId: 'u1' }];
+      clickUsage();
+      expect(navigate).toHaveBeenCalledWith(teamUsage);
+    });
+
+    it('keeps a plain member on personal usage', () => {
+      user.current = { id: 'u2', isAdmin: false };
+      orgs.list = [{ id: 'org1', userId: 'u1' }];
+      clickUsage();
+      expect(navigate).toHaveBeenCalledWith(personalUsage);
+    });
+
+    it('opens the selected team, not the first org in the list', () => {
+      orgs.list = [
+        { id: 'org0', userId: 'u1' },
+        { id: 'org1', userId: 'u1' },
+      ];
+      clickUsage();
+      expect(navigate).toHaveBeenCalledWith(teamUsage);
+    });
+
+    it('keeps personal usage while the org list has not loaded', () => {
+      clickUsage();
+      expect(navigate).toHaveBeenCalledWith(personalUsage);
+    });
   });
 
   it('starts on the $20 pack, not the middle one', () => {

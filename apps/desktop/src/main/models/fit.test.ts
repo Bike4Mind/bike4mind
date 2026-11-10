@@ -537,6 +537,64 @@ describe('on AMD unified memory', () => {
   });
 });
 
+describe('a GPU memory warning the verdict does not count', () => {
+  const WARNING = 'Ollama 0.40.15 in WSL limits GPU memory to the WSL virtual machine memory.';
+  const sized = (overrides: Partial<SizeFit>): SizeFit => ({
+    level: 'fits',
+    needBytes: 3.5 * GIB,
+    budgetBytes: 12 * GIB,
+    offloadBytes: 0,
+    marginBytes: 2 * GIB,
+    ramPoolBytes: 0.7 * 32 * GIB,
+    cpuOnly: false,
+    context: 16384,
+    ...overrides,
+  });
+
+  it.each([
+    ['fits', 6, {}],
+    ['tight', 11, {}],
+    ['tight', 11, { placement: 'layer-offload' as const, memory: { weightsBytes: 4 * GIB, offloadedBytes: 2 * GIB } }],
+  ])('flags a %s verdict on the GPU and leaves the verdict as rated', (level, totalGiB, extra) => {
+    stub(totalGiB, { placement: 'gpu', ...extra });
+    const plain = fitFromArch(DENSE, 4 * GIB, gpu(12, 32), 16384);
+    const flagged = fitFromArch(DENSE, 4 * GIB, gpu(12, 32), 16384, { warning: WARNING });
+    expect(plain).not.toHaveProperty('warning');
+    expect(flagged).toEqual({ ...plain, warning: WARNING });
+    expect(flagged.level).toBe(level);
+  });
+
+  it('does not flag a model too large anyway, or one planned on the CPU', () => {
+    stub(13, { fits: false, placement: 'gpu' });
+    expect(fitFromArch(DENSE, 4 * GIB, gpu(12, 32), 16384, { warning: WARNING })).not.toHaveProperty('warning');
+    stub(6);
+    expect(fitFromArch(DENSE, 4 * GIB, cpu(16), 16384, { warning: WARNING })).not.toHaveProperty('warning');
+  });
+
+  it('leaves the warning out of what the estimator plans', () => {
+    stub(6, { placement: 'gpu' });
+    fitFromArch(DENSE, 4 * GIB, gpu(12, 32), 16384, { warning: WARNING, flashAttention: 'off' });
+    const input = vi.mocked(estimateFit).mock.calls[0]?.[0];
+    expect(input?.model).not.toHaveProperty('warning');
+    expect(input?.runtime).not.toHaveProperty('warning');
+    expect(input?.runtime).toMatchObject({ flashAttn: 'off' });
+  });
+
+  it.each([
+    ['fits', sized({}), true],
+    ['tight', sized({ level: 'tight' }), true],
+    ['tight with part in system RAM', sized({ level: 'tight', offloadBytes: GIB }), true],
+    ['too-large', sized({ level: 'too-large', offloadBytes: 4 * GIB }), false],
+    ['CPU-only fits', sized({ cpuOnly: true }), false],
+  ])('flags a size-only %s verdict only where the GPU is planned', (_case, shared, expected) => {
+    vi.mocked(estimateFitFromSize).mockReturnValue(shared);
+    const plain = fitFromSize(3 * GIB, gpu(12, 32), 16384);
+    const flagged = fitFromSize(3 * GIB, gpu(12, 32), 16384, { warning: WARNING });
+    expect(plain).not.toHaveProperty('warning');
+    expect(flagged).toEqual(expected ? { ...plain, warning: WARNING } : plain);
+  });
+});
+
 describe('machineView', () => {
   it('passes on only what the screen shows', () => {
     expect(machineView(gpu(24, 64))).toEqual({

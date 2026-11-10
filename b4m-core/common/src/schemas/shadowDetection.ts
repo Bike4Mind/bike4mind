@@ -25,6 +25,8 @@ export const SHADOW_DETECTORS = [
   'deviceLinkedToBlocked',
   /** A fresh account that ran the scripted grant-drain sequence (usage pattern signals). */
   'scriptedGrantDrain',
+  /** An actor the API probe detector reported (apps/workers/src/cron/apiProbeDetector.ts). */
+  'apiProbe',
 ] as const;
 export type ShadowDetector = (typeof SHADOW_DETECTORS)[number];
 

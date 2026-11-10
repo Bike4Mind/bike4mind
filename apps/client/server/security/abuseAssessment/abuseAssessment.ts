@@ -120,6 +120,11 @@ export const ABUSE_ASSESSMENT_QUESTION: DecisionQuestion = {
     'completion outcome. Grant-funded spend includes rewards and other grants, not only signup credits.',
     'Unknown funding or unavailable cohort spending must not be inferred to be free-credit misuse. Legacy rows, interrupted calls and missing outcomes remain unknown. Require independent misuse evidence.',
     'Sequence detections are review-only. Never treat the detector name or an earlier AI guess as a ground-truth label.',
+    'An apiProbe detection is different: it scores one account probing the API from the server log, browser',
+    'sessions included, so it needs no coordination. Its signals (refused fetch targets, refused ingest tokens,',
+    'failed webhook signatures, denied admin routes, invalid-id lookups, broad 401/403/404s) are deliberate',
+    'attempts, not routine use; several of them on one account is abuse, while a few denials or 404s alone',
+    'can be a stale tab or an outdated client.',
   ].join(' '),
   choices: [
     { value: 'abuse', description: 'Several independent signals point to coordinated abuse.' },

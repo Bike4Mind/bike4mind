@@ -12,9 +12,15 @@ const { mockForceResetMFA, mockRemovePasskeys, mockRevokeDevices, mockRecord, mo
     txEvents: [] as string[],
   }));
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({ post: (fn: unknown) => fn }),
-}));
+vi.mock('@server/middlewares/baseApi', () => {
+  type Fn = (req: unknown, res: unknown, next?: () => void) => unknown;
+  let guard: Fn;
+  const chain = {
+    use: (fn: Fn) => ((guard = fn), chain),
+    post: (fn: Fn) => async (req: unknown, res: unknown) => (guard(req, res, () => {}), fn(req, res)),
+  };
+  return { baseApi: () => chain };
+});
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@bike4mind/services', () => ({
   mfaService: { forceResetMFA: (...a: unknown[]) => mockForceResetMFA(...a) },
@@ -73,13 +79,36 @@ beforeEach(() => {
 });
 
 describe('POST /api/auth/mfa/force-reset', () => {
-  it('answers 403 for a non-admin and touches nothing', async () => {
-    const { res, run } = post({ userId: 'target1', reason: REASON }, { id: 'user1', isAdmin: false });
-    await run();
+  it('refuses a caller without users:moderate and touches nothing', async () => {
+    const { run } = post({ userId: 'target1', reason: REASON }, { id: 'user1', isAdmin: false });
+    await expect(run()).rejects.toThrow('Missing permission: users:moderate');
 
-    expect(res._getStatusCode()).toBe(403);
     expect(mockForceResetMFA).not.toHaveBeenCalled();
     expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  describe('a users:moderate delegate', () => {
+    const DELEGATE = { id: 'delegate1', isAdmin: false, adminPermissions: ['users:moderate'], username: 'delegate' };
+
+    it('resets MFA for an account without admin access', async () => {
+      const { res, run } = post({ userId: 'target1', reason: REASON }, DELEGATE);
+      await run();
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockForceResetMFA).toHaveBeenCalledTimes(1);
+    });
+
+    it('answers 403, not 400, when the service refuses an admin-access target', async () => {
+      mockForceResetMFA.mockRejectedValue(
+        new ForbiddenError('Only full administrators can reset MFA for users with admin access')
+      );
+      const { run } = post({ userId: 'target1', reason: REASON }, DELEGATE);
+      await expect(run()).rejects.toBeInstanceOf(ForbiddenError);
+
+      expect(mockRemovePasskeys).not.toHaveBeenCalled();
+      expect(mockRevokeDevices).not.toHaveBeenCalled();
+      expect(mockRecord).not.toHaveBeenCalled();
+    });
   });
 
   it('denies resetting your own MFA with a 403 and a user.mfa.denied entry', async () => {
@@ -152,7 +181,7 @@ describe('POST /api/auth/mfa/force-reset', () => {
     const { res, run } = post({ userId: 'target1', reason: `  ${REASON}  ` });
     await run();
 
-    expect(txEvents).toEqual(['tx:start', 'passkeys', 'reset', 'devices', 'record', 'tx:end']);
+    expect(txEvents).toEqual(['tx:start', 'reset', 'passkeys', 'devices', 'record', 'tx:end']);
     expect(mockRecord).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({

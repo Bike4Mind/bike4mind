@@ -171,3 +171,14 @@ it('keeps identifier queries out of request logger metadata', () => {
   expect(line.path).toBe('/api/admin/search');
   expect(JSON.stringify(line)).not.toContain(secret);
 });
+
+it('redacts a share-link token in request logger metadata', async () => {
+  const token = 'synthetic-share-token-0123456789';
+  for (const url of [`/a/${token}`, `/api/publish/serve/a/${token}/index.html`]) {
+    const { req, res, next } = makeReqRes({}, url);
+    logging(req, res, next);
+    const line = logLine(req.logger);
+    expect(line.path).toBe(url.replace(token, '[redacted]'));
+    expect(JSON.stringify(line)).not.toContain(token);
+  }
+});

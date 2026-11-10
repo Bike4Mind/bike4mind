@@ -45,6 +45,17 @@ DlqReplayLogSchema.index({ messageId: 1, status: 1 });
 // Auto-delete after 30 days
 DlqReplayLogSchema.index({ createdAt: 1 }, { expireAfterSeconds: 2592000 });
 
+interface DlqReplayLogFilters {
+  queueLabel?: string;
+  status?: 'success' | 'failed' | 'skipped';
+  startDate?: Date;
+  endDate?: Date;
+  search?: string;
+  limit?: number;
+  /** Defaults to true. Pass false to project `messageBody` out of the query. */
+  includeBody?: boolean;
+}
+
 class DlqReplayLogRepository extends BaseRepository<IDlqReplayLog> {
   constructor(private dlqReplayLogModel: mongoose.Model<IDlqReplayLog>) {
     super(dlqReplayLogModel);
@@ -71,15 +82,10 @@ class DlqReplayLogRepository extends BaseRepository<IDlqReplayLog> {
    * Get recent replay history with optional filters.
    */
   async findRecent(
-    filters: {
-      queueLabel?: string;
-      status?: 'success' | 'failed' | 'skipped';
-      startDate?: Date;
-      endDate?: Date;
-      search?: string;
-      limit?: number;
-    } = {}
-  ): Promise<IDlqReplayLog[]> {
+    filters: DlqReplayLogFilters & { includeBody: false }
+  ): Promise<Omit<IDlqReplayLog, 'messageBody'>[]>;
+  async findRecent(filters?: DlqReplayLogFilters): Promise<IDlqReplayLog[]>;
+  async findRecent(filters: DlqReplayLogFilters = {}): Promise<Omit<IDlqReplayLog, 'messageBody'>[]> {
     const query: Record<string, unknown> = {};
     if (filters.queueLabel) query.queueLabel = filters.queueLabel;
     if (filters.status) query.status = filters.status;
@@ -91,12 +97,13 @@ class DlqReplayLogRepository extends BaseRepository<IDlqReplayLog> {
     if (filters.search) {
       const escaped = filters.search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       query.$or = [
-        { messageBody: { $regex: escaped, $options: 'i' } },
+        { messageId: { $regex: escaped, $options: 'i' } },
         { errorMessage: { $regex: escaped, $options: 'i' } },
       ];
     }
+    const projection = filters.includeBody === false ? { messageBody: 0 } : undefined;
     const results = await this.model
-      .find(query)
+      .find(query, projection)
       .sort({ createdAt: -1 })
       .limit(filters.limit ?? 50);
     return results.map(doc => doc.toObject());

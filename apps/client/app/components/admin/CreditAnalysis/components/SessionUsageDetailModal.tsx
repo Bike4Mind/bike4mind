@@ -16,7 +16,7 @@ import {
 } from '@mui/joy';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { useNavigate } from '@tanstack/react-router';
-import { formatCredits, formatUsd, numberCell } from '../utils/format';
+import { formatCredits, formatUsd, modelKey, modelLabel, numberCell } from '../utils/format';
 import { useSessionUsage } from '../hooks/useSessionUsage';
 
 const num = (n: number) => n.toLocaleString();
@@ -108,8 +108,8 @@ export const SessionUsageDetailModal: React.FC<{
               keyLabel="Model"
               testid="session-usage-model-table"
               rows={(usage?.byModel ?? []).map(m => ({
-                key: `${m.provider}-${m.model}`,
-                label: `${m.provider} / ${m.model}`,
+                key: modelKey(m),
+                label: modelLabel(m),
                 requests: m.requests,
                 inputTokens: m.inputTokens,
                 outputTokens: m.outputTokens,

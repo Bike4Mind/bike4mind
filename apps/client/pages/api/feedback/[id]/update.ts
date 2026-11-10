@@ -6,6 +6,7 @@ import { FeedbackEvents, truncateFeedbackContent } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { originateFeedbackText, reviseFeedbackText } from '@server/utils/feedbackText';
 import { hydrateFeedbackText, toRedactedFeedback } from '@server/utils/redactedFeedback';
+import { recordFeedbackRead } from '@server/utils/feedbackReadAudit';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { z } from 'zod';
 
@@ -148,6 +149,10 @@ const handler = baseApi().put(
       { userId, type: FeedbackEvents.UPDATE_FEEDBACK, metadata: { id, status, username } },
       { ability: req.ability }
     );
+
+    // The response carries the report's text, so an admin updating someone else's report has read it:
+    // audited before the text is loaded, the same as GET /api/feedback/[id]/read.
+    await recordFeedbackRead(req, [{ id, userId: updatedFeedback.userId }]);
 
     const [hydrated] = await hydrateFeedbackText([toRedactedFeedback(updatedFeedback)]);
     return res.json({ ...hydrated, contentApplied });

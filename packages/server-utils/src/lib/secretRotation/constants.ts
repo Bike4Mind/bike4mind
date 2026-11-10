@@ -6,6 +6,7 @@ import {
 } from '@bike4mind/infra';
 import { contributedInfraResources } from '../../premium-generated/infraResources.generated';
 import { ensureContributedSecretsLoaded, isContributedSecret } from '../../utils/contributedSecrets';
+import { Logger } from '@bike4mind/observability';
 
 export interface SecretRotationEntry {
   description: string;
@@ -285,7 +286,7 @@ export function registerContributedSecretRotations(
   }
   result.registered = accepted;
   for (const { secret, ...entry } of accepted) contributedRotations.set(secret, entry);
-  for (const line of describeDroppedContributions('secret rotation', result)) console.warn(`[secretRotation] ${line}`);
+  for (const line of describeDroppedContributions('secret rotation', result)) Logger.warn(`[secretRotation] ${line}`);
   return result;
 }
 

@@ -1,9 +1,10 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
+import { Input } from '@mui/joy';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { AdminCommandPalette } from './AdminCommandPalette';
-import { FilterBar } from './FilterBar';
+import { FilterBar, FilterInputLabel, FilterToolbar } from './FilterBar';
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
 const theme = extendTheme({ ...getThemeConfig() });
@@ -24,5 +25,21 @@ describe('FilterBar keyboard search', () => {
     expect(input).toHaveFocus();
     fireEvent.change(input, { target: { value: 'example' } });
     expect(onChange).toHaveBeenCalledExactlyOnceWith({ query: 'example', view: '' });
+  });
+});
+
+describe('FilterToolbar', () => {
+  it('holds hand-built inputs on one wrapping row at the toolbar height, with muted inline labels', () => {
+    render(
+      <CssVarsProvider theme={theme}>
+        <FilterToolbar data-testid="dates-toolbar">
+          <Input type="date" size="sm" startDecorator={<FilterInputLabel>From</FilterInputLabel>} />
+        </FilterToolbar>
+      </CssVarsProvider>
+    );
+    const toolbar = screen.getByTestId('dates-toolbar');
+    expect(toolbar).toHaveStyle({ flexDirection: 'row', flexWrap: 'wrap' });
+    expect(toolbar.querySelector('.MuiInput-root')).toHaveStyle({ minHeight: '32px' });
+    expect(within(toolbar).getByText('From')).toHaveStyle({ color: 'var(--joy-palette-admin-inkMuted)' });
   });
 });

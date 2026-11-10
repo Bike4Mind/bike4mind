@@ -295,6 +295,31 @@ describe('PlatformUsageDashboard credit sections', () => {
     expect(within(screen.getByTestId('platform-usage-model-table')).getByText('openai / gpt-x')).toBeInTheDocument();
   });
 
+  it('suffixes what ran on a substituted model row only', () => {
+    const today = new Date().toISOString().slice(0, 10);
+    setData({
+      totals: { requests: 2, cogsUsd: 1, creditsCharged: 2 },
+      overTime: [{ day: today, requests: 2, cogsUsd: 1, creditsCharged: 2 }],
+      byModel: [
+        { provider: 'openai', model: 'gpt-x', requests: 1, cogsUsd: 0.5, creditsCharged: 1 },
+        {
+          provider: 'openai',
+          model: 'gpt-x',
+          executedProvider: 'bedrock',
+          executedModel: 'claude-haiku',
+          requests: 1,
+          cogsUsd: 0.5,
+          creditsCharged: 1,
+        },
+      ],
+    });
+    renderDashboard();
+
+    const table = within(screen.getByTestId('platform-usage-model-table'));
+    expect(table.getByText('openai / gpt-x')).toBeInTheDocument();
+    expect(table.getByText('openai / gpt-x (ran: bedrock / claude-haiku)')).toBeInTheDocument();
+  });
+
   it('replaces the chart with an empty message when there are no requests', () => {
     setData();
     renderDashboard();

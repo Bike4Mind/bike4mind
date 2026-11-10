@@ -827,9 +827,10 @@ export class ModelServerRegistry {
   }
 
   /** Rows listed before a server's tool support changed, or a model first thought, carry the old values. */
-  private toolsChanged(id: string): void {
+  private toolsChanged(id: string, client: ServerClient): void {
     const entry = this.entries.get(id);
-    if (entry) entry.kept = undefined;
+    if (entry?.client !== client) return;
+    entry.kept = undefined;
     this.deps.edited?.();
     this.emit();
   }
@@ -1398,7 +1399,9 @@ export class ModelServerRegistry {
             hasCredentials,
             redact: redactServerResponse,
             loadSettings: this.deps.loadSettings,
-            toolsChanged: () => this.toolsChanged(record.id),
+            toolsChanged: () => this.toolsChanged(record.id, client),
+            isCurrent: () => this.entries.get(record.id)?.client === client,
+            warn: message => this.deps.logger.warn(`MODEL SERVERS: ${message}`),
             learnedThinkers: {
               read: () => this.deps.store.thinkers(record.id),
               add: (model, identity) => this.deps.store.addThinker(record.id, model, identity),

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 import {
   parseEscalationMinutes,
   resolveBlockDurationMs,
@@ -193,7 +194,7 @@ describe('runOauthAbuseAutoBlock', () => {
   it('keeps going when one IP fails to block', async () => {
     const { deps, block } = setup();
     block.mockRejectedValueOnce(new Error('boom'));
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(Logger, 'warn').mockImplementation(() => {});
     const result = await runOauthAbuseAutoBlock({ now: NOW, deps });
     expect(result.blocked.map(b => b.ip)).toEqual(['2.2.2.2']);
     expect(result.failed).toEqual(['1.1.1.1']);

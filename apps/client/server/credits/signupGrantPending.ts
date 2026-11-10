@@ -14,11 +14,11 @@ type RewardTotals = Record<'held' | 'paused', { count: number; credits: number }
 
 export type SignupGrantPendingInput = {
   user: userService.ClassifiableUser &
-    Partial<Pick<IUserDocument, 'grantPackageId' | 'pendingCreditGrant' | 'signupGrantHeldAt'>>;
+    Partial<Pick<IUserDocument, 'grantPackageId' | 'pendingCreditGrant' | 'signupGrantHeldAt' | 'signupInvite'>>;
   schedule: { dripCap: number; dailyCredits: number };
   rewards: RewardTotals;
-  /** Release-remaining is the one budget-exempt payout, so it stays with full admins. */
-  viewerIsAdmin: boolean;
+  /** Release-remaining is the one budget-exempt payout, so it needs `credits:adjust`, not just the read. */
+  viewerCanRelease: boolean;
 };
 
 const iso = (value: Date | string | null | undefined): string | null => {
@@ -33,6 +33,21 @@ const actionState = (verdict: userService.SignupGrantActionClass, permitted: boo
     : { available: false, reason: verdict.reason, permitted };
 
 /**
+ * States isInviteBonusEligible (b4m-core/services/src/userService/inviteBonus.ts) refuses for good: no later
+ * release can pay the bonus, so the panel reports it settled with none rather than pending.
+ */
+const inviteBonusUnpayable = (
+  { signupGrant: grant, signupGrantAssessment: assessment, signupInvite: invite }: SignupGrantPendingInput['user'],
+  dripCap: number
+) => {
+  if (!grant || grant.unlockForfeited) return true;
+  if (!assessment) return grant.stage !== 'pending_email';
+  if (assessment.credits !== grant.signupCredits) return true;
+  // A referral bonus is retried only by a later paying release; orgInviteBonus.ts retries an organization one.
+  return invite?.source !== 'organization' && !signupGrantDripOpen(grant) && signupGrantRemaining(grant, dripCap) === 0;
+};
+
+/**
  * Everything the profile pending panel shows, read from the account and the live schedule only. Each action's
  * state comes from the same classifier the mutators and the bulk dry-run gate on, so the panel never offers
  * what the real run would refuse.
@@ -41,7 +56,7 @@ export function buildSignupGrantPending({
   user,
   schedule,
   rewards,
-  viewerIsAdmin,
+  viewerCanRelease,
 }: SignupGrantPendingInput): AdminSignupGrantPending {
   const grant = user.signupGrant ?? null;
   const classify = (action: userService.SignupGrantAdminAction) =>
@@ -85,9 +100,15 @@ export function buildSignupGrantPending({
       pausedCredits: rewards.paused.credits,
     },
     lastActivityCreditDay: grant?.lastDripDay ?? null,
+    invite: user.signupInvite
+      ? {
+          source: user.signupInvite.source,
+          bonusPaid: grant?.inviteBonusPaid ?? (inviteBonusUnpayable(user, schedule.dripCap) ? 0 : null),
+        }
+      : null,
     actions: {
       releaseHeld: actionState(classify('release_held'), true),
-      releaseRemaining: actionState(classify('release_remaining'), viewerIsAdmin),
+      releaseRemaining: actionState(classify('release_remaining'), viewerCanRelease),
       block: actionState(classify('block'), true),
       unblock: actionState(classify('unblock'), true),
     },

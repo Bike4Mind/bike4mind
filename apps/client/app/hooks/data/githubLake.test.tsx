@@ -140,6 +140,30 @@ describe('useLakeGitHubConnection', () => {
     expect(invalidatedKeys).toContainEqual(dataLakeKeys.tagCountsRoot);
   });
 
+  // The bind renames a placeholder lake server-side and the picker reads the name from the lake list,
+  // which caches for minutes; a mid-sync count change must not refetch it on every poll.
+  it('refreshes the lake list once the sync finishes, and not while it is still syncing', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    const invalidatedKeys = () => invalidateSpy.mock.calls.map(([arg]) => (arg as { queryKey: unknown[] }).queryKey);
+    get.mockResolvedValueOnce({ data: { connection: { id: 'c1', status: 'syncing', fileCount: 0 } } });
+    const { result } = renderHook(() => useLakeGitHubConnection('lake1'), { wrapper: wrapperFor(queryClient) });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    get.mockResolvedValueOnce({ data: { connection: { id: 'c1', status: 'syncing', fileCount: 62 } } });
+    await act(async () => {
+      await result.current.refetch();
+    });
+    expect(invalidatedKeys()).toContainEqual(dataLakeKeys.tagCountsRoot);
+    expect(invalidatedKeys()).not.toContainEqual(dataLakeKeys.list);
+
+    get.mockResolvedValueOnce({ data: { connection: { id: 'c1', status: 'connected', fileCount: 204 } } });
+    await act(async () => {
+      await result.current.refetch();
+    });
+    expect(invalidatedKeys().filter(key => key.join('/') === dataLakeKeys.list.join('/'))).toHaveLength(1);
+  });
+
   it('leaves the lake file queries alone on an idle poll that changed nothing', async () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
@@ -343,7 +367,7 @@ describe('useLakeGitHubRepositoryChoices', () => {
 describe('useCompleteLakeGitHubConnect', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('posts the pick, returns the bound connection, invalidates the connection, and drops the stale picker list', async () => {
+  it('posts the pick, returns the bound connection, invalidates the connection and lake list, and drops the stale picker list', async () => {
     const connection = { id: 'c1', repositoryFullName: 'acme/docs' };
     post.mockResolvedValue({ data: { connection } });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -364,6 +388,8 @@ describe('useCompleteLakeGitHubConnect', () => {
 
     const invalidatedKeys = invalidateSpy.mock.calls.map(([arg]) => (arg as { queryKey: unknown[] }).queryKey);
     expect(invalidatedKeys).toContainEqual(dataLakeKeys.gitHubConnection('lake1'));
+    // The bind renames a placeholder-named lake, so every cached lake list is stale.
+    expect(invalidatedKeys).toContainEqual(dataLakeKeys.list);
     const removedKeys = removeSpy.mock.calls.map(([arg]) => (arg as { queryKey: unknown[] }).queryKey);
     expect(removedKeys).toContainEqual(dataLakeKeys.gitHubRepositoryChoices('lake1'));
     expect(queryClient.getQueryData(dataLakeKeys.gitHubConnection('lake1'))).toEqual({ connection, canManage: true });

@@ -21,7 +21,7 @@ import { completionSequenceEvidenceSchema } from './completionSequence';
  */
 
 /** Bump when the question, its choices or the summary's meaning changes; cached results key on it. */
-export const ABUSE_ASSESSMENT_POLICY_VERSION = 5;
+export const ABUSE_ASSESSMENT_POLICY_VERSION = 6;
 
 /** What the model may answer. */
 export const ABUSE_ASSESSMENT_JUDGMENTS = ['abuse', 'legitimate_automation', 'insufficient_evidence'] as const;

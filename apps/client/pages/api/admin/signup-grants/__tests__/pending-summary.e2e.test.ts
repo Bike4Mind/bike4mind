@@ -81,8 +81,8 @@ const seed = [
 ];
 const unpaid = new Set([String(oid(6)), String(oid(7))]);
 
-const call = async (warn = vi.fn()) => {
-  const { req, res } = createMocks({ method: 'GET' });
+const call = async (warn = vi.fn(), query: Record<string, string> = {}) => {
+  const { req, res } = createMocks({ method: 'GET', query });
   Object.assign(req, { user: { id: 'admin-1', isAdmin: true }, logger: { warn, error: vi.fn() } });
   await handler(req as never, res as never);
   return res._getJSONData();
@@ -107,6 +107,9 @@ describe('GET /api/admin/signup-grants/pending-summary', () => {
     const summary = await call();
     expect(summary.exposure).toEqual({ accountsWithRemaining: 0, totalRemaining: 0, totalDripRemaining: 0 });
     expect(summary.queue).toEqual({ held: 0, oldestHeldAt: null });
+    expect(summary.activity).toEqual({ days: 7, accounts: 0, remaining: 0 });
+    expect(summary.drip).toEqual({ day: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/), committed: 0, accounts: 0 });
+    expect(summary.drip.day).toBe(summary.trickle.day);
     expect(summary.trickle).toMatchObject({ spentToday: 0, limit: 0, missing: true });
   });
 
@@ -129,13 +132,24 @@ describe('GET /api/admin/signup-grants/pending-summary', () => {
     expect(summary.queue).toEqual({ held: 3, oldestHeldAt: at.toISOString() });
   });
 
+  it('takes the activity window from activeDays and refuses one outside 1 to 90', async () => {
+    expect((await call(vi.fn(), { activeDays: '30' })).activity.days).toBe(30);
+    for (const activeDays of ['0', '91', '2.5', 'week']) {
+      const { req, res } = createMocks({ method: 'GET', query: { activeDays } });
+      Object.assign(req, { user: { id: 'admin-1', isAdmin: true }, logger: { warn: vi.fn(), error: vi.fn() } });
+      await expect(handler(req as never, res as never), activeDays).rejects.toMatchObject({
+        name: 'BadRequestError',
+      });
+    }
+  });
+
   it.each([
-    { read: 'schedule', tile: 'exposure' },
-    { read: 'exposure', tile: 'exposure' },
-    { read: 'budget', tile: 'trickle' },
-    { read: 'spend', tile: 'trickle' },
-    { read: 'queue', tile: 'queue' },
-  ] as const)('nulls only $tile and logs when the $read read fails', async ({ read, tile }) => {
+    { read: 'schedule', tile: 'exposure', nulled: ['exposure', 'activity', 'drip'] },
+    { read: 'exposure', tile: 'exposure', nulled: ['exposure', 'activity', 'drip'] },
+    { read: 'budget', tile: 'trickle', nulled: ['trickle'] },
+    { read: 'spend', tile: 'trickle', nulled: ['trickle'] },
+    { read: 'queue', tile: 'queue', nulled: ['queue'] },
+  ] as const)('nulls only $nulled and logs when the $read read fails', async ({ read, tile, nulled }) => {
     const baseline = await call();
     const error = new Error(`${read} read failed`);
     switch (read) {
@@ -156,7 +170,7 @@ describe('GET /api/admin/signup-grants/pending-summary', () => {
         break;
     }
     const warn = vi.fn();
-    expect(await call(warn)).toEqual({ ...baseline, [tile]: null });
+    expect(await call(warn)).toEqual({ ...baseline, ...Object.fromEntries(nulled.map(part => [part, null])) });
     expect(warn).toHaveBeenCalledExactlyOnceWith(`Pending summary: ${tile} read failed`, { error });
   });
 });

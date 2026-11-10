@@ -1686,6 +1686,41 @@ describe('ModelServerRegistry', () => {
     const chat = servers.chatFor(`srv-${saved.id}`)!;
     expect(await chat.contextTokens(`local:srv-${saved.id}:m`)).toBe(8192);
   });
+
+  it('ignores a template that /props names after its server was removed', async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>(resolve => (release = resolve));
+    let asked = 0;
+    const fetchFor = (): FetchLike => async input => {
+      const url = new URL(String(input));
+      if (url.pathname === '/v1/models') return json({ data: [{ id: 'm', owned_by: 'llamacpp' }] });
+      if (url.pathname === '/props' && url.searchParams.has('autoload')) {
+        asked++;
+        await gate;
+        return json({ chat_template: '<|channel|> reasoning_effort', model_path: '/m.gguf' });
+      }
+      if (url.pathname === '/props') return json({ build_info: 'b1', default_generation_settings: { n_ctx: 8192 } });
+      return json({ error: 'not found' }, 404);
+    };
+    const { registry: servers, changed, edited } = registry({ fetchFor } as unknown as ReturnType<typeof fakeOllama>);
+    await servers.add({
+      address: 'http://192.168.1.20:8080',
+      credential: none,
+      name: 'llama',
+      kind: 'openai-compatible',
+      access: 'chat',
+    });
+    const [saved] = (await servers.views()).slice(1);
+    await servers.models();
+    await vi.waitFor(() => expect(asked).toBe(1));
+    await servers.remove(saved.id);
+    edited.mockClear();
+    changed.mockClear();
+    release();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(edited).not.toHaveBeenCalled();
+    expect(changed).not.toHaveBeenCalled();
+  });
 });
 
 /** An OpenAI-compatible server listing `models` models owned by `owner`, wanting `token` when one is set. */

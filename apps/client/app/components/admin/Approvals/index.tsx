@@ -5,6 +5,7 @@ import type { AdminApprovalAction, AdminApprovalStatus } from '@bike4mind/common
 import { ActionDialog } from '@client/app/components/admin/shared/ActionDialog';
 import { AdminDialog } from '@client/app/components/admin/shared/AdminDialog';
 import { AdminPageHeader } from '@client/app/components/admin/shared/AdminPageHeader';
+import { ADMIN_REGION_GAP } from '@client/app/components/admin/shared/adminStyles';
 import { DataTable, type DataColumn } from '@client/app/components/admin/shared/DataTable';
 import { EmptyState } from '@client/app/components/admin/shared/EmptyState';
 import { StatusChip } from '@client/app/components/admin/shared/StatusChip';
@@ -311,7 +312,7 @@ const Approvals: React.FC = () => {
   };
 
   return (
-    <Box data-testid="admin-approvals-queue">
+    <Stack spacing={ADMIN_REGION_GAP} data-testid="admin-approvals-queue">
       <AdminPageHeader
         title="Approvals"
         count={approvals.data?.length}
@@ -368,6 +369,7 @@ const Approvals: React.FC = () => {
           color="neutral"
           onClick={() => void approvals.fetchNextPage()}
           loading={approvals.isFetchingNextPage}
+          sx={{ alignSelf: 'flex-start' }}
           data-testid="admin-approvals-load-more-btn"
         >
           Load more requests
@@ -396,7 +398,7 @@ const Approvals: React.FC = () => {
       )}
       {inspecting && <ParamsDialog row={inspecting} onClose={() => setInspecting(null)} />}
       {impersonating && <StartImpersonationDialog row={impersonating} onClose={() => setImpersonating(null)} />}
-    </Box>
+    </Stack>
   );
 };
 

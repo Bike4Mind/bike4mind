@@ -7,7 +7,7 @@ import {
   GetQueueAttributesCommand,
 } from '@aws-sdk/client-sqs';
 import { connectDB, mongoose } from '@bike4mind/database';
-import { Logger } from '@bike4mind/observability';
+import { installConsoleRedaction, Logger } from '@bike4mind/observability';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { handler } from '@workers/queueHandlers/agentExecutor';
 import { createExecutorApp, runQueueMessage, VISIBILITY_SECONDS, EXECUTION_BUDGET_MS } from './server';
@@ -22,6 +22,7 @@ const sqs = new SQSClient({});
 // becomes a logged failure through the .catch() below instead of an uncaught exception
 // at import time (tsx runs this file directly, with no wrapper to catch a module-scope throw).
 async function main() {
+  installConsoleRedaction();
   const queueUrl = process.env.AGENT_CONTINUATION_QUEUE?.trim();
   const secret = process.env.AGENT_EXECUTOR_INTERNAL_SECRET?.trim();
   if (!queueUrl || !secret) throw new Error('AGENT_CONTINUATION_QUEUE and AGENT_EXECUTOR_INTERNAL_SECRET are required');
