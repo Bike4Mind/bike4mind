@@ -15,8 +15,21 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => mocks.navigate }));
 vi.mock('@client/app/hooks/data/aiAdvisory', () => ({ useAiAdvisory: () => ({ data: mocks.data }) }));
 vi.mock('../CampaignWatches/WatchAccountsButton', () => ({
-  WatchAccountsButton: ({ incomplete }: { incomplete?: boolean }) => (
-    <span data-testid="watch-accounts-stub" data-incomplete={String(incomplete)} />
+  WatchAccountsButton: ({
+    label,
+    userIds,
+    incomplete,
+  }: {
+    label?: string;
+    userIds: string[];
+    incomplete?: boolean;
+  }) => (
+    <span
+      data-testid="watch-accounts-stub"
+      data-label={label ?? ''}
+      data-user-ids={userIds.join(',')}
+      data-incomplete={String(incomplete)}
+    />
   ),
 }));
 vi.mock('../BlockedIPs/IpBlockDialogs', () => ({
@@ -134,6 +147,36 @@ describe('AiAdvisoryStrip', () => {
     );
     expect(screen.getByTestId('admin-dashboard-ai-advisory-summary')).toHaveTextContent('1 account likely abuse');
   });
+  it.each([
+    ['complete', false, false],
+    ['complete', true, true],
+    ['truncated', false, true],
+  ] as const)(
+    'watches flagged and linked accounts together (scan %s, advisory truncated=%s, incomplete=%s)',
+    (linkedAccountsStatus, truncated, incomplete) => {
+      const flaggedId = '1'.repeat(24);
+      const linkedId = '2'.repeat(24);
+      mocks.data = summary({
+        advisories: [advisory(flaggedId, 'accountCampaign')],
+        linkedAccounts: [
+          {
+            userId: linkedId,
+            name: 'Example candidate',
+            links: [{ sourceUserId: flaggedId, ip: '198.51.100.10', sourceKind: 'signup', candidateKind: 'login' }],
+          },
+        ],
+        linkedAccountsStatus,
+        truncated,
+      });
+      render(<AiAdvisoryStrip />, { wrapper: Wrapper });
+      const combined = screen
+        .getAllByTestId('watch-accounts-stub')
+        .find(stub => stub.getAttribute('data-label') === 'Watch flagged and linked accounts');
+      expect(combined).toHaveAttribute('data-user-ids', `${flaggedId},${linkedId}`);
+      expect(combined).toHaveAttribute('data-incomplete', String(incomplete));
+    }
+  );
+
   it('shows only the failed alert when the linked-account check failed', () => {
     mocks.data = summary({ advisories: [advisory('1'.repeat(24), 'accountCampaign')], linkedAccountsStatus: 'failed' });
     render(<AiAdvisoryStrip />, { wrapper: Wrapper });

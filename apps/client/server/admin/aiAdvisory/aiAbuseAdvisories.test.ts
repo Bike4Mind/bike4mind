@@ -199,14 +199,13 @@ describe('listAiAbuseAdvisories', () => {
     expect(h.findLinked).toHaveBeenCalledWith([userId(1)], NOW);
   });
 
-  it('applies a campaign verdict to transitive members, who also count toward block suggestions', async () => {
+  it('applies a campaign verdict to transitive members, who also count toward mail-domain suggestions', async () => {
     const members = [userId(1), userId(2), userId(3)];
     h.listUnreviewedSince.mockResolvedValue([
       detection({
         id: detectionId(1),
         detector: 'accountCampaign',
         userIds: members,
-        network: network('198.51.100.10'),
         group: {
           members: [
             { userId: userId(1), membership: 'direct' },
@@ -220,7 +219,8 @@ describe('listAiAbuseAdvisories', () => {
     h.aggregate.mockResolvedValue([judgment(detectionId(1), 'abuse', 0.9)]);
     const result = await listAiAbuseAdvisories(NOW, { includeLinkedAccounts: true });
     expect(result.advisories.map(row => [row.userId, row.abuseProbability])).toEqual(members.map(id => [id, 0.9]));
-    expect(result.networks.map(entry => [entry.ip, entry.accountCount])).toEqual([['198.51.100.10', 3]]);
+    // Campaign detections are stored without a network, so they never suggest an IP block.
+    expect(result.networks).toEqual([]);
     expect(result.mailDomains).toEqual([{ domain: 'example.org', accountCount: 3 }]);
     expect(h.findLinked).toHaveBeenCalledWith(members, NOW);
   });
