@@ -48,10 +48,11 @@ const handler = adminApi({
 
   const messages = await receiveFromQueue(dlqUrl, maxMessages, 0);
 
+  // receiptHandle is omitted: with VisibilityTimeout 0 the handle expires immediately,
+  // so the frontend uses the messageIds replay path which receives with its own timeout.
   const formatted = messages.map(msg => ({
     messageId: msg.MessageId,
     body: msg.Body,
-    receiptHandle: msg.ReceiptHandle,
     sentTimestamp: msg.Attributes?.SentTimestamp,
     approximateReceiveCount: msg.Attributes?.ApproximateReceiveCount,
     approximateFirstReceiveTimestamp: msg.Attributes?.ApproximateFirstReceiveTimestamp,
