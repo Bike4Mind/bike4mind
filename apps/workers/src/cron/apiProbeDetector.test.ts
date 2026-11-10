@@ -119,6 +119,16 @@ describe('apiProbeDetector handler', () => {
     expect(mocks.recordDetection).not.toHaveBeenCalled();
   });
 
+  it('re-pages a known account seen from a new IP without recording it again', async () => {
+    await handler(event);
+    mocks.runQuery.mockResolvedValue(probingRows('198.51.100.7'));
+    const second = await handler({ time: '2026-10-30T12:05:00Z' });
+
+    expect(second).toMatchObject({ alerted: 1, recorded: 0 });
+    expect(mocks.post).toHaveBeenCalledTimes(2);
+    expect(mocks.recordDetection).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps the alert when the detection write fails', async () => {
     mocks.recordDetection.mockRejectedValue(new Error('db down'));
 

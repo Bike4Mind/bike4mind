@@ -35,16 +35,22 @@ export function buildApiProbeShadowDetection(input: {
   actor: ProbeActor;
   threshold: number;
   window: { start: Date; end: Date };
+  /** Accounts this run newly claimed; others already have a detection inside the dedupe window. */
+  newUserIds: ReadonlySet<string>;
 }): RecordShadowDetectionInput | null {
-  const { actor, threshold, window } = input;
-  const userIds = actor.userIds.filter(userId => (actor.userScores[userId] ?? 0) >= threshold);
+  const { actor, threshold, window, newUserIds } = input;
+  const userIds = actor.userIds.filter(
+    userId => newUserIds.has(userId) && (actor.userScores[userId] ?? 0) >= threshold
+  );
   if (userIds.length === 0) return null;
   const windowMinutes = Math.round((window.end.getTime() - window.start.getTime()) / 60_000);
   const signals = (Object.keys(PROBE_SIGNAL_LABELS) as ProbeSignal[])
     .filter(signal => actor.counts[signal] > 0)
     .map(signal => ({
       key: signal,
-      label: `${PROBE_SIGNAL_LABELS[signal]} (weight ${SIGNAL_WEIGHTS[signal]})`,
+      label:
+        `${PROBE_SIGNAL_LABELS[signal]} (weight ${SIGNAL_WEIGHTS[signal]}` +
+        (SIGNAL_GATES[signal] ? '; actor total, the threshold gates each IP/account pair)' : ')'),
       observed: actor.counts[signal],
       threshold: SIGNAL_GATES[signal] ?? null,
     }));

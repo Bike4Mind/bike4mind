@@ -28,9 +28,12 @@ const actor = (overrides: Partial<ProbeActor> = {}): ProbeActor => ({
 
 const window = { start: new Date('2026-10-30T11:45:00Z'), end: new Date('2026-10-30T12:00:00Z') };
 
+const build = (input: Omit<Parameters<typeof buildApiProbeShadowDetection>[0], 'newUserIds'>, newUserIds?: string[]) =>
+  buildApiProbeShadowDetection({ ...input, newUserIds: new Set(newUserIds ?? input.actor.userIds) });
+
 describe('buildApiProbeShadowDetection', () => {
   it('would contain the signed-in accounts and records the observed signals', () => {
-    const detection = buildApiProbeShadowDetection({ actor: actor(), threshold: 25, window });
+    const detection = build({ actor: actor(), threshold: 25, window });
 
     if (!detection) throw new Error('expected a detection');
     expect(detection).toMatchObject({
@@ -52,11 +55,13 @@ describe('buildApiProbeShadowDetection', () => {
     ]);
     expect(detection.signals.find(signal => signal.key === 'score')).toMatchObject({ observed: 46, threshold: 25 });
     expect(detection.signals.find(signal => signal.key === 'adminDenied')).toMatchObject({ observed: 6, threshold: 5 });
+    expect(detection.signals.find(signal => signal.key === 'adminDenied')?.label).toContain('actor total');
+    expect(detection.signals.find(signal => signal.key === 'refusedFetch')?.label).not.toContain('actor total');
     for (const signal of detection.signals) expect(shadowDetectionSignalSchema.parse(signal)).toEqual(signal);
   });
 
   it('leaves out a linked account that did not score the threshold on its own', () => {
-    const detection = buildApiProbeShadowDetection({
+    const detection = build({
       actor: actor({ userIds: ['user-a', 'user-cotenant'], userScores: { 'user-a': 44, 'user-cotenant': 2 } }),
       threshold: 25,
       window,
@@ -65,12 +70,17 @@ describe('buildApiProbeShadowDetection', () => {
     expect(detection?.summary).toContain('1 of 2 linked account(s)');
   });
 
+  it('leaves out an account that already has a detection inside the dedupe window', () => {
+    const scores = { 'user-a': 40, 'user-b': 40 };
+    const linked = actor({ userIds: ['user-a', 'user-b'], userScores: scores });
+    expect(build({ actor: linked, threshold: 25, window }, ['user-b'])?.userIds).toEqual(['user-b']);
+    expect(build({ actor: linked, threshold: 25, window }, [])).toBeNull();
+  });
+
   it('records nothing when no account scored the threshold on its own', () => {
+    expect(build({ actor: actor({ userIds: [], userScores: {} }), threshold: 25, window })).toBeNull();
     expect(
-      buildApiProbeShadowDetection({ actor: actor({ userIds: [], userScores: {} }), threshold: 25, window })
-    ).toBeNull();
-    expect(
-      buildApiProbeShadowDetection({
+      build({
         actor: actor({ userIds: ['user-a', 'user-b'], userScores: { 'user-a': 20, 'user-b': 20 } }),
         threshold: 25,
         window,
@@ -79,7 +89,7 @@ describe('buildApiProbeShadowDetection', () => {
   });
 
   it('leaves the network empty when the actor used several IPs', () => {
-    const detection = buildApiProbeShadowDetection({
+    const detection = build({
       actor: actor({ ips: ['203.0.113.10', '198.51.100.7'] }),
       threshold: 25,
       window,

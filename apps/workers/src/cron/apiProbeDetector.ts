@@ -80,13 +80,11 @@ export async function loadProbeDetectorPolicy(): Promise<ProbeDetectorPolicy> {
 }
 
 const hashIp = (ip: string) => createHash('sha256').update(ip).digest('hex').slice(0, 32);
+const userDedupeKey = (userId: string) => `${DEDUPE_KEY_PREFIX}:user:${userId}`;
 
 /** One key per identifier, so an actor is recognised again from either its IP or its account. IPs are hashed so the Cache row holds no raw address. */
 export function probeDedupeKeys(actor: Pick<ProbeActor, 'ips' | 'userIds'>): string[] {
-  return [
-    ...actor.ips.map(ip => `${DEDUPE_KEY_PREFIX}:ip:${hashIp(ip)}`),
-    ...actor.userIds.map(userId => `${DEDUPE_KEY_PREFIX}:user:${userId}`),
-  ];
+  return [...actor.ips.map(ip => `${DEDUPE_KEY_PREFIX}:ip:${hashIp(ip)}`), ...actor.userIds.map(userDedupeKey)];
 }
 
 /**
@@ -196,8 +194,8 @@ export type ProbeDetectorResult =
     };
 
 /**
- * Writes the actor's shadow detection once its alert is out (the alert's claims already keep a
- * retried run from reaching here twice for the same actor), when it names an account to contain.
+ * Writes the actor's shadow detection once its alert is out, for the accounts whose own claim is new:
+ * an account already claimed in the dedupe window (re-alerted from a new IP) is not recorded again.
  * Never throws: a failed write is logged and the alert stands on its own.
  */
 async function recordProbeShadowDetection(
@@ -285,7 +283,10 @@ export async function handler(event: unknown): Promise<ProbeDetectorResult> {
       continue;
     }
     alerted++;
-    if (await recordProbeShadowDetection({ actor, threshold: policy.threshold, window }, logger)) recorded++;
+    const newUserIds = new Set(actor.userIds.filter(userId => claimed.includes(userDedupeKey(userId))));
+    if (await recordProbeShadowDetection({ actor, threshold: policy.threshold, window, newUserIds }, logger)) {
+      recorded++;
+    }
   }
   if (deferred > 0) logger.error('api-probe-alerts-deferred', { deferred });
 
