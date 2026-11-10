@@ -1561,6 +1561,44 @@ function generateAdminSettings(packages) {
   );
 }
 
+// --- Generate tutorial owner contributions ---
+//
+// A premium package that owns tutorials contributes b4mContributions.tutorialOwnersExport -> a module exporting
+// `tutorialOwners: TutorialOwner[]` ({ owner, label, adminBase, adminHref }). It carries no tutorial content: core
+// serves the list to full admins only. The entries are data inside the overlay module, so the generated file
+// validates them with assertTutorialOwners when it loads.
+function generateTutorialOwners(packages) {
+  const outPath = join(SERVER_UTILS_GENERATED_DIR, 'premiumTutorialOwners.generated.ts');
+
+  const contributors = packages.filter(p => p.contributions.tutorialOwnersExport);
+
+  if (contributors.length === 0) {
+    writeFile(
+      outPath,
+      `${GENERATED_BANNER}\nimport type { TutorialOwner } from '@bike4mind/common';\n\nexport const premiumTutorialOwners: TutorialOwner[] = [];\n`
+    );
+    return;
+  }
+
+  contributors.forEach(p =>
+    assertModuleSpecifier(p.contributions.tutorialOwnersExport, p.name, 'tutorialOwnersExport')
+  );
+
+  const imports = contributors
+    .map((p, i) => {
+      const spec = relativeOverlayImport(p, p.contributions.tutorialOwnersExport, 'tutorialOwnersExport', outPath);
+      return `import { tutorialOwners as owners${i} } from '${spec}';`;
+    })
+    .join('\n');
+
+  const items = contributors.map((_, i) => `  ...owners${i}`).join(',\n');
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\nimport { assertTutorialOwners, type TutorialOwner } from '@bike4mind/common';\n${imports}\n\nexport const premiumTutorialOwners: TutorialOwner[] = assertTutorialOwners([\n${items}\n]);\n`
+  );
+}
+
 const RESERVED_OBJECT_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
 // Session fields a workspace owns, resolved at read time. Each id must name an open
@@ -2108,6 +2146,7 @@ generateLlmTools(linkedPackages);
 generateSystemPrompts(linkedPackages);
 generateAgentExtensions(linkedPackages);
 generateAdminSettings(linkedPackages);
+generateTutorialOwners(linkedPackages);
 generateWorkspaceSessionSettings(linkedPackages);
 // Relative-import glue read only at build or deploy time: needs no node_modules link, so it gets
 // the full list. Any NEW generator goes in whichever group matches how it imports the overlay.
