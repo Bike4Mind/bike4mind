@@ -286,6 +286,14 @@ describe('sessionScriptRun', () => {
     'PATH=$PATH: git help clean',
     'PATH=$(pwd)/bin:$PATH git help clean',
     'PATH="$PWD"/bin:$PATH git help clean',
+    'export GIT_DIR=./evil; find . -maxdepth 0 -exec git status \\;',
+    'export GIT_DIR=./evil; find . -maxdepth 0 -execdir env git status \\;',
+    'env -C sub GIT_DIR=../evil git status',
+    'set -a; read -r GIT_DIR <<< ./evil; git status',
+    'set -a; read -r GIT_COMMON_DIR <<< ./evil; git status',
+    'set -a; read -r XDG_CONFIG_HOME <<< ./xdg; git status',
+    'set -a; read -r PATH <<< ./bin; git help clean',
+    'export PATH="$(pnpm bin):$PATH"; git status',
   ])('flags %s, where git reads config or runs a program from a file this session wrote', async command => {
     const id = 'session-scripts-git-reads';
     for (const file of ['evil/config', 'xdg/git/config', 'x.sh', 'bin/man']) {
@@ -312,6 +320,21 @@ describe('sessionScriptRun', () => {
       await recordSessionWrite({ sessionId: id } as ToolContext, join(root, file));
     }
     expect(await runs(command, id)).toBeNull();
+  });
+
+  it('reads a PATH entry bash fills in as a folder of programs only once the session wrote a program', async () => {
+    const id = 'session-scripts-path-programs';
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'src', 'a.ts'));
+    expect(await runs('export PATH="$(pnpm bin):$PATH"; git status', id)).toBeNull();
+    expect(await runs('set -a; read -r PATH <<< ./x; git status', id)).toBeNull();
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'tools', 'git'));
+    expect(await runs('export PATH="$(pnpm bin):$PATH"; git status', id)).not.toBeNull();
+    const binId = 'session-scripts-path-bin';
+    await recordSessionWrite({ sessionId: binId } as ToolContext, join(root, 'node_modules', '.bin', 'x'));
+    expect(await runs('export PATH="$(pnpm bin):$PATH"; git status', binId)).not.toBeNull();
+    const treeId = 'session-scripts-path-tree';
+    await recordSessionTreeWrite({ sessionId: treeId } as ToolContext, join(root, 'vendor'));
+    expect(await runs('export PATH="$(pnpm bin):$PATH"; git status', treeId)).not.toBeNull();
   });
 
   it('reads a git dir from each folder git is moved into', async () => {
