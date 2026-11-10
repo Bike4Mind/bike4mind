@@ -48,7 +48,6 @@ const ALLOWED = new Map<string, string>([
   ['apps/client/pages/api/research/agents/[id]/tasks/[taskId]/data/[dataId].tsx::session', PASSTHROUGH],
   ['apps/client/pages/api/admin/team-members.ts::payload', 'parsed request body'],
   ['apps/client/pages/api/agents/[id]/index.ts::agentData', 'validated request body plus id'],
-  ['apps/client/pages/api/quest-plans/[id]/index.ts::changes', PARTIAL],
   ['apps/client/pages/api/sessions/[id]/agents/[agentId]/config.ts::patch', 'leaf paths of the validated body'],
   ['apps/client/pages/api/secret-rotations/[id]/index.ts::params', 'parsed request body'],
   ['apps/client/pages/api/sre/patterns/[id].ts::updates', PARTIAL],

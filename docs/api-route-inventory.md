@@ -117,10 +117,6 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | publish | 20 | 0 | 11 | 0 | 6 | 3 | 10 |
 | pyodide-sandbox | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | qa | 2 | 0 | 2 | 0 | 0 | 0 | 2 |
-| quest-graphs | 3 | 0 | 3 | 0 | 0 | 0 | 0 |
-| quest-master-plans | 8 | 0 | 7 | 1 | 0 | 0 | 6 |
-| quest-nodes | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
-| quest-plans | 6 | 0 | 6 | 0 | 0 | 0 | 1 |
 | quests | 5 | 0 | 4 | 1 | 0 | 0 | 0 |
 | react-artifact-sandbox | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | referrals | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
@@ -1298,44 +1294,6 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `/api/qa/runs` | POST | jwt+key | `qa:ingest` | - | no | - | 0 |
 | `/api/qa/uploads` | POST | jwt+key | `qa:ingest` | - | no | - | 0 |
-
-### quest-graphs
-
-| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `/api/quest-graphs` | GET, POST | jwt+key | - | - | no | - | 1: `hooks/data/questGraphs.ts` |
-| `/api/quest-graphs/[id]` | GET | jwt+key | - | - | no | - | 1: `hooks/data/questGraphs.ts` |
-| `/api/quest-graphs/[id]/nodes` | POST | jwt+key | - | - | no | - | 1: `hooks/data/questGraphs.ts` |
-
-### quest-master-plans
-
-| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `/api/quest-master-plans/[id]` | GET | jwt+key | - | - | no | - | 1: `hooks/data/quests.ts` |
-| `/api/quest-master-plans/[id]/blockers` | POST | jwt+key | - | - | no | - | 0 |
-| `/api/quest-master-plans/[id]/decisions` | POST | jwt+key | - | - | no | - | 0 |
-| `/api/quest-master-plans/[id]/handoff` | POST | jwt+key | - | - | no | - | 0 |
-| `/api/quest-master-plans/[id]/resolve-blocker` | POST | jwt+key | - | - | no | - | 0 |
-| `/api/quest-master-plans/[id]/review-gate` | POST | jwt+key | - | - | no | - | 0 |
-| `/api/quest-master-plans/[id]/subquest-progress` | POST | jwt+key | - | - | no | - | 0 |
-| `/api/quest-master-plans/legacy-archive` | GET | jwt | - | - | no | - | 1: `components/questmaster/LegacyQuestmasterRetirement.tsx` |
-
-### quest-nodes
-
-| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `/api/quest-nodes/[id]/run` | POST | jwt+key | - | - | no | - | 1: `hooks/data/questGraphs.ts` |
-
-### quest-plans
-
-| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `/api/quest-plans` | GET, POST | jwt+key | - | - | no | - | 1: `routes/quests.tsx` |
-| `/api/quest-plans/[id]` | GET, PATCH, DELETE | jwt+key | - | - | no | - | 1: `routes/quests.tsx` |
-| `/api/quest-plans/[id]/clone` | POST | jwt+key | - | - | no | - | 0 |
-| `/api/quest-plans/[id]/continue` | POST | jwt+key | - | - | no | - | 1: `routes/quests.tsx` |
-| `/api/quest-plans/[id]/export` | POST | jwt+key | - | - | no | - | 1: `hooks/data/useQuestExport.ts` |
-| `/api/quest-plans/[id]/progress` | PATCH | jwt+key | - | - | no | - | 1: `hooks/data/quests.ts` |
 
 ### quests
 

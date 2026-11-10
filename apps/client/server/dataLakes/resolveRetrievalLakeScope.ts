@@ -155,7 +155,7 @@ export async function resolveRetrievalLakeScope(
  *
  * COVERAGE, stated precisely because an earlier version of this comment overstated it: of the four
  * call sites wired to this function, only `sessionCrud.getOrCreateSession` currently reaches the
- * derivation. The three route sites (voice-sessions, voice/v2/sessions, quest-plans continue) create
+ * derivation. The two route sites (voice-sessions, voice/v2/sessions) create
  * sessions with no `knowledgeIds`, and `sessionService.createSession` skips the derivation entirely
  * for an empty list - so their thunks cannot fire today. They are wired deliberately, so a route that
  * later attaches files is correct by default rather than silently unscoped; do not read them as four

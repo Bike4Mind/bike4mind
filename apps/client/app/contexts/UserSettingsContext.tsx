@@ -28,7 +28,6 @@ import { useSettingsFromServer } from '../hooks/data/settings';
 
 export type ExperimentalFeature =
   | 'enableQuestMaster'
-  | 'enableQuestMasterV5'
   | 'enableMementos'
   | 'enableMementosV2'
   | 'enableArtifacts'
@@ -96,7 +95,6 @@ const defaultSettings: UserSettings = {
   scrollbarWidth: 10,
   experimentalFeatures: {
     enableQuestMaster: false,
-    enableQuestMasterV5: false,
     enableMementos: false,
     enableMementosV2: false,
     enableArtifacts: false,

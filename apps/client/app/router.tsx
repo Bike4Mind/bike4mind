@@ -106,7 +106,6 @@ const AdminSubscriptionDetailPage = lazy(() => import('./routes/admin/subscripti
 const AdminSubscriptionByStripeIdPage = lazy(
   () => import('./routes/admin/subscriptions/by-stripe/$stripeSubscriptionId')
 );
-const QuestsPage = lazy(() => import('./routes/quests'));
 const SlackInstallPage = lazy(() => import('./routes/integrations/slack/install'));
 const SlackSuccessPage = lazy(() => import('./routes/integrations/slack/success'));
 const SlackErrorPage = lazy(() => import('./routes/integrations/slack/error'));
@@ -121,7 +120,6 @@ const BedrockNewsClaimPage = lazy(() => import('./routes/partners/bedrocknews-cl
 const HudPage = lazy(() => import('./routes/hud'));
 const HearthPage = lazy(() => import('./routes/hearth'));
 const StudioPage = lazy(() => import('./routes/studio/$modality'));
-const QuestMasterV5Page = lazy(() => import('./routes/quests-v5'));
 
 // Shared coercion for the optional string search params nearly every route declares.
 // A few routes below deliberately keep a stricter `typeof === 'string'` guard instead,
@@ -561,12 +559,6 @@ const HEARTH_FEATURE_GATE = {
   feature: 'enableHearth' as const,
   featureName: 'Hearth',
   description: 'A shared event log where you, your agents, and your devices all post and catch up as actors.',
-};
-
-const QUESTMASTER_V5_FEATURE_GATE = {
-  feature: 'enableQuestMasterV5' as const,
-  featureName: 'Quest Master v5',
-  description: 'Quests as a graph of nodes: each node is one scoreable task that runs its own agent.',
 };
 
 // Hearth channel view (minimal projection of the shared event log)
@@ -1095,36 +1087,6 @@ const artifactsDemoRoute = createRoute({
 });
 
 // Quests route
-const questsRoute = createRoute({
-  getParentRoute: () => layoutRoute,
-  path: '/quests',
-  component: () => (
-    <Suspense fallback={<RouteLoadingFallback />}>
-      <QuestsPage />
-    </Suspense>
-  ),
-  validateSearch: (search: Record<string, unknown>): { filter?: string; search?: string } => {
-    return {
-      filter: optionalStringParam(search, 'filter'),
-      search: optionalStringParam(search, 'search'),
-    };
-  },
-});
-
-// QuestMaster v5 node-graph surface. Peer to /quests, which stays untouched
-// until v5 supersedes it.
-const questsV5Route = createRoute({
-  getParentRoute: () => layoutRoute,
-  path: '/quests-v5',
-  component: () => (
-    <ExperimentalFeatureGate {...QUESTMASTER_V5_FEATURE_GATE} loadingFallback={<RouteLoadingFallback />}>
-      <Suspense fallback={<RouteLoadingFallback />}>
-        <QuestMasterV5Page />
-      </Suspense>
-    </ExperimentalFeatureGate>
-  ),
-});
-
 // The standalone Data Lakes page was retired in #1943 - its capabilities live in the in-chat
 // surface (DataLakeChatSurface). This route survives ONLY to keep already-shared `?article=`
 // deep links working: it turns Data Lake mode on and forwards into a fresh chat, which opens the
@@ -1418,8 +1380,6 @@ const routeTree = rootRoute.addChildren([
     organizationsRoute,
     organizationDetailRoute,
     artifactsDemoRoute,
-    questsRoute,
-    questsV5Route,
     dataLakesRoute,
     hudRoute,
     hearthRoute,
