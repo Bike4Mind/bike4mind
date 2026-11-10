@@ -12,13 +12,11 @@ export function expiresAfterTtl(field: string, days: number): RetentionPeriod {
   return { expiresBy: 'ttlIndex', field, days };
 }
 
-// The longest statutory bookkeeping period among the jurisdictions served (10 years), so one period covers all.
+// 10 years covers the longest common statutory bookkeeping periods, so one period serves every jurisdiction.
 export const FINANCIAL_RECORD = {
   reason: 'Financial record kept for accounting and tax obligations (GDPR Art. 17(3)(b))',
   retention: { expiresBy: 'policy', years: 10, from: 'the end of the financial year the record belongs to' },
 } as const satisfies RetentionBasis;
-
-export const FINANCIAL_RECORD_REASON = FINANCIAL_RECORD.reason;
 
 export const PAYMENT_DISPUTE = {
   reason: 'Payment dispute kept to establish and defend a legal claim against the chargeback (GDPR Art. 17(3)(e))',

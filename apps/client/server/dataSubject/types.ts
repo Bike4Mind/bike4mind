@@ -20,13 +20,15 @@
  *   subdocuments only the matching elements change (`versions.createdBy` anonymizes the versions
  *   this person created, not every version).
  *
- * Content shared with others, the one rule every entry follows:
+ * Content shared with others:
  * - What the person owns goes, even when others can see it (their notebook shared with a team, their
- *   personal lake); each other person's access entry to it goes with it.
+ *   personal lake), and the access entries inside it go with it.
  * - What the person wrote inside something another user or an organization owns (a message in
- *   someone else's notebook, an annotation on a shared file, an upload to an org's lake, a version
- *   of a shared artifact) stays with that owner, anonymized: the reference becomes the "Deleted user"
- *   placeholder, so the owner's record stays whole. The text itself is not rewritten.
+ *   someone else's notebook, an upload to an org's lake, a version of a shared artifact) stays with
+ *   that owner, anonymized: the reference becomes the "Deleted user" placeholder, so the owner's
+ *   record stays whole. The text itself is not rewritten.
+ * - The exception is an annotation thread: it is the author's own comment rather than part of the
+ *   owner's content, so `Annotation` deletes it with its author wherever it sits.
  * - The person's own access to others' content (`sharedWith`, a membership) is pulled.
  *
  * What an export includes for a document (`exportScope.ts` implements this):

@@ -17,13 +17,19 @@ function gitGrep(pattern: string, pathspec: string): string {
   }
 }
 
-/** Variables bound to `new sst.aws.<constructorName>(` in `infra/*.ts`, including across a line break. */
+const infraSources: readonly string[] = readdirSync(infraDir, { recursive: true, encoding: 'utf8' })
+  .filter(file => file.endsWith('.ts') && !file.endsWith('.test.ts') && !file.split(path.sep).includes('__tests__'))
+  .map(file => readFileSync(path.join(infraDir, file), 'utf8'));
+
+/** Variables bound to `new sst.aws.<constructorName>(` anywhere under `infra/`, including across a line break. */
 function declaredInInfra(constructorName: string): string[] {
   const declaration = new RegExp(`const (\\w+)\\s*=\\s*new sst\\.aws\\.${constructorName}\\(`, 'g');
-  return readdirSync(infraDir)
-    .filter(file => file.endsWith('.ts') && !file.endsWith('.test.ts'))
-    .flatMap(file => [...readFileSync(path.join(infraDir, file), 'utf8').matchAll(declaration)].map(match => match[1]))
-    .sort();
+  return infraSources.flatMap(source => [...source.matchAll(declaration)].map(match => match[1])).sort();
+}
+
+/** Every construction of the resource, assigned or not, so one this test cannot name still fails it. */
+function constructedInInfra(pattern: RegExp): number {
+  return infraSources.reduce((count, source) => count + [...source.matchAll(pattern)].length, 0);
 }
 
 const inventoried = (kind: 's3' | 'eventBus') =>
@@ -40,6 +46,11 @@ const inventoried = (kind: 's3' | 'eventBus') =>
 describe('external data stores', () => {
   it('sanity: finds the buckets declared in infra', () => {
     expect(declaredInInfra('Bucket')).toContain('fabFileBucket');
+  });
+
+  it('every bucket and bus in infra is a named const declaration the inventory check can see', () => {
+    expect(constructedInInfra(/new (sst\.aws\.Bucket|aws\.s3\.Bucket(V2)?)\(/g)).toBe(declaredInInfra('Bucket').length);
+    expect(constructedInInfra(/new (sst\.aws\.Bus|aws\.cloudwatch\.EventBus)\(/g)).toBe(declaredInInfra('Bus').length);
   });
 
   it('inventories exactly the S3 buckets declared in infra', () => {

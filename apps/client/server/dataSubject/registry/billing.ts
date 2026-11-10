@@ -1,11 +1,13 @@
 import type { DataHolderRegistry } from '../types';
-import {
-  FINANCIAL_RECORD,
-  FINANCIAL_RECORD_REASON,
-  PAYMENT_DISPUTE,
-  SIGNUP_GRANT_CLAIM,
-  expiresAfterTtl,
-} from './retention';
+import { FINANCIAL_RECORD, PAYMENT_DISPUTE, SIGNUP_GRANT_CLAIM, expiresAfterTtl } from './retention';
+
+// Records the platform deletes on a short TTL are kept for operations, not under the statutory bookkeeping period.
+const PAYMENT_ATTEMPT_REASON =
+  'Checkout attempt kept for payment fraud screening and reconciliation (legitimate interest, GDPR Art. 6(1)(f))';
+const CREDIT_HOLD_REASON =
+  'Credit reservation kept until its charge settles, to reconcile the balance (legitimate interest, GDPR Art. 6(1)(f))';
+const SPEND_ROLLUP_REASON =
+  'Short-term spend bucket kept for spend alerts and cost reconciliation (legitimate interest, GDPR Art. 6(1)(f))';
 
 export const billingHolders = {
   // Mostly conversation content (query, checkpoint, result, tool inputs). Its charge is already on
@@ -119,7 +121,7 @@ export const billingHolders = {
         path: 'userId',
         matchBy: 'userId',
         action: 'retain',
-        reason: FINANCIAL_RECORD_REASON,
+        reason: PAYMENT_ATTEMPT_REASON,
         retention: expiresAfterTtl('createdAt', 90),
       },
     ],
@@ -137,14 +139,14 @@ export const billingHolders = {
         matchBy: 'userId',
         where: { ownerType: 'User' },
         action: 'retain',
-        reason: FINANCIAL_RECORD_REASON,
+        reason: CREDIT_HOLD_REASON,
         retention: expiresAfterTtl('settledAt', 7),
       },
       {
         path: 'userId',
         matchBy: 'userId',
         action: 'retain',
-        reason: FINANCIAL_RECORD_REASON,
+        reason: CREDIT_HOLD_REASON,
         retention: expiresAfterTtl('settledAt', 7),
       },
     ],
@@ -191,7 +193,7 @@ export const billingHolders = {
         matchBy: 'userId',
         where: { scopeType: 'User' },
         action: 'retain',
-        reason: FINANCIAL_RECORD_REASON,
+        reason: SPEND_ROLLUP_REASON,
         retention: expiresAfterTtl('bucketStart', 35),
       },
     ],

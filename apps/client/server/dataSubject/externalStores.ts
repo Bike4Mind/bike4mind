@@ -1,5 +1,5 @@
 import type { RetentionPeriod } from './types';
-import { FINANCIAL_RECORD } from './registry/retention';
+import { FINANCIAL_RECORD, SAFETY_INCIDENT } from './registry/retention';
 
 /**
  * Where a person's data lands outside MongoDB, and what erasure does about each place. The Mongo side
@@ -28,7 +28,7 @@ export type ExternalDataStore =
       locatedBy: string;
       erasure: ExternalErasure;
     }
-  | { kind: 'logs'; name: string; holds: string; erasure: ExternalErasure }
+  | { kind: 'logs' | 'queues'; name: string; holds: string; erasure: ExternalErasure }
   | { kind: 'eventBus'; bus: string; holds: string; erasure: ExternalErasure }
   | {
       kind: 'service';
@@ -48,8 +48,32 @@ export const EXTERNAL_DATA_STORES: readonly ExternalDataStore[] = [
     holds: 'Uploaded knowledge files, their versions and generated copies; account and notebook download exports',
     locatedBy:
       'FabFile `filePath`, `versions.filePath`, `sourceMetadata.generatedCopyKey`; the `exports/account-data/<userId>/`, `exports/curated-notebooks/<userId>/` and `curated-notebooks/<userId>/` prefixes',
-    // Files kept by the FabFile entry (an organization's upload, one blocked by moderation) keep their objects.
+    // `purgeAccountFiles` keeps the objects of an organization's upload and of a file blocked by moderation.
     erasure: { action: 'erased', erasedBy: 'purgeAccountFiles' },
+  },
+  {
+    kind: 's3',
+    bucket: 'fabFileBucket',
+    holds: 'Pre-edit copies of file content taken before an AI text edit',
+    locatedBy: 'The `text-edit-backups/<userId>/` prefix (`pages/api/fabfiles/[id]/apply-edit.ts`)',
+    erasure: { action: 'expires', after: '30 days (bucket lifecycle rule)' },
+  },
+  {
+    kind: 's3',
+    bucket: 'fabFileBucket',
+    holds: 'Pre-edit copies written before `text-edit-backups/` existed',
+    locatedBy: 'Keys containing `/backups/` under `files/<userId>/`',
+    erasure: {
+      action: 'notErased',
+      gap: 'No lifecycle rule and no purge; only the manual `sweepLegacyBackups` script removes them',
+    },
+  },
+  {
+    kind: 's3',
+    bucket: 'fabFileBucket',
+    holds: 'Generated audio offloaded from a notebook message',
+    locatedBy: 'The `generated-audio-offload/` prefix',
+    erasure: { action: 'expires', after: '1 day (bucket lifecycle rule)' },
   },
   {
     kind: 's3',
@@ -74,6 +98,20 @@ export const EXTERNAL_DATA_STORES: readonly ExternalDataStore[] = [
     holds: 'Voice uploads and their transcripts',
     locatedBy: 'The `transcribe-uploads/` and `transcripts/` prefixes',
     erasure: { action: 'expires', after: '1 day (bucket lifecycle rule)' },
+  },
+  {
+    kind: 's3',
+    bucket: 'appFilesBucket',
+    holds: 'Per-user desktop bridge download bundles',
+    locatedBy: 'The `cc-bridge-downloads/` prefix',
+    erasure: { action: 'expires', after: '1 day (bucket lifecycle rule)' },
+  },
+  {
+    kind: 's3',
+    bucket: 'appFilesBucket',
+    holds: "AI summaries of an organization's feedback, which can quote members",
+    locatedBy: 'The `org-feedback-summaries/<organizationId>/` prefix',
+    erasure: { action: 'expires', after: '14 days (bucket lifecycle rule)' },
   },
   {
     kind: 's3',
@@ -107,9 +145,10 @@ export const EXTERNAL_DATA_STORES: readonly ExternalDataStore[] = [
   {
     kind: 's3',
     bucket: 'emailIngestionBucket',
-    holds: 'Raw inbound email, bodies and attachments',
-    locatedBy: 'IngestedEmail `rawEmailS3Key`, `bodyS3Path`, `attachments.s3Path`',
-    erasure: { action: 'expires', after: '30 days (bucket lifecycle rule)' },
+    // Attachments are stored as FabFiles in `fabFileBucket`, covered by that entry.
+    holds: 'Raw inbound email (`.eml`) under `raw-emails/`',
+    locatedBy: 'IngestedEmail `rawEmailS3Key`',
+    erasure: { action: 'expires', after: '30 days (lifecycle rule on `raw-emails/`)' },
   },
   {
     kind: 's3',
@@ -125,6 +164,21 @@ export const EXTERNAL_DATA_STORES: readonly ExternalDataStore[] = [
     holds: 'User ids, IP addresses and request metadata in log lines; console output is redacted by field name',
     // Default from `resolveDefaultLogging` (b4m-core/infra); some functions set their own retention in `infra/`.
     erasure: { action: 'expires', after: '1 month on production and 1 week elsewhere, unless a function sets its own' },
+  },
+  {
+    kind: 'logs',
+    name: 'WAF request logs',
+    holds: 'Client IP addresses and request headers',
+    erasure: { action: 'expires', after: '30 days (log group retention, `infra/waf.ts`)' },
+  },
+  {
+    kind: 'queues',
+    name: 'SQS work queues and their dead-letter queues',
+    holds: 'Job payloads with user ids; the email queues carry addresses and message content',
+    erasure: {
+      action: 'expires',
+      after: "Each queue's message retention: 4 days by default, 14 days on dead-letter queues",
+    },
   },
 
   {
@@ -154,10 +208,45 @@ export const EXTERNAL_DATA_STORES: readonly ExternalDataStore[] = [
   },
   {
     kind: 'service',
-    name: 'LLM providers',
-    receives: 'Prompts, attached file content and generated output',
+    name: 'AI model and content providers (LLMs; image, voice, search and scraping APIs)',
+    receives: 'Prompts, attached file content, search queries and generated output',
     erasure: { action: 'expires', after: "Each provider's API data-retention term" },
     cannotRecall: 'Everything sent: no provider API deletes a past request',
+  },
+  {
+    kind: 'service',
+    name: 'Child-safety reporting authority (NCMEC)',
+    receives: 'The user id and incident details of a reported image (`b4m-core/services/src/ncmecService`)',
+    erasure: {
+      action: 'retain',
+      reason: SAFETY_INCIDENT.reason,
+      retention: { expiresBy: 'condition', until: "the authority's own retention rules end it" },
+    },
+    cannotRecall: 'The report, once filed',
+  },
+  {
+    kind: 'service',
+    name: 'Apple Push Notification service',
+    receives: 'Device token and notification text',
+    erasure: { action: 'expires', after: 'Delivery: Apple holds a notification only until the device receives it' },
+    cannotRecall: 'Notifications already delivered to the device',
+  },
+  {
+    kind: 'service',
+    name: 'Cloudflare Turnstile',
+    receives: 'Client IP address and challenge token at sign-up and sign-in',
+    erasure: { action: 'expires', after: "Cloudflare's own retention for challenge verification" },
+    cannotRecall: 'Each verification request already made',
+  },
+  {
+    kind: 'service',
+    name: "The person's blog integration",
+    receives: "Posts and images published to the person's own blog with their API key",
+    erasure: {
+      action: 'notErased',
+      gap: 'The stored key is cleared with the account; published posts are not removed',
+    },
+    cannotRecall: "Posts already published, which live on the person's own site",
   },
   {
     kind: 'service',
