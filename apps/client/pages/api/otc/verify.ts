@@ -603,7 +603,7 @@ const handler = baseApi({ auth: false })
           riskSignals: signals.map(type => ({ type, at: new Date() })),
         });
         // Missing or expired form tokens are record-only: the token fetch can be in flight, fail, be rate-limited, or the tab left open.
-        // So is a token reused for another email: a corrected email can race the post-send token refresh.
+        // So is a token reused for another email: the post-send token refresh can fail, leaving the old token in place.
         // Too-fast alone is record-only too (autofill + Enter can beat the timer); it rides along with a stronger signal.
         const recordOnly: UserRiskSignalType[] = [
           'signup_token_missing',
