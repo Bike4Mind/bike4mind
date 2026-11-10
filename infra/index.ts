@@ -46,5 +46,7 @@ export * from './emailMarketing';
 export * from './wafPolicy';
 export * from './waf';
 
+export * from './turborepoCache';
+
 // logMonitor must be last
 export * from './logMonitor';
