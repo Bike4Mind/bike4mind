@@ -31,7 +31,7 @@ import { CheckSuiteHandler } from './CheckSuiteHandler';
 export function createHandlerRegistry(logger?: Logger, ownerUserId?: string): Map<GitHubEventType, GitHubEventHandler> {
   const registry = new Map<GitHubEventType, GitHubEventHandler>();
 
-  const notifier = new GitHubSlackNotifier(logger || (console as unknown as Logger), ownerUserId);
+  const notifier = new GitHubSlackNotifier(logger ?? Logger.globalInstance, ownerUserId);
 
   const handlers: GitHubEventHandler[] = [
     new PingHandler(logger),
