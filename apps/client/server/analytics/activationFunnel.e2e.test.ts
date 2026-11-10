@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { CreditHolderType } from '@bike4mind/common';
-import { AnalyticsUserDay, CreditTransaction, Organization, User } from '@bike4mind/database';
+import { AnalyticsUserDay, CreditTransaction, Organization, UsageEvent, User } from '@bike4mind/database';
 import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import { USER_FUNNEL_STEP_FILTERS, type UserFunnelStep } from '@client/app/utils/adminUsersFilter';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
@@ -32,8 +32,27 @@ afterAll(async () => {
   await mongod.stop();
 });
 
-const seedUser = (name: string, fields: Record<string, unknown> = {}) =>
-  User.create({ name, username: name, email: `${name}@${name}.customer.example.org`, createdAt: signup, ...fields });
+/** A regular user is verified and made an AI request on signup day, so the real-signup rule calls it legit. */
+const seedUser = async (name: string, fields: Record<string, unknown> = {}) => {
+  const createdAt = (fields.createdAt as Date | undefined) ?? signup;
+  const user = await User.create({
+    name,
+    username: name,
+    email: `${name}@${name}.customer.example.org`,
+    emailVerified: true,
+    createdAt,
+    ...fields,
+  });
+  if (fields.emailVerified !== false) {
+    await UsageEvent.collection.insertOne({
+      userId: String(user._id),
+      status: 'ok',
+      source: 'chat',
+      createdAt: new Date(createdAt.getTime() + 3_600_000),
+    });
+  }
+  return user;
+};
 
 const seedActive = (userId: string, days: string[]) =>
   Promise.all(
@@ -98,6 +117,7 @@ async function seedCohort() {
       (
         await seedUser(`burst${i}`, {
           email: `burst${i}@burst.example.net`,
+          emailVerified: false,
           createdAt: new Date(`2026-05-12T09:${String(10 + i).padStart(2, '0')}:00Z`),
           lastActiveAt: new Date('2026-05-14T09:00:00Z'),
         })
