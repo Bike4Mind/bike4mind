@@ -147,7 +147,7 @@ export interface SignupGrantSchedule {
   dripCap: number;
   /** Locked at enrollment and released by a verification unlock. */
   unlockCredits: number;
-  /** A stored cap of 0: nothing is locked, so newSignupGrant pays an explicit `totalCredits` whole at signup. */
+  /** A stored cap of 0: nothing is locked or dripped, so the grant is the initial credits alone. */
   paysFlat: boolean;
   inviteBonusCredits: number;
   dripCapSource: SignupGrantDripCapSource;
@@ -173,7 +173,7 @@ export function runtimeSignupGrantSchedule(
     dailyCredits: read('signupGrantDailyCredits') ?? 0,
     dripCap,
     unlockCredits: dripCap,
-    // An unset cap drips nothing but still locks the remainder of an explicit totalCredits (test fixtures only).
+    // Only a stored 0 pays flat; an unset cap falls back to the registry default above.
     paysFlat: cap === 0,
     inviteBonusCredits: read('signupGrantInviteBonusCredits') ?? 0,
     dripCapSource: cap === undefined ? 'default' : 'setting',
