@@ -168,7 +168,28 @@ describe('PendingBulkDialog', () => {
     expect(mocks.toast.warning).toHaveBeenCalledWith(expect.stringContaining('already spent the credits'));
   });
 
-  it('describes release undo as permanent revocation and reports it accurately', async () => {
+  it('warns when an account received more credits after the release, so undo left it alone', async () => {
+    routeTo({
+      '/api/admin/held-signup-grants/release': body =>
+        body.dryRun
+          ? preview([{ userId: A, outcome: 'would_apply' }])
+          : { batchId: 'c'.repeat(24), results: [{ userId: A, outcome: 'released', credits: 500 }] },
+      '/api/admin/held-signup-grants/revoke': () => ({
+        batchId: 'c'.repeat(24),
+        results: [{ userId: A, outcome: 'state_changed' }],
+      }),
+    });
+    renderDialog('release');
+    await confirmWithReason('release');
+    await waitFor(() => expect(mocks.showUndoToast).toHaveBeenCalledTimes(1));
+
+    await mocks.showUndoToast.mock.calls[0][0].onUndo();
+
+    expect(mocks.toast.warning).toHaveBeenCalledWith(expect.stringContaining('received more credits since'));
+    expect(mocks.toast.success).not.toHaveBeenCalled();
+  });
+
+  it('warns when undo only took the credits back because the release saved no account state', async () => {
     routeTo({
       '/api/admin/held-signup-grants/release': body =>
         body.dryRun
@@ -180,13 +201,34 @@ describe('PendingBulkDialog', () => {
       }),
     });
     renderDialog('release');
+    await confirmWithReason('release');
+    await waitFor(() => expect(mocks.showUndoToast).toHaveBeenCalledTimes(1));
+
+    await mocks.showUndoToast.mock.calls[0][0].onUndo();
+
+    expect(mocks.toast.warning).toHaveBeenCalledWith(expect.stringContaining('only the credits were taken back'));
+    expect(mocks.toast.success).not.toHaveBeenCalled();
+  });
+
+  it('describes release undo as returning the account to the held queue and reports it accurately', async () => {
+    routeTo({
+      '/api/admin/held-signup-grants/release': body =>
+        body.dryRun
+          ? preview([{ userId: A, outcome: 'would_apply' }])
+          : { batchId: 'c'.repeat(24), results: [{ userId: A, outcome: 'released', credits: 500 }] },
+      '/api/admin/held-signup-grants/revoke': () => ({
+        batchId: 'c'.repeat(24),
+        results: [{ userId: A, outcome: 'reversed', heldRestored: true }],
+      }),
+    });
+    renderDialog('release');
     expect(screen.getByTestId('pending-bulk-release')).toHaveTextContent(
-      'Undo permanently revokes the paid credits; it does not restore the hold or make the revoked credits payable again.'
+      'Undo takes the paid credits back and returns the account to the held queue.'
     );
     await confirmWithReason('release');
     await waitFor(() => expect(mocks.showUndoToast).toHaveBeenCalledTimes(1));
     await mocks.showUndoToast.mock.calls[0][0].onUndo();
-    expect(mocks.toast.success).toHaveBeenCalledWith('Revoked credits from 1 account');
+    expect(mocks.toast.success).toHaveBeenCalledWith('Returned 1 account to the held queue');
   });
 
   it('offers no undo when the run changed nothing', async () => {

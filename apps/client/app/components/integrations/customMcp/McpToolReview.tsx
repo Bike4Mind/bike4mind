@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Box, Button, Chip, Divider, Option, Select, Stack, Switch, Typography } from '@mui/joy';
 import { toast } from 'sonner';
-import type { IMcpConnectionPublic, McpToolApprovalMode } from '@bike4mind/common';
+import { isReadOnlyMcpConnectionTool, type IMcpConnectionPublic, type McpToolApprovalMode } from '@bike4mind/common';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   mcpConnectionErrorCode,
@@ -9,7 +9,7 @@ import {
   mcpConnectionKeys,
   useUpdateMcpConnection,
 } from '@client/app/hooks/data/mcpConnections';
-import { initialToolDrafts, isReadOnlyTool, toReviewEntries, type ToolDraft } from './customMcpModel';
+import { initialToolDrafts, toReviewEntries, type ToolDraft } from './customMcpModel';
 
 const APPROVAL_LABELS: Record<McpToolApprovalMode, string> = {
   default: 'Ask for writes',
@@ -77,7 +77,7 @@ const McpToolReview = ({ connection, onDone }: { connection: IMcpConnectionPubli
       <Stack divider={<Divider />} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: '8px' }}>
         {tools.map(tool => {
           const draft = drafts[tool.name]!;
-          const readOnly = isReadOnlyTool(tool);
+          const readOnly = isReadOnlyMcpConnectionTool(tool);
           const toolTestId = `${testId}-tool-${tool.name}`;
           return (
             <Box key={tool.name} data-testid={toolTestId} sx={{ px: '12px', py: '10px' }}>

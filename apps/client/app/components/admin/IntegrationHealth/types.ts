@@ -5,6 +5,9 @@ export type IntegrationName = 'slack' | 'github' | 'jira' | 'confluence';
 
 export type IntegrationHealthStatus = 'healthy' | 'degraded' | 'unhealthy';
 
+/** Mirrors HealthSummaryStatus in integrationHealthService: 'no_data' means the integration was never checked. */
+export type HealthSummaryStatus = IntegrationHealthStatus | 'no_data';
+
 export type CircuitBreakerMode = 'auto' | 'force_block' | 'force_open';
 
 export interface CircuitBreakerStatus {
@@ -34,9 +37,9 @@ export interface RecentError {
 
 export interface IntegrationDashboardEntry {
   name: IntegrationName;
-  status: IntegrationHealthStatus;
+  status: HealthSummaryStatus;
   latencyMs: number;
-  lastCheckedAt: string;
+  lastCheckedAt: string | null;
   successRate: number;
   consecutiveFailures: number;
   error: string | null;

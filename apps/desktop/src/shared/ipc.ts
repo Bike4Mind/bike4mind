@@ -4,6 +4,7 @@ import type { LoopResult, LoopState } from './loop';
 import type { PromptCacheTtl } from '@bike4mind/common';
 import type { AttentionNotice, AttentionOpenEvent } from './attention';
 import type { AccountBilling, AccountCredits, AccountProfile, SubscribePlanResult } from './account';
+import type { FeedbackSubmitResult } from './feedback';
 import type { AccountPage, AuthState, EnvironmentSelection, SetEnvironmentResult } from './auth';
 import type {
   ChromeHostsResult,
@@ -162,6 +163,7 @@ export const IPC_CHANNELS = {
   accountGetBilling: 'account:get-billing',
   accountSubscribePlan: 'account:subscribe-plan',
   accountPurchaseCredits: 'account:purchase-credits',
+  accountSendFeedback: 'account:send-feedback',
   usageGetHistory: 'usage:get-history',
   fleetGetState: 'fleet:get-state',
   fleetRefresh: 'fleet:refresh',
@@ -760,6 +762,7 @@ export interface DesktopApi {
     subscribePlan(priceId: string): Promise<SubscribePlanResult>;
     /** Resolves when the payment window closes, not as proof of payment. */
     purchaseCredits(packageId: string): Promise<SubscribePlanResult>;
+    sendFeedback(content: string): Promise<FeedbackSubmitResult>;
   };
   usage: {
     /**

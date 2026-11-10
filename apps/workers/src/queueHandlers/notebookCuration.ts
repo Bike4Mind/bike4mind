@@ -66,7 +66,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   });
 
   if (!sessionId || !curationJobId) {
-    logger.error(`Invalid message: ${body}`);
+    logger.error('Invalid message: sessionId and curationJobId are required', {
+      sqsMessageId: event.Records[0].messageId,
+      hasSessionId: Boolean(sessionId),
+      hasCurationJobId: Boolean(curationJobId),
+    });
     return;
   }
 

@@ -6,6 +6,7 @@ import {
   type ApiKeyRateLimitUsage,
 } from '@bike4mind/common';
 import { logEvent } from './analyticsLog';
+import { Logger } from '@bike4mind/observability';
 
 const MINUTE_IN_MS = 60_000;
 const DAY_IN_MS = 86_400_000;
@@ -116,7 +117,7 @@ export interface ResetApiKeyRateLimitResult {
 
 /** Minimal logging surface `resetApiKeyRateLimit` needs - satisfied by both `console` and a
  * request-scoped logger, so callers with request correlation (e.g. `req.logger`) can pass it
- * through instead of every failure landing in `console.warn` with no way to trace it back. */
+ * through instead of every failure landing in the unscoped global logger with no way to trace it back. */
 interface CounterLogger {
   warn: (message: string) => void;
 }
@@ -168,7 +169,7 @@ export async function resetApiKeyRateLimit(
   keyId: string,
   options: { alsoResetManagement?: boolean; logger?: CounterLogger } = {}
 ): Promise<ResetApiKeyRateLimitResult> {
-  const logger = options.logger ?? console;
+  const logger = options.logger ?? Logger.globalInstance;
   const { minuteKey, dayKey } = buildRateLimitKeys(keyId);
   const request = deleteCounterGroup(keyId, 'request', minuteKey, dayKey, logger);
 
@@ -480,7 +481,7 @@ export async function checkApiKeyRateLimit(
       }),
     };
   } catch (error) {
-    console.error('[API_KEY_RATE_LIMIT] Error checking rate limit:', error);
+    Logger.error('[API_KEY_RATE_LIMIT] Error checking rate limit', { error });
     throw error;
   }
 }
@@ -574,7 +575,7 @@ async function logRateLimitEvent(
     },
   }).catch(error => {
     // Don't fail the request if analytics logging fails
-    console.error('[API_KEY_RATE_LIMIT] Failed to log rate limit event:', error);
+    Logger.error('[API_KEY_RATE_LIMIT] Failed to log rate limit event', { error });
   });
 }
 

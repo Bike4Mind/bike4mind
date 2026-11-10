@@ -18,11 +18,10 @@ export const getHealthTool = defineAdminTool({
     // Same per-integration breaker read as the Integration Health route; it only fills an in-process cache.
     const integrations = await Promise.all(
       summaries.map(async summary => {
-        // getHealthSummary reports the epoch (and status 'unhealthy') when an integration has never been checked.
-        const neverChecked = summary.lastCheckedAt.getTime() === 0;
+        const neverChecked = summary.lastCheckedAt === null;
         return {
           ...summary,
-          lastCheckedAt: neverChecked ? null : toIso(summary.lastCheckedAt),
+          lastCheckedAt: toIso(summary.lastCheckedAt),
           error: summary.error?.slice(0, MAX_ERROR_CHARS) ?? null,
           neverChecked,
           circuitBreaker: await getStatus(summary.integration),

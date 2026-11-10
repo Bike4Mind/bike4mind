@@ -1,6 +1,7 @@
 import { createPrivateKey } from 'node:crypto';
 import jwt from 'jsonwebtoken';
 import { Config } from '../utils/config';
+import { Logger } from '@bike4mind/observability';
 
 export const APPLE_ISSUER = 'https://appleid.apple.com';
 
@@ -50,7 +51,7 @@ export function getAppleConfig(): AppleConfig | null {
   if (!isEs256PrivateKey(privateKey)) {
     if (!invalidKeyReported) {
       invalidKeyReported = true;
-      console.error(
+      Logger.error(
         '[AUTH] APPLE_PRIVATE_KEY is set but is not a valid P-256 EC private key; Sign in with Apple is disabled. ' +
           'Set it to the full .p8 PEM contents, including the BEGIN/END PRIVATE KEY lines.'
       );

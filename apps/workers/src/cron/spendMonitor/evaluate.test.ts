@@ -7,9 +7,12 @@ import type {
   SpendSourceTotal,
 } from '@bike4mind/common';
 import type { SlackAlarmMessage } from '../../events/alarmSlackMessage';
+import { CreditHolderType } from '@bike4mind/common';
+import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { evaluateSpend, type EvaluateDeps } from './evaluate';
 import type { SpendThresholds } from './rules';
 import { createSpendPost } from './slackPost';
+import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 import { NO_TRUST, parseSpendTrustConfig, type SpendTrustConfig } from './trust';
 
 const BUCKET_MS = 5 * 60 * 1000;
@@ -23,8 +26,12 @@ const thresholds: SpendThresholds = {
   platformSpikeFloorCredits: 5000,
   platformCostFloorUsd: 20,
   accountSpikeRatio: 10,
+  paidAccountMinAgeDays: 7,
+  riskReviewScoreThreshold: 50,
   accountSpikeFloorCredits: 1000,
   accountCeilingCredits: 5000,
+  paidAccountSpikeFloorCredits: 20000,
+  paidAccountCeilingCredits: 40000,
   trustedAccountSpikeFloorCredits: 20000,
   trustedAccountCeilingCredits: 40000,
 };
@@ -146,7 +153,27 @@ function createFakes() {
     ids.map(id => ({ id, email: `${id}@example.com`, emailVerified: true }))
   );
 
+  const paidScopeDeps: EvaluateDeps['paidScopeDeps'] = {
+    findActiveSubscriptionsByOwners: vi.fn(async () => []),
+    findPlanHolderOrganizations: vi.fn(async () => []),
+  };
+  const accountContextDeps: EvaluateDeps['accountContextDeps'] = {
+    findUsers: vi.fn(async ids =>
+      ids.map(id => ({
+        id,
+        createdAt: new Date('2026-01-01'),
+        emailVerified: true,
+        riskScore: { score: 0, reviewState: 'none' as const },
+      }))
+    ),
+    findOrganizations: vi.fn(async ids =>
+      ids.map(id => ({ id, userId: `owner-${id}`, createdAt: new Date('2026-01-01') }))
+    ),
+    findPaymentHistory: vi.fn(async () => []),
+  };
   const deps: EvaluateDeps = {
+    accountContextDeps,
+    paidScopeDeps,
     rollups: { sumWindow, windowSeries, latestBucketStart, sourceMix },
     alerts: { findActive, create, update, applyEvaluation } as unknown as EvaluateDeps['alerts'],
     resolveScopeDeps: {
@@ -162,6 +189,8 @@ function createFakes() {
 
   return {
     deps,
+    accountContextDeps,
+    paidScopeDeps,
     alerts,
     posts,
     post,
@@ -602,7 +631,11 @@ describe('evaluateSpend', () => {
       const fakes = createFakes();
       fakes.deps.resolveScopeDeps = {
         ...fakes.deps.resolveScopeDeps,
-        findApiKeysByIds: vi.fn().mockRejectedValueOnce(new Error('mongo down')).mockResolvedValue([]),
+        findApiKeysByIds: vi
+          .fn()
+          .mockResolvedValueOnce([])
+          .mockRejectedValueOnce(new Error('mongo down'))
+          .mockResolvedValue([]),
       };
       fakes.setRollups([...platform, ...windowBuckets('User', 'u1', 2000), ...windowBuckets('apiKey', 'k1', 2000)]);
 
@@ -627,6 +660,290 @@ describe('evaluateSpend', () => {
     const mentioned = fakes.posts.filter(post => post.text.includes('<!channel>'));
     expect(mentioned).toHaveLength(1);
     expect(mentioned[0].text).toContain('Platform');
+  });
+
+  describe('paid accounts', () => {
+    const paidRows = [{ ownerId: 'subscriber', priceId: SUBSCRIPTION_PLANS[0].priceId, status: 'active' }];
+
+    it('keeps a legitimate Desktop-sized subscriber burst quiet without trusting the account', async () => {
+      const fakes = createFakes();
+      vi.mocked(fakes.paidScopeDeps.findActiveSubscriptionsByOwners).mockResolvedValue(paidRows);
+      fakes.setRollups([
+        ...windowBuckets('platform', 'all', 3400).map(bucket => ({ ...bucket, costUsd: 1 })),
+        ...windowBuckets('User', 'subscriber', 3400),
+      ]);
+      await expect(run(fakes)).resolves.toEqual({ breaches: 0, posted: 0 });
+    });
+
+    it('retains subscriber spend in platform detection and pages above the paid ceiling', async () => {
+      const fakes = createFakes();
+      vi.mocked(fakes.paidScopeDeps.findActiveSubscriptionsByOwners).mockResolvedValue(paidRows);
+      fakes.setRollups([
+        ...quietPlatformHistory(),
+        ...windowBuckets('platform', 'all', 15000),
+        ...windowBuckets('User', 'subscriber', 15000),
+      ]);
+      await run(fakes);
+      expect(fakes.alerts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ rule: 'platform_spike' }),
+          expect.objectContaining({
+            rule: 'account_ceiling',
+            context: expect.objectContaining({ accountTier: 'paid', ceilingCredits: 40000 }),
+          }),
+        ])
+      );
+      expect(fakes.alerts.some(alert => alert.context.trustedExcluded !== undefined)).toBe(false);
+    });
+
+    it('observes paid limits configured below standard candidate thresholds', async () => {
+      const fakes = createFakes();
+      vi.mocked(fakes.paidScopeDeps.findActiveSubscriptionsByOwners).mockResolvedValue(paidRows);
+      fakes.setRollups([
+        ...windowBuckets('platform', 'all', 200).map(bucket => ({ ...bucket, costUsd: 1 })),
+        ...windowBuckets('User', 'subscriber', 200),
+      ]);
+      await evaluateSpend(
+        fakes.now(),
+        fakes.deps,
+        {
+          ...thresholds,
+          paidAccountSpikeFloorCredits: 200,
+          paidAccountCeilingCredits: 500,
+        },
+        NO_TRUST
+      );
+      expect(fakes.alerts).toContainEqual(
+        expect.objectContaining({
+          rule: 'account_ceiling',
+          context: expect.objectContaining({ accountTier: 'paid', ceilingCredits: 500 }),
+        })
+      );
+    });
+
+    it('re-evaluates subscription changes and resolves a standard-tier incident after renewal', async () => {
+      const fakes = createFakes();
+      const subscriptions = vi.mocked(fakes.paidScopeDeps.findActiveSubscriptionsByOwners);
+      fakes.setRollups([
+        ...windowBuckets('platform', 'all', 3400).map(bucket => ({ ...bucket, costUsd: 1 })),
+        ...windowBuckets('User', 'subscriber', 3400),
+      ]);
+      subscriptions.mockResolvedValue(paidRows);
+      await run(fakes);
+      expect(fakes.alerts).toHaveLength(0);
+
+      fakes.nextWindow();
+      subscriptions.mockResolvedValue(paidRows.map(row => ({ ...row, status: 'canceled' })));
+      await run(fakes);
+      expect(fakes.alerts[0]).toMatchObject({ status: 'open', context: { accountTier: 'standard' } });
+
+      subscriptions.mockResolvedValue(paidRows);
+      fakes.nextWindow();
+      await run(fakes);
+      fakes.nextWindow();
+      await run(fakes);
+      expect(fakes.alerts[0].status).toBe('resolved');
+    });
+
+    it('gives an established subscriber created before risk scoring paid limits', async () => {
+      const fakes = createFakes();
+      vi.mocked(fakes.paidScopeDeps.findActiveSubscriptionsByOwners).mockResolvedValue(paidRows);
+      vi.mocked(fakes.accountContextDeps.findUsers).mockImplementation(async ids =>
+        ids.map(id => ({ id, createdAt: new Date('2026-01-01'), emailVerified: true, riskScore: null }))
+      );
+      fakes.setRollups([
+        ...windowBuckets('platform', 'all', 15000).map(bucket => ({ ...bucket, costUsd: 1 })),
+        ...windowBuckets('User', 'subscriber', 15000),
+      ]);
+      await run(fakes);
+      expect(fakes.alerts[0]).toMatchObject({
+        rule: 'account_ceiling',
+        context: {
+          accountTier: 'paid',
+          policyReasons: ['established_account', 'unscored_account', 'active_subscription'],
+        },
+      });
+    });
+
+    it.each(['young', 'pending', 'payment-risk', 'blocked-payment'])(
+      'keeps a paid account with %s context on standard limits',
+      async condition => {
+        const fakes = createFakes();
+        vi.mocked(fakes.paidScopeDeps.findActiveSubscriptionsByOwners).mockResolvedValue(paidRows);
+        vi.mocked(fakes.accountContextDeps.findUsers).mockImplementation(async ids =>
+          ids.map(id => ({
+            id,
+            createdAt: condition === 'young' ? new Date(NOW.getTime() - DAY_MS) : new Date('2026-01-01'),
+            emailVerified: true,
+            riskScore: { score: 10, reviewState: condition === 'pending' ? ('pending' as const) : ('none' as const) },
+            paymentRiskEventAt: condition === 'payment-risk' ? NOW : null,
+          }))
+        );
+        if (condition === 'blocked-payment') {
+          vi.mocked(fakes.accountContextDeps.findPaymentHistory).mockResolvedValue([
+            { userId: 'subscriber', succeeded: 1, failed: 1, radarBlocked: 1, elevatedRisk: 0, latestSucceededAt: NOW },
+          ]);
+        }
+        fakes.setRollups([
+          ...windowBuckets('platform', 'all', 3400).map(bucket => ({ ...bucket, costUsd: 1 })),
+          ...windowBuckets('User', 'subscriber', 3400),
+        ]);
+        await run(fakes);
+        expect(fakes.alerts[0]).toMatchObject({ rule: 'account_ceiling', context: { accountTier: 'standard' } });
+        expect(fakes.alerts[0].context.accountContext).toBeDefined();
+        expect(fakes.alerts[0].context.policyReasons).not.toEqual([]);
+      }
+    );
+
+    it('fails closed on context lookup errors and retains the account in platform totals', async () => {
+      const fakes = createFakes();
+      vi.mocked(fakes.paidScopeDeps.findActiveSubscriptionsByOwners).mockResolvedValue(paidRows);
+      vi.mocked(fakes.accountContextDeps.findUsers).mockRejectedValue(new Error('context unavailable'));
+      fakes.setRollups([
+        ...quietPlatformHistory(),
+        ...windowBuckets('platform', 'all', 15000),
+        ...windowBuckets('User', 'subscriber', 15000),
+      ]);
+      await run(fakes, parseSpendTrustConfig('', 'subscriber'));
+      expect(fakes.alerts).toContainEqual(expect.objectContaining({ rule: 'platform_spike' }));
+      const alert = fakes.alerts.find(row => row.rule === 'account_ceiling');
+      expect(alert?.context).toMatchObject({ accountTier: 'standard', policyReasons: ['account_context_unavailable'] });
+      expect(alert?.context).not.toHaveProperty('trusted');
+      expect(fakes.deps.logger.error).toHaveBeenCalledWith('spend-monitor-account-context-failed', expect.anything());
+    });
+
+    it('applies recorded payment risk before explicit trust and platform exclusion', async () => {
+      const fakes = createFakes();
+      vi.mocked(fakes.accountContextDeps.findUsers).mockImplementation(async ids =>
+        ids.map(id => ({
+          id,
+          createdAt: new Date('2026-01-01'),
+          emailVerified: true,
+          riskScore: { score: 10, reviewState: 'none' as const },
+          paymentRiskEventAt: NOW,
+        }))
+      );
+      fakes.setRollups([
+        ...quietPlatformHistory(),
+        ...windowBuckets('platform', 'all', 15000),
+        ...windowBuckets('User', 'subscriber', 15000),
+      ]);
+      await run(fakes, parseSpendTrustConfig('', 'subscriber'));
+      expect(fakes.alerts).toContainEqual(expect.objectContaining({ rule: 'platform_spike' }));
+      const alert = fakes.alerts.find(row => row.rule === 'account_ceiling');
+      expect(alert?.context).toMatchObject({ accountTier: 'standard', policyReasons: ['payment_risk_event'] });
+      expect(alert?.context).not.toHaveProperty('trusted');
+      expect(fakes.alerts.some(row => row.context.trustedExcluded !== undefined)).toBe(false);
+    });
+
+    it('uses standard limits and logs a failed subscription lookup', async () => {
+      const fakes = createFakes();
+      vi.mocked(fakes.paidScopeDeps.findActiveSubscriptionsByOwners).mockRejectedValue(
+        new Error('billing unavailable')
+      );
+      fakes.setRollups([
+        ...windowBuckets('platform', 'all', 3400).map(bucket => ({ ...bucket, costUsd: 1 })),
+        ...windowBuckets('User', 'subscriber', 3400),
+      ]);
+      await run(fakes);
+      expect(fakes.alerts).toContainEqual(expect.objectContaining({ rule: 'account_ceiling' }));
+      expect(fakes.deps.logger.error).toHaveBeenCalledWith('spend-monitor-paid-lookup-failed', expect.anything());
+    });
+  });
+
+  describe('account context follows the payer', () => {
+    const platform = windowBuckets('platform', 'all', 100).map(bucket => ({ ...bucket, costUsd: 1 }));
+    const spenders = [...windowBuckets('apiKey', 'k1', 2000), ...windowBuckets('Agent', 'a1', 2000)];
+
+    const orgBilledSpenders = (fakes: ReturnType<typeof createFakes>, creatorId: string, riskyIds: string[]) => {
+      fakes.deps.resolveScopeDeps = {
+        ...fakes.deps.resolveScopeDeps,
+        findApiKeysByIds: async ids =>
+          ids.map(id => ({
+            id,
+            name: 'ci-key',
+            userId: creatorId,
+            billingOwnerType: CreditHolderType.Organization,
+            organizationId: 'o1',
+          })),
+        findAgentsByIds: async ids => ids.map(id => ({ id, name: 'helper', organizationId: 'o1' })),
+        findOrganizationsByIds: async ids => ids.map(id => ({ id, name: `Org ${id}` })),
+      };
+      vi.mocked(fakes.accountContextDeps.findUsers).mockImplementation(async ids =>
+        ids.map(id => ({
+          id,
+          createdAt: new Date('2026-01-01'),
+          emailVerified: true,
+          riskScore: { score: 10, reviewState: 'none' as const },
+          paymentRiskEventAt: riskyIds.includes(id) ? NOW : null,
+        }))
+      );
+      fakes.setRollups([...platform, ...spenders]);
+    };
+
+    it('gives keys and agents the paid tier of a clean paying organization despite a risky creator', async () => {
+      const fakes = createFakes();
+      orgBilledSpenders(fakes, 'creator', ['creator']);
+      vi.mocked(fakes.paidScopeDeps.findActiveSubscriptionsByOwners).mockImplementation(async ownerType =>
+        ownerType === SubscriptionOwnerType.Organization
+          ? [{ ownerId: 'o1', priceId: SUBSCRIPTION_PLANS[0].priceId, status: 'active' }]
+          : []
+      );
+      await run(fakes);
+      expect(fakes.alerts).toHaveLength(0);
+      expect(fakes.accountContextDeps.findUsers).toHaveBeenCalledExactlyOnceWith(['owner-o1']);
+    });
+
+    it('applies the risk flags of the paying organization to keys and agents despite a clean creator', async () => {
+      const fakes = createFakes();
+      orgBilledSpenders(fakes, 'creator', ['owner-o1']);
+      vi.mocked(fakes.paidScopeDeps.findActiveSubscriptionsByOwners).mockImplementation(async ownerType =>
+        ownerType === SubscriptionOwnerType.User
+          ? [{ ownerId: 'creator', priceId: SUBSCRIPTION_PLANS[0].priceId, status: 'active' }]
+          : []
+      );
+      await run(fakes);
+      expect(fakes.alerts.map(alert => [alert.scopeType, alert.rule])).toEqual([
+        ['Agent', 'account_ceiling'],
+        ['apiKey', 'apikey_ceiling'],
+      ]);
+      for (const alert of fakes.alerts) {
+        expect(alert.context).toMatchObject({ accountTier: 'standard', policyReasons: ['payment_risk_event'] });
+      }
+    });
+  });
+
+  it('resolves an incident with the tier and policy context stored by its last breach, not a fresh lookup', async () => {
+    const fakes = createFakes();
+    const platform = windowBuckets('platform', 'all', 100).map(bucket => ({ ...bucket, costUsd: 1 }));
+    const accountCreatedAt = (createdAt: Date) =>
+      vi.mocked(fakes.accountContextDeps.findUsers).mockImplementation(async ids =>
+        ids.map(id => ({
+          id,
+          createdAt,
+          emailVerified: true,
+          riskScore: { score: 10, reviewState: 'none' as const },
+        }))
+      );
+    accountCreatedAt(new Date(NOW.getTime() - DAY_MS));
+    fakes.setRollups([...platform, ...windowBuckets('User', 'u1', 2000)]);
+    await run(fakes);
+    const lastBreachContext = structuredClone(fakes.alerts[0].context);
+    expect(lastBreachContext).toMatchObject({ accountTier: 'standard' });
+
+    accountCreatedAt(new Date('2026-01-01'));
+    vi.mocked(fakes.paidScopeDeps.findActiveSubscriptionsByOwners).mockResolvedValue([
+      { ownerId: 'u1', priceId: SUBSCRIPTION_PLANS[0].priceId, status: 'active' },
+    ]);
+    fakes.setRollups(platform);
+    fakes.nextWindow();
+    await run(fakes);
+    fakes.nextWindow();
+    await run(fakes);
+
+    expect(fakes.alerts[0].status).toBe('resolved');
+    expect(fakes.alerts[0].context).toEqual(lastBreachContext);
+    expect(JSON.stringify(fakes.posts.at(-1))).toContain('(standard)');
   });
 
   describe('trusted accounts', () => {

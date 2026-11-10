@@ -37,6 +37,9 @@ export function registerAccount(auth: AuthService): AccountService {
   ipcMain.handle(IPC_CHANNELS.accountPurchaseCredits, (_event, packageId: unknown) =>
     billing.purchaseCredits(packageId)
   );
+  ipcMain.handle(IPC_CHANNELS.accountSendFeedback, (_event, content: unknown) =>
+    service.sendFeedback(content, auth.getState().user)
+  );
 
   return service;
 }

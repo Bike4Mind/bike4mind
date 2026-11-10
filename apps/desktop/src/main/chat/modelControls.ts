@@ -166,6 +166,8 @@ export interface HostedModelFacts {
   backend?: string;
   canThink: boolean;
   thinkingStyle?: string;
+  /** ModelInfo.thinkingAlwaysOn: the server cannot switch this model's thinking off. */
+  thinkingAlwaysOn?: boolean;
   maxOutputTokens?: number;
   /** The catalog sends OpenAI's `max_completion_tokens`, which the server pairs with a fixed temperature. */
   maxCompletionTokens?: boolean;
@@ -230,13 +232,15 @@ export function hostedControls(
   const claude = servedAsClaude(model);
   const budgeted = claude && model.canThink && !thinksAdaptively(model);
   // A Claude that thinks with a budget takes thinking.budget_tokens; Desktop's thinking request makes it ignore an effort.
-  const levels = budgeted
+  const listed = budgeted
     ? []
     : efforts
       ? REASONING_EFFORT_SETTINGS.filter(setting => setting !== 'default' && efforts.includes(setting))
       : effortFallback
         ? [...FALLBACK_HOSTED_EFFORTS]
         : [];
+  // The server runs `none` at the lowest effort on a model that cannot stop thinking, so it is not offered as Off.
+  const levels = model.thinkingAlwaysOn ? listed.filter(level => level !== 'none') : listed;
   const temperature = hostedTemperature(model);
   const cap = model.maxOutputTokens;
   // The server raises max_tokens to the budget plus its headroom and never back to the cap, so a larger budget

@@ -11,6 +11,7 @@ import {
   ADMIN_ACTION_COUNT_LABELS,
   type AdminActionCountKey,
 } from './adminActionCounts';
+import { onOpenAdminCommandPalette } from './shared/adminKeyboard';
 
 const theme = extendTheme({ ...getThemeConfig() });
 const Wrapper = ({ children }: { children: React.ReactNode }) => (
@@ -381,6 +382,20 @@ describe('SidebarNav', () => {
       fireEvent.click(screen.getByTestId('admin-sidebar-collapse-btn'));
 
       expect(onToggleCollapsed).toHaveBeenCalledOnce();
+    });
+
+    it.each([
+      ['the brand row hint', false, 'admin-sidebar-command-hint'],
+      ['the rail button', true, 'admin-sidebar-rail-command-btn'],
+    ])('opens the command palette from %s', (_, collapsed, testId) => {
+      const opened = vi.fn();
+      const stop = onOpenAdminCommandPalette(opened);
+      renderNav({ collapsed, onToggleCollapsed: vi.fn() });
+
+      fireEvent.click(screen.getByTestId(testId));
+
+      expect(opened).toHaveBeenCalledOnce();
+      stop();
     });
 
     it('has no collapse toggle in the phone drawer', () => {

@@ -76,6 +76,8 @@ export type LLMCommandArgs = {
   };
   setChatCompletion?: (updater: (prev: any) => any) => void;
   mcpServers?: string[];
+  /** Custom MCP connector slugs switched off in the Tools menu (LLMContext.disabledMcpConnections). */
+  disabledMcpConnections?: string[];
   optimisticSessionId?: string;
   /** Agent-mode toggle state forwarded through to the chat completion payload. */
   agentMode?: LLMApiRequestBody['agentMode'];
@@ -152,6 +154,7 @@ export async function handleLLMCommand(
       audioConfig,
       deepResearchConfig,
       mcpServers,
+      disabledMcpConnections,
       optimisticSessionId,
       agentMode,
     } = args;
@@ -198,6 +201,7 @@ export async function handleLLMCommand(
       currentSession: _currentSession,
       agentIds: _omitAgentIds,
       mcpServers: _omitMcpServers,
+      disabledMcpConnections: _omitDisabledMcpConnections,
       modelConfigurations: _omitModelConfigurations,
       deepResearchConfig: _omitDeepResearchConfig,
       researchMode: _omitResearchMode,
@@ -290,6 +294,9 @@ export async function handleLLMCommand(
         ...(skipAutoOffers ? { skipAutoOffers: true } : {}),
         // Include mcpServers if it's an array (even empty - means user disabled all)
         ...(Array.isArray(mcpServers) ? { mcpServers } : {}),
+        ...(Array.isArray(disabledMcpConnections) && disabledMcpConnections.length > 0
+          ? { disabledMcpConnections }
+          : {}),
         ...(deepResearchConfig ? { deepResearchConfig } : {}),
         ...(imageConfig ? { imageConfig } : {}),
         ...(audioConfig ? { audioConfig } : {}),

@@ -6,6 +6,7 @@ import {
 } from '@bike4mind/utils';
 import { isAxiosError } from 'axios';
 import { recordCircuitBreakerTransition } from '../utils/cloudwatch';
+import { Logger } from '@bike4mind/observability';
 
 export type OperationType = 'read' | 'write';
 
@@ -149,7 +150,7 @@ function createBreaker(tenantKey: string, mcpServerName: string, operationType: 
     name: serverOpKey(mcpServerName, operationType),
     isFailure: isCircuitBreakerFailure,
     onStateChange: event => {
-      console.log(
+      Logger.info(
         `[CircuitBreaker] ${event.name} (tenant ${tenantKey}): ${event.from} -> ${event.to} (${event.reason})`
       );
       const emit = recordCircuitBreakerTransition(event.name, event.from, event.to, operationType);
