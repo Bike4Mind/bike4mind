@@ -11,6 +11,7 @@ export function toPublicSkillSummary(skill: ISkill, appUrl: string): PublicSkill
     description: skill.description,
     argument_hint: skill.argumentHint ?? null,
     claude_code_allowed_tools: skill.claudeCodeAllowedTools ?? [],
+    ...(skill.claudeCodeModel && { claude_code_model: skill.claudeCodeModel }),
     disable_model_invocation: Boolean(skill.disableModelInvocation),
     scope: skill.isSystem ? 'system' : skill.organizationId ? 'organization' : 'user',
     organization_id: skill.organizationId ?? null,

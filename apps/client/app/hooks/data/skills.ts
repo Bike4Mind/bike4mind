@@ -73,7 +73,15 @@ export const useGetSkill = (id: string | undefined) => {
 
 export type SkillFormInput = Pick<ISkill, 'name' | 'description' | 'body'> &
   Partial<
-    Pick<ISkill, 'argumentHint' | 'allowedTools' | 'claudeCodeAllowedTools' | 'disableModelInvocation' | 'files'>
+    Pick<
+      ISkill,
+      | 'argumentHint'
+      | 'allowedTools'
+      | 'claudeCodeAllowedTools'
+      | 'claudeCodeModel'
+      | 'disableModelInvocation'
+      | 'files'
+    >
   >;
 
 export const useCreateSkill = () => {

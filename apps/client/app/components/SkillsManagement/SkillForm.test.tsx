@@ -188,6 +188,22 @@ describe('SkillForm SKILL.md import', () => {
     expect(onSubmit.mock.calls[0][0]).not.toHaveProperty('allowedTools');
   });
 
+  it('submits an imported model as claudeCodeModel and clears it on remove', () => {
+    const onSubmit = vi.fn();
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <SkillForm submitLabel="Create" onSubmit={onSubmit} onCancel={vi.fn()} enableSkillMdImport />
+      </CssVarsProvider>
+    );
+    paste('---\nname: commit\ndescription: Commit\nmodel: haiku\n---\nCommit it.');
+    expect(screen.getByTestId('skill-form-claude-code-model')).toHaveTextContent('haiku');
+    fireEvent.click(screen.getByTestId('skill-form-submit'));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ claudeCodeModel: 'haiku' }));
+    fireEvent.click(screen.getByTestId('skill-form-claude-code-model-remove'));
+    fireEvent.click(screen.getByTestId('skill-form-submit'));
+    expect(onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({ claudeCodeModel: '' }));
+  });
+
   it('removes imported Claude Code tools, submitting an empty list', () => {
     const onSubmit = vi.fn();
     render(
@@ -459,11 +475,11 @@ describe('SkillForm update from SKILL.md (edit mode)', () => {
   };
   const NEW_MD = '---\nname: summarize\ndescription: New description\n---\nNew body';
 
-  const renderEdit = (onSubmit = vi.fn()) => {
+  const renderEdit = (initial: typeof EXISTING & { claudeCodeModel?: string } = EXISTING, onSubmit = vi.fn()) => {
     render(
       <CssVarsProvider theme={appTheme}>
         <SkillForm
-          initialValue={EXISTING}
+          initialValue={initial}
           submitLabel="Save changes"
           onSubmit={onSubmit}
           onCancel={vi.fn()}
@@ -522,6 +538,30 @@ describe('SkillForm update from SKILL.md (edit mode)', () => {
     fireEvent.click(apply);
     expect(value('skill-description-input')).toBe('New description');
     expect(value('skill-body-input')).toBe('My later edit');
+  });
+
+  it('lists a model change in the preview and writes it on apply', async () => {
+    const onSubmit = renderEdit({ ...EXISTING, claudeCodeModel: 'opus' });
+    upload('---\nname: summarize\ndescription: Old description\nmodel: haiku\n---\nOld body');
+    expect(await screen.findByTestId('skill-form-update-change-claude-code-model')).toHaveTextContent('opus');
+    expect(screen.getByTestId('skill-form-update-change-claude-code-model')).toHaveTextContent('haiku');
+    expect(screen.getByTestId('skill-form-claude-code-model')).toHaveTextContent('opus');
+    fireEvent.click(screen.getByTestId('skill-form-update-apply'));
+    fireEvent.click(screen.getByTestId('skill-form-submit'));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ claudeCodeModel: 'haiku' }));
+  });
+
+  it('keeps a model removed after the preview when the preview did not list the model', async () => {
+    const onSubmit = renderEdit({ ...EXISTING, claudeCodeModel: 'opus' });
+    upload('---\nname: summarize\ndescription: New description\nmodel: opus\n---\nOld body');
+    const apply = await screen.findByTestId('skill-form-update-apply');
+    expect(screen.queryByTestId('skill-form-update-change-claude-code-model')).toBeNull();
+    fireEvent.click(screen.getByTestId('skill-form-claude-code-model-remove'));
+    fireEvent.click(apply);
+    fireEvent.click(screen.getByTestId('skill-form-submit'));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ description: 'New description', claudeCodeModel: '' })
+    );
   });
 
   it('does not show the make-a-copy banner for a same-origin export on edit', async () => {
