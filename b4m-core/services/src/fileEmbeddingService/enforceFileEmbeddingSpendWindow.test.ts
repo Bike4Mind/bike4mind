@@ -27,9 +27,10 @@ function makeFixedWindowCache(clock: { now: number }) {
       windows.set(key, window);
       return { success: true, count: window.count, expiresAt: new Date(window.expiresAt) };
     }),
-    releaseFromFixedWindow: vi.fn(async (key: string, amount: number) => {
+    releaseFromFixedWindow: vi.fn(async (key: string, amount: number, expiresAt: Date) => {
       const live = windows.get(key);
-      if (live && live.expiresAt > clock.now) live.count = Math.max(0, live.count - amount);
+      if (live && live.expiresAt > clock.now && live.expiresAt === expiresAt.getTime())
+        live.count = Math.max(0, live.count - amount);
     }),
   };
 }

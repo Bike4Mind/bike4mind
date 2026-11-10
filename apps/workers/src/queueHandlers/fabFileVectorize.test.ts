@@ -1695,6 +1695,18 @@ describe('fabFileVectorize handler - credit billing outside a data lake', () => 
     expect(h.fileWindowRelease).toHaveBeenCalledTimes(1);
   });
 
+  it('gives the window reservation back, and rethrows for a retry, when the billing check fails', async () => {
+    h.isOperationalBillingEnabled.mockRejectedValueOnce(new Error('plan lookup down'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(
+      'File indexing is temporarily unavailable'
+    );
+
+    expect(h.fileWindowRelease).toHaveBeenCalledTimes(1);
+    expect(h.reserveRequestCredits).not.toHaveBeenCalled();
+    expect(h.getVector).not.toHaveBeenCalled();
+  });
+
   it('keeps the window reservation once the embedding succeeded', async () => {
     await dispatch(makeEvent(payload), {} as never, mockLogger);
 

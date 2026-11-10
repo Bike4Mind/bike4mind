@@ -141,10 +141,10 @@ export async function resolveFileEmbeddingLimits(
  * whether or not the embedding is billed to the user; the lake path has its own gate
  * (`dataLakeService.enforceEmbeddingSpendGate`).
  *
- * Returns a grant whose `release` gives both reservations back; the caller releases only when the
- * embedding it was reserved for never ran (a provider or pre-embed failure), so a retried delivery
- * does not pay twice. When the tokens window grants and the USD window denies, the token
- * reservation is given back here.
+ * Returns a grant whose `release` gives both reservations back; the caller releases when a failure
+ * is caught before the provider returns, so a retry does not reserve twice. A crash or timeout
+ * mid-call, or a throw after the embed, skips the release and can reserve again on redelivery.
+ * When the tokens window grants and the USD window denies, the token reservation is given back here.
  */
 export async function enforceFileEmbeddingSpendWindow(params: {
   userId: string;
@@ -181,14 +181,14 @@ export async function enforceFileEmbeddingSpendWindow(params: {
     ttlMs
   );
   if (!spend.success) {
-    await db.cache.releaseFromFixedWindow(keys.tokens, estimatedTokens);
+    await db.cache.releaseFromFixedWindow(keys.tokens, estimatedTokens, tokens.expiresAt);
     deny('exhausted', spend.expiresAt);
   }
 
   return {
     release: async () => {
-      await db.cache.releaseFromFixedWindow(keys.tokens, estimatedTokens);
-      await db.cache.releaseFromFixedWindow(keys.microUsd, estimatedMicroUsd);
+      await db.cache.releaseFromFixedWindow(keys.tokens, estimatedTokens, tokens.expiresAt);
+      await db.cache.releaseFromFixedWindow(keys.microUsd, estimatedMicroUsd, spend.expiresAt);
     },
   };
 }

@@ -429,7 +429,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       let fileWindowGrant: fileEmbeddingService.FileEmbeddingWindowGrant | null = null;
       if (!spendScope) {
         // Per-user window, reserved before any credit hold so a refused file is never charged.
-        // Released on every failure before the embed succeeds, so a retry does not pay twice.
+        // Released on every caught failure before the embed succeeds.
         fileWindowGrant = await fileEmbeddingService.enforceFileEmbeddingSpendWindow({
           userId,
           estimatedMicroUsd: Math.ceil(missCostUsd * 1_000_000),

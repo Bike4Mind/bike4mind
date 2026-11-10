@@ -29,7 +29,7 @@ const CHANGE_COOLDOWNS: Partial<Record<SettingKey, NumericSettingSpec & { key: S
 
 export interface ScopedSettingCooldownDb {
   adminSettings: Pick<IAdminSettingsRepository, 'findBySettingNames' | 'findAll'>;
-  cache: Pick<ICacheRepository, 'tryAddWithinLimitFixedWindow' | 'decrementCounter'>;
+  cache: Pick<ICacheRepository, 'tryAddWithinLimitFixedWindow' | 'deleteByKey'>;
   scopedSettings: Pick<IScopedSettingsRepository, 'findOverrides'>;
 }
 
@@ -97,7 +97,7 @@ export async function claimScopedSettingChange(
 
   return {
     release: async () => {
-      await db.cache.decrementCounter(cacheKey);
+      await db.cache.deleteByKey(cacheKey);
     },
   };
 }

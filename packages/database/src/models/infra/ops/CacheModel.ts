@@ -273,12 +273,22 @@ class CacheRepository extends BaseRepository<ICacheDocument> implements ICacheRe
     };
   }
 
-  /** Inverse of `tryAddWithinLimitFixedWindow`: live window only, clamped at 0, no-op otherwise. */
-  async releaseFromFixedWindow(key: string, amount: number): Promise<void> {
+  /**
+   * Inverse of `tryAddWithinLimitFixedWindow`: live window only, clamped at 0, no-op otherwise.
+   * Passing the grant's `expiresAt` pins the release to that window, so one that has since rolled
+   * over is left alone.
+   */
+  async releaseFromFixedWindow(key: string, amount: number, expiresAt?: Date): Promise<void> {
     if (!(amount > 0)) return;
-    await this.model.updateOne({ key, expiresAt: { $gt: new Date() }, 'result.count': { $type: 'number' } }, [
-      { $set: { 'result.count': { $max: [0, { $subtract: ['$result.count', amount] }] } } },
-    ]);
+    const now = new Date();
+    await this.model.updateOne(
+      {
+        key,
+        expiresAt: expiresAt ? { $eq: expiresAt, $gt: now } : { $gt: now },
+        'result.count': { $type: 'number' },
+      },
+      [{ $set: { 'result.count': { $max: [0, { $subtract: ['$result.count', amount] }] } } }]
+    );
   }
 
   /**

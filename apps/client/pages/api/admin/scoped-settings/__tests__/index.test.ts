@@ -37,8 +37,16 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
 vi.mock('@bike4mind/services', () => ({
   adminAuditService: { REDACTED_PLACEHOLDER: '[REDACTED]' },
   scopedSettingsService: {
-    writeScopedOverride: (...args: unknown[]) => writeScopedOverride(...args),
-    clearScopedOverride: (...args: unknown[]) => clearScopedOverride(...args),
+    writeScopedOverride: async (...args: unknown[]) => {
+      const result = await writeScopedOverride(...args);
+      await (args[4] as { afterWrite?: () => Promise<void> } | undefined)?.afterWrite?.();
+      return result;
+    },
+    clearScopedOverride: async (...args: unknown[]) => {
+      const result = await clearScopedOverride(...args);
+      await (args[3] as { afterWrite?: () => Promise<void> } | undefined)?.afterWrite?.();
+      return result;
+    },
   },
 }));
 vi.mock('@server/utils/resolveDefaultEmbeddingModel', () => ({
@@ -268,7 +276,7 @@ describe('admin/scoped-settings writes', () => {
           scopedSettings: expect.anything(),
         },
       },
-      { logger }
+      { logger, afterWrite: expect.any(Function) }
     );
     expect(response).toMatchObject({
       settingName: 'PauseLakeConvergence',
@@ -319,7 +327,7 @@ describe('admin/scoped-settings writes', () => {
           scopedSettings: expect.anything(),
         },
       },
-      { logger }
+      { logger, afterWrite: expect.any(Function) }
     );
     expect(response).toEqual({ cleared: true });
   });

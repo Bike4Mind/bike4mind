@@ -364,12 +364,44 @@ describe('CacheRepository.releaseFromFixedWindow', () => {
 
   it('gives an amount back to a live window so it can be granted again', async () => {
     const key = `release:${Date.now()}-5`;
-    await cacheRepository.tryAddWithinLimitFixedWindow(key, 8, 10, windowMs);
+    const { expiresAt } = await cacheRepository.tryAddWithinLimitFixedWindow(key, 8, 10, windowMs);
 
-    await cacheRepository.releaseFromFixedWindow(key, 5);
+    await cacheRepository.releaseFromFixedWindow(key, 5, expiresAt);
 
     const regranted = await cacheRepository.tryAddWithinLimitFixedWindow(key, 7, 10, windowMs);
     expect(regranted).toMatchObject({ success: true, count: 10 });
+  });
+
+  it('leaves the count alone when the window identity does not match', async () => {
+    const key = `release:${Date.now()}-6`;
+    const { expiresAt } = await cacheRepository.tryAddWithinLimitFixedWindow(key, 6, 10, windowMs);
+
+    await cacheRepository.releaseFromFixedWindow(key, 6, new Date(expiresAt.getTime() + 1_000));
+
+    const doc = await cacheRepository.findByKey(key);
+    expect((doc?.result as { count: number }).count).toBe(6);
+  });
+
+  it('floors the count at zero', async () => {
+    const key = `release:${Date.now()}-7`;
+    const { expiresAt } = await cacheRepository.tryAddWithinLimitFixedWindow(key, 3, 10, windowMs);
+
+    await cacheRepository.releaseFromFixedWindow(key, 50, expiresAt);
+
+    const doc = await cacheRepository.findByKey(key);
+    expect((doc?.result as { count: number }).count).toBe(0);
+  });
+
+  it('leaves an expired window alone and is a no-op for an absent key', async () => {
+    const key = `release:${Date.now()}-8`;
+    await Cache.create({ key, result: { count: 4 }, expiresAt: new Date(Date.now() - 1_000) });
+
+    await cacheRepository.releaseFromFixedWindow(key, 4, new Date(Date.now() - 1_000));
+    await cacheRepository.releaseFromFixedWindow(`${key}-absent`, 4, new Date(Date.now() + windowMs));
+
+    const doc = await Cache.findOne({ key }).lean();
+    expect((doc?.result as { count: number }).count).toBe(4);
+    expect(await Cache.findOne({ key: `${key}-absent` })).toBeNull();
   });
 });
 

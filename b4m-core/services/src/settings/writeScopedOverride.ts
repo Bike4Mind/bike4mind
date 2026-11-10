@@ -45,8 +45,8 @@ async function releaseOnFailure(claim: ScopedSettingChangeClaim | null, write: (
   try {
     await write();
   } catch (err) {
-    // Best-effort: a failed release (e.g. inside an aborted transaction, which rolls the claim
-    // back anyway) must not mask the write error.
+    // The claim is a cache write outside any transaction, so it is released here; a failure of the
+    // transaction commit itself is not covered. A failed release must not mask the write error.
     await claim?.release().catch(() => undefined);
     throw err;
   }
@@ -62,7 +62,7 @@ export async function writeScopedOverride<K extends SettingKey>(
   ref: ScopeRef & { ownerType?: SettingOwnerType },
   rawValue: string,
   db: ScopedOverrideWriteDb,
-  opts?: { logger?: Logger }
+  opts?: { logger?: Logger; afterWrite?: () => Promise<unknown> }
 ): Promise<void> {
   const def = settingsMap[key] as {
     scope?: { settableAt: readonly SettingScopeLevel[] };
@@ -91,8 +91,8 @@ export async function writeScopedOverride<K extends SettingKey>(
   }
 
   const claim = await claimScopedSettingChange(key, ref, rawValue, db.changeCooldown, opts);
-  await releaseOnFailure(claim, () =>
-    db.scopedSettings.upsertOverride({
+  await releaseOnFailure(claim, async () => {
+    await db.scopedSettings.upsertOverride({
       scopeLevel: ref.scopeLevel,
       scopeId: ref.scopeId,
       ownerType: ref.ownerType,
@@ -100,8 +100,9 @@ export async function writeScopedOverride<K extends SettingKey>(
       // rawValue, not parsed.data: the overlay stores the raw string (schema.safeParse above is a
       // validation gate, not a normalization step); the resolver re-parses it via pickOverride on read.
       settingValue: rawValue,
-    })
-  );
+    });
+    await opts?.afterWrite?.();
+  });
   opts?.logger?.debug?.(`[scopedSettings] wrote '${key}' override at ${ref.scopeLevel}:${ref.scopeId}`);
   invalidateScopedSettingsCache({ scopeLevel: ref.scopeLevel, scopeId: ref.scopeId });
 }
@@ -111,12 +112,13 @@ export async function clearScopedOverride<K extends SettingKey>(
   key: K,
   ref: ScopeRef,
   db: ScopedOverrideWriteDb,
-  opts?: { logger?: Logger }
+  opts?: { logger?: Logger; afterWrite?: () => Promise<unknown> }
 ): Promise<void> {
   const claim = await claimScopedSettingChange(key, ref, null, db.changeCooldown, opts);
-  await releaseOnFailure(claim, () =>
-    db.scopedSettings.clearOverride({ scopeLevel: ref.scopeLevel, scopeId: ref.scopeId, settingName: key })
-  );
+  await releaseOnFailure(claim, async () => {
+    await db.scopedSettings.clearOverride({ scopeLevel: ref.scopeLevel, scopeId: ref.scopeId, settingName: key });
+    await opts?.afterWrite?.();
+  });
   opts?.logger?.debug?.(`[scopedSettings] cleared '${key}' override at ${ref.scopeLevel}:${ref.scopeId}`);
   invalidateScopedSettingsCache({ scopeLevel: ref.scopeLevel, scopeId: ref.scopeId });
 }

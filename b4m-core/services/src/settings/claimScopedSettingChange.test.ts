@@ -9,7 +9,7 @@ const T0 = Date.UTC(2026, 0, 1);
 const ownerRef = { scopeLevel: SettingScopeLevel.Owner, scopeId: 'u1', ownerType: 'User' as SettingOwnerType };
 const otherOwnerRef = { ...ownerRef, scopeId: 'u2' };
 
-/** Models CacheRepository's fixed-window counter and decrementCounter against a controllable clock. */
+/** Models CacheRepository's fixed-window counter and deleteByKey against a controllable clock. */
 function makeFixedWindowCache(clock: { now: number }) {
   const windows = new Map<string, { count: number; expiresAt: number }>();
   return {
@@ -24,10 +24,8 @@ function makeFixedWindowCache(clock: { now: number }) {
       windows.set(key, window);
       return { success: true, count: window.count, expiresAt: new Date(window.expiresAt) };
     }),
-    decrementCounter: vi.fn(async (key: string) => {
-      const window = windows.get(key);
-      if (window) window.count -= 1;
-      return window?.count ?? 0;
+    deleteByKey: vi.fn(async (key: string) => {
+      windows.delete(key);
     }),
   };
 }
@@ -144,6 +142,33 @@ describe('DefaultChunkSize change cooldown', () => {
 
     await expect(write('512')).rejects.toThrow('db down');
     await expect(write('512')).resolves.toBeUndefined();
+  });
+
+  it('gives the slot back when the afterWrite hook throws, and opens a fresh window on the next claim', async () => {
+    const { clock, db } = setup();
+    const afterWrite = vi.fn().mockRejectedValueOnce(new Error('audit down'));
+
+    await expect(writeScopedOverride('DefaultChunkSize', ownerRef, '512', db, { afterWrite })).rejects.toThrow(
+      'audit down'
+    );
+
+    clock.now = T0 + 10 * HOUR_MS;
+    await expect(writeScopedOverride('DefaultChunkSize', ownerRef, '256', db, { afterWrite })).resolves.toBeUndefined();
+    expect(afterWrite).toHaveBeenCalledTimes(2);
+
+    clock.now = T0 + 10 * HOUR_MS + 23 * HOUR_MS;
+    await expect(writeScopedOverride('DefaultChunkSize', ownerRef, '128', db)).rejects.toBeInstanceOf(
+      ScopedSettingChangeCooldownError
+    );
+  });
+
+  it('gives the slot back when the afterWrite hook throws on a clear', async () => {
+    const { db, scopedSettings } = setup();
+    await scopedSettings.upsertOverride({ ...ownerRef, settingName: 'DefaultChunkSize', settingValue: '512' });
+    const afterWrite = vi.fn().mockRejectedValueOnce(new Error('audit down'));
+
+    await expect(clearScopedOverride('DefaultChunkSize', ownerRef, db, { afterWrite })).rejects.toThrow('audit down');
+    await expect(clearScopedOverride('DefaultChunkSize', ownerRef, db, { afterWrite })).resolves.toBeUndefined();
   });
 
   it('refuses to write a cooldown key when the writer omits the cooldown dependencies', async () => {

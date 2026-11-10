@@ -150,16 +150,19 @@ const handler = adminApi({
           { scopeLevel, scopeId, ownerType },
           settingValue,
           scopedOverrideWriteDb,
-          { logger: req.logger }
+          {
+            logger: req.logger,
+            afterWrite: () =>
+              recordAdminSettingChange(req, {
+                settingName,
+                before,
+                after: settingValue,
+                summary: `set the ${settingName} override at ${scopeLevel} ${scopeId}`,
+                target: scopedTarget(settingName, scopeLevel, scopeId),
+                details: { scopeLevel, scopeId, ownerType },
+              }),
+          }
         );
-        await recordAdminSettingChange(req, {
-          settingName,
-          before,
-          after: settingValue,
-          summary: `set the ${settingName} override at ${scopeLevel} ${scopeId}`,
-          target: scopedTarget(settingName, scopeLevel, scopeId),
-          details: { scopeLevel, scopeId, ownerType },
-        });
       })
     );
 
@@ -175,16 +178,18 @@ const handler = adminApi({
         const before = await readOverrideValue(settingName, scopeLevel, scopeId);
         await scopedSettingsService.clearScopedOverride(settingName, { scopeLevel, scopeId }, scopedOverrideWriteDb, {
           logger: req.logger,
-        });
-        // Clearing an address that holds no override changes nothing, so it is not an admin change.
-        if (before === null) return;
-        await recordAdminSettingChange(req, {
-          settingName,
-          before,
-          after: null,
-          summary: `cleared the ${settingName} override at ${scopeLevel} ${scopeId}`,
-          target: scopedTarget(settingName, scopeLevel, scopeId),
-          details: { scopeLevel, scopeId },
+          // Clearing an address that holds no override changes nothing, so it is not an admin change.
+          afterWrite: async () => {
+            if (before === null) return;
+            await recordAdminSettingChange(req, {
+              settingName,
+              before,
+              after: null,
+              summary: `cleared the ${settingName} override at ${scopeLevel} ${scopeId}`,
+              target: scopedTarget(settingName, scopeLevel, scopeId),
+              details: { scopeLevel, scopeId },
+            });
+          },
         });
       })
     );

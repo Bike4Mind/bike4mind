@@ -43,9 +43,11 @@ export interface ICacheRepository extends IBaseRepository<ICacheDocument> {
   ): Promise<{ success: boolean; count: number; expiresAt: Date }>;
   /**
    * Exact inverse of `tryAddWithinLimitFixedWindow` within the live window: subtracts `amount`,
-   * never below 0, and is a no-op when the window doc is absent or already expired.
+   * never below 0, and is a no-op when the window doc is absent or already expired. Pass the
+   * `expiresAt` the grant returned to pin the release to that window: one that has since rolled
+   * over (different expiry) is then left alone.
    */
-  releaseFromFixedWindow(key: string, amount: number): Promise<void>;
+  releaseFromFixedWindow(key: string, amount: number, expiresAt?: Date): Promise<void>;
   /**
    * `tryIncrementWithinLimitFixedWindow` generalized to add `amount` per call instead of 1.
    * Same FIXED-WINDOW semantics and expiry handling. The add is all-or-nothing: if
