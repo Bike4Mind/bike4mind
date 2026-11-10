@@ -544,7 +544,7 @@ const DlqReplayTab: React.FC = () => {
       {showHistory && (
         <>
           <Typography level="title-md" sx={{ mb: 1 }} startDecorator={<HistoryIcon />}>
-            Replay History {selectedQueueInfo ? `(${selectedQueueInfo.displayName})` : '(all queues)'}
+            Replay History {selectedQueue ? `(${selectedQueueInfo?.displayName ?? selectedQueue})` : '(all queues)'}
           </Typography>
 
           {/* History Filters */}
@@ -665,7 +665,7 @@ const DlqReplayTab: React.FC = () => {
                     </td>
                     <td>
                       <Typography level="body-xs" data-testid={`dlq-history-by-${entry.id}`}>
-                        {entry.replayedBy}
+                        {entry.replayedByName}
                       </Typography>
                     </td>
                     <td>

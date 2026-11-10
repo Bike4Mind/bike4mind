@@ -12,6 +12,7 @@ const state = vi.hoisted(() => ({
     status: 'success' | 'failed' | 'skipped';
     errorMessage?: string;
     replayedBy: string;
+    replayedByName: string;
     createdAt: string;
   }>,
 }));
@@ -65,7 +66,8 @@ describe('DlqReplayTab history table', () => {
         messageId: 'msg-abc123def456ghi789',
         sourceQueue: 'FabFile Vectorize',
         status: 'success',
-        replayedBy: 'admin@bike4mind.com',
+        replayedBy: '64b000000000000000000001',
+        replayedByName: 'admin@bike4mind.com',
         createdAt: '2026-11-01T12:00:00.000Z',
       },
       {
@@ -75,7 +77,8 @@ describe('DlqReplayTab history table', () => {
         sourceQueue: 'Image Generation',
         status: 'failed',
         errorMessage: 'Timeout exceeded',
-        replayedBy: 'ops@bike4mind.com',
+        replayedBy: '64b000000000000000000002',
+        replayedByName: 'ops@bike4mind.com',
         createdAt: '2026-11-02T08:00:00.000Z',
       },
     ];
@@ -105,7 +108,8 @@ describe('DlqReplayTab history table', () => {
         messageId: 'msg-no-body-here',
         sourceQueue: 'Quest Export',
         status: 'skipped',
-        replayedBy: 'admin@bike4mind.com',
+        replayedBy: '64b000000000000000000001',
+        replayedByName: 'admin@bike4mind.com',
         createdAt: '2026-11-03T10:00:00.000Z',
       },
     ];

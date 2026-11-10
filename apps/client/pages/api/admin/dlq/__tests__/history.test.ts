@@ -5,6 +5,7 @@ import { createMocks } from 'node-mocks-http';
 const h = vi.hoisted(() => ({
   routeOptions: vi.fn(),
   findRecent: vi.fn(),
+  findByIds: vi.fn(),
   get: undefined as ((req: unknown, res: unknown) => Promise<void>) | undefined,
 }));
 
@@ -28,10 +29,12 @@ vi.mock('@server/middlewares/adminApi', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   dlqReplayLogRepository: { findRecent: h.findRecent },
+  userRepository: { findByIds: h.findByIds },
 }));
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  h.findByIds.mockResolvedValue([]);
   await import('../history');
 });
 
@@ -47,7 +50,17 @@ describe('GET /api/admin/dlq/history', () => {
         replayedBy: 'admin-1',
         createdAt: new Date('2026-11-01'),
       },
+      {
+        id: 'log-2',
+        queueLabel: 'quest',
+        messageId: 'msg-2',
+        sourceQueue: 'Quest queue',
+        status: 'failed',
+        replayedBy: 'deleted-user',
+        createdAt: new Date('2026-11-02'),
+      },
     ]);
+    h.findByIds.mockResolvedValue([{ id: 'admin-1', email: 'admin@example.com', username: 'admin' }]);
 
     const { req, res } = createMocks({
       method: 'GET',
@@ -61,9 +74,12 @@ describe('GET /api/admin/dlq/history', () => {
     expect(h.findRecent.mock.calls[0][0]).toMatchObject({ includeBody: false });
 
     const body = JSON.parse(res._getData());
-    expect(body.history).toHaveLength(1);
+    expect(body.history).toHaveLength(2);
+    expect(h.findByIds).toHaveBeenCalledWith(['admin-1', 'deleted-user']);
     expect(body.history[0]).not.toHaveProperty('messageBody');
     expect(body.history[0]).toHaveProperty('replayedBy', 'admin-1');
+    expect(body.history[0]).toHaveProperty('replayedByName', 'admin@example.com');
+    expect(body.history[1]).toHaveProperty('replayedByName', 'deleted-user');
     expect(body.history[0]).toHaveProperty('sourceQueue', 'Quest queue');
   });
 

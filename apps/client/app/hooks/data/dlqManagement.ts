@@ -39,6 +39,8 @@ export interface DlqReplayLogEntry {
   status: 'success' | 'failed' | 'skipped';
   errorMessage?: string;
   replayedBy: string;
+  /** Email or username of the admin; falls back to the id when the user no longer exists. */
+  replayedByName: string;
   createdAt: string;
 }
 
