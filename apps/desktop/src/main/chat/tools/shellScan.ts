@@ -38,6 +38,7 @@ import {
   gitToplevel,
   indexListed,
   inPlaceWrites,
+  SPELLED_PROGRAM,
   withGrantedRoots,
   type GitScript,
 } from './shellWrites';
@@ -4320,9 +4321,6 @@ function curlFiles(args: readonly string[]): { reads: string[]; writes: string[]
 
 /** A function name the scan can track. */
 const PLAIN_PROGRAM = /^([\w.+-]+|\[|:)$/;
-
-/** A quote, escape, expansion, glob or brace in a program word, which leaves what runs to bash. */
-const SPELLED_PROGRAM = /['"\\$`*?[{}]/;
 
 /**
  * Whether a command the scan models cannot be followed: a wrapper or program word bash rewrites before it

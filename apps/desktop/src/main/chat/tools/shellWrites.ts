@@ -1947,6 +1947,12 @@ async function writesOf(
   return { files: inPlaceEdit(program, args), trees: [] };
 }
 
+/**
+ * A quote, escape, expansion, glob or brace in a program word, which leaves what runs to bash. Shared with the
+ * shell scan, so both treat the same subcommand spellings as unread.
+ */
+export const SPELLED_PROGRAM = /['"\\$`*?[{}]/;
+
 /** git subcommands that remove, move or overwrite the work-tree paths their words name. */
 const REMOVES_PATHS = new Set(['clean', 'rm', 'mv']);
 
@@ -1960,7 +1966,7 @@ async function gitWrites(
   const relocate = (path: string): string => resolveOperand(git.cwd, path);
   // A subcommand bash rewrites (`cle''an`, `cl$x`) may be any of them, and an expansion in a word of `git clean`,
   // `rm` or `mv` may name any path to remove, move or overwrite.
-  if (/['"\\$`*?[{}]/.test(git.sub) || (REMOVES_PATHS.has(git.sub) && git.rest.some(arg => /[$`]/.test(arg)))) {
+  if (SPELLED_PROGRAM.test(git.sub) || (REMOVES_PATHS.has(git.sub) && git.rest.some(arg => /[$`]/.test(arg)))) {
     return { writes: { files: [], trees: [], unread: true }, restores: false };
   }
   if (git.sub === 'apply') {
