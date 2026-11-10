@@ -169,6 +169,18 @@ export async function findPublishedByArtifact(artifactId: string): Promise<Manag
   }
 }
 
+function toPublishResult(a: ManagedArtifact, url: string): PublishResult {
+  return {
+    publicId: a.publicId,
+    url,
+    tier: a.tier,
+    scopeId: a.scopeId,
+    slug: a.slug,
+    visibility: a.visibility,
+    publishedAt: a.publishedAt ?? '',
+  };
+}
+
 /**
  * Look up the caller's OWN publication of a chat reply, as the share result the dialog renders,
  * so reopening Publish & Share on an answer lands on the live page. Owner-scoped server-side.
@@ -180,16 +192,7 @@ export async function findPublishedByReply(messageId: string): Promise<PublishRe
       `/api/publish/artifacts?sourceMessageId=${encodeURIComponent(messageId)}&limit=1`
     );
     const a = data.artifacts?.[0];
-    if (!a) return null;
-    return {
-      publicId: a.publicId,
-      url: `/p/r/${a.publicId}`,
-      tier: a.tier,
-      scopeId: a.scopeId,
-      slug: a.slug,
-      visibility: a.visibility,
-      publishedAt: a.publishedAt ?? '',
-    };
+    return a ? toPublishResult(a, `/p/r/${a.publicId}`) : null;
   } catch {
     return null;
   }
@@ -748,16 +751,7 @@ export function buildArtifactPublishWiring(input: {
     resolveExisting: findExisting,
     resolvePublished: async () => {
       const a = await findExisting();
-      if (!a) return null;
-      return {
-        publicId: a.publicId,
-        url: toArtifactSharePath(a.tier, a.scopeId, a.slug),
-        tier: a.tier,
-        scopeId: a.scopeId,
-        slug: a.slug,
-        visibility: a.visibility,
-        publishedAt: a.publishedAt ?? '',
-      };
+      return a ? toPublishResult(a, toArtifactSharePath(a.tier, a.scopeId, a.slug)) : null;
     },
     publish: artifactBundlePublisher(input),
     // A /p/ link is the point of no return: it can be handed to a client before anyone
