@@ -5,7 +5,17 @@ import { parseWslPath, wslLocation } from '../../wsl/wslPath';
 import { directoryOptionValues } from './bashArity';
 import { parseBash } from './bashParser';
 import { hostPhysicalTarget, isWithin, operandTargets, resolveOperand } from './paths';
-import { expandHome, isWrapper, pastWrapper, programName, shellHome, splitString, unquote, words } from './shellScan';
+import {
+  expandHome,
+  isWrapper,
+  pastWrapper,
+  programName,
+  scriptVariables,
+  shellHome,
+  splitString,
+  unquote,
+  words,
+} from './shellScan';
 import { repositoryRoot } from './shellWrites';
 import type { ToolContext } from './types';
 
@@ -342,6 +352,23 @@ export function gitRunsConfiguredProgram(commands: readonly { words: string }[])
   return null;
 }
 
+/** Variables naming a folder git reads config or hooks from, a program it runs, or where it finds programs by name. */
+const GIT_READS = ['GIT_DIR', 'GIT_COMMON_DIR', 'XDG_CONFIG_HOME', 'EDITOR', 'VISUAL', 'PAGER', 'SSH_ASKPASS', 'PATH'];
+
+/**
+ * Each value the script parsed as `root` gives a GIT_READS variable anywhere (`NAME=v git`, `env NAME=v`, `export
+ * NAME=v`), as an export reaches every git after it; names match in any case on Windows, as its environment does.
+ */
+function gitAssignments(root: Node): Map<string, string[]> {
+  const assigned = new Map<string, string[]>();
+  const windows = process.platform === 'win32';
+  for (const { name, value } of scriptVariables(root).set) {
+    const key = windows ? name.toUpperCase() : name;
+    if (typeof value === 'string' && GIT_READS.includes(key)) assigned.set(key, [...(assigned.get(key) ?? []), value]);
+  }
+  return assigned;
+}
+
 export interface SessionScriptRun {
   /** The written files the command runs, as given on the command line. */
   names: string[];
@@ -415,6 +442,7 @@ async function scanScripts(
 
   const { home } = await shellHome(startDirectory);
   let cwd = startDirectory;
+  const gitAssigned = gitAssignments(tree.rootNode);
 
   const treeGeneration = async (physical: string): Promise<number | undefined> => {
     let newest: number | undefined;
@@ -437,6 +465,29 @@ async function scanScripts(
         const generation = own === undefined ? inTree : Math.max(own, inTree ?? own);
         if (generation !== undefined) found.set(physical, { name: text, generation });
         else if (overflowed && (await stat(physical).catch(() => null))?.isFile()) {
+          found.set(physical, { name: text, generation: '*' });
+        }
+      }
+    }
+  };
+
+  /** Adds a written file or rewritten folder at or under `raw`, a folder git reads config, hooks or programs from. */
+  const considerFolder = async (raw: string, directory: string): Promise<void> => {
+    // `PATH="$PWD/bin:$PATH"` names a folder under the one git runs in.
+    const text = expandHome(unquote(raw), home).replace(/^\$(PWD|\{PWD\})(?=\/|$)/, '.');
+    if (!text || text.includes('$') || text.includes('`')) return;
+    for (const base of new Set([directory, startDirectory])) {
+      for (const target of operandTargets(base, text)) {
+        const physical = await physicalFrom(base, target);
+        for (const [file, generation] of written) {
+          if (!found.has(file) && isWithin(physical, file)) found.set(file, { name: text, generation });
+        }
+        for (const [tree, generation] of trees) {
+          if (!found.has(tree) && (isWithin(physical, tree) || isWithin(tree, physical))) {
+            found.set(tree, { name: text, generation });
+          }
+        }
+        if (overflowed && !found.has(physical) && (await stat(physical).catch(() => null))?.isDirectory()) {
           found.set(physical, { name: text, generation: '*' });
         }
       }
@@ -477,9 +528,25 @@ async function scanScripts(
     }
     const name = programName(executable);
     if (name === 'git') {
-      await gitHooks([cwd, ...directoryOptionValues(tokens.slice(start)).map(value => resolveOperand(cwd, value))]);
+      const folders = [cwd, ...directoryOptionValues(tokens.slice(start)).map(value => resolveOperand(cwd, value))];
+      await gitHooks(folders);
       for (const value of leadingOptionValues(args, ['-c']))
         for (const path of pathsIn(value)) await consider(path, cwd);
+      const assigned = (variable: string): string[] => gitAssigned.get(variable) ?? [];
+      // git reads config and hooks from its git dir, runs an editor, pager or askpass the environment names, and
+      // finds the programs it runs by name (`man`, `ssh`, `git-<name>`) through PATH.
+      for (const folder of folders) {
+        for (const gitDir of [
+          ...optionValues(args, ['--git-dir']),
+          ...assigned('GIT_DIR'),
+          ...assigned('GIT_COMMON_DIR'),
+        ])
+          await considerFolder(gitDir, folder);
+        for (const config of assigned('XDG_CONFIG_HOME')) await consider(posix.join(config, 'git', 'config'), folder);
+        for (const program of ['EDITOR', 'VISUAL', 'PAGER', 'SSH_ASKPASS'].flatMap(assigned))
+          for (const path of pathsIn(program)) await consider(path, folder);
+        for (const entry of assigned('PATH').flatMap(value => value.split(':'))) await considerFolder(entry, folder);
+      }
     }
     if (executable.includes('/') || launched) await consider(executable, cwd);
     const module = /^python[\d.]*$/.test(name) ? leadingOptionValues(args, ['-m'])[0] : undefined;

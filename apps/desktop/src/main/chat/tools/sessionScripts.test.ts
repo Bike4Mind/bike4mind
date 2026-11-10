@@ -252,6 +252,66 @@ describe('sessionScriptRun', () => {
     expect((await sessionScriptRun('git status', join(root, 'tools'), id))?.hooks).toHaveLength(1);
   });
 
+  it.each([
+    'git --git-dir ./evil --work-tree=. status',
+    'git --git-dir=evil status',
+    'GIT_DIR=./evil GIT_WORK_TREE=. git status',
+    'export GIT_DIR=evil; git status',
+    'env GIT_COMMON_DIR=evil git log',
+    'cd sub && GIT_DIR=../evil git status',
+    'XDG_CONFIG_HOME=./xdg git status',
+    'export XDG_CONFIG_HOME=xdg && git log',
+    'EDITOR=./x.sh git commit --allow-empty',
+    'VISUAL=./x.sh git commit --allow-empty',
+    "EDITOR='./x.sh --wait' git rebase -i HEAD~1",
+    'PAGER=./x.sh git log',
+    'SSH_ASKPASS=./x.sh git fetch',
+    'PATH=./bin:$PATH git help clean',
+    'PATH=bin:"$PATH" git --help clean',
+    'export PATH="$PWD/bin:$PATH"; git log',
+    'PATH=$PATH:./bin git help clean',
+  ])('flags %s, where git reads config or runs a program from a file this session wrote', async command => {
+    const id = 'session-scripts-git-reads';
+    for (const file of ['evil/config', 'xdg/git/config', 'x.sh', 'bin/man']) {
+      await recordSessionWrite({ sessionId: id } as ToolContext, join(root, file));
+    }
+    expect(await runs(command, id)).not.toBeNull();
+  });
+
+  it.each([
+    'git status',
+    'git --git-dir=other status',
+    'GIT_DIR=other git status',
+    'XDG_CONFIG_HOME=other git status',
+    'EDITOR=vim git commit',
+    'PAGER=cat git log',
+    'PATH=/usr/bin:$PATH git log',
+    'PATH=other:$PATH git help clean',
+    'GIT_DIR=$X git status',
+    'echo PATH=./bin; git status',
+    "git commit -m 'EDITOR=./x.sh'",
+  ])('ignores %s, where git reads nothing this session wrote', async command => {
+    const id = 'session-scripts-git-reads';
+    for (const file of ['evil/config', 'xdg/git/config', 'x.sh', 'bin/man']) {
+      await recordSessionWrite({ sessionId: id } as ToolContext, join(root, file));
+    }
+    expect(await runs(command, id)).toBeNull();
+  });
+
+  it('reads a variable name in any case on Windows only', async () => {
+    const id = 'session-scripts-git-reads';
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'evil/config'));
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform') as PropertyDescriptor;
+    try {
+      Object.defineProperty(process, 'platform', { value: 'linux' });
+      expect(await runs('git_dir=./evil git status', id)).toBeNull();
+      Object.defineProperty(process, 'platform', { value: 'win32' });
+      expect(await runs('git_dir=./evil git status', id)).not.toBeNull();
+    } finally {
+      Object.defineProperty(process, 'platform', platform);
+    }
+  });
+
   it('flags git after a write under .husky', async () => {
     const id = 'session-scripts-husky';
     await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'repo', '.husky', 'pre-push'));
