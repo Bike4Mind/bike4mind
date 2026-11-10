@@ -46,6 +46,7 @@ import {
   dataLakeService,
   embeddingCacheService,
   fabFilesService,
+  fileEmbeddingService,
   isOperationalBillingEnabled,
   recordOperationalUsage,
 } from '@bike4mind/services';
@@ -407,6 +408,14 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       let creditReservation: CreditReservation | null = null;
       let billingOrganization: Awaited<ReturnType<typeof organizationRepository.findById>> = null;
       if (!spendScope) {
+        // Per-user window, reserved before any credit hold so a refused file is never charged.
+        await fileEmbeddingService.enforceFileEmbeddingSpendWindow({
+          userId,
+          estimatedMicroUsd: Math.ceil(missCostUsd * 1_000_000),
+          estimatedTokens: missTokenTotal,
+          db: { adminSettings: adminSettingsRepository, cache: cacheRepository },
+          logger,
+        });
         let billable = false;
         try {
           billingOrganization = user.organizationId ? await organizationRepository.findById(user.organizationId) : null;
@@ -833,7 +842,8 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       logger.warn(`Vectorization refused for ${fabFileId} (embedding space conflict): ${errorMessage}`);
     }
 
-    // A non-retryable spend-gate denial is deterministic (a budget does not regrow, the
+    // A non-retryable spend-gate denial (the lake gate, or the per-user file window, which
+    // cannot clear before its window closes) is deterministic (a budget does not regrow, the
     // switch does not flip itself): retrying only re-reserves spend from the wider meters
     // and burns delivery attempts, so it skips the retry deferral and accounts immediately.
     // Insufficient credits, the free-tier daily cap and an AI-access refusal (a banned, suspended,
@@ -841,6 +851,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // account queued before an admin blocked it are still draining. Unrelated 403s still retry.
     const isTerminalVectorizeDenial =
       (err instanceof dataLakeService.EmbeddingSpendDeniedError && !err.retryable) ||
+      err instanceof fileEmbeddingService.FileEmbeddingSpendDeniedError ||
       isTerminalCreditRefusal(err) ||
       isAiAccessRefusal(err);
 

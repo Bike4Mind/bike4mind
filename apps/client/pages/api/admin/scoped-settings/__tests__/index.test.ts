@@ -19,6 +19,8 @@ vi.mock('@bike4mind/database/infra', () => ({
 }));
 // Passthrough: the audit write must run inside this callback so a throw from it propagates to the caller.
 vi.mock('@bike4mind/database', () => ({
+  adminSettingsRepository: { name: 'adminSettingsRepository' },
+  cacheRepository: { name: 'cacheRepository' },
   withTransaction: async (fn: () => Promise<unknown>) => {
     order.push('tx:start');
     const result = await fn();
@@ -257,7 +259,15 @@ describe('admin/scoped-settings writes', () => {
       'PauseLakeConvergence',
       { scopeLevel: 'lake', scopeId: 'lake-1', ownerType: undefined },
       settingValue,
-      { scopedSettings: expect.anything() },
+      {
+        scopedSettings: expect.anything(),
+        // The cooldown dependencies must reach the writer, or a cooldown key's write throws.
+        changeCooldown: {
+          adminSettings: { name: 'adminSettingsRepository' },
+          cache: { name: 'cacheRepository' },
+          scopedSettings: expect.anything(),
+        },
+      },
       { logger }
     );
     expect(response).toMatchObject({
@@ -300,7 +310,15 @@ describe('admin/scoped-settings writes', () => {
     expect(clearScopedOverride).toHaveBeenCalledWith(
       'PauseLakeConvergence',
       { scopeLevel: 'lake', scopeId: 'lake-1' },
-      { scopedSettings: expect.anything() },
+      {
+        scopedSettings: expect.anything(),
+        // The cooldown dependencies must reach the writer, or a cooldown key's write throws.
+        changeCooldown: {
+          adminSettings: { name: 'adminSettingsRepository' },
+          cache: { name: 'cacheRepository' },
+          scopedSettings: expect.anything(),
+        },
+      },
       { logger }
     );
     expect(response).toEqual({ cleared: true });

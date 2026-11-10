@@ -8,6 +8,11 @@ import {
 } from '@bike4mind/common';
 import { invalidateScopedSettingsCache } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
+import {
+  claimScopedSettingChange,
+  type ScopedSettingChangeClaim,
+  type ScopedSettingCooldownDb,
+} from './claimScopedSettingChange';
 
 /**
  * The scoped-override writer (epic #1658 lane 0 / #1660 follow-on). `resolveScopedSetting.ts` ships
@@ -32,6 +37,17 @@ import { Logger } from '@bike4mind/observability';
 
 export interface ScopedOverrideWriteDb {
   scopedSettings: Pick<IScopedSettingsRepository, 'upsertOverride' | 'clearOverride'>;
+  /** Required for a key with a change cooldown (see claimScopedSettingChange); the write throws without it. */
+  changeCooldown?: ScopedSettingCooldownDb;
+}
+
+async function releaseOnFailure(claim: ScopedSettingChangeClaim | null, write: () => Promise<unknown>): Promise<void> {
+  try {
+    await write();
+  } catch (err) {
+    await claim?.release();
+    throw err;
+  }
 }
 
 /**
@@ -72,15 +88,18 @@ export async function writeScopedOverride<K extends SettingKey>(
     throw new Error(`[scopedSettings] ownerType is only meaningful at the owner scope, not '${ref.scopeLevel}'`);
   }
 
-  await db.scopedSettings.upsertOverride({
-    scopeLevel: ref.scopeLevel,
-    scopeId: ref.scopeId,
-    ownerType: ref.ownerType,
-    settingName: key,
-    // rawValue, not parsed.data: the overlay stores the raw string (schema.safeParse above is a
-    // validation gate, not a normalization step); the resolver re-parses it via pickOverride on read.
-    settingValue: rawValue,
-  });
+  const claim = await claimScopedSettingChange(key, ref, rawValue, db.changeCooldown, opts);
+  await releaseOnFailure(claim, () =>
+    db.scopedSettings.upsertOverride({
+      scopeLevel: ref.scopeLevel,
+      scopeId: ref.scopeId,
+      ownerType: ref.ownerType,
+      settingName: key,
+      // rawValue, not parsed.data: the overlay stores the raw string (schema.safeParse above is a
+      // validation gate, not a normalization step); the resolver re-parses it via pickOverride on read.
+      settingValue: rawValue,
+    })
+  );
   opts?.logger?.debug?.(`[scopedSettings] wrote '${key}' override at ${ref.scopeLevel}:${ref.scopeId}`);
   invalidateScopedSettingsCache({ scopeLevel: ref.scopeLevel, scopeId: ref.scopeId });
 }
@@ -92,7 +111,10 @@ export async function clearScopedOverride<K extends SettingKey>(
   db: ScopedOverrideWriteDb,
   opts?: { logger?: Logger }
 ): Promise<void> {
-  await db.scopedSettings.clearOverride({ scopeLevel: ref.scopeLevel, scopeId: ref.scopeId, settingName: key });
+  const claim = await claimScopedSettingChange(key, ref, null, db.changeCooldown, opts);
+  await releaseOnFailure(claim, () =>
+    db.scopedSettings.clearOverride({ scopeLevel: ref.scopeLevel, scopeId: ref.scopeId, settingName: key })
+  );
   opts?.logger?.debug?.(`[scopedSettings] cleared '${key}' override at ${ref.scopeLevel}:${ref.scopeId}`);
   invalidateScopedSettingsCache({ scopeLevel: ref.scopeLevel, scopeId: ref.scopeId });
 }

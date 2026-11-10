@@ -65,6 +65,16 @@ import { SreAgentConfigSchema, SRE_SECRET_PLACEHOLDER, type SreAgentConfig } fro
 import { SecopsTriageConfigSchema } from '../types/entities/SecopsTriageTypes';
 import { ReleaseNotesConfigSchema } from './releaseNotes';
 import { SettingScopeLevel, type SettingScopeConfig } from '../types/entities/ScopedSettingTypes';
+import {
+  DEFAULT_CHUNK_SIZE_CHANGE_COOLDOWN_HOURS_DEFAULT,
+  DEFAULT_CHUNK_SIZE_CHANGE_COOLDOWN_HOURS_MAX,
+  FILE_EMBEDDING_USER_BUDGET_PER_WINDOW_USD_DEFAULT,
+  FILE_EMBEDDING_USER_BUDGET_PER_WINDOW_USD_MAX,
+  FILE_EMBEDDING_USER_TOKENS_PER_WINDOW_DEFAULT,
+  FILE_EMBEDDING_USER_TOKENS_PER_WINDOW_MAX,
+  FILE_EMBEDDING_USER_WINDOW_HOURS_DEFAULT,
+  FILE_EMBEDDING_USER_WINDOW_HOURS_MAX,
+} from '../constants/fileEmbeddingLimits';
 
 /**
  * The measured per-space floors, rendered for an admin-facing description (e.g. "75 for
@@ -613,6 +623,12 @@ export const SettingKeySchema = z.enum([
   'LakeAccessAuditRetentionDays',
   'LakeAccessQueryTextRetentionDays',
   'LakeConfigAuditRetentionDays',
+
+  // FILE INDEXING LIMITS (see fileEmbeddingService and claimScopedSettingChange)
+  'fileEmbeddingUserBudgetPerWindowUsd',
+  'fileEmbeddingUserTokensPerWindow',
+  'fileEmbeddingUserWindowHours',
+  'DefaultChunkSizeChangeCooldownHours',
 
   // New MaxContentLength setting
   'MaxContentLength',
@@ -2322,6 +2338,20 @@ export const API_SERVICE_GROUPS = {
       { key: 'dataLakeEmbeddingBudgetPerOwnerPeriodUsd', order: 11 },
     ],
   },
+  FILE_INDEXING_LIMITS: {
+    id: 'fileIndexingLimits',
+    name: 'File Indexing Limits',
+    description:
+      'Per-user limits on embedding files outside a data lake, and the minimum interval between ' +
+      'changes of a scope owner\'s chunk size. Budgets are USD; 0 means stop, not "use the default".',
+    icon: 'Savings',
+    settings: [
+      { key: 'fileEmbeddingUserBudgetPerWindowUsd', order: 1 },
+      { key: 'fileEmbeddingUserTokensPerWindow', order: 2 },
+      { key: 'fileEmbeddingUserWindowHours', order: 3 },
+      { key: 'DefaultChunkSizeChangeCooldownHours', order: 4 },
+    ],
+  },
   VOICE_SESSION: {
     id: 'voiceSessionService',
     name: 'Voice Session Service',
@@ -3566,6 +3596,61 @@ export const settingsMap = {
       clamp: (value: number) =>
         Math.min(Math.max(Math.floor(value), MIN_PASSAGE_TOKEN_TARGET), OVERSIZED_PASSAGE_TOKEN_THRESHOLD),
     },
+  }),
+  fileEmbeddingUserBudgetPerWindowUsd: makeNumberSetting({
+    key: 'fileEmbeddingUserBudgetPerWindowUsd',
+    name: 'Per-User File Embedding Budget (USD per window)',
+    defaultValue: FILE_EMBEDDING_USER_BUDGET_PER_WINDOW_USD_DEFAULT,
+    min: 0,
+    max: FILE_EMBEDDING_USER_BUDGET_PER_WINDOW_USD_MAX,
+    description:
+      'Most USD one user may spend embedding files outside a data lake per window (see the window-hours ' +
+      'setting), whether or not that work is billed to them. A file that would exceed it fails with a ' +
+      'message naming when the window resets. 0 stops non-lake file embedding.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.FILE_INDEXING_LIMITS.id,
+    order: 1,
+  }),
+  fileEmbeddingUserTokensPerWindow: makeNumberSetting({
+    key: 'fileEmbeddingUserTokensPerWindow',
+    name: 'Per-User File Embedding Tokens (per window)',
+    defaultValue: FILE_EMBEDDING_USER_TOKENS_PER_WINDOW_DEFAULT,
+    min: 0,
+    max: FILE_EMBEDDING_USER_TOKENS_PER_WINDOW_MAX,
+    int: true,
+    description:
+      'Most tokens one user may embed from files outside a data lake per window. Metered beside the USD ' +
+      'budget because an unpriced model meters as free. 0 stops non-lake file embedding.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.FILE_INDEXING_LIMITS.id,
+    order: 2,
+  }),
+  fileEmbeddingUserWindowHours: makeNumberSetting({
+    key: 'fileEmbeddingUserWindowHours',
+    name: 'Per-User File Embedding Window (hours)',
+    defaultValue: FILE_EMBEDDING_USER_WINDOW_HOURS_DEFAULT,
+    min: 1,
+    max: FILE_EMBEDDING_USER_WINDOW_HOURS_MAX,
+    int: true,
+    description:
+      "Length of the per-user file embedding window in hours. The window opens at a user's first " +
+      'embedding after the previous one closed.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.FILE_INDEXING_LIMITS.id,
+    order: 3,
+  }),
+  DefaultChunkSizeChangeCooldownHours: makeNumberSetting({
+    key: 'DefaultChunkSizeChangeCooldownHours',
+    name: 'Chunk Size Change Cooldown (hours)',
+    defaultValue: DEFAULT_CHUNK_SIZE_CHANGE_COOLDOWN_HOURS_DEFAULT,
+    min: 0,
+    max: DEFAULT_CHUNK_SIZE_CHANGE_COOLDOWN_HOURS_MAX,
+    description:
+      'Minimum hours between two changes (set or clear) of one organization or owner Default Chunk Size ' +
+      "override. A new chunk size re-embeds that owner's files. 0 disables the cooldown.",
+    category: 'AI',
+    group: API_SERVICE_GROUPS.FILE_INDEXING_LIMITS.id,
+    order: 4,
   }),
   ModerationEnabled: makeBooleanSetting({
     key: 'ModerationEnabled',

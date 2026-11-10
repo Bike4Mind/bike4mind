@@ -69,6 +69,13 @@ const h = vi.hoisted(() => ({
     owner: { type: 'user', id: 'owner-1' } as { type: string; id: string } | undefined,
   })),
   releaseOwnerEmbeddingSpend: vi.fn(async () => undefined),
+  enforceFileEmbeddingSpendWindow: vi.fn(async () => undefined),
+  FileEmbeddingSpendDeniedError: class FileEmbeddingSpendDeniedError extends Error {
+    constructor(message: string) {
+      super(message);
+      this.name = 'FileEmbeddingSpendDeniedError';
+    }
+  },
   // Mirrors the real resolver's rule closely enough for the handler's branch: batch uploads and
   // tag-joined members are both lake work, everything else is not. Its own decision table is
   // pinned in resolveIngestSpendScope.test.ts.
@@ -154,6 +161,10 @@ vi.mock('@bike4mind/services', () => ({
         this.retryAfterMs = options?.retryAfterMs;
       }
     },
+  },
+  fileEmbeddingService: {
+    enforceFileEmbeddingSpendWindow: h.enforceFileEmbeddingSpendWindow,
+    FileEmbeddingSpendDeniedError: h.FileEmbeddingSpendDeniedError,
   },
   scopedSettingsService: { resolveScopedSetting: vi.fn(), scopeForLake: vi.fn() },
 }));
@@ -1663,6 +1674,39 @@ describe('fabFileVectorize handler - credit billing outside a data lake', () => 
     h.reserveRequestCredits.mockResolvedValue({ refund: h.reservationRefund, settle: h.reservationSettle });
     h.reservationSettle.mockResolvedValue(1);
     h.deferFailureIfRetryable.mockReset().mockResolvedValue(false);
+  });
+
+  it("reserves the uploader's file embedding window before any credit hold", async () => {
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.enforceFileEmbeddingSpendWindow).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'u1', estimatedTokens: 5 })
+    );
+    expect(h.enforceFileEmbeddingSpendWindow.mock.invocationCallOrder[0]).toBeLessThan(
+      h.reserveRequestCredits.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('fails the file with the window message, without billing, embedding or retrying, on a window denial', async () => {
+    h.enforceFileEmbeddingSpendWindow.mockRejectedValueOnce(
+      new h.FileEmbeddingSpendDeniedError('file indexing limit reached')
+    );
+    h.markFailedIfNotAlready.mockResolvedValue(true);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.reserveRequestCredits).not.toHaveBeenCalled();
+    expect(h.getVector).not.toHaveBeenCalled();
+    expect(h.deferFailureIfRetryable).not.toHaveBeenCalled();
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', 'file indexing limit reached');
+  });
+
+  it('does not apply the file window to data-lake work', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.enforceFileEmbeddingSpendWindow).not.toHaveBeenCalled();
   });
 
   it('asks the billing policy about the uploader with the plan resolver', async () => {

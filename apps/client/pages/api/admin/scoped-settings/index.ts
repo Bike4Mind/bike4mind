@@ -8,7 +8,7 @@ import {
   settingsMap,
   type SettingKey,
 } from '@bike4mind/common';
-import { withTransaction } from '@bike4mind/database';
+import { adminSettingsRepository, cacheRepository, withTransaction } from '@bike4mind/database';
 import { scopedSettingsRepository } from '@bike4mind/database/infra';
 import { scopedSettingsService } from '@bike4mind/services';
 import { adminApi } from '@server/middlewares/adminApi';
@@ -67,6 +67,15 @@ export type ScopedOverrideDeleteQuery = z.infer<typeof ScopeAddressSchema>;
  * `b4m-core/services/src/settings/writeScopedOverride.ts`.
  */
 const SERVICE_REJECTION_PREFIX = '[scopedSettings]';
+
+const scopedOverrideWriteDb = {
+  scopedSettings: scopedSettingsRepository,
+  changeCooldown: {
+    adminSettings: adminSettingsRepository,
+    cache: cacheRepository,
+    scopedSettings: scopedSettingsRepository,
+  },
+};
 
 /**
  * The write service signals a rejection by throwing a plain `Error`, and `errorHandler` maps a plain
@@ -140,7 +149,7 @@ const handler = adminApi({
           settingName,
           { scopeLevel, scopeId, ownerType },
           settingValue,
-          { scopedSettings: scopedSettingsRepository },
+          scopedOverrideWriteDb,
           { logger: req.logger }
         );
         await recordAdminSettingChange(req, {
@@ -164,12 +173,9 @@ const handler = adminApi({
     await runWrite(() =>
       withTransaction(async () => {
         const before = await readOverrideValue(settingName, scopeLevel, scopeId);
-        await scopedSettingsService.clearScopedOverride(
-          settingName,
-          { scopeLevel, scopeId },
-          { scopedSettings: scopedSettingsRepository },
-          { logger: req.logger }
-        );
+        await scopedSettingsService.clearScopedOverride(settingName, { scopeLevel, scopeId }, scopedOverrideWriteDb, {
+          logger: req.logger,
+        });
         // Clearing an address that holds no override changes nothing, so it is not an admin change.
         if (before === null) return;
         await recordAdminSettingChange(req, {
