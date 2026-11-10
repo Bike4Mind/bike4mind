@@ -111,7 +111,18 @@ describe('discovery storage', () => {
 });
 
 describe('isDiscoverySkippedPath', () => {
-  it.each(['/admin', '/admin/users', '/gears', '/bob', '/bob/runs/r1', '/Bob', '/BOB/runs/r1', '/profile', '/Profile', '/profile/x'])('skips %s', path => {
+  it.each([
+    '/admin',
+    '/admin/users',
+    '/gears',
+    '/bob',
+    '/bob/runs/r1',
+    '/Bob',
+    '/BOB/runs/r1',
+    '/profile',
+    '/Profile',
+    '/profile/x',
+  ])('skips %s', path => {
     expect(isDiscoverySkippedPath(path)).toBe(true);
   });
 

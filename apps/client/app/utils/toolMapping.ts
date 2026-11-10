@@ -391,7 +391,8 @@ export const findToolDisplayLabel = (
 ): string | undefined => {
   for (const id of [toolName, toolName.replace(/-/g, '_'), toolName.replace(/_/g, '-')]) {
     const label =
-      TOOL_MAPPING[id as PublicTools]?.displayName || (Object.hasOwn(overlayLabels, id) ? overlayLabels[id] : undefined);
+      TOOL_MAPPING[id as PublicTools]?.displayName ||
+      (Object.hasOwn(overlayLabels, id) ? overlayLabels[id] : undefined);
     if (label) return label;
   }
   return undefined;

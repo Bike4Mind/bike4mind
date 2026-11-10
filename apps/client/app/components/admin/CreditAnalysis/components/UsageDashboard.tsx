@@ -259,8 +259,8 @@ export const UsageDashboard: React.FC<{ ownerType: UsageOwnerType; ownerId?: str
           />
           {hasResidual && (
             <Typography level="body-xs" color="neutral" sx={{ mt: -2 }} data-testid="usage-residual-note">
-              Other charges are on your credit ledger but have no per-call record, so they carry no model, request
-              count or COGS.
+              Other charges are on your credit ledger but have no per-call record, so they carry no model, request count
+              or COGS.
             </Typography>
           )}
 

@@ -631,7 +631,11 @@ export class CreditTransactionRepository
     ]);
   }
 
-  async usageTotalForOwner(ownerId: string, ownerType: CreditHolderType, days: number = 30): Promise<ILedgerUsageTotal> {
+  async usageTotalForOwner(
+    ownerId: string,
+    ownerType: CreditHolderType,
+    days: number = 30
+  ): Promise<ILedgerUsageTotal> {
     const from = new Date();
     from.setDate(from.getDate() - days);
     const [total] = await this.model.aggregate<ILedgerUsageTotal>([

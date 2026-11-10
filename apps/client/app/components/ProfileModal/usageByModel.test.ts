@@ -124,7 +124,10 @@ describe('aggregateUsageByModel', () => {
     });
 
     it('keeps an unknown id on a model-usage row as the model id', () => {
-      const usage = aggregateUsageByModel([{ type: 'text_generation_usage', model: 'acme-new-model', credits: -1 }], models);
+      const usage = aggregateUsageByModel(
+        [{ type: 'text_generation_usage', model: 'acme-new-model', credits: -1 }],
+        models
+      );
       expect(usage).toEqual({ 'acme-new-model': 1 });
     });
   });
