@@ -54,7 +54,7 @@ jobs:
     permissions:
       contents: read
     outputs:
-      deployable: ${{ github.event.pull_request.draft == true && github.head_ref != 'perf/ci-client-test-cache' && 'false' || steps.filter.outputs.deployable }}
+      deployable: ${{ github.event.pull_request.draft == true && 'false' || steps.filter.outputs.deployable }}
       docs-changed: ${{ github.event.pull_request.draft == true && 'false' || steps.filter.outputs.docs-changed }}
       published-changed: ${{ steps.filter.outputs.published-changed }}
     steps:
@@ -875,7 +875,6 @@ jobs:
       # can stay scoped to its inputs and skip on a new commit that leaves them unchanged. Pinned
       # to misc so it runs once; scripts/__tests__/turbo-test-cache.test.mjs pins the command and
       # the naming.
-      # TEMPORARY: warm-run measurement commit, touches no turbo input.
       - name: Run repo-scan tests
         if: ${{ !cancelled() && matrix.shard.name == 'misc' && steps.codegen.outcome == 'success' }}
         run: pnpm --recursive --if-present run test:repo
@@ -910,7 +909,7 @@ jobs:
       # job's runs used, so the cache holds the leg's current state and does not grow per save.
       - name: Prune turbo test cache
         id: prune-turbo-cache
-        if: ${{ !cancelled() && (github.event_name == 'push' || github.event_name == 'merge_group' || github.head_ref == 'perf/ci-client-test-cache') && hashFiles('.turbo/runs/*.json') != '' }}
+        if: ${{ !cancelled() && (github.event_name == 'push' || github.event_name == 'merge_group') && hashFiles('.turbo/runs/*.json') != '' }}
         run: node scripts/turbo-test-cache.mjs prune .turbo/runs .turbo/cache
 
       - name: Save turbo test cache
