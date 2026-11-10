@@ -10667,6 +10667,7 @@ describe('ChatCompletionProcess', () => {
       priorToolNames?: string[];
       disableUserIntegrations?: boolean;
       mcpServers?: string[];
+      disabledMcpConnections?: string[];
       disabledTools?: string[];
       surface?: string;
       extraModels?: Array<Record<string, unknown>>;
@@ -10723,6 +10724,9 @@ describe('ChatCompletionProcess', () => {
           ? { disableUserIntegrations: params.disableUserIntegrations }
           : {}),
         ...(params.mcpServers !== undefined ? { mcpServers: params.mcpServers } : {}),
+        ...(params.disabledMcpConnections !== undefined
+          ? { disabledMcpConnections: params.disabledMcpConnections }
+          : {}),
         ...(params.enableSlackTools !== undefined ? { enableSlackTools: params.enableSlackTools } : {}),
       };
       await service.process({ body, logger: mockLogger });
@@ -10883,6 +10887,21 @@ describe('ChatCompletionProcess', () => {
         }
       }
     );
+
+    it('request disabledMcpConnections -> buildMcpTools disabledMcpConnections', async () => {
+      const buildMcpToolsSpy = vi
+        .spyOn(ToolBuilder.prototype, 'buildMcpTools')
+        .mockResolvedValue({ mcpToolsByServer: {}, serverAgentConfig: {}, customMcpToolNames: new Set() });
+      buildMcpToolsSpy.mockClear();
+      try {
+        await runWithBuildToolsSpy({ message: 'Compare the smartphones', disabledMcpConnections: ['some-slug'] });
+        expect(buildMcpToolsSpy).toHaveBeenCalledWith(
+          expect.objectContaining({ disabledMcpConnections: ['some-slug'] })
+        );
+      } finally {
+        buildMcpToolsSpy.mockRestore();
+      }
+    });
 
     it.each([
       { disableUserIntegrations: undefined, expected: false },
