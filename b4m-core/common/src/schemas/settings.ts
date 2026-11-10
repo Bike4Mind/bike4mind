@@ -2532,7 +2532,6 @@ export const API_SERVICE_GROUPS = {
     // Pricing tab, and the signup schedule, free-tier limits and rewards only in the Invite Center
     // (settingHomes.ts in the admin components); this group links there instead of repeating them.
     settings: [
-      { key: 'billOperationalUsage', order: 1 },
       { key: 'blockDisposableEmails', order: 2 },
       { key: 'blockedEmailDomains', order: 3 },
       { key: 'signupGrantRiskPolicy', order: 8 },
@@ -4612,11 +4611,11 @@ export const settingsMap = {
     name: 'Bill Operational Usage',
     // Default OFF on hosted and self-host alike: free-tier accounts are billed for this spend
     // whenever Enforce Credits is on (isOperationalBillingEnabled), so the toggle only decides
-    // whether paying accounts are billed for it too, and turning it on is a pricing change.
+    // whether paying accounts are billed for it too, and turning it on is a pricing change. Edited on
+    // the admin Growth and Pricing tab (GROWTH_PRICING_SECTIONS), not in a settings group.
     defaultValue: false,
     description:
       'Whether operational-model and embedding usage (auto-naming, summarization, tagging, KB search embeddings, file indexing) is billed to every user/org. Off = billed only to free-tier users paying for themselves (no credit purchase or active plan) and recorded as platform cost for everyone else. Requires Enforce Credits.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   enableTeamPlan: makeBooleanSetting({

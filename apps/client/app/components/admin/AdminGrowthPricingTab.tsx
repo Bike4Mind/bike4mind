@@ -55,7 +55,7 @@ export const GROWTH_PRICING_SECTIONS: ReadonlyArray<{
     id: 'credits',
     title: 'Credits and pricing',
     description: 'How usage is metered and what credits cost.',
-    keys: ['enforceCredits', 'pricePerCredit', 'lowCreditsThreshold'],
+    keys: ['enforceCredits', 'billOperationalUsage', 'pricePerCredit', 'lowCreditsThreshold'],
   },
   {
     id: 'preference-arena',

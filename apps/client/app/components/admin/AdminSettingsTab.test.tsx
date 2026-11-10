@@ -318,7 +318,7 @@ describe('AdminSettingsTab field default value', () => {
 });
 
 describe('AdminSettingsTab Credits System group', () => {
-  const renderCreditsTab = () => renderTab(findTab(settingsMap.billOperationalUsage.category));
+  const renderCreditsTab = () => renderTab(findTab(settingsMap.blockDisposableEmails.category));
 
   it('gives every home key exactly one home, the growth home holding the Growth and Pricing keys', () => {
     const seen = new Set<string>();
@@ -349,9 +349,11 @@ describe('AdminSettingsTab Credits System group', () => {
   it('keeps the rest of the Credits System group', () => {
     renderCreditsTab();
 
-    for (const key of ['billOperationalUsage', 'blockDisposableEmails', 'syntheticUserEmailDomains']) {
+    for (const key of ['blockDisposableEmails', 'maxSignupsPerIpPerDay', 'syntheticUserEmailDomains']) {
       expect(screen.getByTestId(`generic-setting-${key}`), key).toBeTruthy();
     }
+    // A pricing control: edited on Growth and Pricing.
+    expect(screen.queryByTestId('generic-setting-billOperationalUsage')).toBeNull();
     expect(screen.getByTestId('string-list-setting-blockedEmailDomains')).toBeTruthy();
   });
 

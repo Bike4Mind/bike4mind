@@ -95,6 +95,7 @@ describe('AdminGrowthPricingTab', () => {
         'ReferralCreditsAmount',
         'enableTeamPlan',
         'enforceCredits',
+        'billOperationalUsage',
         'pricePerCredit',
         'teamPlanMinSeats',
         'teamPlanMaxSeats',

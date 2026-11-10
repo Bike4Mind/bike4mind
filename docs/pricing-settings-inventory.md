@@ -9,8 +9,8 @@ The source of truth stays in code:
 - Setting definitions: `settingsMap` and `API_SERVICE_GROUPS` in `b4m-core/common/src/schemas/settings.ts`.
 - The Growth and Pricing tab layout: `GROWTH_PRICING_SECTIONS` and `GROWTH_PRICING_LINKS` in
   `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`.
-- Keys hidden from Admin Settings because Growth and Pricing owns them: `GROWTH_PRICING_ONLY_KEYS` in
-  `apps/client/app/components/admin/AdminSettingsTab.tsx`.
+- Keys hidden from Admin Settings because Growth and Pricing or an Invite Center section owns them:
+  `SETTING_HOMES` in `apps/client/app/components/admin/settingHomes.ts`.
 - Keys hidden from Admin Settings on `PRODUCTION_STAGES` (`production`, `dev`): definitions with
   `hideOnProductionStages`, collected by `stageHiddenSettingKeys` in `b4m-core/common/src/schemas/settings.ts`.
 
@@ -67,7 +67,7 @@ compute per-run and per-day USD caps) and settings that only toggle a feature.
 | `syntheticUserEmailDomains` | Admin Settings > User Management > Credits System | Funnel analytics (`apps/client/server/analytics/funnel.ts`), and the reserved `persona-` username check (`b4m-core/services/src/userService/reservedUsername.ts`), which lets a verified email on one of these domains choose that prefix. | no. Flags test accounts. | Signup and starter credits |
 | `pricePerCredit` | Growth and Pricing > Credits and pricing | The per-credit Stripe purchase (`handlePerCreditTransaction` in `apps/client/lib/credits/utils.ts`, reached from `/api/stripe/start-payment`), the floor check on save (`apps/client/pages/api/settings/update.ts`) and `PaymentButton.tsx`. | yes, but only on the per-credit purchase path. No UI offers it today (every `PaymentButton` is a credit pack), and credit packs ignore this key. | Credit pricing and conversion |
 | `enforceCredits` | Growth and Pricing > Credits and pricing | 62 files. The credit gates on every billed path: chat completion and reservation (`apps/client/server/billing/reserveRequestCredits.ts`, `creditPreflight.ts`), image, music, video and generation jobs, voice sessions, embeddings, the agent executor in `apps/workers`, and `areCreditsEnforced` in `b4m-core/services/src/billing/isOperationalBillingEnabled.ts`; plus the credit UI (balance chip, composer, billing and credits modals). Default is off on self-host (`B4M_SELF_HOST`). | yes. Off means usage is not deducted from balances. | Credit pricing and conversion |
-| `billOperationalUsage` | Admin Settings > User Management > Credits System | `isOperationalBillingEnabled` and `recordOperationalUsage` (`b4m-core/services/src/billing/`), used by session preflight and lake semantic search. Lake research runs (`apps/workers/src/dataLakes/runLakeResearch.ts`) do not read it: they bill credits through `forceCreditBilling` whatever this key is set to. | yes. On also debits credits for background model and embedding spend (naming, summarization, tagging, KB search). | Credit pricing and conversion |
+| `billOperationalUsage` | Growth and Pricing > Credits and pricing | `isOperationalBillingEnabled` and `recordOperationalUsage` (`b4m-core/services/src/billing/`), used by session preflight and lake semantic search. Lake research runs (`apps/workers/src/dataLakes/runLakeResearch.ts`) do not read it: they bill credits through `forceCreditBilling` whatever this key is set to. | yes. On also debits credits for background model and embedding spend (naming, summarization, tagging, KB search). | Credit pricing and conversion |
 | `HardwareComputeCreditsPerUsd` | Admin Settings > Features > Experimental | No reader in this repository. Its default is `CREDITS_PER_USD_COST` from `b4m-core/common/src/pricing.ts`. | yes. Credits charged per $1 of compute hardware cost. | Credit pricing and conversion |
 | `SimulatorComputeCreditsPerRound` | Admin Settings > Features > Experimental | No reader in this repository. | yes. Credits charged per simulator round. | Credit pricing and conversion |
 | `enableTeamPlan` | Growth and Pricing > Team plan | The team checkout gate (`apps/client/pages/api/organizations/subscriptions/subscribe.ts`), the disabled-purchase message (`packages/server-utils/src/lib/subscriptions/constants.ts`), and the team UI through `useTeamPlanAvailable` (`CreateTeamModal.tsx`, `OrganizationBillingSection.tsx`, `PlansSection.tsx`, the organizations route). | no. Decides whether the Team plan is sold, not its price. | Plans, seats and packs |
@@ -110,8 +110,9 @@ compute per-run and per-day USD caps) and settings that only toggle a feature.
   cleanup in the admin settings epic.
 - **Two credit prices have no reader here.** `HardwareComputeCreditsPerUsd` and `SimulatorComputeCreditsPerRound`
   are defined and editable, but nothing in this repository reads them.
-- **The Credits System group mixes concerns.** `blockDisposableEmails` and `syntheticUserEmailDomains` are
-  signup controls, and only `billOperationalUsage` prices anything.
+- **The Credits System group holds no pricing control.** `billOperationalUsage`, the one key there that
+  priced anything, is edited on Growth and Pricing; `blockDisposableEmails` and `syntheticUserEmailDomains`
+  are signup controls.
 - **Packs, plans and the markup have no admin view.** They are set in code or at deploy time, so an admin
   cannot see what each one sells and grants from the console.
 
@@ -310,8 +311,9 @@ files (`AdminGrowthPricingTab.tsx`, `AdminSettingsTab.tsx`, `settingHomes.ts`) a
 
 </details>
 
-<details><summary><code>billOperationalUsage</code> (4 files)</summary>
+<details><summary><code>billOperationalUsage</code> (5 files)</summary>
 
+- `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
 - `apps/workers/src/dataLakes/runLakeResearch.ts`
 - `b4m-core/common/src/types/entities/UsageEventTypes.ts`
 - `b4m-core/services/src/billing/isOperationalBillingEnabled.ts`
