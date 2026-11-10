@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { ChatModels, ModelBackend } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 import type { IModelCatalogRow } from '@bike4mind/common';
 import {
   MODEL_LIST_REVISION_READ_DEADLINE_MS,
@@ -158,6 +159,102 @@ describe('getAvailableModels model catalog provider', () => {
   describe('model-list revision provider', () => {
     afterEach(() => {
       vi.useRealTimers();
+      vi.restoreAllMocks();
+    });
+
+    it('expires a slow successful read from its start so chat catches a pushed revision on time', async () => {
+      vi.useFakeTimers();
+      const catalog = vi.fn(async () => [row]);
+      setModelCatalogProvider(catalog);
+      let shared = 'rev-1';
+      let answerLate: (revision: string) => void = () => {};
+      const revisionProvider = vi.fn(async () => shared);
+      setModelListRevisionProvider(revisionProvider);
+      await getAvailableModels(null);
+
+      vi.advanceTimersByTime(5_000);
+      revisionProvider.mockImplementationOnce(
+        () =>
+          new Promise<string>(resolve => {
+            answerLate = resolve;
+          })
+      );
+      const previousRevision = getAvailableModels(null);
+      vi.advanceTimersByTime(100);
+      shared = 'rev-2';
+      vi.advanceTimersByTime(900);
+      answerLate('rev-1');
+      await previousRevision;
+
+      // A tab refetches at the earliest permitted time: five seconds after the bump.
+      vi.advanceTimersByTime(4_100);
+      await getAvailableModels(null);
+
+      expect(revisionProvider).toHaveBeenCalledTimes(3);
+      expect(catalog).toHaveBeenCalledTimes(2);
+    });
+
+    it('warns once per shared revision read that exceeds its deadline', async () => {
+      vi.useFakeTimers();
+      const warn = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => {});
+      setModelListRevisionProvider(() => new Promise<string>(() => {}));
+
+      const concurrent = [getAvailableModels(null), getAvailableModels(null)];
+      await vi.advanceTimersByTimeAsync(MODEL_LIST_REVISION_READ_DEADLINE_MS);
+      await Promise.all(concurrent);
+
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        '[getAvailableModels] model-list revision read timed out; keeping the last one'
+      );
+
+      vi.advanceTimersByTime(5_000);
+      const retry = getAvailableModels(null);
+      await vi.advanceTimersByTimeAsync(MODEL_LIST_REVISION_READ_DEADLINE_MS);
+      await retry;
+      expect(warn).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not extend the process memo when a delayed caller reports a pre-bump revision', async () => {
+      vi.useFakeTimers();
+      const catalog = vi.fn(async () => [row]);
+      setModelCatalogProvider(catalog);
+      let shared = 'rev-1';
+      const revisionProvider = vi.fn(async () => shared);
+      setModelListRevisionProvider(revisionProvider);
+      await getAvailableModels(null);
+
+      vi.advanceTimersByTime(100);
+      shared = 'rev-2';
+      vi.advanceTimersByTime(4_000);
+      // This request read rev-1 before the bump, then awaited its caller's credentials.
+      await getAvailableModels(null, { catalogRevision: 'rev-1' });
+      vi.advanceTimersByTime(1_000);
+      await getAvailableModels(null);
+
+      expect(revisionProvider).toHaveBeenCalledTimes(2);
+      expect(catalog).toHaveBeenCalledTimes(2);
+    });
+
+    it('ignores an old revision read after its provider is replaced', async () => {
+      const catalog = vi.fn(async () => [row]);
+      setModelCatalogProvider(catalog);
+      let answerOld: (revision: string) => void = () => {};
+      setModelListRevisionProvider(
+        () =>
+          new Promise<string>(resolve => {
+            answerOld = resolve;
+          })
+      );
+      const old = getAvailableModels(null);
+      const replacement = vi.fn(async () => 'rev-new');
+      setModelListRevisionProvider(replacement);
+      await getAvailableModels(null);
+      answerOld('rev-old');
+      await old;
+      await getAvailableModels(null);
+
+      expect(replacement).toHaveBeenCalledTimes(1);
+      expect(catalog).toHaveBeenCalledTimes(1);
     });
 
     it('rebuilds for a caller that passes no revision once the provider reports a new one', async () => {
@@ -228,8 +325,9 @@ describe('getAvailableModels model catalog provider', () => {
       });
       let answerLate: (revision: string) => void = () => {};
       let hanging = false;
+      let shared = 'rev-1';
       setModelListRevisionProvider(async () => {
-        if (!hanging) return 'rev-1';
+        if (!hanging) return shared;
         return new Promise<string>(resolve => {
           answerLate = resolve;
         });
@@ -258,13 +356,15 @@ describe('getAvailableModels model catalog provider', () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(servedAgain).toBe(true);
 
-      answerLate('rev-2');
+      shared = 'rev-2';
+      hanging = false;
+      answerLate(shared);
       await vi.advanceTimersByTimeAsync(0);
       await getAvailableModels(null);
       expect(calls.count).toBe(2);
     });
 
-    it('prefers a revision the caller passes over the memoized one', async () => {
+    it('uses a reported revision for that call without replacing the provider memo for other callers', async () => {
       const calls = { count: 0 };
       setModelCatalogProvider(async () => {
         calls.count += 1;
@@ -276,7 +376,7 @@ describe('getAvailableModels model catalog provider', () => {
       await getAvailableModels(null, { catalogRevision: 'rev-2' });
       await getAvailableModels(null);
 
-      expect(calls.count).toBe(2);
+      expect(calls.count).toBe(3);
     });
   });
 

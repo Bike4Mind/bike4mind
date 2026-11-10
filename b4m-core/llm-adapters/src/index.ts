@@ -274,7 +274,8 @@ let _revisionProvider: ModelListRevisionProvider | null = null;
 let _knownRevision: string | undefined;
 let _revisionFreshUntil = 0;
 let _revisionRead: Promise<void> | null = null;
-// Bumped by every reported revision, so a provider read that started before it cannot overwrite it.
+const timedOutRevisionReads = new WeakSet<Promise<void>>();
+// Replacing the provider invalidates any read still in flight.
 let _revisionEpoch = 0;
 
 export function setModelListRevisionProvider(provider: ModelListRevisionProvider | null): void {
@@ -301,21 +302,28 @@ async function settlesWithin(promise: Promise<void>, ms: number): Promise<boolea
 
 async function readModelListRevision(provider: ModelListRevisionProvider): Promise<void> {
   const epoch = _revisionEpoch;
+  const startedAt = Date.now();
   try {
     const revision = (await provider()) ?? undefined;
-    if (epoch === _revisionEpoch) _knownRevision = revision;
+    if (epoch === _revisionEpoch) {
+      _knownRevision = revision;
+      // The answer may predate a bump while its read was in flight.
+      _revisionFreshUntil = startedAt + REVISION_MEMO_MS;
+    }
   } catch (error) {
     Logger.globalInstance.warn('[getAvailableModels] model-list revision unavailable; keeping the last one', error);
+    if (epoch === _revisionEpoch) _revisionFreshUntil = Date.now() + REVISION_MEMO_MS;
   }
-  _revisionFreshUntil = Date.now() + REVISION_MEMO_MS;
 }
 
-/** A revision the caller just read wins; otherwise the provider's, memoized; otherwise the last one seen. */
+/** A reported revision applies to this call; other callers use the provider's bounded memo. */
 async function resolveModelListRevision(reported: string | undefined): Promise<string | undefined> {
   if (reported !== undefined) {
-    _revisionEpoch += 1;
-    _knownRevision = reported;
-    _revisionFreshUntil = Date.now() + REVISION_MEMO_MS;
+    // A caller may have awaited other work since reading it, so it must not prolong the process memo.
+    if (!_revisionProvider) {
+      _knownRevision = reported;
+      _revisionFreshUntil = Date.now() + REVISION_MEMO_MS;
+    }
     return reported;
   }
   if (_revisionProvider && Date.now() >= _revisionFreshUntil) {
@@ -323,7 +331,12 @@ async function resolveModelListRevision(reported: string | undefined): Promise<s
       _revisionRead = null;
     });
     // Past the deadline the last known revision serves; the read stays shared and lands when it lands.
-    if (!(await settlesWithin(_revisionRead, MODEL_LIST_REVISION_READ_DEADLINE_MS))) {
+    const read = _revisionRead;
+    if (!(await settlesWithin(read, MODEL_LIST_REVISION_READ_DEADLINE_MS))) {
+      if (!timedOutRevisionReads.has(read)) {
+        timedOutRevisionReads.add(read);
+        Logger.globalInstance.warn('[getAvailableModels] model-list revision read timed out; keeping the last one');
+      }
       _revisionFreshUntil = Date.now() + REVISION_MEMO_MS;
     }
   }

@@ -55,6 +55,31 @@ describe('handleModelListRevisionSetting', () => {
     expect(invalidate).toHaveBeenCalledTimes(1);
   });
 
+  it('waits out the server memo again when a newer revision arrives during the wait', () => {
+    queryClient.setQueryData(MODEL_CATALOG_QUERY_KEY, catalogAt('rev-1'));
+
+    handleModelListRevisionSetting(queryClient, pushed('rev-2'), () => 0);
+    vi.advanceTimersByTime(MODEL_LIST_REVISION_MEMO_MS - 1_000);
+    handleModelListRevisionSetting(queryClient, pushed('rev-3'), () => 0);
+
+    vi.advanceTimersByTime(MODEL_LIST_REVISION_MEMO_MS - 1);
+    expect(invalidate).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1);
+    expect(invalidate).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the existing deadline when the same revision is replayed during the wait', () => {
+    queryClient.setQueryData(MODEL_CATALOG_QUERY_KEY, catalogAt('rev-1'));
+
+    handleModelListRevisionSetting(queryClient, pushed('rev-2'), () => 0);
+    vi.advanceTimersByTime(MODEL_LIST_REVISION_MEMO_MS - 1_000);
+    handleModelListRevisionSetting(queryClient, pushed('rev-2'), () => 1);
+
+    vi.advanceTimersByTime(1_000);
+    expect(invalidate).toHaveBeenCalledTimes(1);
+  });
+
   it('tries the same revision again after a failed refetch', async () => {
     queryClient.setQueryData(MODEL_CATALOG_QUERY_KEY, catalogAt('rev-1'));
     invalidate.mockImplementation(async () => {

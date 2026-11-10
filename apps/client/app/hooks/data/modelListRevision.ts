@@ -68,7 +68,12 @@ export function handleModelListRevisionSetting(
   if (setting.settingName !== settingsMap.modelListRevision.key) return;
   const revision = setting.settingValue;
   if (typeof revision !== 'string' || revision.length === 0) return;
-  watchOf(queryClient).pushed = revision;
+  const watch = watchOf(queryClient);
+  if (watch.pushed !== revision && watch.timer) {
+    clearTimeout(watch.timer);
+    watch.timer = undefined;
+  }
+  watch.pushed = revision;
   reconcile(queryClient, random);
 }
 
