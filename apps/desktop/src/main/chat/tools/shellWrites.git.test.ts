@@ -60,13 +60,30 @@ describe('git write scan on a subcommand word that is not plain text', () => {
     expect(writes.unread).toBe(true);
   });
 
-  it.each([['--no-pager'], ['-C', '.'], ['-c', 'core.x=y'], ['--exec-path']])(
-    'reads `git %s status` as writing nothing',
-    async (...words) => {
-      const writes = await inPlaceWrites(['git', ...words, 'status'], noNode, '/nonexistent/project');
-      expect(writes.unread).toBeUndefined();
-    }
-  );
+  it.each(['--version', '-v', '--help', '-h'])('reads `git %s clean -fdx` as writing nothing', async option => {
+    const writes = await inPlaceWrites(['git', option, 'clean', '-fdx'], noNode, '/nonexistent/project');
+    expect(writes.unread).toBeUndefined();
+    expect(writes.files).toEqual([]);
+  });
+
+  it.each([
+    ['--no-pager'],
+    ['-C', '.'],
+    ['-c', 'core.x=y'],
+    ['--exec-path'],
+    ['--no-literal-pathspecs'],
+    ['--literal-pathspecs'],
+    ['--glob-pathspecs'],
+    ['--noglob-pathspecs'],
+    ['--icase-pathspecs'],
+    ['--no-replace-objects'],
+    ['--no-lazy-fetch'],
+    ['--no-advice'],
+    ['--no-optional-locks'],
+  ])('reads `git %s status` as writing nothing', async (...words) => {
+    const writes = await inPlaceWrites(['git', ...words, 'status'], noNode, '/nonexistent/project');
+    expect(writes.unread).toBeUndefined();
+  });
 
   it.each(['status', 'log', 'diff'])('reads `git %s` as writing nothing', async sub => {
     const writes = await inPlaceWrites(['git', sub], noNode, '/nonexistent/project');

@@ -745,6 +745,10 @@ describe('shell approval in a project with a large node_modules', () => {
     "git status && git cle''an -fdx",
     "git ''clean -fdx",
     "git --no-pager ''status",
+    'git --shallow-file x "log"',
+    'git --shallow-file x "push" https://example.invalid/r main',
+    'git --attr-source x "log"',
+    'git -C . --super-prefix x "log"',
   ])('asks in every mode for %s, whose git subcommand bash rewrites', async command => {
     expect(await judge(command)).toMatchObject(asks);
   });
@@ -780,6 +784,43 @@ describe('shell approval in a project with a large node_modules', () => {
     'git --no-pager ./x clean -fdx',
   ])('asks in every mode for %s, which git reads past its global options', async command => {
     expect(await judge(command, 'brepo')).toMatchObject(asks);
+  });
+
+  const SENDING_GIT = [
+    'push https://example.invalid/r main',
+    'remote add o https://example.invalid/r',
+    'remote set-url o https://example.invalid/r',
+    'send-email x',
+  ];
+
+  it.each([
+    ...['-C', '-c', ...VALUED_GIT_OPTIONS].flatMap(option => SENDING_GIT.map(sending => `git ${option} x ${sending}`)),
+    ...VALUED_GIT_OPTIONS.flatMap(option => SENDING_GIT.map(sending => `git ${option}=x ${sending}`)),
+    ...VALUED_GIT_OPTIONS.flatMap(option => SENDING_GIT.map(sending => `git -C . ${option} x ${sending}`)),
+    ...SENDING_GIT.map(sending => `git ${sending}`),
+  ])('asks in auto mode for %s, which sends data out', async command => {
+    expect((await judge(command)).auto).toBe(false);
+  });
+
+  it.each([
+    'git --no-literal-pathspecs ls-files',
+    'git --no-literal-pathspecs status',
+    'git --literal-pathspecs ls-files',
+    'git --glob-pathspecs ls-files',
+    'git --noglob-pathspecs ls-files',
+    'git --icase-pathspecs ls-files',
+    'git --no-replace-objects log',
+    'git --no-lazy-fetch status',
+    'git --no-advice status',
+    'git --no-optional-locks status',
+    'git --version clean -fdx',
+    'git -v clean -fdx',
+    'git --help clean -fdx',
+    'git -h clean -fdx',
+    'git --version',
+    'git --help',
+  ])('runs %s unasked, as git reads it as a read-only command', async command => {
+    expect(await judge(command, 'brepo')).toMatchObject({ auto: true, full: true });
   });
 
   it.each([

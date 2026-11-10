@@ -3767,9 +3767,6 @@ const STDIN_SCRIPT_ARG = /^(\/(dev|proc\/self)\/fd\/[\d]+|\/dev\/stdin|[<>]\()/;
 /** Programs that resolve a name, so a computed argument can smuggle data into a query. */
 const RESOLVERS = new Set(['dig', 'nslookup', 'host']);
 
-/** Git's global options that take the value in the next argument, which is not a subcommand. */
-const GIT_OPTION_VALUES = /^--(git-dir|work-tree|namespace)(=|$)/;
-
 /**
  * Whether a command's stdin is fed: piped into, a heredoc or here-string, or a `<` redirect. A
  * here-string parses as the command's own child, and `cat <<'EOF' | python3` nests the pipe that
@@ -3891,10 +3888,8 @@ export function outboundReason(raw: readonly string[], stdin = false): string | 
   if (name === 'git') {
     const words: string[] = [];
     for (let i = 0; i < args.length; i++) {
-      if (args[i] === '-C' || args[i] === '-c') i++;
-      else if (GIT_OPTION_VALUES.test(args[i])) {
-        if (!args[i].includes('=')) i++;
-      } else if (!args[i].startsWith('-')) words.push(args[i]);
+      if (GIT_VALUED_OPTIONS.has(args[i])) i++;
+      else if (!args[i].startsWith('-')) words.push(args[i]);
     }
     const [sub, action] = words;
     if (sub === 'push' || sub === 'send-email') return `git ${sub}`;

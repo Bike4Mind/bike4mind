@@ -1795,8 +1795,8 @@ function gitRestored(sub: string, args: readonly string[]): { paths: string[]; s
 const PLAIN_GIT_OPTIONS = new Set(['--no-pager', '-P', '-p', '--paginate', '--no-optional-locks']);
 
 /**
- * git's global options that take their value as the next word (`--attr-source HEAD`); each also takes `--name=value`
- * except `-C` and `-c`. Shared with the shell scan so both read where the subcommand starts alike.
+ * git's global options that take their value as the next word (`--attr-source HEAD`); the long ones except
+ * `--shallow-file` also take `--name=value`. Shared with the shell scan so both read where the subcommand starts alike.
  */
 export const GIT_VALUED_OPTIONS: ReadonlySet<string> = new Set([
   '-C',
@@ -1820,16 +1820,16 @@ const GIT_VALUELESS_OPTIONS: ReadonlySet<string> = new Set([
   '--literal-pathspecs',
   '--glob-pathspecs',
   '--noglob-pathspecs',
+  '--no-literal-pathspecs',
   '--icase-pathspecs',
   '--exec-path',
   '--html-path',
   '--man-path',
   '--info-path',
-  '--version',
-  '--help',
-  '-v',
-  '-h',
 ]);
+
+/** Options after which git runs `version` or `help` and reads nothing else. */
+const GIT_HELP_OPTIONS: ReadonlySet<string> = new Set(['--version', '-v', '--help', '-h']);
 
 /** Whether `arg` is a global option git knows, in its separate or `--name=value` form. */
 const knownGitOption = (arg: string): boolean => {
@@ -1860,7 +1860,8 @@ function gitSubcommand(
       if (index > 0 && !/^[a-z][a-z0-9-]*$/.test(arg))
         return { sub: '', rest: [], cwd: directory, moved: true, unread: true };
       return { sub: arg, rest: args.slice(index + 1), cwd: directory, moved };
-    } else if (!knownGitOption(arg)) return { sub: '', rest: [], cwd: directory, moved: true, unread: true };
+    } else if (GIT_HELP_OPTIONS.has(arg)) return null;
+    else if (!knownGitOption(arg)) return { sub: '', rest: [], cwd: directory, moved: true, unread: true };
     else if (!PLAIN_GIT_OPTIONS.has(arg)) {
       moved = true;
       if (GIT_VALUED_OPTIONS.has(arg)) index++;
