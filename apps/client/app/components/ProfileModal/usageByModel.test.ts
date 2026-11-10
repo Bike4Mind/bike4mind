@@ -96,7 +96,12 @@ describe('aggregateUsageByModel', () => {
 
     const total = Object.values(usage).reduce((sum, credits) => sum + credits, 0);
     expect(total).toBeCloseTo(transactions.reduce((sum, t) => sum + Math.abs(t.credits), 0));
-    expect(usage).toEqual({ 'Claude Sonnet 5.5': 153.5, 'GPT-5.4 Mini': 10, 'retired-model': 4, 'Other charges': 3 });
+    expect(usage).toEqual({
+      'Claude Sonnet 5.5': 153.5,
+      'GPT-5.4 Mini': 10,
+      'retired-model': 4,
+      'Unattributed charges': 3,
+    });
   });
 
   describe('app charges', () => {
@@ -143,6 +148,18 @@ describe('aggregateUsageByModel', () => {
         overlayLabels
       );
       expect(usage).toEqual({ 'gpt-4o': 105, 'Gpt 4o': 1 });
+    });
+
+    it('keeps text spend under the raw model id after a generic_deduct row with the same id', () => {
+      const usage = aggregateUsageByModel(
+        [
+          { type: 'generic_deduct', model: 'gpt-4o', credits: -1 },
+          { type: 'text_generation_usage', model: 'gpt-4o', credits: -100 },
+        ],
+        [],
+        overlayLabels
+      );
+      expect(usage).toEqual({ '4o': 1, 'gpt-4o': 100 });
     });
 
     it('keeps an unknown id on a model-usage row as the model id', () => {

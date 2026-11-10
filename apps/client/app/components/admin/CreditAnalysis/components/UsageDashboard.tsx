@@ -47,8 +47,9 @@ const RESIDUAL_TOLERANCE_CREDITS = 1;
  * panel then hides its own toggle.
  *
  * `reconcileLedger` makes the totals follow the credit ledger, adding an "Other charges" row for spend
- * with no usage event. Only the profile page sets it: it shows that ledger beside this panel, whereas
- * on org dashboards the ledger also holds non-spend debits (expiry, admin adjustments).
+ * with no usage event. Only the profile page sets it, because it shows the ledger beside this panel and
+ * the two must agree. Org views have no ledger section, and the ledger's generic_deduct rows include
+ * non-spend debits (expiry, clawbacks, admin adjustments) for any owner.
  */
 export const UsageDashboard: React.FC<{
   ownerType: UsageOwnerType;
@@ -152,8 +153,9 @@ export const UsageDashboard: React.FC<{
 
       <Alert color="neutral" size="sm" sx={{ mb: 2 }}>
         {isOrg
-          ? "Spend billed to this organization's credit pool (owner-scoped). Members are the users who ran each call; feature is the product surface (chat, agent, operations, embedding). Per-call detail comes from usage events recorded since deploy; charges with no such record appear as Other charges."
-          : "Spend billed to your personal credit pool (owner-scoped). Feature is the product surface (chat, agent, operations, embedding); keys billed to an organization appear in that org's dashboard instead. Per-call detail comes from usage events recorded since deploy; charges with no such record appear as Other charges."}
+          ? "Spend billed to this organization's credit pool (owner-scoped). Members are the users who ran each call; feature is the product surface (chat, agent, operations, embedding). Per-call detail comes from usage events recorded since deploy."
+          : "Spend billed to your personal credit pool (owner-scoped). Feature is the product surface (chat, agent, operations, embedding); keys billed to an organization appear in that org's dashboard instead. Per-call detail comes from usage events recorded since deploy." +
+            (reconcileLedger ? ' Charges with no such record appear as Other charges.' : '')}
       </Alert>
 
       {error && (
@@ -230,6 +232,7 @@ export const UsageDashboard: React.FC<{
             title="By model"
             testid="usage-model-table"
             keyLabel="Model"
+            emptyText={hasResidual ? "No per-call detail for this window's charges." : undefined}
             rows={(data?.byModel ?? []).map(r => ({
               key: `${r.provider}-${r.model}`,
               label: `${r.provider} / ${r.model}`,

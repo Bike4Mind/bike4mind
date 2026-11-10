@@ -18,7 +18,7 @@ export const usageModelKey = (id: string): string => normalizeModelsDevKey(id).r
 const APP_CHARGE_TYPES: ReadonlySet<string> = new Set(['generic_deduct']);
 
 /** Label for a row with no model id at all. */
-export const OTHER_CHARGES_LABEL = 'Other charges';
+export const OTHER_CHARGES_LABEL = 'Unattributed charges';
 
 function featureLabel(type: string | undefined, rawId: string, overlayLabels?: PremiumToolDisplayLabels): string {
   if (rawId === 'Unknown') return OTHER_CHARGES_LABEL;

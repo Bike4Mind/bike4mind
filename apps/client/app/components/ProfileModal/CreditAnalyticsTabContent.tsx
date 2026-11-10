@@ -220,21 +220,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
     });
 
     // Create combined usage (all usage types including generic deducts)
-    [
-      ...genericDeductTransactions,
-      ...textUsageTransactions,
-      ...completionApiUsageTransactions,
-      ...decisionUsageTransactions,
-      ...imageUsageTransactions,
-      ...imageEditUsageTransactions,
-      ...voiceUsageTransactions,
-      ...toolUsageTransactions,
-      ...speechToTextUsageTransactions,
-      ...textToSpeechUsageTransactions,
-      ...soundEffectsUsageTransactions,
-      ...musicUsageTransactions,
-      ...videoUsageTransactions,
-    ].forEach(transaction => {
+    allDeductTransactions.forEach(transaction => {
       const day = dayjs(transaction.createdAt).format('YYYY-MM-DD');
       if (!allUsageDailyData.has(day)) {
         allUsageDailyData.set(day, { x: day, y: 0 });

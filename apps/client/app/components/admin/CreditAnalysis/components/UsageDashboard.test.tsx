@@ -158,6 +158,10 @@ describe('UsageDashboard ledger reconciliation', () => {
     expect(within(table).getByText('5,069')).toBeInTheDocument();
     expect(screen.getByTestId('usage-residual-note')).toBeInTheDocument();
     expect(screen.getByTestId('usage-no-events-note')).toBeInTheDocument();
+    const modelTable = screen.getByTestId('usage-model-table');
+    expect(within(modelTable).queryByText('No usage in this window.')).not.toBeInTheDocument();
+    expect(within(modelTable).getByText("No per-call detail for this window's charges.")).toBeInTheDocument();
+    expect(screen.getByText(/appear as Other charges/)).toBeInTheDocument();
   });
 
   it('adds no residual row when events and ledger agree', () => {
@@ -229,5 +233,6 @@ describe('UsageDashboard ledger reconciliation', () => {
     expect(screen.getAllByText('No usage in this window.').length).toBeGreaterThan(0);
     expect(screen.queryByTestId('usage-residual-note')).not.toBeInTheDocument();
     expect(screen.queryByText(/Other charges \(no per-call/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/appear as Other charges/)).not.toBeInTheDocument();
   });
 });
