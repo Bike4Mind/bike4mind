@@ -565,6 +565,17 @@ class ShadowDetectionRepository {
     return { data: docs.slice(0, query.limit).map(toItem), truncated: docs.length > query.limit };
   }
 
+  /** Which of `userIds` are named by a detection an admin graded confirmed abuse. */
+  async findConfirmedAbuseUserIds(userIds: string[]): Promise<string[]> {
+    if (userIds.length === 0) return [];
+    const named: unknown[] = await ShadowDetectionModel.distinct('userIds', {
+      userIds: { $in: userIds },
+      verdict: 'confirmed_abuse',
+    });
+    const wanted = new Set(userIds);
+    return named.filter((id): id is string => typeof id === 'string' && wanted.has(id));
+  }
+
   /**
    * Detections naming any of these users, newest first, at most `limit`. The `$in` uses the userIds
    * index but the detectedAt sort is in memory. `userIds` holds only the requested members, since a

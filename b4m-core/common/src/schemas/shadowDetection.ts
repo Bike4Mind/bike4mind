@@ -82,8 +82,10 @@ export type ShadowDetectionSignalRule = 'above' | 'atLeast' | 'below' | 'atMost'
 /**
  * The comparison each producer applies, keyed by signal key. Must stay in sync with the producers:
  * signupNetworkAlerts (ipSignups, asnSignups), paymentRisk (youngAccount, sharedCard, manyCards*),
- * strongLink (blockedSignupIpLinks, hoursToBlockedLink), accountCampaignSignals (directMembers, axes)
- * and signupDomainHoldAssessment (confidence). A key not listed here is shown as context, never as
+ * strongLink (blockedSignupIpLinks, hoursToBlockedLink), accountCampaignSignals (directMembers, axes),
+ * signupDomainHoldAssessment (confidence) and youngAccountSpendShadowDetections (farmSignals,
+ * apiOnlySpend, minutesToApiKey, minutesToAuthenticator, youngNetworkPeers, linkedFlaggedAccounts).
+ * A key not listed here is shown as context, never as
  * the reason a detector fired.
  */
 export const SHADOW_DETECTION_SIGNAL_RULES: Readonly<Record<string, ShadowDetectionSignalRule>> = {
@@ -98,6 +100,12 @@ export const SHADOW_DETECTION_SIGNAL_RULES: Readonly<Record<string, ShadowDetect
   directMembers: 'atLeast',
   axes: 'atLeast',
   confidence: 'atLeast',
+  farmSignals: 'atLeast',
+  apiOnlySpend: 'atLeast',
+  minutesToApiKey: 'atMost',
+  minutesToAuthenticator: 'atMost',
+  youngNetworkPeers: 'atLeast',
+  linkedFlaggedAccounts: 'atLeast',
 };
 
 /** The signal's rule when it has one and its observed value met it; null otherwise. */
