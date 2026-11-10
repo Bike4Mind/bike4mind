@@ -16,6 +16,7 @@ import {
   pullKey,
   type HfTokenStatus,
   type HubBuildView,
+  type HubDetailResult,
   type HubModelCard,
   type HubModelView,
   type InstalledModelsResult,
@@ -271,33 +272,56 @@ function ModelDetail({
 
   const serverId = target.local ? undefined : target.id;
   const detailRequest = useRef(0);
+  const appliedRequest = useRef(0);
+  const loading = useRef(false);
+  const readKey = `${repo}\0${serverId ?? ''}`;
+  const currentKey = useRef(readKey);
+  currentKey.current = readKey;
+  // Reads of one model can overlap. A model is applied unless a later read already was; an error only from the
+  // latest read, so an older failure never replaces a shown detail.
+  const apply = useCallback((mine: number, key: string, result: HubDetailResult) => {
+    if (key !== currentKey.current) return;
+    if (result.ok) {
+      if (mine < appliedRequest.current) return;
+      appliedRequest.current = mine;
+      loading.current = false;
+      setDetail({ state: 'ready', model: result.model });
+    } else if (mine === detailRequest.current) {
+      loading.current = false;
+      setDetail({ state: 'error', error: result.error });
+    }
+  }, []);
   const load = useCallback(async () => {
     const mine = ++detailRequest.current;
+    loading.current = true;
     setDetail({ state: 'loading' });
-    const result = await window.b4m.models.getDetail(repo, serverId);
-    if (mine !== detailRequest.current) return;
-    setDetail(result.ok ? { state: 'ready', model: result.model } : { state: 'error', error: result.error });
-  }, [repo, serverId]);
+    apply(mine, readKey, await window.b4m.models.getDetail(repo, serverId));
+  }, [repo, serverId, readKey, apply]);
 
   useEffect(() => {
     setPullError(null);
     void load();
   }, [load]);
 
-  // Main re-rated the fit badges (the WSL flag arrived); the shown detail stays up while the new ratings load.
+  // Main re-rated the fit badges (the WSL flag arrived). A detail still loading reads again, so its error shows; a
+  // shown one stays up while the new ratings load.
   useEffect(() => {
     let live = true;
     const off = window.b4m.models.onCuratedChanged(() => {
+      if (loading.current) {
+        void load();
+        return;
+      }
       const mine = ++detailRequest.current;
       void window.b4m.models.getDetail(repo, serverId).then(result => {
-        if (live && mine === detailRequest.current && result.ok) setDetail({ state: 'ready', model: result.model });
+        if (live && result.ok) apply(mine, readKey, result);
       });
     });
     return () => {
       live = false;
       off();
     };
-  }, [repo, serverId]);
+  }, [repo, serverId, readKey, load, apply]);
 
   if (detail.state === 'loading')
     return (

@@ -2043,6 +2043,64 @@ describe('ModelsScreen explore', () => {
     expect(q('models-pull-dialog-fit-warning')?.textContent).toBe(warning);
   });
 
+  describe('re-rating while the first read is out', () => {
+    const UNREACHABLE: HubDetailResult = {
+      ok: false,
+      error: { kind: 'hub-unreachable', message: 'Could not reach Hugging Face.' },
+    };
+    const gateNext = () => {
+      let release: () => void = () => {};
+      bridge.detailGates.push(new Promise<void>(resolve => (release = resolve)));
+      return release;
+    };
+
+    it('shows the detail the first read returned when the re-rating read fails', async () => {
+      await mount();
+      bridge.detail = { ok: true, model: view({ id: 'first/read' }) };
+      const release = gateNext();
+      await openExplore();
+      await click(q('models-explore-result-row'));
+      bridge.detail = UNREACHABLE;
+      act(() => pushCuratedChanged());
+      await flush();
+      release();
+      await flush();
+      expect(q('models-detail')?.dataset.repo).toBe('first/read');
+      expect(q('models-detail-error')).toBeNull();
+      expect(q('models-detail-loading')).toBeNull();
+    });
+
+    it('shows the error with Retry when both reads fail', async () => {
+      await mount();
+      bridge.detail = UNREACHABLE;
+      const release = gateNext();
+      await openExplore();
+      await click(q('models-explore-result-row'));
+      act(() => pushCuratedChanged());
+      await flush();
+      release();
+      await flush();
+      expect(q('models-detail-error')?.textContent).toContain('Could not reach Hugging Face.');
+      expect(q('models-detail-error')?.querySelector('button')).not.toBeNull();
+      expect(q('models-detail-loading')).toBeNull();
+    });
+
+    it('keeps the newer read when an older load answers last', async () => {
+      await mount();
+      bridge.detail = { ok: true, model: view({ id: 'older/read' }) };
+      const release = gateNext();
+      await openExplore();
+      await click(q('models-explore-result-row'));
+      bridge.detail = { ok: true, model: view({ id: 'newer/read' }) };
+      act(() => pushCuratedChanged());
+      await flush();
+      expect(q('models-detail')?.dataset.repo).toBe('newer/read');
+      release();
+      await flush();
+      expect(q('models-detail')?.dataset.repo).toBe('newer/read');
+    });
+  });
+
   it('keeps the newest detail when an older re-rating read answers last', async () => {
     await mount();
     await openExplore();

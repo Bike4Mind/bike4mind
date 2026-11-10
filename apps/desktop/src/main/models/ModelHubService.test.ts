@@ -1531,6 +1531,31 @@ describe('ModelHubService WSL GPU memory flag on fit badges', () => {
     expect(await capOf(service)).toBeNull();
   });
 
+  it('learns the version of a limit confirmed with the version unread, then drops it for another release', async () => {
+    const { service, runtime } = flagHarness({ version: '0.0.0' });
+    runtime.health.mockResolvedValue({ ok: false, version: null, error: 'timed out' });
+    runtime.loaded.mockResolvedValue(HELD_BACK);
+    await settledFits(service);
+    await vi.waitFor(async () => expect(await capOf(service)).not.toBeNull());
+    runtime.loaded.mockResolvedValue([]);
+    runtime.health.mockResolvedValue({ ok: true, version: '0.40.13', error: null });
+    expect(await capOf(service)).not.toBeNull();
+    runtime.health.mockResolvedValue({ ok: true, version: '0.0.1', error: null });
+    expect(await capOf(service)).toBeNull();
+  });
+
+  it('learns the server of a limit confirmed with the server unread, then drops it for another', async () => {
+    const { service, runtime, ollamaWslPatch } = flagHarness({ version: '0.40.13', build: null });
+    runtime.loaded.mockResolvedValue(HELD_BACK);
+    await settledFits(service);
+    await vi.waitFor(async () => expect(await capOf(service)).not.toBeNull());
+    runtime.loaded.mockResolvedValue([]);
+    ollamaWslPatch.mockResolvedValue({ server: 'pid-1', patched: false });
+    expect(await capOf(service)).not.toBeNull();
+    ollamaWslPatch.mockResolvedValue({ server: 'pid-2', patched: false });
+    expect(await capOf(service)).toBeNull();
+  });
+
   it('keeps a limit seen when one health read fails, then recovers', async () => {
     const { service, runtime } = flagHarness({ version: '0.40.13' });
     runtime.loaded.mockResolvedValue(HELD_BACK);
