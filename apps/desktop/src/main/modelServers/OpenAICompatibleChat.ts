@@ -660,6 +660,11 @@ export class OpenAICompatibleChat implements LocalChat {
    */
   private keepTemplates(listed: readonly InstalledModel[]): void {
     const names = new Set(listed.map(model => model.name));
+    if ([...this.loadStates.keys()].some(name => !names.has(name))) {
+      // A returning name can serve different weights even when neither listing names an identity.
+      this.templateEpoch++;
+      this.askingTemplates.clear();
+    }
     for (const [name, learned] of this.templates) {
       const identity = this.identities.get(name);
       if (!names.has(name) || (identity !== undefined && learned.identity !== identity)) this.templates.delete(name);

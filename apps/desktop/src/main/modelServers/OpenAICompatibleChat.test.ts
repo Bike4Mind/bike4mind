@@ -894,6 +894,40 @@ describe('OpenAICompatibleChat gpt-oss by its template', () => {
     expect(await effortOf(client)).toEqual([['house-model', true, undefined]]);
   });
 
+  it.each([
+    { oldTemplate: HARMONY, currentTemplate: QWEN, effort: false },
+    { oldTemplate: QWEN, currentTemplate: HARMONY, effort: true },
+  ])(
+    'discards the old template when a returning model takes effort=$effort',
+    async ({ oldTemplate, currentTemplate, effort }) => {
+      let names = ['house-model'];
+      const answers: ((response: Response) => void)[] = [];
+      const server = llamaServer({
+        names: () => names,
+        props: () => new Promise<Response>(resolve => answers.push(resolve)),
+      });
+      const changed = vi.fn();
+      const client = chat(server.fetch, 'llama-server', changed);
+      await client.listModels();
+      await vi.waitFor(() => expect(server.propsUrls).toHaveLength(1));
+
+      names = [];
+      expect(await effortOf(client)).toEqual([]);
+      names = ['house-model'];
+      expect(await effortOf(client)).toEqual([['house-model', false, undefined]]);
+
+      answers[0](Response.json({ chat_template: oldTemplate }));
+      await settle();
+      expect(changed).not.toHaveBeenCalled();
+      expect(await effortOf(client)).toEqual([['house-model', false, undefined]]);
+      await vi.waitFor(() => expect(answers).toHaveLength(2));
+      answers[1](Response.json({ chat_template: currentTemplate }));
+      await settle();
+      expect(await effortOf(client)).toEqual([['house-model', effort, undefined]]);
+      expect(changed).toHaveBeenCalledTimes(effort ? 1 : 0);
+    }
+  );
+
   it('asks at once for a name it got no template for once it has left the listing and come back', async () => {
     let names = ['house-model'];
     const server = llamaServer({ names: () => names, props: () => new Response('boom', { status: 500 }) });
