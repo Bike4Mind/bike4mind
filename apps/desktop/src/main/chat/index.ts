@@ -559,7 +559,8 @@ export function registerChat(
     localLlamaServer({
       views: () => serversLoaded.then(() => modelServers.views()),
       onPath: async () => findOnPath('llama-server', await resolveUserPath()),
-    })
+    }),
+    message => logger.warn(message)
   );
   modelServers.onServerSaved(relistAfterSave(localHardware, () => modelServers.views(), logger));
   void localHardware.profile();

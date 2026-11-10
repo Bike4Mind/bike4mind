@@ -26,6 +26,7 @@ export class HardwareProbe {
   /** The identity of the llama-server the current result's probe found: null for none, undefined when unknown. */
   private listedBinary: string | null | undefined;
   private relist = false;
+  private warn: (message: string) => void = () => undefined;
 
   constructor(
     private readonly probe: (options: HardwareProbeOptions) => Promise<HardwareProfile> = options =>
@@ -41,8 +42,12 @@ export class HardwareProbe {
   }
 
   /** The llama-server whose device list sizes a Linux Intel card; probes again with it. */
-  setLlamaServer(locate: NonNullable<HardwareProbeOptions['llamaServer']>): void {
+  setLlamaServer(
+    locate: NonNullable<HardwareProbeOptions['llamaServer']>,
+    warn: (message: string) => void = () => undefined
+  ): void {
     this.llamaServer = locate;
+    this.warn = warn;
     this.forget();
   }
 
@@ -58,13 +63,16 @@ export class HardwareProbe {
    * with the devices listed afresh when the saved server is a llama-server on this computer (`llamaServerSaved`), or
    * when the llama-server Desktop would list is no longer the one listed. The last result stays readable until replaced.
    */
-  relistLlamaServer(llamaServerSaved: boolean, warn: (message: string) => void = () => undefined): void {
-    void this.probed().then(async profile => {
-      if (profile?.platform !== 'linux' || profile.memoryKind !== 'discrete' || profile.gpuVendor !== 'intel') return;
-      if (!llamaServerSaved && !(await this.locatesAnother(warn))) return;
+  relistLlamaServer(llamaServerSaved: boolean, warn: (message: string) => void = () => undefined): Promise<boolean> {
+    return this.probed().then(async profile => {
+      if (profile?.platform !== 'linux' || profile.memoryKind !== 'discrete' || profile.gpuVendor !== 'intel') {
+        return false;
+      }
+      if (!llamaServerSaved && !(await this.locatesAnother(warn))) return false;
       this.pending = undefined;
       this.relist = true;
       void this.probed();
+      return true;
     });
   }
 
@@ -74,12 +82,11 @@ export class HardwareProbe {
     if (!locate) return false;
     try {
       const outcome = await withTimeout(
-        locate().then(found => ({ found })),
+        locate().then(async found => ({ now: found ? await this.identify(found.path) : null })),
         this.locateTimeoutMs
       );
       if (!outcome) throw new Error('the lookup timed out');
-      const now = outcome.found ? await this.identify(outcome.found.path) : null;
-      return now !== this.listedBinary;
+      return outcome.now !== this.listedBinary;
     } catch (error) {
       warn(
         `MODEL SERVERS: could not tell which llama-server is in use, so listing its devices again: ${String(error)}`
@@ -104,8 +111,24 @@ export class HardwareProbe {
       ...(locate
         ? {
             llamaServer: async () => {
-              const found = await locate();
-              located = found ? await this.identify(found.path).catch(() => undefined) : null;
+              const unknown = (error: unknown) => {
+                located = undefined;
+                this.warn(
+                  `MODEL SERVERS: could not tell which llama-server the device listing used, so listing its devices again on the next save: ${String(error)}`
+                );
+              };
+              const found = await locate().catch(error => {
+                unknown(error);
+                throw error;
+              });
+              located = null;
+              if (found) {
+                try {
+                  located = await this.identify(found.path);
+                } catch (error) {
+                  unknown(error);
+                }
+              }
               return found;
             },
           }
