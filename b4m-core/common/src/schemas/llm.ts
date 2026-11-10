@@ -68,6 +68,10 @@ export const b4mLLMTools = z.enum([
   'bob_panel_read',
   // User-defined skills - LLM-invocable instruction templates
   'skill',
+  // Custom pages - the page orchestrator chat reads state and places widgets
+  'page_get_state',
+  'page_update_state',
+  'page_set_widget',
 ]);
 export type B4MLLMTools = z.infer<typeof b4mLLMTools>;
 

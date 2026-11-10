@@ -4,6 +4,7 @@ export * from './ArtifactContentModel';
 export * from './ArtifactModel';
 export * from './ArtifactVersionModel';
 export * from './BriefcasePromptModel';
+export * from './CustomPageModel';
 export * from './FabFileModel';
 export * from './FavoriteModel';
 export * from './ImageGenerationTemplateModel';

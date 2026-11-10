@@ -35,6 +35,7 @@ export * as dataLakeService from './dataLakeService';
 export * as dataLakeResearchService from './dataLakeResearchService';
 export * as scopedSettingsService from './settings';
 export * as briefcaseService from './briefcaseService';
+export * as customPageService from './customPageService';
 export * as imageTemplateService from './imageTemplateService';
 export * as cheerioService from './lib/cheerio';
 export * as turndownService from './lib/turndown';

@@ -22,6 +22,12 @@ import type { IChatHistoryItem } from './types/entities/SessionTypes';
 /** Product-surface tag stamped on Opti / OptiHashi (`/opti`) sessions. */
 export const OPTI_SURFACE = 'opti';
 
+/**
+ * Product-surface tag stamped on the orchestrator session of a custom page (`/pages/$id`). Not a
+ * registered workspace: page sessions are owned by their page and never moved, copied or listed.
+ */
+export const PAGE_SURFACE = 'page';
+
 /** A session's home: `null` is the main notebook list, a string is a product surface. */
 export type SurfaceId = string | null;
 

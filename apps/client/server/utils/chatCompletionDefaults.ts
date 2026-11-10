@@ -34,6 +34,7 @@ import {
 } from '@bike4mind/database';
 import { newAccountSpendCapAdaptersWithAlert } from '@server/billing/newAccountSpendCapWithAlert';
 import { recordUserLimitEvent } from '@server/billing/userLimitEvents';
+import { createCustomPageToolPort } from '@server/customPages/customPageToolPort';
 import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
 import {
   ChatModels,
@@ -162,6 +163,7 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
       operationalBilling: operationalBillingAdapters,
       agents: agentRepository,
       skills: skillRepository,
+      customPages: createCustomPageToolPort({ logger: new Logger({ metadata: { component: 'customPageTool' } }) }),
       prompts: promptRepository,
       rapidReply: {
         mappings: rapidReplyMappingRepository,

@@ -35,6 +35,7 @@ export const featureMeta: Record<ExperimentalFeature, FeatureMeta> = {
   enableBmPi: { adminKey: 'EnableBmPi', defaultKey: 'EnableBmPiDefault' },
   enableLattice: { adminKey: 'EnableLattice', defaultKey: 'EnableLatticeDefault' },
   enableBriefcase: { adminKey: 'EnableBriefcase', defaultKey: 'EnableBriefcaseDefault' },
+  enableCustomPages: { adminKey: 'EnableCustomPages', defaultKey: 'EnableCustomPagesDefault' },
   enableHearth: { adminKey: 'EnableHearth', defaultKey: 'EnableHearthDefault' },
   // enableResearchMode has no admin SettingKey - it is user-controlled only
   enableResearchMode: {},

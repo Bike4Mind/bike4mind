@@ -3,6 +3,7 @@ import type { ILatticeModelRepository } from '../../../latticeService/latticeMod
 import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import { type ICompletionBackend, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { DecisionToolRequest } from '../implementation/decide/request';
+import type { CustomPageToolPort } from '../implementation/customPage/port';
 import type { Logger } from '@bike4mind/observability';
 import { GetEffectiveApiKeyAdapters } from '../../../apiKeyService';
 import type { GeneratedImageCounter } from '../../recordGeneratedImages';
@@ -199,6 +200,8 @@ export interface ToolContext {
     fallbackLakeSettings?: Pick<IFallbackLakeSettingsRepository, 'findByLakeIds'>;
     /** Optional skill repository - present when the host wires `/api/skills`. Used by the `skill` LLM tool. */
     skills?: Pick<ISkillRepository, 'findAccessibleByNameForUser' | 'listAccessibleInvocableForUser'>;
+    /** Host-built port for the page_* tools: apps/client/server/customPages/customPageToolPort.ts. */
+    customPages?: CustomPageToolPort;
     /**
      * Audit-trail repo for blocked images. Optional - the image_generation/edit_image
      * tools construct their own RekognitionImageModerationService inline and call it regardless

@@ -67,6 +67,7 @@ const NewAgentPage = lazy(() => import('./routes/agents/new'));
 const AgentDetailPage = lazy(() => import('./routes/agents/$id'));
 const EditAgentPage = lazy(() => import('./routes/agents/$id/edit'));
 const SkillsPage = lazy(() => import('./routes/skills'));
+const CustomPagePage = lazy(() => import('./routes/pages/$id'));
 const NewSkillPage = lazy(() => import('./routes/skills/new'));
 const SkillDetailPage = lazy(() => import('./routes/skills/$id'));
 const EditSkillPage = lazy(() => import('./routes/skills/$id/edit'));
@@ -656,6 +657,16 @@ const editAgentRoute = createRoute({
 // Not gated behind an experimental flag for v1: skills are a pure productivity
 // surface and the only failure mode of accessing an empty list is a friendly
 // empty state.
+const customPageRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/pages/$id',
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <CustomPagePage />
+    </Suspense>
+  ),
+});
+
 const skillsRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: '/skills',
@@ -1401,6 +1412,7 @@ const routeTree = rootRoute.addChildren([
     newAgentRoute,
     agentDetailRoute,
     editAgentRoute,
+    customPageRoute,
     skillsRoute,
     newSkillRoute,
     skillDetailRoute,

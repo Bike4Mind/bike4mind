@@ -26,7 +26,7 @@ import FinanceIcon from '@mui/icons-material/ShowChart';
 import BobPanelIcon from '@mui/icons-material/Groups';
 import SaveToDataLakeIcon from '@mui/icons-material/SaveAlt';
 import DecideIcon from '@mui/icons-material/Balance';
-import { B4MLLMTools, B4MLLMToolsList } from '@bike4mind/common';
+import { B4MLLMTools, B4MLLMToolsList, type CustomPageToolName } from '@bike4mind/common';
 import type { SlackLlmTools } from '@bike4mind/services/llm';
 import type { ToolAvailability } from '@pages/api/settings/serverConfig';
 import type { PremiumToolDisplayLabels } from '@client/app/premiumContract';
@@ -61,6 +61,8 @@ export type PublicTools = Exclude<
   | 'create_data_lake'
   // Offered server-side on every tool-capable turn; there is nothing to toggle.
   | 'current_model_details'
+  // Forced on by the page surface's session.enabledTools; nothing to toggle or pick.
+  | CustomPageToolName
   | SlackLlmTools
 >;
 

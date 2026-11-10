@@ -153,6 +153,18 @@ export default function ExperimentalFeatureToggle() {
         loading={false}
         onChange={() => handleToggle('enableBmPi')}
       />
+      {(getServerSettingValue('EnableCustomPages') || currentUser?.isAdmin) && (
+        <FeatureContainer
+          title="Custom Pages"
+          featureKey="enableCustomPages"
+          description="Build your own pages with an AI assistant that fills them with cards, lists, and notes."
+          enabled={isFeatureEnabled('enableCustomPages')}
+          disabled={!getServerSettingValue('EnableCustomPages')}
+          disabledReason={!getServerSettingValue('EnableCustomPages') ? 'Disabled by administrator' : undefined}
+          loading={false}
+          onChange={() => handleToggle('enableCustomPages')}
+        />
+      )}
       {(getServerSettingValue('EnableHearth') || currentUser?.isAdmin) && (
         <FeatureContainer
           title="Hearth"

@@ -101,6 +101,8 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 vi.mock('..', () => ({ useNotebookLayout: () => vi.fn() }));
+// Covered by SidenavPages.test.tsx; its data hook needs a QueryClient this suite does not mount.
+vi.mock('./SidenavPages', () => ({ default: () => <div data-testid="sidenav-pages-stub" /> }));
 
 import SidenavNav from './SidenavNav';
 
@@ -127,6 +129,19 @@ beforeEach(() => {
   userState.isAdmin = false;
   userState.currentUser = undefined;
   localStorage.clear();
+});
+
+describe('SidenavNav My Pages group', () => {
+  it('renders in the scroll and all sections, never in the pinned one', () => {
+    const { unmount } = renderNav('pinned');
+    expect(screen.queryByTestId('sidenav-pages-stub')).not.toBeInTheDocument();
+    unmount();
+    const scroll = renderNav('scroll');
+    expect(screen.getByTestId('sidenav-pages-stub')).toBeInTheDocument();
+    scroll.unmount();
+    renderNav('all');
+    expect(screen.getByTestId('sidenav-pages-stub')).toBeInTheDocument();
+  });
 });
 
 describe('SidenavNav Opti row', () => {

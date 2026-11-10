@@ -39,6 +39,8 @@ import { jupyterNotebookTool } from './implementation/jupyterNotebook';
 import { excelGenerationTool } from './implementation/excelGeneration';
 import { fmpTool } from './implementation/fmp';
 import { skillTool } from './implementation/skill';
+import { pageGetStateTool, pageUpdateStateTool, pageSetWidgetTool } from './implementation/customPage';
+export type { CustomPageToolPort, CustomPageToolPage } from './implementation/customPage';
 import { chessEngineTool } from './implementation/chessEngine';
 import { setShowUserQuestionFn } from './implementation/askUserQuestion';
 
@@ -158,6 +160,11 @@ export const b4mTools = {
 
   // User-defined skills (LLM-invokable instruction templates)
   skill: skillTool,
+
+  // Custom pages (host-wired via db.customPages)
+  page_get_state: pageGetStateTool,
+  page_update_state: pageUpdateStateTool,
+  page_set_widget: pageSetWidgetTool,
 } satisfies {
   // PremiumOverlayToolName: implemented by premium overlay packages, supplied at
   // runtime via the externalTools merge - core intentionally has no entry for them.

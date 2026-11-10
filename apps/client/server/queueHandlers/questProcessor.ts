@@ -39,6 +39,7 @@ import { recordUserLimitEvent } from '@server/billing/userLimitEvents';
 import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
 import { NotFoundError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
+import { createCustomPageToolPort } from '@server/customPages/customPageToolPort';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { z } from 'zod';
 import { QuestStartBodySchema, ChatCompletionProcess } from '@bike4mind/services/llm';
@@ -125,6 +126,7 @@ export const getStaticOptions = () => {
       operationalBilling: operationalBillingAdapters,
       agents: agentRepository,
       skills: skillRepository,
+      customPages: createCustomPageToolPort({ logger: staticOptionsLogger }),
       prompts: promptRepository,
       rapidReply: {
         mappings: rapidReplyMappingRepository,

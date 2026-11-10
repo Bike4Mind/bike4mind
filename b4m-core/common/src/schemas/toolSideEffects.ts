@@ -91,6 +91,10 @@ const CORE_TOOL_SIDE_EFFECTS: Record<B4MLLMTools, ToolSideEffects> = {
   // Starts a Bob site read that bills the user's credits and publishes its report as them: a
   // stored write made on their behalf, unlike deep_research's spend, so agent mode asks first.
   bob_panel_read: 'external',
+  page_get_state: 'none',
+  // Own page state and widgets, visible and undoable on the page the user is looking at.
+  page_update_state: 'local',
+  page_set_widget: 'local',
 };
 
 /**

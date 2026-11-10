@@ -48,6 +48,10 @@ export const contentHolders = {
     kind: 'holder',
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
   },
+  CustomPage: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
   DailyReport: { kind: 'noUserData', note: 'Platform-wide generated activity summary for a date, not per person.' },
   DungeonInstance: {
     kind: 'holder',

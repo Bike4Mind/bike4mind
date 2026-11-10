@@ -113,6 +113,7 @@ import {
 } from '../dataLakeService/narrowLakeAccessToSession';
 import type { ILatticeModelRepository } from '../latticeService/latticeModelService';
 import type { DecideToolFn } from './tools/base/types';
+import type { CustomPageToolPort } from './tools/implementation/customPage/port';
 import { nonNegativeIntOr, positiveIntOr } from '../dataLakeService/resolveSearchBudgets';
 import { resolveScopedSettingEntries, scopeForCaller } from '../settings/resolveScopedSetting';
 import {
@@ -288,6 +289,8 @@ interface DatabaseAdapters {
     | 'listSystem'
     | 'searchAccessible'
   >;
+  /** Flows to ToolContext.db unchanged; see its doc there. */
+  customPages?: CustomPageToolPort;
   caches: ICacheRepository;
   prompts: {
     findById: (id: string) => Promise<IPromptDocument | null>;

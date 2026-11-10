@@ -39,6 +39,7 @@ import { inviteBlue, rewardGreen } from '@client/app/components/common/gearRewar
 import { useNotebookLayout } from '..';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
 import { claimFirstRunImpression } from '@client/app/utils/firstRunImpression';
+import SidenavPages from './SidenavPages';
 import { menuItemListSx, menuRowSx, menuSurfaceSx } from './menuSurfaceSx';
 import { NavIcon, NewActionIcon, SIDENAV, SidenavNavRow, SidenavNavStack, navLabelSx, navRowSx } from './kit';
 
@@ -552,6 +553,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
           />
         </Fragment>
       ))}
+      {section !== 'pinned' && <SidenavPages />}
       {showMore && (
         <Dropdown open={moreOpen} onOpenChange={(_, open) => setMoreOpen(open)}>
           <MenuButton

@@ -42,6 +42,7 @@ export type ExperimentalFeature =
   | 'enableLattice'
   | 'enableBriefcase'
   | 'enableHearth'
+  | 'enableCustomPages'
   // Layer-1 gate for the Agent-mode composer toggle.
   // Hides the entire feature surface until parity ships. Default false for everyone.
   | 'agentMode';
@@ -110,6 +111,7 @@ const defaultSettings: UserSettings = {
     enableLattice: false,
     enableHearth: false,
     enableBriefcase: false,
+    enableCustomPages: false,
     agentMode: false,
   },
   contextTelemetryLevel: 'basic',
