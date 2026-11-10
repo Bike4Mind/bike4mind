@@ -80,7 +80,23 @@ const LIGHT_KNOWN_LOW: Record<string, number> = {
   'security layer 8 text': 2.26,
 };
 
+const flatten = (value: unknown, path = ''): [string, string][] =>
+  typeof value === 'string'
+    ? [[path, value.toUpperCase()]]
+    : Object.entries(value as object).flatMap(([key, inner]) => flatten(inner, path ? `${path}.${key}` : key));
+
+// White text on the filled pill and the drop shadow read the same on both canvases.
+const SHARED_KEYS = ['onAccent', 'shadow'];
+
 describe('architecture diagram palettes', () => {
+  it('gives every dark color its own value, so no light fill leaks into dark mode', () => {
+    const light = Object.fromEntries(flatten(LIGHT_PALETTE));
+    const same = flatten(DARK_PALETTE)
+      .filter(([key, hex]) => hex === light[key])
+      .map(([key]) => key);
+    expect(same).toEqual(SHARED_KEYS);
+  });
+
   it('checks the same set of pairs in both palettes', () => {
     expect(textPairs(DARK_PALETTE).map(pair => pair.name)).toEqual(textPairs(LIGHT_PALETTE).map(pair => pair.name));
     expect(textPairs(DARK_PALETTE)).toHaveLength(56);

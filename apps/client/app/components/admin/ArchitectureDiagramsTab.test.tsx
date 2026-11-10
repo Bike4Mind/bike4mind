@@ -79,6 +79,7 @@ describe('ArchitectureDiagramsTab', () => {
       const painted = paintedColors(frame);
       expect(painted.length).toBeGreaterThan(10);
       expect(painted.filter(color => LIGHT_ONLY_HEX.has(color!))).toEqual([]);
+      expect(painted.filter(color => !DARK_HEX.has(color!))).toEqual([]);
     }
   });
 
