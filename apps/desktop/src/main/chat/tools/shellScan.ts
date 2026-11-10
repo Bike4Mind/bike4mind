@@ -1188,7 +1188,11 @@ function xargsReplace(tokens: readonly string[]): string | null {
 
 /** `git config` keys whose value is a program git runs, or a file of more config. Case is ignored, as git does. */
 const GIT_PROGRAM_CONFIG =
-  /^(core\.(fsmonitor|sshcommand|pager|editor|hookspath|gitproxy|askpass|alternaterefscommand)|alias\..+|.+\.textconv|diff\.external|.+\.(cmd|command)|credential\..+|filter\..+|sequence\.editor|gpg(\..+)?\.program|merge\..+\.driver|pager\..+|uploadpack\.packobjectshook|remote\..+\.(uploadpack|receivepack)|include(if\..+)?\.path)$/i;
+  /^(core\.(fsmonitor|sshcommand|pager|editor|hookspath|gitproxy|askpass|alternaterefscommand)|alias\..+|.+\.textconv|diff\.external|.+\.(cmd|command)|(man|browser|difftool|mergetool)\..+\.path|credential\..+|filter\..+|sequence\.editor|gpg(\..+)?\.program|merge\..+\.driver|pager\..+|uploadpack\.packobjectshook|remote\..+\.(uploadpack|receivepack)|include(if\..+)?\.path)$/i;
+
+/** Environment variables through which git is handed a program to run, or config that names one. */
+const GIT_PROGRAM_ENVIRONMENT =
+  /\bGIT_(EXEC_PATH|CONFIG(_[A-Z]\w*)?|EDITOR|SEQUENCE_EDITOR|PAGER|SSH|SSH_COMMAND|ASKPASS|EXTERNAL_DIFF|PROXY_COMMAND|TEMPLATE_DIR)\b/;
 
 /** `git config` options whose value is the next word. */
 const GIT_CONFIG_VALUED = new Set(['-f', '--file', '--blob', '--type', '--default', '--comment', '--value']);
@@ -4416,6 +4420,8 @@ function gitConfigRunsProgram(raw: readonly string[]): boolean {
     // `${X:+}-c` may pass `-c` alone, so where its value ends is open.
     if (bashOption(word) === null && fixedOption(word, 'Cc')?.value === null) return true;
     if (!arg.startsWith('-')) return false;
+    // git runs its helper programs (`git-web--browse`, `git-mergetool`) from the folder `--exec-path=` names.
+    if (arg.startsWith('--exec-path=')) return true;
     const valued = arg === '-c' || arg === '--config-env';
     const glued = /^--config-env=(.*)$/s.exec(arg)?.[1];
     const setting = valued
@@ -4966,6 +4972,9 @@ export async function scanShell(
       anyName ||
       /GIT_/.test(gateText) ||
       ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR'].some(name => process.env[name] !== undefined);
+    // A script that sets a variable git reads a program from (its exec path, config passed by environment, an editor,
+    // pager or ssh command) runs that program in any git call after it.
+    const programEnvironment = GIT_PROGRAM_ENVIRONMENT.test(gateText);
     // Pathspec settings the scan's own git never reads: icase and glob widen what a pathspec matches, literal reads
     // magic as a name, and noglob only narrows.
     const widenedPathspecs =
@@ -5459,7 +5468,13 @@ export async function scanShell(
     ): Promise<void> => {
       const [program, ...rest] = tokens;
       const [wrapped, ...wrappedRest] = withoutWrappers(tokens);
-      if (effects.unread || untrackableCommand(tokens)) unreadOperands++;
+      if (
+        effects.unread ||
+        untrackableCommand(tokens) ||
+        (programEnvironment && programName(unquote(wrapped ?? '')) === 'git')
+      ) {
+        unreadOperands++;
+      }
       for (const output of effects.outputs) {
         noteWrite(output);
         await check(output, state.cwd);

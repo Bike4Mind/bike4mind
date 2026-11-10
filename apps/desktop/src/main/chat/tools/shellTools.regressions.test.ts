@@ -803,6 +803,50 @@ describe('shell approval in a project with a large node_modules', () => {
   });
 
   it.each([
+    'git -c man.man.path=./x.sh --help clean',
+    'git -c man.man.path=./x.sh -h clean',
+    'git -c man.man.path=./x.sh help clean',
+    'git -c man.man.cmd=./x.sh --help clean',
+    'git -c man.x.cmd= --help clean',
+    'git -c core.pager= status',
+    'git -c help.format=web -c help.browser=firefox -c browser.firefox.path=./x.sh -c help.htmlPath=./docs --help clean',
+    'git -c help.format=web -c help.browser=firefox -c browser.firefox.path=./x.sh -c help.htmlPath=./docs help clean',
+    'git -c browser.firefox.cmd=./x.sh help clean',
+    'git -c difftool.x.path=./x.sh difftool',
+    'git -c mergetool.x.path=./x.sh mergetool',
+    'git --exec-path=./bin -c help.format=web -c help.htmlPath=./docs --help clean',
+    'git --exec-path=./bin mergetool',
+    'git --exec-path=./bin status',
+    'git --exec-path=./bin --help clean',
+    'git --exec-path=./bin --version',
+    'git -C . --exec-path=./bin log',
+    'GIT_EXEC_PATH=./bin git mergetool',
+    'GIT_EXEC_PATH=./bin git --help clean',
+    'env GIT_EXEC_PATH=./bin git mergetool',
+    'export GIT_EXEC_PATH=./bin; git mergetool',
+    'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=man.man.path GIT_CONFIG_VALUE_0=./x.sh git help clean',
+    'env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.pager GIT_CONFIG_VALUE_0=./x.sh git log',
+    `GIT_CONFIG_PARAMETERS="'man.man.path=./x.sh'" git help clean`,
+    `env GIT_CONFIG_PARAMETERS="'core.pager=./x.sh'" git log`,
+    'GIT_EDITOR=./x.sh git status',
+    'GIT_PAGER=./x.sh git log',
+  ])('asks in every mode for %s, which has git run a program the command names', async command => {
+    expect(await judge(command)).toMatchObject(asks);
+  });
+
+  it.each([
+    'git help clean',
+    'git --help clean',
+    'git -h clean',
+    'git --version',
+    'git --exec-path',
+    'git --exec-path status',
+    'git -c core.x=y help clean',
+  ])('runs %s unasked, as no program is named', async command => {
+    expect(await judge(command)).toMatchObject({ auto: true, full: true });
+  });
+
+  it.each([
     'git --no-literal-pathspecs ls-files',
     'git --no-literal-pathspecs status',
     'git --literal-pathspecs ls-files',
