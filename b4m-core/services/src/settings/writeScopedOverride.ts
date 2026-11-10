@@ -45,8 +45,9 @@ async function releaseOnFailure(claim: ScopedSettingChangeClaim | null, write: (
   try {
     await write();
   } catch (err) {
-    // Inside a transaction the claim (a Mongoose query, so it joins via ALS) rolls back with it; this
-    // release covers a caller writing outside one. A failed release must not mask the write error.
+    // The claim is a cache write kept outside the caller's transaction, so it is released here even
+    // when the transaction rolls back; a failure of the commit itself is not covered. A failed release
+    // must not mask the write error.
     await claim?.release().catch(() => undefined);
     throw err;
   }

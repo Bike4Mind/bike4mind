@@ -29,7 +29,7 @@ const CHANGE_COOLDOWNS: Partial<Record<SettingKey, NumericSettingSpec & { key: S
 
 export interface ScopedSettingCooldownDb {
   adminSettings: Pick<IAdminSettingsRepository, 'findBySettingNames' | 'findAll'>;
-  cache: Pick<ICacheRepository, 'tryAddWithinLimitFixedWindow' | 'deleteByKey'>;
+  cache: Pick<ICacheRepository, 'tryAddWithinLimitFixedWindow' | 'releaseFromFixedWindow'>;
   scopedSettings: Pick<IScopedSettingsRepository, 'findOverrides'>;
 }
 
@@ -92,12 +92,15 @@ export async function claimScopedSettingChange(
   if ((current?.settingValue ?? null) === nextValue) return null;
 
   const cacheKey = scopedSettingChangeCacheKey(key, ref);
-  const window = await db.cache.tryAddWithinLimitFixedWindow(cacheKey, 1, 1, cooldownHours * HOUR_MS);
+  // Outside the caller's transaction: a refused claim's duplicate-key error would abort it.
+  const window = await db.cache.tryAddWithinLimitFixedWindow(cacheKey, 1, 1, cooldownHours * HOUR_MS, {
+    outsideTransaction: true,
+  });
   if (!window.success) throw new ScopedSettingChangeCooldownError(key, ref, cooldownHours, window.expiresAt);
 
   return {
     release: async () => {
-      await db.cache.deleteByKey(cacheKey);
+      await db.cache.releaseFromFixedWindow(cacheKey, 1, window.expiresAt, { outsideTransaction: true });
     },
   };
 }

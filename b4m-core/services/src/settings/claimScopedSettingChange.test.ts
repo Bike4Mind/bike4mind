@@ -9,7 +9,7 @@ const T0 = Date.UTC(2026, 0, 1);
 const ownerRef = { scopeLevel: SettingScopeLevel.Owner, scopeId: 'u1', ownerType: 'User' as SettingOwnerType };
 const otherOwnerRef = { ...ownerRef, scopeId: 'u2' };
 
-/** Models CacheRepository's fixed-window counter and deleteByKey against a controllable clock. */
+/** Models CacheRepository's fixed-window counter and its release against a controllable clock. */
 function makeFixedWindowCache(clock: { now: number }) {
   const windows = new Map<string, { count: number; expiresAt: number }>();
   return {
@@ -24,8 +24,11 @@ function makeFixedWindowCache(clock: { now: number }) {
       windows.set(key, window);
       return { success: true, count: window.count, expiresAt: new Date(window.expiresAt) };
     }),
-    deleteByKey: vi.fn(async (key: string) => {
-      windows.delete(key);
+    releaseFromFixedWindow: vi.fn(async (key: string, amount: number, expiresAt: Date) => {
+      const live = windows.get(key);
+      if (live && live.expiresAt > clock.now && live.expiresAt === expiresAt.getTime()) {
+        live.count = Math.max(0, live.count - amount);
+      }
     }),
   };
 }
@@ -124,7 +127,8 @@ describe('DefaultChunkSize change cooldown', () => {
       scopedSettingChangeCacheKey('DefaultChunkSize', ownerRef),
       1,
       1,
-      2 * HOUR_MS
+      2 * HOUR_MS,
+      { outsideTransaction: true }
     );
   });
 
@@ -136,6 +140,20 @@ describe('DefaultChunkSize change cooldown', () => {
     expect(cache.tryAddWithinLimitFixedWindow).not.toHaveBeenCalled();
   });
 
+  it('claims and releases outside the caller transaction', async () => {
+    const { cache, write, scopedSettings } = setup();
+    scopedSettings.upsertOverride.mockRejectedValueOnce(new Error('db down'));
+
+    await expect(write('512')).rejects.toThrow('db down');
+
+    expect(cache.tryAddWithinLimitFixedWindow).toHaveBeenCalledWith(expect.any(String), 1, 1, 24 * HOUR_MS, {
+      outsideTransaction: true,
+    });
+    expect(cache.releaseFromFixedWindow).toHaveBeenCalledWith(expect.any(String), 1, expect.any(Date), {
+      outsideTransaction: true,
+    });
+  });
+
   it('gives the slot back when the write itself fails', async () => {
     const { write, scopedSettings } = setup();
     scopedSettings.upsertOverride.mockRejectedValueOnce(new Error('db down'));
@@ -144,7 +162,7 @@ describe('DefaultChunkSize change cooldown', () => {
     await expect(write('512')).resolves.toBeUndefined();
   });
 
-  it('gives the slot back when the afterWrite hook throws, and opens a fresh window on the next claim', async () => {
+  it('gives the slot back when the afterWrite hook throws, so the next claim reuses the same window', async () => {
     const { clock, db } = setup();
     const afterWrite = vi.fn().mockRejectedValueOnce(new Error('audit down'));
 
@@ -156,7 +174,7 @@ describe('DefaultChunkSize change cooldown', () => {
     await expect(writeScopedOverride('DefaultChunkSize', ownerRef, '256', db, { afterWrite })).resolves.toBeUndefined();
     expect(afterWrite).toHaveBeenCalledTimes(2);
 
-    clock.now = T0 + 10 * HOUR_MS + 23 * HOUR_MS;
+    clock.now = T0 + 23 * HOUR_MS;
     await expect(writeScopedOverride('DefaultChunkSize', ownerRef, '128', db)).rejects.toBeInstanceOf(
       ScopedSettingChangeCooldownError
     );
