@@ -7,7 +7,8 @@ const ROOTS = ['apps', 'b4m-core', 'packages', 'selfhost'];
 const SKIPPED_DIRS = new Set(['node_modules', 'dist', '.next', '.sst', '.turbo', 'build', 'coverage']);
 
 // The repository's own module, the alerting wrapper, read-only admin routes (they list and
-// update incidents, never record one), and the review sweep (it re-alerts, never records).
+// update incidents, never record one), the admin action counts (they count pending reviews,
+// never record one), and the review sweep (it re-alerts, never records).
 const ALLOWED = new Set([
   'packages/database/src/models/content/ImageModerationIncidentModel.ts',
   'packages/server-utils/src/moderation/imageModerationIncidents.ts',
@@ -15,6 +16,7 @@ const ALLOWED = new Set([
   'apps/client/pages/api/admin/moderation-incidents/[id]/verdict.ts',
   'apps/client/pages/api/admin/moderation-incidents/[id]/view.ts',
   'apps/client/pages/api/admin/users/[userId]/compliance.ts',
+  'apps/client/server/admin/actionCounts.ts',
   'apps/workers/src/cron/imageModerationReviewSweep.ts',
 ]);
 

@@ -814,13 +814,15 @@ describe('planReasoningEffort', () => {
       }
     );
 
-    it('uses `between_tools` for Sonnet 5.5, which rejects `disabled`', () => {
-      const id = ChatModels.CLAUDE_5_5_SONNET_BEDROCK;
-      expect(planReasoningEffort(id, adaptive(id), 'none', 800)).toEqual({
-        kind: 'off',
-        thinking: { type: 'between_tools' },
-      });
-    });
+    it.each([ChatModels.CLAUDE_5_5_SONNET, ChatModels.CLAUDE_5_5_SONNET_BEDROCK])(
+      'uses `between_tools` for Sonnet 5.5 (%s), which rejects `disabled`',
+      id => {
+        expect(planReasoningEffort(id, adaptive(id), 'none', 800)).toEqual({
+          kind: 'off',
+          thinking: { type: 'between_tools' },
+        });
+      }
+    );
 
     it('falls back to the lowest effort on a model with no off switch', () => {
       const id = ChatModels.CLAUDE_5_5_OPUS;
@@ -883,6 +885,7 @@ describe('isAdaptiveThinkingByDefault', () => {
     expect(byDefault).toEqual(
       expect.arrayContaining([
         ChatModels.CLAUDE_5_SONNET,
+        ChatModels.CLAUDE_5_5_SONNET,
         ChatModels.CLAUDE_5_5_SONNET_BEDROCK,
         ChatModels.CLAUDE_FABLE_5,
         ChatModels.CLAUDE_FABLE_5_1_BEDROCK,
@@ -962,6 +965,7 @@ describe('thinkingCannotBeDisabled', () => {
     ChatModels.CLAUDE_5_OPUS,
     ChatModels.CLAUDE_5_SONNET,
     ChatModels.CLAUDE_5_5_HAIKU,
+    ChatModels.CLAUDE_5_5_SONNET,
     ChatModels.CLAUDE_5_5_SONNET_BEDROCK,
     ChatModels.CLAUDE_4_8_OPUS,
   ])('is false for adaptive %s, which can be switched off', id => {

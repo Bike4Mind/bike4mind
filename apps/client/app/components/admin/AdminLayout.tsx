@@ -1,4 +1,5 @@
-import { Suspense, useCallback, useEffect, useState, type ReactNode } from 'react';
+import { Suspense, useCallback, useState, type ReactNode } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Outlet, useLocation, useNavigate, useRouterState } from '@tanstack/react-router';
 import { useShallow } from 'zustand/react/shallow';
 import MenuIcon from '@mui/icons-material/Menu';
@@ -9,16 +10,16 @@ import { ProviderBundle } from '@client/app/contexts/ProviderBundle';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { useLiveOpsTriageEnv } from '@client/app/hooks/data/admin';
-import { useGetWaitingSubscribersCount } from '@client/app/hooks/data/subscribers';
-import { useUnreviewedAuditCount } from '@client/app/hooks/data/adminAuditLog';
+import { adminActionCountsQueryKey, useAdminActionCounts } from '@client/app/hooks/data/adminActionCounts';
 import { HelpPanel } from '../help';
 import EnvironmentBanner from './AdminEnvironmentBanner';
 import { SidebarNav } from './AdminSidebarNav';
 import { AdminTab } from './adminSidebarConfig';
-import { canEnterAdminConsole, canOpenAdminTab } from './adminTabPermissions';
+import { canEnterAdminConsole, canOpenAdminTab, DELEGATED_ADMIN_TAB_PERMISSIONS } from './adminTabPermissions';
 import { environmentChipLabel, resolveCurrentEnvironment } from './environmentBanner';
 import { adminTabToSlug } from './adminTabSlugs';
 import { AdminCommandPalette } from './shared/AdminCommandPalette';
+import { MissingPermissionState } from './shared/MissingPermission';
 import { adminFocus, adminScrollGutter } from './shared/adminStyles';
 import { useNewSubscriptionsDot } from './Subscriptions/subscriptionsLastSeen';
 import { useAdminModal } from './useAdminModal';
@@ -65,9 +66,10 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
   const { currentUser } = useUser();
   const isAdmin = !!currentUser?.isAdmin;
   const { data: liveOpsEnv } = useLiveOpsTriageEnv(isAdmin);
-  const waitingSubscribers = useGetWaitingSubscribersCount({ enabled: isAdmin });
   const impersonating = useAccessToken(s => s.impersonating);
-  const unreviewedAudit = useUnreviewedAuditCount({ enabled: isFullAdmin(currentUser) && !impersonating });
+  // Every counted queue is a full-admin tab; the server still gates each count by its own permission.
+  const actionCounts = useAdminActionCounts({ enabled: isFullAdmin(currentUser) && !impersonating });
+  const queryClient = useQueryClient();
   const newSubscriptions = useNewSubscriptionsDot(isAdmin);
   const { collapsed, toggleCollapsed } = useAdminSidebarCollapsed();
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -77,21 +79,19 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
 
   // A detail page belongs to its tab, so a delegate who cannot open that tab cannot open the page.
   const canOpenTab = useCallback((tab: AdminTab) => canOpenAdminTab(currentUser, tab), [currentUser]);
-  const isDetailPageDenied = (path: string) => {
+  const deniedTabOf = (path: string) => {
     const tab = detailPageTabFor(path);
-    return tab !== undefined && !canOpenTab(tab);
+    return tab !== undefined && !canOpenTab(tab) ? tab : undefined;
   };
-  // The outlet draws the matched route, which trails the location while the redirect commits, so
-  // check both: one render of a denied page would already fire its requests.
+  // The outlet draws the matched route, which trails the location during a navigation, so check
+  // both: one render of a denied page would already fire its requests.
   const renderedPathname = useRouterState({ select: state => state.matches.at(-1)?.pathname ?? '' });
-  const locationDenied = isDetailPageDenied(pathname);
-  const detailPageDenied = locationDenied || isDetailPageDenied(renderedPathname);
-  useEffect(() => {
-    if (locationDenied) navigate({ to: ADMIN_CONSOLE_PATH, replace: true });
-  }, [locationDenied, navigate]);
+  const deniedDetailTab = deniedTabOf(pathname) ?? deniedTabOf(renderedPathname);
 
   const selectTab = (tab: AdminTab) => {
     setDrawerOpen(false);
+    // Work done on the page being left shows in its badge now rather than at the next poll.
+    void queryClient.invalidateQueries({ queryKey: adminActionCountsQueryKey });
     setActiveTab(tab);
     // On the console the tab URL sync mirrors the store into `?tab=`; anywhere else, go there.
     if (pathname === ADMIN_CONSOLE_PATH) return;
@@ -111,8 +111,7 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
     account,
     enableUserMigration,
     showLiveOpsTriageTab: liveOpsEnv?.showTab ?? false,
-    waitingSubscribersCount: waitingSubscribers.data?.count,
-    unreviewedAuditCount: unreviewedAudit.data,
+    actionCounts: actionCounts.data,
     // No dot on the tab the admin is looking at; a row started meanwhile lights it once they leave.
     newSubscriptions: newSubscriptions && activeTab !== AdminTab.Subscriptions,
     hiddenNotifications,
@@ -171,7 +170,11 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
               </Typography>
             </Box>
             <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', ...adminScrollGutter }}>
-              {detailPageDenied ? null : children}
+              {deniedDetailTab === undefined ? (
+                children
+              ) : (
+                <MissingPermissionState requirement={DELEGATED_ADMIN_TAB_PERMISSIONS[deniedDetailTab]} />
+              )}
             </Box>
           </Box>
         </Box>

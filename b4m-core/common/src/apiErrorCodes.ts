@@ -11,6 +11,7 @@ export const CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE = 'concurrency_limit_exceeded
 export const OUTPUT_BUDGET_EXHAUSTED_ERROR_CODE = 'output_budget_exhausted';
 export const DAILY_FREE_LIMIT_REACHED_ERROR_CODE = 'daily_free_limit_reached';
 export const UPGRADE_REQUIRED_ERROR_CODE = 'upgrade_required';
+export const ACCOUNT_SUSPENDED_ERROR_CODE = 'account_suspended';
 
 /**
  * The one enumerated vocabulary for the `errorCode` field on a public error body
@@ -35,6 +36,8 @@ export const API_ERROR_CODES = [
   API_KEY_TRUST_REQUIRED_ERROR_CODE,
   /** The account is not yet trusted for outbound actions (email, invites, tools, publishing); remediation is verifying email, waiting, purchasing or admin approval. */
   ACCOUNT_TRUST_REQUIRED_ERROR_CODE,
+  /** The credential is valid but its owner's account is suspended; the body carries `suspension` (category, terms, appeal). Not retryable. */
+  ACCOUNT_SUSPENDED_ERROR_CODE,
   /** The user owns as many agents as their tier allows; remediation is deleting one or upgrading. */
   AGENT_LIMIT_REACHED_ERROR_CODE,
   /** The caller cannot afford the request; remediation is buying credits. */

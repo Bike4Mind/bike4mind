@@ -270,8 +270,6 @@ export function AgentPeekDrawer({ agent, persona, onClose, actions }: AgentPeekD
       aria-label={`Agent details: ${agent.title}`}
       tabIndex={-1}
       data-testid="orchestrator-peek-drawer"
-      // Holds the Tavern's chrome up while open (ambient.ts).
-      data-ambient-hold
       sx={{
         outline: 'none',
         width: 340,

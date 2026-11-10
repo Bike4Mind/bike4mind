@@ -34,6 +34,7 @@ import {
   resolveGptImageOutputOptions,
 } from './OpenAIImageService';
 import { downloadImageAsBuffer, invokeImageProcessor } from './imageProcessorUtils';
+import { classifyImageProviderError } from '../imageProviders/shared';
 
 // The helper only reads `code`, `status`, and `requestID` off the error, so a
 // minimal object cast to the APIError instance type is sufficient and avoids
@@ -295,6 +296,34 @@ describe('resolveGptImageOutputOptions', () => {
       output_format: 'png',
     });
     expect(warnings).toEqual([]);
+  });
+});
+
+describe('OpenAIImageService.generate rewrapped API errors', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    imagesGenerate.mockReset();
+    vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => undefined);
+  });
+
+  it.each([
+    [402, true],
+    [403, true],
+    [429, false],
+  ])('keeps the SDK error on cause for a %i so the status survives the rewrap', async (status, terminal) => {
+    imagesGenerate.mockRejectedValue(
+      Object.assign(Object.create(OpenAI.APIError.prototype) as APIErrorLike, { status, message: 'sdk' })
+    );
+
+    const error: unknown = await new OpenAIImageService('test-key', new Logger())
+      .generate('a prompt', { model: ImageModels.GPT_IMAGE_2 })
+      .catch((e: unknown) => e);
+
+    expect((error as Error).cause).toMatchObject({ status });
+    expect(classifyImageProviderError(error)).toMatchObject({
+      status: 'failed',
+      retryable: !terminal,
+    });
   });
 });
 

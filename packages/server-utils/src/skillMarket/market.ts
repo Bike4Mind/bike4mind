@@ -296,6 +296,19 @@ export async function withdrawAuthorListings(authorUserId: string): Promise<numb
   return withdrawn;
 }
 
+/** Skill deletion: withdraw every live listing of the skill, whoever authored it. Returns how many. */
+export async function withdrawSkillListings(sourceSkillId: string): Promise<number> {
+  const listings = await SkillListing.find(
+    { sourceSkillId, deletedAt: null, status: { $nin: ['withdrawn', 'delisted'] } },
+    { _id: 1 }
+  ).lean();
+  let withdrawn = 0;
+  for (const { _id } of listings) {
+    if (await withdrawListing(String(_id))) withdrawn += 1;
+  }
+  return withdrawn;
+}
+
 const HOUR_MS = 60 * 60 * 1000;
 
 // The Request augmentation that declares `user` lives in apps/client/global.d.ts, outside this
