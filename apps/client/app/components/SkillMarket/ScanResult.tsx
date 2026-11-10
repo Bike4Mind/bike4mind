@@ -34,9 +34,10 @@ function heldBody(tier: string | undefined, findings: { severity: string; messag
     : 'Listings with findings are checked by a person before they go live.';
 }
 
-/** Plain-language outcome of a version's scan + review state. */
-
-/** Pass the listing's `authorUserId` so a self-approval is not described as a second person's review. */
+/**
+ * Plain-language outcome of a version's scan + review state. Pass the listing's `authorUserId`
+ * so a self-approval is not described as a second person's review.
+ */
 export function versionOutcome(v: ISkillListingVersion, visibility: SkillListingVisibility, authorUserId?: string) {
   if (v.scanStatus === 'scanning')
     return { color: 'neutral' as const, title: 'Scanning...', body: 'The safety scan is running.' };

@@ -291,17 +291,17 @@ type Step =
   | { kind: 'version'; listingId: string; message: string }
   | { kind: 'result'; result: Submitted };
 
-/**
- * Upload a local SKILL.md: preview and edit what main parsed, save it to the account, and
- * optionally publish it or submit it as a new version of an existing listing (`listing`).
- * Every request runs from a button here; another author's export asks first.
- */
 /** An open Select listbox keeps focus on its button and bubbles Escape to the Modal, which must not treat it as a close. */
 const isEscapeFromOpenListbox = (event: unknown): boolean => {
   const target = (event as { target?: unknown } | null)?.target;
   return target instanceof Element && !!target.closest('[aria-expanded="true"], [role="listbox"]');
 };
 
+/**
+ * Upload a local SKILL.md: preview and edit what main parsed, save it to the account, and
+ * optionally publish it or submit it as a new version of an existing listing (`listing`).
+ * Every request runs from a button here; another author's export asks first.
+ */
 export function SkillUploadDialog({
   preview,
   listing,
