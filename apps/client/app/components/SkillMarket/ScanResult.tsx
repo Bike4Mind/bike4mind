@@ -7,6 +7,8 @@ import ReplayIcon from '@mui/icons-material/Replay';
 import type { ISkillListingVersion, SkillListingVisibility } from '@bike4mind/common';
 import { FindingsList, HonestSummaryPanel, MismatchAlert, TierChip } from './parts';
 
+export const SELF_APPROVED_LABEL = 'Self-approved by the author';
+
 const MAX_HOLD_CAUSES = 3;
 
 /** The findings that put a version in its tier, as one sentence fragment; empty when none apply. */
@@ -32,8 +34,11 @@ function heldBody(tier: string | undefined, findings: { severity: string; messag
     : 'Listings with findings are checked by a person before they go live.';
 }
 
-/** Plain-language outcome of a version's scan + review state. */
-export function versionOutcome(v: ISkillListingVersion, visibility: SkillListingVisibility) {
+/**
+ * Plain-language outcome of a version's scan + review state. Pass the listing's `authorUserId`
+ * so a self-approval is not described as a second person's review.
+ */
+export function versionOutcome(v: ISkillListingVersion, visibility: SkillListingVisibility, authorUserId?: string) {
   if (v.scanStatus === 'scanning')
     return { color: 'neutral' as const, title: 'Scanning...', body: 'The safety scan is running.' };
   if (v.scanStatus === 'error') {
@@ -61,7 +66,11 @@ export function versionOutcome(v: ISkillListingVersion, visibility: SkillListing
             : 'Passed the automated safety scan and is live now.',
       };
     case 'approved':
-      return { color: 'success' as const, title: 'Approved by a reviewer', body: 'This version is live.' };
+      return {
+        color: 'success' as const,
+        title: authorUserId && v.reviewerUserId === authorUserId ? SELF_APPROVED_LABEL : 'Approved by a reviewer',
+        body: 'This version is live.',
+      };
     case 'pending':
       return {
         color: 'warning' as const,
@@ -92,10 +101,11 @@ const ICON = {
 const ScanResult: FC<{
   version: ISkillListingVersion;
   visibility: SkillListingVisibility;
+  authorUserId?: string;
   onRescan?: () => void;
   rescanning?: boolean;
-}> = ({ version, visibility, onRescan, rescanning }) => {
-  const outcome = versionOutcome(version, visibility);
+}> = ({ version, visibility, authorUserId, onRescan, rescanning }) => {
+  const outcome = versionOutcome(version, visibility, authorUserId);
   return (
     <Stack spacing={1.5} data-testid="market-scan-result">
       <Alert

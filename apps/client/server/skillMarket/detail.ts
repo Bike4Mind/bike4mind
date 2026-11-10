@@ -44,7 +44,9 @@ export async function buildListingDetail(listing: ISkillListing, actor: MarketAc
 
   return {
     listing: serializeListing(listing, { privileged: isAuthor || canModerate }),
-    version: versionDoc ? publicVersionView(versionDoc.toJSON() as unknown as ISkillListingVersion) : null,
+    version: versionDoc
+      ? publicVersionView(versionDoc.toJSON() as unknown as ISkillListingVersion, String(listing.authorUserId))
+      : null,
     // Ratings are shown anonymously as "verified importer" reviews.
     ratings: ratingRows.map(r => ({
       stars: r.stars,

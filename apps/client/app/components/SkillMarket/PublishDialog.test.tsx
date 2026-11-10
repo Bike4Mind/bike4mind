@@ -1,6 +1,7 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { ISkill, ISkillListingVersion } from '@bike4mind/common';
@@ -288,6 +289,45 @@ describe('PublishDialog', () => {
       h.suggest.mockImplementation(() => ({ data: undefined, isFetching: true }));
       renderDialog();
       expect(screen.getByTestId('market-publish-tags-suggesting')).toHaveTextContent('Suggesting tags...');
+    });
+  });
+
+  describe('Escape handling', () => {
+    it('closes only the open organization dropdown, then the dialog on a second Escape', async () => {
+      const user = userEvent.setup();
+      const onClose = vi.fn();
+      renderDialog({ skill, onClose });
+      await user.click(screen.getByTestId('market-publish-visibility-organization'));
+      await user.click(screen.getByTestId('market-publish-org-select'));
+      expect(screen.getByTestId('market-publish-org-select')).toHaveAttribute('aria-expanded', 'true');
+
+      await user.keyboard('{Escape}');
+      expect(screen.getByTestId('market-publish-org-select')).toHaveAttribute('aria-expanded', 'false');
+      expect(onClose).not.toHaveBeenCalled();
+      expect(screen.getByTestId('market-publish-dialog')).toBeInTheDocument();
+
+      await user.keyboard('{Escape}');
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it('closes only the open skill dropdown', async () => {
+      const user = userEvent.setup();
+      const onClose = vi.fn();
+      renderDialog({ ownSkills: [skill], onClose });
+      await user.click(screen.getByTestId('market-publish-skill-select'));
+      expect(screen.getByTestId('market-publish-skill-select')).toHaveAttribute('aria-expanded', 'true');
+
+      await user.keyboard('{Escape}');
+      expect(onClose).not.toHaveBeenCalled();
+      expect(screen.getByTestId('market-publish-dialog')).toBeInTheDocument();
+    });
+
+    it('closes the dialog on Escape when no dropdown is open', async () => {
+      const user = userEvent.setup();
+      const onClose = vi.fn();
+      renderDialog({ skill, onClose });
+      await user.keyboard('{Escape}');
+      expect(onClose).toHaveBeenCalledTimes(1);
     });
   });
 });
