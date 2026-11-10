@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 import { settingsMap } from '@bike4mind/common';
 import { AdminSettings } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../database/src/__test__/createMongoServer';
-import migration, { RETIRED_SETTING_NAME } from './20260921240050_drop-referral-credits-amount';
+import migration, { RETIRED_SETTING_NAME } from './20260921240060_drop-referral-credits-amount';
 import DropRetiredGrantSettings, { BACKUP_COLLECTION } from './20260921239996_drop-retired-grant-settings';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });

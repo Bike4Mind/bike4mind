@@ -18,7 +18,7 @@ interface RowBackup {
  * The raw collection is used so a softDeletePlugin tombstone goes too.
  */
 const migration: MigrationFile = {
-  id: 20260921240050,
+  id: 20260921240060,
   name: 'drop-referral-credits-amount',
 
   up: async () => {
