@@ -1488,8 +1488,9 @@ export const ShadowDetectionsTab: React.FC = () => {
         onRetry={() => void detections.refetch()}
         onRowActivate={setGrading}
         rowActions={rowActions}
-        // The fixed-width columns plus room for the summary; narrower screens scroll sideways.
-        minWidth="76rem"
+        // Fixed-width columns (incl. selection and row actions) total 65.75rem, leaving Summary a 12rem
+        // floor; keep in sync with the column widths above. Narrower screens scroll sideways.
+        minWidth="77.75rem"
         empty={
           <EmptyState
             title={emptyTitle}
