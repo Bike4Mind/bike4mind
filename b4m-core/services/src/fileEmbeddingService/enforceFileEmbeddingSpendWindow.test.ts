@@ -1,8 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FILE_EMBEDDING_USER_TOKENS_PER_WINDOW_DEFAULT } from '@bike4mind/common';
 import { invalidateSettingsCache } from '@bike4mind/utils';
 import {
   enforceFileEmbeddingSpendWindow,
+  resetFileEmbeddingSpendWindow,
   FileEmbeddingLimitResolutionError,
   FileEmbeddingSpendDeniedError,
   fileEmbeddingWindowCacheKeys,
@@ -11,11 +12,32 @@ import {
 const HOUR_MS = 3_600_000;
 const T0 = Date.UTC(2026, 0, 1);
 
-/** Models CacheRepository.tryAddWithinLimitFixedWindow against a controllable clock. */
+/** Models the CacheRepository fixed-window and dedup methods against a controllable clock. */
 function makeFixedWindowCache(clock: { now: number }) {
   const windows = new Map<string, { count: number; expiresAt: number }>();
+  const dedup = new Map<string, { data: Record<string, unknown>; expiresAt: number }>();
+  const liveDedup = (key: string) => {
+    const entry = dedup.get(key);
+    return entry && entry.expiresAt > clock.now ? entry : undefined;
+  };
   return {
     windows,
+    dedup,
+    claimDedup: vi.fn(async (key: string, data: Record<string, unknown>, ttlMs: number) => {
+      const live = liveDedup(key);
+      if (live) return { claimed: false, existingData: live.data };
+      dedup.set(key, { data, expiresAt: clock.now + ttlMs });
+      return { claimed: true };
+    }),
+    readDedup: vi.fn(async (key: string) => liveDedup(key)?.data ?? null),
+    deleteByKey: vi.fn(async (key: string) => {
+      windows.delete(key);
+      dedup.delete(key);
+    }),
+    findByKey: vi.fn(async (key: string) => {
+      const window = windows.get(key);
+      return window ? { key, result: { count: window.count }, expiresAt: new Date(window.expiresAt) } : null;
+    }),
     tryAddWithinLimitFixedWindow: vi.fn(async (key: string, amount: number, limit: number, ttlMs: number) => {
       const live = windows.get(key);
       const window = live && live.expiresAt > clock.now ? live : { count: 0, expiresAt: clock.now + ttlMs };
@@ -47,8 +69,15 @@ function setup(settings: Record<string, string> = {}) {
   const clock = { now: T0 };
   const cache = makeFixedWindowCache(clock);
   const db = { adminSettings: makeAdminSettings(settings) as never, cache };
-  const reserve = (userId: string, estimatedTokens: number, estimatedMicroUsd = 1) =>
-    enforceFileEmbeddingSpendWindow({ userId, estimatedTokens, estimatedMicroUsd, db });
+  let nextReservation = 0;
+  const reserve = (userId: string, estimatedTokens: number, estimatedMicroUsd = 1, reservationId?: string) =>
+    enforceFileEmbeddingSpendWindow({
+      userId,
+      reservationId: reservationId ?? `work-${(nextReservation += 1)}`,
+      estimatedTokens,
+      estimatedMicroUsd,
+      db,
+    });
   return { clock, cache, db, reserve };
 }
 
@@ -74,7 +103,7 @@ describe('enforceFileEmbeddingSpendWindow', () => {
 
     expect(err.reason).toBe('exhausted');
     expect(err.resetsAt).toEqual(new Date(T0 + 24 * HOUR_MS));
-    expect(err.message).toContain(new Date(T0 + 24 * HOUR_MS).toISOString());
+    expect(err.message).toContain('Re-index the file after Jan 2, 2026, 12:00 AM UTC.');
     await expect(reserve('u1', 400)).resolves.toBeDefined();
   });
 
@@ -222,5 +251,68 @@ describe('enforceFileEmbeddingSpendWindow', () => {
       7,
       expect.any(Date)
     );
+  });
+
+  it('reuses the reservation of a redelivered message instead of taking a second one', async () => {
+    const { cache, reserve } = setup({ fileEmbeddingUserTokensPerWindow: '1000' });
+    await reserve('u1', 600, 1, 'file-1:abc');
+
+    // The first delivery crashed before releasing; the redelivery is not refused or charged again.
+    const redelivery = await reserve('u1', 600, 1, 'file-1:abc');
+    expect(cache.windows.get(fileEmbeddingWindowCacheKeys('u1').tokens)?.count).toBe(600);
+
+    await redelivery.release();
+    expect(cache.windows.get(fileEmbeddingWindowCacheKeys('u1').tokens)?.count).toBe(0);
+    // Released work reserves afresh on its next delivery.
+    await reserve('u1', 600, 1, 'file-1:abc');
+    expect(cache.windows.get(fileEmbeddingWindowCacheKeys('u1').tokens)?.count).toBe(600);
+  });
+
+  it('keeps only one reservation when two deliveries of the same work race', async () => {
+    const { cache, reserve } = setup({ fileEmbeddingUserTokensPerWindow: '1000' });
+    await Promise.all([reserve('u1', 400, 1, 'file-1:abc'), reserve('u1', 400, 1, 'file-1:abc')]);
+
+    expect(cache.windows.get(fileEmbeddingWindowCacheKeys('u1').tokens)?.count).toBe(400);
+  });
+
+  it('meters different work for one file separately', async () => {
+    const { cache, reserve } = setup({ fileEmbeddingUserTokensPerWindow: '1000' });
+    await reserve('u1', 400, 1, 'file-1:abc');
+    await reserve('u1', 400, 1, 'file-1:def');
+
+    expect(cache.windows.get(fileEmbeddingWindowCacheKeys('u1').tokens)?.count).toBe(800);
+  });
+});
+
+describe('resetFileEmbeddingSpendWindow', () => {
+  // The reset reads window liveness against the real clock; pin it to the fake cache's clock.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'], now: T0 });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('empties the user windows, reports what they held, and leaves other users alone', async () => {
+    const { db, reserve } = setup({ fileEmbeddingUserTokensPerWindow: '1000' });
+    await reserve('u1', 1000, 300);
+    await reserve('u2', 500, 1);
+
+    await expect(resetFileEmbeddingSpendWindow('u1', db)).resolves.toEqual({ tokens: 1000, microUsd: 300 });
+
+    await expect(reserve('u1', 1000)).resolves.toBeDefined();
+    await denial(reserve('u2', 501));
+  });
+
+  it('makes a release of a hold from before the reset a no-op', async () => {
+    const { clock, cache, db, reserve } = setup({ fileEmbeddingUserTokensPerWindow: '1000' });
+    const stale = await reserve('u1', 600);
+    await resetFileEmbeddingSpendWindow('u1', db);
+    clock.now += 1;
+    await reserve('u1', 300);
+
+    await stale.release();
+
+    expect(cache.windows.get(fileEmbeddingWindowCacheKeys('u1').tokens)?.count).toBe(300);
   });
 });

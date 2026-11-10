@@ -133,6 +133,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.api_key_trust.revoked': { category: 'identity', severity: 'notice', write: 'bestEffort' },
   'user.new_account_spend_cap.lifted': { category: 'identity', severity: 'notice', write: 'strict' },
   'user.new_account_spend_cap.restored': { category: 'identity', severity: 'notice', write: 'bestEffort' },
+  'user.file_embedding_window.reset': { category: 'credits', severity: 'notice', write: 'strict' },
   // Analytics classification (User.isInternal): grants nothing, but decides whether an account
   // counts as a customer, so both directions keep a record.
   'user.internal.marked': { category: 'account', severity: 'notice', write: 'strict' },

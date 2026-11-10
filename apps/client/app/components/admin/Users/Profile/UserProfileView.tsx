@@ -17,6 +17,7 @@ import { ChangeRoleDialog, ManageTagsDialog, ProductAccessDialog } from './actio
 import {
   ApiKeyTrustDialog,
   CancelDeletionDialog,
+  FileEmbeddingWindowResetDialog,
   NewAccountSpendCapDialog,
   InternalAccountDialog,
   DeleteUserDialog,
@@ -82,6 +83,8 @@ const ActionHost: React.FC<ProfileDialogProps & { action: ProfileAction; onDelet
       return <ApiKeyTrustDialog {...props} />;
     case 'newAccountSpendCap':
       return <NewAccountSpendCapDialog {...props} />;
+    case 'fileEmbeddingWindowReset':
+      return <FileEmbeddingWindowResetDialog {...props} />;
     case 'internalAccount':
       return <InternalAccountDialog {...props} />;
     case 'subscription':

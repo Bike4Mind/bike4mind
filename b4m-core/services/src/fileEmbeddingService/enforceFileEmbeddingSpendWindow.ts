@@ -10,6 +10,7 @@ import {
   SettingKey,
 } from '@bike4mind/common';
 import { getSettingsByNames } from '@bike4mind/utils';
+import { z } from 'zod';
 import { Logger } from '@bike4mind/observability';
 import { parseNumericSetting } from '../settings/parseNumericSetting';
 
@@ -27,6 +28,18 @@ export const fileEmbeddingWindowCacheKeys = (userId: string) => ({
   tokens: `fileEmbeddingSpend:user:${userId}:tokens`,
 });
 
+const fileEmbeddingHoldCacheKey = (userId: string, reservationId: string) =>
+  `fileEmbeddingSpend:user:${userId}:hold:${reservationId}`;
+
+/** What one reservation took from each window, kept so a redelivery of the same work reuses it. */
+const HoldSchema = z.object({
+  tokens: z.number(),
+  microUsd: z.number(),
+  tokensWindowExpiresAt: z.coerce.date(),
+  microUsdWindowExpiresAt: z.coerce.date(),
+});
+type Hold = z.infer<typeof HoldSchema>;
+
 export interface FileEmbeddingLimits {
   budgetPerWindowMicroUsd: number;
   tokensPerWindow: number;
@@ -35,7 +48,10 @@ export interface FileEmbeddingLimits {
 
 export interface FileEmbeddingWindowDb {
   adminSettings: Pick<IAdminSettingsRepository, 'findBySettingNames' | 'findAll'>;
-  cache: Pick<ICacheRepository, 'tryAddWithinLimitFixedWindow' | 'releaseFromFixedWindow'>;
+  cache: Pick<
+    ICacheRepository,
+    'tryAddWithinLimitFixedWindow' | 'releaseFromFixedWindow' | 'claimDedup' | 'readDedup' | 'deleteByKey'
+  >;
 }
 
 /** The settings could not be read or hold an invalid value. Not a denial: the caller retries. */
@@ -69,6 +85,15 @@ export class FileEmbeddingSpendDeniedError extends Error {
   }
 }
 
+// The message is stored on the file and read by its owner, so it carries a readable UTC time
+// rather than an ISO timestamp.
+const RESET_TIME_FORMAT = new Intl.DateTimeFormat('en-US', {
+  dateStyle: 'medium',
+  timeStyle: 'short',
+  timeZone: 'UTC',
+});
+const formatResetTime = (at: Date) => `${RESET_TIME_FORMAT.format(at)} UTC`;
+
 function denialMessage(reason: FileEmbeddingDenialReason, windowHours: number, resetsAt?: Date): string {
   switch (reason) {
     case 'paused':
@@ -81,7 +106,7 @@ function denialMessage(reason: FileEmbeddingDenialReason, windowHours: number, r
     case 'exhausted':
       return (
         `File indexing was not run: this account reached its file indexing limit for the current ` +
-        `${windowHours}-hour window. Re-index the file after ${resetsAt?.toISOString() ?? 'the window resets'}.`
+        `${windowHours}-hour window. Re-index the file after ${resetsAt ? formatResetTime(resetsAt) : 'the window resets'}.`
       );
   }
 }
@@ -141,19 +166,24 @@ export async function resolveFileEmbeddingLimits(
  * whether or not the embedding is billed to the user; the lake path has its own gate
  * (`dataLakeService.enforceEmbeddingSpendGate`).
  *
- * Returns a grant whose `release` gives both reservations back; the caller releases when a failure
- * is caught before the provider returns, so a retry does not reserve twice. A crash or timeout
- * mid-call, or a throw after the embed, skips the release and can reserve again on redelivery.
- * When the tokens window grants and the USD window denies, the token reservation is given back here.
+ * `reservationId` names the work (e.g. the file plus its uncached content). A later call with the
+ * same id inside the window reuses the earlier reservation instead of taking a second one, so a
+ * redelivery after a crash between reserve and release does not pay twice and is never refused
+ * for the window it already paid into.
+ *
+ * Returns a grant whose `release` gives the reservation back; the caller releases only when the
+ * embedding it was reserved for never ran (a provider or pre-embed failure). When the tokens
+ * window grants and the USD window denies, the token reservation is given back here.
  */
 export async function enforceFileEmbeddingSpendWindow(params: {
   userId: string;
+  reservationId: string;
   estimatedMicroUsd: number;
   estimatedTokens: number;
   db: FileEmbeddingWindowDb;
   logger?: Logger;
 }): Promise<FileEmbeddingWindowGrant> {
-  const { userId, estimatedMicroUsd, estimatedTokens, db, logger } = params;
+  const { userId, reservationId, estimatedMicroUsd, estimatedTokens, db, logger } = params;
   const limits = await resolveFileEmbeddingLimits(db, logger);
   const deny = (reason: FileEmbeddingDenialReason, resetsAt?: Date): never => {
     logger?.warn?.('file-embedding-window-denied', { userId, reason, estimatedTokens, estimatedMicroUsd });
@@ -161,11 +191,33 @@ export async function enforceFileEmbeddingSpendWindow(params: {
   };
 
   if (limits.tokensPerWindow <= 0 || limits.budgetPerWindowMicroUsd <= 0) deny('paused');
+
+  const keys = fileEmbeddingWindowCacheKeys(userId);
+  const holdKey = fileEmbeddingHoldCacheKey(userId, reservationId);
+  const grantFor = (hold: Hold): FileEmbeddingWindowGrant => ({
+    release: async () => {
+      // Both releases are attempted even when one fails; the hold is dropped only when both landed,
+      // so a redelivery after a failed release still reuses it rather than reserving again.
+      const results = await Promise.allSettled([
+        db.cache.releaseFromFixedWindow(keys.tokens, hold.tokens, hold.tokensWindowExpiresAt),
+        db.cache.releaseFromFixedWindow(keys.microUsd, hold.microUsd, hold.microUsdWindowExpiresAt),
+      ]);
+      const failed = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+      if (failed) throw failed.reason;
+      await db.cache.deleteByKey(holdKey);
+    },
+  });
+
+  const prior = HoldSchema.safeParse(await db.cache.readDedup(holdKey));
+  if (prior.success) {
+    logger?.log?.('file-embedding-window-reused', { userId, reservationId });
+    return grantFor(prior.data);
+  }
+
   if (estimatedTokens > limits.tokensPerWindow || estimatedMicroUsd > limits.budgetPerWindowMicroUsd) {
     deny('oversized');
   }
 
-  const keys = fileEmbeddingWindowCacheKeys(userId);
   const ttlMs = limits.windowHours * HOUR_MS;
   const tokens = await db.cache.tryAddWithinLimitFixedWindow(
     keys.tokens,
@@ -197,14 +249,40 @@ export async function enforceFileEmbeddingSpendWindow(params: {
     deny('exhausted', spend.expiresAt);
   }
 
-  return {
-    release: async () => {
-      const results = await Promise.allSettled([
-        releaseTokens(),
-        db.cache.releaseFromFixedWindow(keys.microUsd, estimatedMicroUsd, spend.expiresAt),
-      ]);
-      const failed = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
-      if (failed) throw failed.reason;
-    },
+  const hold: Hold = {
+    tokens: estimatedTokens,
+    microUsd: estimatedMicroUsd,
+    tokensWindowExpiresAt: tokens.expiresAt,
+    microUsdWindowExpiresAt: spend.expiresAt,
   };
+  const claim = await db.cache.claimDedup(holdKey, hold, ttlMs);
+  if (claim.claimed) return grantFor(hold);
+
+  // A concurrent delivery of the same work recorded its reservation first: keep that one only.
+  await releaseTokens();
+  await db.cache.releaseFromFixedWindow(keys.microUsd, estimatedMicroUsd, spend.expiresAt);
+  const winner = HoldSchema.safeParse(claim.existingData);
+  return winner.success ? grantFor(winner.data) : { release: async () => db.cache.deleteByKey(holdKey) };
+}
+
+/**
+ * Admin remedy: empty one user's file embedding windows so indexing resumes before the window
+ * rolls over. Returns what the windows held. Outstanding holds stay; releasing one after a reset
+ * is a no-op, because a release only applies to the window that granted it.
+ */
+export async function resetFileEmbeddingSpendWindow(
+  userId: string,
+  db: { cache: Pick<ICacheRepository, 'findByKey' | 'deleteByKey'> }
+): Promise<{ tokens: number; microUsd: number }> {
+  const keys = fileEmbeddingWindowCacheKeys(userId);
+  const countOf = async (key: string) => {
+    const doc = await db.cache.findByKey(key);
+    const live = doc !== null && doc.expiresAt > new Date();
+    const count = (doc?.result as { count?: unknown } | undefined)?.count;
+    return live && typeof count === 'number' ? count : 0;
+  };
+  const before = { tokens: await countOf(keys.tokens), microUsd: await countOf(keys.microUsd) };
+  await db.cache.deleteByKey(keys.tokens);
+  await db.cache.deleteByKey(keys.microUsd);
+  return before;
 }

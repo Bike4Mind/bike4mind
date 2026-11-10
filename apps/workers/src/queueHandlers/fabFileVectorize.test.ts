@@ -1760,11 +1760,25 @@ describe('fabFileVectorize handler - credit billing outside a data lake', () => 
     await dispatch(makeEvent(payload), {} as never, mockLogger);
 
     expect(h.enforceFileEmbeddingSpendWindow).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: 'u1', estimatedTokens: 5 })
+      expect.objectContaining({
+        userId: 'u1',
+        estimatedTokens: 5,
+        reservationId: expect.stringMatching(/^ff1:.+:[0-9a-f]{64}$/),
+      })
     );
     expect(h.enforceFileEmbeddingSpendWindow.mock.invocationCallOrder[0]).toBeLessThan(
       h.reserveRequestCredits.mock.invocationCallOrder[0]
     );
+  });
+
+  it('names a redelivery of the same job with the same reservation id', async () => {
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    const [first, second] = h.enforceFileEmbeddingSpendWindow.mock.calls.map(
+      ([params]) => (params as { reservationId: string }).reservationId
+    );
+    expect(second).toBe(first);
   });
 
   it('fails the file with the window message, without billing, embedding or retrying, on a window denial', async () => {

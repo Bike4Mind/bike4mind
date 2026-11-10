@@ -109,6 +109,17 @@ const AccountCard: React.FC<{ user: AdminUserProfile; onAction: (action: Profile
           </RowAction>
         </Stack>
       </Fact>
+      <Fact label="File indexing window" data-testid="user-profile-fact-file-embedding-window">
+        <Stack direction="row" alignItems="center" gap={0.75} flexWrap="wrap">
+          Limits how much they can index per window
+          <RowAction
+            onClick={() => onAction('fileEmbeddingWindowReset')}
+            data-testid="user-actions-reset-file-embedding-window"
+          >
+            Reset
+          </RowAction>
+        </Stack>
+      </Fact>
       <Fact label="Analytics" data-testid="user-profile-fact-internal">
         <Stack direction="row" alignItems="center" gap={0.75} flexWrap="wrap">
           {analyticsMark(user)}

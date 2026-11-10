@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   bindEmbeddingModel,
   buildEmbeddingRegistry,
@@ -116,6 +117,16 @@ export function rateDenialRedeliveryDelaySeconds(retryAfterMs: number | undefine
 }
 
 /** Best-effort: a failed release must not mask the error that triggered it. */
+/**
+ * Names one embedding job for the per-user window: the file, the model and the exact uncached
+ * texts. A redelivery of the same job reuses its reservation; a re-index of changed content or at
+ * another chunk size is new work and reserves again.
+ */
+function fileEmbeddingReservationId(fabFileId: string, embeddingModel: string, missTexts: readonly string[]): string {
+  const digest = createHash('sha256').update(missTexts.join('\u0000')).digest('hex');
+  return `${fabFileId}:${embeddingModel}:${digest}`;
+}
+
 async function releaseFileEmbeddingWindow(
   grant: fileEmbeddingService.FileEmbeddingWindowGrant | null,
   cause: string,
@@ -429,9 +440,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       let fileWindowGrant: fileEmbeddingService.FileEmbeddingWindowGrant | null = null;
       if (!spendScope) {
         // Per-user window, reserved before any credit hold so a refused file is never charged.
-        // Released on every caught failure before the embed succeeds.
+        // Released on every caught failure before the embed succeeds; a crash before release is
+        // covered by the reservation id, which a redelivery of the same job reuses.
         fileWindowGrant = await fileEmbeddingService.enforceFileEmbeddingSpendWindow({
           userId,
+          reservationId: fileEmbeddingReservationId(fabFileId, embeddingModel, missTexts),
           estimatedMicroUsd: Math.ceil(missCostUsd * 1_000_000),
           estimatedTokens: missTokenTotal,
           db: { adminSettings: adminSettingsRepository, cache: cacheRepository },

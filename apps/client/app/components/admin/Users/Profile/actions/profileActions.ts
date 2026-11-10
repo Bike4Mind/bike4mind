@@ -15,6 +15,7 @@ export type ProfileAction =
   | 'emailVerification'
   | 'apiKeyTrust'
   | 'newAccountSpendCap'
+  | 'fileEmbeddingWindowReset'
   | 'internalAccount'
   | 'subscription'
   | 'loginAs'

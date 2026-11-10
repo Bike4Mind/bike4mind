@@ -80,6 +80,18 @@ describe('OverviewTab internal account row', () => {
   });
 });
 
+describe('OverviewTab file indexing window row', () => {
+  it('opens the reset action', () => {
+    const onAction = vi.fn();
+    render(<OverviewTab user={buildProfile()} onAction={onAction} onViewActivity={vi.fn()} onViewCredits={vi.fn()} />, {
+      wrapper: ProfileTestWrapper,
+    });
+
+    fireEvent.click(screen.getByTestId('user-actions-reset-file-embedding-window'));
+    expect(onAction).toHaveBeenCalledWith('fileEmbeddingWindowReset');
+  });
+});
+
 describe('OverviewTab recent activity', () => {
   it('lists the recent timeline entries from every source', async () => {
     mocks.get.mockResolvedValue({ data: { entries: [adminRow, creditRow], nextCursor: null } });
