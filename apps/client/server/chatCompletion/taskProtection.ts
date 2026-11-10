@@ -61,6 +61,8 @@ export function createTaskProtection({
   const endpoint = `${agentUri}/task-protection/v1/state`;
   let desired = false;
   let applied = false;
+  // A timed-out or 5xx call may still have taken effect, so `applied` can't be trusted until a call succeeds.
+  let appliedKnown = true;
   let armedAt = 0;
   let busySince = 0;
   let lastCallFailed = false;
@@ -72,7 +74,7 @@ export function createTaskProtection({
     applied &&
     now - armedAt >= PROTECTION_REFRESH_MS - REFRESH_TOLERANCE_MS &&
     now - busySince < MAX_REFRESHED_BUSY_MS;
-  const callNeeded = () => desired !== applied || refreshDue(Date.now());
+  const callNeeded = () => !appliedKnown || desired !== applied || refreshDue(Date.now());
 
   const setProtection = async (enabled: boolean): Promise<void> => {
     const body = enabled
@@ -102,10 +104,12 @@ export function createTaskProtection({
       try {
         await setProtection(target);
         applied = target;
+        appliedKnown = true;
         if (target) armedAt = Date.now();
         if (lastCallFailed) logger.info('Task scale-in protection calls recovered', { enabled: target });
         lastCallFailed = false;
       } catch (err) {
+        appliedKnown = false;
         // Logged once per failure streak so a missing IAM grant doesn't log on every quest.
         if (!lastCallFailed) {
           logger.error('Failed to update task scale-in protection - this task can be scaled in mid-quest', {
@@ -124,7 +128,7 @@ export function createTaskProtection({
   // The timer refreshes protection through a long busy stretch and retries a failed call
   // (including a failed disable, which would otherwise leave an idle task protected).
   const syncTimer = () => {
-    const active = desired || applied;
+    const active = desired || applied || !appliedKnown;
     if (active && !timer) {
       timer = setInterval(kick, PROTECTION_REFRESH_MS);
       timer.unref?.();

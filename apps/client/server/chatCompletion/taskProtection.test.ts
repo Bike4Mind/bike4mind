@@ -289,4 +289,25 @@ describe('createTaskProtection', () => {
     expect(sentBodies(fetchFn)).toEqual([ENABLE, ENABLE, ENABLE]);
     expect(logger.info).toHaveBeenCalledWith('Task scale-in protection calls recovered', { enabled: true });
   });
+
+  it('re-sends enable after a disable that failed but may have taken effect', async () => {
+    const fetchFn = vi
+      .fn()
+      .mockImplementationOnce(async () => okResponse())
+      .mockImplementationOnce(async () => {
+        throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+      })
+      .mockImplementation(async () => okResponse());
+    const protection = createTaskProtection({ agentUri: AGENT_URI, logger: makeLogger(), fetchFn });
+
+    protection.update(1);
+    await protection.idle();
+    protection.update(0);
+    await protection.idle();
+    vi.advanceTimersByTime(1_000);
+    protection.update(1);
+    await protection.idle();
+
+    expect(sentBodies(fetchFn)).toEqual([ENABLE, DISABLE, ENABLE]);
+  });
 });
