@@ -148,9 +148,11 @@ export const secrets = {
   // Header secret for the E2E test endpoints (/api/test/*). The deployer seeds a per-tier value
   // on every deploy; local stages: sst secret set E2E_CLEANUP_SECRET <value> --stage <stage>
   E2E_CLEANUP_SECRET: new sst.Secret('E2E_CLEANUP_SECRET', 'not-configured'),
-  // Shared bearer token for authenticating Turborepo remote cache requests (CI + local dev).
+  // CI-only read/write bearer token for the Turborepo remote cache.
   // Generate with: openssl rand -hex 32
   TURBO_CACHE_TOKEN: new sst.Secret('TURBO_CACHE_TOKEN', 'not-configured'),
+  // Developer token can read artifacts but cannot obtain upload URLs.
+  TURBO_CACHE_READ_TOKEN: new sst.Secret('TURBO_CACHE_READ_TOKEN', 'not-configured'),
   // Feature flag for the break-glass emergency-login endpoint.
   // Endpoint returns 404 by default — set to 'true' to activate during an OAuth outage.
   // Set per stage: sst secret set EMERGENCY_LOGIN_ENABLED "true" --stage <stage>

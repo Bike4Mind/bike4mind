@@ -30,8 +30,8 @@ const turboCacheFunction = isHostedStage
       runtime: 'nodejs24.x',
       timeout: '30 seconds',
       memory: '512 MB',
-      link: [turboCacheBucket!, secrets.TURBO_CACHE_TOKEN],
-      url: true,
+      link: [turboCacheBucket!, secrets.TURBO_CACHE_TOKEN, secrets.TURBO_CACHE_READ_TOKEN],
+      url: { cors: false },
     })
   : undefined;
 
