@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { ResultField } from '@aws-sdk/client-cloudwatch-logs';
 
 import {
+  ADMIN_DENIED_PATH_PATTERN,
+  ADMIN_GATE_PATHS,
   BREADTH_GATE_PATHS,
   PROBE_QUERY,
   REQUEST_PATH_PATTERN,
@@ -12,11 +14,14 @@ import {
   type ProbeRow,
   type ProbeSignalCounts,
 } from './apiProbeScoring';
+import { INGEST_TOKEN_REFUSED_MESSAGE } from '@server/security/ingestToken';
 
 const counts = (overrides: Partial<ProbeSignalCounts> = {}): ProbeSignalCounts => ({
   refusedFetch: 0,
   webhookSignature: 0,
   invalidId: 0,
+  ingestTokenRefused: 0,
+  adminDenied: 0,
   denied: 0,
   notFound: 0,
   ...overrides,
@@ -60,6 +65,19 @@ describe('PROBE_QUERY', () => {
   it('extracts nothing from lines that are not error handler status lines', () => {
     expect(new RegExp(REQUEST_PATH_PATTERN).exec('Stripe webhook signature verification failed')).toBeNull();
     expect(new RegExp(REQUEST_PATH_PATTERN).exec('[cast-id-remap] GET /api/x')).toBeNull();
+  });
+
+  it('captures the path of a denied admin request only', () => {
+    const adminPath = (line: string) => new RegExp(ADMIN_DENIED_PATH_PATTERN).exec(line)?.groups?.adminDeniedPath;
+    expect(adminPath('GET /api/admin/users \u2192 403: Forbidden')).toBe('/api/admin/users');
+    expect(adminPath('POST /api/admin/system-secrets/x \u2192 401: Unauthorized')).toBe('/api/admin/system-secrets/x');
+    expect(adminPath('GET /api/admin/users \u2192 404: Not found')).toBeUndefined();
+    expect(adminPath('GET /api/users \u2192 403: Forbidden')).toBeUndefined();
+  });
+
+  it('counts refused ingest tokens by the exact line the ingest routes write', () => {
+    expect(PROBE_QUERY).toContain(`strcontains(message, "${INGEST_TOKEN_REFUSED_MESSAGE}")`);
+    expect(PROBE_QUERY).toContain('count_distinct(adminDeniedPath) as adminDenied');
   });
 
   it('never aliases an aggregate to the field it sums, which Logs Insights returns empty', () => {
@@ -118,6 +136,18 @@ describe('scoreRow', () => {
     expect(scoreRow({ counts: counts({ denied: 8, notFound: 22 }), distinctPaths: BREADTH_GATE_PATHS })).toBe(30);
   });
 
+  it('weighs refused ingest tokens at any breadth', () => {
+    expect(scoreRow({ counts: counts({ ingestTokenRefused: 3 }), distinctPaths: 1 })).toBe(15);
+  });
+
+  it('ignores denied admin routes below the gate, such as a page polling a few of them', () => {
+    expect(scoreRow({ counts: counts({ adminDenied: ADMIN_GATE_PATHS - 1 }), distinctPaths: 1 })).toBe(0);
+  });
+
+  it('scores each distinct denied admin route once the gate is reached', () => {
+    expect(scoreRow({ counts: counts({ adminDenied: 13 }), distinctPaths: 13 })).toBe(39);
+  });
+
   it('gives breadth alone no score, so a busy legitimate user stays quiet', () => {
     expect(scoreRow({ counts: counts({ notFound: 1 }), distinctPaths: 200 })).toBe(1);
   });
@@ -165,6 +195,16 @@ describe('groupProbeActors', () => {
     ]);
     expect(actors).toHaveLength(1);
     expect(actors[0]).toMatchObject({ ips: ['192.0.2.1', '192.0.2.2'], userIds: ['user-a', 'user-b'], score: 6 });
+  });
+
+  it("scores each linked account on its own rows, so a co-tenant's share stays visible", () => {
+    const [actor] = groupProbeActors([
+      row({ ip: '192.0.2.1', userId: 'user-attacker', counts: counts({ refusedFetch: 3 }) }),
+      row({ ip: '192.0.2.1', userId: 'user-cotenant', counts: counts({ invalidId: 1 }) }),
+      row({ ip: '192.0.2.9', userId: 'user-attacker', counts: counts({ invalidId: 2 }) }),
+    ]);
+    expect(actor.score).toBe(36);
+    expect(actor.userScores).toEqual({ 'user-attacker': 34, 'user-cotenant': 2 });
   });
 });
 
