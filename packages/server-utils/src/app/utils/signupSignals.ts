@@ -3,7 +3,8 @@ import { z } from 'zod';
 /**
  * The suspected-signup signals and the signup time-series response, shared by the classifier
  * (packages/server-utils/src/users/signupClassifier.ts), the endpoint
- * (apps/client/pages/api/admin/signup-timeseries.ts) and the admin charts. Keep the order stable: the charts assign series colors by this order.
+ * (apps/client/pages/api/admin/signup-timeseries.ts) and the admin charts. Keep the order stable:
+ * the charts assign series colors by this order.
  */
 export const SIGNUP_SIGNALS = [
   'domainBurst',
