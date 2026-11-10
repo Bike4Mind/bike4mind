@@ -12,7 +12,13 @@ import type {
   CookieImportResult,
   CookieImportState,
 } from './browserCookies';
-import type { ClaudeImportKind, ClaudeImportResult, ClaudeImportState, ClaudeRemoveResult } from './claudeImport';
+import type {
+  ClaudeImportKind,
+  ClaudeImportResult,
+  ClaudeImportState,
+  ClaudeRemoveResult,
+  SyncHintId,
+} from './claudeImport';
 import type { CapabilityLedgerState } from './capabilities';
 import type { McpMutationResult, McpServerInput, McpServersState } from './mcp';
 import type {
@@ -345,6 +351,7 @@ export const IPC_CHANNELS = {
   claudeImportRemove: 'claude:remove-imported',
   claudeImportSetWebSettings: 'claude:set-web-import',
   claudeImportSyncWeb: 'claude:sync-web',
+  claudeImportDismissHint: 'claude:dismiss-hint',
   /** main -> renderer push of the import state. */
   claudeImportStateChanged: 'claude:import-state-changed',
   /** main -> renderer push, batched: imported sessions were added or changed, so re-list. */
@@ -1271,6 +1278,8 @@ export interface DesktopApi {
     setWatchFolder(clear: boolean): Promise<ClaudeImportState>;
     setWebSettings(patch: { enabled?: boolean }): Promise<ClaudeImportState>;
     syncWeb(): Promise<ClaudeImportState>;
+    /** Hides a sidebar sync hint for the signed-in account, for good. */
+    dismissHint(id: SyncHintId): Promise<ClaudeImportState>;
     remove(kind: ClaudeImportKind): Promise<ClaudeRemoveResult>;
     onStateChanged(listener: (state: ClaudeImportState) => void): () => void;
     onSessionsChanged(listener: () => void): () => void;

@@ -1,6 +1,6 @@
 import { watch, type FSWatcher } from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import type { ChatAttachmentInput, ChatMessage, ChatSessionSummary } from '@shared/chat';
 import type {
   ClaudeCodeImportSettings,
@@ -10,7 +10,7 @@ import type {
   ClaudeRemoveResult,
   WebSyncSettings,
 } from '@shared/claudeImport';
-import { isImportKind } from '@shared/claudeImport';
+import { isImportKind, isSyncHintId } from '@shared/claudeImport';
 import { IPC_CHANNELS } from '@shared/ipc';
 import type { AttachmentStore } from '../chat/AttachmentStore';
 import { MAX_ATTACHMENTS_PER_TURN } from '../chat/attachments';
@@ -37,6 +37,7 @@ import {
   type ScopeImportState,
 } from './ImportStateStore';
 import {
+  countWebNotebooks,
   importNotebook,
   listWebNotebooks,
   needsWebImport,
@@ -105,6 +106,10 @@ export class ClaudeImportService {
   private readonly tidied = new Set<string>();
   private disposed = false;
   private removing = false;
+  /** For the sidebar hints; looked up once per launch and account, see detectHints. */
+  private codeSessions: number | null = null;
+  private webNotebooks: { scopeKey: string; count: number } | null = null;
+  private readonly hintsChecked = new Set<string>();
   /** Settings writes are read-modify-write; two quick clicks must not lose one of them. */
   private settingsChain: Promise<unknown> = Promise.resolve();
 
@@ -127,6 +132,7 @@ export class ClaudeImportService {
       this.startTimer = null;
       this.runBackground(() => this.autoSync());
       this.runBackground(() => this.autoSyncWeb());
+      this.runBackground(() => this.detectHints());
     }, FIRST_SYNC_DELAY_MS);
     this.startTimer.unref?.();
   }
@@ -139,6 +145,7 @@ export class ClaudeImportService {
     if (!this.startTimer) {
       this.runBackground(() => this.autoSync());
       this.runBackground(() => this.autoSyncWeb());
+      this.runBackground(() => this.detectHints());
     }
     this.pushState();
   }
@@ -175,6 +182,11 @@ export class ClaudeImportService {
     const { forked: webForked, ...webCount } = webCounts(scope?.webNotebooks ?? {});
     return {
       signedIn: !!scopeKey,
+      hints: {
+        dismissed: scope?.dismissedHints ?? [],
+        codeSessions: this.codeSessions,
+        webNotebooks: scopeKey && this.webNotebooks?.scopeKey === scopeKey ? this.webNotebooks.count : null,
+      },
       code: {
         settings: settings.code,
         sourceFolder: this.sourceFolder(settings),
@@ -296,6 +308,39 @@ export class ClaudeImportService {
     });
     await this.applyWatchers();
     return this.state();
+  }
+
+  async dismissHint(id: unknown): Promise<ClaudeImportState> {
+    const scopeKey = this.deps.scopeKey();
+    if (scopeKey && isSyncHintId(id)) await this.states.dismissHint(scopeKey, id);
+    return this.state();
+  }
+
+  /**
+   * What the sidebar hints offer: Claude Code sessions counted by file name alone (never read),
+   * and one count request to the web. Only for a sync that is off, once per launch and account.
+   */
+  private async detectHints(): Promise<void> {
+    const scopeKey = this.deps.scopeKey();
+    if (!scopeKey || this.hintsChecked.has(scopeKey)) return;
+    this.hintsChecked.add(scopeKey);
+    const settings = await this.states.readSettings();
+    const dismissed = (await this.states.scope(scopeKey)).dismissedHints;
+    const wanted = (hint: 'claude-code' | 'web') => !dismissed.includes(hint) || !dismissed.includes('sidebar-empty');
+    if (this.codeSessions === null && !settings.code.enabled && !settings.code.sourceFolder && wanted('claude-code')) {
+      const transcripts = await listTranscripts(this.defaultSourceFolder(), false);
+      this.codeSessions = transcripts.filter(transcript => ranInClaudeWorktree(transcript.path)).length;
+    }
+    const api = this.deps.webApi?.() ?? null;
+    if (api && !settings.web.enabled && wanted('web')) {
+      try {
+        const count = await countWebNotebooks(api);
+        if (this.deps.scopeKey() === scopeKey) this.webNotebooks = { scopeKey, count };
+      } catch (error) {
+        this.deps.logger.warn(`WEB IMPORT: could not count notebooks: ${String(error)}`);
+      }
+    }
+    this.pushState();
   }
 
   private async autoSync(): Promise<void> {
@@ -847,6 +892,15 @@ export class ClaudeImportService {
     if (which === 'code') this.codeTimer = timer;
     else this.chatTimer = timer;
   }
+}
+
+/**
+ * Claude Code names a project folder after its cwd with every separator turned into '-', so
+ * `<repo>/.claude/worktrees/<name>` shows as `--claude-worktrees-`: the sessions sync takes
+ * (see claudeWorktreeOf), told apart without opening a transcript.
+ */
+function ranInClaudeWorktree(transcriptPath: string): boolean {
+  return basename(dirname(transcriptPath)).includes('--claude-worktrees-');
 }
 
 /** Read again from the top next time it is in scope: the copy it described is gone. */
