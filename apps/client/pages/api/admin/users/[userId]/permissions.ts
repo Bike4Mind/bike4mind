@@ -25,10 +25,6 @@ import {
 const sameSet = (left: readonly AdminPermissionId[], right: readonly AdminPermissionId[]) =>
   left.length === right.length && left.every(id => right.includes(id));
 
-// Arrays are stored in canonical order, but an older write may not be: match the set, not the order.
-const permissionsFilter = (before: readonly AdminPermissionId[]) =>
-  before.length ? { $all: before, $size: before.length } : { $in: [null, []] };
-
 const describeChange = (granted: readonly AdminPermissionId[], revoked: readonly AdminPermissionId[]) =>
   [granted.length && `granted ${granted.join(', ')}`, revoked.length && `revoked ${revoked.join(', ')}`]
     .filter(Boolean)
@@ -43,12 +39,6 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PUT: 'settings:m
   .put(async (req, res) => {
     // settings:manage only admits the request; granting stays with full admins until delegates can grant.
     if (!isFullAdmin(req.user)) throw new ForbiddenError('Only full administrators can change admin permissions');
-    const parsed = AdminUserPermissionsChangeSchema.safeParse(req.body);
-    if (!parsed.success) throw new BadRequestError('Choose admin permissions from the supported list');
-    const reason = parseAdminActionReason(parsed.data.reason);
-    const before = sortAdminPermissions(parsed.data.before);
-    const after = sortAdminPermissions(parsed.data.adminPermissions);
-
     const targetId = AdminNoteIdSchema.safeParse(req.query.userId);
     if (targetId.success && isSelfOrImpersonator(req.user, targetId.data)) {
       await denySelfAdminAction(req, {
@@ -59,6 +49,12 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PUT: 'settings:m
       });
     }
 
+    const parsed = AdminUserPermissionsChangeSchema.safeParse(req.body);
+    if (!parsed.success) throw new BadRequestError('Choose admin permissions from the supported list');
+    const reason = parseAdminActionReason(parsed.data.reason);
+    const before = sortAdminPermissions(parsed.data.before);
+    const after = sortAdminPermissions(parsed.data.adminPermissions);
+
     const adminPermissions = await withTransaction(async () => {
       const { userId, user } = await noteSubject(req, 'settings:manage');
       if (isFullAdmin(user)) {
@@ -66,14 +62,16 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PUT: 'settings:m
       }
       assertCanActOnAdminTarget(req.user, user, 'change admin permissions of');
       assertCanGrantAdminAccess(req.user, { adminPermissions: after });
-      if (!sameSet(before, (user.adminPermissions ?? []) as AdminPermissionId[])) {
+      // Compare the cleaned set the editor showed; the write below replaces the raw stored array.
+      const stored: readonly string[] = user.adminPermissions ?? [];
+      if (!sameSet(before, sortAdminPermissions(stored))) {
         throw new ConflictError('Admin permissions changed. Reload the profile before trying again.');
       }
       if (sameSet(before, after)) return before;
 
       await requireStepUp(req);
       const result = await User.updateOne(
-        { _id: userId, adminPermissions: permissionsFilter(before) },
+        { _id: userId, adminPermissions: stored.length ? stored : { $in: [null, []] } },
         { $set: { adminPermissions: after } },
         { runValidators: true }
       );

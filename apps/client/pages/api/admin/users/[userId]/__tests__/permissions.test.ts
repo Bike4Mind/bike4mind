@@ -80,8 +80,18 @@ beforeEach(() => {
 });
 
 describe('PUT /api/admin/users/:userId/permissions', () => {
-  it('is session-only and gated on settings:manage', () => {
+  it('is session-only and PUT-only', () => {
     expect(mocks.options).toMatchObject({ auth: 'jwtOnly', allowedMethods: ['PUT'] });
+  });
+
+  it('admits only settings:manage holders past the route guard', async () => {
+    await expect(
+      call(
+        { before: [], adminPermissions: ['support:read'], reason: REASON },
+        { actor: { id: ADMIN, adminPermissions: ['support:read'] } }
+      )
+    ).rejects.toThrow(/settings:manage/);
+    expect(mocks.findById).not.toHaveBeenCalled();
   });
 
   it('grants and revokes in canonical order with a reasoned, attributed audit entry', async () => {
@@ -95,7 +105,7 @@ describe('PUT /api/admin/users/:userId/permissions', () => {
     expect(res._getJSONData()).toEqual({ adminPermissions: ['support:read', 'credits:adjust'] });
     expect(mocks.stepUp).toHaveBeenCalledOnce();
     expect(mocks.update).toHaveBeenCalledWith(
-      { _id: TARGET, adminPermissions: { $all: ['users:moderate'], $size: 1 } },
+      { _id: TARGET, adminPermissions: ['users:moderate'] },
       { $set: { adminPermissions: ['support:read', 'credits:adjust'] } },
       { runValidators: true }
     );
@@ -116,6 +126,16 @@ describe('PUT /api/admin/users/:userId/permissions', () => {
     expect(mocks.update.mock.calls[0][0]).toEqual({ _id: TARGET, adminPermissions: { $in: [null, []] } });
   });
 
+  it('cleans a stored set holding repeats or retired ids, matching the raw array it read', async () => {
+    target({ isAdmin: false, adminPermissions: ['support:read', 'support:read', 'retired:perm'] });
+    await call({ before: ['support:read'], adminPermissions: [], reason: REASON });
+    expect(mocks.update).toHaveBeenCalledWith(
+      { _id: TARGET, adminPermissions: ['support:read', 'support:read', 'retired:perm'] },
+      { $set: { adminPermissions: [] } },
+      { runValidators: true }
+    );
+  });
+
   it('rejects delegates, even ones holding settings:manage', async () => {
     await expect(
       call(
@@ -134,6 +154,24 @@ describe('PUT /api/admin/users/:userId/permissions', () => {
       expect.anything(),
       expect.objectContaining({ action: 'user.permissions.denied', attempted: 'user.permissions.updated' })
     );
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it('records a self-attempt even when the reason is missing', async () => {
+    await expect(call({ before: [], adminPermissions: ['support:read'] }, { userId: ADMIN })).rejects.toMatchObject({
+      statusCode: 403,
+    });
+    expect(mocks.deny).toHaveBeenCalledOnce();
+  });
+
+  it('blocks an impersonating admin from changing their own permissions', async () => {
+    await expect(
+      call(
+        { before: [], adminPermissions: ['support:read'], reason: REASON },
+        { actor: { id: TARGET, isAdmin: true, impersonatedBy: ADMIN }, userId: ADMIN }
+      )
+    ).rejects.toMatchObject({ statusCode: 403 });
+    expect(mocks.deny).toHaveBeenCalledOnce();
     expect(mocks.update).not.toHaveBeenCalled();
   });
 

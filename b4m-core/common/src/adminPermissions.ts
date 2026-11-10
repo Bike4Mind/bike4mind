@@ -25,8 +25,11 @@ export const AdminUserPermissionsChangeSchema = z
   .strict();
 export type AdminUserPermissionsChange = z.infer<typeof AdminUserPermissionsChangeSchema>;
 
-/** Orders a permission set the way ADMIN_PERMISSIONS lists them, so stored arrays and audit diffs are stable. */
-export const sortAdminPermissions = (ids: readonly AdminPermissionId[]): AdminPermissionId[] =>
+/**
+ * Orders a permission set the way ADMIN_PERMISSIONS lists them, so stored arrays and audit diffs are
+ * stable. Drops repeats and ids no longer in the list.
+ */
+export const sortAdminPermissions = (ids: readonly string[]): AdminPermissionId[] =>
   ADMIN_PERMISSIONS.filter(id => ids.includes(id));
 /** One permission, or a list any one of which suffices. */
 export type AdminPermissionRequirement = AdminPermissionId | readonly AdminPermissionId[];

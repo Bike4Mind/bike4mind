@@ -101,6 +101,9 @@ describe('describeAuditEntry', () => {
     expect(sentence('emailVerified', true, false)).toBe('Marked email unverified');
     expect(sentence('tags', ['a'], ['a', 'b'])).toBe('Tags: added b');
     expect(sentence('tags', 'a', null)).toBe('Changed tags');
+    expect(sentence('adminPermissions', ['support:read'], ['keys:revoke'])).toBe(
+      'Admin permissions: added keys:revoke; removed support:read'
+    );
     expect(sentence('preferredContact', 'Text', 'Call')).toBe('Changed preferred contact');
   });
 

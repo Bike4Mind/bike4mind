@@ -35,8 +35,6 @@ const ACTION_SENTENCES: Readonly<Record<string, string>> = {
   'user.internal.marked': 'Marked as an internal account',
   'user.internal.unmarked': 'Stopped marking as an internal account',
   'user.role.admin_granted': 'Granted the Super Admin role',
-  'user.permissions.updated': 'Changed admin permissions',
-  'user.permissions.denied': 'Was blocked from changing their own admin permissions',
   'user.role.admin_revoked': 'Revoked the Super Admin role',
   'user.storage.recalculated': 'Recalculated storage',
   'user.created': 'Created the account',
@@ -86,7 +84,7 @@ export const formatAuditValue = (value: unknown): string => {
   return JSON.stringify(value);
 };
 
-const tagSentence = (before: unknown, after: unknown): string => {
+const listSentence = (label: string, before: unknown, after: unknown): string => {
   const previous = asStrings(before);
   const next = asStrings(after);
   const added = next.filter(tag => !previous.includes(tag));
@@ -95,7 +93,7 @@ const tagSentence = (before: unknown, after: unknown): string => {
     added.length > 0 && `added ${added.join(', ')}`,
     removed.length > 0 && `removed ${removed.join(', ')}`,
   ].filter(Boolean);
-  return parts.length > 0 ? `Tags: ${parts.join('; ')}` : 'Changed tags';
+  return parts.length > 0 ? `${label}: ${parts.join('; ')}` : `Changed ${label.toLowerCase()}`;
 };
 
 const changeSentence = ({ field, before, after }: AuditChange): string => {
@@ -107,7 +105,8 @@ const changeSentence = ({ field, before, after }: AuditChange): string => {
     case 'emailVerified':
       return after ? 'Marked email verified' : 'Marked email unverified';
     case 'tags':
-      return tagSentence(before, after);
+    case 'adminPermissions':
+      return listSentence(fieldLabel(field), before, after);
     case 'pendingEmail':
       return `Requested an email change to ${formatAuditValue(after)}`;
     case 'currentCredits': {
