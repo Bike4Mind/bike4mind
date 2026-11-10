@@ -179,6 +179,7 @@ export const useModelAdminLog = (id: string) => {
     entries,
     isLoading: results.some(result => result.isLoading),
     isError: results.some(result => result.isError),
+    error: results.find(result => result.error)?.error ?? null,
     /** Some source holds more entries than were read. */
     truncated: results.some(result => !!result.data?.nextCursor),
     refetch: () => Promise.all(results.map(result => result.refetch())),

@@ -1,10 +1,13 @@
 import type {
+  ModelAccessAudienceEffect,
   ModelAccessBulkChange,
   ModelAccessBulkDryRun,
   ModelAccessBulkItem,
   ModelAccessBulkResult,
+  ModelAccessEntry,
 } from '@bike4mind/common';
 import { BASE_ENTITLEMENT_KEY } from '@bike4mind/server-utils/lib/entitlements/registry';
+import { changedFields, describeAccess, diffAccess, effectiveAccess } from '../Access/modelAccessChange';
 
 export const MODEL_BULK_KINDS = [
   'turn-on',
@@ -98,12 +101,36 @@ export const BULK_FAILURE_LABEL: Record<NonNullable<ModelAccessBulkResult['resul
 export const failedResults = (result: ModelAccessBulkResult) =>
   result.results.filter(entry => entry.outcome === 'failed');
 
+const accessOf = (entry: Omit<ModelAccessEntry, 'id' | 'updatedAt'> | null) =>
+  entry
+    ? effectiveAccess({
+        enabled: entry.enabled,
+        allowedUserTags: entry.allowedUserTags,
+        allowedEntitlements: entry.allowedEntitlements,
+        fallbackModel: entry.fallbackModel,
+        rank: entry.rank,
+      })
+    : effectiveAccess(null);
+
+/** Before and after for each field the change touches: "Tags: none \u2192 beta; On \u2192 Off". */
 export const describeBulkEntry = (item: Pick<ModelAccessBulkItem, 'before' | 'after'>): string => {
-  const { after } = item;
-  const parts = [
-    after.enabled ? 'On' : 'Off',
-    after.allowedUserTags.length > 0 ? `tags ${after.allowedUserTags.join(', ')}` : 'no tags',
-    after.allowedEntitlements.length > 0 ? `entitlements ${after.allowedEntitlements.join(', ')}` : 'no entitlements',
-  ];
-  return parts.join('; ');
+  const before = accessOf(item.before);
+  const after = accessOf(item.after);
+  const fields = changedFields(diffAccess(before, after) ?? {});
+  if (fields.length === 0) return 'No change';
+  const from = describeAccess(before, fields);
+  const to = describeAccess(after, fields);
+  return fields
+    .map((_, index) => {
+      const label = from[index].match(/^[^:]+: /)?.[0] ?? '';
+      return `${from[index]} \u2192 ${to[index].slice(label.length)}`;
+    })
+    .join('; ');
+};
+
+export const BULK_AUDIENCE_LABEL: Record<ModelAccessAudienceEffect, string> = {
+  none: 'Same users as before',
+  wider: 'More users can pick it',
+  narrower: 'Fewer users can pick it',
+  mixed: 'Some users gain it, others lose it',
 };

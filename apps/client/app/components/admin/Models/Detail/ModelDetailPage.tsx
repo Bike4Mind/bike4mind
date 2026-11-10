@@ -1,8 +1,8 @@
-import { Box, Button, Sheet, Skeleton, Stack, Typography } from '@mui/joy';
+import { Box, Button, Skeleton, Stack, Typography } from '@mui/joy';
 import { useAdminModelRow } from '@client/app/hooks/data/adminModels';
 import { getErrorMessage } from '@client/app/utils/error';
 import { ErrorState, UndoToastProvider, UpdatingBar } from '../../shared';
-import { ADMIN_DETAIL_MAX_WIDTH } from '../../shared/adminStyles';
+import { ADMIN_DETAIL_MAX_WIDTH, adminPageFrame } from '../../shared/adminStyles';
 import type { ModelDetailTab } from '../modelDetailSearch';
 import { useModelsNavigation } from '../modelsNavigation';
 import { ModelDetailView } from './ModelDetailView';
@@ -67,14 +67,12 @@ export function ModelDetailPage({
   };
 
   return (
-    <Sheet data-testid="model-detail-page" sx={{ minHeight: '100vh', overflowY: 'auto', bgcolor: 'admin.canvas' }}>
-      {/* Keyed so an undo offered on one model never carries over to the next. */}
-      <UndoToastProvider key={modelId}>
-        <Box sx={{ maxWidth: ADMIN_DETAIL_MAX_WIDTH, mx: 'auto', px: { xs: 2, sm: 4 }, pt: 2.5, pb: 12 }}>
-          <UpdatingBar active={row.isFetching && !row.isPending} testId="model-detail-updating" />
-          {body()}
-        </Box>
-      </UndoToastProvider>
-    </Sheet>
+    // Keyed so an undo offered on one model never carries over to the next.
+    <UndoToastProvider key={modelId}>
+      <Stack sx={{ ...adminPageFrame, maxWidth: ADMIN_DETAIL_MAX_WIDTH }} data-testid="model-detail-page">
+        <UpdatingBar active={row.isFetching && !row.isPending} testId="model-detail-updating" />
+        {body()}
+      </Stack>
+    </UndoToastProvider>
   );
 }

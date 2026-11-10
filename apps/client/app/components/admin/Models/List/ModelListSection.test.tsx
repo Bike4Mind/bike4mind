@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import type { ModelAccessBulkDryRun, ModelAccessBulkResult } from '@bike4mind/common';
 import { apiFailure, listResponse, modelRow, renderModelsRoute } from '../modelsTestUtils';
+import { useRunNowStore } from '../Discovery/runDiscoveryNow';
 
 const { get, post, patch, user } = vi.hoisted(() => ({
   get: vi.fn(),
@@ -12,6 +13,7 @@ const { get, post, patch, user } = vi.hoisted(() => ({
 
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get, post, patch } }));
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: user.current }) }));
+vi.mock('sonner', () => ({ toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }) }));
 
 import { ModelListSection } from './ModelListSection';
 
@@ -97,7 +99,10 @@ beforeEach(() => {
   patch.mockReset();
   user.current = { isAdmin: true };
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  useRunNowStore.setState({ phase: 'idle', notice: null, error: null });
+});
 
 describe('ModelListSection views', () => {
   it('opens on Needs review while it holds models, asking the server for that view by name', async () => {
@@ -121,6 +126,39 @@ describe('ModelListSection views', () => {
 
     expect(await screen.findByTestId('models-row-example-text-1')).toBeInTheDocument();
     expect(listCalls().at(-1)?.view).toBe('all');
+  });
+
+  it('shows the loading state, not an empty All, while switching from an empty Needs review', async () => {
+    let resolveAll: (value: { data: ReturnType<typeof listResponse> }) => void = () => {};
+    get.mockImplementation((url: string, config?: { params?: Params }) => {
+      if (url !== '/api/admin/models') throw new Error(`unexpected GET ${url}`);
+      if (config?.params?.view === 'all') return new Promise(resolve => (resolveAll = resolve));
+      return Promise.resolve({ data: listResponse([], { viewCounts: { all: 1 } }) });
+    });
+    await renderModelsRoute('/admin?tab=models', ModelListSection);
+
+    await waitFor(() => expect(listCalls().some(params => params.view === 'all')).toBe(true));
+    expect(screen.queryByText(/No models in/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('models-show-all-btn')).not.toBeInTheDocument();
+
+    resolveAll({ data: listResponse([listedRow], { viewCounts: { all: 1 } }) });
+    expect(await screen.findByTestId('models-row-example-text-1')).toBeInTheDocument();
+  });
+
+  it('sorts from a column header and goes back to page 1', async () => {
+    serveList(() => listResponse([listedRow, reviewRow], { total: 240 }));
+    const { router } = await renderModelsRoute('/admin?tab=models&modelsView=all&modelsPage=3', ModelListSection);
+
+    await screen.findByTestId('models-row-example-text-1');
+    expect(listCalls().at(-1)).toMatchObject({ page: '3' });
+    fireEvent.click(screen.getByTestId('admin-table-sort-rank-btn'));
+
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ modelsSort: 'rank', modelsDir: 'asc' }));
+    expect(router.state.location.search).not.toHaveProperty('modelsPage');
+    await waitFor(() => expect(listCalls().at(-1)).toMatchObject({ sort: 'rank', dir: 'asc', page: '1' }));
+
+    fireEvent.click(screen.getByTestId('admin-table-sort-rank-btn'));
+    await waitFor(() => expect(listCalls().at(-1)).toMatchObject({ sort: 'rank', dir: 'desc', page: '1' }));
   });
 
   it('follows a deep-linked view, filters and sort', async () => {
@@ -197,6 +235,47 @@ describe('ModelListSection single-model access', () => {
     expect(screen.getByTestId('model-access-reload-btn')).toBeInTheDocument();
   });
 
+  it('keeps a blocked fix action in a row from opening the model', async () => {
+    user.current = { isAdmin: false, adminPermissions: ['settings:manage'] };
+    const offRow = modelRow({
+      status: 'hidden',
+      reasons: [{ code: 'admin-off', message: 'Turned off by an admin', fixAction: 'turn-on' }],
+    });
+    serveList(() => listResponse([offRow]));
+    const { router } = await renderModelsRoute('/admin?tab=models&modelsView=all', ModelListSection);
+
+    const fix = within(await screen.findByTestId('models-row-example-text-1')).getByTestId('models-row-fix-btn');
+    expect(fix).toBeDisabled();
+    fireEvent.click(screen.getByTestId('models-write-blocked-action'));
+    await act(() => new Promise(resolve => setTimeout(resolve, 50)));
+
+    expect(router.state.location.pathname).toBe('/admin');
+    expect(screen.queryByTestId('probe-detail')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('model-access-dialog')).not.toBeInTheDocument();
+  });
+
+  it('starts a discovery run from the Run discovery fix action', async () => {
+    const staleRow = modelRow({
+      status: 'needs-review',
+      reasons: [{ code: 'not-discovered', message: 'Not seen by discovery yet', fixAction: 'run-discovery' }],
+    });
+    get.mockImplementation(async (url: string) => {
+      if (url === '/api/admin/models') return { data: listResponse([staleRow]) };
+      if (url === '/api/admin/model-discovery') return { data: { enabled: true, lastRun: null } };
+      throw new Error(`unexpected GET ${url}`);
+    });
+    post.mockResolvedValue({ data: { dispatched: 'lambda' } });
+    await renderModelsRoute('/admin?tab=models&modelsView=all', ModelListSection);
+
+    const fix = within(await screen.findByTestId('models-row-example-text-1')).getByTestId('models-row-fix-btn');
+    expect(fix).toHaveTextContent('Run discovery');
+    fireEvent.click(fix);
+
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/api/admin/model-discovery'));
+    expect(fix).toBeDisabled();
+    expect(screen.queryByTestId('probe-detail')).not.toBeInTheDocument();
+  });
+
   it('keeps writes visible but disabled for an admin who is not a full administrator', async () => {
     user.current = { isAdmin: false, adminPermissions: ['settings:manage', 'support:read'] };
     serveList(() => listResponse([listedRow]));
@@ -240,6 +319,10 @@ describe('ModelListSection bulk access', () => {
       change: { addTags: ['beta'] },
     });
     expect(screen.getByTestId('models-bulk-no-audience-change')).toHaveTextContent('No audience change for 2 models');
+    fireEvent.click(screen.getByTestId('models-bulk-changed-toggle-btn'));
+    const [firstChanged] = screen.getAllByTestId('models-bulk-changed-item');
+    expect(firstChanged).toHaveTextContent('example-text-1: Tags: none \u2192 beta');
+    expect(firstChanged).toHaveTextContent('Same users as before');
 
     fireEvent.click(screen.getByTestId('models-bulk-also-remove-base-checkbox'));
     await waitFor(() =>
@@ -261,6 +344,50 @@ describe('ModelListSection bulk access', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
     await waitFor(() => expect(bulkBodies().at(-1)).toEqual({ undoToken: 'undo-1', reason: 'Undo: Ready for users' }));
+  });
+
+  it('reports an undo that could not revert every model', async () => {
+    serveList(twoRows);
+    const applied: ModelAccessBulkResult = {
+      batchId: 'b1',
+      results: [
+        { id: 'example-text-1', outcome: 'updated' },
+        { id: 'example-text-2', outcome: 'updated' },
+      ],
+      counts: { selected: 2, updated: 2, unchanged: 0, failed: 0 },
+      summary: 'Updated 2 of 2',
+      undoToken: 'undo-1',
+      revision: 'r2',
+    };
+    const undone: ModelAccessBulkResult = {
+      batchId: 'b2',
+      results: [
+        { id: 'example-text-1', outcome: 'updated' },
+        { id: 'example-text-2', outcome: 'failed', reason: 'stamp-moved' },
+      ],
+      counts: { selected: 2, updated: 1, unchanged: 0, failed: 1 },
+      summary: 'Updated 1 of 2. 1 failed',
+      undoToken: null,
+      revision: 'r3',
+    };
+    post.mockImplementation(async (_url: string, body: { dryRunToken?: string; undoToken?: string }) => ({
+      data: body.undoToken ? undone : body.dryRunToken ? applied : dryRun(),
+    }));
+    await renderModelsRoute('/admin?tab=models&modelsView=all', ModelListSection);
+
+    await selectPage();
+    fireEvent.click(screen.getByTestId('models-bulk-turn-off-btn'));
+    await screen.findByTestId('models-bulk-summary');
+    pickReason('models-bulk-dialog');
+    fireEvent.click(screen.getByTestId('models-bulk-dialog-confirm-btn'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Undo' }));
+
+    expect(await screen.findByTestId('undo-toast-error')).toHaveTextContent(
+      'Undo: Updated 1 of 2. 1 failed. 1 model not reverted.'
+    );
+    const failed = screen.getByTestId('models-bulk-failed');
+    expect(failed).toHaveTextContent('example-text-2: changed by someone else since the preview');
+    expect(screen.queryByTestId('models-bulk-retry-btn')).not.toBeInTheDocument();
   });
 
   it('reports failed models and retries only those through a fresh dry run', async () => {
@@ -338,6 +465,52 @@ describe('ModelListSection bulk access', () => {
     expect(screen.getByTestId('models-bulk-dialog-confirm-btn')).toBeDisabled();
     fireEvent.click(screen.getByTestId('models-bulk-admin-only-checkbox'));
     expect(screen.getByTestId('models-bulk-dialog-confirm-btn')).not.toBeDisabled();
+  });
+
+  it('drops the server admins-only list once the change it was for is edited', async () => {
+    serveList(twoRows);
+    post.mockImplementation(async (_url: string, body: { dryRunToken?: string }) => {
+      if (body.dryRunToken) throw apiFailure(422, { error: 'Only admins', adminOnlyIds: ['example-text-1'] });
+      return { data: dryRun() };
+    });
+    await renderModelsRoute('/admin?tab=models&modelsView=all', ModelListSection);
+
+    await selectPage();
+    fireEvent.click(screen.getByTestId('models-bulk-remove-entitlement-btn'));
+    const input = screen.getByTestId('models-bulk-values-input');
+    fireEvent.change(input, { target: { value: 'pro' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await screen.findByTestId('models-bulk-summary');
+    pickReason('models-bulk-dialog');
+    fireEvent.click(screen.getByTestId('models-bulk-dialog-confirm-btn'));
+    expect(await screen.findByTestId('models-bulk-admin-only')).toHaveTextContent('example-text-1');
+
+    fireEvent.change(input, { target: { value: 'team' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(screen.queryByTestId('models-bulk-admin-only')).not.toBeInTheDocument());
+    expect(screen.queryByTestId('models-bulk-apply-error')).not.toBeInTheDocument();
+  });
+
+  it('suggests tags already on the selected models alongside the tags users hold', async () => {
+    const taggedRow = modelRow({
+      access: {
+        entry: { enabled: true, allowedUserTags: ['legacy'], allowedEntitlements: [], updatedAt: null },
+        everyone: false,
+        adminsOnly: false,
+        freeTierLocked: false,
+      },
+    });
+    serveList(() => listResponse([taggedRow, reviewRow]));
+    post.mockResolvedValue({ data: dryRun() });
+    await renderModelsRoute('/admin?tab=models&modelsView=all', ModelListSection);
+
+    await selectPage();
+    fireEvent.click(screen.getByTestId('models-bulk-remove-tag-btn'));
+    const input = screen.getByTestId('models-bulk-values-input');
+    fireEvent.mouseDown(input);
+    fireEvent.change(input, { target: { value: 'leg' } });
+
+    expect(await screen.findByRole('option', { name: 'legacy' })).toBeInTheDocument();
   });
 
   it('explains a filter that matches more models than one bulk change covers', async () => {

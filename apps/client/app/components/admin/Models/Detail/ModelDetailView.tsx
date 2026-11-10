@@ -6,7 +6,7 @@ import { EntityHeader, StatStrip, StatTile, StatusChip } from '../../shared';
 import { ADMIN_MODEL_LOGS_TAB_SLUG, ADMIN_MODEL_METRICS_TAB_SLUG } from '../../adminTabParams';
 import { MODEL_LOGS_MODEL_PARAM } from '../../modelLogsTabSearch';
 import { MODEL_METRICS_SEARCH_KEYS } from '../../ModelMetrics/modelMetricsSearch';
-import { ModelAccessDialog } from '../Access/ModelAccessDialog';
+import { ModelToggleDialog } from '../Access/ModelAccessDialog';
 import { effectiveAccess } from '../Access/modelAccessChange';
 import { ModelFixAction } from '../ModelFixAction';
 import { ModelWriteAction } from '../ModelWriteAction';
@@ -67,7 +67,7 @@ export function ModelDetailView({
 }) {
   const navigate = useNavigate();
   const { openSection } = useModelsNavigation();
-  const [toggling, setToggling] = useState(false);
+  const [toggling, setToggling] = useState<AdminModelRowWire | null>(null);
   const access = effectiveAccess(model.access.entry);
   const summary = accessSummary(model.access);
   const verb = access.enabled ? 'Turn off' : 'Turn on';
@@ -125,7 +125,7 @@ export function ModelDetailView({
                   size="sm"
                   variant="outlined"
                   disabled={disabled}
-                  onClick={() => setToggling(true)}
+                  onClick={() => setToggling(model)}
                   data-testid="model-detail-toggle-btn"
                 >
                   {verb}
@@ -164,7 +164,7 @@ export function ModelDetailView({
                 <ModelFixAction
                   action={first.fixAction}
                   model={model}
-                  onTurnOn={() => setToggling(true)}
+                  onTurnOn={() => setToggling(model)}
                   data-testid="model-detail-fix-btn"
                 />
               )}
@@ -181,7 +181,7 @@ export function ModelDetailView({
                   <ModelFixAction
                     action={reason.fixAction}
                     model={model}
-                    onTurnOn={() => setToggling(true)}
+                    onTurnOn={() => setToggling(model)}
                     data-testid="model-detail-more-fix-btn"
                   />
                 )}
@@ -248,15 +248,7 @@ export function ModelDetailView({
         </Box>
       </Box>
 
-      {toggling && (
-        <ModelAccessDialog
-          target={model}
-          change={{ enabled: !access.enabled }}
-          title={`${verb} ${model.name}`}
-          confirmLabel={verb}
-          onClose={() => setToggling(false)}
-        />
-      )}
+      {toggling && <ModelToggleDialog model={toggling} onClose={() => setToggling(null)} />}
     </Stack>
   );
 }

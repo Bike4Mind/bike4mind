@@ -77,6 +77,20 @@ describe('handleModelAccessRevisionSetting', () => {
     expect(invalidate).toHaveBeenCalledTimes(1);
   });
 
+  it('tries the revision again after a refetch that came back with no revision', async () => {
+    queryClient.setQueryData(LLM_MODEL_CONFIGURATIONS_QUERY_KEY, entriesAt('acc-1'));
+    invalidate.mockImplementation(async () => {
+      queryClient.setQueryData(LLM_MODEL_CONFIGURATIONS_QUERY_KEY, entriesAt(null));
+    });
+
+    handleModelAccessRevisionSetting(queryClient, pushed('acc-2'), () => 0);
+    await vi.runAllTimersAsync();
+    handleModelAccessRevisionSetting(queryClient, pushed('acc-2'), () => 0);
+    await vi.runAllTimersAsync();
+
+    expect(invalidate).toHaveBeenCalledTimes(2);
+  });
+
   it('skips the refetch when the entries caught up during the wait', () => {
     queryClient.setQueryData(LLM_MODEL_CONFIGURATIONS_QUERY_KEY, entriesAt('acc-1'));
 

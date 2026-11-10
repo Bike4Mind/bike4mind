@@ -14,6 +14,7 @@ import { apiErrorOf, postModelAccessBulk, useAdminUserTags } from '@client/app/h
 import { ADMIN_REASON_PRESETS, ActionDialog } from '../../shared';
 import { MODEL_PICKER_FRESHNESS } from '../Access/ModelAccessDialog';
 import {
+  BULK_AUDIENCE_LABEL,
   MODEL_BULK_LABEL,
   bulkChangeOf,
   bulkDiffSummary,
@@ -34,6 +35,8 @@ export type ModelBulkRequest = {
   /** Prefilled tags or entitlements, for Retry failed. */
   values?: string[];
   alsoRemoveBase?: boolean;
+  /** Tags already on the selected models' entries, offered alongside the tags users hold. */
+  entryTags?: string[];
 };
 
 export type ModelBulkApplied = {
@@ -101,11 +104,9 @@ function BulkDialogBody({
   const isTags = bulkKindIsTags(kind);
   const [values, setValues] = useState<string[]>(request.values ?? []);
   const [alsoRemoveBase, setAlsoRemoveBase] = useState(request.alsoRemoveBase ?? false);
-  const [adminOnlyConfirmed, setAdminOnlyConfirmed] = useState(false);
   const [showChanged, setShowChanged] = useState(false);
   /** A fresh dry run from a 409, for the change it was computed for. */
   const [replaced, setReplaced] = useState<{ changeKey: string; dryRun: ModelAccessBulkDryRun } | null>(null);
-  const [serverAdminOnlyIds, setServerAdminOnlyIds] = useState<string[] | null>(null);
 
   const tags = useAdminUserTags(isTags);
   const change = bulkChangeOf(kind, values, alsoRemoveBase);
@@ -120,9 +121,15 @@ function BulkDialogBody({
     gcTime: 0,
   });
   const dryRun = replaced?.changeKey === changeKey ? replaced.dryRun : preview.data;
+  // The admins-only confirm and the server's admins-only list hold for one change and one dry run only.
+  const previewKey = `${changeKey}|${dryRun?.token ?? ''}`;
+  const [adminOnlyConfirmedFor, setAdminOnlyConfirmedFor] = useState<string | null>(null);
+  const adminOnlyConfirmed = adminOnlyConfirmedFor === previewKey;
+  const [serverAdminOnly, setServerAdminOnly] = useState<{ previewKey: string; ids: string[] } | null>(null);
+  const serverAdminOnlyIds = serverAdminOnly?.previewKey === previewKey ? serverAdminOnly.ids : null;
 
   const apply = useMutation({
-    mutationFn: (reason: string) =>
+    mutationFn: ({ reason }: { reason: string; previewKey: string }) =>
       postModelAccessBulk<ModelAccessBulkResult>({
         selection,
         change: change!,
@@ -132,16 +139,18 @@ function BulkDialogBody({
       }),
   });
 
+  const entryTags = request.entryTags;
   const options = useMemo(() => {
-    if (isTags) return (tags.data ?? []).map(entry => entry.tag);
-    return [...KNOWN_ENTITLEMENT_KEYS];
-  }, [isTags, tags.data]);
+    if (!isTags) return [...KNOWN_ENTITLEMENT_KEYS];
+    return [...new Set([...(tags.data ?? []).map(entry => entry.tag), ...(entryTags ?? [])])];
+  }, [isTags, tags.data, entryTags]);
   const tagCounts = useMemo(() => new Map((tags.data ?? []).map(entry => [entry.tag, entry.count])), [tags.data]);
 
   const adminOnlyIds = serverAdminOnlyIds ?? dryRun?.adminOnlyIds ?? [];
   const quiet = dryRun ? noAudienceChangeItems(dryRun) : [];
   const changed = dryRun?.items.filter(item => item.changes) ?? [];
-  const conflict = apply.error ? apiErrorOf(apply.error) : null;
+  const applyError = apply.variables?.previewKey === previewKey ? apply.error : null;
+  const conflict = applyError ? apiErrorOf(applyError) : null;
   const stale = !!replaced && replaced.changeKey === changeKey;
   const previewProblem = selectionProblem(preview.error);
   const valueNoun = isTags ? 'tag' : 'entitlement';
@@ -164,15 +173,14 @@ function BulkDialogBody({
   const confirm = async (reason: string) => {
     if (!change || !dryRun) return;
     try {
-      const result = await apply.mutateAsync(reason);
+      const result = await apply.mutateAsync({ reason, previewKey });
       onApplied({ request, values, alsoRemoveBase, reason, result });
     } catch (error) {
       const { status, data } = apiErrorOf(error);
       if (status === 409 && data.dryRun) {
         setReplaced({ changeKey, dryRun: data.dryRun as ModelAccessBulkDryRun });
-        setAdminOnlyConfirmed(false);
       } else if (status === 422 && Array.isArray(data.adminOnlyIds)) {
-        setServerAdminOnlyIds(data.adminOnlyIds as string[]);
+        setServerAdminOnly({ previewKey, ids: data.adminOnlyIds as string[] });
       }
     }
   };
@@ -209,10 +217,7 @@ function BulkDialogBody({
               options={options}
               value={values}
               loading={isTags && tags.isLoading}
-              onChange={(_event, next) => {
-                setValues(normalize(next));
-                setAdminOnlyConfirmed(false);
-              }}
+              onChange={(_event, next) => setValues(normalize(next))}
               getOptionLabel={option =>
                 isTags && tagCounts.has(option) ? `${option} (${countOf(tagCounts.get(option)!, 'user')})` : option
               }
@@ -230,7 +235,13 @@ function BulkDialogBody({
             color="danger"
             data-testid="models-bulk-preview-error"
             endDecorator={
-              <Button size="sm" variant="plain" color="danger" onClick={() => void preview.refetch()}>
+              <Button
+                size="sm"
+                variant="plain"
+                color="neutral"
+                onClick={() => void preview.refetch()}
+                data-testid="models-bulk-preview-retry-btn"
+              >
                 Retry
               </Button>
             }
@@ -269,12 +280,21 @@ function BulkDialogBody({
                     sx={{ m: 0, pl: 2.5, maxHeight: 240, overflowY: 'auto' }}
                   >
                     {changed.map(item => (
-                      <Typography key={item.id} component="li" level="body-sm" sx={{ overflowWrap: 'anywhere' }}>
+                      <Typography
+                        key={item.id}
+                        component="li"
+                        level="body-sm"
+                        sx={{ overflowWrap: 'anywhere' }}
+                        data-testid="models-bulk-changed-item"
+                      >
                         <Box component="span" sx={{ fontFamily: 'code', fontSize: 12 }}>
                           {item.id}
                         </Box>
                         {': '}
                         {describeBulkEntry(item)}
+                        <Typography component="span" level="body-xs" sx={{ display: 'block', color: 'admin.inkMuted' }}>
+                          {BULK_AUDIENCE_LABEL[item.audience]}
+                        </Typography>
                       </Typography>
                     ))}
                   </Box>
@@ -343,7 +363,7 @@ function BulkDialogBody({
                 size="sm"
                 label="Keep these visible to admins only"
                 checked={adminOnlyConfirmed}
-                onChange={event => setAdminOnlyConfirmed(event.target.checked)}
+                onChange={event => setAdminOnlyConfirmedFor(event.target.checked ? previewKey : null)}
                 slotProps={{ input: { 'data-testid': 'models-bulk-admin-only-checkbox' } }}
               />
             </Stack>
@@ -352,7 +372,7 @@ function BulkDialogBody({
 
         {conflict && !(conflict.status === 409 && stale) && !(conflict.status === 422 && serverAdminOnlyIds) && (
           <Alert color="danger" data-testid="models-bulk-apply-error">
-            {getErrorMessage(apply.error)}
+            {getErrorMessage(applyError)}
           </Alert>
         )}
       </Stack>

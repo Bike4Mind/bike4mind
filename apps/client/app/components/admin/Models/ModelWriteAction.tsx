@@ -23,8 +23,9 @@ export function ModelWriteAction({ children }: { children: (disabled: boolean) =
   if (!blocked) return children(false);
   return (
     <Tooltip title={blocked}>
-      {/* A disabled button fires no pointer events, so the tooltip needs a focusable wrapper. */}
-      <span tabIndex={0} data-testid="models-write-blocked-action">
+      {/* A disabled button fires no pointer events, so the tooltip needs a focusable wrapper; in a table row its
+          click must not open the row. */}
+      <span tabIndex={0} onClick={event => event.stopPropagation()} data-testid="models-write-blocked-action">
         {children(true)}
       </span>
     </Tooltip>

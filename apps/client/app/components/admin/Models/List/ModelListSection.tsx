@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -23,9 +23,11 @@ import {
   type AdminModelSort,
   type AdminModelSource,
   type AdminModelView,
+  type ModelAccessBulkResult,
   type ModelAccessChange,
   type ModelAccessSelection,
 } from '@bike4mind/common';
+import { getErrorMessage } from '@client/app/utils/error';
 import {
   postModelAccessBulk,
   useAdminModelList,
@@ -96,7 +98,8 @@ const positiveInt = (value: string, fallback: number) => {
 };
 
 type AccessEdit = { target: ModelAccessTarget; change: ModelAccessChange; title: string; confirmLabel: string };
-type BulkOutcome = { applied: ModelBulkApplied; failed: ReturnType<typeof failedResults> };
+/** Models a bulk apply or its undo could not write; `retry` is the apply to rerun on just those. */
+type BulkOutcome = { summary: string; failed: ReturnType<typeof failedResults>; retry?: ModelBulkApplied };
 
 const toggleEdit = (row: AdminModelRowWire): AccessEdit => {
   const on = effectiveAccess(row.access.entry).enabled;
@@ -160,19 +163,30 @@ export function ModelListSection() {
   const [bulk, setBulk] = useState<ModelBulkRequest | null>(null);
   const [outcome, setOutcome] = useState<BulkOutcome | null>(null);
 
-  const setFilters = (patch: Partial<typeof filters>) => update({ filters: { ...filters, page: '', ...patch } });
+  // DataTable follows a sort change with onPageChange(1) in the same tick, before the URL comes back round; each
+  // write builds on the last one so the second does not put the old sort back.
+  const lastWrite = useRef<{ from: typeof filters; to: typeof filters } | null>(null);
+  const writeList = (patch: typeof filters, rest: { query?: string; view?: string } = {}) => {
+    const next = { ...(lastWrite.current?.from === filters ? lastWrite.current.to : filters), ...patch };
+    lastWrite.current = { from: filters, to: next };
+    update({ ...rest, filters: next });
+  };
+  const setFilters = (patch: typeof filters) => writeList({ page: '', ...patch });
   const filtered = !!state.query || providers.length > 0 || types.length > 0 || sources.length > 0 || showFoundationIds;
   const clearFilters = () =>
-    update({
-      query: '',
-      view: '',
-      filters: { ...filters, providers: '', types: '', sources: '', foundation: '', page: '' },
-    });
+    writeList({ providers: '', types: '', sources: '', foundation: '', page: '' }, { query: '', view: '' });
 
   const total = data?.total ?? 0;
+  // An empty placeholder is the previous view's result (Needs review before the switch to All), not this one's.
+  const loading = list.isPending || (list.isPlaceholderData && (data?.models.length ?? 0) === 0);
   const selectedCount = selection.mode === 'allMatching' ? total : selection.ids.length;
   const bulkSelection = (): ModelAccessSelection =>
     selection.mode === 'allMatching' ? { filter: { ...baseFilter, view } } : { ids: [...selection.ids] };
+  const selectedEntryTags = () => {
+    const rows = data?.models ?? [];
+    const picked = selection.mode === 'allMatching' ? rows : rows.filter(row => selection.ids.includes(row.id));
+    return [...new Set(picked.flatMap(row => row.access.entry?.allowedUserTags ?? []))];
+  };
 
   const onBulkApplied = (applied: ModelBulkApplied) => {
     const { result, reason } = applied;
@@ -180,22 +194,31 @@ export function ModelListSection() {
     setSelection(NO_SELECTION);
     void invalidate();
     const failed = failedResults(result);
-    setOutcome(failed.length > 0 ? { applied, failed } : null);
+    setOutcome(failed.length > 0 ? { summary: result.summary, failed, retry: applied } : null);
     const { undoToken } = result;
     showUndo({
       message: `${result.summary} ${MODEL_PICKER_FRESHNESS}`,
       onUndo: undoToken
         ? async () => {
-            await postModelAccessBulk({ undoToken, reason: undoAdminReason(reason) });
+            const undone = await postModelAccessBulk<ModelAccessBulkResult>({
+              undoToken,
+              reason: undoAdminReason(reason),
+            });
             await invalidate();
+            const notReverted = failedResults(undone);
+            if (notReverted.length > 0) {
+              const message = `Undo: ${undone.summary}. ${countOf(notReverted.length, 'model')} not reverted.`;
+              setOutcome({ summary: message, failed: notReverted });
+              throw new Error(message);
+            }
           }
         : undefined,
     });
   };
 
   const retryFailed = () => {
-    if (!outcome) return;
-    const { applied, failed } = outcome;
+    if (!outcome?.retry) return;
+    const { retry: applied, failed } = outcome;
     setOutcome(null);
     setBulk({
       kind: applied.request.kind,
@@ -203,6 +226,7 @@ export function ModelListSection() {
       count: failed.length,
       values: applied.values,
       alsoRemoveBase: applied.alsoRemoveBase,
+      entryTags: applied.request.entryTags,
     });
   };
 
@@ -319,7 +343,7 @@ export function ModelListSection() {
           testId: `models-view-${id}`,
         }))}
         activeId={view}
-        onSelect={id => update({ view: id, filters: { ...filters, page: '' } })}
+        onSelect={id => writeList({ page: '' }, { view: id })}
         aria-label="Model views"
         data-testid="models-views"
       />
@@ -397,21 +421,24 @@ export function ModelListSection() {
           data-testid="models-bulk-failed"
           endDecorator={
             <Stack direction="row" gap={0.5}>
-              <Button
-                size="sm"
-                variant="outlined"
-                color="warning"
-                onClick={retryFailed}
-                data-testid="models-bulk-retry-btn"
-              >
-                Retry failed
-              </Button>
+              {outcome.retry && (
+                <Button
+                  size="sm"
+                  variant="outlined"
+                  color="neutral"
+                  onClick={retryFailed}
+                  data-testid="models-bulk-retry-btn"
+                >
+                  Retry failed
+                </Button>
+              )}
               <IconButton
                 size="sm"
                 variant="plain"
-                color="warning"
+                color="neutral"
                 aria-label="Dismiss"
                 onClick={() => setOutcome(null)}
+                data-testid="models-bulk-failed-dismiss-btn"
               >
                 <CloseRoundedIcon />
               </IconButton>
@@ -420,7 +447,7 @@ export function ModelListSection() {
         >
           <Stack gap={0.5} sx={{ minWidth: 0 }}>
             <Typography level="body-sm" sx={{ fontWeight: 600 }}>
-              {outcome.applied.result.summary}
+              {outcome.summary}
             </Typography>
             {outcome.failed.map(entry => (
               <Typography key={entry.id} level="body-xs" sx={{ overflowWrap: 'anywhere' }}>
@@ -431,14 +458,14 @@ export function ModelListSection() {
         </Alert>
       )}
 
-      <UpdatingBar active={list.isFetching && !list.isPending} testId="models-list-updating" />
+      <UpdatingBar active={list.isFetching && !loading} testId="models-list-updating" />
       <DataTable
         rows={data?.models ?? []}
         columns={columns}
         getRowId={row => row.id}
         label="Models"
-        loading={list.isPending}
-        error={list.error ? "Couldn't load the models." : undefined}
+        loading={loading}
+        error={list.error ? `Couldn't load the models. ${getErrorMessage(list.error)}` : undefined}
         onRetry={() => void list.refetch()}
         onRowActivate={row => void openModel(row.id)}
         testId="models-table"
@@ -455,7 +482,7 @@ export function ModelListSection() {
           page,
           pageSize,
           total,
-          onPageChange: next => update({ filters: { ...filters, page: next > 1 ? String(next) : '' } }),
+          onPageChange: next => writeList({ page: next > 1 ? String(next) : '' }),
           onPageSizeChange: next => setFilters({ pageSize: next === DEFAULT_PAGE_SIZE ? '' : String(next) }),
         }}
         rowActions={row => {
@@ -512,7 +539,7 @@ export function ModelListSection() {
               action={
                 <Button
                   variant="outlined"
-                  onClick={() => update({ view: 'all', filters: { ...filters, page: '' } })}
+                  onClick={() => writeList({ page: '' }, { view: 'all' })}
                   data-testid="models-show-all-btn"
                 >
                   Show all models
@@ -542,7 +569,9 @@ export function ModelListSection() {
                 variant="outlined"
                 disabled={disabled}
                 data-testid={`models-bulk-${kind}-btn`}
-                onClick={() => setBulk({ kind, selection: bulkSelection(), count: selectedCount })}
+                onClick={() =>
+                  setBulk({ kind, selection: bulkSelection(), count: selectedCount, entryTags: selectedEntryTags() })
+                }
               >
                 {MODEL_BULK_LABEL[kind]}
               </Button>

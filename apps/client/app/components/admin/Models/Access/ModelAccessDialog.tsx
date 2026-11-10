@@ -168,7 +168,7 @@ export function ModelAccessDialog({ target, change, title, confirmLabel, onClose
               <Button
                 size="sm"
                 variant="outlined"
-                color="warning"
+                color="neutral"
                 data-testid="model-access-reload-btn"
                 onClick={() => {
                   write.reset();
@@ -191,5 +191,20 @@ export function ModelAccessDialog({ target, change, title, confirmLabel, onClose
         )}
       </Stack>
     </ActionDialog>
+  );
+}
+
+/** Turns one model on or off. Pass the row as it was when the dialog opened, so a refetch cannot flip the verb. */
+export function ModelToggleDialog({ model, onClose }: { model: ModelAccessTarget; onClose: () => void }) {
+  const { enabled } = effectiveAccess(model.access.entry);
+  const verb = enabled ? 'Turn off' : 'Turn on';
+  return (
+    <ModelAccessDialog
+      target={model}
+      change={{ enabled: !enabled }}
+      title={`${verb} ${model.name}`}
+      confirmLabel={verb}
+      onClose={onClose}
+    />
   );
 }

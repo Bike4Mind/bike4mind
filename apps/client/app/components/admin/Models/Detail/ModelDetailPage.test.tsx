@@ -147,6 +147,53 @@ describe('ModelDetailPage', () => {
     );
   });
 
+  it('keeps an open toggle on the row it opened with when the row refetches', async () => {
+    serve([offRow]);
+    patch.mockResolvedValue({ data: { entry: null, changed: true, revision: 'r3' } });
+    const { queryClient } = await renderModelsRoute(`/admin/models/${BEDROCK_ID}`, () => null, {
+      Detail: DetailRoute,
+    });
+
+    fireEvent.click(await screen.findByTestId('model-detail-fix-btn'));
+    const turnedOnElsewhere = modelRow({
+      ...offRow,
+      access: {
+        ...offRow.access,
+        entry: { ...offRow.access.entry!, enabled: true, updatedAt: '2026-11-04T00:00:00.000Z' },
+      },
+    });
+    serve([turnedOnElsewhere]);
+    await queryClient.invalidateQueries();
+    await waitFor(() => expect(screen.getByTestId('model-detail-toggle-btn')).toHaveTextContent('Turn off'));
+
+    expect(screen.getByTestId('model-access-dialog-confirm-btn')).toHaveTextContent('Turn on');
+    fireEvent.click(screen.getByTestId('model-access-dialog-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('model-access-dialog-confirm-btn'));
+    await waitFor(() =>
+      expect(patch.mock.calls[0][1]).toMatchObject({
+        change: { enabled: true },
+        expectedUpdatedAt: '2026-11-03T00:00:00.000Z',
+      })
+    );
+  });
+
+  it('offers the tags already on the model in the tag picker', async () => {
+    serve([
+      modelRow({
+        ...offRow,
+        access: { ...offRow.access, entry: { ...offRow.access.entry!, allowedUserTags: ['legacy'] } },
+      }),
+    ]);
+    await renderModelsRoute(`/admin/models/${BEDROCK_ID}?tab=access`, () => null, { Detail: DetailRoute });
+
+    fireEvent.click(await screen.findByTestId('model-access-audience-btn'));
+    const input = screen.getByTestId('model-access-tags-input');
+    fireEvent.mouseDown(input);
+    fireEvent.change(input, { target: { value: 'leg' } });
+
+    expect(await screen.findByRole('option', { name: 'legacy' })).toBeInTheDocument();
+  });
+
   it('edits tags on the Access tab as one change, previewed before and after', async () => {
     serve([offRow]);
     patch.mockResolvedValue({ data: { entry: null, changed: true, revision: 'r3' } });
@@ -205,6 +252,18 @@ describe('ModelDetailPage', () => {
     fireEvent.change(rank, { target: { value: '3' } });
     fireEvent.click(screen.getByTestId('model-access-dialog-confirm-btn'));
     await waitFor(() => expect(patch.mock.calls[0][1]).toMatchObject({ change: { rank: 3 } }));
+  });
+
+  it('shows why the admin log could not be loaded', async () => {
+    serve([offRow]);
+    const served = get.getMockImplementation()!;
+    get.mockImplementation(async (url: string, config?: { params?: Record<string, string> }) => {
+      if (url === '/api/admin/audit-log') throw apiFailure(503, { error: 'Audit log is unavailable' });
+      return served(url, config);
+    });
+    await renderModelsRoute(`/admin/models/${BEDROCK_ID}?tab=admin`, () => null, { Detail: DetailRoute });
+
+    expect(await screen.findByText(/The admin log could not be loaded\. Audit log is unavailable/)).toBeInTheDocument();
   });
 
   it('merges the access, price and lifecycle audit trails newest first', async () => {

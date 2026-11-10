@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Box, Typography } from '@mui/joy';
 import type { AuditEntry } from '@bike4mind/common';
 import { useModelAdminLog } from '@client/app/hooks/data/adminModels';
+import { getErrorMessage } from '@client/app/utils/error';
 import { AuditEntryDrawer } from '@client/app/components/admin/AuditLog/shared';
 import { EmptyState, ErrorState, RelativeTime, SectionCard } from '../../../shared';
 import { describeAuditEntry, fieldLabel, formatAuditValue } from '../../../Users/Profile/tabs/auditSentence';
@@ -43,7 +44,12 @@ export function ModelAdminLogTab({ modelId }: { modelId: string }) {
   const body = () => {
     if (log.isLoading) return <TimelineSkeleton />;
     if (log.isError && items.length === 0) {
-      return <ErrorState message="The admin log could not be loaded." onRetry={() => void log.refetch()} />;
+      return (
+        <ErrorState
+          message={`The admin log could not be loaded. ${getErrorMessage(log.error)}`}
+          onRetry={() => void log.refetch()}
+        />
+      );
     }
     if (items.length === 0) {
       return (

@@ -51,10 +51,12 @@ function reconcile(queryClient: QueryClient, random: () => number): void {
     if (!target || readRevision(queryClient) === target) return;
     watch.refetchedFor = target;
     void queryClient.invalidateQueries({ queryKey: LLM_MODEL_CONFIGURATIONS_QUERY_KEY }).then(() => {
-      // A failed refetch has not used up the revision: the next push or landing tries again.
-      if (queryClient.getQueryState(LLM_MODEL_CONFIGURATIONS_QUERY_KEY)?.status === 'error') {
-        watch.refetchedFor = undefined;
-      }
+      // A failed refetch has not used up the revision: the next push or landing tries again. useLLMModelConfigurations
+      // turns a failed read into entries with no revision, which a read after a push never legitimately has.
+      const failed =
+        queryClient.getQueryState(LLM_MODEL_CONFIGURATIONS_QUERY_KEY)?.status === 'error' ||
+        readRevision(queryClient) === null;
+      if (failed) watch.refetchedFor = undefined;
     });
   }, random() * MODEL_ACCESS_REFETCH_JITTER_MS);
 }

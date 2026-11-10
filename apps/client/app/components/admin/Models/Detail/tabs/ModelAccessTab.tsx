@@ -16,8 +16,8 @@ import { normalizeEntitlementKey, type ModelAccessChange } from '@bike4mind/comm
 import { KNOWN_ENTITLEMENT_KEYS } from '@bike4mind/server-utils/lib/entitlements/registry';
 import { useAdminModelsOfType, useAdminUserTags, type AdminModelRowWire } from '@client/app/hooks/data/adminModels';
 import { Fact, SectionCard } from '../../../shared';
-import { ModelAccessDialog } from '../../Access/ModelAccessDialog';
-import { diffAccess, effectiveAccess, type EffectiveAccess } from '../../Access/modelAccessChange';
+import { ModelAccessDialog, ModelToggleDialog } from '../../Access/ModelAccessDialog';
+import { diffAccess, effectiveAccess } from '../../Access/modelAccessChange';
 import { ModelWriteAction } from '../../ModelWriteAction';
 import { MODEL_STATUS_LABEL, accessSummary } from '../../modelPresentation';
 import { useModelsNavigation } from '../../modelsNavigation';
@@ -56,19 +56,16 @@ function EditButton({ label, onClick, testId }: { label: string; onClick: () => 
   );
 }
 
-function AudienceEditor({
-  model,
-  before,
-  onClose,
-}: {
-  model: AdminModelRowWire;
-  before: EffectiveAccess;
-  onClose: () => void;
-}) {
+function AudienceEditor({ model, onClose }: { model: AdminModelRowWire; onClose: () => void }) {
+  const before = effectiveAccess(model.access.entry);
   const [tags, setTags] = useState<string[]>(before.allowedUserTags);
   const [entitlements, setEntitlements] = useState<string[]>(before.allowedEntitlements);
   const tagCounts = useAdminUserTags();
-  const tagOptions = useMemo(() => (tagCounts.data ?? []).map(entry => entry.tag), [tagCounts.data]);
+  const entryTags = model.access.entry?.allowedUserTags;
+  const tagOptions = useMemo(
+    () => [...new Set([...(tagCounts.data ?? []).map(entry => entry.tag), ...(entryTags ?? [])])],
+    [tagCounts.data, entryTags]
+  );
   const change = diffAccess(before, { ...before, allowedUserTags: tags, allowedEntitlements: entitlements });
   return (
     <ModelAccessDialog
@@ -112,15 +109,8 @@ function AudienceEditor({
   );
 }
 
-function RankingEditor({
-  model,
-  before,
-  onClose,
-}: {
-  model: AdminModelRowWire;
-  before: EffectiveAccess;
-  onClose: () => void;
-}) {
+function RankingEditor({ model, onClose }: { model: AdminModelRowWire; onClose: () => void }) {
+  const before = effectiveAccess(model.access.entry);
   const [rankText, setRankText] = useState(before.rank === null ? '' : String(before.rank));
   const [fallback, setFallback] = useState(before.fallbackModel);
   const sameType = useAdminModelsOfType(model.type);
@@ -177,7 +167,9 @@ function RankingEditor({
 
 /** Access: on/off, who can pick it, rank and fallback; each change is one audited write with Undo. */
 export function ModelAccessTab({ model }: { model: AdminModelRowWire }) {
-  const [editor, setEditor] = useState<Editor | null>(null);
+  // Each editor works on the row as it was when it opened, so a refetch cannot re-base its change or its stamp.
+  const [editor, setEditor] = useState<{ kind: Editor; model: AdminModelRowWire } | null>(null);
+  const open = (kind: Editor) => setEditor({ kind, model });
   const { openSection } = useModelsNavigation();
   const before = effectiveAccess(model.access.entry);
   const summary = accessSummary(model.access);
@@ -193,7 +185,7 @@ export function ModelAccessTab({ model }: { model: AdminModelRowWire }) {
         action={
           <EditButton
             label={before.enabled ? 'Turn off' : 'Turn on'}
-            onClick={() => setEditor('toggle')}
+            onClick={() => open('toggle')}
             testId="model-access-toggle-btn"
           />
         }
@@ -224,7 +216,7 @@ export function ModelAccessTab({ model }: { model: AdminModelRowWire }) {
 
       <SectionCard
         title="Tags and entitlements"
-        action={<EditButton label="Edit" onClick={() => setEditor('audience')} testId="model-access-audience-btn" />}
+        action={<EditButton label="Edit" onClick={() => open('audience')} testId="model-access-audience-btn" />}
         data-testid="model-access-audience"
       >
         <Fact label="User tags" data-testid="model-access-tags">
@@ -237,7 +229,7 @@ export function ModelAccessTab({ model }: { model: AdminModelRowWire }) {
 
       <SectionCard
         title="Rank and fallback"
-        action={<EditButton label="Edit" onClick={() => setEditor('ranking')} testId="model-access-ranking-btn" />}
+        action={<EditButton label="Edit" onClick={() => open('ranking')} testId="model-access-ranking-btn" />}
         data-testid="model-access-ranking"
       >
         <Fact label="Rank" data-testid="model-access-rank">
@@ -252,17 +244,9 @@ export function ModelAccessTab({ model }: { model: AdminModelRowWire }) {
         </Fact>
       </SectionCard>
 
-      {editor === 'toggle' && (
-        <ModelAccessDialog
-          target={model}
-          change={{ enabled: !before.enabled }}
-          title={`${before.enabled ? 'Turn off' : 'Turn on'} ${model.name}`}
-          confirmLabel={before.enabled ? 'Turn off' : 'Turn on'}
-          onClose={close}
-        />
-      )}
-      {editor === 'audience' && <AudienceEditor model={model} before={before} onClose={close} />}
-      {editor === 'ranking' && <RankingEditor model={model} before={before} onClose={close} />}
+      {editor?.kind === 'toggle' && <ModelToggleDialog model={editor.model} onClose={close} />}
+      {editor?.kind === 'audience' && <AudienceEditor model={editor.model} onClose={close} />}
+      {editor?.kind === 'ranking' && <RankingEditor model={editor.model} onClose={close} />}
     </Box>
   );
 }
