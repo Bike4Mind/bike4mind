@@ -682,12 +682,17 @@ export function useConversation(
       const historyBeforeRead = historyVersion.current;
       const failed = (error: unknown): void => {
         if (!current) return;
+        if (preparationBeforeRead !== workspaceVersion.current) return load();
+        if (historyBeforeRead !== historyVersion.current) return load();
+        if (read.stale) return load();
         if (openRead.current === read) openRead.current = null;
         const reason = error instanceof Error ? error.message : String(error);
         const detail = reason.replace(/^Error invoking remote method '[^']*': (?:Error(?:: |$))?/, '');
         setSendError(`Could not open this conversation. ${detail}`);
         setSession(null);
         setMessages([]);
+        setStreaming(false);
+        setTurn(null);
         setOpenFailedFor(sessionId);
       };
       void window.b4m.chat

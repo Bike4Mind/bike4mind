@@ -109,6 +109,36 @@ describe.each([
   { command: 'compact', mock: compactContext },
   { command: 'clear', mock: clearContext },
 ])('/$command that lands during a reopen', ({ command, mock }) => {
+  it('reads again when the superseded opening read rejects after the command succeeds', async () => {
+    const after = sessionFor('s1', { title: 'Done' });
+    let settle: (value: unknown) => void = () => {};
+    mock.mockReturnValue(new Promise(done => (settle = done)));
+    await act(async () => root.render(<Harness id="s1" />));
+    let pending: Promise<void> = Promise.resolve();
+    await act(async () => {
+      pending = conversation.runCommand(command, '');
+    });
+    await act(async () => root.render(<Harness id="s2" />));
+    let rejectFirstRead: (error: Error) => void = () => {};
+    let reads = 0;
+    getSession.mockImplementation(async id => {
+      if (id !== 's1') return sessionFor(id);
+      reads++;
+      return reads === 1 ? new Promise<ChatSession>((_, reject) => (rejectFirstRead = reject)) : after;
+    });
+    await act(async () => root.render(<Harness id="s1" />));
+    await act(async () => {
+      settle({ ok: true, session: after });
+      await pending;
+    });
+    expect(conversation.session?.title).toBe('Done');
+    await act(async () => rejectFirstRead(new Error('superseded read failed')));
+    expect(reads).toBe(2);
+    expect(conversation.session?.title).toBe('Done');
+    expect(conversation.sendError).toBeNull();
+    expect(conversation.openFailedFor).toBeNull();
+  });
+
   it('reads the chat again rather than putting back a transcript read before it', async () => {
     const message = { id: 'm', role: 'user', content: 'old' } as never;
     const after = sessionFor('s1', { title: 'Done' });
@@ -140,6 +170,45 @@ describe.each([
 });
 
 describe('a failed chat read', () => {
+  it.each(['summary', 'workspace'] as const)('retries a failed read invalidated by a %s event', async via => {
+    let invalidate = () => {};
+    if (via === 'summary') {
+      window.b4m.chat.onSessionSummary = listener => {
+        invalidate = () => listener(summaryFor('s1', { title: 'Updated' }));
+        return () => {};
+      };
+    } else {
+      window.b4m.chat.onStreamEvent = listener => {
+        invalidate = () => listener({ type: 'workspace', sessionId: 's1', running: false, base: 'main' });
+        return () => {};
+      };
+    }
+    let rejectFirstRead: (error: Error) => void = () => {};
+    getSession.mockImplementationOnce(() => new Promise<ChatSession>((_, reject) => (rejectFirstRead = reject)));
+    getSession.mockResolvedValue(sessionFor('s1', { title: 'Updated' }));
+    await act(async () => root.render(<Harness id="s1" />));
+    await act(async () => invalidate());
+    await act(async () => rejectFirstRead(new Error('superseded read failed')));
+    expect(getSession).toHaveBeenCalledTimes(2);
+    expect(conversation.session?.title).toBe('Updated');
+    expect(conversation.openFailedFor).toBeNull();
+    expect(conversation.sendError).toBeNull();
+  });
+
+  it('clears the previous chat running state when the selected chat cannot be opened', async () => {
+    getSession.mockImplementation(async id => {
+      if (id === 's2') throw new Error('database locked');
+      return sessionFor(id, { replyInFlight: { messageId: 'running-s1', startedAt: 10 } });
+    });
+    await act(async () => root.render(<Harness id="s1" />));
+    expect(conversation.streaming).toBe(true);
+    expect(conversation.turn).not.toBeNull();
+    await act(async () => root.render(<Harness id="s2" />));
+    expect(conversation.openFailedFor).toBe('s2');
+    expect(conversation.streaming).toBe(false);
+    expect(conversation.turn).toBeNull();
+  });
+
   it("drops Electron's remote method prefix from the reason", async () => {
     getSession.mockRejectedValue(new Error("Error invoking remote method 'chat:get-session': Error: database locked"));
     await act(async () => root.render(<Harness id="s1" />));
