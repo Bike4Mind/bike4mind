@@ -406,7 +406,7 @@ export class ModalManagementToolServer implements AdminTool {
         },
       };
     } catch (error) {
-      console.error('Error fetching modals:', error);
+      modalToolLogger.error('Error fetching modals:', { error });
       return {
         success: false,
         error: `Failed to fetch modals: ${error instanceof Error ? error.message : 'Unknown error'}`,
@@ -515,7 +515,7 @@ export class ModalManagementToolServer implements AdminTool {
         },
       };
     } catch (error) {
-      console.error('Error triggering modal:', error);
+      modalToolLogger.error('Error triggering modal:', { error });
       return {
         success: false,
         error: `Failed to trigger modal: ${error instanceof Error ? error.message : 'Unknown error'}`,
@@ -625,7 +625,7 @@ export class ModalManagementToolServer implements AdminTool {
 
       return result;
     } catch (error) {
-      console.error('LLM modal processing error:', error);
+      modalToolLogger.error('LLM modal processing error:', { error });
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to process modal request',
