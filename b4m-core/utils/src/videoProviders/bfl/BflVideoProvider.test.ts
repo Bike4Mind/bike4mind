@@ -2,10 +2,10 @@ import { existsSync, readFileSync } from 'node:fs';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import { setupServer } from 'msw/node';
-import type { ValidatedVideoRequest } from '@bike4mind/common';
+import { MAX_VIDEO_OUTPUT_BYTES, type ValidatedVideoRequest } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { describeVideoProviderConformance, type ConformanceScenario } from '../conformance';
-import { ProviderOutputUnavailableError, ProviderSubmitError } from '../types';
+import { ProviderOutputTooLargeError, ProviderOutputUnavailableError, ProviderSubmitError } from '../types';
 import { BflVideoProvider } from './BflVideoProvider';
 
 type Exchange = {
@@ -147,10 +147,36 @@ describe('BflVideoProvider specifics', () => {
     await new BflVideoProvider().submit(request({ prompt: 'test prompt', durationSeconds: 5 }), {}, ctx());
     expect(sent).toEqual({
       prompt: 'test prompt',
-      duration_seconds: 5,
+      mode: 't2v',
+      duration: 5,
       aspect_ratio: '16:9',
-      resolution: '720p',
+      resolution: 'hd',
+      generate_audio: true,
     });
+  });
+
+  it.each([
+    ['720p', 'hd', false],
+    ['1080p', 'fhd', true],
+  ] as const)('maps %s to %s and preserves audio=%s', async (resolution, providerResolution, audio) => {
+    let sent: unknown;
+    server.use(
+      http.post(SUBMIT_URL, async ({ request: submitted }) => {
+        sent = await submitted.json();
+        return reply(exchange(FIXTURES.succeeds, 'submit'));
+      })
+    );
+    await new BflVideoProvider().submit(request({ resolution, audio }), {}, ctx());
+    expect(sent).toMatchObject({ mode: 't2v', duration: 5, resolution: providerResolution, generate_audio: audio });
+  });
+
+  it('does not submit unsupported resolution tiers', async () => {
+    await expect(new BflVideoProvider().submit(request({ resolution: '480p' }), {}, ctx())).rejects.toMatchObject({
+      message: 'bfl_unsupported_resolution',
+      definitive: true,
+      retryable: false,
+    });
+    expect(seenAuth).toEqual([]);
   });
 
   it('returns a handle with requestId and pollingUrl', async () => {
@@ -203,6 +229,33 @@ describe('BflVideoProvider specifics', () => {
   it('polls with the x-key header', async () => {
     await new BflVideoProvider().poll(handleFor('r1'), ctx());
     expect(seenAuth).toEqual([KEY]);
+  });
+
+  it.each([
+    'http://api.bfl.ai/v1/get_result?id=r1',
+    'https://api.bfl.ai.example.com/v1/get_result?id=r1',
+    'https://example.com/v1/get_result?id=r1',
+    'https://user:password@api.bfl.ai/v1/get_result?id=r1',
+  ])('requires a trusted polling URL: %s', async pollingUrl => {
+    await expect(new BflVideoProvider().poll(handleFor('r1', pollingUrl), ctx())).rejects.toThrow(
+      'bfl_untrusted_polling_url'
+    );
+    expect(seenAuth).toEqual([]);
+  });
+
+  it('polls the returned regional URL with redirects disabled', async () => {
+    let redirect: RequestRedirect | undefined;
+    server.use(
+      http.get('https://api.eu.bfl.ai/v1/get_result', ({ request: polled }) => {
+        expect(polled.headers.get('x-key')).toBe(KEY);
+        redirect = polled.redirect;
+        return HttpResponse.json({ status: 'Pending' });
+      })
+    );
+    await expect(
+      new BflVideoProvider().poll(handleFor('r1', 'https://api.eu.bfl.ai/v1/get_result?id=r1'), ctx())
+    ).resolves.toEqual({ status: 'running' });
+    expect(redirect).toBe('error');
   });
 
   it('reports running for Pending status', async () => {
@@ -261,6 +314,22 @@ describe('BflVideoProvider specifics', () => {
       status: 'failed',
       retryable: false,
       message: 'bfl_failed',
+    });
+  });
+
+  it('maps No Card Generated to a terminal failure', async () => {
+    expect(await pollWith({ status: 'No Card Generated' })).toMatchObject({
+      status: 'failed',
+      retryable: false,
+      message: 'bfl_no_output',
+    });
+  });
+
+  it('maps Task not found to a terminal failure', async () => {
+    expect(await pollWith({ status: 'Task not found' })).toMatchObject({
+      status: 'failed',
+      retryable: false,
+      message: 'bfl_request_not_found',
     });
   });
 
@@ -336,6 +405,37 @@ describe('BflVideoProvider specifics', () => {
       .catch((e: unknown) => e);
     expect(error).toBeInstanceOf(ProviderOutputUnavailableError);
     expect(error).toMatchObject({ status });
+  });
+
+  it('fetchOutput refuses an HTTPS redirect to HTTP', async () => {
+    server.use(
+      http.get(
+        VIDEO_URL,
+        () =>
+          new HttpResponse(null, {
+            status: 302,
+            headers: { location: 'http://delivery.bfl.ai/clip.mp4' },
+          })
+      )
+    );
+    await expect(
+      new BflVideoProvider().fetchOutput({ kind: 'url', url: VIDEO_URL, requiresAuth: false }, ctx())
+    ).rejects.toThrow('bfl_untrusted_output_url');
+  });
+
+  it('fetchOutput enforces the output byte limit', async () => {
+    server.use(
+      http.get(
+        VIDEO_URL,
+        () =>
+          new HttpResponse(VIDEO_BYTES, {
+            headers: { 'content-length': String(MAX_VIDEO_OUTPUT_BYTES + 1) },
+          })
+      )
+    );
+    await expect(
+      new BflVideoProvider().fetchOutput({ kind: 'url', url: VIDEO_URL, requiresAuth: false }, ctx())
+    ).rejects.toBeInstanceOf(ProviderOutputTooLargeError);
   });
 
   it('never logs the api key', async () => {

@@ -10,32 +10,51 @@
         "path": "/v1/flux-3-video",
         "body": {
           "prompt": "A slow dolly shot of a red lighthouse on a rocky coast at dusk, waves breaking.",
-          "duration_seconds": 5,
           "aspect_ratio": "16:9",
-          "resolution": "720p"
+          "resolution": "hd",
+          "mode": "t2v",
+          "duration": 5,
+          "generate_audio": true
         }
       },
       "response": {
         "status": 200,
-        "headers": { "content-type": "application/json" },
-        "body": { "id": "synthetic-text-to-video", "polling_url": "https://api.bfl.ai/v1/get_result?id=synthetic-text-to-video" }
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "id": "synthetic-text-to-video",
+          "polling_url": "https://api.bfl.ai/v1/get_result?id=synthetic-text-to-video"
+        }
       }
     },
     {
       "name": "poll_first",
-      "request": { "method": "GET", "path": "/v1/get_result?id=synthetic-text-to-video" },
+      "request": {
+        "method": "GET",
+        "path": "/v1/get_result?id=synthetic-text-to-video"
+      },
       "response": {
         "status": 200,
-        "headers": { "content-type": "application/json" },
-        "body": { "status": "Generating" }
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "status": "Generating"
+        }
       }
     },
     {
       "name": "poll_terminal",
-      "request": { "method": "GET", "path": "/v1/get_result?id=synthetic-text-to-video" },
+      "request": {
+        "method": "GET",
+        "path": "/v1/get_result?id=synthetic-text-to-video"
+      },
       "response": {
         "status": 200,
-        "headers": { "content-type": "application/json" },
+        "headers": {
+          "content-type": "application/json"
+        },
         "body": {
           "status": "Ready",
           "result": {

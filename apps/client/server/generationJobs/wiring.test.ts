@@ -216,6 +216,12 @@ describe('provider key selection', () => {
     expect(usableApiKey(selectProviderKey('xai', { xai: 'expired' } as never))).toBeNull();
   });
 
+  it('maps bfl to the BFL key and applies placeholder checks', () => {
+    expect(selectProviderKey('bfl', { bfl: 'b-key' } as never)).toBe('b-key');
+    expect(usableApiKey(selectProviderKey('bfl', { bfl: null } as never))).toBeNull();
+    expect(usableApiKey(selectProviderKey('bfl', { bfl: 'your-api-key' } as never))).toBeNull();
+  });
+
   it('throws for a provider id with no mapping', () => {
     expect(() => selectProviderKey('unmapped' as VideoProviderId, {} as never)).toThrow(/no API key mapping/);
   });
@@ -413,13 +419,13 @@ describe('buildProviders', () => {
     delete process.env.ENABLE_TEST_VIDEO_PROVIDER;
   });
 
-  it('registers Gemini Omni, xAI and Veo unconditionally, Gemini first', () => {
-    expect(buildProviders().map(provider => provider.id)).toEqual(['gemini-omni', 'xai', 'veo']);
+  it('registers Gemini Omni, xAI, Veo and BFL unconditionally, Gemini first', () => {
+    expect(buildProviders().map(provider => provider.id)).toEqual(['gemini-omni', 'xai', 'veo', 'bfl']);
   });
 
   it('adds the test provider only when enabled', () => {
     process.env.ENABLE_TEST_VIDEO_PROVIDER = 'true';
-    expect(buildProviders().map(provider => provider.id)).toEqual(['gemini-omni', 'xai', 'veo', 'test']);
+    expect(buildProviders().map(provider => provider.id)).toEqual(['gemini-omni', 'xai', 'veo', 'bfl', 'test']);
   });
 
   it('builds a registry the catalog-owner check accepts', () => {

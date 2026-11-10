@@ -181,7 +181,7 @@ export const toJobUpdate = (job: IGenerationJobDocument): IGenerationJobUpdatedA
   };
 };
 
-// Gemini, xAI and Veo are registered everywhere; whether a caller can use one depends on a resolvable key
+// Gemini, xAI, Veo and BFL are registered everywhere; whether a caller can use one depends on a resolvable key
 // (hasUsableKey in packages/server-utils/src/videoGenerations/listUsableVideoModels.ts).
 export const buildProviders = (): VideoProvider[] => {
   const providers: VideoProvider[] = [

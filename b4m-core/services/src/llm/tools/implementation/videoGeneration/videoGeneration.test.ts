@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE } from '@bike4mind/common';
+import { MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE, type VideoModelId } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/utils';
 import { videoGenerationTool, isVideoToolConfig, type VideoToolConfig } from './index';
 
@@ -8,12 +8,13 @@ const okJob = { ok: true as const, created: true, job: { id: 'job1' } };
 const build = (
   createJob: VideoToolConfig['createJob'],
   { questId, apiKeyId }: { questId?: string; apiKeyId?: string } = { questId: 'q1' },
-  deliveryNote?: string
+  deliveryNote?: string,
+  usableModels: readonly VideoModelId[] = ['test-video']
 ) => {
   const statusUpdate = vi.fn().mockResolvedValue(undefined);
   const onStart = vi.fn();
   const onFinish = vi.fn();
-  const config: VideoToolConfig = { usableModels: ['test-video'], createJob, deliveryNote };
+  const config: VideoToolConfig = { usableModels, createJob, deliveryNote };
   const logger = { warn: vi.fn() };
   const context = {
     logger,
@@ -41,6 +42,17 @@ describe('video_generation tool', () => {
       user: { id: 'u1', adminRoleWithheld: true },
     });
     expect(statusUpdate).toHaveBeenCalledWith({ generationJobs: [{ id: 'job1', kind: 'video' }] });
+  });
+
+  it.each([false, true])('passes FLUX audio=%s to the job request', async audio => {
+    const createJob = vi.fn().mockResolvedValue(okJob);
+    const { tool } = build(createJob, { questId: 'q1' }, undefined, ['flux-3-video']);
+    await tool.toolFn({ model: 'flux-3-video', prompt: 'a cat', audio });
+    expect(createJob).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        request: expect.objectContaining({ model: 'flux-3-video', audio }),
+      })
+    );
   });
 
   it('attributes the job to the authenticating API key', async () => {

@@ -8,6 +8,7 @@ import {
   type ProviderJobHandle,
   type ProviderOutput,
   type ProviderPollResult,
+  type ResolvedInputs,
   type VideoProvider,
   type VideoProviderContext,
 } from '../types';
@@ -44,9 +45,20 @@ const requestIdOf = (handle: ProviderJobHandle): string => {
   return id;
 };
 
-const pollingUrlOf = (handle: ProviderJobHandle): string | undefined => {
-  const url = handle.data.pollingUrl;
-  return typeof url === 'string' ? url : undefined;
+const pollingUrlOf = (handle: ProviderJobHandle): URL => {
+  const raw = handle.data.pollingUrl;
+  const url = new URL(
+    typeof raw === 'string' ? raw : `${GET_RESULT_URL}?id=${encodeURIComponent(requestIdOf(handle))}`
+  );
+  if (
+    url.protocol !== 'https:' ||
+    !(url.hostname === 'api.bfl.ai' || url.hostname.endsWith('.bfl.ai')) ||
+    url.username ||
+    url.password ||
+    url.port
+  )
+    throw new Error('bfl_untrusted_polling_url');
+  return url;
 };
 
 const failed = (code: string, raw: unknown): ProviderPollResult => ({
@@ -77,6 +89,9 @@ const toPollResult = (body: PollBody, ctx: VideoProviderContext): ProviderPollRe
     return failed('video_unparsed', body);
   }
 
+  if (status === 'Task not found') return failed('request_not_found', body);
+  if (status === 'No Card Generated') return failed('no_output', body);
+
   if (status === 'Error' || status === 'Failed') {
     return failed('failed', body);
   }
@@ -101,14 +116,18 @@ export class BflVideoProvider implements VideoProvider {
 
   async submit(
     request: ValidatedVideoRequest,
-    _inputs: Record<string, never>,
+    _inputs: ResolvedInputs,
     ctx: VideoProviderContext
   ): Promise<ProviderJobHandle> {
+    const resolution = request.resolution === '720p' ? 'hd' : request.resolution === '1080p' ? 'fhd' : undefined;
+    if (!resolution) throw new ProviderSubmitError('bfl_unsupported_resolution', true, undefined, false);
     const body = {
+      mode: 't2v',
       prompt: request.prompt,
-      duration_seconds: request.durationSeconds,
+      duration: request.durationSeconds,
       aspect_ratio: request.aspectRatio,
-      resolution: request.resolution,
+      resolution,
+      generate_audio: request.audio ?? true,
     };
     let response: Response;
     try {
@@ -142,10 +161,11 @@ export class BflVideoProvider implements VideoProvider {
   }
 
   async poll(handle: ProviderJobHandle, ctx: VideoProviderContext): Promise<ProviderPollResult> {
-    const id = requestIdOf(handle);
-    const url = pollingUrlOf(handle) ?? `${GET_RESULT_URL}?id=${encodeURIComponent(id)}`;
+    requestIdOf(handle);
+    const url = pollingUrlOf(handle);
     const response = await fetch(url, {
       headers: { 'x-key': ctx.apiKey },
+      redirect: 'error',
       signal: ctx.signal,
     });
     const raw = await readJson(response);

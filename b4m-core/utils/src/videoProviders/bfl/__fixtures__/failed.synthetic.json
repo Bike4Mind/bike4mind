@@ -10,35 +10,56 @@
         "path": "/v1/flux-3-video",
         "body": {
           "prompt": "A simple test",
-          "duration_seconds": 5,
           "aspect_ratio": "16:9",
-          "resolution": "720p"
+          "resolution": "hd",
+          "mode": "t2v",
+          "duration": 5,
+          "generate_audio": true
         }
       },
       "response": {
         "status": 200,
-        "headers": { "content-type": "application/json" },
-        "body": { "id": "synthetic-failed", "polling_url": "https://api.bfl.ai/v1/get_result?id=synthetic-failed" }
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "id": "synthetic-failed",
+          "polling_url": "https://api.bfl.ai/v1/get_result?id=synthetic-failed"
+        }
       }
     },
     {
       "name": "poll_first",
-      "request": { "method": "GET", "path": "/v1/get_result?id=synthetic-failed" },
+      "request": {
+        "method": "GET",
+        "path": "/v1/get_result?id=synthetic-failed"
+      },
       "response": {
         "status": 200,
-        "headers": { "content-type": "application/json" },
-        "body": { "status": "Pending" }
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "status": "Pending"
+        }
       }
     },
     {
       "name": "poll_terminal",
-      "request": { "method": "GET", "path": "/v1/get_result?id=synthetic-failed" },
+      "request": {
+        "method": "GET",
+        "path": "/v1/get_result?id=synthetic-failed"
+      },
       "response": {
         "status": 200,
-        "headers": { "content-type": "application/json" },
+        "headers": {
+          "content-type": "application/json"
+        },
         "body": {
           "status": "Error",
-          "result": { "error": "Internal rendering error" }
+          "result": {
+            "error": "Internal rendering error"
+          }
         }
       }
     }
