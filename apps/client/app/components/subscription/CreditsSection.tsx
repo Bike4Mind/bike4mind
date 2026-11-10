@@ -9,6 +9,9 @@ import { CREDIT_PACKAGES } from '@client/lib/credits/constants';
 import { CreditPackageId, TransactionType } from '@client/lib/credits/types';
 import { formatCreditAmount, purchaseCreditsAriaLabel } from '@client/app/utils/formatCredits';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
+import { useUser } from '@client/app/contexts/UserContext';
+import { useGetUserOrganizations } from '@client/app/hooks/data/organizations';
+import { canViewOrgUsage, OrganizationTabs } from '@client/app/routes/organizations/orgTabAccess';
 import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import PaymentButton from '../Credits/PaymentButton';
 import { formatPlanPrice, pricePerThousandCredits, sharedPackRate } from './billingFormat';
@@ -65,6 +68,22 @@ export const CreditsSection = ({
   const { selectedAccount } = useSelectedAccount();
   // Organization credits are bought by the org, so packs only show for the personal account.
   const canPurchaseCredits = !selectedAccount || selectedAccount.personal;
+  const { currentUser } = useUser();
+  const { data: organizations } = useGetUserOrganizations(currentUser?.id);
+  // A team account's usage lives on the org page, which only owners and platform admins may see
+  // (orgTabAccess.ts); everyone else, or an org not loaded yet, keeps personal usage.
+  const usageOrg =
+    selectedAccount && !selectedAccount.personal
+      ? organizations?.find(org => org.id === selectedAccount.id)
+      : undefined;
+  const openUsage = () => {
+    onClose();
+    if (usageOrg && canViewOrgUsage(currentUser, usageOrg)) {
+      void navigate({ to: '/organizations/$id', params: { id: usageOrg.id }, search: { tab: OrganizationTabs.Usage } });
+    } else {
+      void navigate({ to: '/profile', search: { tab: 'usage' } });
+    }
+  };
   const historyEntries = transactions
     .filter(isHistoryEntry)
     .sort((a, b) => dayjs(b.createdAt).valueOf() - dayjs(a.createdAt).valueOf());
@@ -248,10 +267,7 @@ export const CreditsSection = ({
               type="button"
               level="body-xs"
               data-testid="credits-modal-see-usage-link"
-              onClick={() => {
-                onClose();
-                void navigate({ to: '/profile', search: { tab: 'usage' } });
-              }}
+              onClick={openUsage}
             >
               {t('credits_modal.see_usage', 'See usage')}
             </Link>
