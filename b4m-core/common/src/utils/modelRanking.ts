@@ -1,4 +1,4 @@
-import type { ModelInfo } from '../models';
+import { ModelBackend, type ModelInfo } from '../models';
 
 // A plain string type, so a catalog-only record whose type this build cannot render still ranks.
 type RankedModel = { type: string; name: string; rank?: number };
@@ -39,4 +39,45 @@ export const provisionalRank = <T extends RankedModel>(model: T, models: T[]): n
   if (section.length > 0) return median(section.map(m => m.rank as number));
 
   return 1;
+};
+
+/** The picker section for models running on the operator's own hardware (self-host). */
+export const SELF_HOSTED_PICKER_GROUP = 'Local / Self-Hosted';
+
+export const isOpenAIModelName = (modelName: string): boolean => {
+  const lowerName = modelName.toLowerCase();
+  return ['gpt', 'o1', 'o3', 'o4'].some(pattern => lowerName.includes(pattern));
+};
+
+/**
+ * The provider section the web picker files a model under, by maker rather than by serving backend, so the
+ * direct and Bedrock copies of a model share one section. Shared by the picker (ModelSelection.tsx) and the
+ * admin model list, which ranks within the same sections.
+ */
+export const pickerProviderGroup = (
+  model: { id: string; name: string; backend: string },
+  isSelfHost: boolean
+): string => {
+  // Self-host: Ollama (text) and the local Stable-Diffusion backend (image) both run on the operator's hardware.
+  // In the hosted product the same Ollama backend is remote, so this applies only to a self-host build.
+  if (isSelfHost && (model.backend === ModelBackend.Ollama || model.backend === ModelBackend.LocalImage)) {
+    return SELF_HOSTED_PICKER_GROUP;
+  }
+
+  const modelName = model.name.toLowerCase();
+  const modelId = model.id.toLowerCase();
+
+  if (isOpenAIModelName(modelName)) return 'OpenAI';
+  if (modelName.includes('claude') || modelId.includes('claude')) return 'Anthropic';
+  if (modelName.includes('gemini') || modelName.includes('bard') || modelId.includes('gemini')) return 'Google';
+  if (modelName.includes('llama') || modelId.includes('llama')) return 'Meta';
+  if (modelName.includes('grok') || modelId.includes('grok')) return 'xAI';
+  if (modelName.includes('flux') || modelId.includes('flux')) return 'Black Forest Labs';
+  // Matches the Bedrock-served ids (moonshot./moonshotai.) too.
+  if (modelName.includes('kimi') || modelId.includes('kimi') || modelId.startsWith('moonshot')) return 'Moonshot';
+  // The Ollama-hosted deepseek-r1:latest is excluded by backend, not by string: it groups as self-hosted or Other.
+  if (model.backend !== ModelBackend.Ollama && (modelName.includes('deepseek') || modelId.includes('deepseek'))) {
+    return 'DeepSeek';
+  }
+  return 'Other';
 };
