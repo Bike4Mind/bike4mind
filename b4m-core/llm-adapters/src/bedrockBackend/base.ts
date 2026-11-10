@@ -68,8 +68,25 @@ const loggedErrors = new WeakSet<Error>();
  * services/src/llm/llmErrorPredicates.ts retries it once then falls back; it must not say "without a
  * terminal event", which isTruncatedStreamError reads as a mid-stream truncation. Any other empty
  * stream is deterministic (the max-tool-calls cap) and must match neither.
+ *
+ * `hiddenReasoningOnly` marks a stream whose only output was a thinking block with no displayed
+ * text: the model was reached, so the misrouted-profile hint does not apply.
  */
-export function bedrockEmptyResponseMessage(model: string, region: string, stalled: boolean): string {
+export function bedrockEmptyResponseMessage(
+  model: string,
+  region: string,
+  stalled: boolean,
+  hiddenReasoningOnly = false
+): string {
+  if (hiddenReasoningOnly) {
+    const what =
+      `model "${model}" in region ${region} streamed only a thinking block with no displayed text, ` +
+      `then no text and no tool call`;
+    return stalled
+      ? `[BaseBedrockBackend] stream timeout - ${what} and no terminal event: an EMPTY response, usually a ` +
+          `Bedrock socket that stalled after the thinking block.`
+      : `[BaseBedrockBackend] ${what}: an EMPTY response.`;
+  }
   const profileHint =
     `If every call on this model is empty, a "global." cross-region inference profile served from a ` +
     `region that does not host it does the same - try the "us." variant, or confirm the model/profile ` +
@@ -246,6 +263,16 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
    */
   protected get signalsStreamTermination(): boolean {
     return false;
+  }
+
+  /**
+   * The text that closes a reasoning block the stream ended inside, at its choice index, or
+   * undefined when none is open. A stream cut mid-block never delivers the event that closes
+   * the marker, so complete() asks for it once the stream loop ends. Adapters that wrap
+   * reasoning across chunks override this.
+   */
+  protected closeOpenReasoning(): { index: number; text: string } | undefined {
+    return undefined;
   }
 
   protected updateClientForModel(model: string): void {
@@ -531,6 +558,8 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         let streamedRoundText = '';
         // @see signalsStreamTermination - only meaningful for adapters that opt in.
         let sawTerminalEvent = false;
+        // A reasoning frame arrived, even one with no displayable text; see bedrockEmptyResponseMessage.
+        let sawReasoning = false;
         const isToolArgument = (choice: IChoice) => Boolean(func[choice.index]?.name) && (choice.toolArguments ?? true);
 
         for await (const streamEvent of response.body) {
@@ -579,11 +608,19 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
 
             // Reasoning arrives on its own chunk, so the tag is frame-wide.
             const channel = chunk?.choices.find(c => c.channel)?.channel;
-            if (channel !== 'reasoning') streamedRoundText += streamedText.join('');
+            if (channel === 'reasoning') sawReasoning = true;
+            else streamedRoundText += streamedText.join('');
 
             // Send streamed text from chunk text data
             await callback(streamedText, { ...buildCompletionInfo(), ...(channel ? { channel } : {}) });
           }
+        }
+        const openReasoning = this.closeOpenReasoning();
+        if (openReasoning) {
+          const closing: string[] = [];
+          closing[openReasoning.index] = openReasoning.text;
+          emittedTextChars += openReasoning.text.length;
+          await callback(closing, { ...buildCompletionInfo(), channel: 'reasoning' });
         }
         const modelDoneAt = Date.now();
 
@@ -599,7 +636,12 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
           !options.abortSignal?.aborted
         ) {
           throw new Error(
-            bedrockEmptyResponseMessage(model, this._options.region, this.signalsStreamTermination && !sawTerminalEvent)
+            bedrockEmptyResponseMessage(
+              model,
+              this._options.region,
+              this.signalsStreamTermination && !sawTerminalEvent,
+              sawReasoning
+            )
           );
         }
 
