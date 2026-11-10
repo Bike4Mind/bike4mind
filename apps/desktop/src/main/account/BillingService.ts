@@ -124,6 +124,7 @@ export class BillingService {
       const response = await context.api.post<unknown>('/api/stripe/start-payment', {
         transactionType: 'package',
         packageId,
+        allowRedirects: false,
       });
       this.assertCurrent(context);
       const payment = z

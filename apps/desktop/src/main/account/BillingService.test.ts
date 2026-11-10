@@ -256,6 +256,7 @@ describe('credit checkout', () => {
     expect(post).toHaveBeenCalledExactlyOnceWith('/api/stripe/start-payment', {
       transactionType: 'package',
       packageId: pack.id,
+      allowRedirects: false,
     });
     expect(openCreditPayment).toHaveBeenCalledWith(
       { clientSecret: 'pi_123_secret_abc', publishableKey: 'pk_test_123', credits: 33333, price: 20 },

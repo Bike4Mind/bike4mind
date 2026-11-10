@@ -61,6 +61,7 @@ export async function openCreditPayment(payment: CreditPayment, isCurrent: () =>
     if (
       req.headers.host !== new URL(origin).host ||
       req.method !== 'GET' ||
+      !URL.canParse(req.url ?? '/', origin) ||
       ![`/${nonce}`, `/${nonce}/return`].includes(new URL(req.url ?? '/', origin).pathname)
     ) {
       res.writeHead(404).end();

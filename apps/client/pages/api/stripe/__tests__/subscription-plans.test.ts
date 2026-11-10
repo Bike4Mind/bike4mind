@@ -3,6 +3,7 @@ import { createMocks } from 'node-mocks-http';
 
 const mocks = vi.hoisted(() => ({
   list: vi.fn(),
+  retrieve: vi.fn(),
   setting: vi.fn(),
   locked: vi.fn(),
   development: vi.fn(),
@@ -31,7 +32,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return { get: (handler: unknown) => handler };
   },
 }));
-vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({ stripe: { prices: { list: mocks.list } } }));
+vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
+  stripe: { prices: { list: mocks.list, retrieve: mocks.retrieve } },
+}));
 vi.mock('@bike4mind/database', () => ({ adminSettingsRepository: { getSettingsValue: mocks.setting } }));
 vi.mock('@bike4mind/common', () => ({ isEnforceCreditsLocked: mocks.locked, MIN_PRICE_PER_CREDIT_USD: 0.0006 }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: mocks.config, isDevelopment: mocks.development }));
@@ -55,6 +58,7 @@ const price = {
 
 async function request(desktop = true) {
   const { req, res } = createMocks({ method: 'GET', query: desktop ? { catalog: 'desktop' } : {} });
+  (req as Record<string, unknown>).logger = { warn: vi.fn() };
   await invoke(req, res);
   return res._getJSONData();
 }
@@ -63,6 +67,10 @@ describe('subscription plan catalog', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.list.mockResolvedValue({ data: [price] });
+    mocks.retrieve.mockImplementation(async id => {
+      if (id !== price.id) throw { code: 'resource_missing' };
+      return price;
+    });
     mocks.setting.mockResolvedValue(true);
     mocks.locked.mockReturnValue(false);
     mocks.development.mockReturnValue(false);
@@ -93,6 +101,15 @@ describe('subscription plan catalog', () => {
     }
   });
 
+  it('retrieves configured plans independently of the first page of unrelated prices', async () => {
+    mocks.list.mockResolvedValue({
+      data: Array.from({ length: 100 }, (_, index) => ({ ...price, id: `price_other_${index}` })),
+      has_more: true,
+    });
+    mocks.retrieve.mockResolvedValue(price);
+    expect((await request()).plans).toEqual([expect.objectContaining({ priceId: 'price_stage' })]);
+  });
+
   it('joins only configured public personal plan metadata to live Stripe prices', async () => {
     expect(await request()).toEqual({
       billingEnabled: true,
@@ -115,8 +132,13 @@ describe('subscription plan catalog', () => {
   it('uses the server-resolved price, independent of any caller-supplied stage', async () => {
     mocks.plans[0].priceId = 'price_other_stage';
     expect(await request()).toMatchObject({ billingEnabled: true, plans: [] });
-    mocks.list.mockResolvedValue({ data: [{ ...price, id: 'price_other_stage' }] });
+    mocks.retrieve.mockResolvedValue({ ...price, id: 'price_other_stage' });
     expect((await request()).plans[0].priceId).toBe('price_other_stage');
+  });
+
+  it('surfaces a failed price read instead of presenting an empty catalog', async () => {
+    mocks.retrieve.mockRejectedValue(new Error('Stripe unavailable'));
+    await expect(request()).rejects.toThrow('Stripe unavailable');
   });
 
   it('returns no plans when price configuration is absent or hidden', async () => {
@@ -138,7 +160,7 @@ describe('subscription plan catalog', () => {
     { recurring: { interval: 'month', interval_count: 2 } },
     { billing_scheme: 'tiered' },
   ])('omits incompatible or unavailable Stripe price %j', async patch => {
-    mocks.list.mockResolvedValue({ data: [{ ...price, ...patch }] });
+    mocks.retrieve.mockResolvedValue({ ...price, ...patch });
     expect((await request()).plans).toEqual([]);
   });
 
@@ -146,6 +168,7 @@ describe('subscription plan catalog', () => {
     mocks.setting.mockResolvedValue(false);
     expect(await request()).toMatchObject({ billingEnabled: false, plans: [] });
     expect(mocks.list).not.toHaveBeenCalled();
+    expect(mocks.retrieve).not.toHaveBeenCalled();
   });
 
   it('honors hosted credit enforcement', async () => {
@@ -160,6 +183,7 @@ describe('subscription plan catalog', () => {
       mocks.config[key] = '';
       expect(await request()).toMatchObject({ billingEnabled: false, plans: [] });
       expect(mocks.list).not.toHaveBeenCalled();
+      expect(mocks.retrieve).not.toHaveBeenCalled();
     }
   );
 
@@ -167,5 +191,6 @@ describe('subscription plan catalog', () => {
     mocks.config.STRIPE_WEBHOOK_SECRET = value;
     expect(await request()).toMatchObject({ billingEnabled: false, plans: [] });
     expect(mocks.list).not.toHaveBeenCalled();
+    expect(mocks.retrieve).not.toHaveBeenCalled();
   });
 });

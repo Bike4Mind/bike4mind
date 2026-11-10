@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { request } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -62,6 +63,17 @@ describe('isolated credit payment window', () => {
       expect((await fetch(new URL('/', window.url))).status).toBe(404);
       expect((await fetch(window.url, { method: 'POST' })).status).toBe(404);
       expect((await fetch(`${window.url}/return?payment_intent=pi_123`)).status).toBe(200);
+      const local = new URL(window.url);
+      const malformedStatus = await new Promise<number | undefined>((resolve, reject) => {
+        const req = request({ hostname: local.hostname, port: local.port, path: 'http://[' }, res => {
+          res.resume();
+          res.on('end', () => resolve(res.statusCode));
+        });
+        req.on('error', reject);
+        req.setTimeout(1000, () => req.destroy(new Error('Malformed request was not answered')));
+        req.end();
+      });
+      expect(malformedStatus).toBe(404);
       const preventDefault = vi.fn();
       window.webContents.emit('will-navigate', { preventDefault }, 'file:///etc/passwd');
       expect(preventDefault).toHaveBeenCalledOnce();
