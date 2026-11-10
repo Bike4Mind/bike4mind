@@ -13,22 +13,9 @@ const settings = (values: Record<string, unknown>) =>
   }) as unknown as Parameters<typeof newSignupGrant>[0];
 
 describe('signup grant configuration', () => {
-  it('locks nothing and pays an invite whole when the drip cap is 0', async () => {
+  it('locks nothing when the drip cap is 0', async () => {
     const offEnv = { signupGrantInitialCredits: '75', signupGrantDripCap: '0' };
     expect(await newSignupGrant(settings(offEnv))).toMatchObject({ signupCredits: 75, unlockCredits: 0 });
-    expect(await newSignupGrant(settings(offEnv), 60)).toMatchObject({ signupCredits: 60, unlockCredits: 0 });
-  });
-
-  it('pays an invite worth more than the initial credits whole under a stored drip cap of 0', async () => {
-    const offEnv = { signupGrantInitialCredits: '75', signupGrantDailyCredits: '0', signupGrantDripCap: '0' };
-    expect(await newSignupGrant(settings(offEnv), 200)).toMatchObject({ signupCredits: 200, unlockCredits: 0 });
-  });
-
-  it.each([
-    ['a stored drip cap', { signupGrantInitialCredits: '75', signupGrantDripCap: '9000' }],
-    ['no cap key', { signupGrantInitialCredits: '75' }],
-  ])('still splits an invite into tranche plus locked remainder under %s', async (_label, values) => {
-    expect(await newSignupGrant(settings(values), 200)).toMatchObject({ signupCredits: 75, unlockCredits: 125 });
   });
 
   it('honors an explicit zero initial grant', async () => {

@@ -212,24 +212,15 @@ export async function resolveSignupGrantSettings(adminSettings: ScheduleSettings
 
 /**
  * Every signup enrolls a staged grant from the signup settings; a drip cap of 0 (seeded where staging used to
- * be off) locks nothing. Production signups, referral invitees included, never pass `totalCredits`.
- * `totalCredits` overrides the enrolled entitlement (tranche first, remainder locked) and exists for tests that
- * need a specific pool; the drip and verification unlocks still grow the pool to the live drip cap
- * (signupGrantUnlockCredits, the drip branch in stagedSignupGrant.ts). signupGrantInviteBonusCredits is the
- * on-top invite bonus (payInviteBonus).
+ * be off) locks nothing. Referral invitees take the same grant. signupGrantInviteBonusCredits is the on-top
+ * invite bonus (payInviteBonus).
  */
-export async function newSignupGrant(adminSettings: ScheduleSettingsReader, totalCredits?: number) {
+export async function newSignupGrant(adminSettings: ScheduleSettingsReader) {
   const schedule = await resolveSignupGrantSchedule(adminSettings);
-  const signupCredits =
-    totalCredits === undefined
-      ? schedule.initialCredits
-      : schedule.paysFlat
-        ? totalCredits
-        : Math.min(schedule.initialCredits, totalCredits);
   return {
     stage: 'pending_email',
-    signupCredits,
-    unlockCredits: totalCredits === undefined ? schedule.unlockCredits : totalCredits - signupCredits,
+    signupCredits: schedule.initialCredits,
+    unlockCredits: schedule.unlockCredits,
     creditsReleased: 0,
     nextCondition: 'email_verification',
   } satisfies SignupGrant;
