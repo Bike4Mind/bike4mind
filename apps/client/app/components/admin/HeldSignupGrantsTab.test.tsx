@@ -59,7 +59,7 @@ describe('HeldSignupGrantsTab', () => {
     invalidate.mockClear();
     fireEvent.click(await screen.findByTestId('held-signup-grants-revoke-btn'));
     expect(await screen.findByTestId('held-signup-grants-revoke-dialog')).toHaveTextContent(
-      'permanently debits the credits granted by this release'
+      'returns the accounts to the held list'
     );
     expect(postMock).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByTestId('held-signup-grants-revoke-confirm-btn'));
@@ -70,6 +70,24 @@ describe('HeldSignupGrantsTab', () => {
     expect(screen.getByTestId('held-signup-grants-revoke-btn')).toBeDisabled();
     expect(getMock).toHaveBeenCalledTimes(3);
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'signup-grants'] });
+  });
+
+  it('says when an account was left alone because it was granted more since the release', async () => {
+    postMock
+      .mockResolvedValueOnce({
+        data: { batchId: 'batch-1', results: [{ userId: rows[1].id, outcome: 'released', credits: 12 }] },
+      })
+      .mockResolvedValueOnce({
+        data: { batchId: 'batch-1', results: [{ userId: rows[1].id, outcome: 'state_changed', credits: 12 }] },
+      });
+    renderTab();
+    fireEvent.click(await screen.findByTestId(`held-signup-grants-select-${rows[1].id}`));
+    fireEvent.click(screen.getByTestId('held-signup-grants-release-btn'));
+    fireEvent.click(await screen.findByTestId('held-signup-grants-revoke-btn'));
+    fireEvent.click(await screen.findByTestId('held-signup-grants-revoke-confirm-btn'));
+    expect(await screen.findByTestId('held-signup-grants-revoke-result')).toHaveTextContent(
+      'Revoked 0 of 1 grants. Accounts that received more credits since the release were left as they are.'
+    );
   });
 
   it('allows another revoke when the previous one left a retryable entry', async () => {
