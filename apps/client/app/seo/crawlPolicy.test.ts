@@ -44,7 +44,6 @@ const EXPECTED_CORE_DISALLOWED = [
   '/organizations',
   '/profile',
   '/projects',
-  '/quests',
   '/skills',
   '/status',
   '/studio',

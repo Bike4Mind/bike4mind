@@ -1086,7 +1086,6 @@ const artifactsDemoRoute = createRoute({
   ),
 });
 
-// Quests route
 // The standalone Data Lakes page was retired in #1943 - its capabilities live in the in-chat
 // surface (DataLakeChatSurface). This route survives ONLY to keep already-shared `?article=`
 // deep links working: it turns Data Lake mode on and forwards into a fresh chat, which opens the
