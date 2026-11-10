@@ -216,14 +216,19 @@ export async function getHealthSummary(logger: Logger): Promise<HealthSummary[]>
  * Latency is published as Milliseconds so CloudWatch can compute P50/P95/P99 natively.
  * Latency and Success are also published without a dimension: CloudWatch does not aggregate
  * across dimensions, and the high-latency and all-down alarms in infra/alarms.ts read that series.
+ * A probe with no response (timeout, network error) publishes no Latency: its elapsed time is the
+ * abort deadline, not a measurement, and the per-integration Failure alarm already reports it.
  */
 async function publishMetrics(checks: IIntegrationHealthCheckDocument[]): Promise<void> {
   const metrics = checks.flatMap(check => {
     const dimensions = { Integration: check.integration };
-    const latency = { name: 'Latency', value: check.latencyMs, unit: StandardUnit.Milliseconds };
     const success = { name: 'Success', value: check.status === 'healthy' ? 1 : 0, unit: StandardUnit.Count };
     const failure = { name: 'Failure', value: check.status === 'unhealthy' ? 1 : 0, unit: StandardUnit.Count };
-    return [{ ...latency, dimensions }, { ...success, dimensions }, { ...failure, dimensions }, latency, success];
+    const counts = [{ ...success, dimensions }, { ...failure, dimensions }, success];
+    if (check.statusCode === null) return counts;
+
+    const latency = { name: 'Latency', value: check.latencyMs, unit: StandardUnit.Milliseconds };
+    return [...counts, { ...latency, dimensions }, latency];
   });
 
   await emitMetrics(INTEGRATION_HEALTH_NAMESPACE, metrics);

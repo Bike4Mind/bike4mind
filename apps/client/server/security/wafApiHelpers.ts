@@ -6,6 +6,8 @@
  */
 
 import type { Request } from 'express';
+import { isFullAdmin } from '@bike4mind/common';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { type WafRangeInput, type WafTrafficRange } from '@bike4mind/server-utils/security/wafSharedHelpers';
 
 /** Maximum allowed span for a custom date range (30 days). */
@@ -56,4 +58,25 @@ export function parseRangeParam(req: Request): { range: WafRangeInput | null; er
   }
 
   return { range: isWafTrafficRange(rawRange) ? rawRange : '24h' };
+}
+
+// The dashboard fetches each WAF view once per range change or Refresh (no polling), so 20 a minute
+// is headroom for a reader while bounding the CloudWatch spend a delegated reader can start:
+// every new custom range misses the per-instance cache in wafQueryCache.ts.
+export const WAF_QUERY_RATE_LIMIT = 20;
+
+/** Per-user limit for a billed WAF read, full admins exempt; chain it after adminApi so it keys on the user. */
+export const wafQueryRateLimit = (bucket: string) =>
+  rateLimit({
+    limit: req => (isFullAdmin(req.user) ? Infinity : WAF_QUERY_RATE_LIMIT),
+    windowMs: 60 * 1000,
+    bucket,
+  });
+
+/**
+ * Debug skips the query cache and returns internal metadata, so it stays off in production and is
+ * limited to full admins elsewhere.
+ */
+export function isWafDebugRequest(req: Request, stage: string): boolean {
+  return stage !== 'production' && isFullAdmin(req.user) && req.query.debug === 'true';
 }

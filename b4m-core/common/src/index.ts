@@ -2,6 +2,8 @@ export * from './errors';
 export * from './adminUserNotes';
 export * from './signupGrant';
 export * from './apiErrorCodes';
+export * from './accountSuspensionCategories';
+export * from './accountSuspension';
 export * from './groupTypes';
 export * from './importHistoryFailure';
 export * from './insufficientCredits';

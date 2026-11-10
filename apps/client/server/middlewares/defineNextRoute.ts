@@ -1,4 +1,5 @@
 import { baseApi } from './baseApi';
+import { checkClientVersion } from '@bike4mind/server-utils/middlewares/clientVersionGate';
 import {
   BadRequestError,
   deprecationHeaders,
@@ -138,7 +139,14 @@ export function nextRouteForContract<C extends EndpointContract>(
     });
   }
 
-  // Ahead of validation (behind only the deprecation headers, which reject nothing):
+  // A declared client build below its configured minimum gets a 426 (CONVENTIONS.md section 9)
+  // before it is rate limited or validated: it cannot fix either until it upgrades.
+  prelude.push(async (req, _res, next) => {
+    const upgradeRequired = await checkClientVersion(req.headers, req.logger);
+    next(upgradeRequired);
+  });
+
+  // Ahead of validation (behind only the deprecation headers and the client-version gate):
   // a malformed body still counts against the limiter (see the function-doc note on ordering).
   if (rateLimit) {
     prelude.push(rateLimit as unknown as Handler);

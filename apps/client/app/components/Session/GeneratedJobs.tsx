@@ -1,10 +1,10 @@
 import { Stack } from '@mui/joy';
 import type { FC } from 'react';
-import type { GenerationJobKind, GenerationJobRef } from '@bike4mind/common';
+import type { GenerationJobRef, QuestGenerationJobKind } from '@bike4mind/common';
 import VideoJobCard from '../VideoStudio/VideoJobCard';
 import MusicJobCard from './MusicJobCard';
 
-const JOB_CARDS: Record<GenerationJobKind, FC<{ jobId: string }>> = {
+const JOB_CARDS: Record<QuestGenerationJobKind, FC<{ jobId: string }>> = {
   video: VideoJobCard,
   music: MusicJobCard,
 };

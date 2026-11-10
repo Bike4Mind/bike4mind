@@ -1,5 +1,6 @@
 import {
   CHAT_MESSAGE_WITHHELD_FIELDS,
+  ORGANIZATION_MEMBER_CREDIT_FIELDS,
   ORGANIZATION_OWNER_ONLY_FIELDS,
   ORGANIZATION_SECRET_FIELDS,
   OWNER_ONLY_PROMPT_META_PROJECTION_PATHS,
@@ -29,11 +30,9 @@ import {
  *
  * organizations: the subscription streams raw org documents, so it has to reproduce what
  * `toSafeOrganization` applies on every REST path - it reads the same two field lists so the
- * transports cannot drift. `stripeCustomerId` is dropped for everyone. `billingContact` is kept
- * only for a platform admin, NOT for an org owner as the REST serializer does: a Mongo projection
- * is per-query, not per-document, so an owner-keyed keep would also hand over the billing contact
- * of every co-member org the same subscription happens to match. An owner's own billing contact
- * still reaches them through the access-gated REST GET.
+ * transports cannot drift. A Mongo projection is per-query, not per-document: billingContact
+ * is kept only for a platform admin; member credit details are also kept for owners/managers
+ * when the query is pinned to their verified org. Broader subscriptions exclude both.
  *
  * invites: the subscription matches both invites addressed to the caller and every invite on a
  * project the caller may share, so a raw document carries co-recipients' addresses and addresses
@@ -56,8 +55,10 @@ export type FieldLimitOptions = {
   inviteCollectionName: string;
   /** The subscribed session belongs to the caller (see the quests note above). */
   isQuestOwner?: boolean;
-  /** Caller is a platform admin, the only viewer a per-query projection can safely privilege. */
+  /** Caller is a platform admin. */
   isPlatformAdmin?: boolean;
+  /** The query is pinned to a verified org owned or managed by the caller. */
+  isPrivilegedOrgSubscriber?: boolean;
 };
 
 export function resolveFieldLimits(
@@ -68,6 +69,7 @@ export function resolveFieldLimits(
     inviteCollectionName,
     isQuestOwner = false,
     isPlatformAdmin = false,
+    isPrivilegedOrgSubscriber = false,
   }: FieldLimitOptions
 ): Record<string, boolean> | undefined {
   if (collectionName === 'users') {
@@ -95,7 +97,13 @@ export function resolveFieldLimits(
     return Object.fromEntries(excluded.map(path => [path, false]));
   }
   if (collectionName === organizationCollectionName) {
-    const excluded = [...ORGANIZATION_SECRET_FIELDS, ...(isPlatformAdmin ? [] : ORGANIZATION_OWNER_ONLY_FIELDS)];
+    const excluded = [
+      ...ORGANIZATION_SECRET_FIELDS,
+      ...(isPlatformAdmin ? [] : ORGANIZATION_OWNER_ONLY_FIELDS),
+      // A per-query projection cannot keep one row, so non-privileged subscribers lose the credit
+      // fields on every row (the budget notice reads its own row over REST).
+      ...(isPlatformAdmin || isPrivilegedOrgSubscriber ? [] : ORGANIZATION_MEMBER_CREDIT_FIELDS),
+    ];
     return Object.fromEntries(excluded.map(field => [field, false]));
   }
   if (collectionName === inviteCollectionName) {
@@ -120,8 +128,15 @@ export function findWithheldFilterPaths(filter: unknown, fieldLimits: Record<str
     .map(([path]) => path);
   if (!withheld.length) return [];
 
-  const touches = (path: string) =>
-    withheld.some(field => field === path || field.startsWith(`${path}.`) || path.startsWith(`${field}.`));
+  const normalize = (path: string) =>
+    path
+      .split('.')
+      .filter(segment => !/^\d+$/.test(segment))
+      .join('.');
+  const touches = (key: string) => {
+    const path = normalize(key);
+    return withheld.some(field => field === path || field.startsWith(`${path}.`) || path.startsWith(`${field}.`));
+  };
   const found: string[] = [];
   const walk = (node: unknown) => {
     if (Array.isArray(node)) {

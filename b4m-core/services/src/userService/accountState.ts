@@ -9,6 +9,8 @@ export type AccountBlockReason = 'banned' | 'disputePending' | 'suspended';
  */
 export interface AccountStateFields {
   isBanned?: boolean | null;
+  /** Read only for the refusal's wording (accountSuspendedError), never for whether the account is blocked. */
+  suspensionReasonCategory?: string | null;
   disputePending?: boolean | null;
   moderation?: { status?: UserModerationStatus | null } | null;
 }

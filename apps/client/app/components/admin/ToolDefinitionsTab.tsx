@@ -42,6 +42,7 @@ import {
 } from '@client/app/hooks/data/toolDefinitions';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
+import { AdminPermissionAction } from './shared/MissingPermission';
 
 const PAGE_SIZE = 50;
 
@@ -309,31 +310,46 @@ const ToolDefinitionsTab: React.FC = () => {
                           <VisibilityIcon />
                         </IconButton>
                       </Tooltip>
-                      <Tooltip title="Edit">
-                        <IconButton size="sm" variant="plain" color="primary" onClick={() => setEditingTool(tool)}>
-                          <EditIcon />
-                        </IconButton>
-                      </Tooltip>
+                      <AdminPermissionAction requirement="settings:manage">
+                        {disabled => (
+                          <Tooltip title="Edit">
+                            <IconButton
+                              size="sm"
+                              variant="plain"
+                              color="primary"
+                              disabled={disabled}
+                              onClick={() => setEditingTool(tool)}
+                              data-testid={`tool-definitions-edit-btn-${tool.toolId}`}
+                            >
+                              <EditIcon />
+                            </IconButton>
+                          </Tooltip>
+                        )}
+                      </AdminPermissionAction>
                       {tool.hasOverride && (
-                        <Tooltip title="Revert to Code Defaults">
-                          <IconButton
-                            size="sm"
-                            variant="plain"
-                            color="warning"
-                            onClick={() => {
-                              if (
-                                window.confirm(
-                                  `Revert "${tool.toolName}" to code defaults? This will delete the database override.`
-                                )
-                              ) {
-                                deleteTool.mutate(tool.toolId);
-                              }
-                            }}
-                            disabled={deleteTool.isPending}
-                          >
-                            <RestoreIcon />
-                          </IconButton>
-                        </Tooltip>
+                        <AdminPermissionAction requirement="settings:manage">
+                          {disabled => (
+                            <Tooltip title="Revert to Code Defaults">
+                              <IconButton
+                                size="sm"
+                                variant="plain"
+                                color="warning"
+                                onClick={() => {
+                                  if (
+                                    window.confirm(
+                                      `Revert "${tool.toolName}" to code defaults? This will delete the database override.`
+                                    )
+                                  ) {
+                                    deleteTool.mutate(tool.toolId);
+                                  }
+                                }}
+                                disabled={disabled || deleteTool.isPending}
+                              >
+                                <RestoreIcon />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                        </AdminPermissionAction>
                       )}
                       {tool.enabled ? (
                         <CheckCircleIcon color="success" fontSize="small" />
@@ -452,31 +468,46 @@ const ToolDefinitionsTab: React.FC = () => {
                             <VisibilityIcon />
                           </IconButton>
                         </Tooltip>
-                        <Tooltip title="Edit">
-                          <IconButton size="sm" variant="plain" color="primary" onClick={() => setEditingTool(tool)}>
-                            <EditIcon />
-                          </IconButton>
-                        </Tooltip>
+                        <AdminPermissionAction requirement="settings:manage">
+                          {disabled => (
+                            <Tooltip title="Edit">
+                              <IconButton
+                                size="sm"
+                                variant="plain"
+                                color="primary"
+                                disabled={disabled}
+                                onClick={() => setEditingTool(tool)}
+                                data-testid={`tool-definitions-edit-btn-${tool.toolId}`}
+                              >
+                                <EditIcon />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                        </AdminPermissionAction>
                         {tool.hasOverride && (
-                          <Tooltip title="Revert to Code Defaults">
-                            <IconButton
-                              size="sm"
-                              variant="plain"
-                              color="warning"
-                              onClick={() => {
-                                if (
-                                  window.confirm(
-                                    `Revert "${tool.toolName}" to code defaults? This will delete the database override.`
-                                  )
-                                ) {
-                                  deleteTool.mutate(tool.toolId);
-                                }
-                              }}
-                              disabled={deleteTool.isPending}
-                            >
-                              <RestoreIcon />
-                            </IconButton>
-                          </Tooltip>
+                          <AdminPermissionAction requirement="settings:manage">
+                            {disabled => (
+                              <Tooltip title="Revert to Code Defaults">
+                                <IconButton
+                                  size="sm"
+                                  variant="plain"
+                                  color="warning"
+                                  onClick={() => {
+                                    if (
+                                      window.confirm(
+                                        `Revert "${tool.toolName}" to code defaults? This will delete the database override.`
+                                      )
+                                    ) {
+                                      deleteTool.mutate(tool.toolId);
+                                    }
+                                  }}
+                                  disabled={disabled || deleteTool.isPending}
+                                >
+                                  <RestoreIcon />
+                                </IconButton>
+                              </Tooltip>
+                            )}
+                          </AdminPermissionAction>
                         )}
                       </Stack>
                     </td>

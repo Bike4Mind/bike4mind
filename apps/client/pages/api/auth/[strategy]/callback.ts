@@ -3,7 +3,7 @@
 // POST /api/auth/apple/callback
 //   - Apple's form_post return; bounces to the GET form (see below)
 
-import { AuthStrategy } from '@bike4mind/common';
+import { AuthStrategy, toSuspensionReasonCategory } from '@bike4mind/common';
 import { authFailLogRepository } from '@bike4mind/database';
 import type { OAuthUser } from '@server/utils/auth/verifyCallback';
 import { issueBrowserSession } from '@server/auth/issueSession';
@@ -199,7 +199,9 @@ const handler = baseApi({ auth: false })
           } catch (logErr) {
             console.error('Failed to write AuthFailLog (oauth banned):', logErr);
           }
-          return res.redirect('/login?error=account_suspended');
+          // The category, never the detection signal, so the login page can name the rule.
+          const reason = toSuspensionReasonCategory(user.suspensionReasonCategory);
+          return res.redirect(`/login?error=account_suspended&reason=${reason}`);
         }
         const blockedCode = blockedSignInErrorCode(user);
         if (blockedCode) {

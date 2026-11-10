@@ -9,9 +9,26 @@ interface FeedbackRowLinksProps {
   feedbackItem: Pick<IExtendedFeedbackDocument, '_id' | 'sessionId' | 'questId'>;
 }
 
+export const copyFeedbackRecordLink = (feedbackId: string) =>
+  copyTextWithToast(
+    toAbsoluteUrl(window.location.origin, adminFeedbackRecordPath(feedbackId)),
+    'Link to this report copied'
+  );
+
 /**
- * The two deep links a triaging admin needs on a feedback row: a shareable link back to this
- * record, and a jump to the conversation turn the report is about.
+ * A product-level report has no session and a session-level one has no turn, so the target
+ * degrades from turn to session to absent rather than building a link to neither.
+ */
+export const feedbackConversationPath = ({
+  sessionId,
+  questId,
+}: Pick<IExtendedFeedbackDocument, 'sessionId' | 'questId'>): string | null =>
+  sessionId ? (questId ? sessionTurnPath(sessionId, questId) : sessionPath(sessionId)) : null;
+
+/**
+ * The two deep links a triaging admin needs on a feedback report: a shareable link back to this
+ * record, and a jump to the conversation turn the report is about. The focused card shows them as
+ * buttons; the list's row menu offers the same two through the helpers above.
  *
  * Both are built from the shared path builders in common/utils/deepLinks rather than composed
  * here, because the same scheme is emitted server-side into Slack and email notifications - one
@@ -22,17 +39,9 @@ interface FeedbackRowLinksProps {
  * also makes the link middle-clickable, which is how anyone reading a list of reports uses it.
  */
 const FeedbackRowLinks = ({ feedbackItem }: FeedbackRowLinksProps) => {
-  const { _id, sessionId, questId } = feedbackItem;
-
-  const copyRecordLink = () =>
-    copyTextWithToast(
-      toAbsoluteUrl(window.location.origin, adminFeedbackRecordPath(_id)),
-      'Link to this report copied'
-    );
-
-  // A product-level report has no session and a session-level one has no turn, so the target
-  // degrades from turn to session to absent rather than building a link to neither.
-  const conversationPath = sessionId ? (questId ? sessionTurnPath(sessionId, questId) : sessionPath(sessionId)) : null;
+  const { _id, questId } = feedbackItem;
+  const copyRecordLink = () => copyFeedbackRecordLink(_id);
+  const conversationPath = feedbackConversationPath(feedbackItem);
 
   return (
     <Stack direction="row" spacing={0.5} alignItems="center">

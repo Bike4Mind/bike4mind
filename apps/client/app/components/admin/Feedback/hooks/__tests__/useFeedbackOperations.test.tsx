@@ -1,18 +1,22 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import React from 'react';
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { FeedbackStatus } from '@bike4mind/common';
-import type { FeedbackListParams } from '../../types';
+import { FeedbackStatus, FeedbackType, type PromptMeta } from '@bike4mind/common';
+import type { FeedbackListParams, IExtendedFeedbackDocument } from '../../types';
 
-const mocks = vi.hoisted(() => ({ getFeedbackFromServer: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  getFeedbackFromServer: vi.fn(),
+  updateFeedbackOnServer: vi.fn(),
+  toastSuccess: vi.fn(),
+}));
 
 vi.mock('@client/app/utils/feedbackAPICalls', () => ({
   getFeedbackFromServer: mocks.getFeedbackFromServer,
   deleteFeedbackFromServer: vi.fn(),
-  updateFeedbackOnServer: vi.fn(),
+  updateFeedbackOnServer: mocks.updateFeedbackOnServer,
 }));
-vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('sonner', () => ({ toast: { success: mocks.toastSuccess, error: vi.fn() } }));
 
 import { useFeedbackOperations } from '../useFeedbackOperations';
 
@@ -67,5 +71,64 @@ describe('useFeedbackOperations totalSettled', () => {
     const { result } = renderOperations({ sort: 'desc', page: 3, limit: 20 });
 
     expect(result.current.totalSettled).toBe(true);
+  });
+});
+
+describe('useFeedbackOperations isError', () => {
+  beforeEach(() => {
+    mocks.getFeedbackFromServer.mockReset();
+  });
+
+  it('reports a failed list request', async () => {
+    mocks.getFeedbackFromServer.mockImplementation((params: FeedbackListParams) =>
+      params.includeOrganizations
+        ? Promise.resolve({ items: [], total: 0, organizations: [] })
+        : Promise.reject(new Error('list failed'))
+    );
+
+    const { result } = renderOperations(listParams(1));
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+  });
+
+  it('stays false with no status checked, since no list request is made', async () => {
+    mocks.getFeedbackFromServer.mockRejectedValue(new Error('list failed'));
+
+    const { result } = renderOperations({ sort: 'desc', page: 1, limit: 25 });
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.isError).toBe(false);
+  });
+});
+
+describe('useFeedbackOperations handleStatusChange', () => {
+  it('names the new status by its label in the toast', async () => {
+    mocks.getFeedbackFromServer.mockResolvedValue({ items: [], total: 0, organizations: [] });
+    mocks.updateFeedbackOnServer.mockResolvedValue({ ok: true });
+    const item: IExtendedFeedbackDocument = {
+      id: 'fb-1',
+      _id: 'fb-1',
+      userId: 'user-1',
+      status: FeedbackStatus.New,
+      username: 'reporter',
+      userEmail: 'reporter@example.com',
+      customerService: '',
+      organization: 'Unknown',
+      type: FeedbackType.FEEDBACK,
+      promptMeta: {} as unknown as PromptMeta,
+      subject: 'product',
+      contentStored: true,
+      content: 'Short report',
+      createdAt: new Date('2024-01-01T00:00:00.000Z'),
+      updatedAt: new Date('2024-01-01T00:00:00.000Z'),
+    };
+
+    const { result } = renderOperations(listParams(1));
+    await act(() => result.current.handleStatusChange(item, FeedbackStatus.InProgress));
+
+    expect(mocks.toastSuccess).toHaveBeenCalledWith(
+      '"Short report" feedback from reporter updated to: In progress',
+      expect.anything()
+    );
   });
 });

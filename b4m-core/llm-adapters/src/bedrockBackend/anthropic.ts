@@ -701,6 +701,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         supportsImageVariation: false,
         logoFile: 'Anthropic_logo.png',
         rank: 1,
+        trainingCutoff: '2026-06-01',
         description:
           "Anthropic's Claude 5.5 Sonnet model via AWS Bedrock, with adaptive extended thinking and a 1M-token context window.",
       },

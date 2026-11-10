@@ -12,6 +12,11 @@ import { api } from '@client/app/contexts/ApiContext';
 const ENDPOINT = '/api/admin/campaign-watches';
 const QUERY_KEY = ['admin', 'campaign-watches'];
 
+// Mirrors the server: every campaign-watch route requires a full administrator (see
+// pages/api/admin/campaign-watches), because the detail returns member credits and ban state.
+export const canUseCampaignWatches = (user: { isAdmin?: boolean } | null | undefined): boolean =>
+  user?.isAdmin === true;
+
 export const watchErrorMessage = (error: unknown): string => {
   if (isAxiosError<{ error?: unknown }>(error)) {
     const message = error.response?.data?.error;

@@ -220,6 +220,16 @@
         "default": "./dist/embeddingProviders/index.cjs"
       }
     },
+    "./imageProviders": {
+      "import": {
+        "types": "./dist/imageProviders/index.d.mts",
+        "default": "./dist/imageProviders/index.mjs"
+      },
+      "require": {
+        "types": "./dist/imageProviders/index.d.cts",
+        "default": "./dist/imageProviders/index.cjs"
+      }
+    },
     "./musicProviders": {
       "import": {
         "types": "./dist/musicProviders/index.d.mts",

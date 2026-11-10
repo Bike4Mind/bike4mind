@@ -282,6 +282,7 @@ export const SkillSchema = new Schema<ISkill, ISkillModel, ISkillMethods>(
     argumentHint: { type: String, maxlength: 200 },
     allowedTools: { type: [String] },
     claudeCodeAllowedTools: { type: [String], default: undefined },
+    claudeCodeModel: { type: String, maxlength: 64 },
     disableModelInvocation: { type: Boolean, default: false },
     // Bounds live in checkSkillFiles (@bike4mind/common utils/skillFiles.ts), applied by every writer.
     files: {

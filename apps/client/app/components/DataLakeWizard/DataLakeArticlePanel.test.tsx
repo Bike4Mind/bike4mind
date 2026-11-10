@@ -3,7 +3,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { CHUNK_STALL_NOTICES, NO_EXTRACTABLE_TEXT_NOTICE, type IFabFileDocument } from '@bike4mind/common';
+import {
+  CHUNK_STALL_NOTICES,
+  EXTRACTION_REFUSAL_NOTICES,
+  NO_EXTRACTABLE_TEXT_NOTICE,
+  type IFabFileDocument,
+} from '@bike4mind/common';
 import DataLakeArticlePanel from './DataLakeArticlePanel';
 
 const { removeFileMutate, reprocessMutate, reprocessLakeId, currentUserId, citedAnchor } = vi.hoisted(() => ({
@@ -109,6 +114,16 @@ describe('DataLakeArticlePanel pipeline notice', () => {
 
     expect(screen.getByText(NO_EXTRACTABLE_TEXT_NOTICE, { exact: false })).toBeTruthy();
   });
+
+  it.each(['decompressedSizeExceeded', 'unopenableContainer'] as const)(
+    'renders the refusal notice instead of the zero-chunk notice (%s)',
+    reason => {
+      renderPanel(file({ noExtractableTextAt: new Date('2026-08-01T00:00:00Z'), extractionRefusalReason: reason }));
+
+      expect(screen.getByText(EXTRACTION_REFUSAL_NOTICES[reason], { exact: false })).toBeTruthy();
+      expect(screen.queryByText(NO_EXTRACTABLE_TEXT_NOTICE, { exact: false })).toBeNull();
+    }
+  );
 
   it('renders the owner note alone when the pipeline has nothing to say', () => {
     renderPanel(file({ notes: 'Ask legal before sharing' }));

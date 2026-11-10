@@ -2,7 +2,7 @@
 
 One set of rules for every admin page: users, organizations, credits, API keys, security, settings and audit. If two admin pages solve the same problem differently, one of them is wrong.
 
-This guide is the target. Pages that predate it are being moved onto it tab by tab (see [Rollout](#8-rollout)); new admin UI follows it from day one. Every value below is meant to be implementable as written: if a rule leaves you guessing, fix the rule in the same PR.
+This guide is the target. Pages that predate it are being moved onto it tab by tab (see [Rollout](#9-rollout)); new admin UI follows it from day one. Every value below is meant to be implementable as written: if a rule leaves you guessing, fix the rule in the same PR.
 
 ## 1. Principles
 
@@ -125,9 +125,10 @@ The sidebar is the frame of every admin page, so it sets the tone. Calm, scannab
 - **Sections.** A small number of groups (Overview, People, Money, Trust and safety, AI, Platform, Settings) with a 12 / 500 `inkMuted` label in sentence case, 20 px above each label. Labels are static text, not accordions; there are no section icons, no section colors and no dividers between sections.
 - **Items.** 36 px tall, 8 px radius, 10 px horizontal padding, 16 px stroke icon (2 px stroke, `inkMuted`) then the label in 14 / 500 `inkSecondary`. One line only: labels are short ("Credits", not "Credit Analytics"), sentence case, and truncate with a tooltip rather than wrap. An item and its page title name the same thing. Hover: `hover` fill and `ink` text.
 - **Active item.** `surface` fill, `ink` text and icon, and a 1 px `border` ring. Exactly one active item; on a detail page the item of its list is active (Users on a user profile).
-- **Long lists.** A section with more than 7 items shows the 5 most used and a "More" row that expands in place. The sidebar scrolls on its own, and every admin scroll area uses a thin overlay scrollbar that shows on hover or focus; the brand row and search stay pinned.
+- **Badges.** A page whose items wait for an admin to act (pending, held, flagged, unreviewed or failed, with an approve, release, resolve, replay or dismiss action on the page) shows how many on its sidebar item; nothing else gets one. A log, a dashboard, a config editor or a population that is never meant to reach zero is not a queue. One look for every badge: a 20 px neutral pill (`admin.status.neutral` background and foreground, 11 / 600, tabular figures), never a status color, since a waiting queue is work, not an alarm. It hides at zero, and also when the count is unknown (failed, or the admin may not act on that queue). Counts stop at 100 and read "99+". The one other marker is the Subscriptions dot (new since your last visit, not work waiting): an 8 px dot in the same neutral tone. On the collapsed rail a section holding work shows a 6 px neutral dot on its icon; its menu shows the counts. Every count comes from the one batched `GET /api/admin/action-counts` request (`server/admin/actionCounts.ts`): a new queue adds a key to `adminActionCounts.ts`, a capped `countDocuments` on an indexed filter (new index, new `ensure-*` migration), gated by the permission that acts on the queue, and a `badge` on its item in `adminSidebarConfig.tsx`. Badges refresh on the 60 s poll and whenever the admin switches sidebar items; to drop a badge the moment its action lands, invalidate `adminActionCountsQueryKey` after that action (the audit, waitlist and feedback queues do).
+- **Long lists.** A section with more than 7 items shows the 5 most used and a "More" row that expands in place. An item with work waiting stays in view under the visible ones, like the active item, so its badge is never hidden behind "More". The sidebar scrolls on its own, and every admin scroll area uses a thin overlay scrollbar that shows on hover or focus; the brand row and search stay pinned.
 - **Footer.** Pinned at the bottom: the signed-in admin (24 px avatar, name, role in `inkMuted`: "Admin", or "Delegated admin" for a user with `adminPermissions` and no `isAdmin`) and a collapse button.
-- **Delegated admins.** A delegate sees only the tabs `DELEGATED_ADMIN_TAB_PERMISSIONS` (`adminTabPermissions.ts`) maps to a permission they hold; the sidebar, the command palette and `?tab=` links all hide the rest, and a section left with none is omitted. Map a tab there only once every request it makes accepts that permission server-side, so a delegate never lands on a pane that answers 403. A detail page follows its list's tab, and a delegate whose permissions open no tab is not admitted.
+- **Delegated admins.** A delegate sees only the tabs `DELEGATED_ADMIN_TAB_PERMISSIONS` (`adminTabPermissions.ts`) maps to a permission they hold; the sidebar, the command palette and `?tab=` links all hide the rest, and a section left with none is omitted. Map a tab there only once every request it makes accepts that permission server-side, so a delegate never lands on a pane that answers 403; a list (`SETTINGS_PAGE_READ`) admits any one of its permissions and must match the GET declaration of the tab's routes. A write the tab offers but the delegate cannot make is wrapped in `AdminPermissionAction`. A detail page follows its list's tab and, when denied, shows `MissingPermissionState` in place of the page; a delegate whose permissions open no tab is not admitted.
 - **App-wide chrome.** Anything that renders under the admin root but belongs to the whole app (the floating AI chat, the help panel) spreads `adminSurfaceExcludeProps` on its root so the admin skin stops there.
 - **Collapsed and mobile.** Collapsed is a 64 px icon rail with tooltips, remembered per admin. Under 900 px (Joy `md`) the sidebar becomes a 280 px drawer opened from a menu button in a top bar.
 
@@ -135,7 +136,7 @@ The sidebar is the frame of every admin page, so it sets the tone. Calm, scannab
 
 The shell owns the frame, so every page lines up with every other page:
 
-- **Gutter.** `adminPageFrame` (`shared/adminStyles.ts`): 32 px left and right (16 on phones), 24 px above the page header (16 on phones), 32 px below the last region (24 on phones). `AdminPage` applies it to every tab panel; a detail route outside `AdminPage` spreads it on its root. A page **never sets its own outer padding** (`p`, `px`, `py` on its root), never wraps itself in a scrolling `Sheet`, and never sets `minHeight: 100vh`: the layout already fills the window and scrolls.
+- **Gutter.** `adminPageFrame` (`shared/adminStyles.ts`): 32 px left and right (16 on phones), 24 px above the page header (16 on phones), 64 px below the last region, which is what keeps the bottom-right AI chat pill (20 px in, 40 px tall) off the table pager. `AdminPage` applies it to every tab panel; a detail route outside `AdminPage` spreads it on its root. A page **never sets its own outer padding** (`p`, `px`, `py` on its root), never wraps itself in a scrolling `Sheet`, and never sets `minHeight: 100vh`: the layout already fills the window and scrolls.
 - **Width.** List pages and dashboards are full width. Detail and settings pages cap their content at `ADMIN_DETAIL_MAX_WIDTH` (1280 px), left-aligned so the page header stays on the same line as every other page. No other max width and no centered column (`mx: 'auto'`); a short form stays left-aligned and simply ends early.
 - **Rhythm.** The page root is a `Stack` with `gap: ADMIN_REGION_GAP` (24 px) between regions (header, banner, views, filters, table, section grid). Cards inside a region sit 16 px apart. No `Divider` between regions: the gap is the separator.
 - **Header first.** The first element of every page is `AdminPageHeader`: the page title (24 / 600, `h1`), an optional count, a one-line description in `inkMuted`, and the page actions top-right. Nothing sits above it: not tabs, not chips, not a banner. The title names the page in sentence case ("Rate limits", not "Rate Limits Dashboard"), has no icon, and is the only `h1` on the page; sections inside the page use the 15 / 600 section level. A count goes in the header's `count`, not in a chip beside the title.
@@ -245,7 +246,7 @@ Build new admin pages from these, imported from `apps/client/app/components/admi
 | `SectionCard` / `Fact` | A group of facts | Title, optional ghost action, a definition list of `Fact`s (`body="custom"` for a table or chart). No form inputs inside. |
 | `SettingsSection` | A group of settings fields | A plain card for a form; the page saves through `SaveBar`. |
 | `DataTable` | Every admin list | Sticky header, sortable columns, row selection, row actions, sideways scroll below `minWidth`, skeleton, empty and error states. Page sizes 25, 50, 100. Server paging is described in `shared/README.md`. |
-| `FilterBar` / `AdminSearchInput` | Narrowing a list | Every filter is kept in the URL (`useAdminListUrlState`). Search first, then `FilterChip`s, 8 px apart on one line that wraps as a whole. No stacks of labelled selects, no native date inputs, no Apply button: a filter applies when picked. `AdminSearchInput` alone still goes in a row Stack; in a column it stretches to fill the height. |
+| `FilterBar` / `AdminSearchInput` | Narrowing a list | Every filter is kept in the URL (`useAdminListUrlState`). The Feedback and Email verification lists still keep their filters and page in local state; that is a known gap to move over later. Search first, then `FilterChip`s, 8 px apart on one line that wraps as a whole. No stacks of labelled selects, no native date inputs, no Apply button: a filter applies when picked. `AdminSearchInput` alone still goes in a row Stack; in a column it stretches to fill the height. |
 | `FilterChip` | One filter in a `FilterBar` | Dashed with just the label while unset; "Label: Value" in the `selection` tint with a remove button once set. Picking a value opens a menu. |
 | `ViewTabs` / `SavedViews` | Built-in and saved views above a list | The active tab is ink-filled. Each tab may carry a count. A view is its filters, so matching filters light its tab (`matchSavedView`). |
 | `SegmentedControl` | 2 to 4 mutually exclusive modes | Toggle buttons on a `hover` track, e.g. Group by None / Email domain. Not for filters with many values. |
@@ -306,6 +307,7 @@ Definition of done for any admin UI:
 | Nothing exists yet | `EmptyState` | A title that says what is missing, an optional one-line description, and an `action` (required): the next step as a button ("Create rule"). It sits where the data would, never as a separate grey strip, dashed card or warning banner. |
 | Filters match nothing | `EmptyState` | "No users match these filters", with a "Clear filters" action. |
 | Request failed | `ErrorState` | The message in plain words and "Try again" (`onRetry`). Never an empty table with a toast as the only signal. |
+| No permission | `MissingPermissionState` / `AdminPermissionGate` (an area), `AdminPermissionAction` (a control) | "Missing permission: X", from the same `missingAdminPermissionMessage` the server answers with. An action stays visible, disabled, with the message on hover and focus; never hide it silently or let it answer 403. |
 
 Shortcuts:
 
@@ -318,7 +320,11 @@ Shortcuts:
 | `s` | Suspend (user profile) |
 | Cmd+S | Save (settings forms) |
 
-## 8. Rollout
+## 8. Admin assistant eval
+
+A new admin tab or admin tool adds at least one question to `b4m-core/services/src/llm/evals/adminAssistant/cases.ts`, so the admin assistant is measured on it. See that directory's README for the "Adding its question" step.
+
+## 9. Rollout
 
 1. **Tokens and toolkit.** Done: admin tokens in the Joy theme, the admin skin, and the components above in `components/admin/shared` with tests.
 2. **Users first.** Done: the users list and user profile run on the toolkit and are the reference implementation.

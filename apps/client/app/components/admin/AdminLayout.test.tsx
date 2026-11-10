@@ -1,6 +1,7 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import {
   createMemoryHistory,
@@ -28,14 +29,20 @@ vi.mock('@client/app/contexts/ProviderBundle', () => ({
   ProviderBundle: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 vi.mock('@client/app/hooks/data/admin', () => ({ useLiveOpsTriageEnv: () => ({ data: { showTab: false } }) }));
-const mockUnreviewedAuditCount = vi.hoisted(() => vi.fn((_opts: { enabled: boolean }) => ({ data: undefined })));
-vi.mock('@client/app/hooks/data/adminAuditLog', () => ({ useUnreviewedAuditCount: mockUnreviewedAuditCount }));
-vi.mock('@client/app/hooks/data/subscribers', () => ({ useGetWaitingSubscribersCount: () => ({ data: undefined }) }));
+const mockActionCounts = vi.hoisted(() =>
+  vi.fn((_opts: { enabled: boolean }): { data: Record<string, number> | undefined } => ({ data: undefined }))
+);
+vi.mock('@client/app/hooks/data/adminActionCounts', () => ({
+  adminActionCountsQueryKey: ['admin', 'action-counts'],
+  useAdminActionCounts: mockActionCounts,
+}));
 vi.mock('./Subscriptions/subscriptionsLastSeen', () => ({ useNewSubscriptionsDot: () => false }));
 vi.mock('@client/app/hooks/useHelpKeyboardShortcut', () => ({ useHelpKeyboardShortcut: () => undefined }));
 vi.mock('../help', () => ({ HelpPanel: () => null }));
 
 const theme = extendTheme({ ...getThemeConfig() });
+
+let queryClient = new QueryClient();
 
 const renderAt = async (path: string) => {
   const rootRoute = createRootRoute({ component: () => <Outlet /> });
@@ -68,9 +75,11 @@ const renderAt = async (path: string) => {
   });
   await act(async () => {
     render(
-      <CssVarsProvider theme={theme}>
-        <RouterProvider router={router} />
-      </CssVarsProvider>
+      <QueryClientProvider client={queryClient}>
+        <CssVarsProvider theme={theme}>
+          <RouterProvider router={router} />
+        </CssVarsProvider>
+      </QueryClientProvider>
     );
   });
   return router;
@@ -80,6 +89,8 @@ const desktopSidebar = () => screen.getAllByTestId('admin-sidebar-nav')[0];
 
 describe('AdminLayoutRoute', () => {
   beforeEach(() => {
+    queryClient = new QueryClient();
+    mockActionCounts.mockImplementation(() => ({ data: undefined }));
     window.localStorage.clear();
     useAdminModal.setState({ activeTab: AdminTab.Dashboard });
   });
@@ -122,8 +133,20 @@ describe('AdminLayoutRoute', () => {
       expect(within(sidebar).getByText('Delegated admin')).toBeInTheDocument();
     });
 
-    it('whose permissions open no tab is sent to /new', async () => {
+    it('with support:read enters the console and sees the support tabs', async () => {
       mockUseUser.mockReturnValue(delegate(['support:read']));
+
+      await renderAt('/admin');
+
+      await screen.findByTestId('admin-layout');
+      const sidebar = desktopSidebar();
+      expect(within(sidebar).getByTestId('admin-approvals-btn')).toBeInTheDocument();
+      expect(within(sidebar).queryByTestId('admin-modals-tab-btn')).toBeNull();
+      expect(within(sidebar).queryByTestId('admin-users-tab-btn')).toBeNull();
+    });
+
+    it('whose permissions open no tab is sent to /new', async () => {
+      mockUseUser.mockReturnValue(delegate(['users:impersonate']));
 
       const router = await renderAt('/admin');
 
@@ -136,8 +159,10 @@ describe('AdminLayoutRoute', () => {
 
       const router = await renderAt('/admin/users/0123456789abcdef01234567');
 
-      await waitFor(() => expect(router.state.location.pathname).toBe('/admin'));
-      // Never rendered, not just gone after the redirect: a mounted profile fires admin requests.
+      const state = await screen.findByTestId('admin-missing-permission-state');
+      expect(state).toHaveTextContent('Full admin access required');
+      expect(router.state.location.pathname).toBe('/admin/users/0123456789abcdef01234567');
+      // Never rendered, not just hidden: a mounted profile fires admin requests.
       expect(profileRendered).not.toHaveBeenCalled();
     });
   });
@@ -153,20 +178,38 @@ describe('AdminLayoutRoute', () => {
     expect(within(desktopSidebar()).getByTestId('admin-dashboard-tab-btn')).toHaveAttribute('aria-current', 'page');
   });
 
-  it('does not enable the audit review badge for a full admin who is impersonating', async () => {
+  it('does not fetch the sidebar counts for a full admin who is impersonating', async () => {
     useAccessToken.setState({ impersonating: true });
     mockUseUser.mockReturnValue({ currentUser: { id: 'u1', isAdmin: true, tags: [] } });
     await renderAt('/admin');
     await screen.findByTestId('admin-layout');
-    expect(mockUnreviewedAuditCount).toHaveBeenCalled();
-    expect(mockUnreviewedAuditCount).not.toHaveBeenCalledWith({ enabled: true });
+    expect(mockActionCounts).toHaveBeenCalled();
+    expect(mockActionCounts).not.toHaveBeenCalledWith({ enabled: true });
   });
 
-  it('enables the audit review badge for a full admin who is not impersonating', async () => {
+  it('does not fetch the sidebar counts for a delegated admin', async () => {
+    mockUseUser.mockReturnValue({ currentUser: { id: 'u1', adminPermissions: ['settings:manage'], tags: [] } });
+    await renderAt('/admin');
+    await screen.findByTestId('admin-layout');
+    expect(mockActionCounts).toHaveBeenLastCalledWith({ enabled: false });
+  });
+
+  it('badges the sidebar from the batched counts for a full admin', async () => {
+    mockActionCounts.mockImplementation(() => ({ data: { moderationReview: 4, feedback: 0 } }));
     mockUseUser.mockReturnValue({ currentUser: { id: 'u1', isAdmin: true, tags: [] } });
     await renderAt('/admin');
     await screen.findByTestId('admin-layout');
-    expect(mockUnreviewedAuditCount).toHaveBeenLastCalledWith({ enabled: true });
+    expect(mockActionCounts).toHaveBeenLastCalledWith({ enabled: true });
+    expect(within(desktopSidebar()).getByTestId('admin-sidebar-moderationReview-badge')).toHaveTextContent('4');
+    expect(within(desktopSidebar()).queryByTestId('admin-sidebar-feedback-badge')).toBeNull();
+  });
+
+  it('refreshes the sidebar counts when the admin moves to another tab', async () => {
+    mockUseUser.mockReturnValue({ currentUser: { id: 'u1', isAdmin: true, tags: [] } });
+    await renderAt('/admin');
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    fireEvent.click(within(desktopSidebar()).getByTestId('admin-users-tab-btn'));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'action-counts'] });
   });
 
   it('keeps the sidebar on a user profile, with Users active', async () => {

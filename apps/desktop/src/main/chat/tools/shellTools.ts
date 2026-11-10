@@ -4,6 +4,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import type { BackgroundProcessInfo } from '@shared/chat';
 import type { OutputStream } from './outputBuffer';
+import { CappedOutput } from './cappedOutput';
 import { guardForm, isWithin, realpathNearest, resolveWithinRoots, withinGuarded } from './paths';
 import { writesOwnRepository } from './ownRepository';
 import {
@@ -28,6 +29,7 @@ import { protectionFor, secretPaths, type SandboxedCommand } from './sandbox';
 import { folderReaches, shellReachesProtected } from '../permissions/rules';
 import { shownPath, wslLocation } from '../../wsl/wslPath';
 import {
+  MAX_TOOL_OUTPUT_CHARS,
   capOutputMiddle,
   optionalNumber,
   requireString,
@@ -39,8 +41,8 @@ import {
 const DEFAULT_TIMEOUT_MS = 60_000;
 const MAX_TIMEOUT_MS = 300_000;
 
-/** Per stream. The model pays for this text on every later turn, the endpoint being stateless. */
-const MAX_STREAM_BYTES = 40_000;
+/** Below this, splitting the streams would leave each too little to read; the outer middle cut decides. */
+const MIN_STREAMS_BUDGET = 2_000;
 
 /** Grace between asking the process group to stop and killing it outright. */
 const SIGKILL_DELAY_MS = 3_000;
@@ -159,35 +161,6 @@ interface CommandOutcome {
   watchStopped: boolean;
   /** Set instead of an exit: the user moved the command to the background and it is still running. */
   movedToBackground?: BackgroundProcessInfo;
-}
-
-/**
- * Collects a stream up to a byte ceiling, decoding incrementally so a multi-byte character
- * split across two chunks is not turned into replacement characters.
- */
-class CappedOutput {
-  private readonly decoder = new StringDecoder('utf8');
-  private text = '';
-  private bytes = 0;
-  private dropped = 0;
-
-  push(chunk: Buffer): void {
-    if (this.bytes >= MAX_STREAM_BYTES) {
-      this.dropped += chunk.length;
-      return;
-    }
-    const room = MAX_STREAM_BYTES - this.bytes;
-    const kept = chunk.length <= room ? chunk : chunk.subarray(0, room);
-    this.dropped += chunk.length - kept.length;
-    this.bytes += kept.length;
-    this.text += this.decoder.write(kept);
-  }
-
-  toString(): string {
-    const tail = this.decoder.end();
-    const body = this.text + tail;
-    return this.dropped > 0 ? `${body}\n[truncated: ${this.dropped} more bytes]` : body;
-  }
 }
 
 function runCommand(
@@ -341,10 +314,39 @@ function runCommand(
 }
 
 function formatOutcome(command: string, cwd: string, timeoutMs: number, outcome: CommandOutcome): string {
+  const stdout = outcome.stdout.trimEnd();
+  const stderr = outcome.stderr.trimEnd();
+  const whole = formatSections(command, cwd, timeoutMs, outcome, stdout, stderr);
+  if (whole.length <= MAX_TOOL_OUTPUT_CHARS) return whole;
+  const budget = MAX_TOOL_OUTPUT_CHARS - (whole.length - stdout.length - stderr.length);
+  if (budget < MIN_STREAMS_BUDGET) return whole;
+  const [fitStdout, fitStderr] = fitStreams(stdout, stderr, budget);
+  return formatSections(command, cwd, timeoutMs, outcome, fitStdout, fitStderr);
+}
+
+/**
+ * Middle-cuts each stream to its share of `budget`, so a long stderr cannot push the end of
+ * stdout (where `gh pr create` prints the URL) out of the single middle cut applied after.
+ */
+function fitStreams(stdout: string, stderr: string, budget: number): [string, string] {
+  if (stdout.length + stderr.length <= budget) return [stdout, stderr];
+  const half = Math.floor(budget / 2);
+  const stdoutShare = stderr.length <= half ? budget - stderr.length : stdout.length <= half ? stdout.length : half;
+  return [capOutputMiddle(stdout, stdoutShare), capOutputMiddle(stderr, budget - stdoutShare)];
+}
+
+function formatSections(
+  command: string,
+  cwd: string,
+  timeoutMs: number,
+  outcome: CommandOutcome,
+  stdout: string,
+  stderr: string
+): string {
   const sections = [`$ ${command}`, `(in ${cwd})`];
 
-  if (outcome.stdout.trim()) sections.push('', outcome.stdout.trimEnd());
-  if (outcome.stderr.trim()) sections.push('', '[stderr]', outcome.stderr.trimEnd());
+  if (stdout.trim()) sections.push('', stdout);
+  if (stderr.trim()) sections.push('', '[stderr]', stderr);
 
   if (outcome.watchStopped) {
     const failed = WATCH_FAILURE.test(`${outcome.stdout}\n${outcome.stderr}`.replace(ANSI, ''));
@@ -366,7 +368,7 @@ function formatOutcome(command: string, cwd: string, timeoutMs: number, outcome:
     sections.push('', `[killed by ${outcome.signal ?? 'a signal'}]`);
   }
 
-  if (!outcome.stdout.trim() && !outcome.stderr.trim()) sections.push('[no output]');
+  if (!stdout.trim() && !stderr.trim()) sections.push('[no output]');
 
   return sections.join('\n');
 }

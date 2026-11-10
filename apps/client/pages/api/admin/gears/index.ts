@@ -1,4 +1,4 @@
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, SETTINGS_PAGE_READ } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { gearOverrideRepository, GearOverride } from '@bike4mind/database';
@@ -34,7 +34,7 @@ const PutSchema = z.object({
 });
 
 const handler = adminApi({
-  adminPermissions: { GET: 'support:read', PUT: 'settings:manage' },
+  adminPermissions: { GET: SETTINGS_PAGE_READ, PUT: 'settings:manage' },
   requiredScopes: [ApiKeyScope.ADMIN],
 })
   .get(async (req, res) => {

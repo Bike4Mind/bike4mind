@@ -50,6 +50,7 @@ import { checkRateLimit, checkApiKeyRateLimitOrThrow, type ApiKeyInfo } from '@s
 import { resolveContractAuth } from '@server/cli/resolveContractAuth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { Config } from '@bike4mind/server-utils/utils/config';
+import { checkClientVersion } from '@bike4mind/server-utils/middlewares/clientVersionGate';
 import { flattenHeaders } from '@bike4mind/server-utils/utils/flattenHeaders';
 import { serializeError } from '@bike4mind/server-utils/utils/serializeError';
 import { createMethodGuard } from '@bike4mind/server-utils/utils/allowedMethods';
@@ -271,6 +272,10 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
           throw new HTTPError(503, 'Service temporarily unavailable. Retry shortly.');
         }
       }
+
+      // Client-version gate (CONVENTIONS.md section 9), ahead of validation as on every transport.
+      const upgradeRequired = await checkClientVersion(req.headers, logger);
+      if (upgradeRequired) throw upgradeRequired;
 
       const parsed = CompletionRequestSchema.safeParse(req.body);
       if (!parsed.success) {

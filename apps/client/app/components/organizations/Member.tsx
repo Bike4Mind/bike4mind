@@ -117,7 +117,10 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
         ...u,
         status: 'accepted' as const,
         permissions: organization.users.find(m => m.userId === u.id)?.permissions || [],
-        creditUsage: getMemberCreditUsage(organization, u.id),
+        creditUsage:
+          currentUser && canManageMemberCreditBudgets(currentUser, organization)
+            ? getMemberCreditUsage(organization, u.id)
+            : null,
       })) || [];
     result.push(
       ...(pendingUsers
@@ -135,7 +138,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
     }
 
     return result.sort((a, b) => (sortOrder === 'asc' ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name)));
-  }, [users, search, sortOrder, pendingUsers, pendingInvites, organization]);
+  }, [users, search, sortOrder, pendingUsers, pendingInvites, organization, currentUser]);
 
   // Each roster control mirrors the server predicate behind its own endpoint; only the owner may
   // revoke a manager.

@@ -137,7 +137,11 @@ describe('purgeAccountFiles', () => {
     expect(h.hardDelete).toHaveBeenCalledWith('f1', 50, assertLease);
     expect(h.fileOptions).toHaveBeenCalledWith({ includeDeleted: true });
     expect(h.fileDelete.mock.invocationCallOrder[1]).toBeLessThan(h.hardDelete.mock.invocationCallOrder[0]);
-    expect(h.deletePrefix).toHaveBeenCalledWith('exports/account-data/u1/');
+    expect(h.deletePrefix.mock.calls).toEqual([
+      ['exports/account-data/u1/'],
+      ['exports/curated-notebooks/u1/'],
+      ['curated-notebooks/u1/'],
+    ]);
     expect(h.find).toHaveBeenCalledWith(
       expect.objectContaining({ $or: [{ userId: 'u1' }, { organizationId: { $in: [] } }] })
     );

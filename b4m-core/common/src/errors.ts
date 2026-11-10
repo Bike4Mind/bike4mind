@@ -1,5 +1,5 @@
 import { z, ZodError } from 'zod';
-import type { ApiErrorCode } from './apiErrorCodes';
+import { UPGRADE_REQUIRED_ERROR_CODE, type ApiErrorCode } from './apiErrorCodes';
 import type { IFabFileDocument } from './types/entities/FabFileTypes';
 
 /** A recoverable tool refusal returned to the model so it can correct its request. */
@@ -26,6 +26,7 @@ export enum HttpStatus {
   MethodNotAllowed = 405,
   Conflict = 409,
   UnprocessableEntity = 422,
+  UpgradeRequired = 426,
   TooManyRequests = 429,
   InternalServerError = 500,
   BadGateway = 502,
@@ -332,6 +333,22 @@ export class TooManyRequestsError extends HTTPError {
   ) {
     super(HttpStatus.TooManyRequests, message, additionalInfo);
     this.name = 'TooManyRequestsError';
+  }
+}
+
+/**
+ * 426: the request declared (X-Client-Name + X-Client-Version) a client build older than
+ * the minimum configured for that client. The body names the minimum so the client can
+ * tell its user exactly what to install (CONVENTIONS.md section 9).
+ */
+export class UpgradeRequiredError extends HTTPError {
+  constructor(clientName: string, clientVersion: string, minimumVersion: string) {
+    super(
+      HttpStatus.UpgradeRequired,
+      `${clientName} ${clientVersion} is no longer supported. Upgrade to ${minimumVersion} or later.`,
+      { errorCode: UPGRADE_REQUIRED_ERROR_CODE, client_name: clientName, minimum_version: minimumVersion }
+    );
+    this.name = 'UpgradeRequiredError';
   }
 }
 

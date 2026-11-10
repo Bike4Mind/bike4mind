@@ -511,6 +511,12 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
    */
   healKeyPrefix: (id: string, keyPrefix: string, matchedSecret: ApiKeyStoredSecret) => Promise<void>;
   findActiveByKeyPrefix: (keyPrefix: string) => Promise<IUserApiKeyDocument | null>;
+  /**
+   * The DISABLED keys under a prefix, so a refused key can still be traced to a suspended owner and
+   * answered with `account_suspended` instead of a bare 401. Optional for the same reason as
+   * revokeIfNotDisabled.
+   */
+  findDisabledByKeyPrefix?: (keyPrefix: string) => Promise<IUserApiKeyDocument[]>;
   deactivateAllByUserId: (userId: string) => Promise<void>;
   /**
    * Disables the key and stamps revokedAt/revokedBy/revokedReason, only if it is not already DISABLED.

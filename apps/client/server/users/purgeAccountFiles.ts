@@ -19,6 +19,7 @@ import {
   getGeneratedImageStorage,
 } from '@bike4mind/server-utils/utils/storage/index';
 import { getGeneratedCopyStore } from '@server/files/generatedCopyStore';
+import { NOTEBOOK_DOWNLOAD_KEY_PREFIX } from '@server/notebooks/downloadCopyKeys';
 import { Resource } from 'sst';
 import { z } from 'zod';
 
@@ -189,6 +190,11 @@ export async function purgeAccountFiles(userId: string, options: PurgeOptions): 
   await purgeKnowledgeFiles(userId, options);
   await purgeAppFiles(userId, options.assertLease);
   await purgeImportArchives(userId, options.assertLease);
-  await options.assertLease();
-  await getFilesStorage().deletePrefixPermanently(`exports/account-data/${encodeURIComponent(userId)}/`);
+  // Notebook download copies: the current exports/ location plus the legacy one no lifecycle rule reaps.
+  // Safe only while durable curated files stay at curated-notebooks/<uuid> (fabFileService create.ts)
+  // and curated-notebooks/jobs/<sha> (workers queueHandlers/notebookCuration.ts), never under a user id.
+  for (const prefix of ['exports/account-data', NOTEBOOK_DOWNLOAD_KEY_PREFIX, 'curated-notebooks']) {
+    await options.assertLease();
+    await getFilesStorage().deletePrefixPermanently(`${prefix}/${encodeURIComponent(userId)}/`);
+  }
 }

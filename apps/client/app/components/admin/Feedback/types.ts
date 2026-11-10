@@ -107,6 +107,8 @@ export interface UseFeedbackOperationsReturn {
   /** Whether `total` is the answer for the current params rather than a previous query's. */
   totalSettled: boolean;
   loading: boolean;
+  /** The list request failed; the table shows a retry in place of the rows. */
+  isError: boolean;
   refreshFeedback: () => Promise<void>;
   handleStatusChange: (feedbackItem: IExtendedFeedbackDocument, newValue: FeedbackStatus | null) => Promise<void>;
   handleDeleteFeedbackClick: (feedback: IExtendedFeedbackDocument) => void;

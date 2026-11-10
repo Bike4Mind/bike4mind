@@ -4,7 +4,14 @@ import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import { EmptyState } from './EmptyState';
 import { ErrorState } from './ErrorState';
-import { adminFocus, adminFocusScope, adminScrollGutter, adminScrollbarVisible, adminSurface } from './adminStyles';
+import {
+  ADMIN_PAGE_SIZES,
+  adminFocus,
+  adminFocusScope,
+  adminScrollGutter,
+  adminScrollbarVisible,
+  adminSurface,
+} from './adminStyles';
 import type { AdminSelection } from './BulkActionBar';
 
 export type DataColumn<Row> = {
@@ -68,7 +75,6 @@ export type DataTableProps<Row> = {
   /** Show the scrollbar thumb all the time instead of only on hover. */
   alwaysShowScrollbar?: boolean;
 };
-const PAGE_SIZES = [25, 50, 100] as const;
 const CELL_CONTROLS = 'button, input, a, [role="checkbox"], [role="menu"], [role="menuitem"]';
 
 function nextDirection(current: DataTableSort | undefined, columnId: string): DataTableSort {
@@ -244,8 +250,10 @@ export function DataTable<Row>({
   }
 
   const firstShown = total === 0 ? 0 : currentPage * pageSize + 1;
+  // Server-paged tables keep the previous page's rows on screen while the next one loads, so the
+  // row count alone would read past the total ("26 to 50 of 38") for a moment.
   const lastShown = pagination
-    ? currentPage * pageSize + pageRows.length
+    ? Math.min(currentPage * pageSize + pageRows.length, total)
     : Math.min((currentPage + 1) * pageSize, total);
   return (
     <Box
@@ -473,7 +481,7 @@ export function DataTable<Row>({
               }
             }}
           >
-            {PAGE_SIZES.map(size => (
+            {ADMIN_PAGE_SIZES.map(size => (
               <Option key={size} value={size} data-testid={`admin-table-page-size-${size}`}>
                 {size}
               </Option>

@@ -504,11 +504,6 @@
       "count": 1
     }
   },
-  "apps/client/app/components/admin/EmailVerificationTab.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
   "apps/client/app/components/admin/EmbedKeysTab.test.tsx": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
@@ -540,11 +535,6 @@
     }
   },
   "apps/client/app/components/admin/ModelMetrics/components/AnalyticsTab.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
-  "apps/client/app/components/admin/ModelMetrics/components/ControlPanel.tsx": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
     }
@@ -2705,11 +2695,6 @@
       "count": 8
     }
   },
-  "apps/client/pages/api/slack/interactive.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 34
-    }
-  },
   "apps/client/pages/api/slack/oauth/user-link/index.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
@@ -3156,11 +3141,6 @@
     }
   },
   "apps/client/server/middlewares/baseApi.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 10
-    }
-  },
-  "apps/client/server/middlewares/defineNextRoute.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 10
     }

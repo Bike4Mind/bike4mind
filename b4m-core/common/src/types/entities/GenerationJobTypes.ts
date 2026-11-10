@@ -1,15 +1,20 @@
 import type { ProviderOutput } from '../../generation';
+import type { ImageProviderId, StoredImageRequest } from '../../image';
 import type { MusicGenerationRequest, MusicProviderId } from '../../music';
 import type { ProviderJobHandle, VideoGenerationRequest, VideoProviderId } from '../../video';
 import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
 import { CreditHolderType, type CreditHoldRecord } from './CreditHolderTypes';
 
-export const GENERATION_JOB_KINDS = ['video', 'music'] as const;
+export const GENERATION_JOB_KINDS = ['video', 'music', 'image'] as const;
 export type GenerationJobKind = (typeof GENERATION_JOB_KINDS)[number];
 
+/** The kinds a chat message can start. An image job is started from Studio only, so it never lands on a quest. */
+export const QUEST_GENERATION_JOB_KINDS = ['video', 'music'] as const satisfies readonly GenerationJobKind[];
+export type QuestGenerationJobKind = (typeof QUEST_GENERATION_JOB_KINDS)[number];
+
 /** A job a chat message started, as stored on the quest: the kind picks the card and the endpoint that reads it. */
-export type GenerationJobRef = { id: string; kind: GenerationJobKind };
+export type GenerationJobRef = { id: string; kind: QuestGenerationJobKind };
 
 /**
  * The jobs a quest started, oldest first. Quests written before `generationJobs` existed only carry
@@ -111,10 +116,28 @@ export type MusicJobPayload = {
   billedBlock?: boolean;
 };
 
+/** Same storage fields as VideoJobOutput minus the duration a still image does not have. */
+export type ImageJobOutput = Omit<VideoJobOutput, 'durationSeconds'>;
+
+/**
+ * One image per job. Like music, the provider returns the finished image from one blocking call, so the output
+ * is moderated and stored in the submit step and provider bytes never reach this payload.
+ */
+export type ImageJobPayload = {
+  request: StoredImageRequest;
+  providerId: ImageProviderId;
+  /** Shared by the jobs one "make N" request created, so a surface can show them as one batch. */
+  groupId?: string;
+  output?: ImageJobOutput;
+  /** As VideoJobPayload.billedBlock. */
+  billedBlock?: boolean;
+};
+
 /** Each kind's payload; the job type is a union discriminated on `kind`. */
 export type GenerationJobPayloads = {
   video: VideoJobPayload;
   music: MusicJobPayload;
+  image: ImageJobPayload;
 };
 
 export const GENERATION_JOB_DELIVERY_KINDS = ['slack'] as const;

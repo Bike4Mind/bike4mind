@@ -38,6 +38,7 @@ import {
 } from '@bike4mind/common';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import {
+  AdminPermissionAction,
   ADMIN_REASON_PRESETS,
   ActionDialog,
   AdminPageHeader,
@@ -934,7 +935,7 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({
     (value: ShadowDetectionVerdict) => setVerdictChoice({ rowId: row.id, value }),
     [row.id]
   );
-  const title = row.verdict ? 'Change verdict' : 'Record verdict';
+  const title = row.verdict ? 'View review' : 'Review evidence';
   const pending = single.isPending || bulk.isPending;
   const error = forRow(failureChoice) ?? single.error ?? bulk.error;
 
@@ -1343,15 +1344,20 @@ export const ShadowDetectionsTab: React.FC = () => {
 
   const rowActions = (row: ShadowDetectionRow) => (
     <Stack gap={0.5} alignItems="flex-start">
-      <Button
-        size="sm"
-        variant="plain"
-        color="neutral"
-        data-testid={`shadow-detection-grade-btn-${row.id}`}
-        onClick={() => setGrading(row)}
-      >
-        {row.verdict ? 'View review' : 'Review evidence'}
-      </Button>
+      <AdminPermissionAction requirement="users:moderate">
+        {disabled => (
+          <Button
+            size="sm"
+            variant="plain"
+            color="neutral"
+            disabled={disabled}
+            data-testid={`shadow-detection-grade-btn-${row.id}`}
+            onClick={() => setGrading(row)}
+          >
+            {row.verdict ? 'View review' : 'Review evidence'}
+          </Button>
+        )}
+      </AdminPermissionAction>
       {(row.detector === 'accountCampaign' ||
         row.detector === 'completionSequence' ||
         row.detector === 'completionSynchrony') && (

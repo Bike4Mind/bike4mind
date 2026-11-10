@@ -18,6 +18,7 @@ const m = vi.hoisted(() => ({
   search: {} as Record<string, unknown>,
   navigate: vi.fn(),
   verdictError: null as Error | null,
+  currentUser: { isAdmin: true } as { isAdmin: boolean; adminPermissions?: string[] },
   realWatch: false,
 }));
 vi.mock('@client/app/hooks/data/shadowDetections', () => ({
@@ -28,7 +29,7 @@ vi.mock('@client/app/hooks/data/shadowDetections', () => ({
   useRequestAbuseAssessment: () => ({ mutateAsync: vi.fn(), isPending: false, error: null }),
   useVerdictEval: () => ({ data: undefined, isPending: true, error: null, refetch: vi.fn() }),
 }));
-vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: { isAdmin: true } }) }));
+vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: m.currentUser }) }));
 vi.mock('@tanstack/react-router', () => ({
   useSearch: () => m.search,
   useNavigate: () => m.navigate,
@@ -57,7 +58,14 @@ vi.mock('./CampaignWatches/WatchAccountsButton', async importOriginal => {
       m.realWatch ? (
         <actual.WatchAccountsButton {...props} />
       ) : (
-        <button disabled={props.incomplete}>Watch cohort</button>
+        <button
+          data-testid="watch-accounts-stub"
+          data-label={props.label}
+          data-incomplete={String(props.incomplete)}
+          disabled={props.incomplete}
+        >
+          Watch cohort
+        </button>
       ),
   };
 });
@@ -132,6 +140,7 @@ describe('ShadowDetectionsTab', () => {
     window.localStorage.clear();
     m.search = {};
     m.verdictError = null;
+    m.currentUser = { isAdmin: true };
     m.realWatch = false;
     m.useShadowDetections.mockReturnValue(queryResult(list()));
   });
@@ -360,6 +369,13 @@ describe('ShadowDetectionsTab', () => {
     expect(query.refetch).toHaveBeenCalledTimes(1);
   });
 
+  it('disables grading for a support reader', () => {
+    m.currentUser = { isAdmin: false, adminPermissions: ['support:read'] };
+    m.useShadowDetections.mockReturnValue(queryResult(list({ data: [detection()] })));
+    renderTab();
+    expect(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`)).toBeDisabled();
+  });
+
   it('renders a missing signal value as a muted dash', async () => {
     m.useShadowDetections.mockReturnValue(
       queryResult(
@@ -550,6 +566,35 @@ describe('ShadowDetectionsTab', () => {
     expect(screen.queryByTestId('shadow-detection-campaign-truncated')).toBeNull();
   });
 
+  it('offers a Watch button only on account-campaign rows, flagged incomplete when the group is truncated', () => {
+    renderTab();
+    expect(screen.queryByTestId('watch-accounts-stub')).toBeNull();
+
+    m.useShadowDetections.mockReturnValue(
+      queryResult(list({ data: [detection({ detector: 'accountCampaign', network: null, group: campaignGroup() })] }))
+    );
+    const { unmount } = renderTab();
+    expect(screen.getByTestId('watch-accounts-stub')).toHaveAttribute('data-label', 'Watch');
+    expect(screen.getByTestId('watch-accounts-stub')).toHaveAttribute('data-incomplete', 'false');
+    unmount();
+
+    m.useShadowDetections.mockReturnValue(
+      queryResult(
+        list({
+          data: [
+            detection({
+              detector: 'accountCampaign',
+              network: null,
+              group: { ...campaignGroup(), truncated: true },
+            }),
+          ],
+        })
+      )
+    );
+    renderTab();
+    expect(screen.getByTestId('watch-accounts-stub')).toHaveAttribute('data-incomplete', 'true');
+  });
+
   it('ignores verdict shortcuts from the nested Watch campaign dialog', async () => {
     m.realWatch = true;
     await openCampaignDialog(campaignGroup());
@@ -633,7 +678,7 @@ describe('ShadowDetectionsTab', () => {
       'Graded by someone else.'
     );
     const dialog = screen.getByTestId('shadow-detection-verdict-dialog');
-    expect(within(dialog).getByText('Change verdict')).toBeTruthy();
+    expect(within(dialog).getByText('View review')).toBeTruthy();
     expect(
       within(screen.getByTestId('shadow-detection-history')).getByText('Known customer or integration')
     ).toBeTruthy();

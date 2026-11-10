@@ -21,6 +21,7 @@ import {
   IUserApiKeyRepository,
   IRealtimeConnectionRepository,
   type SignupRiskReviewState,
+  SuspensionReasonCategorySchema,
 } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, secureParameters } from '@bike4mind/utils';
 import { sendFriendRequest } from '../friendshipService/sendFriendRequest';
@@ -46,6 +47,9 @@ export const adminUpdateUserSchema = updateUserSchema.extend({
   storageLimitOverride: z.number().min(0).max(MAX_STORAGE_LIMIT_MB).nullable().optional(),
   currentCredits: z.number().int().min(0).max(MAX_CREDIT_VALUE).optional(),
   isBanned: z.boolean().optional(),
+  // The reason the suspended user is told (a fixed category, never the detection signal). Cleared when
+  // `isBanned` goes false; see accountSuspensionCategories.ts.
+  suspensionReasonCategory: SuspensionReasonCategorySchema.nullable().optional(),
   isModerated: z.boolean().optional(),
   subscribedUntil: z.string().optional().nullable(),
   systemFiles: z.array(z.object({ fileId: z.string(), enabled: z.boolean() })).optional(),
@@ -232,9 +236,12 @@ export async function adminUpdateUser(
   // that was refunded or lost a dispute does not count, so a grant never re-confers what the reversal revoked.
   const restoresPurchaseStamp =
     creditDelta > 0 && (await db.creditTransactions.findUnreversedPurchase(params.id, CreditHolderType.User)) !== null;
+  // Reinstating clears the reason, so a later suspension without one cannot resurface a stale category.
+  const suspensionParams = params.isBanned === false ? { suspensionReasonCategory: null } : {};
   const builtParams = {
     ...baseParams,
     ...storageParams,
+    ...suspensionParams,
     ...(restoresPurchaseStamp ? { lastCreditsPurchasedAt: new Date() } : {}),
   };
   const builtUser = applyBaseUserUpdates(user, builtParams);

@@ -1,5 +1,5 @@
 import { ApiKeyScope, usernameSchema, MAX_STORAGE_LIMIT_MB, DEFAULT_STORAGE_LIMIT_MB } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import {
   userRepository,
   pendingOtcTokenRepository,
@@ -10,6 +10,7 @@ import { userService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { requireStepUp } from '@server/auth/stepUp';
+import { assertCanSeedAccount } from '@server/admin/assertCanSeedAccount';
 import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { getLogoUrl, buildEmailLogoImg } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { Config } from '@bike4mind/server-utils/utils/config';
@@ -44,12 +45,8 @@ const toCreateUserError = (error: unknown) => {
   return new BadRequestError('Failed to create user');
 };
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
+const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions: { POST: 'settings:manage' } }).post(
   asyncHandler<{}, unknown, CreateUserInput>(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     let validatedData: CreateUserInput;
     try {
       validatedData = createUserSchema.parse(req.body);
@@ -67,6 +64,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
       throw new BadRequestError('Invalid input data');
     }
 
+    assertCanSeedAccount(req, {
+      isAdmin: validatedData.isAdmin,
+      credits: validatedData.initialCredits,
+      tags: validatedData.tags,
+    });
     // A new admin account is an admin-role grant: session-only, and a browser session must have
     // recently re-verified. A non-admin account takes over no existing account, so it is ungated.
     if (validatedData.isAdmin) {

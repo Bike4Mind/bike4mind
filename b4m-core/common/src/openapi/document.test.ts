@@ -182,6 +182,18 @@ describe('buildOpenApiDocument', () => {
     }
   });
 
+  it('auto-injects the client-version 426 on every operation, streaming and Lambda-served included', () => {
+    // Every transport runs the gate: nextRouteForContract's prelude, defineLambdaRoute, and the
+    // completions route in chatCompletion/external/sseRoute.ts.
+    for (const op of [chat, completions, tools]) {
+      expect(op.responses['426'].content['application/json'].schema).toEqual(ref('UpgradeRequiredResponse'));
+    }
+    const component = doc.components.schemas.UpgradeRequiredResponse;
+    expect(component.required).toEqual(
+      expect.arrayContaining(['error', 'errorCode', 'client_name', 'minimum_version'])
+    );
+  });
+
   it('documents OR semantics for required scopes in info.description', () => {
     expect(doc.info.description.toLowerCase()).toContain('any one');
   });

@@ -11,6 +11,7 @@ import { synthesizeSpeechContract } from './tts.contract';
 import { generateMusicContract } from './music.contract';
 import { generateSoundEffectContract } from './soundEffects.contract';
 import { getMeContract } from './me.contract';
+import { getClientConfigContract } from './clientConfig.contract';
 import { registerPushTokenContract, unregisterPushTokenContract } from './pushTokens.contract';
 import { getCreditBalanceContract } from './credits.contract';
 import { listModelsContract } from './models.contract';
@@ -129,6 +130,7 @@ import {
   importSkillMarketListingContract,
   rescanSkillMarketVersionContract,
 } from './skillMarketWrite.contract';
+import { createSkillContract, updateSkillContract, listMySkillsContract, getSkillContract } from './skills.contract';
 import { listSkillMarketReviewQueueContract, reviewSkillMarketVersionContract } from './skillMarketReview.contract';
 
 /**
@@ -151,6 +153,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   generateMusicContract,
   generateSoundEffectContract,
   getMeContract,
+  getClientConfigContract,
   registerPushTokenContract,
   unregisterPushTokenContract,
   getCreditBalanceContract,
@@ -252,6 +255,10 @@ export const CONTRACTS: readonly EndpointContract[] = [
   submitSkillMarketListingVersionContract,
   importSkillMarketListingContract,
   rescanSkillMarketVersionContract,
+  createSkillContract,
+  updateSkillContract,
+  listMySkillsContract,
+  getSkillContract,
   listSkillMarketReviewQueueContract,
   reviewSkillMarketVersionContract,
   postSlackMessageContract,

@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { CREDITS_PER_USD_COST, formatUsdPerCredit, MIN_PRICE_PER_CREDIT_USD } from '../pricing';
 import { CustomMcpPrivateCidrSchema, McpHostPatternListSchema } from './customMcpHosts';
+// The leaf module, not the api-contract barrel, which pulls in every contract.
+import { MinimumClientVersionsSchema } from '../api-contract/clientVersion';
 import {
   DEFAULT_PASSAGE_TOKEN_TARGET,
   MIN_PASSAGE_TOKEN_TARGET,
@@ -466,6 +468,7 @@ export const SettingKeySchema = z.enum([
   'usagePatternSignalsEnabled',
   'usagePatternSignalsConfig',
   'abuseAssessmentEnabled',
+  'suspensionNoticeEmailEnabled',
   'abuseAssessmentConfig',
   'autoContainmentConfig',
   'thinkingVisibilityFree',
@@ -734,6 +737,8 @@ export const SettingKeySchema = z.enum([
   'apiRateLimitCreditsPerMin',
   'apiRateLimitDefaultWritePerMin',
   'apiRateLimitDefaultWriteMode',
+  // OLDEST CLIENT BUILD SERVED PER X-Client-Name (api-contract/clientVersion.ts)
+  'minimumClientVersions',
   'fileUploadLimitFreePerHour',
   'fileUploadLimitPaidPerHour',
   'pendingUploadLimit',
@@ -2871,6 +2876,13 @@ export const API_SERVICE_GROUPS = {
       { key: 'usagePatternSignalsConfig', order: 2 },
     ],
   },
+  SUSPENSION_NOTICE: {
+    id: 'suspensionNotice',
+    name: 'Suspension Notice',
+    description: 'How a suspended user is told. The sign-in, in-app and API notices always show; email is optional',
+    icon: 'Security',
+    settings: [{ key: 'suspensionNoticeEmailEnabled', order: 1 }],
+  },
   ABUSE_ASSESSMENT: {
     id: 'abuseAssessmentService',
     name: 'Advisory Abuse Assessment',
@@ -2881,6 +2893,13 @@ export const API_SERVICE_GROUPS = {
       { key: 'abuseAssessmentConfig', order: 2 },
       { key: 'autoContainmentConfig', order: 3 },
     ],
+  },
+  API_CLIENTS: {
+    id: 'apiClientsService',
+    name: 'API Clients',
+    description: 'Minimum versions of long-lived API clients (SDKs and other client binaries) that are still served',
+    icon: 'Widgets',
+    settings: [{ key: 'minimumClientVersions', order: 1 }],
   },
   // Note: CONTEXT_TELEMETRY settings are managed in the Context Inspector tab (Admin UI)
   // to keep all telemetry controls in one place
@@ -3836,6 +3855,18 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 6,
   }),
+  // Read by packages/server-utils/src/middlewares/clientVersionGate.ts.
+  minimumClientVersions: makeObjectSetting({
+    key: 'minimumClientVersions',
+    name: 'Minimum Client Versions',
+    defaultValue: {},
+    description:
+      'JSON object mapping a client name (the X-Client-Name request header) to the oldest version (X-Client-Version, SemVer such as "2.1.0") still served, e.g. {"b4m-sdk-ts": "2.1.0"}. A request from an older version of a listed client gets 426 Upgrade Required with errorCode "upgrade_required" and the minimum version. Requests without both headers, and clients not listed, are never blocked. Changes apply within 15 seconds.',
+    category: 'Admin',
+    group: API_SERVICE_GROUPS.API_CLIENTS.id,
+    order: 1,
+    schema: MinimumClientVersionsSchema,
+  }),
   // Both read by apps/client/server/files/fileUploadBudget.ts.
   fileUploadLimitFreePerHour: makeNumberSetting({
     key: 'fileUploadLimitFreePerHour',
@@ -4787,6 +4818,16 @@ export const settingsMap = {
     dependsOn: 'usagePatternSignalsEnabled',
     schema: UsagePatternSignalsConfigSchema,
   }),
+  suspensionNoticeEmailEnabled: makeBooleanSetting({
+    key: 'suspensionNoticeEmailEnabled',
+    name: 'Email Suspended Users',
+    defaultValue: false,
+    description:
+      'Also email the account owner when an admin suspends an account from the user profile, with the reason category and how to appeal. Off by default: the sign-in page, the app and the API already show the notice, and mass mail to throwaway inboxes hurts sender reputation. Never names what flagged the account.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.SUSPENSION_NOTICE.id,
+    order: 1,
+  }),
   abuseAssessmentEnabled: makeBooleanSetting({
     key: 'abuseAssessmentEnabled',
     name: 'Advisory Abuse Assessment',
@@ -5187,6 +5228,7 @@ export const settingsMap = {
     min: 0,
     max: 720,
     int: true,
+    userReadable: true,
     description:
       'Hours a subscription, credit pack or card payment must settle before it releases the locked signup credits. A dispute, refund or early fraud warning in that window cancels the release. Zero releases them on payment.',
     group: API_SERVICE_GROUPS.CREDITS.id,

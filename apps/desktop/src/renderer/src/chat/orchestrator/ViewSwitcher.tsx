@@ -10,6 +10,7 @@ import { Fragment, useEffect, useRef, type ReactNode } from 'react';
 import { BoardIcon, CaretDownIcon, CheckIcon, TableIcon, TavernIcon } from '../icons';
 import { isMac } from '../platform';
 import { ORCHESTRATOR_VIEWS, type OrchestratorViewId } from './orchestratorPrefs';
+import { AMBIENT_IDLE_MS } from './ambient';
 
 type ViewGroup = 'scene' | 'layout';
 
@@ -135,7 +136,7 @@ export function ViewSwitcher({
               <Box sx={{ flex: 1, minWidth: 0 }}>
                 <Typography level="body-sm">Quiet when idle</Typography>
                 <Typography level="body-xs" textColor="text.tertiary">
-                  Hide the conversation and composer after a while
+                  {`After ${AMBIENT_IDLE_MS / 1000} seconds without input, hide the conversation, composer and agent details`}
                 </Typography>
               </Box>
               {ambient.on && <CheckIcon />}

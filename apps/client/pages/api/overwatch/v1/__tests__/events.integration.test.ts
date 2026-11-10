@@ -289,14 +289,14 @@ describe('POST /api/overwatch/v1/events (integration — real middleware chain)'
       expect(mockSendBatch).not.toHaveBeenCalled();
     });
 
-    it('rejects a banned user (401) — apiKeyAuth refuses before the handler', async () => {
+    it('rejects a banned user (403 account_suspended): apiKeyAuth refuses before the handler', async () => {
       mockFindById.mockReturnValue(
         Promise.resolve({ id: 'user-1', _id: 'user-1', isBanned: true, disputePending: false })
       );
       const { req, res } = fire();
       await handler(req, res);
-      expect(res._getStatusCode()).toBe(401);
-      expect(res._getJSONData().error).toMatch(/banned/i);
+      expect(res._getStatusCode()).toBe(403);
+      expect(res._getJSONData().errorCode).toBe('account_suspended');
       // apiKeyAuth short-circuits before the rate-limit middleware
       expect(mockRateLimit).not.toHaveBeenCalled();
       expect(mockSendBatch).not.toHaveBeenCalled();

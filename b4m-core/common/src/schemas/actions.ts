@@ -15,7 +15,11 @@ import { supportedChatModels } from '../models';
 import { shareableDocumentSchema, QUEST_ERROR_CODES, CHAT_HISTORY_ITEM_TYPES } from '../types';
 import { AGENT_EXECUTION_STATUSES, type AgentExecutionStatus } from '../constants/agentExecutionStatus';
 import { PERSISTED_SESSION_SUMMARY_TRIGGERS } from '../constants/sessionSummary';
-import { GENERATION_JOB_KINDS, GENERATION_JOB_STATES } from '../types/entities/GenerationJobTypes';
+import {
+  GENERATION_JOB_KINDS,
+  GENERATION_JOB_STATES,
+  QUEST_GENERATION_JOB_KINDS,
+} from '../types/entities/GenerationJobTypes';
 import { findDisallowedSubscriptionFilterKeys } from './subscriptionQueryFilter';
 import {
   CompletionProviderBlockEventSchema,
@@ -375,7 +379,8 @@ export const GenerationJobUpdatedAction = z.object({
     progress: z.number().min(0).max(1).optional(),
     error: z.object({ code: z.string(), message: z.string() }).optional(),
     output: z
-      .object({ fileId: z.string().optional(), contentType: z.string(), durationSeconds: z.number() })
+      // durationSeconds: absent for an image.
+      .object({ fileId: z.string().optional(), contentType: z.string(), durationSeconds: z.number().optional() })
       .optional(),
   }),
 });
@@ -394,7 +399,7 @@ export const StreamedChatCompletionAction = z.object({
       images: z.array(z.string()).optional(),
       videos: z.array(z.string()).optional(),
       videoJobIds: z.array(z.string()).optional(),
-      generationJobs: z.array(z.object({ id: z.string(), kind: z.enum(GENERATION_JOB_KINDS) })).optional(),
+      generationJobs: z.array(z.object({ id: z.string(), kind: z.enum(QUEST_GENERATION_JOB_KINDS) })).optional(),
       // Derived from CHAT_HISTORY_ITEM_TYPES so the WebSocket payload cannot publish a
       // narrower quest-type vocabulary than the REST surfaces (schemas/chat.ts) do.
       type: z.enum(CHAT_HISTORY_ITEM_TYPES),
@@ -1353,7 +1358,7 @@ export const AgentProgressAction = z.object({
   // Jobs a tool just started, or a write preview awaiting confirmation, so the client can render
   // their cards on the run's quest mid-run. questId is only set together with generationJobs or pendingAction.
   questId: z.string().optional(),
-  generationJobs: z.array(z.object({ id: z.string(), kind: z.enum(GENERATION_JOB_KINDS) })).optional(),
+  generationJobs: z.array(z.object({ id: z.string(), kind: z.enum(QUEST_GENERATION_JOB_KINDS) })).optional(),
   pendingAction: z.object({ tool: z.string(), params: z.record(z.string(), z.unknown()), ts: z.number() }).optional(),
 });
 

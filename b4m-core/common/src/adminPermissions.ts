@@ -18,6 +18,15 @@ export const AdminPermissionsSchema = z
   .max(ADMIN_PERMISSIONS.length)
   .refine(ids => new Set(ids).size === ids.length, 'Admin permissions must not repeat');
 export type AdminPermissionId = z.infer<typeof AdminPermissionSchema>;
+/** One permission, or a list any one of which suffices. */
+export type AdminPermissionRequirement = AdminPermissionId | readonly AdminPermissionId[];
+
+/**
+ * The reads of a page whose writes need `settings:manage`: a settings manager can open the page
+ * it edits without also holding `support:read`. Shared by those routes' GET declarations and their
+ * admin console tabs (`adminTabPermissions.ts`), so the two stay in step.
+ */
+export const SETTINGS_PAGE_READ = ['support:read', 'settings:manage'] as const satisfies readonly AdminPermissionId[];
 
 type AdminIdentity = {
   isAdmin?: boolean | null;
@@ -26,6 +35,14 @@ type AdminIdentity = {
 
 export function hasAdminPermission(user: AdminIdentity | null | undefined, permission: AdminPermissionId): boolean {
   return user?.isAdmin === true || user?.adminPermissions?.includes(permission) === true;
+}
+
+export function meetsAdminPermissionRequirement(
+  user: AdminIdentity | null | undefined,
+  requirement: AdminPermissionRequirement
+): boolean {
+  const anyOf: readonly AdminPermissionId[] = typeof requirement === 'string' ? [requirement] : requirement;
+  return anyOf.some(permission => hasAdminPermission(user, permission));
 }
 
 export function canAccessAdmin(user: AdminIdentity | null | undefined): boolean {
@@ -37,8 +54,8 @@ export function isFullAdmin(user: AdminIdentity | null | undefined): boolean {
   return user?.isAdmin === true;
 }
 
-export function missingAdminPermissionMessage(permission: AdminPermissionId): string {
-  return `Missing permission: ${permission}`;
+export function missingAdminPermissionMessage(requirement: AdminPermissionRequirement): string {
+  return `Missing permission: ${typeof requirement === 'string' ? requirement : requirement.join(' or ')}`;
 }
 
 /**

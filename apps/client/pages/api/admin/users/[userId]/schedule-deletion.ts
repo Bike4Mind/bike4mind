@@ -1,7 +1,17 @@
-import { BadRequestError, NotFoundError, assertCanActOnAdminTarget, canAccessAdmin } from '@bike4mind/common';
+import {
+  BadRequestError,
+  NotFoundError,
+  assertCanActOnAdminTarget,
+  canAccessAdmin,
+  isFullAdmin,
+} from '@bike4mind/common';
 import { userRepository } from '@bike4mind/database';
 import { adminApi } from '@server/middlewares/adminApi';
-import { denySelfAdminAction, isSelfOrImpersonator, parseAdminActionReason } from '@bike4mind/server-utils/utils/adminAudit';
+import {
+  denySelfAdminAction,
+  isSelfOrImpersonator,
+  parseAdminActionReason,
+} from '@bike4mind/server-utils/utils/adminAudit';
 import { getApprovalPolicy, requestApproval } from '@server/admin/approvals/service';
 import { ScheduleDeletionSchema, scheduleDeletionAsAdmin } from '@server/admin/scheduleDeletionAsAdmin';
 
@@ -48,7 +58,10 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'users:del
     );
     return res.status(202).json(pending);
   }
-  const result = await scheduleDeletionAsAdmin(req, params, undefined, { requireNonAdmin: policy.enabled });
+  const result = await scheduleDeletionAsAdmin(req, params, undefined, {
+    // A delegate's target is re-checked too, in case it gained admin access since the check above.
+    requireNonAdmin: policy.enabled || !isFullAdmin(req.user),
+  });
   return res.status(202).json(result);
 });
 

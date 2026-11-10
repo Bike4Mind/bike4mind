@@ -1,5 +1,6 @@
 import type { Logger } from '@bike4mind/observability';
-import { authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
+import { accountSuspendedError, type HTTPError } from '@bike4mind/common';
+import { User, authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { authSessionService } from '@bike4mind/services';
 import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
 
@@ -34,4 +35,25 @@ export async function refuseBlockedRotatedSession(
     }
     throw error;
   }
+}
+
+/**
+ * Suspending signs the user out everywhere, so their next refresh fails as a plain invalid token and
+ * the app would read it as an expired session. When the presented token is still a secret of its
+ * session (current or one generation back, so it proves the caller held that session) and the owner is
+ * now suspended, this is the typed `account_suspended` refusal to send instead; null otherwise, and the
+ * caller keeps its original 401. Read-only: the session is already revoked.
+ */
+export async function suspendedSessionRefusal(opaqueToken: string): Promise<HTTPError | null> {
+  const parsed = authSessionService.parseRefreshToken(opaqueToken);
+  if (!parsed) return null;
+  const session = await authSessionRepository.findBySid(parsed.sid);
+  if (!session) return null;
+  const presentedHash = authSessionService.hashRefreshSecret(parsed.secret);
+  if (presentedHash !== session.refreshTokenHash && presentedHash !== session.previousRefreshTokenHash) return null;
+  const owner = (await User.findById(session.userId).select('isBanned suspensionReasonCategory').lean()) as {
+    isBanned?: boolean;
+    suspensionReasonCategory?: string | null;
+  } | null;
+  return owner?.isBanned ? accountSuspendedError(owner.suspensionReasonCategory) : null;
 }
