@@ -106,7 +106,6 @@ import { ImageModerationBlockedError } from '@bike4mind/utils/imageModeration';
 import { createImageProviderRegistry } from '@bike4mind/utils/imageProviders';
 import { createMusicProviderRegistry } from '@bike4mind/utils/musicProviders';
 import { createVideoProviderRegistry } from '@bike4mind/utils/videoProviders';
-import { createImageProviderRegistry } from '@bike4mind/utils/imageProviders';
 import {
   buildImageProviders,
   buildMusicProviders,
@@ -447,8 +446,8 @@ describe('buildProviders', () => {
 });
 
 describe('buildImageProviders', () => {
-  it('registers the OpenAI and Gemini adapters, which the catalog accepts', () => {
-    expect(buildImageProviders().map(provider => provider.id)).toEqual(['openai', 'gemini']);
+  it('registers the OpenAI, Gemini, BFL and xAI adapters, which the catalog accepts', () => {
+    expect(buildImageProviders().map(provider => provider.id)).toEqual(['openai', 'gemini', 'bfl', 'xai']);
     expect(() => createImageProviderRegistry(buildImageProviders())).not.toThrow();
   });
 });
