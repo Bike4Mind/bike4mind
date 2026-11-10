@@ -47,6 +47,7 @@ describe('buildSpendAlertMessage', () => {
     reviewState: 'approved',
     riskScore: 12,
     reviewReopened: false,
+    banned: false,
     paymentRiskEvent: false,
     hasCreditPurchase: true,
     lastCreditPurchaseAgeDays: 5,
@@ -89,6 +90,7 @@ describe('buildSpendAlertMessage', () => {
               riskScore: null,
               paymentRiskEvent: true,
               reviewReopened: true,
+              banned: false,
               hasCreditPurchase: null,
               lastCreditPurchaseAgeDays: null,
               payments: {

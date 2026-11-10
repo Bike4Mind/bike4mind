@@ -58,7 +58,8 @@ purchase standing uses the existing purchase stamp, not a checkout/customer ID. 
 clears a user's stamp once no unreversed purchase backs it. An organization's stamp is not cleared
 on reversal.
 
-Pending or banned reviews, a reopened review not subsequently approved, recorded payment-risk
+Pending or banned reviews, a banned account (read from the account flag, since unscored accounts
+have no review state), a reopened review not subsequently approved, recorded payment-risk
 events, retained Radar-blocked payments, or elevated payment-risk outcomes select standard limits.
 An unapproved numeric risk score at or above the existing signup review threshold also selects
 standard limits; an explicit review approval takes precedence over that numeric score. Ordinary

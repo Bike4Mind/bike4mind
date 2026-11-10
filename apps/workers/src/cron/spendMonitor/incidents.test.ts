@@ -46,6 +46,7 @@ describe('decideIncidents', () => {
       reviewState: 'approved' as const,
       riskScore: 5,
       reviewReopened: false,
+      banned: false,
       paymentRiskEvent: false,
       hasCreditPurchase: true,
       lastCreditPurchaseAgeDays: 2,

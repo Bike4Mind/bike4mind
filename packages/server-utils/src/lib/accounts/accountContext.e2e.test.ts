@@ -100,6 +100,7 @@ describe('account context database adapters', () => {
       reviewState: 'pending',
       riskScore: 90,
       reviewReopened: true,
+      banned: false,
       paymentRiskEvent: true,
       hasCreditPurchase: true,
       lastCreditPurchaseAgeDays: 5,
@@ -120,6 +121,7 @@ describe('account context database adapters', () => {
       reviewState: 'pending',
       riskScore: 90,
       reviewReopened: true,
+      banned: false,
       paymentRiskEvent: true,
     });
     const [projectedOwner] = await deps.findUsers([String(OWNER_ID)]);

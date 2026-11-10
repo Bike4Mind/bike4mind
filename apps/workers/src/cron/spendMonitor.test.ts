@@ -184,6 +184,7 @@ describe('spendMonitor handler', () => {
       reviewState: 'none',
       riskScore: 40,
       reviewReopened: false,
+      banned: false,
       paymentRiskEvent: false,
       hasCreditPurchase: false,
       lastCreditPurchaseAgeDays: null,

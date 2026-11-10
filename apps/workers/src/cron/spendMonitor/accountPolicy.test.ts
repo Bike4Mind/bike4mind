@@ -9,6 +9,7 @@ const context: AccountContext = {
   reviewState: 'none',
   riskScore: 10,
   reviewReopened: false,
+  banned: false,
   paymentRiskEvent: false,
   hasCreditPurchase: false,
   lastCreditPurchaseAgeDays: null,
@@ -62,6 +63,8 @@ describe('selectSpendAccountPolicy', () => {
     { paymentRiskEvent: null },
     { reviewReopened: null },
     { payments: { ...context.payments, status: 'observed', radarBlocked: 1 } },
+    { banned: true },
+    { banned: null },
     { payments: { ...context.payments, status: 'observed', elevatedRisk: 1 } },
   ])('keeps automatic limits standard with %j', patch => {
     expect(select({ ...context, ...patch }).tier).toBe('standard');
@@ -90,6 +93,12 @@ describe('selectSpendAccountPolicy', () => {
     expect(select({ ...context, paymentRiskEvent: true }, true, true).tier).toBe('standard');
     expect(select({ ...context, paymentRiskEvent: null, reviewReopened: null }, true, true).tier).toBe('standard');
   });
+  it('names a ban as the reason, even with explicit trust', () => {
+    expect(select({ ...context, banned: true }, true, true)).toMatchObject({
+      tier: 'standard',
+      reasons: ['account_banned'],
+    });
+  });
   it('keeps a pending review standard even with explicit trust', () => {
     expect(select({ ...context, reviewState: 'pending' }, true, true)).toMatchObject({
       tier: 'standard',
@@ -116,7 +125,9 @@ describe('selectSpendAccountPolicy', () => {
       { paymentRiskEvent: true },
       { reviewReopened: true },
       { reviewReopened: null },
+      { banned: true },
       { payments: { ...context.payments, status: 'observed', radarBlocked: 1 } },
+      { payments: { ...context.payments, status: 'observed', elevatedRisk: 1 } },
     ])('still keeps limits standard with %j', patch => {
       expect(select({ ...unscored, ...patch }).tier).toBe('standard');
     });

@@ -69,6 +69,7 @@ describe('resolveAccountContexts', () => {
       reviewState: 'none',
       riskScore: 12,
       reviewReopened: true,
+      banned: false,
       paymentRiskEvent: true,
       hasCreditPurchase: true,
       lastCreditPurchaseAgeDays: 15,
@@ -95,11 +96,20 @@ describe('resolveAccountContexts', () => {
       reviewState: 'unknown',
       riskScore: null,
       reviewReopened: false,
+      banned: false,
       paymentRiskEvent: false,
       hasCreditPurchase: false,
       payments: { status: 'missing', succeeded: 0, latestSucceededAgeDays: null },
       evidence: { status: 'missing', ageHours: null },
     });
+  });
+
+  it('reports a ban on an unscored account, which carries no banned review state', async () => {
+    const deps = createDeps({
+      findUsers: vi.fn(async () => [{ id: 'user', createdAt: ago(300), emailVerified: true, isBanned: true }]),
+    });
+    const context = (await resolveAccountContexts([account], NOW, deps)).get('User:user');
+    expect(context).toMatchObject({ reviewState: 'unknown', riskScore: null, banned: true });
   });
 
   it('does not infer a clean profile or an established age for a missing account', async () => {
@@ -112,6 +122,7 @@ describe('resolveAccountContexts', () => {
       reviewState: 'unknown',
       riskScore: null,
       reviewReopened: null,
+      banned: null,
       paymentRiskEvent: null,
       hasCreditPurchase: null,
       lastCreditPurchaseAgeDays: null,
@@ -234,6 +245,7 @@ describe('resolveAccountContexts', () => {
       reviewState: 'none',
       riskScore: null,
       reviewReopened: false,
+      banned: false,
       paymentRiskEvent: false,
       hasCreditPurchase: false,
       lastCreditPurchaseAgeDays: null,
@@ -271,6 +283,7 @@ describe('defaultAccountContextDeps', () => {
       new Set([
         'createdAt',
         'emailVerified',
+        'isBanned',
         'riskScore.score',
         'riskScore.reviewState',
         'riskReviewReopenedAt',

@@ -17,6 +17,7 @@ export function selectSpendAccountPolicy(input: {
 
   const risks = [
     ...(context.paymentRiskEvent === true ? ['payment_risk_event'] : []),
+    ...(context.banned === true ? ['account_banned'] : []),
     ...(context.reviewReopened === true && context.reviewState !== 'approved' ? ['review_reopened'] : []),
     ...(['pending', 'banned'].includes(context.reviewState) ? [`review_${context.reviewState}`] : []),
     ...(context.reviewState !== 'approved' &&
@@ -28,7 +29,7 @@ export function selectSpendAccountPolicy(input: {
     ...(context.payments.elevatedRisk > 0 ? ['payment_elevated_risk'] : []),
   ];
   if (risks.length > 0) return decide('standard', risks);
-  if (context.paymentRiskEvent === null || context.reviewReopened === null) {
+  if (context.paymentRiskEvent === null || context.reviewReopened === null || context.banned === null) {
     return decide('standard', ['risk_flags_unknown']);
   }
   // Explicit operator trust can accommodate a new partner, but never overrides recorded risk flags.

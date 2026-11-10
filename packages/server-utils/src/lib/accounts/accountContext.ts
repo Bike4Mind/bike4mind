@@ -17,6 +17,7 @@ export const AccountContextSchema = z.strictObject({
   reviewState: z.enum([...SIGNUP_RISK_REVIEW_STATES, 'unknown']),
   riskScore: z.number().finite().min(0).max(100).nullable(),
   reviewReopened: z.boolean().nullable(),
+  banned: z.boolean().nullable(),
   paymentRiskEvent: z.boolean().nullable(),
   hasCreditPurchase: z.boolean().nullable(),
   lastCreditPurchaseAgeDays: nullableAge,
@@ -38,6 +39,7 @@ export type AccountContextUser = {
   id: string;
   createdAt?: Date | null;
   emailVerified?: boolean;
+  isBanned?: boolean;
   riskScore?: { score: number; reviewState: (typeof SIGNUP_RISK_REVIEW_STATES)[number] } | null;
   riskReviewReopenedAt?: Date | null;
   paymentRiskEventAt?: Date | null;
@@ -95,6 +97,8 @@ function buildContext(
     reviewState: user?.riskScore?.reviewState ?? 'unknown',
     riskScore: user?.riskScore?.score ?? null,
     reviewReopened: user ? Boolean(user.riskReviewReopenedAt) : null,
+    // Ban paths only set reviewState 'banned' on scored users, so the account flag is read too.
+    banned: user ? Boolean(user.isBanned) : null,
     paymentRiskEvent: user ? Boolean(user.paymentRiskEventAt) : null,
     hasCreditPurchase: owner ? Boolean(owner.lastCreditsPurchasedAt) : null,
     lastCreditPurchaseAgeDays: ageAt(owner?.lastCreditsPurchasedAt, now, DAY_MS),
@@ -162,7 +166,7 @@ export function defaultAccountContextDeps(): AccountContextDeps {
       if (validIds.length === 0) return [];
       const rows = await User.find({ _id: { $in: validIds } })
         .select(
-          'createdAt emailVerified riskScore.score riskScore.reviewState riskReviewReopenedAt paymentRiskEventAt lastCreditsPurchasedAt riskEvidence.summary.computedAt'
+          'createdAt emailVerified isBanned riskScore.score riskScore.reviewState riskReviewReopenedAt paymentRiskEventAt lastCreditsPurchasedAt riskEvidence.summary.computedAt'
         )
         .lean<(Omit<AccountContextUser, 'id'> & { _id: unknown })[]>();
       return rows.map(row => ({ ...row, id: String(row._id) }));
