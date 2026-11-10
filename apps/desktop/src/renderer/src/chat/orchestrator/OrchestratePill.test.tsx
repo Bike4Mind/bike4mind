@@ -70,6 +70,22 @@ describe('OrchestratePill', () => {
     expect(el('composer-orchestrate-toggle').getAttribute('aria-label')).toBe('Orchestrate');
   });
 
+  it('keeps the button name and describes it with the open tooltip', async () => {
+    await themed.render(
+      <OrchestratePill
+        on
+        policy={policyWith({ implementation: 'inherit', exploration: 'inherit', review: 'inherit' })}
+        planner="planner"
+        models={models}
+        onChange={onChange}
+      />
+    );
+    const tooltip = await hoverTooltip();
+    const toggle = el('composer-orchestrate-toggle');
+    expect(toggle.getAttribute('aria-labelledby')).toBeNull();
+    expect(toggle.getAttribute('aria-describedby')).toBe(tooltip?.id);
+  });
+
   it('marks the icon and flags the role when a policy model is unavailable', async () => {
     await themed.render(
       <OrchestratePill
@@ -86,6 +102,27 @@ describe('OrchestratePill', () => {
     expect(el('orchestration-policy-summary').textContent).toContain(
       'exploration: missing (unavailable; choose a replacement)'
     );
+  });
+
+  it.each([
+    ['an unavailable planner', 'missing', { implementation: 'inherit', exploration: 'inherit', review: 'inherit' }],
+    ['a disabled model', 'planner', { implementation: 'off', exploration: 'inherit', review: 'inherit' }],
+    ['a model without tool support', 'planner', { implementation: 'inherit', exploration: 'plain', review: 'inherit' }],
+  ])('marks the icon for %s', async (_name, planner, roles) => {
+    await themed.render(
+      <OrchestratePill
+        on
+        policy={policyWith(roles)}
+        planner={planner}
+        models={[
+          ...models,
+          { id: 'off', name: 'Off Model', supportsTools: true, disabled: true },
+          { id: 'plain', name: 'Plain Model', supportsTools: false },
+        ]}
+        onChange={onChange}
+      />
+    );
+    expect(query('composer-orchestrate-unavailable')).not.toBeNull();
   });
 
   it('leaves the icon unmarked before the model catalog has loaded', async () => {

@@ -54,7 +54,7 @@ export function OrchestratePill({
   );
 
   return (
-    <Tooltip title={title} size="sm" variant="soft" placement="top">
+    <Tooltip title={title} size="sm" variant="soft" placement="top" describeChild>
       <IconButton
         size="sm"
         aria-label={unavailable ? 'Orchestrate, a run policy model is unavailable' : 'Orchestrate'}
