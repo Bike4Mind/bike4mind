@@ -1406,6 +1406,38 @@ describe('AgentExecutionRepository', () => {
       expect(await agentExecutionRepository.clearPendingGate(exec.id)).toBe(false);
     });
 
+    it('clearPendingGate with keepCompletion drops the gate but keeps the held completion', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution());
+      const completion = { answer: 'done', replyText: 'done', totalTokens: 10, totalIterations: 2 };
+      await agentExecutionRepository.setPendingGate(
+        exec.id,
+        { iteration: 1, confidence: 0.2, reason: 'low', requestedAt: new Date() },
+        { completion: completion as never, checkpoint: { iteration: 2, steps: [] } }
+      );
+
+      expect(await agentExecutionRepository.clearPendingGate(exec.id, { keepCompletion: true })).toBe(true);
+      const kept = await agentExecutionRepository.findById(exec.id);
+      expect(kept?.pendingGate).toBeUndefined();
+      expect(kept?.pendingCompletion).toMatchObject(completion);
+    });
+
+    it('markComplete drops a held completion in the same write', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution());
+      await agentExecutionRepository.setPendingGate(
+        exec.id,
+        { iteration: 1, confidence: 0.2, reason: 'low', requestedAt: new Date() },
+        {
+          completion: { answer: 'done', replyText: 'done', totalTokens: 1, totalIterations: 1 } as never,
+          checkpoint: { iteration: 1, steps: [] },
+        }
+      );
+
+      await agentExecutionRepository.markComplete(exec.id, { answer: 'done' });
+      const done = await agentExecutionRepository.findById(exec.id);
+      expect(done?.status).toBe('completed');
+      expect(done?.pendingCompletion).toBeUndefined();
+    });
+
     it('records the latest evaluated confidence on the doc, whether or not it was below threshold', async () => {
       const exec = await agentExecutionRepository.create(makeBaseExecution());
       expect((await agentExecutionRepository.findById(exec.id))?.lastConfidence).toBeUndefined();

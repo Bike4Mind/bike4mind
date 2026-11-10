@@ -769,7 +769,10 @@ export async function handleGateResponse(
     // this, `markComplete` (which has no such guard) would silently overwrite
     // a freshly-aborted execution back to `completed`, contradicting the
     // user's abort decision.
-    const cleared = await agentExecutionRepository.clearPendingGate(cmd.executionId);
+    const cleared = await agentExecutionRepository.clearPendingGate(
+      cmd.executionId,
+      execution.pendingCompletion ? { keepCompletion: true } : undefined
+    );
     if (!cleared) {
       logger.warn('[Gate] Stop ignored — clearPendingGate matched 0 docs (likely aborted concurrently)', {
         executionId: cmd.executionId,
@@ -825,8 +828,10 @@ export async function handleGateResponse(
       ? reopenLowConfidenceAnswer(execution.checkpoint as AgentCheckpoint)
       : null;
   if (execution.pendingCompletion && !reopened) {
-    if (await agentExecutionRepository.clearPendingGate(cmd.executionId)) {
+    if (await agentExecutionRepository.clearPendingGate(cmd.executionId, { keepCompletion: true })) {
       await acceptHeldCompletion(execution, connectionId, endpoint, logger);
+    } else {
+      logger.warn('[Gate] Continue ignored - clearPendingGate matched 0 docs', { executionId: cmd.executionId });
     }
     return;
   }
@@ -890,14 +895,6 @@ async function acceptHeldCompletion(
     reachedMaxIterations: completion.reachedMaxIterations,
     lowConfidence: completion.lowConfidence,
   });
-  await sendAgentEvent(connectionId, endpoint, {
-    action: 'completed',
-    executionId: execution.id,
-    answer,
-    totalIterations: completion.totalIterations,
-    totalCreditsUsed: execution.totalCreditsUsed,
-    mementoIds: execution.usedMementoIds ?? [],
-  });
   await persistRunAsQuest(
     execution.id,
     completion.replyText,
@@ -908,6 +905,21 @@ async function acceptHeldCompletion(
     completion.retrievalSummary ?? undefined
   );
   await resolveAndPublishMementoCompletion(execution, { db: { adminSettings: adminSettingsRepository } }, logger);
+  try {
+    await sendAgentEvent(connectionId, endpoint, {
+      action: 'completed',
+      executionId: execution.id,
+      answer,
+      totalIterations: completion.totalIterations,
+      totalCreditsUsed: execution.totalCreditsUsed,
+      mementoIds: execution.usedMementoIds ?? [],
+    });
+  } catch (error) {
+    logger.warn('[Gate] Completed event not delivered', {
+      executionId: execution.id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
   logger.info('[Gate] Accepted low-confidence completion', { executionId: execution.id });
 }
 

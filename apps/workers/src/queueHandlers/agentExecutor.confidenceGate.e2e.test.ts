@@ -31,6 +31,8 @@ const h = vi.hoisted(() => ({
   lowConfidenceMode: undefined as 'block' | 'annotate' | 'off' | undefined,
   // Profile `confidenceGateThreshold` the executor resolves; undefined keeps the built-in threshold.
   gateThreshold: undefined as number | undefined,
+  // Makes the API Gateway send reject for the `completed` frame only.
+  failCompletedSend: false,
 }));
 
 vi.mock('./agentExecutor.orchestrationProfile', async () => {
@@ -57,7 +59,9 @@ vi.mock('sst', () => ({
 vi.mock('@aws-sdk/client-apigatewaymanagementapi', () => ({
   ApiGatewayManagementApiClient: class {
     send(command: { input: { Data: Buffer } }) {
-      h.wsEvents.push(JSON.parse(command.input.Data.toString()));
+      const event = JSON.parse(command.input.Data.toString());
+      if (h.failCompletedSend && event.action === 'completed') return Promise.reject(new Error('gone'));
+      h.wsEvents.push(event);
       return Promise.resolve({});
     }
   },
@@ -105,6 +109,7 @@ vi.mock('@bike4mind/llm-adapters', async () => {
         await callback([probeTurn ? 'Calling the probe' : FINAL_ANSWER], {
           inputTokens: 10,
           outputTokens: 5,
+          stopReason: probeTurn ? 'tool_use' : 'end_turn',
           toolsUsed: probeTurn ? [{ id: `call-${turn + 1}`, name: PROBE_TOOL, arguments: '{}' }] : [],
         });
       },
@@ -126,9 +131,22 @@ vi.mock('@bike4mind/services/llm', async () => {
   return {
     ...actual,
     resolveToolAvailability: vi.fn().mockResolvedValue({}),
-    buildSharedTools: () => [
+    buildSharedTools: (
+      _deps: unknown,
+      callbacks: {
+        onStatusUpdate: (changes: Record<string, unknown>) => Promise<void>;
+        onUiSideEffect: (effect: { type: string; payload: unknown }) => Promise<void>;
+      }
+    ) => [
       {
-        toolFn: async () => 'probe ok',
+        toolFn: async () => {
+          await callbacks.onStatusUpdate({
+            images: ['probe-image.png'],
+            promptMeta: { retrieval: { attempted: true, outcome: 'hit', surfaces: [], dataLakeTags: [] } },
+          });
+          await callbacks.onUiSideEffect({ type: 'probe_effect', payload: { ok: true } });
+          return 'probe ok';
+        },
         toolSchema: {
           name: PROBE_TOOL,
           description: 'A tool that always succeeds',
@@ -203,6 +221,7 @@ describe('confidence gate, end to end', () => {
     h.probeTurns = 1;
     h.lowConfidenceMode = undefined;
     h.gateThreshold = undefined;
+    h.failCompletedSend = false;
   });
 
   it('pauses on a streak of low overrides, resumes through a gate response, and completes', async () => {
@@ -347,10 +366,65 @@ describe('confidence gate, end to end', () => {
         executionId,
         FINAL_ANSWER,
         expect.anything(),
-        [],
-        execution?.pendingCompletion?.finishReason ?? undefined,
-        [],
-        undefined
+        ['probe-image.png'],
+        'end_turn',
+        [{ type: 'probe_effect', payload: { ok: true } }],
+        { attempted: true, outcome: 'hit', surfaces: [], dataLakeTags: [] }
+      );
+    });
+
+    it('Stop and Continue racing on a held completion produce exactly one outcome', async () => {
+      h.lowConfidenceMode = 'block';
+      const { persistRunAsQuest } = await import('@server/utils/persistRunAsQuest');
+      vi.mocked(persistRunAsQuest).mockClear();
+      const { executionId, userId } = await runToAnswer(0.1);
+
+      await Promise.all([respond(executionId, userId, 'stop'), respond(executionId, userId, 'continue')]);
+
+      const { agentExecutionRepository } = await import('@bike4mind/database');
+      const settled = await agentExecutionRepository.findById(executionId);
+      const completedFrames = h.wsEvents.filter(event => event.action === 'completed');
+      if (settled?.status === 'completed') {
+        expect(persistRunAsQuest).toHaveBeenCalledTimes(1);
+        expect(completedFrames).toHaveLength(1);
+        expect(h.dispatched).toEqual([]);
+      } else {
+        expect(settled?.status).toBe('continuing');
+        expect(h.dispatched).toHaveLength(1);
+        expect(persistRunAsQuest).not.toHaveBeenCalled();
+        expect(completedFrames).toHaveLength(0);
+      }
+    });
+
+    it('a double Continue dispatches the executor once', async () => {
+      h.lowConfidenceMode = 'block';
+      const { executionId, userId } = await runToAnswer(0.1);
+
+      await Promise.all([respond(executionId, userId, 'continue'), respond(executionId, userId, 'continue')]);
+
+      expect(h.dispatched).toEqual([{ executionId, connectionId: 'conn-1' }]);
+    });
+
+    it('Stop still writes the Quest and completes when the completed event cannot be delivered', async () => {
+      h.lowConfidenceMode = 'block';
+      const { persistRunAsQuest } = await import('@server/utils/persistRunAsQuest');
+      vi.mocked(persistRunAsQuest).mockClear();
+      const { executionId, userId } = await runToAnswer(0.1);
+
+      h.failCompletedSend = true;
+      try {
+        await respond(executionId, userId, 'stop');
+      } finally {
+        h.failCompletedSend = false;
+      }
+
+      const { agentExecutionRepository } = await import('@bike4mind/database');
+      const stopped = await agentExecutionRepository.findById(executionId);
+      expect(stopped?.status).toBe('completed');
+      expect(persistRunAsQuest).toHaveBeenCalledTimes(1);
+      expect(logger.warn).toHaveBeenCalledWith(
+        '[Gate] Completed event not delivered',
+        expect.objectContaining({ executionId })
       );
     });
 

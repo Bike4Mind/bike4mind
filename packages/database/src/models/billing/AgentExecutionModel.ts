@@ -1757,11 +1757,11 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    * without the `pendingGate` filter a repeated or racing response would still report a
    * modification and act on the same pause twice.
    */
-  async clearPendingGate(id: string, opts?: { checkpoint?: unknown }): Promise<boolean> {
+  async clearPendingGate(id: string, opts?: { checkpoint?: unknown; keepCompletion?: boolean }): Promise<boolean> {
     const result = await this.model.updateOne(
       { _id: id, status: 'paused', pendingGate: { $exists: true }, abortedAt: { $exists: false } },
       {
-        $unset: { pendingGate: '', pendingCompletion: '' },
+        $unset: opts?.keepCompletion ? { pendingGate: '' } : { pendingGate: '', pendingCompletion: '' },
         ...(opts?.checkpoint !== undefined && { $set: { checkpoint: opts.checkpoint } }),
       }
     );
@@ -1834,6 +1834,7 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
           result,
           completedAt: new Date(),
         },
+        $unset: { pendingCompletion: '' },
       }
     );
   }
