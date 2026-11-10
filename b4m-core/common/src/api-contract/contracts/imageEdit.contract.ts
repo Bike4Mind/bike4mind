@@ -41,12 +41,12 @@ export const editImageContract = defineEndpoint({
     '`download_url`, which must still be unexpired when the render runs. The edited image is not a file ' +
     'id: read it from `files[].url` on the polled quest, not from `GET /api/v1/files/{id}`. ' +
     '`seed` makes an edit reproducible on BFL (FLUX) models only; gpt-image and Gemini models ignore it. ' +
-    '`edit_regions` carries BFL region-edit bounding boxes: each entry has a `prompt` and a ' +
+    '`edit_regions` carries region-edit bounding boxes: each entry has a `prompt` and a ' +
     '`bbox` of `[y_min, x_min, y_max, x_max]` in normalised [0, 1] coordinates (BFL convention, ' +
-    'vertical axis first). At most 8 regions per request. Accepted on BFL models only ' +
-    '(non-BFL → 400); schema-validated on ingress but not yet forwarded to the BFL API ' +
-    '(pending a verified FLUX 3 provider contract). A box with out-of-range coordinates, ' +
-    'degenerate ordering, or exceeding the region cap is a 422. ' +
+    'vertical axis first). At most 8 regions per request. Accepted on FLUX 3 models only ' +
+    '(non-FLUX-3 → 400); schema-validated on ingress (422 on bad coordinates / degenerate boxes / ' +
+    "over-cap count), then converted to BFL's prompt-inline JSON layout (0-1000 integer grid) " +
+    'before the request reaches the provider. ' +
     'Credits are checked when ' +
     'the render runs, so insufficient credits arrive on the polled quest rather than as a 422. ' +
     '`organization_id` is accepted as an alias of `organizationId`, for callers used to the snake_case ' +

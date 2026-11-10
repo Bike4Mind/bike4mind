@@ -14,6 +14,7 @@ import {
   supportsBflSeed,
   supportsPromptUpsampling,
   toNonWebpOutputFormat,
+  formatBflEditRegionsPrompt,
 } from '@bike4mind/common';
 import { redactErrorForLog } from './redactErrorForLog';
 import {
@@ -277,15 +278,33 @@ export class BFLImageService extends AIImageService {
       output_format = 'jpeg',
       safety_tolerance = BFL_SAFETY_TOLERANCE.DEFAULT,
       referenceImages = [],
+      edit_regions,
     }: ImageEditOptions
   ): Promise<ImageEditResponse> {
     try {
       const flux2 = isFlux2ImageModel(model);
+      const flux3 = isFlux3ImageModel(model);
       if (flux2 && 1 + referenceImages.length > getMaxReferenceImages(model)) {
         throw new Error(
           `Model ${model} accepts at most ${getMaxReferenceImages(model)} input images (the source plus references)`
         );
       }
+      // FLUX 3 region edits: the layout is embedded in the prompt as inline JSON on a 0-1000
+      // grid. The source image rides in the `images` array as a reference. The request goes to
+      // the standard FLUX 3 generation endpoint (additionalProperties: false, so only
+      // allowlisted fields are sent).
+      const flux3Body =
+        flux3 && edit_regions?.length
+          ? {
+              prompt: formatBflEditRegionsPrompt(prompt, edit_regions),
+              images: [image, ...referenceImages],
+              safety_tolerance: this.clampSafetyTolerance(safety_tolerance),
+              ...(supportsBflSeed(model) ? { seed } : {}),
+              ...(supportsBflOutputFormat(model)
+                ? { output_format: toNonWebpOutputFormat(output_format) || 'jpeg' }
+                : {}),
+            }
+          : undefined;
       // FLUX.2 edits on its generation endpoint: no mask, steps or guidance, and the source rides as input_image.
       const flux2Body = flux2
         ? {
@@ -322,7 +341,7 @@ export class BFLImageService extends AIImageService {
         output_format: toNonWebpOutputFormat(output_format) || 'jpeg',
       };
 
-      const cleanedBody = this.stripNullFields(flux2Body ?? requestBody);
+      const cleanedBody = this.stripNullFields(flux3Body ?? flux2Body ?? requestBody);
       Logger.globalInstance.debug('[DEBUG] BFL Image edit request body:', redactInputImages(cleanedBody));
 
       // Submit a new generation request for each image

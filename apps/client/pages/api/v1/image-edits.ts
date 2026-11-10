@@ -11,7 +11,7 @@ import { getOrCreateSession } from '@server/managers/sessionManager';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrgId';
 import { assertNoStrayBillingOrgKeys, resolveBillingOrgInput } from '@bike4mind/server-utils/utils/orgAccess';
-import { editImageContract, validateBflEditRegions, isBflImageModel } from '@bike4mind/common';
+import { editImageContract, validateBflEditRegions, isFlux3ImageModel } from '@bike4mind/common';
 import { armGenerationCallback, resolveGenerationCallback } from '@server/generationCallback/armGenerationCallback';
 import { assertReferenceImagesSupported } from '@server/utils/assertReferenceImagesSupported';
 import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
@@ -26,8 +26,8 @@ const handler = nextRouteForContract(editImageContract).post(async (req, res) =>
   assertReferenceImagesSupported(body.model, body.referenceImageFabFileIds);
 
   if (body.edit_regions?.length) {
-    if (!isBflImageModel(body.model)) {
-      return res.status(400).json({ error: 'edit_regions are only supported on BFL models' });
+    if (!isFlux3ImageModel(body.model)) {
+      return res.status(400).json({ error: 'edit_regions are only supported on FLUX 3 models' });
     }
     const regionIssues = validateBflEditRegions(body.edit_regions);
     if (regionIssues.length) {

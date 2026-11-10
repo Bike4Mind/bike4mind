@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   BflEditRegionSchema,
   validateBflEditRegions,
+  formatBflEditRegionsPrompt,
   MAX_BFL_EDIT_REGIONS,
   EditImageRequestBodySchema,
   type BflEditRegion,
@@ -79,10 +80,7 @@ describe('validateBflEditRegions', () => {
   });
 
   it('validates each region independently', () => {
-    const issues = validateBflEditRegions([
-      validRegion,
-      { prompt: 'bad', bbox: [0.9, 0.2, 0.1, 0.9] },
-    ]);
+    const issues = validateBflEditRegions([validRegion, { prompt: 'bad', bbox: [0.9, 0.2, 0.1, 0.9] }]);
     expect(issues.some(i => i.includes('[1]'))).toBe(true);
     expect(issues.every(i => !i.includes('[0]'))).toBe(true);
   });
@@ -122,5 +120,38 @@ describe('EditImageRequestBodySchema edit_regions field', () => {
     });
     const regionIssues = result.error?.issues?.filter(i => String(i.path[0]) === 'edit_regions') ?? [];
     expect(regionIssues.length).toBeGreaterThan(0);
+  });
+});
+
+describe('formatBflEditRegionsPrompt', () => {
+  it('embeds a single region as prompt-inline JSON on a 0-1000 grid', () => {
+    const result = formatBflEditRegionsPrompt('paint it red', [{ prompt: 'a red square', bbox: [0.1, 0.2, 0.5, 0.8] }]);
+    expect(result).toContain('<region_0>');
+    const layout = JSON.parse(result.split('\n\n')[1]);
+    expect(layout).toEqual([{ id: 'region_0', bbox: [100, 200, 500, 800], desc: 'a red square' }]);
+  });
+
+  it('scales coordinates to 0-1000 integers with rounding', () => {
+    const result = formatBflEditRegionsPrompt('test', [{ prompt: 'desc', bbox: [0.333, 0.667, 0.999, 1.0] }]);
+    const layout = JSON.parse(result.split('\n\n')[1]);
+    expect(layout[0].bbox).toEqual([333, 667, 999, 1000]);
+  });
+
+  it('embeds multiple regions with separate ids', () => {
+    const result = formatBflEditRegionsPrompt('composite', [
+      { prompt: 'sky', bbox: [0, 0, 0.3, 1] },
+      { prompt: 'ground', bbox: [0.7, 0, 1, 1] },
+    ]);
+    expect(result).toContain('<region_0>');
+    expect(result).toContain('<region_1>');
+    const layout = JSON.parse(result.split('\n\n')[1]);
+    expect(layout).toHaveLength(2);
+    expect(layout[0].id).toBe('region_0');
+    expect(layout[1].id).toBe('region_1');
+  });
+
+  it('preserves the original prompt before the region refs', () => {
+    const result = formatBflEditRegionsPrompt('a scenic landscape', [{ prompt: 'mountains', bbox: [0, 0, 0.5, 1] }]);
+    expect(result.startsWith('a scenic landscape')).toBe(true);
   });
 });

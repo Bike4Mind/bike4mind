@@ -147,6 +147,27 @@ export function validateBflEditRegions(regions: BflEditRegion[]): string[] {
   return issues;
 }
 
+/**
+ * Embed validated `edit_regions` into a FLUX 3 prompt as an inline JSON layout.
+ *
+ * FLUX 3 accepts bounding-box layouts as text appended to the prompt: a JSON array
+ * of `{id, bbox, desc}` objects where `bbox` is `[top, left, bottom, right]` on a
+ * 0-1000 integer grid (see https://api.bfl.ai/openapi.json - the layout rides inside
+ * the `prompt` field, not as a separate request property).
+ *
+ * Each region ID is referenced in the prompt as `<region_N>` so the model can ground
+ * the layout element to the caption.
+ */
+export function formatBflEditRegionsPrompt(prompt: string, regions: BflEditRegion[]): string {
+  const layout = regions.map((r, i) => ({
+    id: `region_${i}`,
+    bbox: r.bbox.map(v => Math.round(v * 1000)),
+    desc: r.prompt,
+  }));
+  const refs = regions.map((_, i) => `<region_${i}>`).join(' ');
+  return `${prompt} ${refs}\n\n${JSON.stringify(layout)}`;
+}
+
 const BillingOrgIdAliasSchema = BillingOrganizationIdSchema.describe(
   'Alias of `organizationId`, for callers used to the snake_case video and music bodies. Sending both ' +
     'with different values is a 422.'
@@ -246,9 +267,10 @@ export const EditImageRequestBodySchema = OpenAIImageGenerationInput.extend({
   /**
    * BFL region-edit bounding boxes. Each entry carries a per-region prompt and a
    * \`[y_min, x_min, y_max, x_max]\` box in normalised [0, 1] coordinates (BFL convention).
-   * Accepted on BFL models only (others → 400). Schema-validated on ingress (422 on bad
-   * coordinates / degenerate boxes / over-cap count) but **not yet forwarded** to the BFL API —
-   * pending a verified FLUX 3 provider contract that accepts the field.
+   * Accepted on BFL FLUX 3 models only (others → 400). Schema-validated on ingress (422 on
+   * bad coordinates / degenerate boxes / over-cap count), then converted to BFL's prompt-inline
+   * JSON layout format (0-1000 integer grid) by {@link formatBflEditRegionsPrompt} before the
+   * request reaches the provider.
    */
   edit_regions: z.array(BflEditRegionSchema).optional(),
   callbackUrl: GenerationCallbackUrlSchema.optional(),

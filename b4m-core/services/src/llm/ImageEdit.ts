@@ -33,6 +33,7 @@ import {
   isGeminiImageModel,
   rejectsTransparentBackground,
   isFlux2ImageModel,
+  isFlux3ImageModel,
   getMaxEditReferenceImages,
   MAX_REFERENCE_IMAGES,
   supportsImageEditEndpoint,
@@ -486,8 +487,7 @@ export class ImageEditService {
       image: sourceImageUrl,
       organizationId,
       generationId,
-      // edit_regions: parsed and validated on the route (422), but not yet forwarded to any
-      // provider — pending a verified FLUX 3 contract that accepts the field.
+      edit_regions,
     } = ImageEditBodySchema.parse(body);
     // Step a gpt-image-2 selection down to gpt-image-1.5 when transparency is requested:
     // gpt-image-2 rejects background: 'transparent' outright, so sending it there would
@@ -765,7 +765,25 @@ export class ImageEditService {
 
       let editResponse: ImageEditResponse;
       if (provider === 'bfl') {
-        if (isFlux2ImageModel(model)) {
+        if (isFlux3ImageModel(model) && edit_regions?.length) {
+          // FLUX 3 region edits: formatBflEditRegionsPrompt (in the service layer) embeds the
+          // layout as prompt-inline JSON on a 0-1000 grid; the source image rides in `images`.
+          const referenceBase64Images = await Promise.all(
+            referenceImageUrls.map(async url => {
+              const encoded = await imageUrlToBase64(url, true);
+              if (!encoded) throw new NotFoundError('Reference image not found');
+              return encoded;
+            })
+          );
+          editResponse = await service.edit(sourceBase64Image, truncatedPrompt, {
+            model,
+            referenceImages: referenceBase64Images,
+            edit_regions,
+            safety_tolerance,
+            seed,
+            output_format,
+          });
+        } else if (isFlux2ImageModel(model)) {
           // FLUX.2 takes the references inline as base64, like the generation path; the URLs are freshly signed above.
           const referenceBase64Images = await Promise.all(
             referenceImageUrls.map(async url => {
