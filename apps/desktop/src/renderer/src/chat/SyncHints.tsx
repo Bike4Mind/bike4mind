@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 import Button from '@mui/joy/Button';
 import IconButton from '@mui/joy/IconButton';
 import Link from '@mui/joy/Link';
@@ -48,24 +48,33 @@ function plural(count: number, one: string, many: string): string {
 
 function HintCard({
   testId,
+  heading,
+  headingProps,
   children,
   onClose,
   closeLabel,
 }: {
   testId: string;
+  heading: string;
+  headingProps?: { fontWeight: 'md' };
   children: ReactNode;
   onClose: () => void;
   closeLabel: string;
 }) {
+  const headingId = useId();
   return (
     <Sheet
       variant="soft"
-      role="status"
+      role="region"
+      aria-labelledby={headingId}
       data-testid={testId}
       sx={{ mx: 1, mb: 1, py: 1, pl: 1.25, pr: 0.5, borderRadius: 'sm' }}
     >
       <Stack direction="row" spacing={0.5} alignItems="flex-start">
         <Stack spacing={0.75} sx={{ flex: 1, minWidth: 0 }}>
+          <Typography id={headingId} level="body-xs" {...headingProps}>
+            {heading}
+          </Typography>
           {children}
         </Stack>
         <IconButton
@@ -97,8 +106,7 @@ function SourceHint({
   onDismiss: () => void;
 }) {
   return (
-    <HintCard testId={testId} onClose={onDismiss} closeLabel="Hide this hint">
-      <Typography level="body-xs">{text}</Typography>
+    <HintCard testId={testId} heading={text} onClose={onDismiss} closeLabel="Hide this hint">
       {error && (
         <Typography level="body-xs" color="danger" data-testid={`${testId}-error`}>
           Could not turn on sync. Try again.
@@ -172,12 +180,11 @@ export function SyncHintsView({
   return (
     <HintCard
       testId="sidebar-empty-sync-card"
+      heading="No conversations yet. Bring some in:"
+      headingProps={{ fontWeight: 'md' }}
       onClose={() => onDismiss('sidebar-empty')}
       closeLabel="Hide these suggestions"
     >
-      <Typography level="body-xs" fontWeight="md">
-        No conversations yet. Bring some in:
-      </Typography>
       {options.code && option('sidebar-empty-sync-code-btn', 'Bring in your Claude Code sessions', 'claude-code')}
       {options.chat && (
         <Stack spacing={0.25}>

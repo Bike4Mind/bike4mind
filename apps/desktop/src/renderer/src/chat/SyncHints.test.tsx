@@ -232,3 +232,13 @@ describe('web hint', () => {
     expect(query('sync-hint-web')).toBeNull();
   });
 });
+
+describe('hint card accessibility', () => {
+  it('labels the card as a region by its heading', async () => {
+    await mount(stateWith(), false);
+    const card = query('sync-hint-claude-code');
+    expect(card?.getAttribute('role')).toBe('region');
+    const heading = document.getElementById(card?.getAttribute('aria-labelledby') ?? '');
+    expect(heading?.textContent).toContain('Claude Code session');
+  });
+});
