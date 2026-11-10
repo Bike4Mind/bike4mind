@@ -725,6 +725,68 @@ async function gitQuery(directory: string, args: readonly string[]): Promise<str
   return result?.code === 0 ? result.stdout : null;
 }
 
+/** The commands git runs under their own name before it reads any alias: builtins and the `git-<name>` programs it finds. */
+export async function gitCommandNames(directory: string): Promise<ReadonlySet<string> | null> {
+  const listed = await gitQuery(directory, ['--list-cmds=builtins,main,others']);
+  return listed === null ? null : new Set(listed.split(/\r?\n/).filter(Boolean));
+}
+
+/** The aliases git reads in a folder, by lowercased name, and whether help.autocorrect may run a command it guesses. */
+export interface GitAliases {
+  /** Null for an alias set with no value, which git refuses. */
+  aliases: ReadonlyMap<string, string | null>;
+  autocorrect: boolean;
+}
+
+/** help.autocorrect values under which git only names the command it guesses. */
+const SHOWS_GUESS = /^(0|false|off|no|show|never)$/i;
+
+/** What git reads of aliases and help.autocorrect in `directory`; null when git could not tell. */
+export async function gitAliases(directory: string): Promise<GitAliases | null> {
+  const listed = await gitRun(directory, ['config', '-z', '--get-regexp', String.raw`^alias\.|^help\.autocorrect$`]);
+  // git config exits 1, printing nothing, when no key matches.
+  if (listed === null || (listed.code !== 0 && (listed.code !== 1 || listed.stdout !== ''))) return null;
+  const aliases = new Map<string, string | null>();
+  let autocorrect = false;
+  for (const entry of listed.stdout.split('\0')) {
+    if (entry === '') continue;
+    const newline = entry.indexOf('\n');
+    const key = (newline === -1 ? entry : entry.slice(0, newline)).toLowerCase();
+    const value = newline === -1 ? null : entry.slice(newline + 1);
+    if (key === 'help.autocorrect') autocorrect = value === null || !SHOWS_GUESS.test(value.trim());
+    else if (key.startsWith('alias.')) aliases.set(key.slice('alias.'.length), value);
+  }
+  return { aliases, autocorrect };
+}
+
+/** An alias value split into words as git splits it (split_cmdline); null for an unclosed quote or a trailing backslash. */
+export function splitGitAlias(value: string): string[] | null {
+  const words: string[] = [];
+  let word = '';
+  let quote = '';
+  for (let at = 0; at < value.length; at++) {
+    let char = value[at] as string;
+    if (quote === '' && /[ \t\n\v\f\r]/.test(char)) {
+      words.push(word);
+      word = '';
+      while (at + 1 < value.length && /[ \t\n\v\f\r]/.test(value[at + 1] as string)) at++;
+    } else if (quote === '' && (char === "'" || char === '"')) {
+      quote = char;
+    } else if (char === quote) {
+      quote = '';
+    } else {
+      if (char === '\\' && quote !== "'") {
+        if (++at >= value.length) return null;
+        char = value[at] as string;
+      }
+      word += char;
+    }
+  }
+  if (quote !== '') return null;
+  words.push(word);
+  return words;
+}
+
 /** What `git rev-parse --show-toplevel` prints in `directory` (a Linux path in a WSL folder), or null when git fails. */
 export async function gitToplevel(directory: string): Promise<string | null> {
   const printed = (await gitQuery(directory, ['rev-parse', '--show-toplevel']))?.replace(/\r?\n$/, '');
@@ -990,6 +1052,8 @@ const TREE_GRAMMARS: Readonly<Record<string, GitGrammar>> = {
     long: ['whitespace', 'exclude', 'include', 'patch-format', 'quoted-cr', 'empty'],
   },
   clean: { letters: 'dfxXnq', valued: 'e', flags: ['force', 'dry-run', 'quiet'], long: ['exclude'] },
+  rm: { letters: 'nqrf', flags: ['dry-run', 'quiet', 'cached', 'ignore-unmatch', 'sparse', 'force'] },
+  mv: { letters: 'vnfk', flags: ['verbose', 'dry-run', 'force', 'sparse'] },
 };
 
 /** A revision the scan hands to git as one: no option, expansion or space can hide in it. */
@@ -1707,6 +1771,41 @@ async function gitTreeWrites(
     }
     case 'clean':
       return moved || read.unknown ? UNREAD_TREE : cleanWrites(read, cwd);
+    case 'rm': {
+      if (has(read, 'cached', 'n', 'dry-run')) return NO_TREE;
+      const specs = [...read.positionals, ...read.paths];
+      if (specs.length === 0) return NO_TREE;
+      // Bash expands braces and `~` before git reads a pathspec; icase widens what one matches.
+      const icase = /^(1|true|yes|on)$/i.test(process.env.GIT_ICASE_PATHSPECS ?? '');
+      if (moved || read.unknown || icase || specs.some(spec => /[{}]|^~/.test(spec))) return UNREAD_TREE;
+      const root = await top();
+      const listed =
+        root === null ? null : await gitQuery(cwd, ['ls-files', '-s', '-z', '--full-name', '--', ...specs]);
+      if (listed === null) return UNREAD_TREE;
+      const removed: TreeWrite = { files: [], trees: [], links: false, unread: false };
+      for (const entry of listed.split('\0')) {
+        const [, mode, path = ''] = /^(\d+) \S+ \d\t([^]*)$/.exec(entry) ?? [];
+        // A submodule goes with its whole work tree.
+        if (mode === '160000') removed.trees?.push(`${root}/${path}`);
+        else if (mode !== undefined && inSettings(path)) removed.files.push(`${root}/${path}`);
+      }
+      return removed;
+    }
+    case 'mv': {
+      const named = [...read.positionals, ...read.paths];
+      if (has(read, 'n', 'dry-run') || named.length < 2) return NO_TREE;
+      if (moved || read.unknown || named.some(word => /[{}]|^~/.test(word))) return UNREAD_TREE;
+      const sources = named.slice(0, -1);
+      const destination = named.at(-1) as string;
+      const target = resolveOperand(cwd, treeOf(destination));
+      const into = !hasGlob(destination) && (await stat(target).catch(() => null))?.isDirectory() === true;
+      // A folder moves whole, untracked files and all; a glob bash expands may name any source under its folder.
+      const trees = sources.map(source => resolveOperand(cwd, treeOf(source)));
+      for (const source of sources) {
+        trees.push(into && !hasGlob(source) ? join(target, basename(source)) : target);
+      }
+      return { files: [], trees, links: false, unread: false };
+    }
     case 'worktree': {
       // `move` carries the tree's relative links to a new place, like mv.
       if (args[0] === 'move') return UNREAD_TREE;
@@ -1849,7 +1948,7 @@ const knownGitOption = (arg: string): boolean => {
  * option other than `-C` and the pager ones may point git at another repository or work tree. `unread` is set when
  * a global option is one the scan does not know, which leaves where the subcommand starts open.
  */
-function gitSubcommand(
+export function gitSubcommand(
   args: readonly string[],
   cwd: string
 ): { sub: string; rest: string[]; cwd: string; moved: boolean; unread?: true } | null {

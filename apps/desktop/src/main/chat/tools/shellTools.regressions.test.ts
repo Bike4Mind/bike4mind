@@ -219,6 +219,30 @@ describe('shell approval in a project with a large node_modules', () => {
     const grepo = await repository('grepo', { '.claude/settings.json': '{}', 'src/b.ts': 'b' });
     await writeFile(join(grepo, 'src', 'b.ts'), 'b2');
     git(grepo, 'commit', '-qam', 'second');
+    // qrepo has untracked settings and aliases in its own config; zrepo has git run the command it guesses for a typo.
+    const qrepo = await repository('qrepo', { 'src/b.ts': 'b' });
+    await mkdir(join(qrepo, '.claude'));
+    await writeFile(join(qrepo, '.claude', 'settings.json'), '{}');
+    for (const [name, value] of [
+      ['tidy', 'clean -fdx'],
+      ['t2', 'tidy'],
+      ['zap', '!rm -rf .claude'],
+      ['st', 'status'],
+      ['co', 'checkout'],
+      ['lg', 'log --oneline --graph'],
+      ['lq', "log --format='%h %s'"],
+      ['p', 'push'],
+      ['lo', 'log --output=.claude/settings.json'],
+      ['up', "ls-remote --upload-pack='touch x'"],
+      ['loop', 'loop2'],
+      ['loop2', 'loop'],
+      ['bare', ''],
+    ]) {
+      git(qrepo, 'config', `alias.${name}`, value as string);
+    }
+    git(qrepo, 'config', 'help.autocorrect', '0');
+    const zrepo = await repository('zrepo', { 'src/b.ts': 'b' });
+    git(zrepo, 'config', 'help.autocorrect', '1');
     // prepo is a treeless partial clone whose missing trees would come from a host through core.sshCommand.
     git(proj, 'config', 'uploadpack.allowFilter', 'true');
     execFileSync('git', ['clone', '-q', '--filter=tree:0', '--no-checkout', `file://${proj}`, join(proj, 'prepo')]);
@@ -250,6 +274,7 @@ describe('shell approval in a project with a large node_modules', () => {
     await mkdir(join(base, 'tmp'));
     vi.stubEnv('TMPDIR', join(base, 'tmp'));
     vi.stubEnv('HOME', home);
+    vi.stubEnv('XDG_CONFIG_HOME', join(home, '.config'));
     permissionRoots = permissionProtectedLocations(userData, home, join(base, 'managed'), { warn: () => {} }).paths();
     const compiled: CompiledRule[] = [];
     for (const program of PROGRAMS) {
@@ -840,8 +865,374 @@ describe('shell approval in a project with a large node_modules', () => {
     'git --exec-path=./bin --help clean',
     'git --exec-path=./bin --version',
     'git -C . --exec-path=./bin log',
+    'GIT_EXEC_PATH=./bin git mergetool',
+    'GIT_EXEC_PATH=./bin git --help clean',
+    'GIT_EXEC_PATH=./bin git -h clean',
+    'GIT_EXEC_PATH=./bin git help clean',
+    'GIT_EXEC_PATH=./bin git -c help.format=web help clean',
+    'export GIT_EXEC_PATH=./bin; git help clean',
+    'env GIT_EXEC_PATH=./bin git mergetool',
+    'export GIT_EXEC_PATH=./bin; git mergetool',
+    'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=man.man.path GIT_CONFIG_VALUE_0=./x.sh git help clean',
+    'env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.pager GIT_CONFIG_VALUE_0=./x.sh git log',
+    `GIT_CONFIG_PARAMETERS="'man.man.path=./x.sh'" git help clean`,
+    `env GIT_CONFIG_PARAMETERS="'core.pager=./x.sh'" git log`,
+    'GIT_EDITOR=./x.sh git status',
+    'GIT_PAGER=./x.sh git log',
+    'GIT_TRACE=$PWD/.claude/settings.json git status',
+    'env GIT_TRACE2_EVENT=/tmp/t git status',
+    'GIT_TRACE2_EVENT=af_unix:./s git status',
+    'GIT_PAGER+=x git log',
+    'export GIT_PAGER; git log',
+    'declare -x GIT_PAGER=./x.sh; git log',
+    'typeset GIT_PAGER=./x.sh; git log',
+    'local GIT_PAGER=./x.sh; git log',
+    'readonly GIT_PAGER=./x.sh; git log',
+    'read -r GIT_PAGER <<< ./x.sh; git log',
+    'readarray GIT_PAGER <<< ./x.sh; git log',
+    'mapfile GIT_PAGER < f; git log',
+    'printf -v GIT_PAGER %s ./x.sh; git log',
+    'getopts a GIT_PAGER; git log',
+    'for GIT_PAGER in ./x.sh; do git log; done',
+    'select GIT_PAGER in ./x.sh; do git log; done',
+    'let GIT_PAGER=1; git log',
+    ': ${GIT_PAGER:=./x.sh}; git log',
+    ': ${GIT_PAGER=./x.sh}; git log',
+    'true && export GIT_PAGER=./x.sh && git log',
+    'v=PAGER; export GIT_$v=./x.sh; git log',
+    'v=GIT_PAGER; export $v=./x.sh; git log',
+    'v=GIT_PAGER; printf -v "$v" %s ./x.sh; git log',
+    'env GIT_{PAGER,X}=./x.sh git log',
+    "env $'GIT_PAGER'=./x.sh git log",
+    'env $(cat f) git log',
   ])('asks in every mode for %s, which has git run a program the command names', async command => {
     expect(await judge(command)).toMatchObject(asks);
+  });
+
+  it.each([
+    'git log --grep=GIT_PAGER',
+    'git grep GIT_CONFIG_GLOBAL',
+    'git log -S GIT_EDITOR --oneline',
+    "git commit -m 'docs: explain GIT_SSH_COMMAND'",
+    'echo GIT_PAGER && git status',
+    'git status # GIT_PAGER',
+    'rg GIT_SSH src && git diff',
+    'git log --oneline | grep GIT_EXEC_PATH',
+    'git diff -- docs/GIT_EDITOR.md',
+    'git log --grep=GIT_TRACE',
+  ])('runs %s unasked, as it only names a variable', async command => {
+    expect(await judge(command)).toMatchObject({ auto: true, full: true });
+  });
+
+  it.each([
+    'echo `GIT_EDITOR=./x.sh git commit --allow-empty`',
+    'echo $(GIT_EDITOR=./x.sh git commit --allow-empty)',
+    'cat <(GIT_EDITOR=./x.sh git commit --allow-empty)',
+    '(export GIT_EDITOR=./x.sh; git commit --allow-empty)',
+    'set -a; IFS= read -r GIT_EDITOR <<< ./x.sh; git commit --allow-empty',
+    'set -a; while IFS= read -r GIT_EDITOR; do git commit --allow-empty; done <<< ./x.sh',
+    'set -a; if IFS= read -r GIT_EDITOR <<< ./x.sh; then git commit --allow-empty; fi',
+    'set -a; until IFS= read -r GIT_EDITOR <<< ./x.sh; do :; done; git commit --allow-empty',
+    'set -a; ! IFS= read -r GIT_EDITOR <<< ./x.sh; git commit --allow-empty',
+    'set -a; time IFS= read -r GIT_EDITOR <<< ./x.sh; git commit --allow-empty',
+    'set -o allexport; IFS= read -r GIT_EDITOR <<< ./x.sh; git commit --allow-empty',
+    'set -a; builtin printf -v GIT_EDITOR %s ./x.sh; git commit --allow-empty',
+    'set -a; command printf -v GIT_EDITOR %s ./x.sh; git commit --allow-empty',
+    'set -a; LC_ALL=C printf -v GIT_EDITOR %s ./x.sh; git commit --allow-empty',
+    'set -a; printf -vGIT_EDITOR %s ./x.sh; git commit --allow-empty',
+    'x=1 export GIT_EDITOR; git commit --allow-empty',
+    'x=1 export GIT_EDITOR=./x.sh; git commit --allow-empty',
+    'time export GIT_EDITOR=./x.sh; git commit --allow-empty',
+    '! export GIT_EDITOR=./x.sh; git commit --allow-empty',
+    'if export GIT_EDITOR=./x.sh; then git commit --allow-empty; fi',
+    'command -p export GIT_EDITOR=./x.sh; git commit --allow-empty',
+    'builtin export GIT_EDITOR=./x.sh; git commit --allow-empty',
+    "export 'a=|' GIT_EDITOR; git commit --allow-empty",
+    "declare -x 'a=;' GIT_EDITOR; git commit --allow-empty",
+    'x=1 declare -n r=GIT_EDITOR; r=./x.sh; export r; git commit --allow-empty',
+    'set -a; IFS= read -r GIT_CONFIG_GLOBAL <<< ./evil.cfg; git status',
+    'set -a; IFS= read -r GIT_TRACE <<< "$PWD/.claude/settings.json"; git status',
+    'v=GIT_EDITOR; x=1 export $v=./x.sh; git commit --allow-empty',
+    'v=GIT_EDITOR; set -a; read -r $v <<< ./x.sh; git commit --allow-empty',
+    'v=GIT_EDITOR; declare -n r=$v; r=./x.sh; export r; git commit --allow-empty',
+    'v=GIT_EDITOR; command -p export "$v=./x.sh"; git commit --allow-empty',
+    "env -S'GIT_EDITOR=./x.sh git' commit --allow-empty",
+    "env -S 'GIT_EDITOR=./x.sh git' commit --allow-empty",
+    "env --split-string='GIT_EDITOR=./x.sh git' commit --allow-empty",
+    'EDITOR=./x.sh git commit --allow-empty',
+    'export VISUAL=./x.sh; git commit --allow-empty',
+    'PAGER=./x.sh git log',
+    'GIT_EDITOR[0]=./x.sh git commit --allow-empty',
+    'GIT_INDEX_FILE=.claude/settings.json git add -A',
+    'export GIT_OBJECT_DIRECTORY=.claude; git add -A',
+    'time for i in 1; do git -c core.fsmonitor=./x.sh status; done',
+    '! for i in 1; do git -c core.fsmonitor=./x.sh status; done',
+    'time while true; do git -c core.fsmonitor=./x.sh status; break; done',
+    'time { git -c core.fsmonitor=./x.sh status; }',
+  ])('asks in every mode for %s, which sets a variable git runs a program from', async command => {
+    expect(await judge(command)).toMatchObject(asks);
+  });
+
+  it.each([
+    'git log --grep=GIT_PAGER',
+    'git grep GIT_CONFIG_GLOBAL',
+    "git log -S 'GIT_EDITOR=' --oneline",
+    "rg 'GIT_SSH_COMMAND=' && git diff",
+    "git commit -m 'docs: set GIT_PAGER=less'",
+    "git commit -m 'fix; export GIT_PAGER'",
+    'echo GIT_PAGER && git status',
+    'git status # GIT_PAGER',
+    'GIT_TRACE=1 git status',
+    'GIT_TRACE2_EVENT=t.json git status',
+    "git log --grep 'GIT_TRACE2_EVENT=' --oneline",
+    'export X=1; git log --grep=GIT_PAGER',
+    'time git status',
+    'for i in 1; do git status; done',
+  ])('runs %s unasked, as it sets no variable git runs a program from', async command => {
+    expect(await judge(command)).toMatchObject({ auto: true, full: true });
+  });
+
+  it.each([
+    'git rm -r .',
+    "git rm -r '*'",
+    "git rm -r ':/'",
+    "git rm -r '.clau*'",
+    'git rm -r .clau*',
+    'git rm -r .claude',
+    'git rm .claude/settings.json',
+    'git rm -r -- .claude',
+    'cd src && git rm -r :/',
+    'git mv .claude y',
+    'git mv .clau* y',
+    'git mv .claude/settings.json x.json',
+    'git mv -f a .claude/settings.json',
+    'git mv a .claude',
+    'git mv a .clau*',
+    'git mv -k a src .claude',
+  ])('asks in every mode for %s, which removes, moves or replaces a settings file', async command => {
+    expect(await judge(command)).toMatchObject(asks);
+  });
+
+  it.each([
+    'git rm --cached -r .',
+    'git rm -n -r .',
+    'git rm src/a.ts',
+    'git rm -r src',
+    'git rm -r -- src',
+    "git rm 'src/*.ts'",
+    'git mv src/a.ts src/b.ts',
+    'git mv -n src y',
+    'git mv a src',
+    'git mv a b',
+  ])('runs %s unasked, as it removes or moves no settings file', async command => {
+    expect(await judge(command)).toMatchObject({ auto: true, full: true });
+  });
+
+  it.each([
+    ['git rm -r w', 'vrepo'],
+    ['git mv w y', 'vrepo'],
+    ['git mv -k w src y', 'vrepo'],
+  ])(
+    'asks in every mode for %s (in proj/%s), which removes or moves a folder holding a settings file',
+    async (command, folder) => {
+      expect(await judge(command, folder)).toMatchObject(asks);
+    }
+  );
+
+  it.each([
+    "let 'a[$(touch x)]'",
+    "let 'x = a[$(touch x)]'",
+    "declare -i n='a[$(touch x)]'",
+    "declare -i n; n='a[$(touch x)]'",
+    "local -ri n='a[$(touch x)]'",
+    "[[ 'a[$(touch x)]' -eq 1 ]]",
+    '[[ 1 -lt a[\\$(touch x)] ]]',
+    "(( 'a[$(touch x)]' ))",
+    "a['$(touch x)']=1",
+  ])('asks in every mode for %s, where bash runs a quoted command in an arithmetic subscript', async command => {
+    expect(await judge(command)).toMatchObject(asks);
+  });
+
+  it.each([
+    'rm -rf ./{$x,y}a.claude',
+    'rm -rf {$x,y}a.claude',
+    'cat ./{$PWD,y}_../protected/value',
+    'for f in ./{$x,y}a.claude; do rm -rf "$f"; done',
+  ])('asks in every mode for %s, a word bash reads whole across a `{$`', async command => {
+    expect(await judge(command)).toMatchObject(asks);
+  });
+
+  it.each(['echo a$ b', 'echo {$x} > /dev/null', 'echo "a$"', 'echo $x$y'])(
+    'runs %s unasked, as each word reads as bash reads it',
+    async command => {
+      expect(await judge(command)).toMatchObject({ auto: true, full: true });
+    }
+  );
+
+  it.each([
+    'let i=1+2',
+    'declare -i n=3',
+    '[[ $(git rev-list --count HEAD) -gt 0 ]] && git status',
+    "git log --format='%h $(x)'",
+    'for ((i = 0; i < 2; i++)); do echo $i; done',
+  ])('runs %s unasked, as no quoted command reaches arithmetic', async command => {
+    expect(await judge(command)).toMatchObject({ auto: true, full: true });
+  });
+
+  const lowercased = [
+    'export git_pager=./x.sh; git log',
+    'Git_Exec_Path=./bin git status',
+    'env git_editor=./x.sh git log',
+  ];
+
+  it.each(lowercased)('asks in every mode for %s on Windows, which reads variable names in any case', async command => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform') as PropertyDescriptor;
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    try {
+      expect(await judge(command)).toMatchObject(asks);
+    } finally {
+      Object.defineProperty(process, 'platform', platform);
+    }
+  });
+
+  it.runIf(process.platform !== 'win32').each(lowercased)(
+    'runs %s unasked where variable names keep their case, as git reads no variable it sets',
+    async command => {
+      expect(await judge(command)).toMatchObject({ auto: true, full: true });
+    }
+  );
+
+  it.each([
+    "git ls-remote --upload-pack='rm -rf .claude k; git-upload-pack' .",
+    "git ls-remote --upload-pack 'touch x; git-upload-pack' .",
+    "git ls-remote --upl='touch x; git-upload-pack' .",
+    "git ls-remote -u 'touch x; git-upload-pack' .",
+    "git ls-remote -u'touch x' .",
+    'git ls-remote --upload-pack="$X" .',
+    "git fetch --upload-pack='touch x; git-upload-pack' .",
+    'git fetch --upload-pack "touch x; git-upload-pack" .',
+    "git pull --upload-pack='touch x; git-upload-pack' . main",
+    "git fetch-pack --upload-pack='touch x' . main",
+    "git fetch-pack --exec='touch x' . main",
+    "git clone -u 'touch x; git-upload-pack' . y",
+    "git clone --upload-pack='touch x' . y",
+    "git archive --remote=. --exec='touch x; git-upload-archive' HEAD",
+    "git archive --remote=. --exec 'touch x' HEAD",
+    "git push --receive-pack='touch x; git-receive-pack' . HEAD:refs/heads/x",
+    "git push --exec='touch x' . HEAD:refs/heads/x",
+    "git push --ex='touch x' . HEAD:refs/heads/x",
+    "git send-pack --receive-pack='touch x' . main",
+    "git send-pack --exec='touch x' . main",
+    "git -c protocol.ext.allow=always ls-remote 'ext::sh -c touch% x'",
+    "git -c protocol.allow=always ls-remote 'ext::sh -c touch% x'",
+    "GIT_ALLOW_PROTOCOL=ext git ls-remote 'ext::sh -c touch% x'",
+    "GIT_ALLOW_PROTOCOL=ext git fetch 'ext::sh -c touch% x' main",
+    "git -c protocol.ext.allow=always fetch 'ext::sh -c touch% x' main",
+    'export GIT_ALLOW_PROTOCOL=ext; git fetch o',
+    'git -c protocol.allow=always fetch o',
+    'git ls-remote ext::sh',
+    "git remote add o 'ext::sh -c touch% x'",
+    'git -c remote.o.url=ext::sh fetch o',
+    "git -c gpg.format=ssh -c gpg.ssh.defaultKeyCommand='rm -rf .claude k' commit -S --allow-empty -m m",
+    'git -c gpg.ssh.defaultkeycommand=./x.sh commit -S -m m',
+    'git -c sendemail.toCmd=./x.sh send-email x.patch',
+    'git -c hook.x.command=./x.sh commit -m m',
+    'git -c help.autocorrect=immediate cleen -fdx',
+    "git -c submodule.x.update='!touch x' submodule update",
+    "git -c interactive.diffFilter='touch x' add -p",
+    'git -c imap.tunnel=./x.sh imap-send',
+    "git grep -O'touch x' a",
+    "git grep -nO'touch x' a",
+    "git grep --open-files-in-pager='touch x' a",
+    "git grep --open='touch x' a",
+    "git difftool -y -x 'touch x' HEAD~1",
+    "git difftool --extcmd='touch x' HEAD~1",
+    "git rebase -x 'touch x' HEAD~1",
+    "git rebase --exec='touch x' HEAD~1",
+    "git filter-branch --tree-filter 'touch x' HEAD",
+    "git instaweb --httpd='touch x'",
+    "git send-email --sendmail-cmd='touch x' x.patch",
+    "git send-email --to-cmd='touch x' x.patch",
+    "git send-email -to-cmd='touch x' x.patch",
+    'git send-email --smtp-server=./x.sh x.patch',
+  ])('asks in every mode for %s, which has git run a command line its words give', async command => {
+    expect(await judge(command)).toMatchObject(asks);
+  });
+
+  it.each([
+    'git fetch origin',
+    'git fetch --prune origin',
+    'git fetch -u origin',
+    'git ls-remote origin',
+    'git ls-remote --tags origin',
+    'git archive HEAD',
+    'git archive --format=tar HEAD',
+    'git grep -n a',
+    'git grep -A3 -e a',
+    'git grep -eO a',
+    'git log --oneline -5',
+    'git status',
+    'git diff',
+    'git commit -m x',
+    'git -c gpg.format=ssh log -1',
+  ])('runs %s unasked, as git runs no command line its words give', async command => {
+    expect(await judge(command)).toMatchObject({ auto: true, full: true });
+  });
+
+  it.each(['git push origin main', 'git push', 'git send-email --to=a@example.invalid x.patch'])(
+    'runs %s in full mode, as it names no command for git to run',
+    async command => {
+      expect(await judge(command)).toMatchObject({ full: true });
+    }
+  );
+
+  it.each([
+    ['git tidy', 'qrepo'],
+    ['git t2', 'qrepo'],
+    ['git -C . tidy', 'qrepo'],
+    ['git -C qrepo tidy', ''],
+    ['git zap', 'qrepo'],
+    ['git lo -1', 'qrepo'],
+    ['git up .', 'qrepo'],
+    ['git loop', 'qrepo'],
+    ['git bare', 'qrepo'],
+    ["git config alias.fresh 'clean -fdx' && git fresh", 'qrepo'],
+    ["git config alias.st 'clean -fdx' && git st", 'qrepo'],
+    ["git config --global alias.st 'clean -fdx'; git st", 'qrepo'],
+    ['echo x >> .git/config; git st', 'qrepo'],
+    ["for i in 1 2; do git st; git config alias.st 'clean -fdx'; done", 'qrepo'],
+    ['git st & git config alias.st x', 'qrepo'],
+    ['XDG_CONFIG_HOME=./x git st', 'qrepo'],
+    ['HOME=./h git st', 'qrepo'],
+    ['GIT_DIR=.git git st', 'qrepo'],
+    ['git --git-dir=.git st', 'qrepo'],
+    ['git -c core.x=y st', 'qrepo'],
+    ['git cleen -fdx', 'zrepo'],
+    ['git -c help.autocorrect=1 cleen -fdx', 'qrepo'],
+  ])(
+    'asks in every mode for %s (in proj/%s), whose git alias the scan cannot read as git runs it',
+    async (command, folder) => {
+      expect(await judge(command, folder)).toMatchObject(asks);
+    }
+  );
+
+  it.each([
+    'git st',
+    'git st --short',
+    'git lg -5',
+    'git lq -3',
+    'git co main',
+    'git st && git lg -1',
+    'git st | head -1',
+    'git cleen -fdx',
+  ])('runs %s (in proj/qrepo) unasked, reading the git alias it names as git expands it', async command => {
+    expect(await judge(command, 'qrepo')).toMatchObject({ auto: true, full: true });
+  });
+
+  it('reads a git alias for push as the push it expands to', async () => {
+    const push = await judge('git push origin main', 'qrepo');
+    expect(await judge('git p origin main', 'qrepo')).toMatchObject({ auto: push.auto, full: push.full });
+    expect(await judge('git p https://example.invalid/r main', 'qrepo')).toMatchObject({ auto: false, full: true });
   });
 
   it.each([
