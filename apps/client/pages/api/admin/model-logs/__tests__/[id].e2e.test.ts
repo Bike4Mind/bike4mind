@@ -6,7 +6,12 @@ import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../../packages/database/src/__test__/createMongoServer';
-import { Quest, AdminSupportAccessAuditLog, adminSupportAccessAuditLogRepository } from '@bike4mind/database';
+import {
+  Quest,
+  AdminSupportAccessAuditLog,
+  adminSupportAccessAuditLogRepository,
+  userRepository,
+} from '@bike4mind/database';
 import { AdminSupportAccessAction } from '@bike4mind/common';
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -52,14 +57,14 @@ const run = (id: string, isAdmin = true, supportCase: string | null = SUPPORT_CA
   return { req, res };
 };
 
-const createLog = () =>
+const createLog = (ownerUserId = 'user-2') =>
   Quest.create({
     sessionId: 'session-1',
     type: 'message',
     timestamp: new Date('2026-01-01T00:00:00Z'),
     prompt: 'hello',
     promptMeta: {
-      session: { id: 'session-1', userId: 'user-2' },
+      session: { id: 'session-1', userId: ownerUserId },
       model: { name: 'claude-sonnet-5' },
       functionCalls: [
         {
@@ -195,6 +200,57 @@ describe('GET /api/admin/model-logs/[id]', () => {
       const { req, res } = run(new mongoose.Types.ObjectId().toString());
       await expect(handler(req, res)).rejects.toMatchObject({ name: 'NotFoundError' });
       expect(await AdminSupportAccessAuditLog.countDocuments()).toBe(0);
+    });
+
+    it('refuses an owner in their deletion grace period, as the notebook read does, and records nothing', async () => {
+      const ownerUserId = new mongoose.Types.ObjectId().toString();
+      const quest = await createLog(ownerUserId);
+      const findUserSpy = vi
+        .spyOn(userRepository, 'findById')
+        .mockResolvedValue({ deletion: { scheduledFor: new Date() } } as Awaited<
+          ReturnType<typeof userRepository.findById>
+        >);
+      const { req, res } = run(quest.id);
+
+      await expect(handler(req, res)).rejects.toMatchObject({ name: 'ForbiddenError' });
+      expect(findUserSpy).toHaveBeenCalledWith(ownerUserId);
+      expect(await AdminSupportAccessAuditLog.countDocuments()).toBe(0);
+      expect(res._isEndCalled()).toBe(false);
+      findUserSpy.mockRestore();
+    });
+
+    it('serves an owner with no deletion pending', async () => {
+      const ownerUserId = new mongoose.Types.ObjectId().toString();
+      const quest = await createLog(ownerUserId);
+      const findUserSpy = vi
+        .spyOn(userRepository, 'findById')
+        .mockResolvedValue({} as Awaited<ReturnType<typeof userRepository.findById>>);
+      const { req, res } = run(quest.id);
+
+      await handler(req, res);
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(await AdminSupportAccessAuditLog.findOne({}).lean()).toMatchObject({ targetUserId: ownerUserId });
+      findUserSpy.mockRestore();
+    });
+
+    it('records an unresolved owner as such, still serving the log', async () => {
+      // A legacy log with no recorded owner (the schema now requires one, so unset it past validation)
+      // and no session to fall back to.
+      const quest = await createLog();
+      await Quest.updateOne({ _id: quest._id }, { $unset: { 'promptMeta.session.userId': '' } });
+      const { req, res } = run(quest.id);
+
+      await handler(req, res);
+
+      expect(res._getStatusCode()).toBe(200);
+      const records = await AdminSupportAccessAuditLog.find({}).lean();
+      expect(records).toHaveLength(1);
+      expect(records[0].targetUserId).toBeUndefined();
+      expect(records[0]).toMatchObject({
+        sessionId: 'session-1',
+        details: { questId: quest.id, ownerUnresolved: true },
+      });
     });
 
     it('fails the request and serves no body when the audit write fails', async () => {

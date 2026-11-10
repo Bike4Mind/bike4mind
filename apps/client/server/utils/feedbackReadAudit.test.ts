@@ -10,7 +10,7 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   isSameUserId: (left: string, right: string) => left.toLowerCase() === right.toLowerCase(),
 }));
 
-import { recordFeedbackRead } from './feedbackReadAudit';
+import { recordFeedbackRead, recordFeedbackReadBy } from './feedbackReadAudit';
 
 const req = { user: { id: 'admin-1' } } as unknown as Parameters<typeof recordFeedbackRead>[0];
 
@@ -67,6 +67,31 @@ describe('recordFeedbackRead', () => {
   it('writes nothing when the caller reads only their own reports', async () => {
     await recordFeedbackRead(req, [{ id: 'mine', userId: 'admin-1' }]);
     expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('audits an admin impersonating the reporter, since the read is the admin and not the account holder', async () => {
+    const impersonating = { user: { id: 'user-2', impersonatedBy: 'admin-1' } } as unknown as Parameters<
+      typeof recordFeedbackRead
+    >[0];
+    await recordFeedbackRead(impersonating, [{ id: 'f1', userId: 'user-2' }]);
+
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      impersonating,
+      expect.objectContaining({
+        target: { kind: 'user', id: 'user-2', displayName: 'user-2@example.com' },
+        details: { feedbackIds: ['f1'] },
+      })
+    );
+  });
+
+  it('hands the entry to the given writer when called outside a request', async () => {
+    const write = vi.fn().mockResolvedValue(null);
+    await recordFeedbackReadBy({ id: 'admin-1' }, write, [{ id: 'f1', userId: 'user-2' }], { via: 'tool' });
+
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+    expect(write).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'feedback.viewed', details: { via: 'tool', feedbackIds: ['f1'] } })
+    );
   });
 
   it('writes nothing for an empty page', async () => {

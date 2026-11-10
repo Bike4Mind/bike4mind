@@ -6,7 +6,11 @@ import { Quest, sessionRepository } from '@bike4mind/database';
 import { z } from 'zod';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
-import { authorizeSupportCase, recordSupportAccess } from '@server/utils/adminSupportAccess';
+import {
+  assertOwnerNotPendingDeletion,
+  authorizeSupportCase,
+  recordSupportAccess,
+} from '@server/utils/adminSupportAccess';
 
 const paramsSchema = z.object({
   id: z.string().min(1),
@@ -44,11 +48,19 @@ const handler = adminApi({
       throw new NotFoundError(`Model log not found: ${id}`);
     }
 
+    const ownerUserId = await resolveLogOwner(quest);
+    // The same deletion-grace refusal the notebook read applies, so the owner's prompt text is not
+    // served here while their notebook is refused.
+    if (ownerUserId) await assertOwnerNotPendingDeletion(ownerUserId);
+
+    // An owner that cannot be resolved (no recorded owner, session gone) still gets the read served
+    // and recorded: the row keeps the session and quest, and `ownerUnresolved` marks why a query on
+    // targetUserId will not find it.
     await recordSupportAccess(
       ctx,
       AdminSupportAccessAction.ModelLogRead,
-      { targetUserId: await resolveLogOwner(quest), sessionId: quest.sessionId },
-      { questId: quest._id.toString() }
+      { targetUserId: ownerUserId, sessionId: quest.sessionId },
+      { questId: quest._id.toString(), ...(ownerUserId ? {} : { ownerUnresolved: true }) }
     );
 
     // Serves any user's log to any admin: redact owner-only fields like every cross-user read.

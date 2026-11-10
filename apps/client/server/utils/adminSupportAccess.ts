@@ -106,6 +106,17 @@ export function authorizeSupportCase(req: SupportReadRequest, supportCase: unkno
 }
 
 /**
+ * An account in its deletion grace period is out of reach of support reads, whichever route serves
+ * its content. Call it once the content's owner is known, before the read is recorded or served.
+ */
+export async function assertOwnerNotPendingDeletion(ownerUserId: string): Promise<void> {
+  const owner = await userRepository.findById(ownerUserId);
+  if (owner?.deletion) {
+    throw new ForbiddenError('This account is scheduled for deletion');
+  }
+}
+
+/**
  * Authorize a support read and load the target session. Throws before any
  * customer content is touched; 404s an unknown session rather than 403ing, so an
  * under-privileged caller can't enumerate ids.
@@ -125,11 +136,7 @@ export async function authorizeSupportRead(req: SupportReadRequest): Promise<Sup
     throw new NotFoundError('Session not found');
   }
 
-  // An account in its deletion grace period is out of reach of support browsing.
-  const owner = await userRepository.findById(session.userId);
-  if (owner?.deletion) {
-    throw new ForbiddenError('This account is scheduled for deletion');
-  }
+  await assertOwnerNotPendingDeletion(session.userId);
 
   return { ...toActorContext(req, supportCase), session };
 }

@@ -1,6 +1,8 @@
 import { FeedbackModel } from '@bike4mind/database';
 import { z } from 'zod';
+import { recordFeedbackReadBy } from '../../utils/feedbackReadAudit';
 import { hydrateFeedbackText, toRedactedFeedback } from '../../utils/redactedFeedback';
+import { adminAssistantAuditWriter } from '../auditWriter';
 import { defineAdminTool } from '../defineAdminTool';
 import { resolveAdminUserRef } from '../resolveAdminUserRef';
 import { AdminUserRefFields, withExactlyOneUserRef } from '../schemas';
@@ -16,12 +18,14 @@ const GetUserFeedbackInput = withExactlyOneUserRef(
   })
 );
 
+const TOOL_NAME = 'admin_get_user_feedback';
+
 export const getUserFeedbackTool = defineAdminTool({
-  name: 'admin_get_user_feedback',
+  name: TOOL_NAME,
   description:
     'Read the most recent feedback reports a user submitted, newest first, with text truncated to 500 characters.',
   input: GetUserFeedbackInput,
-  run: async ({ userId, email, limit }) => {
+  run: async ({ userId, email, limit }, context) => {
     const user = await resolveAdminUserRef({ userId, email });
     if (!user) return { ok: false, error: 'not_found', message: 'No user matches that id or email.' };
 
@@ -29,7 +33,16 @@ export const getUserFeedbackTool = defineAdminTool({
       .select(FEEDBACK_SELECT)
       .sort({ createdAt: -1 })
       .limit(limit + 1);
-    const items = await hydrateFeedbackText(docs.slice(0, limit).map(toRedactedFeedback));
+    const reports = docs.slice(0, limit).map(toRedactedFeedback);
+    // The same feedback.viewed row GET /api/feedback writes, awaited before the text is loaded: a
+    // failed write throws, and defineAdminTool fails the tool call rather than return the text.
+    await recordFeedbackReadBy(
+      context.user,
+      adminAssistantAuditWriter(context, TOOL_NAME),
+      reports.map(report => ({ id: report.id, userId: report.userId })),
+      { userId: user.id, limit }
+    );
+    const items = await hydrateFeedbackText(reports);
 
     return {
       ok: true,
