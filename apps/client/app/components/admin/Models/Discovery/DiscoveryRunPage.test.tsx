@@ -149,16 +149,16 @@ describe('DiscoveryRunPage frame', () => {
 });
 
 describe('DiscoveryRunPage decisions', () => {
-  it('leads a flagged price with the plain reason, both rates, both sources and the whole detail', async () => {
+  it('leads a flagged price with the plain reason, then the whole detail once', async () => {
     await renderLoaded();
 
     const card = screen.getByTestId('discovery-decision-gpt-5.6-luna');
     expect(card).toHaveTextContent('GPT 5.6 Luna');
     const flag = screen.getByTestId('discovery-decision-flag-gpt-5.6-luna');
     expect(flag).toHaveTextContent('Sources disagree on this price');
-    expect(flag).toHaveTextContent('Proposed $0.2 in / $1.2 out per 1M; in force $1 in / $6 out');
-    expect(flag).toHaveTextContent('models.dev, litellm');
     expect(flag).toHaveTextContent(LUNA_FLAG.detail);
+    expect(flag.textContent?.split('models.dev')).toHaveLength(2);
+    expect(flag).not.toHaveTextContent('Proposed');
     expect(flag).not.toHaveTextContent('source-disagreement');
 
     fireEvent.click(screen.getByTestId('discovery-decision-action-gpt-5.6-luna'));
@@ -215,14 +215,31 @@ describe('DiscoveryRunPage decisions', () => {
     });
   });
 
-  it('turns a model on through the access dialog', async () => {
-    run = runWith({ priceFlags: [], changes: { ...EMPTY_CHANGES, added: ['gpt-new'] } });
-    rows = [needsReview('gpt-new', 'manual-approval-required', 'Waiting for approval', 'turn-on')];
+  it('links every decision card to its model page', async () => {
+    run = runWith({ changes: { ...EMPTY_CHANGES, added: ['gpt-new'] } });
+    rows = [
+      adminRow('gpt-5.6-luna', { name: 'GPT 5.6 Luna' }),
+      needsReview('gpt-new', 'manual-approval-required', 'Waiting for approval'),
+    ];
     await renderLoaded();
-    fireEvent.click(screen.getByTestId('discovery-decision-action-gpt-new'));
 
-    const dialog = await screen.findByTestId('model-access-dialog');
-    expect(dialog).toHaveTextContent('Turn on Model gpt-new');
+    for (const id of ['gpt-5.6-luna', 'gpt-new']) {
+      fireEvent.click(screen.getByTestId(`discovery-decision-open-${id}`));
+      expect(m.nav.openModel).toHaveBeenLastCalledWith(id);
+    }
+  });
+
+  it('keeps a write-mode flag card for a model the list does not carry, with its id and Open model', async () => {
+    rows = [];
+    await renderLoaded();
+
+    const card = screen.getByTestId('discovery-decision-gpt-5.6-luna');
+    expect(card).toHaveTextContent('gpt-5.6-luna');
+    expect(screen.getByTestId('discovery-decision-flag-gpt-5.6-luna')).toHaveTextContent(LUNA_FLAG.detail);
+    expect(screen.queryByTestId('discovery-decision-not-saved-gpt-5.6-luna')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('discovery-decision-action-gpt-5.6-luna')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('discovery-decision-open-gpt-5.6-luna'));
+    expect(m.nav.openModel).toHaveBeenCalledWith('gpt-5.6-luna');
   });
 
   it('shows no button when the server gives the reason no fix action', async () => {

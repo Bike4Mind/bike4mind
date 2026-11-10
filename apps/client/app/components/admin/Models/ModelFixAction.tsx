@@ -11,8 +11,8 @@ import { useModelsNavigation } from './modelsNavigation';
 type Props = {
   action: AdminModelFixAction;
   model: { id: string; backend: string };
-  /** Turn on opens the caller's access dialog. */
-  onTurnOn: () => void;
+  /** Turn on opens the caller's access dialog; without one the action renders nothing. */
+  onTurnOn?: () => void;
   'data-testid'?: string;
 };
 
@@ -44,7 +44,7 @@ export function ModelFixAction({ action, model, onTurnOn, 'data-testid': testId 
 
   switch (action) {
     case 'turn-on':
-      return <ModelWriteAction>{disabled => button(onTurnOn, disabled)}</ModelWriteAction>;
+      return onTurnOn ? <ModelWriteAction>{disabled => button(onTurnOn, disabled)}</ModelWriteAction> : null;
     case 'add-price':
       return button(() => void openPrices(model.id));
     case 'run-discovery':

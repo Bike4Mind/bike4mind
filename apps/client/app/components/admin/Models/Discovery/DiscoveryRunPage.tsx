@@ -14,11 +14,9 @@ import {
   LoadingState,
   SectionCard,
   StatusChip,
-  UndoToastProvider,
   UpdatingBar,
 } from '../../shared';
 import { ADMIN_DETAIL_MAX_WIDTH, ADMIN_REGION_GAP, adminPageFrame } from '../../shared/adminStyles';
-import { ModelAccessDialog } from '../Access/ModelAccessDialog';
 import { ModelFixAction } from '../ModelFixAction';
 import { useModelsNavigation } from '../modelsNavigation';
 import { apiErrorMessage, apiStatusOf, useDiscoveryRun, type DiscoveryRun, type RunPriceFlag } from './discoveryApi';
@@ -59,8 +57,9 @@ const unique = (ids: readonly string[]) => [...new Set(ids)];
 /**
  * One card per model this run touched whose status is Needs review now (docs/admin-models-spec.md section 5.3),
  * plus this run's price flags, which phase 1 does not yet persist on the model. A report-mode run's new models have
- * no catalog row, so they show what they would need and no action. Without the index (`indexFailed`) only the run's
- * own findings are known, so nothing is claimed about catalog rows.
+ * no catalog row, so they show what they would need and no action; a write-mode flag on a model the list does not
+ * carry still gets a card. Without the index (`indexFailed`) only the run's own findings are known, so nothing is
+ * claimed about catalog rows.
  */
 function buildDecisions(run: DiscoveryRun, index: ModelIndex, indexFailed: boolean): Decision[] {
   const flagsByModel = new Map<string, RunPriceFlag[]>();
@@ -79,7 +78,6 @@ function buildDecisions(run: DiscoveryRun, index: ModelIndex, indexFailed: boole
     const row = index.get(modelId);
     const flags = flagsByModel.get(modelId) ?? [];
     if (!row) {
-      if (run.mode !== 'report' && !indexFailed) continue;
       const blockers =
         run.mode === 'report' ? (diffByModel.get(modelId)?.blockedBy ?? []).filter(isDecisionBlocker) : [];
       if (blockers.length === 0 && flags.length === 0) continue;
@@ -87,7 +85,7 @@ function buildDecisions(run: DiscoveryRun, index: ModelIndex, indexFailed: boole
         modelId,
         reasons: blockers.map(blockerCopy),
         flags,
-        notSaved: !indexFailed,
+        notSaved: run.mode === 'report' && !indexFailed,
         fix: null,
         openPrices: indexFailed && flags.length > 0,
       });
@@ -109,17 +107,9 @@ function buildDecisions(run: DiscoveryRun, index: ModelIndex, indexFailed: boole
   return decisions;
 }
 
-function DecisionCard({
-  decision,
-  index,
-  onTurnOn,
-}: {
-  decision: Decision;
-  index: ModelIndex;
-  onTurnOn: (row: AdminModelRow) => void;
-}) {
+function DecisionCard({ decision, index }: { decision: Decision; index: ModelIndex }) {
   const { modelId, reasons, flags, notSaved, fix } = decision;
-  const { openPrices } = useModelsNavigation();
+  const { openModel, openPrices } = useModelsNavigation();
   const actionTestId = `discovery-decision-action-${modelId}`;
   return (
     <SectionCard
@@ -127,12 +117,7 @@ function DecisionCard({
       data-testid={`discovery-decision-${modelId}`}
       action={
         fix ? (
-          <ModelFixAction
-            action={fix.action}
-            model={fix.row}
-            onTurnOn={() => onTurnOn(fix.row)}
-            data-testid={actionTestId}
-          />
+          <ModelFixAction action={fix.action} model={fix.row} data-testid={actionTestId} />
         ) : decision.openPrices ? (
           <Button
             size="sm"
@@ -147,9 +132,20 @@ function DecisionCard({
       }
     >
       <Fact label="Model id">
-        <Typography level="body-xs" fontFamily="code" sx={{ overflowWrap: 'anywhere' }}>
-          {modelId}
-        </Typography>
+        <Stack gap={0.25} alignItems="flex-start">
+          <Typography level="body-xs" fontFamily="code" sx={{ overflowWrap: 'anywhere' }}>
+            {modelId}
+          </Typography>
+          <Link
+            component="button"
+            type="button"
+            level="body-sm"
+            onClick={() => void openModel(modelId)}
+            data-testid={`discovery-decision-open-${modelId}`}
+          >
+            Open model
+          </Link>
+        </Stack>
       </Fact>
       {notSaved && (
         <Fact label="Status" data-testid={`discovery-decision-not-saved-${modelId}`}>
@@ -167,11 +163,7 @@ function DecisionCard({
         <Fact key={flag.kind} label="Price" data-testid={`discovery-decision-flag-${modelId}`}>
           <Stack gap={0.5}>
             <Box>{flagCopy(flag.kind, flag.detail)}</Box>
-            <Box sx={{ color: 'admin.inkMuted' }}>
-              Proposed {inOut(flag.proposed)} per 1M; in force {inOut(flag.current)}. Sources: {flag.sources.join(', ')}
-              .
-            </Box>
-            {/* Never truncated: this sentence is what the admin came for. */}
+            {/* Never truncated: the sentence names the rates and sources, so they print nowhere else. */}
             <Box sx={{ color: 'admin.inkMuted' }}>{flag.detail}</Box>
           </Stack>
         </Fact>
@@ -401,7 +393,6 @@ function RunView({ run }: { run: DiscoveryRun }) {
   const index: ModelIndex = models.data ?? new Map();
   const indexFailed = models.isError && !models.data;
   const [showDetails, setShowDetails] = useState(false);
-  const [turningOn, setTurningOn] = useState<AdminModelRow | null>(null);
   const result = runResult(run);
   const decisions = models.isLoading ? [] : buildDecisions(run, index, indexFailed);
   // The plan is reported identically in both modes, so a write run whose appends all threw looks clean everywhere
@@ -448,7 +439,7 @@ function RunView({ run }: { run: DiscoveryRun }) {
         ) : (
           <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' }}>
             {decisions.map(decision => (
-              <DecisionCard key={decision.modelId} decision={decision} index={index} onTurnOn={setTurningOn} />
+              <DecisionCard key={decision.modelId} decision={decision} index={index} />
             ))}
           </Box>
         )}
@@ -479,16 +470,6 @@ function RunView({ run }: { run: DiscoveryRun }) {
           </Box>
         )}
       </Stack>
-
-      {turningOn && (
-        <ModelAccessDialog
-          target={turningOn}
-          change={{ enabled: true }}
-          title={`Turn on ${turningOn.name}`}
-          confirmLabel="Turn on"
-          onClose={() => setTurningOn(null)}
-        />
-      )}
     </>
   );
 }
@@ -520,10 +501,7 @@ export function DiscoveryRunPage({ runId }: { runId: string }) {
       />
       <UpdatingBar active={query.isFetching && !query.isLoading && !!run} testId="discovery-run-updating" />
       {run ? (
-        // The route sits outside AdminPage, so the turn-on dialog's Undo toast needs its own provider.
-        <UndoToastProvider key={runId}>
-          <RunView run={run} />
-        </UndoToastProvider>
+        <RunView key={runId} run={run} />
       ) : query.isLoading ? (
         <LoadingState label="Loading the run" testId="discovery-run-loading" />
       ) : expired ? (
