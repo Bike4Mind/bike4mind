@@ -10,7 +10,8 @@
 
 import { describe, it, expect } from 'vitest';
 import { AnthropicBackend } from '../anthropicBackend';
-import type { CompletionInfo, ICompletionOptionTools } from '../backend';
+import type { CompletionInfo, ICompletionOptions, ICompletionOptionTools } from '../backend';
+import { SafetyRefusalError } from '../llmRefusalErrors';
 import { ChatModels, ModelBackend, type IMessage, type ModelInfo } from '@bike4mind/common';
 
 function asyncIterable(events: unknown[]) {
@@ -71,10 +72,42 @@ function textTurn(text: string): unknown[] {
   ];
 }
 
-const run = (backend: AnthropicBackend, model: string, stream: boolean, infos: CompletionInfo[] = []) =>
-  backend.complete(model, [{ role: 'user', content: 'benign adjacent request' }], { stream }, async (_text, info) => {
-    infos.push(info);
-  });
+// A refusal after some output: the text streamed before the classifier stopped the turn.
+function midStreamRefusalTurn(): unknown[] {
+  return [
+    { type: 'message_start', message: { usage: { input_tokens: 30, output_tokens: 0 } } },
+    { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Here is how' } },
+    { type: 'content_block_stop', index: 0 },
+    { type: 'message_delta', delta: { stop_reason: 'refusal' }, usage: { input_tokens: 30, output_tokens: 7 } },
+    { type: 'message_stop' },
+  ];
+}
+
+const run = (
+  backend: AnthropicBackend,
+  model: string,
+  stream: boolean,
+  infos: CompletionInfo[] = [],
+  options: Partial<ICompletionOptions> = {}
+) =>
+  backend.complete(
+    model,
+    [{ role: 'user', content: 'benign adjacent request' }],
+    { stream, ...options },
+    async (_text, info) => {
+      infos.push(info);
+    }
+  );
+
+async function refusalOf(promise: Promise<void>): Promise<SafetyRefusalError> {
+  const error = await promise.then(
+    () => undefined,
+    (rejected: unknown) => rejected
+  );
+  expect(error).toBeInstanceOf(SafetyRefusalError);
+  return error as SafetyRefusalError;
+}
 
 describe('AnthropicBackend - safety-classifier refusal fallback', () => {
   it.each([
@@ -104,10 +137,10 @@ describe('AnthropicBackend - safety-classifier refusal fallback', () => {
     if (stream) expect(infos.some(info => info.stopReason === 'refusal')).toBe(true);
   });
 
-  it('replays a refused Fable 5.2 tool round to the Opus 5.5 fallback with its thinking block unchanged', async () => {
+  it('replays a refused Fable 5.2 tool round to the Opus 4.8 fallback with its thinking block unchanged', async () => {
     // What the completion loop hands the fallback hop after Fable 5.2 ran a tool round and then
     // refused: the round's assistant content as the backend pushed it, signed thinking first.
-    // Opus 5.5 cannot read a Fable 5.2 block; the API drops it unbilled, and stripping it here
+    // Opus 4.8 cannot read a Fable 5.2 block; the API drops it unbilled, and stripping it here
     // instead would break the tool turn's block order.
     const fableThinking = { type: 'thinking', thinking: '', signature: 'fable-5-2-signature' };
     const history = [
@@ -129,12 +162,81 @@ describe('AnthropicBackend - safety-classifier refusal fallback', () => {
     const { backend, enqueue, requests } = buildBackend();
     enqueue(textTurn('the host is up'));
 
-    await backend.complete(ChatModels.CLAUDE_5_5_OPUS, history, { stream: true, tools: [lookup] }, async () => {});
+    await backend.complete(ChatModels.CLAUDE_4_8_OPUS, history, { stream: true, tools: [lookup] }, async () => {});
 
     const sent = requests[0] as { messages: Array<{ role: string; content: unknown }>; thinking?: { type: string } };
     const assistant = sent.messages.find(message => message.role === 'assistant');
     expect(assistant?.content).toEqual([fableThinking, expect.objectContaining({ type: 'tool_use', id: 'call_1' })]);
     expect(sent.thinking?.type).not.toBe('disabled');
+  });
+
+  it.each([
+    [ChatModels.CLAUDE_FABLE_5, true],
+    ['claude-fable-5-2', true],
+    ['claude-fable-5-2', false],
+    ['claude-fable-5-1', true],
+  ])('settles a refusal from %s when the caller has no fallback loop (stream=%s)', async (model, stream) => {
+    const { backend, enqueue } = buildBackend();
+    enqueue(stream ? refusalTurn() : refusalResponse());
+    const infos: CompletionInfo[] = [];
+
+    await expect(run(backend, model, stream, infos, { settleRefusal: true })).resolves.not.toThrow();
+    if (stream) expect(infos.some(info => info.stopReason === 'refusal')).toBe(true);
+  });
+});
+
+describe('AnthropicBackend safety refusal usage', () => {
+  // What a recursive tool round hands the next one: the rounds already run, summed and per request.
+  const afterOneToolRound: Partial<ICompletionOptions> = {
+    _internal: {
+      accumInputTokens: 100,
+      accumOutputTokens: 40,
+      accumCacheReadTokens: 10,
+      accumCacheWriteTokens: 5,
+      accumTurnUsage: [{ inputTokens: 100, outputTokens: 40, cacheReadInputTokens: 10, cacheCreationInputTokens: 5 }],
+    },
+  };
+
+  it.each([true, false])(
+    'carries the tool rounds already run but not a pre-output refusal (stream=%s)',
+    async stream => {
+      const { backend, enqueue } = buildBackend();
+      enqueue(stream ? refusalTurn() : refusalResponse());
+
+      const error = await refusalOf(run(backend, 'claude-fable-5-2', stream, [], afterOneToolRound));
+      expect(error.usage).toEqual({
+        inputTokens: 100,
+        cacheReadInputTokens: 10,
+        cacheCreationInputTokens: 5,
+        outputTokens: 40,
+        turnUsage: [{ inputTokens: 100, outputTokens: 40, cacheReadInputTokens: 10, cacheCreationInputTokens: 5 }],
+      });
+    }
+  );
+
+  it('adds a refused request that streamed output, which the provider bills', async () => {
+    const { backend, enqueue } = buildBackend();
+    enqueue(midStreamRefusalTurn());
+
+    const error = await refusalOf(run(backend, 'claude-fable-5-2', true, [], afterOneToolRound));
+    expect(error.usage).toEqual({
+      inputTokens: 130,
+      cacheReadInputTokens: 10,
+      cacheCreationInputTokens: 5,
+      outputTokens: 47,
+      turnUsage: [
+        { inputTokens: 100, outputTokens: 40, cacheReadInputTokens: 10, cacheCreationInputTokens: 5 },
+        { inputTokens: 30, outputTokens: 7 },
+      ],
+    });
+  });
+
+  it('carries no usage for a first-round pre-output refusal', async () => {
+    const { backend, enqueue } = buildBackend();
+    enqueue(refusalTurn());
+
+    const error = await refusalOf(run(backend, 'claude-fable-5-2', true));
+    expect(error.usage).toBeUndefined();
   });
 });
 

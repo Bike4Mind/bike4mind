@@ -325,9 +325,10 @@ export const FALLBACK_PREFERENCES: Record<string, string[]> = {
     'claude-sonnet-4-6',
     'gpt-5',
   ],
-  // Fable 5.1 and 5.2 refusals (refusalFallback) and outages lead with Opus 5.5.
-  'claude-fable-5-2': ['claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8'],
-  'claude-fable-5-1': ['claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8'],
+  // Opus 4.8 leads: Anthropic names it and Opus 5 as Fable 5.1/5.2's refusal-fallback targets, while
+  // Opus 5.5 runs similar classifiers and settles a repeat refusal as a decline.
+  'claude-fable-5-2': ['claude-opus-4-8', 'claude-opus-5', 'claude-opus-5-5', 'claude-sonnet-5', 'gpt-5'],
+  'claude-fable-5-1': ['claude-opus-4-8', 'claude-opus-5', 'claude-opus-5-5', 'claude-sonnet-5', 'gpt-5'],
   'claude-haiku-5-5': ['claude-haiku-4-5-20251001', 'gpt-4o-mini'],
   'claude-opus-5-5': [
     'claude-opus-5',

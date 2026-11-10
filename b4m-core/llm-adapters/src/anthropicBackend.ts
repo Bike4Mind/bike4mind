@@ -86,6 +86,7 @@ import {
   createAnthropicStreamTimeoutError,
   type LlmStreamTimeoutKind,
 } from './llmTimeoutErrors';
+import { SafetyRefusalError } from './llmRefusalErrors';
 import { addReasoningTokens, reasoningTokensField, reasoningTokensFromUsage } from './reasoningTokens';
 import { acquireSlot, type SlotRelease } from './_anthropicSemaphore';
 import { appendIdentityReminder, buildIdentityReminder, shouldOmitIdentityReminder } from './identityReminder';
@@ -1010,6 +1011,34 @@ export class AnthropicBackend implements ICompletionBackend {
     // handoffs add the turn in directly, since they need the running number itself.
     const reasoningSoFar = (usage: unknown) =>
       reasoningTokensField(addReasoningTokens(accumReasoningTokens, reasoningTokensFromUsage(usage)));
+
+    // Thrown only when the model falls back on refusal and the caller has a fallback loop to continue on.
+    const throwsOnRefusal = (stopReason: string | null | undefined) =>
+      stopReason === 'refusal' && !options.settleRefusal && this.apiSurfaceFor(model).refusalFallback;
+
+    // The refusal carries what was billed: the rounds already run, plus the refused request when it
+    // streamed output (a mid-stream refusal bills normally; a pre-output one depends on its category).
+    const safetyRefusal = (refusedTurn: AnthropicUsage) => {
+      const billedTurn = (refusedTurn?.output_tokens ?? 0) > 0 ? refusedTurn : undefined;
+      const inputTokens = accumInputTokens + (billedTurn?.input_tokens ?? 0);
+      const cacheReadInputTokens = accumCacheReadTokens + (billedTurn?.cache_read_input_tokens ?? 0);
+      const cacheCreationInputTokens = accumCacheWriteTokens + (billedTurn?.cache_creation_input_tokens ?? 0);
+      const outputTokens = accumOutputTokens + (billedTurn?.output_tokens ?? 0);
+      const turnUsage = billedTurn ? appendAnthropicTurn(accumTurnUsage, billedTurn) : accumTurnUsage;
+      const billed = inputTokens + cacheReadInputTokens + cacheCreationInputTokens + outputTokens > 0;
+      return new SafetyRefusalError(
+        model,
+        billed
+          ? {
+              inputTokens,
+              cacheReadInputTokens,
+              cacheCreationInputTokens,
+              ...(outputTokens > 0 ? { outputTokens } : {}),
+              ...(turnUsage?.length ? { turnUsage } : {}),
+            }
+          : undefined
+      );
+    };
 
     // Check if we've exceeded the tool call limit (only when there are tools to execute).
     // Honor a per-request override (a surface-set, admin-tunable maxToolCalls); else the default.
@@ -2220,16 +2249,14 @@ export class AnthropicBackend implements ICompletionBackend {
               // Scoped to models whose refusalFallback resolves true so a *genuine*
               // refusal from any other model still surfaces unchanged; any partial output here is
               // discarded by the retry (the loop resets streaming state before re-running).
-              if (stopReason === 'refusal' && this.apiSurfaceFor(model).refusalFallback) {
+              if (throwsOnRefusal(stopReason)) {
                 this.logger.warn(
                   '[AnthropicBackend] Safety classifier refusal — falling back to an alternative model',
                   {
                     model,
                   }
                 );
-                reject(
-                  new Error(`Anthropic safety classifier refusal for ${model} — falling back to an alternative model`)
-                );
+                reject(safetyRefusal(streamingTurnUsage));
                 return;
               }
 
@@ -2871,9 +2898,9 @@ export class AnthropicBackend implements ICompletionBackend {
         // fallback. Throw the same recognized error so the completion loop continues on the fallback chain.
         const nonStreamStopReason =
           'stop_reason' in response ? (response as { stop_reason?: string }).stop_reason : undefined;
-        if (nonStreamStopReason === 'refusal' && this.apiSurfaceFor(model).refusalFallback) {
+        if (throwsOnRefusal(nonStreamStopReason)) {
           this.logger.warn('[AnthropicBackend] Safety classifier refusal (non-streaming) — falling back', { model });
-          throw new Error(`Anthropic safety classifier refusal for ${model} — falling back to an alternative model`);
+          throw safetyRefusal(('usage' in response ? response.usage : undefined) as AnthropicUsage);
         }
 
         // Populate toolsUsed from func (non-streaming path)

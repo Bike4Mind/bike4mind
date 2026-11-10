@@ -192,6 +192,11 @@ export interface ICompletionOptions {
    * with no live view leave this unset and keep full retry and fallback.
    */
   streamText?: boolean;
+  /**
+   * Set by a caller with no fallback loop (the completions API): a safety-classifier refusal settles
+   * with stopReason 'refusal' even when the model's refusalFallback is on, instead of throwing.
+   */
+  settleRefusal?: boolean;
   bestOf?: number;
   logitBias?: { [key: string]: number };
   tools: ICompletionOptionTools[];

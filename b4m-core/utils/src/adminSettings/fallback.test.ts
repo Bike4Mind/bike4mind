@@ -1176,7 +1176,7 @@ describe('Fable 5.1 / 5.2 safety-classifier refusal fallback, end to end', () =>
     ['claude-fable-5-2', false],
     ['claude-fable-5-1', true],
     ['claude-fable-5-1', false],
-  ])('continues a refused %s request (stream=%s) on claude-opus-5-5', async (id, stream) => {
+  ])('continues a refused %s request (stream=%s) on claude-opus-4-8', async (id, stream) => {
     const error = await refusalFrom(id, stream);
     expect(isSafetyRefusalError(error)).toBe(true);
     expect(shouldTriggerFallback(error)).toBe(true);
@@ -1186,20 +1186,25 @@ describe('Fable 5.1 / 5.2 safety-classifier refusal fallback, end to end', () =>
       excludeModelIds: new Set([id]),
     });
     expect(result?.attempt).toBe(1);
-    expect(result?.model.id).toBe('claude-opus-5-5');
+    expect(result?.model.id).toBe('claude-opus-4-8');
   });
 
-  it('walks on to Opus 5 and then Opus 4.8 as each hop is tried', async () => {
-    const fable52 = roster.find(model => model.id === 'claude-fable-5-2')!;
-    const hops: string[] = [];
-    const tried = new Set([fable52.id]);
-    for (let hop = 0; hop < 3; hop++) {
-      const result = await getLlmWithFallback(fable52, undefined, roster, apiKeyTable, mockLogger, {
-        excludeModelIds: tried,
-      });
-      hops.push(result!.model.id);
-      tried.add(result!.model.id);
+  it.each(['claude-fable-5-1', 'claude-fable-5-2'])(
+    'moves %s to gpt-5 when the Anthropic spend limit is hit',
+    async id => {
+      const gpt4oMini = createModelInfo({ id: 'gpt-4o-mini', backend: ModelBackend.OpenAI });
+      const gpt5 = createModelInfo({ id: 'gpt-5', backend: ModelBackend.OpenAI });
+      const refused = roster.find(model => model.id === id)!;
+      // gpt-4o-mini is listed first so a last-resort scan would pick it instead of the chain's tail.
+      const result = await getLlmWithFallback(
+        refused,
+        undefined,
+        [gpt4oMini, ...roster, gpt5],
+        { ...apiKeyTable, openai: 'valid-key' },
+        mockLogger,
+        { excludeModelIds: new Set([id]), excludeBackends: new Set<string>([ModelBackend.Anthropic]) }
+      );
+      expect(result?.model.id).toBe('gpt-5');
     }
-    expect(hops).toEqual(['claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8']);
-  });
+  );
 });
