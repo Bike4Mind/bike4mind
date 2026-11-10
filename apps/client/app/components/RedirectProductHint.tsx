@@ -39,7 +39,11 @@ export default function RedirectProductHint({ mode }: { mode: 'signIn' | 'signUp
         textAlign: 'center',
       }}
     >
-      {t(mode === 'signIn' ? 'auth.signInToContinueTo' : 'auth.signUpToContinueTo', { product: item.label })}
+      {/* React escapes the text node, so i18next must not HTML-escape the label as well. */}
+      {t(mode === 'signIn' ? 'auth.signInToContinueTo' : 'auth.signUpToContinueTo', {
+        product: item.label,
+        interpolation: { escapeValue: false },
+      })}
     </Typography>
   );
 }

@@ -4,6 +4,7 @@ import { render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { PremiumNavDescriptor } from '@client/app/premiumContract';
+import i18next from 'i18next';
 import en from '@client/app/locales/en.json';
 import RedirectProductHint from './RedirectProductHint';
 
@@ -13,16 +14,15 @@ vi.mock('@client/app/premium-generated/premiumNavItems.generated', () => ({
     return nav.items;
   },
 }));
-// Interpolates the real en.json copy, so the test pins the wording users see.
+// A real i18next over en.json with its default escaping, so the test pins the wording and the
+// interpolation options users actually get.
+const i18n = vi.hoisted(() => ({ t: (key: string): string => key }));
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({
-    t: (key: string, opts?: Record<string, string>) => {
-      const [ns, name] = key.split('.') as ['auth', keyof typeof en.auth];
-      const template = String(en[ns][name]);
-      return template.replace(/\{\{(\w+)\}\}/g, (_, k: string) => opts?.[k] ?? '');
-    },
-  }),
+  useTranslation: () => ({ t: i18n.t }),
 }));
+const instance = i18next.createInstance();
+void instance.init({ lng: 'en', resources: { en: { translation: en } }, initAsync: false });
+i18n.t = instance.t.bind(instance) as (key: string) => string;
 
 const ProductIcon = () => <svg data-testid="product-icon" />;
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -55,6 +55,14 @@ describe('RedirectProductHint', () => {
     renderAt('/register?redirectTo=%2Fproduct', 'signUp');
     expect(screen.getByTestId('auth-redirect-product-hint')).toHaveTextContent(
       'Create an account to continue to Product'
+    );
+  });
+
+  it('shows a label with HTML-special characters as written', () => {
+    nav.items = [{ path: '/product', label: `R&D <Studio> "Q's"` }];
+    renderAt('/login?redirectTo=%2Fproduct');
+    expect(screen.getByTestId('auth-redirect-product-hint')).toHaveTextContent(
+      `Sign in to continue to R&D <Studio> "Q's"`
     );
   });
 
