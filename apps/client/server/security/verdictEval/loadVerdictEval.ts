@@ -41,7 +41,6 @@ export const VERDICT_EVAL_DETECTION_LIMIT = 2_000;
 export const VERDICT_EVAL_ACCOUNT_LIMIT = 5_000;
 const IN_CHUNK = 500;
 
-const LABEL_ACTIONS_FILTER = ACCOUNT_STATUS_ACTIONS_FILTER;
 const LABEL_REVIEW_STATES: SignupRiskReviewState[] = ['approved', 'banned'];
 const OBJECT_ID = /^[0-9a-f]{24}$/;
 
@@ -153,7 +152,7 @@ export async function loadVerdictEvalInput(
     // Accounts an admin suspended, contained, reinstated or un-contained in the window, with or without a detection.
     AdminAuditLogModel.find(
       {
-        ...LABEL_ACTIONS_FILTER,
+        ...ACCOUNT_STATUS_ACTIONS_FILTER,
         occurredAt: { $gte: since },
         'target.kind': 'user',
       },
@@ -188,7 +187,7 @@ export async function loadVerdictEvalInput(
         {
           'target.kind': 'user',
           'target.id': { $in: chunk },
-          ...LABEL_ACTIONS_FILTER,
+          ...ACCOUNT_STATUS_ACTIONS_FILTER,
         },
         { action: 1, 'actor.kind': 1, 'target.id': 1, occurredAt: 1 }
       )
