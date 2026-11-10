@@ -149,6 +149,7 @@ export class ModelCatalogRepository
   async discoveryMilestones(): Promise<Map<string, { firstSeenAt: Date; activatedAt?: Date }>> {
     const groups = await this.model.aggregate<{ _id: string; firstSeenAt: Date; activatedAt: Date | null }>([
       { $match: { source: 'discovery' } },
+      { $project: { modelId: 1, effectiveFrom: 1, 'patch.lifecycle.status': 1 } },
       {
         $group: {
           _id: '$modelId',
