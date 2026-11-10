@@ -27,6 +27,8 @@ vi.mock('@bike4mind/server-utils/security/wafSharedHelpers', () => ({
 
 import { PURGE_BUDGET_MS, purgeDeletedNotebookMedia } from './purgeDeletedNotebookMedia';
 
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
+
 let database: MongoMemoryReplSet;
 const collection = (name: string) => mongoose.connection.collection(mongoose.model(name).collection.name);
 const logger = { info: vi.fn(), warn: vi.fn() };
