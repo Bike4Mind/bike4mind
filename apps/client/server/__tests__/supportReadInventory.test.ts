@@ -28,14 +28,17 @@ const routeFiles = (dir: string): string[] =>
     return entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts') ? [full] : [];
   });
 
+/** The shared any-of read constants from adminPermissions.ts; each includes support:read. */
+const PAGE_READS = new Set(['SETTINGS_PAGE_READ', 'CREDITS_PAGE_READ']);
+
 /** The methods a route's `adminApi` declarations put on support:read, alone or in an any-of list. */
 const supportReadMethods = (source: string): string[] =>
   [...source.matchAll(/adminPermissions:\s*\{([^}]*)\}/g)].flatMap(([, declaration]) =>
     [...declaration.matchAll(/(\w+):\s*(\[[^\]]*\]|'[^']*'|\w+)/g)].flatMap(([, method, value]) => {
-      if (/^\w+$/.test(value) && value !== 'SETTINGS_PAGE_READ') {
+      if (/^\w+$/.test(value) && !PAGE_READS.has(value)) {
         throw new Error(`Unrecognised permission constant ${value}: teach this test whether it includes support:read`);
       }
-      return value.includes("'support:read'") || value === 'SETTINGS_PAGE_READ' ? [method] : [];
+      return value.includes("'support:read'") || PAGE_READS.has(value) ? [method] : [];
     })
   );
 

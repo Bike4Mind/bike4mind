@@ -1,8 +1,8 @@
 import { z } from 'zod';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, CREDITS_PAGE_READ } from '@bike4mind/common';
 import { signupGrantReleaseRepository } from '@bike4mind/database';
-import { BadRequestError, ensureAdmin } from '@bike4mind/server-utils/utils/errors';
-import { baseApi } from '@server/middlewares/baseApi';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 
 const querySchema = z.object({
@@ -14,9 +14,12 @@ const querySchema = z.object({
 });
 const PAGE_SIZE = 25;
 
-const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const handler = adminApi({
+  auth: 'jwtOnly',
+  requiredScopes: [ApiKeyScope.ADMIN],
+  adminPermissions: { GET: CREDITS_PAGE_READ },
+}).get(
   asyncHandler(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
     const parsed = querySchema.safeParse(req.query);
     if (!parsed.success) throw new BadRequestError('Invalid reason or cursor');
     const rows = await signupGrantReleaseRepository.listHeld({

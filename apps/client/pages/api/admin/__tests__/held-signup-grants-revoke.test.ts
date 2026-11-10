@@ -9,8 +9,8 @@ const { handlers, baseOptions, revoke } = vi.hoisted(() => ({
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: () => 'csrf' }));
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: (options: unknown) => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: (options: unknown) => {
     baseOptions(options);
     const chain = {
       use: () => chain,
@@ -66,11 +66,11 @@ beforeEach(() => {
 
 describe('POST /api/admin/held-signup-grants/revoke', () => {
   it('guards with the admin scope', () => {
-    expect(baseOptions).toHaveBeenCalledWith({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] });
-  });
-  it('rejects non-admins', async () => {
-    expect((await run({ batchId: 'a'.repeat(24) }, false)).statusCode).toBe(403);
-    expect(revoke).not.toHaveBeenCalled();
+    expect(baseOptions).toHaveBeenCalledWith({
+      auth: 'jwtOnly',
+      requiredScopes: [ApiKeyScope.ADMIN],
+      adminPermissions: { POST: 'credits:adjust' },
+    });
   });
   it.each([
     ['missing', {}],

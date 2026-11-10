@@ -28,6 +28,9 @@ export type AdminPermissionRequirement = AdminPermissionId | readonly AdminPermi
  */
 export const SETTINGS_PAGE_READ = ['support:read', 'settings:manage'] as const satisfies readonly AdminPermissionId[];
 
+/** The same for credits: the credit, grant and subscription reads a `credits:adjust` delegate needs beside its writes. */
+export const CREDITS_PAGE_READ = ['support:read', 'credits:adjust'] as const satisfies readonly AdminPermissionId[];
+
 type AdminIdentity = {
   isAdmin?: boolean | null;
   adminPermissions?: readonly string[] | null;

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, CREDITS_PAGE_READ } from '@bike4mind/common';
 
 const { handlers, baseOptions, listHeld } = vi.hoisted(() => ({
   handlers: {} as Record<string, (req: unknown, res: unknown) => Promise<void>>,
@@ -9,8 +9,8 @@ const { handlers, baseOptions, listHeld } = vi.hoisted(() => ({
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: () => 'csrf' }));
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: (options: unknown) => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: (options: unknown) => {
     baseOptions(options);
     const chain = {
       use: () => chain,
@@ -43,11 +43,11 @@ beforeEach(() => listHeld.mockReset().mockResolvedValue([]));
 
 describe('GET /api/admin/held-signup-grants', () => {
   it('requires the admin scope on a JWT-only route', () => {
-    expect(baseOptions).toHaveBeenCalledWith({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] });
-  });
-  it('rejects non-admins before querying', async () => {
-    expect((await run({}, false)).statusCode).toBe(403);
-    expect(listHeld).not.toHaveBeenCalled();
+    expect(baseOptions).toHaveBeenCalledWith({
+      auth: 'jwtOnly',
+      requiredScopes: [ApiKeyScope.ADMIN],
+      adminPermissions: { GET: CREDITS_PAGE_READ },
+    });
   });
   it('rejects an unknown reason and a malformed cursor', async () => {
     expect((await run({ reason: 'bogus' })).statusCode).toBe(400);

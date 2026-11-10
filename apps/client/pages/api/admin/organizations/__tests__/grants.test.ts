@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { ApiKeyScope, CREDITS_PAGE_READ } from '@bike4mind/common';
 
 /**
  * GET /api/admin/organizations/grants: the Subscription query result goes through the response
@@ -7,12 +8,12 @@ import { createMocks } from 'node-mocks-http';
  * must not reach the client.
  */
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: (config?: unknown) => {
     const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign(
       (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'GET']?.(req, res),
-      { use: () => chain, get: (fn: (req: unknown, res: unknown) => unknown) => ((h.GET = fn), chain) }
+      { use: () => chain, get: (fn: (req: unknown, res: unknown) => unknown) => ((h.GET = fn), chain), _config: config }
     );
     return chain;
   },
@@ -79,10 +80,8 @@ describe('GET /api/admin/organizations/grants', () => {
     }
   });
 
-  it('rejects a non-admin before querying', async () => {
-    const { run } = call(false);
-
-    await expect(run()).rejects.toMatchObject({ statusCode: 403 });
-    expect(mockFind).not.toHaveBeenCalled();
+  it('gates reads on the credits page permissions', () => {
+    const config = (handler as unknown as { _config?: unknown })._config;
+    expect(config).toEqual({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions: { GET: CREDITS_PAGE_READ } });
   });
 });

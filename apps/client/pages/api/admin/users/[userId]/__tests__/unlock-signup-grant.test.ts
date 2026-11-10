@@ -11,8 +11,8 @@ const h = vi.hoisted(() => ({
   protection: { repository: {} },
 }));
 vi.mock('@bike4mind/server-utils/auth/signupProtection', () => ({ signupProtection: h.protection }));
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: (config: unknown) => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: (config: unknown) => {
     h.config = config;
     return {
       use: () => ({
@@ -70,12 +70,8 @@ describe('admin signup unlock', () => {
     h.denySelf.mockRejectedValue(new Error('Admins cannot perform this action on their own account.'));
     h.unlock.mockResolvedValue({ outcome: 'noop', reason: 'nothing_remaining' });
   });
-  it('is jwt-only and rejects non-admin callers before invoking the grant', async () => {
-    expect(h.config).toEqual({ auth: 'jwtOnly' });
-    const req = request();
-    req.user.isAdmin = false;
-    await expect(h.handler!(req, { json: vi.fn() })).rejects.toThrow('Admin access required');
-    expect(h.unlock).not.toHaveBeenCalled();
+  it('is jwt-only and gated on the credits permission', () => {
+    expect(h.config).toEqual({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:adjust' } });
   });
   it('requires an audit reason', async () => {
     const req = request();
@@ -113,6 +109,10 @@ describe('admin signup unlock', () => {
     expect(id).toBe('user-1');
     h.findById.mockResolvedValue({ isAdmin: false });
     expect(await adapters.validators.admin()).toBe(false);
+    h.findById.mockResolvedValue({ isAdmin: false, adminPermissions: ['support:read'] });
+    expect(await adapters.validators.admin()).toBe(false);
+    h.findById.mockResolvedValue({ isAdmin: false, adminPermissions: ['credits:adjust'] });
+    expect(await adapters.validators.admin()).toBe(true);
     h.findById.mockResolvedValue({ isAdmin: true });
     expect(await adapters.validators.admin()).toBe(true);
     await adapters.audit({ credits: 28, creditTransactionId: 'tx-1' });

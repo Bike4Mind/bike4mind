@@ -10,8 +10,8 @@ const { handlers, baseOptions, release, preview } = vi.hoisted(() => ({
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: () => 'csrf' }));
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: (options: unknown) => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: (options: unknown) => {
     baseOptions(options);
     const chain = {
       use: () => chain,
@@ -66,11 +66,11 @@ beforeEach(() => {
 
 describe('POST /api/admin/held-signup-grants/release', () => {
   it('guards with the admin scope', () => {
-    expect(baseOptions).toHaveBeenCalledWith({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] });
-  });
-  it('rejects non-admins', async () => {
-    expect((await run({ userIds: [id(1)] }, false)).statusCode).toBe(403);
-    expect(release).not.toHaveBeenCalled();
+    expect(baseOptions).toHaveBeenCalledWith({
+      auth: 'jwtOnly',
+      requiredScopes: [ApiKeyScope.ADMIN],
+      adminPermissions: { POST: 'credits:adjust' },
+    });
   });
   it.each([
     ['empty ids', { userIds: [] }],
@@ -157,8 +157,7 @@ describe('POST /api/admin/held-signup-grants/release', () => {
       expect(audit.record).not.toHaveBeenCalled();
     });
 
-    it('still refuses a non-admin and the admin own account', async () => {
-      expect((await run({ userIds: [id(1)], dryRun: true }, false)).statusCode).toBe(403);
+    it('still refuses the admin own account', async () => {
       expect((await run({ userIds: [id(1)], dryRun: true }, true, { id: id(1) })).statusCode).toBe(403);
       expect(preview).not.toHaveBeenCalled();
     });

@@ -1,20 +1,25 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { ForbiddenError } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
+  config: null as unknown,
   handler: null as null | ((req: unknown, res: unknown) => Promise<unknown>),
   findById: vi.fn(),
   update: vi.fn(),
 }));
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({
-    use: () => ({
-      post: (fn: (req: unknown, res: unknown) => Promise<unknown>) => {
-        h.handler = fn;
-        return {};
-      },
-    }),
-  }),
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: (config: unknown) => {
+    h.config = config;
+    return {
+      use: () => ({
+        post: (fn: (req: unknown, res: unknown) => Promise<unknown>) => {
+          h.handler = fn;
+          return {};
+        },
+      }),
+    };
+  },
 }));
 
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: vi.fn() }));
@@ -34,10 +39,13 @@ await import('../new-account-spend-cap');
 
 const REASON = 'Verified the integration owner';
 
-const makeReq = (body: unknown, isAdmin = true) => ({
+const FULL_ADMIN = { id: 'admin-1', username: 'admin', isAdmin: true };
+const DELEGATE = { id: 'delegate-1', username: 'delegate', isAdmin: false, adminPermissions: ['credits:adjust'] };
+
+const makeReq = (body: unknown, user: Record<string, unknown> = FULL_ADMIN) => ({
   query: { userId: 'user-1' },
   body,
-  user: { id: 'admin-1', username: 'admin', isAdmin },
+  user,
   headers: {},
   logger: { info: vi.fn(), error: vi.fn() },
 });
@@ -47,11 +55,38 @@ describe('POST /api/admin/users/[userId]/new-account-spend-cap', () => {
     vi.clearAllMocks();
   });
 
-  it('rejects a non-admin before touching the user', async () => {
-    await expect(h.handler!(makeReq({ lifted: true }, false), { json: vi.fn() })).rejects.toThrow(/admin/i);
+  it('is jwt-only and gated on the credits permission', () => {
+    expect(h.config).toEqual({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:adjust' } });
+  });
 
-    expect(h.findById).not.toHaveBeenCalled();
+  it('lets a credits delegate change an account without admin access', async () => {
+    h.findById.mockResolvedValue({ id: 'user-1', username: 'u', newAccountSpendCapLifted: false });
+
+    await h.handler!(makeReq({ lifted: true, reason: REASON }, DELEGATE), { json: vi.fn() });
+
+    expect(h.update).toHaveBeenCalledWith({ id: 'user-1', newAccountSpendCapLifted: true });
+  });
+
+  it.each([
+    ['full admin', { isAdmin: true }],
+    ['delegate', { isAdmin: false, adminPermissions: ['credits:adjust'] }],
+  ])('refuses a delegate on a %s target and writes nothing', async (_label, targetAccess) => {
+    h.findById.mockResolvedValue({ id: 'user-1', username: 'u', newAccountSpendCapLifted: false, ...targetAccess });
+
+    await expect(h.handler!(makeReq({ lifted: true, reason: REASON }, DELEGATE), { json: vi.fn() })).rejects.toThrow(
+      ForbiddenError
+    );
+
     expect(h.update).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('lets a full admin change an account that has admin access', async () => {
+    h.findById.mockResolvedValue({ id: 'user-1', username: 'u', isAdmin: true, newAccountSpendCapLifted: false });
+
+    await h.handler!(makeReq({ lifted: true, reason: REASON }), { json: vi.fn() });
+
+    expect(h.update).toHaveBeenCalledWith({ id: 'user-1', newAccountSpendCapLifted: true });
   });
 
   it('lifts the cap for a capped user and audits the change', async () => {
