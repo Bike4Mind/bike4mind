@@ -24,19 +24,11 @@ describe('loadArenaUser', () => {
     findOne.mockReset();
   });
 
-  it('reads GitHub and work-email proof from the no-card unlock ledger rows', async () => {
+  it('reads the account fields and grants no proof from retired unlock ledger rows', async () => {
     findById.mockReturnValue(userQuery({ emailVerified: true }));
-    findOne.mockImplementation(async ({ transactionId }: { transactionId: string }) =>
-      transactionId === 'unlock-grant:work_email_verified:u1' ? { transactionId } : undefined
-    );
-    expect(await loadArenaUser('u1')).toEqual({ emailVerified: true, noCardUnlocks: ['work_email_verified'] });
-    expect(findOne).toHaveBeenCalledWith({ transactionId: 'unlock-grant:github_verified:u1' });
-  });
-
-  it('leaves a user with no unlock ledger row without proof', async () => {
-    findById.mockReturnValue(userQuery({ emailVerified: true }));
-    findOne.mockResolvedValue(undefined);
-    expect(await loadArenaUser('u1')).toEqual({ emailVerified: true, noCardUnlocks: [] });
+    findOne.mockResolvedValue({ transactionId: 'unlock-grant:github_verified:u1' });
+    expect(await loadArenaUser('u1')).toEqual({ emailVerified: true });
+    expect(findOne).not.toHaveBeenCalled();
   });
 
   it('returns null for a missing user', async () => {

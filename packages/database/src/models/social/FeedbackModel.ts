@@ -1,5 +1,6 @@
 import mongoose, { Model, model, Schema } from 'mongoose';
 import {
+  FeedbackStatus,
   FEEDBACK_SUBJECTS,
   HELP_FEEDBACK_REPORT_TYPES,
   HELP_FEEDBACK_SURFACES,
@@ -96,8 +97,14 @@ feedbackSchema.index(
 // defaults to null, so the key is present on unstamped rows too, and a compound sparse index skips
 // a document only when every one of its keys is absent.
 feedbackSchema.index({ organizationId: 1, createdAt: -1 }, { name: 'feedback_org_createdAt' });
+// The admin triage queue: reports still in a status, newest first, and the sidebar's count of New ones.
+feedbackSchema.index({ status: 1, createdAt: -1 }, { name: 'feedback_status_createdAt' });
 
 export const FeedbackModel: Model<IFeedbackDocument> =
   mongoose.models.Feedback ?? model<IFeedbackDocument>('Feedback', feedbackSchema);
+
+/** Reports nobody has triaged yet; `limit` stops counting there. */
+export const countNewFeedback = (options: { limit?: number } = {}): Promise<number> =>
+  FeedbackModel.countDocuments({ status: FeedbackStatus.New }, { limit: options.limit }).exec();
 
 export default FeedbackModel;

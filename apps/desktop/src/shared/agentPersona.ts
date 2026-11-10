@@ -96,19 +96,26 @@ const EPITHET_RULES: ReadonlyArray<readonly [Epithet, readonly string[]]> = [
   ['Seeker', ['find', 'search', 'audit', 'scan', 'investigate', 'look for', 'unused', 'todo']],
 ];
 
-export function epithetFor(title: string, seedPrompt: string): Epithet {
-  const text = `${title}\n${seedPrompt}`.toLowerCase();
-  const rule = EPITHET_RULES.find(([, keywords]) => keywords.some(keyword => text.includes(keyword)));
-  return rule ? rule[0] : 'Wanderer';
+function matchEpithet(text: string): Epithet | undefined {
+  const lower = text.toLowerCase();
+  return EPITHET_RULES.find(([, keywords]) => keywords.some(keyword => lower.includes(keyword)))?.[0];
 }
 
-function hashOf(text: string): number {
+/**
+ * The title names the task; the seed prompt is read only when the title says nothing, since a delegated
+ * brief nearly always asks to "report back" with a "summary" and would otherwise make everyone a Scribe.
+ */
+export function epithetFor(title: string, seedPrompt: string): Epithet {
+  return matchEpithet(title) ?? matchEpithet(seedPrompt) ?? 'Wanderer';
+}
+
+export function hashOf(text: string): number {
   let hash = 0;
   for (let index = 0; index < text.length; index++) hash = (hash * 31 + text.charCodeAt(index)) >>> 0;
   return hash;
 }
 
-const byAge = (a: PersonaSubject, b: PersonaSubject) =>
+export const byAge = <T extends { id: string; createdAt: string }>(a: T, b: T) =>
   a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 
 /**

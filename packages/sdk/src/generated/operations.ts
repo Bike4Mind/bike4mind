@@ -81,6 +81,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/sessions',
   },
+  createSkill: {
+    method: 'POST',
+    path: '/api/v1/skills',
+  },
   createTextRefinement: {
     method: 'POST',
     path: '/api/v1/text-refinements',
@@ -241,6 +245,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/sessions/{id}/messages/{messageId}',
   },
+  getSkill: {
+    method: 'GET',
+    path: '/api/v1/skills/{id}',
+  },
   getSkillMarketListing: {
     method: 'GET',
     path: '/api/v1/skills/market/listings/{id}',
@@ -308,6 +316,10 @@ export const operations = {
   listMySkillMarketListings: {
     method: 'GET',
     path: '/api/v1/skills/market/listings/mine',
+  },
+  listMySkills: {
+    method: 'GET',
+    path: '/api/v1/skills/mine',
   },
   listProjectFiles: {
     method: 'GET',
@@ -468,6 +480,10 @@ export const operations = {
   updateSessionMessage: {
     method: 'PUT',
     path: '/api/v1/sessions/{id}/messages/{messageId}',
+  },
+  updateSkill: {
+    method: 'PUT',
+    path: '/api/v1/skills/{id}',
   },
   withdrawSkillMarketListing: {
     method: 'DELETE',

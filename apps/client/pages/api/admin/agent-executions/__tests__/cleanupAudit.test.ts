@@ -69,4 +69,12 @@ describe('POST /api/admin/agent-executions/cleanup admin audit', () => {
     });
     expect(h.markAbandoned.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
   });
+
+  it('rejects a support:read-only delegate without sweeping', async () => {
+    const { req, res } = createMocks({ method: 'POST', body: { executionIds: ['e1'] } });
+    (req as unknown as Record<string, unknown>).user = { id: 'u1', isAdmin: false, adminPermissions: ['support:read'] };
+
+    await expect((handler as unknown as Route)(req, res)).rejects.toThrow('Missing permission: settings:manage');
+    expect(h.markAbandoned).not.toHaveBeenCalled();
+  });
 });

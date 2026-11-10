@@ -5,6 +5,12 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { AdminTab, SIDEBAR_SECTIONS, filterSidebarSections } from './adminSidebarConfig';
 import { SidebarNav, type SidebarNavProps } from './AdminSidebarNav';
+import {
+  ADMIN_ACTION_COUNT_CAP,
+  ADMIN_ACTION_COUNT_KEYS,
+  ADMIN_ACTION_COUNT_LABELS,
+  type AdminActionCountKey,
+} from './adminActionCounts';
 
 const theme = extendTheme({ ...getThemeConfig() });
 const Wrapper = ({ children }: { children: React.ReactNode }) => (
@@ -33,24 +39,71 @@ describe('SidebarNav', () => {
     window.localStorage.clear();
   });
 
-  it('badges the Audit log with the unreviewed count, and nothing when there are none', () => {
-    const { unmount } = render(
-      <SidebarNav
-        activeTab={AdminTab.Dashboard}
-        showLiveOpsTriageTab={false}
-        hiddenNotifications={[]}
-        onTabSelect={vi.fn()}
-        unreviewedAuditCount={3}
-      />,
-      { wrapper: Wrapper }
+  describe('action count badges', () => {
+    const countedItems = SIDEBAR_SECTIONS.flatMap(section => section.items).filter(
+      (item): item is typeof item & { badge: AdminActionCountKey } =>
+        item.badge !== undefined && item.badge !== 'newSubscriptions'
     );
-    const badge = screen.getByTestId('admin-sidebar-unreviewed-audit-badge');
-    expect(badge).toHaveTextContent('3');
-    expect(badge).toHaveAttribute('aria-label', '3 audit entries to review');
-    unmount();
 
-    renderNav({ unreviewedAuditCount: 0 });
-    expect(screen.queryByTestId('admin-sidebar-unreviewed-audit-badge')).toBeNull();
+    it('gives every counted queue a sidebar item', () => {
+      expect(countedItems.map(item => item.badge).sort()).toEqual([...ADMIN_ACTION_COUNT_KEYS].sort());
+    });
+
+    it.each(countedItems.map(item => [item.badge, item.tab] as const))(
+      'badges %s when its count is above zero and hides it at zero',
+      (key, tab) => {
+        const { unmount } = render(
+          <SidebarNav
+            activeTab={tab}
+            showLiveOpsTriageTab={false}
+            hiddenNotifications={[]}
+            onTabSelect={vi.fn()}
+            actionCounts={{ [key]: 3 }}
+          />,
+          { wrapper: Wrapper }
+        );
+        const badge = screen.getByTestId(`admin-sidebar-${key}-badge`);
+        expect(badge).toHaveTextContent('3');
+        expect(badge).toHaveAttribute('aria-label', `3 ${ADMIN_ACTION_COUNT_LABELS[key]}`);
+        unmount();
+
+        renderNav({ activeTab: tab, actionCounts: { [key]: 0 } });
+        expect(screen.queryByTestId(`admin-sidebar-${key}-badge`)).toBeNull();
+      }
+    );
+
+    it('shows no badge for a count that failed or that the admin may not see', () => {
+      renderNav({ actionCounts: { unreviewedAudit: null } });
+      expect(screen.queryByTestId('admin-sidebar-unreviewedAudit-badge')).toBeNull();
+      expect(screen.queryByTestId('admin-sidebar-moderationReview-badge')).toBeNull();
+    });
+
+    it('caps a count at 99+', () => {
+      renderNav({ actionCounts: { moderationReview: ADMIN_ACTION_COUNT_CAP } });
+      expect(screen.getByTestId('admin-sidebar-moderationReview-badge')).toHaveTextContent('99+');
+    });
+
+    it('keeps the waiting-subscribers count hidden when the admin dismissed that notification', () => {
+      renderNav({ actionCounts: { waitingSubscribers: 5 }, hiddenNotifications: ['waiting-subscribers'] });
+      expect(screen.queryByTestId('admin-sidebar-waitingSubscribers-badge')).toBeNull();
+    });
+
+    it('keeps an item with work waiting out from under More', () => {
+      renderNav({ actionCounts: { heldSignupGrants: 2 } });
+      expect(screen.getByRole('link', { name: /Held signup grants/ })).toBeInTheDocument();
+      expect(screen.getByTestId('admin-sidebar-heldSignupGrants-badge')).toHaveTextContent('2');
+      expect(screen.queryByRole('link', { name: /Signup domain holds/ })).toBeNull();
+    });
+
+    it('marks a rail section that holds work waiting, and only that one', () => {
+      renderNav({ collapsed: true, onToggleCollapsed: vi.fn(), actionCounts: { deadLetters: 1 } });
+      expect(screen.getByTestId('admin-sidebar-rail-platform-work-dot')).toBeInTheDocument();
+      expect(screen.getByTestId('admin-sidebar-rail-platform-btn')).toHaveAttribute(
+        'aria-label',
+        'Platform, work waiting'
+      );
+      expect(screen.queryByTestId('admin-sidebar-rail-people-work-dot')).toBeNull();
+    });
   });
 
   it('selects the Dashboard tab from the Dashboard link', () => {

@@ -56,13 +56,14 @@ const BODY = {
 };
 const EXISTING = { toolId: TOOL_ID, description: 'old description', shortDescription: 'old short', enabled: false };
 
-const invoke = async (method: 'PUT' | 'DELETE', body?: object, isAdmin = true) => {
+const invoke = async (
+  method: 'GET' | 'PUT' | 'DELETE',
+  body?: object,
+  isAdmin = true,
+  adminPermissions: string[] = []
+) => {
   const { req, res } = createMocks({ method, body, query: { toolId: TOOL_ID } });
-  (req as unknown as { user: { id: string; isAdmin: boolean; name: string } }).user = {
-    id: 'admin-1',
-    isAdmin,
-    name: 'Admin',
-  };
+  (req as unknown as { user: object }).user = { id: 'admin-1', isAdmin, name: 'Admin', adminPermissions };
   await (handler as unknown as (rq: unknown, rs: unknown) => Promise<unknown>)(req, res);
   return { req, res };
 };
@@ -154,5 +155,23 @@ describe('/api/admin/tool-definitions/[toolId] non-admin', () => {
     await expect(invoke('DELETE', undefined, false)).rejects.toThrow(/missing permission/i);
     expect(h.findByToolId).not.toHaveBeenCalled();
     expect(h.audit).not.toHaveBeenCalled();
+  });
+});
+
+describe('delegated access to /api/admin/tool-definitions/[toolId]', () => {
+  it('lets a settings:manage-only delegate read', async () => {
+    const { res } = await invoke('GET', undefined, false, ['settings:manage']);
+    expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('lets a support:read-only delegate read', async () => {
+    const { res } = await invoke('GET', undefined, false, ['support:read']);
+    expect(res._getStatusCode()).toBe(200);
+  });
+
+  it.each(['PUT', 'DELETE'] as const)('rejects a support:read-only %s', async method => {
+    await expect(invoke(method, BODY, false, ['support:read'])).rejects.toThrow('Missing permission: settings:manage');
+    expect(h.updateDescription).not.toHaveBeenCalled();
+    expect(h.softDelete).not.toHaveBeenCalled();
   });
 });
