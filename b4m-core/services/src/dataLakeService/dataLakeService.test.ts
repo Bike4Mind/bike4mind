@@ -33,6 +33,10 @@ import {
 } from './authorizeLakeWrite';
 import type { LakeGrant } from './manageRule';
 import { createDataLake, DATA_LAKE_SLUG_UNAVAILABLE_CODE } from './createDataLake';
+
+// The cap has its own unit tests (assertLakeCountWithinCap.test.ts); these mocks keep it out of
+// the way, and one test below pins that createDataLake calls it before inserting.
+vi.mock('./assertLakeCountWithinCap', () => ({ assertLakeCountWithinCap: vi.fn(async () => undefined) }));
 import { TAG_PREFIX_UNAVAILABLE_CODE } from './tagPrefixCollision';
 import { archiveDataLake } from './archiveDataLake';
 import { deleteDataLake } from './deleteDataLake';

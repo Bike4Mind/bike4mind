@@ -403,7 +403,13 @@ export default function UploadStep() {
           <Typography level="title-lg" color="danger">
             Upload Failed
           </Typography>
-          <Typography level="body-sm" color="neutral" textAlign="center" sx={{ maxWidth: 400 }}>
+          <Typography
+            level="body-sm"
+            color="neutral"
+            textAlign="center"
+            sx={{ maxWidth: 400 }}
+            data-testid="upload-step-error-message"
+          >
             {progress.errorMessage || `${progress.failedFiles} of ${progress.totalFiles} files failed to upload.`}
           </Typography>
           {/* Hint matches the failure kind: only a validation failure is actually about the
@@ -413,6 +419,19 @@ export default function UploadStep() {
               <Typography level="body-xs">
                 <strong>Common fixes:</strong> The {DATA_LAKE} Name needs at least {MIN_DATA_LAKE_SLUG_LENGTH} letters
                 or numbers, and the Tag Prefix must end with &quot;:&quot; (e.g. &quot;legal:&quot;).
+              </Typography>
+            </Alert>
+          )}
+          {progress.errorKind === 'entitlement' && (
+            <Alert
+              color="warning"
+              variant="soft"
+              sx={{ maxWidth: 400, textAlign: 'left' }}
+              data-testid="upload-step-entitlement-alert"
+            >
+              <Typography level="body-xs">
+                Retrying will not change this. Nothing was created: do what the message above asks, then start this
+                upload again.
               </Typography>
             </Alert>
           )}

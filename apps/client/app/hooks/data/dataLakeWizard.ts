@@ -235,7 +235,8 @@ export function useBatchUpload() {
       toast.error(message, {
         id: 'data-lake-batch-upload-error',
         duration: 8000,
-        action: { label: 'Retry', onClick: () => retryRef.current() },
+        // A retry cannot clear an entitlement refusal, so it gets no button that implies otherwise.
+        action: kind === 'entitlement' ? undefined : { label: 'Retry', onClick: () => retryRef.current() },
       });
     },
   });
@@ -355,7 +356,8 @@ export function useCreateLakeFromDrive() {
       toast.error(message, {
         id: 'data-lake-batch-upload-error',
         duration: 8000,
-        action: { label: 'Retry', onClick: () => retryRef.current() },
+        // A retry cannot clear an entitlement refusal, so it gets no button that implies otherwise.
+        action: kind === 'entitlement' ? undefined : { label: 'Retry', onClick: () => retryRef.current() },
       });
     },
   });

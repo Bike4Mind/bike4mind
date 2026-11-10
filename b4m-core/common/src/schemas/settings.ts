@@ -603,6 +603,7 @@ export const SettingKeySchema = z.enum([
   'dataLakeEmbeddingTierMultiplierIndividual',
   'dataLakeEmbeddingTierMultiplierOrganization',
   'dataLakeEmbeddingBudgetPerOwnerPeriodUsd',
+  'dataLakeMaxLakesPerUser',
 
   // LAKE ACCESS AUDIT SETTINGS
   'LakeAccessAuditRetentionDays',
@@ -1269,6 +1270,9 @@ export const DATA_LAKE_EMBEDDING_BUDGET_PER_PERIOD_USD_MAX = 5_000;
 export const DATA_LAKE_EMBEDDING_BUDGET_PER_OWNER_PERIOD_USD_DEFAULT = 5;
 export const DATA_LAKE_EMBEDDING_BUDGET_PER_OWNER_PERIOD_USD_MAX = 5_000;
 export const DATA_LAKE_EMBEDDING_BUDGET_PERIOD_HOURS_DEFAULT = 24;
+/** Most data lakes one user may have created and not deleted. 0 turns the cap off. */
+export const DATA_LAKE_MAX_LAKES_PER_USER_DEFAULT = 25;
+export const DATA_LAKE_MAX_LAKES_PER_USER_MAX = 10_000;
 export const DATA_LAKE_EMBEDDING_BUDGET_PERIOD_HOURS_MAX = 720; // 30 days
 export const DATA_LAKE_EMBEDDING_MAX_CALLS_PER_MINUTE_DEFAULT = 120;
 export const DATA_LAKE_EMBEDDING_MAX_CALLS_PER_MINUTE_MAX = 10_000;
@@ -2845,6 +2849,13 @@ export const API_SERVICE_GROUPS = {
       { key: 'LakeAccessQueryTextRetentionDays', order: 2 },
       { key: 'LakeConfigAuditRetentionDays', order: 3 },
     ],
+  },
+  DATA_LAKE_LIMITS: {
+    id: 'dataLakeLimits',
+    name: 'Data Lake Limits',
+    description: 'Who may create data lakes and connect lake sources, and how many lakes one user may keep',
+    icon: 'Security',
+    settings: [{ key: 'dataLakeMaxLakesPerUser', order: 1 }],
   },
   USAGE_PATTERN_SIGNALS: {
     id: 'usagePatternSignalsService',
@@ -7162,6 +7173,20 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
     order: 11,
+  }),
+  dataLakeMaxLakesPerUser: makeNumberSetting({
+    key: 'dataLakeMaxLakesPerUser',
+    name: 'Max Data Lakes Per User',
+    defaultValue: DATA_LAKE_MAX_LAKES_PER_USER_DEFAULT,
+    min: 0,
+    max: DATA_LAKE_MAX_LAKES_PER_USER_MAX,
+    int: true,
+    description:
+      'Most data lakes one user may have created and not deleted (archived lakes count). Creating one more is ' +
+      'refused with a message asking the user to delete a lake. 0 turns the cap off.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DATA_LAKE_LIMITS.id,
+    order: 1,
   }),
   // Analytics Bot (existing production bot - DO NOT CHANGE)
   slackSigningSecret: makeStringSetting({

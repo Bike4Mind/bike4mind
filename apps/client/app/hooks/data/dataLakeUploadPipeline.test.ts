@@ -38,6 +38,15 @@ const axiosError = (status: number | undefined, data?: unknown, code?: string) =
 const CREATE = { config: { name: 'Legal Docs', tagPrefix: 'legal:' }, isAppend: false };
 
 describe('classifyUploadError', () => {
+  it('marks a coded lake-cap refusal as an entitlement failure carrying the server copy', () => {
+    const data = { error: 'You have reached the limit of 3 data lakes per account.', code: 'DATA_LAKE_LIMIT_REACHED' };
+    expect(classifyUploadError(axiosError(403, data), CREATE)).toEqual({ kind: 'entitlement', message: data.error });
+  });
+
+  it('keeps an uncoded 403 on the generic server path', () => {
+    expect(classifyUploadError(axiosError(403, { error: 'Forbidden' }), CREATE).kind).toBe('server');
+  });
+
   it('classifies offline/transport errors as network with the canonical message', () => {
     expect(classifyUploadError(new Error(OFFLINE_MESSAGE), CREATE)).toEqual({
       kind: 'network',

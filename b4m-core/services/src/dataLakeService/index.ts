@@ -99,6 +99,7 @@ export * from './resolveSpendLevers';
 export * from './resolveIngestSpendScope';
 export * from './enforceEmbeddingSpendGate';
 export * from './reserveOwnerEmbeddingSpend';
+export * from './assertLakeCountWithinCap';
 export * from './resolveLakeSpendAddressees';
 export * from './spendNotificationKeys';
 export * from './renderSpendNotificationEmail';

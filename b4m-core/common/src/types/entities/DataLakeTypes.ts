@@ -232,6 +232,21 @@ export const LAKE_INGESTABLE_STATUSES = ['draft', 'active'] as const satisfies r
  */
 export const LAKE_ATTACHABLE_STATUSES = ['draft', 'active'] as const satisfies readonly DataLakeStatus[];
 
+/**
+ * Statuses a lake leaves the per-user lake count in: it is on its way out or already gone. Every
+ * other status counts, archived included, because an archived lake still holds its files.
+ */
+export const LAKE_UNCOUNTED_STATUSES = ['deleting', 'deleted', 'purging'] as const satisfies readonly DataLakeStatus[];
+
+/**
+ * `code` on the 403 a lake create gets when its creator is at the per-user lake cap. Clients key
+ * on it to show the refusal as final (no retry), since retrying cannot succeed until a lake goes.
+ */
+export const DATA_LAKE_LIMIT_REACHED_CODE = 'DATA_LAKE_LIMIT_REACHED';
+
+/** Refusal codes that a retry cannot clear: the user has to change something first. */
+export const DATA_LAKE_ENTITLEMENT_REFUSAL_CODES: readonly string[] = [DATA_LAKE_LIMIT_REACHED_CODE];
+
 type LakeIngestableStatus = (typeof LAKE_INGESTABLE_STATUSES)[number];
 
 /**
@@ -832,6 +847,11 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * provenance alone answers nothing about ownership, which is why this returns bare ids.
    */
   findIdsCreatedBy(userId: string): Promise<string[]>;
+  /**
+   * How many lakes the given user created that still count toward the per-user lake cap: every
+   * status except {@link LAKE_UNCOUNTED_STATUSES}. 0 for a blank id.
+   */
+  countCountedCreatedBy(userId: string): Promise<number>;
   /**
    * The discover/browse catalog: active, PUBLIC lakes the given caller can actually reach.
    * Deliberately PER-CALLER, not one catalog for everyone: it applies the same gate as

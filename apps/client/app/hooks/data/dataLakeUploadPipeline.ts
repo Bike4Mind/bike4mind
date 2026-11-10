@@ -1,4 +1,5 @@
 import {
+  DATA_LAKE_ENTITLEMENT_REFUSAL_CODES,
   folderTagForFile,
   isSupportedFabFileMimeType,
   hasBlankTagPrefixSegment,
@@ -160,6 +161,20 @@ export function classifyUploadError(
 
   if (status !== undefined && status >= 500) {
     return { kind: 'server', message: 'The server ran into a problem. Please try again in a moment.' };
+  }
+
+  const refusalCode = axios.isAxiosError(error)
+    ? (error.response?.data as { code?: unknown } | undefined)?.code
+    : undefined;
+  const serverRefusal = axios.isAxiosError(error)
+    ? (error.response?.data as { error?: unknown } | undefined)?.error
+    : undefined;
+  if (
+    typeof refusalCode === 'string' &&
+    DATA_LAKE_ENTITLEMENT_REFUSAL_CODES.includes(refusalCode) &&
+    typeof serverRefusal === 'string'
+  ) {
+    return { kind: 'entitlement', message: serverRefusal };
   }
 
   // Other 4xx (403 feature gate, 404, 409, 429, ...) carry a curated server message worth

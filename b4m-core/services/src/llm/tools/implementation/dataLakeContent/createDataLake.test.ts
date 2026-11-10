@@ -34,13 +34,17 @@ function makeContext({
     logger,
     statusUpdate: vi.fn().mockResolvedValue(undefined),
     db: {
-      dataLakes: withAdapters ? { create: vi.fn() } : {},
+      dataLakes: withAdapters ? { create: vi.fn(), countCountedCreatedBy: vi.fn().mockResolvedValue(0) } : {},
       dataLakeAccessGrants: withAdapters ? { upsertGrant: vi.fn() } : {},
       organizations: {
         findMembershipOrgIds: vi.fn().mockResolvedValue(memberOf),
         findIdsWithAdminRights: vi.fn().mockResolvedValue([]),
       },
-      adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(enabled) },
+      adminSettings: {
+        getSettingsValue: vi.fn().mockResolvedValue(enabled),
+        findBySettingNames: vi.fn().mockResolvedValue([]),
+        findAll: vi.fn().mockResolvedValue([]),
+      },
     },
   } as unknown as ToolContext;
 }
