@@ -433,13 +433,20 @@ describe('signup protection persistence', () => {
     it('releases a pending hold and marks the policy that did it', async () => {
       await seed('pending.test', { reviewedBy: 'stale-admin' });
       expect(
-        await signupDomainReviewRepository.autoRelease('pending.test', YOUNG_REASON, 'advisory-decision', autoDecidedAt)
+        await signupDomainReviewRepository.autoRelease(
+          'pending.test',
+          YOUNG_REASON,
+          'advisory-decision',
+          autoDecidedAt,
+          ['user-2']
+        )
       ).toBe(true);
       const row = await stored('pending.test');
       expect(row).toMatchObject({
         status: 'released',
         reviewedAt: autoDecidedAt,
         autoDecision: { policy: 'advisory-decision', decidedAt: autoDecidedAt },
+        cohortUserIds: ['user-1', 'user-2'],
       });
       expect(row).not.toHaveProperty('reviewedBy');
     });
@@ -459,7 +466,9 @@ describe('signup protection persistence', () => {
       await seed('decided.test', decision);
       const before = await stored('decided.test');
       expect(
-        await signupDomainReviewRepository.autoRelease('decided.test', YOUNG_REASON, 'advisory-decision', new Date())
+        await signupDomainReviewRepository.autoRelease('decided.test', YOUNG_REASON, 'advisory-decision', new Date(), [
+          'user-2',
+        ])
       ).toBe(false);
       expect(await stored('decided.test')).toEqual(before);
     });
@@ -467,7 +476,13 @@ describe('signup protection persistence', () => {
     it('does not release a pending hold whose reason changed since it was judged', async () => {
       await seed('rehold.test', { reason: BURST_REASON });
       expect(
-        await signupDomainReviewRepository.autoRelease('rehold.test', YOUNG_REASON, 'advisory-decision', autoDecidedAt)
+        await signupDomainReviewRepository.autoRelease(
+          'rehold.test',
+          YOUNG_REASON,
+          'advisory-decision',
+          autoDecidedAt,
+          ['user-2']
+        )
       ).toBe(false);
       expect(await stored('rehold.test')).toMatchObject({ status: 'held_pending_review' });
     });

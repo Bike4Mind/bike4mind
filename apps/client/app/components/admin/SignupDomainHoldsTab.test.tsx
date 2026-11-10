@@ -235,6 +235,30 @@ describe('SignupDomainHoldsTab', () => {
       })
     );
   });
+  it('retries an auto-released hold payout in one click without taking it over', async () => {
+    getMock.mockResolvedValue({
+      data: {
+        data: [
+          {
+            ...reviews[0],
+            status: 'released',
+            autoDecision: { policy: 'advisory-decision', decidedAt: '2026-01-02T00:00:00.000Z' },
+          },
+        ],
+        total: 1,
+      },
+    });
+    postMock.mockResolvedValue({ data: { status: 'released', creditsReleased: 25, remaining: 0, nextCursor: null } });
+    renderTab();
+    fireEvent.click(await screen.findByTestId('signup-domain-retry-alpha.test'));
+    await waitFor(() => expect(postMock).toHaveBeenCalledWith(endpoint, { domain: 'alpha.test', action: 'release' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+  it('offers no auto-release retry on a pending hold', async () => {
+    renderTab();
+    expect(await screen.findByTestId('signup-domain-release-alpha.test')).toBeInTheDocument();
+    expect(screen.queryByTestId('signup-domain-retry-alpha.test')).not.toBeInTheDocument();
+  });
   it('uses server pagination without a second local pager', async () => {
     renderTab();
     expect(await screen.findByTestId('signup-domain-confirm-alpha.test')).toBeEnabled();

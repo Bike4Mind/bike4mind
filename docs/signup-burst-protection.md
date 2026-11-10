@@ -103,19 +103,27 @@ A `legitimate` verdict releases the hold only when **Auto-release legitimate hol
 confidence is at or above `minReleaseConfidence` (default 0.95), and every code guard passes: the site has real
 content and no disposable-mail wording, mail runs on Google Workspace or Microsoft, every summarized signup has known
 network data and none came from a datacenter, and the domain has between 1 and `maxAutoReleaseSignups` (default 2)
-verified accounts still waiting, read live, every one of them in the hold's cohort. The guards judged that cohort,
-fixed when the hold was created, so an account that joined the hold later keeps it pending for an admin. The payout
-covers only the accounts read. At most `maxAutoReleasesPerDay` holds (default 5) are released per 24 hours, a window
+verified accounts still waiting, read live. The summary the guards and the model judge covers the hold's cohort plus
+every account waiting on the domain when the facts are gathered, so a later signup on a held domain is judged with it.
+The waiting accounts are read again just before the release, and an account that joined after the facts were gathered
+keeps the hold pending for an admin. The release adds the accounts it pays to the hold's cohort and pays only those.
+An account that verifies in the moment between that last read and the status change is not covered by the release: it
+stays held and is picked up when the domain is held or decided again (an accepted window, as it never receives credits
+it was not judged for). At most `maxAutoReleasesPerDay` holds (default 5) are released per 24 hours, a window
 opened by the first release, and a release an admin decided first does not use up a slot; the rest wait for an
-admin. Unlike an admin release, an automated release does not exempt the domain for good. A later signup that would
-trip a domain-intelligence hold (the domain is still young, for example) re-holds it with that reason, so the next
+admin. Unlike an admin release, an automated release does not exempt the domain for good: the accounts it judged are
+paid, and every other account on the domain stays watched. A later account that would trip a domain-intelligence hold
+(the domain is still young, for example), however long after signup it verified, re-holds it with that reason, so the next
 signups are not paid until the hold is decided again; the domain also stays under burst detection whatever
 **Auto-hold Signup Bursts** says, and a burst re-holds it with the detector's reason (which starts
 `Verified signup burst with generated local parts`). Either re-hold drops the old verdict. An admin can overrule an
 automated release: Confirm blocks the domain (credits already paid stay paid), and Release takes the release over,
 making the exemption permanent like any admin release. A release writes a strict `signup_domain_hold.auto_released` system audit entry in the same
 transaction as the status change, then pays out the held credits within the daily free-grant budget (an admin
-Release bypasses that budget); grants the budget or a payout error leaves pending can be retried from the tab.
+Release bypasses that budget); grants the budget or a payout error leaves pending can be retried from the tab with
+**Retry pending grants**, which on an auto-released row pays only the judged accounts, within the same budget, and
+keeps the automated decision. Recovery scripts in `mode: 'enforce'` likewise pay only those judged accounts and leave
+the rest of a watched domain held.
 
 Every other outcome, including refusals and provider failures, leaves the hold pending with the verdict shown on the
 row; failures retry up to three times, an hour apart, and a domain gets at most three provider calls a day whatever was

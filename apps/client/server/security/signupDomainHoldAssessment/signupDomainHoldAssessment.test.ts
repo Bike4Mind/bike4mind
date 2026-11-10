@@ -119,12 +119,15 @@ const makeHolds = (store: Store): SignupDomainHoldAssessmentDeps['holds'] => {
       store.set(domain, { ...review, status: 'blocked', autoDecision: { policy, decidedAt } });
       return true;
     }),
-    autoRelease: vi.fn(async (domain: string, reason: string, policy: 'advisory-decision', decidedAt: Date) => {
-      const review = store.get(domain);
-      if (review?.status !== 'held_pending_review' || review.reason !== reason) return false;
-      store.set(domain, { ...review, status: 'released', autoDecision: { policy, decidedAt } });
-      return true;
-    }),
+    autoRelease: vi.fn(
+      async (domain: string, reason: string, policy: 'advisory-decision', decidedAt: Date, paidUserIds: string[]) => {
+        const review = store.get(domain);
+        if (review?.status !== 'held_pending_review' || review.reason !== reason) return false;
+        const cohortUserIds = [...new Set([...review.cohortUserIds, ...paidUserIds])];
+        store.set(domain, { ...review, status: 'released', cohortUserIds, autoDecision: { policy, decidedAt } });
+        return true;
+      }
+    ),
   };
   return new Proxy(allowed, {
     get(target, key) {
@@ -643,6 +646,18 @@ describe('runSignupDomainHoldAssessments', () => {
       expect(deps.releaseCredits).toHaveBeenCalledWith('fresh.example', live);
     });
 
+    it('judges accounts that joined the hold after it was created, and records the paid accounts on it', async () => {
+      enableAutoRelease({ maxAutoReleaseSignups: 2 });
+      mocks.providerDecide.mockResolvedValue(answer('legitimate', 0.99));
+      const store = storeWith(hold({ signupCount: 1, cohortUserIds: [COHORT_ID_1] }));
+      const deps = legitimateDeps(store, { listHeldSignupIds: vi.fn(async () => [COHORT_ID_1, JOINER_ID]) });
+
+      expect(await runSignupDomainHoldAssessments(deps)).toMatchObject({ released: 1 });
+      expect(deps.loadCohort).toHaveBeenCalledWith([COHORT_ID_1, JOINER_ID]);
+      expect(deps.releaseCredits).toHaveBeenCalledWith('fresh.example', [COHORT_ID_1, JOINER_ID]);
+      expect(store.get('fresh.example')?.cohortUserIds).toEqual([COHORT_ID_1, JOINER_ID]);
+    });
+
     it('never releases while auto-release is off, whatever the verdict', async () => {
       mocks.providerDecide.mockResolvedValue(answer('legitimate', 0.99));
       const store = storeWith(hold({ signupCount: 1 }));
@@ -703,10 +718,28 @@ describe('runSignupDomainHoldAssessments', () => {
         { listHeldSignupIds: vi.fn(async () => [COHORT_ID_1, COHORT_ID_2, JOINER_ID]) },
         {},
       ],
-      // The guards judged only the cohort, so a joiner inside the cap was never checked.
+      // Read after the model call: the facts were gathered without this account.
       [
-        'an account joined the hold after it was judged',
-        { listHeldSignupIds: vi.fn(async () => [COHORT_ID_1, JOINER_ID]) },
+        'an account joined the hold after its facts were gathered',
+        {
+          listHeldSignupIds: vi
+            .fn()
+            .mockResolvedValueOnce([COHORT_ID_1])
+            .mockResolvedValueOnce([COHORT_ID_1, JOINER_ID]),
+        },
+        {},
+      ],
+      [
+        'an account that joined the hold before it was judged signed up from a datacenter',
+        {
+          listHeldSignupIds: vi.fn(async () => [COHORT_ID_1, JOINER_ID]),
+          loadCohort: vi.fn(async (ids: string[]) =>
+            ids.map(id => ({
+              createdAt: NOW,
+              signupMeta: { ip: '198.51.100.4', asn: 64501, country: 'ZZ', isDatacenter: id === JOINER_ID },
+            }))
+          ),
+        },
         {},
       ],
       ['no account is waiting any more', { listHeldSignupIds: vi.fn(async () => []) }, {}],

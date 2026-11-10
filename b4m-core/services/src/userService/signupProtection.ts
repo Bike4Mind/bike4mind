@@ -65,16 +65,17 @@ export async function protectSignupCredits(
   )
     return false;
 
-  // An admin release exempts a domain for good. An automated release only pays out the cohort it judged,
-  // so the domain stays watched: a signup that still trips a domain-intel hold (a young domain, below)
-  // or a burst re-holds it for review instead of being paid.
+  // An admin release exempts a domain for good. An automated release pays only the accounts it judged, which it
+  // adds to the cohort (signupDomainHoldAssessment.ts), so those are paid here, the release's own payout included.
+  // Any other account on the domain stays watched: held in enforce mode, and re-held below when it trips a
+  // domain-intel hold (a still-young domain) or a burst.
   const watched =
     existing?.status === 'released' &&
     existing.autoDecision?.policy === 'advisory-decision' &&
     !!repository.reholdWatched;
-  if (existing && (!watched || protection.mode === 'enforce'))
-    return (await repository.findReview(domain))?.status !== 'released';
-  if (protection.mode === 'enforce') return false;
+  if (watched && existing.cohortUserIds.includes(userId)) return false;
+  if (existing && !watched) return (await repository.findReview(domain))?.status !== 'released';
+  if (protection.mode === 'enforce') return watched;
 
   const threshold = settingsMap.signupBurstThreshold.schema.parse(valueOf('signupBurstThreshold') ?? 5);
   const hours = settingsMap.signupBurstWindowHours.schema.parse(valueOf('signupBurstWindowHours') ?? 6);
@@ -82,7 +83,9 @@ export async function protectSignupCredits(
   const since = new Date(now.getTime() - hours * 60 * 60 * 1000);
   // OTC proves ownership before persisting emailVerified; retries keep the original event time.
   const verifiedAt = user.emailVerifiedAt ?? now;
-  if (verifiedAt < since || (user.createdAt && user.createdAt < since)) return false;
+  const freshSignup = verifiedAt >= since && !(user.createdAt && user.createdAt < since);
+  // A watched domain is re-checked for a domain-intel hold however late the account verified.
+  if (!freshSignup && !watched) return false;
 
   const hold = async (reason: string, signupCount: number, signups: { userId: string; email: string }[]) => {
     const review = {
@@ -129,8 +132,8 @@ export async function protectSignupCredits(
     if (reason) return (watched ? rehold : hold)(reason, 1, [{ userId, email: user.email }]);
   }
 
-  // A watched domain is checked for bursts whatever signupBurstAutoHold says.
-  if (!autoHold && !watched) return false;
+  // Bursts are judged on fresh signups only; a watched domain is checked whatever signupBurstAutoHold says.
+  if (!freshSignup || (!autoHold && !watched)) return false;
   await repository.observe({ userId, email: user.email, domain, verifiedAt });
   const cohort = await repository.recent(domain, since);
   const verdict = detectSignupBurst(cohort, { domain, threshold, since });

@@ -440,6 +440,7 @@ describe('signup domain hold decisions', () => {
       domain: 'example.net',
       status: 'released',
       reason: 'pattern',
+      cohortUserIds: ['user-1'],
       autoDecision: { policy: 'advisory-decision', decidedAt: new Date() },
     });
     const { req, res } = makeRequest({
@@ -452,6 +453,45 @@ describe('signup domain hold decisions', () => {
     // The retry leaves the stored decision (and its auto-release marker) as it was.
     expect(reviewUpdate).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalled();
+  });
+  it('retries an auto-release payout for its judged accounts only, within budget, ignoring any cursor', async () => {
+    reviewFind.mockResolvedValue({
+      domain: 'example.net',
+      status: 'released',
+      reason: 'young-domain (<30 days)',
+      cohortUserIds: ['user-1', 'user-2'],
+      autoDecision: { policy: 'advisory-decision', decidedAt: new Date() },
+    });
+    const { req, res } = makeRequest({
+      domain: 'example.net',
+      action: 'release',
+      afterUserId: '000000000000000000000064',
+    });
+    await handlers.post(req, res);
+    expect(find.mock.calls[0][0]._id).toEqual({ $in: ['user-1', 'user-2'] });
+    expect(release).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-1' }),
+      'Signup domain hold payout retried by admin',
+      expect.anything(),
+      undefined,
+      { bypassBudget: false }
+    );
+    expect(res._getJSONData()).toEqual({ status: 'released', creditsReleased: 25, remaining: 0, nextCursor: null });
+    expect(count).not.toHaveBeenCalled();
+  });
+  it('pays nobody on a payout retry of an auto-release with no judged accounts', async () => {
+    reviewFind.mockResolvedValue({
+      domain: 'example.net',
+      status: 'released',
+      reason: 'young-domain (<30 days)',
+      cohortUserIds: [],
+      autoDecision: { policy: 'advisory-decision', decidedAt: new Date() },
+    });
+    const { req, res } = makeRequest({ domain: 'example.net', action: 'release' });
+    await handlers.post(req, res);
+    expect(find).not.toHaveBeenCalled();
+    expect(release).not.toHaveBeenCalled();
+    expect(res._getJSONData()).toEqual({ status: 'released', creditsReleased: 0, remaining: 0, nextCursor: null });
   });
   it('lets an admin confirm a hold the advisory assessment auto-released', async () => {
     reviewUpdate.mockResolvedValue({
@@ -500,10 +540,22 @@ describe('signup domain hold decisions', () => {
         details: { reason: 'young-domain (<30 days)', overrodeAutoDecision: 'advisory-decision' },
       })
     );
-    expect(release).toHaveBeenCalled();
+    // A takeover pays the whole domain like any admin release, not only the judged accounts.
+    expect(find.mock.calls[0][0]._id).toBeUndefined();
+    expect(release).toHaveBeenCalledWith(
+      expect.anything(),
+      'Signup domain hold released by admin',
+      expect.anything(),
+      undefined,
+      { bypassBudget: true }
+    );
   });
   it.each([
-    ['a payout retry of an auto-release', { autoDecision: { policy: 'advisory-decision', decidedAt: new Date() } }, {}],
+    [
+      'a payout retry of an auto-release',
+      { cohortUserIds: ['user-1'], autoDecision: { policy: 'advisory-decision', decidedAt: new Date() } },
+      {},
+    ],
     ['an explicit release of an admin release', {}, { overrideAutoDecision: true }],
   ])('leaves the stored decision alone on %s', async (_label, stored, body) => {
     reviewFind.mockResolvedValue({ domain: 'example.net', status: 'released', reason: 'pattern', ...stored });

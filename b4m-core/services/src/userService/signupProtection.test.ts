@@ -299,12 +299,15 @@ describe('domain intelligence holds', () => {
 });
 
 describe('domains the advisory assessment auto-released', () => {
-  const released = (autoDecision?: SignupDomainReview['autoDecision']): SignupDomainReview => ({
+  const released = (
+    autoDecision?: SignupDomainReview['autoDecision'],
+    cohortUserIds: string[] = []
+  ): SignupDomainReview => ({
     domain: 'example.net',
     status: 'released',
     reason: 'young-domain (<30 days)',
     triggeredAt: new Date(),
-    cohortUserIds: [],
+    cohortUserIds,
     sampleEmails: [],
     signupCount: 1,
     ...(autoDecision ? { autoDecision } : {}),
@@ -362,12 +365,30 @@ describe('domains the advisory assessment auto-released', () => {
     expect(fixture.repository.observe).not.toHaveBeenCalled();
   });
 
-  it('neither watches nor re-holds in enforce mode', async () => {
-    const fixture = watchedFixture(released({ policy: 'advisory-decision', decidedAt: new Date() }));
+  it('in enforce mode pays only the judged accounts and keeps every other account held', async () => {
+    const fixture = watchedFixture(released({ policy: 'advisory-decision', decidedAt: new Date() }, ['u1']));
     (fixture.db.signupProtection as SignupProtection).mode = 'enforce';
-    for (const index of [1, 2, 3, 4, 5])
-      expect(await protectSignupCredits(fixture.user(index).id, fixture.db)).toBe(false);
+    expect(await protectSignupCredits(fixture.user(1).id, fixture.db)).toBe(false);
+    for (const index of [2, 3]) expect(await protectSignupCredits(fixture.user(index).id, fixture.db)).toBe(true);
     expect(fixture.repository.observe).not.toHaveBeenCalled();
     expect(fixture.repository.reholdWatched).not.toHaveBeenCalled();
+  });
+
+  it('pays a judged account on a still-young domain, so the release payout is not re-held', async () => {
+    const fixture = watchedFixture(released({ policy: 'advisory-decision', decidedAt: new Date() }, ['u1']));
+    Object.assign(fixture.repository, { disposableSources: vi.fn(async () => ['aggregate']) });
+    expect(await protectSignupCredits(fixture.user(1).id, fixture.db)).toBe(false);
+    expect(fixture.repository.reholdWatched).not.toHaveBeenCalled();
+    expect(fixture.notifyHold).not.toHaveBeenCalled();
+  });
+
+  it('re-holds on a domain-intel signal for an account that verified outside the burst window', async () => {
+    const fixture = watchedFixture(released({ policy: 'advisory-decision', decidedAt: new Date() }, ['u1']));
+    Object.assign(fixture.repository, { disposableSources: vi.fn(async () => ['aggregate']) });
+    const user = fixture.user(2);
+    user.emailVerifiedAt = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    expect(await protectSignupCredits(user.id, fixture.db)).toBe(true);
+    expect(fixture.repository.reholdWatched).toHaveBeenCalledWith(expect.objectContaining({ cohortUserIds: ['u2'] }));
+    expect(fixture.repository.observe).not.toHaveBeenCalled();
   });
 });

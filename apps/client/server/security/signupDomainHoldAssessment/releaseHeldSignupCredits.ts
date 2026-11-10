@@ -37,25 +37,21 @@ export async function releaseHeldSignupCredits(
     reason: string;
     bypassBudget: boolean;
     logger: Logger;
-    /** Pays only these accounts (still subject to the pending query); the rest of the domain stays pending. */
+    /** Pays only these accounts, in one call (still subject to the pending query); the rest stays pending. */
     onlyUserIds?: string[];
     /** Accounts this caller may not pay out; they stay pending and count toward `remaining`. */
     skipUser?: (user: IUser & { _id: unknown }) => boolean;
   }
 ): Promise<HeldSignupCreditRelease> {
   const pendingQuery = pendingSignupsQuery(domain);
-  const pageSize = Math.min(PAGE_SIZE, options.onlyUserIds?.length ?? PAGE_SIZE);
-  const idFilter = {
-    ...(options.afterUserId ? { $gt: options.afterUserId } : {}),
-    ...(options.onlyUserIds ? { $in: options.onlyUserIds } : {}),
-  };
-  const users = await User.find({
-    ...pendingQuery,
-    ...(Object.keys(idFilter).length ? { _id: idFilter } : {}),
-  })
+  const { onlyUserIds } = options;
+  if (onlyUserIds?.length === 0) return { creditsReleased: 0, remaining: 0, nextCursor: null };
+  const pageSize = onlyUserIds?.length ?? PAGE_SIZE;
+  const idFilter = onlyUserIds ? { $in: onlyUserIds } : options.afterUserId ? { $gt: options.afterUserId } : undefined;
+  const users = await User.find({ ...pendingQuery, ...(idFilter ? { _id: idFilter } : {}) })
     .sort({ _id: 1 })
     .limit(pageSize);
-  const nextCursor = users.length === pageSize ? String(users[users.length - 1]._id) : null;
+  const nextCursor = !onlyUserIds && users.length === pageSize ? String(users[users.length - 1]._id) : null;
   let creditsReleased = 0;
   let stillPending = 0;
   for (const user of users) {
@@ -79,6 +75,7 @@ export async function releaseHeldSignupCredits(
     if (!result.tags) stillPending++;
   }
   // The regex cannot use an index, so recount only when this call did not see every candidate.
-  const remaining = options.afterUserId || nextCursor ? await User.countDocuments(pendingQuery) : stillPending;
+  const remaining =
+    !onlyUserIds && (options.afterUserId || nextCursor) ? await User.countDocuments(pendingQuery) : stillPending;
   return { creditsReleased, remaining, nextCursor };
 }

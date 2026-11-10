@@ -239,18 +239,21 @@ export const signupDomainReviewRepository = {
   },
   /**
    * Moves a still-pending hold to `released` on behalf of an automated policy; paying out the held
-   * credits is the caller's next step. False when an admin (or another run) decided it first.
+   * credits is the caller's next step. `paidUserIds` join the cohort, which is what the watch on an
+   * automatically released domain pays (signupProtection.ts). False when an admin (or another run) decided it first.
    */
   async autoRelease(
     domain: string,
     reason: string,
     policy: SignupDomainHoldAutoPolicy,
-    decidedAt: Date
+    decidedAt: Date,
+    paidUserIds: string[]
   ): Promise<boolean> {
     const result = await SignupDomainReviewModel.updateOne(
       { domain, reason, status: 'held_pending_review' },
       {
         $set: { status: 'released', reviewedAt: decidedAt, autoDecision: { policy, decidedAt } },
+        $addToSet: { cohortUserIds: { $each: paidUserIds } },
         $unset: { reviewedBy: 1 },
       }
     );

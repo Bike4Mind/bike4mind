@@ -59,9 +59,10 @@ type DecisionInput = {
   overrideAutoDecision?: boolean;
 };
 
-// An automated release stays open to an admin's Confirm or Release; an admin's own release is final and only
-// offers to retry its pending grants.
+// An automated release stays open to an admin's Confirm or Release (a takeover) and can retry its own payout;
+// an admin's own release is final and only offers to retry its pending grants.
 const isAdminReleased = (review: SignupDomainReview) => review.status === 'released' && !review.autoDecision;
+const isAutoReleased = (review: SignupDomainReview) => review.status === 'released' && !!review.autoDecision;
 const canConfirm = (review: SignupDomainReview) =>
   review.status === 'held_pending_review' || (review.status === 'released' && Boolean(review.autoDecision));
 type DecisionResult = {
@@ -209,9 +210,11 @@ export default function SignupDomainHoldsTab() {
             a confident abuse verdict confirms the hold the same way. A confident legitimate verdict releases the hold
             only when auto-release is turned on and the hold passes every guard (a real site, Google or Microsoft mail,
             no disposable-mail wording, known residential networks, few waiting accounts), up to a daily cap; each
-            auto-release is recorded in the Admin Audit Log. An auto-released domain stays under burst detection, and a
-            burst puts it back in this queue. Any other verdict leaves it for you. Young-domain holds are rechecked, and
-            one whose domain has since passed the age threshold is marked. Settled holds older than{' '}
+            auto-release is recorded in the Admin Audit Log and pays only the accounts it judged. Its domain stays
+            watched: a burst, or a later signup while the domain is still young, puts it back in this queue. Retry
+            pending grants on an auto-released row pays only those judged accounts; Release takes the release over and
+            exempts the domain for good. Any other verdict leaves it for you. Young-domain holds are rechecked, and one
+            whose domain has since passed the age threshold is marked. Settled holds older than{' '}
             {query.data?.settledVisibleDays ?? 90} days are hidden, never deleted; turn on Include older to see them.
           </Typography>
         )}
@@ -373,6 +376,22 @@ export default function SignupDomainHoldsTab() {
                     </Button>
                   )}
                 </AdminPermissionAction>
+                {isAutoReleased(review) && (
+                  // Pays only the accounts the automated release judged, within budget, and keeps its decision.
+                  <AdminPermissionAction requirement={{ allOf: ['users:moderate', 'credits:adjust'] }}>
+                    {missing => (
+                      <Button
+                        size="sm"
+                        variant="outlined"
+                        data-testid={`signup-domain-retry-${review.domain}`}
+                        disabled={missing || decision.isPending}
+                        onClick={() => decide({ domain: review.domain, action: 'release' })}
+                      >
+                        Retry pending grants
+                      </Button>
+                    )}
+                  </AdminPermissionAction>
+                )}
                 <AdminPermissionAction requirement={{ allOf: ['users:moderate', 'credits:adjust'] }}>
                   {missing => (
                     <Button

@@ -265,6 +265,7 @@ class HoldSkipped extends DecisionSkipped<HoldSkipReason> {}
 /** Gathers the facts; null when they take too long, which is stored as a failed attempt. */
 async function summarizeHold(
   hold: SignupDomainReview,
+  judgedIds: string[],
   deps: SignupDomainHoldAssessmentDeps
 ): Promise<SignupDomainHoldFeatureSummary | null> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -272,7 +273,7 @@ async function summarizeHold(
     timer = setTimeout(() => resolve(null), SUMMARY_TIMEOUT_MS);
   });
   try {
-    return await Promise.race([gatherSummary(hold, deps), timeout]);
+    return await Promise.race([gatherSummary(hold, judgedIds, deps), timeout]);
   } finally {
     clearTimeout(timer);
   }
@@ -280,6 +281,7 @@ async function summarizeHold(
 
 async function gatherSummary(
   hold: SignupDomainReview,
+  judgedIds: string[],
   deps: SignupDomainHoldAssessmentDeps
 ): Promise<SignupDomainHoldFeatureSummary> {
   const [intel, site, accounts] = await Promise.all([
@@ -291,9 +293,10 @@ async function gatherSummary(
       return null;
     }),
     deps.probeSite(hold.domain),
-    deps.loadCohort(hold.cohortUserIds),
+    deps.loadCohort(judgedIds),
   ]);
-  return buildSignupDomainHoldFeatureSummary({ signupCount: hold.signupCount, intel, site, accounts, now: deps.now() });
+  const signupCount = Math.max(hold.signupCount, judgedIds.length);
+  return buildSignupDomainHoldFeatureSummary({ signupCount, intel, site, accounts, now: deps.now() });
 }
 
 const toAssessment = (
@@ -375,12 +378,14 @@ const confirmWithAudit = (
 
 const releaseWithAudit = (
   hold: SignupDomainReview,
+  paidUserIds: string[],
   assessment: Extract<SignupDomainHoldAssessment, { outcome: 'judged' }>,
   deps: SignupDomainHoldAssessmentDeps
 ): Promise<Applied> =>
   deps.inTransaction(async () => {
     if (!(await deps.holds.recordAssessment(hold.domain, assessment))) return 'stale';
-    if (!(await deps.holds.autoRelease(hold.domain, hold.reason, POLICY, assessment.assessedAt))) return 'recorded';
+    if (!(await deps.holds.autoRelease(hold.domain, hold.reason, POLICY, assessment.assessedAt, paidUserIds)))
+      return 'recorded';
     await deps.recordAudit({
       action: 'signup_domain_hold.auto_released',
       actor: SYSTEM_ACTOR,
@@ -409,17 +414,17 @@ const releaseWithAudit = (
  */
 async function applyRelease(
   hold: SignupDomainReview,
+  judgedIds: ReadonlySet<string>,
   assessment: Extract<SignupDomainHoldAssessment, { outcome: 'judged' }>,
   config: SignupDomainHoldAssessmentConfig,
   deps: SignupDomainHoldAssessmentDeps
 ): Promise<Applied> {
   const recordOnly = async (): Promise<Applied> =>
     (await deps.holds.recordAssessment(hold.domain, assessment)) ? 'recorded' : 'stale';
-  // The guards judged the hold's cohort, fixed at creation, while later signups join the hold without entering
-  // it. Release only when every account still held is one the guards judged, and pay only those.
+  // Re-read after the model call: release only when every account still held is one the guards judged, so a
+  // signup that joined since keeps the hold pending for an admin. Only the accounts read here are paid.
   const held = await deps.listHeldSignupIds(hold.domain, config.maxAutoReleaseSignups + 1);
-  const judged = new Set(hold.cohortUserIds);
-  if (held.length < 1 || held.length > config.maxAutoReleaseSignups || !held.every(id => judged.has(id)))
+  if (held.length < 1 || held.length > config.maxAutoReleaseSignups || !held.every(id => judgedIds.has(id)))
     return recordOnly();
   const slot = await deps.reserveAutoRelease(config.maxAutoReleasesPerDay);
   if (!slot) return recordOnly();
@@ -433,7 +438,7 @@ async function applyRelease(
       deps.logger.warn('Signup domain hold auto-release slot was not refunded', { domain: hold.domain, error });
     }
   };
-  const applied = await releaseWithAudit(hold, assessment, deps).catch(async (error: unknown) => {
+  const applied = await releaseWithAudit(hold, held, assessment, deps).catch(async (error: unknown) => {
     await refund();
     throw error;
   });
@@ -505,7 +510,11 @@ async function assessHold(
   config: SignupDomainHoldAssessmentConfig,
   deps: SignupDomainHoldAssessmentDeps
 ): Promise<HoldOutcome> {
-  const summary = await summarizeHold(hold, deps);
+  // The hold's cohort is fixed when it is created, while later signups on the domain join the hold without
+  // entering it; judging the accounts held right now too means the guards see every account a release pays.
+  const heldNow = await deps.listHeldSignupIds(hold.domain, COHORT_SAMPLE_LIMIT);
+  const judgedIds = [...new Set([...hold.cohortUserIds, ...heldNow])].slice(0, COHORT_SAMPLE_LIMIT);
+  const summary = await summarizeHold(hold, judgedIds, deps);
   // Stored rather than skipped: the hold would otherwise head the oldest-first queue every run.
   const output: ModelOutput = !summary
     ? { outcome: 'failed', failure: 'summary_timeout' }
@@ -530,7 +539,7 @@ async function assessHold(
     assessment.outcome === 'judged' && shouldConfirm(assessment, config)
       ? await confirmWithAudit(hold, assessment, deps)
       : assessment.outcome === 'judged' && summary && shouldRelease(assessment, summary, config)
-        ? await applyRelease(hold, assessment, config, deps)
+        ? await applyRelease(hold, new Set(judgedIds), assessment, config, deps)
         : (await deps.holds.recordAssessment(hold.domain, assessment))
           ? 'recorded'
           : 'stale';

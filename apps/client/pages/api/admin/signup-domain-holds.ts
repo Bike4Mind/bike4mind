@@ -142,20 +142,35 @@ const handler = adminApi({
         return previous;
       });
       if (!review) throw new BadRequestError('Hold not found or already resolved with another decision');
+      // A retry on an automated release keeps its decision, so it pays only the accounts that release judged,
+      // within the daily free-grant budget like the release itself; the rest of the domain stays watched.
+      // (A takeover also returns the pre-update automated row, so the override flag is what tells them apart.)
+      const retriesAutoRelease =
+        action === 'release' && !overrideAutoDecision && review.status === 'released' && !!review.autoDecision;
       const fullAdmin = isFullAdmin(req.user);
+      // A delegate never pays out to itself or to an account with admin access; those stay pending.
+      const skipUser = fullAdmin
+        ? undefined
+        : (user: Parameters<typeof canAccessAdmin>[0] & { _id: unknown }) =>
+            isSelfOrImpersonator(req.user, String(user._id)) || canAccessAdmin(user);
       const { creditsReleased, remaining, nextCursor } =
-        action === 'release'
-          ? await releaseHeldSignupCredits(domain, {
-              afterUserId,
-              reason: 'Signup domain hold released by admin',
-              bypassBudget: true,
-              logger: req.logger,
-              // A delegate never pays out to itself or to an account with admin access; those stay pending.
-              skipUser: fullAdmin
-                ? undefined
-                : user => isSelfOrImpersonator(req.user, String(user._id)) || canAccessAdmin(user),
-            })
-          : { creditsReleased: 0, remaining: 0, nextCursor: null };
+        action !== 'release'
+          ? { creditsReleased: 0, remaining: 0, nextCursor: null }
+          : retriesAutoRelease
+            ? await releaseHeldSignupCredits(domain, {
+                onlyUserIds: review.cohortUserIds ?? [],
+                reason: 'Signup domain hold payout retried by admin',
+                bypassBudget: false,
+                logger: req.logger,
+                skipUser,
+              })
+            : await releaseHeldSignupCredits(domain, {
+                afterUserId,
+                reason: 'Signup domain hold released by admin',
+                bypassBudget: true,
+                logger: req.logger,
+                skipUser,
+              });
       res.status(200).json({ status, creditsReleased, remaining, nextCursor });
     })
   );
