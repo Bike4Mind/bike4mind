@@ -46,10 +46,9 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
       );
       if (!result) throw new NotFoundError('Release batch not found');
       let policy: ReturnType<typeof loadCreditGrantPolicy> | undefined;
-      const heldRestoredIds = new Set(batch.entries.filter(entry => entry.restore).map(entry => entry.userId));
       for (const row of result.results) {
         if (row.outcome !== 'reversed') continue;
-        const heldRestored = heldRestoredIds.has(row.userId);
+        const heldRestored = !!row.heldRestored;
         try {
           await recordAdminActionFromRequest(
             req,
