@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { hkdfSync } from 'crypto';
 import jwt from 'jsonwebtoken';
-import { evaluateSignupSignals, signSignupFormToken } from './signupBotChecks';
+import { evaluateSignupSignals, signSignupFormToken, verifiedSignupFormTokenId } from './signupBotChecks';
 
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' } }));
 
@@ -109,5 +109,47 @@ describe('evaluateSignupSignals', () => {
       'signup_honeypot',
       'signup_too_fast',
     ]);
+  });
+});
+
+describe('signSignupFormToken', () => {
+  it('carries a unique jti', () => {
+    const a = jwt.decode(signSignupFormToken()) as { jti?: unknown };
+    const b = jwt.decode(signSignupFormToken()) as { jti?: unknown };
+    expect(typeof a.jti).toBe('string');
+    expect(a.jti).not.toBe(b.jti);
+  });
+});
+
+describe('verifiedSignupFormTokenId', () => {
+  const base = { purpose: 'signup_form', issuedAtMs: NOW };
+  const signed = (payload: object, opts: jwt.SignOptions = {}, key: jwt.Secret = KEY) =>
+    jwt.sign(payload, key, { algorithm: 'HS256', audience: 'signup-form', expiresIn: '1h', ...opts });
+
+  it('returns the jti and expiry of a valid token', () => {
+    const token = signSignupFormToken();
+    const decoded = jwt.decode(token) as { jti: string; exp: number };
+    expect(verifiedSignupFormTokenId(token)).toEqual({ jti: decoded.jti, expMs: decoded.exp * 1000 });
+  });
+
+  it('returns undefined for anything that does not verify', () => {
+    const bad = [
+      undefined,
+      '',
+      'garbage',
+      123,
+      signed(base, { jwtid: 'x' }, 'other'),
+      signed(base, { jwtid: 'x' }, 'test-secret'),
+      signed(base, { jwtid: 'x', audience: 'other' }),
+      signed(base, { jwtid: 'x', expiresIn: -3600 }),
+      signed({ ...base, purpose: 'other' }, { jwtid: 'x' }),
+    ];
+    for (const formToken of bad) expect(verifiedSignupFormTokenId(formToken)).toBeUndefined();
+  });
+
+  it('treats a legacy token without a jti as valid but unbound', () => {
+    const legacy = signed(base);
+    expect(verifiedSignupFormTokenId(legacy)).toBeUndefined();
+    expect(evaluate({ formToken: legacy })).toEqual([]);
   });
 });

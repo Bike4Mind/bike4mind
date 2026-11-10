@@ -316,6 +316,7 @@ export const USER_RISK_SIGNAL_TYPES = [
   'signup_token_missing',
   'signup_token_invalid',
   'signup_token_expired',
+  'signup_token_reused',
 ] as const;
 export type UserRiskSignalType = (typeof USER_RISK_SIGNAL_TYPES)[number];
 
