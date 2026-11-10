@@ -8,7 +8,6 @@ import {
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 import { AdminAuditLogModel, AdminSettings, Cache, User } from '@bike4mind/database';
-import { MODEL_ACCESS_BULK_MAX_IDS } from '@bike4mind/common';
 import { resolveAdminModelFilterIds } from '@server/admin/models/adminModelFilter';
 import { commitAccessEntry } from './modelAccessStore';
 
@@ -302,6 +301,15 @@ describe('POST /api/admin/models/access/bulk', () => {
     await expect(apply(ids, { enabled: false }, fresh.token)).resolves.toMatchObject({ summary: 'Updated 10 of 10' });
   });
 
+  it('takes at most 500 ids in one selection', async () => {
+    const named = (count: number) => Array.from({ length: count }, (_, index) => `model-${index}`);
+
+    await expect(bulk({ selection: { ids: named(501) }, change: { enabled: false } })).rejects.toMatchObject({
+      statusCode: 400,
+    });
+    expect((await dryRun(named(500), { enabled: false })).counts.selected).toBe(500);
+  });
+
   it('returns 409 when the id set differs from the dry run', async () => {
     await seed(ids.map(id => entry(id)));
     const preview = await dryRun(ids.slice(0, 5), { enabled: false });
@@ -371,13 +379,13 @@ describe('POST /api/admin/models/access/bulk', () => {
       });
     });
 
-    it('returns 422 when the filter matches more models than one bulk change may cover', async () => {
-      const matched = MODEL_ACCESS_BULK_MAX_IDS + 1;
+    it('returns 422 when the filter matches more than 500 models', async () => {
+      const matched = 501;
       resolved.mockResolvedValue(Array.from({ length: matched }, (_, index) => `model-${index}`));
 
       await expect(filterDryRun()).rejects.toMatchObject({
         statusCode: 422,
-        message: `This filter matches ${matched} models. Narrow it to ${MODEL_ACCESS_BULK_MAX_IDS} or fewer.`,
+        message: 'This filter matches 501 models. Narrow it to 500 or fewer.',
         additionalInfo: { matched },
       });
     });

@@ -12,7 +12,7 @@ import { AdminActionReasonSchema } from './types/entities/adminActionReason';
 export const MODEL_ACCESS_REVISION_HEADER = 'x-model-access-revision';
 
 /** Upper bound on the models one bulk selection covers, whether named by `{ ids }` or matched by `{ filter }`. */
-export const MODEL_ACCESS_BULK_MAX_IDS = 2000;
+export const MODEL_ACCESS_BULK_MAX_IDS = 500;
 
 /** One llmModelConfigurations entry as the access endpoints return it. */
 export type ModelAccessEntry = {
