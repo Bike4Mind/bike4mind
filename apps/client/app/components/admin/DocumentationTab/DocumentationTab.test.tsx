@@ -151,6 +151,8 @@ describe('DocumentationTab', () => {
     fetchMock.mockReturnValue(new Promise((_, r) => (reject = r)));
     fireEvent.click(screen.getByTestId('documentation-refresh-btn'));
     expect(screen.getByTestId('documentation-updating')).toBeInTheDocument();
+    expect(screen.getByTestId('documentation-content')).toContainElement(screen.getByTestId('documentation-updating'));
+    expect(screen.getByTestId('documentation-content')).toContainElement(screen.getByTestId('documentation-doc-grid'));
     expect(screen.queryByTestId('documentation-loading')).toBeNull();
     expect(screen.getByTestId('documentation-doc-security-auth')).toBeInTheDocument();
 

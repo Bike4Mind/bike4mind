@@ -197,9 +197,12 @@ const DocumentationTab: React.FC = () => {
           data-testid="documentation-search-input"
         />
       </Stack>
-      <UpdatingBar active={loading && documentationData !== null} testId="documentation-updating" />
-      {documentationData !== null && errorState}
-      {body}
+      {/* The bar sits inside the content region: as its own region its reserved height adds two region gaps. */}
+      <Stack gap={1} sx={{ minWidth: 0 }} data-testid="documentation-content">
+        <UpdatingBar active={loading && documentationData !== null} testId="documentation-updating" />
+        {documentationData !== null && errorState}
+        {body}
+      </Stack>
     </Stack>
   );
 };
