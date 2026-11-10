@@ -256,12 +256,16 @@ describe('withAgentTerminalPush live activity', () => {
 
   it('keeps each execution tool name separate', async () => {
     const deps = makeLiveDeps();
+    deps.findExecution.mockImplementation(async id =>
+      id === 'child' ? { ...EXECUTION, parentExecutionId: 'exec-1' } : EXECUTION
+    );
     const sendWs = withAgentTerminalPush(async () => undefined, deps, logger);
     const step = (type: string, toolName?: string) => ({ type, content: 'x', metadata: { toolName, timestamp: 1 } });
 
     await sendWs('iteration_step', { executionId: 'exec-1', step: step('action', 'parent_tool') });
     await sendWs('iteration_step', { executionId: 'child', step: step('action', 'child_tool') });
     await sendWs('iteration_step', { executionId: 'exec-1', step: step('observation') });
+    await sendWs.flush();
 
     expect(sentEvents(deps).map(e => e.contentState.stageLabel)).toEqual(['Using parent_tool', 'Finished parent_tool']);
   });
