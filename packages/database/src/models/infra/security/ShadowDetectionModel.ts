@@ -142,6 +142,9 @@ const directUserIds = (group: AccountCampaignGroup) =>
 /** Recent records sharing a direct member that one sweep's group is matched against. */
 const CAMPAIGN_MATCH_CANDIDATES = 20;
 
+// Matches the automation grader time budget (apps/client/server/security/shadowDetectionAutoGrade.ts).
+const FLAGGED_BY_OTHERS_MAX_TIME_MS = 20_000;
+
 /**
  * The record a re-observed group continues: the one sharing the most direct members, provided they are
  * at least two and at least half of the smaller direct set. Two clusters that meet at one account, or a
@@ -585,12 +588,15 @@ class ShadowDetectionRepository {
   /** Which of these users any detection by a detector other than `detector` names. */
   async findUsersFlaggedByOtherDetectors(userIds: string[], detector: ShadowDetector): Promise<Set<string>> {
     if (userIds.length === 0) return new Set();
-    const wanted = new Set(userIds);
-    const docs = await ShadowDetectionModel.find(
-      { userIds: { $in: userIds }, detector: { $ne: detector } },
-      { userIds: 1 }
-    ).lean<Pick<LeanShadowDetection, '_id' | 'userIds'>[]>();
-    return new Set(docs.flatMap(doc => (doc.userIds ?? []).filter(id => wanted.has(id))));
+    const docs = await ShadowDetectionModel.aggregate<{ userIds: string[] }>([
+      { $match: { userIds: { $in: userIds }, detector: { $ne: detector } } },
+      {
+        $project: {
+          userIds: { $filter: { input: { $ifNull: ['$userIds', []] }, cond: { $in: ['$$this', userIds] } } },
+        },
+      },
+    ]).option({ maxTimeMS: FLAGGED_BY_OTHERS_MAX_TIME_MS });
+    return new Set(docs.flatMap(doc => doc.userIds));
   }
 
   /**
