@@ -43,7 +43,12 @@ export async function revokeAtlassianGrant(
       signal: AbortSignal.timeout(REVOKE_TIMEOUT_MS),
     });
     if (!response.ok) {
-      // Status only: the upstream body is never read into a log line.
+      // Release the connection without reading the upstream payload into memory or logs.
+      try {
+        await response.body?.cancel();
+      } catch (error) {
+        Logger.warn('[atlassian] failed to release revoke response', { context, error });
+      }
       Logger.warn('[atlassian] revoke failed', { context, status: response.status });
       return 'failed';
     }

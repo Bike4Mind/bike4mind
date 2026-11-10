@@ -86,6 +86,11 @@ const handler = baseApi()
           const contentResponse = await fetch(signedUrl);
 
           if (!contentResponse.ok) {
+            try {
+              await contentResponse.body?.cancel();
+            } catch (error) {
+              req.logger.warn('Failed to release file content response', { fileId: id, error });
+            }
             req.logger.error('[Auto-Rename API] Failed to fetch file content', {
               status: contentResponse.status,
               statusText: contentResponse.statusText,

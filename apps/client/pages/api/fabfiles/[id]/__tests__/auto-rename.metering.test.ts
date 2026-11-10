@@ -213,3 +213,20 @@ it.each(['success', 'failure'] as const)('keeps a timed-out provider slot throug
     vi.useRealTimers();
   }
 });
+
+it.each([false, true])('releases a failed storage response (cancellation rejects: %s)', async cancelFails => {
+  const response = new Response('private upstream payload', { status: 403 });
+  const cancel = vi.spyOn(response.body!, 'cancel');
+  if (cancelFails) cancel.mockRejectedValue(new Error('stream cancellation failed'));
+  const read = vi.spyOn(response, 'text');
+  vi.stubGlobal('fetch', async () => response);
+
+  await expect(call()).rejects.toMatchObject({
+    statusCode: 400,
+    message: 'Failed to fetch file content from storage',
+  });
+
+  expect(cancel).toHaveBeenCalledOnce();
+  expect(read).not.toHaveBeenCalled();
+  expect(m.complete).not.toHaveBeenCalled();
+});

@@ -97,14 +97,14 @@ Generate a detailed image prompt for a featured blog image that captures the ess
       throw new Error('Generated prompt was empty');
     }
 
-    logger.log('[BlogImagePrompt] Generated prompt:', generatedPrompt.substring(0, 100) + '...');
+    logger.info('Blog image prompt generated', { generatedPromptLength: generatedPrompt.length });
 
     return {
       success: true,
       prompt: generatedPrompt.trim(),
     };
   } catch (error) {
-    if (!isTerminalCreditRefusal(error)) logger.error('[BlogImagePrompt] Error:', error);
+    if (!isTerminalCreditRefusal(error)) logger.error('Blog image prompt generation failed', { error });
     throw error;
   }
 }

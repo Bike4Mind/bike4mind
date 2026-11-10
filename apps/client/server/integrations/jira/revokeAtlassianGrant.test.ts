@@ -77,14 +77,32 @@ describe('revokeAtlassianGrant', () => {
   it('logs the upstream status without reading or logging the response body', async () => {
     const response = new Response('secret-upstream-body', { status: 400 });
     const textSpy = vi.spyOn(response, 'text');
+    const cancelSpy = vi.spyOn(response.body!, 'cancel');
     fetchMock.mockResolvedValue(response);
 
     await revokeAtlassianGrant('enc', 'user u1');
 
     expect(logger.warn).toHaveBeenCalledWith('[atlassian] revoke failed', { context: 'user u1', status: 400 });
     expect(textSpy).not.toHaveBeenCalled();
+    expect(cancelSpy).toHaveBeenCalledOnce();
+    expect(response.bodyUsed).toBe(true);
     expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('secret-upstream-body');
     expect(console.warn).not.toHaveBeenCalled();
+  });
+
+  it('preserves the failed outcome when releasing the response body fails', async () => {
+    const failure = new Error('stream cancellation failed');
+    const response = new Response('upstream body', { status: 400 });
+    vi.spyOn(response.body!, 'cancel').mockRejectedValue(failure);
+    fetchMock.mockResolvedValue(response);
+
+    await expect(revokeAtlassianGrant('enc', 'user u1')).resolves.toBe('failed');
+
+    expect(logger.warn).toHaveBeenCalledWith('[atlassian] failed to release revoke response', {
+      context: 'user u1',
+      error: failure,
+    });
+    expect(logger.warn).toHaveBeenCalledWith('[atlassian] revoke failed', { context: 'user u1', status: 400 });
   });
 
   it('passes a thrown error as metadata with a static message', async () => {
