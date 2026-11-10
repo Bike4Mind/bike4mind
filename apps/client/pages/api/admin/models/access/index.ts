@@ -1,4 +1,4 @@
-import { ApiKeyScope, ModelAccessPatchRequestSchema } from '@bike4mind/common';
+import { ModelAccessPatchRequestSchema } from '@bike4mind/common';
 import { parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 import { adminApi } from '@server/middlewares/adminApi';
 import { assertFullAdmin, patchModelAccess } from '@server/modelAccess/modelAccess';
@@ -9,7 +9,7 @@ const QuerySchema = z.object({ id: z.string().trim().min(1).max(512) });
 
 const handler = adminApi({
   adminPermissions: { PATCH: 'settings:manage' },
-  requiredScopes: [ApiKeyScope.ADMIN],
+  auth: 'jwtOnly',
 }).patch(async (req, res) => {
   assertFullAdmin(req.user);
   const { id } = parseOrBadRequest(QuerySchema, req.query);

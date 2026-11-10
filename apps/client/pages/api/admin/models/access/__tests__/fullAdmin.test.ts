@@ -2,8 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 type Handler = (req: unknown, res: unknown) => Promise<unknown>;
 const routes = vi.hoisted(() => ({}) as Record<string, Handler>);
+const routeAuth = vi.hoisted(() => [] as unknown[]);
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+  baseApi: (options: { auth?: unknown } = {}) => {
+    routeAuth.push(options.auth);
     const chain: Record<string, unknown> = { use: () => chain };
     for (const method of ['get', 'post', 'patch']) {
       chain[method] = (fn: Handler) => {
@@ -45,6 +47,10 @@ const bulkReq = (user: unknown) => ({ user, body: { selection: { ids: ['model-a'
 
 describe('model access endpoints need a full admin', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it('accept session JWTs only, never an API key', () => {
+    expect(routeAuth).toEqual(['jwtOnly', 'jwtOnly', 'jwtOnly']);
+  });
 
   it('refuses a settings:manage delegate with 403 before any read or write', async () => {
     await expect(patchRoute(patchReq(DELEGATE), res())).rejects.toMatchObject({ statusCode: 403 });

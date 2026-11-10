@@ -1,4 +1,4 @@
-import { ApiKeyScope, OAUTH_SOURCE_TAG_PREFIX, SETTINGS_PAGE_READ, type ModelUserTagCount } from '@bike4mind/common';
+import { OAUTH_SOURCE_TAG_PREFIX, SETTINGS_PAGE_READ, type ModelUserTagCount } from '@bike4mind/common';
 import { User } from '@bike4mind/database';
 import { adminApi } from '@server/middlewares/adminApi';
 import { assertFullAdmin } from '@server/modelAccess/modelAccess';
@@ -8,7 +8,7 @@ const MAX_TAGS = 2000;
 /** Distinct user tags (lower-cased, as model access matches them) with how many live accounts hold each. */
 const handler = adminApi({
   adminPermissions: { GET: SETTINGS_PAGE_READ },
-  requiredScopes: [ApiKeyScope.ADMIN],
+  auth: 'jwtOnly',
 }).get(async (req, res) => {
   assertFullAdmin(req.user);
   const rows = await User.aggregate<{ _id: string; count: number }>([

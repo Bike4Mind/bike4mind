@@ -1,4 +1,4 @@
-import { ApiKeyScope, BadRequestError, ModelAccessBulkRequestSchema } from '@bike4mind/common';
+import { BadRequestError, ModelAccessBulkRequestSchema } from '@bike4mind/common';
 import { parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 import { adminApi } from '@server/middlewares/adminApi';
 import {
@@ -10,7 +10,7 @@ import {
 
 const handler = adminApi({
   adminPermissions: { POST: 'settings:manage' },
-  requiredScopes: [ApiKeyScope.ADMIN],
+  auth: 'jwtOnly',
 }).post(async (req, res) => {
   assertFullAdmin(req.user);
   const body = parseOrBadRequest(ModelAccessBulkRequestSchema, req.body);
