@@ -1380,6 +1380,47 @@ describe('POST /api/ai/v1/completions - run attribution', () => {
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 
+  it("refuses a teammate's run on the same org-billed key, since the minting user must match", async () => {
+    mockResolveContractAuth.mockResolvedValueOnce({
+      method: 'apiKey',
+      userId: 'user-1',
+      apiKeyInfo: { keyId: 'key-1', userId: 'user-1', organizationId: 'org-1', billingOwnerType: 'Organization' },
+    });
+    mockFindCompletionRun.mockResolvedValueOnce(
+      storedRun({ userId: 'user-2', ownerType: 'Organization', ownerId: 'org-1' })
+    );
+
+    const body = await expectJsonError(await post({ ...COMPLETION, run: RUN }), 404);
+
+    expect(body.errorCode).toBe('run_not_found');
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it("refuses the caller's run minted for another org when the key bills a different org", async () => {
+    mockResolveContractAuth.mockResolvedValueOnce({
+      method: 'apiKey',
+      userId: 'user-1',
+      apiKeyInfo: { keyId: 'key-1', userId: 'user-1', organizationId: 'org-B', billingOwnerType: 'Organization' },
+    });
+    mockFindCompletionRun.mockResolvedValueOnce(storedRun({ ownerType: 'Organization', ownerId: 'org-A' }));
+
+    const body = await expectJsonError(await post({ ...COMPLETION, run: RUN }), 404);
+
+    expect(body.errorCode).toBe('run_not_found');
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('accepts an uppercased id for an owned run and forwards the normalized id', async () => {
+    mockFindCompletionRun.mockResolvedValueOnce(storedRun());
+
+    const res = await post({ ...COMPLETION, run: { ...RUN, runId: RUN_ID.toUpperCase() } });
+    await res.text();
+
+    expect(res.status).toBe(200);
+    expect(mockFindCompletionRun).toHaveBeenCalledWith(RUN_ID);
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(expect.objectContaining({ run: RUN }));
+  });
+
   it('accepts an org run on the org-billed key that minted it', async () => {
     mockResolveContractAuth.mockResolvedValueOnce({
       method: 'apiKey',

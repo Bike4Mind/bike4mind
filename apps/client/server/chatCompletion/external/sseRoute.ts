@@ -131,7 +131,9 @@ async function verifyRunOwnership(
   run: CompletionRunAttribution,
   caller: { userId: string; billingOrganizationId?: string }
 ): Promise<CompletionRunAttribution> {
-  const stored = await completionRunRepository.findById(run.runId);
+  // _id is stored lowercase (randomUUID) but z.uuid accepts uppercase.
+  const runId = run.runId.toLowerCase();
+  const stored = await completionRunRepository.findById(runId);
   const ownerType = caller.billingOrganizationId ? CreditHolderType.Organization : CreditHolderType.User;
   const ownerId = caller.billingOrganizationId ?? caller.userId;
   if (!stored || stored.userId !== caller.userId || stored.ownerType !== ownerType || stored.ownerId !== ownerId) {
@@ -139,7 +141,7 @@ async function verifyRunOwnership(
       errorCode: RUN_NOT_FOUND_ERROR_CODE,
     });
   }
-  return run;
+  return { ...run, runId };
 }
 
 function requestIdFrom(headers: Record<string, string | undefined>): string {

@@ -1,6 +1,7 @@
 import { defineEndpoint } from '../defineEndpoint';
 import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 // Specific files, not the barrel (`../../schemas`) - see the note in tools.contract.ts.
+import { ApiErrorSchema } from '../../schemas/chat';
 import { CompletionRunSchema, CreateCompletionRunRequestSchema } from '../../schemas/cliCompletions';
 
 /**
@@ -35,6 +36,7 @@ export const createCompletionRunContract = defineEndpoint({
         createdAt: '2026-11-10T12:00:00.000Z',
       },
     },
+    429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
   },
   codeSample: {
     authToken: 'b4m_live_<key>',

@@ -580,6 +580,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // One id per request: the usage event and the credit transaction share it so the admin ledger can
   // point at the usage record.
   const requestId = params.requestId ?? `completion-${apiKeyInfo?.keyId ?? userId}-${Date.now()}`;
+  // The caller's session id lives under run, not top-level: top-level UsageEvent.sessionId is an ownership-probe input.
+  const runLineage = params.run && { ...params.run, sessionId: params.sessionId };
   const completionStartTime = Date.now();
 
   if (!hasEffectiveConversationMessage(messages)) {
@@ -1265,8 +1267,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
             userId,
             ownerId: holderId,
             ownerType: holderType,
-            sessionId: params.sessionId,
-            run: params.run,
+            run: runLineage,
             feature: 'completion_api',
             source,
             apiKeyId: apiKeyInfo?.keyId,
@@ -1285,8 +1286,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
             userId,
             ownerId: holderId,
             ownerType: holderType,
-            sessionId: params.sessionId,
-            run: params.run,
+            run: runLineage,
             feature: 'completion_api',
             source,
             apiKeyId: apiKeyInfo?.keyId,
@@ -1403,8 +1403,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         userId,
         ownerId: holderId,
         ownerType: holderType,
-        sessionId: params.sessionId,
-        run: params.run,
+        run: runLineage,
         feature: 'completion_api',
         provider: requestedModelInfo!.backend,
         model,
@@ -1550,7 +1549,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
                 reservedCredits,
                 creditDifference,
                 ...(toolNamesUsed.size > 0 && { toolNames: boundedToolNames(toolNamesUsed) }),
-                ...(params.run && { run: params.run }),
+                ...(runLineage && { run: runLineage }),
               },
             },
             {

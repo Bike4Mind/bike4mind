@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { PassThrough } from 'node:stream';
+import { PassThrough, Readable } from 'node:stream';
 import axios, {
   AxiosError,
   type AxiosAdapter,
@@ -471,8 +471,9 @@ describe('run attribution and request ids', () => {
   it('sends a fresh X-Request-ID on every request', async () => {
     const [, , first] = await send(REQUEST);
     const [, , second] = await send(REQUEST);
-    expect(first.headers?.['X-Request-ID']).toMatch(/^[0-9a-f-]{36}$/);
-    expect(second.headers?.['X-Request-ID']).toMatch(/^[0-9a-f-]{36}$/);
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+    expect(first.headers?.['X-Request-ID']).toMatch(uuid);
+    expect(second.headers?.['X-Request-ID']).toMatch(uuid);
     expect(first.headers?.['X-Request-ID']).not.toBe(second.headers?.['X-Request-ID']);
   });
 
@@ -492,6 +493,20 @@ describe('run attribution and request ids', () => {
 
   it('raises RunNotFoundError for a 404 that names run_not_found', async () => {
     const post = refused(404, { error: 'Run not found', errorCode: 'run_not_found' });
+    const err = await streamCompletion({ post } as unknown as AxiosInstance, '/c', { ...REQUEST, run: RUN }, () => {})
+      .then(() => null)
+      .catch((caught: unknown) => caught);
+    expect(err).toBeInstanceOf(RunNotFoundError);
+  });
+
+  it('raises RunNotFoundError when the 404 envelope arrives as a stream, as it does for a streamed request', async () => {
+    const body = JSON.stringify({ error: 'Run not found', errorCode: 'run_not_found' });
+    const post = vi.fn().mockRejectedValue(
+      Object.assign(new Error('Request failed'), {
+        isAxiosError: true,
+        response: { status: 404, data: Readable.from([Buffer.from(body.slice(0, 10)), Buffer.from(body.slice(10))]) },
+      })
+    );
     const err = await streamCompletion({ post } as unknown as AxiosInstance, '/c', { ...REQUEST, run: RUN }, () => {})
       .then(() => null)
       .catch((caught: unknown) => caught);

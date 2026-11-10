@@ -1,6 +1,11 @@
 import type { AxiosInstance } from 'axios';
 import { describe, expect, it, vi } from 'vitest';
-import { COMPLETION_RUNS_PATH, createCompletionRunMinter, requestCompletionRun } from './completionRuns';
+import {
+  COMPLETION_RUNS_PATH,
+  MINT_FAILURE_BACKOFF_MS,
+  createCompletionRunMinter,
+  requestCompletionRun,
+} from './completionRuns';
 
 const RUN = {
   runId: '7d0c8f3e-2b1a-4c5d-9e8f-0a1b2c3d4e5f',
@@ -50,13 +55,32 @@ describe('createCompletionRunMinter', () => {
   });
 
   it('mints again once the earlier request has settled', async () => {
-    const request = vi.fn().mockResolvedValueOnce(undefined).mockResolvedValueOnce(RUN);
+    const request = vi.fn().mockResolvedValue(RUN);
     const mint = createCompletionRunMinter(vi.fn(), request);
     const axios = axiosWith(vi.fn());
 
-    await expect(mint('local-run', axios, 'root-1')).resolves.toBeUndefined();
+    await expect(mint('local-run', axios, 'root-1')).resolves.toEqual(RUN);
     await expect(mint('local-run', axios, 'root-1')).resolves.toEqual(RUN);
     expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it('answers without a request for a while after a failed mint, then tries again', async () => {
+    let clock = 1_000;
+    const request = vi.fn().mockResolvedValueOnce(undefined).mockResolvedValueOnce(RUN);
+    const mint = createCompletionRunMinter(vi.fn(), request, () => clock);
+    const axios = axiosWith(vi.fn());
+
+    await expect(mint('local-run', axios, 'root-1')).resolves.toBeUndefined();
+    clock += MINT_FAILURE_BACKOFF_MS - 1;
+    await expect(mint('local-run', axios, 'root-1')).resolves.toBeUndefined();
+    expect(request).toHaveBeenCalledOnce();
+    await expect(mint('other-run', axios, 'root-2')).resolves.toEqual(RUN);
+    expect(request).toHaveBeenCalledTimes(2);
+
+    request.mockResolvedValueOnce(RUN);
+    clock += 1;
+    await expect(mint('local-run', axios, 'root-1')).resolves.toEqual(RUN);
+    expect(request).toHaveBeenCalledTimes(3);
   });
 
   it('keeps different roots apart', async () => {

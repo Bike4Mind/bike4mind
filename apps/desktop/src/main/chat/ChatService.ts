@@ -1868,7 +1868,7 @@ export class ChatService {
   private async recordServerRun(
     requesterId: string,
     policy: RootPolicy,
-    serverRunId: string | undefined,
+    serverRunId: string,
     scope: string | null
   ): Promise<void> {
     try {
@@ -1884,19 +1884,19 @@ export class ChatService {
    * The `run` an orchestrated session's agent turn is sent with; `undefined` outside orchestration
    * or when no server run id could be had, which sends the turn unattributed rather than holding
    * it. Prefers the ROOT's current policy over the session's own copy: a worker copied its policy
-   * at spawn, possibly before the root's id arrived.
+   * at spawn, possibly before the root's id arrived. An id found only on the root or in memory is
+   * copied onto the session, since after a restart the root's policy and the map are both gone.
    */
   private async runAttribution(session: ChatSession): Promise<CompletionRunAttribution | undefined> {
     const policy = session.orchestrationPolicy;
     if (!policy || !this.deps.mintCompletionRun) return undefined;
+    const scope = this.deps.store.scopeKey();
     const root =
       policy.rootSessionId === session.id ? session : await this.deps.store.get(policy.rootSessionId).catch(() => null);
     const rootPolicy = root?.orchestrationPolicy?.rootRunId === policy.rootRunId ? root.orchestrationPolicy : undefined;
-    const serverRunId =
-      rootPolicy?.serverRunId ??
-      policy.serverRunId ??
-      this.serverRuns.get(policy.rootRunId) ??
-      (await this.mintServerRun(session.id, policy, this.deps.store.scopeKey()));
+    const known = rootPolicy?.serverRunId ?? policy.serverRunId ?? this.serverRuns.get(policy.rootRunId);
+    if (known && known !== policy.serverRunId) await this.recordServerRun(session.id, policy, known, scope);
+    const serverRunId = known ?? (await this.mintServerRun(session.id, policy, scope));
     if (!serverRunId) {
       this.deps.logger.warn(`CHAT: no server run id for session ${session.id}; sending its turn unattributed`);
       return undefined;
@@ -1913,13 +1913,34 @@ export class ChatService {
     };
   }
 
-  /** Forget a run id the server refused, so the next turn mints a fresh one. */
-  private async forgetServerRun(session: ChatSession): Promise<void> {
+  /**
+   * Forget a run id the server refused, so the next turn mints a fresh one. Only where it still
+   * holds `refusedRunId`: a refusal arriving after a newer id was minted leaves the newer one.
+   */
+  private async forgetServerRun(session: ChatSession, refusedRunId: string): Promise<void> {
     const policy = session.orchestrationPolicy;
     if (!policy) return;
     this.deps.logger.warn(`CHAT: server refused run attribution for session ${session.id}; resending without it`);
-    this.serverRuns.delete(policy.rootRunId);
-    await this.recordServerRun(session.id, policy, undefined, this.deps.store.scopeKey());
+    if (this.serverRuns.get(policy.rootRunId) === refusedRunId) this.serverRuns.delete(policy.rootRunId);
+    const scope = this.deps.store.scopeKey();
+    try {
+      for (const id of new Set([policy.rootSessionId, session.id])) {
+        await this.deps.store.clearServerRunId(id, policy.rootRunId, refusedRunId, scope);
+      }
+    } catch (err) {
+      this.deps.logger.warn(`CHAT: could not forget run attribution: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  /**
+   * The policy a worker spawned now inherits: the parent's STORED copy when it still belongs to the
+   * same run, since the server run id may have landed after the parent's turn read its session.
+   */
+  private async currentPolicyFor(parent: ChatSession, snapshot: RootPolicy): Promise<RootPolicy> {
+    const stored = (await this.deps.store.get(parent.id).catch(() => null))?.orchestrationPolicy;
+    const current = stored?.rootRunId === snapshot.rootRunId ? stored : snapshot;
+    const serverRunId = current.serverRunId ?? this.serverRuns.get(current.rootRunId);
+    return serverRunId ? { ...current, serverRunId } : current;
   }
 
   getRolePolicy(): Promise<RolePolicy> {
@@ -3466,8 +3487,9 @@ export class ChatService {
       // Once per turn: a worker's attempt cannot change mid-turn. Cleared when the server refuses it.
       let run = api && !localTurn ? await this.runAttribution(session) : undefined;
       const dropRun = async (): Promise<void> => {
+        const refused = run?.runId;
         run = undefined;
-        await this.forgetServerRun(session);
+        if (refused) await this.forgetServerRun(session, refused);
       };
       // A spawned session's seed run has nobody watching it; a turn the user typed into it does.
       const ask = !session.origin || this.attendedTurns.has(sessionId);
@@ -3832,12 +3854,7 @@ export class ChatService {
         // A plain reply keeps no rounds, but one that reasoned needs them to carry the reasoning,
         // and one continued on another model needs them to say which model spent what.
         const continuedOnOther = resume?.model !== undefined && resume.model !== session.model;
-        // A continued reply made several requests, and only rounds can keep each one's settlement apart.
-        const settledApart = rounds.length > 1 && rounds.some(round => round.requestId || round.settled);
-        const keepRounds =
-          toolCalls.length > 0 || continuedOnOther || settledApart || rounds.some(round => round.reasoning);
-        // A plain reply drops its rounds, so its one request's settlement moves onto the message.
-        const plainRequest = !keepRounds && rounds.length === 1 ? rounds[0] : undefined;
+        const keepRounds = continuedOnOther || keepsRounds(rounds, toolCalls);
         const finalContent = joinRounds(rounds.map(round => round.text));
         const lastTiming = produced[produced.length - 1]?.timing;
         const promptCache: ChatPromptCacheStamp | undefined =
@@ -3854,8 +3871,7 @@ export class ChatService {
           stopReason,
           ...(toolCalls.length > 0 ? { toolCalls } : {}),
           ...(keepRounds ? { rounds } : {}),
-          ...(plainRequest?.requestId ? { requestId: plainRequest.requestId } : {}),
-          ...(plainRequest?.settled ? { settled: plainRequest.settled } : {}),
+          ...(keepRounds ? {} : plainRequestOf(rounds)),
           ...(thinking ? { thinking } : {}),
           ...(artifacts.length > 0 ? { artifacts } : {}),
           ...(usage ? { usage } : {}),
@@ -4385,7 +4401,13 @@ export class ChatService {
               ],
               ...(resume.artifacts.length > 0 ? { artifacts: resume.artifacts } : {}),
             }
-          : {}),
+          : failedSettlement(
+              storedRounds(
+                produced.map(round => ({ round, text: round.text })),
+                session.model
+              ),
+              toolCalls
+            )),
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
         ...(usage ? { usage } : {}),
         ...(contextSnapshot ? { contextSnapshot } : {}),
@@ -4477,6 +4499,10 @@ export class ChatService {
       thinking: message.thinking,
       artifacts: message.artifacts,
       usage: message.usage,
+      // A reply that keeps rounds holds each request's charge there; clearing these keeps a
+      // continued plain reply from also holding its first request's charge on the message.
+      requestId: message.requestId,
+      settled: message.settled,
       promptCache: message.promptCache,
       contextSnapshot: message.contextSnapshot,
       questComplete: message.questComplete,
@@ -6117,8 +6143,9 @@ export class ChatService {
         };
       const brief = validated.contract ? renderTaskBrief(validated.contract) : seed;
       const named = title?.trim();
+      const inherited = managed ? await this.currentPolicyFor(parent, managed) : undefined;
       const child = await this.deps.store.create(selection?.effectiveModel ?? parent.model, {
-        ...(managed ? { orchestrationPolicy: managed } : {}),
+        ...(inherited ? { orchestrationPolicy: inherited } : {}),
         ...(selection ? { workerSelection: selection } : {}),
         ...(validated.contract
           ? {
@@ -9190,6 +9217,37 @@ function storedRounds(runs: { round: RawRound; text: string }[], model: string):
       // A round with only usage is kept: it is the measured size of a trimmed round stopped early.
       .filter(round => round.text.length > 0 || round.toolCallIds.length > 0 || round.reasoning || round.usage)
   );
+}
+
+/**
+ * Whether a reply is stored with its rounds. A plain reply keeps none, but one that ran tools or
+ * reasoned needs them, and one that made several settled requests needs them to keep each
+ * request's charge apart. Charges live on rounds or on the message, never both; see plainRequestOf.
+ */
+function keepsRounds(rounds: readonly ChatReplyRound[], toolCalls: readonly ChatToolCall[]): boolean {
+  const settledApart = rounds.length > 1 && rounds.some(round => round.requestId || round.settled);
+  return toolCalls.length > 0 || settledApart || rounds.some(round => round.reasoning);
+}
+
+/** The one request of a reply stored without rounds, whose charge then rides the message. */
+function plainRequestOf(rounds: readonly ChatReplyRound[]): Pick<ChatMessage, 'requestId' | 'settled'> {
+  const only = rounds.length === 1 ? rounds[0] : undefined;
+  return {
+    ...(only?.requestId ? { requestId: only.requestId } : {}),
+    ...(only?.settled ? { settled: only.settled } : {}),
+  };
+}
+
+/**
+ * What a failed fresh reply stores of the requests it already made, so the charges they settled
+ * are not lost with the turn. Nothing when none settled, which leaves the failure stored as before.
+ */
+function failedSettlement(
+  rounds: ChatReplyRound[],
+  toolCalls: readonly ChatToolCall[]
+): Pick<ChatMessage, 'rounds' | 'requestId' | 'settled'> {
+  if (!rounds.some(round => round.requestId || round.settled)) return {};
+  return keepsRounds(rounds, toolCalls) ? { rounds } : plainRequestOf(rounds);
 }
 
 /** The rounds minus `sent`, which only replay reads, for the renderer: it roughly doubles a tool turn. */

@@ -146,6 +146,8 @@ export const UsageEventRun = z.object({
   taskId: z.string().optional(),
   attemptId: z.string().optional(),
   parentSessionId: z.string().optional(),
+  // The caller's untrusted, display-only session id; never an authorization input.
+  sessionId: z.string().max(128).optional(),
 });
 
 export type IUsageEventRun = z.infer<typeof UsageEventRun>;

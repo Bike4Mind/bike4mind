@@ -30,7 +30,7 @@ export const createCompletionContract = defineEndpoint({
   description:
     'OpenAI-compatible completion. A successful request is ALWAYS answered with an SSE stream ' +
     '(`text/event-stream`), regardless of the `stream` flag: a `meta` event, then `content`/`tool_use` ' +
-    'events carrying `usage`/`credits`, then (when credits were charged) one `settled` event, terminated by `data: [DONE]`. The terminal event carries ' +
+    'events carrying `usage`/`credits`, then one `settled` event once credits are committed (the charge can be 0), terminated by `data: [DONE]`. The terminal event carries ' +
     '`stopReason`; treat `max_tokens` as a TRUNCATED reply rather than a complete one, and note ' +
     'that omitting `max_tokens` on the request lets the server size the output ceiling for the ' +
     'model (recommended for reasoning models, which spend thinking tokens inside that ceiling). ' +
@@ -47,7 +47,9 @@ export const createCompletionContract = defineEndpoint({
     'against the run, never charged twice. The `settled` event (`{ type, requestId, creditsCharged, usdCost, runId }`) ' +
     'arrives after the last content event and before `[DONE]`, once the charge is committed: `creditsCharged` is ' +
     "what the ledger recorded, which can be below the terminal event's `credits.used` when the balance capped it, " +
-    'and `requestId` (your `X-Request-ID` when sent) identifies that charge, so count it once per `requestId`.\n\n' +
+    'and `requestId` is the `X-Request-ID` you sent (or a generated one). Use it to count a settled charge once when ' +
+    'your client sees the same event twice (replay or reconnect). Send a fresh `X-Request-ID` per request: reusing one ' +
+    'does not deduplicate charges, since the server charges every request.\n\n' +
     'TOOL SEARCH. On a model whose `GET /api/v1/models` row has `supports_tool_search: true` (`backend` `"anthropic"` or `"bedrock"`), ' +
     'a `tools` entry may set `toolSchema.defer_loading: true`, and a `{ "serverTool": { "type": ' +
     '"tool_search_tool_regex_20251119", "name": "tool_search_tool_regex" } }` (or the `bm25` pair) entry adds ' +

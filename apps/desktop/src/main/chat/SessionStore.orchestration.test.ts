@@ -262,6 +262,7 @@ it('loads a session stored before run attribution, then keeps a server run id th
   expect((await new SessionStore(directory, 'worker').get(child.id))?.orchestrationPolicy?.serverRunId).toBe(
     'server-run'
   );
-  await restarted.setServerRunId(child.id, 'run-one', undefined);
+  expect(await restarted.clearServerRunId(child.id, 'run-one', 'older-run')).toBeNull();
+  await restarted.clearServerRunId(child.id, 'run-one', 'server-run');
   expect((await new SessionStore(directory, 'worker').get(child.id))?.orchestrationPolicy).toEqual(legacyPolicy);
 });

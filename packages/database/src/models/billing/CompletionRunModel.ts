@@ -42,6 +42,10 @@ const CompletionRunSchema = new Schema<CompletionRunRecord>(
   { timestamps: true, versionKey: false, strict: 'throw' }
 );
 
+// Erasure matches by user and by billing owner (dataSubject/registry/billing.ts).
+CompletionRunSchema.index({ userId: 1 });
+CompletionRunSchema.index({ ownerType: 1, ownerId: 1 });
+
 export const CompletionRunModel: mongoose.Model<CompletionRunRecord> =
   (mongoose.models.CompletionRun as mongoose.Model<CompletionRunRecord> | undefined) ??
   mongoose.model<CompletionRunRecord>('CompletionRun', CompletionRunSchema);

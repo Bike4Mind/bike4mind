@@ -196,6 +196,7 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
           taskId: { type: String, required: false },
           attemptId: { type: String, required: false },
           parentSessionId: { type: String, required: false },
+          sessionId: { type: String, required: false, maxlength: 128 },
         },
         { _id: false }
       ),

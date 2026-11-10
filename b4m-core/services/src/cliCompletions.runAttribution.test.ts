@@ -70,6 +70,9 @@ function buildDb() {
   return { db, usageEvents };
 }
 
+/** The caller's session id is kept inside the run, never on the top-level usage event. */
+const LINEAGE = { ...RUN, sessionId: 'worker-session' };
+
 const run = (db: ReturnType<typeof buildDb>['db'], overrides: Partial<CompletionParams> = {}) =>
   executeCompletion({
     userId: 'user1',
@@ -105,7 +108,7 @@ describe('executeCompletion - run attribution', () => {
     expect(vi.mocked(subtractCredits).mock.calls[0][0]).toMatchObject({
       type: 'completion_api_usage',
       sessionId: 'worker-session',
-      metadata: expect.objectContaining({ run: RUN, requestId: 'caller-request-id' }),
+      metadata: expect.objectContaining({ run: LINEAGE, requestId: 'caller-request-id' }),
     });
   });
 
@@ -117,11 +120,11 @@ describe('executeCompletion - run attribution', () => {
     expect(usageEvents.record).toHaveBeenCalledWith(
       expect.objectContaining({
         requestId: 'caller-request-id',
-        sessionId: 'worker-session',
-        run: RUN,
+        run: LINEAGE,
         status: 'ok',
       })
     );
+    expect(usageEvents.record.mock.calls[0][0]).not.toHaveProperty('sessionId');
   });
 
   it('leaves run off the ledger metadata and the usage event of an unattributed request', async () => {
@@ -142,9 +145,7 @@ describe('executeCompletion - run attribution', () => {
 
     await expect(run(db)).rejects.toBe(error);
 
-    expect(usageEvents.record).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'timeout', sessionId: 'worker-session', run: RUN })
-    );
+    expect(usageEvents.record).toHaveBeenCalledWith(expect.objectContaining({ status: 'timeout', run: LINEAGE }));
   });
 
   it('records the session and run on the refusal row', async () => {
@@ -155,7 +156,7 @@ describe('executeCompletion - run attribution', () => {
     await expect(run(db)).rejects.toBe(error);
 
     expect(usageEvents.record).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'refusal', sessionId: 'worker-session', run: RUN, creditsCharged: 0 })
+      expect.objectContaining({ status: 'refusal', run: LINEAGE, creditsCharged: 0 })
     );
   });
 
