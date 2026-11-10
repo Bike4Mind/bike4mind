@@ -1,8 +1,9 @@
 import { useEffect } from 'react';
-import { Box, Button, LinearProgress, Sheet, Stack, Typography } from '@mui/joy';
+import { Box, Button, LinearProgress, Stack, Typography } from '@mui/joy';
 import { useNavigate, useParams } from '@tanstack/react-router';
 import { ADMIN_TAB_PARAM } from '@bike4mind/common';
 import { ErrorState } from '@client/app/components/admin/shared';
+import { ADMIN_DETAIL_MAX_WIDTH, adminPageFrame } from '@client/app/components/admin/shared/adminStyles';
 import { ADMIN_SUBSCRIPTIONS_TAB_SLUG } from '@client/app/components/admin/Subscriptions/Detail/subscriptionDetailModel';
 import { isNotFoundError, useAdminSubscriptionIdByStripeId } from '@client/app/hooks/data/adminSubscriptionDetail';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
@@ -56,9 +57,9 @@ const AdminSubscriptionByStripeId = () => {
   };
 
   return (
-    <Sheet data-testid="subscription-by-stripe-page" sx={{ minHeight: '100vh', bgcolor: 'admin.canvas' }}>
-      <Box sx={{ maxWidth: 1280, mx: 'auto', px: { xs: 2, sm: 4 }, pt: 2.5, pb: 12 }}>{body()}</Box>
-    </Sheet>
+    <Box data-testid="subscription-by-stripe-page" sx={adminPageFrame}>
+      <Box sx={{ maxWidth: ADMIN_DETAIL_MAX_WIDTH }}>{body()}</Box>
+    </Box>
   );
 };
 
