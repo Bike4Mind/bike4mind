@@ -17,6 +17,7 @@ export const createRegInvites = async (data: {
   tags?: string[];
   startingCredits?: number;
   startingStorage?: number;
+  grantPackageId?: string;
 }) => {
   const response = await api.post(`/api/reg-invites/create`, data);
   return response.data;

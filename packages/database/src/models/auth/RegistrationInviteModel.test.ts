@@ -74,3 +74,29 @@ describe('RegistrationInviteRepository.usageByGrantPackage', () => {
     expect((await registrationInviteRepository.usageByGrantPackage([], NOW)).size).toBe(0);
   });
 });
+
+describe('RegistrationInviteRepository.listByGrantPackage', () => {
+  setupMongoTest();
+
+  beforeEach(async () => {
+    await RegistrationInvite.deleteMany({});
+  });
+
+  it('returns only the package codes, newest first, and flags when more exist than the limit', async () => {
+    for (const code of ['OLD', 'MID', 'NEW']) await invite({ grantPackageId: 'a', code });
+    await invite({ grantPackageId: 'other', code: 'ELSEWHERE' });
+    await invite({ code: 'UNLINKED' });
+
+    const all = await registrationInviteRepository.listByGrantPackage('a', 5);
+    expect(all.data.map(row => row.code)).toEqual(['NEW', 'MID', 'OLD']);
+    expect(all.truncated).toBe(false);
+
+    const capped = await registrationInviteRepository.listByGrantPackage('a', 2);
+    expect(capped.data.map(row => row.code)).toEqual(['NEW', 'MID']);
+    expect(capped.truncated).toBe(true);
+  });
+
+  it('returns an empty page for a package with no codes', async () => {
+    expect(await registrationInviteRepository.listByGrantPackage('none', 50)).toEqual({ data: [], truncated: false });
+  });
+});

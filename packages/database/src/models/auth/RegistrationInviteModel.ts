@@ -67,6 +67,15 @@ export class RegistrationInviteRepository
     return updatedInvites;
   }
 
+  /** Newest codes linked to a grant package, at most `limit`, plus whether more exist. */
+  async listByGrantPackage(grantPackageId: string, limit: number) {
+    const rows = await this.model
+      .find({ grantPackageId })
+      .sort({ createdAt: -1 })
+      .limit(limit + 1);
+    return { data: rows.slice(0, limit).map(row => row.toJSON()), truncated: rows.length > limit };
+  }
+
   /**
    * Per-package code counts for the grant packages admin list. A code is active while register()
    * in b4m-core/services/src/userService/register.ts would still accept it: not past expiresAt,

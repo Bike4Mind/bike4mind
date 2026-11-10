@@ -14,6 +14,11 @@ vi.mock('@client/app/utils/grantPackageAPICalls', () => ({
   fetchGrantPackages,
   createGrantPackage,
   updateGrantPackage,
+  fetchGrantPackageLinks: async () => ({
+    invites: { data: [], truncated: false },
+    partnerRules: { data: [], truncated: false },
+  }),
+  grantPackageLinksQueryKey: (id: string) => ['admin-grant-packages', id, 'links'],
   GRANT_PACKAGES_QUERY_KEY: 'admin-grant-packages',
 }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
