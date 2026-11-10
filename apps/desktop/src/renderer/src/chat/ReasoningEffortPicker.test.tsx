@@ -113,6 +113,31 @@ describe('ReasoningEffortPicker', () => {
     );
   });
 
+  it('says a hosted model that cannot stop thinking always thinks, in place of a disabled effort', () => {
+    const kimi: ChatModelOption = {
+      id: 'kimi-k2.7-code',
+      name: 'Kimi K2.7 Code',
+      controls: {},
+      thinkingAlwaysOn: true,
+    };
+    const html = markup(kimi.id, [kimi]);
+    expect(html).toContain('Thinking: Always on');
+    expect(html).toContain('kimi-k2.7-code always thinks before answering. Its thinking cannot be switched off.');
+    expect(html).not.toContain('Effort: n/a');
+    expect(html).toMatch(/<button[^>]*Mui-disabled/);
+  });
+
+  it('keeps the effort menu on an always-thinking model that lists levels', () => {
+    const opus: ChatModelOption = {
+      id: 'claude-opus-5-5',
+      name: 'Claude Opus 5.5',
+      thinkingAlwaysOn: true,
+      controls: { effort: { levels: ['low', 'medium', 'high'], scope: 'request' } },
+    };
+    expect(markup(opus.id, [opus])).toContain('Effort: High');
+    expect(markup(opus.id, [opus])).not.toContain('Thinking: Always on');
+  });
+
   it('shows a stored level the model does not list as the nearest level it sends instead', () => {
     const listed: ChatModelOption = {
       id: 'gpt-5',
