@@ -9,7 +9,9 @@ import {
   LIFECYCLE_SUNSET_STATUSES,
   ModelBackend,
   PRICE_ROW_BILLED_MODEL_TYPES,
+  RETIRED_BY_PROVIDER_REASON,
   applyModelPriceCatalog,
+  billableRealtimeVoiceTier,
   hasAdminRank,
   isDiscoveryVerdict,
   normalizeEntitlementKey,
@@ -37,6 +39,7 @@ import {
   type ResolvedAdminModelFilter,
 } from '@bike4mind/common';
 import {
+  REALTIME_VOICE_PRICING,
   alignRouteTwinNames,
   isBackendUsable,
   mergeCatalogWithDrops,
@@ -319,6 +322,12 @@ function priceOf(
   const row = PRICE_ROW_BILLED_MODEL_TYPES.has(type)
     ? resolveModelPriceRow(priceRows, id, 'per_token', now)
     : undefined;
+  if (type === 'realtime-voice') {
+    // As voice settlement reads it (pickRealtimeVoiceTier): a row without audio rates yields to the literal.
+    if (row && billableRealtimeVoiceTier(row.pricing)) return priceRow(row);
+    const literal = Object.hasOwn(REALTIME_VOICE_PRICING, id) ? REALTIME_VOICE_PRICING[id] : undefined;
+    return literal ? { source: 'build', pricing: { '0': literal } } : null;
+  }
   if (row) return priceRow(row);
   if (!adapter || adapter.freeToRun || Object.keys(adapter.pricing).length === 0) return null;
   const pricing: Record<string, IModelPriceTier> = {};
@@ -329,14 +338,15 @@ function priceOf(
 const hasPricedTier = (price: AdminModelPrice | null): boolean =>
   price !== null && Object.values(price.pricing).some(tier => tier.input > 0 || tier.output > 0);
 
-/** The disable text the newest non-operator row wrote, under an operator row that owns the availability group. */
+/** The newest disable text a non-operator row wrote, under an operator row that owns the availability group. */
 function sourceDisableText(bucket: readonly IModelCatalogRow[]): string | undefined {
-  let newest: IModelCatalogRow | undefined;
+  let newest: { at: Date; text: string } | undefined;
   for (const row of bucket) {
     if (row.source === 'operator' || !row.ownedGroups.includes('availability')) continue;
-    if (!newest || row.effectiveFrom > newest.effectiveFrom) newest = row;
+    const text = str(row.patch.autoDisabledReason) ?? str(row.patch.disabledReason);
+    if (text && (!newest || row.effectiveFrom > newest.at)) newest = { at: row.effectiveFrom, text };
   }
-  return newest ? (str(newest.patch.autoDisabledReason) ?? str(newest.patch.disabledReason)) : undefined;
+  return newest?.text;
 }
 
 /** The operator row winning a group: operator rows outrank every other source, the newest of them wins. */
@@ -442,8 +452,15 @@ export async function buildAdminModelRows(input: AdminModelListInput): Promise<A
       reasons.push(reason('operator-disabled', why ? `Disabled: ${why}` : 'Disabled by an admin'));
     }
 
+    // toModelInfo folds a 'retired' lifecycle into disabled: a disable from that fold alone is the retirement itself.
+    const retiredByProvider =
+      servedModel?.disabled === true &&
+      status === 'retired' &&
+      !operatorDisabled &&
+      servedModel.disabledReason === RETIRED_BY_PROVIDER_REASON;
+
     if (servedModel) {
-      if (servedModel.disabled && !operatorDisabled) {
+      if (servedModel.disabled && !operatorDisabled && !retiredByProvider) {
         if (adapter?.disabled && servedModel.disabledReason === adapter.disabledReason) {
           reasons.push(
             reason(
@@ -544,10 +561,12 @@ export async function buildAdminModelRows(input: AdminModelListInput): Promise<A
 
     const deprecationDays = daysUntil(lifecycle.deprecationDate, now);
     const retirementDays = daysUntil(lifecycle.retirementDate, now);
-    // Retired means not served: getAvailableModels drops a model only from its deprecationDate, on the same UTC
-    // day boundary (isModelDeprecated), and the merge never serves a catalog-only model in a sunset status.
+    // Retired means no user can pick it for its lifecycle: getAvailableModels drops a model from its deprecationDate
+    // (same UTC day boundary as isModelDeprecated), the catalog's retired fold disables it, and the merge never
+    // serves a catalog-only model in a sunset status.
     const retired =
       (deprecationDays !== undefined && deprecationDays <= 0) ||
+      retiredByProvider ||
       (!servedModel && LIFECYCLE_SUNSET_STATUSES.has(status ?? ''));
     const withinHorizon = (days: number | undefined) => days !== undefined && days <= ADMIN_MODEL_RETIRING_HORIZON_DAYS;
     const retiring =
@@ -608,8 +627,8 @@ export async function buildAdminModelRows(input: AdminModelListInput): Promise<A
     };
   });
 
-  // The picker ranks an unranked model within its provider section, over the models it offers there
-  // (ModelSelection.tsx, sortModelsForPicker); a model it does not offer has no place in that order.
+  // Approximates the picker's provisional rank (ModelSelection.tsx, sortModelsForPicker) over each section's offered
+  // models. The picker first dedupes twins per viewer (dedupeModelsForPicker), which this list cannot know.
   const sections = new Map<string, AdminModelRow[]>();
   for (const row of rows) {
     if (!offeredInPicker(row)) continue;
