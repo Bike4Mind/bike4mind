@@ -18,6 +18,7 @@ import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrinc
 import { lakeMembershipAuditDb } from '@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { getGeneratedCopyStore } from '@server/files/generatedCopyStore';
+import { createCdnInvalidationBatch } from '@server/services/cdn/invalidateRouterCdn';
 import { adjustOwnerStorageInSession } from '@bike4mind/server-utils/s3/storageCharge';
 import { unpublishUserArtifactsBySource } from '@server/services/publish/purgeUserPublishedArtifacts';
 import type { Request } from 'express';
@@ -51,6 +52,9 @@ export async function deleteFileForUser(req: Request, fabFileId: string) {
 
   let refund: { owner: StorageOwner; bytes: number } | undefined;
 
+  // Flushed after the transaction settles so the CloudFront call stays out of it; a rolled-back
+  // attempt still flushes because the deleted copy's bytes do not come back.
+  const generatedCdn = createCdnInvalidationBatch('generated-copy', req.logger);
   const { action: deleteAction, references } = await withTransaction(async session => {
     const result = await fabFilesService.deleteFabFile(
       userId,
@@ -65,7 +69,7 @@ export async function deleteFileForUser(req: Request, fabFileId: string) {
           ...lakeMembershipAuditDb,
         },
         storage: getFilesStorage(),
-        generatedCopies: getGeneratedCopyStore({ logger: req.logger }),
+        generatedCopies: getGeneratedCopyStore({ batch: generatedCdn }),
         onDeleteComplete: async (deleted, size) => {
           refund = { owner: storageOwnerOf(deleted), bytes: size };
         },
@@ -94,7 +98,7 @@ export async function deleteFileForUser(req: Request, fabFileId: string) {
     }
 
     return result;
-  });
+  }).finally(() => generatedCdn.flush());
 
   // After the commit, outside the transaction's session (see cleanUpDeletedFileReferences).
   if (references) {
