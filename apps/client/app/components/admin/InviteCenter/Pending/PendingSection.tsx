@@ -71,11 +71,17 @@ const SECTION_LINKS = [
   { label: 'Open Risk review queue', tab: AdminTab.SignupRiskReview, testId: 'pending-open-risk-review-btn' },
 ] as const;
 
+/** The activity window the header counts over; the route accepts 1 to 90. */
+const PENDING_ACTIVE_DAYS = 7;
+
 const PendingHeader = () => {
-  const { data, isError } = useAdminSignupGrantPendingSummary();
+  const { data, isError } = useAdminSignupGrantPendingSummary(PENDING_ACTIVE_DAYS);
   const exposure = data?.exposure;
   const trickle = data?.trickle;
   const queue = data?.queue;
+  const activity = data?.activity;
+  const drip = data?.drip;
+  const poolLeft = trickle && !trickle.missing ? Math.max(0, trickle.limit - trickle.spentToday) : null;
   const blank = isError ? UNAVAILABLE : '-';
   return (
     <StatStrip aria-label="Pending signup credit exposure">
@@ -87,6 +93,21 @@ const PendingHeader = () => {
         label="Remaining to drip"
         value={exposure ? credits(exposure.totalDripRemaining) : exposure === null ? UNAVAILABLE : blank}
         comparison={exposure ? `${credits(exposure.totalRemaining)} left in all grants` : undefined}
+      />
+      <StatTile
+        label={`Active in last ${PENDING_ACTIVE_DAYS} days`}
+        value={activity ? activity.accounts : activity === null ? UNAVAILABLE : blank}
+        comparison={activity ? `${credits(activity.remaining)} left in their grants` : undefined}
+      />
+      <StatTile
+        label="Drip due today (UTC)"
+        value={drip ? credits(drip.committed) : drip === null ? UNAVAILABLE : blank}
+        valueColor={drip && poolLeft !== null && drip.committed > poolLeft ? 'admin.status.warn.foreground' : undefined}
+        comparison={
+          drip
+            ? `Upper bound if all ${drip.accounts} are active${poolLeft !== null ? `; ${credits(poolLeft)} left in the pool` : ''}`
+            : undefined
+        }
       />
       <StatTile
         label="Trickle pool today"

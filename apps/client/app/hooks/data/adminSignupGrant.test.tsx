@@ -74,9 +74,9 @@ describe('useAdminSignupGrantPendingSummary', () => {
     const { result } = renderHook(() => useAdminSignupGrantPendingSummary(), { wrapper: Wrapper });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(apiGet).toHaveBeenCalledWith('/api/admin/signup-grants/pending-summary');
+    expect(apiGet).toHaveBeenCalledWith('/api/admin/signup-grants/pending-summary', { params: { activeDays: 7 } });
     expect(result.current.data).toEqual(summary);
-    expect(queryClient.getQueryData([...PENDING_GRANTS_QUERY_KEY, 'pending-summary'])).toEqual(summary);
+    expect(queryClient.getQueryData([...PENDING_GRANTS_QUERY_KEY, 'pending-summary', 7])).toEqual(summary);
   });
 });
 

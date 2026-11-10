@@ -240,13 +240,82 @@ describe('signupGrantPendingRepository.summarizePending', () => {
     const rows = all.filter(r => !unpaid.has(r.id));
     expect(all.length - rows.length).toBe(2);
     expect(all.filter(r => unpaid.has(r.id)).every(r => r.remaining > 0)).toBe(true);
-    const summary = await signupGrantPendingRepository.summarizePending({ dripCap: DRIP_CAP });
-    expect(summary).toEqual({
+    const summary = await signupGrantPendingRepository.summarizePending({
+      dripCap: DRIP_CAP,
+      dailyCredits: 0,
+      day: '2026-11-10',
+      activeSince: new Date(),
+    });
+    expect(summary).toMatchObject({
       accountsWithRemaining: rows.filter(r => r.remaining > 0).length,
       totalRemaining: rows.reduce((sum, r) => sum + r.remaining, 0),
       totalDripRemaining: rows.reduce((sum, r) => sum + r.dripRemaining, 0),
     });
     expect(summary.accountsWithRemaining).toBeGreaterThan(0);
+  });
+
+  describe('activity and the drip due today', () => {
+    const DAY = '2026-11-10';
+    const DAILY = 100;
+    const activeSince = new Date('2026-11-03T00:00:00Z');
+    const dripping = (over: Partial<SignupGrant> = {}) => grant({ creditsReleased: 150, dripCredits: 50, ...over });
+    const edges = [
+      {
+        key: 'dueActive',
+        emailVerified: true,
+        lastActiveAt: new Date('2026-11-09T00:00:00Z'),
+        signupGrant: dripping({ lastDripDay: '2026-11-09' }),
+      },
+      { key: 'paidToday', emailVerified: true, signupGrant: dripping({ lastDripDay: DAY }) },
+      {
+        key: 'unverified',
+        emailVerified: false,
+        lastActiveAt: new Date('2026-10-01T00:00:00Z'),
+        signupGrant: dripping(),
+      },
+      {
+        key: 'blockedDue',
+        emailVerified: true,
+        lastActiveAt: activeSince,
+        signupGrant: { ...dripping(), blocked: { at: heldAt } },
+      },
+      { key: 'nearCap', emailVerified: true, lastActiveAt: activeSince, signupGrant: dripping({ dripCredits: 460 }) },
+    ].map((doc, n) => ({ ...doc, _id: oid(900 + n) }));
+    const summarize = (dailyCredits = DAILY) =>
+      signupGrantPendingRepository.summarizePending({ dripCap: DRIP_CAP, dailyCredits, day: DAY, activeSince });
+
+    beforeAll(async () => {
+      await User.collection.insertMany(
+        edges.map(({ key, ...doc }) => ({ ...doc, email: `${key}@example.com`, username: key, createdAt: heldAt }))
+      );
+    });
+    afterAll(async () => {
+      await User.collection.deleteMany({ _id: { $in: edges.map(doc => doc._id) } });
+    });
+
+    it('sums min(dailyCredits, drip remaining) over verified, unblocked grants not yet paid today', async () => {
+      const due = edges.filter(doc => ['dueActive', 'nearCap'].includes(doc.key));
+      const expected = due.map(doc =>
+        Math.min(DAILY, signupGrantDripRemaining(doc.signupGrant as SignupGrant, DRIP_CAP))
+      );
+      expect(expected).toEqual([100, 40]);
+      const summary = await summarize();
+      expect(summary.dripCommitToday).toBe(140);
+      expect(summary.dripAccountsToday).toBe(2);
+    });
+
+    it('commits nothing when the daily drip is off', async () => {
+      expect(await summarize(0)).toMatchObject({ dripCommitToday: 0, dripAccountsToday: 0 });
+    });
+
+    it('counts payable accounts active since the window start, leaving out blocked and missing activity', async () => {
+      const rows = await listAll();
+      const remainingOf = (key: string) =>
+        rows.find(r => r.id === String(edges.find(e => e.key === key)!._id))!.remaining;
+      const summary = await summarize();
+      expect(summary.activeAccounts).toBe(2);
+      expect(summary.activeRemaining).toBe(remainingOf('dueActive') + remainingOf('nearCap'));
+    });
   });
 
   it('counts the held queue as the rows the list labels held, of either reason', async () => {

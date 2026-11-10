@@ -30,6 +30,24 @@ export type SignupGrantPendingSummary = {
   accountsWithRemaining: number;
   totalRemaining: number;
   totalDripRemaining: number;
+  /** Payable accounts with credits to come whose lastActiveAt is on or after `activeSince`. */
+  activeAccounts: number;
+  activeRemaining: number;
+  /** What the drip job would pay on `day` if every eligible account were active: an upper bound. */
+  dripCommitToday: number;
+  dripAccountsToday: number;
+};
+
+export type SummarizePendingInput = { dripCap: number; dailyCredits: number; day: string; activeSince: Date };
+
+const EMPTY_SUMMARY: SignupGrantPendingSummary = {
+  accountsWithRemaining: 0,
+  totalRemaining: 0,
+  totalDripRemaining: 0,
+  activeAccounts: 0,
+  activeRemaining: 0,
+  dripCommitToday: 0,
+  dripAccountsToday: 0,
 };
 
 const QUERY_MAX_TIME_MS = 10_000;
@@ -251,22 +269,42 @@ export const signupGrantPendingRepository = {
    * Exposure the grant flow can still pay, over the population listPending pages through. Blocked and
    * forfeited grants pay nothing without an admin, so they are listed but left out of these totals.
    */
-  async summarizePending(input: { dripCap: number }): Promise<SignupGrantPendingSummary> {
+  async summarizePending(input: SummarizePendingInput): Promise<SignupGrantPendingSummary> {
     const payable = { $not: [{ $or: ['$_blocked', '$_forfeited'] }] };
+    const active = { $and: [payable, { $gt: ['$remaining', 0] }, { $gte: ['$lastActiveAt', input.activeSince] }] };
+    // Mirrors the drip branch of releaseStage in stagedSignupGrant.ts: a verified, unblocked, drip-open grant
+    // not yet paid today gets min(dailyCredits, dripRemaining). A held tranche does not stop the drip.
+    const dripsToday =
+      input.dailyCredits > 0 && input.dripCap > 0
+        ? {
+            $and: [
+              '$_hasGrant',
+              '$_dripOpen',
+              { $not: ['$_blocked'] },
+              { $eq: ['$emailVerified', true] },
+              { $ne: [{ $ifNull: ['$signupGrant.lastDripDay', null] }, input.day] },
+            ],
+          }
+        : false;
     const [totals] = await User.aggregate<SignupGrantPendingSummary>([
       { $match: candidateMatch },
       ...derivedFields(input.dripCap),
+      { $addFields: { _dripToday: { $cond: [dripsToday, { $min: [input.dailyCredits, '$dripRemaining'] }, 0] } } },
       {
         $group: {
           _id: null,
           accountsWithRemaining: { $sum: { $cond: [{ $and: [payable, { $gt: ['$remaining', 0] }] }, 1, 0] } },
           totalRemaining: { $sum: { $cond: [payable, '$remaining', 0] } },
           totalDripRemaining: { $sum: { $cond: [payable, '$dripRemaining', 0] } },
+          activeAccounts: { $sum: { $cond: [active, 1, 0] } },
+          activeRemaining: { $sum: { $cond: [active, '$remaining', 0] } },
+          dripCommitToday: { $sum: '$_dripToday' },
+          dripAccountsToday: { $sum: { $cond: [{ $gt: ['$_dripToday', 0] }, 1, 0] } },
         },
       },
       { $project: { _id: 0 } },
     ]).option({ maxTimeMS: QUERY_MAX_TIME_MS });
-    return totals ?? { accountsWithRemaining: 0, totalRemaining: 0, totalDripRemaining: 0 };
+    return totals ?? EMPTY_SUMMARY;
   },
 
   /**

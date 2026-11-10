@@ -110,6 +110,10 @@ export const adminSignupGrantPendingSummarySchema = z.object({
   exposure: z
     .object({ accountsWithRemaining: z.number(), totalRemaining: z.number(), totalDripRemaining: z.number() })
     .nullable(),
+  /** Payable accounts with credits to come that were active in the last `days` days. */
+  activity: z.object({ days: z.number(), accounts: z.number(), remaining: z.number() }).nullable(),
+  /** Upper bound on today's (UTC `day`) drip: a drip pays only on activity and behind the trickle pool. */
+  drip: z.object({ day: z.string(), committed: z.number(), accounts: z.number() }).nullable(),
   trickle: z.object({ day: z.string(), spentToday: z.number(), limit: z.number(), missing: z.boolean() }).nullable(),
   queue: z.object({ held: z.number(), oldestHeldAt: z.string().nullable() }).nullable(),
 });

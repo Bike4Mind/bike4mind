@@ -86,11 +86,13 @@ export const useAdminSignupGrantPendingList = (filters: PendingListFilters) =>
     staleTime: 1000 * 30,
   });
 
-export const useAdminSignupGrantPendingSummary = () =>
+export const useAdminSignupGrantPendingSummary = (activeDays = 7) =>
   useQuery({
-    queryKey: [...PENDING_GRANTS_QUERY_KEY, 'pending-summary'],
+    queryKey: [...PENDING_GRANTS_QUERY_KEY, 'pending-summary', activeDays],
     queryFn: async (): Promise<AdminSignupGrantPendingSummary> => {
-      const response = await api.get<AdminSignupGrantPendingSummary>('/api/admin/signup-grants/pending-summary');
+      const response = await api.get<AdminSignupGrantPendingSummary>('/api/admin/signup-grants/pending-summary', {
+        params: { activeDays },
+      });
       return response.data;
     },
     staleTime: 1000 * 30,

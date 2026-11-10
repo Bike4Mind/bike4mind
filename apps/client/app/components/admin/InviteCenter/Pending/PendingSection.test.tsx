@@ -66,6 +66,8 @@ const listOf = (rows: AdminSignupGrantPendingRow[], extra: Record<string, unknow
 
 const SUMMARY: AdminSignupGrantPendingSummary = {
   exposure: { accountsWithRemaining: 7, totalRemaining: 12000, totalDripRemaining: 9000 },
+  activity: { days: 7, accounts: 4, remaining: 5000 },
+  drip: { day: '2026-11-06', committed: 600, accounts: 6 },
   trickle: { day: '2026-11-06', spentToday: 150, limit: 1000, missing: false },
   queue: { held: 3, oldestHeldAt: '2026-11-02T00:00:00.000Z' },
 };
@@ -87,8 +89,14 @@ describe('PendingSection', () => {
 
   it('shows the exposure header from the summary', () => {
     render(<PendingSection />, { wrapper: Wrapper });
-    const [accounts, drip, trickle, queue] = tiles();
+    const [accounts, drip, active, dueToday, trickle, queue] = tiles();
     expect(accounts).toContain('7');
+    expect(active).toContain('Active in last 7 days');
+    expect(active).toContain('4');
+    expect(active).toContain('5,000 left in their grants');
+    expect(dueToday).toContain('Drip due today (UTC)');
+    expect(dueToday).toContain('600');
+    expect(dueToday).toContain('Upper bound if all 6 are active; 850 left in the pool');
     expect(drip).toContain('9,000');
     expect(drip).toContain('12,000 left in all grants');
     expect(trickle).toContain('150 of 1,000');
@@ -97,13 +105,27 @@ describe('PendingSection', () => {
   });
 
   it('shows Unavailable, not zero, for a part whose read failed', () => {
-    mocks.summary = { data: { ...SUMMARY, trickle: null, exposure: null }, isError: false };
+    mocks.summary = {
+      data: { ...SUMMARY, trickle: null, exposure: null, activity: null, drip: null },
+      isError: false,
+    };
     render(<PendingSection />, { wrapper: Wrapper });
-    const [accounts, drip, trickle, queue] = tiles();
+    const [accounts, drip, active, dueToday, trickle, queue] = tiles();
     expect(accounts).toContain('Unavailable');
     expect(drip).toContain('Unavailable');
+    expect(active).toContain('Unavailable');
+    expect(dueToday).toContain('Unavailable');
+    expect(dueToday).not.toContain('left in the pool');
     expect(trickle).toContain('Unavailable');
     expect(queue).toContain('3');
+  });
+
+  it('leaves the pool out of the drip tile when no trickle pool is set', () => {
+    mocks.summary = { data: { ...SUMMARY, trickle: { ...SUMMARY.trickle!, missing: true } }, isError: false };
+    render(<PendingSection />, { wrapper: Wrapper });
+    const [, , , dueToday] = tiles();
+    expect(dueToday).toContain('Upper bound if all 6 are active');
+    expect(dueToday).not.toContain('left in the pool');
   });
 
   it('renders each row with the remaining the payload carries', () => {
