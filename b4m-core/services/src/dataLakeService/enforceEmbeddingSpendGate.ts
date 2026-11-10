@@ -12,10 +12,12 @@ import {
   periodKeyForLakeBudget,
   periodKeyForRun,
   periodKeyForWindow,
+  SPEND_NOTIFY_WINDOW_MS,
 } from './spendNotificationKeys';
 import type { DataLakeSpendNotificationEvent } from './sendDataLakeSpendNotification';
 import { scopeForLake } from '../settings/resolveScopedSetting';
 import {
+  claimOwnerSpendNotice,
   releaseOwnerEmbeddingSpend,
   releaseReservationsAfterOwnerDenial,
   reserveOwnerEmbeddingSpend,
@@ -360,7 +362,8 @@ export async function enforceEmbeddingSpendGate(params: {
   }
 
   let ownerReserved = false;
-  if (owner) {
+  // A 0 owner budget means the per-owner window is off; the platform levers still apply.
+  if (owner && levers.perOwnerPeriodBudgetMicroUsd > 0) {
     const reservation = await reserveOwnerEmbeddingSpend({
       owner,
       estimatedMicroUsd,
@@ -370,16 +373,27 @@ export async function enforceEmbeddingSpendGate(params: {
     });
     if (!reservation.granted) {
       // Same stuck/windowed split as the platform period denial below, for the same dedup reason.
-      await fire({
-        kind: 'budget_exhausted',
-        scope: 'owner',
-        periodKey: reservation.stuck ? periodKeyForClock(new Date()) : periodKeyForWindow(reservation.windowEndsAt),
-        detail: {
-          budgetMicroUsd: levers.perOwnerPeriodBudgetMicroUsd,
-          periodHours: levers.periodHours,
-          windowEndsAt: reservation.stuck ? undefined : reservation.windowEndsAt,
-        },
+      const now = new Date();
+      const ownerPeriodKey = reservation.stuck ? periodKeyForClock(now) : periodKeyForWindow(reservation.windowEndsAt);
+      const noticeClaimed = await claimOwnerSpendNotice({
+        owner,
+        periodKey: ownerPeriodKey,
+        ttlMs: reservation.stuck ? SPEND_NOTIFY_WINDOW_MS : reservation.windowEndsAt.getTime() - now.getTime(),
+        cache: db.cache,
+        logger,
       });
+      if (noticeClaimed) {
+        await fire({
+          kind: 'budget_exhausted',
+          scope: 'owner',
+          periodKey: ownerPeriodKey,
+          detail: {
+            budgetMicroUsd: levers.perOwnerPeriodBudgetMicroUsd,
+            periodHours: levers.periodHours,
+            windowEndsAt: reservation.stuck ? undefined : reservation.windowEndsAt,
+          },
+        });
+      }
       await releaseReservationsAfterOwnerDenial({
         estimatedMicroUsd,
         batchId,

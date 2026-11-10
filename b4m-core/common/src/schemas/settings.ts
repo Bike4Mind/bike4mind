@@ -1266,13 +1266,15 @@ export const DATA_LAKE_EMBEDDING_BUDGET_PER_PERIOD_USD_MAX = 5_000;
  * Per-OWNER share of the period window: each lake owner (the organization for an org-owned lake,
  * otherwise the creating user - see scopeForLake) gets its own fixed window of the same length,
  * reserved BEFORE the platform window. An owner over its share pauses only its own lakes; the
- * platform window still bounds the sum. Tiered like the per-run and per-lake budgets.
+ * platform window still bounds the sum. Tiered like the per-run and per-lake budgets. Unlike the
+ * other budgets, 0 turns this window OFF rather than stopping spend (the platform levers already
+ * provide the stop); it ships off and is switched on in Admin Settings.
  */
-export const DATA_LAKE_EMBEDDING_BUDGET_PER_OWNER_PERIOD_USD_DEFAULT = 5;
+export const DATA_LAKE_EMBEDDING_BUDGET_PER_OWNER_PERIOD_USD_DEFAULT = 0;
 export const DATA_LAKE_EMBEDDING_BUDGET_PER_OWNER_PERIOD_USD_MAX = 5_000;
 export const DATA_LAKE_EMBEDDING_BUDGET_PERIOD_HOURS_DEFAULT = 24;
-/** Most data lakes one user may have created and not deleted. 0 turns the cap off. */
-export const DATA_LAKE_MAX_LAKES_PER_USER_DEFAULT = 25;
+/** Most data lakes one user may have created and not deleted. 0 turns the cap off, the default. */
+export const DATA_LAKE_MAX_LAKES_PER_USER_DEFAULT = 0;
 export const DATA_LAKE_MAX_LAKES_PER_USER_MAX = 10_000;
 export const DATA_LAKE_EMBEDDING_BUDGET_PERIOD_HOURS_MAX = 720; // 30 days
 export const DATA_LAKE_EMBEDDING_MAX_CALLS_PER_MINUTE_DEFAULT = 120;
@@ -7173,7 +7175,7 @@ export const settingsMap = {
       'Most USD one lake owner (the organization for an org-owned lake, otherwise the user) may spend on ' +
       "data-lake embedding calls per period (see the period-hours setting), scaled by that owner's cost tier. " +
       'An owner over it pauses only its own lakes until the window resets; the platform per-period budget still ' +
-      'caps the total. 0 stops all spend.',
+      'caps the total. 0 turns the per-owner window off.',
     category: 'AI',
     group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
     order: 11,

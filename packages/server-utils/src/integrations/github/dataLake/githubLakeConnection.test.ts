@@ -732,6 +732,7 @@ describe('completeGitHubLakeConnection', () => {
     installationId: 42,
     repositoryId: REPO.id,
     logger,
+    assertAllowed: vi.fn(async () => {}),
   });
 
   beforeEach(() => {
@@ -933,6 +934,7 @@ describe('completeGitHubLakeConnection - first ingest', () => {
     installationId: 42,
     repositoryId: REPO.id,
     logger,
+    assertAllowed: vi.fn(async () => {}),
   });
 
   beforeEach(() => {

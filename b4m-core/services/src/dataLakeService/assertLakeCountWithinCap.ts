@@ -13,8 +13,8 @@ export const lakeLimitReachedMessage = (cap: number): string =>
   'Archived lakes count toward it; delete a lake you no longer need, then create the new one.';
 
 /**
- * The configured cap, or 0 when it is off. An unreadable stored value falls back to the coded
- * default rather than to "off", so a bad write can never lift the cap.
+ * The configured cap, or 0 when it is off. An absent or unreadable stored value falls back to the
+ * coded default (off).
  */
 export async function resolveMaxLakesPerUser(
   db: { adminSettings: Pick<IAdminSettingsRepository, 'findBySettingNames' | 'findAll'> },

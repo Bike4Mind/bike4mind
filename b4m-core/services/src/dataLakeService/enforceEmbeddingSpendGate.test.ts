@@ -753,17 +753,43 @@ describe('enforceEmbeddingSpendGate per-owner window', () => {
     );
   });
 
-  it('withholds windowEndsAt and keys on the clock when the owner budget is 0 (a stuck denial)', async () => {
-    mockedLevers.mockResolvedValue(levers({ perOwnerPeriodBudgetMicroUsd: 0 }));
+  it('withholds windowEndsAt and keys on the clock when one call alone exceeds the owner budget (a stuck denial)', async () => {
+    mockedLevers.mockResolvedValue(levers({ perOwnerPeriodBudgetMicroUsd: 1_000 }));
     const { db } = meteredDb();
     const notify = vi.fn().mockResolvedValue(undefined);
 
-    await expect(gateFor(db, 'lakeA', 1, notify)).rejects.toThrow(EmbeddingSpendDeniedError);
+    await expect(gateFor(db, 'lakeA', 1_500, notify)).rejects.toThrow(EmbeddingSpendDeniedError);
     const event = notify.mock.calls
       .map(([sent]) => sent as DataLakeSpendNotificationEvent)
       .find(sent => sent.scope === 'owner');
     expect(event?.periodKey).toMatch(/^t:\d+$/);
     expect(event?.detail.windowEndsAt).toBeUndefined();
+  });
+
+  it('treats a 0 owner budget as no owner window, leaving the platform window in force', async () => {
+    mockedLevers.mockResolvedValue(levers({ perOwnerPeriodBudgetMicroUsd: 0, perPeriodBudgetMicroUsd: 2_000 }));
+    const { db, cache } = meteredDb();
+
+    await expect(gateFor(db, 'lakeA', 1_500)).resolves.toBeDefined();
+    expect([...cache.counts.keys()].some(key => key.startsWith('dataLakeEmbeddingSpend:owner:'))).toBe(false);
+    await expect(gateFor(db, 'lakeA', 1_500)).rejects.toThrow(/platform-wide embedding budget/);
+  });
+
+  it("sends one owner budget notice per window across all of that owner's lakes", async () => {
+    lakesByOwner.lakeA2 = { id: 'lakeA2', createdByUserId: 'userA' };
+    mockedLevers.mockResolvedValue(levers({ perOwnerPeriodBudgetMicroUsd: 2_000 }));
+    const { db } = meteredDb();
+    const notify = vi.fn().mockResolvedValue(undefined);
+
+    await gateFor(db, 'lakeA', 1_500, notify);
+    await expect(gateFor(db, 'lakeA', 1_500, notify)).rejects.toThrow(EmbeddingSpendDeniedError);
+    await expect(gateFor(db, 'lakeA2', 1_500, notify)).rejects.toThrow(EmbeddingSpendDeniedError);
+
+    const ownerNotices = notify.mock.calls.filter(
+      ([sent]) => (sent as DataLakeSpendNotificationEvent).scope === 'owner'
+    );
+    expect(ownerNotices).toHaveLength(1);
+    delete lakesByOwner.lakeA2;
   });
 
   it('skips the owner window when the run has no lake', async () => {

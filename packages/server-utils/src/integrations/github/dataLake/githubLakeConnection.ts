@@ -424,12 +424,12 @@ export async function completeGitHubLakeConnection(params: {
   repositoryId: number;
   logger: Pick<Logger, 'warn'>;
   /** Runs once the caller is authorized on the lake, before any GitHub call or write (plan gate). */
-  assertAllowed?: (owner: Awaited<ReturnType<typeof resolveConnectableLake>>['owner']) => Promise<void>;
+  assertAllowed: (owner: Awaited<ReturnType<typeof resolveConnectableLake>>['owner']) => Promise<void>;
 }): Promise<IOrgGitHubLakeConnectionDocument> {
   const { config, user, installationId, repositoryId, logger } = params;
   const nonceHash = requireGitHubLakeFlowNonce(params.nonceHash);
   const { lakeId, owner } = await resolveConnectableLake(user, params.dataLakeId);
-  await params.assertAllowed?.(owner);
+  await params.assertAllowed(owner);
   const userToken = await readGitHubLakeUserToken(nonceHash, user, lakeId);
 
   const visibleRepositories = await withGitHubLakeUserToken(config, nonceHash, () =>

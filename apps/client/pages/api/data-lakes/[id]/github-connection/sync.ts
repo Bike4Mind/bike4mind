@@ -11,6 +11,7 @@ import {
   NotFoundError,
 } from '@bike4mind/server-utils/utils/errors';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
+import { assertLakePlanAllowed } from '@server/entitlements/lakePlanGate';
 import { Request } from 'express';
 import { Resource } from 'sst';
 
@@ -25,6 +26,8 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
       throw new NotFoundError('Data lake not found');
     }
     const owner = await authorizeLakeConnectorAccess(req.user, lake);
+    // Same paid-plan gate as the Drive re-sync door (drive-sync.ts).
+    await assertLakePlanAllowed(req, owner.kind === 'organization' ? owner.organizationId : undefined);
     if (!isLakeIngestable(lake.status)) {
       throw new BadRequestError(`Cannot sync a data lake in '${lake.status}' status`);
     }

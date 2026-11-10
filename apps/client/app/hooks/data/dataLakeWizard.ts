@@ -224,6 +224,9 @@ export function useBatchUpload() {
         isAppend: !!targetLake,
       });
       updateUploadProgress({ status: 'error', errorKind: kind, errorMessage: message });
+      // A lake-cap or plan refusal comes from the create call, before the pipeline leaves Configure.
+      // It is final, so move to the Upload step's error state, which shows it with its notice.
+      if (kind === 'entitlement') setStep('upload');
       // This can fire before setStep('upload') runs (e.g. the very first request
       // fails while offline), leaving the wizard on the Configure step with no
       // other feedback - so this toast's retry action is the only signal the user
@@ -352,6 +355,8 @@ export function useCreateLakeFromDrive() {
         isAppend: !!targetLake,
       });
       updateUploadProgress({ status: 'error', errorKind: kind, errorMessage: message });
+      // Same reason as the upload path: the create refusal lands before setStep('upload') runs.
+      if (kind === 'entitlement') setStep('upload');
       // Same toast id as the upload path: both represent the one current commit attempt's error.
       toast.error(message, {
         id: 'data-lake-batch-upload-error',

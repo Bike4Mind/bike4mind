@@ -628,6 +628,18 @@ describe('fabFileVectorize handler - spend gate', () => {
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow('openai 500');
   });
 
+  it('still releases the owner window when the run release throws', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.getVector.mockRejectedValueOnce(new Error('openai 500'));
+    h.batchReleaseSpend.mockRejectedValueOnce(new Error('mongo down'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow('openai 500');
+
+    expect(h.releaseOwnerEmbeddingSpend).toHaveBeenCalledWith(
+      expect.objectContaining({ owner: { type: 'user', id: 'owner-1' }, estimatedMicroUsd: 100 })
+    );
+  });
+
   it('a retryable (rate-limit) denial on a non-final attempt is handed back for a delayed redelivery, not thrown', async () => {
     h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
     const rateDenial = await denial('rate limit stayed exhausted', true);

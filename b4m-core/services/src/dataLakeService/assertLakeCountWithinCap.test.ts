@@ -38,14 +38,13 @@ describe('assertLakeCountWithinCap', () => {
     expect(db.dataLakes.countCountedCreatedBy).not.toHaveBeenCalled();
   });
 
-  it('applies the coded default when the setting is absent', async () => {
-    await expect(resolveMaxLakesPerUser(makeDb(null, 0))).resolves.toBe(DATA_LAKE_MAX_LAKES_PER_USER_DEFAULT);
-    await expect(
-      assertLakeCountWithinCap(makeDb(null, DATA_LAKE_MAX_LAKES_PER_USER_DEFAULT), 'user1')
-    ).rejects.toBeInstanceOf(ForbiddenError);
+  it('ships off: an absent setting resolves to the coded default of 0 and refuses nothing', async () => {
+    expect(DATA_LAKE_MAX_LAKES_PER_USER_DEFAULT).toBe(0);
+    await expect(resolveMaxLakesPerUser(makeDb(null, 0))).resolves.toBe(0);
+    await expect(assertLakeCountWithinCap(makeDb(null, 10_000), 'user1')).resolves.toBeUndefined();
   });
 
-  it('falls back to the default, never to "off", on an unusable stored value', async () => {
+  it('falls back to the coded default on an unusable stored value', async () => {
     const warn = vi.fn();
     await expect(resolveMaxLakesPerUser(makeDb('-4', 0), { warn })).resolves.toBe(DATA_LAKE_MAX_LAKES_PER_USER_DEFAULT);
     expect(warn).toHaveBeenCalled();

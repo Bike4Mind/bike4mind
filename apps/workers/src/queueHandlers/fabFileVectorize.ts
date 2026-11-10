@@ -459,6 +459,15 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
             const releasedLake = dataLakeId
               ? await dataLakeRepository.releaseEmbeddingSpend(dataLakeId, estimatedMicroUsd)
               : true;
+            logger.warn(
+              `[spendGate] released ~${estimatedMicroUsd} microUSD after provider failure ` +
+                `(run: ${releasedRun}, lake: ${releasedLake})`
+            );
+          } catch (releaseErr) {
+            logger.error(`[spendGate] failed to release reservation after provider failure: ${releaseErr}`);
+          } finally {
+            // Separate from the run/lake release so a throw there cannot strand the owner window.
+            // releaseOwnerEmbeddingSpend never throws.
             if (owner) {
               await dataLakeService.releaseOwnerEmbeddingSpend({
                 owner,
@@ -467,12 +476,6 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
                 logger,
               });
             }
-            logger.warn(
-              `[spendGate] released ~${estimatedMicroUsd} microUSD after provider failure ` +
-                `(run: ${releasedRun}, lake: ${releasedLake}, owner: ${owner ? 'released' : 'none'})`
-            );
-          } catch (releaseErr) {
-            logger.error(`[spendGate] failed to release reservation after provider failure: ${releaseErr}`);
           }
         }
         throw providerErr;

@@ -86,3 +86,30 @@ export async function releaseReservationsAfterOwnerDenial(params: {
     logger?.warn?.('[spendGate] could not release reservations after an owner-window denial:', error);
   }
 }
+
+/**
+ * Claims the one budget notice an owner gets per denial window, across all of that owner's lakes.
+ * The notification ledger dedupes per lake, so without this claim an owner with N lakes paused in
+ * the same window would get N notices. Best-effort: a cache failure lets the notice through.
+ */
+export async function claimOwnerSpendNotice(params: {
+  owner: LakeSpendOwner;
+  periodKey: string;
+  ttlMs: number;
+  cache: Pick<ICacheRepository, 'tryAddWithinLimitFixedWindow'>;
+  logger?: Logger;
+}): Promise<boolean> {
+  const { owner, periodKey, ttlMs, cache, logger } = params;
+  try {
+    const claim = await cache.tryAddWithinLimitFixedWindow(
+      `dataLakeEmbeddingSpend:ownerNotice:${owner.type}:${owner.id}:${periodKey}`,
+      1,
+      1,
+      Math.max(ttlMs, 60_000)
+    );
+    return claim.success;
+  } catch (error) {
+    logger?.warn?.('[spendGate] could not claim the owner budget notice:', error);
+    return true;
+  }
+}

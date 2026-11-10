@@ -61,7 +61,7 @@ export interface DataLakeSpendLevers {
   /** Tiered by lake ownership - see {@link pickTierMultiplier}. */
   perLakeBudgetMicroUsd: number;
   perPeriodBudgetMicroUsd: number;
-  /** One lake owner's share of each period window. Tiered - see {@link pickTierMultiplier}. */
+  /** One lake owner's share of each period window; 0 means no owner window. Tiered - see {@link pickTierMultiplier}. */
   perOwnerPeriodBudgetMicroUsd: number;
   periodHours: number;
   maxCallsPerMinute: number;
