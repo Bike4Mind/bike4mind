@@ -3,15 +3,17 @@ import {
   ADMIN_MODEL_REASON_CODES,
   ADMIN_MODEL_RETIRING_HORIZON_DAYS,
   ADMIN_MODEL_STATUSES,
+  ADMIN_MODEL_VIEWS,
   AdminModelFilterSchema,
   DISCOVERY_VERDICT_PREFIX,
   LIFECYCLE_SUNSET_STATUSES,
-  MODEL_PRICE_UNITS,
   ModelBackend,
+  PRICE_ROW_BILLED_MODEL_TYPES,
   applyModelPriceCatalog,
   hasAdminRank,
   isDiscoveryVerdict,
   normalizeEntitlementKey,
+  pickerProviderGroup,
   provisionalRank,
   resolveModelPriceRow,
   type AdminModelAccess,
@@ -25,6 +27,7 @@ import {
   type AdminModelSort,
   type AdminModelStatus,
   type AdminModelView,
+  type DiscoveryRunMode,
   type IModelCatalogRow,
   type IModelDiscoveryState,
   type IModelPrice,
@@ -52,6 +55,9 @@ import {
 } from './promotion';
 import { BEDROCK_NOT_ENTITLED_REASON, BEDROCK_NOT_ON_DEMAND_REASON } from './sources/bedrock';
 
+/** 'off' while enableModelDiscovery is false, else modelDiscoveryMode: only a write-mode run promotes a model. */
+export type AdminDiscoveryRunMode = DiscoveryRunMode | 'off';
+
 /** Everything the admin model list reads, already loaded: it never calls a provider or the getAvailableModels cache. */
 export interface AdminModelListInput {
   /** staticAdapterModels(): the adapter literals, read with no key and no network. */
@@ -71,6 +77,9 @@ export interface AdminModelListInput {
   freeTierAllowedModels?: FreeTierAllowedModels;
   /** The entitlement every signed-in user holds (BASE_ENTITLEMENT_KEY in server-utils). */
   baseEntitlementKey: string;
+  discoveryRunMode: AdminDiscoveryRunMode;
+  /** B4M_SELF_HOST: the picker gives self-hosted backends their own section. */
+  isSelfHost?: boolean;
   now?: Date;
 }
 
@@ -116,12 +125,61 @@ const reason = (
 const NO_PRICE_NEW = (): AdminModelReason =>
   reason('price-none', 'No price yet. New models list once they have a price.', { fixAction: 'add-price' });
 
-const notCallable = (backend: string, detail?: string): AdminModelReason =>
+const noRequestProfile = (backend: string, mode: AdminDiscoveryRunMode, detail?: string): AdminModelReason =>
   reason('not-callable', 'We cannot call this model yet: no request profile for it', {
-    // A probe can find an OpenAI id's request profile; any other gap needs an engineer.
-    ...(backend === ModelBackend.OpenAI ? { fixAction: 'run-discovery' as const } : {}),
+    // A write-mode probe can find an OpenAI id's request profile; any other gap needs an engineer.
+    ...(backend === ModelBackend.OpenAI && mode === 'write' ? { fixAction: 'run-discovery' as const } : {}),
     ...(detail ? { detail } : {}),
   });
+
+/** A blocker cleared since the run that recorded it: the model waits for a run that can promote it. */
+function awaitingRun(lead: string, mode: AdminDiscoveryRunMode): AdminModelReason {
+  switch (mode) {
+    case 'write':
+      return reason('awaiting-discovery-run', `${lead}. It lists on the next discovery run.`, {
+        fixAction: 'run-discovery',
+      });
+    case 'report':
+      return reason(
+        'awaiting-discovery-run',
+        `${lead}. Discovery only reports right now, so it lists after a run in write mode.`
+      );
+    case 'off':
+      return reason(
+        'awaiting-discovery-run',
+        `${lead}. Model discovery is off, so it lists after a run in write mode.`
+      );
+  }
+}
+
+/** A catalog-only model the merge dropped (llm-adapters mergeCatalog.ts), in the admin's words. */
+function dropReason(drop: string, backend: string, mode: AdminDiscoveryRunMode): AdminModelReason {
+  if (drop === 'no adapterFamily' || drop === 'no dispatchProfile') return noRequestProfile(backend, mode, drop);
+  if (/^incomplete record: missing .*\bcontextWindow\b/.test(drop)) {
+    return reason('missing-context-window', "We do not know this model's context window yet");
+  }
+  const notOffered = (message: string) => reason('not-callable', message, { detail: drop });
+  const lifecycle = /^lifecycle status "(.*)" is not invocable$/.exec(drop);
+  if (lifecycle) {
+    return notOffered(
+      lifecycle[1] === 'unset'
+        ? 'Not offered: its catalog record has no lifecycle status'
+        : `Not offered while its catalog lifecycle status is "${lifecycle[1]}"`
+    );
+  }
+  const missing = /^incomplete record: missing (.*)$/.exec(drop);
+  if (missing) return notOffered(`Its catalog record is missing ${missing[1]}`);
+  const family = /^adapterFamily "(.*)" is not dispatchable by this build$/.exec(drop);
+  if (family) return notOffered(`This build has no request client for the "${family[1]}" family`);
+  if (drop.startsWith('needs a dedicated API')) {
+    return notOffered('It needs a dedicated API or a mandatory tool, so it cannot be offered as a text model');
+  }
+  const unknownBackend = /^unknown backend "(.*)"$/.exec(drop);
+  if (unknownBackend) return notOffered(`This build does not know the provider "${unknownBackend[1]}"`);
+  const type = /^unsupported model type "(.*)"$/.exec(drop);
+  if (type) return notOffered(`This build cannot list ${type[1]} models`);
+  return notOffered(`This build cannot offer it: ${drop}`);
+}
 
 const noCredential = (backend: string): AdminModelReason =>
   reason('no-credential-for-backend', `No ${backendLabel(backend)} key is configured in this environment`, {
@@ -132,7 +190,11 @@ const noCredential = (backend: string): AdminModelReason =>
  * The reasons behind a stored disable text: the reason promotion or a source wrote on the catalog row
  * (promotion.ts, sources/bedrock.ts). Unknown text shows verbatim as a provider disable.
  */
-export function adminReasonsFromDisableText(text: string | undefined, backend: string): AdminModelReason[] {
+export function adminReasonsFromDisableText(
+  text: string | undefined,
+  backend: string,
+  mode: AdminDiscoveryRunMode
+): AdminModelReason[] {
   if (!text) return [];
   switch (text) {
     case AWAITING_PRICE_REASON:
@@ -145,7 +207,7 @@ export function adminReasonsFromDisableText(text: string | undefined, backend: s
     case AWAITING_APPROVAL_REASON:
       return [reason('manual-approval-required', 'Waiting for your approval')];
     case NOT_INVOCABLE_REASON:
-      return [notCallable(backend)];
+      return [noRequestProfile(backend, mode)];
     case BEDROCK_NOT_ON_DEMAND_REASON:
       return [reason('source-not-on-demand', 'Bedrock serves this model only through an inference profile')];
     case BEDROCK_NOT_ENTITLED_REASON:
@@ -161,8 +223,8 @@ export function adminReasonsFromDisableText(text: string | undefined, backend: s
 }
 
 /** For a model known to be disabled: a missing text still has to keep it off the Listed view. */
-function disabledReasons(text: string | undefined, backend: string): AdminModelReason[] {
-  const mapped = adminReasonsFromDisableText(text, backend);
+function disabledReasons(text: string | undefined, backend: string, mode: AdminDiscoveryRunMode): AdminModelReason[] {
+  const mapped = adminReasonsFromDisableText(text, backend, mode);
   return mapped.length > 0 ? mapped : [reason('source-disabled', 'Disabled, with no reason recorded')];
 }
 
@@ -246,7 +308,7 @@ function priceRow(row: IModelPrice): AdminModelPrice {
   };
 }
 
-/** Text models bill from per-token rows; any other type from its build literal, shown as such. */
+/** The price that bills the model: its per-token row where rows bill its type, else its build literal. */
 function priceOf(
   id: string,
   type: string,
@@ -254,12 +316,10 @@ function priceOf(
   priceRows: IModelPrice[],
   now: Date
 ): AdminModelPrice | null {
-  const units = type === 'text' ? (['per_token'] as const) : MODEL_PRICE_UNITS;
-  const rows = units
-    .map(unit => resolveModelPriceRow(priceRows, id, unit, now))
-    .filter((row): row is IModelPrice => row !== undefined)
-    .sort((a, b) => b.effectiveFrom.getTime() - a.effectiveFrom.getTime());
-  if (rows[0]) return priceRow(rows[0]);
+  const row = PRICE_ROW_BILLED_MODEL_TYPES.has(type)
+    ? resolveModelPriceRow(priceRows, id, 'per_token', now)
+    : undefined;
+  if (row) return priceRow(row);
   if (!adapter || adapter.freeToRun || Object.keys(adapter.pricing).length === 0) return null;
   const pricing: Record<string, IModelPriceTier> = {};
   for (const [threshold, tier] of Object.entries(adapter.pricing)) pricing[threshold] = tier;
@@ -268,6 +328,16 @@ function priceOf(
 
 const hasPricedTier = (price: AdminModelPrice | null): boolean =>
   price !== null && Object.values(price.pricing).some(tier => tier.input > 0 || tier.output > 0);
+
+/** The disable text the newest non-operator row wrote, under an operator row that owns the availability group. */
+function sourceDisableText(bucket: readonly IModelCatalogRow[]): string | undefined {
+  let newest: IModelCatalogRow | undefined;
+  for (const row of bucket) {
+    if (row.source === 'operator' || !row.ownedGroups.includes('availability')) continue;
+    if (!newest || row.effectiveFrom > newest.effectiveFrom) newest = row;
+  }
+  return newest ? (str(newest.patch.autoDisabledReason) ?? str(newest.patch.disabledReason)) : undefined;
+}
 
 /** The operator row winning a group: operator rows outrank every other source, the newest of them wins. */
 function operatorWinner(bucket: readonly IModelCatalogRow[], group: string): IModelCatalogRow | undefined {
@@ -278,6 +348,13 @@ function operatorWinner(bucket: readonly IModelCatalogRow[], group: string): IMo
   }
   return winner;
 }
+
+/** What the web picker offers: served, and blocked by nothing an admin has to clear first. */
+const offeredInPicker = (row: AdminModelRow): boolean =>
+  row.status === 'listed' ||
+  row.status === 'limited' ||
+  row.status === 'retiring' ||
+  (row.status === 'needs-review' && row.reasons.every(entry => entry.code === 'lifecycle-suggestion'));
 
 function sortReasons(reasons: AdminModelReason[]): AdminModelReason[] {
   const seen = new Set<AdminModelReasonCode>();
@@ -293,6 +370,7 @@ function sortReasons(reasons: AdminModelReason[]): AdminModelReason[] {
  */
 export async function buildAdminModelRows(input: AdminModelListInput): Promise<AdminModelRow[]> {
   const now = input.now ?? new Date();
+  const mode = input.discoveryRunMode;
   const adapterModels = [...input.adapterModels];
   const { models, dropped } = mergeCatalogWithDrops(adapterModels, input.catalogRows, EVERY_BACKEND_KEYED);
   const served = applyModelPriceCatalog(await alignRouteTwinNames(models), input.priceRows, now);
@@ -317,14 +395,8 @@ export async function buildAdminModelRows(input: AdminModelListInput): Promise<A
     const entry = entries.get(id);
     return entry && hasAdminRank(entry) ? entry.rank : undefined;
   };
-  // Ranked the way the web picker merges them: the saved access entry's rank over the catalog's.
-  const rankables = ids.map(id => {
-    const display = displays.get(id) as DisplayModel;
-    return { id, type: display.type, name: display.name, rank: savedRank(id) ?? display.rank };
-  });
 
-  return rankables.map(rankable => {
-    const { id } = rankable;
+  const rows = ids.map((id): AdminModelRow => {
     const display = displays.get(id) as DisplayModel;
     const servedModel = servedById.get(id);
     const adapter = adapterById.get(id);
@@ -362,13 +434,17 @@ export async function buildAdminModelRows(input: AdminModelListInput): Promise<A
       );
     }
 
+    // An operator row owns the whole availability group, so the resolved disable fields are the operator's.
+    const operatorAvailability = operatorWinner(bucket, 'availability');
+    const operatorDisabled = operatorAvailability?.patch.disabled === true;
+    if (operatorAvailability && operatorDisabled) {
+      const why = str(operatorAvailability.patch.disabledReason);
+      reasons.push(reason('operator-disabled', why ? `Disabled: ${why}` : 'Disabled by an admin'));
+    }
+
     if (servedModel) {
-      if (servedModel.disabled && status !== 'retired') {
-        const operatorAvailability = operatorWinner(bucket, 'availability');
-        if (operatorAvailability?.patch.disabled === true) {
-          const why = str(operatorAvailability.patch.disabledReason);
-          reasons.push(reason('operator-disabled', why ? `Disabled: ${why}` : 'Disabled by an admin'));
-        } else if (adapter?.disabled && servedModel.disabledReason === adapter.disabledReason) {
+      if (servedModel.disabled && !operatorDisabled) {
+        if (adapter?.disabled && servedModel.disabledReason === adapter.disabledReason) {
           reasons.push(
             reason(
               'build-disabled',
@@ -376,7 +452,7 @@ export async function buildAdminModelRows(input: AdminModelListInput): Promise<A
             )
           );
         } else {
-          reasons.push(...disabledReasons(servedModel.disabledReason, display.backend));
+          reasons.push(...disabledReasons(servedModel.disabledReason, display.backend, mode));
         }
       }
       if (input.enforceCredits && isUnpricedTextModel(servedModel)) {
@@ -388,37 +464,37 @@ export async function buildAdminModelRows(input: AdminModelListInput): Promise<A
       }
     } else if (catalogStatus === 'discovered') {
       const stored = adminReasonsFromDisableText(
-        str(draft.autoDisabledReason) ?? str(draft.disabledReason),
-        display.backend
+        operatorAvailability ? sourceDisableText(bucket) : (str(draft.autoDisabledReason) ?? str(draft.disabledReason)),
+        display.backend,
+        mode
       );
-      reasons.push(...(stored.length > 0 ? stored : [notCallable(display.backend)]));
+      if (stored.length > 0) reasons.push(...stored);
+      else if (!operatorDisabled)
+        reasons.push(reason('not-callable', 'Discovered, and no run has recorded why it is held'));
     } else if (!LIFECYCLE_SUNSET_STATUSES.has(catalogStatus ?? '')) {
       const drop = dropReasons.get(id);
-      if (draft.autoDisabled === true || draft.disabled === true) {
-        reasons.push(...disabledReasons(str(draft.disabledReason) ?? str(draft.autoDisabledReason), display.backend));
+      if (!operatorAvailability && (draft.autoDisabled === true || draft.disabled === true)) {
+        reasons.push(
+          ...disabledReasons(str(draft.disabledReason) ?? str(draft.autoDisabledReason), display.backend, mode)
+        );
       }
-      if (drop && /^incomplete record: missing .*\bcontextWindow\b/.test(drop)) {
-        reasons.push(reason('missing-context-window', "We do not know this model's context window yet"));
-      } else if (drop) {
-        reasons.push(notCallable(display.backend, drop));
+      if (drop) {
+        reasons.push(dropReason(drop, display.backend, mode));
       } else if (!isBackendUsable(display.backend, EVERY_BACKEND_KEYED)) {
-        reasons.push(notCallable(display.backend, `this build cannot list ${display.backend} models`));
+        reasons.push(reason('not-callable', `This build cannot list ${backendLabel(display.backend)} models`));
       }
     }
 
+    const keyPresent = input.isBackendKeyed(display.backend);
     const price = priceOf(id, display.type, adapter, input.priceRows, now);
-    // Priced since the run that blocked it: the stored wording is stale until a run promotes it.
+    // Priced or keyed since the run that blocked it: the stored wording is stale until a run promotes it.
     if (display.type === 'text' && price?.source === 'row' && hasPricedTier(price)) {
       const stale = reasons.findIndex(entry => entry.code === 'price-none' || entry.code === 'price-aggregator-quote');
-      if (stale >= 0) {
-        reasons.splice(
-          stale,
-          1,
-          reason('awaiting-discovery-run', 'Priced. It lists on the next discovery run.', {
-            fixAction: 'run-discovery',
-          })
-        );
-      }
+      if (stale >= 0) reasons.splice(stale, 1, awaitingRun('Priced', mode));
+    }
+    if (keyPresent) {
+      const stale = reasons.findIndex(entry => entry.code === 'no-credential-for-backend');
+      if (stale >= 0) reasons.splice(stale, 1, awaitingRun(`${backendLabel(display.backend)} key configured`, mode));
     }
 
     const suggestion = suggestions.get(id);
@@ -436,7 +512,6 @@ export async function buildAdminModelRows(input: AdminModelListInput): Promise<A
       );
     }
 
-    const keyPresent = input.isBackendKeyed(display.backend);
     if (!keyPresent && isBackendUsable(display.backend, EVERY_BACKEND_KEYED))
       reasons.push(noCredential(display.backend));
     if (display.private) reasons.push(reason('private', 'Private model'));
@@ -469,13 +544,17 @@ export async function buildAdminModelRows(input: AdminModelListInput): Promise<A
 
     const deprecationDays = daysUntil(lifecycle.deprecationDate, now);
     const retirementDays = daysUntil(lifecycle.retirementDate, now);
+    // Retired means not served: getAvailableModels drops a model only from its deprecationDate, on the same UTC
+    // day boundary (isModelDeprecated), and the merge never serves a catalog-only model in a sunset status.
     const retired =
-      status === 'retired' ||
       (deprecationDays !== undefined && deprecationDays <= 0) ||
-      (retirementDays !== undefined && retirementDays <= 0) ||
       (!servedModel && LIFECYCLE_SUNSET_STATUSES.has(status ?? ''));
     const withinHorizon = (days: number | undefined) => days !== undefined && days <= ADMIN_MODEL_RETIRING_HORIZON_DAYS;
-    const retiring = status === 'deprecated' || withinHorizon(deprecationDays) || withinHorizon(retirementDays);
+    const retiring =
+      status === 'deprecated' ||
+      status === 'retired' ||
+      withinHorizon(deprecationDays) ||
+      withinHorizon(retirementDays);
     const limited = !access.everyone || access.freeTierLocked;
 
     let modelStatus: AdminModelStatus;
@@ -486,7 +565,8 @@ export async function buildAdminModelRows(input: AdminModelListInput): Promise<A
     else if (limited) modelStatus = 'limited';
     else modelStatus = 'listed';
 
-    const rankProvisional = rankable.rank === undefined;
+    // The web picker reads the saved access entry's rank over the catalog's.
+    const setRank = savedRank(id) ?? (hasAdminRank(display) ? display.rank : undefined);
     const sources = new Set(bucket.map(row => row.source));
     const firstSeenAt = input.discoveryMilestones.get(id)?.firstSeenAt;
 
@@ -503,8 +583,8 @@ export async function buildAdminModelRows(input: AdminModelListInput): Promise<A
       freeToRun: display.freeToRun,
       status: modelStatus,
       reasons: sorted,
-      rank: rankProvisional ? provisionalRank(rankable, rankables) : (rankable.rank as number),
-      rankProvisional,
+      rank: setRank ?? null,
+      rankProvisional: setRank === undefined,
       origin: adapter || sources.has('seed') ? 'default' : sources.has('discovery') ? 'discovered' : 'admin',
       adminEdited: sources.has('operator'),
       keyPresent,
@@ -527,6 +607,24 @@ export async function buildAdminModelRows(input: AdminModelListInput): Promise<A
       profileOnlyFoundation: sorted.some(entry => entry.code === 'source-not-on-demand'),
     };
   });
+
+  // The picker ranks an unranked model within its provider section, over the models it offers there
+  // (ModelSelection.tsx, sortModelsForPicker); a model it does not offer has no place in that order.
+  const sections = new Map<string, AdminModelRow[]>();
+  for (const row of rows) {
+    if (!offeredInPicker(row)) continue;
+    const key = pickerProviderGroup(row, input.isSelfHost === true);
+    const section = sections.get(key);
+    if (section) section.push(row);
+    else sections.set(key, [row]);
+  }
+  for (const section of sections.values()) {
+    const rankables = section.map(row => ({ row, type: row.type, name: row.name, rank: row.rank ?? undefined }));
+    for (const rankable of rankables) {
+      if (rankable.row.rankProvisional) rankable.row.rank = provisionalRank(rankable, rankables);
+    }
+  }
+  return rows;
 }
 
 const VIEW_STATUSES: Readonly<Record<AdminModelView, ReadonlySet<AdminModelStatus> | null>> = {
@@ -551,7 +649,12 @@ function matchesFacets(row: AdminModelRow, filter: ResolvedAdminModelFilter): bo
   return true;
 }
 
-const matchesView = (row: AdminModelRow, view: AdminModelView): boolean => VIEW_STATUSES[view]?.has(row.status) ?? true;
+// A pending lifecycle suggestion needs a decision whatever the model's status, Retired included.
+const matchesView = (row: AdminModelRow, view: AdminModelView): boolean =>
+  (view === 'needs-review' && row.lifecycleSuggestion !== null) || (VIEW_STATUSES[view]?.has(row.status) ?? true);
+
+/** The order filterAdminModels returns ids in. */
+export const compareAdminModelIds = (a: string, b: string): number => a.localeCompare(b);
 
 /** Throws a ZodError on a filter that does not parse. */
 export function parseAdminModelFilter(filter: AdminModelFilter): ResolvedAdminModelFilter {
@@ -571,7 +674,7 @@ export function filterAdminModels(rows: readonly AdminModelRow[], filter: AdminM
         matchesView(row, resolvedFilter.view) &&
         (resolvedFilter.showFoundationIds || !row.profileOnlyFoundation)
     )
-    .sort((a, b) => a.id.localeCompare(b.id));
+    .sort((a, b) => compareAdminModelIds(a.id, b.id));
 }
 
 /** Actionable first. */
@@ -583,7 +686,9 @@ const STATUS_ORDER = new Map<AdminModelStatus, number>(
 );
 
 function compareRows(sort: AdminModelSort): (a: AdminModelRow, b: AdminModelRow) => number {
-  const byRank = (a: AdminModelRow, b: AdminModelRow) => a.rank - b.rank;
+  // A model the picker does not offer has no rank and sorts after every ranked one.
+  const byRank = (a: AdminModelRow, b: AdminModelRow) =>
+    a.rank === b.rank ? 0 : a.rank === null ? 1 : b.rank === null ? -1 : a.rank - b.rank;
   const byName = (a: AdminModelRow, b: AdminModelRow) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
   switch (sort) {
     case 'name':
@@ -622,7 +727,12 @@ export function adminModelListPage(rows: readonly AdminModelRow[], query: AdminM
     AdminModelStatus,
     number
   >;
-  for (const row of facetMatched) if (shown(row)) counts[row.status] += 1;
+  const viewCounts = Object.fromEntries(ADMIN_MODEL_VIEWS.map(view => [view, 0])) as Record<AdminModelView, number>;
+  for (const row of facetMatched) {
+    if (!shown(row)) continue;
+    counts[row.status] += 1;
+    for (const view of ADMIN_MODEL_VIEWS) if (matchesView(row, view)) viewCounts[view] += 1;
+  }
 
   const viewMatched = facetMatched.filter(row => matchesView(row, filter.view));
   const matched = viewMatched.filter(shown);
@@ -637,6 +747,7 @@ export function adminModelListPage(rows: readonly AdminModelRow[], query: AdminM
     page,
     pageSize,
     counts,
+    viewCounts,
     foundationIds: viewMatched.filter(row => row.profileOnlyFoundation).length,
     facets: {
       providers: [...new Set(rows.map(row => row.backend))].sort(),

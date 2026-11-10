@@ -37,6 +37,8 @@ export async function loadAdminModelRows(now: Date = new Date()): Promise<AdminM
     platformKeys,
     enforceCredits,
     freeTierAllowedModels,
+    discoveryEnabled,
+    discoveryMode,
   ] = await Promise.all([
     staticAdapterModels(),
     modelCatalogRepository.rowsInForce(now),
@@ -52,10 +54,13 @@ export async function loadAdminModelRows(now: Date = new Date()): Promise<AdminM
     ),
     isCreditsEnforced(),
     loadFreeTierAllowedModels(adminSettingsRepository),
+    adminSettingsRepository.getSettingsValue('enableModelDiscovery'),
+    adminSettingsRepository.getSettingsValue('modelDiscoveryMode'),
   ]);
+  const isSelfHost = process.env.B4M_SELF_HOST === 'true';
   const gate = {
     apiKeys: buildApiKeyTable(platformKeys),
-    isSelfHost: process.env.B4M_SELF_HOST === 'true',
+    isSelfHost,
     bedrockReachable: bedrockClientCredentials() !== null,
   };
   const accessEntries = Array.isArray(accessSetting?.settingValue)
@@ -73,6 +78,9 @@ export async function loadAdminModelRows(now: Date = new Date()): Promise<AdminM
     enforceCredits,
     freeTierAllowedModels,
     baseEntitlementKey: BASE_ENTITLEMENT_KEY,
+    // Same defaulting as the discovery service's readMode: unset is on, and anything but 'write' reports.
+    discoveryRunMode: discoveryEnabled === false ? 'off' : discoveryMode === 'write' ? 'write' : 'report',
+    isSelfHost,
     now,
   });
 }
