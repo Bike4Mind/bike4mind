@@ -2240,13 +2240,13 @@ export function useGetScopedDataLakeTagCounts(source: DataLakeBrowseSource, lake
 }
 
 /**
- * Refreshes the Data Lake mode picker's reads: the labelled lake list (names) and every tag count
- * (the per-lake counts and the browse tree's). For when the picker opens: both cache for minutes,
+ * Refreshes the Data Lake mode picker's reads: the labelled lake list (names) and the tag counts of
+ * `source` (the per-lake counts and the browse tree's, scoped ones included). For when the picker opens: both cache for minutes,
  * and a connector sync renames a lake and adds files server-side, which only the sync poll sees -
  * and that is mounted by the manager surfaces, not the picker. Rows stay on screen while it runs.
  * `cancelRefetch: false` lets a read already in flight finish instead of restarting it.
  */
-export function useRefreshLakePickerReads(sessionId: string | null | undefined) {
+export function useRefreshLakePickerReads(sessionId: string | null | undefined, source: DataLakeBrowseSource) {
   const queryClient = useQueryClient();
   const sid = sessionId || null;
   return useCallback(() => {
@@ -2254,8 +2254,8 @@ export function useRefreshLakePickerReads(sessionId: string | null | undefined) 
       { queryKey: dataLakeKeys.listWithRetrievability(sid), exact: true },
       { cancelRefetch: false }
     );
-    void queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCountsRoot }, { cancelRefetch: false });
-  }, [queryClient, sid]);
+    void queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCounts(source) }, { cancelRefetch: false });
+  }, [queryClient, sid, source]);
 }
 
 /**

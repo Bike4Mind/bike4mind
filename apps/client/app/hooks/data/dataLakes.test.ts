@@ -254,7 +254,7 @@ describe('useRefreshLakePickerReads', () => {
     for (const key of Object.values(keys)) queryClient.setQueryData(key, { seeded: true });
     const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
       React.createElement(QueryClientProvider, { client: queryClient }, children);
-    const { result } = renderHook(() => useRefreshLakePickerReads('sess-1'), { wrapper });
+    const { result } = renderHook(() => useRefreshLakePickerReads('sess-1', 'datalakes'), { wrapper });
 
     act(() => result.current());
 
@@ -276,7 +276,10 @@ describe('useRefreshLakePickerReads', () => {
     const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
       React.createElement(QueryClientProvider, { client: queryClient }, children);
     const { result } = renderHook(
-      () => ({ lakes: useGetDataLakesWithRetrievability('sess-1'), refresh: useRefreshLakePickerReads('sess-1') }),
+      () => ({
+        lakes: useGetDataLakesWithRetrievability('sess-1'),
+        refresh: useRefreshLakePickerReads('sess-1', 'datalakes'),
+      }),
       { wrapper }
     );
     await waitFor(() => expect(result.current.lakes.data).toEqual([{ id: 'a', name: 'New GitHub data lake' }]));
@@ -295,7 +298,7 @@ describe('useRefreshLakePickerReads', () => {
     queryClient.setQueryData(dataLakeKeys.listWithRetrievability(null), []);
     const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
       React.createElement(QueryClientProvider, { client: queryClient }, children);
-    const { result } = renderHook(() => useRefreshLakePickerReads(undefined), { wrapper });
+    const { result } = renderHook(() => useRefreshLakePickerReads(undefined, 'datalakes'), { wrapper });
 
     act(() => result.current());
 

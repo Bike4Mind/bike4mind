@@ -68,7 +68,7 @@ const respond = async (url: string) => {
 function PickerHost() {
   const lakes = useGetDataLakesWithRetrievability('sess-1');
   const counts = useGetDataLakeTagCounts('datalakes');
-  const refresh = useRefreshLakePickerReads('sess-1');
+  const refresh = useRefreshLakePickerReads('sess-1', 'datalakes');
   return (
     <DataLakeLakePicker
       lakes={lakes.data}
