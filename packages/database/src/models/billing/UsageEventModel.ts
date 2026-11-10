@@ -50,8 +50,8 @@ export type IUsageEventDocument = IUsageEvent & IMongoDocument;
 // spend spans many accounts.
 const SPEND_ACCOUNT_LIMIT = 50;
 
-// Same payload guard for the "by model" list: a catalog with many provider/model
-// variants would otherwise ship every one. Comfortably above a realistic catalog.
+// Same payload guard for the "by model" list, which has one row per requested/executed
+// model pair; without it a large catalog would ship every one.
 const SPEND_MODEL_LIMIT = 100;
 
 // Old rows lack executed*, so always coalesce to the requested provider/model.
