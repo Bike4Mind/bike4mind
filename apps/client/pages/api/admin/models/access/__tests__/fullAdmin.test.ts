@@ -25,8 +25,16 @@ vi.mock('@server/modelAccess/modelAccess', async importOriginal => ({
   ...(await importOriginal<typeof import('@server/modelAccess/modelAccess')>()),
   ...writes,
 }));
-const aggregate = vi.hoisted(() => vi.fn(async () => []));
-vi.mock('@bike4mind/database', () => ({ User: { aggregate } }));
+const aggregate = vi.hoisted(() =>
+  vi.fn(() => {
+    const pipeline = { option: () => pipeline, read: async () => [] };
+    return pipeline;
+  })
+);
+vi.mock('@bike4mind/database', () => ({ User: { aggregate }, cacheRepository: {} }));
+vi.mock('@bike4mind/services', () => ({
+  cacheService: { getCachedData: (_key: string, load: () => Promise<unknown>) => load() },
+}));
 
 await import('../index');
 const patchRoute = routes.patch;

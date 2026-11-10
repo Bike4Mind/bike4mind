@@ -67,7 +67,7 @@ async function call<T>(
       user,
       headers: {},
       url: '/api/admin/models/access',
-      logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() },
+      logger: { log: vi.fn(), warn: vi.fn(), info: vi.fn(), error: vi.fn() },
     },
     res
   );
@@ -532,6 +532,23 @@ describe('GET /api/admin/users/tags', () => {
 
     expect(tags).toEqual([
       { tag: 'beta', count: 2 },
+      { tag: 'gamma', count: 1 },
+    ]);
+  });
+
+  it('serves the counts from a short-lived cache row, which also leaves out source: tags', async () => {
+    await User.collection.insertMany([{ name: 'one', tags: ['beta', 'source:acme'] }]);
+    const first = await call<{ tags: { tag: string; count: number }[] }>(tagsRoute);
+    await User.collection.insertOne({ name: 'two', tags: ['gamma', 'source:other'] });
+
+    const cached = await call<{ tags: { tag: string; count: number }[] }>(tagsRoute);
+    expect(cached).toEqual(first);
+    expect(cached.tags).toEqual([{ tag: 'beta', count: 1 }]);
+
+    await Cache.collection.updateMany({}, { $set: { expiresAt: new Date(Date.now() - 1000) } });
+    const fresh = await call<{ tags: { tag: string; count: number }[] }>(tagsRoute);
+    expect(fresh.tags).toEqual([
+      { tag: 'beta', count: 1 },
       { tag: 'gamma', count: 1 },
     ]);
   });
