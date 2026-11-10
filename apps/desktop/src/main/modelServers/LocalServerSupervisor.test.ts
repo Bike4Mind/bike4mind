@@ -41,8 +41,10 @@ describe('LocalServerSupervisor', () => {
   it('owns a server it started, with the settings it started with, until it stops it', async () => {
     const child = handle();
     const { instance, changed } = supervisor(async () => child);
+    expect(instance.runningCount()).toBe(0);
     expect(instance.owned('a')).toBeNull();
     await instance.start('a', OLLAMA);
+    expect(instance.runningCount()).toBe(1);
     expect(instance.owned('a')).toEqual({
       runtime: 'ollama',
       port: 11500,
@@ -54,6 +56,7 @@ describe('LocalServerSupervisor', () => {
     await expect(instance.start('a', OLLAMA)).rejects.toThrow('Ollama is already running.');
     await instance.stop('a');
     expect(child.stop).toHaveBeenCalledTimes(1);
+    expect(instance.runningCount()).toBe(0);
     expect(instance.owned('a')).toBeNull();
     expect(instance.problem('a')).toBeNull();
     expect(changed).toHaveBeenCalledWith('a');
@@ -88,6 +91,7 @@ describe('LocalServerSupervisor', () => {
     await instance.start('a', OLLAMA);
     child.running = false;
     expect(instance.owned('a')).toBeNull();
+    expect(instance.runningCount()).toBe(0);
   });
 
   it('keeps why a server stopped on its own, with its last log line, and says so', async () => {
@@ -135,11 +139,13 @@ describe('LocalServerSupervisor', () => {
     const starting = instance.start('a', OLLAMA);
     await vi.waitFor(() => expect(signal).toBeDefined());
     expect(instance.busy('a')).toBe('starting');
+    expect(instance.runningCount()).toBe(1);
     await instance.stop('a');
     await expect(starting).rejects.toThrow('Stopped before it was ready.');
     expect(instance.owned('a')).toBeNull();
     expect(instance.busy('a')).toBeNull();
     expect(instance.problem('a')).toBeNull();
+    expect(instance.runningCount()).toBe(0);
   });
 
   it('stops a server whose start finishes after a stop cancelled it, and keeps nothing', async () => {
@@ -174,6 +180,23 @@ describe('LocalServerSupervisor', () => {
     await instance.stopAll();
     expect(a.stop).toHaveBeenCalledTimes(1);
     expect(b.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('counts a server until its stop finishes', async () => {
+    const child = handle();
+    const stopping = Promise.withResolvers<void>();
+    const stop = child.stop.getMockImplementation();
+    child.stop.mockImplementation(async () => {
+      await stopping.promise;
+      await stop?.();
+    });
+    const { instance } = supervisor(async () => child);
+    await instance.start('a', OLLAMA);
+    const stopped = instance.stop('a');
+    expect(instance.runningCount()).toBe(1);
+    stopping.resolve();
+    await stopped;
+    expect(instance.runningCount()).toBe(0);
   });
 });
 

@@ -31,7 +31,16 @@ export function AdminPageHeader({ title, count, description, actions, level = 'p
         )}
       </Box>
       {actions && (
-        <Stack direction="row" gap={1} flexWrap="wrap">
+        // A long description must wrap before an action button does: the title block shrinks, the
+        // actions keep their width and their own height: a two-line description must not stretch
+        // the buttons to the title block.
+        <Stack
+          direction="row"
+          gap={1}
+          flexWrap="wrap"
+          sx={{ flexShrink: 0, alignItems: 'flex-start' }}
+          data-testid="admin-page-header-actions"
+        >
           {actions}
         </Stack>
       )}

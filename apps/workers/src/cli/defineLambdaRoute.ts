@@ -6,12 +6,14 @@ import {
   type RequestBodyOf,
   REQUEST_ID_HEADER,
   LEGACY_REQUEST_ID_HEADER,
+  parseClientIdentity,
   resolveRequestId,
 } from '@bike4mind/common';
 import { connectDB, mongoose } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { createMethodGuard } from '@bike4mind/server-utils/utils/allowedMethods';
+import { checkClientVersion } from '@bike4mind/server-utils/middlewares/clientVersionGate';
 import { resolveContractAuth, type ContractAuthResult } from '@server/cli/resolveContractAuth';
 import { authInfraFailureHeaders, isAuthInfraFailure } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 
@@ -143,10 +145,38 @@ export function defineLambdaRoute<C extends EndpointContract>(
           );
         }
         return json(authFailureStatus(error), {
+          // A 403's classifier (e.g. `errorCode: account_suspended` and its `suspension` detail) is part
+          // of the published body; a 401 carries none.
+          ...(error instanceof ForbiddenError && error.additionalInfo),
           error: error instanceof Error ? error.message : 'Authentication failed',
           request_id: requestId,
         });
       }
+    }
+
+    // Client-version gate (CONVENTIONS.md section 9), after auth and ahead of rate limit and
+    // validation, as in nextRouteForContract. A public contract skipped the connect above, and
+    // only a declared client reads the setting.
+    const headers = event.headers ?? {};
+    const gateLogger = new Logger({ metadata: { requestId } });
+    let canReadMinimums = true;
+    if (parseClientIdentity(headers) && mongoose.connection.readyState !== 1) {
+      try {
+        await connectDB(Config.MONGODB_URI.replace('%STAGE%', Config.STAGE), gateLogger);
+      } catch (error) {
+        // Fail open, as the gate does when the setting cannot be read: a client that declared
+        // itself must never be worse off than one that did not, and a public route needs no DB.
+        canReadMinimums = false;
+        gateLogger.warn('[clientVersionGate] database unavailable; not gating client versions', { error });
+      }
+    }
+    const upgradeRequired = canReadMinimums ? await checkClientVersion(headers, gateLogger) : undefined;
+    if (upgradeRequired) {
+      return json(upgradeRequired.statusCode, {
+        error: upgradeRequired.message,
+        request_id: requestId,
+        ...upgradeRequired.additionalInfo,
+      });
     }
 
     // Rate limit AFTER auth (needs the caller identity) but BEFORE validation, so a

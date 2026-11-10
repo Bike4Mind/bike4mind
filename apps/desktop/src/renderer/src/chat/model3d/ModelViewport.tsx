@@ -12,6 +12,7 @@ import {
   ModelComposer,
   ModelStage,
   type StageLighting,
+  viewportPixelRatio,
 } from './modelStage';
 import {
   recordCanvas,
@@ -144,7 +145,7 @@ export function ModelViewport({
     if (!element) return;
     // No canvas MSAA: frames go through the composer, whose own target is multisampled.
     const renderer = new THREE.WebGLRenderer({ antialias: false });
-    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setPixelRatio(viewportPixelRatio(window.devicePixelRatio));
     // Parts print in behind a clip plane (buildIn.ts).
     renderer.localClippingEnabled = true;
     element.appendChild(renderer.domElement);
@@ -188,7 +189,7 @@ export function ModelViewport({
       const { clientWidth, clientHeight } = element;
       if (!clientWidth || !clientHeight || recording) return;
       renderer.setSize(clientWidth, clientHeight);
-      composer.setSize(clientWidth, clientHeight, window.devicePixelRatio);
+      composer.setSize(clientWidth, clientHeight, viewportPixelRatio(window.devicePixelRatio));
       const previousFit = fitAngle(camera);
       camera.aspect = clientWidth / clientHeight;
       camera.updateProjectionMatrix();
@@ -296,7 +297,7 @@ export function ModelViewport({
           explodeModel(shownCopy.current, explodeAmount.current);
         }
         canvas.style.objectFit = '';
-        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.setPixelRatio(viewportPixelRatio(window.devicePixelRatio));
         controls.enabled = true;
         resize();
       }

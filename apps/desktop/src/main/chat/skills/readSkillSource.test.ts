@@ -31,8 +31,9 @@ describe('readSkillSource', () => {
         description: 'Reviews code',
         body: 'Review it.',
         claudeCodeAllowedTools: ['Bash', 'Read'],
+        claudeCodeModel: 'opus',
       },
-      dropped: ['model'],
+      dropped: [],
       extraFiles: ['a.py', 'b.md', 'c', 'd', 'e'],
       extraFileCount: 6,
     });

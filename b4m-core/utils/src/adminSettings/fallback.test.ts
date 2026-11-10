@@ -623,7 +623,7 @@ describe('getLlmWithFallback - Bedrock cross-path fallback chains', () => {
     ['global.anthropic.claude-opus-4-6-v1', 'claude-opus-4-6'],
     ['global.anthropic.claude-opus-4-5-20251101-v1:0', 'claude-opus-4-5-20251101'],
     ['global.anthropic.claude-sonnet-5', 'claude-sonnet-5'],
-    ['global.anthropic.claude-sonnet-5-5', 'claude-sonnet-5'],
+    ['global.anthropic.claude-sonnet-5-5', 'claude-sonnet-5-5'],
     ['global.anthropic.claude-sonnet-4-6', 'claude-sonnet-4-6'],
     ['us.anthropic.claude-sonnet-4-5-20250929-v1:0', 'claude-sonnet-4-5-20250929'],
     ['us.anthropic.claude-haiku-4-5-20251001-v1:0', 'claude-haiku-4-5-20251001'],
@@ -750,6 +750,20 @@ describe('getLlmWithFallback - excludeModelIds (multi-hop traversal)', () => {
     });
     expect(result).not.toBeNull();
     expect(result!.model.id).toBe('claude-opus-4-6');
+  });
+
+  it('walks the Sonnet 5.5 chain to the cross-provider tail once its direct siblings are excluded', async () => {
+    const sonnet55 = createModelInfo({ id: 'claude-sonnet-5-5', backend: ModelBackend.Anthropic });
+    const sonnet46 = createModelInfo({ id: 'claude-sonnet-4-6', backend: ModelBackend.Anthropic });
+    const result = await getLlmWithFallback(
+      sonnet55,
+      undefined,
+      [sonnet55, sonnet5, sonnet46, gpt5],
+      apiKeyTable,
+      mockLogger,
+      { forceSwitch: true, excludeModelIds: new Set(['claude-sonnet-5', 'claude-sonnet-4-6']) }
+    );
+    expect(result?.model.id).toBe('gpt-5');
   });
 
   it('respects the exclusion on the last-resort path', async () => {

@@ -5,6 +5,7 @@ import {
   ConflictError,
   ForbiddenError,
   canAccessAdmin,
+  isFullAdmin,
   type AdminApproval,
   type IUserDocument,
 } from '@bike4mind/common';
@@ -44,7 +45,11 @@ export async function deleteUserAsAdmin(
         assertInTransaction: async () => {
           if (approval) return assertStillAdmin(userId);
           if (canAccessAdmin(await userRepository.findById(userId))) {
-            throw new ConflictError('This user now has admin access; request the deletion again for approval.');
+            throw new ConflictError(
+              isFullAdmin(admin)
+                ? 'This user now has admin access; request the deletion again for approval.'
+                : 'This user now has admin access; only a full administrator can delete it.'
+            );
           }
         },
       }),

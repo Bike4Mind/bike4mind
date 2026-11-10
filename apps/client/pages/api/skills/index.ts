@@ -3,57 +3,12 @@ import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { skillRepository } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
-import { ISkill, ISkillDocument } from '@bike4mind/common';
-import { BadRequestError } from '@bike4mind/utils';
-import {
-  validateSkillName,
-  validateSkillDescription,
-  validateSkillBody,
-  validateSkillArgumentHint,
-  validateSkillAllowedTools,
-  validateSkillFiles,
-  validateSkillClaudeCodeAllowedTools,
-} from '@server/utils/skillValidation';
-import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
-import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
-import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
+import { SkillCreateBody, insertSkill, resolveCreateScope, validateNewSkill } from '@server/skills/skillWrite';
 import { ShareableSkill, canManageSkillSharingWith, redactShareRosterForViewer } from '@server/utils/skillAccess';
 import { attachMarketStatus } from '@server/skillMarket/marketStatus';
 
 const ALLOWED_ORDER_BY = new Set(['createdAt', 'updatedAt', 'name']);
 const ALLOWED_ORDER_DIRECTION = new Set(['asc', 'desc']);
-
-/** Scope fields written to the new skill - exactly one is set (model invariant). */
-type SkillScope = { userId: string } | { organizationId: string } | { isSystem: true };
-
-/**
- * Resolve and authorize the scope for a new skill from the optional
- * `scope` payload. Defaults to user-scoped (backward compatible). Org-scoped
- * creation requires the caller to be an admin/owner/manager of that org;
- * system-scoped creation requires a super-admin.
- */
-async function resolveCreateScope(
-  body: Partial<ISkill> & { scope?: { organizationId?: string; isSystem?: boolean } },
-  user: { id: string; isAdmin: boolean }
-): Promise<SkillScope> {
-  const scope = body.scope;
-  if (!scope || (!scope.organizationId && !scope.isSystem)) {
-    return { userId: user.id };
-  }
-  if (scope.organizationId && scope.isSystem) {
-    throw new BadRequestError('A skill cannot be both organization-scoped and system-scoped');
-  }
-
-  if (scope.isSystem) {
-    // System skills are global built-ins - super-admin only.
-    ensureAdmin(user.isAdmin);
-    return { isSystem: true };
-  }
-
-  // verifyOrgAccess admits the same set that can later manage the skill (skillAccess.isOrgAdminFor).
-  await verifyOrgAccess(user, scope.organizationId as string);
-  return { organizationId: scope.organizationId as string };
-}
 
 const handler = baseApi()
   .get<Request<{}, {}, {}, Record<string, string>>>(async (req, res) => {
@@ -102,45 +57,10 @@ const handler = baseApi()
     res.json({ ...result, data: withStatus.map(({ files: _files, ...skill }) => skill) });
   })
   .post(async (req, res) => {
-    const body = req.body as Partial<ISkill> & { scope?: { organizationId?: string; isSystem?: boolean } };
-
-    const name = validateSkillName(body.name);
-    const description = validateSkillDescription(body.description);
-    const skillBody = validateSkillBody(body.body);
-    const argumentHint = validateSkillArgumentHint(body.argumentHint);
-    const allowedTools = validateSkillAllowedTools(body.allowedTools);
-    const files = validateSkillFiles(body.files);
-    const claudeCodeAllowedTools = validateSkillClaudeCodeAllowedTools(body.claudeCodeAllowedTools);
-
+    const body = req.body as SkillCreateBody;
+    const fields = validateNewSkill(body);
     const scope = await resolveCreateScope(body, { id: req.user!.id, isAdmin: Boolean(req.user!.isAdmin) });
-
-    try {
-      const created = await skillRepository.create({
-        name,
-        description,
-        body: skillBody,
-        ...(argumentHint !== undefined && { argumentHint }),
-        ...(allowedTools !== undefined && { allowedTools }),
-        ...(files?.length ? { files } : {}),
-        ...(claudeCodeAllowedTools?.length && { claudeCodeAllowedTools }),
-        disableModelInvocation: Boolean(body.disableModelInvocation),
-        ...scope,
-        isGlobalRead: false,
-        isGlobalWrite: false,
-        users: [],
-        groups: [],
-      } as Omit<ISkillDocument, 'id' | 'createdAt' | 'updatedAt'>);
-
-      res.status(201).json(created);
-    } catch (error) {
-      // Uniqueness is enforced by a partial unique index on (name, userId)
-      // where deletedAt: null - catching the duplicate-key error here keeps
-      // the create path atomic AND still yields a friendly 400.
-      if (isDuplicateKeyError(error)) {
-        throw new BadRequestError(`A skill named "${name}" already exists`);
-      }
-      throw error;
-    }
+    res.status(201).json(await insertSkill(fields, scope));
   });
 
 export default handler;

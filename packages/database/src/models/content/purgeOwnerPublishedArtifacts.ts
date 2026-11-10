@@ -167,12 +167,17 @@ async function purgeMatchingPublishedArtifacts(
   };
 }
 
-/** The sources a delete-all removed: notebook ids for published replies, file ids for published files. */
+/**
+ * The sources a delete removed: notebook ids for published replies, message ids within one notebook
+ * for replies published from single messages, file ids for published files.
+ */
 export type PublishedArtifactSources =
-  { kind: 'reply'; sessionIds: string[] } | { kind: 'fabfile'; fabFileIds: string[] };
+  | { kind: 'reply'; sessionIds: string[] }
+  | { kind: 'replyMessage'; sessionId: string; messageIds: string[] }
+  | { kind: 'fabfile'; fabFileIds: string[] };
 
 /**
- * Take down the artifacts `ownerId` published from the given notebooks or files, for when the user
+ * Take down the artifacts `ownerId` published from the given notebooks, messages or files, for when the user
  * deletes the source rather than the account. Only artifacts `ownerId` owns are touched: someone
  * else's page built from a shared source is theirs to keep. Same cleanup as
  * purgeOwnerPublishedArtifacts, minus the org-page handover (the owner is still around).
@@ -182,6 +187,19 @@ export async function purgeOwnerPublishedArtifactsBySource(
   sources: PublishedArtifactSources,
   { deletedBy }: { deletedBy: string }
 ): Promise<Omit<PurgeOwnerPublishedArtifactsResult, 'transferred'>> {
+  if (sources.kind === 'replyMessage') {
+    // An empty list must stay a no-op: dropping the messageId clause would take down the whole notebook.
+    if (sources.messageIds.length === 0) return { artifacts: [], annotations: 0, reports: 0, viewAudits: 0 };
+    return purgeMatchingPublishedArtifacts(
+      {
+        ownerId,
+        'source.kind': 'reply',
+        'source.sessionId': sources.sessionId,
+        'source.messageId': { $in: sources.messageIds },
+      },
+      { deletedBy }
+    );
+  }
   const ids = sources.kind === 'reply' ? sources.sessionIds : sources.fabFileIds;
   if (ids.length === 0) return { artifacts: [], annotations: 0, reports: 0, viewAudits: 0 };
   const sourceField = sources.kind === 'reply' ? 'source.sessionId' : 'source.fabFileId';

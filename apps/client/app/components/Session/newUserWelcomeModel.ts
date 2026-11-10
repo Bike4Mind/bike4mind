@@ -1,4 +1,5 @@
 import {
+  settingsMap,
   signupActiveSeconds,
   signupGrantDripOpen,
   signupGrantDripRemaining,
@@ -54,10 +55,6 @@ interface CreditsLineArgs {
   /** An explicit grant or the maximum staged entitlement before risk assessment. */
   pendingGrant: number | null;
   pendingGrantIsMaximum?: boolean;
-  /** Daily activity drip amount; omitted or 0 when the drip is off. */
-  dailyDripCredits?: number;
-  /** Raw signupGrantActivityMinActiveSeconds setting; invalid values read as the default. */
-  minActiveSeconds?: unknown;
 }
 
 /** "5 minutes" style phrase for the active-time minimum, rounded to whole minutes, or tenths of an hour from 60 minutes. */
@@ -92,13 +89,33 @@ export function advertisedDripCredits({
   return dailyCredits > 0 ? Math.min(dailyCredits, signupGrantDripRemaining(grant ?? {}, dripCap)) : 0;
 }
 
-/** The self-serve unlock paths we advertise; org invites and admin releases also unlock but are not offered here. */
-export function unlockPathsCopy(dailyDripCredits: number, minActiveSeconds?: unknown): string {
+/** Use the server's setting schema so the advertised wait follows the payment hold. */
+export function paymentHoldHours(value: unknown): number {
+  const { schema, defaultValue } = settingsMap.signupUnlockPaymentHoldHours;
+  const parsed = schema.safeParse(value);
+  return parsed.success ? parsed.data : (defaultValue ?? 72);
+}
+
+/** "3 days" style phrase for the payment hold, in whole hours under a day and whole days (rounded up) from there. */
+export function paymentHoldCopy(hours: number): string {
+  if (hours < 24) return `${hours} ${hours === 1 ? 'hour' : 'hours'}`;
+  const days = Math.ceil(hours / 24);
+  return `${days} ${days === 1 ? 'day' : 'days'}`;
+}
+
+/**
+ * The self-serve unlock paths we advertise; org invites and admin releases also unlock but are not offered here.
+ * A subscription or card unlock waits for the payment to settle, which SignupGrantStatus states once it is held.
+ */
+export function unlockPathsCopy(dailyDripCredits: number, minActiveSeconds?: unknown, holdHours?: unknown): string {
   const drip =
     dailyDripCredits > 0
       ? `up to ${formatCreditBalance(dailyDripCredits)} for each day you have Bike4Mind open and in use for ${activeTimeCopy(minActiveSeconds)} (a hidden tab or 5 minutes without input does not count), `
       : '';
-  return `The rest unlocks ${drip}all at once when you subscribe, or all at once when you verify a card.`;
+  const hold = paymentHoldHours(holdHours);
+  if (hold === 0)
+    return `The rest unlocks ${drip}all at once when you subscribe, or all at once when you verify a card.`;
+  return `The rest unlocks ${drip}all at once when you subscribe or verify a card, once that payment settles (usually within ${paymentHoldCopy(hold)}).`;
 }
 
 /**
@@ -112,14 +129,13 @@ export function welcomeCreditsLine({
   awaitingVerification,
   pendingGrant,
   pendingGrantIsMaximum = false,
-  dailyDripCredits = 0,
-  minActiveSeconds,
 }: CreditsLineArgs): string | null {
   if (!enforceCredits) return null;
   if (awaitingVerification) {
     return pendingGrant && pendingGrant > 0
       ? pendingGrantIsMaximum
-        ? `Verify your email to unlock up to ${formatCreditBalance(pendingGrant)} now. ${unlockPathsCopy(dailyDripCredits, minActiveSeconds)}`
+        ? // The unlock paths come from SignupGrantStatus, which the card renders right below for a staged grant.
+          `Verify your email to unlock up to ${formatCreditBalance(pendingGrant)} now.`
         : `Verify your email to unlock your ${formatCreditBalance(pendingGrant)}.`
       : 'Verify your email to unlock your free credits.';
   }

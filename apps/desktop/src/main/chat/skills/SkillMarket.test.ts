@@ -384,6 +384,7 @@ describe('SkillMarket', () => {
         'argumentHint',
         'body',
         'claudeCodeAllowedTools',
+        'claudeCodeModel',
         'description',
         'disableModelInvocation',
         'files',
@@ -405,6 +406,17 @@ describe('SkillMarket', () => {
         .mockResolvedValueOnce(mineBody([]));
       await market.saveSkill({ fields: FIELDS, mode: 'update', targetSkillId: 's1' });
       expect(put).toHaveBeenCalledWith('/api/skills/s1', expect.objectContaining({ claudeCodeAllowedTools: [] }));
+    });
+
+    it('sends the SKILL.md model as claudeCodeModel, and an empty string to clear it on update', async () => {
+      get.mockResolvedValueOnce({ data: { data: [] } });
+      post.mockResolvedValueOnce({ data: { id: 's1' } });
+      await market.saveSkill({ fields: { ...FIELDS, claudeCodeModel: 'haiku' }, mode: 'create' });
+      expect(post).toHaveBeenCalledWith('/api/skills', expect.objectContaining({ claudeCodeModel: 'haiku' }));
+
+      get.mockResolvedValueOnce({ data: { id: 's1', userId: 'me' } }).mockResolvedValueOnce(mineBody([]));
+      await market.saveSkill({ fields: FIELDS, mode: 'update', targetSkillId: 's1' });
+      expect(put).toHaveBeenCalledWith('/api/skills/s1', expect.objectContaining({ claudeCodeModel: '' }));
     });
 
     it('sends each supporting file with its path and content, on create and update', async () => {

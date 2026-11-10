@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Autocomplete, Button, FormControl, FormLabel, Input, Option, Select, Stack } from '@mui/joy';
 import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import {
@@ -7,6 +7,7 @@ import {
   AdminAuditSeveritySchema,
   AuditTargetSchema,
   AUDIT_EXPORT_MAX_ROWS,
+  isFullAdmin,
   StoredAuditContextSourceSchema,
   type AuditLogFilters,
 } from '@bike4mind/common';
@@ -14,6 +15,7 @@ import { downloadAuditLogCsv } from '@client/app/hooks/data/adminAuditLog';
 import { useSearchOrganizations } from '@client/app/hooks/data/organizations';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { useSnackbar } from '@client/app/contexts/SnackbarContext';
+import { useUser } from '@client/app/contexts/UserContext';
 import UserSelector from '@client/app/components/admin/shared/UserSelector';
 
 const ANY = 'any';
@@ -112,28 +114,40 @@ const OrganizationTargetPicker: React.FC<TargetIdInputProps> = ({ filters, onCha
   );
 };
 
-const RawTargetIdInput: React.FC<TargetIdInputProps> = ({ filters, onChange }) => {
-  const [draft, setDraft] = useState(filters.targetId ?? '');
+type IdInputProps = {
+  label: string;
+  testId: string;
+  value: string | undefined;
+  onChange(id: string | undefined): void;
+};
+
+const IdInput: React.FC<IdInputProps> = ({ label, testId, value, onChange }) => {
+  const [draft, setDraft] = useState(value ?? '');
+  useEffect(() => setDraft(value ?? ''), [value]);
   const commit = () => {
     const trimmed = draft.trim();
-    if (trimmed !== (filters.targetId ?? '')) onChange({ targetId: trimmed || undefined });
+    if (trimmed !== (value ?? '')) onChange(trimmed || undefined);
   };
   return (
     <FormControl size="sm" sx={{ minWidth: 200 }}>
-      <FormLabel>Target id</FormLabel>
+      <FormLabel>{label}</FormLabel>
       <Input
         value={draft}
         onChange={event => setDraft(event.target.value)}
         onBlur={commit}
         onKeyDown={event => event.key === 'Enter' && commit()}
-        slotProps={{ input: { 'data-testid': 'audit-filter-target-id' } }}
+        slotProps={{ input: { 'data-testid': testId } }}
       />
     </FormControl>
   );
 };
 
+/** The user and organization lookups list only full admins' results, so a delegate filters by id. */
+const useCanSearchAccounts = () => isFullAdmin(useUser().currentUser);
+
 const TargetPicker: React.FC<TargetIdInputProps> = ({ filters, onChange }) => {
-  if (filters.targetKind === 'user') {
+  const canSearchAccounts = useCanSearchAccounts();
+  if (filters.targetKind === 'user' && canSearchAccounts) {
     return (
       <div data-testid="audit-filter-target-user">
         <UserSelector
@@ -144,8 +158,20 @@ const TargetPicker: React.FC<TargetIdInputProps> = ({ filters, onChange }) => {
       </div>
     );
   }
-  if (filters.targetKind === 'organization') return <OrganizationTargetPicker filters={filters} onChange={onChange} />;
-  if (filters.targetKind) return <RawTargetIdInput key={filters.targetKind} filters={filters} onChange={onChange} />;
+  if (filters.targetKind === 'organization' && canSearchAccounts) {
+    return <OrganizationTargetPicker filters={filters} onChange={onChange} />;
+  }
+  if (filters.targetKind) {
+    return (
+      <IdInput
+        key={filters.targetKind}
+        label="Target id"
+        testId="audit-filter-target-id"
+        value={filters.targetId}
+        onChange={targetId => onChange({ targetId })}
+      />
+    );
+  }
   return null;
 };
 
@@ -157,6 +183,7 @@ type AuditFilterBarProps = {
 
 export const AuditFilterBar: React.FC<AuditFilterBarProps> = ({ filters, onChange, onClear }) => {
   const { showSnackbar } = useSnackbar();
+  const canSearchAccounts = useCanSearchAccounts();
   const [isExporting, setIsExporting] = useState(false);
 
   const handleExport = async () => {
@@ -185,13 +212,22 @@ export const AuditFilterBar: React.FC<AuditFilterBarProps> = ({ filters, onChang
       alignItems="flex-end"
       data-testid="audit-filter-bar"
     >
-      <div data-testid="audit-filter-actor">
-        <UserSelector
-          label="Actor"
-          value={filters.actorUserId ?? null}
-          onChange={userId => onChange({ actorUserId: userId ?? undefined })}
+      {canSearchAccounts ? (
+        <div data-testid="audit-filter-actor">
+          <UserSelector
+            label="Actor"
+            value={filters.actorUserId ?? null}
+            onChange={userId => onChange({ actorUserId: userId ?? undefined })}
+          />
+        </div>
+      ) : (
+        <IdInput
+          label="Actor id"
+          testId="audit-filter-actor-id"
+          value={filters.actorUserId}
+          onChange={actorUserId => onChange({ actorUserId })}
         />
-      </div>
+      )}
       <EnumSelect
         label="Target kind"
         testId="audit-filter-target-kind"

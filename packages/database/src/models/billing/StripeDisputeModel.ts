@@ -60,7 +60,7 @@ const ContainSchema = new Schema<StripeDisputeContain & { snapshot: unknown }>(
   { _id: false, minimize: false }
 );
 
-export const StripeDisputeSchema = new Schema<IStripeDisputeDocument>(
+export const StripeDisputeSchema: Schema<IStripeDisputeDocument> = new Schema<IStripeDisputeDocument>(
   {
     stripeDisputeId: { type: String, required: true, unique: true },
     chargeId: { type: String, default: null },
@@ -148,6 +148,15 @@ const toItem = (doc: LeanStripeDispute): StripeDisputeItem => ({
 /** The facts a later event may not change: whose dispute it is and what was disputed. */
 const insertOnly = ({ stripeStatus: _stripeStatus, ...facts }: StripeDisputeFacts) => facts;
 
+/** isStripeDisputeAdminResolvable as a query: what resolveByAdmin may close and the admin queue counts. */
+const ADMIN_RESOLVABLE_FILTER = {
+  state: 'open',
+  $or: [
+    { subject: { $in: STRIPE_DISPUTE_ADMIN_RESOLVABLE } },
+    { closedAt: { $ne: null }, stripeStatus: { $nin: ['won', 'lost'] } },
+  ],
+};
+
 class StripeDisputeRepository {
   /** Records a new dispute; a redelivery leaves the existing record as it is. */
   async recordOpened(facts: StripeDisputeFacts): Promise<StripeDisputeItem> {
@@ -232,18 +241,16 @@ class StripeDisputeRepository {
       resolvedAt: new Date(),
     };
     const updated = await StripeDisputeModel.findOneAndUpdate(
-      {
-        _id: input.id,
-        state: 'open',
-        $or: [
-          { subject: { $in: STRIPE_DISPUTE_ADMIN_RESOLVABLE } },
-          { closedAt: { $ne: null }, stripeStatus: { $nin: ['won', 'lost'] } },
-        ],
-      },
+      { _id: input.id, ...ADMIN_RESOLVABLE_FILTER },
       { $set: { state: 'resolved', resolution } },
       { new: true }
     ).lean<LeanStripeDispute>();
     return this.updateResult(input.id, updated);
+  }
+
+  /** Open disputes an admin may resolve right now; `limit` stops counting there. */
+  async countAdminResolvable(options: { limit?: number } = {}): Promise<number> {
+    return StripeDisputeModel.countDocuments(ADMIN_RESOLVABLE_FILTER, { limit: options.limit }).exec();
   }
 
   /** Marks the Contain undone once; a second undo is a conflict. Runs inside the undo's transaction. */

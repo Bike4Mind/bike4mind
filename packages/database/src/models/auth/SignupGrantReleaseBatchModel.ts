@@ -33,7 +33,7 @@ const batchSchema = new Schema<SignupGrantReleaseBatch>(
 
 batchSchema.index({ createdAt: -1 });
 
-export const SignupGrantReleaseBatchModel =
+export const SignupGrantReleaseBatchModel: mongoose.Model<SignupGrantReleaseBatch> =
   (mongoose.models.SignupGrantReleaseBatch as mongoose.Model<SignupGrantReleaseBatch>) ??
   mongoose.model('SignupGrantReleaseBatch', batchSchema);
 
@@ -102,11 +102,14 @@ export const signupGrantReleaseRepository = {
     }));
   },
   /** Count of the held grants listHeld pages through, without payableOnly. */
-  async countHeld(reason: HeldSignupGrantReason = 'budget_exhausted') {
-    return User.countDocuments({
-      signupGrantHeldReason: { $eq: reason, $type: 'string' },
-      tags: PENDING_FREE_CREDITS_TAG,
-    });
+  async countHeld(reason: HeldSignupGrantReason = 'budget_exhausted', options: { limit?: number } = {}) {
+    return User.countDocuments(
+      {
+        signupGrantHeldReason: { $eq: reason, $type: 'string' },
+        tags: PENDING_FREE_CREDITS_TAG,
+      },
+      { limit: options.limit }
+    );
   },
   /** Payable accounts whose held payment unlock has settled, in ObjectId order; `afterId` pages. */
   async listDueHeldUnlocks(input: { now: Date; afterId?: string; limit: number }) {

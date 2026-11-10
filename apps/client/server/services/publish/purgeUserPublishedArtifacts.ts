@@ -40,7 +40,7 @@ export async function purgeUserPublishedArtifacts(
 }
 
 /**
- * Take down what `userId` published from notebooks or files they just deleted (see
+ * Take down what `userId` published from notebooks, messages or files they just deleted (see
  * purgeOwnerPublishedArtifactsBySource) and purge the CDN for the public ones. Idempotent.
  * Replies and files never get a rendered thumbnail, so there are no thumbnail objects to delete.
  */

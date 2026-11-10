@@ -2,14 +2,12 @@ import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { deleteSubscriber, fetchSubscribers } from '@client/app/utils/subscriberAPICalls';
 import { ISubscriberDocument, SubscriberSource } from '@bike4mind/common';
 import { APP_NAME } from '@client/config/general'; // brand externalized
+import { adminActionCountsQueryKey } from '@client/app/hooks/data/adminActionCounts';
 import { useGetWaitingSubscribersCount } from '@client/app/hooks/data/subscribers';
 import {
   Button,
   Input,
-  LinearProgress,
-  Sheet,
   Stack,
-  Table,
   Typography,
   FormControl,
   FormLabel,
@@ -17,21 +15,17 @@ import {
   Box,
   Alert,
   Chip,
-  Card,
-  CardContent,
-  Divider,
-  RadioGroup,
-  Radio,
-  Select,
-  Option,
+  Dropdown,
+  Menu,
+  MenuButton,
+  MenuItem,
   IconButton,
-  useTheme,
 } from '@mui/joy';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { GRANT_PACKAGES_QUERY_KEY } from '@client/app/utils/grantPackageAPICalls';
-import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import PersonAddIcon from '@mui/icons-material/PersonAdd';
+import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import CloseIcon from '@mui/icons-material/Close';
 import { api } from '@client/app/contexts/ApiContext';
@@ -41,6 +35,11 @@ import { useShallow } from 'zustand/react/shallow';
 import { toast } from 'sonner';
 import { ActionDialog } from './shared/ActionDialog';
 import { ADMIN_REASON_PRESETS } from './shared/adminReason';
+import { DataTable, type DataColumn } from './shared/DataTable';
+import { EmptyState } from './shared/EmptyState';
+import { AdminSearchInput } from './shared/FilterBar';
+import { StatusChip } from './shared/StatusChip';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
 import { InviteCenterShell } from './InviteCenterShell';
 import { SubscriberNetworkCell, SuspiciousNameChip } from './WaitlistSignals';
 import GrantPackageSelect, { useGrantPackageOptions } from './InviteCenter/shared/GrantPackageSelect';
@@ -63,6 +62,7 @@ const useGetSubscribers = (params: { page?: number; limit?: number; search?: str
   return useQuery({
     queryKey: ['subscribers', params],
     queryFn: () => fetchSubscribers(params),
+    placeholderData: keepPreviousData,
   });
 };
 
@@ -84,9 +84,9 @@ const useGenerateSubscriberInvite = () => {
       return response.data;
     },
     onSuccess: () => {
+      // ['subscribers'] also covers the waiting count this tab shows.
       queryClient.invalidateQueries({ queryKey: ['subscribers'] });
-      // Also invalidate the waiting count badge in admin navigation
-      queryClient.invalidateQueries({ queryKey: ['subscribers', 'waiting-count'] });
+      queryClient.invalidateQueries({ queryKey: adminActionCountsQueryKey });
       queryClient.invalidateQueries({ queryKey: [GRANT_PACKAGES_QUERY_KEY] });
     },
   });
@@ -251,86 +251,18 @@ The${APP_NAME ? ` ${APP_NAME}` : ''} Team`;
   );
 };
 
-const PaginationControls = ({
-  currentPage,
-  totalPages,
-  onPageChange,
-  itemsPerPage,
-  onItemsPerPageChange,
-  totalCount,
-}: {
-  currentPage: number;
-  totalPages: number;
-  onPageChange: (page: number) => void;
-  itemsPerPage: number;
-  onItemsPerPageChange: (size: number) => void;
-  totalCount: number;
-}) => {
-  const isMobile = useIsMobile();
-  return (
-    <Stack
-      direction={{ xs: 'column', sm: 'row' }}
-      justifyContent="space-between"
-      alignItems="center"
-      sx={{ mt: 2, mb: 2 }}
-      spacing={{ xs: 2, sm: 0 }}
-    >
-      <Stack direction="row" spacing={2} justifyContent="center" alignItems="center">
-        <Button disabled={currentPage <= 1} onClick={() => onPageChange(currentPage - 1)}>
-          Previous
-        </Button>
-        <Typography>
-          Page {currentPage} of {totalPages}
-        </Typography>
-        <Button disabled={currentPage >= totalPages} onClick={() => onPageChange(currentPage + 1)}>
-          Next
-        </Button>
-      </Stack>
-
-      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems="center">
-        <FormControl>
-          {isMobile ? (
-            <Select
-              size="sm"
-              value={itemsPerPage}
-              onChange={(_, value) => value !== null && onItemsPerPageChange(Number(value))}
-              sx={{ minWidth: 120 }}
-            >
-              {[5, 10, 20].map(value => (
-                <Option key={value} value={value}>
-                  {value} per page
-                </Option>
-              ))}
-            </Select>
-          ) : (
-            <RadioGroup
-              orientation="horizontal"
-              value={itemsPerPage}
-              onChange={e => onItemsPerPageChange(Number(e.target.value))}
-            >
-              {[5, 10, 20].map(value => (
-                <Radio key={value} value={value} label={`${value} per page`} size="sm" sx={{ mr: 2 }} />
-              ))}
-            </RadioGroup>
-          )}
-        </FormControl>
-        <Typography level="title-sm" fontWeight={800}>
-          Total Items: {totalCount}
-        </Typography>
-      </Stack>
-    </Stack>
-  );
-};
-
 const WaitlistSection = () => {
   const { value: search, debouncedValue: debouncedSearch, setValue: setSearch } = useDebounceValue('');
   const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage, setItemsPerPage] = useState(10);
+  const [itemsPerPage, setItemsPerPage] = useState(25);
+  // Back to page 1 when the debounced term changes, before the query keys on it.
+  const [pageSearch, setPageSearch] = useState(debouncedSearch);
+  if (pageSearch !== debouncedSearch) {
+    setPageSearch(debouncedSearch);
+    setCurrentPage(1);
+  }
   const [selectedSubscriber, setSelectedSubscriber] = useState<ISubscriberDocument | null>(null);
   const [inviteModalOpen, setInviteModalOpen] = useState(false);
-  const theme = useTheme();
-  const isDarkMode = theme.palette.mode === 'dark';
-  const isMobile = useIsMobile();
 
   const [hiddenNotifications, hideNotification] = useAdminNotifications(
     useShallow(state => [state.hiddenNotifications, state.hideNotification])
@@ -338,13 +270,14 @@ const WaitlistSection = () => {
   const waitingSubscribers = useGetWaitingSubscribersCount();
 
   const subscribers = useGetSubscribers({ page: currentPage, limit: itemsPerPage, search: debouncedSearch });
-  const totalPages = Math.ceil((subscribers.data?.meta?.total || 0) / itemsPerPage);
 
   const handleDelete = async (id: string) => {
     if (window.confirm('Remove this person from the waitlist?')) {
       try {
         await deleteSubscriber(id);
-        subscribers.refetch();
+        // Removing a page's only row would otherwise land on an empty page.
+        if (currentPage > 1 && subscribers.data?.data.length === 1) setCurrentPage(currentPage - 1);
+        else subscribers.refetch();
       } catch (error) {
         console.error('Error deleting subscriber:', error);
       }
@@ -356,207 +289,161 @@ const WaitlistSection = () => {
     setInviteModalOpen(true);
   };
 
-  const handleRefresh = () => {
-    subscribers.refetch();
-  };
+  const columns: DataColumn<ISubscriberDocument>[] = [
+    {
+      id: 'name',
+      label: 'Name',
+      render: subscriber => (
+        <Stack spacing={0.5} alignItems="flex-start">
+          <span>{`${subscriber.firstName} ${subscriber.lastName}`}</span>
+          {subscriber.suspicious && <SuspiciousNameChip reasons={subscriber.suspicious.reasons} />}
+        </Stack>
+      ),
+    },
+    { id: 'email', label: 'Email', render: subscriber => subscriber.email },
+    { id: 'date', label: 'Date', render: subscriber => new Date(subscriber.createdAt).toLocaleDateString() },
+    { id: 'source', label: 'Source', render: subscriber => <SubscriberSourceChip source={subscriber.source} /> },
+    {
+      id: 'network',
+      label: 'Network',
+      width: '17.5rem',
+      render: subscriber => <SubscriberNetworkCell network={subscriber.signupNetwork} />,
+    },
+    {
+      id: 'status',
+      label: 'Status',
+      render: subscriber => (
+        <StatusChip
+          tone={subscriber.inviteGenerated ? 'good' : 'neutral'}
+          label={subscriber.inviteGenerated ? 'Invite sent' : 'Waiting'}
+        />
+      ),
+    },
+  ];
+
+  const rowActions = (subscriber: ISubscriberDocument) => (
+    <>
+      <Button
+        size="sm"
+        variant="plain"
+        startDecorator={<PersonAddIcon />}
+        onClick={() => handleGenerateInvite(subscriber)}
+        disabled={subscriber.inviteGenerated}
+        data-testid={`waitlist-generate-invite-${subscriber.id}`}
+      >
+        Generate invite
+      </Button>
+      <Dropdown>
+        <MenuButton
+          slots={{ root: IconButton }}
+          slotProps={{
+            root: { variant: 'plain', size: 'sm', 'aria-label': `Actions for ${subscriber.email}` },
+          }}
+          data-testid={`waitlist-row-actions-${subscriber.id}`}
+        >
+          <MoreHorizIcon sx={{ fontSize: 18 }} />
+        </MenuButton>
+        <Menu size="sm" placement="bottom-end">
+          <MenuItem
+            color="danger"
+            onClick={() => handleDelete(subscriber.id)}
+            data-testid={`waitlist-remove-${subscriber.id}`}
+          >
+            Remove from waitlist
+          </MenuItem>
+        </Menu>
+      </Dropdown>
+    </>
+  );
 
   return (
-    <Sheet sx={{ px: 2, py: 1 }}>
-      <Stack spacing={2}>
-        {/* Waitlist notification banner */}
-        {!!waitingSubscribers.data?.count &&
-          waitingSubscribers.data.count > 0 &&
-          !hiddenNotifications.includes('waiting-subscribers') && (
-            <Alert
-              color="warning"
-              variant="soft"
-              sx={{ mb: 2 }}
-              endDecorator={
-                <IconButton
-                  size="sm"
-                  variant="plain"
-                  onClick={() => hideNotification('waiting-subscribers')}
-                  sx={{ color: 'warning.600' }}
-                >
-                  <CloseIcon />
-                </IconButton>
-              }
+    <Stack gap={ADMIN_REGION_GAP}>
+      {!!waitingSubscribers.data?.count && !hiddenNotifications.includes('waiting-subscribers') && (
+        <Alert
+          color="warning"
+          variant="soft"
+          endDecorator={
+            <IconButton
+              size="sm"
+              variant="plain"
+              aria-label="Dismiss waitlist notice"
+              onClick={() => hideNotification('waiting-subscribers')}
             >
-              <Typography level="body-md" sx={{ color: isDarkMode ? 'warning.300' : 'warning.700' }}>
-                There {waitingSubscribers.data.count === 1 ? 'is' : 'are'}{' '}
-                <strong>{waitingSubscribers.data.count}</strong>{' '}
-                {waitingSubscribers.data.count === 1 ? 'person' : 'people'} on the waitlist waiting for an invite.
-              </Typography>
-            </Alert>
-          )}
+              <CloseIcon />
+            </IconButton>
+          }
+        >
+          <span>
+            There {waitingSubscribers.data.count === 1 ? 'is' : 'are'} <strong>{waitingSubscribers.data.count}</strong>{' '}
+            {waitingSubscribers.data.count === 1 ? 'person' : 'people'} on the waitlist waiting for an invite.
+          </span>
+        </Alert>
+      )}
 
-        {/* Header Section */}
-        <Card sx={{ mb: 2 }}>
-          <Stack spacing={1}>
-            <Stack direction="row" alignItems="center" spacing={1}>
-              <Typography level="body-sm" color="neutral">
-                Manage waitlist requests and generate invite codes with custom credits and storage allocations
-              </Typography>
-              <ContextHelpButton helpId="admin/waitlist" tooltipText="Waitlist Help" />
-            </Stack>
-            <Stack
-              direction={{ xs: 'column', sm: 'row' }}
-              justifyContent="space-between"
-              alignItems={{ xs: 'stretch', sm: 'center' }}
-              spacing={{ xs: 2, sm: 0 }}
-            >
-              <Input
-                placeholder="Search the waitlist..."
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                sx={{ minWidth: { xs: 0, sm: 450 }, width: { xs: '100%', sm: 'auto' } }}
-              />
-
-              <Button
-                size="sm"
-                startDecorator={<RefreshIcon />}
-                onClick={handleRefresh}
-                disabled={subscribers.isPending}
-                sx={{ width: { xs: '100%', sm: 'auto' } }}
-              >
-                Refresh
-              </Button>
-            </Stack>
-          </Stack>
-        </Card>
-
-        {subscribers.isPending && <LinearProgress />}
-
-        <Box sx={{ display: { xs: 'none', sm: 'block' } }}>
-          <PaginationControls
-            currentPage={currentPage}
-            totalPages={totalPages}
-            onPageChange={setCurrentPage}
-            itemsPerPage={itemsPerPage}
-            onItemsPerPageChange={size => {
-              setItemsPerPage(size);
-              setCurrentPage(1);
-            }}
-            totalCount={subscribers.data?.meta?.total || 0}
+      <Stack gap={1.5}>
+        <Stack direction="row" alignItems="center" spacing={1}>
+          <Typography level="body-sm" color="neutral">
+            Manage waitlist requests and generate invite codes with custom credits and storage allocations
+          </Typography>
+          <ContextHelpButton helpId="admin/waitlist" tooltipText="Waitlist Help" />
+        </Stack>
+        <Stack direction="row" flexWrap="wrap" alignItems="center" gap={1}>
+          <AdminSearchInput
+            value={search}
+            onChange={setSearch}
+            label="Search the waitlist"
+            data-testid="waitlist-search-input"
           />
-        </Box>
+          <Button
+            size="sm"
+            variant="outlined"
+            color="neutral"
+            startDecorator={<RefreshIcon />}
+            onClick={() => subscribers.refetch()}
+            disabled={subscribers.isFetching}
+            data-testid="waitlist-refresh-btn"
+          >
+            Refresh
+          </Button>
+        </Stack>
+      </Stack>
 
-        {isMobile ? (
-          <Stack spacing={1.5}>
-            {subscribers.data?.data.map(subscriber => (
-              <Card key={subscriber.id} variant="outlined">
-                <CardContent sx={{ p: 1.5 }}>
-                  <Stack spacing={0.75}>
-                    <Stack direction="row" justifyContent="space-between" alignItems="center">
-                      <Typography fontWeight="bold">{`${subscriber.firstName} ${subscriber.lastName}`}</Typography>
-                      <Chip size="sm" color={subscriber.inviteGenerated ? 'success' : 'neutral'}>
-                        {subscriber.inviteGenerated ? 'Invite Sent' : 'Waiting'}
-                      </Chip>
-                    </Stack>
-                    <Typography level="body-sm" sx={{ wordBreak: 'break-word', color: 'text.secondary' }}>
-                      {subscriber.email}
-                    </Typography>
-                    <Stack direction="row" spacing={1} alignItems="center">
-                      <Typography level="body-xs" color="neutral">
-                        {new Date(subscriber.createdAt).toLocaleDateString()}
-                      </Typography>
-                      <SubscriberSourceChip source={subscriber.source} />
-                      {subscriber.suspicious && <SuspiciousNameChip reasons={subscriber.suspicious.reasons} />}
-                    </Stack>
-                    <SubscriberNetworkCell network={subscriber.signupNetwork} />
-                    <Divider />
-                    <Stack direction="row" spacing={1}>
-                      <Button
-                        size="sm"
-                        color="primary"
-                        variant="soft"
-                        startDecorator={<PersonAddIcon />}
-                        onClick={() => handleGenerateInvite(subscriber)}
-                        disabled={subscriber.inviteGenerated}
-                        sx={{ flex: 1 }}
-                      >
-                        Generate Invite
-                      </Button>
-                      <Button size="sm" color="danger" variant="soft" onClick={() => handleDelete(subscriber.id)}>
-                        Delete
-                      </Button>
-                    </Stack>
-                  </Stack>
-                </CardContent>
-              </Card>
-            ))}
-          </Stack>
-        ) : (
-          <Box sx={{ overflowX: { xs: 'auto', sm: 'visible' } }}>
-            <Table sx={{ minWidth: { xs: '800px', sm: 'auto' } }}>
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Email</th>
-                  <th>Date</th>
-                  <th>Source</th>
-                  <th style={{ width: 280 }}>Network</th>
-                  <th>Status</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {subscribers.data?.data.map(subscriber => (
-                  <tr key={subscriber.id}>
-                    <td>
-                      <Stack spacing={0.5} alignItems="flex-start">
-                        <span>{`${subscriber.firstName} ${subscriber.lastName}`}</span>
-                        {subscriber.suspicious && <SuspiciousNameChip reasons={subscriber.suspicious.reasons} />}
-                      </Stack>
-                    </td>
-                    <td>{subscriber.email}</td>
-                    <td>{new Date(subscriber.createdAt).toLocaleDateString()}</td>
-                    <td>
-                      <SubscriberSourceChip source={subscriber.source} />
-                    </td>
-                    <td>
-                      <SubscriberNetworkCell network={subscriber.signupNetwork} />
-                    </td>
-                    <td>
-                      <Chip size="sm" color={subscriber.inviteGenerated ? 'success' : 'neutral'}>
-                        {subscriber.inviteGenerated ? 'Invite Sent' : 'Waiting'}
-                      </Chip>
-                    </td>
-                    <td>
-                      <Stack direction="row" spacing={1}>
-                        <Button
-                          size="sm"
-                          color="primary"
-                          variant="soft"
-                          startDecorator={<PersonAddIcon />}
-                          onClick={() => handleGenerateInvite(subscriber)}
-                          disabled={subscriber.inviteGenerated}
-                        >
-                          Generate Invite
-                        </Button>
-                        <Button size="sm" color="danger" variant="soft" onClick={() => handleDelete(subscriber.id)}>
-                          Delete
-                        </Button>
-                      </Stack>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </Table>
-          </Box>
-        )}
-        <PaginationControls
-          currentPage={currentPage}
-          totalPages={totalPages}
-          onPageChange={setCurrentPage}
-          itemsPerPage={itemsPerPage}
-          onItemsPerPageChange={size => {
+      <DataTable
+        label="Waitlist"
+        testId="waitlist-table"
+        rows={subscribers.data?.data ?? []}
+        columns={columns}
+        getRowId={subscriber => subscriber.id}
+        loading={subscribers.isPending}
+        error={subscribers.isError ? 'The waitlist could not be loaded.' : undefined}
+        onRetry={() => subscribers.refetch()}
+        empty={
+          <EmptyState
+            title={debouncedSearch ? 'No one on the waitlist matches your search' : 'The waitlist is empty'}
+            description={debouncedSearch ? 'Try a different name or email.' : 'People who ask for access appear here.'}
+            action={
+              debouncedSearch ? (
+                <Button variant="outlined" color="neutral" size="sm" onClick={() => setSearch('')}>
+                  Clear search
+                </Button>
+              ) : null
+            }
+          />
+        }
+        rowActions={rowActions}
+        minWidth="56rem"
+        maxHeight="none"
+        pagination={{
+          page: currentPage,
+          pageSize: itemsPerPage,
+          total: subscribers.data?.meta?.total ?? 0,
+          onPageChange: setCurrentPage,
+          onPageSizeChange: size => {
             setItemsPerPage(size);
             setCurrentPage(1);
-          }}
-          totalCount={subscribers.data?.meta?.total || 0}
-        />
-      </Stack>
+          },
+        }}
+      />
 
       <GenerateInviteDialog
         key={selectedSubscriber?.id}
@@ -564,7 +451,7 @@ const WaitlistSection = () => {
         onClose={() => setInviteModalOpen(false)}
         subscriber={selectedSubscriber}
       />
-    </Sheet>
+    </Stack>
   );
 };
 

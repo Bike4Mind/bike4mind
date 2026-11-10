@@ -147,6 +147,7 @@ re-deciding per endpoint:
 | Request body failed schema validation | `422` | - |
 | Missing or invalid credential | `401` | - |
 | Valid key, missing scope | `403` | - (the body carries `required_scopes`, and `also_required_scopes` when set) |
+| Valid credential, but an admin suspended the owner's account | `403` | `account_suspended` (the body carries `suspension`: `reason_category`, and `terms_url` / `appeal_url` when the deployment has a website; never the signals behind the decision; not retryable) |
 | Method the contract does not declare | `405` | - (`Allow` header; answered before auth, auto-documented on every operation) |
 | Provider rejected *our* credentials | `401` | `provider_rejected` |
 | Provider failed to generate (upstream error) | `502` | - |
@@ -182,12 +183,14 @@ re-deciding per endpoint:
 | Org-billed API key names a billing organization other than its own | `403` | `billing_organization_mismatch` |
 | Org-billed API key's organization is gone, or its holder has left it | `400` | - (re-mint the key) |
 | Cancel of a job the provider is already rendering and billing | `409` | `not_cancellable` (do not retry; the job runs to its end and is charged if it produces output) |
+| Declared client build (`X-Client-Name` + `X-Client-Version`) is below the minimum served for that client | `426` | `upgrade_required` (the body carries `client_name` and `minimum_version`; answered by every transport, auto-documented on every operation, see [section 9](#9-client-versions)) |
 
 The four tool search rows are `400`, not the `422` used for schema failures: the body is well-formed and passes the schema, and whether it is acceptable depends on the requested model (`tool_search_unsupported`, like `unknown_model`) or on how the request's tools relate to each other, which is request semantics rather than body shape.
 
 **[gated]** A contract may only declare statuses from the allowed set (`200`, `201`,
 `202`, `204`, `303`, `400`, `401`, `403`, `404`, `409`, `413`, `422`, `429`, `500`, `502`,
-`503`, `504`).
+`503`, `504`). `426` is not in it on purpose: the client-version gate answers it for every
+operation, so `registerContract` injects it the way it injects `405`, and no contract declares it.
 
 A **malformed** resource id is a `404`, not a `400`: a string that is not an ObjectId names a
 resource that cannot exist, and telling a caller apart-from-404 that their id was the wrong
@@ -499,6 +502,48 @@ a `pagination` conventionExemption stating why, the same escape hatch `status-ta
 `scope-required` use.
 
 This exemption is not live-caller debt, so the exemption policy at the top of this file does not govern it. It records that the list inference misfired on a GET whose `data` array has nothing to page through. Prefer renaming the field over exempting it.
+
+## 9. Client versions
+
+A long-lived client - an SDK pinned in someone's lockfile, a first-party client shipped as a
+binary - cannot be redeployed with the server. A change that a stale build does not understand
+breaks it silently, and nothing on our side can reach it to fix it. So such a client declares
+which build it is, and the server can tell an outdated build to upgrade instead.
+
+**The handshake.** A client sends both request headers on every call:
+
+- `X-Client-Name`: a stable, lowercase name for the client (`[a-z0-9][a-z0-9._-]*`, at most 64
+  characters), e.g. `b4m-sdk-ts`.
+- `X-Client-Version`: its SemVer 2.0.0 version, e.g. `2.1.0` or `2.2.0-rc.1`.
+
+Both are optional, and **a request that omits either, or sends a malformed value, is never
+blocked**: older and third-party clients keep working exactly as before. The transports parse
+the pair once (`parseClientIdentity`, `clientVersion.ts`) into a validated `ClientIdentity`, or
+nothing.
+
+**The kill switch.** The `minimumClientVersions` admin setting maps a client name to the oldest
+version still served, e.g. `{"b4m-sdk-ts": "2.1.0"}`. A request from a listed client whose
+declared version has lower SemVer precedence than that minimum gets `426` with the shared
+envelope plus `errorCode: "upgrade_required"`, `client_name` and `minimum_version`
+(`UpgradeRequiredResponse` in the spec). Exactly the minimum passes; a pre-release of it
+(`2.1.0-rc.1`) does not. A client absent from the map is never gated, and changes apply within
+15 seconds. The gate fails open: if the setting cannot be read, nothing is blocked.
+
+Every transport runs the same gate (`packages/server-utils/src/middlewares/clientVersionGate.ts`)
+ahead of rate limiting and validation: `nextRouteForContract`'s prelude, `defineLambdaRoute`, and
+the completions route. That is what makes the injected `426` true on every operation, so a new
+transport must call it too. It is a compatibility signal, not an access control: a caller can
+always omit the headers.
+
+`426` is borrowed from RFC 9110, which defines it for a protocol change and asks for an
+`Upgrade` header. No protocol changes here, so none is sent; the body says what to upgrade to.
+
+**The policy it backs.** Within a version path (`/api/v1`) changes stay additive: new optional
+request fields, new response fields, new endpoints (section 3). A client has to tolerate
+unknown response fields and enum values it was not built with. `426` is the last resort for
+the change that cannot be additive - a security fix a client must pick up, a removal past its
+sunset (section 7) - not a substitute for a deprecation window. Raise a minimum only once the
+release it names is published, and announce it first, the same as a sunset.
 
 ---
 

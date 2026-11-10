@@ -13,6 +13,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/projects/{id}/sessions',
   },
+  addProjectSystemPrompts: {
+    method: 'POST',
+    path: '/api/v1/projects/{id}/system-prompts',
+  },
   bulkDeleteFiles: {
     method: 'POST',
     path: '/api/v1/files/bulk-delete',
@@ -69,9 +73,17 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/projects',
   },
+  createProjectInvite: {
+    method: 'POST',
+    path: '/api/v1/projects/{id}/invites',
+  },
   createSession: {
     method: 'POST',
     path: '/api/v1/sessions',
+  },
+  createSkill: {
+    method: 'POST',
+    path: '/api/v1/skills',
   },
   createTextRefinement: {
     method: 'POST',
@@ -185,6 +197,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/skills/market/{id}/claude-plugin.zip',
   },
+  getClientConfig: {
+    method: 'GET',
+    path: '/api/v1/client-config',
+  },
   getCreditBalance: {
     method: 'GET',
     path: '/api/v1/credits',
@@ -228,6 +244,10 @@ export const operations = {
   getSessionMessage: {
     method: 'GET',
     path: '/api/v1/sessions/{id}/messages/{messageId}',
+  },
+  getSkill: {
+    method: 'GET',
+    path: '/api/v1/skills/{id}',
   },
   getSkillMarketListing: {
     method: 'GET',
@@ -297,9 +317,17 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/skills/market/listings/mine',
   },
+  listMySkills: {
+    method: 'GET',
+    path: '/api/v1/skills/mine',
+  },
   listProjectFiles: {
     method: 'GET',
     path: '/api/v1/projects/{id}/files',
+  },
+  listProjectInvites: {
+    method: 'GET',
+    path: '/api/v1/projects/{id}/invites',
   },
   listProjectSessions: {
     method: 'GET',
@@ -369,9 +397,17 @@ export const operations = {
     method: 'DELETE',
     path: '/api/v1/projects/{id}/files/{file_id}',
   },
+  removeProjectMember: {
+    method: 'DELETE',
+    path: '/api/v1/projects/{id}/members/{user_id}',
+  },
   removeProjectSession: {
     method: 'DELETE',
     path: '/api/v1/projects/{id}/sessions/{session_id}',
+  },
+  removeProjectSystemPrompt: {
+    method: 'DELETE',
+    path: '/api/v1/projects/{id}/system-prompts/{file_id}',
   },
   rescanSkillMarketVersion: {
     method: 'POST',
@@ -433,6 +469,10 @@ export const operations = {
     method: 'PATCH',
     path: '/api/v1/projects/{id}',
   },
+  updateProjectSystemPrompt: {
+    method: 'PATCH',
+    path: '/api/v1/projects/{id}/system-prompts/{file_id}',
+  },
   updateSession: {
     method: 'PUT',
     path: '/api/sessions/{id}',
@@ -440,6 +480,10 @@ export const operations = {
   updateSessionMessage: {
     method: 'PUT',
     path: '/api/v1/sessions/{id}/messages/{messageId}',
+  },
+  updateSkill: {
+    method: 'PUT',
+    path: '/api/v1/skills/{id}',
   },
   withdrawSkillMarketListing: {
     method: 'DELETE',

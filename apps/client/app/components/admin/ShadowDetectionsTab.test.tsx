@@ -17,6 +17,7 @@ const m = vi.hoisted(() => ({
   search: {} as Record<string, unknown>,
   navigate: vi.fn(),
   verdictError: null as Error | null,
+  currentUser: { isAdmin: true } as { isAdmin: boolean; adminPermissions?: string[] },
 }));
 vi.mock('@client/app/hooks/data/shadowDetections', () => ({
   useShadowDetections: m.useShadowDetections,
@@ -25,7 +26,7 @@ vi.mock('@client/app/hooks/data/shadowDetections', () => ({
   useRequestAbuseAssessment: () => ({ mutateAsync: vi.fn(), isPending: false, error: null }),
   useVerdictEval: () => ({ data: undefined, isPending: true, error: null, refetch: vi.fn() }),
 }));
-vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: { isAdmin: true } }) }));
+vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: m.currentUser }) }));
 vi.mock('@tanstack/react-router', () => ({
   useSearch: () => m.search,
   useNavigate: () => m.navigate,
@@ -108,7 +109,17 @@ describe('ShadowDetectionsTab', () => {
     vi.clearAllMocks();
     m.search = {};
     m.verdictError = null;
+    m.currentUser = { isAdmin: true };
     m.useShadowDetections.mockReturnValue(queryResult(list()));
+  });
+
+  it('leaves the outer padding to the admin page frame', () => {
+    renderTab();
+    const root = screen.getByTestId('admin-shadow-detections-tab');
+    const style = getComputedStyle(root);
+    for (const side of [style.paddingTop, style.paddingRight, style.paddingBottom, style.paddingLeft]) {
+      expect(parseFloat(side || '0')).toBe(0);
+    }
   });
 
   it('defaults to unreviewed detections and renders rows and stats', () => {
@@ -232,6 +243,13 @@ describe('ShadowDetectionsTab', () => {
     expect(within(screen.getByTestId('admin-error-state')).getByText("Couldn't load detections.")).toBeTruthy();
     fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
     expect(query.refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('disables grading for a support reader', () => {
+    m.currentUser = { isAdmin: false, adminPermissions: ['support:read'] };
+    m.useShadowDetections.mockReturnValue(queryResult(list({ data: [detection()] })));
+    renderTab();
+    expect(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`)).toBeDisabled();
   });
 
   it('renders a missing signal value as a muted dash', async () => {

@@ -103,6 +103,16 @@ describe('GenerationUpdatesListener', () => {
     expect(invalidate).not.toHaveBeenCalled();
   });
 
+  it('refreshes only the credit balance when an image job finishes', async () => {
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    renderListener();
+    await send(frame({ id: 'img-1', kind: 'image', state: 'running' }));
+    expect(invalidate).not.toHaveBeenCalled();
+    await send(frame({ id: 'img-1', kind: 'image', state: 'succeeded' }));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['credits-balance'], refetchType: 'all' });
+    expect(invalidate).not.toHaveBeenCalledWith(expect.objectContaining({ exact: true }));
+  });
+
   it('ignores other actions', async () => {
     queryClient.setQueryData(videoGenerationKeys.detail('job-1'), videoJob({ state: 'pending' }));
     renderListener();

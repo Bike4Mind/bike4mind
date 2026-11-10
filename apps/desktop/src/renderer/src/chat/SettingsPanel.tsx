@@ -1,3 +1,4 @@
+import { OrchestrationSettings } from './OrchestrationSettings';
 import type { ReactNode } from 'react';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -427,6 +428,13 @@ function useSettingsEntries(auth: AuthState | null): Record<SettingsSection, Con
       worktreeEntry(worktreeDefault, toggleWorktreeDefault),
       nestedSessionsEntry(nestedSessions, toggleNestedSessions),
       orchestratorSoundEntry(orchestratorSound, toggleOrchestratorSound),
+      {
+        id: 'orchestration-policy',
+        icon: null,
+        label: 'Orchestration worker models',
+        summary: 'Explicit worker defaults and targeted model upgrades',
+        control: <OrchestrationSettings key={`${auth?.environment?.url ?? 'device'}:${auth?.user?.id ?? 'local'}`} />,
+      },
       localContextEntry(localContext, next => void setLocalContext(next), localContextError, localContextFit),
       tokenRateEntry(showTokenRate, toggleTokenRate),
       curatedListEntry(

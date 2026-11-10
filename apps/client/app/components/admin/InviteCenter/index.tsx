@@ -1,13 +1,20 @@
 import { useState } from 'react';
-import { Box, Sheet, Tab, TabList, TabPanel, Tabs, Typography } from '@mui/joy';
-import EmailIcon from '@mui/icons-material/Email';
-import VpnKeyIcon from '@mui/icons-material/VpnKey';
+import { Stack } from '@mui/joy';
+import { AdminPageHeader } from '../shared/AdminPageHeader';
+import { ViewTabs } from '../shared/ViewTabs';
+import { ADMIN_REGION_GAP } from '../shared/adminStyles';
 import InviteCenterQuickActions from './InviteCenterQuickActions';
 import BulkInviteTab from './BulkInvite/BulkInviteTab';
 import InviteCodesTab from './InviteCodes/InviteCodesTab';
 import { APP_NAME } from '@client/config/general'; // brand externalized
 
 type InviteCenterTab = 'bulk' | 'codes';
+
+// The e2e page object clicks the codes tab and index.test.tsx clicks the bulk tab by these test ids.
+const VIEWS = [
+  { id: 'bulk', label: 'Bulk invite', testId: 'invite-center-bulk-tab' },
+  { id: 'codes', label: 'Invite codes', testId: 'invite-center-codes-tab' },
+];
 
 const InviteCenter = () => {
   const [activeTab, setActiveTab] = useState<InviteCenterTab>('bulk');
@@ -33,47 +40,31 @@ const InviteCenter = () => {
   };
 
   return (
-    <Sheet sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      <Box sx={{ px: '10px', pt: 1, pb: 0.5 }}>
-        <Typography level="h3" sx={{ mb: 1 }}>
-          Invites
-        </Typography>
-        <Typography level="body-sm" sx={{ mb: 2, color: 'text.secondary' }}>
-          Get people into{APP_NAME ? ` ${APP_NAME}` : ' the app'}. Send personalized invites or generate registration
-          codes.
-        </Typography>
-        <InviteCenterQuickActions
-          onQuickInvite={handleQuickInvite}
-          onGenerateCodes={handleGenerateCodes}
-          onPasteCsv={handlePasteCsv}
-        />
-      </Box>
-
-      <Tabs
-        value={activeTab}
-        onChange={(_, value) => setActiveTab(value as InviteCenterTab)}
-        sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
-      >
-        <TabList sx={{ px: 3 }}>
-          <Tab value="bulk" data-testid="invite-center-bulk-tab">
-            <EmailIcon sx={{ mr: 0.5, fontSize: '1rem' }} />
-            Bulk Invite
-          </Tab>
-          <Tab value="codes" data-testid="invite-center-codes-tab">
-            <VpnKeyIcon sx={{ mr: 0.5, fontSize: '1rem' }} />
-            Invite Codes
-          </Tab>
-        </TabList>
-
-        <TabPanel value="bulk" sx={{ flex: 1, minHeight: 0, overflow: 'auto', px: 0 }}>
-          {activeTab === 'bulk' && <BulkInviteTab quickAction={quickAction} />}
-        </TabPanel>
-
-        <TabPanel value="codes" sx={{ flex: 1, minHeight: 0, overflow: 'auto', px: 0 }}>
-          {activeTab === 'codes' && <InviteCodesTab quickAction={quickAction} />}
-        </TabPanel>
-      </Tabs>
-    </Sheet>
+    <Stack gap={ADMIN_REGION_GAP}>
+      <AdminPageHeader
+        title="Invites"
+        description={`Get people into${APP_NAME ? ` ${APP_NAME}` : ' the app'}. Send personalized invites or generate registration codes.`}
+        actions={
+          <InviteCenterQuickActions
+            onQuickInvite={handleQuickInvite}
+            onGenerateCodes={handleGenerateCodes}
+            onPasteCsv={handlePasteCsv}
+          />
+        }
+      />
+      <ViewTabs
+        views={VIEWS}
+        activeId={activeTab}
+        onSelect={id => setActiveTab(id as InviteCenterTab)}
+        aria-label="Invite views"
+        data-testid="invite-center-views"
+      />
+      {activeTab === 'bulk' ? (
+        <BulkInviteTab quickAction={quickAction} />
+      ) : (
+        <InviteCodesTab quickAction={quickAction} />
+      )}
+    </Stack>
   );
 };
 

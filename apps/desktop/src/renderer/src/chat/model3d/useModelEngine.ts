@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type * as THREE from 'three';
 import {
   EMPTY_MODEL_STATE,
@@ -9,6 +9,7 @@ import {
   type ModelSummary,
   type ModelViewState,
 } from '@shared/model3d';
+import { latestOnly } from './latestOnly';
 import { checkedOutcome, errorMessage, ModelEngineFrame, reportGoodFileBuild } from './modelEngineFrame';
 import {
   buildModelObject,
@@ -98,7 +99,6 @@ export function useModelEngine(dark: boolean, sessionId: string | null): ModelEn
   const engine = useRef<ModelEngineFrame | null>(null);
   const captureEngine = useRef<ModelEngineFrame | null>(null);
   const fileBuild = useRef<Promise<ModelBuildOutcome | null> | null>(null);
-  const previewFrame = useRef<number | null>(null);
   const darkRef = useRef(dark);
   darkRef.current = dark;
   const objectRef = useRef<THREE.Group | null>(null);
@@ -109,16 +109,16 @@ export function useModelEngine(dark: boolean, sessionId: string | null): ModelEn
   sessionRef.current = sessionId;
   objectRef.current = object;
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    // Mounted and booted now, so the first build after app start does not pay for the cold start.
+    engine.current ??= new ModelEngineFrame().warm();
+    return () => {
       engine.current?.dispose();
       engine.current = null;
       captureEngine.current?.dispose();
       captureEngine.current = null;
-      if (previewFrame.current !== null) cancelAnimationFrame(previewFrame.current);
-    },
-    []
-  );
+    };
+  }, []);
 
   useEffect(() => {
     if (sessionId === null) return;
@@ -277,26 +277,29 @@ export function useModelEngine(dark: boolean, sessionId: string | null): ModelEn
     []
   );
 
+  // One preview build in flight at a time: a drag faster than the model builds would otherwise
+  // supersede each build before it finished, and nothing would show until the slider stopped.
+  const runPreview = useMemo(
+    () =>
+      latestOnly(async () => {
+        const current = stateRef.current;
+        const session = sessionRef.current;
+        if (current.kind !== 'model' || current.source === null || session === null) return;
+        const outcome = await build(current.source, overrides.current, 'preview');
+        if (outcome) await showOutcome(session, current.generation, outcome, false);
+      }),
+    [build, showOutcome]
+  );
+
   const previewParam = useCallback(
     (key: string, value: number) => {
       const { source, kind } = stateRef.current;
       if (kind !== 'model' || source === null) return;
       overrides.current = { ...overrides.current, [key]: value };
       setParams(previous => (previous[key] ? { ...previous, [key]: { ...previous[key], value } } : previous));
-      // One build per frame however fast the slider fires: each build is a fresh worker and WASM instance.
-      if (previewFrame.current !== null) return;
-      previewFrame.current = requestAnimationFrame(() => {
-        previewFrame.current = null;
-        const current = stateRef.current;
-        if (current.kind !== 'model' || current.source === null) return;
-        const session = sessionRef.current;
-        if (session === null) return;
-        void build(current.source, overrides.current, 'preview').then(outcome => {
-          if (outcome) void showOutcome(session, current.generation, outcome, false);
-        });
-      });
+      runPreview();
     },
-    [build, showOutcome]
+    [runPreview]
   );
 
   const commitParam = useCallback(async (key: string, value: number) => {

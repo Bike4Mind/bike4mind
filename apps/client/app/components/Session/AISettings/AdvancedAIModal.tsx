@@ -99,6 +99,7 @@ import { MobileTopBar } from '@client/app/components/MobileTopBar';
 import { brand, grayAlpha, green, greenAlpha } from '@client/app/utils/themes/colors';
 
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
+import { thinkingForSend } from '@client/app/utils/thinkingPayload';
 import { visuallyHidden } from '@client/app/utils/a11yStyles';
 import { ContextHelpButton, FieldTooltip, FIELD_TOOLTIPS } from '@client/app/components/help';
 import {
@@ -724,7 +725,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
   const isBelowReasoningFloor =
     !readOnly &&
     reasonsWithinOutputBudget(modelInfo) &&
-    sentMaxTokensFor(modelInfo, thinking, outputTokens) < reasoningFloor;
+    sentMaxTokensFor(modelInfo, thinkingForSend(thinking, modelInfo), outputTokens) < reasoningFloor;
 
   // The session-wide switches, defined once and rendered two ways. Desktop keeps them inline beside
   // the section title; mobile has no room for four controls on that row, so there the title keeps

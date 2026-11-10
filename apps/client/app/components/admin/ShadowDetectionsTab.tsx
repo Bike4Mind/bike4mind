@@ -17,6 +17,7 @@ import {
 } from '@bike4mind/common';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import {
+  AdminPermissionAction,
   ADMIN_REASON_PRESETS,
   ActionDialog,
   AdminPageHeader,
@@ -597,15 +598,20 @@ export const ShadowDetectionsTab: React.FC = () => {
   ];
 
   const rowActions = (row: ShadowDetectionRow) => (
-    <Button
-      size="sm"
-      variant="plain"
-      color="neutral"
-      data-testid={`shadow-detection-grade-btn-${row.id}`}
-      onClick={() => setGrading(row)}
-    >
-      {row.verdict ? 'Change verdict' : 'Record verdict'}
-    </Button>
+    <AdminPermissionAction requirement="users:moderate">
+      {disabled => (
+        <Button
+          size="sm"
+          variant="plain"
+          color="neutral"
+          disabled={disabled}
+          data-testid={`shadow-detection-grade-btn-${row.id}`}
+          onClick={() => setGrading(row)}
+        >
+          {row.verdict ? 'Change verdict' : 'Record verdict'}
+        </Button>
+      )}
+    </AdminPermissionAction>
   );
 
   const filtered = detector !== undefined || verdict !== 'unreviewed';
@@ -619,7 +625,7 @@ export const ShadowDetectionsTab: React.FC = () => {
   return (
     <Stack
       spacing={2}
-      sx={{ bgcolor: 'admin.canvas', color: 'admin.ink', p: 2, borderRadius: 'md', minWidth: 0 }}
+      sx={{ bgcolor: 'admin.canvas', color: 'admin.ink', borderRadius: 'md', minWidth: 0 }}
       data-testid="admin-shadow-detections-tab"
     >
       <AdminPageHeader

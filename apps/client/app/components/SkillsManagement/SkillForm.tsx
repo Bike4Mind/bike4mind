@@ -13,9 +13,30 @@ import {
   Textarea,
   Typography,
 } from '@mui/joy';
-import { parseSkillMd, referencedRelativePaths, type ParseSkillMdResult } from '@bike4mind/common/utils/skillMd';
-import { SKILL_FILE_DIRS, checkSkillFiles, type ISkillFile } from '@bike4mind/common';
+import {
+  parseSkillMd,
+  referencedRelativePaths,
+  type ParseSkillMdResult,
+  type SkillMdFields,
+} from '@bike4mind/common/utils/skillMd';
+import { type ISkillFile } from '@bike4mind/common';
+import {
+  BINARY_FILE_ERROR,
+  MAX_IMPORT_BYTES,
+  ZIP_UNSUPPORTED_ERROR,
+  entriesFromPickedFolder,
+  hasZipSignature,
+  isZipFile,
+  readSkillEntries,
+  readSkillZip,
+  resolveDrop,
+  type DroppedFsEntry,
+  type SkillFolderResult,
+} from './skillImport';
+import { MAX_BODY_LENGTH, MAX_DESCRIPTION_LENGTH, MAX_SKILL_NAME_LENGTH } from './skillImportRules';
+import { SkillImportHelp } from './SkillImportHelp';
 import { SkillFormInput } from '@client/app/hooks/data/skills';
+import { diffSkillUpdate, type SkillUpdatePreviewData } from './skillUpdatePreview';
 
 export interface SkillFormProps {
   initialValue?: Partial<SkillFormInput>;
@@ -25,46 +46,16 @@ export interface SkillFormProps {
   onCancel: () => void;
   /** Show the "Import SKILL.md" strip (create mode only; it prefills the fields). */
   enableSkillMdImport?: boolean;
+  /** Edit mode: an imported SKILL.md is previewed against the current values and applied only on confirm. */
+  updateFromSkillMd?: boolean;
 }
+
+type SkillFolderBundle = { files: ISkillFile[]; skipped: string[] };
 
 const SKILL_NAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
-/** Bounds a local file read; the server accepts 50k characters, so this is already generous. */
-const MAX_IMPORT_BYTES = 200_000;
-
-/**
- * A picked skill folder (`webkitRelativePath` is `<folder>/...`): its top-level SKILL.md, the text
- * files under scripts/ and references/, and the other files it skipped. Dotfiles are skipped silently.
- */
-export async function readSkillFolder(
-  picked: File[]
-): Promise<{ ok: true; skillMd: string; files: ISkillFile[]; skipped: string[] } | { ok: false; error: string }> {
-  let skillMd: File | undefined;
-  const files: ISkillFile[] = [];
-  const skipped: string[] = [];
-  for (const file of picked) {
-    const path = file.webkitRelativePath.split('/').slice(1).join('/');
-    if (path.split('/').some(segment => segment.startsWith('.'))) continue;
-    if (path === 'SKILL.md') {
-      skillMd = file;
-    } else if ((SKILL_FILE_DIRS as readonly string[]).includes(path.split('/')[0])) {
-      if (file.size > MAX_IMPORT_BYTES) return { ok: false, error: `${path} is too large to import.` };
-      try {
-        const content = new TextDecoder('utf-8', { fatal: true }).decode(await file.arrayBuffer());
-        files.push({ path, content });
-      } catch {
-        return { ok: false, error: `${path}: only text files are supported.` };
-      }
-    } else {
-      skipped.push(path);
-    }
-  }
-  if (!skillMd) return { ok: false, error: 'The folder has no SKILL.md at its top level.' };
-  if (skillMd.size > MAX_IMPORT_BYTES) return { ok: false, error: 'SKILL.md is too large to import (200 KB maximum).' };
-  const checked = checkSkillFiles(files);
-  if (!checked.ok) return { ok: false, error: checked.error };
-  return { ok: true, skillMd: await skillMd.text(), files: checked.files, skipped };
-}
+/** A picked skill folder (`webkitRelativePath` is `<folder>/...`), read by the Choose folder path. */
+export const readSkillFolder = (picked: File[]) => readSkillEntries(entriesFromPickedFolder(picked));
 
 /** Only a same-origin export gets a clickable provenance link; anything else stays plain text. */
 const isSameOrigin = (url: string): boolean => {
@@ -87,6 +78,7 @@ export const SkillForm: FC<SkillFormProps> = ({
   onSubmit,
   onCancel,
   enableSkillMdImport = false,
+  updateFromSkillMd = false,
 }) => {
   const [name, setName] = useState(initialValue?.name ?? '');
   const [description, setDescription] = useState(initialValue?.description ?? '');
@@ -94,7 +86,21 @@ export const SkillForm: FC<SkillFormProps> = ({
   const [argumentHint, setArgumentHint] = useState(initialValue?.argumentHint ?? '');
   const [disableModelInvocation, setDisableModelInvocation] = useState(Boolean(initialValue?.disableModelInvocation));
   const [claudeCodeAllowedTools, setClaudeCodeAllowedTools] = useState(initialValue?.claudeCodeAllowedTools ?? []);
-  const [importResult, setImportResult] = useState<ParseSkillMdResult | null>(null);
+  const [claudeCodeModel, setClaudeCodeModel] = useState(initialValue?.claudeCodeModel ?? '');
+  const [importResult, setImportResultState] = useState<ParseSkillMdResult | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const dragDepth = useRef(0);
+  const [pendingUpdate, setPendingUpdate] = useState<{
+    fields: SkillMdFields;
+    bundle?: SkillFolderBundle;
+    preview: SkillUpdatePreviewData;
+  } | null>(null);
+  const setImportResult = (result: ParseSkillMdResult | null) => {
+    setImportResultState(result);
+    setPendingUpdate(null);
+    setDetailsOpen(false);
+  };
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState('');
   const [files, setFiles] = useState<ISkillFile[]>(initialValue?.files ?? []);
@@ -109,11 +115,31 @@ export const SkillForm: FC<SkillFormProps> = ({
   // Bumped by every import so a slow earlier file read cannot overwrite a newer one.
   const importReadId = useRef(0);
 
+  // `only` (edit mode) limits the write to the previewed change keys, so a field the preview did not list keeps edits made since.
+  const applyFields = (fields: SkillMdFields, bundle?: SkillFolderBundle, only?: ReadonlySet<string>) => {
+    const include = (key: string) => !only || only.has(key);
+    if (fields.name !== undefined && !updateFromSkillMd) setName(fields.name);
+    if (fields.description !== undefined && include('description')) setDescription(fields.description);
+    if (include('argument-hint')) setArgumentHint(fields.argumentHint ?? '');
+    if (fields.body !== undefined && include('body')) setBody(fields.body);
+    if (include('model-invocation')) setDisableModelInvocation(fields.disableModelInvocation ?? false);
+    if (include('claude-code-tools')) setClaudeCodeAllowedTools(fields.claudeCodeAllowedTools ?? []);
+    if (include('claude-code-model')) setClaudeCodeModel(fields.claudeCodeModel ?? '');
+    if (bundle && include('files')) {
+      setFiles(bundle.files);
+      setSkippedFiles(bundle.skipped);
+    }
+  };
+
   // Replaces argument hint, Claude Code tools and model-invocation flag with the file's values; other fields change only if the file sets them. A malformed file touches nothing.
-  const applySkillMd = (text: string): boolean => {
+  const applySkillMd = (text: string, bundle?: SkillFolderBundle): boolean => {
     // Checked here, not in parseSkillMd: the CLI relies on it accepting a frontmatter-less commands/*.md.
     if (text.includes('\u0000')) {
-      setImportResult({ ok: false, error: 'This is not a text file (it looks like a binary or .zip file).' });
+      setImportResult({ ok: false, error: hasZipSignature(text) ? ZIP_UNSUPPORTED_ERROR : BINARY_FILE_ERROR });
+      return false;
+    }
+    if (hasZipSignature(text)) {
+      setImportResult({ ok: false, error: ZIP_UNSUPPORTED_ERROR });
       return false;
     }
     if (!/^\uFEFF?---/.test(text)) {
@@ -124,22 +150,41 @@ export const SkillForm: FC<SkillFormProps> = ({
     setImportResult(result);
     if (!result.ok) return false;
     const { fields } = result;
-    if (fields.name !== undefined) setName(fields.name);
-    if (fields.description !== undefined) setDescription(fields.description);
-    setArgumentHint(fields.argumentHint ?? '');
-    if (fields.body !== undefined) setBody(fields.body);
-    setDisableModelInvocation(fields.disableModelInvocation ?? false);
-    setClaudeCodeAllowedTools(fields.claudeCodeAllowedTools ?? []);
+    if (updateFromSkillMd) {
+      const current = {
+        name,
+        description,
+        body,
+        argumentHint,
+        disableModelInvocation,
+        claudeCodeAllowedTools,
+        claudeCodeModel,
+        files,
+      };
+      setPendingUpdate({ fields, bundle, preview: diffSkillUpdate(current, fields, bundle) });
+    } else {
+      applyFields(fields, bundle);
+    }
     setPasteOpen(false);
     setPasteText('');
     return true;
   };
 
-  const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (!file) return;
+  const finishFolderImport = (readId: number, result: SkillFolderResult) => {
+    if (readId !== importReadId.current) return;
+    if (!result.ok) {
+      setImportResult({ ok: false, error: result.error });
+      return;
+    }
+    applySkillMd(result.skillMd, result);
+  };
+
+  const importSkillMdFile = (file: File) => {
     const readId = ++importReadId.current;
+    if (isZipFile(file)) {
+      void readSkillZip(file).then(result => finishFolderImport(readId, result));
+      return;
+    }
     if (file.size > MAX_IMPORT_BYTES) {
       setImportResult({ ok: false, error: 'The file is too large to import (200 KB maximum).' });
       return;
@@ -154,21 +199,52 @@ export const SkillForm: FC<SkillFormProps> = ({
       });
   };
 
+  const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (file) importSkillMdFile(file);
+  };
+
   const handleFolder = (e: React.ChangeEvent<HTMLInputElement>) => {
     const picked = Array.from(e.target.files ?? []);
     e.target.value = '';
     if (!picked.length) return;
     const readId = ++importReadId.current;
-    void readSkillFolder(picked).then(result => {
+    void readSkillEntries(entriesFromPickedFolder(picked)).then(result => finishFolderImport(readId, result));
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    dragDepth.current = 0;
+    setDragging(false);
+    if (submitting) return;
+    // Entries must be taken synchronously: the DataTransfer is emptied once the event returns.
+    const entries = Array.from(e.dataTransfer?.items ?? []).map(item =>
+      item.kind === 'file' ? ((item.webkitGetAsEntry?.() as DroppedFsEntry | null | undefined) ?? null) : null
+    );
+    const dropped = Array.from(e.dataTransfer?.files ?? []);
+    if (!dropped.length && !entries.length) return;
+    const readId = ++importReadId.current;
+    void resolveDrop(entries, dropped).then(outcome => {
       if (readId !== importReadId.current) return;
-      if (!result.ok) {
-        setImportResult({ ok: false, error: result.error });
-        return;
-      }
-      if (!applySkillMd(result.skillMd)) return;
-      setFiles(result.files);
-      setSkippedFiles(result.skipped);
+      if (outcome.kind === 'error') setImportResult({ ok: false, error: outcome.error });
+      else if (outcome.kind === 'folder')
+        void readSkillEntries(outcome.entries).then(r => finishFolderImport(readId, r));
+      else importSkillMdFile(outcome.file);
     });
+  };
+
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    if (submitting) return;
+    dragDepth.current += 1;
+    setDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setDragging(false);
   };
 
   const applyPasted = () => {
@@ -179,15 +255,16 @@ export const SkillForm: FC<SkillFormProps> = ({
   const source = importResult?.ok ? importResult.source : undefined;
   const sourceIsSameOrigin = source ? isSameOrigin(source.url) : false;
   // Files a folder import brought in are not missing, so they do not count toward the warning.
+  const importedFiles = pendingUpdate?.bundle?.files ?? files;
   const supportingFiles = importResult?.ok
-    ? referencedRelativePaths(importResult.fields.body ?? '').filter(path => !files.some(f => f.path === path))
+    ? referencedRelativePaths(importResult.fields.body ?? '').filter(path => !importedFiles.some(f => f.path === path))
     : [];
 
   const nameError =
     name.length === 0
       ? 'Name is required'
-      : name.length > 64
-        ? 'Name must be 64 characters or fewer'
+      : name.length > MAX_SKILL_NAME_LENGTH
+        ? `Name must be ${MAX_SKILL_NAME_LENGTH} characters or fewer`
         : !SKILL_NAME_PATTERN.test(name)
           ? 'Use lowercase letters, digits, and hyphens (e.g. summarize, review-pr)'
           : null;
@@ -195,15 +272,15 @@ export const SkillForm: FC<SkillFormProps> = ({
   const descriptionError =
     description.trim().length === 0
       ? 'Description is required'
-      : description.length > 500
-        ? 'Description must be 500 characters or fewer'
+      : description.length > MAX_DESCRIPTION_LENGTH
+        ? `Description must be ${MAX_DESCRIPTION_LENGTH} characters or fewer`
         : null;
 
   const bodyError =
     body.trim().length === 0
       ? 'Body is required'
-      : body.length > 50_000
-        ? 'Body must be 50000 characters or fewer'
+      : body.length > MAX_BODY_LENGTH
+        ? `Body must be ${MAX_BODY_LENGTH} characters or fewer`
         : null;
 
   const isValid = !nameError && !descriptionError && !bodyError;
@@ -218,6 +295,7 @@ export const SkillForm: FC<SkillFormProps> = ({
       ...(argumentHint.trim() && { argumentHint: argumentHint.trim() }),
       // Always sent, so re-importing a file without allowed-tools clears it on edit.
       claudeCodeAllowedTools,
+      claudeCodeModel,
       disableModelInvocation,
       files,
     });
@@ -226,14 +304,30 @@ export const SkillForm: FC<SkillFormProps> = ({
   return (
     <Box component="form" onSubmit={handleSubmit} data-testid="skill-form">
       <Stack spacing={3}>
-        {enableSkillMdImport ? (
-          <Stack spacing={1.5} data-testid="skill-form-import-skillmd">
+        {enableSkillMdImport || updateFromSkillMd ? (
+          <Stack
+            spacing={1.5}
+            data-testid="skill-form-import-skillmd"
+            onDragEnter={handleDragEnter}
+            onDragOver={e => e.preventDefault()}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            sx={{
+              p: 1,
+              m: -1,
+              borderRadius: 'sm',
+              outline: '2px dashed',
+              outlineColor: dragging ? 'primary.500' : 'transparent',
+              bgcolor: dragging ? 'primary.softBg' : 'transparent',
+            }}
+          >
             <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-              <Typography level="title-sm">Import SKILL.md</Typography>
+              <Typography level="title-sm">{updateFromSkillMd ? 'Update from SKILL.md' : 'Import SKILL.md'}</Typography>
+              <SkillImportHelp />
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".md,text/markdown"
+                accept=".md,.zip,text/markdown,application/zip"
                 hidden
                 onChange={handleFile}
                 data-testid="skill-form-import-file"
@@ -267,9 +361,9 @@ export const SkillForm: FC<SkillFormProps> = ({
               </Button>
             </Stack>
             <Typography level="body-xs" textColor="text.tertiary" data-testid="skill-form-import-file-limitations">
-              Choose a skill folder to also import the text files in its scripts/ and references/ folders. Scripts run
-              on the user&apos;s machine, so a skill with scripts is always reviewed by a person before it is shared in
-              the Skill Market.
+              ...or drop a SKILL.md, a skill folder or a .zip here. A folder or zip also brings the text files in its
+              scripts/ and references/ folders. Scripts run on the user&apos;s machine, so a skill with scripts is
+              always reviewed by a person before it is shared in the Skill Market.
             </Typography>
             {pasteOpen ? (
               <Stack spacing={1}>
@@ -291,12 +385,102 @@ export const SkillForm: FC<SkillFormProps> = ({
                 </Button>
               </Stack>
             ) : null}
-            {importResult && !importResult.ok ? (
-              <Alert color="danger" variant="soft" data-testid="skill-form-import-error">
-                Couldn&apos;t read that SKILL.md: {importResult.error}
+            {pendingUpdate ? (
+              <Alert color="primary" variant="soft" data-testid="skill-form-update-preview">
+                <Stack spacing={1} sx={{ width: '100%' }}>
+                  <Typography level="title-sm">
+                    {pendingUpdate.preview.changes.length
+                      ? 'This file changes:'
+                      : 'This file matches the skill as it is. Nothing would change.'}
+                  </Typography>
+                  {pendingUpdate.preview.changes.length ? (
+                    <Typography level="body-sm" component="ul" sx={{ m: 0, pl: 3 }}>
+                      {pendingUpdate.preview.changes.map(change => (
+                        <li key={change.key} data-testid={`skill-form-update-change-${change.key}`}>
+                          <strong>{change.label}</strong>
+                          {change.before !== undefined
+                            ? `: ${change.before} -> ${change.after}`
+                            : change.after
+                              ? `: ${change.after}`
+                              : ' changed'}
+                        </li>
+                      ))}
+                    </Typography>
+                  ) : null}
+                  {pendingUpdate.preview.nameMismatch ? (
+                    <Alert color="warning" variant="soft" data-testid="skill-form-update-name-mismatch">
+                      The file is named {pendingUpdate.preview.nameMismatch}, not {name}. The name is kept so the /
+                      {name} command keeps working. To rename it, change the Name field.
+                    </Alert>
+                  ) : null}
+                  {pendingUpdate.preview.scriptsChanged ? (
+                    <Typography level="body-xs" data-testid="skill-form-update-scripts-note">
+                      Scripts run on the user&apos;s machine. A new version of this skill that ships changed scripts is
+                      reviewed by a person before it is shared in the Skill Market.
+                    </Typography>
+                  ) : null}
+                  <Typography level="body-xs">Nothing is saved until you click the save button below.</Typography>
+                  <Stack direction="row" spacing={1}>
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        applyFields(
+                          pendingUpdate.fields,
+                          pendingUpdate.bundle,
+                          new Set(pendingUpdate.preview.changes.map(change => change.key))
+                        );
+                        setPendingUpdate(null);
+                      }}
+                      disabled={!pendingUpdate.preview.changes.length}
+                      data-testid="skill-form-update-apply"
+                    >
+                      Apply to form
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="plain"
+                      color="neutral"
+                      onClick={() => setImportResult(null)}
+                      data-testid="skill-form-update-discard"
+                    >
+                      Discard
+                    </Button>
+                  </Stack>
+                </Stack>
               </Alert>
             ) : null}
-            {source ? (
+            {importResult && !importResult.ok ? (
+              <Alert color="danger" variant="soft" data-testid="skill-form-import-error">
+                <Stack spacing={0.5}>
+                  <span>Couldn&apos;t read that SKILL.md: {importResult.error}</span>
+                  {importResult.details ? (
+                    <>
+                      <Link
+                        component="button"
+                        type="button"
+                        level="body-xs"
+                        sx={{ alignSelf: 'flex-start' }}
+                        onClick={() => setDetailsOpen(open => !open)}
+                        data-testid="skill-form-import-error-details-toggle"
+                      >
+                        {detailsOpen ? 'Hide details' : 'Details'}
+                      </Link>
+                      {detailsOpen ? (
+                        <Typography
+                          level="body-xs"
+                          component="pre"
+                          sx={{ m: 0, whiteSpace: 'pre-wrap', fontFamily: 'code' }}
+                          data-testid="skill-form-import-error-details"
+                        >
+                          {importResult.details}
+                        </Typography>
+                      ) : null}
+                    </>
+                  ) : null}
+                </Stack>
+              </Alert>
+            ) : null}
+            {source && !(updateFromSkillMd && sourceIsSameOrigin && !source.thirdParty) ? (
               <Alert
                 color={source.thirdParty || !sourceIsSameOrigin ? 'warning' : 'primary'}
                 variant="soft"
@@ -316,6 +500,14 @@ export const SkillForm: FC<SkillFormProps> = ({
                     source.url
                   )}
                 </span>
+              </Alert>
+            ) : null}
+            {importResult?.ok &&
+            (importResult.fields.description?.length ?? 0) > MAX_DESCRIPTION_LENGTH &&
+            description.length > MAX_DESCRIPTION_LENGTH ? (
+              <Alert color="warning" variant="soft" data-testid="skill-form-import-description-length">
+                The description is {importResult.fields.description?.length} characters; skills allow{' '}
+                {MAX_DESCRIPTION_LENGTH}. Shorten it before saving.
               </Alert>
             ) : null}
             {importResult?.ok && importResult.dropped.length ? (
@@ -384,6 +576,22 @@ export const SkillForm: FC<SkillFormProps> = ({
               onClick={() => setClaudeCodeAllowedTools([])}
               disabled={submitting}
               data-testid="skill-form-claude-code-tools-remove"
+            >
+              Remove
+            </Link>
+          </Typography>
+        ) : null}
+
+        {claudeCodeModel ? (
+          <Typography level="body-sm" textColor="text.tertiary" data-testid="skill-form-claude-code-model">
+            Claude Code model: {claudeCodeModel}. Kept for Claude Code exports; not used in Bike4Mind.{' '}
+            <Link
+              component="button"
+              type="button"
+              level="body-sm"
+              onClick={() => setClaudeCodeModel('')}
+              disabled={submitting}
+              data-testid="skill-form-claude-code-model-remove"
             >
               Remove
             </Link>

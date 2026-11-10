@@ -25,6 +25,7 @@ import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import { useGetSkills } from '@client/app/hooks/data/skills';
 import { useUser } from '@client/app/contexts/UserContext';
 import {
+  useDeleteListing,
   useMyListings,
   useRescanVersion,
   useSubmitNewVersion,
@@ -89,10 +90,12 @@ const ListingRow: FC<{ listing: MyListing }> = ({ listing }) => {
   const navigate = useNavigate();
   const submit = useSubmitNewVersion();
   const withdraw = useWithdrawListing();
+  const deleteListing = useDeleteListing();
   const status = listing.hiddenByReports
     ? { label: 'Hidden (reported)', color: 'warning' as const }
     : STATUS[listing.status];
   const open = listing.status !== 'withdrawn' && listing.status !== 'delisted';
+  const deletable = listing.status === 'withdrawn' && !listing.hiddenByReports;
   const waiting = listing.versions.some(v => v.reviewStatus === 'pending');
 
   const resubmit = async () => {
@@ -111,6 +114,21 @@ const ListingRow: FC<{ listing: MyListing }> = ({ listing }) => {
     try {
       await withdraw.mutateAsync(listing.id);
       toast.success('Listing withdrawn');
+    } catch (e) {
+      toast.error(getErrorMessage(e));
+    }
+  };
+
+  const doDelete = async () => {
+    if (
+      !window.confirm(
+        `Delete /${listing.name} permanently? Its versions and ratings are removed and this cannot be undone. People who imported it keep their copies.`
+      )
+    )
+      return;
+    try {
+      await deleteListing.mutateAsync(listing.id);
+      toast.success('Listing deleted');
     } catch (e) {
       toast.error(getErrorMessage(e));
     }
@@ -201,6 +219,18 @@ const ListingRow: FC<{ listing: MyListing }> = ({ listing }) => {
               onClick={() => void doWithdraw()}
             >
               Withdraw
+            </Button>
+          ) : null}
+          {deletable ? (
+            <Button
+              size="sm"
+              variant="plain"
+              color="danger"
+              loading={deleteListing.isPending}
+              onClick={() => void doDelete()}
+              data-testid={`market-mine-delete-${listing.name}`}
+            >
+              Delete permanently
             </Button>
           ) : null}
         </Stack>

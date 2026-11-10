@@ -380,7 +380,7 @@ export const FALLBACK_PREFERENCES: Record<string, string[]> = {
   ],
   'global.anthropic.claude-haiku-5-5': ['claude-haiku-5-5', 'claude-haiku-4-5-20251001', 'gpt-4o-mini'],
   'global.anthropic.claude-sonnet-5': ['claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
-  'global.anthropic.claude-sonnet-5-5': ['claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
+  'global.anthropic.claude-sonnet-5-5': ['claude-sonnet-5-5', 'claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
   'global.anthropic.claude-sonnet-4-6': ['claude-sonnet-4-6', 'claude-sonnet-5', 'gpt-5'],
   'us.anthropic.claude-sonnet-4-5-20250929-v1:0': [
     'claude-sonnet-4-5-20250929',
@@ -399,6 +399,7 @@ export const FALLBACK_PREFERENCES: Record<string, string[]> = {
     'gpt-5',
     'claude-haiku-4-5-20251001',
   ],
+  'claude-sonnet-5-5': ['claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
   'claude-sonnet-5': ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5'],
   'claude-sonnet-4-6': ['claude-sonnet-5', 'claude-sonnet-4-5-20250929', 'claude-opus-4-5-20251101', 'gpt-5'],
   'claude-sonnet-4-5-20250929': ['claude-sonnet-5', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001', 'gpt-5'],

@@ -66,6 +66,17 @@ const logOf = (agent: ReActAgent) =>
   agent.toCheckpoint().confidenceLog.map(({ confidence, source, reason }) => ({ confidence, source, reason }));
 
 describe('ReActAgent self-reported confidence', () => {
+  it('keeps a literal empty think pair that sits inside the final answer when the flag is off', async () => {
+    const { agent, steps } = createAgent(
+      createTool('a real result'),
+      createLlm('Checking', 'Write <think></think> to open a block'),
+      {}
+    );
+    await agent.run('probe it');
+
+    expect(steps.find(s => s.type === 'final_answer')?.content).toContain('<think></think>');
+  });
+
   describe.each([
     ['run()', (agent: ReActAgent) => agent.run('probe it')],
     ['runIteration()', (agent: ReActAgent) => agent.runIteration('probe it')],
@@ -124,6 +135,20 @@ describe('ReActAgent self-reported confidence', () => {
       expect(logOf(agent)).toEqual([{ confidence: 0.7, source: 'default', reason: undefined }]);
       expect(steps.find(s => s.type === 'thought')?.content).toContain('<confidence');
     });
+
+    it('drops an empty think block from the thought when the flag is off', async () => {
+      const { agent, steps } = createAgent(createTool('a real result'), createLlm('<think></think>\nChecking'), {});
+      await drive(agent);
+
+      expect(steps.find(s => s.type === 'thought')?.content).toBe('Checking');
+    });
+
+    it('emits no thought for a preamble that is only an empty think block when the flag is off', async () => {
+      const { agent, steps } = createAgent(createTool('a real result'), createLlm('<think></think>'), {});
+      await drive(agent);
+
+      expect(steps.some(s => s.type === 'thought')).toBe(false);
+    });
   });
 
   describe.each([
@@ -157,6 +182,12 @@ describe('ReActAgent self-reported confidence', () => {
       await drive(agent);
       return { deltas: deltas.join(''), agent, steps };
     };
+
+    it('hides an empty think block split across deltas when the flag is off, and leaves a confidence tag alone', async () => {
+      const { deltas } = await deltasOf(['<think>', '</think>', '\nChecking ', GOOD_TAG], {});
+
+      expect(deltas).toBe(`\nChecking ${GOOD_TAG}`);
+    });
 
     it('never shows the tag, but still records the report', async () => {
       const { deltas, agent } = await deltasOf(['<confid', 'ence score="0.4">thin</confid', 'ence>\nChecking']);

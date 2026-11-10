@@ -1559,6 +1559,10 @@ export class ModelHubService {
     return [...this.#pulls.values()].map(entry => ({ ...entry.view }));
   }
 
+  runningCount(): number {
+    return [...this.#pulls.keys()].filter(key => this.#running(key)).length;
+  }
+
   /**
    * Resolves when the pull finishes, fails, pauses or is cancelled; progress arrives through `onPullsChanged`.
    * Refused for a server the user did not set to "Chat and manage".

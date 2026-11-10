@@ -64,6 +64,12 @@ beforeEach(() => {
 });
 
 describe('PrReportDialog send-state machine', () => {
+  it('is titled after the page it opens from', () => {
+    renderDialog();
+
+    expect(screen.getByRole('dialog', { name: 'PR digest' })).toBeInTheDocument();
+  });
+
   it('sends and reports success, then keeps Send locked', async () => {
     const user = userEvent.setup();
     sendMutateAsync.mockResolvedValue({ outcome: 'sent' });

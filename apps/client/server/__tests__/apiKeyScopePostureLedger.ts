@@ -313,7 +313,6 @@ export const KNOWN_UNPOSTURED = new Set<string>([
   'users/[id]/activities/index.ts',
   'users/[id]/agents.ts',
   'users/[id]/collections/index.ts',
-  'users/[id]/delete.ts',
   'users/[id]/docx-template.ts',
   'users/[id]/email-settings.ts',
   'users/[id]/friend-requests.ts',

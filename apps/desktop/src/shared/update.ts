@@ -269,10 +269,23 @@ export interface UpdateBusyReport {
   awaitingApproval: number;
   /** Background commands still running - dev servers, watchers, builds. */
   background: number;
+  /** Open terminal shells, including their foreground jobs. */
+  terminals?: number;
+  /** Model pulls that have not finished, failed or paused. */
+  modelDownloads?: number;
+  /** Model servers Desktop started or is starting/stopping. */
+  modelServers?: number;
 }
 
 export function isBusy(report: UpdateBusyReport): boolean {
-  return report.replying > 0 || report.awaitingApproval > 0 || report.background > 0;
+  return (
+    report.replying > 0 ||
+    report.awaitingApproval > 0 ||
+    report.background > 0 ||
+    (report.terminals ?? 0) > 0 ||
+    (report.modelDownloads ?? 0) > 0 ||
+    (report.modelServers ?? 0) > 0
+  );
 }
 
 /**
@@ -293,6 +306,17 @@ export function describeBusy(report: UpdateBusyReport): string {
   }
   if (report.background > 0) {
     parts.push(`${report.background} background ${report.background === 1 ? 'process is' : 'processes are'} running`);
+  }
+  if (report.terminals) {
+    parts.push(`${report.terminals} terminal ${report.terminals === 1 ? 'session is' : 'sessions are'} open`);
+  }
+  if (report.modelDownloads) {
+    parts.push(
+      `${report.modelDownloads} model ${report.modelDownloads === 1 ? 'download is' : 'downloads are'} active`
+    );
+  }
+  if (report.modelServers) {
+    parts.push(`${report.modelServers} model ${report.modelServers === 1 ? 'server is' : 'servers are'} running`);
   }
   if (parts.length === 0) return 'Nothing is running.';
   if (parts.length === 1) return `${parts[0]}.`;

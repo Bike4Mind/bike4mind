@@ -22,6 +22,7 @@ import {
   type SidebarItem,
 } from './adminSidebarConfig';
 import { adminTabToSlug } from './adminTabSlugs';
+import { ADMIN_ACTION_COUNT_LABELS, formatAdminActionCount, type AdminActionCounts } from './adminActionCounts';
 import { useAdminSidebarMore } from './useAdminSidebarState';
 
 /** The signed-in admin shown in the sidebar footer. */
@@ -36,8 +37,8 @@ export type SidebarNavProps = {
   activeTab: AdminTab | string | null;
   enableUserMigration?: boolean;
   showLiveOpsTriageTab: boolean;
-  waitingSubscribersCount?: number;
-  unreviewedAuditCount?: number;
+  /** The sidebar counts from `useAdminActionCounts`; a missing or zero count shows no badge. */
+  actionCounts?: AdminActionCounts;
   /** A Stripe-billed subscription started since this browser last opened the Subscriptions tab. */
   newSubscriptions?: boolean;
   hiddenNotifications: string[];
@@ -270,37 +271,42 @@ const SectionLabel = ({ id, children }: { id: string; children: ReactNode }) => 
   </Box>
 );
 
-const CountPill = ({ count, label, testId }: { count: number; label: string; testId?: string }) => (
-  <Box
-    component="span"
-    aria-label={label}
-    title={label}
-    data-testid={testId}
-    sx={{
-      minWidth: 20,
-      height: 20,
-      px: '6px',
-      boxSizing: 'border-box',
-      borderRadius: '999px',
-      fontSize: 11,
-      fontWeight: 600,
-      display: 'inline-flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      bgcolor: 'admin.status.neutral.background',
-      color: 'admin.status.neutral.foreground',
-    }}
-  >
-    {count}
-  </Box>
-);
+/** The one sidebar badge: a neutral pill, tabular figures, capped at "99+". See "Sidebar badges" in DESIGN_GUIDE.md. */
+const CountPill = ({ count, label, testId }: { count: number; label: string; testId: string }) => {
+  const text = formatAdminActionCount(count);
+  return (
+    <Box
+      component="span"
+      aria-label={`${text} ${label}`}
+      title={`${text} ${label}`}
+      data-testid={testId}
+      sx={{
+        minWidth: 20,
+        height: 20,
+        px: '6px',
+        flexShrink: 0,
+        boxSizing: 'border-box',
+        borderRadius: '999px',
+        fontSize: 11,
+        fontWeight: 600,
+        fontVariantNumeric: 'tabular-nums',
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        bgcolor: 'admin.status.neutral.background',
+        color: 'admin.status.neutral.foreground',
+      }}
+    >
+      {text}
+    </Box>
+  );
+};
 
 export const SidebarNav = ({
   activeTab,
   enableUserMigration,
   showLiveOpsTriageTab,
-  waitingSubscribersCount,
-  unreviewedAuditCount,
+  actionCounts,
   newSubscriptions = false,
   hiddenNotifications,
   canOpenTab,
@@ -347,6 +353,13 @@ export const SidebarNav = ({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [collapsed]);
 
+  const pendingCount = (item: SidebarItem): number => {
+    if (!item.badge || item.badge === 'newSubscriptions') return 0;
+    if (item.badge === 'waitingSubscribers' && hiddenNotifications.includes('waiting-subscribers')) return 0;
+    return actionCounts?.[item.badge] ?? 0;
+  };
+  const hasWaitingWork = (item: SidebarItem) => pendingCount(item) > 0;
+
   const itemBadge = (item: SidebarItem): ReactNode => {
     if (item.badge === 'newSubscriptions') {
       return newSubscriptions ? (
@@ -355,28 +368,19 @@ export const SidebarNav = ({
           role="img"
           aria-label="New subscriptions since your last visit"
           data-testid="admin-sidebar-new-subscriptions-dot"
-          sx={{ width: 8, height: 8, flexShrink: 0, borderRadius: '50%', bgcolor: 'admin.status.bad.foreground' }}
+          sx={{ width: 8, height: 8, flexShrink: 0, borderRadius: '50%', bgcolor: 'admin.status.neutral.foreground' }}
         />
       ) : null;
     }
-    if (item.badge === 'unreviewedAudit') {
-      return unreviewedAuditCount && unreviewedAuditCount > 0 ? (
-        <CountPill
-          count={unreviewedAuditCount}
-          label={`${unreviewedAuditCount} audit entries to review`}
-          testId="admin-sidebar-unreviewed-audit-badge"
-        />
-      ) : null;
-    }
-    if (
-      item.badge !== 'waitingSubscribers' ||
-      !waitingSubscribersCount ||
-      waitingSubscribersCount <= 0 ||
-      hiddenNotifications.includes('waiting-subscribers')
-    ) {
-      return null;
-    }
-    return <CountPill count={waitingSubscribersCount} label={`${waitingSubscribersCount} waiting for an invite`} />;
+    const count = pendingCount(item);
+    if (!item.badge || count <= 0) return null;
+    return (
+      <CountPill
+        count={count}
+        label={ADMIN_ACTION_COUNT_LABELS[item.badge]}
+        testId={`admin-sidebar-${item.badge}-badge`}
+      />
+    );
   };
 
   const focusables = () => Array.from(navRef.current?.querySelectorAll<HTMLElement>(`[${FOCUSABLE_ATTR}]`) ?? []);
@@ -498,6 +502,7 @@ export const SidebarNav = ({
           )}
           {visibleSections.map(section => {
             const sectionActive = section.key === activeSectionKey;
+            const sectionHasWork = section.items.some(hasWaitingWork);
             return (
               <Dropdown key={section.key}>
                 <Tooltip title={section.label} placement="right">
@@ -507,14 +512,31 @@ export const SidebarNav = ({
                       root: {
                         variant: 'plain',
                         color: 'neutral',
-                        'aria-label': section.label,
-                        sx: iconButtonSx(sectionActive),
+                        'aria-label': sectionHasWork ? `${section.label}, work waiting` : section.label,
+                        sx: { ...iconButtonSx(sectionActive), position: 'relative' },
                         ...focusableProps,
                       },
                     }}
                     data-testid={`admin-sidebar-rail-${section.key}-btn`}
                   >
                     <NavIcon Icon={section.Icon} />
+                    {sectionHasWork && (
+                      // The rail has no room for counts; the dot says "open me", the menu shows the numbers.
+                      <Box
+                        component="span"
+                        aria-hidden
+                        data-testid={`admin-sidebar-rail-${section.key}-work-dot`}
+                        sx={{
+                          position: 'absolute',
+                          top: 6,
+                          right: 6,
+                          width: 6,
+                          height: 6,
+                          borderRadius: '50%',
+                          bgcolor: 'admin.status.neutral.foreground',
+                        }}
+                      />
+                    )}
                   </MenuButton>
                 </Tooltip>
                 <Menu
@@ -657,9 +679,11 @@ export const SidebarNav = ({
         {visibleSections.map(section => {
           const labelId = `${idPrefix}-${section.key}`;
           const moreOpen = filtering || isMoreOpen(section.key);
-          const { shown, hiddenCount } = splitSectionItems(section.items, activeTab, moreOpen);
+          const { shown, hiddenCount } = splitSectionItems(section.items, activeTab, moreOpen, hasWaitingWork);
           const canCollapseAgain =
-            !filtering && moreOpen && splitSectionItems(section.items, activeTab, false).hiddenCount > 0;
+            !filtering &&
+            moreOpen &&
+            splitSectionItems(section.items, activeTab, false, hasWaitingWork).hiddenCount > 0;
           return (
             <Box key={section.key} component="section" data-testid={`admin-sidebar-section-${section.key}`}>
               <SectionLabel id={labelId}>{section.label}</SectionLabel>

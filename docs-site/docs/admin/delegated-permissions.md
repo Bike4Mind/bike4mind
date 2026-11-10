@@ -1,0 +1,112 @@
+---
+title: Delegated Admin Permissions
+description: How delegated admin permissions work, their current coverage, and full-admin rules
+sidebar_position: 3
+tags: [admin, permissions, security]
+---
+
+# Delegated Admin Permissions
+
+A delegated admin holds one or more named permissions instead of full admin access. API routes check the permission declared for each HTTP method. Console access is separate: a delegated admin can enter only when a tab supports one of their permissions, and sees only those tabs. See [Console tabs](#console-tabs) for the current list.
+
+Full administrators (the legacy `isAdmin` flag) have every permission implicitly. Account-action safeguards still apply, including the role-change rules below.
+
+## Permissions
+
+The table gives examples of current route coverage. A permission does not automatically unlock every operation in its category.
+
+| Permission | Current coverage |
+|------------|------------------|
+| `support:read` | Read admin reporting, audit, approval, security, and settings pages, and internal notes (see [Support reads](#support-reads)) |
+| `credits:adjust` | Review, release, block, and unblock signup credit grants |
+| `users:moderate` | Write, edit, and delete internal notes; manage organization membership and moderation reviews |
+| `users:impersonate` | Defined permission; Login as User requires full admin access |
+| `keys:revoke` | Defined permission; revoking other users' API keys requires full admin access |
+| `users:delete` | Schedule or cancel account deletion |
+| `settings:manage` | Edit admin settings, manage tags and modals, configure Slack workspaces, and manage partner signup rules |
+| `models:curate` | Publish curated model catalog versions |
+
+Permissions are enforced per route. `users:delete`, `models:curate`, `support:read`, `credits:adjust`, `users:moderate`, and `settings:manage` are enforced by `adminApi` middleware on their routes. `users:impersonate` and `keys:revoke` are defined in the permission list but not declared on an `adminApi` route; those flows require the legacy full-admin flag.
+
+Legacy user profile edits, balance adjustments, and bulk account actions require full admin access. Holding a named permission alone does not grant access to those flows.
+
+## Support reads
+
+`support:read` is read-only. Routes declare it on `GET` only, with two reviewed exceptions whose handlers make their own check: deciding an approval also needs the permission the approval names, and signing off an audit entry needs full admin access.
+
+It covers the read side of:
+
+- Reporting: analytics, revenue, spend, usage, model metrics and logs, event metrics, help analytics, and retrieval rate.
+- Oversight: the audit log, approvals, webhook and integration audit logs, published-page reports, Stripe disputes, and shadow detections.
+- Operations: stuck agent executions, the dead-letter queue list and history, integration health and demand, and QA runs.
+- Security: the security dashboard, including firewall traffic and blocked requests.
+- Configuration: system prompts, tool definitions, gears, email templates and campaigns, OAuth clients, partner signup rules, voice agents, and the GitHub connection.
+
+Firewall reads run metered cloud queries, and some GitHub reads call the GitHub API. They stay on `support:read` and are rate-limited per user.
+
+A page whose edits need `settings:manage` also opens to `settings:manage` alone for reading, so a settings manager does not need `support:read` to see what they edit. This applies to tool definitions, gears, and stuck agent executions. `settings:manage` does not imply `support:read` anywhere else.
+
+## Console tabs
+
+| Tab | Opens with |
+|-----|------------|
+| Modals | `settings:manage` |
+| Retrieval, Webhook logs, Help analytics, API key scopes, Integration demand, Audit log, Approvals, Stripe disputes, Shadow detections | `support:read` |
+| Tools, Gears, Stuck executions | `support:read` or `settings:manage` |
+
+Other tabs require full admin access. Inside an open tab, an action the delegate cannot perform is disabled and names the permission it needs, such as "Missing permission: users:moderate". A detail page under a tab the delegate cannot open, such as a user profile, shows "Full admin access required" in place of the page.
+
+## Granting permissions
+
+There is no delegated-permission editor or grant endpoint in the admin panel. Delegated permissions are stored in the user's `adminPermissions` field and assigned directly in the database.
+
+To change full admin access, open the user's profile and choose **More > Change role** (also available from Overview). Select **Super Admin** to grant it, or another role to remove it, enter a reason, and confirm. Only a full administrator can make this change. You cannot change your own role or demote the last Super Admin.
+
+## Full administrators
+
+A full administrator is a user whose `isAdmin` flag is set. This is the legacy admin model. A full admin:
+
+- Has every permission implicitly without being listed in `adminPermissions`.
+- Can act on other admins, subject to each action's safeguards.
+- Can grant or revoke another user's full-admin flag, subject to role-change safeguards.
+
+The platform refuses to demote the last Super Admin, whoever asks. When the target is the sole `isAdmin: true` user, the request returns an error regardless of the caller's role. Full admins also cannot change their own role.
+
+Holding every explicit permission is not the same as being a full admin. A user with every explicit permission is still a delegated admin.
+
+## Acting on admin accounts
+
+On routes using `assertCanActOnAdminTarget`, delegated admins cannot act on users who themselves have admin access. For example, a delegated admin with `settings:manage` can change a regular user's free-form tags but cannot change another admin's tags. The error message is: "Only full administrators can [action] users with admin access".
+
+Routes that call `assertCanActOnAdminTarget` enforce this guard: deletion scheduling and cancellation, tag changes, internal-mark changes, and signup grant actions. A full administrator is not subject to this particular restriction.
+
+## Declaring a permission on an admin route
+
+A route using `adminApi` declares which permission each HTTP method requires. The middleware checks the caller's permissions before the handler runs. A route that does not declare at least one permission is rejected when initialized.
+
+```ts
+import { adminApi } from '@server/middlewares/adminApi';
+
+export default adminApi({
+  adminPermissions: {
+    GET: 'support:read',
+    PATCH: 'settings:manage',
+  },
+})
+  .get(async (_req, res) => {
+    res.status(200).json({ status: 'ok' });
+  })
+  .patch(async (_req, res) => {
+    res.status(204).end();
+  });
+```
+
+A `HEAD` request uses the `GET` permission unless the route declares a separate `HEAD` entry. API keys must include the `admin` scope to call an `adminApi` route, regardless of the user's permissions.
+
+## Troubleshooting
+
+If the admin entry or a tab is missing, check [Console tabs](#console-tabs); holding a permission does not by itself grant console access. An API response of `Missing permission: ...` names the permission required for that method. API keys also need the `admin` scope, and routes configured as session-only require a signed-in browser session.
+
+## Existing references
+
+- [User Management](./user-management.md) describes the internal-notes permission requirements (`support:read` to read, `users:moderate` to write) and the tags permission (`settings:manage`).

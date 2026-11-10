@@ -32,11 +32,16 @@ export function registerPullRequests(options: RegisterPullRequestsOptions): PrMo
     emitSummary: event => send(IPC_CHANNELS.prSummaryChanged, event),
     chat: {
       isCode: async sessionId => (await store.get(sessionId))?.mode === 'code',
-      project: async sessionId => {
+      project: async (sessionId, options) => {
         const session = await store.get(sessionId);
         const project = session?.mode === 'code' ? session.project : undefined;
         if (!project) return null;
-        const branch = project.workspaceBranch ?? (await currentBranch(project.workingDirectory).catch(() => null));
+        const checkedOut = () => currentBranch(project.workingDirectory).catch(() => null);
+        // The recorded branch first otherwise: before a pending worktree exists, workingDirectory
+        // is the repository folder, whose checkout is not this session's branch.
+        const branch = options?.live
+          ? ((await checkedOut()) ?? project.workspaceBranch ?? null)
+          : (project.workspaceBranch ?? (await checkedOut()));
         return { workingDirectory: project.workingDirectory, branch };
       },
       archive: async sessionId => {

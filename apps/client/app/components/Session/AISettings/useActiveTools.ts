@@ -7,6 +7,7 @@ import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { filterToolsForDisplay } from '@client/app/utils/toolMapping';
 import { effectiveDisabledTools } from '@client/app/utils/effectiveDisabledTools';
+import { isThinkingShownActive } from '@client/app/utils/thinkingPayload';
 import { AGENT_ONLY_MCP_SERVERS, ICONED_MCP_SERVERS } from '../../common/ToolIndicators';
 
 const PRIMARY_TOOLS = ['web_search', 'web_fetch', 'image_generation'] as const;
@@ -43,7 +44,6 @@ export function useActiveTools(currentSession: ISessionDocument | null) {
   const disabledTools = effectiveDisabledTools(currentSession);
   const displayTools = filterToolsForDisplay(tools, serverConfig?.toolAvailability, disabledTools);
   const activePrimaryTools: string[] = PRIMARY_TOOLS.filter(tool => displayTools.includes(tool));
-  const isThinkingActive = thinking?.enabled ?? false;
   // Integrations that actually reach this turn. "Only tools I pick" withholds every
   // non-agent-only MCP tool server-side (`offerOnlyNamedTools` in sharedToolBuilder), so
   // those integrations contribute nothing and must not read as active here - the same
@@ -77,6 +77,7 @@ export function useActiveTools(currentSession: ISessionDocument | null) {
   // has not resolved the model yet.
   const { data: modelInfoRepo } = useModelInfo();
   const info = modelInfoRepo?.find(m => m.id === model);
+  const isThinkingActive = isThinkingShownActive(thinking, info);
   const toolsLive = toolMode !== 'fast' && (info ? !!info.supportsTools : true);
   const activeToolsCount = toolsLive ? activePrimaryTools.length + iconedMcpCount + otherActiveToolsCount : 0;
 

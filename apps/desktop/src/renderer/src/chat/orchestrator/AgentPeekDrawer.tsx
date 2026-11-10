@@ -1,3 +1,4 @@
+import { TaskDecisionPanel } from './TaskDecisionPanel';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import IconButton from '@mui/joy/IconButton';
@@ -269,8 +270,6 @@ export function AgentPeekDrawer({ agent, persona, onClose, actions }: AgentPeekD
       aria-label={`Agent details: ${agent.title}`}
       tabIndex={-1}
       data-testid="orchestrator-peek-drawer"
-      // Holds the Tavern's chrome up while open (ambient.ts).
-      data-ambient-hold
       sx={{
         outline: 'none',
         width: 340,
@@ -315,6 +314,7 @@ export function AgentPeekDrawer({ agent, persona, onClose, actions }: AgentPeekD
         </IconButton>
       </Box>
 
+      <TaskDecisionPanel agent={agent} />
       {pending.length > 0 && <PendingRequests calls={pending} />}
 
       <Typography
