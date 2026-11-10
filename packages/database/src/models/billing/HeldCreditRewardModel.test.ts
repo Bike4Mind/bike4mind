@@ -79,3 +79,43 @@ describe('heldCreditRewardRepository.totalsForUsers', () => {
     spy.mockRestore();
   });
 });
+
+describe('heldCreditRewardRepository.reduceHeld', () => {
+  const row = (transactionId: string) => HeldCreditRewardModel.findOne({ transactionId }).lean();
+
+  it('lowers a held or paused reward only while it still holds the expected amount', async () => {
+    await heldCreditRewardRepository.hold(reward('u1', 'tx-1', 100));
+    await heldCreditRewardRepository.hold(reward('u1', 'tx-2', 100));
+    await heldCreditRewardRepository.pauseOne('tx-2');
+
+    expect(await heldCreditRewardRepository.reduceHeld('tx-1', 100, 40)).toBe(1);
+    expect(await heldCreditRewardRepository.reduceHeld('tx-1', 100, 10)).toBe(0);
+    expect(await heldCreditRewardRepository.reduceHeld('tx-2', 100, 60)).toBe(1);
+
+    expect(await row('tx-1')).toMatchObject({ credits: 40, status: 'held' });
+    expect(await row('tx-2')).toMatchObject({ credits: 60, status: 'paused' });
+  });
+
+  it('voids the reward when nothing is left, and never touches a paid one', async () => {
+    await heldCreditRewardRepository.hold(reward('u1', 'tx-1', 100));
+    await heldCreditRewardRepository.hold(reward('u1', 'tx-2', 100));
+    await heldCreditRewardRepository.settle('tx-2', 'paid');
+
+    expect(await heldCreditRewardRepository.reduceHeld('tx-1', 100, 0)).toBe(1);
+    expect(await heldCreditRewardRepository.reduceHeld('tx-2', 100, 0)).toBe(0);
+
+    expect(await row('tx-1')).toMatchObject({ status: 'void' });
+    expect(await row('tx-2')).toMatchObject({ status: 'paid', credits: 100 });
+  });
+});
+
+describe('heldCreditRewardRepository.settle', () => {
+  it('settles with an expected amount only while the row still holds it', async () => {
+    await heldCreditRewardRepository.hold(reward('u1', 'tx-1', 100));
+    await heldCreditRewardRepository.reduceHeld('tx-1', 100, 40);
+
+    expect(await heldCreditRewardRepository.settle('tx-1', 'paid', { credits: 100 })).toBe(0);
+    expect(await heldCreditRewardRepository.settle('tx-1', 'paid', { credits: 40 })).toBe(1);
+    expect(await HeldCreditRewardModel.findOne({ transactionId: 'tx-1' }).lean()).toMatchObject({ status: 'paid' });
+  });
+});

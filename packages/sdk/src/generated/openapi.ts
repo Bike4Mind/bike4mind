@@ -8469,6 +8469,8 @@ export interface components {
       argument_hint: string | null;
       /** @description The SKILL.md `allowed-tools`, kept verbatim. */
       claude_code_allowed_tools: string[];
+      /** @description The SKILL.md `model`, kept verbatim for Claude Code exports. Absent when the SKILL.md sets none. */
+      claude_code_model?: string;
       disable_model_invocation: boolean;
       /** @enum {string} */
       scope: 'user' | 'organization' | 'system';
@@ -8500,7 +8502,7 @@ export interface components {
      *     }
      */
     createSkillRequest: {
-      /** @description The full text of a SKILL.md: a YAML frontmatter block (`name`, `description`, and optionally `argument-hint`, `allowed-tools`, `disable-model-invocation`) followed by the markdown body. The same rules as the Skills page import apply: name in kebab-case up to 64 characters, description up to 500 characters, body up to 50,000 characters. */
+      /** @description The full text of a SKILL.md: a YAML frontmatter block (`name`, `description`, and optionally `argument-hint`, `allowed-tools`, `model`, `disable-model-invocation`) followed by the markdown body. The same rules as the Skills page import apply: name in kebab-case up to 64 characters, description up to 500 characters, body up to 50,000 characters. */
       skill_md: string;
       /** @description Supporting text files keyed by path, each under `scripts/` or `references/` (for example `scripts/run.sh`). At most 20 files, 100 KB each and 512 KB in total. `scripts/` files are reviewed by a human before the skill can be published to the Skill Market. */
       files?: {
@@ -8521,6 +8523,8 @@ export interface components {
       argument_hint: string | null;
       /** @description The SKILL.md `allowed-tools`, kept verbatim. */
       claude_code_allowed_tools: string[];
+      /** @description The SKILL.md `model`, kept verbatim for Claude Code exports. Absent when the SKILL.md sets none. */
+      claude_code_model?: string;
       disable_model_invocation: boolean;
       /** @enum {string} */
       scope: 'user' | 'organization' | 'system';
@@ -8549,7 +8553,7 @@ export interface components {
      *     }
      */
     updateSkillRequest: {
-      /** @description The full replacement SKILL.md. Fields the frontmatter leaves out are cleared (`argument-hint`, `allowed-tools`, `disable-model-invocation`); `name` may be left out to keep the current one. */
+      /** @description The full replacement SKILL.md. Fields the frontmatter leaves out are cleared (`argument-hint`, `allowed-tools`, `model`, `disable-model-invocation`); `name` may be left out to keep the current one. */
       skill_md: string;
       /** @description Replaces all supporting files; `{}` removes them. Omit to leave the current files unchanged. */
       files?: {
@@ -8568,6 +8572,8 @@ export interface components {
         argument_hint: string | null;
         /** @description The SKILL.md `allowed-tools`, kept verbatim. */
         claude_code_allowed_tools: string[];
+        /** @description The SKILL.md `model`, kept verbatim for Claude Code exports. Absent when the SKILL.md sets none. */
+        claude_code_model?: string;
         disable_model_invocation: boolean;
         /** @enum {string} */
         scope: 'user' | 'organization' | 'system';
@@ -8590,6 +8596,8 @@ export interface components {
       argument_hint: string | null;
       /** @description The SKILL.md `allowed-tools`, kept verbatim. */
       claude_code_allowed_tools: string[];
+      /** @description The SKILL.md `model`, kept verbatim for Claude Code exports. Absent when the SKILL.md sets none. */
+      claude_code_model?: string;
       disable_model_invocation: boolean;
       /** @enum {string} */
       scope: 'user' | 'organization' | 'system';
