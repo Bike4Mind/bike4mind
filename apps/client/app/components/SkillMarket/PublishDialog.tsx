@@ -45,13 +45,8 @@ import {
   useSuggestListingTags,
   type SubmitResult,
 } from '@client/app/hooks/data/skillMarket';
+import { isEscapeFromOpenListbox } from './parts';
 import ScanResult from './ScanResult';
-
-/** An open Select listbox keeps focus on its button and bubbles Escape to the Modal, which must not treat it as a close. */
-const isEscapeFromOpenListbox = (event: unknown): boolean => {
-  const target = (event as { target?: unknown } | null)?.target;
-  return target instanceof Element && !!target.closest('[aria-expanded="true"], [role="listbox"]');
-};
 
 const MY_LISTINGS = 'My listings';
 

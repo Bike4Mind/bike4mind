@@ -59,6 +59,7 @@ import {
   TierChip,
   VisibilityChip,
   formatCount,
+  isEscapeFromOpenListbox,
 } from './parts';
 import { SELF_APPROVED_LABEL } from './ScanResult';
 
@@ -268,7 +269,13 @@ const ReportDialog: FC<{ listingId: string; token?: string; onClose: () => void 
     }
   };
   return (
-    <Modal open onClose={onClose}>
+    <Modal
+      open
+      onClose={(event, reason) => {
+        if (reason === 'escapeKeyDown' && isEscapeFromOpenListbox(event)) return;
+        onClose();
+      }}
+    >
       <ModalDialog sx={{ width: 460, maxWidth: '95vw' }} data-testid="market-report-dialog">
         <ModalClose />
         <DialogTitle>Report this skill</DialogTitle>
