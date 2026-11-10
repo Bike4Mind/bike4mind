@@ -1,7 +1,10 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
-import { AdminAuditLogModel, Organization, PartnerSignupRule, User } from '@bike4mind/database';
+import { AdminAuditLogModel, Invite, Organization, PartnerSignupRule, User } from '@bike4mind/database';
+import { organizationRepository } from '@bike4mind/database/infra';
+import { InviteType } from '@bike4mind/common';
+import { organizationService } from '@bike4mind/services';
 import {
   createMongoReplSet,
   MONGO_TEST_TIMEOUT_MS,
@@ -15,7 +18,7 @@ vi.mock('@bike4mind/services', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/services')>();
   return {
     adminAuditService: actual.adminAuditService,
-    organizationService: actual.organizationService,
+    organizationService: { ...actual.organizationService },
     authSessionService: { endRealtimeConnections: vi.fn() },
   };
 });
@@ -124,20 +127,62 @@ describe('account deletion purge claims with Mongo', () => {
     expect(await Organization.exists({ _id: org.id })).toBeNull();
     expect(await PartnerSignupRule.collection.countDocuments({ organizationId: String(org.id) })).toBe(0);
   });
-  it('leaves an organization that gained a member after the check and refuses the delete', async () => {
+  it.each([
+    [
+      'a member row',
+      (id: string) => ({ users: { userId: new mongoose.Types.ObjectId().toString(), permissions: ['read'] } }),
+    ],
+    ['a manager entry', (id: string) => ({ adminUserIds: new mongoose.Types.ObjectId().toString() })],
+  ] as const)('leaves an organization that gains %s between the check and the delete', async (_label, push) => {
     const userId = await seedUser();
     const org = await Organization.create({ name: 'Racing', userId, personal: false });
-    const { classifyOwnedOrganizations } = await import('./ownedOrganizations');
-    const before = await classifyOwnedOrganizations(userId);
-    expect(before.solo).toHaveLength(1);
-    await Organization.collection.updateOne(
-      { _id: org._id },
-      { $push: { users: { userId: new mongoose.Types.ObjectId().toString(), permissions: ['read'] } } as never }
-    );
+    const original = organizationRepository.findById.bind(organizationRepository);
+    vi.spyOn(organizationRepository, 'findById').mockImplementationOnce(async (id: string) => {
+      await Organization.collection.updateOne({ _id: org._id }, { $push: push(id) as never });
+      return original(id);
+    });
     const { deleteSoleOwnedOrganizations } = await import('./ownedOrganizations');
     const deleted = await deleteSoleOwnedOrganizations(userId, { logger: logger as never });
     expect(deleted).toEqual([]);
     expect(await Organization.exists({ _id: org.id })).not.toBeNull();
+    vi.restoreAllMocks();
+  });
+  it('clears references for an organization already deleted when a later one fails', async () => {
+    const userId = await seedUser();
+    const orgs = await Promise.all(['A', 'B'].map(name => Organization.create({ name, userId, personal: false })));
+    for (const org of orgs) {
+      await PartnerSignupRule.collection.insertOne({
+        domain: `${org.id}.example.test`,
+        organizationId: String(org.id),
+      });
+      await Invite.collection.insertOne({
+        type: InviteType.Organization,
+        documentId: String(org.id),
+        remaining: 3,
+        recipients: { pending: ['someone@example.test'], accepted: [], refused: [] },
+      });
+    }
+    const realDelete = organizationService.deleteOrganization.bind(organizationService);
+    let calls = 0;
+    vi.spyOn(organizationService, 'deleteOrganization').mockImplementation(async (...args) => {
+      calls += 1;
+      if (calls === 2) throw new Error('delete failed');
+      return realDelete(...args);
+    });
+    const { deleteSoleOwnedOrganizations } = await import('./ownedOrganizations');
+    await expect(deleteSoleOwnedOrganizations(userId, { logger: logger as never })).rejects.toThrow('delete failed');
+    vi.restoreAllMocks();
+    const survivorIds = new Set(
+      (await Organization.find({ _id: { $in: orgs.map(o => o._id) } })).map(o => String(o.id))
+    );
+    expect(survivorIds.size).toBe(1);
+    for (const org of orgs) {
+      const rule = await PartnerSignupRule.collection.findOne({ domain: `${org.id}.example.test` });
+      const invite = await Invite.collection.findOne({ documentId: String(org.id) });
+      const removed = !survivorIds.has(String(org.id));
+      expect(rule?.organizationId).toBe(removed ? null : String(org.id));
+      expect(invite?.recipients.pending).toEqual(removed ? [] : ['someone@example.test']);
+    }
   });
   it('refuses an owner of an organization with other members and keeps both the user and the organization', async () => {
     const userId = await seedUser();

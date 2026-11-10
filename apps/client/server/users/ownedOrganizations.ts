@@ -60,9 +60,9 @@ export async function deleteSoleOwnedOrganizations(
     await assertLease?.();
     // Subscriptions were cancelled when deletion was scheduled, so the route's active-subscription
     // validation is not applied here.
-    await withTransaction(async () => {
+    const removed = await withTransaction(async () => {
       const current = (await organizationRepository.findById(org.id)) as WithId<IOrganizationDocument> | null;
-      if (!current || hasOtherMembers(current, userId)) return;
+      if (!current || String(current.userId) !== userId || hasOtherMembers(current, userId)) return false;
       await organizationService.deleteOrganization(
         owner,
         { id: org.id },
@@ -78,10 +78,10 @@ export async function deleteSoleOwnedOrganizations(
           logger,
         }
       );
-      deleted.push(org);
+      return true;
     });
-  }
-  for (const org of deleted) {
+    if (!removed) continue;
+    deleted.push(org);
     await clearDeletedOrganizationReferences(org.id, logger);
     logger.info(`[AccountDeletion] Deleted sole-owner organization ${org.id} for user ${userId}`);
   }
