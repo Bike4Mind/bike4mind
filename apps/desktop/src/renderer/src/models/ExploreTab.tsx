@@ -281,6 +281,20 @@ function ModelDetail({
     void load();
   }, [load]);
 
+  // Main re-rated the fit badges (the WSL flag arrived); the shown detail stays up while the new ratings load.
+  useEffect(() => {
+    let live = true;
+    const off = window.b4m.models.onCuratedChanged(() => {
+      void window.b4m.models.getDetail(repo, serverId).then(result => {
+        if (live && result.ok) setDetail({ state: 'ready', model: result.model });
+      });
+    });
+    return () => {
+      live = false;
+      off();
+    };
+  }, [repo, serverId]);
+
   if (detail.state === 'loading')
     return (
       <Box sx={{ display: 'grid', placeItems: 'center', py: 6 }} data-testid="models-detail-loading">
@@ -304,6 +318,8 @@ function ModelDetail({
     );
 
   const model = detail.model;
+  // The open dialog follows a re-rated detail rather than the build as it was when clicked.
+  const confirmingBuild = model.builds.find(entry => entry.id === confirmingOn?.build.id) ?? confirmingOn?.build;
   const runtimeReady = status?.reachable === true;
   const start = async (build: HubBuildView, serverId: string | undefined, consent: PullConsent) => {
     setConfirming(null);
@@ -425,13 +441,13 @@ function ModelDetail({
         )}
       </Box>
 
-      {canPull && confirmingOn && (
+      {canPull && confirmingOn && confirmingBuild && (
         <PullDialog
           model={model}
-          build={confirmingOn.build}
+          build={confirmingBuild}
           target={target}
           onClose={() => setConfirming(null)}
-          onConfirm={consent => void start(confirmingOn.build, confirmingOn.serverId, consent)}
+          onConfirm={consent => void start(confirmingBuild, confirmingOn.serverId, consent)}
         />
       )}
     </Stack>

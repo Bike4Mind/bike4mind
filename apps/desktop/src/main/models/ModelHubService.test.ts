@@ -1396,8 +1396,11 @@ describe('ModelHubService WSL GPU memory flag on fit badges', () => {
     ['Desktop runs on native Linux or macOS', { wslHost: false }],
     ['the GPU is discrete', { integrated: false }],
     ['nvidia-smi cannot say whether the GPU is integrated', { integrated: null }],
-    ['Ollama runs on Windows itself', { storeDir: WINDOWS_STORE }],
-    ['Ollama reports no model folder, so where it runs is unknown', { storeDir: null }],
+    ['Ollama runs on Windows itself', { storeDir: WINDOWS_STORE, build: null }],
+    [
+      'Ollama reports no model folder and no server is found, so where it runs is unknown',
+      { storeDir: null, build: null },
+    ],
     ['the release is newer than the ones known to limit the GPU', { version: '0.40.16' }],
     ['Ollama is a source build, which may carry the fix', { version: '0.0.0' }],
     ['Ollama is a git describe build, which may carry the fix', { version: '0.40.13-11-g3f9c2d1' }],
@@ -1446,11 +1449,34 @@ describe('ModelHubService WSL GPU memory flag on fit badges', () => {
     ['the release is not known to limit the GPU', { version: '0.40.16' }],
     ['Desktop runs on native Linux or macOS', { wslHost: false }],
     ['the GPU is discrete', { integrated: false }],
-    ['Ollama runs on Windows itself', { storeDir: WINDOWS_STORE }],
   ])('does not read the running binary when %s', async (_case, options) => {
     const { service, ollamaWslPatch } = flagHarness(options);
     await settledFits(service);
     expect(ollamaWslPatch).not.toHaveBeenCalled();
+  });
+
+  it('does not run nvidia-smi for a release newer than the ones known to limit the GPU', async () => {
+    const { service, integratedGpu } = flagHarness({ version: '0.41.0' });
+    await settledFits(service);
+    expect(integratedGpu).not.toHaveBeenCalled();
+  });
+
+  it('flags the curated builds on a fresh Ollama with nothing installed once the probe found its server', async () => {
+    const { service, runtime } = flagHarness({ storeDir: null });
+    runtime.list.mockResolvedValue([]);
+    await settledFits(service);
+    const builds = (await service.curated()).entries.flatMap(entry => entry.builds);
+    const flagged = builds.filter(build => build.fit.level !== 'too-large');
+    expect(flagged.length).toBeGreaterThan(0);
+    for (const build of flagged) expect(build.fit.warning).toMatch(RELEASE_FLAG);
+  });
+
+  it('needs the model folder on a fresh Ollama only when the probe found no server', async () => {
+    const { service, runtime } = flagHarness({ storeDir: null, build: null });
+    runtime.list.mockResolvedValue([]);
+    await settledFits(service);
+    for (const entry of (await service.curated()).entries)
+      for (const build of entry.builds) expect(build.fit).not.toHaveProperty('warning');
   });
 
   it('follows the running binary from one read to the next', async () => {
@@ -1488,6 +1514,42 @@ describe('ModelHubService WSL GPU memory flag on fit badges', () => {
     runtime.loaded.mockResolvedValue([]);
     expect(await capOf(service)).toBeNull();
     for (const fit of (await installedFits(service)).values()) expect(fit).not.toHaveProperty('warning');
+  });
+
+  it('keeps a limit seen when one health read fails, then recovers', async () => {
+    const { service, runtime } = flagHarness({ version: '0.40.13' });
+    runtime.loaded.mockResolvedValue(HELD_BACK);
+    await settledFits(service);
+    await vi.waitFor(async () => expect(await capOf(service)).not.toBeNull());
+    runtime.loaded.mockResolvedValue([]);
+    runtime.health.mockResolvedValue({ ok: false, version: null, error: 'timed out' });
+    await installedFits(service);
+    runtime.health.mockResolvedValue({ ok: true, version: '0.40.13', error: null });
+    expect(await capOf(service)).not.toBeNull();
+  });
+
+  it('keeps a limit seen when one probe read gives no answer, then recovers', async () => {
+    const { service, runtime, ollamaWslPatch } = flagHarness({ version: '0.40.13' });
+    runtime.loaded.mockResolvedValue(HELD_BACK);
+    await settledFits(service);
+    await vi.waitFor(async () => expect(await capOf(service)).not.toBeNull());
+    runtime.loaded.mockResolvedValue([]);
+    ollamaWslPatch.mockResolvedValue(null);
+    await installedFits(service);
+    ollamaWslPatch.mockResolvedValue({ server: 'pid-1', patched: false });
+    expect(await capOf(service)).not.toBeNull();
+  });
+
+  it('keeps a limit seen with Desktop on Windows when one health read fails', async () => {
+    const { service, runtime } = flagHarness({ windowsDesktop: true, version: '0.40.13' });
+    runtime.loaded.mockResolvedValue(HELD_BACK);
+    await settledFits(service);
+    await vi.waitFor(async () => expect(await capOf(service)).not.toBeNull());
+    runtime.loaded.mockResolvedValue([]);
+    runtime.health.mockResolvedValue({ ok: false, version: null, error: 'timed out' });
+    await installedFits(service);
+    runtime.health.mockResolvedValue({ ok: true, version: '0.40.13', error: null });
+    expect(await capOf(service)).not.toBeNull();
   });
 
   it('keeps a limit seen after a load when the probe fails, logging the failure once', async () => {
@@ -1601,14 +1663,18 @@ describe('ModelHubService WSL GPU memory flag on fit badges', () => {
   it('logs a failed model folder lookup and lists without the flag', async () => {
     const { service, warn } = flagHarness({
       storeDir: null,
+      build: null,
       defaultStoreDir: () => {
         throw new Error('no home directory');
       },
     });
     const fits = await settledFits(service);
+    await installedFits(service);
     expect(fits.size).toBe(MODELS.length);
     for (const fit of fits.values()) expect(fit).not.toHaveProperty('warning');
-    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/badges are not flagged: no home directory$/));
+    const logged = warn.mock.calls.filter(([message]) => message.includes('badges are not flagged: no home'));
+    expect(logged).toHaveLength(1);
+    expect(logged[0][0]).toMatch(/badges are not flagged: no home directory$/);
   });
 
   it('does not flag a saved model server, Ollama or llama-server, whose GPU is not this computer', async () => {

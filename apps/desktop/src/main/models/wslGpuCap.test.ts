@@ -95,6 +95,8 @@ describe('releaseCapsWslGpu', () => {
     ['a release candidate past the ones checked', '0.40.16-rc0'],
     ['a later major release', '1.0.0'],
     ['a release from before the scheduler limit', '0.24.0'],
+    ['the last release before the first known to limit', '0.29.9'],
+    ['a patch release of 0.29 with a candidate suffix', '0.29.99-rc1'],
     ['an unstamped source build', '0.0.0'],
     ['a source build stamped by git describe', '0.40.13-11-g3f9c2d1'],
     ['a dirty source build at a tag', '0.40.15-0-g1a2b3c4-dirty'],

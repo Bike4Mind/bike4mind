@@ -253,7 +253,14 @@ export interface ModelHubServiceDeps {
 }
 
 const DEFAULT_PROGRESS_INTERVAL_MS = 250;
-const serverKey = (version: string | null, build: OllamaBuild | null) => `${version ?? ''}\0${build?.server ?? ''}`;
+interface ServerIdentity {
+  version: string | null;
+  server: string | null;
+}
+/** True only when a part both reads know disagrees; a failed read never makes another server. */
+const otherServer = (seen: ServerIdentity, now: ServerIdentity) =>
+  (seen.version !== null && now.version !== null && seen.version !== now.version) ||
+  (seen.server !== null && now.server !== null && seen.server !== now.server);
 // Ollama 0.40 holds /api/show on a just-pulled model for about 15 s on a busy host, then answers in milliseconds.
 const CHECK_TIMEOUT_MS = 30_000;
 const DEFAULT_CHECK_BACKOFF_MS = [1_000, 3_000];
@@ -811,8 +818,9 @@ export class ModelHubService {
   #integrated: boolean | null | undefined = undefined;
   #integratedAsked = false;
   /** The server `#gpuCap` was seen on; the limit is not shown once another one answers. */
-  #gpuCapServer: string | null = null;
+  #gpuCapServer: ServerIdentity | null = null;
   #buildUnreadLogged = false;
+  #warnedChecks = new Set<string>();
   #lastPush = 0;
   #pushTimer: ReturnType<typeof setTimeout> | null = null;
   #awake = false;
@@ -862,7 +870,9 @@ export class ModelHubService {
   }
 
   async #checkGpuCap(target: Target, loaded: readonly LoadedModel[]): Promise<void> {
-    if (this.#gpuCap && (await this.#serverKey(target)) !== this.#gpuCapServer) this.#gpuCap = null;
+    if (this.#gpuCap && this.#gpuCapServer && otherServer(this.#gpuCapServer, await this.#serverIdentity(target))) {
+      this.#gpuCap = null;
+    }
     const { hardware } = await this.#localSizing();
     const budgets = memoryBudgets(hardware);
     const found = budgets.cpuOnly ? null : partialLoad(loaded, budgets.gpu - fitMarginBytes(hardware));
@@ -907,7 +917,7 @@ export class ModelHubService {
     if (integrated === undefined) return false;
     const confirmed = integrated === true && (await this.#ollamaInLinux(target));
     if (confirmed) {
-      const server = await this.#serverKey(target);
+      const server = await this.#serverIdentity(target);
       this.#gpuCap = this.#capCandidate;
       this.#gpuCapServer = server;
       this.#ratingsChanged(target.id);
@@ -916,8 +926,12 @@ export class ModelHubService {
     return confirmed;
   }
 
-  /** Ollama reported a Linux model folder, so it runs under Linux: in WSL, on a WSL host. */
-  async #ollamaInLinux(target: Target): Promise<boolean> {
+  /**
+   * Ollama runs under Linux (in WSL, on a WSL host): the probe found its `ollama serve` in this Linux, or, without a
+   * probe answer, Ollama reported a Linux model folder.
+   */
+  async #ollamaInLinux(target: Target, build?: OllamaBuild | null): Promise<boolean> {
+    if ((build === undefined ? await this.#build(target) : build) !== null) return true;
     const store = await this.storeLocation(target.id);
     return store.source !== 'default' && isLinuxStoreDir(store.path);
   }
@@ -931,22 +945,27 @@ export class ModelHubService {
     if (!target.local || !this.#deps.wslHost) return null;
     // Without the probe only a load seen held back flags, so nvidia-smi and the folder lookup wait for one.
     if (!this.#deps.ollamaWslPatch && !this.#gpuCap) return null;
-    if (this.#integratedGpu(target) !== true) return null;
     try {
       const health = await target.runtime.health();
       const version = health.ok ? health.version : null;
       const release = releaseCapsWslGpu(version) ? version : null;
       if (!release && !this.#gpuCap) return null;
-      if (!(await this.#ollamaInLinux(target))) return null;
+      if (this.#integratedGpu(target) !== true) return null;
       const build = await this.#build(target);
+      if (!(await this.#ollamaInLinux(target, build))) return null;
       if (release && build?.patched === false) return wslGpuCapWarning(release);
-      const capped = this.#gpuCap !== null && this.#gpuCapServer === serverKey(version, build);
+      const capped =
+        this.#gpuCap !== null &&
+        this.#gpuCapServer !== null &&
+        !otherServer(this.#gpuCapServer, { version, server: build?.server ?? null });
       return capped ? wslGpuCapWarning(null) : null;
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
-      this.#deps.warn(
-        `MODELS: could not check whether Ollama in WSL limits GPU memory, so badges are not flagged: ${reason}`
-      );
+      const message = `MODELS: could not check whether Ollama in WSL limits GPU memory, so badges are not flagged: ${reason}`;
+      if (!this.#warnedChecks.has(message)) {
+        this.#warnedChecks.add(message);
+        this.#deps.warn(message);
+      }
       return null;
     }
   }
@@ -972,9 +991,9 @@ export class ModelHubService {
   }
 
   /** Which Ollama answers for this computer: its version and, where the probe reads it, its process and binary. */
-  async #serverKey(target: Target): Promise<string> {
+  async #serverIdentity(target: Target): Promise<ServerIdentity> {
     const [health, build] = await Promise.all([target.runtime.health().catch(() => null), this.#build(target)]);
-    return serverKey(health?.ok ? health.version : null, build);
+    return { version: health?.ok ? health.version : null, server: build?.server ?? null };
   }
 
   #ratingsChanged(serverId: string): void {

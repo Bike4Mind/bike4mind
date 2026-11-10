@@ -2018,6 +2018,25 @@ describe('ModelsScreen explore', () => {
     expect(calls.getDetail.mock.calls.length).toBe(loads + 1);
   });
 
+  it('rates an open detail and its pull dialog again when main re-rates the lists', async () => {
+    bridge.detail = { ok: true, model: view({ builds: [{ ...view().builds[0], fit: FITS }] }) };
+    await mount();
+    await openExplore();
+    await click(q('models-explore-result-row'));
+    await click(q('models-build-pull-btn'));
+    expect(q('models-pull-dialog-fit-warning')).toBeNull();
+    const loads = calls.getDetail.mock.calls.length;
+    const warning = "Ollama 0.40.15 in WSL limits GPU memory to the WSL virtual machine's memory.";
+    bridge.detail = {
+      ok: true,
+      model: view({ builds: [{ ...view().builds[0], fit: { ...FITS, warning } }] }),
+    };
+    act(() => pushCuratedChanged());
+    await flush();
+    expect(calls.getDetail.mock.calls.length).toBe(loads + 1);
+    expect(q('models-pull-dialog-fit-warning')?.textContent).toBe(warning);
+  });
+
   it.each([
     [{ kind: 'hub-unreachable' as const, message: 'Could not reach Hugging Face.' }, 'Could not reach Hugging Face.'],
     [{ kind: 'rate-limited' as const, message: 'x', retryAfterMs: 30_000 }, 'Try again in 30 seconds'],

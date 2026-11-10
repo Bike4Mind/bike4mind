@@ -230,6 +230,13 @@ describe('servingOllamaPid', () => {
     expect(await servingOllamaPid(LOCALHOST_URL, root)).toBeNull();
   });
 
+  it('finds none when two servers hold the socket, whichever holds every one the address reaches', async () => {
+    await writeSockets([LISTENING, ON_V6_LOOPBACK]);
+    await writeServer({ pid: 100, image: stockImage(), sockets: [5001, 5002] });
+    await writeServer({ pid: 300, image: imageWith(SHARED), sockets: [5002] });
+    expect(await servingOllamaPid(LOCALHOST_URL, root)).toBeNull();
+  });
+
   it('finds none when a server holds only some of the sockets the address reaches', async () => {
     await writeSockets([LISTENING, ON_V6_LOOPBACK]);
     await writeServer({ pid: 100, image: stockImage(), sockets: [5001] });
@@ -269,6 +276,9 @@ describe('createOllamaWslPatchProbe', () => {
 
   it.each([
     ['0', false],
+    ['f', false],
+    ['F', false],
+    ['FALSE', false],
     ['false', false],
     [' "False" ', false],
     ['1', true],
@@ -288,6 +298,33 @@ describe('createOllamaWslPatchProbe', () => {
   it('ignores OLLAMA_WSL_SHARED_GPU_MEMORY in a build with only the earlier setting', async () => {
     await serving({ image: imageWith(SPILL), environ: { [SHARED]: '0' } });
     expect(await createOllamaWslPatchProbe({ root })(OLLAMA_URL)).toMatchObject({ patched: true });
+  });
+
+  it('lets OLLAMA_WSL_SHARED_GPU_MEMORY=0 decide in a build with both settings', async () => {
+    await serving({ image: imageWith(`${SPILL}${SHARED}`), environ: { [SHARED]: '0' } });
+    expect(await createOllamaWslPatchProbe({ root })(OLLAMA_URL)).toMatchObject({ patched: false });
+  });
+
+  it('is unknown when the server binary cannot be examined', async () => {
+    await serving({ image: imageWith(SHARED) });
+    await rm(join(root, 'proc', '100', 'exe'));
+    expect(await createOllamaWslPatchProbe({ root })(OLLAMA_URL)).toBeNull();
+  });
+
+  it('is unknown when the server start time cannot be read', async () => {
+    await serving({ image: imageWith(SHARED) });
+    await rm(join(root, 'proc', '100', 'stat'));
+    expect(await createOllamaWslPatchProbe({ root })(OLLAMA_URL)).toBeNull();
+  });
+
+  it('reads again when the cached server can no longer be examined', async () => {
+    await serving({ image: imageWith(SHARED) });
+    const serverPid = vi.fn((url: string) => servingOllamaPid(url, root));
+    const probe = createOllamaWslPatchProbe({ root, serverPid });
+    expect(await probe(OLLAMA_URL)).toMatchObject({ patched: true });
+    await rm(join(root, 'proc', '100', 'stat'));
+    expect(await probe(OLLAMA_URL)).toBeNull();
+    expect(serverPid).toHaveBeenCalledTimes(2);
   });
 
   it('keeps the binary read when the environment cannot be read', async () => {
