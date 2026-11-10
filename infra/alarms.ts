@@ -792,7 +792,7 @@ if (isMonitoredStage) {
    *
    * Lambda OOM/SIGKILL events surface only in logs (no native CloudWatch metric) and often during
    * INIT with no application output — exactly the failure mode that hit agent_execute at 256 MB.
-   * Every WebSocket route whose memory was explicitly sized (#5336) gets a log-metric filter on
+   * Every WebSocket route whose memory was explicitly sized gets a log-metric filter on
    * the OOM signatures so a future regression (memory drop, dependency bloat) pages loudly instead
    * of degrading silently. Each route publishes to its OWN metric name and gets its own alarm
    * (sharing one SNS topic), so a firing alarm names the culprit route directly.

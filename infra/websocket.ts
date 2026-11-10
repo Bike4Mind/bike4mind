@@ -4,25 +4,25 @@ import { lambdaVpc } from './vpc';
 
 const websocketApi = new sst.aws.ApiGatewayWebSocket('websocket', {});
 
-// ── Memory sizing ──────────────────────────────────────────────────────
+// Memory sizing
 // Every route sets memory explicitly so changes are visible in code review.
 // SST default is 1024 MB; relying on it silently masks whether a route
 // needs that much.
 //
 // Tiers (cold-start stack drives the floor):
-//   LIFECYCLE  1024 MB — $connect/$disconnect/$default: full Mongoose + AWS SDK init.
-//                        256 MB hit OOM + 10s init timeouts on preview envs.
-//   HEAVY      2048 MB — cli_completion_request: streams Bedrock responses.
-//   MEDIUM      512 MB — heartbeat, cli_tool_request, voice routes: lighter
-//                        handlers but still init the DB + SDK stack.
-//   LIGHT       256 MB — keep_command_*, jupyter_cell_output, cc_agent_*:
-//                        thin relay / fanout handlers with minimal heap.
+//   LIFECYCLE  1024 MB -- $connect/$disconnect/$default: full Mongoose + AWS SDK init.
+//                         256 MB hit OOM + 10s init timeouts on preview envs.
+//   HEAVY      2048 MB -- cli_completion_request: streams Bedrock responses.
+//   MEDIUM      512 MB -- heartbeat, cli_tool_request: lighter handlers but
+//                         still init the DB + SDK stack.
+//   LIGHT       256 MB -- keep_command_*, jupyter_cell_output, cc_agent_*:
+//                         thin relay / fanout handlers with minimal heap.
 //
 // When CloudWatch max-memory-used data becomes available, update the values
 // here and reference the measurement window in the commit message.
-// ────────────────────────────────────────────────────────────────────────
 
 const LIFECYCLE_MEMORY = '1024 MB';
+const HEAVY_MEMORY = '2048 MB';
 const MEDIUM_MEMORY = '512 MB';
 const LIGHT_MEMORY = '256 MB';
 
@@ -87,7 +87,7 @@ const voiceSendTranscriptRoute = websocketApi.route('voice_session_send_transcri
   handler: 'apps/client/server/websocket/voiceSessionSendTranscript.func',
   runtime: 'nodejs24.x',
   timeout: '10 minutes',
-  memory: MEDIUM_MEMORY,
+  memory: LIFECYCLE_MEMORY,
   vpc: lambdaVpc,
   link: [...allSecrets, websocketApi],
   environment: {
@@ -99,7 +99,7 @@ const voiceEndedRoute = websocketApi.route('voice_session_ended', {
   handler: 'apps/client/server/websocket/voiceSessionEnded.func',
   runtime: 'nodejs24.x',
   timeout: '5 minutes',
-  memory: MEDIUM_MEMORY,
+  memory: LIFECYCLE_MEMORY,
   vpc: lambdaVpc,
   link: [...allSecrets, websocketApi],
   environment: {
@@ -114,7 +114,7 @@ const cliCompletionRoute = websocketApi.route('cli_completion_request', {
   handler: 'apps/client/server/websocket/cliCompletion.func',
   runtime: 'nodejs24.x',
   timeout: '10 minutes',
-  memory: '2048 MB',
+  memory: HEAVY_MEMORY,
   vpc: lambdaVpc,
   link: [...allSecrets, websocketApi],
   environment: {
