@@ -122,8 +122,8 @@ import { lambdaVpc } from './vpc';
 import { wafLabelForwarding, wafQueryWebAclArn, wafReadPermissions, wafWebAclArn } from './waf';
 
 // SQS queue URLs bundled as Linkable resources. Stored in resource.enc at deploy
-// time — no IAM statements generated, no env var size concerns. The wildcard SQS
-// permission already grants runtime access to all queues.
+// time: no IAM statements generated, no env var size concerns. The stage-scoped SQS
+// statement on the server function (stageQueueArns below) grants runtime access.
 const dlqUrls = new sst.Linkable('dlqUrls', {
   properties: {
     // Contributed entries go first so a core key always wins.
@@ -174,8 +174,9 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
 });
 
 // Lambda function names exposed via sst.Linkable to avoid generating per-resource IAM
-// statements when the frontend only needs the function *name* for invocation. The wildcard
-// `lambda:InvokeFunction` permission below already grants runtime invocation access.
+// statements when the frontend only needs the function *name* for invocation. The
+// `lambda:InvokeFunction` statement below names exactly these functions; add a target here
+// and there together.
 const lambdaFunctionNames = new sst.Linkable('lambdaFunctionNames', {
   properties: {
     attackSimulation: attackSimulationFunction.name,
@@ -239,6 +240,11 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
   },
 });
 
+// Every queue this stage creates, by SST's physical-name prefix (`${app}-${stage}-...`). One
+// pattern instead of one ARN per queue keeps the server function's inline policy well under
+// Lambda's size cap, which is why the queue URLs travel as Linkables in the first place.
+const stageQueueArns = $interpolate`arn:${aws.getPartitionOutput().partition}:sqs:${aws.getRegionOutput().name}:${aws.getCallerIdentityOutput().accountId}:${$app.name}-${$app.stage}-*`;
+
 export const web = new sst.aws.Nextjs(
   'frontend',
   {
@@ -286,7 +292,7 @@ export const web = new sst.aws.Nextjs(
       ...(wafWebAclArn ? [wafWebAclArn] : []),
       // SQS queue URLs passed via sst.Linkable to avoid IAM inline policy bloat.
       // Linkable stores properties in resource.enc without generating IAM statements.
-      // Wildcard SQS permission (below) already grants access to all queues.
+      // The stage-scoped SQS statement (below) grants access to all of them.
       dlqUrls,
       sourceQueueUrls,
       // Directly linked (not folded into sourceQueueUrls) so the cron reconciler's
@@ -348,9 +354,16 @@ export const web = new sst.aws.Nextjs(
           'config:GetComplianceDetailsByConfigRule',
           'config:DescribeConfigurationRecorders',
           'config:DescribeDeliveryChannels',
-          'lambda:InvokeFunction',
         ],
         resources: ['*'],
+      },
+      {
+        // Invoked by name through the lambdaFunctionNames Linkable: admin "Run now" for the attack
+        // simulation and model discovery, and QuestMaster node dispatch. The other functions this
+        // Lambda invokes (mcpHandler, remoteMcpHandler, the two import-complete functions) are
+        // linked above and carry their own invoke grant.
+        actions: ['lambda:InvokeFunction'],
+        resources: [attackSimulationFunction.arn, modelDiscoveryFunction.arn, agentExecutor.arn],
       },
       {
         actions: ['events:PutEvents'],
@@ -387,20 +400,15 @@ export const web = new sst.aws.Nextjs(
         resources: ['*'],
       },
       {
-        // Explicit SQS permissions for GitHub webhook queue
-        // (not relying on SST implicit linking permissions)
-        actions: ['sqs:SendMessage'],
-        resources: [githubWebhookQueue.arn],
-      },
-      {
         // CloudWatch metrics for What's New modal sync and generation
         actions: ['cloudwatch:PutMetricData'],
         resources: ['*'],
       },
       {
-        // SQS permissions for admin DLQ replay: receive from DLQs, send to source queues, get attributes
+        // Admin DLQ replay (receive and delete from DLQs, send to source queues, read depth) and the
+        // API routes that enqueue work through sourceQueueUrls, limited to this stage's queues.
         actions: ['sqs:ReceiveMessage', 'sqs:DeleteMessage', 'sqs:GetQueueAttributes', 'sqs:SendMessage'],
-        resources: ['*'],
+        resources: [stageQueueArns],
       },
       {
         // CloudFront cache invalidation for What's New modal edit/delete
