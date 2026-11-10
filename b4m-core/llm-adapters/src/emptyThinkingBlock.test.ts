@@ -42,14 +42,14 @@ function capture() {
   };
 }
 
-async function runDirect(thinkingDeltas: string[]): Promise<string> {
+async function runDirect(stream: unknown[]): Promise<string> {
   const backend = new AnthropicBackend('test-key');
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the SDK client has no exported mock shape
   (backend as unknown as { _api: any })._api = {
     messages: {
       create: async () => ({
         [Symbol.asyncIterator]: async function* () {
-          for (const e of events(thinkingDeltas)) yield e;
+          for (const e of stream) yield e;
         },
         controller: { abort: () => {} },
       }),
@@ -105,8 +105,8 @@ class StubbedBedrockBackend extends AnthropicBedrockBackend {
   }
 }
 
-async function runBedrock(thinkingDeltas: string[]): Promise<string> {
-  const backend = new StubbedBedrockBackend(events(thinkingDeltas));
+async function runBedrock(stream: unknown[]): Promise<string> {
+  const backend = new StubbedBedrockBackend(stream);
   backend.setDispatchModel(modelRecord);
   const { chunks, cb } = capture();
   const messages: IMessage[] = [{ role: 'user', content: 'weather in Paris?' }];
@@ -119,20 +119,33 @@ describe.each([
   ['AnthropicBedrockBackend', runBedrock],
 ])('%s with a thinking block that streams no reasoning', (_name, run) => {
   it('emits no think markers', async () => {
-    expect(await run([])).toBe(PROSE);
+    expect(await run(events([]))).toBe(PROSE);
   });
 
   it('emits no think markers for empty thinking deltas', async () => {
-    expect(await run(['', ''])).toBe(PROSE);
+    expect(await run(events(['', '']))).toBe(PROSE);
   });
 
   it('still wraps reasoning that does stream', async () => {
-    expect(await run(['Short ', 'thought.'])).toBe(`<think>Short thought.</think>${PROSE}`);
+    expect(await run(events(['Short ', 'thought.']))).toBe(`<think>Short thought.</think>${PROSE}`);
   });
 
   it('opens the marker for reasoning the escaper held until the block closed', async () => {
     // '<th' could be the start of a literal marker, so the escaper holds it until flush.
-    expect(await run(['<th'])).toBe(`<think><th</think>${PROSE}`);
+    expect(await run(events(['<th']))).toBe(`<think><th</think>${PROSE}`);
+  });
+
+  it('does not close a markerless block after one that streamed reasoning', async () => {
+    const stream = events(['Short.']);
+    const emptyBlock = [
+      { type: 'content_block_start', index: 2, content_block: { type: 'thinking', thinking: '' } },
+      { type: 'content_block_delta', index: 2, delta: { type: 'signature_delta', signature: 'sig-2' } },
+      { type: 'content_block_stop', index: 2 },
+    ];
+    // The second thinking block lands between the prose and message_delta.
+    expect(await run([...stream.slice(0, -2), ...emptyBlock, ...stream.slice(-2)])).toBe(
+      `<think>Short.</think>${PROSE}`
+    );
   });
 });
 
