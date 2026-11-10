@@ -55,14 +55,22 @@ export class EmbeddingSpendDeniedError extends Error {
    * the wider meters; the caller should account the failure once and consume the message.
    */
   readonly retryable: boolean;
+  /**
+   * For a retryable denial, how long (ms) until the saturated window resets - the earliest a
+   * redelivery can be granted. Lets a queue consumer size its back-off to the window instead of
+   * guessing. Undefined on a non-retryable denial. Rate windows are about a minute, so a consumer's
+   * floor currently dominates this value; it only matters if a window outlasts the floor.
+   */
+  readonly retryAfterMs?: number;
 
-  constructor(reason: string, options?: { retryable?: boolean }) {
+  constructor(reason: string, options?: { retryable?: boolean; retryAfterMs?: number }) {
     super(
       `Embedding was not run because data-lake cost governance denied it: ${reason}. ` +
         'An admin can adjust the spend levers under Data Lake Cost Governance, then re-index this file.'
     );
     this.name = 'EmbeddingSpendDeniedError';
     this.retryable = options?.retryable ?? false;
+    this.retryAfterMs = options?.retryAfterMs;
   }
 }
 
@@ -282,7 +290,8 @@ export async function enforceEmbeddingSpendGate(params: {
     if (waitedMs + waitMs > RATE_WAIT_TOTAL_MS) {
       const reason =
         `the embedding ${limitWindow.name} (${limitWindow.limit}${limitWindow.unit}) ` +
-        `stayed exhausted after waiting ${waitedMs}ms`;
+        `stayed exhausted after waiting ${waitedMs}ms (it resets in ${Math.ceil(waitMs / 1000)}s, ` +
+        `past the ${RATE_WAIT_TOTAL_MS / 1000}s in-handler wait budget)`;
       // Retryable: the window drains on its own, so a later SQS delivery can be granted.
       await fire({
         kind: 'throttled',
@@ -290,7 +299,7 @@ export async function enforceEmbeddingSpendGate(params: {
         periodKey: periodKeyForClock(new Date()),
         detail: { reason, retryable: true },
       });
-      throw new EmbeddingSpendDeniedError(reason, { retryable: true });
+      throw new EmbeddingSpendDeniedError(reason, { retryable: true, retryAfterMs: waitMs });
     }
     logger?.log?.(
       `[spendGate] ${limitWindow.name} window full (${rate.count}); waiting ${waitMs}ms (${waitedMs}ms waited so far)`

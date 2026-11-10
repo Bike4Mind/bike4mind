@@ -203,8 +203,10 @@ const fabFileVectorizeQueueSubscription = fabFileVectorizeQueue.subscribe(
   {
     // Handler is single-record (reads event.Records[0]); pin batch size to 1 so
     // multi-record deliveries can't silently drop the un-read records. Matches
-    // sreJobQueue / overwatchAnalyticsQueue below.
-    batch: { size: 1 },
+    // sreJobQueue / overwatchAnalyticsQueue below. partialResponses: a retryable spend-gate
+    // (rate window) denial is handed back as a batch item failure rather than thrown, so it
+    // retries without an Invoke Error (see returnRecordForRedelivery).
+    batch: { size: 1, partialResponses: true },
   }
 );
 

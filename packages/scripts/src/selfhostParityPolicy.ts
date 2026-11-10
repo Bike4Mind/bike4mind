@@ -439,7 +439,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'queue:infra/queues.ts:fabFileVectorizeQueue',
-    'a8b00ba8d0ad0e42c470f733cf4329be38cc543fa6619e0077b3c0e12a8c9b3b',
+    'f96989f888043bc01078ec5cf647c7d170804a24ce34179715ab4711f69d33bb',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:fabFileVectorizeQueue',
