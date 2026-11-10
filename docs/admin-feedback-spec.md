@@ -56,7 +56,7 @@ Each item: what I saw, why it hurts support, the change, and whether it needs ba
 
 ### F5. Status changes leave no trail and cannot be undone
 
-- **Seen:** the status Select applies instantly with no undo. The client sends the whole row to `PUT /api/feedback/[id]/update`; the server accepts any string as status (`z.string()`) and logs the event under the reporter's `userId` from the body, not the admin who acted. Delete has no reason and no Admin log entry.
+- **Seen:** the status Select applies instantly with no undo. The client sends the whole row to `PUT /api/feedback/[id]/update`; the server accepts any string as status (`z.string()`) and its only record is an analytics event under the acting admin (`id`, `status`, reporter `username`); nothing goes to the Admin log and the report stores no handled-by. Delete has no reason and no Admin log entry.
 - **Why:** with two people on support, nobody can see who closed what or why, and a mis-click on the Select silently removes a report from the New view.
 - **Change:** a dedicated status action that takes the enum, records `handledBy` and `handledAt`, writes an Admin log entry, and offers a 30 s Undo (guide principle 4). Delete takes a reason and is audited.
 - **Work:** backend (new endpoint or a tightened update, two schema fields, audit write) plus frontend.
