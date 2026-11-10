@@ -38,7 +38,7 @@ export function progressStoreFor(Progress: TutorialModels['Progress']): Tutorial
         {
           userId,
           [key]: { $exists: true },
-          ...(status === 'in_progress' && { [`${key}.status`]: { $ne: 'finished' } }),
+          ...(status !== 'finished' && { [`${key}.status`]: { $ne: 'finished' } }),
         },
         { $set: { [`${key}.stepId`]: stepId, [`${key}.status`]: status, [`${key}.updatedAt`]: at } }
       );

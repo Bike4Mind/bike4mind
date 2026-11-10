@@ -87,7 +87,7 @@ describe('tutorial models against a real database', () => {
     ).rejects.toThrow();
   });
 
-  it('does not move a finished walk back to in_progress, but still records a left one', async () => {
+  it('does not move a finished walk back to in_progress or erase it with a late left', async () => {
     const store = progressStoreFor(owner.Progress);
     const at = new Date('2026-10-28T12:00:00Z');
     await store.begin('u2', 'demo', {
@@ -100,7 +100,7 @@ describe('tutorial models against a real database', () => {
     });
     expect(await store.setPosition('u2', 'demo', 'a', 'in_progress', at)).toBe(false);
     expect((await store.read('u2', 'demo'))?.status).toBe('finished');
-    expect(await store.setPosition('u2', 'demo', 'a', 'left', at)).toBe(true);
-    expect((await store.read('u2', 'demo'))?.status).toBe('left');
+    expect(await store.setPosition('u2', 'demo', 'a', 'left', at)).toBe(false);
+    expect((await store.read('u2', 'demo'))?.status).toBe('finished');
   });
 });

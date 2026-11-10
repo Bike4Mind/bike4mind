@@ -24,10 +24,17 @@ function setup() {
   const rows: Row[] = [];
   const Override = {
     find: () => ({ lean: async () => rows.map(row => ({ ...row })) }),
-    findOneAndUpdate: async (filter: { moduleId: string; contentSeq?: unknown }, update: Update, opts: object) => {
+    findOneAndUpdate: async (
+      filter: { moduleId: string; contentSeq?: unknown; enabled?: boolean | null },
+      update: Update,
+      opts: object
+    ) => {
       const seq = filter.contentSeq;
       const hit = rows.find(
-        row => row.moduleId === filter.moduleId && (typeof seq === 'number' ? row.contentSeq === seq : false)
+        row =>
+          row.moduleId === filter.moduleId &&
+          (typeof seq === 'number' ? row.contentSeq === seq : false) &&
+          (!('enabled' in filter) || (row.enabled ?? null) === filter.enabled)
       );
       const row =
         hit ??
@@ -77,5 +84,16 @@ describe('overridesRoute PUT content sequence', () => {
     const saved = await put({ moduleId: 'fixture', fields, reason: 'edit', expectedContentSeq: 0 });
     expect(saved.statusCode).toBe(200);
     expect(rows[0].contentSeq).toBe(1);
+  });
+
+  it('refuses the second of two switch-only writes made from the same prior', async () => {
+    const { rows, put } = setup();
+    expect((await put({ moduleId: 'fixture', enabled: true, reason: 'seed' })).statusCode).toBe(200);
+    const [first, second] = await Promise.all([
+      put({ moduleId: 'fixture', enabled: false, reason: 'off' }),
+      put({ moduleId: 'fixture', enabled: false, reason: 'off too' }),
+    ]);
+    expect([first.statusCode, second.statusCode].sort()).toEqual([200, 409]);
+    expect(rows[0].enabled).toBe(false);
   });
 });

@@ -31,7 +31,7 @@ export interface TutorialModuleOverrideRow {
   title: string;
   version: number;
   revision: number;
-  /** Moves on every write; the editor sends back the value its draft started from. Null before any write. */
+  /** Moves on content writes and system revision bumps, not switch-only writes; the editor sends back the value its draft started from. */
   contentSeq: number | null;
   repoEnabled: boolean;
   enabled: boolean;
@@ -236,12 +236,18 @@ export function overridesRoute({ api, isAdmin, models, content, repo, policy, kn
       if (fields !== undefined) changed.push({ field: 'fields', before: prior?.fields, after: fields });
 
       // The change and its audit rows commit together, so a failed audit rolls the change back. The content
-      // sequence guards against a concurrent save: the loser gets a 409 and reloads.
+      // sequence guards content edits and the enabled value read guards switch writes; the loser gets a 409.
       const written = await withTransaction(async session => {
         // A first save matches no stored row, so one committed since the read makes it insert, hit the unique
         // moduleId and read as a conflict below rather than overwrite it.
         const update = await models.Override.findOneAndUpdate(
-          prior ? { moduleId, contentSeq: prior.contentSeq ?? 0 } : { moduleId, contentSeq: { $exists: false } },
+          prior
+            ? {
+                moduleId,
+                contentSeq: prior.contentSeq ?? 0,
+                ...(enabled !== undefined && { enabled: prior.enabled ?? null }),
+              }
+            : { moduleId, contentSeq: { $exists: false } },
           {
             $set: {
               ...(enabled !== undefined && { enabled }),
