@@ -49,8 +49,23 @@ export async function reserveOwnerEmbeddingSpend(params: {
   };
 }
 
+/** Returns an owner reservation to its window. Best-effort: a failure is logged, never thrown. */
+export async function releaseOwnerEmbeddingSpend(params: {
+  owner: LakeSpendOwner;
+  estimatedMicroUsd: number;
+  cache: Pick<ICacheRepository, 'releaseFromFixedWindow'>;
+  logger?: Logger;
+}): Promise<void> {
+  const { owner, estimatedMicroUsd, cache, logger } = params;
+  try {
+    await cache.releaseFromFixedWindow(ownerEmbeddingSpendKey(owner), estimatedMicroUsd);
+  } catch (error) {
+    logger?.warn?.('[spendGate] could not release the owner window reservation:', error);
+  }
+}
+
 /**
- * Gives back the run and lake reservations a message made before the owner window denied it. The
+ * Gives back the run and lake reservations a message made before the owner or period window denied it. The
  * owner window resets, but the per-lake meter is lifetime, so without this a paused owner's lake
  * would fill up with spend that never ran and stay blocked after the window resets. Best-effort,
  * like the worker's release after a provider failure (fabFileVectorize).

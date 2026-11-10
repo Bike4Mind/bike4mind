@@ -42,6 +42,7 @@ const grantAll = () => ({
     tryAddWithinLimitFixedWindow: vi
       .fn()
       .mockResolvedValue({ success: true, count: 1, expiresAt: new Date(Date.now() + 60_000) }),
+    releaseFromFixedWindow: vi.fn().mockResolvedValue(undefined),
   },
   dataLakes: {
     tryAddEmbeddingSpendMetered: vi.fn().mockResolvedValue({ granted: true, spendMicroUsd: 1_000 }),
@@ -78,7 +79,7 @@ beforeEach(() => {
 describe('enforceEmbeddingSpendGate', () => {
   it('lets the call proceed when every meter grants, reserving in narrowest-first order', async () => {
     const db = grantAll();
-    await expect(gate(db)).resolves.toBeUndefined();
+    await expect(gate(db)).resolves.toBeDefined();
 
     // run -> lake -> owner -> period, with both throughput windows (calls, then tokens) checked first.
     expect(db.cache.tryAddWithinLimitFixedWindow).toHaveBeenNthCalledWith(1, EMBEDDING_SPEND_RATE_KEY, 1, 120, 60_000);
@@ -292,7 +293,7 @@ describe('enforceEmbeddingSpendGate', () => {
 describe('enforceEmbeddingSpendGate - spend notifications', () => {
   it('notify is a no-op when omitted - every existing caller/test is unaffected', async () => {
     const db = grantAll();
-    await expect(gate(db)).resolves.toBeUndefined();
+    await expect(gate(db)).resolves.toBeDefined();
   });
 
   it('fires a stopped/switch notification before the switch-off throw', async () => {
@@ -469,7 +470,7 @@ describe('enforceEmbeddingSpendGate - spend notifications', () => {
     const db = grantAll();
     const notify = vi.fn().mockRejectedValue(new Error('mailer down'));
 
-    await expect(gate(db, 1_000, notify)).resolves.toBeUndefined();
+    await expect(gate(db, 1_000, notify)).resolves.toBeDefined();
   });
 
   it("notify rejecting does not change the gate's own resolve/reject outcome (deny path)", async () => {
@@ -524,7 +525,7 @@ describe('enforceEmbeddingSpendGate - spend notifications', () => {
         notify: hungNotify,
         notifyTimeoutMs: 10,
       })
-    ).resolves.toBeUndefined();
+    ).resolves.toBeDefined();
   });
 });
 
@@ -552,7 +553,7 @@ describe('enforceEmbeddingSpendGate cost tier', () => {
   it('leaves the tier unresolved rather than guessing when the lake row is gone', async () => {
     const db = grantAll();
     db.dataLakes.findById.mockResolvedValue(null);
-    await expect(gate(db)).resolves.toBeUndefined();
+    await expect(gate(db)).resolves.toBeDefined();
     expect(ownerTypePassedToResolver()).toBeUndefined();
   });
 
@@ -599,6 +600,9 @@ const meteringCache = () => {
       counts.set(key, next);
       return { success: true, count: next, expiresAt };
     }),
+    releaseFromFixedWindow: vi.fn(async (key: string, amount: number) => {
+      counts.set(key, Math.max(0, (counts.get(key) ?? 0) - amount));
+    }),
   };
 };
 
@@ -613,7 +617,13 @@ describe('enforceEmbeddingSpendGate per-owner window', () => {
     const base = grantAll();
     const cache = meteringCache();
     base.dataLakes.findById.mockImplementation(async (id: string) => lakesByOwner[id] ?? null);
-    const db: SpendGateDb = { ...base, cache: { tryAddWithinLimitFixedWindow: cache.tryAddWithinLimitFixedWindow } };
+    const db: SpendGateDb = {
+      ...base,
+      cache: {
+        tryAddWithinLimitFixedWindow: cache.tryAddWithinLimitFixedWindow,
+        releaseFromFixedWindow: cache.releaseFromFixedWindow,
+      },
+    };
     return { db, cache };
   };
 
@@ -636,16 +646,16 @@ describe('enforceEmbeddingSpendGate per-owner window', () => {
     mockedLevers.mockResolvedValue(levers({ perOwnerPeriodBudgetMicroUsd: 2_000 }));
     const { db } = meteredDb();
 
-    await expect(gateFor(db, 'lakeA', 1_500)).resolves.toBeUndefined();
+    await expect(gateFor(db, 'lakeA', 1_500)).resolves.toBeDefined();
     await expect(gateFor(db, 'lakeA', 1_500)).rejects.toThrow(/lake owner's embedding budget/);
-    await expect(gateFor(db, 'lakeB', 1_500)).resolves.toBeUndefined();
+    await expect(gateFor(db, 'lakeB', 1_500)).resolves.toBeDefined();
   });
 
   it('still enforces the platform window when every owner is under its own share', async () => {
     mockedLevers.mockResolvedValue(levers({ perOwnerPeriodBudgetMicroUsd: 2_000, perPeriodBudgetMicroUsd: 2_500 }));
     const { db } = meteredDb();
 
-    await expect(gateFor(db, 'lakeA', 1_500)).resolves.toBeUndefined();
+    await expect(gateFor(db, 'lakeA', 1_500)).resolves.toBeDefined();
     await expect(gateFor(db, 'lakeB', 1_500)).rejects.toThrow(/platform-wide embedding budget/);
   });
 
@@ -657,7 +667,7 @@ describe('enforceEmbeddingSpendGate per-owner window', () => {
     expect(cache.counts.get(ownerEmbeddingSpendKey({ type: CreditHolderType.Organization, id: 'org1' }))).toBe(1_500);
     expect(cache.counts.has(ownerEmbeddingSpendKey({ type: CreditHolderType.User, id: 'userA' }))).toBe(false);
     // userA's personal lake still has its own full share.
-    await expect(gateFor(db, 'lakeA', 1_500)).resolves.toBeUndefined();
+    await expect(gateFor(db, 'lakeA', 1_500)).resolves.toBeDefined();
   });
 
   it('does not reserve platform spend for a call the owner window denied', async () => {
@@ -684,6 +694,36 @@ describe('enforceEmbeddingSpendGate per-owner window', () => {
     ).rejects.toThrow(/lake owner's embedding budget/);
     expect(db.dataLakes.releaseEmbeddingSpend).toHaveBeenCalledWith('lakeA', 1_500);
     expect(db.dataLakeBatches.releaseEmbeddingSpend).toHaveBeenCalledWith('batch1', 1_500);
+  });
+
+  it('returns the owner window, run and lake to their prior values when the platform period denies', async () => {
+    mockedLevers.mockResolvedValue(levers({ perOwnerPeriodBudgetMicroUsd: 2_000, perPeriodBudgetMicroUsd: 1_000 }));
+    const { db, cache } = meteredDb();
+    const ownerKey = ownerEmbeddingSpendKey({ type: CreditHolderType.User, id: 'userA' });
+    cache.counts.set(ownerKey, 300);
+
+    await expect(
+      enforceEmbeddingSpendGate({
+        estimatedMicroUsd: 1_500,
+        estimatedTokens: 1_000,
+        batchId: 'batch1',
+        dataLakeId: 'lakeA',
+        db,
+        sleep: vi.fn().mockResolvedValue(undefined),
+      })
+    ).rejects.toThrow(/platform-wide embedding budget/);
+    expect(cache.counts.get(ownerKey)).toBe(300);
+    expect(db.dataLakes.releaseEmbeddingSpend).toHaveBeenCalledWith('lakeA', 1_500);
+    expect(db.dataLakeBatches.releaseEmbeddingSpend).toHaveBeenCalledWith('batch1', 1_500);
+  });
+
+  it('returns the resolved owner when the call is granted', async () => {
+    mockedLevers.mockResolvedValue(levers({ perOwnerPeriodBudgetMicroUsd: 2_000 }));
+    const { db } = meteredDb();
+
+    await expect(gateFor(db, 'lakeOrg', 1_500)).resolves.toEqual({
+      owner: { type: CreditHolderType.Organization, id: 'org1' },
+    });
   });
 
   it('keeps the reservations when the owner window grants', async () => {

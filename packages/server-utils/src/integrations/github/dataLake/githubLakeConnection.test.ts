@@ -778,6 +778,23 @@ describe('completeGitHubLakeConnection', () => {
     expect(h.verifyOrgAccess).not.toHaveBeenCalled();
   });
 
+  it('hands the authorized owner to assertAllowed and writes nothing when it refuses', async () => {
+    const refusal = new ForbiddenError('plan required');
+    const assertAllowed = vi.fn().mockRejectedValue(refusal);
+    await expect(completeGitHubLakeConnection({ ...params(), assertAllowed })).rejects.toBe(refusal);
+    expect(assertAllowed).toHaveBeenCalledWith({ kind: 'organization', organizationId: 'orgA' });
+    expect(h.listInstallerVisibleRepositories).not.toHaveBeenCalled();
+    expect(h.ghConnCreate).not.toHaveBeenCalled();
+    expect(h.consumeGitHubLakeAuthGrant).not.toHaveBeenCalled();
+  });
+
+  it('does not run assertAllowed for a caller who fails lake authorization', async () => {
+    h.verifyOrgAccess.mockRejectedValue(new ForbiddenError('no standing'));
+    const assertAllowed = vi.fn();
+    await expect(completeGitHubLakeConnection({ ...params(), assertAllowed })).rejects.toThrow();
+    expect(assertAllowed).not.toHaveBeenCalled();
+  });
+
   it('consumes the flow grant after a successful connect', async () => {
     await completeGitHubLakeConnection(params());
     expect(h.consumeGitHubLakeAuthGrant).toHaveBeenCalledWith(CONFIG, NONCE_HASH);

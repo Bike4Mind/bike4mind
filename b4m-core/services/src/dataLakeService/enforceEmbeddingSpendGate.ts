@@ -16,6 +16,7 @@ import {
 import type { DataLakeSpendNotificationEvent } from './sendDataLakeSpendNotification';
 import { scopeForLake } from '../settings/resolveScopedSetting';
 import {
+  releaseOwnerEmbeddingSpend,
   releaseReservationsAfterOwnerDenial,
   reserveOwnerEmbeddingSpend,
   type LakeSpendOwner,
@@ -80,7 +81,7 @@ export class EmbeddingSpendDeniedError extends Error {
 
 export interface SpendGateDb {
   adminSettings: Pick<IAdminSettingsRepository, 'findBySettingNames' | 'findAll'>;
-  cache: Pick<ICacheRepository, 'tryAddWithinLimitFixedWindow'>;
+  cache: Pick<ICacheRepository, 'tryAddWithinLimitFixedWindow' | 'releaseFromFixedWindow'>;
   dataLakes: Pick<IDataLakeRepository, 'tryAddEmbeddingSpendMetered' | 'releaseEmbeddingSpend' | 'findById'>;
   dataLakeBatches: Pick<IDataLakeBatchRepository, 'tryAddEmbeddingSpend' | 'releaseEmbeddingSpend'>;
 }
@@ -132,10 +133,12 @@ export interface SpendGateDb {
  * Reservations are made narrowest-first and NOT rolled back when a later check denies: a
  * denial fails the file anyway, so a stranded reservation only makes the wider meters read
  * slightly high - never low. Bounded by one message's cost, and overcounting is the safe
- * direction for a spend meter. The one exception is the per-owner window: it denies far more
+ * direction for a spend meter. The exception is the per-owner window: it denies far more
  * often than the platform window, and each denied message would otherwise strand its estimate
  * on the LIFETIME per-lake meter, so an owner denial releases the run and lake reservations
- * (releaseReservationsAfterOwnerDenial) before it throws.
+ * (releaseReservationsAfterOwnerDenial) before it throws. A platform-period denial after a
+ * granted owner reservation releases all three (owner window, run, lake) the same way, so the
+ * owner is never charged for work that does not run.
  *
  * That non-rollback argument covers DENIALS only. A granted reservation whose provider call
  * then FAILS is a different case: the money was never spent, and under SQS redelivery the
@@ -147,7 +150,8 @@ export interface SpendGateDb {
  * Math.ceil'd upward by design and never reconciled against the provider invoice; that bias
  * is noise on the windowed meters and one more reason the lifetime meter needs the reset.
  *
- * Throws EmbeddingSpendDeniedError on any denial; returns void when the call may proceed.
+ * Throws EmbeddingSpendDeniedError on any denial; when the call may proceed, returns the resolved
+ * lake owner (undefined when none) so the caller can release the owner window on a later failure.
  */
 export async function enforceEmbeddingSpendGate(params: {
   /** Estimated provider cost of the call about to be made, integer micro-USD (>= 0). */
@@ -175,7 +179,7 @@ export async function enforceEmbeddingSpendGate(params: {
   notify?: (event: DataLakeSpendNotificationEvent) => Promise<unknown>;
   /** Injectable for tests; defaults to DEFAULT_NOTIFY_TIMEOUT_MS. */
   notifyTimeoutMs?: number;
-}): Promise<void> {
+}): Promise<{ owner?: LakeSpendOwner }> {
   const { estimatedMicroUsd, estimatedTokens, batchId, dataLakeId, db, logger, notify } = params;
   const sleep = params.sleep ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms)));
   const notifyTimeoutMs = params.notifyTimeoutMs ?? DEFAULT_NOTIFY_TIMEOUT_MS;
@@ -355,6 +359,7 @@ export async function enforceEmbeddingSpendGate(params: {
     lakeSpendMicroUsd = result.spendMicroUsd;
   }
 
+  let ownerReserved = false;
   if (owner) {
     const reservation = await reserveOwnerEmbeddingSpend({
       owner,
@@ -388,6 +393,7 @@ export async function enforceEmbeddingSpendGate(params: {
           'is used up for the current window'
       );
     }
+    ownerReserved = true;
   }
 
   const period = await db.cache.tryAddWithinLimitFixedWindow(
@@ -419,6 +425,17 @@ export async function enforceEmbeddingSpendGate(params: {
         periodHours: levers.periodHours,
         windowEndsAt: periodIsStuck ? undefined : period.expiresAt,
       },
+    });
+    if (owner && ownerReserved) {
+      await releaseOwnerEmbeddingSpend({ owner, estimatedMicroUsd, cache: db.cache, logger });
+    }
+    await releaseReservationsAfterOwnerDenial({
+      estimatedMicroUsd,
+      batchId,
+      dataLakeId,
+      dataLakes: db.dataLakes,
+      dataLakeBatches: db.dataLakeBatches,
+      logger,
     });
     throw new EmbeddingSpendDeniedError(
       `the platform-wide embedding budget ($${levers.perPeriodBudgetMicroUsd / 1e6} per ${levers.periodHours}h) is exhausted`
@@ -454,6 +471,7 @@ export async function enforceEmbeddingSpendGate(params: {
   // every other affected lake hears nothing, and no platform admin (the only party who can
   // actually act on it) is reached at all. budget_exhausted/period does not have this problem -
   // it fires on every denial, so it correctly reaches every affected lake once per window.
+  return { owner };
 }
 
 /**
