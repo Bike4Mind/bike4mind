@@ -1,0 +1,64 @@
+{
+  "scenario": "blocked.synthetic",
+  "synthetic": true,
+  "basis": "BFL moderation is reported as status 'Request Moderated' or 'Content Moderated' on the poll response.",
+  "exchanges": [
+    {
+      "name": "submit",
+      "request": {
+        "method": "POST",
+        "path": "/v1/flux-3-video",
+        "body": {
+          "prompt": "blocked content",
+          "aspect_ratio": "16:9",
+          "resolution": "hd",
+          "mode": "t2v",
+          "duration": 5,
+          "generate_audio": true
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "id": "synthetic-blocked",
+          "polling_url": "https://api.bfl.ai/v1/get_result?id=synthetic-blocked"
+        }
+      }
+    },
+    {
+      "name": "poll_first",
+      "request": {
+        "method": "GET",
+        "path": "/v1/get_result?id=synthetic-blocked"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "status": "Pending"
+        }
+      }
+    },
+    {
+      "name": "poll_terminal",
+      "request": {
+        "method": "GET",
+        "path": "/v1/get_result?id=synthetic-blocked"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "status": "Request Moderated"
+        }
+      }
+    }
+  ]
+}
