@@ -156,7 +156,7 @@ export const stopReply = async (sessionId: string, ability: Ability, questId?: s
         status: 'cancellation_requested',
       });
     } catch (error) {
-      console.error('Error emitting cancellation event:', error);
+      Logger.error('Error emitting cancellation event:', error);
     }
 
     // The status filter closes the same race between the read above and this write.

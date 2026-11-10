@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { Logger } from '@bike4mind/observability';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const {
@@ -149,7 +150,7 @@ describe('subscriptionEventUser', () => {
   });
 
   it('turns a failed lookup into nobody rather than a throw', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
     mockFindById.mockRejectedValue(new Error('db down'));
     await expect(subscriptionEventUser({ ownerType: SubscriptionOwnerType.User, ownerId: 'u1' })).resolves.toBeNull();
     warn.mockRestore();
@@ -169,7 +170,7 @@ describe('creditBuyerForEvents', () => {
   });
 
   it('turns a failed lookup into nobody rather than a throw', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
     mockFindByStripeCustomerId.mockRejectedValue(new Error('db down'));
     await expect(creditBuyerForEvents('cus_1', 'u1')).resolves.toBeNull();
     warn.mockRestore();
@@ -180,7 +181,7 @@ describe('the visit a purchase was made in', () => {
   const visitId = 'a'.repeat(32);
   let warn: ReturnType<typeof vi.spyOn>;
   beforeEach(() => {
-    warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    warn = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
   });
   afterEach(() => warn.mockRestore());
 

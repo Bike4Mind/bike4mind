@@ -1,3 +1,4 @@
+import { Logger } from '@bike4mind/observability';
 import { adminSettingsRepository, User, UserApiKey } from '@bike4mind/database';
 import {
   hasDeveloperUserTag,
@@ -64,7 +65,7 @@ export async function loadCountingContext(): Promise<CountingContext> {
     testDomains = parseSyntheticDomainList(await adminSettingsRepository.getSettingsValue('syntheticUserEmailDomains'));
   } catch (error) {
     // A failed settings read leaves the e2e domain rule off rather than failing the rollup.
-    console.warn('[b4m-analytics] test-domain setting unavailable; e2e domain rule off for this run', error);
+    Logger.warn('[b4m-analytics] test-domain setting unavailable; e2e domain rule off for this run', error);
   }
   return {
     staffRegex: internalStaffEmailRegex(parseInternalStaffDomains(process.env.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS)),

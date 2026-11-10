@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { Logger } from '@bike4mind/observability';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { scopedSettingsService } from '@bike4mind/services';
 import { CustomMcpPolicySchema, ForbiddenError, type CustomMcpPolicy } from '@bike4mind/common';
@@ -109,7 +110,7 @@ describe('resolveCustomMcpContext', () => {
   describe('dropped stored override', () => {
     let warn: ReturnType<typeof vi.spyOn>;
     beforeEach(() => {
-      warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      warn = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
     });
     afterEach(() => warn.mockRestore());
 

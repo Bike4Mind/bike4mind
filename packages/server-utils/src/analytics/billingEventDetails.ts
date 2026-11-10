@@ -1,3 +1,4 @@
+import { Logger } from '@bike4mind/observability';
 import type Stripe from 'stripe';
 import { paymentAttemptRepository, userRepository } from '@bike4mind/database';
 import { stripe } from '../integrations/stripe/stripe';
@@ -21,7 +22,7 @@ export async function subscriptionEventUser(row: Pick<ISubscription, 'ownerType'
   try {
     return await userRepository.findById(row.ownerId);
   } catch {
-    console.warn('[b4m-analytics] billing event user lookup failed');
+    Logger.warn('[b4m-analytics] billing event user lookup failed');
     return null;
   }
 }
@@ -99,7 +100,7 @@ export async function creditBuyerForEvents(customerId: string | undefined, metad
     const byCustomer = customerId ? await userRepository.findByStripeCustomerId(customerId) : null;
     return byCustomer ?? (metadataUserId ? await userRepository.findById(metadataUserId) : null);
   } catch {
-    console.warn('[b4m-analytics] billing event user lookup failed');
+    Logger.warn('[b4m-analytics] billing event user lookup failed');
     return null;
   }
 }
@@ -114,7 +115,7 @@ export async function purchaseVisitId(paymentIntentId: string): Promise<string |
   try {
     return (await paymentAttemptRepository.findVisitId(paymentIntentId)) ?? undefined;
   } catch {
-    console.warn('[b4m-analytics] purchase visit lookup failed');
+    Logger.warn('[b4m-analytics] purchase visit lookup failed');
     return undefined;
   }
 }
@@ -133,7 +134,7 @@ export async function recordCheckoutVisit(input: {
       visitId: input.visitId,
     });
   } catch {
-    console.warn('[b4m-analytics] checkout visit not recorded');
+    Logger.warn('[b4m-analytics] checkout visit not recorded');
   }
 }
 
@@ -148,7 +149,7 @@ export async function subscriptionCheckoutVisitId(subscriptionId: string): Promi
     if (!checkoutSessionId) return undefined;
     return (await paymentAttemptRepository.findVisitId(checkoutSessionId)) ?? undefined;
   } catch {
-    console.warn('[b4m-analytics] subscription checkout visit lookup failed');
+    Logger.warn('[b4m-analytics] subscription checkout visit lookup failed');
     return undefined;
   }
 }

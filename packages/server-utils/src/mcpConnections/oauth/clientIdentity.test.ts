@@ -1,3 +1,4 @@
+import { Logger } from '@bike4mind/observability';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RemoteMcpOAuthDiscovery } from '@bike4mind/mcp/remote';
 
@@ -60,7 +61,7 @@ beforeEach(() => {
   h.registerIfAbsent.mockReset().mockImplementation(async (row: Record<string, unknown>) => ({ ...row, id: 'reg-1' }));
   h.byId.mockReset().mockResolvedValue(null);
   vi.stubEnv('APP_URL', 'https://app.example.com');
-  vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  vi.spyOn(Logger, 'warn').mockImplementation(() => undefined);
 });
 
 describe('resolveOAuthClient', () => {
@@ -165,14 +166,14 @@ describe('resolveOAuthClient', () => {
   it('logs a malformed preset setting instead of ignoring it silently', async () => {
     h.settings = '{not json';
     await resolve({ connection: { presetId: 'linear' as never } });
-    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('customMcpPresetClients is unusable'));
+    expect(Logger.warn).toHaveBeenCalledWith(expect.stringContaining('customMcpPresetClients is unusable'));
   });
 
   it('never logs part of a client secret from a malformed preset setting', async () => {
     h.settings = '{"linear":{"clientId":"a","clientSecret":ABCDEFGHIJKLMNOPQRSTUV}}';
     await resolve({ connection: { presetId: 'linear' as never } });
-    expect(console.warn).toHaveBeenCalled();
-    const logged = vi.mocked(console.warn).mock.calls.flat().join(' ');
+    expect(Logger.warn).toHaveBeenCalled();
+    const logged = vi.mocked(Logger.warn).mock.calls.flat().join(' ');
     expect(logged).not.toMatch(/ABCDE|clientSecret/);
   });
 });

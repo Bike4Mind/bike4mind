@@ -1,3 +1,4 @@
+import { Logger } from '@bike4mind/observability';
 import {
   BadRequestError,
   parseCustomMcpPresetClients,
@@ -61,7 +62,7 @@ export async function presetClientFor(presetId: string | undefined): Promise<Man
   );
   const parsed = parseCustomMcpPresetClients(raw);
   // The parser message can quote the value around the error, which holds client secrets: never log it.
-  if (!parsed.ok) console.warn('[mcpOAuth] customMcpPresetClients is unusable (invalid JSON or shape)');
+  if (!parsed.ok) Logger.warn('[mcpOAuth] customMcpPresetClients is unusable (invalid JSON or shape)');
   return parsed.clients[presetId];
 }
 

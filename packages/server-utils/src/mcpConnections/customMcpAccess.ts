@@ -1,3 +1,4 @@
+import { Logger } from '@bike4mind/observability';
 import {
   CreditHolderType,
   ForbiddenError,
@@ -86,7 +87,7 @@ const warnedDroppedOverrides = new Set<string>();
 function warnOnce(id: string, message: string): void {
   if (warnedDroppedOverrides.has(id)) return;
   warnedDroppedOverrides.add(id);
-  console.warn(message);
+  Logger.warn(message);
 }
 
 /**
