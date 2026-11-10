@@ -8,6 +8,7 @@ import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { formatCreditAmount } from '@client/app/utils/formatCredits';
 import { BILLING_SEARCH_PARAM } from '@client/app/utils/billingDeepLink';
 import { markBillingCheckoutReturn } from '@client/app/utils/billingCheckoutReturn';
+import { CHECKOUT_RETURN_PARAM, allowedCheckoutReturn } from '@client/app/utils/checkoutReturn';
 
 /**
  * Handles Stripe Checkout success redirects globally (subscription checkout success).
@@ -102,6 +103,12 @@ async function confirmCheckout(sessionId: string): Promise<void> {
   if (claimed) trackPurchaseConversion(summary);
 }
 
+/** How long the confirmation stays on screen before a checkout started elsewhere returns there. */
+export const CHECKOUT_RETURN_DELAY_MS = 1500;
+
+/** Sends the buyer back to the app that started the checkout. Exported for its test. */
+export const checkoutReturnNavigator = { assign: (url: string) => window.location.assign(url) };
+
 const StripeCheckoutSuccessHandler = () => {
   const queryClient = useQueryClient();
 
@@ -110,6 +117,15 @@ const StripeCheckoutSuccessHandler = () => {
     const searchParams = new URLSearchParams(window.location.search);
     const subscriptionSuccess = searchParams.get('subscription_success');
     const checkoutSessionId = searchParams.get('checkout_session_id');
+    // A checkout another Bike4Mind app started (utils/checkoutReturn.ts): re-checked here, because
+    // this URL is one anyone can type.
+    const returnTo = allowedCheckoutReturn(searchParams.get(CHECKOUT_RETURN_PARAM));
+
+    if (subscriptionSuccess !== 'true' && returnTo) {
+      // Stripe's cancel_url carries no success marker: nothing was bought, so go straight back.
+      checkoutReturnNavigator.assign(returnTo);
+      return;
+    }
 
     if (subscriptionSuccess === 'true') {
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
@@ -117,10 +133,16 @@ const StripeCheckoutSuccessHandler = () => {
 
       // Admin-initiated conversions redirect without a session id: nothing to look up, and not
       // reported, since they are not customer-attributable acquisitions.
-      if (checkoutSessionId && checkoutSessionId.startsWith('cs_')) {
-        void confirmCheckout(checkoutSessionId);
-      } else {
-        toast.success(GENERIC_CONFIRMATION);
+      const confirmed =
+        checkoutSessionId && checkoutSessionId.startsWith('cs_')
+          ? confirmCheckout(checkoutSessionId)
+          : Promise.resolve(void toast.success(GENERIC_CONFIRMATION));
+
+      // Only once the purchase is confirmed and reported, so leaving cannot cost the conversion.
+      if (returnTo) {
+        void confirmed
+          .catch(() => undefined)
+          .then(() => setTimeout(() => checkoutReturnNavigator.assign(returnTo), CHECKOUT_RETURN_DELAY_MS));
       }
 
       // Clean up URL without triggering a refresh. Strip only OUR two params and
