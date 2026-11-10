@@ -1615,6 +1615,9 @@ importers:
       '@bike4mind/fab-pipeline':
         specifier: workspace:*
         version: link:../fab-pipeline
+      '@bike4mind/observability':
+        specifier: workspace:*
+        version: link:../observability
       '@modelcontextprotocol/sdk':
         specifier: 1.32.1
         version: 1.32.1(zod@4.6.6)

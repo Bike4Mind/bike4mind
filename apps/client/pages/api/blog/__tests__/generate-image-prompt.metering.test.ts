@@ -140,6 +140,9 @@ describe('POST /api/blog/generate-image-prompt metering', () => {
     const res = await call();
 
     expect(res._getStatusCode()).toBe(200);
+    expect(testLogger.info).toHaveBeenCalledWith('Blog image prompt generated', { generatedPromptLength: 17 });
+    expect(JSON.stringify(testLogger.info.mock.calls)).not.toContain('A bicycle at dawn');
+    expect(testLogger.log).not.toHaveBeenCalled();
     expect(m.hold).toHaveBeenCalledBefore(m.complete);
     expect(m.record).toHaveBeenCalledOnce();
     expect(m.record).toHaveBeenCalledWith(
@@ -155,10 +158,13 @@ describe('POST /api/blog/generate-image-prompt metering', () => {
   });
 
   it('refunds the hold when the provider throws', async () => {
-    m.complete.mockRejectedValue(new Error('provider down'));
+    const error = new Error('provider down');
+    m.complete.mockRejectedValue(error);
 
     const res = await call();
     expect(res._getStatusCode()).toBe(500);
+    expect(testLogger.error).toHaveBeenCalledWith('Blog image prompt generation failed', { error });
+    expect(testLogger.error).toHaveBeenCalledWith('Blog image prompt generation error', { error });
     expect(m.release).toHaveBeenCalledOnce();
     expect(m.settleHold).not.toHaveBeenCalled();
   });
