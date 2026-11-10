@@ -8,9 +8,9 @@
 #   3. every file that accepts API keys (no `auth: 'jwtOnly'`) and calls an LLM must name a
 #      credit-billing seam (server/billing/meterPlatformCompletion.ts), or be on the baseline.
 #   4. every `sst.aws.Function` in infra/ that exposes a Function URL (`url:`) must have a
-#      handler built on defineLambdaRoute, or be on the function-url baseline. A Function URL
-#      skips the Next.js middleware chain, so the contract has to be wired at the handler;
-#      the pages/api scans cannot see a Lambda declared in infra/.
+#      handler built on defineLambdaRoute, a reviewed fixed-protocol exception, or the frozen
+#      function-url baseline. Function URLs skip the Next.js middleware chain; the pages/api
+#      scans cannot see a Lambda declared in infra/.
 # Exits 1 on any unacknowledged violation.
 #
 # ALLOWLISTS
@@ -239,7 +239,8 @@ report "$ALLOWLIST_FUNCTION_URL" "$url_violators" \
 authenticates; then add the contract to contracts/index.ts and regenerate the spec, which is
 what registers it in the OpenAPI spec (see b4m-core/common/src/api-contract/README.md).
 Do NOT add to $ALLOWLIST_FUNCTION_URL for new code: entries there are frozen debt, and each
-needs a trailing '# reason'." || failed=1
+needs a trailing '# reason'. Fixed third-party protocols require an explicit declaration/handler
+exception in check-function-url-contracts.mjs, with protocol and authentication regression tests." || failed=1
 
 if [ "$failed" -eq 0 ]; then
   echo "OK: No contract-gate violations."

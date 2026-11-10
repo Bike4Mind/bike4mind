@@ -4,7 +4,6 @@ import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from '
 import { timingSafeEqual } from 'node:crypto';
 import { Resource } from 'sst';
 import { z } from 'zod';
-import { handleEvents } from './eventsRoute';
 
 // The body is uploaded later by Turbo; do not sign a checksum of an empty body.
 const s3 = new S3Client({ requestChecksumCalculation: 'WHEN_REQUIRED' });
@@ -112,10 +111,10 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   const path = event.rawPath;
   const team = event.queryStringParameters?.slug ?? event.queryStringParameters?.teamId;
 
-  // POST /v8/artifacts/events -- Turborepo analytics events (contract-routed via eventsRoute)
+  // POST /v8/artifacts/events -- Turborepo analytics events (accepted but not stored)
   if (requestedMethod === 'POST' && path === '/v8/artifacts/events') {
     if (method === 'OPTIONS') return preflightResponse;
-    return handleEvents(event) as Promise<APIGatewayProxyStructuredResultV2>;
+    return { statusCode: 200, body: '{}' };
   }
 
   const hashMatch = path.match(/^\/v8\/artifacts\/([a-f0-9]+)$/);

@@ -22,6 +22,25 @@ Self-hosted Turborepo remote cache backed by S3 and a Lambda Function URL.
   Developer and preview stages create no cache resources. Each hosted stage has
   its own bucket; choose one endpoint for a shared cache.
 
+## Contract-gate exception
+
+The Function URL scanner explicitly permits only the declaration in
+`infra/turborepoCache.ts` targeting `apps/workers/src/turboCache/handler.handler`.
+This permanent third-party protocol exception is separate from the frozen
+migration-debt allowlist, which remains unchanged. Other declarations and handler
+exports still require `defineLambdaRoute`.
+
+Turbo fixes the v8 paths and requires OPTIONS preflight, HEAD metadata and redirect
+headers across multiple methods. The app's JSON contract adapter uses app
+credentials and JSON response shaping; this transport instead owns bearer-token
+validation and read/write roles before dispatching any protocol route, including
+analytics events. It does not expose an app API-key endpoint or app OpenAPI contract.
+
+Scanner integration tests cover the exact exception and rejection of other
+bindings, missing handlers and malformed declarations. Handler tests cover
+unauthenticated requests and read-only upload rejection, while a real AWS signer
+regression covers body-independent upload URLs.
+
 ## Access control
 
 Set two distinct secrets on the hosted stage:

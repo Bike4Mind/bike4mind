@@ -43,14 +43,6 @@ vi.mock('sst', () => ({
   },
 }));
 
-vi.mock('./eventsRoute', () => ({
-  handleEvents: vi.fn().mockResolvedValue({
-    statusCode: 200,
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({}),
-  }),
-}));
-
 function makeEvent(
   overrides: Partial<APIGatewayProxyEventV2> & { method?: string; path?: string }
 ): APIGatewayProxyEventV2 {
@@ -93,6 +85,26 @@ describe('turboCache handler', () => {
     const event = makeEvent({ method: 'GET', path: '/v8/artifacts/abc123', headers: {} });
     const result = await handler(event);
     expect(result.statusCode).toBe(401);
+  });
+
+  it.each([
+    ['GET', '/v8/artifacts/abc123', 'GET'],
+    ['HEAD', '/v8/artifacts/abc123', 'GET'],
+    ['PUT', '/v8/artifacts/abc123', 'PUT'],
+    ['OPTIONS', '/v8/artifacts/abc123', 'PUT'],
+    ['POST', '/v8/artifacts/events', 'POST'],
+    ['OPTIONS', '/v8/artifacts/events', 'POST'],
+  ])('authenticates %s %s before dispatch', async (method, path, requestedMethod) => {
+    const result = await handler(
+      makeEvent({
+        method,
+        path,
+        headers: { 'access-control-request-method': requestedMethod },
+      })
+    );
+    expect(result.statusCode).toBe(401);
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(mockGetSignedUrl).not.toHaveBeenCalled();
   });
 
   it('rejects requests with a wrong token', async () => {

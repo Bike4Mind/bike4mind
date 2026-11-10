@@ -9,10 +9,6 @@ vi.mock('sst', () => ({
   },
 }));
 
-vi.mock('./eventsRoute', () => ({
-  handleEvents: vi.fn().mockResolvedValue({ statusCode: 200, body: '{}' }),
-}));
-
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.resetModules();
