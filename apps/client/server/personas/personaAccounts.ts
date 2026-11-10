@@ -6,6 +6,10 @@ import {
   PERSONA_TTL_DAYS_DEFAULT,
   RESERVED_USERNAME_PREFIX,
   canAccessAdmin,
+  internalStaffEmailRegex,
+  parseInternalStaffDomains,
+  personalEmailProviders,
+  regionalPersonalEmailProviders,
   type AuditActor,
   type IUserDocument,
   type StoredAuditContext,
@@ -22,6 +26,8 @@ import { adminAuditService, userService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
+import { entitlementsForEmail } from '@bike4mind/server-utils/lib/entitlements/registry';
+import { partnerSignupGrantForEmail } from '@bike4mind/server-utils/entitlements/partnerRules';
 
 /** The name a caller picks; it becomes the username middle and, on production, the mailbox. */
 export const PERSONA_NAME_PATTERN = /^[a-z0-9]{1,24}$/;
@@ -39,9 +45,39 @@ const HOSTNAME_PATTERN = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\
 const DAY_MS = 24 * 60 * 60 * 1000;
 const SWEEP_BATCH = 200;
 
-export type PersonaSettings = { dailyLimit: number; maxLive: number; ttlDays: number; emailDomain: string | null };
+export type PersonaSettings = {
+  dailyLimit: number;
+  maxLive: number;
+  ttlDays: number;
+  /** Null when unset, malformed or refused by personaEmailDomainRefusal: production minting stays off. */
+  emailDomain: string | null;
+};
 
-export async function loadPersonaSettings(): Promise<PersonaSettings> {
+/**
+ * Why `domain` must not be the persona mail domain, or null when it is safe. A persona's address is
+ * verified at mint, so on a domain that confers anything to verified addresses (env or partner-rule
+ * entitlement grants, staff status, domain-gated shares) every persona would get it, and on a
+ * public mail provider a persona would squat a real person's address. A partner-rule lookup failure
+ * refuses.
+ */
+export async function personaEmailDomainRefusal(domain: string): Promise<string | null> {
+  if (personalEmailProviders.includes(domain) || regionalPersonalEmailProviders.includes(domain)) {
+    return 'a public mail provider';
+  }
+  const probe = `persona-domain-probe@${domain}`;
+  if (entitlementsForEmail(probe, true).size > 0) return 'an entitlement grant domain';
+  if (internalStaffEmailRegex(parseInternalStaffDomains(process.env.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS))?.test(probe)) {
+    return 'an internal staff domain';
+  }
+  try {
+    if ((await partnerSignupGrantForEmail(probe, true)).matched) return 'a partner signup rule domain';
+  } catch {
+    return 'a domain whose partner signup rules could not be read';
+  }
+  return null;
+}
+
+export async function loadPersonaSettings(logger?: Logger): Promise<PersonaSettings> {
   const settings = await getSettingsMap(
     { adminSettings: adminSettingsRepository },
     { names: ['PersonaMintDailyLimit', 'PersonaMaxLive', 'PersonaTtlDays', 'PersonaEmailDomain'] }
@@ -49,11 +85,19 @@ export async function loadPersonaSettings(): Promise<PersonaSettings> {
   const domain = String(getSettingsValue('PersonaEmailDomain', settings, '') ?? '')
     .trim()
     .toLowerCase();
+  let emailDomain: string | null = HOSTNAME_PATTERN.test(domain) ? domain : null;
+  if (emailDomain) {
+    const refusal = await personaEmailDomainRefusal(emailDomain);
+    if (refusal) {
+      logger?.error('[PersonaMint] PersonaEmailDomain refused', { domain: emailDomain, refusal });
+      emailDomain = null;
+    }
+  }
   return {
     dailyLimit: getSettingsValue('PersonaMintDailyLimit', settings, PERSONA_MINT_DAILY_LIMIT_DEFAULT),
     maxLive: getSettingsValue('PersonaMaxLive', settings, PERSONA_MAX_LIVE_DEFAULT),
     ttlDays: getSettingsValue('PersonaTtlDays', settings, PERSONA_TTL_DAYS_DEFAULT),
-    emailDomain: HOSTNAME_PATTERN.test(domain) ? domain : null,
+    emailDomain,
   };
 }
 

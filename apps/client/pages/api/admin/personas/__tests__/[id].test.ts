@@ -11,10 +11,12 @@ const h = vi.hoisted(() => ({
   hardDeleteUser: vi.fn(),
   revokeUserSessions: vi.fn(),
   recordAdminAction: vi.fn(),
+  baseApiOptions: [] as unknown[],
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+  baseApi: (options: unknown) => {
+    h.baseApiOptions.push(options);
     const routes: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign((req: { method?: string }, res: unknown) => routes[req.method ?? 'GET']?.(req, res), {
       use: () => chain,
@@ -28,6 +30,10 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
 }));
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
 vi.mock('@bike4mind/server-utils/utils/ip', () => ({ getClientIp: () => '203.0.113.9' }));
+vi.mock('@bike4mind/server-utils/lib/entitlements/registry', () => ({ entitlementsForEmail: () => new Set() }));
+vi.mock('@bike4mind/server-utils/entitlements/partnerRules', () => ({
+  partnerSignupGrantForEmail: () => Promise.resolve({ matched: false }),
+}));
 vi.mock('@server/services/hardDeleteUser', () => ({ hardDeleteUser: h.hardDeleteUser }));
 vi.mock('sst', () => ({
   Resource: {
@@ -79,9 +85,20 @@ beforeEach(() => {
 describe('DELETE /api/admin/personas/:id', () => {
   it('answers 404 when the stage secret is unset', async () => {
     h.secret = undefined;
-    const { status } = await del();
+    const { status, json } = await del();
     expect(status).toHaveBeenCalledWith(404);
+    expect(json).toHaveBeenCalledWith(expect.objectContaining({ code: 'persona_endpoint_off' }));
     expect(h.hardDeleteUser).not.toHaveBeenCalled();
+  });
+
+  it('serves DELETE only, so any other verb is a 405 ahead of the DB connect', () => {
+    expect(h.baseApiOptions[0]).toEqual(expect.objectContaining({ auth: false, allowedMethods: ['DELETE'] }));
+  });
+
+  it('marks a missing persona with its own code, distinct from the endpoint being off', async () => {
+    h.findById.mockResolvedValue(null);
+    const { json } = await del();
+    expect(json).toHaveBeenCalledWith({ error: 'No persona account with that id', code: 'persona_not_found' });
   });
 
   it.each([

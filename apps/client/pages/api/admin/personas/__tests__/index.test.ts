@@ -18,10 +18,15 @@ const h = vi.hoisted(() => ({
   recordAdminAction: vi.fn(),
   issueSessionForRequest: vi.fn(),
   disableExpiredPersonas: vi.fn(),
+  reserve: vi.fn(),
+  domainGrants: new Set<string>(),
+  partnerMatch: false as boolean | 'throws',
+  baseApiOptions: [] as unknown[],
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+  baseApi: (options: unknown) => {
+    h.baseApiOptions.push(options);
     const routes: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign((req: { method?: string }, res: unknown) => routes[req.method ?? 'GET']?.(req, res), {
       use: () => chain,
@@ -36,6 +41,14 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ isProduction: () => h.production }));
 vi.mock('@bike4mind/server-utils/utils/ip', () => ({ getClientIp: () => '203.0.113.9' }));
+vi.mock('@bike4mind/server-utils/lib/entitlements/registry', () => ({
+  entitlementsForEmail: (email: string) =>
+    h.domainGrants.has(email.slice(email.lastIndexOf('@') + 1)) ? new Set(['optihashi:pro']) : new Set(),
+}));
+vi.mock('@bike4mind/server-utils/entitlements/partnerRules', () => ({
+  partnerSignupGrantForEmail: () =>
+    h.partnerMatch === 'throws' ? Promise.reject(new Error('db down')) : Promise.resolve({ matched: h.partnerMatch }),
+}));
 vi.mock('@server/auth/issueSession', () => ({ issueSessionForRequest: h.issueSessionForRequest }));
 vi.mock('@server/auth/tokenGenerator', () => ({ ACCESS_TOKEN_TTL_SECONDS: 1800 }));
 vi.mock('sst', () => ({
@@ -55,11 +68,13 @@ vi.mock('@bike4mind/database', () => ({
   authSessionRepository: {},
   realtimeConnectionRepository: {},
   userRepository: {},
+  cacheRepository: { tryIncrementWithinLimitFixedWindow: h.reserve },
   withTransaction: (fn: () => unknown) => fn(),
   isTransientTransactionError: () => false,
 }));
 vi.mock('@bike4mind/services', () => ({
   adminAuditService: { recordAdminAction: h.recordAdminAction },
+  authSessionService: { PERSONA_SESSION_IDLE_TTL_MS: 24 * 60 * 60 * 1000 },
   userService: { createUser: h.createUser, revokeUserSessions: vi.fn() },
 }));
 vi.mock('@bike4mind/utils', () => ({
@@ -107,6 +122,9 @@ beforeEach(() => {
   h.settings = {};
   h.mintedLast24h = 0;
   h.live = 0;
+  h.domainGrants = new Set();
+  h.partnerMatch = false;
+  h.reserve.mockResolvedValue({ success: true, expiresAt: new Date() });
   delete process.env.PERSONA_ADMIN_KEY;
   h.disableExpiredPersonas.mockResolvedValue({ disabled: 0 });
   h.createUser.mockImplementation(async (params: { username: string; email: string }) => ({
@@ -126,9 +144,14 @@ describe('POST /api/admin/personas', () => {
       ['the placeholder', { value: 'not-configured' }],
     ])('answers 404 when the stage secret is %s, so the endpoint does not exist', async (_label, secret) => {
       h.secret = secret;
-      const { status } = await post();
+      const { status, json } = await post();
       expect(status).toHaveBeenCalledWith(404);
+      expect(json).toHaveBeenCalledWith({ error: 'Not found', code: 'persona_endpoint_off' });
       expect(h.createUser).not.toHaveBeenCalled();
+    });
+
+    it('serves POST only, so any other verb is a 405 ahead of the DB connect', () => {
+      expect(h.baseApiOptions[0]).toEqual(expect.objectContaining({ auth: false, allowedMethods: ['POST'] }));
     });
 
     it('refuses a request without the key header', async () => {
@@ -175,6 +198,20 @@ describe('POST /api/admin/personas', () => {
       }
     );
 
+    it.each([
+      ['a public mail provider', 'gmail.com', () => undefined],
+      ['a domain with entitlement grants', 'partner.example', () => h.domainGrants.add('partner.example')],
+      ['a partner signup rule domain', 'rule.example', () => (h.partnerMatch = true)],
+      ['any domain when partner rules cannot be read', 'personas.example.com', () => (h.partnerMatch = 'throws')],
+    ])('refuses on production when PersonaEmailDomain is %s', async (_label, domain, arrange) => {
+      arrange();
+      h.production = true;
+      h.settings = { PersonaEmailDomain: domain };
+      const { status } = await post();
+      expect(status).toHaveBeenCalledWith(503);
+      expect(h.createUser).not.toHaveBeenCalled();
+    });
+
     it('refuses on production while PersonaEmailDomain is unset', async () => {
       h.production = true;
       const { status } = await post();
@@ -196,6 +233,14 @@ describe('POST /api/admin/personas', () => {
       h.live = 3;
       const { status } = await post();
       expect(status).toHaveBeenCalledWith(429);
+      expect(h.createUser).not.toHaveBeenCalled();
+    });
+
+    it('refuses when the atomic daily reservation is spent, so concurrent mints cannot overshoot the cap', async () => {
+      h.reserve.mockResolvedValue({ success: false, expiresAt: new Date() });
+      const { status } = await post();
+      expect(status).toHaveBeenCalledWith(429);
+      expect(h.reserve).toHaveBeenCalledWith(expect.any(String), 20, 24 * 60 * 60 * 1000);
       expect(h.createUser).not.toHaveBeenCalled();
     });
 
@@ -253,6 +298,13 @@ describe('POST /api/admin/personas', () => {
           user: expect.objectContaining({ id: '64b000000000000000000001', isPersona: true }),
         })
       );
+    });
+
+    it('answers 409 when a concurrent mint wins the unique index', async () => {
+      h.createUser.mockRejectedValue(Object.assign(new Error('E11000 duplicate key error'), { code: 11000 }));
+      const { status } = await post();
+      expect(status).toHaveBeenCalledWith(409);
+      expect(h.issueSessionForRequest).not.toHaveBeenCalled();
     });
 
     it('answers 409 when that persona name already exists', async () => {

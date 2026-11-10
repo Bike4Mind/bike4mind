@@ -1,6 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const h = vi.hoisted(() => ({ secret: undefined as { value?: string } | undefined, throws: false }));
+const h = vi.hoisted(() => ({
+  secret: undefined as { value?: string } | undefined,
+  throws: false,
+  timingSafeEqual: vi.fn(),
+}));
+
+vi.mock('crypto', async () => {
+  const actual = await vi.importActual<typeof import('crypto')>('crypto');
+  h.timingSafeEqual.mockImplementation(actual.timingSafeEqual);
+  return { ...actual, timingSafeEqual: h.timingSafeEqual };
+});
 
 vi.mock('sst', () => ({
   Resource: {
@@ -49,6 +59,12 @@ describe('isValidPersonaAdminKey', () => {
     expect(isValidPersonaAdminKey(KEY, KEY)).toBe(true);
     expect(isValidPersonaAdminKey(`${KEY}x`, KEY)).toBe(false);
     expect(isValidPersonaAdminKey('k'.repeat(39) + 'j', KEY)).toBe(false);
+  });
+
+  it('runs the constant-time compare even for a key of the wrong length, so timing never reveals the length', () => {
+    h.timingSafeEqual.mockClear();
+    expect(isValidPersonaAdminKey('k', KEY)).toBe(false);
+    expect(h.timingSafeEqual).toHaveBeenCalledTimes(1);
   });
 
   it.each([undefined, '', ['a', 'b'], 42])('rejects a missing or malformed header (%s)', provided => {

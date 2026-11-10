@@ -8,6 +8,8 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { hardDeleteUser } from '@server/services/hardDeleteUser';
 import {
   PERSONA_ADMIN_KEY_HEADER,
+  PERSONA_ENDPOINT_OFF_CODE,
+  PERSONA_NOT_FOUND_CODE,
   isValidPersonaAdminKey,
   readPersonaAdminKey,
 } from '@server/personas/personaAdminKey';
@@ -28,18 +30,19 @@ const OBJECT_ID_PATTERN = /^[a-f0-9]{24}$/i;
  * can never delete a real user. Signs the persona out everywhere first, then deletes through the
  * shared hardDeleteUser path with the audit entry in the delete's transaction.
  */
-const handler = baseApi({ auth: false })
+const handler = baseApi({ auth: false, allowedMethods: ['DELETE'] })
   .use(rateLimit({ limit: 30, windowMs: 60 * 1000, bucket: 'admin-personas-delete' }))
   .delete(
     asyncHandler(async (req: Request, res: Response) => {
       const expectedKey = readPersonaAdminKey();
-      if (!expectedKey) return res.status(404).json({ error: 'Not found' });
+      if (!expectedKey) return res.status(404).json({ error: 'Not found', code: PERSONA_ENDPOINT_OFF_CODE });
       if (!isValidPersonaAdminKey(req.headers[PERSONA_ADMIN_KEY_HEADER], expectedKey)) {
         return res.status(401).json({ error: 'Invalid persona admin key' });
       }
 
       const id = typeof req.query.id === 'string' ? req.query.id : '';
-      const notFound = () => res.status(404).json({ error: 'No persona account with that id' });
+      const notFound = () =>
+        res.status(404).json({ error: 'No persona account with that id', code: PERSONA_NOT_FOUND_CODE });
       if (!OBJECT_ID_PATTERN.test(id)) return notFound();
       const target = await userRepository.findById(id);
       if (!isPersonaAccount(target)) return notFound();

@@ -2,11 +2,12 @@ import type { Request, Response } from 'express';
 import { CURRENT_POLICY_VERSION } from '@bike4mind/common';
 import {
   adminAuditLogRepository,
+  cacheRepository,
   isTransientTransactionError,
   userRepository,
   withTransaction,
 } from '@bike4mind/database';
-import { adminAuditService, userService } from '@bike4mind/services';
+import { adminAuditService, authSessionService, userService } from '@bike4mind/services';
 import { isProduction } from '@bike4mind/server-utils/utils/config';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -15,6 +16,7 @@ import { issueSessionForRequest } from '@server/auth/issueSession';
 import { ACCESS_TOKEN_TTL_SECONDS } from '@server/auth/tokenGenerator';
 import {
   PERSONA_ADMIN_KEY_HEADER,
+  PERSONA_ENDPOINT_OFF_CODE,
   isValidPersonaAdminKey,
   readPersonaAdminKey,
 } from '@server/personas/personaAdminKey';
@@ -31,8 +33,13 @@ import {
   personaIdentity,
 } from '@server/personas/personaAccounts';
 
-// The returned refresh token dies unused after a day; the expiry sweep revokes every session at expiresAt.
-const MINTED_SESSION_IDLE_MS = 24 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+// One counter for every caller of the key, incremented atomically, so concurrent mints cannot all
+// pass the audit-log count before any of them commits.
+const MINT_RESERVATION_KEY = 'persona-mint:daily-reservations';
+
+const isDuplicateKeyError = (error: unknown) =>
+  typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 11000;
 
 /**
  * POST /api/admin/personas - mint a synthetic test-persona account for QA bots, so they never go
@@ -45,13 +52,13 @@ const MINTED_SESSION_IDLE_MS = 24 * 60 * 60 * 1000;
  * admin audit log. Returns a session for that account only: a 30-minute access token and a refresh
  * token that expires after a day unused. DELETE is personas/[id].ts.
  */
-const handler = baseApi({ auth: false })
+const handler = baseApi({ auth: false, allowedMethods: ['POST'] })
   // Before the key check, so guessing at the key is throttled too.
   .use(rateLimit({ limit: 10, windowMs: 60 * 1000, bucket: 'admin-personas' }))
   .post(
     asyncHandler(async (req: Request, res: Response) => {
       const expectedKey = readPersonaAdminKey();
-      if (!expectedKey) return res.status(404).json({ error: 'Not found' });
+      if (!expectedKey) return res.status(404).json({ error: 'Not found', code: PERSONA_ENDPOINT_OFF_CODE });
       if (!isValidPersonaAdminKey(req.headers[PERSONA_ADMIN_KEY_HEADER], expectedKey)) {
         return res.status(401).json({ error: 'Invalid persona admin key' });
       }
@@ -62,11 +69,13 @@ const handler = baseApi({ auth: false })
       }
       const { name } = parsed.data;
 
-      const settings = await loadPersonaSettings();
+      const settings = await loadPersonaSettings(req.logger);
       const now = new Date();
       const identity = personaIdentity(name, { production: isProduction(), emailDomain: settings.emailDomain, now });
       if (!identity) {
-        return res.status(503).json({ error: 'Persona minting is not configured on this stage (PersonaEmailDomain)' });
+        return res
+          .status(503)
+          .json({ error: 'Persona minting is not configured on this stage (PersonaEmailDomain unset or refused)' });
       }
 
       try {
@@ -77,6 +86,14 @@ const handler = baseApi({ auth: false })
       }
       const refusal = personaCapRefusal(settings, await countPersonaCaps(now));
       if (refusal) return res.status(429).json({ error: refusal });
+      const reservation = await cacheRepository.tryIncrementWithinLimitFixedWindow(
+        MINT_RESERVATION_KEY,
+        settings.dailyLimit,
+        DAY_MS
+      );
+      if (!reservation.success) {
+        return res.status(429).json({ error: `Persona mint limit reached (${settings.dailyLimit} per 24 hours)` });
+      }
 
       const expiresAt = personaExpiresAt(now, settings.ttlDays);
       let user: Awaited<ReturnType<typeof userService.createUser>>;
@@ -121,7 +138,7 @@ const handler = baseApi({ auth: false })
         });
       } catch (error) {
         if (isTransientTransactionError(error)) throw error;
-        if (error instanceof Error && error.message.includes('already in use')) {
+        if (isDuplicateKeyError(error) || (error instanceof Error && error.message.includes('already in use'))) {
           return res.status(409).json({ error: `A persona named "${name}" already exists on this stage` });
         }
         throw error;
@@ -130,7 +147,7 @@ const handler = baseApi({ auth: false })
       const { accessToken, refreshToken } = await issueSessionForRequest(req, user.id, {
         createdVia: 'persona-mint',
         tokenVersion: user.tokenVersion ?? 0,
-        refreshTtlMs: Math.min(MINTED_SESSION_IDLE_MS, expiresAt.getTime() - now.getTime()),
+        refreshTtlMs: Math.min(authSessionService.PERSONA_SESSION_IDLE_TTL_MS, expiresAt.getTime() - now.getTime()),
       });
 
       return res.status(201).json({

@@ -4741,7 +4741,7 @@ export const settingsMap = {
     name: 'Test Persona Email Domain',
     defaultValue: '',
     description:
-      'Mail domain for test personas minted on production, as <name>@<domain>. Leave empty to keep minting off on production. Other stages use the -e2e@test.com addresses.',
+      'Mail domain for test personas minted on production, as <name>@<domain>. Use a dedicated subdomain: a public mail provider, a staff domain or any domain with entitlement or partner signup grants is refused, since every persona address is verified. Leave empty to keep minting off on production. Other stages use the -e2e@test.com addresses.',
     category: 'SecOps',
   }),
   AdminApprovalsEnabled: makeBooleanSetting({

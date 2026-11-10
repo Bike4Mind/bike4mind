@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
   find: vi.fn(),
@@ -19,6 +19,9 @@ vi.mock('@bike4mind/database', () => ({
   realtimeConnectionRepository: {},
   userRepository: {},
 }));
+vi.mock('@bike4mind/server-utils/entitlements/partnerRules', () => ({
+  partnerSignupGrantForEmail: () => Promise.resolve({ matched: false }),
+}));
 vi.mock('@bike4mind/services', () => ({
   adminAuditService: { recordAdminAction: h.recordAdminAction },
   userService: { revokeUserSessions: h.revokeUserSessions },
@@ -26,6 +29,7 @@ vi.mock('@bike4mind/services', () => ({
 
 import {
   MintPersonaBodySchema,
+  personaEmailDomainRefusal,
   disableExpiredPersonas,
   isPersonaAccount,
   personaCapRefusal,
@@ -37,6 +41,25 @@ const NOW = new Date('2026-11-10T12:00:00.000Z');
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+describe('personaEmailDomainRefusal', () => {
+  afterEach(() => {
+    delete process.env.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS;
+  });
+
+  it('refuses an internal staff domain, where a verified persona would pass as staff', async () => {
+    process.env.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS = 'staff.example';
+    expect(await personaEmailDomainRefusal('staff.example')).toBe('an internal staff domain');
+  });
+
+  it('refuses a regional public mail provider', async () => {
+    expect(await personaEmailDomainRefusal('mail.ru')).toBe('a public mail provider');
+  });
+
+  it('accepts a dedicated persona subdomain', async () => {
+    expect(await personaEmailDomainRefusal('personas.example.com')).toBeNull();
+  });
 });
 
 describe('MintPersonaBodySchema', () => {
