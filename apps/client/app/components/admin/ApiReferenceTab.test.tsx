@@ -24,7 +24,7 @@ describe('ApiReferenceTab', () => {
     h.hasOptiAccess = false;
   });
 
-  const showHandWritten = () => fireEvent.click(screen.getByTestId('api-reference-view-full-toggle'));
+  const showHandWritten = () => fireEvent.click(screen.getByTestId('api-reference-view-full'));
 
   it('opens with the page header, the actions in its slot and no emoji', () => {
     render(<ApiReferenceTab />, { wrapper: TestWrapper });
@@ -37,6 +37,29 @@ describe('ApiReferenceTab', () => {
     expect(document.body.textContent).not.toMatch(/\p{Extended_Pictographic}/u);
   });
 
+  it.each([
+    ['full', /API Reference$/],
+    ['quickstart', /API Quickstart$/],
+  ])('keeps the page title as the only h1 in the %s view', (view, markdownTitle) => {
+    render(<ApiReferenceTab />, { wrapper: TestWrapper });
+    fireEvent.click(screen.getByTestId(`api-reference-view-${view}`));
+    const [h1] = screen.getAllByRole('heading', { level: 1 });
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    expect(h1).toHaveTextContent(/^API reference$/);
+    expect(screen.getAllByRole('heading', { level: 2 })[0]).toHaveTextContent(markdownTitle);
+  });
+
+  it('switches views with the toolkit segmented control', () => {
+    render(<ApiReferenceTab />, { wrapper: TestWrapper });
+    const group = screen.getByRole('group', { name: 'Reference view' });
+    expect(group).toHaveAttribute('data-testid', 'api-reference-view');
+    expect(
+      within(group)
+        .getAllByRole('button')
+        .map(button => button.textContent)
+    ).toEqual(['Interactive docs', 'Auth and unmigrated endpoints', 'Claude Code quickstart']);
+  });
+
   it('embeds the generated docs by default, without the drift banner', () => {
     render(<ApiReferenceTab />, { wrapper: TestWrapper });
     const frame = screen.getByTestId('api-reference-docs-iframe');
@@ -47,15 +70,15 @@ describe('ApiReferenceTab', () => {
 
   it('marks the active view toggle as pressed', () => {
     render(<ApiReferenceTab />, { wrapper: TestWrapper });
-    expect(screen.getByTestId('api-reference-view-docs-toggle')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('api-reference-view-docs')).toHaveAttribute('aria-pressed', 'true');
     showHandWritten();
-    expect(screen.getByTestId('api-reference-view-full-toggle')).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByTestId('api-reference-view-docs-toggle')).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByTestId('api-reference-view-full')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('api-reference-view-docs')).toHaveAttribute('aria-pressed', 'false');
   });
 
   it('switches to the quickstart, unmounting the docs frame', () => {
     render(<ApiReferenceTab />, { wrapper: TestWrapper });
-    fireEvent.click(screen.getByTestId('api-reference-view-quickstart-toggle'));
+    fireEvent.click(screen.getByTestId('api-reference-view-quickstart'));
     expect(screen.queryByTestId('api-reference-docs-iframe')).toBeNull();
     expect(screen.queryByTestId('api-reference-drift-banner')).toBeNull();
   });

@@ -1,17 +1,17 @@
-import { Alert, Box, Button, Link, Sheet, Stack, ToggleButtonGroup, Typography } from '@mui/joy';
-import ReactMarkdown from 'react-markdown';
+import { Alert, Box, Button, Link, Sheet, Stack, Typography } from '@mui/joy';
+import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useState } from 'react';
 import { getApiReferenceContent } from './content/apiReferenceContent';
 import { getQuickstartContent } from './content/quickstartContent';
 import { ExternalLinks } from '@client/app/utils/externalLinks';
 import { useGenericApiKeyScopes } from '@client/app/hooks/useGenericApiKeyScopes';
-import { AdminPageHeader } from './shared';
+import { AdminPageHeader, SegmentedControl, type SegmentedOption } from './shared';
 import { ADMIN_REGION_GAP } from './shared/adminStyles';
 
 const markdownStyles = {
-  '& h1': { fontSize: '1.8rem', fontWeight: 700, mt: 3, mb: 2 },
   '& h2': { fontSize: '1.4rem', fontWeight: 600, mt: 2.5, mb: 1.5 },
+  '& [data-markdown-title]': { fontSize: '1.8rem', fontWeight: 700, mt: 3, mb: 2 },
   '& h3': { fontSize: '1.15rem', fontWeight: 600, mt: 2, mb: 1 },
   '& p': { mb: 1.5, lineHeight: 1.7 },
   '& ul, & ol': { pl: 3, mb: 1.5 },
@@ -64,9 +64,14 @@ const markdownStyles = {
   },
 };
 
+// The page header owns the only h1, so the markdown's own title steps down a level.
+const markdownComponents: Components = {
+  h1: ({ children }) => <h2 data-markdown-title="">{children}</h2>,
+};
+
 type View = 'docs' | 'full' | 'quickstart';
 
-const VIEWS: { value: View; label: string }[] = [
+const VIEWS: readonly SegmentedOption<View>[] = [
   { value: 'docs', label: 'Interactive docs' },
   { value: 'full', label: 'Auth and unmigrated endpoints' },
   { value: 'quickstart', label: 'Claude Code quickstart' },
@@ -112,24 +117,13 @@ const ApiReferenceTab = () => {
           </>
         }
       />
-      <ToggleButtonGroup
-        size="sm"
+      <SegmentedControl
+        options={VIEWS}
         value={view}
-        onChange={(_e, v) => v && setView(v as View)}
+        onChange={setView}
         aria-label="Reference view"
-        sx={{ alignSelf: 'flex-start', flexWrap: 'wrap' }}
-      >
-        {VIEWS.map(({ value, label }) => (
-          <Button
-            key={value}
-            value={value}
-            data-testid={`api-reference-view-${value}-toggle`}
-            sx={{ whiteSpace: 'nowrap' }}
-          >
-            {label}
-          </Button>
-        ))}
-      </ToggleButtonGroup>
+        data-testid="api-reference-view"
+      />
       {view === 'full' && (
         // This reference is hand-maintained (apiReferenceContent.ts) and is not
         // generated from the code, so it can lag reality. Point readers at the
@@ -164,13 +158,13 @@ const ApiReferenceTab = () => {
             minHeight: 480,
             width: '100%',
             border: '1px solid',
-            borderColor: 'divider',
+            borderColor: 'admin.border',
             borderRadius: 'lg',
           }}
         />
       ) : (
         <Sheet variant="outlined" sx={{ p: 3, borderRadius: 'lg', ...markdownStyles }}>
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+          <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
             {view === 'full'
               ? getApiReferenceContent(window.location.origin, scopes)
               : getQuickstartContent(window.location.origin)}

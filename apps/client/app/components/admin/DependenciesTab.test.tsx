@@ -42,7 +42,7 @@ describe('DependenciesTab', () => {
     expect(within(header).getByRole('heading', { level: 1 })).toHaveTextContent(/^Dependencies$/);
   });
 
-  it('lists the categories as plain facts, not coloured chips', () => {
+  it('lists the categories as plain facts, not colored chips', () => {
     renderTab();
     const categories = screen.getByTestId('dependencies-categories');
     expect(categories.querySelectorAll('.MuiChip-root')).toHaveLength(0);
@@ -52,7 +52,7 @@ describe('DependenciesTab', () => {
     }
   });
 
-  it('shows every chip on the page in the neutral colour, and no emoji', () => {
+  it('shows every chip on the page in the neutral color, and no emoji', () => {
     renderTab();
     fireEvent.click(within(screen.getByTestId(`dependencies-package-${withKeyDeps.name}`)).getByRole('button'));
     expect(screen.getByTestId(`dependencies-package-${withKeyDeps.name}-key`)).toBeVisible();
@@ -89,6 +89,20 @@ describe('DependenciesTab', () => {
       expect(row).toHaveTextContent(dep.version);
       expect(row).toHaveTextContent(dep.category);
     }
+  });
+
+  it('gives every section the same heading level under the page title', () => {
+    renderTab();
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    expect(screen.queryAllByRole('heading', { level: 2 })).toHaveLength(0);
+    expect(screen.getByRole('heading', { level: 3, name: 'Shared dependencies' })).toBeInTheDocument();
+  });
+
+  it('renders the dependency flow in the code font so the tree lines up', () => {
+    renderTab();
+    const flow = screen.getByTestId('dependencies-flow-text');
+    expect(flow.tagName).toBe('PRE');
+    expect(getComputedStyle(flow).fontFamily).toContain('--joy-fontFamily-code');
   });
 
   it('lists every shared dependency with no pager, even past one page of 25', () => {

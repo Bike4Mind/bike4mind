@@ -46,18 +46,18 @@ The **Refresh** button in the page header fetches the metadata again. Use it whe
 
 ## Loading, Empty and Error States
 
-| Condition                         | What you see                                                                                                            |
-| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| First load in progress            | A "Loading docs" spinner where the cards will appear                                                                    |
-| The docs site returns no articles | "No docs found", with a Refresh button                                                                                  |
-| A search matches nothing          | "No docs match" and your search, with a Clear search button                                                             |
-| A category has no articles        | "No docs in" and the category, with a Show all docs button                                                              |
-| The metadata request fails        | "Docs failed to load", with a Try again button. If articles were already on screen, they stay visible under the message |
+| Condition                                      | What you see                                                                                                            |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| First load in progress                         | A "Loading docs" spinner where the cards will appear                                                                    |
+| No docs site is configured for this deployment | "No docs found", with a Refresh button                                                                                  |
+| A search matches nothing                       | "No docs match" and your search, with a Clear search button                                                             |
+| A category has no articles                     | "No docs in" and the category, with a Show all docs button                                                              |
+| The metadata request fails                     | "Docs failed to load", with a Try again button. If articles were already on screen, they stay visible under the message |
 
 ## Best Practices
 
 - Pick a category before searching to narrow a large set of articles.
-- If no articles appear after a fresh load, check that the Docusaurus docs site is running and reachable from the current environment, then refresh.
+- "No docs found" means this deployment has no docs site configured; Refresh will not change that. "Docs failed to load" means the docs site is configured but could not be reached, so check that it is up, then use Try again.
 - Refresh is most useful in development environments, where documentation changes often.
 
 ---

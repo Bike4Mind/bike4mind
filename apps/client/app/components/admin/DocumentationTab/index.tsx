@@ -116,7 +116,7 @@ const DocumentationTab: React.FC = () => {
       <StateSurface>
         <EmptyState
           title="No docs found"
-          description="The docs site returned no pages. Check that it is running, then refresh."
+          description="This deployment has no docs site configured."
           action={refreshButton('documentation-empty-refresh-btn')}
         />
       </StateSurface>
@@ -197,12 +197,8 @@ const DocumentationTab: React.FC = () => {
           data-testid="documentation-search-input"
         />
       </Stack>
-      {documentationData !== null && (
-        <>
-          <UpdatingBar active={loading} testId="documentation-updating" />
-          {errorState}
-        </>
-      )}
+      <UpdatingBar active={loading && documentationData !== null} testId="documentation-updating" />
+      {documentationData !== null && errorState}
       {body}
     </Stack>
   );

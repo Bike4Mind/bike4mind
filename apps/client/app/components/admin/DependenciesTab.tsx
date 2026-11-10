@@ -115,7 +115,7 @@ const DependenciesTab = () => {
       </SectionCard>
 
       <Stack gap={1.5}>
-        <Typography level="title-md" component="h2" sx={{ color: 'admin.ink' }}>
+        <Typography level="title-md" component="h3" sx={{ color: 'admin.ink' }}>
           Shared dependencies
         </Typography>
         <DataTable
@@ -123,6 +123,7 @@ const DependenciesTab = () => {
           columns={SHARED_COLUMNS}
           getRowId={dep => dep.name}
           label="Shared dependencies"
+          // Static rows never fail to load, so there is nothing to retry.
           onRetry={() => undefined}
           rowTestId={dep => `dependencies-shared-${dep.name}`}
           testId="dependencies-shared-table"
@@ -133,12 +134,14 @@ const DependenciesTab = () => {
       </Stack>
 
       <SectionCard title="Dependency flow" body="custom" data-testid="dependencies-flow">
-        <Box
+        <Typography
           component="pre"
-          sx={{ m: 0, p: 2, overflowX: 'auto', fontFamily: 'code', typography: 'body-sm', color: 'admin.ink' }}
+          level="body-sm"
+          data-testid="dependencies-flow-text"
+          sx={{ m: 0, p: 2, overflowX: 'auto', fontFamily: 'code', color: 'admin.ink' }}
         >
           {DEPENDENCY_FLOW}
-        </Box>
+        </Typography>
       </SectionCard>
     </Stack>
   );

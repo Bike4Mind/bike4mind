@@ -72,7 +72,7 @@ const markdownStyles = {
     mb: 2,
     '& th, & td': {
       border: '1px solid',
-      borderColor: 'divider',
+      borderColor: 'admin.border',
       px: 1.5,
       py: 1,
       textAlign: 'left',
@@ -129,6 +129,7 @@ const ApiCookbookTab = () => {
           columns={COLUMNS}
           getRowId={recipe => recipe.id}
           label="API recipes"
+          // Static rows never fail to load, so there is nothing to retry.
           onRetry={() => undefined}
           onRowActivate={setSelectedRecipe}
           rowTestId={recipe => `api-cookbook-recipe-${recipe.id}`}

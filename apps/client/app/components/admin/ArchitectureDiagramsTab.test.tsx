@@ -4,6 +4,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import ArchitectureDiagramsTab from './ArchitectureDiagramsTab';
+import { DARK_PALETTE, LIGHT_PALETTE } from './content/architectureDiagramPalettes';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const renderTab = (mode: 'light' | 'dark' = 'light') =>
@@ -14,8 +15,11 @@ const renderTab = (mode: 'light' | 'dark' = 'light') =>
   );
 
 const DIAGRAMS = ['prompt', 'infra', 'rag', 'security'] as const;
-// The light canvas, the white panels and a few of the pale fills that glare on a dark page.
-const LIGHT_FILLS = ['#F8FAFC', '#FFFFFF', '#FEF2F2', '#E0F2FE', '#FEF3C7', '#EDE9FE'];
+const hexValues = (value: unknown): string[] =>
+  typeof value === 'string' ? [value.toUpperCase()] : Object.values(value as object).flatMap(hexValues);
+// Every light-only color; white stays in both (text on the filled pill), so it is not one of them.
+const DARK_HEX = new Set(hexValues(DARK_PALETTE));
+const LIGHT_ONLY_HEX = new Set(hexValues(LIGHT_PALETTE).filter(hex => !DARK_HEX.has(hex)));
 
 /** Joy mounts only the active panel, so each diagram is opened before it is read. */
 const openFrame = (id: (typeof DIAGRAMS)[number]) => {
@@ -25,6 +29,10 @@ const openFrame = (id: (typeof DIAGRAMS)[number]) => {
 const background = (frame: HTMLElement) => frame.querySelector('svg > rect');
 const rectFills = (frame: HTMLElement) =>
   Array.from(frame.querySelectorAll('rect')).map(rect => rect.getAttribute('fill'));
+const paintedColors = (frame: HTMLElement) =>
+  Array.from(frame.querySelectorAll('svg *')).flatMap(node =>
+    ['fill', 'stroke'].map(attr => node.getAttribute(attr)?.toUpperCase()).filter(color => color?.startsWith('#'))
+  );
 
 describe('ArchitectureDiagramsTab', () => {
   it('opens with the page header', () => {
@@ -62,15 +70,32 @@ describe('ArchitectureDiagramsTab', () => {
     expect(rectFills(openFrame('security'))).toContain('#FEF2F2');
   });
 
-  it('switches to the dark palette under a dark theme, with no pale fills left', () => {
+  it('switches to the dark palette under a dark theme, with no light-only color left', () => {
     renderTab('dark');
+    expect(LIGHT_ONLY_HEX.size).toBeGreaterThan(30);
     for (const id of DIAGRAMS) {
       const frame = openFrame(id);
       expect(background(frame)).toHaveAttribute('fill', '#1A1A1E');
-      const fills = rectFills(frame);
-      for (const light of LIGHT_FILLS) {
-        expect(fills).not.toContain(light);
-      }
+      const painted = paintedColors(frame);
+      expect(painted.length).toBeGreaterThan(10);
+      expect(painted.filter(color => LIGHT_ONLY_HEX.has(color!))).toEqual([]);
     }
+  });
+
+  it('names each diagram frame as a figure and caps its width', () => {
+    renderTab();
+    for (const id of DIAGRAMS) {
+      const frame = openFrame(id);
+      const label = screen.getByTestId(`arch-diagram-${id}-tab`).textContent;
+      expect(screen.getByRole('figure', { name: `${label} diagram` })).toBe(frame);
+      expect(frame).toHaveStyle({ maxWidth: '1280px' });
+    }
+  });
+
+  it('prints the ampersand in the audit layer label, not its entity', () => {
+    renderTab();
+    const frame = openFrame('security');
+    expect(frame).toHaveTextContent('Audit & Monitoring');
+    expect(frame.textContent).not.toContain('&amp;');
   });
 });

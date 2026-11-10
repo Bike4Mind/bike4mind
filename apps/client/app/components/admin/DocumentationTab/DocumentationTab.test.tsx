@@ -68,6 +68,7 @@ describe('DocumentationTab', () => {
     fetchMock.mockReturnValue(new Promise(r => (resolve = r)));
     renderTab();
     expect(screen.getByTestId('documentation-loading')).toBeInTheDocument();
+    expect(screen.queryByTestId('documentation-updating')).toBeNull();
     resolve(ok({ success: true, docs: DOCS }));
     await loaded();
     expect(screen.queryByTestId('documentation-loading')).toBeNull();
@@ -121,10 +122,12 @@ describe('DocumentationTab', () => {
     expect(screen.getByTestId('documentation-doc-agents-intro')).toBeInTheDocument();
   });
 
-  it('shows an empty state with a refresh action when the docs site returns no pages', async () => {
+  it('says no docs site is configured when the metadata comes back empty, with a refresh action', async () => {
     fetchMock.mockResolvedValue(ok({ success: true, docs: [] }));
     renderTab();
-    expect(await screen.findByTestId('admin-empty-state')).toHaveTextContent('No docs found');
+    const empty = await screen.findByTestId('admin-empty-state');
+    expect(empty).toHaveTextContent('No docs found');
+    expect(empty).toHaveTextContent('This deployment has no docs site configured.');
     fetchMock.mockResolvedValue(ok({ success: true, docs: DOCS }));
     fireEvent.click(screen.getByTestId('documentation-empty-refresh-btn'));
     await loaded();
