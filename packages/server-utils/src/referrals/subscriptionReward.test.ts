@@ -6,7 +6,8 @@ const {
   mockFindById,
   mockRepo,
   mockFindLots,
-  mockAddCredits,
+  mockPayReward,
+  mockHeldRewards,
   mockSubtractCredits,
   mockClawbackLots,
   mockGetSettingsMap,
@@ -24,7 +25,8 @@ const {
     recordTakeBack: vi.fn(),
   },
   mockFindLots: vi.fn(),
-  mockAddCredits: vi.fn(),
+  mockPayReward: vi.fn(),
+  mockHeldRewards: { findByTransactionIds: vi.fn(), reduceHeld: vi.fn() },
   mockSubtractCredits: vi.fn(),
   mockClawbackLots: vi.fn(),
   mockGetSettingsMap: vi.fn(),
@@ -36,6 +38,7 @@ vi.mock('@bike4mind/database', () => ({
   creditLotRepository: { findByStripeRef: mockFindLots },
   REFERRAL_REWARD_STEPS: ['first_payment', 'second_payment'],
   creditTransactionRepository: {},
+  heldCreditRewardRepository: mockHeldRewards,
   userRepository: {},
   referralSubscriptionRewardRepository: mockRepo,
   User: { findById: mockFindById },
@@ -44,10 +47,15 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/services', async () => ({
   creditService: {
     isRewardPartyBlocked: (await import('@bike4mind/services/creditService')).isRewardPartyBlocked,
-    addCreditsWithLedgerRow: mockAddCredits,
+    isRewardRecipientBlocked: (await import('@bike4mind/services/creditService')).isRewardRecipientBlocked,
+    payCreditReward: mockPayReward,
     subtractCredits: mockSubtractCredits,
     clawbackCreditLotsByStripeRef: mockClawbackLots,
   },
+  userService: { refundBudgetOnFailure: <T>(fn: () => Promise<T>) => fn() },
+}));
+vi.mock('../credits/creditRewardAdapters', () => ({
+  buildCreditRewardAdapters: (options: unknown) => ({ builtWith: options }),
 }));
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: mockGetSettingsMap,
@@ -124,7 +132,8 @@ beforeEach(() => {
   mockRepo.findByInvoiceId.mockResolvedValue(null);
   mockRepo.findClaimedSteps.mockResolvedValue([]);
   mockRepo.create.mockResolvedValue({ id: 'r1' });
-  mockAddCredits.mockResolvedValue({ creditTransactionId: 'tx1' });
+  mockPayReward.mockResolvedValue({ outcome: 'paid', creditTransactionId: 'tx1' });
+  mockHeldRewards.findByTransactionIds.mockResolvedValue([]);
 });
 
 describe('isFullPriceProfessionalInvoice', () => {
@@ -180,7 +189,7 @@ describe('recordSubscriptionPaymentReward', () => {
       },
       NOW
     );
-    expect(mockAddCredits).not.toHaveBeenCalled();
+    expect(mockPayReward).not.toHaveBeenCalled();
   });
 
   it('uses the second-payment amount once one reward is already counted', async () => {
@@ -330,18 +339,37 @@ describe('releaseDueSubscriptionRewards', () => {
 
   const withPayment = { ...due, paymentIntentId: 'pi_1' };
 
-  it('credits a due reward once with a stable key and the locked amount, then checks the alert', async () => {
+  it('pays a due reward through the reward pool with a stable key and the locked amount, then checks the alert', async () => {
     const result = await releaseDueSubscriptionRewards({ now: NOW });
 
     expect(result).toEqual({ candidates: 1, released: 1, cancelled: 0, failed: 0 });
-    expect(mockAddCredits.mock.calls[0][0]).toMatchObject({
-      ownerId: 'inviter1',
-      credits: 6000,
-      type: 'generic_add',
-      reason: 'referral_reward',
-      transactionId: 'referral-subscription:inviter1:in_1',
-    });
+    expect(mockPayReward).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'inviter1',
+        credits: 6000,
+        source: 'referral_subscription',
+        reason: 'referral_reward',
+        transactionId: 'referral-subscription:inviter1:in_1',
+        lotRef: 'referral-subscription:inviter1:in_1',
+        metadata: { step: 'first_payment', referredUserId: 'friend1', invoiceId: 'in_1' },
+      }),
+      { builtWith: { inTransaction: true, duplicateTransactionId: 'throw' } }
+    );
     expect(mockAlert).toHaveBeenCalledWith('tx1', 50);
+  });
+
+  it('counts a reward the dry pool queued as released, without the spike alert', async () => {
+    mockPayReward.mockResolvedValue({ outcome: 'queued' });
+    const result = await releaseDueSubscriptionRewards({ now: NOW });
+    expect(result).toEqual({ candidates: 1, released: 1, cancelled: 0, failed: 0 });
+    expect(mockAlert).not.toHaveBeenCalled();
+  });
+
+  it('leaves the reward pending, not cancelled, when the pool refuses the inviter', async () => {
+    mockPayReward.mockResolvedValue({ outcome: 'blocked' });
+    const result = await releaseDueSubscriptionRewards({ now: NOW });
+    expect(result).toEqual({ candidates: 1, released: 0, cancelled: 0, failed: 0 });
+    expect(mockRepo.cancelPending).not.toHaveBeenCalled();
   });
 
   it('does nothing when no reward is due', async () => {
@@ -355,7 +383,7 @@ describe('releaseDueSubscriptionRewards', () => {
     mockRepo.claimForRelease.mockResolvedValue(null);
     const result = await releaseDueSubscriptionRewards({ now: NOW });
     expect(result.released).toBe(0);
-    expect(mockAddCredits).not.toHaveBeenCalled();
+    expect(mockPayReward).not.toHaveBeenCalled();
   });
 
   it('cancels instead of paying when the inviter is now blocked', async () => {
@@ -363,7 +391,15 @@ describe('releaseDueSubscriptionRewards', () => {
     const result = await releaseDueSubscriptionRewards({ now: NOW });
     expect(result).toMatchObject({ released: 0, cancelled: 1 });
     expect(mockRepo.cancelPending).toHaveBeenCalledWith('r1', 'inviter_blocked', NOW);
-    expect(mockAddCredits).not.toHaveBeenCalled();
+    expect(mockPayReward).not.toHaveBeenCalled();
+  });
+
+  it('cancels instead of retrying when the inviter has forfeited the signup unlock', async () => {
+    givenUsers({}, { signupGrant: { unlockForfeited: { cause: 'refund', at: NOW } } });
+    const result = await releaseDueSubscriptionRewards({ now: NOW });
+    expect(result).toMatchObject({ released: 0, cancelled: 1 });
+    expect(mockRepo.cancelPending).toHaveBeenCalledWith('r1', 'inviter_blocked', NOW);
+    expect(mockPayReward).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -375,7 +411,7 @@ describe('releaseDueSubscriptionRewards', () => {
     const result = await releaseDueSubscriptionRewards({ now: NOW });
     expect(result).toMatchObject({ released: 0, cancelled: 1 });
     expect(mockRepo.cancelPending).toHaveBeenCalledWith('r1', 'payer_blocked', NOW);
-    expect(mockAddCredits).not.toHaveBeenCalled();
+    expect(mockPayReward).not.toHaveBeenCalled();
   });
 
   it('keeps the reward pending when the inviter has only an admin grant block', async () => {
@@ -385,7 +421,7 @@ describe('releaseDueSubscriptionRewards', () => {
     expect(result).toEqual({ candidates: 1, released: 0, cancelled: 0, failed: 0 });
     expect(mockRepo.cancelPending).not.toHaveBeenCalled();
     expect(mockRepo.claimForRelease).not.toHaveBeenCalled();
-    expect(mockAddCredits).not.toHaveBeenCalled();
+    expect(mockPayReward).not.toHaveBeenCalled();
   });
 
   it('still cancels when the inviter has a grant block and is also banned', async () => {
@@ -428,7 +464,7 @@ describe('releaseDueSubscriptionRewards', () => {
     const result = await releaseDueSubscriptionRewards({ now: NOW, paymentOutcome: async () => outcome });
     expect(result).toMatchObject({ released: 0, cancelled: 1, failed: 0 });
     expect(mockRepo.cancelPending).toHaveBeenCalledWith('r1', outcome, NOW);
-    expect(mockAddCredits).not.toHaveBeenCalled();
+    expect(mockPayReward).not.toHaveBeenCalled();
   });
 
   it('counts a failed Stripe lookup and pays nothing, so the reward is retried', async () => {
@@ -439,19 +475,21 @@ describe('releaseDueSubscriptionRewards', () => {
     });
     expect(result).toMatchObject({ released: 0, cancelled: 0, failed: 1 });
     expect(mockRepo.cancelPending).not.toHaveBeenCalled();
-    expect(mockAddCredits).not.toHaveBeenCalled();
+    expect(mockPayReward).not.toHaveBeenCalled();
   });
 
   it('counts a failed grant and carries on with the next reward', async () => {
     mockRepo.findDue.mockResolvedValue([due, { ...due, id: 'r2', invoiceId: 'in_2' }]);
     mockRepo.claimForRelease.mockImplementation((id: string) => Promise.resolve({ ...due, id }));
-    mockAddCredits.mockRejectedValueOnce(new Error('db down')).mockResolvedValueOnce({ creditTransactionId: 'tx2' });
+    mockPayReward
+      .mockRejectedValueOnce(new Error('db down'))
+      .mockResolvedValueOnce({ outcome: 'paid', creditTransactionId: 'tx2' });
     const result = await releaseDueSubscriptionRewards({ now: NOW });
     expect(result).toMatchObject({ released: 1, failed: 1 });
   });
 
   it('does not alert on a replay that wrote no ledger row', async () => {
-    mockAddCredits.mockResolvedValue({ creditTransactionId: undefined });
+    mockPayReward.mockResolvedValue({ outcome: 'duplicate' });
     const result = await releaseDueSubscriptionRewards({ now: NOW });
     expect(result.released).toBe(1);
     expect(mockAlert).not.toHaveBeenCalled();

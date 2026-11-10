@@ -18,6 +18,7 @@ import {
   settleAutoIndexBuilds,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
+import { findOwedArenaCredits } from '../preferenceArena';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -299,6 +300,124 @@ describe('payCreditReward', () => {
     expect(await balance(later.id)).toBe(0);
   });
 
+  it('refuses a forfeited unlock up front, and voids a queued reward that forfeits so it cannot hold the queue head', async () => {
+    const forfeit = { 'signupGrant.unlockForfeited': { cause: 'refund', at: new Date() } };
+    const forfeited = await makeUser();
+    await User.updateOne({ _id: forfeited.id }, { $set: forfeit });
+    expect((await creditService.payCreditReward(reward(forfeited.id, 'projects'), adapters)).outcome).toBe('blocked');
+    expect(await HeldCreditRewardModel.countDocuments({})).toBe(0);
+
+    config.signupGrantTricklePoolDaily = '0';
+    const later = await makeUser();
+    await creditService.payCreditReward(reward(later.id, 'projects'), adapters);
+    await User.updateOne({ _id: later.id }, { $set: forfeit });
+    const behind = await makeUser();
+    await creditService.payCreditReward(reward(behind.id, 'projects'), adapters);
+    expect(await heldCreditRewardRepository.oldestHeldCredits()).toBe(100);
+    config.signupGrantTricklePoolDaily = '1000';
+    expect(await creditService.releaseHeldCreditRewards(adapters, { limit: 1 })).toMatchObject({
+      paid: 0,
+      voided: 1,
+      deferred: 0,
+    });
+    expect(await creditService.releaseHeldCreditRewards(adapters, { limit: 1 })).toMatchObject({ paid: 1 });
+    expect([await balance(later.id), await balance(behind.id)]).toEqual([0, 100]);
+    expect(await heldCreditRewardRepository.oldestHeldCredits()).toBeNull();
+  });
+
+  it('voids its own queued row when a forfeit lands between the check and the queue insert', async () => {
+    config.signupGrantTricklePoolDaily = '0';
+    const user = await makeUser();
+    const findById = userRepository.findById.bind(userRepository);
+    let reads = 0;
+    const racing = {
+      ...adapters,
+      users: {
+        findById: async (id: string) => {
+          const party = await findById(id);
+          // A dry pool reads the recipient twice: the up-front gate, then the re-check after the queue insert.
+          return ++reads >= 2 && party
+            ? { ...party, signupGrant: { unlockForfeited: { cause: 'refund' as const, at: new Date() } } }
+            : party;
+        },
+      },
+    } as creditService.PayCreditRewardAdapters;
+    expect((await creditService.payCreditReward(reward(user.id, 'projects'), racing)).outcome).toBe('blocked');
+    expect(await HeldCreditRewardModel.findOne({}).lean()).toMatchObject({ status: 'void' });
+  });
+
+  it.each([
+    ['AI access revoked', { isModerated: true }],
+    ['a pending risk review', { 'riskScore.reviewState': 'pending' }],
+  ])('keeps a queued arena reward queued while the rater has %s', async (_label, state) => {
+    config.signupGrantTricklePoolDaily = '0';
+    const rater = await makeUser();
+    const vote = { ...reward(rater.id, 'vote'), transactionId: 'arena-vote:v2', source: 'preference_arena' as const };
+    expect((await creditService.payCreditReward(vote, adapters)).outcome).toBe('queued');
+    await User.updateOne({ _id: rater.id }, { $set: state });
+    config.signupGrantTricklePoolDaily = '1000';
+    expect(await creditService.releaseHeldCreditRewards(adapters, { limit: 10 })).toMatchObject({
+      paid: 0,
+      deferred: 1,
+    });
+    expect(await balance(rater.id)).toBe(0);
+  });
+
+  it('counts an arena reward as owed while it is queued or paused, and not once voided', async () => {
+    config.signupGrantTricklePoolDaily = '0';
+    const rater = await makeUser();
+    const vote = { ...reward(rater.id, 'vote'), transactionId: 'arena-vote:v3', source: 'preference_arena' as const };
+    expect(await findOwedArenaCredits('arena-vote:v3')).toBeNull();
+    await creditService.payCreditReward(vote, adapters);
+    expect(await findOwedArenaCredits('arena-vote:v3')).toEqual({ credits: 100, queued: true });
+    await heldCreditRewardRepository.pauseForUser(rater.id);
+    expect(await findOwedArenaCredits('arena-vote:v3')).toEqual({ credits: 100, queued: true });
+    await HeldCreditRewardModel.updateOne({ transactionId: 'arena-vote:v3' }, { $set: { status: 'void' } });
+    expect(await findOwedArenaCredits('arena-vote:v3')).toBeNull();
+  });
+
+  it('queues a preference arena reward on a dry pool and pays it under its source on refill', async () => {
+    config.signupGrantTricklePoolDaily = '0';
+    const rater = await makeUser();
+    const vote = { ...reward(rater.id, 'vote'), transactionId: 'arena-vote:v1', source: 'preference_arena' as const };
+    expect((await creditService.payCreditReward(vote, adapters)).outcome).toBe('queued');
+    expect(await HeldCreditRewardModel.findOne({ transactionId: 'arena-vote:v1' }).lean()).toMatchObject({
+      source: 'preference_arena',
+      status: 'held',
+    });
+    expect(await CreditTransaction.countDocuments({ transactionId: 'arena-vote:v1' })).toBe(0);
+
+    config.signupGrantTricklePoolDaily = '1000';
+    expect(await creditService.releaseHeldCreditRewards(adapters, { limit: 10 })).toMatchObject({ paid: 1 });
+    expect(await balance(rater.id)).toBe(100);
+  });
+
+  it('keeps an arena reward queued while AI access is revoked or a risk review is pending, paying other sources', async () => {
+    config.signupGrantTricklePoolDaily = '0';
+    const rater = await makeUser();
+    const vote = { ...reward(rater.id, 'vote'), transactionId: 'arena-vote:v4', source: 'preference_arena' as const };
+    await creditService.payCreditReward(vote, adapters);
+    await creditService.payCreditReward(reward(rater.id, 'projects'), adapters);
+    await User.updateOne({ _id: rater.id }, { $set: { isModerated: true } });
+    config.signupGrantTricklePoolDaily = '1000';
+    expect(await creditService.releaseHeldCreditRewards(adapters, { limit: 10 })).toMatchObject({
+      paid: 1,
+      deferred: 1,
+      voided: 0,
+    });
+    expect(await balance(rater.id)).toBe(100);
+
+    await User.updateOne({ _id: rater.id }, { $set: { isModerated: false, 'riskScore.reviewState': 'pending' } });
+    expect(await creditService.releaseHeldCreditRewards(adapters, { limit: 10 })).toMatchObject({
+      paid: 0,
+      deferred: 1,
+    });
+
+    await User.updateOne({ _id: rater.id }, { $set: { 'riskScore.reviewState': 'approved' } });
+    expect(await creditService.releaseHeldCreditRewards(adapters, { limit: 10 })).toMatchObject({ paid: 1 });
+    expect(await balance(rater.id)).toBe(200);
+  });
+
   it('answers duplicate for a reward already in the ledger', async () => {
     const user = await makeUser();
     await creditService.payCreditReward(reward(user.id, 'projects'), adapters);
@@ -326,6 +445,42 @@ describe('payCreditReward in its own transaction', () => {
     reason: 'referral_reward',
     description: 'Referral reward: first answer from an invited friend',
     metadata: { [creditService.REFERRED_USER_ID_METADATA_KEY]: friendId },
+  });
+
+  it.each([
+    ['AI access revoked', { isModerated: true }],
+    ['a pending risk review', { 'riskScore.reviewState': 'pending' }],
+  ])('defers an arena payout when the rater gains %s before its transaction starts', async (_label, state) => {
+    const rater = await makeUser();
+    const vote = {
+      ...reward(rater.id, 'vote'),
+      transactionId: `arena-vote:${rater.id}`,
+      source: 'preference_arena' as const,
+    };
+    await heldCreditRewardRepository.hold(vote);
+    const racing: creditService.PayCreditRewardAdapters = {
+      ...txAdapters,
+      withTransaction: async fn => {
+        await User.updateOne({ _id: rater.id }, { $set: state });
+        return withTransaction(() => fn());
+      },
+    };
+
+    expect(await creditService.releaseHeldCreditRewards(racing, { limit: 10 })).toMatchObject({
+      paid: 0,
+      deferred: 1,
+      failed: 0,
+    });
+    expect(await balance(rater.id)).toBe(0);
+    expect(await CreditTransaction.countDocuments({ transactionId: vote.transactionId })).toBe(0);
+    expect(await signupGrantBudgetRepository.getSpent(trickleKey())).toBe(0);
+    expect(await HeldCreditRewardModel.findOne({ transactionId: vote.transactionId }).lean()).toMatchObject({
+      status: 'held',
+    });
+
+    await User.updateOne({ _id: rater.id }, { $set: { isModerated: false, 'riskScore.reviewState': 'approved' } });
+    expect(await creditService.releaseHeldCreditRewards(txAdapters, { limit: 10 })).toMatchObject({ paid: 1 });
+    expect(await balance(rater.id)).toBe(100);
   });
 
   it('rolls back the ledger row and refunds the draw when the referral balance credit throws, then pays once on retry', async () => {

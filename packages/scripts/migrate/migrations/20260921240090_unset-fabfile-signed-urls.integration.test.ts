@@ -6,7 +6,7 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 
 vi.mock('../../utils/config', () => ({ Config: {} }));
 
-import migration from './20260921240050_unset-fabfile-signed-urls';
+import migration from './20260921240090_unset-fabfile-signed-urls';
 
 let server: Awaited<ReturnType<typeof createMongoServer>>;
 

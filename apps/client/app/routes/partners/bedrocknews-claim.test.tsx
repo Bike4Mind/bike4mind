@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { getThemeConfig } from '@client/app/utils/themes';
 
 const mockNavigate = vi.fn();
@@ -38,12 +39,19 @@ vi.mock('@client/app/hooks/data/user', () => ({
   useUserLogout: () => ({ mutate: mockLogout, isPending: false }),
 }));
 
+const mockSyncCreditBalance = vi.fn();
+vi.mock('@client/app/components/CreditBalanceSyncListener', () => ({
+  syncCreditBalance: (...args: unknown[]) => mockSyncCreditBalance(...args),
+}));
+
 import BedrockNewsClaimPage from './bedrocknews-claim';
 
 const TICKET = 'tkt_abcdefghijklmnop1234';
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: ReactNode }) => (
-  <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
+  <QueryClientProvider client={new QueryClient()}>
+    <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
+  </QueryClientProvider>
 );
 const renderPage = () => render(<BedrockNewsClaimPage />, { wrapper: TestWrapper });
 
@@ -167,6 +175,21 @@ describe('BedrockNewsClaimPage', () => {
       `https://news.example/games/headword#claim=${TICKET}`
     );
     expect(screen.queryByRole('button', { name: /credits/ })).not.toBeInTheDocument();
+  });
+
+  it('refreshes the app balance after a confirm pays, so Open Bike4Mind shows it', async () => {
+    mockPost.mockResolvedValueOnce({ data: READY }).mockResolvedValueOnce({ data: { state: 'done', result: DONE } });
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: /Add 150 credits/ }));
+    await waitFor(() => expect(mockSyncCreditBalance).toHaveBeenCalledTimes(1));
+  });
+
+  it('leaves the balance alone when the confirm pays nothing', async () => {
+    mockPost.mockResolvedValueOnce({ data: READY }).mockResolvedValueOnce({ data: { state: 'expired' } });
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: /Add 150 credits/ }));
+    await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(2));
+    expect(mockSyncCreditBalance).not.toHaveBeenCalled();
   });
 
   it('names the account the redeem paid, not the one the preview showed', async () => {

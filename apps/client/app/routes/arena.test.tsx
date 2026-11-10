@@ -98,6 +98,17 @@ describe('ArenaPage', () => {
     expect(state.toastSuccess).toHaveBeenLastCalledWith('Thanks for your feedback');
   });
 
+  it.each([
+    [1, '+1 credit pending'],
+    [3, '+3 credits pending'],
+  ])('shows a queued %i-credit reward as pending', (creditsAwarded, message) => {
+    state.mutate.mockImplementation((_request, options) => options.onSuccess({ creditsAwarded, queued: true }));
+    renderPage();
+    fireEvent.click(screen.getByTestId('arena-vote-a-btn'));
+    expect(state.toastSuccess).toHaveBeenCalledWith(message);
+    expect(state.next.refetch).toHaveBeenCalled();
+  });
+
   it('uses the singular for one credit', () => {
     state.mutate.mockImplementation((_request, options) => options.onSuccess({ creditsAwarded: 1 }));
     renderPage();

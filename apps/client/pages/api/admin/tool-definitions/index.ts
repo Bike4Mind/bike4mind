@@ -1,5 +1,5 @@
 import { toolDefinitionOverrideRepository } from '@bike4mind/database';
-import { ApiKeyScope, B4MLLMToolsList, MCP_PROVIDER_METADATA } from '@bike4mind/common';
+import { ApiKeyScope, B4MLLMToolsList, MCP_PROVIDER_METADATA, SETTINGS_PAGE_READ } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { TOOL_MAPPING, TOOL_CATEGORIES } from '@client/app/utils/toolMapping';
 
@@ -109,7 +109,7 @@ const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 200;
 
 const handler = adminApi({
-  adminPermissions: { GET: 'support:read' },
+  adminPermissions: { GET: SETTINGS_PAGE_READ },
   requiredScopes: [ApiKeyScope.ADMIN],
 }).get(async (req, res) => {
   try {

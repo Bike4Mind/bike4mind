@@ -5,6 +5,7 @@ import {
   type AdminApproval,
   type AdminApprovalAction,
   type AdminApprovalClaimGuard,
+  type AdminApprovalDecidableQuery,
   type AdminApprovalDecider,
   type AdminApprovalListQuery,
   type AdminApprovalRequester,
@@ -133,6 +134,28 @@ class AdminApprovalRepository implements IAdminApprovalRepository {
       .limit(limit)
       .lean<AdminApprovalDocumentShape[]>();
     return documents.map(toAdminApproval);
+  }
+
+  async countDecidable({
+    now,
+    viewerIds,
+    permissions,
+    fullAdmin,
+    limit,
+  }: AdminApprovalDecidableQuery): Promise<number> {
+    return this.approvalModel
+      .countDocuments(
+        {
+          status: 'pending',
+          expiresAt: { $gt: now },
+          'requestedBy.id': { $nin: viewerIds },
+          'requestedBy.selfIds': { $nin: viewerIds },
+          requiredPermission: { $in: permissions },
+          ...(fullAdmin ? {} : { requiresFullAdmin: false }),
+        },
+        { limit }
+      )
+      .exec();
   }
 
   async claim(

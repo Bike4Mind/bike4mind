@@ -56,6 +56,12 @@ describe('publishGenerationJobReadyPush', () => {
     });
   });
 
+  it('does not push a succeeded image job', async () => {
+    const deps = jobDeps({ ...videoJob, kind: 'image' });
+    await publishGenerationJobReadyPush('job-1', deps, logger);
+    expect(deps.publish).not.toHaveBeenCalled();
+  });
+
   it('links a music job to its notebook', async () => {
     const deps = jobDeps({ ...videoJob, kind: 'music', payload: { sessionId: 's1', request: {} } });
     await publishGenerationJobReadyPush('job-1', deps, logger);

@@ -56,7 +56,7 @@ export async function loadVersionQueue(
   const previousIds = listings.flatMap(l => (l.currentApprovedVersionId ? [l.currentApprovedVersionId] : []));
   // Not `snapshot`: its files can be large and only the body is diffed (inclusion and exclusion cannot mix).
   const previous = await SkillListingVersion.find({ _id: { $in: previousIds } }).select(
-    'version snapshot.name snapshot.description snapshot.body snapshot.argumentHint snapshot.allowedTools snapshot.claudeCodeAllowedTools snapshot.disableModelInvocation'
+    'version snapshot.name snapshot.description snapshot.body snapshot.argumentHint snapshot.allowedTools snapshot.claudeCodeAllowedTools snapshot.claudeCodeModel snapshot.disableModelInvocation'
   );
   const previousById = new Map(previous.map(p => [String(p._id), p.toJSON()]));
 

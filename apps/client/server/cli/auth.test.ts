@@ -78,6 +78,8 @@ const resolveUntrustedKeyLimits = vi.hoisted(() =>
   }))
 );
 vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({ resolveUntrustedKeyLimits }));
+const refuseIfSuspendedOwner = vi.hoisted(() => vi.fn(async (_key: string, _logger?: unknown) => undefined));
+vi.mock('@server/auth/suspendedApiKeyRefusal', () => ({ refuseIfSuspendedOwner }));
 
 vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', () => ({
   extractApiKeyFromHeaders: vi.fn(),
@@ -403,8 +405,8 @@ describe('verifyJwtToken (P0-B policy consent gate)', () => {
   describe('account state (ban / dispute / suspension) on the JWT/WS/CLI fallback', () => {
     it('rejects a banned owner even with accepted policy and a current tokenVersion', async () => {
       vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1', isBanned: true }));
-      await expect(verifyJwtToken(sign('u1'))).rejects.toThrow('User not found or banned');
-      await expect(verifyJwtToken(sign('u1'))).rejects.toBeInstanceOf(UnauthorizedError);
+      await expect(verifyJwtToken(sign('u1'))).rejects.toThrow('This account is suspended');
+      await expect(verifyJwtToken(sign('u1'))).rejects.toBeInstanceOf(ForbiddenError);
     });
 
     it('rejects a chargeback/dispute-pending owner', async () => {
@@ -619,10 +621,19 @@ describe('api-key account-state gates (mirrors apiKeyAuth)', () => {
     );
   });
 
-  it('refuses a banned owner with an UnauthorizedError', async () => {
+  it('refuses a banned owner with the account_suspended ForbiddenError', async () => {
     vi.mocked(User.findById).mockResolvedValue({ id: 'u1', isBanned: true });
+    await expect(verifyApiKey({})).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(verifyApiKey({})).rejects.toThrow(/This account is suspended/);
+  });
+
+  it("answers a suspended owner's disabled key with account_suspended, other unknown keys with 401", async () => {
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue({ isValid: false, reason: 'not_found' });
+    refuseIfSuspendedOwner.mockRejectedValueOnce(new ForbiddenError('This account is suspended'));
+    await expect(verifyApiKey({})).rejects.toBeInstanceOf(ForbiddenError);
+    expect(refuseIfSuspendedOwner).toHaveBeenCalledWith('b4m_live_somekey', expect.anything());
+
     await expect(verifyApiKey({})).rejects.toBeInstanceOf(UnauthorizedError);
-    await expect(verifyApiKey({})).rejects.toThrow(/banned/i);
   });
 
   it('refuses an owner with a pending payment dispute with a ForbiddenError', async () => {

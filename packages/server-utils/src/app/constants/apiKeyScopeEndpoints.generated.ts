@@ -380,12 +380,15 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'GET /api/v1/skills/market/listings/:id',
   ],
   [ApiKeyScope.SKILLS_WRITE]: [
+    'POST /api/v1/skills',
+    'GET|PUT /api/v1/skills/:id',
     'GET|POST /api/v1/skills/market/listings',
     'GET|DELETE /api/v1/skills/market/listings/:id',
     'POST /api/v1/skills/market/listings/:id/import',
     'POST /api/v1/skills/market/listings/:id/versions',
     'GET /api/v1/skills/market/listings/mine',
     'POST /api/v1/skills/market/versions/:vid/rescan',
+    'GET /api/v1/skills/mine',
   ],
   [ApiKeyScope.SKILLS_REVIEW]: [
     'GET /api/v1/skills/market/review-queue',

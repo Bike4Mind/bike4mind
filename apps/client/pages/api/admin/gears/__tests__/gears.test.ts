@@ -29,10 +29,11 @@ const h = vi.hoisted(() => ({
   findOne: vi.fn(),
   findOneAndUpdate: vi.fn(),
   deleteOne: vi.fn(),
+  byKey: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
-  gearOverrideRepository: { byKey: vi.fn() },
+  gearOverrideRepository: { byKey: h.byKey },
   GearOverride: {
     findOne: () => ({ lean: () => h.findOne() }),
     findOneAndUpdate: () => ({ lean: () => h.findOneAndUpdate() }),
@@ -51,10 +52,15 @@ import keyHandler from '../[key]';
 
 const invoke = async (
   handler: unknown,
-  options: { method: 'PUT' | 'DELETE'; body?: object; query?: Record<string, string> }
+  options: {
+    method: 'GET' | 'PUT' | 'DELETE';
+    body?: object;
+    query?: Record<string, string>;
+    user?: { isAdmin: boolean; adminPermissions?: string[] };
+  }
 ) => {
   const { req, res } = createMocks({ method: options.method, body: options.body, query: options.query });
-  (req as unknown as { user: { id: string; isAdmin: boolean } }).user = { id: 'admin-1', isAdmin: true };
+  (req as unknown as { user: object }).user = { id: 'admin-1', ...(options.user ?? { isAdmin: true }) };
   await (handler as (rq: unknown, rs: unknown) => Promise<unknown>)(req, res);
   return { req, res };
 };
@@ -114,5 +120,22 @@ describe('DELETE /api/admin/gears/[key] admin audit', () => {
     await invoke(keyHandler, { method: 'DELETE', query: { key: 'daily' } });
 
     expect(h.audit).not.toHaveBeenCalled();
+  });
+});
+
+describe('delegated access to /api/admin/gears', () => {
+  const read = (permission: string) => ({ isAdmin: false, adminPermissions: [permission] });
+
+  it.each(['settings:manage', 'support:read'])('lets a %s-only delegate read', async permission => {
+    h.byKey.mockResolvedValue(new Map());
+    const { res } = await invoke(indexHandler, { method: 'GET', user: read(permission) });
+    expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('rejects a support:read-only PUT', async () => {
+    await expect(
+      invoke(indexHandler, { method: 'PUT', body: { key: 'daily', credits: 0 }, user: read('support:read') })
+    ).rejects.toThrow('Missing permission: settings:manage');
+    expect(h.findOneAndUpdate).not.toHaveBeenCalled();
   });
 });

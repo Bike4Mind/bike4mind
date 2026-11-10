@@ -12,8 +12,8 @@ import {
   QuestCallbackStateSchema,
   ChatToolModeSchema,
   type GenerationJobRef,
-  type GenerationJobKind,
-  GENERATION_JOB_KINDS,
+  type QuestGenerationJobKind,
+  QUEST_GENERATION_JOB_KINDS,
 } from '@bike4mind/common';
 import { softDeletePlugin } from '../../utils/mongo';
 import BaseRepository, { convertId } from '@bike4mind/db-core';
@@ -639,7 +639,7 @@ export const ChatHistoryItemSchema: Schema<IChatHistoryItemDocument> = new Schem
         {
           _id: false,
           id: { type: String, required: true },
-          kind: { type: String, enum: GENERATION_JOB_KINDS, required: true },
+          kind: { type: String, enum: QUEST_GENERATION_JOB_KINDS, required: true },
         },
       ],
       default: undefined,
@@ -964,7 +964,7 @@ export function sessionKeysetFilter(sessionId: string, after?: { timestamp: Date
 const AGENT_GENERATION_SLOT_FIELDS = {
   video: 'agentVideoClipsClaimed',
   music: 'agentMusicTracksClaimed',
-} as const satisfies Record<GenerationJobKind, keyof IChatHistoryItem>;
+} as const satisfies Record<QuestGenerationJobKind, keyof IChatHistoryItem>;
 
 class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implements IChatHistoryItemRepository {
   ctx: mongoose.mongo.ClientSession | null;
@@ -1384,7 +1384,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
    * checkpoint continuations share this Quest and can claim concurrently, so the check and the increment must be one atomic update.
    * Returns false when the cap is reached or no Quest matches.
    */
-  async claimAgentGenerationSlot(questId: string, kind: GenerationJobKind, limit: number): Promise<boolean> {
+  async claimAgentGenerationSlot(questId: string, kind: QuestGenerationJobKind, limit: number): Promise<boolean> {
     if (limit <= 0) return false;
     const field = AGENT_GENERATION_SLOT_FIELDS[kind];
     const result = await this.model.updateOne(
@@ -1409,7 +1409,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   }
 
   /** Give back a slot from claimAgentGenerationSlot whose call started no new job. */
-  async releaseAgentGenerationSlot(questId: string, kind: GenerationJobKind): Promise<void> {
+  async releaseAgentGenerationSlot(questId: string, kind: QuestGenerationJobKind): Promise<void> {
     const field = AGENT_GENERATION_SLOT_FIELDS[kind];
     await this.model.updateOne({ _id: convertId(questId), [field]: { $gt: 0 } }, { $inc: { [field]: -1 } });
   }

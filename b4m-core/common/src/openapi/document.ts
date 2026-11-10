@@ -409,7 +409,8 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
     },
     {
       name: 'Skills',
-      description: "Your organization's approved Skill Market listings, served as a Claude Code plugin marketplace.",
+      description:
+        "Create, update and read your own skills from a SKILL.md, and the Skill Market: your organization's approved listings, served as a Claude Code plugin marketplace.",
     },
     {
       name: 'Slack',

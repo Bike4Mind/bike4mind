@@ -10,7 +10,7 @@ const BATCH_SIZE = 1000;
  * Raw collection so soft-deleted rows are included. Id stays below the oauth backfill, which must be highest.
  */
 const migration: MigrationFile = {
-  id: 20260921240050,
+  id: 20260921240090,
   name: 'unset-fabfile-signed-urls',
 
   up: async () => {

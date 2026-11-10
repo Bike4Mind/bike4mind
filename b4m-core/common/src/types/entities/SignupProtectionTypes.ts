@@ -149,7 +149,7 @@ export type SignupProtectionRepository = {
 /** Free-credit pools with separate daily budgets: initial grants vs the daily activity drip. */
 export type SignupGrantPool = 'signup' | 'trickle';
 
-export type SignupGrantBudgetThreshold = 50 | 100 | 'missing';
+export type SignupGrantBudgetThreshold = 50 | 100 | 'missing' | 'drip_cap_default';
 
 /**
  * Per-UTC-day spend counter for free grants, one per pool. Each method's `day` is the counter key:
@@ -176,7 +176,10 @@ export type SignupGrantBudgetRepository = {
   getSpent: (day: string) => Promise<number>;
 };
 
-/** `missing` fires when the pool's setting is absent or invalid, which pauses the pool. */
+/**
+ * `missing` fires when the pool's setting is absent or invalid, which pauses the pool.
+ * `drip_cap_default` fires when the drip pays with no stored cap; `budget` then carries that default cap.
+ */
 export type SignupGrantBudgetAlert = {
   pool: SignupGrantPool;
   day: string;

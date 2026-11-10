@@ -1,4 +1,11 @@
-import { SkillListing, SkillListingVersion, skillRepository } from '@bike4mind/database';
+import {
+  SkillBundle,
+  SkillListing,
+  SkillListingImport,
+  SkillListingReport,
+  SkillListingVersion,
+  skillRepository,
+} from '@bike4mind/database';
 import {
   BadRequestError,
   ConflictError,
@@ -201,6 +208,44 @@ export async function withdrawOwnListing(userId: string, listingId: string): Pro
   if (listing.authorUserId !== userId) throw new ForbiddenError('Only the author can withdraw a listing');
 
   if (!(await withdrawListing(listing.id))) throw new ConflictError('This listing is already withdrawn or delisted');
+}
+
+/**
+ * The author permanently deletes a withdrawn listing and everything keyed to it. Live, held,
+ * delisted and report-hidden listings are refused: the last two keep blocking a republish after a
+ * takedown. So is a listing with open reports, which moderators have not yet reviewed. Importers keep their copies (`marketStatus` reads a missing listing as removed).
+ */
+export async function deleteOwnWithdrawnListing(userId: string, listingId: string): Promise<void> {
+  const listing = await findListing(listingId);
+  if (!listing) throw new NotFoundError('Listing not found');
+  if (listing.authorUserId !== userId) throw new ForbiddenError('Only the author can delete a listing');
+
+  if (await SkillListingReport.exists({ listingId: String(listing.id), status: 'open' })) {
+    throw new ConflictError('This listing has open reports and cannot be deleted until they are reviewed');
+  }
+
+  // One atomic delete so a concurrent restore or moderation action cannot slip between check and delete.
+  // hardDelete: the soft-delete plugin would otherwise only stamp deletedAt, keeping shareToken
+  // and claudePluginName reserved.
+  const deleted = await SkillListing.findOneAndDelete(
+    {
+      _id: listing.id,
+      authorUserId: userId,
+      status: 'withdrawn',
+      hiddenByReports: { $ne: true },
+      deletedAt: null,
+    },
+    { hardDelete: true }
+  );
+  if (!deleted) throw new ConflictError('Only a withdrawn listing can be deleted permanently');
+
+  const id = String(listing.id);
+  await Promise.all([
+    SkillListingVersion.deleteMany({ listingId: id }),
+    SkillListingImport.deleteMany({ listingId: id }),
+    SkillListingReport.deleteMany({ listingId: id }),
+    SkillBundle.updateMany({ listingIds: id }, { $pull: { listingIds: id } }),
+  ]);
 }
 
 /**

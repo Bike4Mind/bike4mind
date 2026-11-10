@@ -430,6 +430,7 @@ const ADAPTIVE_THINKING_OFF_SWITCH: ReadonlyMap<string, 'disabled' | 'between_to
   [ChatModels.CLAUDE_5_5_HAIKU, 'disabled'],
   [ChatModels.CLAUDE_5_5_HAIKU_BEDROCK, 'disabled'],
   // Sonnet 5.5 rejects `disabled`; `between_tools` is its off switch.
+  [ChatModels.CLAUDE_5_5_SONNET, 'between_tools'],
   [ChatModels.CLAUDE_5_5_SONNET_BEDROCK, 'between_tools'],
 ]);
 
@@ -442,6 +443,7 @@ const ADAPTIVE_THINKING_OFF_SWITCH: ReadonlyMap<string, 'disabled' | 'between_to
 const ADAPTIVE_THINKING_BY_DEFAULT: ReadonlySet<string> = new Set([
   ChatModels.CLAUDE_5_SONNET,
   ChatModels.CLAUDE_5_SONNET_BEDROCK,
+  ChatModels.CLAUDE_5_5_SONNET,
   ChatModels.CLAUDE_5_5_SONNET_BEDROCK,
   ChatModels.CLAUDE_FABLE_5,
   ChatModels.CLAUDE_FABLE_5_BEDROCK,

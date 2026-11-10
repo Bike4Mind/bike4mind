@@ -1,4 +1,4 @@
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, SETTINGS_PAGE_READ } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import {
@@ -41,7 +41,7 @@ export type StuckExecutionsResponse = {
  * `awaiting_subagent` is deliberately excluded - see model docstring.
  */
 const handler = adminApi({
-  adminPermissions: { GET: 'support:read' },
+  adminPermissions: { GET: SETTINGS_PAGE_READ },
   requiredScopes: [ApiKeyScope.ADMIN],
 }).get(async (req, res) => {
   const parsed = QuerySchema.safeParse(req.query);

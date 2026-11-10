@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   StorageLimitError,
   type IGenerationJobDocument,
+  type ImageProviderId,
   type MusicProviderId,
   type StorageLimitErrorInfo,
   type VideoProviderId,
@@ -23,13 +24,21 @@ const notifications = vi.hoisted(() => ({
   deliverToSlack: vi.fn(),
   slackDeps: { marker: 'slack-delivery-deps' },
   notify: undefined as ((job: IGenerationJobDocument) => Promise<void>) | undefined,
+  handlers: [] as { kind: string }[],
 }));
+
+const { moderateImageOrThrow, usageEventRecord } = vi.hoisted(() => ({
+  moderateImageOrThrow: vi.fn(),
+  usageEventRecord: vi.fn(),
+}));
+vi.mock('@bike4mind/services/llm/imageModerationGate', () => ({ moderateImageOrThrow }));
 
 vi.mock('@bike4mind/services/generationJobs', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/services/generationJobs')>()),
   GenerationJobEngine: class {
-    constructor(deps: { notify(job: IGenerationJobDocument): Promise<void> }) {
+    constructor(deps: { notify(job: IGenerationJobDocument): Promise<void>; handlers: { kind: string }[] }) {
       notifications.notify = deps.notify;
+      notifications.handlers = deps.handlers;
     }
   },
 }));
@@ -68,8 +77,16 @@ vi.mock('@bike4mind/auth', async importOriginal => {
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue }));
 vi.mock('@bike4mind/database', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/database')>();
-  return { ...actual, userRepository: { ...actual.userRepository, findById: userFindById } };
+  return {
+    ...actual,
+    userRepository: { ...actual.userRepository, findById: userFindById },
+    usageEventRepository: { ...actual.usageEventRepository, record: usageEventRecord },
+  };
 });
+vi.mock('@bike4mind/utils/imageModeration', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils/imageModeration')>()),
+  RekognitionImageModerationService: class {},
+}));
 vi.mock('@bike4mind/utils', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/utils')>();
   return {
@@ -83,6 +100,7 @@ vi.mock('@bike4mind/utils', async importOriginal => {
 });
 
 import { adminSettingsRepository } from '@bike4mind/database';
+import { ImageModerationBlockedError } from '@bike4mind/utils/imageModeration';
 import { createMusicProviderRegistry } from '@bike4mind/utils/musicProviders';
 import { createVideoProviderRegistry } from '@bike4mind/utils/videoProviders';
 import {
@@ -93,6 +111,9 @@ import {
   getGenerationJobEngine,
   getMusicJobDeps,
   getVideoJobDeps,
+  moderateImage,
+  recordImageUsage,
+  selectImageProviderKey,
   selectMusicProviderKey,
   selectProviderKey,
   toJobUpdate,
@@ -234,6 +255,25 @@ describe('music provider key selection', () => {
   });
 });
 
+describe('image provider key selection', () => {
+  const keys = { openai: 'o-key', gemini: 'g-key', xai: 'x-key' } as never;
+
+  it('maps openai and gemini to the keys the chat image paths use', () => {
+    expect(selectImageProviderKey('openai', keys)).toBe('o-key');
+    expect(selectImageProviderKey('gemini', keys)).toBe('g-key');
+    expect(usableApiKey(selectImageProviderKey('openai', { openai: 'expired' } as never))).toBeNull();
+  });
+
+  it('gives providers without an image job adapter no key', () => {
+    expect(selectImageProviderKey('bfl', keys)).toBeNull();
+    expect(selectImageProviderKey('xai', keys)).toBeNull();
+  });
+
+  it('throws for a provider id with no mapping', () => {
+    expect(() => selectImageProviderKey('unmapped' as ImageProviderId, keys)).toThrow(/no API key mapping/);
+  });
+});
+
 describe('checkStorageFor', () => {
   const info: StorageLimitErrorInfo = {
     errorCode: 'storage_limit_exceeded',
@@ -297,6 +337,20 @@ describe('toJobUpdate', () => {
       payload: { ...baseJob.payload, output: { contentType: 'video/mp4', durationSeconds: 4 } },
     } as IGenerationJobDocument);
     expect(withoutFile.job.output).toEqual({ contentType: 'video/mp4', durationSeconds: 4 });
+  });
+
+  it('maps an image job output, which has no duration', () => {
+    const update = toJobUpdate({
+      ...baseJob,
+      kind: 'image',
+      state: 'succeeded',
+      payload: {
+        providerId: 'openai',
+        request: { model: 'gpt-image-1', mode: 'generate', prompt: 'p' },
+        output: { location: 'files', s3Key: 'k', contentType: 'image/png', bytes: 3, fileId: 'f1' },
+      },
+    } as IGenerationJobDocument);
+    expect(update.job.output).toEqual({ fileId: 'f1', contentType: 'image/png' });
   });
 
   it('maps a music job output without its lyrics', () => {
@@ -419,5 +473,117 @@ describe('generation job billing settings', () => {
       { names: ['enforceCredits', settingName], skipCache: true }
     );
     expect(settings).toEqual({ enforceCredits: false, [settingName]: modelSettings });
+  });
+});
+
+describe('image job engine registration', () => {
+  it('registers a handler for the image kind next to video and music', () => {
+    getGenerationJobEngine();
+    expect(notifications.handlers.map(handler => handler.kind)).toEqual(
+      expect.arrayContaining(['video', 'music', 'image'])
+    );
+  });
+});
+
+describe('image job moderation', () => {
+  const imageJob = (mode: 'generate' | 'edit') =>
+    ({
+      id: 'job1',
+      kind: 'image',
+      requestedBy: 'user1',
+      questId: 'quest1',
+      payload: { providerId: 'openai', request: { model: 'gpt-image-2', mode, prompt: 'x' } },
+    }) as unknown as Parameters<typeof moderateImage>[0]['job'];
+  const scan = (mode: 'generate' | 'edit' = 'generate') =>
+    moderateImage({ job: imageJob(mode), bytes: Buffer.from('img'), mimeType: 'image/png' });
+
+  beforeEach(() => {
+    moderateImageOrThrow.mockReset().mockResolvedValue(undefined);
+    getSettingsMap.mockReset().mockResolvedValue({});
+  });
+
+  it('passes an image the gate accepts', async () => {
+    await expect(scan()).resolves.toEqual({ blocked: false });
+  });
+
+  it('turns a confirmed block into a verdict carrying the reason', async () => {
+    const blocked = new ImageModerationBlockedError([{ name: 'Violence', confidence: 99.5 }]);
+    moderateImageOrThrow.mockRejectedValue(blocked);
+    await expect(scan()).resolves.toEqual({ blocked: true, reason: blocked.message });
+  });
+
+  it('propagates any other error so an unscanned image is not kept', async () => {
+    const failure = new Error('rekognition unavailable');
+    moderateImageOrThrow.mockRejectedValue(failure);
+    await expect(scan()).rejects.toBe(failure);
+  });
+
+  it('enables the gate when ImageModerationEnabled is unset', async () => {
+    await scan();
+    expect(moderateImageOrThrow).toHaveBeenCalledWith(expect.objectContaining({ enabled: true }));
+  });
+
+  it.each([
+    ['edit', 'edit'],
+    ['generate', 'generation'],
+  ] as const)('reports a %s job to the incident store as the %s surface', async (mode, surface) => {
+    await scan(mode);
+    expect(moderateImageOrThrow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        incidentMeta: expect.objectContaining({
+          userId: 'user1',
+          questId: 'quest1',
+          provider: 'openai',
+          model: 'gpt-image-2',
+          surface,
+        }),
+      })
+    );
+  });
+});
+
+describe('image usage recording', () => {
+  const usage = (mode: 'generate' | 'edit') =>
+    recordImageUsage({
+      job: {
+        id: 'job1',
+        requestedBy: 'user1',
+        ownerId: 'owner1',
+        ownerType: 'user',
+        payload: { providerId: 'openai', request: { model: 'gpt-image-2', mode, prompt: 'x' } },
+      } as unknown as Parameters<typeof recordImageUsage>[0]['job'],
+      creditsCharged: 5,
+      costUsd: 0.05,
+      status: 'refusal',
+    } as unknown as Parameters<typeof recordImageUsage>[0]);
+
+  beforeEach(() => {
+    usageEventRecord.mockReset().mockResolvedValue(undefined);
+  });
+
+  it.each([
+    ['edit', 'image_edit'],
+    ['generate', 'image_generation'],
+  ] as const)('records a %s job under the %s feature as one unit', async (mode, feature) => {
+    await usage(mode);
+    expect(usageEventRecord).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        requestId: 'job1',
+        userId: 'user1',
+        ownerId: 'owner1',
+        feature,
+        provider: 'openai',
+        model: 'gpt-image-2',
+        units: 1,
+        costUsd: 0.05,
+        creditsCharged: 5,
+        status: 'refusal',
+      })
+    );
+  });
+
+  it('never fails the job when the analytics row cannot be written', async () => {
+    usageEventRecord.mockRejectedValue(new Error('mongo down'));
+    await expect(usage('generate')).resolves.toBeUndefined();
   });
 });

@@ -52,11 +52,11 @@ type RewardUser = {
   isSynthetic?: boolean | null;
   deletedAt?: Date | null;
   currentCredits?: number | null;
-  signupGrant?: { blocked?: { at: Date } } | null;
+  signupGrant?: { blocked?: { at: Date }; unlockForfeited?: { at: Date } } | null;
 } & AccountStateFields;
 
 const PAYABLE_FIELDS =
-  'emailVerified isSynthetic deletedAt isBanned disputePending moderation.status signupGrant.blocked';
+  'emailVerified isSynthetic deletedAt isBanned disputePending moderation.status signupGrant.blocked signupGrant.unlockForfeited';
 
 // suspend_pending is not an accountBlockReason; a money path refuses it too.
 const isPayable = (user: RewardUser) =>
@@ -65,6 +65,7 @@ const isPayable = (user: RewardUser) =>
   !user.deletedAt &&
   accountBlockReasons(user).length === 0 &&
   !isSignupGrantBlocked(user) &&
+  !user.signupGrant?.unlockForfeited &&
   user.moderation?.status !== 'suspend_pending';
 
 export async function findPayableUser(userId: string): Promise<{ email: string } | null> {

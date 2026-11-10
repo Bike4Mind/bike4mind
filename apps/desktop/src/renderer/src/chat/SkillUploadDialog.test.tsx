@@ -378,3 +378,51 @@ describe('legacy auto-approved review-tier outcomes', () => {
     });
   });
 });
+
+describe('held outcome names its cause', () => {
+  it('lists the high findings of a pending high-tier version', () => {
+    const outcome = versionOutcome(
+      {
+        ...published.version,
+        scanStatus: 'passed',
+        reviewStatus: 'pending',
+        riskTier: 'high',
+        findings: [
+          { severity: 'medium', message: 'Tells the agent to run shell commands' },
+          { severity: 'high', message: 'Tells the agent to run a command that pipes a download into a shell' },
+        ],
+      },
+      'organization'
+    );
+    expect(outcome.body).toBe(
+      'A reviewer must approve it first because of: Tells the agent to run a command that pipes a download into a shell.'
+    );
+    expect(outcome.body).not.toContain('declares tools');
+  });
+
+  const held = (riskTier: 'review' | 'high', findings: { severity: string; message: string }[]) =>
+    versionOutcome(
+      { ...published.version, scanStatus: 'passed', reviewStatus: 'pending', riskTier, findings },
+      'organization'
+    );
+
+  it('lists the medium findings of a pending review-tier version', () => {
+    expect(held('review', [{ severity: 'medium', message: 'Tells the agent to run shell commands.' }]).body).toBe(
+      'A person checks it before it goes live because of: Tells the agent to run shell commands.'
+    );
+  });
+
+  it('falls back to generic copy when no finding of the tier exists', () => {
+    expect(held('review', [{ severity: 'low', message: 'note' }]).body).toBe(
+      'Listings with findings are checked by a person before they go live.'
+    );
+    expect(held('high', []).body).toBe('It has high-risk findings, so a reviewer must approve it first.');
+  });
+
+  it('names at most three causes and counts the rest', () => {
+    const findings = ['a', 'b', 'c', 'd', 'e'].map(m => ({ severity: 'high', message: `Finding ${m}` }));
+    expect(held('high', findings).body).toBe(
+      'A reviewer must approve it first because of: Finding a; Finding b; Finding c; and 2 more.'
+    );
+  });
+});

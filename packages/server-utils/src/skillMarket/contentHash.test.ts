@@ -53,6 +53,14 @@ describe('skillContentHash', () => {
     );
   });
 
+  it('hashes the Claude Code model only when set, keeping the hash of a skill without one', () => {
+    const pinned = skillContentHash(toolSkill);
+    expect(skillContentHash({ ...toolSkill, claudeCodeModel: '' })).toBe(pinned);
+    expect(skillContentHash({ ...toolSkill, claudeCodeModel: 'haiku' })).not.toBe(pinned);
+    const withFiles = { ...toolSkill, claudeCodeAllowedTools: ['Read'], files };
+    expect(skillContentHash({ ...withFiles, claudeCodeModel: '' })).toBe(skillContentHash(withFiles));
+  });
+
   it('keeps a Claude Code tools hash when files are added later, and hashes the two together', () => {
     const tools = { ...toolSkill, claudeCodeAllowedTools: ['Bash(git:*)'] };
     expect(skillContentHash({ ...tools, files: [] })).toBe(skillContentHash(tools));
