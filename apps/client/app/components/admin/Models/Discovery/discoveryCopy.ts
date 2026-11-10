@@ -142,7 +142,15 @@ const FLAG_COPY: Record<string, string> = {
   'operator-owned-divergence': 'A source now differs from the price an admin set',
   'tiered-pricing-manual': 'This model has tiered pricing that must be entered by hand',
 };
-export const flagCopy = (kind: string): string => FLAG_COPY[kind] ?? 'Discovery did not apply this price';
+// The flag stores no band; its detail line ends "(band 50%): ..." (pricePlan.ts in the discovery service), which is
+// the band the run applied, not today's setting.
+const BAND_IN_DETAIL = /\(band (\d+)%\)/;
+
+export const flagCopy = (kind: string, detail = ''): string => {
+  const band = kind === 'band-exceeded' ? BAND_IN_DETAIL.exec(detail)?.[1] : undefined;
+  if (band !== undefined) return `Proposed price is more than ${band}% away from the current one`;
+  return FLAG_COPY[kind] ?? 'Discovery did not apply this price';
+};
 
 const PRICE_SKIP_COPY: Record<string, string> = {
   'unknown-model': 'Not a model this build knows',

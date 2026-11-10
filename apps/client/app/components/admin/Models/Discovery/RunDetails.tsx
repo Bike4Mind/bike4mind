@@ -21,6 +21,8 @@ import {
 /** Undefined is tolerated: a subdocument written before its path existed has no array. */
 const list = (values: readonly string[] | undefined) => (values && values.length > 0 ? values.join(', ') : '-');
 
+const BUILD_TABLE = 'Build table';
+
 const Mono = ({ children }: { children: ReactNode }) => (
   <Typography level="body-xs" fontFamily="code" sx={{ color: 'admin.ink', overflowWrap: 'anywhere' }}>
     {children}
@@ -102,7 +104,7 @@ const priceRowColumns: DataColumn<RunPriceRow & { index: number }>[] = [
   {
     id: 'from',
     label: 'From',
-    render: row => (row.sources.includes(ADAPTER_LITERAL_PRICE_SOURCE) ? 'Build table' : list(row.sources)),
+    render: row => list(row.sources.map(source => (source === ADAPTER_LITERAL_PRICE_SOURCE ? BUILD_TABLE : source))),
   },
   { id: 'note', label: 'Note', render: row => row.note || '-' },
 ];
@@ -238,7 +240,7 @@ export function RunDetails({ run }: { run: DiscoveryRun }) {
               id: 'kind',
               label: 'Kind',
               width: '14rem',
-              render: flag => <Coded code={flag.kind} text={flagCopy(flag.kind)} />,
+              render: flag => <Coded code={flag.kind} text={flagCopy(flag.kind, flag.detail)} />,
             },
             { id: 'proposed', label: 'Proposed per 1M', render: flag => inOut(flag.proposed) },
             { id: 'current', label: 'In force per 1M', render: flag => inOut(flag.current) },

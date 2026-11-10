@@ -4,6 +4,7 @@ import {
   DELEGATE,
   FULL_ADMIN,
   LIFECYCLE,
+  SUPPORT_ONLY,
   adminRow,
   makeWrapper,
   modelList,
@@ -91,10 +92,22 @@ describe('StaleReferencesPanel', () => {
     );
   });
 
-  it('blocks the check for a delegate who cannot make model writes', async () => {
+  it('lets a delegate with settings:manage check, since it is a read', async () => {
     m.currentUser = DELEGATE;
+    renderPanel();
+    fireEvent.click(screen.getByTestId('discovery-check-references-btn'));
+
+    expect(await screen.findByTestId('discovery-references-table')).toBeInTheDocument();
+  });
+
+  it('blocks the check, with the reason, without settings:manage', () => {
+    m.currentUser = SUPPORT_ONLY;
     renderPanel();
 
     expect(screen.getByTestId('discovery-check-references-btn')).toBeDisabled();
+    expect(screen.getByTestId('admin-missing-permission-action')).toContainElement(
+      screen.getByTestId('discovery-check-references-btn')
+    );
+    expect(m.get).not.toHaveBeenCalledWith('/api/admin/model-deprecation-status');
   });
 });

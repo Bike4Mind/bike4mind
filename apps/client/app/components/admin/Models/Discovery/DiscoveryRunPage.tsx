@@ -3,7 +3,7 @@ import { Alert, Box, Button, Link, Stack, Typography } from '@mui/joy';
 import {
   ADMIN_MODEL_NEEDS_REVIEW_REASONS,
   ADAPTER_LITERAL_PRICE_SOURCE,
-  type AdminModelReasonCode,
+  type AdminModelFixAction,
   type AdminModelRow,
 } from '@bike4mind/common';
 import {
@@ -14,9 +14,12 @@ import {
   LoadingState,
   SectionCard,
   StatusChip,
+  UndoToastProvider,
   UpdatingBar,
 } from '../../shared';
 import { ADMIN_DETAIL_MAX_WIDTH, ADMIN_REGION_GAP, adminPageFrame } from '../../shared/adminStyles';
+import { ModelAccessDialog } from '../Access/ModelAccessDialog';
+import { ModelFixAction } from '../ModelFixAction';
 import { useModelsNavigation } from '../modelsNavigation';
 import { apiErrorMessage, apiStatusOf, useDiscoveryRun, type DiscoveryRun, type RunPriceFlag } from './discoveryApi';
 import {
@@ -39,35 +42,27 @@ import { RunDetails } from './RunDetails';
 import { modelName, useModelIndex } from './useModelIndex';
 
 type ModelIndex = ReadonlyMap<string, AdminModelRow>;
-type Navigation = ReturnType<typeof useModelsNavigation>;
 
 type Decision = {
   modelId: string;
   reasons: string[];
   flags: RunPriceFlag[];
   notSaved: boolean;
-  action: { label: string; onClick: () => void } | null;
+  /** The first open reason's server fix action, on the model's own row. */
+  fix: { action: AdminModelFixAction; row: AdminModelRow } | null;
+  /** Flags with no open reason to act on: the price is the decision. */
+  openPrices: boolean;
 };
 
-const PRICE_REASONS = new Set<AdminModelReasonCode>(['price-none', 'price-missing', 'price-aggregator-quote']);
-
 const unique = (ids: readonly string[]) => [...new Set(ids)];
-
-function decisionAction(modelId: string, code: AdminModelReasonCode | undefined, nav: Navigation): Decision['action'] {
-  if (code && PRICE_REASONS.has(code)) return { label: 'Add price', onClick: () => void nav.openPrices(modelId) };
-  // The lifecycle queue lives in the Discovery section until each model's Lifecycle tab carries it.
-  if (code === 'lifecycle-suggestion') {
-    return { label: 'Review suggestion', onClick: () => void nav.openSection('discovery') };
-  }
-  return { label: 'Open model', onClick: () => void nav.openModel(modelId) };
-}
 
 /**
  * One card per model this run touched whose status is Needs review now (docs/admin-models-spec.md section 5.3),
  * plus this run's price flags, which phase 1 does not yet persist on the model. A report-mode run's new models have
- * no catalog row, so they show what they would need and no action.
+ * no catalog row, so they show what they would need and no action. Without the index (`indexFailed`) only the run's
+ * own findings are known, so nothing is claimed about catalog rows.
  */
-function buildDecisions(run: DiscoveryRun, index: ModelIndex, nav: Navigation): Decision[] {
+function buildDecisions(run: DiscoveryRun, index: ModelIndex, indexFailed: boolean): Decision[] {
   const flagsByModel = new Map<string, RunPriceFlag[]>();
   for (const flag of run.priceFlags) flagsByModel.set(flag.modelId, [...(flagsByModel.get(flag.modelId) ?? []), flag]);
   const diffByModel = new Map(run.catalogDiff.map(entry => [entry.modelId, entry]));
@@ -84,47 +79,71 @@ function buildDecisions(run: DiscoveryRun, index: ModelIndex, nav: Navigation): 
     const row = index.get(modelId);
     const flags = flagsByModel.get(modelId) ?? [];
     if (!row) {
-      if (run.mode !== 'report') continue;
-      const blockers = (diffByModel.get(modelId)?.blockedBy ?? []).filter(isDecisionBlocker);
+      if (run.mode !== 'report' && !indexFailed) continue;
+      const blockers =
+        run.mode === 'report' ? (diffByModel.get(modelId)?.blockedBy ?? []).filter(isDecisionBlocker) : [];
       if (blockers.length === 0 && flags.length === 0) continue;
-      decisions.push({ modelId, reasons: blockers.map(blockerCopy), flags, notSaved: true, action: null });
+      decisions.push({
+        modelId,
+        reasons: blockers.map(blockerCopy),
+        flags,
+        notSaved: !indexFailed,
+        fix: null,
+        openPrices: indexFailed && flags.length > 0,
+      });
       continue;
     }
     const open =
       row.status === 'needs-review' ? row.reasons.filter(r => ADMIN_MODEL_NEEDS_REVIEW_REASONS.has(r.code)) : [];
     if (open.length === 0 && flags.length === 0) continue;
+    const fixAction = open[0]?.fixAction;
     decisions.push({
       modelId,
       reasons: open.map(reason => reason.message),
       flags,
       notSaved: false,
-      action:
-        open.length > 0
-          ? decisionAction(modelId, open[0].code, nav)
-          : { label: 'Open prices', onClick: () => void nav.openPrices(modelId) },
+      fix: fixAction ? { action: fixAction, row } : null,
+      openPrices: open.length === 0,
     });
   }
   return decisions;
 }
 
-function DecisionCard({ decision, index }: { decision: Decision; index: ModelIndex }) {
-  const { modelId, reasons, flags, notSaved, action } = decision;
+function DecisionCard({
+  decision,
+  index,
+  onTurnOn,
+}: {
+  decision: Decision;
+  index: ModelIndex;
+  onTurnOn: (row: AdminModelRow) => void;
+}) {
+  const { modelId, reasons, flags, notSaved, fix } = decision;
+  const { openPrices } = useModelsNavigation();
+  const actionTestId = `discovery-decision-action-${modelId}`;
   return (
     <SectionCard
       title={modelName(index, modelId)}
       data-testid={`discovery-decision-${modelId}`}
       action={
-        action && (
+        fix ? (
+          <ModelFixAction
+            action={fix.action}
+            model={fix.row}
+            onTurnOn={() => onTurnOn(fix.row)}
+            data-testid={actionTestId}
+          />
+        ) : decision.openPrices ? (
           <Button
             size="sm"
             variant="plain"
             color="neutral"
-            onClick={action.onClick}
-            data-testid={`discovery-decision-action-${modelId}`}
+            onClick={() => void openPrices(modelId)}
+            data-testid={actionTestId}
           >
-            {action.label}
+            Open prices
           </Button>
-        )
+        ) : null
       }
     >
       <Fact label="Model id">
@@ -147,7 +166,7 @@ function DecisionCard({ decision, index }: { decision: Decision; index: ModelInd
       {flags.map(flag => (
         <Fact key={flag.kind} label="Price" data-testid={`discovery-decision-flag-${modelId}`}>
           <Stack gap={0.5}>
-            <Box>{flagCopy(flag.kind)}</Box>
+            <Box>{flagCopy(flag.kind, flag.detail)}</Box>
             <Box sx={{ color: 'admin.inkMuted' }}>
               Proposed {inOut(flag.proposed)} per 1M; in force {inOut(flag.current)}. Sources: {flag.sources.join(', ')}
               .
@@ -372,12 +391,13 @@ function Breadcrumb({ current }: { current: string }) {
 }
 
 function RunView({ run }: { run: DiscoveryRun }) {
-  const nav = useModelsNavigation();
   const models = useModelIndex();
   const index: ModelIndex = models.data ?? new Map();
+  const indexFailed = models.isError && !models.data;
   const [showDetails, setShowDetails] = useState(false);
+  const [turningOn, setTurningOn] = useState<AdminModelRow | null>(null);
   const result = runResult(run);
-  const decisions = models.isLoading ? [] : buildDecisions(run, index, nav);
+  const decisions = models.isLoading ? [] : buildDecisions(run, index, indexFailed);
   // The plan is reported identically in both modes, so a write run whose appends all threw looks clean everywhere
   // but here. Write mode only: report mode plans rows and writes none by design.
   const writeGaps =
@@ -422,11 +442,11 @@ function RunView({ run }: { run: DiscoveryRun }) {
         ) : (
           <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' }}>
             {decisions.map(decision => (
-              <DecisionCard key={decision.modelId} decision={decision} index={index} />
+              <DecisionCard key={decision.modelId} decision={decision} index={index} onTurnOn={setTurningOn} />
             ))}
           </Box>
         )}
-        {models.isError && (
+        {indexFailed && (
           <Muted>Could not load each model&apos;s current status, so only this run&apos;s own findings show.</Muted>
         )}
       </Stack>
@@ -453,6 +473,16 @@ function RunView({ run }: { run: DiscoveryRun }) {
           </Box>
         )}
       </Stack>
+
+      {turningOn && (
+        <ModelAccessDialog
+          target={turningOn}
+          change={{ enabled: true }}
+          title={`Turn on ${turningOn.name}`}
+          confirmLabel="Turn on"
+          onClose={() => setTurningOn(null)}
+        />
+      )}
     </>
   );
 }
@@ -484,7 +514,10 @@ export function DiscoveryRunPage({ runId }: { runId: string }) {
       />
       <UpdatingBar active={query.isFetching && !query.isLoading && !!run} testId="discovery-run-updating" />
       {run ? (
-        <RunView run={run} />
+        // The route sits outside AdminPage, so the turn-on dialog's Undo toast needs its own provider.
+        <UndoToastProvider key={runId}>
+          <RunView run={run} />
+        </UndoToastProvider>
       ) : query.isLoading ? (
         <LoadingState label="Loading the run" testId="discovery-run-loading" />
       ) : expired ? (

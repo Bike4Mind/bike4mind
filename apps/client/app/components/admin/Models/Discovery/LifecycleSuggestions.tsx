@@ -209,13 +209,19 @@ function AcceptSuggestionDialog({
   const [blockers, setBlockers] = useState<string[] | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const name = modelName(index, item.modelId);
-  const status = item.suggestion?.status ?? 'deprecated';
-  const successor = replacedBy.trim();
+  const suggestion = item.suggestion;
+  const current = index?.get(item.modelId)?.lifecycle;
+  // Resolved as the accept route resolves them: the suggestion, then what is recorded. An empty successor field
+  // sends nothing, so the suggested or recorded successor stays.
+  const status = suggestion?.status ?? current?.status ?? 'deprecated';
+  const typed = replacedBy.trim();
+  const keptSuccessor = suggestion?.replacedBy ?? current?.replacedBy;
+  const successor = typed || keptSuccessor || '';
   const successorRow = successor ? index?.get(successor) : undefined;
-  const dates = [
-    item.suggestion?.deprecationDate && `Deprecation ${item.suggestion.deprecationDate}`,
-    item.suggestion?.retirementDate && `retirement ${item.suggestion.retirementDate}`,
-  ]
+  const statusWord = lifecycleWord(status).toLowerCase();
+  const deprecationDate = suggestion?.deprecationDate ?? current?.deprecationDate;
+  const retirementDate = suggestion?.retirementDate ?? current?.retirementDate;
+  const dates = [deprecationDate && `Deprecation ${deprecationDate}`, retirementDate && `retirement ${retirementDate}`]
     .filter(Boolean)
     .join(', ');
 
@@ -226,7 +232,7 @@ function AcceptSuggestionDialog({
         modelId: item.modelId,
         action: 'accept',
         note: reason,
-        ...(successor ? { replacedBy: successor } : {}),
+        ...(typed ? { replacedBy: typed } : {}),
         ...(blockers ? { acknowledgeBlockers: true } : {}),
       });
     } catch (error) {
@@ -243,15 +249,19 @@ function AcceptSuggestionDialog({
       open
       onClose={onClose}
       title="Accept lifecycle change"
-      description={`Records ${name} as ${lifecycleWord(status).toLowerCase()}, effective now. It drops out of pickers once its deprecation date passes.`}
+      description={
+        suggestion?.status
+          ? `Records ${name} as ${statusWord}, effective now. It drops out of pickers once its deprecation date passes.`
+          : `Records the successor for ${name}. Its lifecycle stays ${statusWord}.`
+      }
       reasonPresets={ACCEPT_REASONS}
-      confirmLabel={blockers ? 'Accept anyway' : `Mark as ${lifecycleWord(status).toLowerCase()}`}
+      confirmLabel={blockers ? 'Accept anyway' : suggestion?.status ? `Mark as ${statusWord}` : 'Accept change'}
       onConfirm={accept}
       data-testid="discovery-accept-dialog"
     >
       <Stack gap={1.5}>
         <ChangePreview
-          before={lifecycleWord(index?.get(item.modelId)?.lifecycle.status ?? 'active')}
+          before={lifecycleWord(current?.status ?? 'active')}
           after={lifecycleWord(status)}
           data-testid="discovery-accept-preview"
         />
@@ -260,9 +270,9 @@ function AcceptSuggestionDialog({
             {dates}
           </Typography>
         )}
-        {item.suggestion?.detail && (
+        {suggestion?.detail && (
           <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }} data-testid="discovery-accept-detail">
-            {item.suggestion.detail}
+            {suggestion.detail}
           </Typography>
         )}
         {failure && (
@@ -304,12 +314,14 @@ function AcceptSuggestionDialog({
           <FormHelperText data-testid="discovery-accept-successor-name">
             {!successor
               ? 'No successor: users of this model are not moved.'
-              : successorRow
-                ? successorRow.name
-                : 'Not a model this console knows yet.'}
+              : !typed
+                ? `Left empty, ${modelName(index, successor)} stays the successor.`
+                : successorRow
+                  ? successorRow.name
+                  : 'Not a model this console knows yet.'}
           </FormHelperText>
         </FormControl>
-        {/* Priced against what is typed: the override is the decision that needs the number. */}
+        {/* Priced against the successor this accept would write: the override is the decision that needs the number. */}
         <SuccessorCostPanel modelId={item.modelId} successorId={successor} rates={rates} />
       </Stack>
     </ActionDialog>
@@ -379,7 +391,7 @@ export function LifecycleSuggestions() {
   const queue = lifecycle.data?.queue ?? [];
   const rates = lifecycle.data?.perMTokRates ?? {};
 
-  // Settled locally: a refetch would ask every provider again for the reference report the same GET carries.
+  // Settled locally rather than refetched: the same GET rebuilds the reference report, asking every provider again.
   const settle = (modelId: string, message: string) => {
     queryClient.setQueryData<LifecycleStatus>(LIFECYCLE_STATUS_QUERY_KEY, current =>
       current ? { ...current, queue: current.queue.filter(item => item.modelId !== modelId) } : current

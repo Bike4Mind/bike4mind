@@ -11,6 +11,7 @@ import {
   modelList,
   newQueryClient,
 } from './__tests__/discoveryTestKit';
+import type { AdminModelRow } from '@bike4mind/common';
 import type { LifecycleStatus } from './discoveryApi';
 
 const m = vi.hoisted(() => ({
@@ -33,6 +34,7 @@ import { LifecycleSuggestions } from './LifecycleSuggestions';
 const LIFECYCLE_PATH = '/api/admin/model-deprecation-status';
 let queryClient = newQueryClient();
 let lifecycle: LifecycleStatus = LIFECYCLE;
+let sunsetLifecycle: AdminModelRow['lifecycle'] = {};
 
 const lifecycleGets = () => m.get.mock.calls.filter(([url]) => url === LIFECYCLE_PATH).length;
 
@@ -56,12 +58,13 @@ beforeEach(() => {
   queryClient = newQueryClient();
   m.currentUser = FULL_ADMIN;
   lifecycle = LIFECYCLE;
+  sunsetLifecycle = {};
   m.get.mockImplementation(async (url: string) => {
     if (url === LIFECYCLE_PATH) return { data: lifecycle };
     if (url === '/api/admin/models') {
       return {
         data: modelList([
-          adminRow('gpt-sunset', { name: 'GPT Sunset' }),
+          adminRow('gpt-sunset', { name: 'GPT Sunset', lifecycle: sunsetLifecycle }),
           adminRow('gpt-live', { name: 'GPT Live' }),
           adminRow('gpt-newer', { name: 'GPT Newer' }),
         ]),
@@ -178,18 +181,65 @@ describe('LifecycleSuggestions accept', () => {
     expect(m.post.mock.calls[0][1]).toMatchObject({ replacedBy: 'gpt-newer', note: 'operator pick' });
   });
 
-  it('sends no successor when the field is cleared, and says users are not moved', async () => {
+  it('sends no successor when the field is cleared, and says the suggested one stays', async () => {
     renderQueue();
+    await screen.findByText('GPT Sunset');
     await openMenuItem('accept');
     typeSuccessor('');
 
     expect(screen.getByTestId('discovery-accept-successor-name')).toHaveTextContent(
-      'users of this model are not moved'
+      'Left empty, GPT Live stays the successor.'
     );
+    expect(screen.getByTestId('successor-cost-panel')).toHaveTextContent('costs more');
     writeReason('accept', 'operator pick');
     fireEvent.click(confirm('accept'));
     await waitFor(() => expect(m.post).toHaveBeenCalledTimes(1));
     expect(m.post.mock.calls[0][1]).not.toHaveProperty('replacedBy');
+  });
+
+  it('names the recorded successor when the suggestion carries none', async () => {
+    const { replacedBy: _dropped, ...withoutSuccessor } = LIFECYCLE.queue[0].suggestion!;
+    lifecycle = { ...LIFECYCLE, queue: [{ modelId: 'gpt-sunset', suggestion: withoutSuccessor }] };
+    sunsetLifecycle = { replacedBy: 'gpt-newer' };
+    renderQueue();
+    await screen.findByText('GPT Sunset');
+    await openMenuItem('accept');
+
+    expect(screen.getByTestId('discovery-accept-successor-name')).toHaveTextContent(
+      'Left empty, GPT Newer stays the successor.'
+    );
+  });
+
+  it('says users are not moved only when no successor is suggested or recorded', async () => {
+    const { replacedBy: _dropped, ...withoutSuccessor } = LIFECYCLE.queue[0].suggestion!;
+    lifecycle = { ...LIFECYCLE, queue: [{ modelId: 'gpt-sunset', suggestion: withoutSuccessor }] };
+    renderQueue();
+    await screen.findByText('GPT Sunset');
+    await openMenuItem('accept');
+
+    expect(screen.getByTestId('discovery-accept-successor-name')).toHaveTextContent(
+      'No successor: users of this model are not moved.'
+    );
+  });
+
+  it('keeps the recorded status for a successor-only suggestion, as the server does', async () => {
+    const { status: _dropped, ...remapOnly } = LIFECYCLE.queue[0].suggestion!;
+    lifecycle = { ...LIFECYCLE, queue: [{ modelId: 'gpt-sunset', suggestion: remapOnly }] };
+    sunsetLifecycle = { status: 'retired', retirementDate: '2026-09-01' };
+    renderQueue();
+    await screen.findByText('GPT Sunset');
+    await openMenuItem('accept');
+
+    const preview = screen.getByTestId('discovery-accept-preview');
+    expect(preview).not.toHaveTextContent('Deprecated');
+    expect(preview).toHaveTextContent('Retired');
+    expect(screen.getByTestId('discovery-accept-dialog')).toHaveTextContent('Its lifecycle stays retired.');
+    expect(screen.getByTestId('discovery-accept-dialog')).toHaveTextContent('retirement 2026-09-01');
+    expect(confirm('accept')).toHaveTextContent('Accept change');
+
+    writeReason('accept', 'operator pick');
+    fireEvent.click(confirm('accept'));
+    await waitFor(() => expect(m.toast.success).toHaveBeenCalledWith('Recorded GPT Sunset as retired.'));
   });
 
   it('reprices the accept panel against the typed successor, not the suggested one', async () => {

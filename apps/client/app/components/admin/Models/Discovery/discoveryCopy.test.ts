@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   countLabel,
+  flagCopy,
   formatRunTime,
   nextScheduledRun,
   runChangeSummary,
@@ -86,6 +87,20 @@ describe('runSentence', () => {
 
   it('says No changes for a quiet run', () => {
     expect(runSentence(runWith({ sources: [], changes: EMPTY_CHANGES }))).toBe('No changes.');
+  });
+});
+
+describe('flagCopy', () => {
+  it('states the band the run applied, read from the flag detail', () => {
+    const detail = 'models.dev moves input +240% against the row this run started from (band 50%): a -> b';
+    expect(flagCopy('band-exceeded', detail)).toBe('Proposed price is more than 50% away from the current one');
+  });
+
+  it('falls back to band-free wording when the detail names no band', () => {
+    expect(flagCopy('band-exceeded', 'no band here')).toBe(
+      'Proposed price is outside the allowed band around the current one'
+    );
+    expect(flagCopy('source-disagreement', '(band 50%)')).toBe('Sources disagree on this price');
   });
 });
 

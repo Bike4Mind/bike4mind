@@ -13,23 +13,27 @@ import {
   newQueryClient,
   runWith,
 } from './__tests__/discoveryTestKit';
+import { ADMIN_SETTINGS_SEARCH_PARAM, ADMIN_SETTINGS_TAB_SLUG } from '../../adminTabParams';
 import type { DiscoveryRun, RunPriceRow } from './discoveryApi';
 
 const m = vi.hoisted(() => ({
   get: vi.fn(),
   currentUser: { id: 'admin-1', isAdmin: true } as Record<string, unknown>,
   nav: { openModel: vi.fn(), openRun: vi.fn(), openSection: vi.fn(), openPrices: vi.fn() },
+  navigate: vi.fn(),
 }));
 
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: (...a: unknown[]) => m.get(...a) } }));
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: m.currentUser }) }));
 vi.mock('../modelsNavigation', () => ({ useModelsNavigation: () => m.nav }));
+vi.mock('@tanstack/react-router', () => ({ useNavigate: () => m.navigate }));
 
 import { DiscoveryRunPage } from './DiscoveryRunPage';
 
 let queryClient = newQueryClient();
 let run: DiscoveryRun | Error | ReturnType<typeof apiError> = RUN;
 let rows: AdminModelRow[] = [];
+let modelsError: ReturnType<typeof apiError> | null = null;
 
 const runGets = () => m.get.mock.calls.filter(([url, config]) => url === '/api/admin/model-discovery' && config).length;
 
@@ -56,8 +60,14 @@ const priceRow = (modelId: string, source: string, inputPerMTok = 3): RunPriceRo
   note: `discovery:${source}@2026-07-30`,
 });
 
-const needsReview = (id: string, code: AdminModelRow['reasons'][number]['code'], message: string) =>
-  adminRow(id, { name: `Model ${id}`, status: 'needs-review', reasons: [{ code, message }] });
+type Reason = AdminModelRow['reasons'][number];
+
+const needsReview = (id: string, code: Reason['code'], message: string, fixAction?: Reason['fixAction']) =>
+  adminRow(id, {
+    name: `Model ${id}`,
+    status: 'needs-review',
+    reasons: [{ code, message, ...(fixAction ? { fixAction } : {}) }],
+  });
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -65,12 +75,16 @@ beforeEach(() => {
   m.currentUser = FULL_ADMIN;
   run = RUN;
   rows = [adminRow('gpt-5.6-luna', { name: 'GPT 5.6 Luna' })];
+  modelsError = null;
   m.get.mockImplementation(async (url: string, config?: { params?: { runId?: string } }) => {
     if (url === '/api/admin/model-discovery' && config?.params?.runId) {
       if (run instanceof Error || 'response' in run) throw run;
       return { data: { run } };
     }
-    if (url === '/api/admin/models') return { data: modelList(rows) };
+    if (url === '/api/admin/models') {
+      if (modelsError) throw modelsError;
+      return { data: modelList(rows) };
+    }
     throw new Error(`unexpected GET ${url}`);
   });
 });
@@ -147,25 +161,87 @@ describe('DiscoveryRunPage decisions', () => {
   });
 
   it.each([
-    ['price-none', 'Add a price to list it', 'Add price', 'openPrices', 'gpt-new'],
-    [
-      'lifecycle-suggestion',
-      'A provider marked this model deprecated',
-      'Review suggestion',
-      'openSection',
-      'discovery',
-    ],
-    ['manual-approval-required', 'Waiting for approval', 'Open model', 'openModel', 'gpt-new'],
-  ] as const)('acts on a needs-review %s reason with %s', async (code, message, label, navCall, navArg) => {
+    ['price-none', 'add-price', 'Add price', 'openPrices', 'gpt-new'],
+    ['lifecycle-suggestion', 'review-lifecycle', 'Review suggestion', 'openSection', 'discovery'],
+    ['awaiting-discovery-run', 'run-discovery', 'Run discovery', 'openSection', 'discovery'],
+  ] as const)('renders the server fix action for a %s reason (%s)', async (code, fixAction, label, navCall, navArg) => {
     run = runWith({ priceFlags: [], changes: { ...EMPTY_CHANGES, added: ['gpt-new'] } });
-    rows = [needsReview('gpt-new', code, message)];
+    rows = [needsReview('gpt-new', code, 'The reason the server wrote', fixAction)];
     await renderLoaded();
 
-    expect(screen.getByTestId('discovery-decision-reasons-gpt-new')).toHaveTextContent(message);
+    expect(screen.getByTestId('discovery-decision-reasons-gpt-new')).toHaveTextContent('The reason the server wrote');
     const action = screen.getByTestId('discovery-decision-action-gpt-new');
     expect(action).toHaveTextContent(label);
+    expect(action).toHaveAttribute('data-action', fixAction);
     fireEvent.click(action);
     expect(m.nav[navCall]).toHaveBeenCalledWith(navArg);
+  });
+
+  it('opens key settings for the model provider', async () => {
+    run = runWith({ priceFlags: [], changes: { ...EMPTY_CHANGES, added: ['gpt-new'] } });
+    rows = [needsReview('gpt-new', 'manual-approval-required', 'Needs a key', 'open-key-settings')];
+    await renderLoaded();
+    fireEvent.click(screen.getByTestId('discovery-decision-action-gpt-new'));
+
+    expect(m.navigate).toHaveBeenCalledWith({
+      to: '/admin',
+      search: { tab: ADMIN_SETTINGS_TAB_SLUG, [ADMIN_SETTINGS_SEARCH_PARAM]: 'openai' },
+    });
+  });
+
+  it('turns a model on through the access dialog', async () => {
+    run = runWith({ priceFlags: [], changes: { ...EMPTY_CHANGES, added: ['gpt-new'] } });
+    rows = [needsReview('gpt-new', 'manual-approval-required', 'Waiting for approval', 'turn-on')];
+    await renderLoaded();
+    fireEvent.click(screen.getByTestId('discovery-decision-action-gpt-new'));
+
+    const dialog = await screen.findByTestId('model-access-dialog');
+    expect(dialog).toHaveTextContent('Turn on Model gpt-new');
+  });
+
+  it('shows no button when the server gives the reason no fix action', async () => {
+    run = runWith({ priceFlags: [], changes: { ...EMPTY_CHANGES, added: ['gpt-new'] } });
+    rows = [needsReview('gpt-new', 'manual-approval-required', 'Waiting for approval')];
+    await renderLoaded();
+
+    expect(screen.getByTestId('discovery-decision-reasons-gpt-new')).toHaveTextContent('Waiting for approval');
+    expect(screen.queryByTestId('discovery-decision-action-gpt-new')).not.toBeInTheDocument();
+  });
+
+  it('keeps flag cards and claims nothing about catalog rows when model status fails to load', async () => {
+    run = runWith({
+      mode: 'report',
+      changes: { ...EMPTY_CHANGES, added: ['gpt-planned'], flagged: ['gpt-5.6-luna'] },
+      catalogDiff: [
+        {
+          modelId: 'gpt-planned',
+          kind: 'added',
+          ownedGroups: [],
+          changedKeys: [],
+          lifecycleStatus: 'active',
+          promoted: false,
+          blockedBy: ['no-trusted-price'],
+          operatorOwned: false,
+        },
+      ],
+    });
+    modelsError = apiError(500, { error: 'list down' });
+    renderPage();
+    await screen.findByText(/Could not load each model/);
+
+    fireEvent.click(screen.getByTestId('discovery-decision-action-gpt-5.6-luna'));
+    expect(m.nav.openPrices).toHaveBeenCalledWith('gpt-5.6-luna');
+    expect(screen.getByTestId('discovery-decision-flag-gpt-5.6-luna')).toHaveTextContent('Sources disagree');
+    expect(screen.getByTestId('discovery-decision-reasons-gpt-planned')).toHaveTextContent('No price yet.');
+    expect(screen.queryByTestId('discovery-decision-not-saved-gpt-planned')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('discovery-decision-not-saved-gpt-5.6-luna')).not.toBeInTheDocument();
+  });
+
+  it('keeps a write-mode flag card with Open prices when model status fails to load', async () => {
+    modelsError = apiError(500, { error: 'list down' });
+    renderPage();
+
+    expect(await screen.findByTestId('discovery-decision-action-gpt-5.6-luna')).toHaveTextContent('Open prices');
   });
 
   it('skips a touched model that no longer needs a decision', async () => {
@@ -276,7 +352,11 @@ describe('DiscoveryRunPage what changed', () => {
     run = runWith({
       priceFlags: [],
       changes: { ...EMPTY_CHANGES, plannedPriceRows: 5, appendedPriceRows: 5 },
-      priceRows: [priceRow('gpt-cheap', 'openrouter'), priceRow('kimi-k3', 'adapter-literal')],
+      priceRows: [
+        priceRow('gpt-cheap', 'openrouter'),
+        priceRow('kimi-k3', 'adapter-literal'),
+        { ...priceRow('glm-5', 'adapter-literal'), sources: ['adapter-literal', 'models.dev'] },
+      ],
       detailTotals: { priceRows: 5 },
     });
     await renderLoaded();
@@ -286,9 +366,10 @@ describe('DiscoveryRunPage what changed', () => {
 
     openDetails();
     expect(screen.getByTestId('discovery-run-price-rows-table-card')).toHaveTextContent(
-      'Price rows (2 shown, 5 in the run)'
+      'Price rows (3 shown, 5 in the run)'
     );
     expect(screen.getByTestId('discovery-run-price-row-kimi-k3-1')).toHaveTextContent('Build table');
+    expect(screen.getByTestId('discovery-run-price-row-glm-5-2')).toHaveTextContent('Build table, models.dev');
     expect(screen.getByTestId('discovery-run-price-row-gpt-cheap-0')).toHaveTextContent('openrouter');
   });
 

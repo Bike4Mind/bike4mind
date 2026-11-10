@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Box, Button, Stack, Typography } from '@mui/joy';
 import {
+  AdminPermissionAction,
   DataTable,
   ErrorState,
   LoadingState,
@@ -9,7 +10,6 @@ import {
   useMissingAdminPermission,
   type DataColumn,
 } from '../../shared';
-import { ModelWriteAction } from '../ModelWriteAction';
 import { apiErrorMessage, useLifecycleStatus, type StaleReference } from './discoveryApi';
 import { problemCopy } from './discoveryCopy';
 import { modelName, useModelIndex } from './useModelIndex';
@@ -18,8 +18,9 @@ const referenceId = (reference: StaleReference) => `${reference.surface}|${refer
 
 /**
  * References to unavailable models (docs/admin-models-spec.md section 5.3): model ids that fallback chains and
- * defaults point at. Its own panel, not on model pages, because an unknown id has no model to sit on. Shown only
- * after "Check references", since building the report asks every provider on platform credentials.
+ * defaults point at. Its own panel, not on model pages, because an unknown id has no model to sit on. The report
+ * comes with the lifecycle status GET that also loads the suggestion queue; "Check references" rebuilds it and
+ * shows it.
  */
 export function StaleReferencesPanel() {
   const [requested, setRequested] = useState(false);
@@ -65,8 +66,8 @@ export function StaleReferencesPanel() {
   const references = report.data?.staleReferences;
   const body = !requested ? (
     <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }} data-testid="discovery-references-idle">
-      Finds fallback chains and defaults that point at a deprecated, retired or unknown model. It asks every provider on
-      platform credentials, so it runs only when you ask.
+      Finds fallback chains and defaults that point at a deprecated, retired or unknown model. Check references asks
+      every provider again and shows the result.
     </Typography>
   ) : report.isFetching ? (
     <LoadingState label="Checking references" testId="discovery-references-loading" />
@@ -103,7 +104,7 @@ export function StaleReferencesPanel() {
       body="custom"
       data-testid="discovery-references"
       action={
-        <ModelWriteAction>
+        <AdminPermissionAction requirement="settings:manage">
           {disabled => (
             <Button
               size="sm"
@@ -116,7 +117,7 @@ export function StaleReferencesPanel() {
               Check references
             </Button>
           )}
-        </ModelWriteAction>
+        </AdminPermissionAction>
       }
     >
       <Box sx={{ px: 2, py: 1.75 }}>{body}</Box>
