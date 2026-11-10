@@ -1,5 +1,6 @@
 import { Stack } from '@mui/joy';
 import { useNavigate, useSearch } from '@tanstack/react-router';
+import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import type { AdminSearch } from '../adminTabParams';
 import { AdminPageHeader, ViewTabs } from '../shared';
 import { ADMIN_REGION_GAP } from '../shared/adminStyles';
@@ -53,7 +54,12 @@ export function ModelsShell() {
       <AdminPageHeader
         title="Models"
         description="Models users can pick, why the others are hidden, and what each one costs."
-        actions={<RunDiscoveryButton data-testid="models-run-discovery-btn" />}
+        actions={
+          <Stack direction="row" gap={1} alignItems="center">
+            <ContextHelpButton helpId="admin/llm-dashboard" tooltipText="Models help" />
+            <RunDiscoveryButton data-testid="models-run-discovery-btn" />
+          </Stack>
+        }
       />
       <ViewTabs
         views={VIEWS}

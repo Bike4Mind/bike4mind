@@ -104,6 +104,13 @@ export const ADMIN_REASON_PRESETS = {
   ],
   identityProviderDelete: ['Replaced by another provider', 'Domain no longer uses single sign-on', 'Created in error'],
   knowledgeFileRemoval: ['File no longer needed', 'Outdated instructions', 'Missing file reference'],
+  modelAccess: [
+    'Ready for users',
+    'Limit to a test group',
+    'Provider issue',
+    'Cost control',
+    'Replaced by a newer model',
+  ],
 } as const satisfies Record<string, readonly string[]>;
 
 export type AdminReasonPresetKey = keyof typeof ADMIN_REASON_PRESETS;
