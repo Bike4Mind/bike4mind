@@ -65,7 +65,7 @@ const READY = {
   account: 'victor@example.com',
 };
 
-const DONE = { total: 150, balance: 900, firstSolveCredits: 50, capped: 0, claimed: [] };
+const DONE = { total: 150, balance: 11218671, firstSolveCredits: 1000, capped: 0, claimed: [] };
 const UNAVAILABLE_COPY = 'Something went wrong on our side. Your credits are safe; try again.';
 const CAPPED_COPY =
   'Bike4Mind\u2019s daily limit is reached for that day, so those credits can\u2019t be paid. They stay waiting in Headword.';
@@ -166,9 +166,9 @@ describe('BedrockNewsClaimPage', () => {
     const status = (await screen.findByText('150 credits added')).closest('[role="status"]') as HTMLElement;
     expect(within(status).getByText('to victor@example.com')).toBeInTheDocument();
     expect(screen.getByText('New balance')).toBeInTheDocument();
-    expect(screen.getByText('900')).toBeInTheDocument();
+    expect(screen.getByText('11,218,671')).toBeInTheDocument();
     expect(screen.getByText('First-solve bonus')).toBeInTheDocument();
-    expect(screen.getByText('+50')).toBeInTheDocument();
+    expect(screen.getByText('+1,000')).toBeInTheDocument();
     expect(screen.queryByText(/daily limit/)).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Back to Headword' })).toHaveAttribute(
       'href',

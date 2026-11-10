@@ -24,6 +24,7 @@ import MailOutlineRounded from '@mui/icons-material/MailOutlineRounded';
 import WarningAmberRounded from '@mui/icons-material/WarningAmberRounded';
 import { api } from '@client/app/contexts/ApiContext';
 import { syncCreditBalance } from '@client/app/components/CreditBalanceSyncListener';
+import { formatCreditAmount } from '@client/app/utils/formatCredits';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { useUserLogout } from '@client/app/hooks/data/user';
@@ -249,7 +250,7 @@ const MessageView = ({ state, action, backHref }: { state: MessageState; action?
         sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1, textAlign: 'center', pt: 1.5 }}
       >
         <ToneCircle tone={tone}>{icon}</ToneCircle>
-        <Typography component="h1" sx={{ mt: 0.5, fontSize: '20px', fontWeight: 700 }}>
+        <Typography textColor="text.primary" component="h1" sx={{ mt: 0.5, fontSize: '20px', fontWeight: 700 }}>
           {title}
         </Typography>
         <Typography textColor="text.secondary" sx={{ fontSize: '15px', maxWidth: 340 }}>
@@ -274,8 +275,8 @@ const DoneView = ({ result, account, backHref }: { result: ClaimResult; account?
         <ToneCircle tone="success">
           <CheckRounded />
         </ToneCircle>
-        <Typography component="h1" sx={{ mt: 0.5, fontSize: '22px', fontWeight: 700 }}>
-          {total} credits added
+        <Typography textColor="text.primary" component="h1" sx={{ mt: 0.5, fontSize: '22px', fontWeight: 700 }}>
+          {formatCreditAmount(total)} credits added
         </Typography>
         {account && (
           <Typography textColor="text.secondary" sx={{ fontSize: '14px' }}>
@@ -293,8 +294,8 @@ const DoneView = ({ result, account, backHref }: { result: ClaimResult; account?
               <Typography component="dt" textColor="text.tertiary" sx={{ fontSize: '13px' }}>
                 New balance
               </Typography>
-              <Typography component="dd" sx={{ m: 0, fontSize: '22px', fontWeight: 700 }}>
-                {balance}
+              <Typography textColor="text.primary" component="dd" sx={{ m: 0, fontSize: '22px', fontWeight: 700 }}>
+                {formatCreditAmount(balance)}
               </Typography>
             </Sheet>
           )}
@@ -304,7 +305,7 @@ const DoneView = ({ result, account, backHref }: { result: ClaimResult; account?
                 First-solve bonus
               </Typography>
               <Typography component="dd" textColor="inherit" sx={{ m: 0, fontSize: '22px', fontWeight: 700 }}>
-                +{firstSolveCredits}
+                +{formatCreditAmount(firstSolveCredits)}
               </Typography>
             </Sheet>
           )}
@@ -349,7 +350,11 @@ const ReadyView = ({
         >
           From BedrockNews Headword
         </Chip>
-        <Typography component="h1" sx={{ fontSize: '22px', fontWeight: 700, lineHeight: 1.25 }}>
+        <Typography
+          textColor="text.primary"
+          component="h1"
+          sx={{ fontSize: '22px', fontWeight: 700, lineHeight: 1.25 }}
+        >
           Claim your Headword credits
         </Typography>
       </Box>
@@ -362,7 +367,7 @@ const ReadyView = ({
       >
         <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1 }}>
           <Typography textColor="inherit" sx={{ fontSize: '36px', fontWeight: 800, lineHeight: 1.1 }}>
-            {credits}
+            {formatCreditAmount(credits)}
           </Typography>
           <Typography textColor="inherit" sx={{ fontSize: '16px', fontWeight: 600 }}>
             credits
@@ -376,7 +381,8 @@ const ReadyView = ({
       {limitReached && <LimitNote>{CAPPED_NOTE} Another Bike4Mind account can still claim them.</LimitNote>}
       {!limitReached && payable != null && payable < credits && (
         <LimitNote>
-          Your daily limit allows <strong>up to {payable}</strong> today. The rest stays waiting in Headword.
+          Your daily limit allows <strong>up to {formatCreditAmount(payable)}</strong> today. The rest stays waiting in
+          Headword.
         </LimitNote>
       )}
 
@@ -389,7 +395,12 @@ const ReadyView = ({
             {account.charAt(0).toUpperCase()}
           </Avatar>
           <Box sx={{ minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-            <Typography noWrap data-testid="claim-account" sx={{ fontSize: '15px', fontWeight: 600 }}>
+            <Typography
+              textColor="text.primary"
+              noWrap
+              data-testid="claim-account"
+              sx={{ fontSize: '15px', fontWeight: 600 }}
+            >
               {account}
             </Typography>
             <Typography textColor="text.tertiary" sx={{ fontSize: '13px' }}>
@@ -441,7 +452,7 @@ const ReadyView = ({
             onClick={onConfirm}
             sx={ACTION_SX}
           >
-            {confirming ? 'Adding credits\u2026' : `Add ${credits} credits`}
+            {confirming ? 'Adding credits\u2026' : `Add ${formatCreditAmount(credits)} credits`}
           </Button>
         )}
         <Button
