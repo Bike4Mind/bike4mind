@@ -10,8 +10,9 @@ const websocketApi = new sst.aws.ApiGatewayWebSocket('websocket', {});
 // needs that much.
 //
 // Tiers (cold-start stack drives the floor):
-//   LIFECYCLE  1024 MB -- $connect/$disconnect/$default: full Mongoose + AWS SDK init.
-//                         256 MB hit OOM + 10s init timeouts on preview envs.
+//   LIFECYCLE  1024 MB -- $connect/$disconnect/$default and voice_session_*: full
+//                         Mongoose + AWS SDK init. 256 MB hit OOM + 10s init timeouts
+//                         on preview envs.
 //   HEAVY      2048 MB -- cli_completion_request: streams Bedrock responses.
 //   MEDIUM      512 MB -- heartbeat, cli_tool_request: lighter handlers but
 //                         still init the DB + SDK stack.
