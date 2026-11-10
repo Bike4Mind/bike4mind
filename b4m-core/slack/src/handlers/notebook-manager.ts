@@ -1,6 +1,14 @@
 import mongoose from 'mongoose';
 import { Logger } from '@bike4mind/observability';
-import { ISessionDocument, IKeywordRoutingRule, IUser, canUpdateShareable } from '@bike4mind/common';
+import {
+  ISessionDocument,
+  IKeywordRoutingRule,
+  IProjectRepository,
+  ISessionRepository,
+  IUser,
+  IUserDocument,
+  canUpdateShareable,
+} from '@bike4mind/common';
 import { projectService } from '@bike4mind/services';
 import { getSlackDeps, getSlackDb } from '../di/registry';
 
@@ -9,6 +17,16 @@ import { getSlackDeps, getSlackDb } from '../di/registry';
  */
 function escapeRegExp(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+const errorMessage = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+function isDuplicateKeyError(e: unknown): boolean {
+  const { code, message } = (e ?? {}) as { code?: unknown; message?: unknown };
+  return (
+    code === 11000 || // MongoDB duplicate key error
+    (typeof message === 'string' && (message.includes('duplicate') || message.includes('E11000')))
+  );
 }
 
 /**
@@ -41,9 +59,8 @@ function findMatchingKeywordRule(text: string, rules: IKeywordRoutingRule[]): st
  * another user's notebook. Returns null for a missing, malformed or denied id so the caller falls
  * through; lookup errors propagate rather than silently creating a new notebook.
  */
-// any: getSlackDb() exposes the Session model untyped, as elsewhere in this file
 export async function resolveAccessibleNotebookId(
-  Session: any,
+  Session: mongoose.Model<ISessionDocument>,
   notebookId: unknown,
   user: { id: string; groups?: string[] | null }
 ): Promise<string | null> {
@@ -52,7 +69,9 @@ export async function resolveAccessibleNotebookId(
   if (!mongoose.Types.ObjectId.isValid(id)) return null;
 
   const notebook = await Session.findOne({ _id: id, deletedAt: null });
-  if (canUpdateShareable(notebook, user.id, user.groups ?? []) || notebook?.isGlobalWrite) return notebook.id;
+  if (notebook && (canUpdateShareable(notebook, user.id, user.groups ?? []) || notebook.isGlobalWrite)) {
+    return notebook.id;
+  }
 
   Logger.warn('[Slack Notebook Lookup] Ignoring saved notebook id the user cannot write to', {
     notebookId: id,
@@ -65,8 +84,9 @@ export async function resolveAccessibleNotebookId(
  * Helper function to update user's slack settings
  */
 export async function updateUserSlackSettings(userId: string, slackSettings: NonNullable<IUser['slackSettings']>) {
-  const { User } = getSlackDb();
-  await (User as any).findByIdAndUpdate(userId, { $set: { slackSettings } }, { new: true, upsert: false });
+  // DI exposes models as unknown; the bound implementations are the database Mongoose models.
+  const User = getSlackDb().User as mongoose.Model<IUserDocument>;
+  await User.findByIdAndUpdate(userId, { $set: { slackSettings } }, { new: true, upsert: false });
 }
 
 /**
@@ -95,10 +115,13 @@ export async function getOrCreateNotebookForSlackUser(
   agentName?: string | null,
   workspaceId?: string // Slack workspace ID for async notification
 ): Promise<string> {
-  const { User, Session, sessionRepository, projectRepository, fabFileRepository, defineAbilitiesFor } = getSlackDb();
+  const db = getSlackDb();
+  const { sessionRepository, projectRepository, fabFileRepository, defineAbilitiesFor } = db;
+  const User = db.User as mongoose.Model<IUserDocument>;
+  const Session = db.Session as mongoose.Model<ISessionDocument>;
   const { sessionManager } = getSlackDeps();
 
-  const user = await (User as any).findById(userId);
+  const user = await User.findById(userId);
   if (!user) throw new Error('User not found');
 
   const slackSettings = user.slackSettings || {};
@@ -140,7 +163,7 @@ export async function getOrCreateNotebookForSlackUser(
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
         // Check for existing notebook
-        const existingNotebook = await (Session as any).findOne(threadQuery).sort({ lastUpdated: -1 });
+        const existingNotebook = await Session.findOne(threadQuery).sort({ lastUpdated: -1 });
 
         if (existingNotebook) {
           return existingNotebook.id;
@@ -154,7 +177,7 @@ export async function getOrCreateNotebookForSlackUser(
         const ability = defineAbilitiesFor(user);
 
         try {
-          const newSession = await (sessionManager as any).createSession(
+          const newSession = await sessionManager.createSession(
             userId,
             {
               name: notebookName,
@@ -183,19 +206,19 @@ export async function getOrCreateNotebookForSlackUser(
                 },
                 {
                   db: {
-                    sessions: sessionRepository as any,
-                    projects: projectRepository as any,
-                    fabFiles: fabFileRepository as any,
+                    sessions: sessionRepository as ISessionRepository,
+                    projects: projectRepository as IProjectRepository,
+                    fabFiles: fabFileRepository,
                   },
                 }
               );
-            } catch (error: any) {
+            } catch (error) {
               // Don't fail notebook creation if project assignment fails
               // The project might have been deleted or user might not have access
               Logger.error('⚠️ [Slack Notebook Lookup] Failed to assign notebook to project, continuing anyway', {
                 notebookId: newSession.id,
                 projectId: slackSettings.defaultProjectId,
-                error: error.message,
+                error: errorMessage(error),
               });
             }
           }
@@ -210,18 +233,15 @@ export async function getOrCreateNotebookForSlackUser(
           }
 
           return newSession.id;
-        } catch (createError: any) {
+        } catch (createError) {
           // Check if this is a duplicate key error (race condition)
-          const isDuplicateError =
-            createError.code === 11000 || // MongoDB duplicate key error
-            createError.message?.includes('duplicate') ||
-            createError.message?.includes('E11000');
+          const isDuplicateError = isDuplicateKeyError(createError);
 
           if (isDuplicateError && attempt < MAX_RETRIES) {
             Logger.warn('⚠️ [Slack Notebook Lookup] Race condition detected - another request created notebook', {
               attempt,
               willRetry: true,
-              error: createError.message,
+              error: errorMessage(createError),
             });
             // Retry the find operation - the other request's notebook should now exist
             continue;
@@ -230,10 +250,9 @@ export async function getOrCreateNotebookForSlackUser(
           // Not a duplicate error, or we've exhausted retries
           throw createError;
         }
-      } catch (error: any) {
+      } catch (error) {
         // Only retry if it's a duplicate error and we haven't exceeded retries
-        const isDuplicateError =
-          error.code === 11000 || error.message?.includes('duplicate') || error.message?.includes('E11000');
+        const isDuplicateError = isDuplicateKeyError(error);
 
         if (!isDuplicateError || attempt === MAX_RETRIES) {
           Logger.error('❌ [Slack Notebook Lookup] Failed to find or create notebook', {
@@ -245,7 +264,7 @@ export async function getOrCreateNotebookForSlackUser(
         }
 
         Logger.warn('⚠️ [Slack Notebook Lookup] Duplicate error in outer catch, retrying', {
-          error: error.message,
+          error: errorMessage(error),
           attempt,
         });
         // Continue to next retry for duplicate errors
@@ -268,7 +287,7 @@ export async function getOrCreateNotebookForSlackUser(
         threadQuery['slackMetadata.threadTs'] = { $exists: false };
       }
 
-      const existingNotebook = await (Session as any).findOne(threadQuery).sort({ lastUpdated: -1 });
+      const existingNotebook = await Session.findOne(threadQuery).sort({ lastUpdated: -1 });
 
       if (existingNotebook) {
         return existingNotebook.id;
@@ -293,7 +312,7 @@ export async function getOrCreateNotebookForSlackUser(
     : `${slackSettings.notebookNamePrefix || 'Slack Chat'} - ${new Date().toLocaleDateString()}`;
 
   const ability = defineAbilitiesFor(user);
-  const defaultSession = await (sessionManager as any).createSession(
+  const defaultSession = await sessionManager.createSession(
     userId,
     {
       ...sessionManager.getDefaultSession(userId),
@@ -323,17 +342,17 @@ export async function getOrCreateNotebookForSlackUser(
         },
         {
           db: {
-            sessions: sessionRepository as any,
-            projects: projectRepository as any,
-            fabFiles: fabFileRepository as any,
+            sessions: sessionRepository as ISessionRepository,
+            projects: projectRepository as IProjectRepository,
+            fabFiles: fabFileRepository,
           },
         }
       );
-    } catch (error: any) {
+    } catch (error) {
       Logger.warn('⚠️ [Slack Notebook Lookup] Failed to assign default notebook to project', {
         notebookId: defaultSession.id,
         projectId: slackSettings.defaultProjectId,
-        error: error.message,
+        error: errorMessage(error),
       });
     }
   }
