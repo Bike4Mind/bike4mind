@@ -13,7 +13,8 @@ const RESTORE = {
   signupGrantHeldReason: 'budget_exhausted',
   signupGrantHeldAt: new Date('2026-11-01T00:00:00Z'),
   pendingCreditGrant: null,
-  riskReviewState: null,
+  riskScore: null,
+  signupGrantAssessment: null,
 };
 
 const releasedUser = (creditsReleased: number) => ({
@@ -50,7 +51,7 @@ const buildRevokeAdapters = (balance: number, entry: Record<string, unknown> = {
         return true;
       }),
       findById: vi.fn().mockResolvedValue(releasedUser(40)),
-      update: vi.fn().mockResolvedValue({}),
+      restoreReleasedGrantState: vi.fn().mockResolvedValue(true),
       addTagsToUser: vi.fn().mockResolvedValue(undefined),
     },
     creditTransactions: {
@@ -134,7 +135,7 @@ describe('revokeHeldGrantRelease', () => {
 
     expect(adapters.users.findById).not.toHaveBeenCalled();
     expect(adapters.creditTransactions.rekeyTransaction).not.toHaveBeenCalled();
-    expect(adapters.users.update).not.toHaveBeenCalled();
+    expect(adapters.users.restoreReleasedGrantState).not.toHaveBeenCalled();
     expect(adapters.users.addTagsToUser).not.toHaveBeenCalled();
   });
 
@@ -150,21 +151,57 @@ describe('revokeHeldGrantRelease', () => {
         'verify-grant:user-1',
         `reversed-signup-grant:user-1:${BATCH_ID}`
       );
-      expect(adapters.users.update).toHaveBeenCalledWith({
-        id: 'user-1',
-        signupGrant: RESTORE.signupGrant,
-        signupGrantHeldReason: 'budget_exhausted',
-        signupGrantHeldAt: RESTORE.signupGrantHeldAt,
-        pendingCreditGrant: null,
+      expect(adapters.users.restoreReleasedGrantState).toHaveBeenCalledWith('user-1', {
+        creditsReleased: 40,
+        set: {
+          signupGrant: RESTORE.signupGrant,
+          signupGrantHeldReason: 'budget_exhausted',
+          signupGrantHeldAt: RESTORE.signupGrantHeldAt,
+          pendingCreditGrant: null,
+        },
+        unset: ['riskScore', 'signupGrantAssessment'],
       });
       expect(adapters.users.addTagsToUser).toHaveBeenCalledWith('user-1', [PENDING_FREE_CREDITS_TAG]);
-      expect(adapters.users.update.mock.invocationCallOrder[0]).toBeLessThan(
+      expect(adapters.users.restoreReleasedGrantState.mock.invocationCallOrder[0]).toBeLessThan(
         adapters.users.addTagsToUser.mock.invocationCallOrder[0]
       );
     });
 
-    it('restores the review state the release moved', async () => {
-      const { adapters } = buildRevokeAdapters(100, { restore: { ...RESTORE, riskReviewState: 'pending' } });
+    it('removes the assessment and risk score the release created', async () => {
+      const { adapters } = buildRevokeAdapters(100, { restore: RESTORE });
+      adapters.users.findById.mockResolvedValue({
+        ...releasedUser(40),
+        signupGrantAssessment: { band: 'review', status: 'evaluated' },
+        riskScore: { score: 3, signals: [], reviewState: 'pending' },
+      });
+
+      await revoke(adapters);
+
+      expect(adapters.users.restoreReleasedGrantState).toHaveBeenCalledWith(
+        'user-1',
+        expect.objectContaining({ unset: ['riskScore', 'signupGrantAssessment'] })
+      );
+    });
+
+    it('restores the prior risk score and assessment whole', async () => {
+      const riskScore = { score: 1, signals: [], reviewState: 'none', computedAt: new Date('2026-10-01T00:00:00Z') };
+      const signupGrantAssessment = { band: 'allow', status: 'evaluated' };
+      const { adapters } = buildRevokeAdapters(100, { restore: { ...RESTORE, riskScore, signupGrantAssessment } });
+
+      await revoke(adapters);
+
+      expect(adapters.users.restoreReleasedGrantState).toHaveBeenCalledWith(
+        'user-1',
+        expect.objectContaining({
+          set: expect.objectContaining({ riskScore, signupGrantAssessment }),
+          unset: [],
+        })
+      );
+    });
+
+    it('reverts only the review state for a batch saved with the old snapshot', async () => {
+      const { riskScore: _r, signupGrantAssessment: _a, ...base } = RESTORE;
+      const { adapters } = buildRevokeAdapters(100, { restore: { ...base, riskReviewState: 'pending' } });
       adapters.users.findById.mockResolvedValue({
         ...releasedUser(40),
         riskScore: { score: 3, signals: [], reviewState: 'none' },
@@ -172,8 +209,28 @@ describe('revokeHeldGrantRelease', () => {
 
       await revoke(adapters);
 
-      expect(adapters.users.update).toHaveBeenCalledWith(
-        expect.objectContaining({ riskScore: { score: 3, signals: [], reviewState: 'pending' } })
+      expect(adapters.users.restoreReleasedGrantState).toHaveBeenCalledWith(
+        'user-1',
+        expect.objectContaining({
+          set: expect.objectContaining({ riskScore: { score: 3, signals: [], reviewState: 'pending' } }),
+          unset: [],
+        })
+      );
+    });
+
+    it('leaves the entry claimed when the account changed after the credits were taken back', async () => {
+      const { state, adapters } = buildRevokeAdapters(100, { restore: RESTORE });
+      adapters.users.restoreReleasedGrantState.mockResolvedValueOnce(false);
+
+      const result = await revoke(adapters);
+
+      expect(result?.results).toEqual([{ userId: 'user-1', outcome: 'failed', credits: 40 }]);
+      expect(state).toEqual({ balance: 60, claimed: true });
+      expect(adapters.batches.unclaimReversal).not.toHaveBeenCalled();
+      expect(adapters.users.addTagsToUser).not.toHaveBeenCalled();
+      expect(adapters.logger.error).toHaveBeenCalledWith(
+        expect.stringContaining('did not restore the held grant'),
+        expect.any(Error)
       );
     });
 
@@ -186,7 +243,7 @@ describe('revokeHeldGrantRelease', () => {
       expect(result?.results).toEqual([{ userId: 'user-1', outcome: 'state_changed', credits: 40 }]);
       expect(state).toEqual({ balance: 100, claimed: false });
       expect(adapters.users.decrementCreditsIfCovered).not.toHaveBeenCalled();
-      expect(adapters.users.update).not.toHaveBeenCalled();
+      expect(adapters.users.restoreReleasedGrantState).not.toHaveBeenCalled();
     });
 
     it('takes nothing when the account no longer exists', async () => {
@@ -201,7 +258,7 @@ describe('revokeHeldGrantRelease', () => {
 
     it('leaves the entry claimed when the restore fails after the credits were taken back', async () => {
       const { state, adapters } = buildRevokeAdapters(100, { restore: RESTORE });
-      adapters.users.update.mockRejectedValueOnce(new Error('users down'));
+      adapters.users.restoreReleasedGrantState.mockRejectedValueOnce(new Error('users down'));
 
       const result = await revoke(adapters);
 
@@ -228,7 +285,7 @@ describe('revokeHeldGrantRelease', () => {
 
       expect(state).toEqual({ balance: 100, claimed: false });
       expect(adapters.creditTransactions.rekeyTransaction).not.toHaveBeenCalled();
-      expect(adapters.users.update).not.toHaveBeenCalled();
+      expect(adapters.users.restoreReleasedGrantState).not.toHaveBeenCalled();
     });
   });
 });
@@ -330,7 +387,8 @@ describe('held grant release', () => {
             signupGrantHeldReason: 'budget_exhausted',
             signupGrantHeldAt: heldAt,
             pendingCreditGrant: 25,
-            riskReviewState: 'pending',
+            riskScore: { score: 1, signals: [], reviewState: 'pending' },
+            signupGrantAssessment: null,
           },
         }),
       ],

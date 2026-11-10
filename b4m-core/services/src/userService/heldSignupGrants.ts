@@ -3,8 +3,10 @@ import {
   PENDING_FREE_CREDITS_TAG,
   type ICreditTransactionRepository,
   type IUserDocument,
+  type ISignupRiskScore,
   type IUserRepository,
   type SignupGrant,
+  type SignupGrantAssessment,
   type SignupRiskReviewState,
 } from '@bike4mind/common';
 import type { FreeCreditAdapters } from './freeCredits';
@@ -19,6 +21,12 @@ export type HeldReleaseRestore = {
   signupGrantHeldReason: 'budget_exhausted' | 'risk_review' | null;
   signupGrantHeldAt: Date | null;
   pendingCreditGrant: number | null;
+  riskScore: ISignupRiskScore | null;
+  signupGrantAssessment: SignupGrantAssessment | null;
+};
+
+/** Batches saved before the assessment was snapshotted kept only the review state. */
+type LegacyHeldReleaseRestore = Omit<HeldReleaseRestore, 'riskScore' | 'signupGrantAssessment'> & {
   riskReviewState: SignupRiskReviewState | null;
 };
 
@@ -28,7 +36,7 @@ export type HeldReleaseEntry = {
   credits: number;
   reversed?: boolean;
   /** Absent on batches released before revoke restored the hold; those revokes only take the credits back. */
-  restore?: HeldReleaseRestore;
+  restore?: HeldReleaseRestore | LegacyHeldReleaseRestore;
 };
 
 export type HeldReleaseBatchRepository = {
@@ -65,7 +73,8 @@ async function releaseHeldGrant(
       signupGrantHeldReason: user.signupGrantHeldReason ?? null,
       signupGrantHeldAt: user.signupGrantHeldAt ?? null,
       pendingCreditGrant: user.pendingCreditGrant ?? null,
-      riskReviewState: user.riskScore?.reviewState ?? null,
+      riskScore: user.riskScore ?? null,
+      signupGrantAssessment: user.signupGrantAssessment ?? null,
     };
     const result = await releasePendingFreeCredits(
       { id: userId, tags: [...user.tags], pendingCreditGrant: user.pendingCreditGrant ?? null },
@@ -114,12 +123,19 @@ export type RevokeOutcome = 'reversed' | 'already_reversed' | 'insufficient_bala
 const reversedGrantTransactionId = (userId: string, batchId: string) => `reversed-signup-grant:${userId}:${batchId}`;
 
 /** True while the account still shows exactly what the release left, so restoring cannot clobber later grants. */
-function releaseStillCurrent(current: { signupGrant?: SignupGrant }, restore: HeldReleaseRestore, credits: number) {
+function releaseStillCurrent(
+  current: { signupGrant?: SignupGrant },
+  restore: HeldReleaseEntry['restore'] & object,
+  credits: number
+) {
   if (!restore.signupGrant) return !current.signupGrant;
   return current.signupGrant?.creditsReleased === restore.signupGrant.creditsReleased + credits;
 }
 
-type RevokeUsers = Pick<IUserRepository, 'incrementCredits' | 'findById' | 'update' | 'addTagsToUser'> & {
+type RevokeUsers = Pick<
+  IUserRepository,
+  'incrementCredits' | 'findById' | 'restoreReleasedGrantState' | 'addTagsToUser'
+> & {
   /** Atomic debit applied only when the balance covers all of `credits`. */
   decrementCreditsIfCovered: (userId: string, credits: number) => Promise<boolean>;
 };
@@ -127,20 +143,36 @@ type RevokeUsers = Pick<IUserRepository, 'incrementCredits' | 'findById' | 'upda
 /** The tag goes last: the queue lists an account by its tag, so it must not appear before the rest is back. */
 async function restoreHeldState(
   userId: string,
-  restore: HeldReleaseRestore,
+  restore: NonNullable<HeldReleaseEntry['restore']>,
+  credits: number,
   current: Pick<IUserDocument, 'riskScore'>,
   users: RevokeUsers
 ) {
-  await users.update({
-    id: userId,
+  const set: Parameters<RevokeUsers['restoreReleasedGrantState']>[1]['set'] = {
     ...(restore.signupGrant ? { signupGrant: restore.signupGrant } : {}),
     signupGrantHeldReason: restore.signupGrantHeldReason,
     signupGrantHeldAt: restore.signupGrantHeldAt,
     pendingCreditGrant: restore.pendingCreditGrant,
-    ...(current.riskScore && restore.riskReviewState && current.riskScore.reviewState !== restore.riskReviewState
-      ? { riskScore: { ...current.riskScore, reviewState: restore.riskReviewState } }
-      : {}),
+  };
+  const unset: Parameters<RevokeUsers['restoreReleasedGrantState']>[1]['unset'] = [];
+  if ('riskScore' in restore) {
+    if (restore.riskScore) set.riskScore = restore.riskScore;
+    else unset.push('riskScore');
+    if (restore.signupGrantAssessment) set.signupGrantAssessment = restore.signupGrantAssessment;
+    else unset.push('signupGrantAssessment');
+  } else if (
+    current.riskScore &&
+    restore.riskReviewState &&
+    current.riskScore.reviewState !== restore.riskReviewState
+  ) {
+    set.riskScore = { ...current.riskScore, reviewState: restore.riskReviewState };
+  }
+  const restored = await users.restoreReleasedGrantState(userId, {
+    creditsReleased: restore.signupGrant ? restore.signupGrant.creditsReleased + credits : null,
+    set,
+    unset,
   });
+  if (!restored) throw new Error(`User ${userId} changed after the release; held state not restored`);
   await users.addTagsToUser(userId, [PENDING_FREE_CREDITS_TAG]);
 }
 
@@ -205,7 +237,7 @@ export async function revokeHeldGrantRelease(
           `verify-grant:${entry.userId}`,
           reversedGrantTransactionId(entry.userId, batch.id)
         );
-        await restoreHeldState(entry.userId, entry.restore, current, adapters.users);
+        await restoreHeldState(entry.userId, entry.restore, entry.credits, current, adapters.users);
       }
       row('reversed');
     } catch (error) {

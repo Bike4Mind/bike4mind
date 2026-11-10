@@ -1,14 +1,27 @@
 import mongoose, { Schema } from 'mongoose';
-import { PENDING_FREE_CREDITS_TAG, type SignupGrant, type SignupRiskReviewState } from '@bike4mind/common';
+import {
+  PENDING_FREE_CREDITS_TAG,
+  type ISignupRiskScore,
+  type SignupGrant,
+  type SignupGrantAssessment,
+  type SignupRiskReviewState,
+} from '@bike4mind/common';
 import { User } from './UserModel';
 
-export type SignupGrantReleaseRestore = {
+type SignupGrantReleaseRestoreBase = {
   signupGrant: SignupGrant | null;
   signupGrantHeldReason: 'budget_exhausted' | 'risk_review' | null;
   signupGrantHeldAt: Date | null;
   pendingCreditGrant: number | null;
-  riskReviewState: SignupRiskReviewState | null;
 };
+
+export type SignupGrantReleaseRestore =
+  | (SignupGrantReleaseRestoreBase & {
+      riskScore: ISignupRiskScore | null;
+      signupGrantAssessment: SignupGrantAssessment | null;
+    })
+  // Batches saved before the assessment was snapshotted.
+  | (SignupGrantReleaseRestoreBase & { riskReviewState: SignupRiskReviewState | null });
 
 export type SignupGrantReleaseEntry = {
   userId: string;
