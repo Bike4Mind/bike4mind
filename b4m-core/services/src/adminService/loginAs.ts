@@ -1,4 +1,10 @@
-import { IUserDocument, IUserRepository } from '@bike4mind/common';
+import {
+  IUserDocument,
+  IUserRepository,
+  assertCanActOnAdminTarget,
+  hasAdminPermission,
+  missingAdminPermissionMessage,
+} from '@bike4mind/common';
 import { NotFoundError, ForbiddenError } from '@bike4mind/utils';
 import { secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -25,8 +31,8 @@ export const loginAs = async (adminUser: IUserDocument, parameters: LoginAsParam
   const { db, notify } = adapters;
   const { targetUserId, mfaToken } = secureParameters(parameters, loginAsSchema);
 
-  if (!adminUser.isAdmin) {
-    throw new ForbiddenError('Admin privileges required');
+  if (!hasAdminPermission(adminUser, 'users:impersonate')) {
+    throw new ForbiddenError(missingAdminPermissionMessage('users:impersonate'));
   }
 
   // MFA is required for loginAs - compromised admin account must not enable free impersonation
@@ -41,9 +47,9 @@ export const loginAs = async (adminUser: IUserDocument, parameters: LoginAsParam
     throw new NotFoundError('Admin user not found');
   }
 
-  // Re-verify admin status on fresh record - JWT may be stale if privileges were revoked
-  if (!freshAdmin.isAdmin) {
-    throw new ForbiddenError('Admin privileges required');
+  // Re-verify on the fresh record - JWT may be stale if privileges were revoked
+  if (!hasAdminPermission(freshAdmin, 'users:impersonate')) {
+    throw new ForbiddenError(missingAdminPermissionMessage('users:impersonate'));
   }
 
   if (mfaService.isUserLockedOut(freshAdmin)) {
@@ -78,6 +84,9 @@ export const loginAs = async (adminUser: IUserDocument, parameters: LoginAsParam
   if (targetUser.deletion) {
     throw new ForbiddenError('Cannot loginAs an account that is scheduled for deletion');
   }
+
+  // Must stay before any approval request: a delegate never stores a pending impersonation of an admin.
+  assertCanActOnAdminTarget(freshAdmin, targetUser, 'impersonate');
 
   await notify.send(targetUser);
 

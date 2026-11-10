@@ -133,3 +133,62 @@ describe('adminService.loginAs - deletion-pending target', () => {
     expect(mocks.send).not.toHaveBeenCalled();
   });
 });
+
+describe('adminService.loginAs - delegated users:impersonate', () => {
+  const delegateJwt = {
+    id: 'admin1',
+    isAdmin: false,
+    adminPermissions: ['users:impersonate'],
+    mfa: { totpEnabled: true },
+  } as unknown as IUserDocument;
+  const freshDelegate = () =>
+    ({
+      ...freshAdminWithSecret(),
+      isAdmin: false,
+      adminPermissions: ['users:impersonate'],
+    }) as unknown as IUserDocument;
+  const run = (jwt: IUserDocument, adapters: unknown) =>
+    loginAs(jwt, { targetUserId: 'target1', mfaToken: 'anytoken' }, adapters as never);
+
+  it('lets a delegate with the permission impersonate a non-admin target', async () => {
+    vi.clearAllMocks();
+    mockVerifyMFA.mockResolvedValue({ verified: true });
+    const { adapters } = makeAdapters(freshDelegate());
+    await expect(run(delegateJwt, adapters)).resolves.toBe(targetUser);
+    expect(mockVerifyMFA).toHaveBeenCalled();
+  });
+
+  it('refuses a delegate on an admin target before notifying', async () => {
+    vi.clearAllMocks();
+    mockVerifyMFA.mockResolvedValue({ verified: true });
+    const { adapters, mocks } = makeAdapters(freshDelegate());
+    mocks.findById.mockResolvedValue({ ...targetUser, adminPermissions: ['support:read'] } as never);
+    await expect(run(delegateJwt, adapters)).rejects.toThrow('Only full administrators can impersonate');
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it('still lets a full admin impersonate an admin target', async () => {
+    vi.clearAllMocks();
+    mockVerifyMFA.mockResolvedValue({ verified: true });
+    const { adapters, mocks } = makeAdapters(freshAdminWithSecret());
+    const adminTarget = { ...targetUser, isAdmin: true } as unknown as IUserDocument;
+    mocks.findById.mockResolvedValue(adminTarget);
+    await expect(run(adminJwt, adapters)).resolves.toBe(adminTarget);
+  });
+
+  it('refuses a delegate without the permission before MFA is verified', async () => {
+    vi.clearAllMocks();
+    const jwt = { ...delegateJwt, adminPermissions: ['support:read'] } as unknown as IUserDocument;
+    const { adapters } = makeAdapters(freshDelegate());
+    await expect(run(jwt, adapters)).rejects.toThrow('Missing permission: users:impersonate');
+    expect(mockVerifyMFA).not.toHaveBeenCalled();
+  });
+
+  it('refuses when the fresh record no longer holds the permission', async () => {
+    vi.clearAllMocks();
+    const stale = { ...freshDelegate(), adminPermissions: [] } as unknown as IUserDocument;
+    const { adapters } = makeAdapters(stale);
+    await expect(run(delegateJwt, adapters)).rejects.toThrow('Missing permission: users:impersonate');
+    expect(mockVerifyMFA).not.toHaveBeenCalled();
+  });
+});

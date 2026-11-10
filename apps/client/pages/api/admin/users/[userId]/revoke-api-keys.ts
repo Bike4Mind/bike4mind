@@ -2,12 +2,12 @@ import {
   adminRevokeAllApiKeysResponseSchema,
   ApiKeyStatus,
   BadRequestError,
-  ForbiddenError,
+  assertCanActOnAdminTarget,
   NotFoundError,
 } from '@bike4mind/common';
 import { userRepository, withTransaction } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { auditKeyRef, endKeyRealtimeConnections } from '@server/utils/adminApiKeyActions';
@@ -16,21 +16,21 @@ import { respond } from '@server/utils/respond';
 /**
  * POST /api/admin/users/[userId]/revoke-api-keys  { reason }
  *
- * Admin-only: revokes every key the user owns that is not already disabled, stamping the acting
+ * Requires keys:revoke: revokes every key the user owns that is not already disabled, stamping the acting
  * admin as `revokedBy`. The keys and ONE strict audit row (listing each key id and prefix) commit
  * together. A user with nothing left to revoke gets an empty list and no audit row, since nothing
  * changed.
  */
-const handler = baseApi({ auth: 'jwtOnly' })
+const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'keys:revoke' } })
   .use(csrfProtection())
   .post(async (req, res) => {
-    if (!req.user?.isAdmin) throw new ForbiddenError('Admin access required');
     const { userId } = req.query as { userId?: string | string[] };
     if (typeof userId !== 'string' || !userId) throw new BadRequestError('Invalid user ID');
     const reason = parseAdminActionReason(req.body?.reason);
 
     const user = await userRepository.findById(userId);
     if (!user) throw new NotFoundError('User not found');
+    assertCanActOnAdminTarget(req.user, user, 'revoke API keys of');
 
     const keys = await userApiKeyRepository.findByUserId(user.id);
     const revocable = keys.filter(key => key.status !== ApiKeyStatus.DISABLED);

@@ -8,13 +8,19 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi, requireAdminPermission } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
 import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
 import { toObjectIdString } from '@bike4mind/server-utils/utils/objectId';
-import { ApiKeyScope, UserApiKeyEvents, isBuiltInApiKeyScope } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  UserApiKeyEvents,
+  assertCanActOnAdminTarget,
+  isBuiltInApiKeyScope,
+  isFullAdmin,
+} from '@bike4mind/common';
 import {
   ADMIN_ONLY_API_KEY_SCOPES,
   USER_API_KEY_SCOPE_VALUES,
@@ -24,7 +30,11 @@ import {
 } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 import { toEntitlementUser } from '@server/entitlements';
 import { resolveApiKeyScopeAccessForUser } from '@server/entitlements/apiKeyScopeAccess';
-import { parseAdminActionReason, readAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import {
+  parseAdminActionReason,
+  readAdminActionReason,
+  recordAdminActionFromRequest,
+} from '@bike4mind/server-utils/utils/adminAudit';
 
 // Scopes this admin endpoint may mint: the standard self-service set plus the
 // admin-provisioned ingest scopes. ADMIN and CC_BRIDGE are still excluded -
@@ -169,16 +179,15 @@ async function screenPreauthorizedLakeIds(
 /**
  * POST /api/admin/users/[userId]/generate-api-key
  *
- * Admin-only endpoint to generate an API key on behalf of any user.
+ * Admin endpoint (keys:revoke plus users:impersonate) to generate an API key on behalf of any user.
  * Useful for creating service account keys without logging in as the target user.
  */
-const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN], adminPermissions: { POST: 'keys:revoke' } })
   .use(csrfProtection())
   .post(
     asyncHandler(async (req, res) => {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
+      // The key is a working credential for the target, so minting also needs the impersonation grant.
+      requireAdminPermission(req, 'users:impersonate');
 
       const { userId } = req.query as RequestQuery;
 
@@ -190,6 +199,7 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
       if (!targetUser) {
         throw new BadRequestError('User not found');
       }
+      assertCanActOnAdminTarget(req.user, targetUser, 'create API keys for');
       // Canonical target id for everything below, NOT the `userId` URL segment: findById casts to
       // ObjectId and resolves the user under any hex casing, but every field this id is compared
       // against afterwards is a `type: String` matched by byte equality - the key's own `userId`,
@@ -240,6 +250,9 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
 
       // An admin-provisioned scope reaches past the owner's own data (granting credits, writing ingest
       // streams), so its audit entry must say why. Self-service-only keys keep the reason optional.
+      if (requestedScopes.some(isAdminProvisionedApiKeyScope) && !isFullAdmin(req.user)) {
+        throw new ForbiddenError('Only full administrators can create API keys with admin-provisioned scopes');
+      }
       const reason = requestedScopes.some(isAdminProvisionedApiKeyScope)
         ? parseAdminActionReason(rawReason)
         : readAdminActionReason(rawReason);

@@ -30,7 +30,8 @@ import {
   useUndoToast,
   type DataColumn,
 } from '../../../../shared';
-import type { AdminUserProfile } from '../../userProfileModel';
+import { adminActionBlockedReason, type AdminUserProfile } from '../../userProfileModel';
+import { useUser } from '@client/app/contexts/UserContext';
 import {
   KEY_STATUS,
   SINGLE_REVOKE_REASON,
@@ -49,6 +50,8 @@ const VISIBLE_SCOPES = 1;
 type NewSecret = { name: string; keyPrefix: string; secret: string };
 
 type KeyRowActions = {
+  revokeBlocked: string | null;
+  rotateBlocked: string | null;
   onRevoke: (key: IUserApiKeyDocument) => void;
   onRotate: (key: IUserApiKeyDocument) => void;
   pendingKeyId: string | null;
@@ -93,38 +96,44 @@ const RowActions: React.FC<{ apiKey: IUserApiKeyDocument } & KeyRowActions> = ({
   onRevoke,
   onRotate,
   pendingKeyId,
+  revokeBlocked,
+  rotateBlocked,
 }) => {
   if (apiKey.status !== ApiKeyStatus.ACTIVE) return null;
   const busy = pendingKeyId === apiKey.id;
   return (
     <Stack direction="row" gap={0.5} justifyContent="flex-end">
-      <Tooltip title="Rotate key">
-        <IconButton
-          size="sm"
-          variant="plain"
-          color="neutral"
-          aria-label={`Rotate ${apiKey.name}`}
-          disabled={busy}
-          onClick={() => onRotate(apiKey)}
-          data-testid="user-keys-rotate-btn"
-          sx={{ color: 'admin.inkMuted' }}
-        >
-          <AutorenewRoundedIcon sx={{ fontSize: 18 }} />
-        </IconButton>
+      <Tooltip title={rotateBlocked ?? 'Rotate key'}>
+        <span>
+          <IconButton
+            size="sm"
+            variant="plain"
+            color="neutral"
+            aria-label={`Rotate ${apiKey.name}`}
+            disabled={busy || !!rotateBlocked}
+            onClick={() => onRotate(apiKey)}
+            data-testid="user-keys-rotate-btn"
+            sx={{ color: 'admin.inkMuted' }}
+          >
+            <AutorenewRoundedIcon sx={{ fontSize: 18 }} />
+          </IconButton>
+        </span>
       </Tooltip>
-      <Tooltip title="Revoke key">
-        <IconButton
-          size="sm"
-          variant="plain"
-          color="neutral"
-          aria-label={`Revoke ${apiKey.name}`}
-          disabled={busy}
-          onClick={() => onRevoke(apiKey)}
-          data-testid="user-keys-revoke-btn"
-          sx={{ color: 'admin.inkMuted', '&:hover': { color: 'admin.danger' } }}
-        >
-          <BlockRoundedIcon sx={{ fontSize: 18 }} />
-        </IconButton>
+      <Tooltip title={revokeBlocked ?? 'Revoke key'}>
+        <span>
+          <IconButton
+            size="sm"
+            variant="plain"
+            color="neutral"
+            aria-label={`Revoke ${apiKey.name}`}
+            disabled={busy || !!revokeBlocked}
+            onClick={() => onRevoke(apiKey)}
+            data-testid="user-keys-revoke-btn"
+            sx={{ color: 'admin.inkMuted', '&:hover': { color: 'admin.danger' } }}
+          >
+            <BlockRoundedIcon sx={{ fontSize: 18 }} />
+          </IconButton>
+        </span>
       </Tooltip>
     </Stack>
   );
@@ -242,6 +251,10 @@ export const ApiKeysTab: React.FC<{ user: AdminUserProfile }> = ({ user }) => {
   const rotate = useAdminRotateApiKey(user.id);
   const revokeAll = useAdminRevokeAllApiKeys(user.id);
   const showUndo = useUndoToast();
+  const { currentUser } = useUser();
+  // Rotating or minting hands back a working secret for the owner, so it also needs the impersonation grant.
+  const revokeBlocked = adminActionBlockedReason(currentUser, user, 'keys:revoke');
+  const secretBlocked = revokeBlocked ?? adminActionBlockedReason(currentUser, user, 'users:impersonate');
 
   const [modal, setModal] = useState<'generate' | 'limits' | null>(null);
   const [rotating, setRotating] = useState<IUserApiKeyDocument | null>(null);
@@ -304,6 +317,8 @@ export const ApiKeysTab: React.FC<{ user: AdminUserProfile }> = ({ user }) => {
     onRevoke: key => void revokeKey(key),
     onRotate: setRotating,
     pendingKeyId,
+    revokeBlocked,
+    rotateBlocked: secretBlocked,
   });
 
   return (
@@ -327,7 +342,8 @@ export const ApiKeysTab: React.FC<{ user: AdminUserProfile }> = ({ user }) => {
               size="sm"
               variant="outlined"
               color="danger"
-              disabled={activeCount === 0}
+              disabled={activeCount === 0 || !!revokeBlocked}
+              title={revokeBlocked ?? undefined}
               onClick={() => setRevokingAll(true)}
               data-testid="user-keys-revoke-all-btn"
             >
@@ -337,6 +353,8 @@ export const ApiKeysTab: React.FC<{ user: AdminUserProfile }> = ({ user }) => {
               size="sm"
               variant="outlined"
               color="neutral"
+              disabled={!!secretBlocked}
+              title={secretBlocked ?? undefined}
               onClick={() => setModal('generate')}
               data-testid="user-profile-generate-key-btn"
             >

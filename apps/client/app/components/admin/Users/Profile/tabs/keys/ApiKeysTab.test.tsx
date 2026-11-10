@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiKeyStatus, type AdminApiKeyAccess, type IUserApiKeyDocument } from '@bike4mind/common';
+import { useUser } from '@client/app/contexts/UserContext';
 import { ProfileTestWrapper, buildProfile } from '../../profileTestUtils';
 import { ApiKeysTab } from './ApiKeysTab';
 import { SINGLE_REVOKE_REASON, UNDO_REVOKE_REASON } from './apiKeysModel';
@@ -89,6 +90,7 @@ describe('ApiKeysTab', () => {
   });
   beforeEach(() => {
     vi.clearAllMocks();
+    useUser.setState({ currentUser: { id: 'admin1', isAdmin: true } as never });
     respond();
   });
 
@@ -302,5 +304,60 @@ describe('ApiKeysTab', () => {
     await waitFor(() => expect(mocks.revokeAll).toHaveBeenCalledWith('Abuse / automated signups'));
     expect(mocks.toastSuccess).toHaveBeenCalledWith('Revoked 2 API keys.');
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Revoke all API keys' })).not.toBeInTheDocument());
+  });
+});
+
+describe('ApiKeysTab permission gating', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    respond();
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  const actAs = (adminPermissions: string[]) =>
+    useUser.setState({ currentUser: { id: 'd1', isAdmin: false, adminPermissions } as never });
+
+  it('disables every key action for a delegate without keys:revoke', () => {
+    actAs(['support:read']);
+    renderTab();
+    expect(within(row('key-1')).getByTestId('user-keys-revoke-btn')).toBeDisabled();
+    expect(within(row('key-1')).getByTestId('user-keys-rotate-btn')).toBeDisabled();
+    expect(screen.getByTestId('user-keys-revoke-all-btn')).toBeDisabled();
+    expect(screen.getByTestId('user-profile-generate-key-btn')).toBeDisabled();
+    expect(screen.getByTestId('user-profile-generate-key-btn')).toHaveAttribute(
+      'title',
+      'Missing permission: keys:revoke'
+    );
+  });
+
+  it('lets keys:revoke alone revoke but not rotate or generate, which hand back a secret', () => {
+    actAs(['keys:revoke']);
+    renderTab();
+    expect(within(row('key-1')).getByTestId('user-keys-revoke-btn')).toBeEnabled();
+    expect(screen.getByTestId('user-keys-revoke-all-btn')).toBeEnabled();
+    expect(within(row('key-1')).getByTestId('user-keys-rotate-btn')).toBeDisabled();
+    expect(screen.getByTestId('user-profile-generate-key-btn')).toHaveAttribute(
+      'title',
+      'Missing permission: users:impersonate'
+    );
+  });
+
+  it('enables everything for a delegate holding both permissions', () => {
+    actAs(['keys:revoke', 'users:impersonate']);
+    renderTab();
+    expect(within(row('key-1')).getByTestId('user-keys-rotate-btn')).toBeEnabled();
+    expect(screen.getByTestId('user-profile-generate-key-btn')).toBeEnabled();
+  });
+
+  it('disables the actions for a delegate on an account with admin access', () => {
+    actAs(['keys:revoke', 'users:impersonate']);
+    render(<ApiKeysTab user={buildProfile({ adminPermissions: ['support:read'] } as never)} />, {
+      wrapper: ProfileTestWrapper,
+    });
+    expect(within(row('key-1')).getByTestId('user-keys-revoke-btn')).toBeDisabled();
+    expect(screen.getByTestId('user-profile-generate-key-btn')).toHaveAttribute(
+      'title',
+      'Only full administrators can act on accounts with admin access'
+    );
   });
 });
