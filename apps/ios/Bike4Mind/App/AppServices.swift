@@ -115,6 +115,14 @@ final class AppServices {
     return current.account
   }
 
+  /// The signed-in account's first name for greetings; fixture runs have no session, so they get a stand-in.
+  func accountFirstName() async -> String? {
+    #if DEBUG
+      if FixtureServices.isEnabled { return "Alex" }
+    #endif
+    return await auth.firstName()
+  }
+
   var stepUp: any StepUpAPI {
     #if DEBUG
       if FixtureServices.isEnabled { return FixtureServices.stepUp }

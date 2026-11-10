@@ -24,8 +24,6 @@ private struct ChatScreen: View {
   @State private var isRecordingVoice = false
   /// A web link tapped in the transcript, shown in the in-app browser.
   @State private var linkedPage: URL?
-  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-  @ScaledMetric(relativeTo: .title) private var composerIconSize: CGFloat = 32
 
   init(
     session: SessionSummary, api: any B4MAPI, realtime: any RealtimeClient, activities: any QuestActivityTracking,
@@ -184,103 +182,10 @@ private struct ChatScreen: View {
   }
 
   private var composer: some View {
-    VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
-      if model.sendsAsAgentRun {
-        Label("Agent run: leave anytime, progress shows on your Lock Screen", systemImage: "bolt.circle.fill")
-          .font(Tokens.Typography.meta)
-          .foregroundStyle(Tokens.Palette.secondaryText)
-          .accessibilityIdentifier("chat-composer-agent-hint")
-      }
-      composerRow
-    }
-    .padding(.horizontal, Tokens.Spacing.m)
-    .padding(.vertical, Tokens.Spacing.s)
-    .background(.bar)
-  }
-
-  /// At accessibility text sizes the field takes the full width and the buttons move to a row beneath it;
-  /// beside three scaled buttons the placeholder would truncate to a few letters.
-  private var composerRow: some View {
-    Group {
-      if dynamicTypeSize.isAccessibilitySize {
-        VStack(alignment: .leading, spacing: Tokens.Spacing.s) {
-          messageField
-          HStack(spacing: Tokens.Spacing.s) {
-            micButton
-            agentButton
-            Spacer(minLength: 0)
-            sendButton
-          }
-        }
-      } else {
-        HStack(alignment: .bottom, spacing: Tokens.Spacing.s) {
-          micButton
-          agentButton
-          messageField
-          sendButton
-        }
-      }
-    }
-  }
-
-  private var micButton: some View {
-    Button {
-      isRecordingVoice = true
-    } label: {
-      composerIcon("mic.circle")
-    }
-    .frame(minWidth: 44, minHeight: 44)
-    .accessibilityLabel("Dictate a message")
-    .accessibilityIdentifier("chat-composer-mic")
-  }
-
-  @ViewBuilder
-  private var agentButton: some View {
-    if model.canRunAgent {
-      Button {
-        model.sendsAsAgentRun.toggle()
-      } label: {
-        composerIcon(model.sendsAsAgentRun ? "bolt.circle.fill" : "bolt.circle")
-      }
-      .frame(minWidth: 44, minHeight: 44)
-      .accessibilityLabel("Run as agent")
-      .accessibilityHint("Runs in the background and shows progress on your Lock Screen")
-      .accessibilityValue(model.sendsAsAgentRun ? "On" : "Off")
-      .accessibilityIdentifier("chat-composer-agent-toggle")
-    }
-  }
-
-  private var messageField: some View {
-    TextField("Message", text: $model.draft, axis: .vertical)
-      .lineLimit(1...6)
-      .focused($composerFocused)
-      .padding(.horizontal, Tokens.Spacing.m)
-      .padding(.vertical, Tokens.Spacing.s + 2)
-      .background(Tokens.Palette.groupedBackground)
-      .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.bubble, style: .continuous))
-      .overlay {
-        RoundedRectangle(cornerRadius: Tokens.Radius.bubble, style: .continuous)
-          .strokeBorder(Tokens.Palette.divider, lineWidth: 1)
-      }
-      .submitLabel(.send)
-      .onSubmit(send)
-      .accessibilityIdentifier("chat-composer-field")
-  }
-
-  private var sendButton: some View {
-    Button(action: send) {
-      composerIcon("arrow.up.circle.fill")
-    }
-    .disabled(!model.canSend)
-    .frame(minWidth: 44, minHeight: 44)
-    .accessibilityLabel("Send")
-    .accessibilityIdentifier("chat-composer-send")
-  }
-
-  private func composerIcon(_ name: String) -> some View {
-    Image(systemName: name)
-      .font(.system(size: composerIconSize))
-      .symbolRenderingMode(.hierarchical)
+    ChatComposer(
+      draft: $model.draft, isFocused: $composerFocused, canSend: model.canSend,
+      agentRun: model.canRunAgent ? $model.sendsAsAgentRun : nil,
+      onDictate: { isRecordingVoice = true }, onSend: send)
   }
 
   private func send() {
