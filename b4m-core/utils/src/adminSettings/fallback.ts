@@ -208,7 +208,7 @@ export function shouldTriggerFallback(error: Error): boolean {
     // Google's 404 for a model closed upstream: "models/<id> is no longer available to new users".
     'no longer available to new users',
     // Claude Fable 5 GA safety-classifier refusal: the Anthropic backend surfaces a
-    // stop_reason: 'refusal' as a thrown error for REFUSAL_FALLBACK_MODELS so blocked
+    // stop_reason: 'refusal' as a thrown error when the model's refusalFallback resolves true so blocked
     // requests continue on Opus 5 via the claude-fable-5 fallback chain below.
     SAFETY_REFUSAL_MESSAGE,
   ];

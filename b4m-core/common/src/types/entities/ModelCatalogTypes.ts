@@ -12,7 +12,7 @@ import { MODEL_PRICE_UNITS } from './ModelPriceTypes';
  * ones - the read schemas below are lenient precisely so a version skew shortens
  * nobody's model list.
  */
-export const CATALOG_SCHEMA_VERSION = 2;
+export const CATALOG_SCHEMA_VERSION = 3;
 
 /**
  * How a model's request is built and which backend constructor serves it.
@@ -55,7 +55,8 @@ export type AdapterFamily = (typeof ADAPTER_FAMILIES)[number];
  * Precedence unit for the catalog merge. Rows claim authority per group, never
  * over the whole record, so an operator who pins a model's rank does not
  * thereby freeze its context window: within a group the newest operator row
- * wins, else the newest discovery row, else seed.
+ * wins, else the newest discovery row, else seed. `apiSurface` applies that rule
+ * per key instead, because each of its flags is an independent fact.
  */
 export const FIELD_GROUPS = [
   'identity',
@@ -68,6 +69,7 @@ export const FIELD_GROUPS = [
   'presentation',
   'dispatch',
   'availability',
+  'apiSurface',
 ] as const;
 
 export type FieldGroup = (typeof FIELD_GROUPS)[number];
@@ -187,7 +189,20 @@ const ModelRecordFields = z.strictObject({
   supportsSafetyTolerance: z.boolean().optional(),
   imageSizes: z.array(z.string()).optional(),
   promptCaching: PromptCachingWrite.optional(),
-  /** Retry-on-refusal quirk; subsumes REFUSAL_FALLBACK_MODELS. */
+
+  // apiSurface: optional request features the model accepts. Absent means "the catalog has no
+  // opinion"; resolveApiSurface (claudeToolCapabilities.ts) then applies the seed tables and a default.
+  /** Accepts a forced `tool_choice` (`any` / `tool`). */
+  forcedToolChoice: z.boolean().optional(),
+  /** Accepts a final assistant turn to continue. */
+  assistantPrefill: z.boolean().optional(),
+  /** Accepts the tool search server tool and `defer_loading` on tool definitions. */
+  toolSearch: z.boolean().optional(),
+  /** Accepts `tool_addition` / `tool_removal` blocks in a mid-conversation system message. */
+  toolChanges: z.boolean().optional(),
+  /** Accepts a deferred tool surfaced by reference in a `tool_addition`, on this model's own route. */
+  deferredToolAddition: z.boolean().optional(),
+  /** A `stop_reason: 'refusal'` is thrown so the fallback chain continues the request; subsumes REFUSAL_FALLBACK_MODELS. */
   refusalFallback: z.boolean().optional(),
 
   dispatchProfile: DispatchProfileWrite.optional(),
@@ -228,6 +243,21 @@ export type ModelRecord = z.infer<typeof ModelRecordFields>;
  * profile that reached them through the merge must be the same shape a row wrote.
  */
 export type ModelDispatchProfile = NonNullable<ModelRecord['dispatchProfile']>;
+
+/** The `apiSurface` group's fields, in one place for the resolver, the merge fold and discovery's inheritance. */
+export const API_SURFACE_KEYS = [
+  'forcedToolChoice',
+  'assistantPrefill',
+  'toolSearch',
+  'toolChanges',
+  'deferredToolAddition',
+  'refusalFallback',
+] as const satisfies ReadonlyArray<keyof ModelRecord>;
+
+export type ApiSurfaceKey = (typeof API_SURFACE_KEYS)[number];
+
+/** Every apiSurface flag resolved to a verdict (see resolveApiSurface). */
+export type ApiSurface = Record<ApiSurfaceKey, boolean>;
 
 /**
  * Read side of the strict/lenient pair. Two deliberate relaxations:
@@ -319,7 +349,15 @@ export const FIELD_GROUP_OF: Record<keyof ModelRecord, FieldGroup> = {
   // a correctly shaped request", and the promotion predicate reads them together.
   adapterFamily: 'dispatch',
   dispatchProfile: 'dispatch',
-  refusalFallback: 'dispatch',
+
+  // Its own group, not `dispatch`: a sparse operator override of one flag must not strip the
+  // routing fields off a catalog-only model, and an inherited value needs its own contributor.
+  forcedToolChoice: 'apiSurface',
+  assistantPrefill: 'apiSurface',
+  toolSearch: 'apiSurface',
+  toolChanges: 'apiSurface',
+  deferredToolAddition: 'apiSurface',
+  refusalFallback: 'apiSurface',
 
   disabled: 'availability',
   disabledReason: 'availability',
@@ -384,6 +422,13 @@ export const MODEL_INFO_FIELD_GROUP_OF: Record<
 
   adapterFamily: 'dispatch',
   dispatchProfile: 'dispatch',
+
+  forcedToolChoice: 'apiSurface',
+  assistantPrefill: 'apiSurface',
+  toolSearch: 'apiSurface',
+  toolChanges: 'apiSurface',
+  deferredToolAddition: 'apiSurface',
+  refusalFallback: 'apiSurface',
 
   description: 'presentation',
   logoFile: 'presentation',
