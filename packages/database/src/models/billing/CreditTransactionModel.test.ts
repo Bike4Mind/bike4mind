@@ -308,6 +308,39 @@ describe('CreditTransactionRepository.sourceUsageForOwner', () => {
   });
 });
 
+describe('CreditTransactionRepository.usageTotalForOwner', () => {
+  const recent = () => new Date();
+
+  it('sums every usage type, including generic deducts, and leaves out transfers and credits added', async () => {
+    await seed([
+      { credits: -40, createdAt: recent() },
+      { type: 'tool_usage', credits: -5000, createdAt: recent() },
+      { type: 'generic_deduct', credits: -29, createdAt: recent() },
+      { type: 'transfer_credit', credits: -100, createdAt: recent() },
+      { type: 'purchase', credits: 500, createdAt: recent() },
+    ]);
+
+    const total = await creditTransactionRepository.usageTotalForOwner(ORG, CreditHolderType.Organization);
+
+    expect(total).toEqual({ creditsCharged: 5069, transactions: 3 });
+  });
+
+  it('scopes to the owner and the trailing window, and is zero when nothing matches', async () => {
+    await seed([{ credits: -10, createdAt: recent() }]);
+    await seed([{ ownerId: 'org-2', credits: -999, createdAt: recent() }]);
+    await seed([{ credits: -7, createdAt: new Date('2020-01-01') }]);
+
+    expect(await creditTransactionRepository.usageTotalForOwner(ORG, CreditHolderType.Organization, 30)).toEqual({
+      creditsCharged: 10,
+      transactions: 1,
+    });
+    expect(await creditTransactionRepository.usageTotalForOwner('nobody', CreditHolderType.Organization)).toEqual({
+      creditsCharged: 0,
+      transactions: 0,
+    });
+  });
+});
+
 describe('CreditTransactionRepository.queryAdminAdjustmentsPage', () => {
   const USER = 'user-1';
   const recent = () => new Date();

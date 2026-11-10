@@ -31,6 +31,7 @@ const responseWith = (overrides: Partial<IUsageDashboardResponse>): IUsageDashbo
   byFeature: [],
   byApiKey: [],
   bySource: [],
+  ledger: { creditsCharged: 0, transactions: 0 },
   totals: { requests: 0, cogsUsd: 0, creditsCharged: 0 },
   ...overrides,
 });
@@ -127,5 +128,65 @@ describe('UsageDashboard owner type', () => {
     expect(screen.queryByTestId('usage-member-table')).not.toBeInTheDocument();
     expect(screen.queryByTestId('usage-org-select')).not.toBeInTheDocument();
     expect(screen.getByTestId('usage-source-table')).toBeInTheDocument();
+  });
+});
+
+describe('UsageDashboard ledger reconciliation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const renderUser = (days?: number) =>
+    render(
+      <TestWrapper>
+        <UsageDashboard ownerType={CreditHolderType.User} ownerId="user-1" days={days} />
+      </TestWrapper>
+    );
+
+  it('shows the ledger total and an Other charges row when there are no usage events', () => {
+    setData({
+      ownerType: CreditHolderType.User,
+      ownerId: 'user-1',
+      totals: { requests: 0, cogsUsd: 0, creditsCharged: 0 },
+      ledger: { creditsCharged: 5069, transactions: 12 },
+    });
+    renderUser();
+
+    expect(screen.getByTestId('usage-total-credits')).toHaveTextContent('5,069 credits');
+    const table = screen.getByTestId('usage-feature-table');
+    expect(within(table).getByText('Other charges (no per-call detail)')).toBeInTheDocument();
+    expect(within(table).getByText('5,069')).toBeInTheDocument();
+    expect(screen.getByTestId('usage-residual-note')).toBeInTheDocument();
+    expect(screen.getByTestId('usage-no-events-note')).toBeInTheDocument();
+  });
+
+  it('adds no residual row when events and ledger agree', () => {
+    setData({
+      ownerType: CreditHolderType.User,
+      ownerId: 'user-1',
+      byFeature: [{ feature: 'agent_execution', requests: 4, cogsUsd: 0.2, creditsCharged: 1000 }],
+      totals: { requests: 4, cogsUsd: 0.2, creditsCharged: 1000 },
+      ledger: { creditsCharged: 1000, transactions: 4 },
+    });
+    renderUser();
+
+    const table = screen.getByTestId('usage-feature-table');
+    expect(within(table).getByText('Agent runs')).toBeInTheDocument();
+    expect(within(table).queryByText(/Other charges/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('usage-residual-note')).not.toBeInTheDocument();
+  });
+
+  it('hides its own range toggle and requests the controlled window', () => {
+    setData({ ownerType: CreditHolderType.User, ownerId: 'user-1' });
+    renderUser(7);
+
+    expect(screen.queryByTestId('usage-range-toggle')).not.toBeInTheDocument();
+    expect(mockUseOwnerUsage).toHaveBeenCalledWith(CreditHolderType.User, 'user-1', 7);
+  });
+
+  it('keeps its own range toggle when uncontrolled', () => {
+    setData({ ownerType: CreditHolderType.User, ownerId: 'user-1' });
+    renderUser();
+    expect(screen.getByTestId('usage-range-toggle')).toBeInTheDocument();
   });
 });
