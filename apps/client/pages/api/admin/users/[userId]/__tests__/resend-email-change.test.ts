@@ -72,7 +72,10 @@ describe('POST /api/admin/users/[userId]/resend-email-change', () => {
     h.rotate.mockResolvedValue(true);
   });
 
-  it('stores the hash of a fresh token and emails the raw token', async () => {
+  it.each([
+    { id: 'admin-1', username: 'admin', isAdmin: true },
+    { id: 'mod-1', username: 'mod', isAdmin: false, adminPermissions: ['users:moderate'] },
+  ])('stores a fresh token hash and emails the raw token for an authorized actor: $username', async actor => {
     const user = {
       id: 'user-1',
       username: 'u',
@@ -87,7 +90,7 @@ describe('POST /api/admin/users/[userId]/resend-email-change', () => {
     await h.handler!(
       {
         query: { userId: 'user-1' },
-        user: { id: 'admin-1', username: 'admin', isAdmin: true },
+        user: actor,
         headers: {},
         logger: { info: vi.fn() },
       },
@@ -216,7 +219,7 @@ describe('POST /api/admin/users/[userId]/resend-email-change', () => {
 
     await expect(h.handler!(req, { json: vi.fn() })).rejects.toThrow(missingAdminPermissionMessage('users:moderate'));
     expect(h.findById).not.toHaveBeenCalled();
-    expect(h.update).not.toHaveBeenCalled();
+    expect(h.rotate).not.toHaveBeenCalled();
     expect(h.publish).not.toHaveBeenCalled();
   });
 
@@ -240,7 +243,7 @@ describe('POST /api/admin/users/[userId]/resend-email-change', () => {
     await expect(h.handler!(req, { json: vi.fn() })).rejects.toThrow(
       'Only full administrators can resend an email change to users with admin access'
     );
-    expect(h.update).not.toHaveBeenCalled();
+    expect(h.rotate).not.toHaveBeenCalled();
     expect(h.publish).not.toHaveBeenCalled();
   });
 
@@ -252,6 +255,7 @@ describe('POST /api/admin/users/[userId]/resend-email-change', () => {
       isAdmin: true,
       pendingEmail: 'new@b.test',
       pendingEmailToken: 'tok',
+      pendingEmailSentAt: new Date(Date.now() - 60_000),
     });
 
     await h.handler!(
@@ -264,6 +268,6 @@ describe('POST /api/admin/users/[userId]/resend-email-change', () => {
       { json: vi.fn() }
     );
 
-    expect(h.update).toHaveBeenCalledTimes(1);
+    expect(h.rotate).toHaveBeenCalledTimes(1);
   });
 });
