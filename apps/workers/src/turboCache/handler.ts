@@ -5,7 +5,7 @@ import { Resource } from 'sst';
 const s3 = new S3Client({});
 
 function bucketName(): string {
-  return (Resource as Record<string, { name: string }>).turboCacheBucket.name;
+  return (Resource as unknown as Record<string, { name: string }>).turboCacheBucket.name;
 }
 
 function artifactKey(hash: string, team?: string): string {
@@ -21,7 +21,7 @@ function verifyToken(event: APIGatewayProxyEventV2): boolean {
   const auth = event.headers.authorization ?? event.headers.Authorization;
   if (!auth) return false;
   const token = auth.replace(/^Bearer\s+/i, '');
-  const expected = (Resource as Record<string, { value: string }>).TURBO_CACHE_TOKEN.value;
+  const expected = (Resource as unknown as Record<string, { value: string }>).TURBO_CACHE_TOKEN.value;
   if (!expected || expected === 'not-configured') return false;
   // Constant-time comparison to prevent timing attacks
   if (token.length !== expected.length) return false;
