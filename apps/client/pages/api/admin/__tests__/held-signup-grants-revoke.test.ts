@@ -110,6 +110,25 @@ describe('POST /api/admin/held-signup-grants/revoke', () => {
       expect.anything()
     );
   });
+  it('records in the audit entry that the account went back to the held queue', async () => {
+    findBatch.mockResolvedValue({
+      id: BATCH,
+      actorId: 'x',
+      entries: [{ userId: 'u', outcome: 'released', credits: 12, restore: { signupGrant: null } }],
+    });
+    revoke.mockResolvedValue({ batchId: 'b', results: [{ userId: 'u', outcome: 'reversed', credits: 12 }] });
+    await run({ batchId: BATCH });
+    expect(audit.record).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      {
+        action: 'user.credits.adjusted',
+        target: { kind: 'user', id: 'u', displayName: 'u' },
+        summary: 'revoked released signup grant and returned it to the held queue',
+        details: { credits: -12, source: 'held_grant_revoke', batchId: 'b', heldRestored: true },
+      },
+      expect.anything()
+    );
+  });
   it('writes no audit entry when nothing was revoked', async () => {
     revoke.mockResolvedValue({ batchId: 'b', results: [{ userId: 'u', outcome: 'failed', credits: 12 }] });
     expect((await run({ batchId: BATCH })).statusCode).toBe(200);
