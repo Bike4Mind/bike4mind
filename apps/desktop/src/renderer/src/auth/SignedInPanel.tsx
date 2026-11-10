@@ -10,10 +10,11 @@ import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import { useNavigate } from '@tanstack/react-router';
 import type { AuthState } from '@shared/auth';
-import { ChevronIcon, GearIcon, SignOutIcon, UserIcon } from '../chat/icons';
+import { ChevronIcon, ConversationIcon, GearIcon, SignOutIcon, UserIcon } from '../chat/icons';
 import { NavItem } from '../chat/SessionList';
 import { useSettingsAttention } from '../chat/settingsAttention';
 import { RuntimeInfo } from '../components/RuntimeInfo';
+import { SendFeedbackDialog } from './SendFeedbackDialog';
 
 /** Two letters for the avatar. Falls back to one, then to nothing, rather than to a stray '?'. */
 function initials(name: string): string {
@@ -40,6 +41,7 @@ function initials(name: string): string {
  */
 export function SignedInPanel({ state, status }: { state: AuthState; status?: ReactNode }) {
   const [open, setOpen] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
   const navigate = useNavigate();
   const settingsAttention = useSettingsAttention();
   const user = state.user;
@@ -123,8 +125,13 @@ export function SignedInPanel({ state, status }: { state: AuthState; status?: Re
           attention={settingsAttention}
           onOpenSettings={() => void navigate({ to: '/settings' })}
           onProfile={() => void navigate({ to: '/profile' })}
+          onSendFeedback={() => {
+            setOpen(false);
+            setFeedbackOpen(true);
+          }}
         />
       )}
+      {feedbackOpen && <SendFeedbackDialog onClose={() => setFeedbackOpen(false)} />}
     </Stack>
   );
 }
@@ -141,11 +148,13 @@ export function AccountMenu({
   attention,
   onOpenSettings,
   onProfile,
+  onSendFeedback,
 }: {
   state: AuthState;
   attention?: string;
   onOpenSettings?: () => void;
   onProfile: () => void;
+  onSendFeedback?: () => void;
 }) {
   const user = state.user;
   const displayName = user?.nickname || user?.username || user?.email || user?.id || 'Signed in';
@@ -188,6 +197,15 @@ export function AccountMenu({
             ) : undefined
           }
           testId="account-settings-btn"
+        />
+      )}
+
+      {onSendFeedback && (
+        <NavItem
+          icon={<ConversationIcon />}
+          label="Send Feedback"
+          onClick={onSendFeedback}
+          testId="account-feedback-btn"
         />
       )}
 

@@ -1,5 +1,8 @@
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
+import { feedbackDeliveryFailed } from '@bike4mind/common';
 import type { AccountCredits, AccountPlan, AccountProfile, AccountTier } from '@shared/account';
+import type { DesktopUser } from '@shared/auth';
+import type { FeedbackSubmitResult } from '@shared/feedback';
 
 /**
  * Built for exactly this: the route exempts its reads from the daily rate limit so a client
@@ -56,6 +59,57 @@ export class AccountService {
 
   credits(): Promise<AccountCredits> {
     return this.profile().then(profile => profile.credits);
+  }
+
+  async sendFeedback(content: unknown, user?: DesktopUser): Promise<FeedbackSubmitResult> {
+    const api = this.deps.getApiClient();
+    if (!api || !user) return { ok: false, error: 'Sign in to send feedback.' };
+    if (typeof content !== 'string' || !content.trim()) {
+      return { ok: false, error: 'Write a message before sending feedback.' };
+    }
+
+    try {
+      const response = await api.post<{
+        contentStored?: boolean;
+        contentTruncated?: boolean;
+        delivery?: { channels?: { slack?: { outcome?: string }; email?: { outcome?: string } } };
+      }>('/api/feedback', {
+        userId: user.id,
+        username: user.username ?? 'Unknown',
+        userEmail: user.email ?? 'Unknown',
+        tags: ['feedback', 'cs'],
+        content,
+      });
+      const deliveryFailed = feedbackDeliveryFailed(response.delivery);
+      if (response.contentStored === false) {
+        return {
+          ok: true,
+          warning: 'Your feedback was received, but we could not save the message text - please try again.',
+        };
+      }
+      if (response.contentTruncated && deliveryFailed) {
+        return {
+          ok: true,
+          warning:
+            'Your feedback was saved (trimmed a bit), but we could not notify the team - please contact support if it is urgent.',
+        };
+      }
+      if (response.contentTruncated) {
+        return {
+          ok: true,
+          warning: 'Your feedback was saved, but it was long enough that we had to trim it a bit.',
+        };
+      }
+      if (deliveryFailed) {
+        return {
+          ok: true,
+          warning: 'Saved your feedback, but we could not notify the team - please contact support if it is urgent.',
+        };
+      }
+      return { ok: true };
+    } catch {
+      return { ok: false, error: 'Could not submit your feedback. Please try again.' };
+    }
   }
 
   private async read(): Promise<AccountProfile> {
