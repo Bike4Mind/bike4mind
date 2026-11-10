@@ -623,6 +623,10 @@ apps/client/pages/api/qa/uploads.ts
 apps/client/pages/api/quest-master-plans/[id]/index.ts
 apps/client/pages/api/quest-plans/[id]/export.ts
 apps/client/pages/api/quest-plans/[id]/progress.ts
+apps/client/pages/api/quests/[id]/check-timeout.ts
+apps/client/pages/api/quests/[id]/client-timing.ts
+apps/client/pages/api/quests/[id]/files.ts
+apps/client/pages/api/quests/[id]/index.ts
 apps/client/pages/api/react-artifact-sandbox.ts
 apps/client/pages/api/reg-invites/create.ts
 apps/client/pages/api/reg-invites/delete.ts
