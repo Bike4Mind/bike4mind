@@ -10,7 +10,12 @@ vi.mock('@bike4mind/server-utils/utils/pushDelivery', () => ({
   isPushDeliveryConfigured: () => pushDelivery.configured,
 }));
 
-import { createLiveActivityThrottle, endAgentRunLiveActivity, publishLiveActivityUpdate } from './liveActivityPush';
+import {
+  createLiveActivityThrottle,
+  endAgentRunLiveActivity,
+  LIVE_ACTIVITY_STALE_AFTER_MS,
+  publishLiveActivityUpdate,
+} from './liveActivityPush';
 
 const update = (questId: string, status: string, extra: Partial<LiveActivityPushEvent['contentState']> = {}) =>
   ({
@@ -44,7 +49,22 @@ describe('publishLiveActivityUpdate', () => {
   it('validates and publishes, stamped with the publish time in unix seconds', async () => {
     h.publish.mockResolvedValue(undefined);
     await publishLiveActivityUpdate(update('q1', 'running'), { warn: vi.fn() }, 1_800_000_000_999);
-    expect(h.publish).toHaveBeenCalledWith({ ...update('q1', 'running'), timestamp: 1_800_000_000 });
+    expect(h.publish).toHaveBeenCalledWith(
+      expect.objectContaining({ ...update('q1', 'running'), timestamp: 1_800_000_000 })
+    );
+  });
+
+  it('stamps a staleDate on an update unless the caller set one, and never on an end', async () => {
+    h.publish.mockResolvedValue(undefined);
+    const nowMs = 1_800_000_000_000;
+    const staleAt = 1_800_000_000 + LIVE_ACTIVITY_STALE_AFTER_MS / 1000;
+    await publishLiveActivityUpdate(update('q1', 'running'), { warn: vi.fn() }, nowMs);
+    await publishLiveActivityUpdate({ ...update('q1', 'running'), staleDate: 42 }, { warn: vi.fn() }, nowMs);
+    await publishLiveActivityUpdate(end('q1'), { warn: vi.fn() }, nowMs);
+    const [stamped, supplied, ended] = h.publish.mock.calls.map(([e]) => e);
+    expect(stamped.staleDate).toBe(staleAt);
+    expect(supplied.staleDate).toBe(42);
+    expect(ended.staleDate).toBeUndefined();
   });
 
   it('logs and swallows a publish failure', async () => {
@@ -169,6 +189,14 @@ describe('createLiveActivityThrottle', () => {
 
     await vi.advanceTimersByTimeAsync(60_000);
     expect(publish).toHaveBeenCalledTimes(2);
+  });
+
+  it('sends a repeated identical immediate update once', async () => {
+    const throttle = createLiveActivityThrottle(publish, 15_000);
+    await throttle.emit(update('q1', 'running', { stageLabel: 'a' }));
+    await throttle.emit(update('q1', 'paused'), { immediate: true });
+    await throttle.emit(update('q1', 'paused'), { immediate: true });
+    expect(publish.mock.calls.map(([e]) => e.contentState.status)).toEqual(['running', 'paused']);
   });
 
   it('sends end even as the first frame', async () => {

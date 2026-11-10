@@ -9,7 +9,8 @@ import { NotificationEvents } from '@bike4mind/server-utils/utils/eventBus';
  */
 
 /**
- * Validates, stamps the publish time (APNs `timestamp`, see LiveActivityPushEventSchema) and publishes;
+ * Validates, stamps the publish time (APNs `timestamp`, see LiveActivityPushEventSchema) and, on an update,
+ * a `staleDate` LIVE_ACTIVITY_STALE_AFTER_MS ahead unless the caller set one, then publishes;
  * a failure is logged at warn and swallowed. A no-op while push is unconfigured.
  */
 export async function publishLiveActivityUpdate(
@@ -19,7 +20,12 @@ export async function publishLiveActivityUpdate(
 ): Promise<void> {
   if (!isPushDeliveryConfigured()) return;
   try {
-    const stamped = { ...event, timestamp: event.timestamp ?? Math.floor(nowMs / 1000) };
+    const stamped = {
+      ...event,
+      timestamp: event.timestamp ?? Math.floor(nowMs / 1000),
+      ...(event.event === 'update' &&
+        event.staleDate === undefined && { staleDate: Math.floor((nowMs + LIVE_ACTIVITY_STALE_AFTER_MS) / 1000) }),
+    };
     await NotificationEvents.LiveActivity.publish(LiveActivityPushEventSchema.parse(stamped));
   } catch (error) {
     logger.warn('[LiveActivity] failed to publish live activity update', {
@@ -59,6 +65,9 @@ export async function endAgentRunLiveActivity(
 
 /** APNs budgets live activity updates, and a lock screen gains nothing from more than a few a minute. */
 export const LIVE_ACTIVITY_UPDATE_INTERVAL_MS = 15_000;
+
+/** How long a frame may sit on the lock screen before the client marks the activity stale. */
+export const LIVE_ACTIVITY_STALE_AFTER_MS = 10 * 60 * 1000;
 
 /** Longest stage label either producer (chat turn, agent run) puts on the lock screen. */
 export const LIVE_ACTIVITY_STAGE_LABEL_MAX = 60;
@@ -138,7 +147,7 @@ export function createLiveActivityThrottle(
 
       if (options?.immediate) {
         clearPending(existing);
-        await sendUpdate(existing, event);
+        if (keyOf(event) !== existing.lastSentKey) await sendUpdate(existing, event);
         return;
       }
 
@@ -153,7 +162,7 @@ export function createLiveActivityThrottle(
       existing.timer = setTimeout(
         () => {
           const latest = takePending(existing);
-          if (latest) void sendUpdate(existing, latest);
+          if (latest) void sendUpdate(existing, latest).catch(() => undefined);
         },
         Math.max(waitMs, 0)
       );
