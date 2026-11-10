@@ -241,7 +241,7 @@ describe('useGetScopedDataLakeTagCounts', () => {
 
 // The picker opening is the only refresh the Data Lake mode picker gets when no sync poll is mounted.
 describe('useRefreshLakePickerReads', () => {
-  it("marks the session's labelled lake list and every tag count stale, and nothing else under the lake prefix", () => {
+  it("marks the session's labelled lake list and the tag counts of its source stale, and nothing else under the lake prefix", () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const keys = {
       ownList: dataLakeKeys.listWithRetrievability('sess-1'),
@@ -250,6 +250,7 @@ describe('useRefreshLakePickerReads', () => {
       publicCatalog: dataLakeKeys.public(''),
       tagCounts: dataLakeKeys.tagCounts('datalakes'),
       scopedTagCounts: dataLakeKeys.tagCountsScoped('datalakes', ['lake-a']),
+      otherSourceTagCounts: dataLakeKeys.tagCounts('opti'),
     };
     for (const key of Object.values(keys)) queryClient.setQueryData(key, { seeded: true });
     const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
@@ -262,6 +263,7 @@ describe('useRefreshLakePickerReads', () => {
     expect(invalidated(keys.ownList)).toBe(true);
     expect(invalidated(keys.tagCounts)).toBe(true);
     expect(invalidated(keys.scopedTagCounts)).toBe(true);
+    expect(invalidated(keys.otherSourceTagCounts)).toBe(false);
     expect(invalidated(keys.otherSessionList)).toBe(false);
     expect(invalidated(keys.plainList)).toBe(false);
     expect(invalidated(keys.publicCatalog)).toBe(false);
