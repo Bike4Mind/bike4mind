@@ -158,12 +158,11 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
   const { page: currentPage, limit: itemsPerPage, startDate, endDate } = view;
   const modelFilter = view.model ?? ALL_MODELS;
   const { value: searchQuery, debouncedValue: debouncedSearch, setValue: setSearchQuery } = useDebounceValue('');
-  const {
-    value: supportCaseInput,
-    debouncedValue: debouncedSupportCase,
-    setValue: setSupportCaseInput,
-  } = useDebounceValue('');
-  const supportCase = debouncedSupportCase.trim();
+  // Committed on blur or Enter, never on a debounce: every request carrying the case writes an audit
+  // row under it, so a half-typed case must not reach the server.
+  const [supportCaseInput, setSupportCaseInput] = useState('');
+  const [supportCase, setSupportCase] = useState('');
+  const commitSupportCase = () => setSupportCase(supportCaseInput.trim());
   // A text search matches users' prompt text, so the server refuses it without a case.
   const canSearch = isValidSupportCase(supportCase);
 
@@ -258,7 +257,7 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
             </Grid>
             <Grid xs={12} md={4}>
               <Input
-                placeholder="Support case (required for search and details)"
+                placeholder="Support case, then Enter (required for search and details)"
                 value={supportCaseInput}
                 slotProps={{
                   input: {
@@ -268,12 +267,17 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
                   },
                 }}
                 onChange={e => setSupportCaseInput(e.target.value)}
+                onBlur={commitSupportCase}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') commitSupportCase();
+                }}
               />
             </Grid>
             <Grid xs={12} md={4}>
               <Input
                 placeholder={canSearch ? 'Search logs...' : 'Enter a support case to search'}
-                value={searchQuery}
+                // Without a case the term is not sent, so showing it would read as an active filter.
+                value={canSearch ? searchQuery : ''}
                 disabled={!canSearch}
                 slotProps={{ input: { 'data-testid': 'model-logs-search-input' } }}
                 onChange={e => handleSearchChange(e.target.value)}

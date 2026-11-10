@@ -4,7 +4,11 @@ const { recordAdminActionFromRequest, userAuditTarget } = vi.hoisted(() => ({
   recordAdminActionFromRequest: vi.fn(),
   userAuditTarget: vi.fn(),
 }));
-vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest, userAuditTarget }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+  recordAdminActionFromRequest,
+  userAuditTarget,
+  isSameUserId: (left: string, right: string) => left.toLowerCase() === right.toLowerCase(),
+}));
 
 import { recordFeedbackRead } from './feedbackReadAudit';
 

@@ -59,8 +59,7 @@ const SUPPORT_CASE = 'ZD-4821';
 
 // Searching and expanding a log are support reads: both stay disabled until a case is entered.
 const enterSupportCase = async (value = SUPPORT_CASE) => {
-  await userEvent.type(screen.getByTestId('model-logs-support-case-input'), value);
-  elapseSearchDebounce();
+  await userEvent.type(screen.getByTestId('model-logs-support-case-input'), `${value}{Enter}`);
 };
 
 describe('ModelLogsTab', () => {
@@ -197,8 +196,12 @@ describe('ModelLogsTab', () => {
     await waitFor(() => expect(screen.getByTestId('model-logs-search-input')).toBeDisabled());
     expect(screen.getByTestId('model-logs-details-toggle-btn')).toBeDisabled();
 
+    // Typed but not committed: a half-typed case must never reach the server.
     await userEvent.type(screen.getByTestId('model-logs-support-case-input'), 'c');
     elapseSearchDebounce();
+    expect(screen.getByTestId('model-logs-search-input')).toBeDisabled();
+
+    await userEvent.type(screen.getByTestId('model-logs-support-case-input'), '{Enter}');
     await waitFor(() => expect(screen.getByTestId('model-logs-search-input')).toBeEnabled());
     expect(screen.getByTestId('model-logs-details-toggle-btn')).toBeEnabled();
   });

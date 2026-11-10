@@ -1,4 +1,4 @@
-import { recordAdminActionFromRequest, userAuditTarget } from '@bike4mind/server-utils/utils/adminAudit';
+import { isSameUserId, recordAdminActionFromRequest, userAuditTarget } from '@bike4mind/server-utils/utils/adminAudit';
 
 type AuditableRequest = Parameters<typeof recordAdminActionFromRequest>[0] & { user?: { id: string } };
 
@@ -10,8 +10,9 @@ type FeedbackReport = { id: string; userId?: string | null };
  * Feedback is written to staff, so unlike the support reads in adminSupportAccess.ts no case is
  * required. A read of only the caller's own reports is not a staff read and writes nothing.
  *
- * Details name the report ids, not their owners: AdminAuditLog's data-subject entry
- * (server/dataSubject/registry/infra.ts) resolves `target.id`, never ids inside `details`.
+ * Details name the report ids rather than their owners, since AdminAuditLog's data-subject entry
+ * (server/dataSubject/registry/infra.ts) resolves `target.id`, never `details`. The caller's own
+ * filter values (a userId or a search term, which may be an email) are recorded as given.
  */
 export async function recordFeedbackRead(
   req: AuditableRequest,
@@ -19,7 +20,7 @@ export async function recordFeedbackRead(
   details: Record<string, unknown> = {}
 ): Promise<void> {
   const readerId = req.user?.id;
-  const othersReports = reports.filter(report => report.userId !== readerId);
+  const othersReports = reports.filter(report => !readerId || !report.userId || !isSameUserId(report.userId, readerId));
   if (othersReports.length === 0) return;
 
   const owners = new Set(othersReports.map(report => report.userId ?? ''));

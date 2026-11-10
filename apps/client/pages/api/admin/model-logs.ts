@@ -83,7 +83,8 @@ const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredSc
 
       // A text search matches prompt text across every user, so it is a support read: a case is
       // required and the search is recorded before results are served. Browsing by date and model
-      // reads metadata only and stays case-free.
+      // stays case-free; note it still returns a short artifact preview (LIST_PROJECTION), which is
+      // not yet treated as a support read.
       const searchCtx: SupportActorContext | undefined = search ? authorizeSupportCase(req, supportCase) : undefined;
 
       // aggregate/countDocuments skip the softDeletePlugin's find hook, so filter tombstones here.
