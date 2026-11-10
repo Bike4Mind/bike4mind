@@ -12,20 +12,14 @@ import {
 } from './inviteCenterSearch';
 import { useAdminModal } from './useAdminModal';
 import { AdminPageHeader } from './shared/AdminPageHeader';
-import { EmptyState } from './shared/EmptyState';
 import GrantPackagesTab from './InviteCenter/Packages/GrantPackagesTab';
 import { PendingSection } from './InviteCenter/Pending/PendingSection';
+import { RewardsSection } from './InviteCenter/Rewards/RewardsSection';
 import { ScheduleSection } from './InviteCenter/Schedule/ScheduleSection';
 import { ViewTabs } from './shared/ViewTabs';
 import { ADMIN_REGION_GAP } from './shared/adminStyles';
 
 type SectionLink = { label: string; tab: AdminTab; testId: string };
-
-type StubSection = {
-  title: string;
-  description: string;
-  links: ReadonlyArray<SectionLink>;
-};
 
 const SECTION_LABELS: Record<InviteCenterSectionId, string> = {
   waitlist: 'Waitlist',
@@ -38,46 +32,6 @@ const SECTION_LABELS: Record<InviteCenterSectionId, string> = {
 const parseSection = INVITE_CENTER_SEARCH_PARSERS[INVITE_CENTER_SECTION_PARAM];
 
 const VIEWS = INVITE_CENTER_SECTION_IDS.map(id => ({ id, label: SECTION_LABELS[id] }));
-
-const STUB_SECTIONS: Record<
-  Exclude<InviteCenterSectionId, 'waitlist' | 'packages' | 'pending' | 'schedule'>,
-  StubSection
-> = {
-  rewards: {
-    title: 'Rewards are coming here',
-    description: 'Referral and gear rewards will be set in this section.',
-    links: [],
-  },
-};
-
-const StubSectionBody = ({ section }: { section: StubSection }) => {
-  const setActiveTab = useAdminModal(state => state.setActiveTab);
-  const { title, description, links } = section;
-  return (
-    <EmptyState
-      title={title}
-      description={description}
-      action={
-        links.length > 0 ? (
-          <Stack direction="row" gap={1} flexWrap="wrap" justifyContent="center">
-            {links.map(({ label, tab, testId }) => (
-              <Button
-                key={tab}
-                variant="outlined"
-                color="neutral"
-                size="sm"
-                data-testid={testId}
-                onClick={() => setActiveTab(tab)}
-              >
-                {label}
-              </Button>
-            ))}
-          </Stack>
-        ) : null
-      }
-    />
-  );
-};
 
 const PACKAGE_LINKS: ReadonlyArray<SectionLink> = [
   { label: 'Open Invites', tab: AdminTab.RegistrationInvites, testId: 'invite-center-open-invites-btn' },
@@ -151,7 +105,7 @@ export function InviteCenterShell({ waitlist }: { waitlist: ReactNode }) {
         ) : section === 'schedule' ? (
           <ScheduleSection />
         ) : (
-          <StubSectionBody section={STUB_SECTIONS[section]} />
+          <RewardsSection />
         )}
       </div>
     </Stack>
