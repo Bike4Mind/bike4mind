@@ -84,30 +84,6 @@ describe('exportDashboardCsv', () => {
     expect(capturedCsv).toContain('"95.0%"');
   });
 
-  it('exports a never-checked integration as no data, last checked never', () => {
-    const data = makeResponse({
-      integrations: [
-        {
-          name: 'slack',
-          status: 'no_data',
-          latencyMs: 0,
-          lastCheckedAt: null,
-          successRate: 0,
-          consecutiveFailures: 0,
-          error: null,
-          circuitBreaker: { available: true, reason: null, mode: 'auto', autoTripped: false, noData: true },
-          rateLimit: null,
-          recentErrors: [],
-        },
-      ],
-    });
-
-    exportDashboardCsv(data);
-    expect(capturedCsv).toContain('"no data"');
-    expect(capturedCsv).toContain('"never"');
-    expect(capturedCsv).not.toContain('1970');
-  });
-
   it('escapes double quotes in cell values', () => {
     const data = makeResponse({
       integrations: [
@@ -136,7 +112,7 @@ describe('exportDashboardCsv', () => {
       integrations: [
         {
           name: 'jira',
-          status: 'unhealthy',
+          status: 'no_data',
           latencyMs: 0,
           lastCheckedAt: null,
           successRate: 0,
@@ -151,10 +127,11 @@ describe('exportDashboardCsv', () => {
 
     exportDashboardCsv(data);
     expect(capturedCsv).toContain('"not checked"');
-    expect(capturedCsv).toContain('"jira","not checked","\'--","\'--"');
+    expect(capturedCsv).toContain('"jira","not checked","",""');
     expect(capturedCsv).not.toContain('"0.0%"');
     expect(capturedCsv).toContain('"never"');
     expect(capturedCsv).not.toContain('"down"');
+    expect(capturedCsv).not.toContain('1970');
   });
 
   it('prefixes formula-injection characters with a single quote', () => {

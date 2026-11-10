@@ -658,6 +658,7 @@ function RepoConfigCard({
                         <IconButton
                           size="sm"
                           variant="plain"
+                          aria-label="Copy webhook URL"
                           onClick={() => {
                             const url =
                               typeof window !== 'undefined' ? `${window.location.origin}/api/webhooks/github/sre` : '';
@@ -2457,13 +2458,13 @@ export default function SreAgentTab() {
           <Tab data-testid="sre-tab-configuration">Configuration</Tab>
         </TabList>
 
-        <TabPanel value={0} sx={panelSx}>
+        <TabPanel value={0} sx={panelSx} data-admin-self-framed>
           <PipelineStatusPanel repoSlugs={repoSlugs} />
         </TabPanel>
-        <TabPanel value={1} sx={panelSx}>
+        <TabPanel value={1} sx={panelSx} data-admin-self-framed>
           <PatternLibraryPanel repoSlugs={repoSlugs} />
         </TabPanel>
-        <TabPanel value={2} sx={panelSx}>
+        <TabPanel value={2} sx={panelSx} data-admin-self-framed>
           <SreConfigPanel />
         </TabPanel>
       </Tabs>

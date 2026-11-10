@@ -42,7 +42,7 @@ describe('integrationStatusView', () => {
   });
 
   it('shows a never-checked integration as not checked, not down', () => {
-    expect(integrationStatusView({ status: 'unhealthy', lastCheckedAt: null })).toEqual({
+    expect(integrationStatusView({ status: 'no_data', lastCheckedAt: null })).toEqual({
       tone: 'neutral',
       label: 'Not checked',
     });

@@ -69,6 +69,7 @@ describe('GET /api/admin/integration-health-dashboard', () => {
 
     await h.get?.(req, res);
 
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
     const body = res._getJSONData() as { integrations: { name: string; lastCheckedAt: string | null }[] };
     expect(body.integrations).toEqual([
       expect.objectContaining({ name: 'github', lastCheckedAt: '2026-11-09T10:00:00.000Z' }),

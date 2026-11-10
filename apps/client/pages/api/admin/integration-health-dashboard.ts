@@ -174,7 +174,8 @@ const handler = adminApi({
       })
     );
 
-    res.setHeader('Cache-Control', 'private, max-age=25');
+    // Mutations immediately refetch this dashboard; the browser must not reuse a pre-write response.
+    res.setHeader('Cache-Control', 'private, no-store');
     return res.json({
       generatedAt: new Date().toISOString(),
       timeRangeHours: hours,

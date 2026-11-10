@@ -25,8 +25,8 @@ export function exportDashboardCsv(data: IntegrationDashboardResponse): void {
     rows.push([
       entry.name,
       integrationStatusView(entry).label.toLowerCase(),
-      checked ? String(entry.latencyMs) : '--',
-      checked ? `${(entry.successRate * 100).toFixed(1)}%` : '--',
+      checked ? String(entry.latencyMs) : '',
+      checked ? `${(entry.successRate * 100).toFixed(1)}%` : '',
       String(entry.consecutiveFailures),
       entry.circuitBreaker.mode,
       String(entry.circuitBreaker.available),

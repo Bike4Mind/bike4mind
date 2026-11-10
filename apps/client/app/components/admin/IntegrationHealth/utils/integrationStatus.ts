@@ -3,13 +3,14 @@ import type { IntegrationDashboardEntry } from '../types';
 
 export type IntegrationStatusView = { tone: AdminStatusTone; label: string };
 
+export const NOT_CHECKED: IntegrationStatusView = { tone: 'neutral', label: 'Not checked' };
+
 const STATUS_VIEW: Record<IntegrationDashboardEntry['status'], IntegrationStatusView> = {
   healthy: { tone: 'good', label: 'Healthy' },
   degraded: { tone: 'warn', label: 'Degraded' },
   unhealthy: { tone: 'bad', label: 'Down' },
+  no_data: NOT_CHECKED,
 };
-
-export const NOT_CHECKED: IntegrationStatusView = { tone: 'neutral', label: 'Not checked' };
 
 /** The one rule for "has been probed": a readable timestamp. A missing or unreadable one counts as never. */
 export function lastCheckedTime(lastCheckedAt: string | null): number | null {
@@ -17,10 +18,7 @@ export function lastCheckedTime(lastCheckedAt: string | null): number | null {
   return Number.isFinite(time) ? time : null;
 }
 
-/**
- * The server reports a never-probed integration as 'unhealthy' with no last check, so it shows as
- * not checked rather than down.
- */
+/** 'no_data' or no readable last check both show as not checked, so the chip agrees with the "Never checked" text. */
 export function integrationStatusView(entry: Pick<IntegrationDashboardEntry, 'status' | 'lastCheckedAt'>) {
   if (lastCheckedTime(entry.lastCheckedAt) === null) return NOT_CHECKED;
   return STATUS_VIEW[entry.status];
