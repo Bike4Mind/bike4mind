@@ -711,7 +711,7 @@ describe('shell approval in a project with a large node_modules', () => {
     expect(await judge(command, folder)).toMatchObject(asks);
   });
 
-  it.each(['üdir', ...(process.platform === 'win32' ? [] : ['line\ndir', 'back\\slash', '"quote'])])(
+  it.each(['\u00fcdir', ...(process.platform === 'win32' ? [] : ['line\ndir', 'back\\slash', '"quote'])])(
     'asks when git quotes a removed folder named %j holding settings',
     async name => {
       const repository = join(proj, 'quoted-repo');
