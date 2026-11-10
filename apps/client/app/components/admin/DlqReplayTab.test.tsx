@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within, act } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { CssVarsProvider } from '@mui/joy/styles';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import DlqReplayTab from './DlqReplayTab';
@@ -48,10 +48,7 @@ function renderTab() {
       <DlqReplayTab />
     </CssVarsProvider>
   );
-  // Toggle history on
-  act(() => {
-    fireEvent.click(screen.getByTestId('dlq-toggle-history'));
-  });
+  fireEvent.click(screen.getByTestId('dlq-toggle-history'));
   return result;
 }
 

@@ -96,7 +96,7 @@ class DlqReplayLogRepository extends BaseRepository<IDlqReplayLog> {
         { errorMessage: { $regex: escaped, $options: 'i' } },
       ];
     }
-    const projection = filters.includeBody ? undefined : { messageBody: 0 };
+    const projection = filters.includeBody === false ? { messageBody: 0 } : undefined;
     const results = await this.model
       .find(query, projection)
       .sort({ createdAt: -1 })
