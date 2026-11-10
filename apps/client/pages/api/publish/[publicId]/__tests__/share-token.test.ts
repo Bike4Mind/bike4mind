@@ -33,6 +33,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  // Opaque stand-in for the model's live-entry clauses, which PublishedArtifactModel.shareToken.test.ts
+  // pins against real Mongo; here it only proves the handler routes its filters through the helper.
+  liveShareTokenMatch: () => ({ revokedAt: null, __notExpired: true }),
   PublishedArtifact: {
     // `.lean()` -> load (loadOwnedArtifact); `.select().lean()` -> lost-race current read.
     findOne: (...a: unknown[]) => ({
@@ -46,13 +49,30 @@ vi.mock('@bike4mind/database', () => ({
   // PublishedArtifactModel.shareToken.test.ts. The legacy-scalar fold-in this used to carry went
   // with the scalar in #3523, so `shareToken` on a loaded row is now simply ignored, which is
   // what the two "leftover scalar" cases below assert the handler does.
-  liveShareTokens: (artifact: { shareTokens?: { token?: string; revokedAt?: Date | null }[] }) =>
-    (artifact.shareTokens ?? []).filter(entry => !!entry?.token && !entry.revokedAt),
+  liveShareTokens: (artifact: {
+    shareTokens?: { token?: string; revokedAt?: Date | null; expiresAt?: Date | null }[];
+  }) =>
+    (artifact.shareTokens ?? []).filter(
+      entry => !!entry?.token && !entry.revokedAt && (!entry.expiresAt || entry.expiresAt > new Date())
+    ),
 }));
 
 vi.mock('@server/services/publish', () => ({ generateShareToken: () => 'TESTTOKEN' }));
 
 import handler from '../share-token';
+
+const LIVE_MATCH = { revokedAt: null, __notExpired: true };
+const IS_LIVE_EXPR = {
+  $and: [
+    { $eq: [{ $ifNull: ['$$entry.revokedAt', null] }, null] },
+    {
+      $or: [
+        { $eq: [{ $ifNull: ['$$entry.expiresAt', null] }, null] },
+        { $gt: ['$$entry.expiresAt', expect.any(Date)] },
+      ],
+    },
+  ],
+};
 
 type RunOpts = {
   method?: 'GET' | 'POST' | 'DELETE';
@@ -144,7 +164,7 @@ describe('POST /api/publish/[publicId]/share-token', () => {
     // The ARRAY is the arbiter (#3255 step 3), and since #3523 it is the ONLY thing pinned -
     // the `shareToken: { $exists: false }` clause beside this existed to stop a pre-backfill
     // row getting a second live link, and no such row survives the migration.
-    expect(filter.shareTokens).toEqual({ $not: { $elemMatch: { revokedAt: null } } });
+    expect(filter.shareTokens).toEqual({ $not: { $elemMatch: LIVE_MATCH } });
     expect(filter.shareToken).toBeUndefined();
     // Nothing mirrors the fact any more: one representation, one write, nothing to keep in step.
     expect(pipeline[0].$set.shareToken).toBeUndefined();
@@ -184,7 +204,7 @@ describe('POST /api/publish/[publicId]/share-token', () => {
     const [kept, appended] = pipeline[0].$set.shareTokens.$concatArrays;
     // Matched on liveness, not on one token: splitting this into a second write would let a
     // crash leave a rotated-away link live.
-    expect(kept.$map?.in.$cond[0]).toEqual({ $eq: [{ $ifNull: ['$$entry.revokedAt', null] }, null] });
+    expect(kept.$map?.in.$cond[0]).toEqual(IS_LIVE_EXPR);
     expect(appended[0].token).toBe('TESTTOKEN');
   });
 
@@ -206,7 +226,7 @@ describe('POST /api/publish/[publicId]/share-token', () => {
     expect(res._getJSONData()).toMatchObject({ shareToken: 'TESTTOKEN', shareUrl: '/a/TESTTOKEN' });
     const [filter] = mockFindOneAndUpdate.mock.calls[0] as [Record<string, unknown>];
     // Only rotate if that entry is still live - the array, not the scalar, arbitrates.
-    expect(filter.shareTokens).toEqual({ $elemMatch: { _id: outgoing._id, revokedAt: null } });
+    expect(filter.shareTokens).toEqual({ $elemMatch: { _id: outgoing._id, ...LIVE_MATCH } });
   });
 
   it('ignores a leftover scalar on the loaded row, which the handler no longer reads', async () => {
@@ -219,7 +239,7 @@ describe('POST /api/publish/[publicId]/share-token', () => {
     expect(res._getStatusCode()).toBe(200);
     const [filter] = mockFindOneAndUpdate.mock.calls[0] as [Record<string, unknown>];
     expect(filter.shareToken).toBeUndefined();
-    expect(filter.shareTokens).toEqual({ $not: { $elemMatch: { revokedAt: null } } });
+    expect(filter.shareTokens).toEqual({ $not: { $elemMatch: LIVE_MATCH } });
   });
 
   it('on a lost race (CAS matched nothing), returns the concurrently-persisted link', async () => {
@@ -266,7 +286,7 @@ describe('POST /api/publish/[publicId]/share-token', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ shareToken: 'TESTTOKEN' });
     const [filter] = mockFindOneAndUpdate.mock.calls[0] as [Record<string, unknown>];
-    expect(filter.shareTokens).toEqual({ $not: { $elemMatch: { revokedAt: null } } });
+    expect(filter.shareTokens).toEqual({ $not: { $elemMatch: LIVE_MATCH } });
   });
 
   it('rotates pinned to the NEWEST live entry when several are live', async () => {
@@ -279,7 +299,7 @@ describe('POST /api/publish/[publicId]/share-token', () => {
     const { promise } = run({ body: { regenerate: true } });
     await promise;
     const [filter] = mockFindOneAndUpdate.mock.calls[0] as [Record<string, unknown>];
-    expect(filter.shareTokens).toEqual({ $elemMatch: { _id: newest._id, revokedAt: null } });
+    expect(filter.shareTokens).toEqual({ $elemMatch: { _id: newest._id, ...LIVE_MATCH } });
   });
 
   it('on a regenerate lost race where a pre-rotate link is still live, returns 409', async () => {
@@ -406,7 +426,7 @@ describe('DELETE /api/publish/[publicId]/share-token', () => {
     // Stamped, never pulled: the token must stay claimed in the unique index so a revoked link
     // can never be re-minted, and its view count has to survive.
     expect(pipeline[0].$set.shareTokens.$map.in.$cond[0]).toEqual({
-      $and: [{ $eq: [{ $ifNull: ['$$entry.revokedAt', null] }, null] }, { $literal: true }],
+      $and: [IS_LIVE_EXPR, { $literal: true }],
     });
   });
 
@@ -419,7 +439,7 @@ describe('DELETE /api/publish/[publicId]/share-token', () => {
     expect(res._getJSONData()).toEqual({ revoked: true, remaining: 1 });
     const [, pipeline] = mockUpdateOne.mock.calls[0] as [unknown, RevokeStage[]];
     expect(pipeline[0].$set.shareTokens.$map.in.$cond[0]).toEqual({
-      $and: [{ $eq: [{ $ifNull: ['$$entry.revokedAt', null] }, null] }, { $eq: ['$$entry._id', a._id] }],
+      $and: [IS_LIVE_EXPR, { $eq: ['$$entry._id', a._id] }],
     });
   });
 
@@ -453,7 +473,7 @@ describe('DELETE /api/publish/[publicId]/share-token', () => {
     const { promise } = run({ method: 'DELETE', query: { id: String(a._id) } });
     await promise;
     const [filter] = mockUpdateOne.mock.calls[0] as [Record<string, unknown>];
-    expect(filter.shareTokens).toEqual({ $elemMatch: { _id: { $ne: a._id }, revokedAt: null } });
+    expect(filter.shareTokens).toEqual({ $elemMatch: { _id: { $ne: a._id }, ...LIVE_MATCH } });
   });
 
   it('400s the racer whose sibling vanished before its write landed', async () => {
@@ -612,6 +632,7 @@ describe('GET /api/publish/[publicId]/share-token', () => {
         shareToken: 'A',
         shareUrl: '/a/A',
         createdAt: '2026-09-20T00:00:00.000Z',
+        expiresAt: null,
         viewCount: 7,
         lastViewedAt: '2026-09-27T00:00:00.000Z',
       },
@@ -620,6 +641,7 @@ describe('GET /api/publish/[publicId]/share-token', () => {
         shareToken: 'B',
         shareUrl: '/a/B',
         createdAt: '2026-09-20T00:00:00.000Z',
+        expiresAt: null,
         viewCount: 0,
         lastViewedAt: null,
       },
@@ -718,5 +740,63 @@ describe('GET /api/publish/[publicId]/share-token', () => {
     await promise;
     expect(res._getStatusCode()).toBe(status);
     expect(res.getHeader('Cache-Control')).toBe('private, no-store');
+  });
+});
+
+describe('share-link expiry', () => {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  type AppendedEntry = ShareEntry & { expiresAt?: Date | null };
+  const appended = () =>
+    (mockFindOneAndUpdate.mock.calls[0] as [unknown, SharePipelineStage[]])[1][0].$set.shareTokens
+      .$concatArrays[1][0] as AppendedEntry;
+
+  it.each([
+    ['in the past', new Date(Date.now() - 60_000).toISOString()],
+    ['less than an hour away', new Date(Date.now() + 59 * 60_000).toISOString()],
+    ['more than 365 days away', new Date(Date.now() + 366 * DAY_MS).toISOString()],
+    ['an empty string', ''],
+    ['a number', Date.now() + DAY_MS],
+    ['a date with no time zone', '2099-01-01T00:00:00'],
+  ])('400s an expiresAt %s', async (_label, expiresAt) => {
+    const { res, promise } = run({ body: { additional: true, expiresAt } });
+    await promise;
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData().code).toBe('INVALID_SHARE_LINK_EXPIRY');
+    expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it.each([{}, { regenerate: true }, { additional: true }])(
+    'stores a valid expiresAt on the new entry (%o)',
+    async mode => {
+      const expiresAt = new Date(Date.now() + DAY_MS);
+      if ('regenerate' in mode)
+        mockLoad.mockResolvedValue({ publicId: 'pub1', ownerId: 'owner1', shareTokens: [entry('OLD')] });
+      mockFindOneAndUpdate.mockResolvedValue({ shareTokens: [entry('TESTTOKEN', { expiresAt })] });
+      const { res, promise } = run({ body: { ...mode, expiresAt: expiresAt.toISOString() } });
+      await promise;
+      expect(res._getStatusCode()).toBe(200);
+      expect(appended().expiresAt).toEqual(expiresAt);
+      expect(res._getJSONData().shareLinks[0].expiresAt).toBe(expiresAt.toISOString());
+    }
+  );
+
+  it('stores a null expiresAt when none is requested', async () => {
+    const { promise } = run();
+    await promise;
+    expect(appended().expiresAt).toBeNull();
+  });
+
+  it('GET hides an expired link and reports the expiry of a live one', async () => {
+    const expiresAt = new Date(Date.now() + DAY_MS);
+    mockLoad.mockResolvedValue({
+      publicId: 'pub1',
+      ownerId: 'owner1',
+      shareTokens: [entry('GONE', { expiresAt: new Date(Date.now() - 60_000) }), entry('KEPT', { expiresAt })],
+    });
+    const { res, promise } = run({ method: 'GET' });
+    await promise;
+    const body = res._getJSONData();
+    expect(body.shareLinks.map((l: { shareToken: string }) => l.shareToken)).toEqual(['KEPT']);
+    expect(body.shareLinks[0].expiresAt).toBe(expiresAt.toISOString());
   });
 });
