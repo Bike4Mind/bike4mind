@@ -18,6 +18,7 @@ import {
 } from '@bike4mind/common';
 import { CacheKeys } from '@server/utils/cacheKeys';
 import { resolveUserNames } from '@server/utils/resolveUserNames';
+import { isSubstituted, modelLabel } from '@client/app/utils/modelLabel';
 import { Request } from 'express';
 import { z } from 'zod';
 
@@ -259,8 +260,11 @@ async function buildSpendData(query: Omit<SpendQuery, 'recache'>): Promise<Spend
     // Key and label on provider+model: the same model id can be served by more than
     // one backend, so collapsing to model alone would merge rows and collide React
     // keys. Matches the sibling usage dashboard's `${provider} / ${model}` identity.
-    modelId: `${m.provider}/${m.model}`,
-    modelName: `${m.provider} / ${m.model}`,
+    // A substituted row also keys on the executed pair so each pair is its own bar.
+    modelId: isSubstituted(m)
+      ? `${m.provider}/${m.model}->${m.executedProvider}/${m.executedModel}`
+      : `${m.provider}/${m.model}`,
+    modelName: modelLabel(m),
     estCost: m.cogsUsd,
     requests: m.requests,
     share: totalCogs > 0 ? m.cogsUsd / totalCogs : 0,
