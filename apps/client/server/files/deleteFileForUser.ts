@@ -65,7 +65,7 @@ export async function deleteFileForUser(req: Request, fabFileId: string) {
           ...lakeMembershipAuditDb,
         },
         storage: getFilesStorage(),
-        generatedCopies: getGeneratedCopyStore(),
+        generatedCopies: getGeneratedCopyStore({ logger: req.logger }),
         onDeleteComplete: async (deleted, size) => {
           refund = { owner: storageOwnerOf(deleted), bytes: size };
         },

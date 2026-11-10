@@ -77,7 +77,11 @@ vi.mock('@bike4mind/database', async importOriginal => ({
     findBySettingNames: vi.fn().mockResolvedValue([]),
     findAll: vi.fn().mockResolvedValue([]),
   },
-  sessionRepository: { findAllWithKnowledgeId: h.findAllWithKnowledgeId, update: h.sessionUpdate },
+  sessionRepository: {
+    findAllWithKnowledgeId: h.findAllWithKnowledgeId,
+    update: h.sessionUpdate,
+    findAllByIds: async () => [{ id: 's1' }],
+  },
   userRepository: { findById: h.userFindById },
   withTransaction: (fn: (session?: unknown) => Promise<unknown>) => fn(undefined),
   User: { findById: () => ({ session: async () => null }) },

@@ -5,6 +5,7 @@ import { Organization } from '@bike4mind/database/infra';
 import { S3Storage } from '@bike4mind/fab-pipeline';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { appFileCdnPath, invalidateRouterPaths } from '@server/services/cdn/invalidateRouterCdn';
 import { resolveBrowserAppFileUploadUrl } from '@server/utils/browserUploadUrl';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
@@ -71,6 +72,10 @@ const handler = baseApi().post(
       // Self-host swaps the (browser-unreachable) MinIO presign for the same-origin upload proxy.
       return { url: resolveBrowserAppFileUploadUrl(file.id, presignedUrl), fileId: file.id, fileKey };
     });
+
+    // Only once the replacement committed: a rolled-back attempt leaves the old logo referenced.
+    const retiredCdnPath = organization.logo ? appFileCdnPath(organization.logo.path) : null;
+    if (retiredCdnPath) await invalidateRouterPaths([retiredCdnPath], { label: 'org-logo', logger: req.logger });
 
     return res.json(result);
   })
