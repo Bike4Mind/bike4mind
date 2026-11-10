@@ -237,7 +237,9 @@ export const registerUser = async (
           subscriberStorage = subscriber.startingStorage || DEFAULT_STORAGE_LIMIT_MB;
           subscriberStorageFound = true;
           logger.info(
-            `Applying subscriber-specific allocations: ${subscriberCredits} credits, ${subscriberStorage}MB storage for ${email}`
+            isReferralInvite
+              ? `Applying subscriber storage override for referral invite: ${subscriberStorage}MB storage for ${email}`
+              : `Applying subscriber-specific allocations: ${subscriberCredits} credits, ${subscriberStorage}MB storage for ${email}`
           );
         }
       } catch (error) {
