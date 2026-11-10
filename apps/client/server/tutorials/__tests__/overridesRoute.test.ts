@@ -86,6 +86,27 @@ describe('overridesRoute PUT content sequence', () => {
     expect(rows[0].contentSeq).toBe(1);
   });
 
+  it('saves an editor opened before any row existed after a switch toggle creates one', async () => {
+    const { rows, put } = setup();
+    expect((await put({ moduleId: 'fixture', enabled: false, reason: 'off' })).statusCode).toBe(200);
+    const open = FIXTURE_CONTENT.steps.find(s => s.id === 'open')!;
+    const fields = [{ kind: 'copy', stepId: 'open', field: 'body', value: 'Changed.', repoValue: open.body }];
+    const saved = await put({ moduleId: 'fixture', fields, reason: 'edit', expectedContentSeq: null });
+    expect(saved.statusCode).toBe(200);
+    expect(rows[0].contentSeq).toBe(1);
+  });
+
+  it('refuses a null basis once content has been saved', async () => {
+    const { put } = setup();
+    const open = FIXTURE_CONTENT.steps.find(s => s.id === 'open')!;
+    const fields = [{ kind: 'copy', stepId: 'open', field: 'body', value: 'Changed.', repoValue: open.body }];
+    expect((await put({ moduleId: 'fixture', fields, reason: 'first', expectedContentSeq: null })).statusCode).toBe(
+      200
+    );
+    const stale = await put({ moduleId: 'fixture', fields, reason: 'second', expectedContentSeq: null });
+    expect(stale.statusCode).toBe(409);
+  });
+
   it('refuses the second of two switch-only writes made from the same prior', async () => {
     const { rows, put } = setup();
     expect((await put({ moduleId: 'fixture', enabled: true, reason: 'seed' })).statusCode).toBe(200);

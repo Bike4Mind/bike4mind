@@ -203,7 +203,8 @@ export function overridesRoute({ api, isAdmin, models, content, repo, policy, kn
       const actorId = req.user!.id;
       const rows = await content.readOverrides();
       const prior = rows.find(row => row.moduleId === moduleId);
-      if (expectedContentSeq !== undefined && expectedContentSeq !== (prior ? (prior.contentSeq ?? 0) : null)) {
+      // Every content write bumps contentSeq, so a stored 0 (switch-only row) holds no content a null basis could miss.
+      if (expectedContentSeq !== undefined && (expectedContentSeq ?? 0) !== (prior?.contentSeq ?? 0)) {
         return res.status(409).json({ error: 'The module changed while you edited it; reload and try again' });
       }
 
