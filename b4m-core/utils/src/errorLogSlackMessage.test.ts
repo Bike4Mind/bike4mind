@@ -250,6 +250,8 @@ describe('metadata fallbacks', () => {
         sourceIp: '198.51.100.4',
         issuedIp: '2001:db8::1',
         clientIpAddress: '198.51.100.5',
+        sourceIP: '198.51.100.6',
+        ip_address: '198.51.100.7',
         zip: '94107',
       },
     });
@@ -257,6 +259,21 @@ describe('metadata fallbacks', () => {
     expect(serialized).not.toMatch(/203\.0\.113\.9|198\.51\.100\.|2001:db8::1/);
     expect(serialized).not.toContain('Client IP');
     expect(contextTexts(payload)[0]).toBe('zip: 94107');
+  });
+
+  it('redacts IPs written into the message, the error detail and nested metadata', () => {
+    const payload = render({
+      message: 'Auto-block of IP 203.0.113.7 not committed: {"name":"Error","message":"peer 198.51.100.1 reset"}',
+      metadata: {
+        ...metadata,
+        error: { message: 'from 2001:db8::1', stack: 'Error: from 2001:db8::1\n    at handler (index.js:1:1)' },
+        target: 'blocked-ip:192.0.2.44',
+      },
+    });
+    const serialized = JSON.stringify(payload);
+    expect(serialized).not.toMatch(/203\.0\.113\.|198\.51\.100\.|2001:db8|192\.0\.2\./);
+    expect(payload.text).toContain('Auto-block of IP [IP] not committed');
+    expect(contextTexts(payload)[0]).toBe('target: blocked-ip:[IP]');
   });
 
   it('lists leftover scalar metadata in one context block before the CloudWatch link', () => {
