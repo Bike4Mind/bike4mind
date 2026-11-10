@@ -1,7 +1,25 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { CssVarsProvider } from '@mui/joy/styles';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import DlqReplayTab from './DlqReplayTab';
+
+const mockQueues = [
+  {
+    label: 'quest',
+    displayName: 'Quest queue',
+    application: 'client',
+    approximateMessageCount: 2,
+    approximateNotVisibleCount: 0,
+  },
+];
+const mockMessages = [
+  {
+    messageId: 'm1',
+    body: '{"a":1}',
+    receiptHandle: 'rh1',
+    sentTimestamp: '1700000000000',
+    approximateReceiveCount: '14',
+  },
+];
 
 const state = vi.hoisted(() => ({
   history: [] as Array<{
@@ -19,13 +37,13 @@ const state = vi.hoisted(() => ({
 
 vi.mock('@client/app/hooks/data/dlqManagement', () => ({
   useDlqQueues: () => ({
-    data: [],
+    data: mockQueues,
     isLoading: false,
     isError: false,
     refetch: vi.fn(),
   }),
   useDlqMessages: () => ({
-    data: [],
+    data: mockMessages,
     isLoading: false,
     isError: false,
     refetch: vi.fn(),
@@ -42,6 +60,15 @@ vi.mock('@client/app/hooks/data/dlqManagement', () => ({
     isError: false,
   }),
 }));
+
+import DlqReplayTab from './DlqReplayTab';
+
+const selectQueue = () => {
+  const selector = screen.getByTestId('dlq-queue-selector');
+  fireEvent.click(selector);
+  const option = screen.getByTestId('dlq-queue-option-quest');
+  fireEvent.click(option);
+};
 
 function renderTab() {
   const result = render(
@@ -122,5 +149,32 @@ describe('DlqReplayTab history table', () => {
 
     expect(headerTexts).not.toContain('Body');
     expect(headerTexts).not.toContain('Message Body');
+  });
+});
+
+describe('DlqReplayTab messages table', () => {
+  it('renders the "Attempts" column header instead of "Receives" after selecting a queue', () => {
+    render(
+      <CssVarsProvider>
+        <DlqReplayTab />
+      </CssVarsProvider>
+    );
+    selectQueue();
+    const table = screen.getByTestId('dlq-messages-table');
+    expect(within(table).getByText('Attempts')).toBeInTheDocument();
+    expect(within(table).queryByText('Receives')).toBeNull();
+  });
+
+  it('wraps "Attempts" in a Tooltip with an explanatory title', () => {
+    render(
+      <CssVarsProvider>
+        <DlqReplayTab />
+      </CssVarsProvider>
+    );
+    selectQueue();
+    const attemptsHeader = within(screen.getByTestId('dlq-messages-table')).getByText('Attempts');
+    const tooltipWrapper = attemptsHeader.closest('[aria-label], [title]') ?? attemptsHeader.parentElement;
+    const titleAttr = tooltipWrapper?.getAttribute('title') ?? tooltipWrapper?.getAttribute('aria-label') ?? '';
+    expect(titleAttr).toContain('failed to process');
   });
 });
