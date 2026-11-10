@@ -43,7 +43,8 @@ import {
  * so `recipients` and `typedRecipients` are dropped for every non-admin and `token` for everyone.
  * Client subscribers treat an invite event as a cue to refetch through REST rather than reading it.
  *
- * sessions: REST strips SERVER_OWNED_SESSION_FIELDS and origin.apiKeyId for every viewer.
+ * sessions: REST strips SERVER_OWNED_SESSION_FIELDS and SERVER_OWNED_SESSION_ORIGIN_FIELDS (under
+ * `origin.`) for every viewer.
  * A subscription may include both owned and shared sessions, so the query projection must
  * exclude them for everyone, including the owner, to match the REST response shape.
  */
