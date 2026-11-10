@@ -64,7 +64,12 @@ describe('model logs params', () => {
     ['modelLogsPage', '1.5', undefined],
     ['modelLogsModel', 'claude-3-opus', 'claude-3-opus'],
     ['modelLogsModel', 'all', undefined],
-    ['modelLogsModel', 'some-other-model', undefined],
+    ['modelLogsModel', 'some-other-model', 'some-other-model'],
+    ['modelLogsModel', '  anthropic.claude-v2:1  ', 'anthropic.claude-v2:1'],
+    ['modelLogsModel', 'local-image/anime/foo v2.safetensors', 'local-image/anime/foo v2.safetensors'],
+    ['modelLogsModel', '   ', undefined],
+    ['modelLogsModel', 'x'.repeat(201), undefined],
+    ['modelLogsModel', 7, undefined],
   ] as const)('parses %s=%j as %j', (key, value, expected) => {
     expect(parsers[key](value)).toBe(expected);
   });

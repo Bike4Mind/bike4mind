@@ -103,6 +103,17 @@ describe('ModelLogsTab', () => {
     expect(fakeAdminRouter.search).toEqual({ tab: 'model-logs', modelLogsModel: 'claude-3-opus' });
   });
 
+  it('keeps a linked model id that is not one of the options in the filter', () => {
+    mocks.useModelLogs.mockReturnValue(queryResult({ data: undefined, isSuccess: false }));
+    act(() => fakeAdminRouter.reset({ tab: 'model-logs', modelLogsModel: 'claude-opus-4-8' }));
+    renderTab();
+
+    expect(within(screen.getByTestId('model-logs-model-select')).getByRole('combobox').textContent).toContain(
+      'claude-opus-4-8'
+    );
+    expect(fakeAdminRouter.search).toEqual({ tab: 'model-logs', modelLogsModel: 'claude-opus-4-8' });
+  });
+
   it('shows an error with a retry, not the empty state, when the query fails', async () => {
     const refetch = vi.fn();
     mocks.useModelLogs.mockReturnValue(queryResult({ data: undefined, isSuccess: false, isError: true, refetch }));

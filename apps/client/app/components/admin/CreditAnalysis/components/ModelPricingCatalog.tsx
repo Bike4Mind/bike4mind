@@ -27,7 +27,6 @@ import ReplayIcon from '@mui/icons-material/Replay';
 // informs the editor's derived line and never reaches a stored rate.
 import { getPriceMargin, type IModelPriceTier } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
-import { useCreditAnalysisStore } from '../store';
 
 /** Wire shape of a catalog row (dates arrive as ISO strings). */
 interface PriceRow {
@@ -73,7 +72,7 @@ const HISTORY_CHIP_COLOR: Record<Provenance, ColorPaletteProp> = {
 };
 
 /** Every rate field a tier can carry, in display order. */
-const RATE_FIELDS = [
+export const RATE_FIELDS = [
   'input',
   'output',
   'cache_read',
@@ -82,8 +81,8 @@ const RATE_FIELDS = [
   'audio_cache_read',
   'audio_output',
 ] as const;
-type RateField = (typeof RATE_FIELDS)[number];
-const RATE_LABELS: Record<RateField, string> = {
+export type RateField = (typeof RATE_FIELDS)[number];
+export const RATE_LABELS: Record<RateField, string> = {
   input: 'Input',
   output: 'Output',
   cache_read: 'Cache read',
@@ -100,7 +99,7 @@ const UNIT_SUFFIX: Record<string, string> = {
 };
 
 /** Compact form for the narrow editor inputs; the modal states the full unit. */
-const UNIT_FIELD_SUFFIX: Record<string, string> = {
+export const UNIT_FIELD_SUFFIX: Record<string, string> = {
   per_token: '$/M',
   per_minute: '$/min',
   per_image: '$/img',
@@ -131,7 +130,7 @@ const toDisplayedRate = (unit: string, stored: number) =>
   trimRoundTripNoise(unit === 'per_token' ? stored * TOKENS_PER_MILLION : stored);
 
 /** Inverse of toDisplayedRate: the edited value back to the stored wire rate. */
-const toStoredRate = (unit: string, displayed: number) =>
+export const toStoredRate = (unit: string, displayed: number) =>
   trimRoundTripNoise(unit === 'per_token' ? displayed / TOKENS_PER_MILLION : displayed);
 
 /**
@@ -139,7 +138,7 @@ const toStoredRate = (unit: string, displayed: number) =>
  * is applied when calls settle (usdToCredits), so it must never reach the wire
  * or the catalog would carry cost times markup and be marked up again on read.
  */
-const markedUpRate = (displayed: string | undefined) => {
+export const markedUpRate = (displayed: string | undefined) => {
   const value = Number(displayed);
   if (displayed === undefined || !Number.isFinite(value)) return '-';
   return `$${(value * getPriceMargin()).toLocaleString(undefined, { maximumFractionDigits: 4 })}`;
@@ -153,7 +152,7 @@ const numberCell = { fontVariantNumeric: 'tabular-nums' } as const;
 // err.message is the useless generic 'Request failed with status code 400'.
 // The envelope names it 'error' (server/middlewares/errorHandler.ts); 'message'
 // stays as a fallback for endpoints that answer outside that envelope.
-const apiErrorMessage = (err: unknown, fallback: string) => {
+export const apiErrorMessage = (err: unknown, fallback: string) => {
   const e = err as { response?: { data?: { error?: string; message?: string } }; message?: string };
   return e?.response?.data?.error || e?.response?.data?.message || e?.message || fallback;
 };
@@ -170,7 +169,7 @@ const BAND_ERROR_CODE = 'manual-reprice-over-band';
  * it from the resubmitted draft, so it can only ever waive the exact values
  * this rejection enumerated.
  */
-const bandConfirmToken = (err: unknown): string | null => {
+export const bandConfirmToken = (err: unknown): string | null => {
   const data = (err as { response?: { data?: { code?: string; confirmToken?: string } } })?.response?.data;
   return data?.code === BAND_ERROR_CODE && typeof data.confirmToken === 'string' ? data.confirmToken : null;
 };
@@ -182,14 +181,34 @@ const bandConfirmToken = (err: unknown): string | null => {
  * here writes markup.
  * All writes are append-only rows via /api/admin/model-prices.
  */
-export const ModelPricingCatalog: React.FC = () => {
+export type ModelPricingCatalogProps = {
+  /** Controlled model filter; without it the catalog keeps its own. */
+  modelFilter?: string;
+  onModelFilterChange?: (value: string) => void;
+  /** Hides the built-in heading when the host page states the units itself. */
+  hideHeading?: boolean;
+  /** Rendered beside the refresh button. */
+  toolbarActions?: React.ReactNode;
+  /** Changing this refetches the rows, for a write made outside the table. */
+  refreshKey?: number;
+  /** Called after a reprice or revert lands. */
+  onPricesChanged?: () => void;
+};
+
+export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
+  modelFilter,
+  onModelFilterChange,
+  hideHeading = false,
+  toolbarActions,
+  refreshKey = 0,
+  onPricesChanged,
+}) => {
   const [rows, setRows] = useState<PriceRow[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [filter, setFilter] = useState('');
-
-  const pricingModelId = useCreditAnalysisStore(state => state.pricingModelId);
-  const clearPricingModelId = useCreditAnalysisStore(state => state.clearPricingModelId);
+  const [localFilter, setLocalFilter] = useState('');
+  const filter = modelFilter ?? localFilter;
+  const setFilter = onModelFilterChange ?? setLocalFilter;
 
   const [repriceTarget, setRepriceTarget] = useState<PriceRow | null>(null);
   const [draftRates, setDraftRates] = useState<Record<string, Record<string, string>>>({});
@@ -222,15 +241,7 @@ export const ModelPricingCatalog: React.FC = () => {
 
   useEffect(() => {
     void fetchRows();
-  }, [fetchRows]);
-
-  // A cross-surface jump (a discovery price flag) names one model out of ~110
-  // rows. Consumed once so a later manual visit does not open still filtered.
-  useEffect(() => {
-    if (!pricingModelId) return;
-    setFilter(pricingModelId);
-    clearPricingModelId();
-  }, [pricingModelId, clearPricingModelId]);
+  }, [fetchRows, refreshKey]);
 
   // Drafts are held in the DISPLAYED unit (per 1M for token rows), so what the
   // editor shows always matches the table it was opened from.
@@ -276,6 +287,7 @@ export const ModelPricingCatalog: React.FC = () => {
       });
       setRepriceTarget(null);
       setConfirmToken(null);
+      onPricesChanged?.();
       await fetchRows();
     } catch (err) {
       setError(apiErrorMessage(err, 'Reprice failed'));
@@ -296,6 +308,7 @@ export const ModelPricingCatalog: React.FC = () => {
         action: 'revert-to-seed',
       });
       setRevertTarget(null);
+      onPricesChanged?.();
       await fetchRows();
     } catch (err) {
       setError(apiErrorMessage(err, 'Revert failed'));
@@ -326,7 +339,10 @@ export const ModelPricingCatalog: React.FC = () => {
 
   const visibleRows = useMemo(() => {
     const needle = filter.trim().toLowerCase();
-    return needle ? rows.filter(row => row.modelId.toLowerCase().includes(needle)) : rows;
+    if (!needle) return rows;
+    // A full id narrows to that model alone, so a deep link to gpt-4 does not also list gpt-4o.
+    const exact = rows.filter(row => row.modelId.toLowerCase() === needle);
+    return exact.length > 0 ? exact : rows.filter(row => row.modelId.toLowerCase().includes(needle));
   }, [rows, filter]);
 
   const draftInvalid = useMemo(
@@ -339,21 +355,36 @@ export const ModelPricingCatalog: React.FC = () => {
 
   return (
     <Box data-testid="model-pricing-catalog">
-      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
-        <Box>
-          <Typography level="title-md">Model pricing (provider cost, USD; token rates shown per 1M)</Typography>
+      <Stack
+        direction="row"
+        justifyContent="space-between"
+        alignItems="center"
+        flexWrap="wrap"
+        useFlexGap
+        gap={1}
+        sx={{ mb: 1 }}
+      >
+        {hideHeading ? (
           <Typography level="body-sm" color="neutral">
             Users pay this cost times the published uniform markup. Changes append versioned rows; history is never
             edited.
           </Typography>
-        </Box>
-        <Stack direction="row" spacing={1} alignItems="center">
+        ) : (
+          <Box>
+            <Typography level="title-md">Model pricing (provider cost, USD; token rates shown per 1M)</Typography>
+            <Typography level="body-sm" color="neutral">
+              Users pay this cost times the published uniform markup. Changes append versioned rows; history is never
+              edited.
+            </Typography>
+          </Box>
+        )}
+        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
           <Input
             size="sm"
             value={filter}
             onChange={e => setFilter(e.target.value)}
             placeholder="Filter by model id"
-            sx={{ width: 220 }}
+            sx={{ width: 220, maxWidth: '100%' }}
             slotProps={{ input: { 'data-testid': 'model-pricing-filter-input', 'aria-label': 'Filter by model id' } }}
           />
           <IconButton
@@ -365,6 +396,7 @@ export const ModelPricingCatalog: React.FC = () => {
           >
             <RefreshIcon />
           </IconButton>
+          {toolbarActions}
         </Stack>
       </Stack>
 

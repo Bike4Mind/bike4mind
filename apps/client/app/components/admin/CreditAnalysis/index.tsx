@@ -2,13 +2,11 @@ import React from 'react';
 import { Box, Tabs, TabList, Tab, TabPanel } from '@mui/joy';
 import PeopleIcon from '@mui/icons-material/People';
 import InsightsIcon from '@mui/icons-material/Insights';
-import PriceChangeIcon from '@mui/icons-material/PriceChange';
 import BusinessIcon from '@mui/icons-material/Business';
 import ReceiptLongIcon from '@mui/icons-material/ReceiptLong';
 import HistoryIcon from '@mui/icons-material/History';
 import ApiIcon from '@mui/icons-material/Api';
 import { MarginDashboard } from './components/MarginDashboard';
-import { ModelPricingCatalog } from './components/ModelPricingCatalog';
 import { UsageDashboard } from './components/UsageDashboard';
 import { PlatformUsageDashboard } from './components/PlatformUsageDashboard';
 import { CreditHolderType } from '@bike4mind/common';
@@ -19,9 +17,10 @@ import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { useCreditAnalysisStore, type CreditAnalysisTab } from './store';
 
 export const CreditAnalyticsTab: React.FC = () => {
-  // Held in the store rather than locally so another admin tab can land the
-  // operator on a specific inner tab (Model Lifecycle -> Model Pricing).
-  const activeTab = useCreditAnalysisStore(state => state.activeTab);
+  // Held in the store rather than locally so another admin tab can land the operator on a specific inner tab.
+  // The store's 'pricing' value outlives the removed tab until its last writers go, so it reads as the first tab.
+  const storedTab = useCreditAnalysisStore(state => state.activeTab);
+  const activeTab = storedTab === 'pricing' ? 'users' : storedTab;
   const setActiveTab = useCreditAnalysisStore(state => state.setActiveTab);
 
   return (
@@ -32,12 +31,6 @@ export const CreditAnalyticsTab: React.FC = () => {
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <PeopleIcon sx={{ fontSize: '18px' }} />
               <Box sx={{ display: { xs: 'none', sm: 'inline' } }}>User Credits</Box>
-            </Box>
-          </Tab>
-          <Tab value="pricing" data-testid="credit-analysis-pricing-tab">
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <PriceChangeIcon sx={{ fontSize: '18px' }} />
-              <Box sx={{ display: { xs: 'none', sm: 'inline' } }}>Model Pricing</Box>
             </Box>
           </Tab>
           <Tab value="margins" data-testid="credit-analysis-margins-tab">
@@ -75,10 +68,6 @@ export const CreditAnalyticsTab: React.FC = () => {
 
         <TabPanel value="users" sx={{ p: 0 }}>
           <UserCreditsManager />
-        </TabPanel>
-
-        <TabPanel value="pricing" sx={{ p: 0 }}>
-          <ModelPricingCatalog />
         </TabPanel>
 
         <TabPanel value="margins" sx={{ p: 0 }}>

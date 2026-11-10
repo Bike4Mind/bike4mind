@@ -239,7 +239,7 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
               <FormControl>
                 <Select
                   value={modelFilter}
-                  // The parser reads "All Models" (and anything unknown) as no model filter.
+                  // The parser reads "All Models" as no model filter.
                   onChange={(_, value) =>
                     updateView({ model: MODEL_LOGS_SEARCH_PARSERS.modelLogsModel(value), page: 1 })
                   }
@@ -252,6 +252,10 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
                       {option.label}
                     </Option>
                   ))}
+                  {modelFilter !== ALL_MODELS &&
+                    !MODEL_LOGS_MODEL_OPTIONS.some(option => option.value === modelFilter) && (
+                      <Option value={modelFilter}>{modelFilter}</Option>
+                    )}
                 </Select>
               </FormControl>
             </Grid>

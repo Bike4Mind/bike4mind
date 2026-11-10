@@ -9,7 +9,6 @@ const { stub } = vi.hoisted(() => ({
   stub: (id: string) => () => <div data-testid={id} />,
 }));
 vi.mock('./components/UserCreditsManager', () => ({ UserCreditsManager: stub('stub-user-credits') }));
-vi.mock('./components/ModelPricingCatalog', () => ({ ModelPricingCatalog: stub('stub-pricing') }));
 vi.mock('./components/MarginDashboard', () => ({ MarginDashboard: stub('stub-margins') }));
 vi.mock('./components/UsageDashboard', () => ({ UsageDashboard: stub('stub-org-usage') }));
 vi.mock('./components/PlatformUsageDashboard', () => ({ PlatformUsageDashboard: stub('stub-api-usage') }));
@@ -34,5 +33,18 @@ describe('CreditAnalyticsTab', () => {
 
     expect(useCreditAnalysisStore.getState().activeTab).toBe('ledger');
     expect(screen.getByTestId('stub-ledger')).toBeInTheDocument();
+  });
+
+  it('has no Model pricing tab and shows the first tab for a stale pricing value', () => {
+    useCreditAnalysisStore.getState().setActiveTab('pricing');
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <CreditAnalyticsTab />
+      </CssVarsProvider>
+    );
+
+    expect(screen.queryByTestId('credit-analysis-pricing-tab')).toBeNull();
+    expect(screen.queryByText('Model Pricing')).toBeNull();
+    expect(screen.getByTestId('stub-user-credits')).toBeInTheDocument();
   });
 });

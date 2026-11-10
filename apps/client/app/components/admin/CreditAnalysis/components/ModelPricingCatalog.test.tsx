@@ -11,7 +11,6 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
 }));
 
 import { ModelPricingCatalog } from './ModelPricingCatalog';
-import { useCreditAnalysisStore } from '../store';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: React.ReactNode }) => (
@@ -57,7 +56,6 @@ describe('ModelPricingCatalog', () => {
     vi.clearAllMocks();
     mockGet.mockResolvedValue({ data: { rows: ROWS } });
     mockPost.mockResolvedValue({ data: { row: {} } });
-    useCreditAnalysisStore.setState({ activeTab: 'pricing', pricingModelId: null });
   });
 
   it('renders in-force rows with seed/operator source chips', async () => {
@@ -524,13 +522,54 @@ describe('ModelPricingCatalog', () => {
     expect(screen.getByTestId('model-pricing-filter-empty')).toBeInTheDocument();
   });
 
-  it('seeds the filter from a cross-surface jump and consumes the focus so a later visit is not stuck', async () => {
-    useCreditAnalysisStore.setState({ pricingModelId: 'gpt-y' });
-    renderCatalog();
-
-    await waitFor(() => expect(screen.getByTestId('model-pricing-filter-input')).toHaveValue('gpt-y'));
+  it('shows only the model a controlled filter names, and reports edits to the host', async () => {
+    const onChange = vi.fn();
+    render(
+      <TestWrapper>
+        <ModelPricingCatalog modelFilter="gpt-y" onModelFilterChange={onChange} />
+      </TestWrapper>
+    );
+    await screen.findByTestId('model-pricing-row-gpt-y-per_token');
+    expect(screen.getByTestId('model-pricing-filter-input')).toHaveValue('gpt-y');
     expect(screen.queryByTestId('model-pricing-row-gpt-x-per_token')).not.toBeInTheDocument();
-    expect(useCreditAnalysisStore.getState().pricingModelId).toBeNull();
+
+    fireEvent.change(screen.getByTestId('model-pricing-filter-input'), { target: { value: 'gpt' } });
+    expect(onChange).toHaveBeenCalledWith('gpt');
+  });
+
+  it('narrows a full id to that model alone', async () => {
+    mockGet.mockResolvedValue({
+      data: { rows: [...ROWS, { ...ROWS[0], modelId: 'gpt-x-mini' }] },
+    });
+    render(
+      <TestWrapper>
+        <ModelPricingCatalog modelFilter="gpt-x" onModelFilterChange={vi.fn()} />
+      </TestWrapper>
+    );
+    await screen.findByTestId('model-pricing-row-gpt-x-per_token');
+    expect(screen.queryByTestId('model-pricing-row-gpt-x-mini-per_token')).not.toBeInTheDocument();
+  });
+
+  it('reports a landed reprice and refetches when the refresh key changes', async () => {
+    const onPricesChanged = vi.fn();
+    const { rerender } = render(
+      <TestWrapper>
+        <ModelPricingCatalog onPricesChanged={onPricesChanged} refreshKey={0} />
+      </TestWrapper>
+    );
+    await screen.findByTestId('model-pricing-row-gpt-x-per_token');
+    const calls = mockGet.mock.calls.length;
+    rerender(
+      <TestWrapper>
+        <ModelPricingCatalog onPricesChanged={onPricesChanged} refreshKey={1} />
+      </TestWrapper>
+    );
+    await waitFor(() => expect(mockGet.mock.calls.length).toBeGreaterThan(calls));
+
+    fireEvent.click(screen.getByTestId('model-pricing-reprice-gpt-x-per_token'));
+    fireEvent.change(await screen.findByTestId('reprice-note-input'), { target: { value: 'invoice' } });
+    fireEvent.click(screen.getByTestId('reprice-save-btn'));
+    await waitFor(() => expect(onPricesChanged).toHaveBeenCalledTimes(1));
   });
 
   it('history drawer fetches and lists the audit trail for one model', async () => {

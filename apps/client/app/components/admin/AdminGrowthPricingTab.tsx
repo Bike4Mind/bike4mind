@@ -20,7 +20,6 @@ import { SettingKeyRow } from './InviteCenter/shared/SettingKeyRow';
 import { SectionHeading } from './InviteCenter/shared/SettingBlocks';
 import { useStoredByKey } from './InviteCenter/shared/useStoredByKey';
 import { CheckoutCatalogPanel } from './CheckoutCatalogPanel';
-import { AdminTab } from './adminSidebarConfig';
 import {
   ADMIN_SETTINGS_SEARCH_PARAM,
   ADMIN_SETTINGS_SECTION_PARAM,
@@ -28,9 +27,8 @@ import {
   adminSearchForTab,
   type AdminSearch,
 } from './adminTabParams';
-import { useAdminModal } from './useAdminModal';
 import { useOpenSettingHome } from './useOpenSettingHome';
-import { useCreditAnalysisStore } from './CreditAnalysis/store';
+import { useModelsNavigation } from './Models/modelsNavigation';
 import { SettingsDraftProvider } from './SettingsDraftProvider';
 import { AdminPageHeader, ErrorState, LoadingState, SettingsSection } from './shared';
 import { ADMIN_DETAIL_MAX_WIDTH, ADMIN_REGION_GAP } from './shared/adminStyles';
@@ -158,15 +156,13 @@ export const describeDerivedValue = (key: SettingKey, value: unknown): string | 
 const AdminGrowthPricingTab = () => {
   const { data, isLoading, isError, isFetching, refetch } = useSettingsFromServer();
   const navigate = useNavigate();
-  const setAdminTab = useAdminModal(state => state.setActiveTab);
-  const setCreditAnalysisTab = useCreditAnalysisStore(state => state.setActiveTab);
   const openSettingHome = useOpenSettingHome();
+  const { openPrices } = useModelsNavigation();
 
-  // Already inside /admin, so each link is an in-console navigation, as in ModelLifecycleTab.
+  // Already inside /admin, so each link is an in-console navigation.
   const openLink: Record<GrowthPricingLinkId, () => void> = {
     'model-pricing': () => {
-      setCreditAnalysisTab('pricing');
-      setAdminTab(AdminTab.CreditAnalytics);
+      void openPrices();
     },
     // Navigate with the tab slug instead of setting the store: the store-to-URL mirror would
     // rebuild the search and drop the section and filter (see useAdminTabUrlSync).
