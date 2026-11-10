@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -327,8 +327,14 @@ describe('sessionScriptRun', () => {
     await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'src', 'a.ts'));
     expect(await runs('export PATH="$(pnpm bin):$PATH"; git status', id)).toBeNull();
     expect(await runs('set -a; read -r PATH <<< ./x; git status', id)).toBeNull();
-    await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'tools', 'git'));
+    await writeFile(join(root, 'tools', 'plain'), 'x\n', 'utf8');
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'tools', 'plain'));
+    expect(await runs('export PATH="$(pnpm bin):$PATH"; git status', id)).toBeNull();
+    await writeFile(join(root, 'tools', 'vim'), '#!/bin/sh\n', 'utf8');
+    await chmod(join(root, 'tools', 'vim'), 0o755);
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'tools', 'vim'));
     expect(await runs('export PATH="$(pnpm bin):$PATH"; git status', id)).not.toBeNull();
+    expect(await runs('export PATH="$(cd tools && pwd):$PATH"; git commit --allow-empty', id)).not.toBeNull();
     const binId = 'session-scripts-path-bin';
     await recordSessionWrite({ sessionId: binId } as ToolContext, join(root, 'node_modules', '.bin', 'x'));
     expect(await runs('export PATH="$(pnpm bin):$PATH"; git status', binId)).not.toBeNull();
@@ -356,6 +362,49 @@ describe('sessionScriptRun', () => {
     } finally {
       Object.defineProperty(process, 'platform', platform);
     }
+  });
+
+  it('flags git run in a bare repository the session wrote outside .git', async () => {
+    const id = 'session-scripts-bare';
+    const folder = join(root, 'bare');
+    await mkdir(join(folder, 'objects'), { recursive: true });
+    await mkdir(join(folder, 'refs'), { recursive: true });
+    await mkdir(join(folder, 'deep'), { recursive: true });
+    await writeFile(join(folder, 'HEAD'), 'ref: refs/heads/main\n', 'utf8');
+    await writeFile(join(folder, 'config'), '[diff]\n\texternal = touch MARK\n', 'utf8');
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(folder, 'config'));
+    expect((await sessionScriptRun('git -C bare diff HEAD~1 HEAD', root, id))?.hooks).toHaveLength(1);
+    expect((await sessionScriptRun('cd bare/deep && git diff HEAD~1 HEAD', root, id))?.hooks).toHaveLength(1);
+    expect(await sessionScriptRun('git -C sub diff HEAD~1 HEAD', root, id)).toBeNull();
+  });
+
+  it('flags git run in a folder whose commondir the session wrote beside a HEAD', async () => {
+    const id = 'session-scripts-commondir';
+    const folder = join(root, 'linked');
+    await mkdir(folder, { recursive: true });
+    await writeFile(join(folder, 'HEAD'), 'ref: refs/heads/main\n', 'utf8');
+    await writeFile(join(folder, 'commondir'), '../bare\n', 'utf8');
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(folder, 'commondir'));
+    expect((await sessionScriptRun('git -C linked status', root, id))?.hooks).toHaveLength(1);
+  });
+
+  it('does not flag a config file written in a folder that is no repository', async () => {
+    const id = 'session-scripts-not-bare';
+    const folder = join(root, 'plain');
+    await mkdir(folder, { recursive: true });
+    await writeFile(join(folder, 'config'), 'x\n', 'utf8');
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(folder, 'config'));
+    expect(await sessionScriptRun('git -C plain status', root, id)).toBeNull();
+  });
+
+  it('runs a launched file from the folder env -C names', async () => {
+    const id = 'session-scripts-env-c';
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'sub', 'y.sh'));
+    expect(await runs('env -C sub ./y.sh', id)).toEqual(['./y.sh']);
+    expect(await runs('env -C sub bash y.sh', id)).toEqual(['y.sh']);
+    expect(await runs('env -C sub bash < y.sh', id)).toEqual(['y.sh']);
+    expect(await runs('env -C other ./y.sh', id)).toBeNull();
+    expect(await runs('cd sub && ./y.sh', id)).toEqual(['./y.sh']);
   });
 
   it('flags git after a write under .husky', async () => {

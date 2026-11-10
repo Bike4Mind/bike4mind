@@ -1,5 +1,5 @@
 import { stat } from 'node:fs/promises';
-import { basename, join, posix, relative, resolve } from 'node:path';
+import { basename, dirname, join, posix, relative, resolve } from 'node:path';
 import type { Node } from 'web-tree-sitter';
 import { parseWslPath, wslLocation } from '../../wsl/wslPath';
 import { directoryOptionValues } from './bashArity';
@@ -176,6 +176,13 @@ async function recordWrite(context: ToolContext, target: string, kind: 'files' |
   const repository = /^(.*?)[\\/]\.(git|husky)([\\/]|$)/.exec(physical)?.[1];
   // `git config` from a subfolder is recorded as `<subfolder>/.git/config`; git means the enclosing repository.
   if (repository !== undefined) record.hooks.set((await repositoryRoot(repository)) || '/', generation);
+  // A bare repository (HEAD with objects and refs, or a commondir) outside `.git` reads its config and hooks too.
+  if (/^(HEAD|config|config\.worktree|commondir|objects|refs)$/.test(basename(physical))) {
+    const folder = dirname(physical);
+    const has = async (name: string): Promise<boolean> => (await stat(join(folder, name)).catch(() => null)) !== null;
+    const [head, common, objects, refs] = await Promise.all(['HEAD', 'commondir', 'objects', 'refs'].map(has));
+    if (head && (common || (objects && refs))) record.hooks.set(folder, generation);
+  }
   // The user's own git config applies in every repository.
   if (/[\\/](\.gitconfig|\.config[\\/]git[\\/]config)$/.test(physical)) record.hooks.set('/', generation);
   // An archive extracted over a repository can bring its own `.git/hooks`.
@@ -372,8 +379,11 @@ function gitAssignments(root: Node): Map<string, (string | null)[]> {
   return assigned;
 }
 
-/** A file bash or git may run by name off PATH: one in a `bin` folder, or named as git or a program git runs. */
-const PATH_PROGRAM = /[\\/]\.?bin[\\/]|[\\/](git(-[^\\/]*)?|ssh|less|vi|sh|gpg|man)(\.exe)?$/i;
+/** A file in a `bin` folder, which bash or git may run by name off PATH. */
+const BIN_FOLDER = /[\\/]\.?bin[\\/]/i;
+
+/** Where no file has an execute bit, a file named as a program git runs or with an extension Windows runs. */
+const WINDOWS_PROGRAM = /[\\/](git(-[^\\/]*)?|ssh|less|vi|sh|gpg|man)(\.exe)?$|\.(exe|cmd|bat|com)$/i;
 
 export interface SessionScriptRun {
   /** The written files the command runs, as given on the command line. */
@@ -486,8 +496,19 @@ async function scanScripts(
   };
 
   // Rewritten folders may hold any program.
-  const wroteProgram = (): boolean =>
-    overflowed || trees.size > 0 || [...written.keys()].some(file => PATH_PROGRAM.test(file));
+  let programs: Promise<boolean> | undefined;
+  const wroteProgram = (): Promise<boolean> => {
+    programs ??= (async () => {
+      if (overflowed || trees.size > 0 || [...written.keys()].some(file => BIN_FOLDER.test(file))) return true;
+      if (process.platform === 'win32') return [...written.keys()].some(file => WINDOWS_PROGRAM.test(file));
+      for (const file of written.keys()) {
+        const info = await stat(file).catch(() => null);
+        if (info?.isFile() && (info.mode & 0o111) !== 0) return true;
+      }
+      return false;
+    })();
+    return programs;
+  };
 
   /**
    * Adds a written file or rewritten folder at or under `value`, a folder git reads config, hooks or programs from,
@@ -498,7 +519,8 @@ async function scanScripts(
     const text = expandHome(value, home).replace(/^(\$PWD|\$\{PWD\}|\$\(\s*pwd\s*\)|`\s*pwd\s*`)(?=\/|$)/, '.');
     if (!text) return;
     if (text.includes('$') || text.includes('`')) {
-      if (!found.has(text) && (!onPath || wroteProgram())) found.set(text, { name: text, generation: newestWrite() });
+      if (!found.has(text) && (!onPath || (await wroteProgram())))
+        found.set(text, { name: text, generation: newestWrite() });
       return;
     }
     for (const base of new Set([directory, startDirectory])) {
@@ -575,8 +597,13 @@ async function scanScripts(
     const split = splitString(words(node));
     if (split) await scanScripts(split.command, cwd, sessionId, found, hooks);
     const { start, wrapped, launched, launchers } = skipWrappers(tokens);
+    // `env -C DIR` runs the command from DIR.
+    const from = wrapperEffects(words(node)).folders.reduce(
+      (folder, value) => resolveOperand(folder, wordValue(value)),
+      cwd
+    );
     // A launcher spelled as a path (`./npx`) may be a file this session wrote.
-    for (const index of launchers) if (/[/\\]/.test(tokens[index])) await consider(tokens[index], cwd);
+    for (const index of launchers) if (/[/\\]/.test(tokens[index])) await consider(tokens[index], from);
     const [executable, ...args] = tokens.slice(start);
     if (executable === undefined) return;
     const program = basename(executable);
@@ -586,11 +613,6 @@ async function scanScripts(
       return;
     }
     const name = programName(executable);
-    // `env -C DIR` runs the command from DIR.
-    const from = wrapperEffects(words(node)).folders.reduce(
-      (folder, value) => resolveOperand(folder, wordValue(value)),
-      cwd
-    );
     if (name === 'git') await visitGit(words(node).map(wordValue).slice(start), from);
     if (name === 'find') {
       for (const run of findActions(words(node).slice(start + 1)).runs) {
@@ -599,7 +621,7 @@ async function scanScripts(
         if (programName(command[at] ?? '') === 'git') await visitGit(command.slice(at), from);
       }
     }
-    if (executable.includes('/') || launched) await consider(executable, cwd);
+    if (executable.includes('/') || launched) await consider(executable, from);
     const module = /^python[\d.]*$/.test(name) ? leadingOptionValues(args, ['-m'])[0] : undefined;
     const runner = module ?? name;
     if (CONFIGURED_RUNNERS.has(runner) || args.some(arg => CONFIGURED_RUNNERS.has(arg))) {
@@ -614,13 +636,13 @@ async function scanScripts(
     const operands = wrapped ? tokens : args;
     if (runs) {
       // Behind a wrapper the program is not reliably the first word, so every word is a candidate.
-      for (const word of operands) for (const path of pathsIn(word)) await consider(path, cwd);
-      for (const target of inputRedirects(node)) await consider(target, cwd);
+      for (const word of operands) for (const path of pathsIn(word)) await consider(path, from);
+      for (const target of inputRedirects(node)) await consider(target, from);
     }
     if (runs || PROJECT_FILES.has(name)) {
       for (const child of node.namedChildren) {
         if (child?.type !== 'variable_assignment') continue;
-        for (const path of pathsIn(child.childForFieldName('value')?.text ?? '')) await consider(path, cwd);
+        for (const path of pathsIn(child.childForFieldName('value')?.text ?? '')) await consider(path, from);
       }
     }
     const inline = SHELLS.test(name) ? args.findIndex(arg => /^[-+][a-z]*c[a-z]*$/.test(arg)) : -1;
