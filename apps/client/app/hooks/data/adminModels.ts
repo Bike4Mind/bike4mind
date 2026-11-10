@@ -65,7 +65,23 @@ export const useAdminModelList = (query: AdminModelListQuery, options: { enabled
 
 /** The server's search filter accepts 200 characters; a prefix of a longer id still matches it. */
 const SEARCH_MAX = 200;
+/** The server's page size cap (ADMIN_MODEL_PAGE_SIZE_MAX in the discovery service). */
 const LOOKUP_PAGE_SIZE = 500;
+/** A runaway guard only: 5,000 rows is far past any catalog. */
+const LOOKUP_MAX_PAGES = 10;
+
+/** Every row a filter matches, paged until the server has none left. */
+export const fetchAllAdminModels = async (
+  query: Omit<AdminModelListQuery, 'page' | 'pageSize'>
+): Promise<AdminModelRow[]> => {
+  const rows: AdminModelRow[] = [];
+  for (let page = 1; page <= LOOKUP_MAX_PAGES; page += 1) {
+    const response = await fetchAdminModels({ ...query, page, pageSize: LOOKUP_PAGE_SIZE });
+    rows.push(...response.models);
+    if (page * LOOKUP_PAGE_SIZE >= response.total || response.models.length === 0) break;
+  }
+  return rows;
+};
 
 /** One model's row, found through the list: there is no per-model read yet. Null when no known model has the id. */
 export const useAdminModelRow = (id: string) =>
@@ -85,14 +101,11 @@ export const useAdminModelRow = (id: string) =>
 export const useAdminModelsOfType = (type: string | undefined) =>
   useQuery({
     queryKey: [...ADMIN_MODELS_QUERY_KEY, 'of-type', type],
-    queryFn: async () =>
-      (
-        await fetchAdminModels({
-          filter: { view: 'all', types: type ? [type] : undefined, showFoundationIds: true },
-          sort: 'name',
-          pageSize: LOOKUP_PAGE_SIZE,
-        })
-      ).models,
+    queryFn: () =>
+      fetchAllAdminModels({
+        filter: { view: 'all', types: type ? [type] : undefined, showFoundationIds: true },
+        sort: 'name',
+      }),
     enabled: !!type,
   });
 
