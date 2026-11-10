@@ -8,6 +8,8 @@ import {
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 import { AdminAuditLogModel, AdminSettings, User } from '@bike4mind/database';
+import { MODEL_ACCESS_BULK_MAX_IDS } from '@bike4mind/common';
+import { resolveAdminModelFilterIds } from '@server/admin/models/adminModelFilter';
 import { commitAccessEntry } from './modelAccessStore';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -26,6 +28,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
+vi.mock('@server/admin/models/adminModelFilter', () => ({ resolveAdminModelFilterIds: vi.fn() }));
 vi.mock('./modelAccessStore', async importOriginal => {
   const original = await importOriginal<typeof import('./modelAccessStore')>();
   return { ...original, commitAccessEntry: vi.fn(original.commitAccessEntry) };
@@ -120,6 +123,7 @@ afterAll(async () => {
 });
 beforeEach(async () => {
   vi.mocked(commitAccessEntry).mockImplementation(realCommit);
+  vi.mocked(resolveAdminModelFilterIds).mockReset();
   for (const model of [AdminSettings, AdminAuditLogModel, User]) await model.collection.deleteMany({});
 });
 
@@ -303,6 +307,86 @@ describe('POST /api/admin/models/access/bulk', () => {
     await expect(apply(ids.slice(0, 6), { enabled: false }, preview.token)).rejects.toMatchObject({
       statusCode: 409,
       additionalInfo: { dryRun: { ids: ids.slice(0, 6) } },
+    });
+  });
+
+  describe('selecting by filter', () => {
+    const filter = { view: 'hidden', providers: ['openai'] };
+    const resolved = vi.mocked(resolveAdminModelFilterIds);
+    const filterDryRun = () => bulk<ModelAccessBulkDryRun>({ selection: { filter }, change: { enabled: true } });
+
+    it('previews exactly the ids the list filter resolves to, sorted', async () => {
+      await seed(ids.map(id => entry(id, { enabled: false })));
+      resolved.mockResolvedValue(['model-3', 'model-1', 'model-2']);
+
+      const preview = await filterDryRun();
+
+      expect(resolved).toHaveBeenCalledWith({ ...filter, showFoundationIds: false });
+      expect(preview.ids).toEqual(['model-1', 'model-2', 'model-3']);
+      expect(preview.counts).toMatchObject({ selected: 3, change: 3 });
+    });
+
+    it('applies when the filter still matches the previewed models', async () => {
+      await seed(ids.map(id => entry(id, { enabled: false })));
+      resolved.mockResolvedValue(['model-1', 'model-2']);
+      const preview = await filterDryRun();
+
+      const result = await bulk<ModelAccessBulkResult>({
+        selection: { filter },
+        change: { enabled: true },
+        reason: REASON,
+        dryRunToken: preview.token,
+      });
+
+      expect(result.summary).toBe('Updated 2 of 2');
+      expect(await stored('model-1')).toMatchObject({ enabled: true });
+      expect(await stored('model-3')).toMatchObject({ enabled: false });
+    });
+
+    it('returns 409 with a fresh preview when the filter matches other models at apply time', async () => {
+      await seed(ids.map(id => entry(id, { enabled: false })));
+      resolved.mockResolvedValue(['model-1', 'model-2']);
+      const preview = await filterDryRun();
+      resolved.mockResolvedValue(['model-1', 'model-2', 'model-4']);
+
+      await expect(
+        bulk({ selection: { filter }, change: { enabled: true }, reason: REASON, dryRunToken: preview.token })
+      ).rejects.toMatchObject({
+        statusCode: 409,
+        message: 'This preview no longer applies. Review the new one and apply again.',
+        additionalInfo: { dryRun: { ids: ['model-1', 'model-2', 'model-4'] } },
+      });
+      expect(await stored('model-1')).toMatchObject({ enabled: false });
+    });
+
+    it('returns 422 when the filter matches no models', async () => {
+      resolved.mockResolvedValue([]);
+
+      await expect(filterDryRun()).rejects.toMatchObject({
+        statusCode: 422,
+        message: 'No models match this filter.',
+        additionalInfo: { matched: 0 },
+      });
+    });
+
+    it('returns 422 when the filter matches more models than one bulk change may cover', async () => {
+      const matched = MODEL_ACCESS_BULK_MAX_IDS + 1;
+      resolved.mockResolvedValue(Array.from({ length: matched }, (_, index) => `model-${index}`));
+
+      await expect(filterDryRun()).rejects.toMatchObject({
+        statusCode: 422,
+        message: `This filter matches ${matched} models. Narrow it to ${MODEL_ACCESS_BULK_MAX_IDS} or fewer.`,
+        additionalInfo: { matched },
+      });
+    });
+
+    it('returns 400 for a filter the list does not accept, before resolving it', async () => {
+      for (const bad of [{ view: 'everything' }, { search: 'gpt', sortBy: 'name' }]) {
+        await expect(bulk({ selection: { filter: bad }, change: { enabled: true } })).rejects.toMatchObject({
+          statusCode: 400,
+        });
+      }
+      expect(resolved).not.toHaveBeenCalled();
     });
   });
 

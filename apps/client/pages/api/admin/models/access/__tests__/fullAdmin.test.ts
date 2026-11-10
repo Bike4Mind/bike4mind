@@ -18,6 +18,7 @@ const writes = vi.hoisted(() => ({
   patchModelAccess: vi.fn(async () => ({ entry: null, changed: false, revision: null })),
   dryRunModelAccessBulk: vi.fn(async () => ({})),
 }));
+vi.mock('@server/admin/models/adminModelFilter', () => ({ resolveAdminModelFilterIds: vi.fn() }));
 vi.mock('@server/modelAccess/modelAccess', async importOriginal => ({
   ...(await importOriginal<typeof import('@server/modelAccess/modelAccess')>()),
   ...writes,

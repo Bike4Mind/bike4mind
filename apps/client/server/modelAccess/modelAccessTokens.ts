@@ -56,3 +56,7 @@ export function canonicalJson(value: unknown): string {
 /** Digest of the sorted id-to-stamp list (null for an id with no entry) a dry run was computed from. */
 export const stampsDigest = (stamps: [string, string | null][]): string =>
   createHash('sha256').update(JSON.stringify(stamps)).digest('base64url');
+
+/** Digest of the sorted id set a selection resolved to, so a filter matching different models voids the preview. */
+export const idsDigest = (ids: string[]): string =>
+  createHash('sha256').update(JSON.stringify(ids)).digest('base64url');

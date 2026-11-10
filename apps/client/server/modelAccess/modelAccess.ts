@@ -5,6 +5,7 @@ import {
   ForbiddenError,
   UnprocessableEntityError,
   isFullAdmin,
+  MODEL_ACCESS_BULK_MAX_IDS,
   type ModelAccessBulkChange,
   type ModelAccessBulkDryRun,
   type ModelAccessBulkItem,
@@ -14,6 +15,7 @@ import {
   type ModelAccessSelection,
 } from '@bike4mind/common';
 import { bumpModelAccessRevision } from '@bike4mind/server-utils/modelDiscovery/modelAccessRevision';
+import { resolveAdminModelFilterIds } from '@server/admin/models/adminModelFilter';
 import {
   accessFieldsOf,
   applyAccessChange,
@@ -35,6 +37,7 @@ import {
   canonicalJson,
   readAccessToken,
   signAccessToken,
+  idsDigest,
   stampsDigest,
 } from './modelAccessTokens';
 
@@ -98,13 +101,18 @@ export async function patchModelAccess(
   return { entry: toEntryView(next), changed: true, revision: await bumpRevision(req) };
 }
 
-/**
- * The ids a selection names. `{ filter }` resolves through the model list's server-side filter, which this
- * branch does not have yet.
- */
+/** The sorted ids a selection covers; `{ filter }` resolves to exactly what the model list shows for it. */
 async function resolveSelection(selection: ModelAccessSelection): Promise<string[]> {
   if ('ids' in selection) return [...new Set(selection.ids)].sort();
-  throw new UnprocessableEntityError('Selecting models by filter is not available yet. Select them by id.');
+  const ids = [...new Set(await resolveAdminModelFilterIds(selection.filter))].sort();
+  if (ids.length === 0) throw new UnprocessableEntityError('No models match this filter.', { matched: 0 });
+  if (ids.length > MODEL_ACCESS_BULK_MAX_IDS) {
+    throw new UnprocessableEntityError(
+      `This filter matches ${ids.length} models. Narrow it to ${MODEL_ACCESS_BULK_MAX_IDS} or fewer.`,
+      { matched: ids.length }
+    );
+  }
+  return ids;
 }
 
 // Order and repeats in an id list do not change what it selects.
@@ -113,13 +121,14 @@ const canonicalSelection = (selection: ModelAccessSelection): string =>
 
 type PlannedItem = { id: string; current: StoredAccessEntry | null; after: AccessFields; changes: boolean };
 
-type Plan = { items: PlannedItem[]; dryRun: ModelAccessBulkDryRun; digest: string };
+type Plan = { items: PlannedItem[]; dryRun: ModelAccessBulkDryRun; digest: string; idSet: string };
 
 type DryRunTokenPayload = {
   kind: 'model-access-dry-run';
   actor: string;
   change: string;
   selection: string;
+  ids: string;
   stamps: string;
   exp: number;
 };
@@ -145,18 +154,21 @@ async function plan(actor: string, selection: ModelAccessSelection, change: Mode
   const changing = items.filter(item => item.changes);
   const adminOnlyIds = changing.filter(item => item.adminOnly).map(item => item.id);
   const digest = stampsDigest(planned.map(({ id, current }) => [id, stampOf(current)]));
+  const idSet = idsDigest(ids);
   const exp = Date.now() + ACCESS_TOKEN_TTL_MS;
   const payload: DryRunTokenPayload = {
     kind: 'model-access-dry-run',
     actor,
     change: canonicalJson(change),
     selection: canonicalSelection(selection),
+    ids: idSet,
     stamps: digest,
     exp,
   };
   return {
     items: planned,
     digest,
+    idSet,
     dryRun: {
       ids,
       items,
@@ -273,7 +285,8 @@ export async function applyModelAccessBulk(
   const mismatch =
     payload.actor !== actorOf(req) ||
     payload.change !== canonicalJson(input.change) ||
-    payload.selection !== canonicalSelection(input.selection);
+    payload.selection !== canonicalSelection(input.selection) ||
+    payload.ids !== fresh.idSet;
   if (mismatch || typeof payload.exp !== 'number' || payload.exp <= Date.now()) {
     throw new ConflictError('This preview no longer applies. Review the new one and apply again.', {
       dryRun: fresh.dryRun,

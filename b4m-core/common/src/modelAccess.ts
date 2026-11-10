@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { OAUTH_SOURCE_TAG_PREFIX, isOAuthSourceTag } from './constants/oauthClients';
+import { AdminModelFilterSchema } from './schemas/adminModels';
 import { AdminActionReasonSchema } from './types/entities/adminActionReason';
 
 /**
@@ -10,7 +11,7 @@ import { AdminActionReasonSchema } from './types/entities/adminActionReason';
 /** Response header on GET /api/admin/llm-models/configurations carrying the modelAccessRevision setting. */
 export const MODEL_ACCESS_REVISION_HEADER = 'x-model-access-revision';
 
-/** Upper bound on one bulk `{ ids }` selection. */
+/** Upper bound on the models one bulk selection covers, whether named by `{ ids }` or matched by `{ filter }`. */
 export const MODEL_ACCESS_BULK_MAX_IDS = 2000;
 
 /** One llmModelConfigurations entry as the access endpoints return it. */
@@ -91,10 +92,13 @@ export const ModelAccessBulkChangeSchema = z.union([
 ]);
 export type ModelAccessBulkChange = z.infer<typeof ModelAccessBulkChangeSchema>;
 
-/** Explicit ids, or the model list's URL filter state resolved by the list's own server-side filter. */
+/**
+ * Explicit ids, or the model list's filter (GET /api/admin/models) resolved server-side to the ids it lists. A
+ * filter matching no models or more than MODEL_ACCESS_BULK_MAX_IDS is a 422.
+ */
 export const ModelAccessSelectionSchema = z.union([
   z.object({ ids: z.array(ModelIdSchema).min(1).max(MODEL_ACCESS_BULK_MAX_IDS) }).strict(),
-  z.object({ filter: z.record(z.string(), z.unknown()) }).strict(),
+  z.object({ filter: AdminModelFilterSchema }).strict(),
 ]);
 export type ModelAccessSelection = z.infer<typeof ModelAccessSelectionSchema>;
 
@@ -115,6 +119,8 @@ export const ModelAccessBulkRequestSchema = z.union([
   z.object({ undoToken: z.string().min(1), reason: AdminActionReasonSchema }).strict(),
 ]);
 export type ModelAccessBulkRequest = z.infer<typeof ModelAccessBulkRequestSchema>;
+/** What a client sends: a `{ filter }` may leave out the fields AdminModelFilterSchema defaults. */
+export type ModelAccessBulkRequestInput = z.input<typeof ModelAccessBulkRequestSchema>;
 
 /**
  * Who can pick the model after the change compared with before: `none` when the audience is the same
