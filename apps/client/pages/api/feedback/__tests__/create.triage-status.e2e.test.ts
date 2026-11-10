@@ -8,7 +8,12 @@ import {
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../packages/database/src/__test__/createMongoServer';
 import { countNewFeedback, FeedbackModel } from '@bike4mind/database';
-import { FeedbackStatus, FeedbackType, WAITLIST_FEEDBACK_TAG } from '@bike4mind/common';
+import {
+  FeedbackStatus,
+  FeedbackType,
+  NO_FEEDBACK_DETAILS_PLACEHOLDER,
+  WAITLIST_FEEDBACK_TAG,
+} from '@bike4mind/common';
 import errorHandler from '@server/middlewares/errorHandler';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -92,6 +97,17 @@ describe('POST /api/feedback - initial triage status', () => {
   it('stores a thumbs-up with no comment as Closed, so it stays out of the New queue', async () => {
     expect(await submit({ type: FeedbackType.THUMBS_UP, content: '   ' })).toBe(FeedbackStatus.Closed);
     expect(await countNewFeedback()).toBe(0);
+  });
+
+  it('stores a thumbs-up from the bug-report modal with an empty comment as Closed', async () => {
+    const status = await submit({ type: FeedbackType.THUMBS_UP, content: '', tags: ['bug', 'feedback', 'bugReport'] });
+    expect(status).toBe(FeedbackStatus.Closed);
+  });
+
+  it('stores a thumbs-up carrying the legacy placeholder text as Closed', async () => {
+    expect(await submit({ type: FeedbackType.THUMBS_UP, content: NO_FEEDBACK_DETAILS_PLACEHOLDER })).toBe(
+      FeedbackStatus.Closed
+    );
   });
 
   it('keeps a thumbs-up that carries a comment New', async () => {

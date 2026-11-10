@@ -89,7 +89,7 @@ const BugReportModal: React.FC<BugReportModalProps> = ({
         userEmail: userContext?.currentUser?.email ?? 'Unknown',
         tags: ['bug', 'feedback', 'bugReport'],
         type: feedbackType,
-        content: bugReport || 'No feedback details provided',
+        content: bugReport,
         promptMeta: promptMeta ?? {},
         sessionId,
         questId,

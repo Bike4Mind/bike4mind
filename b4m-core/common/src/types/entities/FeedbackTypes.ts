@@ -20,6 +20,15 @@ export enum FeedbackType {
  * always with no `type`. Those rows, and any a stale client still sends, are kept out of triage. */
 export const WAITLIST_FEEDBACK_TAG = 'comingSoon';
 
+/** Content older bug-report modals sent when the user typed nothing. It is not a comment. */
+export const NO_FEEDBACK_DETAILS_PLACEHOLDER = 'No feedback details provided';
+
+/** Whether submitted feedback text is a real comment: not blank and not the legacy placeholder. */
+export function hasFeedbackComment(content: string): boolean {
+  const trimmed = content.trim();
+  return trimmed.length > 0 && trimmed !== NO_FEEDBACK_DETAILS_PLACEHOLDER;
+}
+
 /**
  * Whether a new report has nothing for triage to act on, so it is stored Closed rather than New:
  * a thumbs-up with no comment (it still counts in trends), or an untyped waitlist signup - a typed

@@ -19,7 +19,7 @@ const migration: MigrationFile = {
   up: async () => {
     const closed = await closeTriageNoise();
     console.log(
-      `Closed ${closed.waitlistSignups} waitlist signup row(s) and ${closed.bareThumbsUps} comment-less thumbs-up row(s).`
+      `Closed ${closed.waitlistSignups} waitlist signup row(s) and ${closed.bareThumbsUps + closed.placeholderThumbsUps} comment-less thumbs-up row(s).`
     );
   },
 

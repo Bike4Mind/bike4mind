@@ -36,7 +36,10 @@ export async function main(): Promise<void> {
   console.log(
     `  comment-less thumbs-up: ${recent.bareThumbsUps} in the last ${RECENT_DAYS} days, ${total.bareThumbsUps} in all`
   );
-  console.log(`WOULD CLOSE ${total.waitlistSignups + total.bareThumbsUps} row(s).`);
+  console.log(
+    `  placeholder-only thumbs-up: ${recent.placeholderThumbsUps} in the last ${RECENT_DAYS} days, ${total.placeholderThumbsUps} in all`
+  );
+  console.log(`WOULD CLOSE ${total.waitlistSignups + total.bareThumbsUps + total.placeholderThumbsUps} row(s).`);
 }
 
 const isMainModule = (() => {
