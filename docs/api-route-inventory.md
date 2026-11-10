@@ -36,7 +36,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-1095 routes: 91 contracted, 11 aliases of another route, 275 with no static caller in `apps/client/app`.
+1098 routes: 91 contracted, 11 aliases of another route, 278 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -44,7 +44,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | [type] | 4 | 0 | 4 | 0 | 0 | 0 | 0 |
 | account | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
 | activities | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
-| admin | 312 | 0 | 202 | 103 | 0 | 7 | 57 |
+| admin | 315 | 0 | 205 | 103 | 0 | 7 | 60 |
 | agent-executions | 2 | 0 | 2 | 0 | 0 | 0 | 0 |
 | agent-quest | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | agents | 10 | 0 | 10 | 0 | 0 | 0 | 0 |
@@ -295,6 +295,8 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/model-metrics` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/ModelMetrics/hooks/useModelMetrics.ts` |
 | `/api/admin/model-prices` | GET, POST | jwt+key | `admin:*` | GET: `support:read`; POST: `settings:manage` | no | - | 1: `components/admin/CreditAnalysis/components/ModelPricingCatalog.tsx` |
 | `/api/admin/models` | GET | jwt | `admin:*` | GET: `support:read` | no | - | 0 |
+| `/api/admin/models/access` | PATCH | jwt+key | `admin:*` | PATCH: `settings:manage` | no | - | 0 |
+| `/api/admin/models/access/bulk` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 0 |
 | `/api/admin/moderation-incidents` | GET | jwt+key | `admin:*` | - | no | - | 1: `hooks/data/moderationIncidents.ts` |
 | `/api/admin/moderation-incidents/[id]/verdict` | POST | jwt+key | `admin:*` | - | no | - | 1: `hooks/data/moderationIncidents.ts` |
 | `/api/admin/moderation-incidents/[id]/view` | GET | jwt | `admin:*` | GET: `users:moderate` | no | - | 1: `hooks/data/moderationIncidents.ts` |
@@ -494,6 +496,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/users/linked-suspend-propagation` | POST | jwt | `admin:*` | POST: `users:moderate` | no | - | 1: `components/admin/Users/Profile/DetectionLinkedAccountsCard.tsx` |
 | `/api/admin/users/signup-verdicts` | GET | jwt | `admin:*` | GET: ? | no | - | 1: `components/admin/Signups/useSignupTimeseries.ts` |
 | `/api/admin/users/summary` | GET | jwt | `admin:*` | GET: ? | no | - | 1: `components/admin/Users/List/useAdminUsersList.ts` |
+| `/api/admin/users/tags` | GET | jwt+key | `admin:*` | GET: ? | no | - | 0 |
 | `/api/admin/voice-agents` | GET, POST | jwt+key | `admin:*` | GET: `support:read`; POST: `settings:manage` | no | - | 1: `components/admin/VoiceSettingsTab.tsx` |
 | `/api/admin/voice-agents/[id]` | GET, PATCH, DELETE | jwt+key | `admin:*` | GET: `settings:manage`; PATCH: `settings:manage`; DELETE: `settings:manage` | no | - | 1: `components/admin/VoiceSettingsTab.tsx` |
 | `/api/admin/webhook-logs` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/webhookAuditLogs.ts` |
