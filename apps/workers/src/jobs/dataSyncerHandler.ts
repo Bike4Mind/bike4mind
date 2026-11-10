@@ -16,14 +16,22 @@ import { MongoClient } from 'mongodb';
 import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
 import { allSettingDefinitions } from '@bike4mind/common';
 
+const MAX_LOG_ERROR_DEPTH = 5;
+
 /**
  * A bare copy of an error: name, message, code, stack and cause only. Logging the error itself would
  * serialize its enumerable fields (a Mongo bulk-write error carries the whole documents being written),
  * and it stays an Error so the Logger's redactor keeps its message.
  */
-function describeError(error: unknown): Error {
+function describeError(error: unknown, seen = new Set<Error>()): Error {
   if (!(error instanceof Error)) return new Error(String(error));
-  const copy = new Error(error.message, error.cause !== undefined ? { cause: describeError(error.cause) } : undefined);
+  // Logging happens before rollback, so a cyclic or deep cause must never interrupt recovery.
+  if (seen.has(error) || seen.size >= MAX_LOG_ERROR_DEPTH) return new Error('[Truncated]');
+  seen.add(error);
+  const copy = new Error(
+    error.message,
+    error.cause !== undefined ? { cause: describeError(error.cause, seen) } : undefined
+  );
   copy.name = error.name;
   copy.stack = error.stack;
   const { code } = error as { code?: unknown };

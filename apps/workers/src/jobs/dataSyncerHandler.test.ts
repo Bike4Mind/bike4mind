@@ -299,6 +299,31 @@ describe('dataSyncerHandler', () => {
     }
   });
 
+  it.each(['cyclic', 'deep'] as const)('restores the backup when the copy error has a %s cause chain', async shape => {
+    process.env.SEED_STAGE_NAME = 'pr123';
+    state.failInsertInto = 'rapidreplymappings';
+    const failure = new Error('copy failed');
+    if (shape === 'cyclic') failure.cause = failure;
+    else {
+      const causes = Array.from({ length: 10_000 }, () => new Error('nested failure'));
+      causes.forEach((cause, index) => {
+        cause.cause = causes[index + 1];
+      });
+      failure.cause = causes[0];
+    }
+    state.failInsertWith = failure;
+
+    const result = await invoke();
+
+    expect(state.ops.filter(operation => operation.startsWith('rapidreplymappings.'))).toEqual([
+      'rapidreplymappings.deleteMany',
+      'rapidreplymappings.deleteMany',
+      'rapidreplymappings.bulkWrite',
+    ]);
+    expect(state.markerWrites).toEqual([]);
+    expect(result.message).toContain('copy failed');
+  });
+
   it('surfaces both the copy failure and the rollback failure', async () => {
     process.env.SEED_STAGE_NAME = 'pr123';
     state.failInsertInto = 'rapidreplymappings';
