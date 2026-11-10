@@ -1,4 +1,4 @@
-import { IRegInviteDocument } from '@bike4mind/common';
+import { IRegInviteDocument, RegInviteStatusType } from '@bike4mind/common';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -10,11 +10,18 @@ import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/admi
 
 const MAX_AUDITED_IDS = 100;
 
-// Only status is currently used as an update field.
-const UpdateRegisterInviteSchema = z.object({
-  ids: z.array(z.string().min(1)).min(1),
-  status: z.string().optional(),
-});
+const UpdateRegisterInviteSchema = z
+  .object({
+    ids: z.array(z.string().regex(/^[a-f0-9]{24}$/i, 'Invalid invite id')).min(1),
+    status: z.nativeEnum(RegInviteStatusType).optional(),
+    unlimitedUse: z.boolean().optional(),
+    // null clears the expiry; an empty string fails rather than coercing to an invalid date.
+    expiresAt: z.coerce.date().nullable().optional(),
+  })
+  .refine(
+    body => body.status !== undefined || body.unlimitedUse !== undefined || body.expiresAt !== undefined,
+    'Nothing to update'
+  );
 
 const handler = baseApi().post(
   asyncHandler<unknown, unknown, unknown>(async (req, res) => {
@@ -41,6 +48,8 @@ const handler = baseApi().post(
           ids: ids.slice(0, MAX_AUDITED_IDS),
           idsTruncated: ids.length > MAX_AUDITED_IDS,
           status: updates.status ?? null,
+          ...(updates.unlimitedUse !== undefined && { unlimitedUse: updates.unlimitedUse }),
+          ...(updates.expiresAt !== undefined && { expiresAt: updates.expiresAt?.toISOString() ?? null }),
         },
       });
       return invites;

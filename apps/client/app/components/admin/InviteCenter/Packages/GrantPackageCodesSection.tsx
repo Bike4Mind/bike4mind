@@ -1,5 +1,16 @@
 import { useState } from 'react';
-import { Alert, Button, Chip, FormControl, FormHelperText, FormLabel, Stack, Switch, Typography } from '@mui/joy';
+import {
+  Alert,
+  Button,
+  Chip,
+  FormControl,
+  FormHelperText,
+  FormLabel,
+  Input,
+  Stack,
+  Switch,
+  Typography,
+} from '@mui/joy';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isGrantPackageExpired, type IGrantPackageDocument, type IRegInviteDocument } from '@bike4mind/common';
 import {
@@ -7,7 +18,7 @@ import {
   fetchGrantPackageLinks,
   grantPackageLinksQueryKey,
 } from '@client/app/utils/grantPackageAPICalls';
-import { createRegInvites } from '@client/app/utils/regInviteAPICalls';
+import { createRegInvites, updateRegInvite } from '@client/app/utils/regInviteAPICalls';
 import { getErrorMessage } from '@client/app/utils/error';
 import { DataTable, type DataColumn } from '@client/app/components/admin/shared';
 
@@ -28,13 +39,20 @@ const isCodeActive = (invite: IRegInviteDocument, now = new Date()) =>
 const usesLabel = (invite: IRegInviteDocument) =>
   invite.unlimitedUse ? `${invite.usageHistory?.length ?? 0} (unlimited)` : invite.used ? 'Used' : 'Unused';
 
+type CodeEdit = { id: string; code: string; unlimitedUse: boolean; expiresOn: string };
+
+const dayOf = (date: Date | string | null | undefined) => (date ? new Date(date).toISOString().slice(0, 10) : '');
+
+/** Same end-of-day UTC reading as the package's own expiry field in GrantPackageFormModal. */
+const expiresAtFromDay = (day: string): Date | null => (day === '' ? null : new Date(`${day}T23:59:59.999Z`));
+
 const CODE_COLUMNS: readonly DataColumn<IRegInviteDocument>[] = [
   { id: 'code', label: 'Code', render: invite => invite.code },
   { id: 'uses', label: 'Uses', render: usesLabel },
   {
     id: 'expires',
     label: 'Expires',
-    render: invite => (invite.expiresAt ? new Date(invite.expiresAt).toISOString().slice(0, 10) : 'Never'),
+    render: invite => dayOf(invite.expiresAt) || 'Never',
   },
   {
     id: 'status',
@@ -57,6 +75,47 @@ export function GrantPackageCodesSection({ pkg, queued, onQueuedChange }: Props)
     queryFn: () => fetchGrantPackageLinks(pkg?.id ?? ''),
     enabled: pkg !== null,
   });
+
+  const [editing, setEditing] = useState<CodeEdit | null>(null);
+  const editExpiresAt = editing ? expiresAtFromDay(editing.expiresOn) : null;
+  const editInvalid = editExpiresAt !== null && Number.isNaN(editExpiresAt.getTime());
+
+  const save = useMutation({
+    mutationFn: (edit: CodeEdit) =>
+      updateRegInvite(edit.id, { unlimitedUse: edit.unlimitedUse, expiresAt: expiresAtFromDay(edit.expiresOn) }),
+    onSuccess: () => {
+      setError(null);
+      setEditing(null);
+      void queryClient.invalidateQueries({ queryKey: [GRANT_PACKAGES_QUERY_KEY] });
+    },
+    onError: (err: unknown) => setError(getErrorMessage(err)),
+  });
+
+  const columns: readonly DataColumn<IRegInviteDocument>[] = [
+    ...CODE_COLUMNS,
+    {
+      id: 'actions',
+      label: 'Actions',
+      render: invite => (
+        <Button
+          size="sm"
+          variant="plain"
+          onClick={() =>
+            setEditing({
+              id: invite.id,
+              code: invite.code,
+              unlimitedUse: invite.unlimitedUse === true,
+              expiresOn: dayOf(invite.expiresAt),
+            })
+          }
+          disabled={save.isPending}
+          data-testid={`grant-package-code-edit-btn-${invite.code}`}
+        >
+          Edit
+        </Button>
+      ),
+    },
+  ];
 
   const add = useMutation({
     mutationFn: (packageId: string) => createRegInvites({ multiple: 1, unlimitedUse, grantPackageId: packageId }),
@@ -105,11 +164,66 @@ export function GrantPackageCodesSection({ pkg, queued, onQueuedChange }: Props)
           rows={invites.data}
           label="invite codes"
           onRetry={() => void links.refetch()}
-          columns={CODE_COLUMNS}
+          columns={columns}
           getRowId={invite => invite.id}
           rowTestId={invite => `grant-package-code-row-${invite.code}`}
           testId="grant-package-codes-table"
         />
+      )}
+      {editing && (
+        <Stack
+          gap={1}
+          sx={{ p: 1.5, borderRadius: 'sm', bgcolor: 'background.level1' }}
+          data-testid="grant-package-code-edit"
+        >
+          <Typography level="body-sm" fontWeight="md">
+            Edit code {editing.code}
+          </Typography>
+          <Stack direction="row" gap={1.5} alignItems="center" flexWrap="wrap">
+            <FormControl orientation="horizontal" sx={{ gap: 1 }}>
+              <Switch
+                checked={editing.unlimitedUse}
+                onChange={e => setEditing({ ...editing, unlimitedUse: e.target.checked })}
+                slotProps={{ input: { 'data-testid': 'grant-package-code-edit-unlimited-switch' } }}
+              />
+              <FormLabel>Unlimited use</FormLabel>
+            </FormControl>
+            <FormControl orientation="horizontal" sx={{ gap: 1 }} error={editInvalid}>
+              <FormLabel>Expires on</FormLabel>
+              <Input
+                type="date"
+                size="sm"
+                value={editing.expiresOn}
+                onChange={e => setEditing({ ...editing, expiresOn: e.target.value })}
+                slotProps={{ input: { 'data-testid': 'grant-package-code-edit-expires-input' } }}
+              />
+            </FormControl>
+          </Stack>
+          <FormHelperText>
+            Redeemable through the end of this day (UTC). Leave empty and the code never expires.
+          </FormHelperText>
+          <Stack direction="row" gap={1}>
+            <Button
+              size="sm"
+              onClick={() => save.mutate(editing)}
+              loading={save.isPending}
+              disabled={editInvalid}
+              data-testid="grant-package-code-edit-save-btn"
+            >
+              Save code
+            </Button>
+            <Button
+              size="sm"
+              variant="plain"
+              color="neutral"
+              onClick={() => setEditing(null)}
+              disabled={save.isPending}
+              data-testid="grant-package-code-edit-cancel-btn"
+            >
+              Cancel
+            </Button>
+          </Stack>
+        </Stack>
       )}
       {invites?.truncated && (
         <FormHelperText data-testid="grant-package-codes-truncated">
