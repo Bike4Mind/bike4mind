@@ -44,7 +44,7 @@ export const handler = withEventContext(async (event, logger) => {
   });
 
   if (!sessionId) {
-    logger.error(`Invalid message: ${body}`);
+    logger.error('Invalid message: sessionId is required');
     return;
   }
 
