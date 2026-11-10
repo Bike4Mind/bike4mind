@@ -117,6 +117,7 @@ const input = (overrides: Partial<AdminModelListInput> = {}): AdminModelListInpu
   isBackendKeyed: () => true,
   enforceCredits: false,
   baseEntitlementKey: 'base',
+  discoveryRunMode: 'write',
   now: NOW,
   ...overrides,
 });
@@ -227,19 +228,150 @@ describe('buildAdminModelRows', () => {
       }
     });
 
-    it('offers Run now for an OpenAI id discovery can probe, and nothing for another backend', () => {
-      expect(adminReasonsFromDisableText(NOT_INVOCABLE_REASON, ModelBackend.OpenAI)[0].fixAction).toBe('run-discovery');
-      expect(adminReasonsFromDisableText(NOT_INVOCABLE_REASON, ModelBackend.Anthropic)[0].fixAction).toBeUndefined();
+    it('offers Run now for an OpenAI id discovery can probe, only in write mode, and nothing for another backend', () => {
+      const fix = (backend: string, mode: 'write' | 'report' | 'off') =>
+        adminReasonsFromDisableText(NOT_INVOCABLE_REASON, backend, mode)[0].fixAction;
+
+      expect(fix(ModelBackend.OpenAI, 'write')).toBe('run-discovery');
+      expect(fix(ModelBackend.OpenAI, 'report')).toBeUndefined();
+      expect(fix(ModelBackend.OpenAI, 'off')).toBeUndefined();
+      expect(fix(ModelBackend.Anthropic, 'write')).toBeUndefined();
     });
 
     it('reads a no-credential blocker out of the generic verdict', () => {
       expect(
-        adminReasonsFromDisableText('discovered, no-dispatch-profile, no-credential-for-backend', ModelBackend.XAI)
+        adminReasonsFromDisableText(
+          'discovered, no-dispatch-profile, no-credential-for-backend',
+          ModelBackend.XAI,
+          'write'
+        )
       ).toEqual([
         {
           code: 'no-credential-for-backend',
           message: 'No xAI key is configured in this environment',
           fixAction: 'open-key-settings',
+        },
+      ]);
+    });
+
+    it('drops a stored no-credential verdict once the key is configured', async () => {
+      const keyless = discovered('gpt-new', { autoDisabledReason: 'discovered, no-credential-for-backend' });
+
+      const keyed = await rowFor('gpt-new', { catalogRows: [keyless] });
+      expect(keyed.keyPresent).toBe(true);
+      expect(keyed.status).toBe('needs-review');
+      expect(keyed.reasons).toEqual([
+        {
+          code: 'awaiting-discovery-run',
+          message: 'OpenAI key configured. It lists on the next discovery run.',
+          fixAction: 'run-discovery',
+        },
+      ]);
+
+      const stillKeyless = await rowFor('gpt-new', { catalogRows: [keyless], isBackendKeyed: () => false });
+      expect(stillKeyless.reasons).toEqual([
+        {
+          code: 'no-credential-for-backend',
+          message: 'No OpenAI key is configured in this environment',
+          fixAction: 'open-key-settings',
+        },
+      ]);
+    });
+
+    it('words a cleared blocker for the discovery mode, with Run now only in write mode', async () => {
+      const priced = { catalogRows: [discovered('gpt-new')], priceRows: [priceRow('gpt-new')] };
+
+      expect((await rowFor('gpt-new', { ...priced, discoveryRunMode: 'report' })).reasons).toEqual([
+        {
+          code: 'awaiting-discovery-run',
+          message: 'Priced. Discovery only reports right now, so it lists after a run in write mode.',
+        },
+      ]);
+      expect((await rowFor('gpt-new', { ...priced, discoveryRunMode: 'off' })).reasons).toEqual([
+        {
+          code: 'awaiting-discovery-run',
+          message: 'Priced. Model discovery is off, so it lists after a run in write mode.',
+        },
+      ]);
+    });
+
+    it('reads an operator disable on a discovered model as an admin disable, beside its discovery verdict', async () => {
+      const operatorRow = (patch: Record<string, unknown>) =>
+        catalogRow('gpt-new', patch, {
+          source: 'operator',
+          ownedGroups: ['availability'],
+          effectiveFrom: NOW,
+          note: 'pause',
+        });
+
+      const paused = await rowFor('gpt-new', {
+        catalogRows: [discovered('gpt-new'), operatorRow({ disabled: true, disabledReason: 'billing dispute' })],
+      });
+      expect(paused.reasons).toEqual([
+        { code: 'operator-disabled', message: 'Disabled: billing dispute' },
+        {
+          code: 'price-none',
+          message: 'No price yet. New models list once they have a price.',
+          fixAction: 'add-price',
+        },
+      ]);
+      expect(paused).toMatchObject({ status: 'hidden', adminEdited: true });
+
+      const unexplained = await rowFor('gpt-new', {
+        catalogRows: [discovered('gpt-new', { autoDisabledReason: undefined }), operatorRow({ disabled: true })],
+      });
+      expect(unexplained.reasons).toEqual([{ code: 'operator-disabled', message: 'Disabled by an admin' }]);
+    });
+  });
+
+  describe('catalog-only models the merge drops', () => {
+    const active = (modelId: string, overrides: Record<string, unknown> = {}) =>
+      discovered(modelId, {
+        lifecycle: { status: 'active' },
+        autoDisabled: false,
+        autoDisabledReason: undefined,
+        ...overrides,
+      });
+
+    it('offers Run now for a missing request profile on an OpenAI id, in write mode only', async () => {
+      const row = await rowFor('gpt-new', { catalogRows: [active('gpt-new', { dispatchProfile: undefined })] });
+      expect(row.reasons).toEqual([
+        {
+          code: 'not-callable',
+          message: 'We cannot call this model yet: no request profile for it',
+          fixAction: 'run-discovery',
+          detail: 'no dispatchProfile',
+        },
+      ]);
+
+      const reportMode = await rowFor('gpt-new', {
+        catalogRows: [active('gpt-new', { dispatchProfile: undefined })],
+        discoveryRunMode: 'report',
+      });
+      expect(reportMode.reasons[0].fixAction).toBeUndefined();
+    });
+
+    it('gives a lifecycle drop and a dedicated-API drop their own words and no Run now', async () => {
+      const unlisted = await rowFor('gpt-new', {
+        catalogRows: [active('gpt-new', { lifecycle: { status: 'unlisted' } })],
+      });
+      expect(unlisted.reasons).toEqual([
+        {
+          code: 'not-callable',
+          message: 'Not offered while its catalog lifecycle status is "unlisted"',
+          detail: 'lifecycle status "unlisted" is not invocable',
+        },
+      ]);
+      expect(unlisted.status).toBe('hidden');
+
+      const dedicated = await rowFor('o3-deep-research-x', {
+        catalogRows: [active('o3-deep-research-x')],
+      });
+      expect(dedicated.reasons).toEqual([
+        {
+          code: 'not-callable',
+          message: 'It needs a dedicated API or a mandatory tool, so it cannot be offered as a text model',
+          detail: 'needs a dedicated API or a mandatory tool; not callable as a plain text model',
         },
       ]);
     });
@@ -355,13 +487,32 @@ describe('buildAdminModelRows', () => {
       expect((await rowFor('gpt-x', { adapterModels: [unpriced] })).status).toBe('listed');
     });
 
-    it('reads a non-text model price from its newest row of any unit', async () => {
-      const row = await rowFor('gpt-image-x', {
+    it('shows a non-text model only its build literal, never a price row', async () => {
+      const imageRows = [
+        priceRow('gpt-image-x', { unit: 'per_image', pricing: tier(0.04, 0) }),
+        priceRow('gpt-image-x', { id: 'token-row', pricing: tier(5e-6, 0) }),
+      ];
+
+      const literal = await rowFor('gpt-image-x', {
         adapterModels: [adapter({ id: 'gpt-image-x' as ModelInfo['id'], type: 'image' })],
-        priceRows: [priceRow('gpt-image-x', { unit: 'per_image', pricing: tier(0.04, 0) })],
+        priceRows: imageRows,
+      });
+      expect(literal.price).toEqual({ source: 'build', pricing: tier(1e-6, 4e-6) });
+
+      const catalogOnly = await rowFor('flux-9', {
+        catalogRows: [discovered('flux-9', { backend: ModelBackend.BFL, type: 'image' })],
+        priceRows: [priceRow('flux-9', { unit: 'per_image', pricing: tier(0.04, 0) })],
+      });
+      expect(catalogOnly.price).toBeNull();
+    });
+
+    it('shows a realtime voice model its per-token row, which voice settlement bills', async () => {
+      const row = await rowFor('gpt-realtime-x', {
+        catalogRows: [discovered('gpt-realtime-x', { type: 'realtime-voice' })],
+        priceRows: [priceRow('gpt-realtime-x')],
       });
 
-      expect(row.price).toMatchObject({ source: 'row', unit: 'per_image' });
+      expect(row.price).toMatchObject({ source: 'row', unit: 'per_token', rowId: 'price-gpt-realtime-x' });
     });
   });
 
@@ -431,6 +582,31 @@ describe('buildAdminModelRows', () => {
       expect(byId.get('gpt-b')).toMatchObject({ rank: 6, rankProvisional: false });
       expect(byId.get('gpt-c')).toMatchObject({ rank: 9, rankProvisional: true });
     });
+
+    it('ranks an unranked model within its picker section, over the models the picker offers', async () => {
+      const rows = await buildAdminModelRows(
+        input({
+          adapterModels: [
+            adapter({ id: 'gpt-a' as ModelInfo['id'], name: 'GPT A', rank: 2 }),
+            adapter({ id: 'gpt-b' as ModelInfo['id'], name: 'GPT B', rank: 4 }),
+            adapter({ id: 'gpt-c' as ModelInfo['id'], name: 'GPT C' }),
+            adapter({ id: 'gpt-off' as ModelInfo['id'], name: 'GPT Off', rank: 50, disabled: true }),
+            adapter({ id: 'gpt-hidden' as ModelInfo['id'], name: 'GPT Hidden', disabled: true }),
+            adapter({ id: 'gpt-gone' as ModelInfo['id'], name: 'GPT Gone', deprecationDate: '2026-07-01' }),
+            adapter({ id: 'claude-a' as ModelInfo['id'], name: 'Claude A', backend: ModelBackend.Anthropic, rank: 1 }),
+            adapter({ id: 'claude-b' as ModelInfo['id'], name: 'Claude B', backend: ModelBackend.Anthropic }),
+          ],
+        })
+      );
+      const byId = new Map(rows.map(row => [row.id, row]));
+
+      // OpenAI section offers gpt-a (2) and gpt-b (4): the upper median is 4, untouched by the hidden rank 50.
+      expect(byId.get('gpt-c')).toMatchObject({ rank: 4, rankProvisional: true });
+      expect(byId.get('claude-b')).toMatchObject({ rank: 1, rankProvisional: true });
+      expect(byId.get('gpt-off')).toMatchObject({ status: 'hidden', rank: 50, rankProvisional: false });
+      expect(byId.get('gpt-hidden')).toMatchObject({ status: 'hidden', rank: null, rankProvisional: true });
+      expect(byId.get('gpt-gone')).toMatchObject({ status: 'retired', rank: null, rankProvisional: true });
+    });
   });
 
   describe('lifecycle', () => {
@@ -464,6 +640,35 @@ describe('buildAdminModelRows', () => {
         adapterModels: [adapter({ id: 'gpt-x' as ModelInfo['id'], deprecationDate: '2026-07-15' })],
       });
       expect(past.status).toBe('retired');
+    });
+
+    it('reads a passed retirement date as Retiring while the model is still served', async () => {
+      const lifecycleRow = (lifecycle: Record<string, unknown>) =>
+        catalogRow('gpt-x', { lifecycle }, { ownedGroups: ['lifecycle'] });
+      const served = adapter({ id: 'gpt-x' as ModelInfo['id'] });
+
+      const noDeprecation = await rowFor('gpt-x', {
+        adapterModels: [served],
+        catalogRows: [lifecycleRow({ status: 'active', retirementDate: '2026-07-15' })],
+      });
+      expect(noDeprecation.status).toBe('retiring');
+
+      const laterDeprecation = await rowFor('gpt-x', {
+        adapterModels: [served],
+        catalogRows: [lifecycleRow({ status: 'active', retirementDate: '2026-07-15', deprecationDate: '2027-01-01' })],
+      });
+      expect(laterDeprecation.status).toBe('retiring');
+
+      const markedRetired = await rowFor('gpt-x', {
+        adapterModels: [served],
+        catalogRows: [lifecycleRow({ status: 'retired' })],
+      });
+      expect(markedRetired.status).toBe('retiring');
+
+      const deprecatedToday = await rowFor('gpt-x', {
+        adapterModels: [adapter({ id: 'gpt-x' as ModelInfo['id'], deprecationDate: '2026-08-01' })],
+      });
+      expect(deprecatedToday.status).toBe('retired');
     });
 
     it('shows a sunset catalog-only model as Retired with no reasons', async () => {
@@ -539,6 +744,34 @@ describe('the list page and the filter resolver', () => {
     expect(ids({ types: ['image'] })).toEqual(['gpt-image-a']);
     expect(ids({ sources: ['discovered'] })).toEqual(['gpt-new']);
     expect(() => filterAdminModels(all, { view: 'nope' } as never)).toThrow();
+  });
+
+  it('puts a retired or retiring model with a pending lifecycle suggestion under Needs review too', async () => {
+    const pendingSuggestions = [
+      { modelId: 'gpt-gone', suggestion: { status: 'retired' as const, source: 'openai', suggestedAt: EARLIER } },
+    ];
+    const withSuggestion = await buildAdminModelRows(
+      input({
+        adapterModels: [
+          ...models,
+          adapter({ id: 'gpt-gone' as ModelInfo['id'], name: 'GPT Gone', deprecationDate: '2026-07-01' }),
+        ],
+        catalogRows,
+        pendingSuggestions,
+      })
+    );
+
+    expect(withSuggestion.find(row => row.id === 'gpt-gone')?.status).toBe('retired');
+    expect(filterAdminModels(withSuggestion, { view: 'needs-review' }).map(row => row.id)).toEqual([
+      'gpt-gone',
+      'gpt-new',
+    ]);
+    expect(filterAdminModels(withSuggestion, { view: 'retiring' }).map(row => row.id)).toEqual(['gpt-b', 'gpt-gone']);
+
+    const page = adminModelListPage(withSuggestion, { filter: { view: 'needs-review' } });
+    expect(page.total).toBe(2);
+    expect(page.counts['needs-review']).toBe(1);
+    expect(page.viewCounts).toEqual({ all: 6, 'needs-review': 2, listed: 3, hidden: 0, retiring: 2 });
   });
 
   it('offers every provider and type present as facets', async () => {
