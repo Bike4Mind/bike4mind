@@ -113,6 +113,40 @@ export type GenerateImageIvokeParams = z.infer<typeof GenerateImageIvokeParamsSc
  * (`resolveBillingOrgInput`) rather than the schema, which a public request schema may not
  * `.transform()`. Same rules as `organizationId`: null bills personal, blank is a 422.
  */
+/**
+ * A single BFL region-edit bounding box in normalised [0, 1] coordinates.
+ * BFL convention: `[y_min, x_min, y_max, x_max]`, so the first axis is vertical.
+ */
+export const BflEditRegionSchema = z.object({
+  prompt: z.string().min(1),
+  bbox: z.tuple([z.number(), z.number(), z.number(), z.number()]),
+});
+export type BflEditRegion = z.infer<typeof BflEditRegionSchema>;
+
+export const MAX_BFL_EDIT_REGIONS = 8;
+
+export function validateBflEditRegions(regions: BflEditRegion[]): string[] {
+  const issues: string[] = [];
+  if (regions.length > MAX_BFL_EDIT_REGIONS) {
+    issues.push(`At most ${MAX_BFL_EDIT_REGIONS} edit_regions are allowed; got ${regions.length}`);
+  }
+  for (let i = 0; i < regions.length; i++) {
+    const [yMin, xMin, yMax, xMax] = regions[i].bbox;
+    const tag = `edit_regions[${i}].bbox`;
+    for (const [label, v] of [
+      ['y_min', yMin],
+      ['x_min', xMin],
+      ['y_max', yMax],
+      ['x_max', xMax],
+    ] as const) {
+      if (v < 0 || v > 1) issues.push(`${tag} ${label} must be in [0, 1]; got ${v}`);
+    }
+    if (yMin >= yMax) issues.push(`${tag} y_min (${yMin}) must be less than y_max (${yMax})`);
+    if (xMin >= xMax) issues.push(`${tag} x_min (${xMin}) must be less than x_max (${xMax})`);
+  }
+  return issues;
+}
+
 const BillingOrgIdAliasSchema = BillingOrganizationIdSchema.describe(
   'Alias of `organizationId`, for callers used to the snake_case video and music bodies. Sending both ' +
     'with different values is a 422.'
@@ -209,6 +243,14 @@ export const EditImageRequestBodySchema = OpenAIImageGenerationInput.extend({
   output_format: ImageOutputFormatSchema.nullable().optional(),
   // Same `...rest` strip as output_format. Only BFL edits honour it; gpt-image and Gemini ignore it.
   seed: z.number().nullable().optional(),
+  /**
+   * BFL region-edit bounding boxes. Each entry carries a per-region prompt and a
+   * \`[y_min, x_min, y_max, x_max]\` box in normalised [0, 1] coordinates (BFL convention).
+   * Only honoured on BFL Fill models; other providers ignore them. Validated with a 422 when
+   * any coordinate is out of range, the box is degenerate, or there are more than
+   * \`MAX_BFL_EDIT_REGIONS\` entries.
+   */
+  edit_regions: z.array(BflEditRegionSchema).optional(),
   callbackUrl: GenerationCallbackUrlSchema.optional(),
 });
 

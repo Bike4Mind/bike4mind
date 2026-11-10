@@ -8,6 +8,8 @@ import {
   LLMEventPayload,
   LLMEvents,
   BFL_SAFETY_TOLERANCE,
+  BflEditRegion,
+  validateBflEditRegions,
   IChatHistoryItemRepository,
   IUserRepository,
   PromptMeta,
@@ -106,6 +108,7 @@ export const ImageEditBodySchema = OpenAIImageGenerationInput.extend({
   // Declared here as well as on EditImageRequestBodySchema: invoke() parses the queue payload
   // through this schema, and an undeclared key is stripped before it reaches process().
   referenceImageFabFileIds: z.array(z.string()).max(MAX_REFERENCE_IMAGES).optional(),
+  edit_regions: z.array(z.object({ prompt: z.string(), bbox: z.tuple([z.number(), z.number(), z.number(), z.number()]) })).optional(),
   image: z.string(),
   /** Minted per invoke(); see ImageGenerationBodySchema.generationId. */
   generationId: z.string().optional(),
@@ -484,7 +487,15 @@ export class ImageEditService {
       image: sourceImageUrl,
       organizationId,
       generationId,
+      edit_regions,
     } = ImageEditBodySchema.parse(body);
+
+    if (edit_regions?.length) {
+      const regionIssues = validateBflEditRegions(edit_regions);
+      if (regionIssues.length) {
+        throw new BadRequestError(regionIssues.join('; '));
+      }
+    }
     // Step a gpt-image-2 selection down to gpt-image-1.5 when transparency is requested:
     // gpt-image-2 rejects background: 'transparent' outright, so sending it there would
     // silently turn a valid request into an opaque image. Resolved before billing so

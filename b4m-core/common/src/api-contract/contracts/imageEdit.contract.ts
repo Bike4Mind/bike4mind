@@ -41,6 +41,11 @@ export const editImageContract = defineEndpoint({
     '`download_url`, which must still be unexpired when the render runs. The edited image is not a file ' +
     'id: read it from `files[].url` on the polled quest, not from `GET /api/v1/files/{id}`. ' +
     '`seed` makes an edit reproducible on BFL (FLUX) models only; gpt-image and Gemini models ignore it. ' +
+    '`edit_regions` carries BFL region-edit bounding boxes: each entry has a `prompt` and a ' +
+    '`bbox` of `[y_min, x_min, y_max, x_max]` in normalised [0, 1] coordinates (BFL convention, ' +
+    'vertical axis first). At most 8 regions per request. Only honoured on BFL Fill models; ' +
+    'other providers ignore them. A box with out-of-range coordinates, degenerate ordering, or ' +
+    'exceeding the region cap is a 422. ' +
     'Credits are checked when ' +
     'the render runs, so insufficient credits arrive on the polled quest rather than as a 422. ' +
     '`organization_id` is accepted as an alias of `organizationId`, for callers used to the snake_case ' +
@@ -88,7 +93,7 @@ export const editImageContract = defineEndpoint({
     },
     422: {
       description:
-        'The body is malformed, or it names the billing organization ambiguously. Both `organizationId` and ' +
+        'The body is malformed, `edit_regions` has an out-of-range coordinate or degenerate box, or it names the billing organization ambiguously. Both `organizationId` and ' +
         '`organization_id` sent with different values is a `422`; so is an empty or blank value for either ' +
         '(a blank is never treated as an omission, which would bill a different payer), and so is any other ' +
         'billing-org-shaped key such as `billing_org_id` or `payerOrgId`, which would otherwise be stripped ' +

@@ -11,7 +11,7 @@ import { getOrCreateSession } from '@server/managers/sessionManager';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrgId';
 import { assertNoStrayBillingOrgKeys, resolveBillingOrgInput } from '@bike4mind/server-utils/utils/orgAccess';
-import { editImageContract } from '@bike4mind/common';
+import { editImageContract, validateBflEditRegions, isBflImageModel } from '@bike4mind/common';
 import { armGenerationCallback, resolveGenerationCallback } from '@server/generationCallback/armGenerationCallback';
 import { assertReferenceImagesSupported } from '@server/utils/assertReferenceImagesSupported';
 import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
@@ -24,6 +24,16 @@ const handler = nextRouteForContract(editImageContract).post(async (req, res) =>
   const requestedOrgId = resolveBillingOrgInput(req.validated);
   const { callbackUrl, organization_id: _orgAlias, ...body } = req.validated;
   assertReferenceImagesSupported(body.model, body.referenceImageFabFileIds);
+
+  if (body.edit_regions?.length) {
+    if (!isBflImageModel(body.model)) {
+      return res.status(400).json({ error: 'edit_regions are only supported on BFL models' });
+    }
+    const regionIssues = validateBflEditRegions(body.edit_regions);
+    if (regionIssues.length) {
+      return res.status(422).json({ error: regionIssues.join('; ') });
+    }
+  }
   const callback = await resolveGenerationCallback(req, callbackUrl);
 
   // Reject a session the caller can't write to before the service appends a quest to it.
