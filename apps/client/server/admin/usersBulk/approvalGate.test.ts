@@ -212,4 +212,18 @@ describe('requestUsersBulkApprovalIfNeeded', () => {
     });
     expect(reservations.rows.size).toBe(0);
   });
+
+  it('holds a delegate back from an account with admin access, so the cohort no longer matches', async () => {
+    const target = { ...userRow(idOf(1)), adminPermissions: ['support:read'] };
+    const body = requestFor([target], { type: 'suspend' });
+    const delegate = { user: { id: ADMIN, isAdmin: false, adminPermissions: ['users:moderate'] } } as unknown as Request;
+    await expect(requestUsersBulkApprovalIfNeeded(delegate, body, depsFor([target]))).rejects.toThrow(
+      /matching users changed/
+    );
+    expect(mocks.requestApproval).not.toHaveBeenCalled();
+
+    await expect(requestUsersBulkApprovalIfNeeded(req, body, depsFor([target]))).resolves.toMatchObject({
+      pending: null,
+    });
+  });
 });
