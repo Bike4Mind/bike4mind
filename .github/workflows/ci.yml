@@ -115,7 +115,7 @@ jobs:
             ~/.pnpm-store
             node_modules
             */*/node_modules
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-pnpm-
 
@@ -380,7 +380,7 @@ jobs:
             ~/.pnpm-store
             node_modules
             */*/node_modules
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-pnpm-
 
@@ -452,7 +452,7 @@ jobs:
             ~/.pnpm-store
             node_modules
             */*/node_modules
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-pnpm-
 
@@ -649,7 +649,7 @@ jobs:
             ~/.pnpm-store
             node_modules
             */*/node_modules
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-pnpm-
 
@@ -692,12 +692,15 @@ jobs:
       # Persist the downloaded mongod binary across runs so the pre-warm below is usually a
       # no-op restore. restore-keys lets a lockfile bump reuse the prior binary (the pre-warm
       # then tops up any new version) instead of a cold download every time.
+      # Every cache key here hashes the root lockfile only: `**/pnpm-lock.yaml` walks the installed
+      # node_modules (~14s per evaluation, paid again by each Post step) and matches lockfiles that
+      # dependencies ship, so the key drifted after install and never hit. ciCacheKeys.test.ts.
       - name: Cache mongodb-memory-server binary
         if: matrix.shard.mongod != 'skip'
         uses: actions/cache@v5
         with:
           path: ~/.cache/mongodb-binaries
-          key: ${{ runner.os }}-mongodb-binaries-${{ hashFiles('**/pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-mongodb-binaries-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-mongodb-binaries-
 
@@ -950,7 +953,7 @@ jobs:
             ~/.pnpm-store
             node_modules
             */*/node_modules
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-pnpm-
 
@@ -1059,7 +1062,7 @@ jobs:
             ~/.pnpm-store
             node_modules
             */*/node_modules
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-pnpm-
 
@@ -1134,7 +1137,7 @@ jobs:
             ~/.pnpm-store
             node_modules
             */*/node_modules
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-pnpm-
 
