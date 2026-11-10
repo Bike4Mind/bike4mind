@@ -11,7 +11,7 @@ import { respond } from '@server/utils/respond';
 import { z } from 'zod';
 
 const ONE_MINUTE_MS = 60_000;
-// Each draw reads a window of detections and samples up to 20000 signups.
+// Each draw reads a window of detections and samples up to EVAL_SET_SAMPLE_DRAW_LIMIT signups (evalSets.ts).
 export const EVAL_SET_CREATE_RATE_LIMIT = 3;
 
 const createdSchema = z.object({ id: z.string() });

@@ -24,9 +24,30 @@ export const EVAL_SET_UNFLAGGED_SAMPLE_MAX = 500;
 export const EVAL_SET_HELD_OUT_SHARE_MIN = 0.2;
 export const EVAL_SET_HELD_OUT_SHARE_MAX = 0.8;
 export const EVAL_SET_NOTE_MAX = 500;
-/** Conclusive verdicts on held-out unflagged examples a run needs before it estimates recall. */
+/**
+ * Conclusive evaluation-set verdicts a run needs on each side (held-out unflagged examples, and
+ * held-out flagged examples that signed up in the window) before it estimates recall.
+ */
 export const EVAL_SET_MIN_REVIEWED = 30;
-export const EVAL_SET_RECALL_WITHHELD_REASONS = ['too_few_unflagged_reviews', 'no_flagged_reviews'] as const;
+/** The unflagged side is checked first, so a run short on both reports `too_few_unflagged_reviews`. */
+export const EVAL_SET_RECALL_WITHHELD_REASONS = ['too_few_unflagged_reviews', 'too_few_flagged_reviews'] as const;
+
+/**
+ * Whether an example drives the recall estimate: held out and, for a flagged one, signed up in the
+ * set window. Shared by the run grader (evalSetMath.ts estimateRecall) and the panel's review order.
+ */
+export function countsTowardRecall(
+  example: {
+    kind: (typeof EVAL_SET_EXAMPLE_KINDS)[number];
+    split: (typeof EVAL_SET_SPLITS)[number];
+    signedUpAt: Date | null;
+  },
+  window: { since: Date; until: Date }
+): boolean {
+  if (example.split !== 'heldOut') return false;
+  if (example.kind === 'unflagged') return true;
+  return example.signedUpAt !== null && example.signedUpAt >= window.since && example.signedUpAt <= window.until;
+}
 
 const objectIdStringSchema = z.string().regex(/^[a-f0-9]{24}$/i, 'Not a valid id');
 const windowDaysSchema = z.coerce
@@ -106,7 +127,7 @@ export const evalSetRunReportSchema = z.object({
   recall: z.object({
     /** Held-out flagged examples that signed up in the window. */
     flaggedExamples: countSchema,
-    /** Of those, the ones with a label (verdict or frozen). */
+    /** Of those, the ones whose latest evaluation-set verdict is conclusive; frozen labels never count. */
     flaggedReviewed: countSchema,
     flaggedAbuse: countSchema,
     /** The flagged accounts those examples stand for (undoes the flagged cap). */
@@ -182,6 +203,8 @@ export const evalSetDetailSchema = evalSetSummarySchema
     /** The last two runs, oldest first. */
     runs: z.array(evalSetRunSchema),
     runCount: countSchema,
+    /** Stored runs that no longer match the run schema; counted in runCount, absent from runs. */
+    unreadableRunCount: countSchema,
   });
 export type EvalSetDetail = z.infer<typeof evalSetDetailSchema>;
 

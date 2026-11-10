@@ -5,8 +5,11 @@ import {
   campaignKeys,
   exampleLabel,
   gradeEvalSet,
+  EVAL_SET_MAX_SHARED_IP_GROUP,
   seededSample,
+  sharedIpGroups,
   splitOf,
+  toEvalSetDetail,
   toEvalSetExample,
   wilsonLowerBound,
   windowCovering,
@@ -49,6 +52,29 @@ describe('campaignKeys', () => {
     }
     expect(campaignKeys('seed', userIds, [[id(1), id(2)]])).toEqual(keys);
     expect(campaignKeys('other', userIds, [[id(1), id(2)]]).get(id(1))).not.toBe(keys.get(id(1)));
+  });
+});
+
+describe('sharedIpGroups', () => {
+  it('links accounts sharing a signup IP, up to the group cap', () => {
+    const nat = Array.from({ length: EVAL_SET_MAX_SHARED_IP_GROUP + 1 }, (_, n) => ({
+      userId: id(100 + n),
+      ip: '192.0.2.1',
+    }));
+    const atCap = Array.from({ length: EVAL_SET_MAX_SHARED_IP_GROUP }, (_, n) => ({
+      userId: id(200 + n),
+      ip: '192.0.2.2',
+    }));
+    const groups = sharedIpGroups([
+      { userId: id(1), ip: '198.51.100.1' },
+      { userId: id(2), ip: '198.51.100.1' },
+      { userId: id(3), ip: '198.51.100.2' },
+      { userId: id(4), ip: null },
+      { userId: id(5), ip: undefined },
+      ...nat,
+      ...atCap,
+    ]);
+    expect(groups).toEqual([[id(1), id(2)], atCap.map(user => user.userId)]);
   });
 });
 
@@ -95,6 +121,17 @@ describe('windowCovering', () => {
     expect(windowCovering(new Date('2026-10-10T00:00:00Z'), now)).toBe(30);
     expect(windowCovering(new Date('2026-09-01T00:00:00Z'), now)).toBe(90);
     expect(windowCovering(new Date('2026-06-01T00:00:00Z'), now)).toBeNull();
+  });
+
+  it('maps a set run within a day of its draw to the window it was drawn with', () => {
+    const drawnAt = new Date('2026-11-06T00:00:00Z');
+    const daysBefore = (days: number) => new Date(drawnAt.getTime() - days * 24 * 60 * 60 * 1000);
+    const oneMinuteLater = new Date(drawnAt.getTime() + 60_000);
+    const threeDaysLater = new Date(drawnAt.getTime() + 3 * 24 * 60 * 60 * 1000);
+    expect(windowCovering(daysBefore(7), oneMinuteLater)).toBe(7);
+    expect(windowCovering(daysBefore(30), oneMinuteLater)).toBe(30);
+    expect(windowCovering(daysBefore(90), oneMinuteLater)).toBe(90);
+    expect(windowCovering(daysBefore(90), threeDaysLater)).toBeNull();
   });
 });
 
@@ -227,18 +264,18 @@ describe('gradeEvalSet', () => {
 
   it('scales both sides to their populations and withholds recall below the review minimum', () => {
     // 3 of 4 unflagged examples are held out, so they stand for 750 of the 1000 unflagged accounts;
-    // 3 of 4 flagged ones stand for 3 of the 4 flagged accounts.
+    // 3 of 4 flagged ones stand for 3 of the 4 flagged accounts. Their frozen labels are not reviews.
     expect(report.recall).toEqual({
       flaggedExamples: 3,
-      flaggedReviewed: 3,
-      flaggedAbuse: 2,
+      flaggedReviewed: 0,
+      flaggedAbuse: 0,
       flaggedPopulation: 3,
       unflaggedExamples: 3,
       unflaggedReviewed: 2,
       unflaggedAbuse: 1,
       unflaggedPopulation: 750,
       minimumReviewed: EVAL_SET_MIN_REVIEWED,
-      estimatedFlaggedAbuse: 2,
+      estimatedFlaggedAbuse: null,
       estimatedMissedAbuse: 375,
       estimatedRecall: null,
       recallWithheld: 'too_few_unflagged_reviews',
@@ -262,94 +299,119 @@ describe('gradeEvalSet', () => {
 });
 
 describe('gradeEvalSet recall', () => {
-  const reviewedUnflagged = (count: number, abuse: number) =>
+  const reviewed = (kind: AbuseEvalExample['kind'], from: number) => (count: number, abuse: number) =>
     Array.from({ length: count }, (_, n) =>
       example({
-        userId: id(100 + n),
-        kind: 'unflagged',
+        userId: id(from + n),
+        kind,
         signedUpAt: inWindow,
         verdicts: [verdict(n < abuse ? 'confirmed_abuse' : 'legitimate_human')],
       })
     );
-  const flaggedPair = [
-    example({ userId: id(1), signedUpAt: inWindow, frozenLabel: frozen('abuse') }),
-    example({ userId: id(2), signedUpAt: inWindow, frozenLabel: frozen('legit') }),
-  ];
+  const reviewedFlagged = reviewed('flagged', 1000);
+  const reviewedUnflagged = reviewed('unflagged', 2000);
 
   it('scales the flagged side up past the flagged cap', () => {
-    // 2 flagged examples drawn from 10 flagged accounts; 30 unflagged reviewed, 3 abuse, from 300.
+    // 30 flagged examples, 15 abuse, drawn from 150 flagged accounts; 30 unflagged, 3 abuse, from 300.
     const report = gradeEvalSet(
       {
         window,
-        population: { flagged: 10, unflagged: 300 },
-        examples: [...flaggedPair, ...reviewedUnflagged(EVAL_SET_MIN_REVIEWED, 3)],
+        population: { flagged: 150, unflagged: 300 },
+        examples: [...reviewedFlagged(EVAL_SET_MIN_REVIEWED, 15), ...reviewedUnflagged(EVAL_SET_MIN_REVIEWED, 3)],
       },
       noPredictions
     );
     expect(report.recall).toMatchObject({
-      flaggedPopulation: 10,
-      estimatedFlaggedAbuse: 5,
+      flaggedReviewed: EVAL_SET_MIN_REVIEWED,
+      flaggedPopulation: 150,
+      estimatedFlaggedAbuse: 75,
       unflaggedPopulation: 300,
       estimatedMissedAbuse: 30,
-      estimatedRecall: 0.143,
+      estimatedRecall: 0.714,
       recallWithheld: null,
     });
   });
 
-  it('ignores frozen labels on unflagged examples in the estimate', () => {
-    const frozenOnly = Array.from({ length: EVAL_SET_MIN_REVIEWED }, (_, n) =>
-      example({ userId: id(200 + n), kind: 'unflagged', signedUpAt: inWindow, frozenLabel: frozen('abuse') })
+  it('counts only evaluation-set verdicts on either side, never frozen labels', () => {
+    const frozenFlagged = Array.from({ length: EVAL_SET_MIN_REVIEWED }, (_, n) =>
+      example({ userId: id(300 + n), signedUpAt: inWindow, frozenLabel: frozen(n < 10 ? 'abuse' : 'legit') })
     );
-    const report = gradeEvalSet(
-      { window, population: { flagged: 2, unflagged: 300 }, examples: [...flaggedPair, ...frozenOnly] },
+    const frozenUnflagged = Array.from({ length: EVAL_SET_MIN_REVIEWED }, (_, n) =>
+      example({ userId: id(400 + n), kind: 'unflagged', signedUpAt: inWindow, frozenLabel: frozen('abuse') })
+    );
+    const flaggedFrozenOnly = gradeEvalSet(
+      {
+        window,
+        population: { flagged: 30, unflagged: 300 },
+        examples: [...frozenFlagged, ...reviewedUnflagged(EVAL_SET_MIN_REVIEWED, 3)],
+      },
       noPredictions
     );
-    expect(report.recall).toMatchObject({
+    expect(flaggedFrozenOnly.recall).toMatchObject({
+      flaggedExamples: EVAL_SET_MIN_REVIEWED,
+      flaggedReviewed: 0,
+      flaggedAbuse: 0,
+      estimatedFlaggedAbuse: null,
+      estimatedRecall: null,
+      recallWithheld: 'too_few_flagged_reviews',
+    });
+    // Precision still falls back to the frozen labels.
+    expect(flaggedFrozenOnly.labelled).toBe(2 * EVAL_SET_MIN_REVIEWED);
+
+    const unflaggedFrozenOnly = gradeEvalSet(
+      {
+        window,
+        population: { flagged: 30, unflagged: 300 },
+        examples: [...reviewedFlagged(EVAL_SET_MIN_REVIEWED, 10), ...frozenUnflagged],
+      },
+      noPredictions
+    );
+    expect(unflaggedFrozenOnly.recall).toMatchObject({
       unflaggedExamples: EVAL_SET_MIN_REVIEWED,
       unflaggedReviewed: 0,
       unflaggedAbuse: 0,
       estimatedMissedAbuse: null,
       recallWithheld: 'too_few_unflagged_reviews',
     });
-    expect(report.labelled).toBe(2);
+    expect(unflaggedFrozenOnly.labelled).toBe(EVAL_SET_MIN_REVIEWED);
   });
 
-  it('withholds recall with too few unflagged reviews or no flagged review', () => {
-    const tooFew = gradeEvalSet(
-      {
-        window,
-        population: { flagged: 2, unflagged: 300 },
-        examples: [...flaggedPair, ...reviewedUnflagged(EVAL_SET_MIN_REVIEWED - 1, 1)],
-      },
-      noPredictions
-    );
-    expect(tooFew.recall).toMatchObject({ estimatedRecall: null, recallWithheld: 'too_few_unflagged_reviews' });
-
-    const noFlagged = gradeEvalSet(
-      {
-        window,
-        population: { flagged: 1, unflagged: 300 },
-        examples: [example({ userId: id(1), signedUpAt: inWindow }), ...reviewedUnflagged(EVAL_SET_MIN_REVIEWED, 1)],
-      },
-      noPredictions
-    );
-    expect(noFlagged.recall).toMatchObject({
-      flaggedReviewed: 0,
-      estimatedFlaggedAbuse: null,
+  it('withholds recall below the review minimum on either side, unflagged first', () => {
+    const grade = (flagged: number, unflagged: number) =>
+      gradeEvalSet(
+        {
+          window,
+          population: { flagged, unflagged: 300 },
+          examples: [...reviewedFlagged(flagged, 1), ...reviewedUnflagged(unflagged, 1)],
+        },
+        noPredictions
+      ).recall;
+    expect(grade(EVAL_SET_MIN_REVIEWED, EVAL_SET_MIN_REVIEWED - 1)).toMatchObject({
       estimatedRecall: null,
-      recallWithheld: 'no_flagged_reviews',
+      recallWithheld: 'too_few_unflagged_reviews',
     });
+    expect(grade(EVAL_SET_MIN_REVIEWED - 1, EVAL_SET_MIN_REVIEWED)).toMatchObject({
+      flaggedReviewed: EVAL_SET_MIN_REVIEWED - 1,
+      estimatedRecall: null,
+      recallWithheld: 'too_few_flagged_reviews',
+    });
+    expect(grade(EVAL_SET_MIN_REVIEWED - 1, EVAL_SET_MIN_REVIEWED - 1)).toMatchObject({
+      recallWithheld: 'too_few_unflagged_reviews',
+    });
+    expect(grade(EVAL_SET_MIN_REVIEWED, EVAL_SET_MIN_REVIEWED).recallWithheld).toBeNull();
   });
 
   it('counts only flagged accounts created inside the window', () => {
+    const outside = (userId: string, signedUpAt: Date | null) =>
+      example({ userId, signedUpAt, verdicts: [verdict('confirmed_abuse')] });
     const report = gradeEvalSet(
       {
         window,
         population: { flagged: 4, unflagged: 300 },
         examples: [
-          ...flaggedPair,
-          example({ userId: id(3), signedUpAt: new Date('2026-09-01T00:00:00Z'), frozenLabel: frozen('abuse') }),
-          example({ userId: id(4), signedUpAt: null, frozenLabel: frozen('abuse') }),
+          ...reviewedFlagged(2, 1),
+          outside(id(3), new Date('2026-09-01T00:00:00Z')),
+          outside(id(4), null),
           ...reviewedUnflagged(EVAL_SET_MIN_REVIEWED, 3),
         ],
       },
@@ -378,5 +440,32 @@ describe('toEvalSetExample', () => {
       latestVerdict: { verdict: 'legitimate_human' },
     });
     expect(toEvalSetExample({ ...base, kind: 'unflagged' }).currentLabel).toBeNull();
+  });
+});
+
+describe('toEvalSetDetail', () => {
+  it('counts stored runs that no longer parse instead of dropping them silently', () => {
+    const goodRun = gradeEvalSet({ window, population: { flagged: 1, unflagged: 1 }, examples: [] }, noPredictions);
+    const set = {
+      id: 'set-1',
+      name: 'November',
+      note: null,
+      createdBy: id(99),
+      window,
+      seed: 'seed',
+      heldOutShare: 0.5,
+      population: { flagged: 1, unflagged: 1 },
+      truncated: false,
+      examples: [],
+      runs: [
+        { ranAt: window.until, ranBy: id(99), note: null, report: { split: 'old shape' } },
+        { ranAt: window.until, ranBy: id(99), note: 'ok', report: goodRun },
+      ],
+      createdAt: window.until,
+      updatedAt: window.until,
+    };
+    const detail = toEvalSetDetail(set);
+    expect(detail).toMatchObject({ runCount: 2, unreadableRunCount: 1 });
+    expect(detail.runs.map(run => run.note)).toEqual(['ok']);
   });
 });

@@ -23,6 +23,7 @@ import {
   campaignKeys,
   gradeEvalSet,
   seededSample,
+  sharedIpGroups,
   splitOf,
   windowCovering,
   type EvalSetPredictions,
@@ -57,11 +58,14 @@ const OBJECT_ID = /^[0-9a-f]{24}$/;
 export type EvalSetDeps = VerdictEvalDeps & {
   /** A fresh seed per draw; injectable so tests can fix the sample. */
   newSeed: () => string;
+  /** Newest in-window detections a draw reads; injectable so tests can exceed it with a few rows. */
+  detectionLimit: number;
 };
 
 export const liveEvalSetDeps: EvalSetDeps = {
   ...liveVerdictEvalDeps,
   newSeed: () => randomBytes(16).toString('hex'),
+  detectionLimit: VERDICT_EVAL_DETECTION_LIMIT,
 };
 
 type LeanDetection = {
@@ -73,25 +77,32 @@ type LeanDetection = {
   detectedAt: Date;
   verdict: ShadowDetectionVerdict | null;
 };
+type LeanLinkDetection = Pick<LeanDetection, 'userIds' | 'group'>;
 type LeanIpUser = { _id: { toString(): string }; signupMeta?: { ip?: string | null } | null };
 
 const toObjectIds = (ids: readonly string[]) => ids.map(id => new mongoose.Types.ObjectId(id));
 
+/** Everyone a detection names: its userIds and its campaign members. */
+const linkGroupOf = (row: LeanLinkDetection): string[] =>
+  [...new Set([...row.userIds, ...(row.group?.members ?? []).map(member => member.userId)])].filter(id =>
+    OBJECT_ID.test(id)
+  );
+
 /**
- * Detections in the window. A detection flags only its own userIds; `linkGroups` adds its campaign
- * members, which link accounts into one campaign without flagging them.
+ * The newest `limit` detections in the window. A detection flags only its own userIds; `linkGroups`
+ * adds its campaign members, which link accounts into one campaign without flagging them.
  */
-async function loadWindowDetections(since: Date) {
+async function loadWindowDetections(since: Date, limit: number) {
   const rows = await ShadowDetectionModel.find(
     { detectedAt: { $gte: since } },
     { detector: 1, policyVersion: 1, userIds: 1, 'group.members.userId': 1, detectedAt: 1, verdict: 1 }
   )
     .sort({ detectedAt: -1 })
-    .limit(VERDICT_EVAL_DETECTION_LIMIT + 1)
+    .limit(limit + 1)
     .maxTimeMS(MAX_TIME_MS)
     .lean<LeanDetection[]>()
     .exec();
-  const kept = rows.slice(0, VERDICT_EVAL_DETECTION_LIMIT);
+  const kept = rows.slice(0, limit);
   const detections: EvalDetection[] = kept.map(row => ({
     id: row._id.toString(),
     detector: row.detector,
@@ -100,15 +111,35 @@ async function loadWindowDetections(since: Date) {
     detectedAt: row.detectedAt,
     verdict: row.verdict ?? null,
   }));
-  const linkGroups = kept.map(row =>
-    [...new Set([...row.userIds, ...(row.group?.members ?? []).map(member => member.userId)])].filter(id =>
-      OBJECT_ID.test(id)
-    )
-  );
-  return { detections, linkGroups, truncated: rows.length > VERDICT_EVAL_DETECTION_LIMIT };
+  return { detections, linkGroups: kept.map(linkGroupOf), truncated: rows.length > limit };
 }
 
-/** Accounts that share a signup IP with another account in `userIds`, as groups. */
+/**
+ * Every account any in-window detection flags, uncapped, so an account flagged only past the
+ * detection limit is still kept out of the unflagged sample.
+ */
+async function loadFlaggedInWindow(since: Date): Promise<string[]> {
+  const ids: unknown[] = await ShadowDetectionModel.distinct('userIds', { detectedAt: { $gte: since } })
+    .maxTimeMS(MAX_TIME_MS)
+    .exec();
+  return ids.filter((id): id is string => typeof id === 'string' && OBJECT_ID.test(id));
+}
+
+/** Every detection, at any time, naming one of `userIds`, as link groups; links only, never flags. */
+async function loadMemberLinkGroups(userIds: string[]): Promise<string[][]> {
+  const rows = await inChunks(userIds, chunk =>
+    ShadowDetectionModel.find(
+      { $or: [{ userIds: { $in: chunk } }, { 'group.members.userId': { $in: chunk } }] },
+      { _id: 0, userIds: 1, 'group.members.userId': 1 }
+    )
+      .maxTimeMS(MAX_TIME_MS)
+      .lean<LeanLinkDetection[]>()
+      .exec()
+  );
+  return rows.map(linkGroupOf);
+}
+
+/** Accounts in `userIds` that share a signup IP, as groups (see sharedIpGroups for the cap). */
 async function sharedSignupIpGroups(userIds: string[]): Promise<string[][]> {
   const users = await inChunks(userIds, chunk =>
     User.find({ _id: { $in: toObjectIds(chunk) } }, { 'signupMeta.ip': 1 })
@@ -116,12 +147,7 @@ async function sharedSignupIpGroups(userIds: string[]): Promise<string[][]> {
       .lean<LeanIpUser[]>()
       .exec()
   );
-  const byIp = new Map<string, string[]>();
-  for (const user of users) {
-    const ip = user.signupMeta?.ip;
-    if (ip) byIp.set(ip, [...(byIp.get(ip) ?? []), user._id.toString()]);
-  }
-  return [...byIp.values()].filter(group => group.length > 1);
+  return sharedIpGroups(users.map(user => ({ userId: user._id.toString(), ip: user.signupMeta?.ip })));
 }
 
 /**
@@ -173,7 +199,11 @@ export async function drawEvalSet(
   const window = { since: new Date(now.getTime() - request.days * DAY_MS), until: now };
   const seed = deps.newSeed();
 
-  const { detections, linkGroups, truncated: detectionsTruncated } = await loadWindowDetections(window.since);
+  const [{ detections, linkGroups, truncated: detectionsTruncated }, everyFlagged] = await Promise.all([
+    loadWindowDetections(window.since, deps.detectionLimit),
+    loadFlaggedInWindow(window.since),
+  ]);
+  // Examples come from the detections read; who is flagged at all comes from the uncapped list.
   const flaggedAll = [...new Set(detections.flatMap(detection => detection.userIds))].sort();
   const flagged =
     flaggedAll.length > EVAL_SET_FLAGGED_LIMIT ? seededSample(flaggedAll, seed, EVAL_SET_FLAGGED_LIMIT) : flaggedAll;
@@ -182,18 +212,19 @@ export async function drawEvalSet(
     User.countDocuments({ createdAt: { $gte: window.since, $lte: window.until } })
       .maxTimeMS(MAX_TIME_MS)
       .exec(),
-    countCreatedInWindow(flaggedAll, window),
+    countCreatedInWindow(everyFlagged, window),
   ]);
-  const unflagged = await sampleUnflagged(window, new Set(flaggedAll), flaggedInWindow, request.unflaggedSample);
+  const unflagged = await sampleUnflagged(window, new Set(everyFlagged), flaggedInWindow, request.unflaggedSample);
 
   const members = [...flagged, ...unflagged];
-  const [{ accounts, signedUpAt }, signals, ipGroups] = await Promise.all([
+  const [{ accounts, signedUpAt }, signals, ipGroups, memberLinkGroups] = await Promise.all([
     loadAccountOutcomes(members, deps, now, request.days, { skipSignupVerdicts: true }),
     loadCohortSignals(members),
     sharedSignupIpGroups(members),
+    loadMemberLinkGroups(members),
   ]);
   const { signupLabels } = labelAccountsAndDetections(detections, accounts);
-  const keys = campaignKeys(seed, members, [...linkGroups, ...ipGroups]);
+  const keys = campaignKeys(seed, members, [...linkGroups, ...memberLinkGroups, ...ipGroups]);
 
   const detectionsOf = new Map<string, string[]>();
   for (const detection of detections) {
@@ -223,7 +254,7 @@ export async function drawEvalSet(
     window,
     seed,
     heldOutShare: request.heldOutShare,
-    population: { flagged: flaggedAll.length, unflagged: Math.max(0, createdInWindow - flaggedInWindow) },
+    population: { flagged: everyFlagged.length, unflagged: Math.max(0, createdInWindow - flaggedInWindow) },
     truncated: detectionsTruncated || flaggedAll.length > EVAL_SET_FLAGGED_LIMIT,
     examples: [
       ...flagged.map(userId => example(userId, 'flagged')),
@@ -271,8 +302,10 @@ async function loadPredictions(set: AbuseEvalSetItem, deps: VerdictEvalDeps, now
         .exec()
     ),
   ]);
-  // The chart verdict is only computed for a report window; a set older than 90 days gets none, so
-  // its examples abstain on that grader.
+  // The chart verdict exists only for a report window, and loadAccountOutcomes asks it only for
+  // accounts that signed up within `days` of now. With the drift tolerance, examples in the first
+  // day of an aged set fall outside that and abstain; a set past 90 days plus the tolerance gets no
+  // window, so all its examples abstain on that grader.
   const days = windowCovering(set.window.since, now);
   const { signupVerdicts } =
     days === null

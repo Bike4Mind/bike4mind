@@ -203,6 +203,21 @@ describe('abuseEvalSetRepository', () => {
     expect(found?.examples.find(e => e.userId === flaggedUser)?.verdicts).toHaveLength(1);
   });
 
+  it('lets exactly one of two concurrent same-revision verdicts win', async () => {
+    const id = await abuseEvalSetRepository.create(evalSet());
+    const base = { setId: id, userId: flaggedUser, reviewerId: adminId, reason: 'Checked', expectedRevision: 0 };
+
+    const results = await Promise.all([
+      abuseEvalSetRepository.addExampleVerdict({ ...base, verdict: 'confirmed_abuse' }),
+      abuseEvalSetRepository.addExampleVerdict({ ...base, verdict: 'legitimate_human' }),
+    ]);
+
+    expect([...results].sort()).toEqual(['conflict', 'updated']);
+    const example = (await abuseEvalSetRepository.findById(id))?.examples.find(e => e.userId === flaggedUser);
+    expect(example?.verdicts).toHaveLength(1);
+    expect(example?.revision).toBe(1);
+  });
+
   it('reports an unknown set, unknown example and malformed ids as not_found', async () => {
     const id = await abuseEvalSetRepository.create(evalSet());
     const base = { reviewerId: adminId, reason: 'r', expectedRevision: 0, verdict: 'confirmed_abuse' as const };

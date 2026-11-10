@@ -31,9 +31,10 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const daysAgo = (days: number) => new Date(NOW.getTime() - days * DAY_MS);
 const ADMIN_ID = new mongoose.Types.ObjectId().toString();
 
-const deps = (seed: string): EvalSetDeps => ({
+const deps = (seed: string, detectionLimit = 2_000): EvalSetDeps => ({
   signupVerdicts: async () => new Map(),
   newSeed: () => seed,
+  detectionLimit,
 });
 
 let mongoServer: MongoMemoryServer;
@@ -72,7 +73,12 @@ async function seedUser(fields: Record<string, unknown>): Promise<string> {
   return _id.toString();
 }
 
-async function seedDetection(userIds: string[], verdict: string | null, groupMembers: string[] = []): Promise<string> {
+async function seedDetection(
+  userIds: string[],
+  verdict: string | null,
+  groupMembers: string[] = [],
+  detectedAt = daysAgo(2)
+): Promise<string> {
   const _id = new mongoose.Types.ObjectId();
   await ShadowDetectionModel.collection.insertOne({
     _id,
@@ -80,7 +86,7 @@ async function seedDetection(userIds: string[], verdict: string | null, groupMem
     policyVersion: 1,
     userIds,
     ...(groupMembers.length > 0 ? { group: { members: groupMembers.map(userId => ({ userId })) } } : {}),
-    detectedAt: daysAgo(2),
+    detectedAt,
     verdict,
   });
   return _id.toString();
@@ -187,6 +193,44 @@ describe('drawEvalSet', () => {
     const direct = byUser.get(world.legitFlagged);
     expect(member.campaignKey).toBe(direct?.campaignKey);
     expect(member.split).toBe(direct?.split);
+  });
+});
+
+describe('drawEvalSet past the detection limit', () => {
+  it('never samples an account flagged only by a detection past the limit as unflagged', async () => {
+    await seedWorld();
+    const flaggedPastLimit = await seedUser({});
+    await seedDetection([flaggedPastLimit], null, [], daysAgo(10));
+
+    const id = await drawEvalSet(request, ADMIN_ID, deps('seed-a', 2), NOW);
+    const set = await abuseEvalSetRepository.findById(id);
+    if (!set) throw new Error('set was not stored');
+
+    expect(set.truncated).toBe(true);
+    expect(set.examples.some(example => example.userId === flaggedPastLimit)).toBe(false);
+    expect(set.population).toEqual({ flagged: 5, unflagged: 41 });
+  });
+});
+
+describe('drawEvalSet campaign links', () => {
+  it('links a sampled account to a flagged one through a detection before the window', async () => {
+    const world = await seedWorld();
+    const linkedBefore = await seedUser({});
+    await seedDetection([world.legitFlagged, linkedBefore], 'confirmed_abuse', [], daysAgo(request.days + 10));
+
+    const id = await drawEvalSet(request, ADMIN_ID, deps('seed-a'), NOW);
+    const set = await abuseEvalSetRepository.findById(id);
+    if (!set) throw new Error('set was not stored');
+
+    const byUser = new Map(set.examples.map(example => [example.userId, example]));
+    const member = byUser.get(linkedBefore);
+    const flagged = byUser.get(world.legitFlagged);
+    if (!member || !flagged) throw new Error('the linked accounts were not drawn');
+    // The old detection links the two; only in-window detections flag.
+    expect(member).toMatchObject({ kind: 'unflagged', detectionIds: [] });
+    expect(member.campaignKey).toBe(flagged.campaignKey);
+    expect(member.split).toBe(flagged.split);
+    expect(set.population.flagged).toBe(4);
   });
 });
 

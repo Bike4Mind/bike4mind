@@ -172,9 +172,15 @@ const detail: EvalSetDetail = {
       latestVerdict: { verdict: 'legitimate_human', reason: 'real person', reviewerId: 'rev-2', reviewedAt: WHEN },
     }),
     example('tuning-unlabelled', { split: 'tuning' }),
+    example('flagged-before-window', {
+      kind: 'flagged',
+      signedUpAt: new Date('2026-09-01T00:00:00Z'),
+      currentLabel: { label: 'abuse', source: 'frozen' },
+    }),
   ],
   runs: [runOf(0.7), runOf(0.8)],
   runCount: 2,
+  unreadableRunCount: 0,
 };
 
 beforeEach(() => {
@@ -237,21 +243,24 @@ describe('VerdictEvalSetsPanel', () => {
         screen.getByText(/1 abuse in 2 reviewed unflagged held-out examples, scaled to 450 accounts/)
       ).toBeTruthy();
       expect(screen.getByTestId('eval-sets-scores-note').textContent).toContain('Recall comes from the estimate');
+      expect(screen.queryByTestId('eval-sets-unreadable-runs')).toBeNull();
       expect(within(scores).queryByText('Hit rate (of abuse)')).toBeNull();
       expect(
         within(screen.getByTestId('eval-sets-cohorts')).getByText('Not measurable: no stored signal')
       ).toBeTruthy();
     });
 
-    it('orders held-out unflagged examples without a conclusive verdict first, with a link to the account', () => {
+    it('orders recall examples on both sides without a conclusive verdict first, with a link to the account', () => {
       open();
       const rows = within(screen.getByTestId('eval-sets-examples')).getAllByRole('row');
       const order = rows.slice(1).map(row => row.textContent ?? '');
-      expect(order[0]).toContain('needs-label');
-      expect(order[1]).toContain('inconclusive');
-      expect(order[2]).toContain('tuning-unlabelled');
-      expect(order[3]).toContain('abuse (frozen at draw)');
+      // A frozen label does not count toward recall, so an in-window flagged example still needs a verdict.
+      expect(order[0]).toContain('labelled-flagged');
+      expect(order[1]).toContain('needs-label');
+      expect(order[2]).toContain('inconclusive');
+      expect(order[3]).toContain('tuning-unlabelled');
       expect(order[4]).toContain('legit (verdict)');
+      expect(order[5]).toContain('flagged-before-window');
       expect(screen.getByTestId('eval-sets-user-link-needs-label').getAttribute('href')).toBe(
         '/admin/users/needs-label'
       );
@@ -283,6 +292,35 @@ describe('VerdictEvalSetsPanel', () => {
       });
       open();
       expect(screen.getByText('Needs at least 30 reviewed unflagged held-out examples; 12 so far.')).toBeTruthy();
+    });
+
+    it('explains recall withheld for too few flagged reviews', () => {
+      const withheld = runOf(0.8);
+      withheld.report.recall = {
+        ...withheld.report.recall,
+        estimatedRecall: null,
+        recallWithheld: 'too_few_flagged_reviews',
+        flaggedReviewed: 7,
+      };
+      m.useEvalSet.mockReturnValue({
+        data: { ...detail, runs: [withheld] },
+        isPending: false,
+        error: null,
+        refetch: vi.fn(),
+      });
+      open();
+      expect(screen.getByText('Needs at least 30 reviewed flagged held-out examples; 7 so far.')).toBeTruthy();
+    });
+
+    it('says how many stored runs could not be read', () => {
+      m.useEvalSet.mockReturnValue({
+        data: { ...detail, runCount: 4, unreadableRunCount: 2 },
+        isPending: false,
+        error: null,
+        refetch: vi.fn(),
+      });
+      open();
+      expect(screen.getByTestId('eval-sets-unreadable-runs').textContent).toBe('2 stored runs could not be read.');
     });
 
     const openLabelDialog = async (userId: string) => {

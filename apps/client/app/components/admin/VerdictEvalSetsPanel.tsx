@@ -29,6 +29,7 @@ import {
   EVAL_SET_MIN_REVIEWED,
   EVAL_SET_UNFLAGGED_SAMPLE_MAX,
   EVAL_SET_UNFLAGGED_SAMPLE_MIN,
+  countsTowardRecall,
   type EvalSetDetail,
   type EvalSetExample,
   type EvalSetRun,
@@ -164,11 +165,12 @@ function scoreColumns(previous: EvalSetRun | null): readonly DataColumn<EvalSetS
 type RunRecall = EvalSetRun['report']['recall'];
 
 const withheldMessage = (recall: RunRecall): string | null => {
+  const minimum = count(recall.minimumReviewed || EVAL_SET_MIN_REVIEWED);
   if (recall.recallWithheld === 'too_few_unflagged_reviews') {
-    return `Needs at least ${count(recall.minimumReviewed || EVAL_SET_MIN_REVIEWED)} reviewed unflagged held-out examples; ${count(recall.unflaggedReviewed)} so far.`;
+    return `Needs at least ${minimum} reviewed unflagged held-out examples; ${count(recall.unflaggedReviewed)} so far.`;
   }
-  if (recall.recallWithheld === 'no_flagged_reviews') {
-    return 'Needs at least one reviewed flagged held-out example; none so far.';
+  if (recall.recallWithheld === 'too_few_flagged_reviews') {
+    return `Needs at least ${minimum} reviewed flagged held-out examples; ${count(recall.flaggedReviewed)} so far.`;
   }
   return null;
 };
@@ -180,11 +182,11 @@ const hasConclusiveVerdict = (example: EvalSetExample) =>
   example.latestVerdict !== null && example.latestVerdict.verdict !== 'insufficient_evidence';
 
 /**
- * Held-out unflagged examples without a conclusive evaluation-set verdict first (they decide the
- * recall estimate), then the other unlabelled ones.
+ * Examples that drive the recall estimate (flagged and unflagged) without a conclusive
+ * evaluation-set verdict first, then the other unlabelled ones.
  */
-const reviewPriority = (example: EvalSetExample) => {
-  if (example.split === 'heldOut' && example.kind === 'unflagged' && !hasConclusiveVerdict(example)) return 0;
+const reviewPriority = (window: EvalSetDetail['window']) => (example: EvalSetExample) => {
+  if (countsTowardRecall(example, window) && !hasConclusiveVerdict(example)) return 0;
   return example.currentLabel === null ? 1 : 2;
 };
 
@@ -530,7 +532,8 @@ const SetDetail: React.FC<{ summary: EvalSetSummary }> = ({ summary }) => {
     },
   ];
 
-  const examples = set ? [...set.examples].sort((a, b) => reviewPriority(a) - reviewPriority(b)) : [];
+  const priorityOf = set ? reviewPriority(set.window) : null;
+  const examples = set && priorityOf ? [...set.examples].sort((a, b) => priorityOf(a) - priorityOf(b)) : [];
   const labelling = set?.examples.find(example => example.userId === labellingUserId) ?? null;
   const [latest, previous] = set ? [set.runs.at(-1) ?? null, set.runs.length > 1 ? set.runs[0] : null] : [null, null];
   const heldOut = summary.heldOutExamples;
@@ -591,6 +594,11 @@ const SetDetail: React.FC<{ summary: EvalSetSummary }> = ({ summary }) => {
           {getErrorMessage(run.error)}
         </Alert>
       )}
+      {set && set.unreadableRunCount > 0 && (
+        <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }} data-testid="eval-sets-unreadable-runs">
+          {count(set.unreadableRunCount)} stored {set.unreadableRunCount === 1 ? 'run' : 'runs'} could not be read.
+        </Typography>
+      )}
       {latest ? (
         <RunReport run={latest} previous={previous} onRetry={() => void detail.refetch()} />
       ) : (
@@ -640,8 +648,8 @@ export const VerdictEvalSetsPanel: React.FC = () => {
       </Typography>
       <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
         A frozen set holds every flagged account in a window plus a random sample of accounts no detector flagged.
-        Linked accounts share a split, so tuning never sees a campaign the held-out examples are graded on. Labelling
-        the unflagged sample is what makes recall measurable.
+        Linked accounts share a split, so tuning never sees a campaign the held-out examples are graded on. Recall
+        counts only verdicts given here, on both the flagged and the unflagged held-out examples.
       </Typography>
       <CreateForm onCreated={setSelectedId} nameRef={nameRef} primary={selected === null} />
       <DataTable
