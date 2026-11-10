@@ -436,7 +436,7 @@ export interface IPlatformUsageSummary {
   overTime: IOwnerSpendDay[];
   byFeature: IOwnerSpendFeature[];
   byConsumer: IPlatformConsumerUsage[];
-  byModel: IOwnerSpendModel[];
+  byModel: IAdminSpendModel[];
   totals: IUsageSpendBucket;
 }
 
