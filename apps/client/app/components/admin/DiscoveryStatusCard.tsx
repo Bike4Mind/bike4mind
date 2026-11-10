@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Box, Button, Chip, CircularProgress, Link, Sheet, Stack, Tooltip, Typography } from '@mui/joy';
-import type { ColorPaletteProp } from '@mui/joy/styles';
+import { Alert, Box, Button, CircularProgress, Link, Stack, Tooltip, Typography } from '@mui/joy';
 import type { IDiscoverySkippedSource } from '@bike4mind/common';
+import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import { api } from '@client/app/contexts/ApiContext';
 import { DiscoveryRunDetailModal } from './DiscoveryRunDetailModal';
+import { ErrorState, LoadingState, SectionCard, StatusChip } from './shared';
 
 /** Wire shapes of /api/admin/model-discovery (dates arrive as strings). */
 interface DiscoverySource {
@@ -66,11 +67,12 @@ const POLL_TIMEOUT_MS = 120_000;
 const MAX_CONSECUTIVE_POLL_FAILURES = 3;
 
 const DISABLED_HINT = 'Model discovery is turned off (enableModelDiscovery), so no run will start.';
+const LOAD_FAILED = 'Failed to load discovery status';
 
-const STATUS_COLOR: Record<DiscoveryRunSummary['status'], ColorPaletteProp> = {
-  ok: 'success',
-  partial: 'warning',
-  failed: 'danger',
+const STATUS_TONE: Record<DiscoveryRunSummary['status'], AdminStatusTone> = {
+  ok: 'good',
+  partial: 'warn',
+  failed: 'bad',
 };
 
 const apiErrorMessage = (err: unknown, fallback: string) => {
@@ -120,6 +122,9 @@ const giveUpMessage = (sawNewRun: boolean, enabled: boolean) => {
  * The change counts and the run history are entry points into
  * DiscoveryRunDetailModal: the counts alone ("34 flagged") name no model and no
  * reason, and the 6h cron would otherwise erase whatever run was being read.
+ *
+ * Chips carry only short statuses and wrap as whole pills; the long lists (skipped sources,
+ * coverage) are plain text so they wrap instead of truncating at narrow widths.
  */
 export const DiscoveryStatusCard: React.FC = () => {
   const [status, setStatus] = useState<DiscoveryStatus | null>(null);
@@ -136,12 +141,12 @@ export const DiscoveryStatusCard: React.FC = () => {
   // The poll loop outlives a fast unmount (2 minutes of it), so every state
   // write past an await is gated on this.
   const unmounted = useRef(false);
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    unmounted.current = false;
+    return () => {
       unmounted.current = true;
-    },
-    []
-  );
+    };
+  }, []);
 
   const load = useCallback(async (): Promise<DiscoveryStatus> => {
     const res = await api.get<DiscoveryStatus>('/api/admin/model-discovery');
@@ -150,8 +155,13 @@ export const DiscoveryStatusCard: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    void load().catch(err => setError(apiErrorMessage(err, 'Failed to load discovery status')));
+    void load().catch(err => setError(apiErrorMessage(err, LOAD_FAILED)));
   }, [load]);
+
+  const retryLoad = () => {
+    setError(null);
+    void load().catch(err => setError(apiErrorMessage(err, LOAD_FAILED)));
+  };
 
   const awaitRun = useCallback(
     async (baselineStatus: DiscoveryStatus) => {
@@ -219,40 +229,26 @@ export const DiscoveryStatusCard: React.FC = () => {
   const isBusy = isDispatching || isWaiting;
 
   return (
-    <Sheet variant="outlined" sx={{ p: 1.5, borderRadius: 'sm' }} data-testid="discovery-status-card">
-      <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={1}>
-        <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap">
-          <Typography level="title-sm">Discovery</Typography>
-          <Chip
-            size="sm"
-            variant="soft"
-            // 'report' calculates the diff and writes nothing: the safe mode.
-            color={status?.mode === 'write' ? 'warning' : 'success'}
-            data-testid="discovery-status-mode-chip"
-          >
-            {status?.mode ?? '...'}
-          </Chip>
-          <Chip size="sm" variant="soft" color="neutral" data-testid="discovery-status-autoenable-chip">
-            auto-enable: {status?.autoEnable ?? '...'}
-          </Chip>
-          {discoveryDisabled && (
-            <Chip size="sm" variant="soft" color="danger" data-testid="discovery-status-disabled-chip">
-              disabled
-            </Chip>
+    <SectionCard
+      title="Discovery"
+      body="custom"
+      data-testid="discovery-status-card"
+      action={
+        <Stack direction="row" gap={1} alignItems="center">
+          {isWaiting && (
+            <Stack direction="row" gap={0.75} alignItems="center" role="status" data-testid="discovery-status-waiting">
+              <CircularProgress size="sm" aria-hidden />
+              <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+                Waiting for the run
+              </Typography>
+            </Stack>
           )}
-          {status?.selfHost && (
-            <Chip size="sm" variant="outlined" color="neutral">
-              self-host
-            </Chip>
-          )}
-        </Stack>
-        <Stack direction="row" spacing={1} alignItems="center">
-          {isWaiting && <CircularProgress size="sm" data-testid="discovery-status-waiting" />}
           {/* A disabled Joy button emits no pointer events, so the tooltip needs the span. */}
           <Tooltip title={discoveryDisabled ? DISABLED_HINT : ''} variant="soft">
             <span>
               <Button
                 size="sm"
+                variant="plain"
                 onClick={runNow}
                 disabled={isBusy || discoveryDisabled}
                 loading={isDispatching}
@@ -263,139 +259,169 @@ export const DiscoveryStatusCard: React.FC = () => {
             </span>
           </Tooltip>
         </Stack>
-      </Stack>
+      }
+    >
+      <Stack gap={1} sx={{ px: 2, py: 1.75 }}>
+        <Stack direction="row" gap={0.75} alignItems="center" flexWrap="wrap" data-testid="discovery-status-chips">
+          <StatusChip
+            // 'report' calculates the diff and writes nothing: the safe mode.
+            tone={status?.mode === 'write' ? 'warn' : 'neutral'}
+            label={`mode: ${status?.mode ?? '...'}`}
+            data-testid="discovery-status-mode-chip"
+          />
+          <StatusChip
+            tone="neutral"
+            label={`auto-enable: ${status?.autoEnable ?? '...'}`}
+            data-testid="discovery-status-autoenable-chip"
+          />
+          {discoveryDisabled && <StatusChip tone="bad" label="disabled" data-testid="discovery-status-disabled-chip" />}
+          {status?.selfHost && (
+            <StatusChip tone="neutral" label="self-host" data-testid="discovery-status-selfhost-chip" />
+          )}
+        </Stack>
 
-      {discoveryDisabled && (
-        <Alert color="warning" size="sm" sx={{ mt: 1 }} data-testid="discovery-status-disabled-notice">
-          {DISABLED_HINT} Turn on Enable Model Discovery in Admin settings to run one.
-        </Alert>
-      )}
+        {discoveryDisabled && (
+          <Alert color="warning" size="sm" data-testid="discovery-status-disabled-notice">
+            {DISABLED_HINT} Turn on Enable Model Discovery in Admin settings to run one.
+          </Alert>
+        )}
 
-      {error && (
-        <Alert color="danger" size="sm" sx={{ mt: 1 }} data-testid="discovery-status-error">
-          {error}
-        </Alert>
-      )}
-      {notice && !error && (
-        <Alert color="neutral" size="sm" sx={{ mt: 1 }} data-testid="discovery-status-notice">
-          {notice}
-        </Alert>
-      )}
+        {error && status && (
+          <Alert color="danger" size="sm" data-testid="discovery-status-error">
+            {error}
+          </Alert>
+        )}
+        {notice && !error && (
+          <Alert color="neutral" size="sm" data-testid="discovery-status-notice">
+            {notice}
+          </Alert>
+        )}
 
-      {lastRun ? (
-        <Box sx={{ mt: 1 }}>
-          <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap">
-            <Chip size="sm" color={STATUS_COLOR[lastRun.status]} data-testid="discovery-status-run-chip">
-              {lastRun.status}
-            </Chip>
-            <Typography level="body-xs" data-testid="discovery-status-last-run">
-              {lastRun.trigger} on {lastRun.host}, started {formatTime(lastRun.startedAt)}
-              {lastRun.finishedAt ? `, finished ${formatTime(lastRun.finishedAt)}` : ', still running'}
-            </Typography>
-          </Stack>
-          <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" sx={{ mt: 0.5 }}>
-            {/* The tally stays over attempts so it never conflates a skip with a
-                failure; a run with no attempt at all says so instead of "0/0". */}
-            <Typography level="body-xs" data-testid="discovery-status-sources">
-              {lastRun.sources.length > 0
-                ? `${lastRun.sources.length - failedSources.length}/${lastRun.sources.length} sources ok`
-                : 'no sources attempted'}
-            </Typography>
-            {skippedSources.length > 0 && (
-              <Chip size="sm" variant="soft" color="neutral" data-testid="discovery-status-skipped">
-                {skippedSources.length} skipped: {skippedSources.map(skipped => skipped.name).join(', ')}
-              </Chip>
-            )}
-            {failedSources.length > 0 && (
-              <Link
-                level="body-xs"
-                component="button"
-                onClick={() => setShowFailures(v => !v)}
-                data-testid="discovery-status-failures-toggle"
-              >
-                {showFailures ? 'hide' : 'show'} failures
-              </Link>
-            )}
-            {lastRun.joinCoverage.map(coverage => (
-              <Chip
-                key={coverage.aggregator}
-                size="sm"
-                variant="outlined"
-                data-testid={`discovery-status-coverage-${coverage.aggregator}`}
-              >
-                {coverage.aggregator} {coverage.matched}/{coverage.total}
-              </Chip>
-            ))}
-            {/* No id means there is no report to open, so it stays a sentence. */}
-            {lastRun.id ? (
-              <Link
-                level="body-xs"
-                component="button"
-                onClick={() => setDetailRunId(lastRun.id)}
-                data-testid="discovery-status-changes"
-              >
-                {changeSummary(lastRun.changes)}
-              </Link>
-            ) : (
-              <Typography level="body-xs" color="neutral" data-testid="discovery-status-changes">
-                {changeSummary(lastRun.changes)}
+        {!status ? (
+          error ? (
+            <Box data-testid="discovery-status-error">
+              <ErrorState message={error} onRetry={retryLoad} />
+            </Box>
+          ) : (
+            <LoadingState label="Loading discovery status" testId="discovery-status-loading" />
+          )
+        ) : lastRun ? (
+          <Stack gap={0.5}>
+            <Stack direction="row" columnGap={0.75} rowGap={0.5} alignItems="center" flexWrap="wrap">
+              <StatusChip
+                tone={STATUS_TONE[lastRun.status] ?? 'neutral'}
+                label={lastRun.status}
+                data-testid="discovery-status-run-chip"
+              />
+              <Typography level="body-xs" data-testid="discovery-status-last-run">
+                {lastRun.trigger} on {lastRun.host}, started {formatTime(lastRun.startedAt)}
+                {lastRun.finishedAt ? `, finished ${formatTime(lastRun.finishedAt)}` : ', still running'}
               </Typography>
-            )}
-          </Stack>
-          {showFailures &&
-            failedSources.map(source => (
-              <Typography
-                key={source.name}
-                level="body-xs"
-                color="danger"
-                data-testid={`discovery-status-failure-${source.name}`}
-              >
-                {source.name}: {source.error ?? 'failed'}
+            </Stack>
+            <Stack direction="row" columnGap={1.5} rowGap={0.25} alignItems="center" flexWrap="wrap">
+              {/* The tally stays over attempts so it never conflates a skip with a
+                  failure; a run with no attempt at all says so instead of "0/0". */}
+              <Typography level="body-xs" data-testid="discovery-status-sources">
+                {lastRun.sources.length > 0
+                  ? `${lastRun.sources.length - failedSources.length}/${lastRun.sources.length} sources ok`
+                  : 'no sources attempted'}
               </Typography>
-            ))}
-          <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" sx={{ mt: 0.5 }}>
-            <Typography level="body-xs" color="neutral">
-              Last success: {formatTime(status?.lastSuccessfulRunAt)}
-            </Typography>
-            {runs.length > 1 && (
-              <Link
-                level="body-xs"
-                component="button"
-                onClick={() => setShowHistory(v => !v)}
-                data-testid="discovery-status-history-toggle"
-              >
-                {showHistory ? 'hide' : 'show'} run history ({runs.length})
-              </Link>
-            )}
-            <Typography level="body-xs" color="neutral" data-testid="discovery-status-retention">
-              {RUN_RETENTION_NOTE}
-            </Typography>
-          </Stack>
-          {showHistory && (
-            <Stack spacing={0.25} sx={{ mt: 0.5 }} data-testid="discovery-status-history-list">
-              {runs.map(run => (
+              {skippedSources.length > 0 && (
+                <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }} data-testid="discovery-status-skipped">
+                  {skippedSources.length} skipped: {skippedSources.map(skipped => skipped.name).join(', ')}
+                </Typography>
+              )}
+              {failedSources.length > 0 && (
                 <Link
-                  key={run.id}
                   level="body-xs"
                   component="button"
-                  onClick={() => setDetailRunId(run.id)}
-                  sx={{ display: 'block', textAlign: 'left' }}
-                  data-testid={`discovery-status-history-run-${run.id}`}
+                  onClick={() => setShowFailures(v => !v)}
+                  data-testid="discovery-status-failures-toggle"
                 >
-                  {formatTime(run.startedAt)} - {run.trigger} - {run.status} - {changeSummary(run.changes)}
+                  {showFailures ? 'hide' : 'show'} failures
                 </Link>
+              )}
+              {lastRun.joinCoverage.map(coverage => (
+                <Typography
+                  key={coverage.aggregator}
+                  level="body-xs"
+                  sx={{ color: 'admin.inkMuted' }}
+                  data-testid={`discovery-status-coverage-${coverage.aggregator}`}
+                >
+                  {coverage.aggregator} {coverage.matched}/{coverage.total}
+                </Typography>
               ))}
+              {/* No id means there is no report to open, so it stays a sentence. */}
+              {lastRun.id ? (
+                <Link
+                  level="body-xs"
+                  component="button"
+                  onClick={() => setDetailRunId(lastRun.id)}
+                  data-testid="discovery-status-changes"
+                >
+                  {changeSummary(lastRun.changes)}
+                </Link>
+              ) : (
+                <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }} data-testid="discovery-status-changes">
+                  {changeSummary(lastRun.changes)}
+                </Typography>
+              )}
             </Stack>
-          )}
-        </Box>
-      ) : (
-        <Typography level="body-xs" color="neutral" sx={{ mt: 1 }} data-testid="discovery-status-never-run">
-          Discovery has not run yet.
-        </Typography>
-      )}
+            {showFailures &&
+              failedSources.map(source => (
+                <Typography
+                  key={source.name}
+                  level="body-xs"
+                  sx={{ color: 'admin.danger' }}
+                  data-testid={`discovery-status-failure-${source.name}`}
+                >
+                  {source.name}: {source.error ?? 'failed'}
+                </Typography>
+              ))}
+            <Stack direction="row" columnGap={1.5} rowGap={0.25} alignItems="center" flexWrap="wrap">
+              <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+                Last success: {formatTime(status?.lastSuccessfulRunAt)}
+              </Typography>
+              {runs.length > 1 && (
+                <Link
+                  level="body-xs"
+                  component="button"
+                  onClick={() => setShowHistory(v => !v)}
+                  data-testid="discovery-status-history-toggle"
+                >
+                  {showHistory ? 'hide' : 'show'} run history ({runs.length})
+                </Link>
+              )}
+              <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }} data-testid="discovery-status-retention">
+                {RUN_RETENTION_NOTE}
+              </Typography>
+            </Stack>
+            {showHistory && (
+              <Stack gap={0.25} data-testid="discovery-status-history-list">
+                {runs.map(run => (
+                  <Link
+                    key={run.id}
+                    level="body-xs"
+                    component="button"
+                    onClick={() => setDetailRunId(run.id)}
+                    sx={{ display: 'block', textAlign: 'left' }}
+                    data-testid={`discovery-status-history-run-${run.id}`}
+                  >
+                    {formatTime(run.startedAt)} - {run.trigger} - {run.status} - {changeSummary(run.changes)}
+                  </Link>
+                ))}
+              </Stack>
+            )}
+          </Stack>
+        ) : (
+          <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }} data-testid="discovery-status-never-run">
+            Discovery has not run yet.
+          </Typography>
+        )}
+      </Stack>
 
       <DiscoveryRunDetailModal runId={detailRunId} onClose={() => setDetailRunId(null)} />
-    </Sheet>
+    </SectionCard>
   );
 };
 
