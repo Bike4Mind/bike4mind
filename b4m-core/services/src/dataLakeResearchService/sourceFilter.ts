@@ -1,3 +1,5 @@
+import type { ResearchUnlistedSources } from '@bike4mind/common';
+
 /**
  * The source lists, applied to a search hit BEFORE anything is spent on it -
  * before the relevance judgment, before the fetch. Ordering matters for cost, not just for
@@ -48,7 +50,7 @@ export function classifySource(
     trustedDomains: readonly string[];
     reviewDomains: readonly string[];
     blockedDomains: readonly string[];
-    unlistedSources: 'review' | 'drop';
+    unlistedSources: ResearchUnlistedSources;
   }
 ): SourceVerdict {
   const hostname = sourceHostname(url);

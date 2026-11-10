@@ -1,4 +1,4 @@
-import type { ResearchRunLevers } from '@bike4mind/common';
+import type { ResearchRunLevers, ResearchUnlistedSources } from '@bike4mind/common';
 import {
   boundedStringList,
   deriveLegacyAllowedDomains,
@@ -54,6 +54,20 @@ export type ResearchLeversDraft = Partial<Omit<ResearchRunLevers, 'recencyDays' 
   model?: string | null;
 };
 
+/**
+ * `undefined` hands a legacy-only input to the upgrader. Neither shape given means nothing restricts
+ * the run, and a stored value that is not valid fails closed on the tier lists.
+ */
+const resolveUnlistedSources = (
+  input: ResearchLeversDraft,
+  listedCount: number
+): ResearchUnlistedSources | undefined => {
+  const raw: unknown = input.unlistedSources;
+  if (raw === undefined || raw === null) return input.allowedDomains === undefined ? 'review' : undefined;
+  if (isResearchUnlistedSources(raw)) return raw;
+  return listedCount > 0 ? 'drop' : 'review';
+};
+
 export function normalizeResearchLevers(input: ResearchLeversDraft): ResearchRunLevers {
   const query = typeof input.query === 'string' ? input.query.trim() : '';
   if (!query) throw new BadRequestError('A research run needs a question to research');
@@ -62,27 +76,14 @@ export function normalizeResearchLevers(input: ResearchLeversDraft): ResearchRun
 
   // Legacy `allowedDomains` is normalized BEFORE the upgrade so emptiness is judged on what the
   // filter will actually use: a list like `*.` normalizes to nothing and stays unrestricted.
-  // A stored `unlistedSources` that is not a valid value fails closed on the tier lists.
   const trustedDomains = normalizeDomainList(input.trustedDomains);
   const reviewDomains = normalizeDomainList(input.reviewDomains);
-  const rawUnlisted: unknown = input.unlistedSources;
-  const unlistedSources =
-    rawUnlisted === undefined || rawUnlisted === null
-      ? // Neither shape given: nothing restricts the run, and the upgrade must not read it as legacy.
-        input.allowedDomains === undefined
-        ? 'review'
-        : undefined
-      : isResearchUnlistedSources(rawUnlisted)
-        ? rawUnlisted
-        : trustedDomains.length + reviewDomains.length > 0
-          ? 'drop'
-          : 'review';
   const tiers = upgradeLegacyResearchLevers({
     ...input,
     query,
     trustedDomains,
     reviewDomains,
-    unlistedSources: unlistedSources as ResearchRunLevers['unlistedSources'] | undefined,
+    unlistedSources: resolveUnlistedSources(input, trustedDomains.length + reviewDomains.length),
     allowedDomains: input.allowedDomains === undefined ? undefined : normalizeDomainList(input.allowedDomains),
   } as Parameters<typeof upgradeLegacyResearchLevers>[0]);
   const tierFields = {
