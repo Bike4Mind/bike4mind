@@ -110,33 +110,45 @@ export function ModelDetailView({
           />
         }
         meta={
-          <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }} data-testid="model-detail-meta">
-            {modelTypeLabel(model.type)} {'\u00b7'} {model.backend}
-            {model.releaseDate ? ` \u00b7 Released ${model.releaseDate.slice(0, 10)}` : ''}
-          </Typography>
+          <>
+            <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }} data-testid="model-detail-meta">
+              {modelTypeLabel(model.type)} {'\u00b7'} {model.backend}
+              {model.releaseDate ? ` \u00b7 Released ${model.releaseDate.slice(0, 10)}` : ''}
+            </Typography>
+            <Link
+              component="button"
+              type="button"
+              level="body-sm"
+              onClick={() => void openUsage()}
+              data-testid="model-detail-usage-link"
+            >
+              Usage
+            </Link>
+            <Link
+              component="button"
+              type="button"
+              level="body-sm"
+              onClick={() => void openLogs()}
+              data-testid="model-detail-logs-link"
+            >
+              Logs
+            </Link>
+          </>
         }
         actions={
-          <Stack direction="row" gap={1} flexWrap="wrap">
-            <Button size="sm" variant="plain" onClick={() => void openUsage()} data-testid="model-detail-usage-btn">
-              Usage
-            </Button>
-            <Button size="sm" variant="plain" onClick={() => void openLogs()} data-testid="model-detail-logs-btn">
-              Logs
-            </Button>
-            <ModelWriteAction>
-              {disabled => (
-                <Button
-                  size="sm"
-                  variant="outlined"
-                  disabled={disabled}
-                  onClick={() => setToggling(model)}
-                  data-testid="model-detail-toggle-btn"
-                >
-                  {verb}
-                </Button>
-              )}
-            </ModelWriteAction>
-          </Stack>
+          <ModelWriteAction>
+            {disabled => (
+              <Button
+                size="sm"
+                variant="outlined"
+                disabled={disabled}
+                onClick={() => setToggling(model)}
+                data-testid="model-detail-toggle-btn"
+              >
+                {verb}
+              </Button>
+            )}
+          </ModelWriteAction>
         }
       />
       <StatStrip aria-label="Model at a glance">

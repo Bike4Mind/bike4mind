@@ -119,7 +119,14 @@ export const useAccessTagOptions = (enabled = true) => {
     [userTags.data, entries.data]
   );
   const counts = useMemo(() => new Map((userTags.data ?? []).map(entry => [entry.tag, entry.count])), [userTags.data]);
-  return { options, counts, isLoading: userTags.isLoading };
+  return {
+    options,
+    counts,
+    isLoading: userTags.isLoading,
+    isError: userTags.isError,
+    isRetrying: userTags.isFetching,
+    retry: () => void userTags.refetch(),
+  };
 };
 
 /** Refreshes everything that shows access: this console and every open picker in this tab. */

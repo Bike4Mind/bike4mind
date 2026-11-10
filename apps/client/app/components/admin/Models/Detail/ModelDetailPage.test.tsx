@@ -1,9 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import { apiFailure, listResponse, modelRow, renderModelsRoute } from '../modelsTestUtils';
 import { isModelDetailTab, type ModelDetailTab } from '../modelDetailSearch';
 import { useModelsNavigation } from '../modelsNavigation';
+import { ADMIN_MODEL_LOGS_TAB_SLUG, ADMIN_MODEL_METRICS_TAB_SLUG } from '../../adminTabParams';
+import { MODEL_LOGS_MODEL_PARAM } from '../../modelLogsTabSearch';
+import { MODEL_METRICS_SEARCH_KEYS } from '../../ModelMetrics/modelMetricsSearch';
 
 const { get, patch, user } = vi.hoisted(() => ({
   get: vi.fn(),
@@ -137,6 +141,34 @@ describe('ModelDetailPage', () => {
     expect(screen.getByTestId('model-detail-toggle-btn')).toHaveTextContent('Turn on');
   });
 
+  it('links Usage and Logs from the header meta line and keeps Turn on as the only action', async () => {
+    serve([offRow]);
+    const { router } = await renderModelsRoute(`/admin/models/${BEDROCK_ID}`, () => null, { Detail: DetailRoute });
+
+    const metaLine = (await screen.findByTestId('model-detail-meta')).parentElement!;
+    const usage = within(metaLine).getByTestId('model-detail-usage-link');
+    expect(within(metaLine).getByTestId('model-detail-logs-link')).toHaveTextContent('Logs');
+    expect(within(metaLine).queryByTestId('model-detail-toggle-btn')).not.toBeInTheDocument();
+    expect(screen.getByTestId('model-detail-toggle-btn')).toHaveTextContent('Turn on');
+
+    fireEvent.click(usage);
+    await waitFor(() =>
+      expect(router.state.location.search).toMatchObject({
+        tab: ADMIN_MODEL_METRICS_TAB_SLUG,
+        [MODEL_METRICS_SEARCH_KEYS.filters.model]: BEDROCK_ID,
+      })
+    );
+
+    await router.navigate({ to: '/admin/models/$', params: { _splat: BEDROCK_ID } });
+    fireEvent.click(await screen.findByTestId('model-detail-logs-link'));
+    await waitFor(() =>
+      expect(router.state.location.search).toMatchObject({
+        tab: ADMIN_MODEL_LOGS_TAB_SLUG,
+        [MODEL_LOGS_MODEL_PARAM]: BEDROCK_ID,
+      })
+    );
+  });
+
   it('turns the model on from the fix action, sending the stamp it read', async () => {
     serve([offRow]);
     patch.mockResolvedValue({ data: { entry: null, changed: true, revision: 'r3' } });
@@ -255,6 +287,78 @@ describe('ModelDetailPage', () => {
     fireEvent.change(rank, { target: { value: '3' } });
     fireEvent.click(screen.getByTestId('model-access-dialog-confirm-btn'));
     await waitFor(() => expect(patch.mock.calls[0][1]).toMatchObject({ change: { rank: 3 } }));
+  });
+
+  it('offers only listed or limited models of the same type as a fallback, and still shows a saved one outside them', async () => {
+    const main = modelRow({
+      id: 'main-text',
+      name: 'Main',
+      access: {
+        entry: {
+          enabled: true,
+          allowedUserTags: [],
+          allowedEntitlements: ['base'],
+          fallbackModel: 'old-text',
+          updatedAt: '2026-11-01T00:00:00.000Z',
+        },
+        everyone: true,
+        adminsOnly: false,
+        freeTierLocked: false,
+      },
+    });
+    serve([
+      main,
+      modelRow({ id: 'old-text', name: 'Old', status: 'hidden' }),
+      modelRow({ id: 'good-text', name: 'Good', status: 'listed' }),
+      modelRow({ id: 'beta-text', name: 'Beta', status: 'limited' }),
+      modelRow({ id: 'review-text', name: 'Review', status: 'needs-review' }),
+    ]);
+    await renderModelsRoute('/admin/models/main-text?tab=access', () => null, { Detail: DetailRoute });
+
+    fireEvent.click(await screen.findByTestId('model-access-ranking-btn'));
+    await userEvent.click(screen.getByTestId('model-access-fallback-select'));
+
+    await waitFor(() => expect(screen.getByRole('option', { name: 'Good (Listed)' })).toBeInTheDocument());
+    const names = screen.getAllByRole('option').map(option => option.textContent);
+    expect(names).toEqual(['Automatic', 'Old (Hidden)', 'Good (Listed)', 'Beta (Limited)']);
+  });
+
+  it('says in place when the fallback models fail to load, and asks again on Retry', async () => {
+    serve([offRow]);
+    const served = get.getMockImplementation()!;
+    let failTypes = true;
+    get.mockImplementation(async (url: string, config?: { params?: Record<string, string> }) => {
+      if (url === '/api/admin/models' && config?.params?.types && failTypes) throw apiFailure(500, { error: 'down' });
+      return served(url, config);
+    });
+    await renderModelsRoute(`/admin/models/${BEDROCK_ID}?tab=access`, () => null, { Detail: DetailRoute });
+
+    fireEvent.click(await screen.findByTestId('model-access-ranking-btn'));
+    expect(await screen.findByTestId('model-access-fallback-error')).toHaveTextContent(
+      'Could not load the text models'
+    );
+    failTypes = false;
+    fireEvent.click(screen.getByTestId('model-access-fallback-error-retry-btn'));
+
+    await waitFor(() => expect(screen.queryByTestId('model-access-fallback-error')).not.toBeInTheDocument());
+  });
+
+  it('says in place when the user tags fail to load, and asks again on Retry', async () => {
+    serve([offRow]);
+    const served = get.getMockImplementation()!;
+    let failTags = true;
+    get.mockImplementation(async (url: string, config?: { params?: Record<string, string> }) => {
+      if (url === '/api/admin/users/tags' && failTags) throw apiFailure(500, { error: 'down' });
+      return served(url, config);
+    });
+    await renderModelsRoute(`/admin/models/${BEDROCK_ID}?tab=access`, () => null, { Detail: DetailRoute });
+
+    fireEvent.click(await screen.findByTestId('model-access-audience-btn'));
+    expect(await screen.findByTestId('model-access-tags-error')).toHaveTextContent('Could not load the user tags');
+    failTags = false;
+    fireEvent.click(screen.getByTestId('model-access-tags-error-retry-btn'));
+
+    await waitFor(() => expect(screen.queryByTestId('model-access-tags-error')).not.toBeInTheDocument());
   });
 
   it('shows why the admin log could not be loaded', async () => {

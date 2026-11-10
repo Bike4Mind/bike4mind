@@ -13,6 +13,7 @@ import { getErrorMessage } from '@client/app/utils/error';
 import { apiErrorOf, postModelAccessBulk, useAccessTagOptions } from '@client/app/hooks/data/adminModels';
 import { ADMIN_REASON_PRESETS, ActionDialog } from '../../shared';
 import { MODEL_PICKER_FRESHNESS } from '../Access/ModelAccessDialog';
+import { PickerLoadError } from '../PickerLoadError';
 import {
   BULK_AUDIENCE_LABEL,
   MODEL_BULK_LABEL,
@@ -218,6 +219,14 @@ function BulkDialogBody({
               }
               slotProps={{ input: { 'data-testid': 'models-bulk-values-input' } }}
             />
+            {isTags && tags.isError && (
+              <PickerLoadError
+                message="Could not load the user tags. You can still type one."
+                onRetry={tags.retry}
+                retrying={tags.isRetrying}
+                data-testid="models-bulk-tags-error"
+              />
+            )}
           </FormControl>
         )}
 

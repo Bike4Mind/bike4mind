@@ -12,7 +12,12 @@ import {
   Stack,
   Typography,
 } from '@mui/joy';
-import { normalizeEntitlementKey, type AdminModelRow, type ModelAccessChange } from '@bike4mind/common';
+import {
+  normalizeEntitlementKey,
+  type AdminModelRow,
+  type AdminModelStatus,
+  type ModelAccessChange,
+} from '@bike4mind/common';
 import { KNOWN_ENTITLEMENT_KEYS } from '@bike4mind/server-utils/lib/entitlements/registry';
 import { useAccessTagOptions, useAdminModelsOfType } from '@client/app/hooks/data/adminModels';
 import { Fact, SectionCard } from '../../../shared';
@@ -21,11 +26,15 @@ import { diffAccess, effectiveAccess } from '../../Access/modelAccessChange';
 import { ModelWriteAction } from '../../ModelWriteAction';
 import { MODEL_STATUS_LABEL, accessSummary } from '../../modelPresentation';
 import { useModelsNavigation } from '../../modelsNavigation';
+import { PickerLoadError } from '../../PickerLoadError';
 
 type Editor = 'toggle' | 'audience' | 'ranking';
 
 const RANK_MIN = 0;
 const RANK_MAX = 100;
+
+/** A fallback a user can actually be moved to: one the picker lists to someone. */
+const FALLBACK_STATUSES: ReadonlySet<AdminModelStatus> = new Set(['listed', 'limited']);
 
 const listOrNone = (values: readonly string[]) => (values.length > 0 ? values.join(', ') : 'None');
 
@@ -86,6 +95,14 @@ function AudienceEditor({ model, onClose }: { model: AdminModelRow; onClose: () 
           onChange={(_event, next) => setTags(dedupe(next, value => value.trim()))}
           slotProps={{ input: { 'data-testid': 'model-access-tags-input' } }}
         />
+        {tagOptions.isError && (
+          <PickerLoadError
+            message="Could not load the user tags. You can still type one."
+            onRetry={tagOptions.retry}
+            retrying={tagOptions.isRetrying}
+            data-testid="model-access-tags-error"
+          />
+        )}
       </FormControl>
       <FormControl>
         <FormLabel>Entitlements</FormLabel>
@@ -113,8 +130,17 @@ function RankingEditor({ model, onClose }: { model: AdminModelRow; onClose: () =
   const rankError = 'error' in parsed ? parsed.error : null;
   const change: ModelAccessChange | null =
     'rank' in parsed ? diffAccess(before, { ...before, rank: parsed.rank, fallbackModel: fallback }) : null;
-  const candidates = (sameType.data ?? []).filter(candidate => candidate.id !== model.id);
-  const knownFallback = !fallback || candidates.some(candidate => candidate.id === fallback);
+  const sameTypeRows = (sameType.data ?? []).filter(candidate => candidate.id !== model.id);
+  const candidates = sameTypeRows.filter(candidate => FALLBACK_STATUSES.has(candidate.status));
+  // The saved fallback stays selectable even when it is no longer one a user could be moved to, so it is seen.
+  const saved = before.fallbackModel;
+  const savedOutside = !!saved && !candidates.some(candidate => candidate.id === saved);
+  const savedRow = sameTypeRows.find(candidate => candidate.id === saved);
+  const savedLabel = savedRow
+    ? `${savedRow.name} (${MODEL_STATUS_LABEL[savedRow.status]})`
+    : sameType.data
+      ? `${saved} (not a ${model.type} model)`
+      : saved;
 
   return (
     <ModelAccessDialog
@@ -147,14 +173,28 @@ function RankingEditor({ model, onClose }: { model: AdminModelRow; onClose: () =
           slotProps={{ button: { 'data-testid': 'model-access-fallback-select' } }}
         >
           <Option value="">Automatic</Option>
-          {!knownFallback && <Option value={fallback}>{fallback}</Option>}
+          {savedOutside && (
+            <Option value={saved} data-testid="model-access-fallback-saved-option">
+              {savedLabel}
+            </Option>
+          )}
           {candidates.map(candidate => (
             <Option key={candidate.id} value={candidate.id}>
               {candidate.name} ({MODEL_STATUS_LABEL[candidate.status]})
             </Option>
           ))}
         </Select>
-        <FormHelperText>Used when this model fails. Only models of the same type are offered.</FormHelperText>
+        <FormHelperText>
+          Used when this model fails. Only listed or limited models of the same type are offered.
+        </FormHelperText>
+        {sameType.isError && (
+          <PickerLoadError
+            message={`Could not load the ${model.type} models to choose from.`}
+            onRetry={() => void sameType.refetch()}
+            retrying={sameType.isFetching}
+            data-testid="model-access-fallback-error"
+          />
+        )}
       </FormControl>
     </ModelAccessDialog>
   );
