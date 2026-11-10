@@ -28,6 +28,9 @@ export type AdminPermissionRequirement = AdminPermissionId | readonly AdminPermi
  */
 export const SETTINGS_PAGE_READ = ['support:read', 'settings:manage'] as const satisfies readonly AdminPermissionId[];
 
+/** The reads of a page whose writes need `users:moderate`; the SETTINGS_PAGE_READ counterpart for moderation. */
+export const MODERATION_PAGE_READ = ['support:read', 'users:moderate'] as const satisfies readonly AdminPermissionId[];
+
 type AdminIdentity = {
   isAdmin?: boolean | null;
   adminPermissions?: readonly string[] | null;

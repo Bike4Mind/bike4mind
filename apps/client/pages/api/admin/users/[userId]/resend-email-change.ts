@@ -1,9 +1,8 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { userRepository } from '@bike4mind/database';
-import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { ApiKeyScope, assertCanActOnAdminTarget } from '@bike4mind/common';
+import { adminApi } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
 import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { buildEmailChangeMailer, type EmailChangeMessage } from '@server/users/emailChangeMailer';
@@ -15,15 +14,14 @@ interface RequestQuery {
 }
 
 // Admin-only endpoint to resend email change verification for a specific user
-const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  auth: true,
+  requiredScopes: [ApiKeyScope.ADMIN],
+  adminPermissions: { POST: 'users:moderate' },
+})
   .use(csrfProtection())
   .post(
     asyncHandler(async (req, res) => {
-      // Check admin authorization
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const { userId } = req.query as RequestQuery;
 
       if (typeof userId !== 'string' || !userId) {
@@ -36,6 +34,7 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
       if (!user) {
         throw new BadRequestError('User not found');
       }
+      assertCanActOnAdminTarget(req.user, user, 'resend an email change to');
 
       // Check if user has pending email change
       if (!user.pendingEmail || !user.pendingEmailToken) {

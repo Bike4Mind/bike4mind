@@ -1,6 +1,8 @@
 import { Box, Button, Divider, Dropdown, ListDivider, Menu, MenuButton, MenuItem, Stack, Typography } from '@mui/joy';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import type { AdminUsersBulkActionType } from '@client/app/utils/adminUsersBulk';
+import { useUser } from '@client/app/contexts/UserContext';
+import { ADMIN_USERS_BULK_ACTION_PERMISSIONS, type AdminUsersBulkActionType } from '@client/app/utils/adminUsersBulk';
+import { AdminPermissionAction, missingAdminPermissionFor } from '../../shared/MissingPermission';
 import { BulkActionBar, type AdminSelection } from '../../shared/BulkActionBar';
 import { adminFocus } from '../../shared/adminStyles';
 import { AnalyticsTermHelp } from '../../EventMetrics/components/AnalyticsTermHelp';
@@ -48,6 +50,7 @@ export function UsersBulkBar({
   onClear: () => void;
   onAction: (type: AdminUsersBulkActionType) => void;
 }) {
+  const { currentUser } = useUser();
   return (
     // Left-aligned so the global AI Chat pill in the bottom-right corner does not cover it.
     <Box sx={{ position: 'sticky', bottom: 8, zIndex: 2, alignSelf: 'flex-start', maxWidth: '100%' }}>
@@ -61,17 +64,21 @@ export function UsersBulkBar({
         {USERS_BULK_ACTIONS.map(type => {
           const isContain = type === 'contain';
           return (
-            <Button
-              key={type}
-              size="sm"
-              variant={isContain ? 'solid' : 'outlined'}
-              color={isContain ? 'danger' : 'neutral'}
-              data-testid={`admin-users-bulk-${type}-btn`}
-              onClick={() => onAction(type)}
-              sx={{ ...adminFocus, display: WIDE }}
-            >
-              {USERS_BULK_ACTION_COPY[type].label}
-            </Button>
+            <AdminPermissionAction key={type} requirement={{ allOf: ADMIN_USERS_BULK_ACTION_PERMISSIONS[type] }}>
+              {missing => (
+                <Button
+                  size="sm"
+                  variant={isContain ? 'solid' : 'outlined'}
+                  color={isContain ? 'danger' : 'neutral'}
+                  disabled={missing}
+                  data-testid={`admin-users-bulk-${type}-btn`}
+                  onClick={() => onAction(type)}
+                  sx={{ ...adminFocus, display: WIDE }}
+                >
+                  {USERS_BULK_ACTION_COPY[type].label}
+                </Button>
+              )}
+            </AdminPermissionAction>
           );
         })}
         {/* Six buttons wrap under the chat pill on a phone; one menu keeps the bar short. */}
@@ -91,6 +98,9 @@ export function UsersBulkBar({
               <MenuItem
                 key={type}
                 color={type === 'contain' ? 'danger' : 'neutral'}
+                disabled={
+                  !!missingAdminPermissionFor(currentUser, { allOf: ADMIN_USERS_BULK_ACTION_PERMISSIONS[type] })
+                }
                 data-testid={`admin-users-bulk-${type}-menuitem`}
                 onClick={() => onAction(type)}
               >

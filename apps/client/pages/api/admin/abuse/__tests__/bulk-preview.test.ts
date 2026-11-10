@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, type AdminPermissionId } from '@bike4mind/common';
 import { ADMIN, ALL_ACTIONS, USER_ID, makeUser } from '@server/admin/bulkAbuse/__tests__/bulkAbuseRouteMocks';
 
-vi.mock('@server/middlewares/baseApi', async () =>
-  (await import('@server/admin/bulkAbuse/__tests__/bulkAbuseRouteMocks')).baseApiMock()
+vi.mock('@server/middlewares/adminApi', async () =>
+  (await import('@server/admin/bulkAbuse/__tests__/bulkAbuseRouteMocks')).adminApiMock()
 );
 vi.mock('@server/middlewares/asyncHandler', async () =>
   (await import('@server/admin/bulkAbuse/__tests__/bulkAbuseRouteMocks')).asyncHandlerMock()
@@ -42,6 +42,7 @@ import { verifyBulkAbusePreviewToken } from '@server/admin/bulkAbuse/previewToke
 import handler from '../bulk-preview';
 
 const BOUND = '6a00000000000000ffffffff';
+const delegate = (...adminPermissions: AdminPermissionId[]) => ({ ...ADMIN, isAdmin: false, adminPermissions });
 
 async function call(body: Record<string, unknown>, user: Record<string, unknown> = ADMIN, canEditSettings = true) {
   const { req, res } = createMocks({ method: 'POST', body });
@@ -67,14 +68,36 @@ describe('POST /api/admin/abuse/bulk-preview', () => {
     expect((handler as unknown as { _config: unknown })._config).toEqual({
       auth: 'jwtOnly',
       requiredScopes: [ApiKeyScope.ADMIN],
+      adminPermissions: { POST: 'users:moderate' },
     });
   });
 
-  it('refuses a non-admin', async () => {
+  it('refuses a delegate without users:moderate', async () => {
     await expect(
-      call({ target: { kind: 'domain', domain: 'kashre.com' }, actions: ALL_ACTIONS }, { ...ADMIN, isAdmin: false })
-    ).rejects.toThrow('Admin access required');
+      call({ target: { kind: 'domain', domain: 'kashre.com' }, actions: ALL_ACTIONS }, delegate('support:read'))
+    ).rejects.toThrow('Missing permission: users:moderate');
     expect(mockResolve).not.toHaveBeenCalled();
+  });
+
+  it('refuses revoking keys without keys:revoke when the ban is not also selected', async () => {
+    const actions = { ...ALL_ACTIONS, ban: false, clawbackFreeCredits: false };
+
+    await expect(
+      call({ target: { kind: 'users', userIds: [USER_ID] }, actions }, delegate('users:moderate'))
+    ).rejects.toThrow('Missing permission: keys:revoke');
+    expect(mockResolve).not.toHaveBeenCalled();
+  });
+
+  it('resolves the cohort as a non-full admin for a delegate holding every action permission', async () => {
+    const res = await call(
+      { target: { kind: 'users', userIds: [USER_ID] }, actions: { ...ALL_ACTIONS, ban: false } },
+      delegate('users:moderate', 'keys:revoke', 'credits:adjust')
+    );
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockResolve).toHaveBeenCalledWith(expect.anything(), ADMIN.id, expect.anything(), {
+      actorIsFullAdmin: false,
+    });
   });
 
   it('returns counts, exclusions and a token bound to this admin and cohort', async () => {
@@ -96,7 +119,7 @@ describe('POST /api/admin/abuse/bulk-preview', () => {
       fingerprint: abuseService.bulkAbuseFingerprint(target, ALL_ACTIONS, [USER_ID]),
       upToUserId: BOUND,
     });
-    expect(mockResolve).toHaveBeenCalledWith(target, ADMIN.id, expect.anything());
+    expect(mockResolve).toHaveBeenCalledWith(target, ADMIN.id, expect.anything(), { actorIsFullAdmin: true });
   });
 
   it('does not offer a domain block without the ban action', async () => {

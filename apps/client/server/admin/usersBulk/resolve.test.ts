@@ -59,6 +59,22 @@ describe('resolveAdminUsersBulk', () => {
     expect(cohort.eligible.map(row => row.id)).toEqual([hexId(1)]);
   });
 
+  it('excludes delegated admins only for an actor that is not a full admin', async () => {
+    const deps: ResolveDeps = {
+      findUsersByIds: vi.fn(async () => [user(1), user(2, { adminPermissions: ['support:read'] })]),
+      openFilterPages: vi.fn(),
+    };
+    const target = { kind: 'ids' as const, userIds: [hexId(1), hexId(2)] };
+
+    const delegated = await resolveAdminUsersBulk(target, [SELF], deps, NOW);
+    expect(delegated.excluded).toEqual({ self: 0, admins: 1 });
+    expect(delegated.eligible.map(row => row.id)).toEqual([hexId(1)]);
+
+    const full = await resolveAdminUsersBulk(target, [SELF], deps, NOW, { actorIsFullAdmin: true });
+    expect(full.excluded).toEqual({ self: 0, admins: 0 });
+    expect(full.eligible.map(row => row.id)).toEqual([hexId(1), hexId(2)]);
+  });
+
   it('pages a filter in id order and stops at a short page', async () => {
     const { deps, readPage } = pagedDeps(450);
     const cohort = await resolveAdminUsersBulk({ kind: 'filter', filter: {} }, [SELF], deps, NOW);
