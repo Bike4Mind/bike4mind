@@ -4,12 +4,29 @@ import { lambdaVpc } from './vpc';
 
 const websocketApi = new sst.aws.ApiGatewayWebSocket('websocket', {});
 
-// Lifecycle handlers run a full Mongoose + AWS SDK stack on every cold start.
-// 256 MB triggered Runtime.OutOfMemory + 10s init timeouts on low-traffic
-// preview envs, which surfaced as 504 during the WebSocket handshake.
-const LIFECYCLE_MEMORY = '1024 MB';
+// ── Memory sizing ──────────────────────────────────────────────────────
+// Every route sets memory explicitly so changes are visible in code review.
+// SST default is 1024 MB; relying on it silently masks whether a route
+// needs that much.
+//
+// Tiers (cold-start stack drives the floor):
+//   LIFECYCLE  1024 MB — $connect/$disconnect/$default: full Mongoose + AWS SDK init.
+//                        256 MB hit OOM + 10s init timeouts on preview envs.
+//   HEAVY      2048 MB — cli_completion_request: streams Bedrock responses.
+//   MEDIUM      512 MB — heartbeat, cli_tool_request, voice routes: lighter
+//                        handlers but still init the DB + SDK stack.
+//   LIGHT       256 MB — keep_command_*, jupyter_cell_output, cc_agent_*:
+//                        thin relay / fanout handlers with minimal heap.
+//
+// When CloudWatch max-memory-used data becomes available, update the values
+// here and reference the measurement window in the commit message.
+// ────────────────────────────────────────────────────────────────────────
 
-websocketApi.route('$default', {
+const LIFECYCLE_MEMORY = '1024 MB';
+const MEDIUM_MEMORY = '512 MB';
+const LIGHT_MEMORY = '256 MB';
+
+const defaultRoute = websocketApi.route('$default', {
   handler: 'apps/client/server/websocket/default.handler',
   runtime: 'nodejs24.x',
   memory: LIFECYCLE_MEMORY,
@@ -26,7 +43,7 @@ websocketApi.route('$default', {
     },
   ],
 });
-websocketApi.route('$connect', {
+const connectRoute = websocketApi.route('$connect', {
   handler: 'apps/client/server/websocket/connect.func',
   runtime: 'nodejs24.x',
   memory: LIFECYCLE_MEMORY,
@@ -37,7 +54,7 @@ websocketApi.route('$connect', {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
   },
 });
-websocketApi.route('$disconnect', {
+const disconnectRoute = websocketApi.route('$disconnect', {
   handler: 'apps/client/server/websocket/disconnect.func',
   runtime: 'nodejs24.x',
   memory: LIFECYCLE_MEMORY,
@@ -48,10 +65,10 @@ websocketApi.route('$disconnect', {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
   },
 });
-websocketApi.route('heartbeat', {
+const heartbeatRoute = websocketApi.route('heartbeat', {
   handler: 'apps/client/server/websocket/heartbeat.func',
   runtime: 'nodejs24.x',
-  memory: '512 MB',
+  memory: MEDIUM_MEMORY,
   timeout: '30 seconds',
   vpc: lambdaVpc,
   link: [...allSecrets, websocketApi],
@@ -66,10 +83,11 @@ websocketApi.route('heartbeat', {
   },
 });
 
-websocketApi.route('voice_session_send_transcript', {
+const voiceSendTranscriptRoute = websocketApi.route('voice_session_send_transcript', {
   handler: 'apps/client/server/websocket/voiceSessionSendTranscript.func',
   runtime: 'nodejs24.x',
   timeout: '10 minutes',
+  memory: MEDIUM_MEMORY,
   vpc: lambdaVpc,
   link: [...allSecrets, websocketApi],
   environment: {
@@ -77,10 +95,11 @@ websocketApi.route('voice_session_send_transcript', {
   },
 });
 
-websocketApi.route('voice_session_ended', {
+const voiceEndedRoute = websocketApi.route('voice_session_ended', {
   handler: 'apps/client/server/websocket/voiceSessionEnded.func',
   runtime: 'nodejs24.x',
   timeout: '5 minutes',
+  memory: MEDIUM_MEMORY,
   vpc: lambdaVpc,
   link: [...allSecrets, websocketApi],
   environment: {
@@ -118,7 +137,7 @@ websocketApi.route('cli_tool_request', {
   handler: 'apps/client/server/websocket/cliToolExecution.func',
   runtime: 'nodejs24.x',
   timeout: '10 minutes',
-  memory: '512 MB',
+  memory: MEDIUM_MEMORY,
   vpc: lambdaVpc,
   link: [...allSecrets, websocketApi],
   environment: {
@@ -137,7 +156,7 @@ websocketApi.route('keep_command_request', {
   handler: 'apps/client/server/websocket/keepCommandRequest.func',
   runtime: 'nodejs24.x',
   timeout: '30 seconds',
-  memory: '256 MB',
+  memory: LIGHT_MEMORY,
   vpc: lambdaVpc,
   link: [...allSecrets, websocketApi],
   environment: {
@@ -155,7 +174,7 @@ websocketApi.route('keep_command_response', {
   handler: 'apps/client/server/websocket/keepCommandResponse.func',
   runtime: 'nodejs24.x',
   timeout: '30 seconds',
-  memory: '256 MB',
+  memory: LIGHT_MEMORY,
   vpc: lambdaVpc,
   link: [...allSecrets, websocketApi],
   environment: {
@@ -174,7 +193,7 @@ websocketApi.route('jupyter_cell_output', {
   handler: 'apps/client/server/websocket/jupyterNotebookProgress.func',
   runtime: 'nodejs24.x',
   timeout: '30 seconds',
-  memory: '256 MB',
+  memory: LIGHT_MEMORY,
   vpc: lambdaVpc,
   link: [...allSecrets, websocketApi],
   environment: {
@@ -193,7 +212,7 @@ websocketApi.route('cc_agent_register', {
   handler: 'apps/client/server/websocket/ccAgentRegister.func',
   runtime: 'nodejs24.x',
   timeout: '30 seconds',
-  memory: '256 MB',
+  memory: LIGHT_MEMORY,
   vpc: lambdaVpc,
   link: [...allSecrets, websocketApi],
   environment: {
@@ -212,7 +231,7 @@ websocketApi.route('cc_agent_event', {
   handler: 'apps/client/server/websocket/ccAgentEvent.func',
   runtime: 'nodejs24.x',
   timeout: '30 seconds',
-  memory: '256 MB',
+  memory: LIGHT_MEMORY,
   vpc: lambdaVpc,
   link: [...allSecrets, websocketApi],
   environment: {
@@ -231,7 +250,7 @@ websocketApi.route('cc_agent_disconnect', {
   handler: 'apps/client/server/websocket/ccAgentDisconnect.func',
   runtime: 'nodejs24.x',
   timeout: '30 seconds',
-  memory: '256 MB',
+  memory: LIGHT_MEMORY,
   vpc: lambdaVpc,
   link: [...allSecrets, websocketApi],
   environment: {
@@ -248,4 +267,13 @@ websocketApi.route('cc_agent_disconnect', {
 // NOTE: The agent_execute route is defined in infra/agentExecutor.ts to avoid
 // a circular dependency (websocket.ts ↔ agentExecutor.ts both need each other).
 
-export { websocketApi, cliCompletionRoute };
+export {
+  websocketApi,
+  cliCompletionRoute,
+  defaultRoute,
+  connectRoute,
+  disconnectRoute,
+  heartbeatRoute,
+  voiceSendTranscriptRoute,
+  voiceEndedRoute,
+};
