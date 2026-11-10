@@ -107,7 +107,7 @@ There are only these seven levels. The skin maps every heading below `h1` to the
 | Dialog padding | 24 px |
 | Empty, error and loading blocks | 24 px |
 
-- Radius: 6 small controls, 8 buttons and inputs, 12 cards, 16 dialogs.
+- Radius: 6 small controls, 8 buttons and inputs, 12 cards (`SectionCard`, `SettingsSection`, `StatStrip` and the `DataTable` surface alike), 16 dialogs.
 - Targets: at least 36 px on desktop, 44 px on touch.
 - Content never sits deeper than the gutter: every region's left edge lines up with the page title. A wrapper that pads a whole page section is double padding.
 
@@ -120,7 +120,7 @@ Every admin page renders inside the shared admin layout (`AdminLayout.tsx`: side
 The sidebar is the frame of every admin page, so it sets the tone. Calm, scannable and never louder than the content. Sections and items live in `adminSidebarConfig.tsx`.
 
 - **Size and surface.** 248 px wide on desktop, `canvas` background, 1 px `border` on its right edge, padding 20 px top and 14 px sides. No shadow, no colored background.
-- **Brand row.** 28 px ink tile with the product mark, "Admin" in 14 / 600, a neutral environment chip (Local, Staging, Preview; hidden on production), and a `Cmd K` key hint pushed to the right. 18 px below it before the first item.
+- **Brand row.** 28 px ink tile with the product mark, "Admin" in 14 / 600, a neutral environment chip (Local, Staging, Preview; hidden on production), and a `Cmd K` key hint pushed to the right that opens the command palette on click (the collapsed rail shows a Command button instead). 18 px below it before the first item.
 - **Search.** A 32 px filter input under the brand row ("Filter pages", `/` to focus). Typing narrows items across all sections and hides empty sections.
 - **Sections.** A small number of groups (Overview, People, Money, Trust and safety, AI, Platform, Settings) with a 12 / 500 `inkMuted` label in sentence case, 20 px above each label. Labels are static text, not accordions; there are no section icons, no section colors and no dividers between sections.
 - **Items.** 36 px tall, 8 px radius, 10 px horizontal padding, 16 px stroke icon (2 px stroke, `inkMuted`) then the label in 14 / 500 `inkSecondary`. One line only: labels are short ("Credits", not "Credit Analytics"), sentence case, and truncate with a tooltip rather than wrap. An item and its page title name the same thing. Hover: `hover` fill and `ink` text.
@@ -139,7 +139,7 @@ The shell owns the frame, so every page lines up with every other page:
 - **Gutter.** `adminPageFrame` (`shared/adminStyles.ts`): 32 px left and right (16 on phones), 24 px above the page header (16 on phones), 64 px below the last region, which is what keeps the bottom-right AI chat pill (20 px in, 40 px tall) off the table pager. `AdminPage` applies it to every tab panel; a detail route outside `AdminPage` spreads it on its root. A page **never sets its own outer padding** (`p`, `px`, `py` on its root), never wraps itself in a scrolling `Sheet`, and never sets `minHeight: 100vh`: the layout already fills the window and scrolls.
 - **Width.** List pages and dashboards are full width. Detail and settings pages cap their content at `ADMIN_DETAIL_MAX_WIDTH` (1280 px), left-aligned so the page header stays on the same line as every other page. No other max width and no centered column (`mx: 'auto'`); a short form stays left-aligned and simply ends early.
 - **Rhythm.** The page root is a `Stack` with `gap: ADMIN_REGION_GAP` (24 px) between regions (header, banner, views, filters, table, section grid). Cards inside a region sit 16 px apart. No `Divider` between regions: the gap is the separator.
-- **Header first.** The first element of every page is `AdminPageHeader`: the page title (24 / 600, `h1`), an optional count, a one-line description in `inkMuted`, and the page actions top-right. Nothing sits above it: not tabs, not chips, not a banner. The title names the page in sentence case ("Rate limits", not "Rate Limits Dashboard"), has no icon, and is the only `h1` on the page; sections inside the page use the 15 / 600 section level. A count goes in the header's `count`, not in a chip beside the title.
+- **Header first.** The first element of every page is `AdminPageHeader`: the page title (24 / 600, `h1`), an optional count, a one-line description in `inkMuted`, and the page actions top-right. Nothing sits above it: not tabs, not chips, not a banner, not a toolbar. The command palette's keyboard strip (`AdminCommandPalette`) stays out of the flow until it takes focus, and pointer users open the palette from the sidebar. The title names the page in sentence case ("Rate limits", not "Rate Limits Dashboard"), has no icon, and is the only `h1` on the page; sections inside the page use the 15 / 600 section level. A count goes in the header's `count`, not in a chip beside the title.
 - **Horizontal overflow.** The page itself never scrolls sideways. A wide table scrolls inside its own container (`DataTable` does this), and a dialog never sets a fixed `width` or a `minWidth` wider than a phone; Joy already caps its width at the viewport.
 
 ### Page skeletons

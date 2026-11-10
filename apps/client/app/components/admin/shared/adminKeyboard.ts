@@ -60,3 +60,15 @@ export function focusAdminSearch(root: HTMLElement): boolean {
   search?.focus();
   return !!search;
 }
+
+const OPEN_COMMAND_PALETTE_EVENT = 'admin:open-command-palette';
+
+/** Opens the mounted `AdminCommandPalette` from chrome outside it, such as the sidebar's Cmd K hint. */
+export function openAdminCommandPalette() {
+  window.dispatchEvent(new Event(OPEN_COMMAND_PALETTE_EVENT));
+}
+
+export function onOpenAdminCommandPalette(listener: () => void): () => void {
+  window.addEventListener(OPEN_COMMAND_PALETTE_EVENT, listener);
+  return () => window.removeEventListener(OPEN_COMMAND_PALETTE_EVENT, listener);
+}

@@ -7,7 +7,13 @@ import { adminOrganizationHref } from '../organizationsTabSearch';
 import { useAdminEntitySearch } from './useAdminEntitySearch';
 import { parseUserId } from '../Users/usersTabSearch';
 import { adminFocusScope, adminSurface } from './adminStyles';
-import { focusAdminSearch, isAdminChordEvent, isAdminOverlayOpen, isAdminShortcutEvent } from './adminKeyboard';
+import {
+  focusAdminSearch,
+  isAdminChordEvent,
+  isAdminOverlayOpen,
+  isAdminShortcutEvent,
+  onOpenAdminCommandPalette,
+} from './adminKeyboard';
 
 export type AdminCommand = {
   id: string;
@@ -18,6 +24,23 @@ export type AdminCommand = {
   paletteOnly?: boolean;
   run: () => void;
 };
+
+// The button strip is a keyboard entry point, so it stays out of the page flow until it takes focus: nothing
+// may render above a page's header (DESIGN_GUIDE "Page frame"). Pointer users open the palette from the
+// sidebar's Cmd K hint.
+const revealOnFocus = {
+  '&:not(:focus-within)': {
+    position: 'absolute',
+    width: 1,
+    height: 1,
+    p: 0,
+    m: '-1px',
+    overflow: 'hidden',
+    clip: 'rect(0 0 0 0)',
+    whiteSpace: 'nowrap',
+    border: 0,
+  },
+} as const;
 
 const shortcuts = [
   ['Cmd/Ctrl+K', 'Open command palette'],
@@ -82,6 +105,7 @@ function CommandPalette({
       .filter(({ tab }) => canOpenTab(tab))
       .map(({ id, label, tab }) => ({ id, label, run: () => go(tab) })),
     ...(onOpenHelp ? [{ id: 'help', label: 'Open Help Center', run: onOpenHelp }] : []),
+    { id: 'shortcuts', label: 'Show keyboard shortcuts', run: () => setHelp(true) },
   ];
   // A user profile belongs to the Users tab.
   const userId = canOpenTab(AdminTab.Users) ? parseUserId(query.trim()) : undefined;
@@ -160,12 +184,22 @@ function CommandPalette({
     return () => window.removeEventListener('keydown', handleKey, true);
   }, [commands]);
 
+  useEffect(
+    () =>
+      onOpenAdminCommandPalette(() => {
+        setQuery('');
+        setActive(0);
+        setOpen(true);
+      }),
+    []
+  );
+
   useEffect(() => {
     if (open) document.getElementById(`admin-command-${selected?.id}`)?.scrollIntoView?.({ block: 'nearest' });
   }, [open, selected?.id]);
 
   return (
-    <Box ref={rootRef} sx={{ ...adminFocusScope, p: 1 }}>
+    <Box ref={rootRef} sx={{ ...adminFocusScope, ...revealOnFocus, p: 1 }}>
       <Stack direction="row" gap={1} flexWrap="wrap">
         <Button
           variant="outlined"
