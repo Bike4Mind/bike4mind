@@ -33,7 +33,7 @@ export interface ITutorialOverride {
   enabled?: boolean;
   /** Only ever increases. A running walk whose revision differs is told the tutorial changed. */
   revision: number;
-  /** Increases on every write, so a cached copy of the module can tell it is stale. */
+  /** Increases on content writes and system revision bumps; switch-only writes leave it unchanged. */
   contentSeq: number;
   /** Override units, schema-parsed on every read; a row that fails to parse falls back to the repo module. */
   fields?: unknown[];

@@ -80,6 +80,7 @@ export interface TutorialContentOptions {
   repo: readonly RepoTutorial[];
   policy: OverridePolicy;
   validator: ValidatorOptions;
+  warn?: (message: string, error: unknown) => void;
   /**
    * Steps an owner appends after the edited ones. `offers` tells whether a module is enabled in this same set,
    * so a closing step never points at one that is off.
@@ -93,6 +94,7 @@ export interface TutorialContentOptions {
 
 export function tutorialContent(options: TutorialContentOptions) {
   const { models, repo, policy, validator, closingSteps } = options;
+  const warn = options.warn ?? ((message: string, error: unknown) => console.warn(message, error));
   const repoTranscripts: Record<string, readonly TutorialTurn[]> = Object.fromEntries(
     repo.map(t => [t.intro.id, t.transcript])
   );
@@ -211,8 +213,8 @@ export function tutorialContent(options: TutorialContentOptions) {
               { moduleId: row.moduleId, structuralDigest: { $exists: false } },
               { $set: { structuralDigest: digest, digestRepoVersion: version } }
             );
-          } catch {
-            // left for the next request
+          } catch (error) {
+            warn(`Tutorial digest adoption failed for ${row.moduleId}`, error);
           }
           return;
         }
@@ -241,8 +243,8 @@ export function tutorialContent(options: TutorialContentOptions) {
               { session }
             );
           });
-        } catch {
-          // the re-read decides: a row still disagreeing is held off
+        } catch (error) {
+          warn(`Tutorial revision update failed for ${row.moduleId}`, error);
         }
       })
     );

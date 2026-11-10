@@ -137,3 +137,23 @@ describe('resolve', () => {
     expect(modules[0].revision).toBe(1);
   });
 });
+
+describe('digest write failures', () => {
+  it('reports an adoption failure while retaining the current revision', async () => {
+    const warn = vi.fn();
+    const { content, Override } = build([row([])], { warn });
+    const error = new Error('write unavailable');
+    Override.updateOne.mockRejectedValueOnce(error);
+    expect((await content.resolve()).modules[0].enabled).toBe(true);
+    expect(warn).toHaveBeenCalledWith('Tutorial digest adoption failed for fixture', error);
+  });
+
+  it('reports a failed revision bump and holds the module off until it settles', async () => {
+    const warn = vi.fn();
+    const { content, Override } = build([row([], { structuralDigest: 'old', digestRepoVersion: 1 })], { warn });
+    const error = new Error('write unavailable');
+    Override.findOneAndUpdate.mockRejectedValueOnce(error);
+    expect((await content.resolve()).modules[0].enabled).toBe(false);
+    expect(warn).toHaveBeenCalledWith('Tutorial revision update failed for fixture', error);
+  });
+});

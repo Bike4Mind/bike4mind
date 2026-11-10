@@ -245,7 +245,7 @@ export function overridesRoute({ api, isAdmin, models, content, repo, policy, kn
           prior
             ? {
                 moduleId,
-                contentSeq: prior.contentSeq ?? 0,
+                contentSeq: prior.contentSeq === undefined ? { $exists: false } : prior.contentSeq,
                 ...(enabled !== undefined && { enabled: prior.enabled ?? null }),
               }
             : { moduleId, contentSeq: { $exists: false } },

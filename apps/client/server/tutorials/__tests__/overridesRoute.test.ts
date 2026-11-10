@@ -33,7 +33,7 @@ function setup() {
       const hit = rows.find(
         row =>
           row.moduleId === filter.moduleId &&
-          (typeof seq === 'number' ? row.contentSeq === seq : false) &&
+          (typeof seq === 'number' ? row.contentSeq === seq : row.contentSeq === undefined) &&
           (!('enabled' in filter) || (row.enabled ?? null) === filter.enabled)
       );
       const row =
@@ -94,6 +94,17 @@ describe('overridesRoute PUT content sequence', () => {
     const saved = await put({ moduleId: 'fixture', fields, reason: 'edit', expectedContentSeq: null });
     expect(saved.statusCode).toBe(200);
     expect(rows[0].contentSeq).toBe(1);
+  });
+
+  it('saves a legacy row without contentSeq and rejects a later stale content save', async () => {
+    const { rows, put } = setup();
+    rows.push({ moduleId: 'fixture', revision: 0, enabled: true });
+    const open = FIXTURE_CONTENT.steps.find(step => step.id === 'open')!;
+    const fields = [{ kind: 'copy', stepId: 'open', field: 'body', value: 'Changed.', repoValue: open.body }];
+    expect((await put({ moduleId: 'fixture', fields, reason: 'edit', expectedContentSeq: 0 })).statusCode).toBe(200);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].contentSeq).toBe(1);
+    expect((await put({ moduleId: 'fixture', fields, reason: 'stale', expectedContentSeq: 0 })).statusCode).toBe(409);
   });
 
   it('refuses a null basis once content has been saved', async () => {
