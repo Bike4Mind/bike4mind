@@ -47,11 +47,12 @@ async function scanFile(
   markers: readonly string[],
   stop: { now: boolean },
   deadline: number,
-  chunkBytes: number
+  chunkBytes: number,
+  openFile: typeof open
 ): Promise<Set<string> | null> {
   const needles = markers.map(marker => ({ marker, bytes: Buffer.from(marker, 'latin1') }));
   const overlap = Math.max(0, ...needles.map(({ bytes }) => bytes.length - 1));
-  const handle = await open(path, 'r').catch(() => null);
+  const handle = await openFile(path, 'r').catch(() => null);
   if (!handle) return null;
   try {
     const found = new Set<string>();
@@ -83,10 +84,11 @@ export function fileMarkers(
   path: string,
   markers: readonly string[],
   deadline: number,
-  chunkBytes = CHUNK_BYTES
+  chunkBytes = CHUNK_BYTES,
+  openFile: typeof open = open
 ): Promise<Set<string> | null> {
   const stop = { now: false };
-  return beforeDeadline(scanFile(path, markers, stop, deadline, chunkBytes), deadline, () => {
+  return beforeDeadline(scanFile(path, markers, stop, deadline, chunkBytes, openFile), deadline, () => {
     stop.now = true;
   });
 }

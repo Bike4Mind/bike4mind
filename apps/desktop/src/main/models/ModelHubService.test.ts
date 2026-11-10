@@ -1235,8 +1235,7 @@ describe.each([24, 64, 72, 96])('ModelHubService WSL GPU memory warning, %i GiB 
     let answer: (value: boolean) => void = () => {};
     integratedGpu.mockImplementation(() => new Promise<boolean>(resolve => (answer = resolve)));
     runtime.loaded.mockResolvedValue([capped]);
-    const waited = new Promise(resolve => setTimeout(() => resolve('waited'), 1_000));
-    expect(await Promise.race([capOf(service), waited])).toBeNull();
+    expect(await capOf(service)).toBeNull();
     runtime.loaded.mockResolvedValue([]);
     expect(await capOf(service)).toBeNull();
     answer(true);
@@ -1533,10 +1532,8 @@ describe('ModelHubService WSL GPU memory flag on fit badges', () => {
     const { service, integratedGpu, installedChanged } = flagHarness({ deps: { onRatingsChanged } });
     let answer: (value: boolean) => void = () => {};
     integratedGpu.mockImplementation(() => new Promise<boolean>(resolve => (answer = resolve)));
-    const waited = new Promise(resolve => setTimeout(() => resolve('waited'), 1_000));
-    const first = await Promise.race([installedFits(service), waited]);
-    expect(first).not.toBe('waited');
-    expect((first as Map<string, unknown>).get('small:q4')).not.toHaveProperty('warning');
+    const first = await installedFits(service);
+    expect(first.get('small:q4')).not.toHaveProperty('warning');
     answer(true);
     await vi.waitFor(() => expect(onRatingsChanged).toHaveBeenCalledWith('local'));
     expect(installedChanged).not.toHaveBeenCalled();

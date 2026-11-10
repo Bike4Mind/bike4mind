@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, open, rm, symlink, writeFile } from 'node:fs/promises';
 import { endianness, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -61,15 +60,21 @@ describe('fileMarkers', () => {
     expect(await fileMarkers(path, WSL_MEMORY_PATCH_MARKERS, Date.now() - 1)).toBeNull();
   });
 
-  it.skipIf(process.platform === 'win32')('gives up on an open that blocks past the deadline', async () => {
-    // Opening a FIFO for reading blocks until a writer opens it, as a read on a hung mount would.
-    const fifo = join(root, 'blocked');
-    execFileSync('mkfifo', [fifo]);
-    const started = Date.now();
-    expect(await fileMarkers(fifo, WSL_MEMORY_PATCH_MARKERS, started + 50)).toBeNull();
-    expect(Date.now() - started).toBeLessThan(2_000);
-    const writer = await open(fifo, 'w');
-    await writer.close();
+  it('gives up on an open that blocks past the deadline, and closes the file if it opens later', async () => {
+    vi.useFakeTimers();
+    try {
+      let release: (handle: unknown) => void = () => {};
+      const openFile = vi.fn(() => new Promise(resolve => (release = resolve))) as unknown as typeof open;
+      const result = fileMarkers('/blocked', WSL_MEMORY_PATCH_MARKERS, Date.now() + 50, undefined, openFile);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(await result).toBeNull();
+      const close = vi.fn(async () => undefined);
+      release({ close, read: vi.fn() });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(close).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -298,8 +303,15 @@ describe('createOllamaWslPatchProbe', () => {
   it('is unknown when the process lookup fails or does not answer in time', async () => {
     const failing = createOllamaWslPatchProbe({ root, serverPid: async () => Promise.reject(new Error('EMFILE')) });
     expect(await failing(OLLAMA_URL)).toBeNull();
-    const hung = createOllamaWslPatchProbe({ root, serverPid: () => new Promise(() => {}), timeoutMs: 20 });
-    expect(await hung(OLLAMA_URL)).toBeNull();
+    vi.useFakeTimers();
+    try {
+      const hung = createOllamaWslPatchProbe({ root, serverPid: () => new Promise(() => {}), timeoutMs: 20 });
+      const answer = hung(OLLAMA_URL);
+      await vi.advanceTimersByTimeAsync(20);
+      expect(await answer).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('is unknown, with the server named, when its binary cannot be read', async () => {
