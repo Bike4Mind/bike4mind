@@ -54,9 +54,6 @@ const RAW_GATE_ALLOWLIST = new Set<string>([
   'abuse/bulk-execute.ts',
   'abuse/bulk-preview.ts',
   'credit-adjustments.ts',
-  'held-signup-grants/index.ts',
-  'held-signup-grants/release.ts',
-  'held-signup-grants/revoke.ts',
   'moderation-incidents/[id]/verdict.ts',
   'moderation-incidents/index.ts',
   'organizations/[id]/convert-to-paid.ts',
@@ -102,7 +99,6 @@ const RAW_GATE_ALLOWLIST = new Set<string>([
   'users/[userId]/subscriptions/[subscriptionId]/credits.ts',
   'users/[userId]/subscriptions/[subscriptionId]/remove.ts',
   'users/[userId]/timeline.ts',
-  'users/[userId]/unlock-signup-grant.ts',
   'users/[userId]/unverify-email.ts',
   // Receipts require full admin access, matching the credit ledger and summary routes.
   'users/[userId]/usage-receipt.ts',

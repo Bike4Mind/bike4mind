@@ -67,7 +67,12 @@ const seed: Array<Record<string, unknown> & { key: string; _id: mongoose.Types.O
     tags: [PENDING_FREE_CREDITS_TAG],
     signupGrant: grant({ creditsReleased: 0 }),
   },
-  { key: 'dripping', _id: oid(3), signupGrant: grant({ creditsReleased: 150, dripCredits: 50 }) },
+  {
+    key: 'dripping',
+    _id: oid(3),
+    referredByUserId: 'referrer-1',
+    signupGrant: grant({ creditsReleased: 150, dripCredits: 50 }),
+  },
   {
     key: 'fullyDripped',
     _id: oid(4),
@@ -78,6 +83,7 @@ const seed: Array<Record<string, unknown> & { key: string; _id: mongoose.Types.O
     key: 'invited',
     _id: oid(6),
     referredByUserId: 'inviter-1',
+    signupInvite: { source: 'referral', inviteId: 'inv-1', at },
     signupGrant: grant({ inviteBonusPaid: 25, creditsReleased: 125 }),
   },
   { key: 'package', _id: oid(7), grantPackageId: 'pkg-1', signupGrant: grant({ creditsReleased: 250 }) },
@@ -160,6 +166,18 @@ describe('GET /api/admin/signup-grants/pending', () => {
     expect(await ids({ status: 'dripping' })).toEqual(['dripping', 'invited', 'package'].map(idOf));
   });
 
+  it('filters by invite, counting only a recorded signup invite and not a referral link alone', async () => {
+    expect(await ids({ invite: 'invited' })).toEqual([idOf('invited')]);
+    expect(await ids({ invite: 'uninvited' })).toEqual(
+      ['heldBudget', 'heldRisk', 'dripping', 'blocked', 'package', 'pendingEmail'].map(idOf)
+    );
+    expect(await ids({ invite: 'invited', source: 'package' })).toEqual([]);
+    expect(await ids({ invite: 'uninvited', status: 'dripping' })).toEqual(['dripping', 'package'].map(idOf));
+    const rows = (await call()).data as Array<{ id: string; inviteSource: string | null }>;
+    expect(rows.find(row => row.id === idOf('invited'))!.inviteSource).toBe('referral');
+    expect(rows.find(row => row.id === idOf('dripping'))!.inviteSource).toBeNull();
+  });
+
   it('sorts by remaining descending when asked', async () => {
     const { data } = await call({ sort: 'remaining' });
     expect(data.map(row => row.remaining)).toEqual([...data.map(row => row.remaining)].sort((a, b) => b - a));
@@ -198,6 +216,7 @@ describe('GET /api/admin/signup-grants/pending', () => {
       { limit: '101' },
       { limit: 'abc' },
       { status: 'everything' },
+      { invite: 'maybe' },
     ]) {
       await expect(call(query), JSON.stringify(query)).rejects.toMatchObject({ name: 'BadRequestError' });
     }
@@ -210,9 +229,9 @@ describe('GET /api/admin/signup-grants/pending', () => {
     });
   });
 
-  it('serves a delegated credits admin but does not offer bulk release', async () => {
+  it('serves a delegated credits admin and offers bulk release', async () => {
     const result = await call({}, { id: 'user-1', adminPermissions: ['credits:adjust'] });
     expect(result.data.length).toBeGreaterThan(0);
-    expect(result.viewer).toEqual({ canRelease: false });
+    expect(result.viewer).toEqual({ canRelease: true });
   });
 });

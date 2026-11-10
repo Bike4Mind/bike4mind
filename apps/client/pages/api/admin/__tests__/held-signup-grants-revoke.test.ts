@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ApiKeyScope } from '@bike4mind/common';
 
 const { handlers, baseOptions, revoke } = vi.hoisted(() => ({
   handlers: {} as Record<string, (req: unknown, res: unknown) => Promise<void>>,
@@ -9,11 +8,15 @@ const { handlers, baseOptions, revoke } = vi.hoisted(() => ({
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: () => 'csrf' }));
+const uses = vi.hoisted(() => [] as Array<(req: unknown, res: unknown, next: () => void) => void>);
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (options: unknown) => {
     baseOptions(options);
     const chain = {
-      use: () => chain,
+      use: (fn: unknown) => {
+        if (typeof fn === 'function') uses.push(fn as (typeof uses)[number]);
+        return chain;
+      },
       get: (fn: typeof handlers.get) => {
         handlers.get = fn;
         return chain;
@@ -26,7 +29,8 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@bike4mind/database', () => ({ creditTransactionRepository: {}, userRepository: {} }));
+const findAdminTargetsByIds = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/database', () => ({ creditTransactionRepository: {}, userRepository: { findAdminTargetsByIds } }));
 vi.mock('@bike4mind/services', () => ({ userService: { revokeHeldGrantRelease: revoke } }));
 const findBatch = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/server-utils/credits/heldSignupGrantAdapters', () => ({ heldGrantBatches: { findBatch } }));
@@ -47,14 +51,18 @@ import '@pages/api/admin/held-signup-grants/revoke';
 const run = async (body: unknown, isAdmin = true, user: Record<string, unknown> = {}) => {
   const { req, res } = createMocks({ method: 'POST', body });
   Object.assign(req, { user: { id: 'admin-1', isAdmin, ...user }, logger: { error: vi.fn() } });
-  await handlers
-    .post(req, res)
+  await Promise.resolve()
+    .then(() => {
+      for (const middleware of uses) middleware(req, res, () => undefined);
+      return handlers.post(req, res);
+    })
     .catch((error: unknown) => (res.statusCode = (error as { statusCode?: number }).statusCode ?? 500));
   return res;
 };
 const BATCH = 'a'.repeat(24);
 beforeEach(() => {
   revoke.mockReset().mockResolvedValue({ batchId: 'b', results: [] });
+  findAdminTargetsByIds.mockReset().mockResolvedValue([]);
   findBatch.mockReset().mockResolvedValue({
     id: BATCH,
     actorId: 'x',
@@ -66,11 +74,17 @@ beforeEach(() => {
 
 describe('POST /api/admin/held-signup-grants/revoke', () => {
   it('guards with the admin scope', () => {
-    expect(baseOptions).toHaveBeenCalledWith({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] });
+    expect(baseOptions).toHaveBeenCalledWith({ auth: 'jwtOnly', allowedMethods: ['POST'] });
   });
   it('rejects non-admins', async () => {
     expect((await run({ batchId: 'a'.repeat(24) }, false)).statusCode).toBe(403);
     expect(revoke).not.toHaveBeenCalled();
+  });
+  it('admits a delegate holding credits:adjust and refuses one without it', async () => {
+    expect((await run({ batchId: BATCH }, false, { adminPermissions: ['support:read'] })).statusCode).toBe(403);
+    expect(revoke).not.toHaveBeenCalled();
+    expect((await run({ batchId: BATCH }, false, { adminPermissions: ['credits:adjust'] })).statusCode).toBe(200);
+    expect(revoke).toHaveBeenCalledOnce();
   });
   it.each([
     ['missing', {}],
@@ -127,5 +141,20 @@ describe('POST /api/admin/held-signup-grants/revoke', () => {
     });
     expect(revoke).not.toHaveBeenCalled();
     expect(audit.record).not.toHaveBeenCalled();
+  });
+  it.each([
+    ['a full admin', { id: 'u', isAdmin: true }],
+    ['another delegate', { id: 'u', adminPermissions: ['support:read'] }],
+  ])('refuses a delegate revoking a release paid to %s before anything is reversed', async (_label, target) => {
+    findAdminTargetsByIds.mockResolvedValue([target]);
+    const res = await run({ batchId: BATCH }, false, { adminPermissions: ['credits:adjust'] });
+    expect(res.statusCode).toBe(403);
+    expect(findAdminTargetsByIds).toHaveBeenCalledWith(['u']);
+    expect(revoke).not.toHaveBeenCalled();
+  });
+  it('lets a full admin revoke a release paid to an account with admin access', async () => {
+    findAdminTargetsByIds.mockResolvedValue([{ id: 'u', isAdmin: true }]);
+    expect((await run({ batchId: BATCH })).statusCode).toBe(200);
+    expect(revoke).toHaveBeenCalledOnce();
   });
 });
