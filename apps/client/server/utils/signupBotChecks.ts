@@ -1,6 +1,6 @@
 import type { UserRiskSignalType } from '@bike4mind/common';
 import { Config } from '@bike4mind/server-utils/utils/config';
-import { hkdfSync } from 'crypto';
+import { hkdfSync, randomUUID } from 'crypto';
 import jwt from 'jsonwebtoken';
 
 const PURPOSE = 'signup_form';
@@ -17,7 +17,24 @@ export const signSignupFormToken = (nowMs = Date.now()): string =>
     algorithm: 'HS256',
     expiresIn: '1h',
     audience: AUDIENCE,
+    jwtid: randomUUID(),
   });
+
+const verifyFormToken = (formToken: string) =>
+  jwt.verify(formToken, signupFormTokenKey(), { algorithms: ['HS256'], audience: AUDIENCE }) as Record<string, unknown>;
+
+// Id and expiry of a token that verifies cleanly; undefined for anything else, including legacy tokens without a jti.
+export function verifiedSignupFormTokenId(formToken: unknown): { jti: string; expMs: number } | undefined {
+  if (typeof formToken !== 'string' || !formToken) return undefined;
+  try {
+    const { purpose, jti, exp } = verifyFormToken(formToken);
+    if (purpose !== PURPOSE || typeof jti !== 'string' || typeof exp !== 'number') return undefined;
+    return { jti, expMs: exp * 1000 };
+  } catch (err) {
+    if (err instanceof jwt.JsonWebTokenError) return undefined;
+    throw err;
+  }
+}
 
 export function evaluateSignupSignals(input: {
   formToken?: unknown;
@@ -38,13 +55,7 @@ export function evaluateSignupSignals(input: {
   }
 
   try {
-    const payload = jwt.verify(input.formToken, signupFormTokenKey(), {
-      algorithms: ['HS256'],
-      audience: AUDIENCE,
-    }) as {
-      purpose?: unknown;
-      issuedAtMs?: unknown;
-    };
+    const payload = verifyFormToken(input.formToken);
     if (payload.purpose !== PURPOSE || typeof payload.issuedAtMs !== 'number') {
       signals.push('signup_token_invalid');
     } else if (input.nowMs - payload.issuedAtMs < input.minSubmitMs) {
