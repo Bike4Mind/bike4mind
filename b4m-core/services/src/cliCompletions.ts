@@ -53,6 +53,7 @@ import {
   providerSummarizesReasoning,
   withholdsReasoning,
   type ICacheRepository,
+  type CompletionRunAttribution,
 } from '@bike4mind/common';
 import {
   usdToCredits,
@@ -111,6 +112,18 @@ export type CompletionCreditHolds = {
   reserve(hold: Omit<CreditHoldRecord, 'balanceAfterHold'>, debit: () => Promise<ICreditHolder>): Promise<void>;
   refund(refund: () => Promise<void>): Promise<boolean>;
   settle(chargedCredits: number, settle: () => Promise<void>): Promise<boolean>;
+};
+
+/** How a completion's credit settlement ended, reported once through `onSettled`. */
+export type CompletionSettlement = {
+  /** The id the ledger row and usage event carry. */
+  requestId: string;
+  /** True only when the ledger row was written and its transaction committed. */
+  committed: boolean;
+  /** What the ledger recorded; can be below the computed cost when the balance capped it. 0 unless committed. */
+  creditsCharged: number;
+  /** The provider cost the credits were priced from (the terminal content event's `credits.usdCost`). */
+  usdCost?: number;
 };
 
 export interface CompletionParams {
@@ -217,6 +230,11 @@ export interface CompletionParams {
    */
   sessionId?: string;
   /**
+   * The run this completion belongs to, already verified by the caller as created by this user and
+   * billing owner. Recorded on the ledger row (`metadata.run`) and the usage event; never charged.
+   */
+  run?: CompletionRunAttribution;
+  /**
    * Where this completion request originated. Recorded on the credit
    * transaction (and analytics event) so reports can break down usage by
    * surface (cli, api, etc.). Defaults to 'api' since this service is only
@@ -241,6 +259,11 @@ export interface CompletionParams {
    * A throw from it refunds the hold.
    */
   onReady?: () => void | Promise<void>;
+  /**
+   * Called once after settlement, before the function returns or rethrows an abort. Not called when
+   * the completion failed before settlement or credits were not enforced.
+   */
+  onSettled?: (settlement: CompletionSettlement) => void;
   /** Entitlement resolver for model admission; omitted means tag-only access. */
   getEntitlements?: (user: IUserDocument) => Promise<string[]>;
   /** Resolved on the reloaded caller; omitted means `raw`. A failed resolution withholds. */
@@ -1242,6 +1265,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
             userId,
             ownerId: holderId,
             ownerType: holderType,
+            sessionId: params.sessionId,
+            run: params.run,
             feature: 'completion_api',
             source,
             apiKeyId: apiKeyInfo?.keyId,
@@ -1260,6 +1285,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
             userId,
             ownerId: holderId,
             ownerType: holderType,
+            sessionId: params.sessionId,
+            run: params.run,
             feature: 'completion_api',
             source,
             apiKeyId: apiKeyInfo?.keyId,
@@ -1376,6 +1403,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         userId,
         ownerId: holderId,
         ownerType: holderType,
+        sessionId: params.sessionId,
+        run: params.run,
         feature: 'completion_api',
         provider: requestedModelInfo!.backend,
         model,
@@ -1521,6 +1550,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
                 reservedCredits,
                 creditDifference,
                 ...(toolNamesUsed.size > 0 && { toolNames: boundedToolNames(toolNamesUsed) }),
+                ...(params.run && { run: params.run }),
               },
             },
             {
@@ -1565,6 +1595,16 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       });
       // Don't throw - completion already happened, but ensure this is tracked
     }
+  }
+
+  // Outside the settlement try, so a throwing callback cannot read as a failed ledger adjustment.
+  if (enforceCredits && modelInfo) {
+    params.onSettled?.({
+      requestId,
+      committed: settlementCommitted,
+      creditsCharged: settlementCommitted ? chargedCredits : 0,
+      usdCost: chargedUsdCost,
+    });
   }
 
   // Embed metering fallback: the embed path must record org usage even when the

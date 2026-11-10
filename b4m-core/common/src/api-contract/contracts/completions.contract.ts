@@ -8,6 +8,7 @@ import {
   InsufficientCreditsErrorSchema,
   ProviderNotConfiguredErrorSchema,
   CompletionsBadRequestErrorSchema,
+  RunNotFoundErrorSchema,
 } from '../../schemas/chat';
 
 /**
@@ -29,7 +30,7 @@ export const createCompletionContract = defineEndpoint({
   description:
     'OpenAI-compatible completion. A successful request is ALWAYS answered with an SSE stream ' +
     '(`text/event-stream`), regardless of the `stream` flag: a `meta` event, then `content`/`tool_use` ' +
-    'events carrying `usage`/`credits`, terminated by `data: [DONE]`. The terminal event carries ' +
+    'events carrying `usage`/`credits`, then (when credits were charged) one `settled` event, terminated by `data: [DONE]`. The terminal event carries ' +
     '`stopReason`; treat `max_tokens` as a TRUNCATED reply rather than a complete one, and note ' +
     'that omitting `max_tokens` on the request lets the server size the output ceiling for the ' +
     'model (recommended for reasoning models, which spend thinking tokens inside that ceiling). ' +
@@ -41,6 +42,12 @@ export const createCompletionContract = defineEndpoint({
     "Check the model's " +
     '`supports_assistant_prefill` field from `GET /api/v1/models` before sending one. ' +
     'Authenticate with an API key (`b4m_live_`) or a JWT.\n\n' +
+    'RUNS AND SETTLEMENT. To group the spend of a multi-agent run (a root session and the workers it spawns), ' +
+    'mint a run id with `POST /api/v1/completion-runs` and send it as `run` on each request. Spend is recorded ' +
+    'against the run, never charged twice. The `settled` event (`{ type, requestId, creditsCharged, usdCost, runId }`) ' +
+    'arrives after the last content event and before `[DONE]`, once the charge is committed: `creditsCharged` is ' +
+    "what the ledger recorded, which can be below the terminal event's `credits.used` when the balance capped it, " +
+    'and `requestId` (your `X-Request-ID` when sent) identifies that charge, so count it once per `requestId`.\n\n' +
     'TOOL SEARCH. On a model whose `GET /api/v1/models` row has `supports_tool_search: true` (`backend` `"anthropic"` or `"bedrock"`), ' +
     'a `tools` entry may set `toolSchema.defer_loading: true`, and a `{ "serverTool": { "type": ' +
     '"tool_search_tool_regex_20251119", "name": "tool_search_tool_regex" } }` (or the `bm25` pair) entry adds ' +
@@ -57,7 +64,7 @@ export const createCompletionContract = defineEndpoint({
     'a real HTTP status, before any stream opens: an empty `messages` array, a conversation with no non-empty user or assistant message (system-only, or only blank content), a malformed request, or an unknown `model` `400` (`errorCode: "unknown_model"` for an unknown model), a bad ' +
     'credential `401`, a key without a required scope `403` (with `required_scopes`), a free-tier account calling a model outside the free-tier allowlist `403` with `errorCode: "model_requires_subscription"` (upgrade the plan or pick a free-tier model), a body over 25 MB ' +
     '`413`, any other body that fails schema validation `422`, insufficient credits `422` with ' +
-    '`errorCode: "insufficient_credits"` (personal or org balance, or an org per-member credit cap), a rate limit `429` with `Retry-After`, and a catalogued model ' +
+    '`errorCode: "insufficient_credits"` (personal or org balance, or an org per-member credit cap), a rate limit `429` with `Retry-After`, a `run` that does not exist or that another user or billing owner minted `404` with `errorCode: "run_not_found"`, and a catalogued model ' +
     'whose provider is not configured on this deployment, or a model that could only come from a self-hosted model server (Ollama, local image) that is currently unreachable, `503` with `errorCode: "provider_not_configured"` (retryable). ' +
     'A provider rejection of caller input that happens before the stream opens is also a JSON `400`, with ' +
     '`errorCode: "invalid_request"` (do not retry it unchanged). ' +
@@ -103,6 +110,12 @@ export const createCompletionContract = defineEndpoint({
         'here), `invalid_tool_change` (a malformed block, or one placed where the provider does not accept it), and ' +
         '`unknown_tool_reference` (a changed tool not in `tools`).',
       schema: CompletionsBadRequestErrorSchema,
+    },
+    404: {
+      description:
+        'The `run` does not exist, or another user or billing owner minted it (`errorCode: "run_not_found"`). ' +
+        'Mint one with `POST /api/v1/completion-runs` using the same credential.',
+      schema: RunNotFoundErrorSchema,
     },
     413: { description: 'Request body over 25 MB.', schema: ApiErrorSchema },
     422: {

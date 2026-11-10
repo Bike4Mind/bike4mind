@@ -489,6 +489,30 @@ export class SessionStore implements SessionWritesStore {
     );
   }
 
+  /**
+   * Record (or, with `undefined`, forget) the server's run id on a session's orchestration
+   * policy. A no-op unless the policy still belongs to `rootRunId`, so an id minted for a run the
+   * user has since turned off and on again never lands on its successor.
+   */
+  setServerRunId(
+    id: string,
+    rootRunId: string,
+    serverRunId: string | undefined,
+    expectedScope?: string | null
+  ): Promise<ChatSessionSummary | null> {
+    return this.mutate(
+      id,
+      session => {
+        const policy = session.orchestrationPolicy;
+        if (policy?.rootRunId !== rootRunId || policy.serverRunId === serverRunId) return null;
+        const { serverRunId: _previous, ...rest } = policy;
+        session.orchestrationPolicy = rootPolicySchema.parse(serverRunId ? { ...rest, serverRunId } : rest);
+        return true;
+      },
+      expectedScope
+    );
+  }
+
   setWorkerModel(id: string, model: string, expectedScope: string | null): Promise<ChatSessionSummary | null> {
     return this.mutate(
       id,

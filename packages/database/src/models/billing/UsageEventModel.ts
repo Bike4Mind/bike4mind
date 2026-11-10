@@ -1,6 +1,8 @@
 import mongoose, { Model, Schema, model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 import {
+  COMPLETION_RUN_PURPOSES,
+  COMPLETION_RUN_ROLES,
   COMPLETION_SOURCES,
   CreditHolderType,
   IMongoDocument,
@@ -179,6 +181,21 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
           attachmentCount: { type: Number, required: false },
           attachmentBytes: { type: Number, required: false },
           operation: { type: String, required: false, enum: [...USAGE_EVENT_OPERATIONS] },
+        },
+        { _id: false }
+      ),
+      required: false,
+    },
+    // Mirrors UsageEventRun. No index yet: run totals are read by a later reader.
+    run: {
+      type: new Schema(
+        {
+          runId: { type: String, required: true },
+          role: { type: String, required: true, enum: [...COMPLETION_RUN_ROLES] },
+          purpose: { type: String, required: false, enum: [...COMPLETION_RUN_PURPOSES] },
+          taskId: { type: String, required: false },
+          attemptId: { type: String, required: false },
+          parentSessionId: { type: String, required: false },
         },
         { _id: false }
       ),

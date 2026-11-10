@@ -234,3 +234,34 @@ it.each([32, 31])('keeps the newest resolved decision when a task holding %i tak
   expect(kept?.at(-1)).toBe('decision-new');
   expect(kept?.includes('decision-0')).toBe(held === 31);
 });
+
+it('loads a session stored before run attribution, then keeps a server run id through restart', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'b4m-run-attribution-'));
+  const store = new SessionStore(directory, 'worker');
+  const child = await store.create();
+  const session = await store.get(child.id);
+  const legacyPolicy = { rootSessionId: 'root', rootRunId: 'run-one', policy: inheritancePolicy() };
+  const legacyRound = { text: 'Done', toolCallIds: [], usage: { creditsUsed: 3 } };
+  await writeFile(
+    join(directory, `${child.id}.json`),
+    JSON.stringify({
+      ...session,
+      origin: { parentSessionId: 'root', depth: 1, seedPrompt: 'Brief' },
+      orchestrationPolicy: legacyPolicy,
+      messages: [{ id: 'm1', role: 'assistant', content: 'Done', createdAt: '2026-01-01', rounds: [legacyRound] }],
+    })
+  );
+
+  const restarted = new SessionStore(directory, 'worker');
+  const loaded = await restarted.get(child.id);
+  expect(loaded?.orchestrationPolicy).toEqual(legacyPolicy);
+  expect(loaded?.messages[0].rounds).toEqual([legacyRound]);
+
+  expect(await restarted.setServerRunId(child.id, 'another-run', 'server-run')).toBeNull();
+  await restarted.setServerRunId(child.id, 'run-one', 'server-run');
+  expect((await new SessionStore(directory, 'worker').get(child.id))?.orchestrationPolicy?.serverRunId).toBe(
+    'server-run'
+  );
+  await restarted.setServerRunId(child.id, 'run-one', undefined);
+  expect((await new SessionStore(directory, 'worker').get(child.id))?.orchestrationPolicy).toEqual(legacyPolicy);
+});

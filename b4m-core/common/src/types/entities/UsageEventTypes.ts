@@ -4,6 +4,7 @@ import { IMongoDocument } from './common';
 import { CreditHolderType } from './CreditHolderTypes';
 import { NamedApiKeyUsage, ISourceUsage, ILedgerUsageTotal } from './CreditTransactionTypes';
 import { ApiKeyCompletionSource, COMPLETION_SOURCES, CompletionSource, IPlatformEndpointUsage } from '../analytics';
+import { COMPLETION_RUN_PURPOSES, COMPLETION_RUN_ROLES } from '../../constants/completionRuns';
 
 /**
  * Which product surface generated the provider call.
@@ -135,6 +136,21 @@ export const UsageEventRequestMeta = z.object({
 export type IUsageEventRequestMeta = z.infer<typeof UsageEventRequestMeta>;
 
 /**
+ * The verified run a completion was attributed to (CompletionRunAttributionSchema, as sent).
+ * Stored as sent: an absent `purpose` reads as `turn`. Absent on rows not attributed to a run.
+ */
+export const UsageEventRun = z.object({
+  runId: z.string(),
+  role: z.enum(COMPLETION_RUN_ROLES),
+  purpose: z.enum(COMPLETION_RUN_PURPOSES).optional(),
+  taskId: z.string().optional(),
+  attemptId: z.string().optional(),
+  parentSessionId: z.string().optional(),
+});
+
+export type IUsageEventRun = z.infer<typeof UsageEventRun>;
+
+/**
  * One row per provider API call. Ties true COGS (costUsd, frozen
  * at write time) to what the user was debited (creditsCharged) so margin per
  * model/user is queryable. Dual-written at settlement time; never part of the
@@ -251,6 +267,8 @@ export const UsageEvent = z.object({
   cacheWrite1hTokens: z.number().optional(),
   /** How the request ran, for the admin usage receipt (see UsageEventRequestMeta). */
   requestMeta: UsageEventRequestMeta.optional(),
+  /** The completion run this call's spend belongs to (see UsageEventRun). */
+  run: UsageEventRun.optional(),
 
   createdAt: z.date(),
   updatedAt: z.date(),

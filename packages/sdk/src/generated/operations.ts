@@ -53,6 +53,10 @@ export const operations = {
     method: 'POST',
     path: '/api/ai/v1/completions',
   },
+  createCompletionRun: {
+    method: 'POST',
+    path: '/api/v1/completion-runs',
+  },
   createDecision: {
     method: 'POST',
     path: '/api/v1/decisions',
