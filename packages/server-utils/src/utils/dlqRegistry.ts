@@ -11,7 +11,7 @@ import * as generatedInfraResources from '../premium-generated/infraResources.ge
 /**
  * SQS queue URLs are stored via sst.Linkable in resource.enc.
  * This avoids both IAM inline policy bloat (from SST queue links) and
- * env var size limits. The wildcard SQS permission already covers access.
+ * env var size limits. A single stage-scoped SQS statement in infra/web.ts covers access.
  */
 
 /**
