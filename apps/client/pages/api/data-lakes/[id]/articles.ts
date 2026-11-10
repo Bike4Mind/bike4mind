@@ -13,6 +13,7 @@ import {
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { fileContentUrl } from '@server/files/browserFileSigner';
 import { fabFilesService } from '@bike4mind/services';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import {
@@ -123,6 +124,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
               return null;
             }
           },
+          contentUrl: fileContentUrl,
         },
       },
       {

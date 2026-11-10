@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { IFabFileDocument } from '@bike4mind/common';
-import { S3Storage } from '../../../../b4m-core/fab-pipeline/src/storage/S3Storage';
+import { verifyFileContentSig } from '@bike4mind/utils';
 
-const h = vi.hoisted(() => ({ signUrl: vi.fn<S3Storage['getSignedUrl']>(), update: vi.fn() }));
+const h = vi.hoisted(() => ({ signUrl: vi.fn(), update: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
   fabFileRepository: { update: h.update },
   userRepository: {},
@@ -13,26 +13,26 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
 }));
 
 import { signBrowserFileResponse } from './signBrowserFileResponse';
+import { fileContentKey } from './browserFileSigner';
+
+const FILE_ID = '0123456789abcdef01234567';
+
+const contentQuery = (fileUrl: string | undefined) => {
+  const url = new URL(fileUrl!, 'https://app.example.invalid');
+  return { pathname: url.pathname, exp: url.searchParams.get('exp'), sig: url.searchParams.get('sig') };
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.stubEnv('AWS_REGION', 'us-east-2');
-  vi.stubEnv('AWS_ACCESS_KEY_ID', 'fixture-access');
-  vi.stubEnv('AWS_SECRET_ACCESS_KEY', 'fixture-secret');
-  vi.stubEnv('AWS_SESSION_TOKEN', '');
-  vi.stubEnv('AWS_ENDPOINT_URL_S3', 'http://minio.internal:9000');
-  vi.stubEnv('S3_PRESIGN_ENDPOINT', 'https://objects.example.invalid:9443');
-  const storage = new S3Storage('files-bucket');
-  h.signUrl.mockImplementation((...args) => storage.getSignedUrl(...args));
 });
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
 });
 
-it('signs the browser response with the SDK, ignoring a stored URL, without writing the row', async () => {
+it('mints the stable content URL, ignoring a stored URL, without writing the row', async () => {
   const input = {
-    id: 'owned',
+    id: FILE_ID,
     moderationStatus: 'clean',
     mimeType: 'text/plain',
     filePath: 'owned/folder name/report.txt',
@@ -40,17 +40,15 @@ it('signs the browser response with the SDK, ignoring a stored URL, without writ
     fileUrlExpireAt: new Date(Date.now() + 3600000),
   } as IFabFileDocument;
   const original = { ...input };
-  const fetch = vi.fn().mockResolvedValue({ ok: true });
-  vi.stubGlobal('fetch', fetch);
   const response = await signBrowserFileResponse(input);
-  const url = new URL(response.fileUrl!);
-  expect(url.origin).toBe('https://objects.example.invalid:9443');
-  expect(url.pathname).toBe('/files-bucket/owned/folder%20name/report.txt');
-  expect(url.searchParams.get('X-Amz-Expires')).toBe('3600');
-  expect(url.searchParams.get('X-Amz-Signature')).toMatch(/^[a-f0-9]{64}$/);
+  const { pathname, exp, sig } = contentQuery(response.fileUrl);
+  expect(pathname).toBe(`/api/files/${FILE_ID}/content`);
+  expect(verifyFileContentSig({ fileId: FILE_ID, filePath: input.filePath, exp, sig }, fileContentKey())).toMatchObject(
+    { ok: true }
+  );
+  expect(h.signUrl).not.toHaveBeenCalled();
   expect(input).toEqual(original);
   expect(response).not.toBe(input);
-  expect(fetch).not.toHaveBeenCalled();
   expect(h.update).not.toHaveBeenCalled();
 });
 
@@ -134,34 +132,28 @@ it('preserves hydrated clean fields while signing only the response', async () =
   const original = input.toJSON();
   const response = await signBrowserFileResponse(input);
   expect(response).toMatchObject({ id: original.id, fileName: 'report.txt', notes: 'retained', tags: original.tags });
-  expect(new URL(response.fileUrl!).origin).toBe('https://objects.example.invalid:9443');
+  expect(contentQuery(response.fileUrl).pathname).toBe(`/api/files/${original.id}/content`);
   expect(response).not.toHaveProperty('_doc');
   expect(input.toJSON()).toEqual(original);
   expect(h.update).not.toHaveBeenCalled();
 });
 
-it.each([undefined, '', '   ', 'https://objects.example.invalid:9443'])(
-  'always signs fresh and never writes the row: %s',
-  async endpoint => {
-    vi.stubEnv('S3_PRESIGN_ENDPOINT', endpoint);
-    const storage = new S3Storage('files-bucket');
-    h.signUrl.mockImplementation((...args) => storage.getSignedUrl(...args));
-    const input = {
-      id: 'expired',
-      mimeType: 'text/plain',
-      moderationStatus: 'clean',
-      filePath: 'owned/report.txt',
-      fileUrl: 'http://minio.internal:9000/expired',
-      fileUrlExpireAt: new Date(Date.now() - 3600000),
-    } as IFabFileDocument;
-    const original = { ...input };
-    const response = await signBrowserFileResponse(input);
-    expect(new URL(response.fileUrl!).origin).toBe(endpoint?.trim() || 'http://minio.internal:9000');
-    expect(response.fileUrl).not.toBe(original.fileUrl);
-    expect(h.update).not.toHaveBeenCalled();
-    expect(input).toEqual(original);
-  }
-);
+it('mints a fresh URL for an expired stored one and never writes the row', async () => {
+  const input = {
+    id: FILE_ID,
+    mimeType: 'text/plain',
+    moderationStatus: 'clean',
+    filePath: 'owned/report.txt',
+    fileUrl: 'http://minio.internal:9000/expired',
+    fileUrlExpireAt: new Date(Date.now() - 3600000),
+  } as IFabFileDocument;
+  const original = { ...input };
+  const response = await signBrowserFileResponse(input);
+  expect(contentQuery(response.fileUrl).pathname).toBe(`/api/files/${FILE_ID}/content`);
+  expect(response.fileUrlExpireAt!.getTime()).toBeGreaterThan(Date.now());
+  expect(h.update).not.toHaveBeenCalled();
+  expect(input).toEqual(original);
+});
 
 it('signs repeated reads inside one window to the identical URL', async () => {
   const input = {

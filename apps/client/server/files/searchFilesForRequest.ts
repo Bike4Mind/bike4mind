@@ -10,6 +10,7 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { fileContentUrl } from '@server/files/browserFileSigner';
 import type { Request } from 'express';
 
 /**
@@ -18,10 +19,12 @@ import type { Request } from 'express';
  *
  * Shared by the SPA-internal GET /api/files/search and the public GET /api/v1/files/search, so the
  * two doors cannot scope differently.
+ * `browser` hands out the stable app URL (browserFileSigner.ts) instead of a raw S3 link.
  */
 export async function searchFilesForRequest<Params, ResBody, ReqBody, Query>(
   req: Request<Params, ResBody, ReqBody, Query>,
-  parsed: Parameters<typeof fabFilesService.search>[1]
+  parsed: Parameters<typeof fabFilesService.search>[1],
+  { browser = false }: { browser?: boolean } = {}
 ) {
   if (!req.ability?.can(Permission.read, FabFile)) {
     throw new ForbiddenError('Unauthorized');
@@ -74,6 +77,7 @@ export async function searchFilesForRequest<Params, ResBody, ReqBody, Query>(
             return null;
           }
         },
+        ...(browser && { contentUrl: fileContentUrl }),
       },
     },
     scope

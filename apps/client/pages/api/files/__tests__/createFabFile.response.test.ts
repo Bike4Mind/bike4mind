@@ -44,6 +44,7 @@ vi.mock('@bike4mind/services', async importOriginal => {
   return { ...actual, fabFilesService: { ...actual.fabFilesService, createFabFile: h.createFabFile } };
 });
 vi.mock('sst', () => ({ Resource: { fabFileBucket: { name: 'test-fab-bucket' } } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { JWT_SECRET: 'test-jwt-secret' } }));
 
 import handler from '../createFabFile';
 

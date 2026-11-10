@@ -5,10 +5,11 @@ import {
   secureParameters,
   BaseStorage,
   fileUrlSigningDate,
+  fileContentExp,
   FILE_URL_TTL_SECONDS,
 } from '@bike4mind/utils';
 import { z } from 'zod';
-import { signedUrlExpiresAt } from '../fabFileService/get';
+import { signedUrlExpiresAt, type GetFabFileAdapter } from '../fabFileService/get';
 
 const listProjectFilesSchema = z.object({
   projectId: z.string(),
@@ -23,6 +24,7 @@ interface ListProjectFilesAdapters {
     users: IUserRepository;
   };
   storage?: BaseStorage;
+  contentUrl?: GetFabFileAdapter['storage']['contentUrl'];
 }
 
 export const listFiles = async (
@@ -57,7 +59,11 @@ export const listFiles = async (
 
         file.fileUrl = undefined;
         file.fileUrlExpireAt = undefined;
-        if (file.filePath) {
+        if (file.filePath && adapters.contentUrl && file.id) {
+          const exp = fileContentExp();
+          file.fileUrl = adapters.contentUrl({ id: file.id, filePath: file.filePath }, exp);
+          file.fileUrlExpireAt = new Date(exp * 1000);
+        } else if (file.filePath) {
           try {
             file.fileUrl = await adapters.storage!.getSignedUrl(file.filePath, 'get', {
               expiresIn: FILE_URL_TTL_SECONDS,

@@ -31,6 +31,7 @@ import {
 import type { EntitlementRequest } from '@server/entitlements';
 import type { Logger } from '@bike4mind/observability';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { fileContentUrl } from '@server/files/browserFileSigner';
 import { toAccessContext } from './toAccessContext';
 import {
   grantingLakes,
@@ -256,6 +257,7 @@ export async function queryDataLakeArticles(
           return null;
         }
       },
+      contentUrl: fileContentUrl,
     },
   };
 

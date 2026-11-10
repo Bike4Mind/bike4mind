@@ -12,6 +12,7 @@ import {
   getSettingByName,
   signedUrlExpiresAt,
   fileUrlSigningDate,
+  fileContentExp,
   FILE_URL_TTL_SECONDS,
 } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -62,6 +63,12 @@ export interface GetFabFileAdapter {
       expireInSeconds: number,
       options?: { signingDate?: Date }
     ) => Promise<string | null>;
+    /**
+     * Browser-facing callers only: a stable app URL that redirects to a fresh S3 link, so every
+     * instance hands out the same URL within a signing window. Server consumers that download
+     * `fileUrl` themselves leave it unset and get a raw S3 link.
+     */
+    contentUrl?: (fabFile: { id: string; filePath: string }, exp: number) => string;
   };
 }
 
@@ -128,6 +135,13 @@ export const generateSignedUrl = async (
   fabFile.presignedUrl = undefined;
 
   if (!fabFile.filePath) return fabFile;
+
+  if (storage.contentUrl && fabFile.id) {
+    const exp = fileContentExp();
+    fabFile.fileUrl = storage.contentUrl({ id: fabFile.id, filePath: fabFile.filePath }, exp);
+    fabFile.fileUrlExpireAt = new Date(exp * 1000);
+    return fabFile;
+  }
 
   const fileUrl = await storage.generateSignedUrl(fabFile.filePath, FILE_URL_TTL_SECONDS, {
     signingDate: fileUrlSigningDate(),

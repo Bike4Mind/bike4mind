@@ -12,6 +12,7 @@ import { holdsDataLakeReadScope } from '@server/dataLakes/dataLakeScopes';
 import { resolveAuditPrincipal } from '@bike4mind/server-utils/dataLakes/resolveAuditPrincipal';
 import type { EntitlementRequest } from '@server/entitlements';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { fileContentUrl } from '@server/files/browserFileSigner';
 import type { Logger } from '@bike4mind/observability';
 
 /**
@@ -25,8 +26,11 @@ export type FabFileAccessRequest = Omit<EntitlementRequest, 'apiKeyInfo'> & {
   logger: Logger;
 };
 
-/** Storage and repository adapter shared by the file read doors. */
-export function buildFabFileAdapter(req: FabFileAccessRequest) {
+/**
+ * Storage and repository adapter shared by the file read doors. `browser` hands out the stable app
+ * URL (browserFileSigner.ts) instead of a raw S3 link; leave it off where a server or API client reads `fileUrl`.
+ */
+export function buildFabFileAdapter(req: FabFileAccessRequest, { browser = false }: { browser?: boolean } = {}) {
   return {
     db: {
       fabFiles: fabFileRepository,
@@ -46,6 +50,7 @@ export function buildFabFileAdapter(req: FabFileAccessRequest) {
           throw error;
         }
       },
+      ...(browser && { contentUrl: fileContentUrl }),
     },
   };
 }
@@ -58,8 +63,12 @@ export function buildFabFileAdapter(req: FabFileAccessRequest) {
  * Shared by the SPA-internal `GET /api/files/{id}` and the public `GET /api/v1/files/{id}`, so
  * the two doors cannot authorize differently.
  */
-export async function loadAccessibleFabFile(req: FabFileAccessRequest, id: string) {
-  const adapter = buildFabFileAdapter(req);
+export async function loadAccessibleFabFile(
+  req: FabFileAccessRequest,
+  id: string,
+  options: { browser?: boolean } = {}
+) {
+  const adapter = buildFabFileAdapter(req, options);
   const { user } = req;
   // Every door here is authenticated; a caller that built the slice without a user is a wiring bug.
   if (!user) throw new NotFoundError('Fabfile not found');

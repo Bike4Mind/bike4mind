@@ -171,3 +171,54 @@ describe('generateSignedUrl - sign on read, never persisted', () => {
     }
   });
 });
+
+describe('generateSignedUrl - stable content URL', () => {
+  afterEach(() => vi.useRealTimers());
+
+  const contentUrl = (fabFile: { id: string; filePath: string }, exp: number) =>
+    `https://app.example.invalid/api/files/${fabFile.id}/content?exp=${exp}&sig=${fabFile.filePath.length}`;
+  // Two Lambda instances: each signs S3 with its own role-session credentials, so raw links differ.
+  const instance = (n: number): GetFabFileAdapter['storage'] => ({
+    generateSignedUrl: vi.fn().mockResolvedValue(`https://bucket.example.invalid/f?X-Amz-Credential=instance-${n}`),
+    contentUrl,
+  });
+
+  it('hands out the identical URL from two instances in one window, without signing S3', async () => {
+    vi.useFakeTimers({ now: new Date('2026-01-02T03:04:05Z') });
+    const a = instance(1);
+    const b = instance(2);
+    const first = await generateSignedUrl(fabFile({ filePath: 'owned/file.png' }), { storage: a });
+    vi.setSystemTime(new Date('2026-01-02T03:29:59Z'));
+    const second = await generateSignedUrl(fabFile({ filePath: 'owned/file.png' }), { storage: b });
+    expect(first.fileUrl).toBe(second.fileUrl);
+    expect(first.fileUrl).toBe(
+      `https://app.example.invalid/api/files/f1/content?exp=${Date.parse('2026-01-02T04:00:00Z') / 1000}&sig=14`
+    );
+    expect(first.fileUrlExpireAt).toEqual(new Date('2026-01-02T04:00:00Z'));
+    expect(a.generateSignedUrl).not.toHaveBeenCalled();
+    expect(b.generateSignedUrl).not.toHaveBeenCalled();
+  });
+
+  it('withholds the URL for a held image', async () => {
+    const storage = { ...instance(1), contentUrl: vi.fn(contentUrl) };
+    const held = await generateSignedUrl(fabFile({ filePath: 'owned/file.png', moderationStatus: 'pending' }), {
+      storage,
+    });
+    expect(held.fileUrl).toBeUndefined();
+    expect(held.fileUrlExpireAt).toBeUndefined();
+    expect(storage.contentUrl).not.toHaveBeenCalled();
+  });
+
+  it('gives no URL without a file path', async () => {
+    const result = await generateSignedUrl(fabFile(), { storage: instance(1) });
+    expect(result.fileUrl).toBeUndefined();
+  });
+
+  it('keeps the raw S3 link when no content URL builder is passed', async () => {
+    const { generateSignedUrl: sign } = instance(3);
+    const result = await generateSignedUrl(fabFile({ filePath: 'owned/file.png' }), {
+      storage: { generateSignedUrl: sign },
+    });
+    expect(result.fileUrl).toBe('https://bucket.example.invalid/f?X-Amz-Credential=instance-3');
+  });
+});

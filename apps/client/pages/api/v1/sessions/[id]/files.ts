@@ -11,44 +11,48 @@ import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { toObjectIdString } from '@bike4mind/server-utils/utils/objectId';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
+import { fileContentUrl } from '@server/files/browserFileSigner';
 
-const handler = nextRouteForContract(listSessionFilesContract, {
-  // Reading what a session holds is not a metered action; only the per-minute burst limit applies.
-  exemptReadsFromDailyRateLimit: true,
-}).get(async (req, res) => {
-  // Canonicalized: the session lookup casts and so matches any casing, but the chat-history query
-  // below hits `sessionId: { type: String }` (QuestModel), which does byte equality - an uppercase id
-  // would drop every chat-attached file. A malformed id names a session that cannot exist: 404.
-  const sessionId = toObjectIdString(req.validatedParams.id);
-  if (!sessionId) throw new NotFoundError('Session not found');
+/** `browser`: the SPA's legacy alias gets the stable app URL (browserFileSigner.ts); API callers keep a raw S3 link. */
+export const sessionFilesHandler = ({ browser }: { browser: boolean }) =>
+  nextRouteForContract(listSessionFilesContract, {
+    // Reading what a session holds is not a metered action; only the per-minute burst limit applies.
+    exemptReadsFromDailyRateLimit: true,
+  }).get(async (req, res) => {
+    // Canonicalized: the session lookup casts and so matches any casing, but the chat-history query
+    // below hits `sessionId: { type: String }` (QuestModel), which does byte equality - an uppercase id
+    // would drop every chat-attached file. A malformed id names a session that cannot exist: 404.
+    const sessionId = toObjectIdString(req.validatedParams.id);
+    if (!sessionId) throw new NotFoundError('Session not found');
 
-  const results = await fabFilesService.listFabFilesBySession(
-    req.user.id,
-    { sessionId },
-    {
-      db: {
-        chatHistories: questRepository,
-        fabFiles: fabFileRepository,
-        sessions: sessionRepository,
-        users: userRepository,
-        adminSettings: adminSettingsRepository,
-      },
-      storage: {
-        generateSignedUrl: async (path: string, expireInSeconds: number, options?: { signingDate?: Date }) => {
-          return await getFilesStorage().getSignedUrl(path, 'get', {
-            expiresIn: expireInSeconds,
-            signingDate: options?.signingDate,
-            audience: 'browser',
-          });
+    const results = await fabFilesService.listFabFilesBySession(
+      req.user.id,
+      { sessionId },
+      {
+        db: {
+          chatHistories: questRepository,
+          fabFiles: fabFileRepository,
+          sessions: sessionRepository,
+          users: userRepository,
+          adminSettings: adminSettingsRepository,
         },
-      },
-    }
-  );
+        storage: {
+          generateSignedUrl: async (path: string, expireInSeconds: number, options?: { signingDate?: Date }) => {
+            return await getFilesStorage().getSignedUrl(path, 'get', {
+              expiresIn: expireInSeconds,
+              signingDate: options?.signingDate,
+              audience: 'browser',
+            });
+          },
+          ...(browser && { contentUrl: fileContentUrl }),
+        },
+      }
+    );
 
-  return res.json(results);
-});
+    return res.json(results);
+  });
 
-export default handler;
+export default sessionFilesHandler({ browser: false });
 
 export const config = {
   api: {

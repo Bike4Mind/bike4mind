@@ -41,6 +41,9 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ getSignedUrl: mockGetSignedUrl }),
 }));
 
+vi.mock('@bike4mind/utils', () => ({ mintFileContentSig: vi.fn(() => 'sig') }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { JWT_SECRET: 'test-jwt-secret' } }));
+
 const mockUpdate = vi.hoisted(() => vi.fn().mockResolvedValue({ id: 'task1', title: 'updated' }));
 vi.mock('@bike4mind/services', () => ({
   researchTaskService: {
@@ -110,5 +113,6 @@ describe('GET /api/research/agents/[id]/tasks/[taskId] - signs file URLs on read
       audience: 'browser',
       signingDate,
     });
+    expect(adapters.storage.contentUrl).toEqual(expect.any(Function));
   });
 });

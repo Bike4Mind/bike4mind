@@ -1,7 +1,7 @@
 import type { IFabFileDocument } from '@bike4mind/common';
 import { adminSettingsRepository, fabFileRepository, userRepository } from '@bike4mind/database';
 import { fabFilesService } from '@bike4mind/services';
-import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { browserFileStorage } from '@server/files/browserFileSigner';
 
 export async function signBrowserFileResponse(file: IFabFileDocument): Promise<IFabFileDocument> {
   const plainFile =
@@ -10,13 +10,6 @@ export async function signBrowserFileResponse(file: IFabFileDocument): Promise<I
       : file;
   return fabFilesService.generateSignedUrl(plainFile, {
     db: { fabFiles: fabFileRepository, users: userRepository, adminSettings: adminSettingsRepository },
-    storage: {
-      generateSignedUrl: (path, expiresIn, options) =>
-        getFilesStorage().getSignedUrl(path, 'get', {
-          expiresIn,
-          audience: 'browser',
-          signingDate: options?.signingDate,
-        }),
-    },
+    storage: browserFileStorage(),
   });
 }

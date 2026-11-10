@@ -3,7 +3,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { sharingService } from '@bike4mind/services';
 import { sessionRepository, fabFileRepository } from '@bike4mind/database';
-import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { browserFileStorage } from '@server/files/browserFileSigner';
 import { z } from 'zod';
 
 interface SharingParams {
@@ -35,14 +35,7 @@ const handler = baseApi().put(
       { id, type, isGlobalRead, isGlobalWrite },
       {
         db: { sessions: sessionRepository, fabFiles: fabFileRepository },
-        storage: {
-          generateSignedUrl: async (path: string, expireInSeconds: number, options?: { signingDate?: Date }) =>
-            getFilesStorage().getSignedUrl(path, 'get', {
-              expiresIn: expireInSeconds,
-              audience: 'browser',
-              signingDate: options?.signingDate,
-            }),
-        },
+        storage: browserFileStorage(),
       }
     );
 

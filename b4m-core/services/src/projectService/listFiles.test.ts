@@ -175,4 +175,22 @@ describe('projectService - listFiles', () => {
     expect(mockStorage.getSignedUrl).toHaveBeenCalledTimes(1);
     expect(mockFabFileRepo.update).not.toHaveBeenCalled();
   });
+
+  it('hands out the stable content URL when a builder is passed, without signing S3', async () => {
+    (mockFabFileRepo.findAllByIds as Mock).mockResolvedValue([
+      { id: 'file-clean-image', filePath: 'fab-files/clean.png', mimeType: 'image/png', moderationStatus: 'clean' },
+      { id: 'file-pending', filePath: 'fab-files/pending.png', mimeType: 'image/png', moderationStatus: 'pending' },
+    ]);
+    const contentUrl = vi.fn(
+      (file: { id: string }, exp: number) => `https://app.example.invalid/${file.id}?exp=${exp}`
+    );
+
+    const [clean, pending] = await listFiles(userId, { projectId }, { ...adapters(), contentUrl });
+
+    expect(clean.fileUrl).toMatch(/^https:\/\/app\.example\.invalid\/file-clean-image\?exp=\d+$/);
+    expect(clean.fileUrlExpireAt).toBeInstanceOf(Date);
+    expect(pending.fileUrl).toBeUndefined();
+    expect(contentUrl).toHaveBeenCalledTimes(1);
+    expect(mockStorage.getSignedUrl).not.toHaveBeenCalled();
+  });
 });

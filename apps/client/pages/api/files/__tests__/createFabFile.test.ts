@@ -84,6 +84,7 @@ vi.mock('@server/files/fileUploadBudget', () => ({ consumeFileUploadBudget: h.co
 vi.mock('@server/files/pendingUploads', () => ({ admitPendingUploads: h.admitPendingUploads }));
 
 vi.mock('sst', () => ({ Resource: { fabFileBucket: { name: 'test-fab-bucket' } } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { JWT_SECRET: 'test-jwt-secret' } }));
 
 import handler from '../createFabFile';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
@@ -589,13 +590,13 @@ describe('POST /api/files/createFabFile - signing boundaries', () => {
     );
   });
 
-  it('returns a browser GET for inline content without persisting any URL', async () => {
+  it('returns the stable content URL for inline content without persisting any URL', async () => {
     const { res, json } = makeRes();
     await run(body({ content: 'owned text' }), res);
     expect(h.fabFileCreate.mock.calls[0][0]).not.toHaveProperty('fileUrl');
     expect(h.fabFileCreate.mock.calls[0][0]).not.toHaveProperty('fileUrlExpireAt');
-    expect(json.mock.calls[0][0].fileUrl).toBe('https://public.test/get');
-    expect(h.signUrl.mock.calls[0][1]).toBe('get');
+    expect(json.mock.calls[0][0].fileUrl).toMatch(/\/api\/files\/f1\/content\?exp=\d+&sig=[A-Za-z0-9_-]{43}$/);
+    expect(h.signUrl.mock.calls.some(call => call[2]?.audience === 'browser')).toBe(false);
   });
 
   it.each(['tmp', 'temp', 'x/backups', 'text-edit-backups'])(
