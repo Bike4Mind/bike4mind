@@ -297,7 +297,8 @@ class CacheRepository extends BaseRepository<ICacheDocument> implements ICacheRe
         'result.count': { $type: 'number' },
       },
       [{ $set: { 'result.count': { $max: [0, { $subtract: ['$result.count', amount] }] } } }],
-      opts?.outsideTransaction ? { session: null } : {}
+      // mongoose types `session` as non-null, but an explicit null is what opts out of the ambient one
+      (opts?.outsideTransaction ? { session: null } : {}) as { session?: undefined }
     );
   }
 
