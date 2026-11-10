@@ -1653,9 +1653,6 @@
   "apps/client/pages/api/artifacts/[id]/versions.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 10
-    },
-    "b4m/no-raw-entity-response": {
-      "count": 1
     }
   },
   "apps/client/pages/api/artifacts/[id]/versions/[version].ts": {
