@@ -90,6 +90,7 @@ export class RegistrationInviteRepository
       $and: [
         { $or: [{ $eq: [{ $ifNull: ['$expiresAt', null] }, null] }, { $gte: ['$expiresAt', now] }] },
         { $or: [{ $eq: [{ $ifNull: ['$used', null] }, null] }, { $eq: ['$unlimitedUse', true] }] },
+        { $ne: ['$status', RegInviteStatusType.used] },
       ],
     };
     const rows = await this.model.aggregate<{

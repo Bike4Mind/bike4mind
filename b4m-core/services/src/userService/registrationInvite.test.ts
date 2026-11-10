@@ -49,6 +49,19 @@ describe('resolveRegistrationInvite', () => {
     ).rejects.toBeInstanceOf(BadRequestError);
   });
 
+  it('refuses a code an admin set to used, unlimited or not', async () => {
+    await expect(
+      resolveRegistrationInvite(
+        'X',
+        EMAIL,
+        repo(invite({ unlimitedUse: true, status: RegInviteStatusType.used, used: new Date() }))
+      )
+    ).rejects.toThrow('This invite code has been disabled');
+    await expect(
+      resolveRegistrationInvite('X', EMAIL, repo(invite({ status: RegInviteStatusType.used })))
+    ).rejects.toThrow('Invite code already used');
+  });
+
   it('accepts a used unlimited code and an email bound to the same inbox in another case', async () => {
     const resolved = await resolveRegistrationInvite(
       'X',

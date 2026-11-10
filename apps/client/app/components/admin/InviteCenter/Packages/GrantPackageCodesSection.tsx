@@ -12,7 +12,12 @@ import {
   Typography,
 } from '@mui/joy';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { isGrantPackageExpired, type IGrantPackageDocument, type IRegInviteDocument } from '@bike4mind/common';
+import {
+  isGrantPackageExpired,
+  RegInviteStatusType,
+  type IGrantPackageDocument,
+  type IRegInviteDocument,
+} from '@bike4mind/common';
 import {
   GRANT_PACKAGES_QUERY_KEY,
   fetchGrantPackageLinks,
@@ -34,7 +39,9 @@ type Props = {
 
 /** Mirrors usageByGrantPackage in RegistrationInviteModel.ts and register(): unexpired, and unused unless unlimited. */
 const isCodeActive = (invite: IRegInviteDocument, now = new Date()) =>
-  (!invite.expiresAt || new Date(invite.expiresAt) >= now) && (!invite.used || invite.unlimitedUse === true);
+  (!invite.expiresAt || new Date(invite.expiresAt) >= now) &&
+  (!invite.used || invite.unlimitedUse === true) &&
+  invite.status !== RegInviteStatusType.used;
 
 const usesLabel = (invite: IRegInviteDocument) =>
   invite.unlimitedUse ? `${invite.usageHistory?.length ?? 0} (unlimited)` : invite.used ? 'Used' : 'Unused';

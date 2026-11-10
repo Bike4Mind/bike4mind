@@ -579,6 +579,19 @@ describe('registerUser', () => {
     await expect(registerUser(baseParams, mockAdapters)).rejects.toThrow('Invite code has expired');
   });
 
+  it('refuses an unlimited invite an admin set to used and creates no account', async () => {
+    mockAdapters.db.registrationInvites.findByCode.mockResolvedValue({
+      ...mockInvite,
+      unlimitedUse: true,
+      status: RegInviteStatusType.used,
+      used: new Date(),
+    });
+
+    await expect(registerUser(baseParams, mockAdapters)).rejects.toThrow('This invite code has been disabled');
+    expect(mockAdapters.db.users.create).not.toHaveBeenCalled();
+    expect(mockAdapters.db.registrationInvites.update).not.toHaveBeenCalled();
+  });
+
   it('allows reuse when invite is unlimited', async () => {
     const unlimitedInvite = {
       ...mockInvite,
@@ -905,7 +918,10 @@ describe('registerUser', () => {
         expect(created().signupInvite).toBeUndefined();
         mockAdapters.db.users.create.mockClear();
         mockAdapters.db.users.findByUsernameOrEmail.mockResolvedValue(null);
-        mockAdapters.db.registrationInvites.findByCode.mockResolvedValue(referralInvite({ unlimitedUse: true }));
+        // The first signup redeemed mockInvite in place (status used), so reopen the copy.
+        mockAdapters.db.registrationInvites.findByCode.mockResolvedValue(
+          referralInvite({ unlimitedUse: true, status: RegInviteStatusType.open })
+        );
         await registerUser(baseParams, mockAdapters);
         expect(created().signupInvite).toBeUndefined();
       });

@@ -45,12 +45,20 @@ describe('RegistrationInviteRepository.usageByGrantPackage', () => {
     expect(usage.has('other')).toBe(false);
   });
 
-  it('counts a waiting code as active, since redemption does not check status', async () => {
+  it('counts a waiting code as active, since redemption refuses only a used status', async () => {
     await invite({ grantPackageId: 'a', status: RegInviteStatusType.waiting, expiresAt: day(1) });
 
     const usage = await registrationInviteRepository.usageByGrantPackage(['a'], NOW);
 
     expect(usage.get('a')).toEqual({ codes: 1, activeCodes: 1, nextExpiry: day(1) });
+  });
+
+  it('does not count an unlimited code an admin set to used, since redemption refuses it', async () => {
+    await invite({ grantPackageId: 'a', status: RegInviteStatusType.used, unlimitedUse: true, expiresAt: day(1) });
+
+    const usage = await registrationInviteRepository.usageByGrantPackage(['a'], NOW);
+
+    expect(usage.get('a')).toEqual({ codes: 1, activeCodes: 0, nextExpiry: null });
   });
 
   it('counts a code expiring at exactly now as active, matching the redemption check', async () => {
