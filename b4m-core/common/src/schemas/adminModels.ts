@@ -152,10 +152,11 @@ export interface AdminModelRow {
   reasons: AdminModelReason[];
   /**
    * Its rank in the web picker's provider section (pickerProviderGroup): the access entry's, else the catalog's, else
-   * provisionalRank over the section's pickable models. Null for an unranked model the picker does not offer.
+   * provisionalRank over the section's pickable models. A provisional rank approximates the picker's, which first
+   * dedupes twins, dated snapshots and profiles per viewer. Null for an unranked model the picker does not offer.
    */
   rank: number | null;
-  /** Neither the access entry nor the catalog ranks it; `rank` is provisional, or null. */
+  /** Neither the access entry nor the catalog ranks it; `rank` is provisional (approximate), or null. */
   rankProvisional: boolean;
   /** `default`: an adapter literal or seed row ships it; `discovered`: only discovery knows it; `admin`: only operator rows. */
   origin: AdminModelSource;

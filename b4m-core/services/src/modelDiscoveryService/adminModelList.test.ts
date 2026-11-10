@@ -6,7 +6,7 @@ import {
   type LLMModelConfig,
   type ModelInfo,
 } from '@bike4mind/common';
-import { staticAdapterModels } from '@bike4mind/llm-adapters';
+import { REALTIME_VOICE_PRICING, staticAdapterModels } from '@bike4mind/llm-adapters';
 import { describe, expect, it } from 'vitest';
 import {
   FakeAdminSettingsRepository,
@@ -322,6 +322,26 @@ describe('buildAdminModelRows', () => {
       });
       expect(unexplained.reasons).toEqual([{ code: 'operator-disabled', message: 'Disabled by an admin' }]);
     });
+
+    it('reads the verdict under an operator disable from the newest row that states one', async () => {
+      const row = await rowFor('gpt-new', {
+        catalogRows: [
+          discovered('gpt-new', { autoDisabledReason: AWAITING_APPROVAL_REASON }),
+          catalogRow(
+            'gpt-new',
+            { autoDisabled: false },
+            { source: 'seed', ownedGroups: ['availability'], effectiveFrom: NOW }
+          ),
+          catalogRow(
+            'gpt-new',
+            { disabled: true },
+            { source: 'operator', ownedGroups: ['availability'], effectiveFrom: NOW, note: 'pause' }
+          ),
+        ],
+      });
+
+      expect(codes(row)).toEqual(['operator-disabled', 'manual-approval-required']);
+    });
   });
 
   describe('catalog-only models the merge drops', () => {
@@ -506,13 +526,25 @@ describe('buildAdminModelRows', () => {
       expect(catalogOnly.price).toBeNull();
     });
 
-    it('shows a realtime voice model its per-token row, which voice settlement bills', async () => {
-      const row = await rowFor('gpt-realtime-x', {
-        catalogRows: [discovered('gpt-realtime-x', { type: 'realtime-voice' })],
-        priceRows: [priceRow('gpt-realtime-x')],
-      });
+    it('shows a realtime voice price the way voice settlement reads it', async () => {
+      const voiceTier = { '0': { input: 4e-6, output: 16e-6, audio_input: 32e-6, audio_output: 64e-6 } };
+      const voice = (modelId: string, pricing: IModelPrice['pricing']) =>
+        rowFor(modelId, {
+          catalogRows: [discovered(modelId, { type: 'realtime-voice' })],
+          priceRows: [priceRow(modelId, { pricing })],
+        });
 
-      expect(row.price).toMatchObject({ source: 'row', unit: 'per_token', rowId: 'price-gpt-realtime-x' });
+      expect((await voice('gpt-realtime-x', voiceTier)).price).toMatchObject({
+        source: 'row',
+        unit: 'per_token',
+        rowId: 'price-gpt-realtime-x',
+      });
+      // A row without audio rates is skipped for the literal, or for nothing this build prices.
+      expect((await voice('gpt-realtime-1.5', tier(2e-6, 8e-6))).price).toEqual({
+        source: 'build',
+        pricing: { '0': REALTIME_VOICE_PRICING['gpt-realtime-1.5'] },
+      });
+      expect((await voice('gpt-realtime-x', tier(2e-6, 8e-6))).price).toBeNull();
     });
   });
 
@@ -669,6 +701,18 @@ describe('buildAdminModelRows', () => {
         adapterModels: [adapter({ id: 'gpt-x' as ModelInfo['id'], deprecationDate: '2026-08-01' })],
       });
       expect(deprecatedToday.status).toBe('retired');
+    });
+
+    it('reads a served model the provider retired as Retired, not as a provider disable', async () => {
+      const row = await rowFor('gpt-x', {
+        adapterModels: [adapter({ id: 'gpt-x' as ModelInfo['id'] })],
+        catalogRows: [
+          catalogRow('gpt-x', { lifecycle: { status: 'retired' } }, { ownedGroups: ['lifecycle', 'availability'] }),
+        ],
+      });
+
+      expect(row).toMatchObject({ status: 'retired', reasons: [] });
+      expect(filterAdminModels([row], { view: 'retiring' }).map(candidate => candidate.id)).toEqual(['gpt-x']);
     });
 
     it('shows a sunset catalog-only model as Retired with no reasons', async () => {
