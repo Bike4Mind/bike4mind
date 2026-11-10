@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => {
     const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign(
       (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'POST']?.(req, res),
@@ -386,7 +386,7 @@ describe('POST /api/admin/users/[userId]/grant-subscription - approval gate', ()
       expect.objectContaining({
         action: 'user.subscription.grant',
         requiredPermission: 'credits:adjust',
-        requiresFullAdmin: true,
+        requiresFullAdmin: false,
         params: expect.objectContaining({ userId: 'user-1', seats: 5, creditsAtRequest: 5000 }),
       }),
       POLICY

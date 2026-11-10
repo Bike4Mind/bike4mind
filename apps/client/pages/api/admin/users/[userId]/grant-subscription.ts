@@ -1,6 +1,5 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 import { requestApproval } from '@server/admin/approvals/service';
 import { creditGrantNeedsApproval } from '@server/admin/creditGrants/gate';
@@ -10,7 +9,8 @@ import {
   grantSubscriptionCredits,
   validateGrantSubscription,
 } from '@server/admin/creditGrants/grantSubscription';
-import { baseApi } from '@server/middlewares/baseApi';
+import { assertDelegateCanCreditUser } from '@server/admin/creditGrants/delegateTargets';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { parseAdminActionReason } from '@bike4mind/server-utils/utils/adminAudit';
 import type { Request } from 'express';
@@ -19,12 +19,8 @@ interface RequestQuery {
   userId: string;
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
+const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions: { POST: 'credits:adjust' } }).post(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const { userId } = req.query as RequestQuery;
     const teamPlan = await getTeamPlanSettings();
     const parsed = GrantSubscriptionSchema.parse(req.body);
@@ -39,6 +35,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     const gate = await creditGrantNeedsApproval(credits, req.user.id);
     if (gate.policy) {
       const user = await validateGrantSubscription(params, teamPlan);
+      await assertDelegateCanCreditUser(req.user, user.id, 'grant a subscription to');
       const pending = await requestApproval(
         request,
         {
@@ -47,7 +44,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
           summary: `Grant ${params.subscriptionType} subscription with ${credits} credits to ${user.email ?? user.username}`,
           reason,
           requiredPermission: 'credits:adjust',
-          requiresFullAdmin: true,
+          requiresFullAdmin: false,
         },
         gate.policy
       );
