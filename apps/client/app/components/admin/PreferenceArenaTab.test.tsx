@@ -13,28 +13,34 @@ const stats: ArenaStats = {
   winRates: [{ taskType: 'qa', modelId: 'model-one', wins: 3, losses: 1, ties: 0 }],
 };
 
-const state = vi.hoisted(() => ({ setActive: vi.fn() }));
+const pair = {
+  id: 'pair1',
+  prompt: 'Explain tides',
+  taskType: 'qa',
+  source: 'synthetic',
+  active: true,
+  isGold: false,
+  modelIds: ['model-one', 'model-two'],
+  createdAt: '2026-01-01T00:00:00.000Z',
+};
+
+const state = vi.hoisted(() => ({
+  setActive: vi.fn(),
+  stats: undefined as ArenaStats | undefined,
+  statsPending: false,
+  pairs: [] as (typeof pair)[],
+}));
 
 vi.mock('@client/app/hooks/data/preferenceArena', () => ({
-  useAdminArenaStats: () => ({ data: stats, isPending: false, isError: false, error: null, refetch: vi.fn() }),
+  useAdminArenaStats: () => ({
+    data: state.stats,
+    isPending: state.statsPending,
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+  }),
   useAdminArenaPairs: () => ({
-    data: {
-      rows: [
-        {
-          id: 'pair1',
-          prompt: 'Explain tides',
-          taskType: 'qa',
-          source: 'synthetic',
-          active: true,
-          isGold: false,
-          modelIds: ['model-one', 'model-two'],
-          createdAt: '2026-01-01T00:00:00.000Z',
-        },
-      ],
-      page: 1,
-      limit: 25,
-      total: 1,
-    },
+    data: { rows: state.pairs, page: 1, limit: 25, total: state.pairs.length },
     isPending: false,
     isError: false,
     error: null,
@@ -56,6 +62,15 @@ const renderTab = () =>
 describe('PreferenceArenaTab', () => {
   beforeEach(() => {
     state.setActive.mockReset();
+    state.stats = stats;
+    state.statsPending = false;
+    state.pairs = [pair];
+  });
+
+  it('opens with the page header as the first region of the page', () => {
+    renderTab();
+    const root = screen.getByTestId('preference-arena-tab');
+    expect(root.firstElementChild).toBe(screen.getByTestId('admin-page-header'));
   });
 
   it('renders the totals and a win-rate row', () => {
@@ -76,5 +91,26 @@ describe('PreferenceArenaTab', () => {
     expect(toggle).toBeChecked();
     fireEvent.click(toggle);
     expect(state.setActive).toHaveBeenCalledWith({ id: 'pair1', active: false }, expect.any(Object));
+  });
+
+  it('puts an empty state inside each card when there are no votes or pairs', () => {
+    state.stats = { ...stats, rejections: {}, winRates: [] };
+    state.pairs = [];
+    renderTab();
+    const emptyIn = (card: string) => within(screen.getByTestId(card)).getByTestId('admin-empty-state');
+    expect(emptyIn('arena-rejections-card')).toHaveTextContent('No rejected votes');
+    expect(emptyIn('arena-winrates-card')).toHaveTextContent(
+      'No votes yetWin rates appear here once users compare two answers in the arena.'
+    );
+    expect(emptyIn('arena-pairs-card')).toHaveTextContent('No pairs yetImport pairs below to start the arena.');
+  });
+
+  it('shows a loading state, not the empty one, while the totals load', () => {
+    state.stats = undefined;
+    state.statsPending = true;
+    renderTab();
+    const rejections = screen.getByTestId('arena-rejections-card');
+    expect(within(rejections).getByTestId('arena-rejections-loading')).toHaveTextContent('Loading rejected votes');
+    expect(within(rejections).queryByTestId('admin-empty-state')).toBeNull();
   });
 });

@@ -31,7 +31,7 @@ export function useArenaVote() {
   return useMutation<ArenaVoteResponse, Error, ArenaVoteRequest>({
     mutationFn: async request => (await api.post<ArenaVoteResponse>('/api/preference-arena/vote', request)).data,
     onSuccess: result => {
-      if (result.creditsAwarded > 0) {
+      if (result.creditsAwarded > 0 && !result.queued) {
         queryClient.invalidateQueries({ queryKey: CREDITS_BALANCE_KEY });
         queryClient.invalidateQueries({ queryKey: ['credit-transactions'] });
       }

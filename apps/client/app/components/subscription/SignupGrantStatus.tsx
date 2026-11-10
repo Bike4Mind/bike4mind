@@ -12,6 +12,7 @@ export default function SignupGrantStatus() {
   const { currentUser } = useUser();
   const { dailyCredits, dripCap } = useSignupGrantSchedule();
   const minActiveSeconds = useGetSettingsValue('signupGrantActivityMinActiveSeconds');
+  const paymentHoldHours = useGetSettingsValue('signupUnlockPaymentHoldHours');
   const grant = currentUser?.signupGrant;
   if (currentUser?.signupGrantHeldReason === 'budget_exhausted' && (!grant || grant.stage === 'pending_email')) {
     return (
@@ -42,7 +43,7 @@ export default function SignupGrantStatus() {
       )}
       {remaining > 0 && !grant.heldUnlock && (
         <Typography level="body-sm" data-testid="signup-grant-unlock-paths">
-          {unlockPathsCopy(advertisedDripCredits({ dailyCredits, dripCap, grant }), minActiveSeconds)}
+          {unlockPathsCopy(advertisedDripCredits({ dailyCredits, dripCap, grant }), minActiveSeconds, paymentHoldHours)}
         </Typography>
       )}
     </Stack>

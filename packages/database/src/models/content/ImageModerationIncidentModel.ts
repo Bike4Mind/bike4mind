@@ -127,8 +127,8 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
   }
 
   /** Number of unreviewed incidents (reviewStatus absent or 'pending_review'). */
-  async countPendingReview(): Promise<number> {
-    return this.model.countDocuments({ reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES } });
+  async countPendingReview(options: { limit?: number } = {}): Promise<number> {
+    return this.model.countDocuments({ reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES } }, { limit: options.limit });
   }
 
   /**

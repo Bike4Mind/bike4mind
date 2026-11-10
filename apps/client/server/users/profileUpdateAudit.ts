@@ -15,6 +15,7 @@ const EXCLUDED_FIELDS = new Set([
   'creditDelta',
   'creditReason',
   'isBanned',
+  'suspensionReasonCategory',
   'isModerated',
   'statusChangeReason',
   'throttleTier',

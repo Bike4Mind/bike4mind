@@ -1,7 +1,27 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { addGlowLights, MAX_GLOW_LIGHTS, toneMapped, untoneMapped } from './modelStage';
+import {
+  addGlowLights,
+  MAX_GLOW_LIGHTS,
+  MAX_VIEWPORT_PIXEL_RATIO,
+  toneMapped,
+  untoneMapped,
+  viewportPixelRatio,
+} from './modelStage';
+
+describe('viewportPixelRatio', () => {
+  it('caps a retina display and passes a standard one through', () => {
+    expect(viewportPixelRatio(3)).toBe(MAX_VIEWPORT_PIXEL_RATIO);
+    expect(viewportPixelRatio(2)).toBe(MAX_VIEWPORT_PIXEL_RATIO);
+    expect(viewportPixelRatio(1)).toBe(1);
+    expect(viewportPixelRatio(1.25)).toBe(1.25);
+  });
+
+  it('falls back to 1 when the ratio is missing', () => {
+    expect(viewportPixelRatio(0)).toBe(1);
+  });
+});
 
 describe('untoneMapped', () => {
   it.each(['#f4f5f7', '#1b1e23', '#808080'])('comes back out of the tone mapping as %s', hex => {

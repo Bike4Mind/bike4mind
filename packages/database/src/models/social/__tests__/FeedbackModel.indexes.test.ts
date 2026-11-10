@@ -35,6 +35,7 @@ describe('FeedbackModel indexes', () => {
     'feedback_org_subject_createdAt',
     'feedback_questId_createdAt',
     'feedback_sessionId_createdAt',
+    'feedback_status_createdAt',
     'feedback_userId_createdAt',
   ];
 

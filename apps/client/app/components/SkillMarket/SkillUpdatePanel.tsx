@@ -86,6 +86,11 @@ const SkillUpdatePanel: FC<{ skill: ISkillWithSharing }> = ({ skill }) => {
           before: (skill.claudeCodeAllowedTools ?? []).join(', '),
           after: (latest.snapshot.claudeCodeAllowedTools ?? []).join(', '),
         },
+        {
+          label: 'Claude Code model',
+          before: skill.claudeCodeModel ?? '',
+          after: latest.snapshot.claudeCodeModel ?? '',
+        },
         { label: 'Description', before: skill.description ?? '', after: latest.snapshot.description },
         { label: 'Argument hint', before: skill.argumentHint ?? '', after: latest.snapshot.argumentHint ?? '' },
       ].filter(c => c.before !== c.after)

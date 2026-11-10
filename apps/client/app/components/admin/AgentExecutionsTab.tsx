@@ -25,6 +25,7 @@ import {
   useStuckAgentExecutions,
   type StuckExecutionItem,
 } from '@client/app/hooks/data/stuckAgentExecutions';
+import { AdminPermissionAction } from './shared/MissingPermission';
 import { ACTIVE_AGENT_EXECUTION_STATUSES, type AgentExecutionStatus } from '@client/app/stores/useAgentExecutionStore';
 
 // Both `awaiting_subagent` and `awaiting_dag_children` are excluded: healthy
@@ -176,15 +177,19 @@ const AgentExecutionsTab: React.FC = () => {
               data-testid="stuck-agent-executions-user-id"
             />
           </FormControl>
-          <Button
-            color="danger"
-            startDecorator={<CleaningServicesIcon />}
-            disabled={selected.size === 0 || cleanup.isPending}
-            onClick={handleCleanup}
-            data-testid="stuck-agent-executions-cleanup-btn"
-          >
-            Mark abandoned ({selected.size})
-          </Button>
+          <AdminPermissionAction requirement="settings:manage">
+            {disabled => (
+              <Button
+                color="danger"
+                startDecorator={<CleaningServicesIcon />}
+                disabled={disabled || selected.size === 0 || cleanup.isPending}
+                onClick={handleCleanup}
+                data-testid="stuck-agent-executions-cleanup-btn"
+              >
+                Mark abandoned ({selected.size})
+              </Button>
+            )}
+          </AdminPermissionAction>
         </Stack>
       </Sheet>
 

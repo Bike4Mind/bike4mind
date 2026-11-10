@@ -1,4 +1,5 @@
-import { Input, Stack } from '@mui/joy';
+import type { ReactNode } from 'react';
+import { Input, Stack, Typography } from '@mui/joy';
 import SearchIcon from '@mui/icons-material/Search';
 import type { AdminListState } from './useAdminListUrlState';
 import { FilterChip } from './FilterChip';
@@ -36,6 +37,34 @@ export function AdminSearchInput({
       sx={{ ...adminFocus, flex: '1 1 16rem', minWidth: '12rem', maxWidth: '26rem', minHeight: 34, fontSize: 13 }}
       onChange={event => onChange(event.target.value)}
     />
+  );
+}
+
+/**
+ * A filter row for controls FilterBar has no slot for, such as date inputs: the same wrapping 8 px
+ * row, with every input at one 32 px height so the row still reads as one toolbar when it wraps.
+ */
+export function FilterToolbar({ children, 'data-testid': testId }: { children: ReactNode; 'data-testid': string }) {
+  return (
+    <Stack
+      direction="row"
+      flexWrap="wrap"
+      alignItems="center"
+      gap={1}
+      data-testid={testId}
+      sx={{ ...adminFocusScope, '& .MuiInput-root': { minHeight: 32 } }}
+    >
+      {children}
+    </Stack>
+  );
+}
+
+/** The muted label in a toolbar input's start decorator, such as "From" on a date input. */
+export function FilterInputLabel({ children }: { children: ReactNode }) {
+  return (
+    <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
+      {children}
+    </Typography>
   );
 }
 

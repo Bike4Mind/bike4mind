@@ -152,6 +152,7 @@ export interface SkillUploadFields {
   body: string;
   argumentHint?: string;
   claudeCodeAllowedTools?: string[];
+  claudeCodeModel?: string;
   disableModelInvocation?: boolean;
   /** A SKILL.md folder's scripts/ and references/ text files, sorted by path. */
   files?: ISkillFile[];

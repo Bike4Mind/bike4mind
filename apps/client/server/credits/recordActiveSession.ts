@@ -40,7 +40,10 @@ export async function recordHeartbeat(userId: string, now: Date = new Date()): P
   if (!(limits.dailyCredits > 0)) return result;
   const requiredSeconds = await resolveRequiredActiveSeconds();
   result.requiredSeconds = requiredSeconds;
-  if (signupGrantDripRemaining(grant, limits.dripCap) <= 0) return { ...result, spent: true };
+  if (signupGrantDripRemaining(grant, limits.dripCap) <= 0) {
+    await userService.alertIfDripCapDefault(signupProtection, day, limits);
+    return { ...result, spent: true };
+  }
 
   const prior = grant.activity;
   const samePeriod = prior?.day === day && prior.period === period.key;

@@ -977,12 +977,19 @@ describe('chunkFile captures a document date', () => {
 
     // The container open is what bounds the XML before mammoth inflates it, so a container it
     // cannot open is never handed to mammoth (which reads the zip with the same library anyway).
-    it('fails a DOCX whose container cannot be opened rather than parsing it unbounded', async () => {
+    // Refused rather than thrown: the open fails identically on every retry.
+    it('refuses a DOCX whose container cannot be opened rather than parsing it unbounded', async () => {
       const docx = await buildDatedDocx(
         '<dcterms:created xsi:type="dcterms:W3CDTF">2019-03-04T09:15:00Z</dcterms:created>'
       );
       jsZipLoadFailure.message = 'zip end of central directory not found';
-      await expect(chunker.chunkFile(docx, DOCX_MIME)).rejects.toThrow('zip end of central directory not found');
+      expect(await chunker.chunkFile(docx, DOCX_MIME)).toEqual([]);
+      expect(chunker.getExtractedText()).toBeUndefined();
+      expect(chunker.getExtractionRefusal()).toEqual({
+        reason: 'unopenableContainer',
+        format: 'DOCX',
+        detail: 'zip end of central directory not found',
+      });
     });
 
     // Mirrors the PPTX case below: the container opens fine (the zip headers are intact), but
@@ -1129,6 +1136,11 @@ describe('chunkFile captures a document date', () => {
       const chunks = await chunker.chunkFile(xlsx, XLSX_MIME);
       expect(chunks).toEqual([]);
       expect(chunker.getExtractedText()).toBeUndefined();
+      expect(chunker.getExtractionRefusal()).toEqual({
+        reason: 'unopenableContainer',
+        format: 'XLSX',
+        detail: 'zip end of central directory not found',
+      });
     });
 
     /**
@@ -1427,6 +1439,7 @@ describe('extraction output caps', () => {
       const chunks = await chunker.chunkFile(docx, DOCX_MIME);
       expect(chunks).toEqual([]);
       expect(chunker.getExtractedText()).toBeUndefined();
+      expect(chunker.getExtractionRefusal()).toMatchObject({ reason: 'decompressedSizeExceeded', format: 'DOCX' });
     }, 60_000);
 
     it('charges every entry against one shared budget, not each against its own', async () => {
@@ -1440,7 +1453,15 @@ describe('extraction output caps', () => {
     it('chunks a DOCX whose XML fits the budget', async () => {
       const chunks = await chunker.chunkFile(await buildDocx('BODY_MARKER'), DOCX_MIME);
       expect(allText(chunks)).toContain('BODY_MARKER');
+      expect(chunker.getExtractionRefusal()).toBeUndefined();
     });
+
+    it('clears a refusal from the previous call', async () => {
+      await chunker.chunkFile(await buildDocx('BODY_MARKER', { 'word/media/bulk.bin': OVER_BUDGET_BULK }), DOCX_MIME);
+      expect(chunker.getExtractionRefusal()).toBeDefined();
+      await chunker.chunkFile(await buildDocx('BODY_MARKER'), DOCX_MIME);
+      expect(chunker.getExtractionRefusal()).toBeUndefined();
+    }, 60_000);
 
     it('truncates the extracted text at the character cap', async () => {
       const docx = await buildDocx(`HEAD_MARKER ${'word '.repeat(450_000)} TAIL_MARKER`);
@@ -1458,6 +1479,7 @@ describe('extraction output caps', () => {
       const xlsx = Buffer.from(await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }));
       const chunks = await chunker.chunkFile(xlsx, XLSX_MIME);
       expect(chunks).toEqual([]);
+      expect(chunker.getExtractionRefusal()).toMatchObject({ reason: 'decompressedSizeExceeded', format: 'XLSX' });
     }, 60_000);
 
     it('refuses a PK-led workbook the measuring reader rejects, rather than letting SheetJS open it', async () => {
@@ -1466,6 +1488,7 @@ describe('extraction output caps', () => {
       const xlsx = await buildXlsx([['CELL_MARKER']]);
       const mangled = Buffer.from(xlsx.toString('latin1').split('PK\x03\x04').join('PK\x01\x01'), 'latin1');
       expect(await chunker.chunkFile(mangled, XLSX_MIME)).toEqual([]);
+      expect(chunker.getExtractionRefusal()).toMatchObject({ reason: 'unopenableContainer', format: 'XLSX' });
     });
 
     it('hands a non-zip workbook to SheetJS without opening it as a zip', async () => {

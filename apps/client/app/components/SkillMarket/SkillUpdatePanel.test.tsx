@@ -88,6 +88,20 @@ describe('SkillUpdatePanel version guard', () => {
     );
   });
 
+  it('shows a change to the Claude Code model before the update is applied', () => {
+    h.detail.data = {
+      version: {
+        ...latestDetail.version,
+        snapshot: { ...latestDetail.version.snapshot, claudeCodeModel: 'haiku' },
+      },
+    };
+    renderPanel();
+    fireEvent.click(screen.getByTestId('skill-market-show-changes'));
+    expect(screen.getByTestId('skill-market-update-field-changes')).toHaveTextContent(
+      'Claude Code model: (none) -> haiku'
+    );
+  });
+
   it('sends the loaded version id when saving as a new copy', async () => {
     h.detail.data = latestDetail;
     renderPanel();

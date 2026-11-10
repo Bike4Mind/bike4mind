@@ -468,6 +468,7 @@ export const SettingKeySchema = z.enum([
   'usagePatternSignalsEnabled',
   'usagePatternSignalsConfig',
   'abuseAssessmentEnabled',
+  'suspensionNoticeEmailEnabled',
   'abuseAssessmentConfig',
   'autoContainmentConfig',
   'thinkingVisibilityFree',
@@ -2845,6 +2846,13 @@ export const API_SERVICE_GROUPS = {
       { key: 'usagePatternSignalsConfig', order: 2 },
     ],
   },
+  SUSPENSION_NOTICE: {
+    id: 'suspensionNotice',
+    name: 'Suspension Notice',
+    description: 'How a suspended user is told. The sign-in, in-app and API notices always show; email is optional',
+    icon: 'Security',
+    settings: [{ key: 'suspensionNoticeEmailEnabled', order: 1 }],
+  },
   ABUSE_ASSESSMENT: {
     id: 'abuseAssessmentService',
     name: 'Advisory Abuse Assessment',
@@ -4780,6 +4788,16 @@ export const settingsMap = {
     dependsOn: 'usagePatternSignalsEnabled',
     schema: UsagePatternSignalsConfigSchema,
   }),
+  suspensionNoticeEmailEnabled: makeBooleanSetting({
+    key: 'suspensionNoticeEmailEnabled',
+    name: 'Email Suspended Users',
+    defaultValue: false,
+    description:
+      'Also email the account owner when an admin suspends an account from the user profile, with the reason category and how to appeal. Off by default: the sign-in page, the app and the API already show the notice, and mass mail to throwaway inboxes hurts sender reputation. Never names what flagged the account.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.SUSPENSION_NOTICE.id,
+    order: 1,
+  }),
   abuseAssessmentEnabled: makeBooleanSetting({
     key: 'abuseAssessmentEnabled',
     name: 'Advisory Abuse Assessment',
@@ -5180,6 +5198,7 @@ export const settingsMap = {
     min: 0,
     max: 720,
     int: true,
+    userReadable: true,
     description:
       'Hours a subscription, credit pack or card payment must settle before it releases the locked signup credits. A dispute, refund or early fraud warning in that window cancels the release. Zero releases them on payment.',
     group: API_SERVICE_GROUPS.CREDITS.id,

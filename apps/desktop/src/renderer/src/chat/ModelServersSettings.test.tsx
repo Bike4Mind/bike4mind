@@ -420,6 +420,44 @@ describe('ModelServersSettings SSH servers', () => {
   });
 });
 
+describe('ModelServersSettings unusable servers', () => {
+  const refused = {
+    state: 'refused' as const,
+    version: null,
+    latencyMs: null,
+    checkedAt: null,
+    error: 'Its saved SSH port is not a number from 1 to 65535. Remove this server and add it again.',
+  };
+  const ssh = (overrides: Partial<ModelServerView>) =>
+    server({
+      kind: 'openai-compatible',
+      transport: 'ssh',
+      address: 'me@gpu-box',
+      auth: { type: 'bearer' },
+      health: refused,
+      ...overrides,
+    });
+  const disabled = (id: string) =>
+    element(id).hasAttribute('disabled') || element(id).getAttribute('aria-disabled') === 'true';
+  const settings = [
+    'model-servers-access-select',
+    'model-servers-kind-select',
+    'model-servers-credentials-btn',
+    'model-servers-specs-btn',
+  ];
+
+  it.each([
+    ['an unusable server', ssh({ unusable: true }), true],
+    ['a usable SSH server that refuses', ssh({ port: 8080 }), false],
+  ])('on %s, sets the controls that would fail apart and keeps Remove', async (_, saved, locked) => {
+    await mount([saved]);
+    expect(settings.map(disabled)).toEqual(settings.map(() => locked));
+    expect(disabled('model-servers-remove-btn')).toBe(false);
+    await click('model-servers-remove-btn');
+    expect(disabled('model-servers-remove-confirm-btn')).toBe(false);
+  });
+});
+
 describe('ModelServersSettings credentials form', () => {
   const saveButton = () => element<HTMLButtonElement>('model-servers-credentials-save-btn');
 

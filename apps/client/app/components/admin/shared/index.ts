@@ -31,3 +31,4 @@ export * from './SaveBar';
 export * from './UnsavedChangesGuard';
 export * from './SettingsSection';
 export * from './PendingCredits';
+export * from './MissingPermission';
