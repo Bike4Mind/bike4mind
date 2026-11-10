@@ -277,6 +277,22 @@ describe('shell approval in a project with a large node_modules', () => {
     git(yrepo, 'add', '-A');
     git(yrepo, 'commit', '-qm', 'evil');
     git(yrepo, 'checkout', '-q', 'main');
+    // xrepo tracks folders that become bare repositories once a command adds the file git needs, each with an alias.
+    const evilConfig = '[alias]\n\tst = !touch MARK\n[core]\n\tbare = true\n';
+    const xrepo = await repository('xrepo', {
+      'src/b.ts': 'b',
+      'head.txt': 'ref: refs/heads/main\n',
+      'cfgdir/config': evilConfig,
+      'cfgdir/objects/info/packs': '',
+      'cfgdir/refs/heads/.keep': '',
+      'cfgdir3/HEAD': 'ref: refs/heads/main\n',
+      'cfgdir3/config': evilConfig,
+      'bin/git-st': '#!/bin/sh\ntouch MARK\n',
+    });
+    git(xrepo, 'config', 'alias.st', 'status');
+    await chmod(join(xrepo, 'bin', 'git-st'), 0o755);
+    await symlink(join(xrepo, '.git', 'config'), join(xrepo, 'cfglink'));
+    await symlink(join(xrepo, '.git'), join(xrepo, 'gitlink'));
     // dotfiles tracks a gitconfig its branch `evil` changes, which a test links the user gitconfig to.
     const dotfiles = await repository('dotfiles', { gitconfig: '[alias]\n\tdst = status\n' });
     git(dotfiles, 'checkout', '-qb', 'evil');
@@ -1471,11 +1487,16 @@ describe('shell approval in a project with a large node_modules', () => {
     'git checkout -b feat && git st',
     'git stash && git st',
     'git -C emb st',
-    'cd emb && cp -r ../src/. .',
-    'cd src && cp -r ../emb/. .',
   ])('runs %s (in proj/yrepo) unasked, as nothing before the alias writes config git reads it from', async command => {
     expect(await judge(command, 'yrepo')).toMatchObject({ auto: true, full: true });
   });
+
+  it.each(['cd emb && cp -r ../src/. .', 'cd src && cp -r ../emb/. .'])(
+    'runs %s (in proj/yrepo) unasked, as it copies files and reads no alias',
+    async command => {
+      expect(await judge(command, 'yrepo')).toMatchObject({ auto: true, full: true });
+    }
+  );
 
   it.each(["true && bash -c 'echo x'", "true && sh -c 'echo x; ls'"])(
     'runs %s && git st (in proj/yrepo) in full mode, as the shell string only reads, and asks in auto only for the shell',
@@ -1486,8 +1507,101 @@ describe('shell approval in a project with a large node_modules', () => {
     }
   );
 
+  it('asks in full for a shell string that runs git, as it may write the config the alias is read from', async () => {
+    expect(await judge("true && bash -c 'git status' && git st", 'yrepo')).toMatchObject({ full: false });
+    expect(await judge("true && bash -c 'ls' && git st", 'yrepo')).toMatchObject({ full: true });
+  });
+
+  it.each([
+    [
+      "mkdir -p evil/objects evil/refs && echo 'ref: refs/heads/main' > src/HEAD && echo ../evil > src/commondir && printf '[alias]\\n\\tst = !touch MARK\\n' > evil/config && git -C src st",
+    ],
+    ["echo 'ref: refs/heads/main' > cfgdir/HEAD && git -C cfgdir st"],
+    ['cp head.txt cfgdir/HEAD && git -C cfgdir st'],
+    ['mkdir -p cfgdir3/objects cfgdir3/refs && git -C cfgdir3 st'],
+    ['mkdir cfgdir3/objects cfgdir3/refs && git -C cfgdir3 st'],
+    ['touch cfgdir3/objects && git -C cfgdir3 st'],
+    ['cd cfgdir3 && mkdir -p objects refs && git st'],
+    ['echo x > src/commondir && git st'],
+    ["printf '[alias]\\n\\tst = !touch MARK\\n' >> cfglink && git st"],
+    ["printf '[alias]\\n\\tst = !touch MARK\\n' >> gitlink/config && git st"],
+    ['truncate -s 0 .git/config && git st'],
+    ['truncate -s0 .git/config && git st'],
+    ['truncate --size=0 .git/config && git st'],
+    ['git config extensions.worktreeConfig true && git st'],
+    ['git -c extensions.worktreeConfig=true st'],
+    ["python3 <<< \"open('.git/config','a').write('x')\" && git st"],
+    ["echo \"require('fs').appendFileSync('.git/config','x')\" | node && git st"],
+    ["python3 - <<'EOF'\nopen('.git/config','a').write('x')\nEOF\ngit st"],
+    ['python3 - <<< "print(1)" && git st'],
+  ])('asks in every mode for %s (in proj/xrepo), which may change the config its alias is read from', async command => {
+    expect(await judge(command, 'xrepo')).toMatchObject(asks);
+  });
+
+  it.each([
+    'git add -A && git ci',
+    'echo x > out.txt && git st',
+    'git stash && git st',
+    'git checkout -b feat && git st',
+    'npm install && git st',
+    'pnpm build && git st',
+    'npx prettier --write src && git st',
+    'git config user.email a@b.c && git st',
+    'git -c color.ui=always st',
+    'export PATH="$(pnpm bin):$PATH"; git status',
+    'git switch -c x',
+    'git rm --cached a.ts',
+    'git pull && git st',
+    'mkdir -p build/objects build/refs && git st',
+    'touch HEAD2 config2 && git st',
+    'mkdir -p x && git st',
+    'truncate -s 0 out.txt && git st',
+  ])('runs %s (in proj/xrepo) unasked, as nothing it does reaches the config git reads', async command => {
+    expect(await judge(command, 'xrepo')).toMatchObject({ auto: true, full: true });
+  });
+
+  it.each(['bin', join('.', 'bin')])(
+    'asks in every mode for git st with a git-st program in PATH entry "%s", as git runs it before any alias',
+    async entry => {
+      const before = process.env.PATH;
+      vi.stubEnv('PATH', `${entry}:${before}`);
+      try {
+        expect(await judge('git st', 'xrepo')).toMatchObject(asks);
+      } finally {
+        vi.stubEnv('PATH', before);
+      }
+    }
+  );
+
+  it('asks in every mode for git st with a git-st program in a granted-root PATH entry', async () => {
+    const before = process.env.PATH;
+    vi.stubEnv('PATH', `${join(proj, 'xrepo', 'bin')}:${before}`);
+    try {
+      expect(await judge('git st', 'xrepo')).toMatchObject(asks);
+      expect(await judge('git stash', 'xrepo')).toMatchObject({ full: true });
+    } finally {
+      vi.stubEnv('PATH', before);
+    }
+  });
+
+  it.each([
+    'git $O st',
+    'git "$O" st',
+    'git ${O} st',
+    'git -C . "$O" st',
+    'git -c "$X" st',
+    'git -c $X st',
+    'git --config-env=$X st',
+    'git --git-dir=$X st',
+    'git $(echo x) st',
+    'git `echo x` st',
+    'git -c alias.$X=y st',
+  ])('asks in every mode for %s (in proj/xrepo), as git may read another alias than the scan does', async command => {
+    expect(await judge(command, 'xrepo')).toMatchObject(asks);
+  });
+
   it.each(['git push -u origin HEAD', 'git remote add up https://example.invalid/r'])(
-    'runs %s && git st (in proj/yrepo) in full mode, and asks in auto only as the first sends to a remote',
+    'runs %s && git st (in proj/yrepo) in full mode, and asks in auto only as the first command alone does',
     async first => {
       const alone = await judge(first, 'yrepo');
       expect(alone).toMatchObject({ auto: false, full: true });
