@@ -276,6 +276,14 @@ export class CreditTransactionRepository
     return marked ?? this.model.findOne({ stripePaymentIntentId: paymentIntentId, type: 'purchase' });
   }
 
+  async rekeyTransaction(fromTransactionId: string, toTransactionId: string) {
+    return this.model.findOneAndUpdate(
+      { transactionId: fromTransactionId },
+      { $set: { transactionId: toTransactionId } },
+      { new: true }
+    );
+  }
+
   /** Any completed purchase of this owner's that was never refunded or lost to a dispute. */
   async findUnreversedPurchase(
     ownerId: string,
