@@ -209,6 +209,8 @@ export const shadowDetectionBulkVerdictResponseSchema = z.object({
   conflicts: z.array(shadowDetectionItemSchema),
   /** Ids that no longer exist (e.g. purged with a deleted account). */
   missing: z.array(z.string()),
+  /** Ids whose write errored; they may or may not have been graded. */
+  failed: z.array(z.string()),
 });
 export type ShadowDetectionBulkVerdictResponse = z.infer<typeof shadowDetectionBulkVerdictResponseSchema>;
 

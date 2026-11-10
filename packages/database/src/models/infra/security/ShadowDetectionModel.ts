@@ -217,6 +217,8 @@ export type BulkShadowDetectionVerdictResult = {
   graded: ShadowDetectionItem[];
   conflicts: ShadowDetectionItem[];
   missing: string[];
+  /** Ids whose write threw; their state is unknown, so they are neither graded nor reported as conflicts. */
+  failed: string[];
 };
 
 export type AccountStatusVerdictInput = {
@@ -549,12 +551,16 @@ class ShadowDetectionRepository {
     reason: string;
     reviewerId: string;
   }): Promise<BulkShadowDetectionVerdictResult> {
-    const result: BulkShadowDetectionVerdictResult = { graded: [], conflicts: [], missing: [] };
+    const result: BulkShadowDetectionVerdictResult = { graded: [], conflicts: [], missing: [], failed: [] };
     for (const { id, expectedRevision } of input.items) {
-      const outcome = await this.addVerdict({ ...input, id, expectedRevision });
-      if (outcome.status === 'updated') result.graded.push(outcome.item);
-      else if (outcome.status === 'conflict') result.conflicts.push(outcome.item);
-      else result.missing.push(id);
+      try {
+        const outcome = await this.addVerdict({ ...input, id, expectedRevision });
+        if (outcome.status === 'updated') result.graded.push(outcome.item);
+        else if (outcome.status === 'conflict') result.conflicts.push(outcome.item);
+        else result.missing.push(id);
+      } catch {
+        result.failed.push(id);
+      }
     }
     return result;
   }

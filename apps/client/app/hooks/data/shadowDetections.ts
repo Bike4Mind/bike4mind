@@ -81,6 +81,7 @@ export type ShadowDetectionBulkVerdictResult = {
   graded: ShadowDetectionRow[];
   conflicts: ShadowDetectionRow[];
   missing: string[];
+  failed: string[];
 };
 
 export function useShadowDetectionBulkVerdict() {

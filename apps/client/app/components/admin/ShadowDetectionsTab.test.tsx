@@ -597,7 +597,7 @@ describe('ShadowDetectionsTab', () => {
 
     it('grades the selected rows at the revisions they were selected at, then reports the outcome', async () => {
       twoRows();
-      m.bulkMutateAsync.mockResolvedValue({ graded: [detection()], conflicts: [], missing: [] });
+      m.bulkMutateAsync.mockResolvedValue({ graded: [detection()], conflicts: [], missing: [], failed: [] });
       renderTab();
       selectRow(OTHER_ID);
 
@@ -621,6 +621,7 @@ describe('ShadowDetectionsTab', () => {
         graded: [detection()],
         conflicts: [detection({ id: OTHER_ID, verdict: 'confirmed_abuse' })],
         missing: [],
+        failed: [],
       });
       renderTab();
       selectRow(DETECTION_ID);

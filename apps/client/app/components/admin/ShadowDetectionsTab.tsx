@@ -584,6 +584,7 @@ const bulkOutcomeMessage = (result: ShadowDetectionBulkVerdictResult): string =>
     );
   }
   if (result.missing.length > 0) parts.push(`${countOf(result.missing.length, 'detection')} no longer exist.`);
+  if (result.failed.length > 0) parts.push(`${result.failed.length} could not be graded; try them again.`);
   return parts.join(' ');
 };
 
@@ -900,7 +901,7 @@ export const ShadowDetectionsTab: React.FC = () => {
       />
       {bulkOutcome && (
         <Alert
-          color={bulkOutcome.conflicts.length + bulkOutcome.missing.length > 0 ? 'warning' : 'success'}
+          color={bulkOutcome.conflicts.length + bulkOutcome.missing.length + bulkOutcome.failed.length > 0 ? 'warning' : 'success'}
           data-testid="shadow-detection-bulk-outcome"
           endDecorator={
             <Button size="sm" variant="plain" color="neutral" onClick={() => setBulkOutcome(null)}>

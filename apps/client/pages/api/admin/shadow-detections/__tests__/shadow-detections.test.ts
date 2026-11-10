@@ -276,7 +276,7 @@ describe('POST /api/admin/shadow-detections/bulk-verdict', () => {
   it('grades every item as the signed-in admin, audits each graded record, and reports conflicts and missing ids', async () => {
     const graded = item({ verdict: 'insufficient_evidence', revision: 1 });
     const conflict = item({ id: OTHER_ID, verdict: 'confirmed_abuse', revision: 3 });
-    h.addVerdicts.mockResolvedValue({ graded: [graded], conflicts: [conflict], missing: [GONE_ID] });
+    h.addVerdicts.mockResolvedValue({ graded: [graded], conflicts: [conflict], missing: [GONE_ID], failed: [] });
     const { req, res } = request('POST', { body: bulkBody() });
 
     await h.handlers.bulk.post(req, res);
@@ -308,6 +308,22 @@ describe('POST /api/admin/shadow-detections/bulk-verdict', () => {
     expect(h.userWrite).not.toHaveBeenCalled();
   });
 
+  it('audits the graded records and reports the ids that failed', async () => {
+    h.addVerdicts.mockResolvedValue({
+      graded: [item({ verdict: 'insufficient_evidence', revision: 1 })],
+      conflicts: [],
+      missing: [],
+      failed: [OTHER_ID],
+    });
+    const { req, res } = request('POST', { body: bulkBody() });
+
+    await h.handlers.bulk.post(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().failed).toEqual([OTHER_ID]);
+    expect(h.record).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps the response when one audit write throws, and audits the rest', async () => {
     h.addVerdicts.mockResolvedValue({
       graded: [
@@ -316,6 +332,7 @@ describe('POST /api/admin/shadow-detections/bulk-verdict', () => {
       ],
       conflicts: [],
       missing: [],
+      failed: [],
     });
     h.record.mockRejectedValueOnce(new Error('actor lookup failed'));
     const { req, res } = request('POST', { body: bulkBody() });

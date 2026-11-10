@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Types } from 'mongoose';
 import { setupMongoTest } from '../../../__test__/utils';
 import { User } from '../../auth/UserModel';
@@ -440,6 +440,32 @@ describe('shadowDetectionRepository', () => {
       expect(result.graded[0]?.verdicts).toEqual([expect.objectContaining({ reviewerId: 'admin2', source: 'review' })]);
       expect(result.conflicts.map(item => [item.id, item.verdict])).toEqual([[stale, 'confirmed_abuse']]);
       expect(result.missing).toEqual([gone]);
+    });
+  });
+
+  describe('bulk verdicts with a failing write', () => {
+    it('grades the other records and lists the failed id', async () => {
+      const [a, b, c] = await Promise.all([
+        shadowDetectionRepository.record(detection()),
+        shadowDetectionRepository.record(detection()),
+        shadowDetectionRepository.record(detection()),
+      ]);
+      const original = shadowDetectionRepository.addVerdict.bind(shadowDetectionRepository);
+      const spy = vi.spyOn(shadowDetectionRepository, 'addVerdict').mockImplementation(async input => {
+        if (input.id === b) throw new Error('write failed');
+        return original(input);
+      });
+
+      const result = await shadowDetectionRepository.addVerdicts({
+        items: [a, b, c].map(id => ({ id, expectedRevision: 0 })),
+        verdict: 'insufficient_evidence',
+        reason: 'Two signups from one residential IP',
+        reviewerId: 'admin2',
+      });
+      spy.mockRestore();
+
+      expect(result.graded.map(item => item.id)).toEqual([a, c]);
+      expect(result.failed).toEqual([b]);
     });
   });
 
