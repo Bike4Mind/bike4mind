@@ -261,6 +261,28 @@ describe('shell approval in a project with a large node_modules', () => {
     await writeFile(join(trepo, 'sub', '.claude', 'settings.json'), '{}');
     const head = execFileSync('git', ['-C', trepo, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
     git(trepo, 'update-index', '--add', '--cacheinfo', `160000,${head},sub`);
+    // yrepo's branch `evil` lays `emb` out as a bare repository, which git run from `emb` finds before yrepo's own.
+    const yrepo = await repository('yrepo', { 'emb/readme': 'r', 'src/b.ts': 'b' });
+    git(yrepo, 'config', 'alias.st', 'status');
+    git(yrepo, 'checkout', '-qb', 'evil');
+    for (const [path, content] of [
+      ['HEAD', 'ref: refs/heads/main\n'],
+      ['config', '[core]\n\tbare = true\n'],
+      ['objects/info/packs', ''],
+      ['refs/heads/.keep', ''],
+    ]) {
+      await mkdir(join(yrepo, 'emb', path as string, '..'), { recursive: true });
+      await writeFile(join(yrepo, 'emb', path as string), content as string);
+    }
+    git(yrepo, 'add', '-A');
+    git(yrepo, 'commit', '-qm', 'evil');
+    git(yrepo, 'checkout', '-q', 'main');
+    // dotfiles tracks a gitconfig its branch `evil` changes, which a test links the user gitconfig to.
+    const dotfiles = await repository('dotfiles', { gitconfig: '[alias]\n\tdst = status\n' });
+    git(dotfiles, 'checkout', '-qb', 'evil');
+    await writeFile(join(dotfiles, 'gitconfig'), '[alias]\n\tdst = status --short\n');
+    git(dotfiles, 'commit', '-qam', 'evil');
+    git(dotfiles, 'checkout', '-q', 'main');
     // prepo is a treeless partial clone whose missing trees would come from a host through core.sshCommand.
     git(proj, 'config', 'uploadpack.allowFilter', 'true');
     execFileSync('git', ['clone', '-q', '--filter=tree:0', '--no-checkout', `file://${proj}`, join(proj, 'prepo')]);
@@ -981,12 +1003,6 @@ describe('shell approval in a project with a large node_modules', () => {
     'export VISUAL=./x.sh; git commit --allow-empty',
     'PAGER=./x.sh git log',
     'GIT_EDITOR[0]=./x.sh git commit --allow-empty',
-    'GIT_INDEX_FILE=.claude/settings.json git add -A',
-    'export GIT_OBJECT_DIRECTORY=.claude; git add -A',
-    'time for i in 1; do git -c core.fsmonitor=./x.sh status; done',
-    '! for i in 1; do git -c core.fsmonitor=./x.sh status; done',
-    'time while true; do git -c core.fsmonitor=./x.sh status; break; done',
-    'time { git -c core.fsmonitor=./x.sh status; }',
     "export 'GIT_EDITOR'=./x.sh; git commit --allow-empty",
     'export "GIT_EDITOR"=./x.sh; git commit --allow-empty',
     'export GIT_EDI\\TOR=./x.sh; git commit --allow-empty',
@@ -1006,10 +1022,35 @@ describe('shell approval in a project with a large node_modules', () => {
     "export GIT_EXEC_PATH=./bin; bash -c 'git help clean'",
     "export GIT_EXEC_PATH=./bin; sh -ec 'git help clean'",
     "export GIT_PAGER=./x.sh; eval 'git log'",
+    "export GIT_PAGER=./x.sh; builtin eval 'git log'",
     'GIT_PAGER=less git log',
     'GIT_EDITOR=vi git commit --allow-empty',
+    'GIT_SSH_COMMAND=cat git fetch',
+    'GIT_EXEC_PATH= git mergetool',
+    'set -a; read -r GIT_DIFF_TOOL <<< ../../x; git difftool HEAD~1',
   ])('asks in every mode for %s, which sets a variable git runs a program from', async command => {
     expect(await judge(command)).toMatchObject(asks);
+  });
+
+  it.each(['GIT_INDEX_FILE=.claude/settings.json git add -A', 'export GIT_OBJECT_DIRECTORY=.claude; git add -A'])(
+    'asks in every mode for %s, which sets where git writes its index or objects',
+    async command => {
+      expect(await judge(command)).toMatchObject(asks);
+    }
+  );
+
+  it.each([
+    'time for i in 1; do git -c core.fsmonitor=./x.sh status; done',
+    '! for i in 1; do git -c core.fsmonitor=./x.sh status; done',
+    'time while true; do git -c core.fsmonitor=./x.sh status; break; done',
+    'time { git -c core.fsmonitor=./x.sh status; }',
+  ])('asks in every mode for %s, a compound command whose git -c names a program', async command => {
+    expect(await judge(command)).toMatchObject(asks);
+  });
+
+  it('runs an amend with an editor that runs nothing, and asks for one naming a script', async () => {
+    expect(await judge('GIT_EDITOR=true git commit --amend')).toMatchObject({ auto: true, full: true });
+    expect(await judge('GIT_EDITOR=./x.sh git commit --amend')).toMatchObject(asks);
   });
 
   it.each([
@@ -1020,6 +1061,7 @@ describe('shell approval in a project with a large node_modules', () => {
     'GIT_EDITOR=true git commit --amend',
     'EDITOR=true git commit --amend',
     'GIT_EDITOR=: git commit --amend',
+    "export GIT_''EDITOR=true; git commit --allow-empty",
     'GIT_DIFF_TOOL=vimdiff git diff',
     "git commit -m 'docs: let users run `pnpm dev`'",
     "git commit -m 'fix: read `args[0]` safely'",
@@ -1221,6 +1263,12 @@ describe('shell approval in a project with a large node_modules', () => {
     "git rebase -x 'touch x' HEAD~1",
     "git rebase --exec='touch x' HEAD~1",
     "git filter-branch --tree-filter 'touch x' HEAD",
+    "git filter-repo --commit-callback 'x'",
+    'git -c remote.x.url=y -c remote.x.vcs=../x fetch x',
+    'git -c remote.x.vcs fetch x',
+    'git init --template=./tpl y && git -C y commit --allow-empty -m x',
+    'git init --templ=./tpl y && git -C y commit --allow-empty -m x',
+    'git -c init.templateDir=./tpl init y && git -C y commit --allow-empty -m x',
     "git instaweb --httpd='touch x'",
     "git send-email --sendmail-cmd='touch x' x.patch",
     "git send-email --to-cmd='touch x' x.patch",
@@ -1260,6 +1308,8 @@ describe('shell approval in a project with a large node_modules', () => {
     'git commit -m x',
     'git -c gpg.format=ssh log -1',
     'git -c diff.tool=meld log -1',
+    'git -c remote.x.vcs=svn log -1',
+    'git init -q y',
     'git difftool --tool-help',
   ])('runs %s unasked, as git runs no command line its words give', async command => {
     expect(await judge(command)).toMatchObject({ auto: true, full: true });
@@ -1292,7 +1342,46 @@ describe('shell approval in a project with a large node_modules', () => {
     ['HOME=./h git st', 'qrepo'],
     ['GIT_DIR=.git git st', 'qrepo'],
     ['git --git-dir=.git st', 'qrepo'],
-    ['git -c core.x=y st', 'qrepo'],
+    ['git --bare st', 'qrepo'],
+    ['git -c alias.st=x st', 'qrepo'],
+    ["git -c al''ias.st=x st", 'qrepo'],
+    ['git -c Include.path=../x st', 'qrepo'],
+    ['git -c includeIf.onbranch:main.path=../x st', 'qrepo'],
+    ['git -c help.autocorrect=1 st', 'qrepo'],
+    ['git -c core.worktree=.. st', 'qrepo'],
+    ['git -c safe.bareRepository=all st', 'qrepo'],
+    ['git -c "$X" st', 'qrepo'],
+    ['git --config-env=alias.st=X st', 'qrepo'],
+    ['git --config-env alias.st=X st', 'qrepo'],
+    ['PATH=./bin:$PATH git st', 'qrepo'],
+    ['git config --unset alias.st && git st', 'qrepo'],
+    ['git config --remove-section alias && git st', 'qrepo'],
+    ['git config set include.path ../x && git st', 'qrepo'],
+    ['git config help.autocorrect 1 && git st', 'qrepo'],
+    ['git config "$K" x && git st', 'qrepo'],
+    ['git config --add && git st', 'qrepo'],
+    ['git init -q x && git st', 'qrepo'],
+    ['git submodule add ./s && git st', 'qrepo'],
+    ['make && git st', 'qrepo'],
+    ["python3 -c 'print(1)' && git st", 'yrepo'],
+    ["node -e 'x' && git st", 'yrepo'],
+    ["perl -e 'x' && git st", 'yrepo'],
+    ["ruby -e 'x' && git st", 'yrepo'],
+    ['python3 -c \'open(".git/config", "a").write("x")\' && git st', 'yrepo'],
+    ['true && bash -c \'git config alias.st "!touch x"\' && git st', 'yrepo'],
+    ['true && bash -c "$c" && git st', 'yrepo'],
+    ["true && bash -c 'echo x > .git/config' && git st", 'yrepo'],
+    ["true && sh -c 'echo x; git st' && git st", 'yrepo'],
+    ["true && sh -c 'echo $(touch x)' && git st", 'yrepo'],
+    ["eval 'echo x' && git st", 'yrepo'],
+    ['rm -rf emb/.git && git st', 'yrepo'],
+    ['git checkout evil && git -C emb st', 'yrepo'],
+    ['git checkout evil && cd emb && git st', 'yrepo'],
+    ['git switch evil && cd emb && git st', 'yrepo'],
+    ['git checkout evil && git -C src st', 'yrepo'],
+    ['cd emb && cp -r ../src/. . && git st', 'yrepo'],
+    ['cp -r src/. . && git st', 'yrepo'],
+    ['echo x > src/config && cd src && git st', 'irepo'],
     ['git cleen -fdx', 'zrepo'],
     ['git -c help.autocorrect=1 cleen -fdx', 'qrepo'],
     ['git bang', 'qrepo'],
@@ -1303,7 +1392,6 @@ describe('shell approval in a project with a large node_modules', () => {
     ['sed -i s/a/b/ .git/config && git st', 'qrepo'],
     ['cp x.cfg .git/config; git st', 'qrepo'],
     ['rm -rf .git && git st', 'qrepo'],
-    ['git branch -u origin/main && git st', 'qrepo'],
     ['git worktree add ../w && git st', 'qrepo'],
     ['git worktree add w && git st', 'qrepo'],
     ['coproc git config alias.st x; git st', 'qrepo'],
@@ -1344,8 +1432,67 @@ describe('shell approval in a project with a large node_modules', () => {
     'mkdir -p x && git st',
     'rm -f out.txt && git st',
     'git worktree prune && git st',
+    'git -c color.ui=always st',
+    'git -c core.x=y st',
+    'git -C . -c color.ui=always --no-pager st',
   ])('runs %s (in proj/qrepo) unasked, reading the git alias it names as git expands it', async command => {
     expect(await judge(command, 'qrepo')).toMatchObject({ auto: true, full: true });
+  });
+
+  it.each([
+    'npm install && git st',
+    'pnpm build && git st',
+    'npx prettier --write src && git st',
+    'make && git st',
+    'node scripts/build.js && git st',
+    'npx tsc && git st',
+    'sort -o out.txt src/b.ts && git st',
+    'git config user.email x@example.com && git st',
+    'git config --get alias.st && git st',
+    'git branch --set-upstream-to=origin/main && git st',
+    'git branch -u origin/main && git st',
+    'git checkout evil && git st',
+    'git checkout -b feat && git st',
+    'git stash && git st',
+    'git -C emb st',
+    'cd emb && cp -r ../src/. .',
+    'cd src && cp -r ../emb/. .',
+  ])('runs %s (in proj/yrepo) unasked, as nothing before the alias writes config git reads it from', async command => {
+    expect(await judge(command, 'yrepo')).toMatchObject({ auto: true, full: true });
+  });
+
+  it.each(["true && bash -c 'echo x'", "true && sh -c 'echo x; ls'"])(
+    'runs %s && git st (in proj/yrepo) in full mode, as the shell string only reads, and asks in auto only for the shell',
+    async first => {
+      const alone = await judge(first, 'yrepo');
+      expect(alone).toMatchObject({ auto: false, full: true });
+      expect(await judge(`${first} && git st`, 'yrepo')).toMatchObject({ auto: alone.auto, full: true });
+    }
+  );
+
+  it.each(['git push -u origin HEAD', 'git remote add up https://example.invalid/r'])(
+    'runs %s && git st (in proj/yrepo) in full mode, and asks in auto only as the first sends to a remote',
+    async first => {
+      const alone = await judge(first, 'yrepo');
+      expect(alone).toMatchObject({ auto: false, full: true });
+      expect(await judge(`${first} && git st`, 'yrepo')).toMatchObject({ auto: alone.auto, full: true });
+    }
+  );
+
+  it('asks in every mode for an alias read through a link into a repository a git command rewrites', async () => {
+    const link = join(proj, '..', '.gitconfig');
+    await rm(link, { force: true });
+    await symlink(join(proj, 'dotfiles', 'gitconfig'), link);
+    try {
+      expect(await judge('git dst')).toMatchObject({ auto: true, full: true });
+      expect(await judge('git -C dotfiles checkout evil -- gitconfig && git dst')).toMatchObject(asks);
+      expect(await judge('cd dotfiles && git merge evil && git dst')).toMatchObject(asks);
+      expect(await judge('cd dotfiles && git reset --hard evil && git dst')).toMatchObject(asks);
+      // Inside the granted roots, the gitconfig may be any writer's.
+      expect(await judge('make && git dst')).toMatchObject(asks);
+    } finally {
+      await rm(link, { force: true });
+    }
   });
 
   it('runs a mistyped command unasked where help.autocorrect only names its guess', async () => {

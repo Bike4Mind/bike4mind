@@ -301,12 +301,36 @@ function tarExtraction(
 /** Archive members an extraction lists before the scan reads them as paths instead of a whole tree. */
 const LISTED_MEMBERS = 10_000;
 
-/** The granted roots of the scan running now, for the git calls that do not take them. */
-const scanRoots = new AsyncLocalStorage<readonly string[]>();
+/** The granted roots of the scan running now, for the git calls that do not take them, and its PATH lookups. */
+const scanRoots = new AsyncLocalStorage<{
+  roots: readonly string[];
+  paths: Map<string, Promise<string>>;
+  programs: Map<string, Promise<string | null>>;
+}>();
 
 /** Runs `scan` with `roots` as the granted roots git is found outside of (see pathOutside). */
 export function withGrantedRoots<T>(roots: readonly string[], scan: () => Promise<T>): Promise<T> {
-  return scanRoots.run(roots, scan);
+  return scanRoots.run({ roots, paths: new Map(), programs: new Map() }, scan);
+}
+
+/** `program` on pathOutside(roots), looked up once per scan: reading PATH entries is slow over a WSL mount. */
+async function scanProgram(program: string, roots: readonly string[]): Promise<{ path: string; file: string } | null> {
+  const store = scanRoots.getStore();
+  const key = JSON.stringify(roots);
+  let path = store?.paths.get(key);
+  if (path === undefined) {
+    path = pathOutside(roots);
+    store?.paths.set(key, path);
+  }
+  const outside = await path;
+  const name = `${program}\0${outside}`;
+  let file = store?.programs.get(name);
+  if (file === undefined) {
+    file = findOnPath(program, outside);
+    store?.programs.set(name, file);
+  }
+  const found = await file;
+  return found === null ? null : { path: outside, file: found };
 }
 
 /**
@@ -364,9 +388,9 @@ async function listArchive(
 ): Promise<string | null> {
   if (archive.startsWith('-') || /^[\\/]{2}/.test(archive)) return null;
   if (/^[^/\\]*:/.test(archive.replace(/^[A-Za-z]:[\\/]/, ''))) return null;
-  const path = await pathOutside(roots);
-  const file = await findOnPath(program, path);
-  if (file === null) return null;
+  const found = await scanProgram(program, roots);
+  if (found === null) return null;
+  const { path, file } = found;
   const absolute = resolve(cwd, archive);
   if (program === 'unzip') return runListing(file, [...args, '--', absolute], path);
   let gnu = gnuTar.get(file);
@@ -418,9 +442,9 @@ async function findSelected(
     else if (!((test === '-print' || test === '-print0') && index === tests.length - 1)) return null;
   }
   if (process.platform === 'win32') return null;
-  const path = await pathOutside(roots);
-  const file = await findOnPath('find', path);
-  if (file === null) return null;
+  const program = await scanProgram('find', roots);
+  if (program === null) return null;
+  const { path, file } = program;
   const starts = folders.map(folder =>
     folder.startsWith('-') || folder.startsWith('(') || folder === '!' ? `./${folder}` : folder
   );
@@ -710,9 +734,9 @@ async function gitLaunch(directory: string, args: readonly string[]): Promise<Gi
   if (!command) return null;
   if (!inherited) {
     // Bare `git` would resolve through this process's PATH from the project folder.
-    const path = await pathOutside(scanRoots.getStore() ?? []);
-    const file = await findOnPath('git', path);
-    if (file === null) return null;
+    const found = await scanProgram('git', scanRoots.getStore()?.roots ?? []);
+    if (found === null) return null;
+    const { path, file } = found;
     for (const name of Object.keys(env)) if (name.toUpperCase() === 'PATH') delete env[name];
     env.PATH = path;
     command.file = file;
@@ -741,7 +765,7 @@ async function gitQuery(directory: string, args: readonly string[]): Promise<str
   return result?.code === 0 ? result.stdout : null;
 }
 
-/** `git --list-cmds` answers by git binary, PATH and WSL distro, and none of them changes while the app runs. */
+/** `git --list-cmds` answers by PATH, granted roots and WSL distro, which pick the git and the programs it finds. */
 const commandListings = new Map<string, Promise<GitResult | null>>();
 
 /**
@@ -749,13 +773,11 @@ const commandListings = new Map<string, Promise<GitResult | null>>();
  * listing, and null when it could not tell.
  */
 async function gitCommandListing(directory: string, categories: string): Promise<ReadonlySet<string> | null> {
-  const launch = await gitLaunch(directory, [`--list-cmds=${categories}`]);
-  if (launch === null) return null;
-  const path = Object.entries(launch.env).find(([name]) => name.toUpperCase() === 'PATH')?.[1] ?? '';
-  const key = JSON.stringify([launch.file, path, wslLocation(directory)?.distro ?? '', categories]);
+  const roots = scanRoots.getStore()?.roots ?? [];
+  const key = JSON.stringify([process.env.PATH ?? '', roots, wslLocation(directory)?.distro ?? '', categories]);
   let listed = commandListings.get(key);
   if (listed === undefined) {
-    listed = gitExec(launch);
+    listed = gitLaunch(directory, [`--list-cmds=${categories}`]).then(launch => launch && gitExec(launch));
     commandListings.set(key, listed);
     // A failed or timed-out listing is asked again next time.
     void listed.then(result => {
@@ -769,9 +791,8 @@ async function gitCommandListing(directory: string, categories: string): Promise
 }
 
 /**
- * How git takes `name` as its subcommand from `directory` before it reads any alias: `own` for a builtin or a
- * `git-<name>` program it finds, which no alias overrides; `deprecated` for a builtin an alias of that name overrides;
- * `none` for a name that is only an alias, if anything. Null when git could not tell.
+ * How git takes `name` before any alias: `own` (a builtin or `git-<name>` program, which no alias overrides),
+ * `deprecated` (a builtin an alias overrides), `none` (an alias, if anything); null when git could not tell.
  */
 export async function gitCommandKind(directory: string, name: string): Promise<'own' | 'deprecated' | 'none' | null> {
   const own = await gitCommandListing(directory, 'builtins,main');
@@ -1903,6 +1924,9 @@ async function gitTreeWrites(
       if (target === undefined && !has(add, 'b', 'B', 'd', 'detach')) return UNREAD_TREE;
       return treeListing(cwd, target ?? 'HEAD', resolveOperand(cwd, path));
     }
+    case 'init':
+      // A template dir, from `--template` (any prefix of it) or `-c init.templateDir`, puts hooks in the repository.
+      return moved || args.some(arg => /^--t/.test(arg)) ? UNREAD_TREE : NO_TREE;
     case 'clone': {
       const [source, folder] = read.positionals;
       if (moved || read.unknown || source === undefined) return UNREAD_TREE;
@@ -1979,7 +2003,13 @@ function gitRestored(sub: string, args: readonly string[]): { paths: string[]; s
 }
 
 /** git's global options that leave the repository and work tree where the folder puts them. */
-const PLAIN_GIT_OPTIONS = new Set(['--no-pager', '-P', '-p', '--paginate', '--no-optional-locks']);
+export const PLAIN_GIT_OPTIONS: ReadonlySet<string> = new Set([
+  '--no-pager',
+  '-P',
+  '-p',
+  '--paginate',
+  '--no-optional-locks',
+]);
 
 /**
  * git's global options that take their value as the next word (`--attr-source HEAD`); the long ones except
