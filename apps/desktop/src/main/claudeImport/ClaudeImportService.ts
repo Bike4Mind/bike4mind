@@ -108,8 +108,10 @@ export class ClaudeImportService {
   private removing = false;
   /** For the sidebar hints; looked up once per launch and account, see detectHints. */
   private codeSessions: number | null = null;
-  private webNotebooks: { scopeKey: string; count: number } | null = null;
-  private readonly hintsChecked = new Set<string>();
+  private codeChecked = false;
+  private readonly webNotebooks = new Map<string, number>();
+  /** When the web count was last tried per account, so a failed one retries on focus but not on every focus. */
+  private readonly webCountTriedAt = new Map<string, number>();
   /** Settings writes are read-modify-write; two quick clicks must not lose one of them. */
   private settingsChain: Promise<unknown> = Promise.resolve();
 
@@ -152,6 +154,7 @@ export class ClaudeImportService {
 
   /** A window gained focus: catch up with the web, throttled, and never alongside a running sync. */
   onWindowFocus(): void {
+    this.runBackground(() => this.detectHints());
     if (this.startTimer || this.webRun || Date.now() - this.webStartedAt < WEB_FOCUS_INTERVAL_MS) return;
     this.runBackground(() => this.autoSyncWeb());
   }
@@ -185,7 +188,7 @@ export class ClaudeImportService {
       hints: {
         dismissed: scope?.dismissedHints ?? [],
         codeSessions: this.codeSessions,
-        webNotebooks: scopeKey && this.webNotebooks?.scopeKey === scopeKey ? this.webNotebooks.count : null,
+        webNotebooks: (scopeKey && this.webNotebooks.get(scopeKey)) ?? null,
       },
       code: {
         settings: settings.code,
@@ -318,24 +321,32 @@ export class ClaudeImportService {
 
   /**
    * What the sidebar hints offer: Claude Code sessions counted by file name alone (never read),
-   * and one count request to the web. Only for a sync that is off, once per launch and account.
+   * and one count request to the web. Only for a sync that is off; the Claude Code count runs once
+   * per launch, the web count once per account (retried, throttled, until it succeeds).
    */
   private async detectHints(): Promise<void> {
     const scopeKey = this.deps.scopeKey();
-    if (!scopeKey || this.hintsChecked.has(scopeKey)) return;
-    this.hintsChecked.add(scopeKey);
+    if (!scopeKey) return;
     const settings = await this.states.readSettings();
     const dismissed = (await this.states.scope(scopeKey)).dismissedHints;
     const wanted = (hint: 'claude-code' | 'web') => !dismissed.includes(hint) || !dismissed.includes('sidebar-empty');
-    if (this.codeSessions === null && !settings.code.enabled && !settings.code.sourceFolder && wanted('claude-code')) {
+    if (!this.codeChecked && !settings.code.enabled && !settings.code.sourceFolder && wanted('claude-code')) {
+      this.codeChecked = true;
       const transcripts = await listTranscripts(this.defaultSourceFolder(), false);
       this.codeSessions = transcripts.filter(transcript => ranInClaudeWorktree(transcript.path)).length;
     }
     const api = this.deps.webApi?.() ?? null;
-    if (api && !settings.web.enabled && wanted('web')) {
+    const triedAt = this.webCountTriedAt.get(scopeKey) ?? 0;
+    if (
+      api &&
+      !this.webNotebooks.has(scopeKey) &&
+      Date.now() - triedAt >= WEB_FOCUS_INTERVAL_MS &&
+      !settings.web.enabled &&
+      wanted('web')
+    ) {
+      this.webCountTriedAt.set(scopeKey, Date.now());
       try {
-        const count = await countWebNotebooks(api);
-        if (this.deps.scopeKey() === scopeKey) this.webNotebooks = { scopeKey, count };
+        this.webNotebooks.set(scopeKey, await countWebNotebooks(api));
       } catch (error) {
         this.deps.logger.warn(`WEB IMPORT: could not count notebooks: ${String(error)}`);
       }

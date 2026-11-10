@@ -463,7 +463,7 @@ describe('registerClaudeImport', () => {
 });
 
 describe('sync hints', () => {
-  async function hintSetup(options: { notebooks?: number } = {}) {
+  async function hintSetup(options: { notebooks?: number; countFails?: { times: number } } = {}) {
     const root = await mkdtemp(join(tmpdir(), 'claude-import-hints-'));
     const home = join(root, 'home');
     const projects = join(home, '.claude', 'projects');
@@ -476,10 +476,14 @@ describe('sync hints', () => {
       await writeFile(join(projects, folder, `${id}.jsonl`), 'not read for a hint', 'utf8');
     }
     const get = vi.fn(async (url: string) => {
-      if (url === '/api/sessions/count') return { count: options.notebooks ?? 4 };
+      if (url === '/api/sessions/count') {
+        if (options.countFails && options.countFails.times-- > 0) throw new Error('offline');
+        return { count: options.notebooks ?? 4 };
+      }
       throw new Error(`unexpected ${url}`);
     });
     const userData = join(root, 'userData');
+    const warn = vi.fn();
     const make = () => {
       const store = new SessionStore(join(root, 'sessions'), 'default-model');
       const service = new ClaudeImportService({
@@ -492,13 +496,13 @@ describe('sync hints', () => {
         deleteImported: async () => 'missing',
         pickPath: async () => null,
         send: () => {},
-        logger: { warn: () => {} },
+        logger: { warn },
         webApi: () => ({ get: get as <T>(url: string) => Promise<T> }),
       });
       services.push(service);
       return service;
     };
-    return { service: make(), get, make };
+    return { service: make(), get, make, warn };
   }
 
   it('counts Claude worktree sessions by name and the web notebooks with one request', async () => {
@@ -511,6 +515,24 @@ describe('sync hints', () => {
     service.onScopeChanged();
     await new Promise(resolve => setTimeout(resolve, 20));
     expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the Claude Code count when the web count fails, and retries it on focus', async () => {
+    const { service, get, warn } = await hintSetup({ countFails: { times: 1 } });
+    service.onScopeChanged();
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(1));
+    const { hints } = await service.state();
+    expect(hints.codeSessions).toBe(1);
+    expect(hints.webNotebooks).toBeNull();
+    service.onWindowFocus();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(get).toHaveBeenCalledTimes(1);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.now() + 61_000);
+    service.onWindowFocus();
+    await vi.waitFor(async () => expect((await service.state()).hints.webNotebooks).toBe(4));
+    vi.useRealTimers();
+    expect(get).toHaveBeenCalledTimes(2);
   });
 
   it('keeps a dismissal for the account across a restart, and ignores unknown ids', async () => {
