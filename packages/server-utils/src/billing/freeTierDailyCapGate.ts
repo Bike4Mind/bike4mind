@@ -39,7 +39,7 @@ export function isFreeTierDailyCapError(error: unknown): error is TooManyRequest
 
 /**
  * Whether the free-tier daily caps can refuse this user's personally billed turns: not an admin
- * and on the free rate tier, i.e. without paid standing (`entitlements/paidStanding.ts`). The
+ * and on the free rate tier, i.e. without paid standing (`packages/server-utils/src/entitlements/paidStanding.ts`). The
  * admin credit summary uses it so its cap chip matches this gate.
  */
 export async function isFreeTierCapUser(
