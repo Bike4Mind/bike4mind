@@ -27,6 +27,9 @@ import ReplayIcon from '@mui/icons-material/Replay';
 // informs the editor's derived line and never reaches a stored rate.
 import { getPriceMargin, type IModelPriceTier } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
+import { useModelIndex } from '../../Models/Discovery/useModelIndex';
+import { ModelWriteAction } from '../../Models/ModelWriteAction';
+import { EmptyState, ErrorState, LoadingState, UpdatingBar } from '../../shared';
 
 /** Wire shape of a catalog row (dates arrive as ISO strings). */
 interface PriceRow {
@@ -42,6 +45,9 @@ interface PriceRow {
 // it here would pull mongoose into the client bundle). Pinned by a test there.
 const SEED_NOTE = 'adapter-seed';
 const isSeedRow = (row: PriceRow) => row.note === SEED_NOTE;
+
+// Price rows bill only these types; others price from their build table (b4m-core/common/src/modelPriceCatalog.ts).
+const PRICE_ROW_TYPES = new Set(['text', 'realtime-voice']);
 
 // Mirrors DISCOVERY_PRICE_NOTE_PREFIX in @bike4mind/common; discovery stamps
 // notes as 'discovery:<source>@<iso-date>'. Kept as a literal so the whole note
@@ -204,8 +210,11 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
   onPricesChanged,
 }) => {
   const [rows, setRows] = useState<PriceRow[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Held apart from `error` so a failed write shows in its dialog and never replaces the table.
+  const [writeError, setWriteError] = useState<string | null>(null);
+  const modelIndex = useModelIndex();
   const [localFilter, setLocalFilter] = useState('');
   const filter = modelFilter ?? localFilter;
   const setFilter = onModelFilterChange ?? setLocalFilter;
@@ -256,9 +265,20 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
     }
     setDraftRates(drafts);
     setNote('');
-    setError(null);
+    setWriteError(null);
     setConfirmToken(null);
     setRepriceTarget(row);
+  };
+
+  const openRevert = (row: PriceRow) => {
+    setWriteError(null);
+    setRevertTarget(row);
+  };
+
+  // An id the model list does not know keeps Reprice: the server refuses only known types it does not bill by row.
+  const canReprice = (modelId: string) => {
+    const type = modelIndex.data?.get(modelId)?.type;
+    return type === undefined || PRICE_ROW_TYPES.has(type);
   };
 
   const editRate = (threshold: string, field: string, value: string) => {
@@ -269,7 +289,7 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
   const submitReprice = async (waiver?: string) => {
     if (!repriceTarget) return;
     setIsSaving(true);
-    setError(null);
+    setWriteError(null);
     try {
       const pricing: Record<string, Record<string, number>> = {};
       for (const [threshold, fields] of Object.entries(draftRates)) {
@@ -290,7 +310,7 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
       onPricesChanged?.();
       await fetchRows();
     } catch (err) {
-      setError(apiErrorMessage(err, 'Reprice failed'));
+      setWriteError(apiErrorMessage(err, 'Reprice failed'));
       setConfirmToken(bandConfirmToken(err));
     } finally {
       setIsSaving(false);
@@ -300,7 +320,7 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
   const submitRevert = async () => {
     if (!revertTarget) return;
     setIsSaving(true);
-    setError(null);
+    setWriteError(null);
     try {
       await api.post('/api/admin/model-prices', {
         modelId: revertTarget.modelId,
@@ -311,7 +331,7 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
       onPricesChanged?.();
       await fetchRows();
     } catch (err) {
-      setError(apiErrorMessage(err, 'Revert failed'));
+      setWriteError(apiErrorMessage(err, 'Revert failed'));
     } finally {
       setIsSaving(false);
     }
@@ -400,18 +420,30 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
         </Stack>
       </Stack>
 
-      {error && (
+      {error && rows.length > 0 && (
         <Alert color="danger" sx={{ mb: 1 }} data-testid="model-pricing-error">
           {error}
         </Alert>
       )}
+      <UpdatingBar active={isLoading && rows.length > 0} testId="model-pricing-updating" />
 
       {isLoading && rows.length === 0 ? (
-        <CircularProgress size="sm" />
+        <LoadingState label="Loading prices" testId="model-pricing-loading" />
+      ) : error && rows.length === 0 ? (
+        <ErrorState message={error} onRetry={() => void fetchRows()} />
+      ) : visibleRows.length === 0 && rows.length > 0 ? (
+        <EmptyState
+          title="No prices match these filters"
+          action={
+            <Button variant="outlined" onClick={() => setFilter('')} data-testid="model-pricing-clear-filters-btn">
+              Clear filters
+            </Button>
+          }
+        />
       ) : (
         // Viewport-relative so the catalog fills the tab; scroll stays internal.
         <Sheet sx={{ maxHeight: 'calc(100vh - 240px)', minHeight: 320, overflow: 'auto' }}>
-          <Table stickyHeader hoverRow size="sm" data-testid="model-pricing-table">
+          <Table stickyHeader hoverRow size="sm" sx={{ minWidth: '50rem' }} data-testid="model-pricing-table">
             <thead>
               <tr>
                 <th>Model</th>
@@ -426,15 +458,6 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
               </tr>
             </thead>
             <tbody>
-              {visibleRows.length === 0 && rows.length > 0 && (
-                <tr>
-                  <td colSpan={9}>
-                    <Typography level="body-sm" color="neutral" data-testid="model-pricing-filter-empty">
-                      No model id matches &quot;{filter}&quot;.
-                    </Typography>
-                  </td>
-                </tr>
-              )}
               {visibleRows.map(row => {
                 const tier = firstTier(row);
                 const provenance = provenanceOf(row);
@@ -470,15 +493,22 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
                     </td>
                     <td>
                       <Stack direction="row" spacing={0.5}>
-                        <IconButton
-                          size="sm"
-                          title="Reprice"
-                          aria-label={`Reprice ${row.modelId}`}
-                          onClick={() => openReprice(row)}
-                          data-testid={`model-pricing-reprice-${row.modelId}-${row.unit}`}
-                        >
-                          <EditIcon fontSize="small" />
-                        </IconButton>
+                        {canReprice(row.modelId) && (
+                          <ModelWriteAction>
+                            {disabled => (
+                              <IconButton
+                                size="sm"
+                                title="Reprice"
+                                aria-label={`Reprice ${row.modelId}`}
+                                disabled={disabled}
+                                onClick={() => openReprice(row)}
+                                data-testid={`model-pricing-reprice-${row.modelId}-${row.unit}`}
+                              >
+                                <EditIcon fontSize="small" />
+                              </IconButton>
+                            )}
+                          </ModelWriteAction>
+                        )}
                         <IconButton
                           size="sm"
                           title="History"
@@ -489,15 +519,20 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
                           <HistoryIcon fontSize="small" />
                         </IconButton>
                         {!isSeedRow(row) && (
-                          <IconButton
-                            size="sm"
-                            title="Revert to seed pricing"
-                            aria-label={`Revert ${row.modelId} to seed pricing`}
-                            onClick={() => setRevertTarget(row)}
-                            data-testid={`model-pricing-revert-${row.modelId}-${row.unit}`}
-                          >
-                            <ReplayIcon fontSize="small" />
-                          </IconButton>
+                          <ModelWriteAction>
+                            {disabled => (
+                              <IconButton
+                                size="sm"
+                                title="Revert to seed pricing"
+                                aria-label={`Revert ${row.modelId} to seed pricing`}
+                                disabled={disabled}
+                                onClick={() => openRevert(row)}
+                                data-testid={`model-pricing-revert-${row.modelId}-${row.unit}`}
+                              >
+                                <ReplayIcon fontSize="small" />
+                              </IconButton>
+                            )}
+                          </ModelWriteAction>
                         )}
                       </Stack>
                     </td>
@@ -512,11 +547,11 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
       <Modal open={repriceTarget !== null} onClose={() => setRepriceTarget(null)}>
         <ModalDialog sx={{ minWidth: 420 }} data-testid="reprice-modal">
           <Typography level="title-md">Reprice {repriceTarget?.modelId}</Typography>
-          {error && (
+          {writeError && (
             // pre-line: a guardrail rejection enumerates one violation per
             // line, and every line has to be readable before "Apply anyway".
             <Alert color="danger" size="sm" sx={{ whiteSpace: 'pre-line' }} data-testid="reprice-modal-error">
-              {error}
+              {writeError}
             </Alert>
           )}
           <Typography level="body-sm" color="neutral" data-testid="reprice-unit-help">
@@ -592,9 +627,9 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
       <Modal open={revertTarget !== null} onClose={() => setRevertTarget(null)}>
         <ModalDialog data-testid="revert-modal">
           <Typography level="title-md">Revert {revertTarget?.modelId} to seed pricing?</Typography>
-          {error && (
+          {writeError && (
             <Alert color="danger" size="sm" data-testid="revert-modal-error">
-              {error}
+              {writeError}
             </Alert>
           )}
           <Typography level="body-sm" color="neutral">

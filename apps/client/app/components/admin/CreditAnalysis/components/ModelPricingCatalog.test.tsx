@@ -9,6 +9,15 @@ const mockPost = vi.fn();
 vi.mock('@client/app/contexts/ApiContext', () => ({
   api: { get: (...a: unknown[]) => mockGet(...a), post: (...a: unknown[]) => mockPost(...a) },
 }));
+const gate = vi.hoisted(() => ({ blocked: false, modelTypes: new Map<string, string>() }));
+vi.mock('../../Models/ModelWriteAction', () => ({
+  ModelWriteAction: ({ children }: { children: (disabled: boolean) => React.ReactElement }) => children(gate.blocked),
+}));
+vi.mock('../../Models/Discovery/useModelIndex', () => ({
+  useModelIndex: () => ({
+    data: new Map([...gate.modelTypes].map(([id, type]) => [id, { id, type }])),
+  }),
+}));
 
 import { ModelPricingCatalog } from './ModelPricingCatalog';
 
@@ -54,6 +63,8 @@ function renderCatalog() {
 describe('ModelPricingCatalog', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    gate.blocked = false;
+    gate.modelTypes = new Map();
     mockGet.mockResolvedValue({ data: { rows: ROWS } });
     mockPost.mockResolvedValue({ data: { row: {} } });
   });
@@ -519,7 +530,92 @@ describe('ModelPricingCatalog', () => {
     expect(screen.queryByTestId('model-pricing-row-gpt-x-per_token')).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByTestId('model-pricing-filter-input'), { target: { value: 'nothing-like-this' } });
-    expect(screen.getByTestId('model-pricing-filter-empty')).toBeInTheDocument();
+    expect(screen.getByTestId('admin-empty-state')).toHaveTextContent('No prices match these filters');
+    expect(screen.queryByTestId('model-pricing-table')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('model-pricing-clear-filters-btn'));
+    expect(screen.getByTestId('model-pricing-filter-input')).toHaveValue('');
+    expect(screen.getByTestId('model-pricing-row-gpt-x-per_token')).toBeInTheDocument();
+  });
+
+  it('shows a loading state until the first rows arrive', async () => {
+    let resolve: (value: unknown) => void = () => undefined;
+    mockGet.mockReturnValueOnce(new Promise(r => (resolve = r)));
+    renderCatalog();
+    expect(screen.getByTestId('model-pricing-loading')).toHaveTextContent('Loading prices');
+    resolve({ data: { rows: ROWS } });
+    expect(await screen.findByTestId('model-pricing-row-gpt-x-per_token')).toBeInTheDocument();
+    expect(screen.queryByTestId('model-pricing-loading')).not.toBeInTheDocument();
+  });
+
+  it('shows the load error with a retry when there are no rows, and recovers on retry', async () => {
+    mockGet.mockRejectedValueOnce({ response: { data: { error: 'Catalog unavailable' } } });
+    renderCatalog();
+    expect(await screen.findByTestId('admin-error-state')).toHaveTextContent('Catalog unavailable');
+    expect(screen.queryByTestId('model-pricing-table')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
+    expect(await screen.findByTestId('model-pricing-row-gpt-x-per_token')).toBeInTheDocument();
+    expect(screen.queryByTestId('admin-error-state')).not.toBeInTheDocument();
+  });
+
+  it('keeps the rows on screen when a refresh fails', async () => {
+    renderCatalog();
+    await screen.findByTestId('model-pricing-row-gpt-x-per_token');
+    mockGet.mockRejectedValueOnce({ response: { data: { error: 'Catalog unavailable' } } });
+    fireEvent.click(screen.getByTestId('model-pricing-refresh-btn'));
+
+    expect(await screen.findByTestId('model-pricing-error')).toHaveTextContent('Catalog unavailable');
+    expect(screen.getByTestId('model-pricing-row-gpt-x-per_token')).toBeInTheDocument();
+    expect(screen.queryByTestId('admin-error-state')).not.toBeInTheDocument();
+  });
+
+  it('keeps a failed reprice inside its dialog, off the table', async () => {
+    mockPost.mockRejectedValue({ response: { data: { error: 'Rates out of range' } } });
+    renderCatalog();
+    fireEvent.click(await screen.findByTestId('model-pricing-reprice-gpt-x-per_token'));
+    fireEvent.change(screen.getByTestId('reprice-note-input'), { target: { value: 'invoice' } });
+    fireEvent.click(screen.getByTestId('reprice-save-btn'));
+
+    expect(await screen.findByTestId('reprice-modal-error')).toHaveTextContent('Rates out of range');
+    expect(screen.queryByTestId('model-pricing-error')).not.toBeInTheDocument();
+    expect(screen.getByTestId('model-pricing-table')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('model-pricing-revert-gpt-y-per_token'));
+    expect(screen.queryByTestId('revert-modal-error')).not.toBeInTheDocument();
+  });
+
+  it('disables reprice and revert for an admin who cannot write, and keeps history open', async () => {
+    gate.blocked = true;
+    renderCatalog();
+    await screen.findByTestId('model-pricing-row-gpt-y-per_token');
+    expect(screen.getByTestId('model-pricing-reprice-gpt-y-per_token')).toBeDisabled();
+    expect(screen.getByTestId('model-pricing-revert-gpt-y-per_token')).toBeDisabled();
+    expect(screen.getByTestId('model-pricing-history-gpt-y-per_token')).toBeEnabled();
+  });
+
+  it('offers reprice only for text, realtime-voice and unknown models', async () => {
+    gate.modelTypes = new Map([
+      ['gpt-x', 'text'],
+      ['gpt-y', 'image'],
+      ['voice-1', 'realtime-voice'],
+    ]);
+    mockGet.mockResolvedValue({
+      data: { rows: [...ROWS, { ...ROWS[0], modelId: 'voice-1' }, { ...ROWS[0], modelId: 'unlisted' }] },
+    });
+    renderCatalog();
+    await screen.findByTestId('model-pricing-row-gpt-y-per_token');
+    expect(screen.getByTestId('model-pricing-reprice-gpt-x-per_token')).toBeInTheDocument();
+    expect(screen.queryByTestId('model-pricing-reprice-gpt-y-per_token')).not.toBeInTheDocument();
+    expect(screen.getByTestId('model-pricing-history-gpt-y-per_token')).toBeInTheDocument();
+    expect(screen.getByTestId('model-pricing-reprice-voice-1-per_token')).toBeInTheDocument();
+    expect(screen.getByTestId('model-pricing-reprice-unlisted-per_token')).toBeInTheDocument();
+  });
+
+  it('lets the table scroll sideways on a phone instead of squeezing its columns', async () => {
+    renderCatalog();
+    const table = await screen.findByTestId('model-pricing-table');
+    expect(getComputedStyle(table).minWidth).toBe('50rem');
   });
 
   it('shows only the model a controlled filter names, and reports edits to the host', async () => {

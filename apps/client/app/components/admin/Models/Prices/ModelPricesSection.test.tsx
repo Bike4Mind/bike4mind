@@ -10,7 +10,12 @@ const mocks = vi.hoisted(() => ({
   get: vi.fn(),
   post: vi.fn(),
   toastSuccess: vi.fn(),
-  textModels: [{ id: 'gpt-x' }, { id: 'gpt-new' }, { id: 'local/anime v2:0' }],
+  textModels: [
+    { id: 'gpt-x', price: null },
+    { id: 'gpt-new' },
+    { id: 'local/anime v2:0', price: { source: 'build', pricing: {} } },
+    { id: 'gpt-priced', price: { source: 'row', unit: 'per_token', pricing: {}, effectiveFrom: '2026-07-01' } },
+  ],
   voiceModels: [{ id: 'voice-1' }],
 }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: mocks.get, post: mocks.post } }));
@@ -27,6 +32,7 @@ vi.mock('@client/app/hooks/data/adminModels', () => ({
 vi.mock('../ModelWriteAction', () => ({
   ModelWriteAction: ({ children }: { children: (disabled: boolean) => React.ReactElement }) => children(false),
 }));
+vi.mock('../Discovery/useModelIndex', () => ({ useModelIndex: () => ({ data: undefined }) }));
 
 import { fakeAdminRouter } from '../../__tests__/fakeAdminRouter';
 import { ModelPricesSection } from './ModelPricesSection';
@@ -97,15 +103,33 @@ describe('ModelPricesSection', () => {
     expect(screen.getByTestId('model-pricing-filter-input')).toHaveValue('gpt-y');
   });
 
-  it('writes the filter to the URL, and clears the param when emptied', async () => {
+  it('filters as typed and writes the filter to the URL once typing pauses, clearing the param when emptied', async () => {
     renderSection();
     await screen.findByTestId('model-pricing-row-gpt-x-per_token');
-    fireEvent.change(screen.getByTestId('model-pricing-filter-input'), { target: { value: 'gpt-x' } });
-    expect(fakeAdminRouter.search).toMatchObject({ tab: 'models', modelsSection: 'prices', model: 'gpt-x' });
+    const input = screen.getByTestId('model-pricing-filter-input');
+    await userEvent.type(input, 'gpt-x');
+    expect(input).toHaveValue('gpt-x');
+    expect(screen.queryByTestId('model-pricing-row-gpt-y-per_token')).not.toBeInTheDocument();
+
+    await waitFor(() =>
+      expect(fakeAdminRouter.search).toMatchObject({ tab: 'models', modelsSection: 'prices', model: 'gpt-x' })
+    );
+    expect(fakeAdminRouter.navigate).toHaveBeenCalledTimes(1);
     expect(fakeAdminRouter.navigate).toHaveBeenLastCalledWith(expect.objectContaining({ replace: true }));
 
-    fireEvent.change(screen.getByTestId('model-pricing-filter-input'), { target: { value: '' } });
-    expect(fakeAdminRouter.search).not.toHaveProperty('model');
+    fireEvent.change(input, { target: { value: '' } });
+    await waitFor(() => expect(fakeAdminRouter.search).not.toHaveProperty('model'));
+    expect(input).toHaveValue('');
+  });
+
+  it('follows a model param changed from outside the box', async () => {
+    renderSection();
+    await screen.findByTestId('model-pricing-row-gpt-x-per_token');
+    act(() => {
+      fakeAdminRouter.navigate({ to: '/admin', search: previous => ({ ...previous, model: 'gpt-y' }) });
+    });
+    expect(screen.getByTestId('model-pricing-filter-input')).toHaveValue('gpt-y');
+    expect(screen.queryByTestId('model-pricing-row-gpt-x-per_token')).not.toBeInTheDocument();
   });
 
   it('posts a first per-token price for a text model, then refreshes and toasts', async () => {
@@ -130,7 +154,7 @@ describe('ModelPricesSection', () => {
     await waitFor(() => expect(screen.queryByTestId('add-price-dialog')).not.toBeInTheDocument());
   });
 
-  it('offers only text and realtime-voice models', async () => {
+  it('offers only text and realtime-voice models with no price row in force', async () => {
     renderSection();
     await screen.findByTestId('model-pricing-row-gpt-x-per_token');
     fireEvent.click(screen.getByTestId('model-prices-add-btn'));
@@ -138,6 +162,14 @@ describe('ModelPricesSection', () => {
     await userEvent.click(within(dialog).getByTestId('add-price-model-input'));
     const options = await screen.findAllByRole('option');
     expect(options.map(option => option.textContent)).toEqual(['gpt-x', 'gpt-new', 'local/anime v2:0', 'voice-1']);
+  });
+
+  it('does not preselect a filtered model that already has a price row', async () => {
+    act(() => fakeAdminRouter.reset({ tab: 'models', modelsSection: 'prices', model: 'gpt-priced' }));
+    renderSection();
+    fireEvent.click(await screen.findByTestId('model-prices-add-btn'));
+    const dialog = await screen.findByTestId('add-price-dialog');
+    expect(within(dialog).getByTestId('add-price-model-input')).toHaveValue('');
   });
 
   it('preselects the filtered model when it is a text model', async () => {

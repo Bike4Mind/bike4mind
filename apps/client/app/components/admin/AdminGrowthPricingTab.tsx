@@ -108,8 +108,8 @@ export const GROWTH_PRICING_LINKS = [
   {
     id: 'model-pricing',
     title: 'Model pricing',
-    description: 'Per-model token rates that turn usage into credits. Edited in the Credit Analytics pricing catalog.',
-    linkLabel: 'Open the model pricing catalog',
+    description: 'Per-model token rates that turn usage into credits. Edited in Models > Prices.',
+    linkLabel: 'Open model prices',
   },
   {
     id: 'rate-limits',

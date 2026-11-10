@@ -277,7 +277,7 @@ describe('AdminGrowthPricingTab', () => {
     expect(describeDerivedValue('pricePerCredit', undefined)).toMatch(/^USD per credit - floor /);
   });
 
-  it('links to the model pricing catalog, the tier rate-limit settings and the Invite Center rewards', () => {
+  it('links to model prices, the tier rate-limit settings and the Invite Center rewards', () => {
     renderTab();
 
     for (const link of GROWTH_PRICING_LINKS) {

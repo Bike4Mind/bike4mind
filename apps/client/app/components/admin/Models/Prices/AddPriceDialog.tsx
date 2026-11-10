@@ -44,7 +44,7 @@ const draftProblem = (tiers: TierDraft[]): string | null => {
 
 type AddPriceDialogProps = {
   onClose: () => void;
-  /** A model id from the page's filter; preselected when it is a text model. */
+  /** A model id from the page's filter; preselected when it is a text or voice model with no price row. */
   presetModelId?: string;
   onAdded: () => void;
 };
@@ -54,8 +54,12 @@ export function AddPriceDialog({ onClose, presetModelId, onAdded }: AddPriceDial
   const text = useAdminModelsOfType('text');
   const voice = useAdminModelsOfType('realtime-voice');
   const models = { isLoading: text.isLoading || voice.isLoading, isError: text.isError || voice.isError };
+  // A model with a price row in force (`price.source === 'row'`) is repriced from the table, not here.
   const ids = useMemo(
-    () => [...(text.data ?? []), ...(voice.data ?? [])].map(model => model.id),
+    () =>
+      [...(text.data ?? []), ...(voice.data ?? [])]
+        .filter(model => model.price?.source !== 'row')
+        .map(model => model.id),
     [text.data, voice.data]
   );
   const [picked, setPicked] = useState<string | null>(null);
