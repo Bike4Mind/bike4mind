@@ -11,7 +11,6 @@ import { AdminCommandPalette, type AdminCommand } from '../../shared/AdminComman
 import { Kbd } from '../../shared';
 import { AdjustCreditsDialog } from './actions/AdjustCreditsDialog';
 import { ReinstateDialog, SuspendDialog } from './actions/SuspendDialog';
-import { moderationBlockedReason } from './UserProfileHeader';
 import { EditProfileDialog } from './actions/EditProfileDialog';
 import { ChangeRoleDialog, ManageTagsDialog, ProductAccessDialog } from './actions/accessDialogs';
 import {
@@ -29,7 +28,7 @@ import {
   ShadowTierDialog,
 } from './actions/accountDialogs';
 import type { ProfileAction, ProfileDialogProps } from './actions/profileActions';
-import { UserProfileHeader, deletionBlockedReason } from './UserProfileHeader';
+import { UserProfileHeader, deletionBlockedReason, moderationBlockedReason } from './UserProfileHeader';
 import { UserProfileStats } from './UserProfileStats';
 import { UserProfileTabs } from './UserProfileTabs';
 import { UserRiskBadges } from './UserRiskBadges';
