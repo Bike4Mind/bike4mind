@@ -228,6 +228,16 @@ export const useWithdrawListing = () => {
   });
 };
 
+export const useDeleteListing = () => {
+  const invalidate = useInvalidateMarket();
+  return useMutation({
+    mutationFn: async (listingId: string) => {
+      await api.delete(`/api/skills/market/${listingId}/permanent`);
+    },
+    onSuccess: invalidate,
+  });
+};
+
 export const useImportListing = () => {
   const invalidate = useInvalidateMarket();
   return useMutation({

@@ -53,6 +53,7 @@ export { generateShareToken } from './shareToken';
 export { checkShareGrant, type ShareGrantArtifact, type ShareGrantContext } from './checkShareGrant';
 export { recordGatedView, type RecordGatedViewInput } from './recordGatedView';
 export { renderPassphraseShell } from './renderPassphraseShell';
+export { renderNotFoundPage } from './renderNotFoundPage';
 export {
   checkVisibility,
   type VisibilityCheckArtifact,

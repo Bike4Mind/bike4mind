@@ -26,7 +26,12 @@ const SkillsListPage: FC = () => {
   }, [skills, search]);
 
   const handleDelete = async (skill: ISkill) => {
-    if (!window.confirm(`Delete skill "${skill.name}"? This cannot be undone.`)) return;
+    if (
+      !window.confirm(
+        `Delete skill "${skill.name}"? Any Skill Market listing of this skill will be withdrawn. This cannot be undone.`
+      )
+    )
+      return;
     await deleteSkill.mutateAsync(skill.id);
   };
 

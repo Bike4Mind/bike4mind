@@ -86,6 +86,25 @@ All API errors follow a standardized format:
 }
 ```
 
+### Account Suspended
+
+When an administrator suspends the account that owns your API key or session, every authenticated request returns `403` with `errorCode: "account_suspended"`. Suspension also disables the account's API keys, but a request made with one of them still gets this `403` rather than a `401`, so you can tell a suspension from a wrong key. Retrying or rotating the key does not help. If the account is reinstated, its old keys stay disabled; create new ones.
+
+```json
+{
+  "error": "This account is suspended for automated or scripted misuse of the service, which our Usage Policy does not allow. If you believe this is a mistake, you can appeal at https://example.com/support.",
+  "errorCode": "account_suspended",
+  "suspension": {
+    "reason_category": "automated_misuse",
+    "terms_url": "https://example.com/usage-policy",
+    "appeal_url": "https://example.com/support"
+  },
+  "request_id": "req_123"
+}
+```
+
+`reason_category` is one of `multiple_accounts`, `automated_misuse`, `payment_fraud`, `prohibited_content` or `terms_violation`. New categories may be added, so treat an unknown value like `terms_violation`. `terms_url` and `appeal_url` are absent on self-hosted deployments. Branch on `errorCode`, not on the message text.
+
 ### Organization Access Denied
 ```json
 {
@@ -306,7 +325,7 @@ The retry table and the in-stream error codes are in [Completions errors](./comp
 - Ensure token is properly formatted: `Bearer <token>`
 
 **403 Forbidden**
-- On the completions endpoint, a 403 without `required_scopes` may mean the account is suspended or under a dispute (contact support), or a JWT caller needs to enroll in MFA in the web app. Changing key scopes does not resolve these account restrictions
+- A 403 with `errorCode: "account_suspended"` means the account is suspended; see [Account Suspended](#account-suspended). On the completions endpoint, a 403 without `required_scopes` or an `errorCode` may mean the account is under a payment dispute (contact support), or a JWT caller needs to enroll in MFA in the web app. Changing key scopes does not resolve these account restrictions
 - Verify user has required permissions
 - Check organization membership
 - Confirm subscription tier supports the feature

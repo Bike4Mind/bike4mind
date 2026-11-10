@@ -96,10 +96,11 @@ describe('readSkillFile', () => {
       body: 'Body text',
       argumentHint: '<file>',
       claudeCodeAllowedTools: ['Read', 'Bash'],
+      claudeCodeModel: 'opus',
       disableModelInvocation: false,
     });
     expect(fromDir.payload).not.toHaveProperty('allowedTools');
-    expect(fromDir.dropped).toEqual(['model']);
+    expect(fromDir.dropped).toEqual([]);
   });
 
   it('falls back to the folder name, trimmed and lowercased', async () => {
@@ -166,6 +167,7 @@ describe('buildSkillPayload', () => {
       description: 'b',
       body: 'b',
       claudeCodeAllowedTools: [],
+      claudeCodeModel: '',
       disableModelInvocation: true,
     });
   });
@@ -174,6 +176,11 @@ describe('buildSkillPayload', () => {
     const payload = buildSkillPayload({ name: 'commit', claudeCodeAllowedTools: ['Bash(git:*)', 'Read'] }, 'f');
     expect(payload.claudeCodeAllowedTools).toEqual(['Bash(git:*)', 'Read']);
     expect(payload).not.toHaveProperty('allowedTools');
+  });
+
+  it("sends the file's model as claudeCodeModel, and an empty string when absent so an update clears it", () => {
+    expect(buildSkillPayload({ name: 'a', claudeCodeModel: 'haiku' }, 'f').claudeCodeModel).toBe('haiku');
+    expect(buildSkillPayload({ name: 'a' }, 'f').claudeCodeModel).toBe('');
   });
 
   it('falls back to the first body line, without heading marks, when there is no description', () => {
@@ -218,7 +225,14 @@ const noApiCalls = (api: ReturnType<typeof makeDeps>['api']) =>
   Object.values(api).forEach(fn => expect(fn).not.toHaveBeenCalled());
 
 const file = (extra: Partial<SkillFile> = {}): SkillFile => ({
-  payload: { name: 'my-skill', description: 'd', body: 'b', claudeCodeAllowedTools: [], disableModelInvocation: false },
+  payload: {
+    name: 'my-skill',
+    description: 'd',
+    body: 'b',
+    claudeCodeAllowedTools: [],
+    claudeCodeModel: '',
+    disableModelInvocation: false,
+  },
   dropped: [],
   extraFiles: [],
   ...extra,

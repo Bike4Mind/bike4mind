@@ -186,6 +186,28 @@ describe('AdminAuditLogRepository.listReviewQueue', () => {
     expect(all.total).toBe(3);
   });
 
+  it('counts only eligible unreviewed critical entries up to the limit', async () => {
+    const query = { viewerUserId: VIEWER };
+    await expect(adminAuditLogRepository.countUnreviewed(query, { limit: 2 })).resolves.toBe(0);
+
+    const occurredAt = new Date('2026-03-01T00:00:00Z');
+    const reviewed = await adminAuditLogRepository.append(critical(byOther, occurredAt));
+    await adminAuditReviewRepository.createMany([
+      { auditEntryId: reviewed.id, reviewer: { userId: 'someone', name: 'Someone' }, note: 'ok' },
+    ]);
+    await adminAuditLogRepository.append(critical(byViewer, occurredAt));
+    await adminAuditLogRepository.append(
+      critical({ ...byOther, target: { kind: 'user', id: VIEWER, displayName: 'Viewer' } }, occurredAt)
+    );
+    await adminAuditLogRepository.append(entry(byOther, occurredAt));
+    for (let i = 0; i < 3; i += 1) {
+      await adminAuditLogRepository.append(critical(byOther, occurredAt));
+    }
+
+    await expect(adminAuditLogRepository.countUnreviewed(query, { limit: 2 })).resolves.toBe(2);
+    await expect(adminAuditLogRepository.countUnreviewed(query, { limit: 10 })).resolves.toBe(3);
+  });
+
   it('pages with a cursor and keeps total independent of it', async () => {
     for (let day = 1; day <= 5; day += 1) {
       await adminAuditLogRepository.append(
