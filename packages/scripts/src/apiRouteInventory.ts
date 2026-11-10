@@ -271,9 +271,9 @@ function readAdminPermissions(
   const declared = ts.isIdentifier(unwrapped) ? objects.get(unwrapped.text) : unwrapped;
   if (!declared || !ts.isObjectLiteralExpression(declared)) return [{ method: '*', requirement: '?' }];
   return declared.properties.map(property => {
-    const name = property.name && (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name));
-    if (!name || !ts.isPropertyAssignment(property)) return { method: '?', requirement: '?' };
-    return { method: (property.name as ts.Identifier).text, requirement: readRequirement(property.initializer) };
+    if (!ts.isPropertyAssignment(property)) return { method: '?', requirement: '?' };
+    if (!ts.isIdentifier(property.name) && !ts.isStringLiteral(property.name)) return { method: '?', requirement: '?' };
+    return { method: property.name.text, requirement: readRequirement(property.initializer) };
   });
 }
 
