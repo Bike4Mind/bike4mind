@@ -1003,6 +1003,19 @@ describe('DataLakeExplorer - lake scope in chat mode (#1943)', () => {
     expect(pickerRefresh.sessionIds.at(-1)).toBe('sess-1');
   });
 
+  it('keeps the cached lake rows when a refresh read fails, instead of swapping in the error panel', () => {
+    lakesState.isError = true;
+    try {
+      renderExplorer();
+      fireEvent.click(screen.getByTestId('datalake-lake-picker-btn'));
+
+      expect(screen.queryByTestId('datalake-lake-picker-error')).not.toBeInTheDocument();
+      expect(screen.getByTestId('datalake-lake-picker-lake-lake-1')).toBeInTheDocument();
+    } finally {
+      lakesState.isError = false;
+    }
+  });
+
   // The tree is built purely from tag counts, which have nothing to seed a branch from for a
   // lake with zero files - so an accessible-but-empty lake used to vanish from it entirely (#3234).
   it('adds a row for an accessible lake with no tagged files yet, alongside populated ones (#3234)', () => {
@@ -1449,6 +1462,8 @@ describe('DataLakeExplorer - honest empty states in chat mode (#1943)', () => {
 
     it('surfaces a failed lake list as an error while the bucket is open', () => {
       lakesState.isError = true;
+      // A first load that failed has no data; a failed refresh keeps the cached rows instead.
+      lakesState.value = undefined as unknown as unknown[];
       renderExplorer();
       nav(['lakea', U]);
 

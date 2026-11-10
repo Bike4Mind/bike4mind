@@ -317,10 +317,12 @@ export default function DataLakeExplorer({
   const {
     data: lakes,
     isLoading: lakesLoading,
-    isError: lakesError,
+    isError: lakesQueryError,
     refetch: refetchLakes,
   } = useGetDataLakesWithRetrievability(currentSessionId);
-  const refreshPickerReads = useRefreshLakePickerReads(currentSessionId);
+  // A failed background refresh (the picker refetches on open) must not hide rows already cached.
+  const lakesError = lakesQueryError && lakes === undefined;
+  const refreshPickerReads = useRefreshLakePickerReads(currentSessionId, source);
   const lakeFileTagPrefixes = useMemo(() => lakes?.map(l => l.fileTagPrefix) ?? [], [lakes]);
   const libraryFiles = useSetIncludeLibraryFiles(lakeFileTagPrefixes);
   const removeFile = useRemoveFileFromDataLake(deleteTarget?.lake.id ?? null);
