@@ -703,11 +703,17 @@ describe('confidence gate fields resolution', () => {
     expect(profile.confidenceGateSelfReport).toBe(false);
   });
 
-  it('returns undefined gate fields when neither agent nor defaults provide them', async () => {
+  it('returns undefined gate fields when neither agent nor admin defaults provide them', async () => {
+    const sparseDefaults: OrchestrationDefaults = {
+      ...ADMIN_DEFAULTS,
+      confidenceGateThreshold: undefined as unknown as number,
+      confidenceGateMode: undefined as unknown as 'both',
+      confidenceGateSelfReport: undefined as unknown as boolean,
+    };
     const profile = await resolveTopLevelProfile({
       agentId: 'agent-1',
       loadAgent: vi.fn().mockResolvedValue(makeAgent()),
-      adminDefaults: ADMIN_DEFAULTS,
+      adminDefaults: sparseDefaults,
       model: 'claude-opus',
     });
     expect(profile.confidenceGateThreshold).toBeUndefined();
