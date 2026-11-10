@@ -1,4 +1,6 @@
-import type { SettingKey } from '@bike4mind/common';
+import { settingsMap, type SettingKey } from '@bike4mind/common';
+import { MODELS_SECTION_PARAM } from '../modelsSearch';
+import { leavesAdminSettingsPage } from '../../shared/adminTabSwitches';
 
 /** The setting keys the Models > Settings section edits, in display order, grouped as it renders them. */
 export const MODEL_SETTINGS_GROUP_KEYS = {
@@ -71,3 +73,23 @@ export const MODEL_SETTING_CHOICE_COPY: Record<ChoiceSettingKey, { label: string
       'All models: anything outside the allowed list is paid-only. Media models only: text models stay open to free accounts and only media models need the list or a paid plan.',
   },
 };
+
+/** Switching Models sections keeps the tab, so it must also count as leaving or staged edits vanish unprompted. */
+export const leavesModelSettings: typeof leavesAdminSettingsPage = (current, next) => {
+  const section = (location: { search: object }) =>
+    MODELS_SECTION_PARAM in location.search
+      ? (location.search as Record<string, unknown>)[MODELS_SECTION_PARAM]
+      : undefined;
+  return leavesAdminSettingsPage(current, next) || section(current) !== section(next);
+};
+
+/** The admin Settings categories that lost a key to this section, with the pointer copy for each. */
+export const MODEL_SETTINGS_CATEGORY_POINTERS: Record<string, string> = {
+  AI: 'Model discovery, default, recommended, operations, and video and music models are edited in',
+  SecOps: 'The free-tier model gate, its scope and its allowed models are edited in',
+};
+export const MODEL_SETTINGS_FALLBACK_POINTER = 'Some model settings are edited in';
+
+export const MODEL_SETTINGS_MOVED_CATEGORIES: ReadonlySet<string> = new Set(
+  [...MODEL_SETTINGS_ONLY_KEYS].map(key => settingsMap[key].category as string)
+);

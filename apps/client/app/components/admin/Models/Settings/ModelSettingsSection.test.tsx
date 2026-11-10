@@ -4,10 +4,12 @@ import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
+type Location = { pathname: string; search: object };
 const state = vi.hoisted(() => ({
   rows: [] as { settingName: string; settingValue: unknown }[],
   loading: false,
   error: false,
+  shouldBlock: undefined as undefined | ((args: { current: Location; next: Location }) => boolean),
   mutateAsync: vi.fn(async (_vars: { key: string; value: unknown }) => ({})),
   user: { isAdmin: true, adminPermissions: [] as string[] } as { isAdmin: boolean; adminPermissions?: string[] },
 }));
@@ -25,7 +27,10 @@ vi.mock('@client/app/hooks/data/settings', () => ({
 }));
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: state.user }) }));
 vi.mock('@tanstack/react-router', () => ({
-  useBlocker: () => ({ status: 'idle' }),
+  useBlocker: (options: { shouldBlockFn: (args: { current: Location; next: Location }) => boolean }) => {
+    state.shouldBlock = options.shouldBlockFn;
+    return { status: 'idle' };
+  },
   useRouter: () => ({ state: { location: { pathname: '/admin', search: {} } }, navigate: vi.fn() }),
   useSearch: () => ({}),
   useNavigate: () => vi.fn(),
@@ -41,6 +46,7 @@ vi.mock('../../AdminGenerationModelsSetting', () => ({
 }));
 
 import { ModelSettingsSection } from './ModelSettingsSection';
+import { leavesModelSettings } from './modelSettingsKeys';
 
 const theme = extendTheme({ ...getThemeConfig() });
 const renderSection = () =>
@@ -161,6 +167,38 @@ describe('ModelSettingsSection', () => {
     expect(screen.getByTestId('models-settings-modelDiscoveryMode-write')).toBeDisabled();
     await userEvent.click(screen.getByTestId('models-settings-modelDiscoveryMode-write'));
     expect(screen.queryByTestId('admin-save-bar')).toBeNull();
+  });
+
+  it('hides the gate scope and allowed models while the gate is off, and shows them when on', () => {
+    state.rows = [{ settingName: 'freeTierModelGateEnabled', settingValue: false }];
+    const { unmount } = renderSection();
+    expect(screen.queryByTestId('models-settings-freeTierModelGateScope')).toBeNull();
+    expect(screen.queryByTestId('admin-setting-freeTierAllowedModels-input')).toBeNull();
+    unmount();
+
+    state.rows = [{ settingName: 'freeTierModelGateEnabled', settingValue: true }];
+    renderSection();
+    expect(screen.getByTestId('models-settings-freeTierModelGateScope')).toBeTruthy();
+    expect(screen.getByTestId('admin-setting-freeTierAllowedModels-input')).toBeTruthy();
+  });
+
+  it('blocks a switch to another Models section only while a draft is staged', () => {
+    renderSection();
+    const args = {
+      current: { pathname: '/admin', search: { tab: 'models', modelsSection: 'settings' } },
+      next: { pathname: '/admin', search: { tab: 'models', modelsSection: 'prices' } },
+    };
+    expect(state.shouldBlock?.(args)).toBe(false);
+
+    fireEvent.click(screen.getByTestId('models-settings-modelDiscoveryMode-write'));
+    expect(state.shouldBlock?.(args)).toBe(true);
+  });
+
+  it('counts a Models section switch as leaving, but not a change inside the section', () => {
+    const at = (modelsSection?: string) => ({ pathname: '/admin', search: { tab: 'models', modelsSection } });
+    expect(leavesModelSettings(at('settings'), at('prices'))).toBe(true);
+    expect(leavesModelSettings(at('settings'), at('settings'))).toBe(false);
+    expect(leavesModelSettings(at('settings'), { pathname: '/admin/models/x', search: {} })).toBe(true);
   });
 
   it('allows edits for a full admin', () => {

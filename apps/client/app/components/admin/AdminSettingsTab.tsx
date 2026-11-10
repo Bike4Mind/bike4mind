@@ -39,7 +39,12 @@ import AdminSettingInputField from './AdminSettingInputField';
 import AdminStringListSettingField from './AdminStringListSettingField';
 import { AdminTurnstileStatusNotice } from './AdminTurnstileStatusNotice';
 import { useModelsNavigation } from './Models/modelsNavigation';
-import { MODEL_SETTINGS_ONLY_KEYS } from './Models/Settings/modelSettingsKeys';
+import {
+  MODEL_SETTINGS_CATEGORY_POINTERS,
+  MODEL_SETTINGS_FALLBACK_POINTER,
+  MODEL_SETTINGS_MOVED_CATEGORIES,
+  MODEL_SETTINGS_ONLY_KEYS,
+} from './Models/Settings/modelSettingsKeys';
 import { ScopedOverridesByScope } from './ScopedOverridesByScope';
 import { HOME_BY_KEY, SETTING_HOMES } from './settingHomes';
 import { useOpenSettingHome } from './useOpenSettingHome';
@@ -536,13 +541,13 @@ const AdminSettingsTab: React.FC = () => {
           </Typography>
         </Stack>
 
-        {category === 'AI' && (
+        {MODEL_SETTINGS_MOVED_CATEGORIES.has(category) && (
           <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
-            {MODEL_SETTINGS_LINK_TEXT}{' '}
+            {MODEL_SETTINGS_CATEGORY_POINTERS[category] ?? MODEL_SETTINGS_FALLBACK_POINTER}{' '}
             <Link
               component="button"
               onClick={() => void openSection('settings')}
-              data-testid="admin-settings-models-link"
+              data-testid={`admin-settings-models-link-${category}`}
             >
               Models settings
             </Link>

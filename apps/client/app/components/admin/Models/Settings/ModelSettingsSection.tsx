@@ -12,7 +12,12 @@ import { SettingsDraftProvider } from '../../SettingsDraftProvider';
 import { ErrorState, LoadingState, SettingsSection } from '../../shared';
 import { useModelWriteBlock } from '../ModelWriteAction';
 import { ModelSettingChoiceField } from './ModelSettingChoiceField';
-import { MODEL_SETTINGS_GROUP_KEYS, MODEL_SETTING_CHOICES, type ChoiceSettingKey } from './modelSettingsKeys';
+import {
+  leavesModelSettings,
+  MODEL_SETTINGS_GROUP_KEYS,
+  MODEL_SETTING_CHOICES,
+  type ChoiceSettingKey,
+} from './modelSettingsKeys';
 
 const isChoiceKey = (key: SettingKey): key is ChoiceSettingKey => key in MODEL_SETTING_CHOICES;
 
@@ -91,14 +96,22 @@ export function ModelSettingsSection() {
     );
   };
 
+  // Same rule as the general Settings page: a dependent setting shows only while its parent is on.
+  const isVisible = (key: SettingKey) => {
+    const parent = (settingsMap[key] as { dependsOn?: SettingKey }).dependsOn;
+    if (!parent) return true;
+    const stored = storedByKey.get(parent);
+    return stored !== undefined ? String(stored) === 'true' : settingsMap[parent].defaultValue === true;
+  };
+
   const renderCard = (group: keyof typeof MODEL_SETTINGS_GROUP_KEYS, keys: readonly SettingKey[]) => (
     <SettingsSection sx={{ mb: 0 }} data-testid={`models-settings-${group}-fields`}>
-      <Stack gap={2}>{keys.map(renderField)}</Stack>
+      <Stack gap={2}>{keys.filter(isVisible).map(renderField)}</Stack>
     </SettingsSection>
   );
 
   return (
-    <SettingsDraftProvider>
+    <SettingsDraftProvider isLeaving={leavesModelSettings}>
       <Stack gap={3} data-testid="models-settings">
         {blocked && (
           <Alert

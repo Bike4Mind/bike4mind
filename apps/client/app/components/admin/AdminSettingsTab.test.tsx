@@ -252,10 +252,18 @@ describe('AdminSettingsTab model settings', () => {
     renderAiTab();
 
     expect(screen.getByTestId('generic-setting-agentVideoClipsPerRun')).toBeTruthy();
-    fireEvent.click(screen.getByTestId('admin-settings-models-link'));
+    fireEvent.click(screen.getByTestId('admin-settings-models-link-AI'));
     const call = router.navigate.mock.calls.at(-1)?.[0] as { to: string; search: Record<string, unknown> };
     expect(call.to).toBe('/admin');
     expect(call.search).toMatchObject({ tab: 'models', modelsSection: 'settings' });
+  });
+
+  it('points to Models > Settings from every category that lost a key', () => {
+    renderTab(findTab(settingsMap.freeTierModelGateEnabled.category));
+
+    expect(
+      screen.getByTestId(`admin-settings-models-link-${settingsMap.freeTierModelGateEnabled.category}`)
+    ).toBeTruthy();
   });
 
   it('points a search for a moved key to Models > Settings', () => {
