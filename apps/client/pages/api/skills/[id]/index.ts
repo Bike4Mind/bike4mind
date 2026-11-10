@@ -25,6 +25,7 @@ import {
   canManageSkillSharing,
   redactShareRosterForViewer,
 } from '@server/utils/skillAccess';
+import { withdrawSkillListings } from '@bike4mind/server-utils/skillMarket/market';
 import { attachMarketStatus } from '@server/skillMarket/marketStatus';
 import { scanGlobalSkillUpdate } from '@server/skillMarket/globalSkillUpdate';
 import { getOperationsClassifierLlm } from '@server/skillMarket/classifySkill';
@@ -117,6 +118,12 @@ const handler = baseApi()
     }
 
     await skillRepository.delete(id as string);
+    try {
+      await withdrawSkillListings(skill.id);
+    } catch (err) {
+      // The delete is committed; the author can still withdraw from My listings.
+      req.logger.error(`Failed to withdraw Skill Market listings for deleted skill ${skill.id}: ${String(err)}`);
+    }
     res.status(204).end();
   });
 
