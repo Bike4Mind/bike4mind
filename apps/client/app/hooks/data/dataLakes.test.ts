@@ -107,6 +107,7 @@ import {
   useUnderChunkedCount,
   useGetDataLakesWithRetrievability,
   useGetScopedDataLakeTagCounts,
+  useRefreshLakePickerReads,
   useGetDataLakeArticles,
   useDataLakeSlugPreview,
 } from './dataLakes';
@@ -235,6 +236,70 @@ describe('useGetScopedDataLakeTagCounts', () => {
     expect(result.current.fetchStatus).toBe('idle');
     expect(result.current.isLoading).toBe(false);
     expect(apiGet).not.toHaveBeenCalled();
+  });
+});
+
+// The picker opening is the only refresh the Data Lake mode picker gets when no sync poll is mounted.
+describe('useRefreshLakePickerReads', () => {
+  it("marks the session's labelled lake list and every tag count stale, and nothing else under the lake prefix", () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const keys = {
+      ownList: dataLakeKeys.listWithRetrievability('sess-1'),
+      otherSessionList: dataLakeKeys.listWithRetrievability('sess-2'),
+      plainList: dataLakeKeys.list,
+      publicCatalog: dataLakeKeys.public(''),
+      tagCounts: dataLakeKeys.tagCounts('datalakes'),
+      scopedTagCounts: dataLakeKeys.tagCountsScoped('datalakes', ['lake-a']),
+    };
+    for (const key of Object.values(keys)) queryClient.setQueryData(key, { seeded: true });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    const { result } = renderHook(() => useRefreshLakePickerReads('sess-1'), { wrapper });
+
+    act(() => result.current());
+
+    const invalidated = (key: readonly unknown[]) => queryClient.getQueryState(key)?.isInvalidated;
+    expect(invalidated(keys.ownList)).toBe(true);
+    expect(invalidated(keys.tagCounts)).toBe(true);
+    expect(invalidated(keys.scopedTagCounts)).toBe(true);
+    expect(invalidated(keys.otherSessionList)).toBe(false);
+    expect(invalidated(keys.plainList)).toBe(false);
+    expect(invalidated(keys.publicCatalog)).toBe(false);
+  });
+
+  it('lets a lake list read already in flight finish rather than restarting it', async () => {
+    apiGet.mockReset();
+    apiGet.mockResolvedValueOnce({ data: { data: [{ id: 'a', name: 'New GitHub data lake' }] } });
+    let release: (v: unknown) => void = () => {};
+    apiGet.mockReturnValueOnce(new Promise(resolve => (release = resolve)));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    const { result } = renderHook(
+      () => ({ lakes: useGetDataLakesWithRetrievability('sess-1'), refresh: useRefreshLakePickerReads('sess-1') }),
+      { wrapper }
+    );
+    await waitFor(() => expect(result.current.lakes.data).toEqual([{ id: 'a', name: 'New GitHub data lake' }]));
+    void result.current.lakes.refetch();
+    await waitFor(() => expect(apiGet).toHaveBeenCalledTimes(2));
+
+    act(() => result.current.refresh());
+    await act(async () => release({ data: { data: [{ id: 'a', name: 'acme/docs' }] } }));
+
+    await waitFor(() => expect(result.current.lakes.data).toEqual([{ id: 'a', name: 'acme/docs' }]));
+    expect(apiGet).toHaveBeenCalledTimes(2);
+  });
+
+  it('keys a missing session as the no-session list', () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(dataLakeKeys.listWithRetrievability(null), []);
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    const { result } = renderHook(() => useRefreshLakePickerReads(undefined), { wrapper });
+
+    act(() => result.current());
+
+    expect(queryClient.getQueryState(dataLakeKeys.listWithRetrievability(null))?.isInvalidated).toBe(true);
   });
 });
 

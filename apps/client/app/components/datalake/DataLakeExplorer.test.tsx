@@ -146,6 +146,9 @@ const { tagCountsState, uncategorizedState, articleParams } = vi.hoisted(() => (
   articleParams: [] as Array<{ tags?: string[]; lakeId?: string[] } | null | undefined>,
 }));
 
+// The picker's refresh-on-open; what it invalidates is covered in dataLakes.test.ts.
+const pickerRefresh = vi.hoisted(() => ({ sessionIds: [] as Array<string | null | undefined>, refresh: vi.fn() }));
+
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   activeOrgId: () => undefined,
   useGetDataLakeTagCounts: () => ({
@@ -195,6 +198,10 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useGetDataLakesWithRetrievability: (sessionId: string | null | undefined) => {
     lakesHookSessionIds.push(sessionId);
     return { data: lakesState.value, isLoading: lakesState.isLoading, isError: lakesState.isError };
+  },
+  useRefreshLakePickerReads: (sessionId: string | null | undefined) => {
+    pickerRefresh.sessionIds.push(sessionId);
+    return pickerRefresh.refresh;
   },
   useRemoveFileFromDataLake: (lakeId: string | null) => {
     removeFileLakeIds.push(lakeId);
@@ -981,6 +988,19 @@ describe('DataLakeExplorer - lake scope in chat mode (#1943)', () => {
     expect(screen.getByTestId('datalake-lake-picker-btn')).toHaveTextContent('All data lakes');
     // Unscoped, so every lake's branches are in the tree.
     expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-segments', 'lakea,lakeb');
+  });
+
+  // A connector sync renames a lake and adds files server-side; with no manager open, nothing else
+  // refreshes the picker's cached names and counts.
+  it("refreshes the session's lake list and counts each time the picker opens", () => {
+    pickerRefresh.refresh.mockClear();
+    renderExplorer();
+    expect(pickerRefresh.refresh).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-btn'));
+
+    expect(pickerRefresh.refresh).toHaveBeenCalledTimes(1);
+    expect(pickerRefresh.sessionIds.at(-1)).toBe('sess-1');
   });
 
   // The tree is built purely from tag counts, which have nothing to seed a branch from for a
