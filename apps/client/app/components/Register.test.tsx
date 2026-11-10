@@ -472,6 +472,24 @@ describe('Register - product hint from redirectTo', () => {
     expect(screen.getByTestId('auth-redirect-product-hint')).toHaveTextContent('auth.signUpToContinueTo');
   });
 
+  it('hides the hint once the code step is reached', async () => {
+    vi.clearAllMocks();
+    mocks.allowOpenRegistration = true;
+    mocks.sendOTC.mockResolvedValue({ pendingToken: 'ptok-1' });
+    premiumNav.items = [{ path: '/product', label: 'Product' }];
+    window.history.replaceState(null, '', '/register?redirectTo=%2Fproduct');
+    const user = userEvent.setup();
+    renderRegister();
+    expect(screen.getByTestId('auth-redirect-product-hint')).toBeInTheDocument();
+    await user.type(within(screen.getByTestId('register-username-input')).getByRole('textbox'), 'newbie');
+    await user.type(within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
+    await user.click(within(screen.getByTestId('register-aup-tos-checkbox')).getByRole('checkbox'));
+    await user.click(within(screen.getByTestId('register-age-checkbox')).getByRole('checkbox'));
+    await user.click(screen.getByTestId('register-submit-btn'));
+    await screen.findByTestId('register-otc-input');
+    expect(screen.queryByTestId('auth-redirect-product-hint')).toBeNull();
+  });
+
   it('shows nothing without a product redirect', () => {
     premiumNav.items = [{ path: '/product', label: 'Product' }];
     window.history.replaceState(null, '', '/register');
