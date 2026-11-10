@@ -10,7 +10,9 @@ describe('notion debug logger', () => {
     stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     // vitest intercepts console.* before process.stdout, so spy on them directly
-    consoleCalls = (['log', 'info', 'debug'] as const).map(m => vi.spyOn(console, m).mockImplementation(() => {}));
+    consoleCalls = (['log', 'info', 'debug', 'warn', 'error'] as const).map(m =>
+      vi.spyOn(console, m).mockImplementation(() => {})
+    );
     vi.stubEnv('NOTION_DEBUG', '1');
   });
 

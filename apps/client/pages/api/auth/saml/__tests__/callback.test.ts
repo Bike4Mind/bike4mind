@@ -152,6 +152,7 @@ describe('/api/auth/saml/callback - structured logging', () => {
   const relay = new URLSearchParams({ idp: 'idp-1' }).toString();
   const loggedText = () =>
     JSON.stringify(Object.values(logger).flatMap(fn => fn.mock.calls.map(([message]) => message)));
+  const loggedArguments = () => JSON.stringify(Object.values(logger).flatMap(fn => fn.mock.calls));
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -192,18 +193,22 @@ describe('/api/auth/saml/callback - structured logging', () => {
       'SAML authentication failed',
       expect.objectContaining({ idpId: 'idp-1', reason: 'domain_mismatch' })
     );
-    expect(loggedText()).not.toContain('person@example.com');
-    expect(loggedText()).not.toContain('203.0.113.7');
+    expect(loggedArguments()).not.toContain('person@example.com');
+    expect(loggedArguments()).not.toContain('203.0.113.7');
     expect(console.error).not.toHaveBeenCalled();
   });
 
   it('keeps the SAMLResponse, access token and email out of every logger argument', async () => {
     const samlResponse = 'PHNhbWxwOlJlc3BvbnNlLXNpZ25lZA==';
+    const canaryRelay = new URLSearchParams({ idp: 'idp-1', marker: 'relay-canary-93' }).toString();
     mockSamlUser.mockReturnValue({ id: 'u-1', isBanned: false, email: 'person@example.com' });
+    mockSamlInfo.mockReturnValue({ email: 'info-person@example.com' });
 
-    await runCallback(relay, /\/auth\/success/, { SAMLResponse: samlResponse, RelayState: relay });
+    await runCallback(canaryRelay, /\/auth\/success/, { SAMLResponse: samlResponse, RelayState: canaryRelay });
 
-    const everything = JSON.stringify(Object.values(logger).flatMap(fn => fn.mock.calls));
+    const everything = loggedArguments();
+    expect(everything).not.toContain('relay-canary-93');
+    expect(everything).not.toContain('info-person@example.com');
     expect(everything).not.toContain(samlResponse);
     expect(everything).not.toContain('access-token-canary');
     expect(everything).not.toContain('person@example.com');
