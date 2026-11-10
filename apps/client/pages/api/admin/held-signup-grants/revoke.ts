@@ -46,16 +46,25 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
       );
       if (!result) throw new NotFoundError('Release batch not found');
       let policy: ReturnType<typeof loadCreditGrantPolicy> | undefined;
+      const heldRestoredIds = new Set(batch.entries.filter(entry => entry.restore).map(entry => entry.userId));
       for (const row of result.results) {
         if (row.outcome !== 'reversed') continue;
+        const heldRestored = heldRestoredIds.has(row.userId);
         try {
           await recordAdminActionFromRequest(
             req,
             {
               action: 'user.credits.adjusted',
               target: { kind: 'user', id: row.userId, displayName: row.userId },
-              summary: 'revoked released signup grant',
-              details: { credits: -row.credits, source: 'held_grant_revoke', batchId: result.batchId },
+              summary: heldRestored
+                ? 'revoked released signup grant and returned it to the held queue'
+                : 'revoked released signup grant',
+              details: {
+                credits: -row.credits,
+                source: 'held_grant_revoke',
+                batchId: result.batchId,
+                ...(heldRestored ? { heldRestored: true } : {}),
+              },
             },
             { creditGrantPolicy: () => (policy ??= loadCreditGrantPolicy()) }
           );
