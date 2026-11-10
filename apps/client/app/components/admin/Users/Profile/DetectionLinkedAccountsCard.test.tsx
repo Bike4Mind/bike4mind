@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { UserDetectionLinks } from '@bike4mind/common';
+import { QueryClient } from '@tanstack/react-query';
 import { DetectionLinkedAccountsCard } from './DetectionLinkedAccountsCard';
 import { ProfileTestWrapper } from './profileTestUtils';
 
@@ -155,7 +156,8 @@ describe('DetectionLinkedAccountsCard', () => {
     });
   });
 
-  it('propagates completed suspensions after Cancel while a request is pending', async () => {
+  it('stops at Cancel, then still refreshes, alerts once and offers Undo for the accounts already sent', async () => {
+    const invalidate = vi.spyOn(QueryClient.prototype, 'invalidateQueries');
     let resolveSuspend!: (value: object) => void;
     mocks.updateUser.mockReturnValueOnce(
       new Promise(resolve => {
@@ -173,12 +175,28 @@ describe('DetectionLinkedAccountsCard', () => {
 
     await act(async () => resolveSuspend({}));
 
-    await waitFor(() => expect(mocks.post).toHaveBeenCalledTimes(1));
-    expect(mocks.post).toHaveBeenCalledWith('/api/admin/users/linked-suspend-propagation', {
-      userIds: ['one', 'two'],
-    });
-    expect(screen.queryByTestId('undo-toast')).not.toBeInTheDocument();
+    expect(await screen.findByTestId('undo-toast-message')).toHaveTextContent(
+      'Canceled: 1 of 2 linked accounts were suspended before you canceled.'
+    );
+    // The account not yet sent when the admin canceled is left alone.
+    expect(mocks.updateUser).toHaveBeenCalledTimes(1);
+    expect(mocks.updateUser).toHaveBeenCalledWith('one', expect.objectContaining({ isBanned: true }));
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    expect(mocks.post).toHaveBeenCalledWith('/api/admin/users/linked-suspend-propagation', { userIds: ['one'] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'users'] });
     expect(mocks.toastError).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));
+    await waitFor(() => expect(mocks.updateUser).toHaveBeenCalledTimes(2));
+    expect(mocks.updateUser).toHaveBeenLastCalledWith('one', expect.objectContaining({ isBanned: false }));
+    invalidate.mockRestore();
+  });
+
+  it('words a one-account run in the singular', () => {
+    setup({ ...LINKS, accounts: [account('one')] });
+    openDialog();
+    expect(screen.getByText('Suspend 1 linked account?')).toBeInTheDocument();
+    expect(screen.getByTestId('suspend-linked-dialog-confirm-btn')).toHaveTextContent(/^Suspend 1 account$/);
   });
 
   it('keeps the dialog open on a partial failure and retries only the accounts that failed', async () => {

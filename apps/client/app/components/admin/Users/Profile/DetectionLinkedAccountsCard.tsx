@@ -29,16 +29,21 @@ type LinkedAccount = UserDetectionLinks['accounts'][number];
 const accountLabel = (account: Pick<LinkedAccount, 'id' | 'name' | 'email'>) =>
   account.name || account.email || account.id;
 
+const accountNoun = (count: number) => (count === 1 ? 'account' : 'accounts');
+
 /** Runs the single-account admin suspend once per account, so each gets its own audit entry and detection grading. */
 async function setSuspended(
   accounts: readonly LinkedAccount[],
   isBanned: boolean,
-  reason: string
+  reason: string,
+  shouldStop: () => boolean = () => false
 ): Promise<{ done: LinkedAccount[]; failed: LinkedAccount[] }> {
   const done: LinkedAccount[] = [];
   const failed: LinkedAccount[] = [];
-  // One at a time: the first request may ask for step-up, and the rest reuse it.
+  // One at a time: the first request may ask for step-up, and the rest reuse it. A stop (the admin
+  // canceled) leaves the accounts not yet sent untouched; a request already sent still lands.
   for (const account of accounts) {
+    if (shouldStop()) break;
     try {
       // A suspend defers its linked-account alert; propagateOnce sends one for the whole action. A
       // reinstate here is only ever the Undo of this action, so it removes the suspend's detection grades.
@@ -94,18 +99,43 @@ const SuspendLinkedDialog: React.FC<{
     onClose();
   };
 
+  const showSuspendedUndo = (allDone: LinkedAccount[], reason: string, message: string) => {
+    let undoPending: LinkedAccount[] = allDone;
+    showUndo({
+      message: `${message} Undo does not restore API keys or canceled subscriptions.`,
+      onUndo: async () => {
+        const result = await setSuspended(undoPending, false, undoAdminReason(reason));
+        undoPending = result.failed;
+        onDone();
+        if (result.failed.length > 0)
+          throw new Error(
+            `${result.failed.length} of ${allDone.length} accounts were not reinstated. Undo again to retry them.`
+          );
+      },
+    });
+  };
+
   const handleConfirm = async (reason: string) => {
     const remaining = accounts.filter(account => !suspended.some(done => done.id === account.id));
     inFlight.current = true;
     let result;
     try {
-      result = await setSuspended(remaining, true, reason);
+      result = await setSuspended(remaining, true, reason, () => closed.current);
     } finally {
       inFlight.current = false;
     }
     const allDone = [...suspended, ...result.done];
     if (closed.current) {
+      // Canceled mid-run: the accounts already sent are suspended and audited, so the action still ends
+      // with a refresh, its one alert and an Undo for them; the accounts not yet sent were left alone.
       finish(allDone);
+      onDone();
+      if (allDone.length > 0)
+        showSuspendedUndo(
+          allDone,
+          reason,
+          `Canceled: ${allDone.length} of ${accounts.length} linked accounts were suspended before you canceled.`
+        );
       return;
     }
     setSuspendedAccounts(allDone);
@@ -120,29 +150,17 @@ const SuspendLinkedDialog: React.FC<{
     }
     finish(allDone);
     onClose();
-    let undoPending: LinkedAccount[] = allDone;
-    showUndo({
-      message: `${allDone.length} linked accounts suspended. Undo does not restore API keys or canceled subscriptions.`,
-      onUndo: async () => {
-        const result = await setSuspended(undoPending, false, undoAdminReason(reason));
-        undoPending = result.failed;
-        onDone();
-        if (result.failed.length > 0)
-          throw new Error(
-            `${result.failed.length} of ${allDone.length} accounts were not reinstated. Undo again to retry them.`
-          );
-      },
-    });
+    showSuspendedUndo(allDone, reason, `${allDone.length} linked ${accountNoun(allDone.length)} suspended.`);
   };
 
   return (
     <ActionDialog
       open
       onClose={close}
-      title={`Suspend ${accounts.length} linked accounts?`}
+      title={`Suspend ${accounts.length} linked ${accountNoun(accounts.length)}?`}
       description="Each account is suspended on its own, exactly as from its profile: it is signed out everywhere, its API keys are revoked, its live Stripe subscriptions are canceled with no refund, and each gets its own admin log entry. An abuse reason also grades the detections that name it. One linked-account alert covers the whole action and leaves these accounts out. Their data is kept."
       reasonPresets={ADMIN_REASON_PRESETS.suspension}
-      confirmLabel={`Suspend ${accounts.length} accounts`}
+      confirmLabel={`Suspend ${accounts.length} ${accountNoun(accounts.length)}`}
       tone="danger"
       onConfirm={handleConfirm}
       data-testid="suspend-linked-dialog"
