@@ -131,8 +131,9 @@ describe('revokeHeldGrantRelease', () => {
   it('leaves the account untouched when the batch predates the saved release state', async () => {
     const { adapters } = buildRevokeAdapters(100);
 
-    await revoke(adapters);
+    const result = await revoke(adapters);
 
+    expect(result?.results[0]).not.toHaveProperty('heldRestored');
     expect(adapters.users.findById).not.toHaveBeenCalled();
     expect(adapters.creditTransactions.rekeyTransaction).not.toHaveBeenCalled();
     expect(adapters.users.restoreReleasedGrantState).not.toHaveBeenCalled();
@@ -145,7 +146,7 @@ describe('revokeHeldGrantRelease', () => {
 
       const result = await revoke(adapters);
 
-      expect(result?.results).toEqual([{ userId: 'user-1', outcome: 'reversed', credits: 40 }]);
+      expect(result?.results).toEqual([{ userId: 'user-1', outcome: 'reversed', credits: 40, heldRestored: true }]);
       expect(state).toEqual({ balance: 60, claimed: true });
       expect(adapters.creditTransactions.rekeyTransaction).toHaveBeenCalledWith(
         'verify-grant:user-1',
