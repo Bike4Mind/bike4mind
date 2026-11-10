@@ -368,6 +368,7 @@ export const createMockCreditTransactionRepository = (): MockedObject<ICreditTra
     findByPaymentIntentId: vi.fn(),
     updateTransactionStatus: vi.fn(),
     markPurchaseReversed: vi.fn(),
+    rekeyTransaction: vi.fn(),
     findUnreversedPurchase: vi.fn(),
     findByOwnerWithFilters: vi.fn(),
     queryLedgerPage: vi.fn(),
