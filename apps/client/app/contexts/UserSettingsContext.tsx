@@ -25,7 +25,7 @@ import { useUser } from './UserContext';
 import { updateUserToServer } from '../utils/userAPICalls';
 import { useLanguage } from './TranslationProvider';
 import { useSettingsFromServer } from '../hooks/data/settings';
-import { handleModelListRevisionSetting } from '../hooks/data/modelListRevision';
+import { handleModelListRevisionSetting, watchModelListArrivals } from '../hooks/data/modelListRevision';
 
 export type ExperimentalFeature =
   | 'enableQuestMaster'
@@ -474,6 +474,8 @@ export const UserSettingsProvider: React.FC<PropsWithChildren<{}>> = ({ children
     useMemo(() => ({}), []),
     adminSettingsCallback
   );
+
+  useEffect(() => watchModelListArrivals(queryClient), [queryClient]);
 
   const contextValue = useMemo(
     () => ({ settings, updatePreferences, isHydrated, rawExperimentalPreferences }),

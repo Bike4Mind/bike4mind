@@ -8035,10 +8035,8 @@ export const settingsMap = {
     name: 'Model List Revision',
     defaultValue: '',
     description:
-      'Internal stamp rewritten whenever a catalog change alters the model list, so open tabs refetch it. Written by packages/server-utils/src/modelDiscovery/modelListRevision.ts; not user-configurable.',
+      'Internal stamp rewritten whenever a catalog or price change alters the model list, so open tabs refetch it. Written by packages/server-utils/src/modelDiscovery/modelListRevision.ts; not user-configurable.',
     category: 'AI',
-    group: API_SERVICE_GROUPS.MODEL_DISCOVERY.id,
-    order: 8,
   }),
   prReportRepo: makeStringSetting({
     key: 'prReportRepo',

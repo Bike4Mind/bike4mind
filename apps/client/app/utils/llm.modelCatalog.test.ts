@@ -56,4 +56,12 @@ describe('getModelCatalog model-list revision', () => {
 
     expect((await getModelCatalog()).modelListRevision).toBeNull();
   });
+
+  it('keeps the flag for a list built without the catalog, and reads its absence as false', async () => {
+    get.mockResolvedValueOnce({ data: { models: [model('free')], catalogUnavailable: true } });
+    expect((await getModelCatalog()).catalogUnavailable).toBe(true);
+
+    get.mockResolvedValueOnce({ data: { models: [model('free')] } });
+    expect((await getModelCatalog()).catalogUnavailable).toBe(false);
+  });
 });

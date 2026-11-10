@@ -55,7 +55,14 @@ const SENSITIVE_ADMIN_SETTING_NAMES = new Set(
 
 // Settings tied to a stage's own Cloudflare Turnstile widget. Copying them would enable the challenge
 // on a preview whose hostname the widget does not list; a preview opts in by setting them itself.
-const PREVIEW_UNSYNCED_ADMIN_SETTING_NAMES = ['turnstileEnabled', 'turnstileFailClosed', 'turnstileSiteKey'];
+// modelListRevision mirrors a cache row this sync does not copy; a copied value would make every tab
+// on the preview refetch its model list on each load.
+const PREVIEW_UNSYNCED_ADMIN_SETTING_NAMES = [
+  'turnstileEnabled',
+  'turnstileFailClosed',
+  'turnstileSiteKey',
+  'modelListRevision',
+];
 
 // Source-side query for a synced collection. adminsettings excludes sensitive rows (above);
 // every other collection copies in full. Used for BOTH the count and the cursor so the

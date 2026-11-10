@@ -174,6 +174,42 @@ describe('getCallerModelList model-list revision', () => {
       expect.not.objectContaining({ catalogRevision: expect.anything() })
     );
   });
+
+  describe('when the catalog could not be read', () => {
+    beforeEach(() => {
+      mocks.getAvailableModels.mockImplementation(
+        async (_keys: unknown, options: { onCatalogUnavailable?: () => void }) => {
+          options.onCatalogUnavailable?.();
+          return [priced, free];
+        }
+      );
+      mocks.cacheFind.mockResolvedValue([revisionRow('rev-2')]);
+    });
+
+    it('does not pass the fallback off as the current revision', async () => {
+      const list = await callerList(makeUser());
+
+      expect(list.models.map(model => model.id)).toEqual(['priced', 'free']);
+      expect(list.modelListRevision).toBeNull();
+      expect(list.catalogUnavailable).toBe(true);
+    });
+
+    it('does not cache the fallback for other requests', async () => {
+      await callerList(makeUser());
+
+      expect(mocks.cacheCreateOrUpdate).not.toHaveBeenCalled();
+    });
+  });
+
+  it('marks a list built from the catalog as such, and caches it', async () => {
+    mocks.cacheFind.mockResolvedValue([revisionRow('rev-2')]);
+
+    const list = await callerList(makeUser());
+
+    expect(list.catalogUnavailable).toBe(false);
+    expect(list.modelListRevision).toBe('rev-2');
+    expect(mocks.cacheCreateOrUpdate).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('getCallerModelList free-tier gate', () => {

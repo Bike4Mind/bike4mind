@@ -128,7 +128,7 @@ const giveUpMessage = (sawNewRun: boolean, enabled: boolean) => {
  * Chips carry only short statuses and wrap as whole pills; the long lists (skipped sources,
  * coverage) are plain text so they wrap instead of truncating at narrow widths.
  */
-export const DiscoveryStatusCard: React.FC = () => {
+export const DiscoveryStatusCard: React.FC<{ onRunFinished?: () => void }> = ({ onRunFinished }) => {
   const queryClient = useQueryClient();
   const [status, setStatus] = useState<DiscoveryStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -193,7 +193,10 @@ export const DiscoveryStatusCard: React.FC = () => {
           sawNewRun = true;
           if (latest.lastRun?.finishedAt) {
             void queryClient.invalidateQueries({ queryKey: MODEL_CATALOG_QUERY_KEY });
-            if (!unmounted.current) setNotice(`Run finished: ${latest.lastRun.status}.`);
+            if (!unmounted.current) {
+              setNotice(`Run finished: ${latest.lastRun.status}.`);
+              onRunFinished?.();
+            }
             return;
           }
         }
@@ -202,7 +205,7 @@ export const DiscoveryStatusCard: React.FC = () => {
         if (!unmounted.current) setIsWaiting(false);
       }
     },
-    [load, queryClient]
+    [load, queryClient, onRunFinished]
   );
 
   const runNow = async () => {

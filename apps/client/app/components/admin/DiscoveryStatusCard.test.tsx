@@ -432,6 +432,31 @@ describe('DiscoveryStatusCard run now', () => {
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['llm', 'models'] });
   });
 
+  it('tells its parent once the manual run reports', async () => {
+    const onRunFinished = vi.fn();
+    const manualRunning = runLike({ startedAt: '2026-07-26T12:10:00.000Z', finishedAt: null, trigger: 'manual' });
+    mockGet
+      .mockResolvedValueOnce({ data: STATUS })
+      .mockResolvedValueOnce({ data: STATUS })
+      .mockResolvedValueOnce({ data: statusWith(manualRunning) })
+      .mockResolvedValue({
+        data: statusWith(runLike({ ...manualRunning, finishedAt: '2026-07-26T12:12:00.000Z', status: 'ok' })),
+      });
+    render(
+      <TestWrapper>
+        <DiscoveryStatusCard onRunFinished={onRunFinished} />
+      </TestWrapper>
+    );
+    await tick();
+    fireEvent.click(runNowButton());
+    await tick();
+
+    await tick(POLL_INTERVAL_MS);
+    expect(onRunFinished).not.toHaveBeenCalled();
+    await tick(POLL_INTERVAL_MS);
+    expect(onRunFinished).toHaveBeenCalledTimes(1);
+  });
+
   it('stays disabled for the whole dispatch-and-wait window, not just the POST', async () => {
     await mountAndDispatch();
 

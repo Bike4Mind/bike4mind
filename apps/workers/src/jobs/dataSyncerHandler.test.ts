@@ -321,6 +321,17 @@ describe('dataSyncerHandler', () => {
     );
   });
 
+  it('does not copy the model-list revision, whose cache row stays behind', async () => {
+    process.env.SEED_STAGE_NAME = 'pr123';
+
+    await invoke();
+
+    const adminFilter = state.findFilters.find(f => f.name === 'adminsettings')?.filter as {
+      settingName: { $nin: string[] };
+    };
+    expect(adminFilter.settingName.$nin).toContain('modelListRevision');
+  });
+
   it('excludes ciphertext-shaped values under any name and keeps plaintext', async () => {
     process.env.SEED_STAGE_NAME = 'pr123';
 

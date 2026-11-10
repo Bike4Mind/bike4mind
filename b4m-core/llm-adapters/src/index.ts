@@ -32,6 +32,7 @@ import MoonshotBedrockBackend from './bedrockBackend/moonshot';
 import TitanBedrockBackend from './bedrockBackend/titan';
 import { UndifferentiatedBedrockBackend } from './bedrockBackend/undifferentiated';
 import { BFLBackend } from './bflBackend';
+import { staticPriceBackends } from './adapterPriceLiterals';
 import { DeepSeekBackend } from './deepseekBackend';
 import { GeminiBackend } from './geminiBackend';
 import { KimiBackend } from './kimiBackend';
@@ -243,16 +244,73 @@ const RUNTIME_LISTING_DEFAULT_TIMEOUT_MS = 4_000;
 // preFilterModels keeps the merged list from before the deprecation filter. It is
 // never returned to a caller; getSupersededModels reads it to put a display name
 // on a pin the filter has already hidden.
-let _modelCache: {
+interface BuiltModelList {
   key: string;
   models: ModelInfo[];
   preFilterModels: ModelInfo[];
   failedListings: ModelBackend[];
   expiresAt: number;
-  /** The newest revision any caller had reported when the build started; see catalogRevision. */
+  /** The model-list revision this process knew when the build started; see resolveModelListRevision. */
   revision: string | undefined;
-} | null = null;
-let _catalogRevision: string | undefined;
+  /** The catalog or price overlay could not be read, so this is the adapter-table fallback. */
+  catalogUnavailable: boolean;
+}
+let _modelCache: BuiltModelList | null = null;
+
+// Concurrent misses for one (cache key, revision) share a build instead of each reading the catalog.
+const _inFlightBuilds = new Map<string, Promise<BuiltModelList>>();
+
+/**
+ * Optional model-list revision hook (packages/database/src/modelListRevision.ts). Every caller,
+ * chat paths included, rebuilds once the shared revision moves, so a model the picker lists is
+ * one chat accepts. Read at most once per REVISION_MEMO_MS per process.
+ */
+export type ModelListRevisionProvider = () => Promise<string | null>;
+const REVISION_MEMO_MS = 5_000;
+let _revisionProvider: ModelListRevisionProvider | null = null;
+let _knownRevision: string | undefined;
+let _revisionFreshUntil = 0;
+let _revisionRead: Promise<void> | null = null;
+// Bumped by every reported revision, so a provider read that started before it cannot overwrite it.
+let _revisionEpoch = 0;
+
+export function setModelListRevisionProvider(provider: ModelListRevisionProvider | null): void {
+  _revisionProvider = provider;
+  _knownRevision = undefined;
+  _revisionFreshUntil = 0;
+  _revisionRead = null;
+  _revisionEpoch += 1;
+  _modelCache = null;
+  _inFlightBuilds.clear();
+}
+
+async function readModelListRevision(provider: ModelListRevisionProvider): Promise<void> {
+  const epoch = _revisionEpoch;
+  try {
+    const revision = (await provider()) ?? undefined;
+    if (epoch === _revisionEpoch) _knownRevision = revision;
+  } catch (error) {
+    Logger.globalInstance.warn('[getAvailableModels] model-list revision unavailable; keeping the last one', error);
+  }
+  _revisionFreshUntil = Date.now() + REVISION_MEMO_MS;
+}
+
+/** A revision the caller just read wins; otherwise the provider's, memoized; otherwise the last one seen. */
+async function resolveModelListRevision(reported: string | undefined): Promise<string | undefined> {
+  if (reported !== undefined) {
+    _revisionEpoch += 1;
+    _knownRevision = reported;
+    _revisionFreshUntil = Date.now() + REVISION_MEMO_MS;
+    return reported;
+  }
+  if (_revisionProvider && Date.now() >= _revisionFreshUntil) {
+    _revisionRead ??= readModelListRevision(_revisionProvider).finally(() => {
+      _revisionRead = null;
+    });
+    await _revisionRead;
+  }
+  return _knownRevision;
+}
 
 /**
  * Optional versioned-price-catalog hook. This package cannot depend on the
@@ -268,6 +326,7 @@ export function setModelPriceRowsProvider(provider: ModelPriceRowsProvider | nul
   _priceRowsProvider = provider;
   // Rebuild on next call so freshly wired prices don't wait out a stale TTL.
   _modelCache = null;
+  _inFlightBuilds.clear();
 }
 
 /**
@@ -284,6 +343,7 @@ export function setModelCatalogProvider(provider: ModelCatalogProvider | null): 
   // Both providers null the same cache. That is idempotent and intentional:
   // whichever is wired second simply rebuilds again on the next call.
   _modelCache = null;
+  _inFlightBuilds.clear();
 }
 
 /** Whether a catalog provider is wired on THIS module instance; see esmWorkspacePackages.mjs in apps/client. */
@@ -363,11 +423,16 @@ export interface GetAvailableModelsOptions {
    */
   onFailedListings?: (backends: readonly ModelBackend[]) => void;
   /**
-   * The shared model-list revision the caller read (packages/server-utils/src/modelDiscovery/modelListRevision.ts).
-   * A revision this process has not seen yet rebuilds the module cache for every caller, including the ones that
-   * pass none. Not part of the cache key.
+   * The shared model-list revision the caller already read (packages/server-utils/src/modelDiscovery/modelListRevision.ts),
+   * used instead of the provider's memoized read. A revision different from the one the cached list was built
+   * under rebuilds it for every caller. Not part of the cache key.
    */
   catalogRevision?: string;
+  /**
+   * Called when the catalog or price overlay could not be read, so the list is the adapter-table fallback.
+   * Replayed on a cached list, like onFailedListings.
+   */
+  onCatalogUnavailable?: () => void;
 }
 
 /**
@@ -413,6 +478,15 @@ function reportFailedListings(options: GetAvailableModelsOptions, failed: readon
   }
 }
 
+function reportCatalogUnavailable(options: GetAvailableModelsOptions, unavailable: boolean): void {
+  if (!unavailable) return;
+  try {
+    options.onCatalogUnavailable?.();
+  } catch (error) {
+    Logger.globalInstance.error('[getAvailableModels] onCatalogUnavailable callback threw:', error);
+  }
+}
+
 /** The caller's view of a cached list; the cache itself always holds every model. */
 const applyPrivateVisibility = (models: ModelInfo[], includePrivate: boolean): ModelInfo[] =>
   includePrivate ? models : models.filter(m => !m.private);
@@ -441,21 +515,42 @@ export const getAvailableModels = async (
   const { isSelfHost, bedrockReachable } = gateCtx;
 
   // Captured before the build: a build that started under an older revision must not be stored as current.
-  if (options.catalogRevision !== undefined) _catalogRevision = options.catalogRevision;
-  const revision = _catalogRevision;
+  const revision = await resolveModelListRevision(options.catalogRevision);
 
   // Check module-level cache first
   const cacheKey = getModelCacheKey(apiKeys, { isSelfHost, bedrockReachable, perBackendTimeoutMs });
+  let built: BuiltModelList;
   if (
     _modelCache &&
     _modelCache.key === cacheKey &&
     _modelCache.revision === revision &&
     Date.now() < _modelCache.expiresAt
   ) {
-    reportFailedListings(options, _modelCache.failedListings);
-    return applyPrivateVisibility(_modelCache.models, includePrivate);
+    built = _modelCache;
+  } else {
+    const flightKey = `${cacheKey}\n${revision ?? ''}`;
+    let flight = _inFlightBuilds.get(flightKey);
+    if (!flight) {
+      flight = buildModelList(gateCtx, perBackendTimeoutMs, cacheKey, revision).finally(() => {
+        _inFlightBuilds.delete(flightKey);
+      });
+      _inFlightBuilds.set(flightKey, flight);
+    }
+    built = await flight;
   }
 
+  reportFailedListings(options, built.failedListings);
+  reportCatalogUnavailable(options, built.catalogUnavailable);
+  return applyPrivateVisibility(built.models, includePrivate);
+};
+
+/** One fan-out over the backends plus the catalog and price overlays; stores and returns the private-inclusive list. */
+async function buildModelList(
+  gateCtx: BackendGateContext,
+  perBackendTimeoutMs: number | undefined,
+  cacheKey: string,
+  revision: string | undefined
+): Promise<BuiltModelList> {
   // Every listing credential comes from resolveListingKey, the same predicate
   // the catalog merge gates catalog-only records with, so the two tiers cannot
   // disagree about which backends this caller can reach. The local-image env
@@ -577,11 +672,10 @@ export const getAvailableModels = async (
     failedListings,
     expiresAt: Date.now() + ttl,
     revision,
+    catalogUnavailable: catalogFetchFailed,
   };
-
-  reportFailedListings(options, failedListings);
-  return applyPrivateVisibility(filtered, includePrivate);
-};
+  return _modelCache;
+}
 
 /**
  * Can this caller reach a static-table backend that serves `modelId`? Reads the adapter tables, not the live
@@ -603,6 +697,20 @@ export async function isModelProviderConfigured(modelId: string, apiKeys: ApiKey
     if (isBackendUsable(backend, ctx) && (await build().getModelInfo()).some(m => m.id === modelId)) return true;
   }
   return false;
+}
+
+let cachedSeededIds: Promise<ReadonlySet<string>> | undefined;
+
+/**
+ * Every id a static-table backend of getAvailableModels lists, whatever its catalog status says: the price
+ * backends plus BFL, which publishes image models only. The runtime-listed backends (RUNTIME_DISCOVERED_BACKENDS)
+ * are absent because their listing is a live call. Must cover every static backend getAvailableModels builds.
+ */
+export function seededModelIds(): Promise<ReadonlySet<string>> {
+  cachedSeededIds ??= Promise.all(
+    [...staticPriceBackends(), new BFLBackend('static-listing')].map(backend => backend.getModelInfo())
+  ).then(tables => new Set(tables.flat().map(model => String(model.id))));
+  return cachedSeededIds;
 }
 
 /**

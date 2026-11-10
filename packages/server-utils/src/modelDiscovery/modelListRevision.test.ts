@@ -4,7 +4,7 @@ const { calls, createOrUpdate, findOneAndUpdate } = vi.hoisted(() => {
   const calls: string[] = [];
   return {
     calls,
-    createOrUpdate: vi.fn(async () => {
+    createOrUpdate: vi.fn(async (_doc: unknown) => {
       calls.push('cache');
     }),
     findOneAndUpdate: vi.fn(async () => {
@@ -18,8 +18,7 @@ vi.mock('@bike4mind/database', () => ({
   AdminSettings: { findOneAndUpdate },
 }));
 
-const { MODEL_LIST_REVISION_CACHE_KEY, MODEL_LIST_REVISION_SETTING, bumpModelListRevision, modelListRevisionOf } =
-  await import('./modelListRevision');
+const { MODEL_LIST_REVISION_SETTING, bumpModelListRevision } = await import('./modelListRevision');
 
 describe('bumpModelListRevision', () => {
   beforeEach(() => {
@@ -31,7 +30,7 @@ describe('bumpModelListRevision', () => {
     const revision = await bumpModelListRevision();
 
     expect(createOrUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ key: MODEL_LIST_REVISION_CACHE_KEY, result: { revision } })
+      expect.objectContaining({ key: 'model-list-revision', result: { revision } })
     );
     expect(findOneAndUpdate).toHaveBeenCalledWith(
       { settingName: MODEL_LIST_REVISION_SETTING },
@@ -49,20 +48,10 @@ describe('bumpModelListRevision', () => {
     expect(await bumpModelListRevision()).not.toBe(await bumpModelListRevision());
   });
 
-  it('keeps the revision key outside the per-caller model-list:* namespace', () => {
-    expect(MODEL_LIST_REVISION_CACHE_KEY.startsWith('model-list:')).toBe(false);
-  });
-});
+  it('never lets the revision row expire, since the setting row it mirrors does not', async () => {
+    await bumpModelListRevision();
 
-describe('modelListRevisionOf', () => {
-  it('reads the stamp off a cache row', () => {
-    expect(modelListRevisionOf({ result: { revision: 'r1' } })).toBe('r1');
-  });
-
-  it('reads a missing or malformed row as unset', () => {
-    expect(modelListRevisionOf(null)).toBeNull();
-    expect(modelListRevisionOf({ result: {} })).toBeNull();
-    expect(modelListRevisionOf({ result: { revision: 7 } })).toBeNull();
-    expect(modelListRevisionOf({ result: { revision: '' } })).toBeNull();
+    const { expiresAt } = createOrUpdate.mock.calls[0][0] as { expiresAt: Date };
+    expect(expiresAt.getUTCFullYear()).toBe(9999);
   });
 });

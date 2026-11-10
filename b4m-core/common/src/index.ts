@@ -17,6 +17,7 @@ export * from './modelPriceCatalog';
 export * from './usagePriceStamp';
 export * from './creditLotAssignment';
 export * from './modelCatalog';
+export * from './modelListRevision';
 export * from './modelIdJoin';
 export * from './claudeModelId';
 export * from './claudeToolCapabilities';

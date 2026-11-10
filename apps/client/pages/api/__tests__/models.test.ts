@@ -141,6 +141,7 @@ async function callRouteBody(userId?: string) {
     }>;
     lockedModels: Array<{ id: string; access?: { locked: boolean; reason: string } }>;
     modelListRevision: string | null;
+    catalogUnavailable: boolean;
   };
   return body;
 }
@@ -282,6 +283,7 @@ describe('/api/models cache identity', () => {
     const body = await callRouteBody('user-1');
 
     expect(body.modelListRevision).toBe('rev-9');
+    expect(body.catalogUnavailable).toBe(false);
     expect(mockCacheCreateOrUpdate).toHaveBeenCalledWith(
       expect.objectContaining({ result: expect.objectContaining({ modelListRevision: 'rev-9' }) })
     );

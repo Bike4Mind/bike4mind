@@ -2322,6 +2322,47 @@ describe('runModelDiscovery', () => {
       expect(onModelListChanged).not.toHaveBeenCalled();
     });
 
+    it('refreshes once when the run throws after a promotion landed', async () => {
+      const onModelListChanged = withRefresh(bench);
+      bench.state.recordSighting = vi.fn().mockRejectedValue(new Error('state store down'));
+      bench.state.recordMiss = vi.fn().mockRejectedValue(new Error('state store down'));
+
+      await expect(runModelDiscovery(bench.adapters, bench.options)).rejects.toThrow('state store down');
+
+      expect(bench.catalog.rows.map(row => row.modelId)).toContain('gpt-6');
+      expect(onModelListChanged).toHaveBeenCalledTimes(1);
+    });
+
+    it('refreshes for every written model when the catalog re-read fails', async () => {
+      const onModelListChanged = withRefresh(bench);
+      let absenceApplied = false;
+      const recordSighting = bench.state.recordSighting.bind(bench.state);
+      const recordMiss = bench.state.recordMiss.bind(bench.state);
+      bench.state.recordSighting = async (modelId, at) => {
+        absenceApplied = true;
+        return recordSighting(modelId, at);
+      };
+      bench.state.recordMiss = async (modelId, at) => {
+        absenceApplied = true;
+        return recordMiss(modelId, at);
+      };
+      const rowsInForce = bench.catalog.rowsInForceWithRejects.bind(bench.catalog);
+      bench.catalog.rowsInForceWithRejects = async at => {
+        if (absenceApplied) throw new Error('catalog read timed out');
+        return rowsInForce(at);
+      };
+
+      await runModelDiscovery(bench.adapters, bench.options);
+
+      expect(onModelListChanged).toHaveBeenCalledTimes(1);
+      expect(
+        bench.warnings.some(
+          line =>
+            line.includes('catalog re-read failed') && line.includes('every written model: catalog read timed out')
+        )
+      ).toBe(true);
+    });
+
     it('keeps the run when the refresh throws', async () => {
       const onModelListChanged = withRefresh(bench);
       onModelListChanged.mockRejectedValue(new Error('cache unreachable'));

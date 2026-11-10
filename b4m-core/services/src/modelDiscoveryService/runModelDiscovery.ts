@@ -22,6 +22,7 @@ import {
   adapterPriceTiers,
   resolveCatalogRecords,
   resolveSuccessorChain,
+  seededModelIds,
   type ResolvedCatalogRecord,
 } from '@bike4mind/llm-adapters';
 import { applyAbsence, planAbsence, type AbsencePlan } from './absence';
@@ -338,6 +339,7 @@ async function executeRun(
   const succeeded = (): DiscoverySource[] => attempts.filter(source => results.get(source.name)?.result.ok === true);
 
   const passes: CompletedPass[] = [];
+  const listWrites: ListWriteLog = { written: new Set() };
   let parserShifts: ParserRowShift[] = [];
   try {
     await fetchAll(attempts);
@@ -409,8 +411,11 @@ async function executeRun(
       let catalogWrites: AppendOutcome = { appended: 0, failed: 0, landedModelIds: [] };
       let priceWrites: AppendOutcome = { appended: 0, failed: 0, landedModelIds: [] };
       if (ctx.mode === 'write') {
+        listWrites.before ??= plan.resolvedInForce;
         catalogWrites = await appendRows(plan.lifecycle.rows, adapters, logger);
+        recordListWrites(listWrites, catalogWrites, effectiveAt);
         priceWrites = await appendPriceRows(plan.prices.rows, adapters, logger);
+        recordListWrites(listWrites, priceWrites, effectiveAt);
         // Per pass rather than once at the end: recordSuggestion is a
         // same-content overwrite, so a queue item a later pass re-raises costs
         // one redundant write instead of a lost one when a pass throws.
@@ -423,8 +428,6 @@ async function executeRun(
         appended,
         pricesAppended,
         failed: catalogWrites.failed + priceWrites.failed,
-        landedModelIds: [...catalogWrites.landedModelIds, ...priceWrites.landedModelIds],
-        effectiveAt,
       });
       if (pass > 1) {
         logger.info(
@@ -452,6 +455,10 @@ async function executeRun(
     // record, and deferring the apply keeps the counters the graduation plan
     // read (statesBeforeRun) valid for every pass.
     if (ctx.mode === 'write') await applyAbsence(passes[0].plan.absence, db.discoveryState, startedAt);
+  } catch (error) {
+    // Rows that landed before the throw are in force, and a failed run never reports finished.
+    await notifyModelListChanges(adapters, listWrites, ctx);
+    throw error;
   } finally {
     globalDeadline.cancel();
   }
@@ -502,7 +509,7 @@ async function executeRun(
 
   // Before the run document is finalized: an admin waiting on a manual run refetches the model
   // list once the run reports, and must find the caches already moved.
-  await notifyModelListChanges(adapters, passes, ctx);
+  await notifyModelListChanges(adapters, listWrites, ctx);
 
   await db.discoveryRuns.update({
     id: runId,
@@ -794,9 +801,20 @@ interface CompletedPass {
   pricesAppended: number;
   /** Appends that THREW. A unique-index skip is not one; see appendRows. */
   failed: number;
-  /** Models with a catalog or price row that landed in this pass. */
-  landedModelIds: string[];
-  effectiveAt: Date;
+}
+
+/** What this run's writes put in force, recorded as each append lands so a later throw cannot lose it. */
+interface ListWriteLog {
+  written: Set<string>;
+  /** The catalog as the first write-mode pass planned against it. */
+  before?: ReadonlyMap<string, ResolvedCatalogRecord>;
+  lastWriteAt?: Date;
+}
+
+function recordListWrites(log: ListWriteLog, outcome: AppendOutcome, effectiveAt: Date): void {
+  if (outcome.landedModelIds.length === 0) return;
+  for (const modelId of outcome.landedModelIds) log.written.add(modelId);
+  log.lastWriteAt = effectiveAt;
 }
 
 /**
@@ -1143,23 +1161,23 @@ async function appendPriceRows(
  */
 async function notifyModelListChanges(
   adapters: ModelDiscoveryAdapters,
-  passes: readonly CompletedPass[],
+  writes: ListWriteLog,
   ctx: RunContext
 ): Promise<void> {
   const { logger } = ctx;
-  const written = new Set(passes.flatMap(pass => pass.landedModelIds));
+  const { written, before, lastWriteAt } = writes;
   if (written.size === 0 || !adapters.onModelListChanged) return;
 
   let changed: string[];
   try {
-    const lastWriteAt = passes[passes.length - 1].effectiveAt.getTime();
+    if (!before || !lastWriteAt) throw new Error('no pre-run catalog view recorded');
     const { rows } = await adapters.db.catalog.rowsInForceWithRejects(
-      new Date(Math.max(ctx.now().getTime(), lastWriteAt))
+      new Date(Math.max(ctx.now().getTime(), lastWriteAt.getTime()))
     );
     changed = modelListChanges({
       writtenModelIds: written,
-      staticModelIds: await adapterModelIds(),
-      before: passes[0].plan.resolvedInForce,
+      staticModelIds: await seededModelIds(),
+      before,
       after: resolveCatalogRecords(rows),
     });
   } catch (error) {

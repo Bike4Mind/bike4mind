@@ -15,6 +15,8 @@ import {
   getImageModelCapabilities,
   isImageModel,
   isModelDeprecated,
+  MODEL_LIST_REVISION_CACHE_KEY,
+  modelListRevisionOf,
   PAID_PLAN_ENTITLEMENT_KEY,
   type IUserDocument,
   type ModelAccessLock,
@@ -25,10 +27,6 @@ import { getUserEntitlements, toEntitlementUser } from '@server/entitlements';
 import { Logger } from '@bike4mind/observability';
 import { CacheKeys } from '@server/utils/cacheKeys';
 import { modelCatalogListingOptions } from '@server/utils/modelCatalogOptions';
-import {
-  MODEL_LIST_REVISION_CACHE_KEY,
-  modelListRevisionOf,
-} from '@bike4mind/server-utils/modelDiscovery/modelListRevision';
 
 /**
  * The models one caller can use, shared by `GET /api/models` (internal shape, SPA + CLI) and
@@ -39,9 +37,12 @@ type CatalogModelList = {
   supersededModels: SupersededModelInfo[];
   /**
    * The model-list revision the list was built under (modelListRevision.ts in server-utils), null before
-   * the first bump. A tab compares it with the revision its adminsettings subscription pushes.
+   * the first bump or when catalogUnavailable. A tab compares it with the revision its adminsettings
+   * subscription pushes.
    */
   modelListRevision: string | null;
+  /** The catalog or price overlay could not be read: an adapter-table fallback the client refetches soon. */
+  catalogUnavailable: boolean;
 };
 
 /** `lockedModels`: paid-only models a free account sees but cannot select (see ModelInfo.access). */
@@ -78,9 +79,13 @@ async function buildCallerModelList(
   // provider missing from the table is a provider no user can select.
   const apiKeys = buildApiKeyTable(coreKeys);
 
+  let catalogUnavailable = false;
   const listedModels = await getAvailableModels(apiKeys, {
     ...modelCatalogListingOptions(),
     ...(modelListRevision ? { catalogRevision: modelListRevision } : {}),
+    onCatalogUnavailable: () => {
+      catalogUnavailable = true;
+    },
   });
   // Same rule createModelAdmission refuses at call time (llm/modelAdmission.ts): with credits on,
   // an unpriced text model settles at $0, so the picker must not offer it either.
@@ -90,7 +95,13 @@ async function buildCallerModelList(
   // Superseded pins the client can offer to upgrade, resolved by llm-adapters
   // through the same catalog-overlay-then-static-map chain a pinned request takes.
   // Reads the fan-out getAvailableModels just did, so it costs no extra work.
-  return { models, supersededModels: getSupersededModels(offered), modelListRevision };
+  return {
+    models,
+    supersededModels: getSupersededModels(offered),
+    // A fallback may lack the very model the revision announced, so it must not pass for that revision.
+    modelListRevision: catalogUnavailable ? null : modelListRevision,
+    catalogUnavailable,
+  };
 }
 
 // Fails closed to "free" for the listing: a failed subscription read must not 500 the picker.
@@ -192,7 +203,12 @@ async function getCachedCallerModelList(
   // An entry written before revisions existed carries none, which matches only while none has been bumped.
   if (cached?.models && (cached.modelListRevision ?? null) === modelListRevision) {
     logger.log(`Cache hit for key: ${cacheKey}`);
-    return { models: cached.models, supersededModels: cached.supersededModels ?? [], modelListRevision };
+    return {
+      models: cached.models,
+      supersededModels: cached.supersededModels ?? [],
+      modelListRevision,
+      catalogUnavailable: false,
+    };
   }
 
   logger.log(`Cache ${cached ? 'stale (model list revision moved)' : 'miss'} for key: ${cacheKey}`);
@@ -200,13 +216,14 @@ async function getCachedCallerModelList(
 
   // Don't cache an empty result. If every backend timed out (network blip, all
   // providers slow at once), caching `{ models: [] }` for 60s would hide healthy
-  // backends from the next request until expiry.
+  // backends from the next request until expiry. An adapter-table fallback is
+  // skipped for the same reason.
   //
   // INVARIANT: this function is the only writer of `model-list:*`. The entries
   // are per-caller views built from that caller's keys, so background jobs (model
   // discovery included) must never populate them; they invalidate every entry at
   // once through bumpModelListRevision.
-  if (payload.models.length > 0) {
+  if (payload.models.length > 0 && !payload.catalogUnavailable) {
     await cacheRepository.createOrUpdate({
       key: cacheKey,
       result: payload,

@@ -1,7 +1,14 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { ChatModels, ModelBackend } from '@bike4mind/common';
 import type { IModelCatalogRow } from '@bike4mind/common';
-import { getAvailableModels, setModelCatalogProvider, setModelPriceRowsProvider } from './index';
+import {
+  RUNTIME_DISCOVERED_BACKENDS,
+  getAvailableModels,
+  seededModelIds,
+  setModelCatalogProvider,
+  setModelListRevisionProvider,
+  setModelPriceRowsProvider,
+} from './index';
 import { replacedByOverlayEntries, resetReplacedByOverlay } from './resolveDeprecatedModel';
 import { AnthropicBackend } from './anthropicBackend';
 import { directTwinId } from './routeTwinNames';
@@ -22,6 +29,7 @@ const row: IModelCatalogRow = {
 afterEach(() => {
   setModelCatalogProvider(null);
   setModelPriceRowsProvider(null);
+  setModelListRevisionProvider(null);
   resetReplacedByOverlay();
 });
 
@@ -113,7 +121,12 @@ describe('getAvailableModels model catalog provider', () => {
 
     it('does not keep a list whose build started before a newer revision was reported', async () => {
       const pending: Array<() => void> = [];
-      setModelCatalogProvider(() => new Promise<IModelCatalogRow[]>(resolve => pending.push(() => resolve([row]))));
+      let calls = 0;
+      setModelCatalogProvider(async () => {
+        calls += 1;
+        if (calls > 2) return [row];
+        return new Promise<IModelCatalogRow[]>(resolve => pending.push(() => resolve([row])));
+      });
 
       const older = getAvailableModels(null, { catalogRevision: 'rev-d' });
       await vi.waitFor(() => expect(pending).toHaveLength(1));
@@ -125,10 +138,134 @@ describe('getAvailableModels model catalog provider', () => {
       pending[0]();
       await older;
 
-      const next = getAvailableModels(null, { catalogRevision: 'rev-e' });
-      await vi.waitFor(() => expect(pending).toHaveLength(3));
-      pending[2]();
-      await next;
+      await getAvailableModels(null, { catalogRevision: 'rev-e' });
+      expect(calls).toBe(3);
+    });
+
+    it('shares one build between concurrent misses for the same revision', async () => {
+      const calls = countingProvider();
+
+      await Promise.all([
+        getAvailableModels(null, { catalogRevision: 'rev-f' }),
+        getAvailableModels(null, { catalogRevision: 'rev-f' }),
+      ]);
+
+      expect(calls.count).toBe(1);
+    });
+  });
+
+  describe('model-list revision provider', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('rebuilds for a caller that passes no revision once the provider reports a new one', async () => {
+      vi.useFakeTimers();
+      const calls = { count: 0 };
+      setModelCatalogProvider(async () => {
+        calls.count += 1;
+        return [row];
+      });
+      let shared = 'rev-1';
+      setModelListRevisionProvider(async () => shared);
+
+      await getAvailableModels(null);
+      await getAvailableModels(null);
+      expect(calls.count).toBe(1);
+
+      shared = 'rev-2';
+      vi.advanceTimersByTime(5_000);
+      await getAvailableModels(null);
+      expect(calls.count).toBe(2);
+    });
+
+    it('reads the revision at most once per memo window', async () => {
+      vi.useFakeTimers();
+      const reads = { count: 0 };
+      setModelListRevisionProvider(async () => {
+        reads.count += 1;
+        return 'rev-1';
+      });
+
+      await Promise.all([getAvailableModels(null), getAvailableModels(null)]);
+      vi.advanceTimersByTime(4_000);
+      await getAvailableModels(null);
+      expect(reads.count).toBe(1);
+
+      vi.advanceTimersByTime(1_000);
+      await getAvailableModels(null);
+      expect(reads.count).toBe(2);
+    });
+
+    it('keeps the cached list when the revision read fails', async () => {
+      vi.useFakeTimers();
+      const calls = { count: 0 };
+      setModelCatalogProvider(async () => {
+        calls.count += 1;
+        return [row];
+      });
+      let failing = false;
+      setModelListRevisionProvider(async () => {
+        if (failing) throw new Error('cache unreachable');
+        return 'rev-1';
+      });
+
+      await getAvailableModels(null);
+      failing = true;
+      vi.advanceTimersByTime(5_000);
+      await getAvailableModels(null);
+
+      expect(calls.count).toBe(1);
+    });
+
+    it('prefers a revision the caller passes over the memoized one', async () => {
+      const calls = { count: 0 };
+      setModelCatalogProvider(async () => {
+        calls.count += 1;
+        return [row];
+      });
+      setModelListRevisionProvider(async () => 'rev-1');
+
+      await getAvailableModels(null);
+      await getAvailableModels(null, { catalogRevision: 'rev-2' });
+      await getAvailableModels(null);
+
+      expect(calls.count).toBe(2);
+    });
+  });
+
+  describe('onCatalogUnavailable', () => {
+    it('reports an adapter-table fallback, and replays it on the cached list', async () => {
+      setModelCatalogProvider(async () => {
+        throw new Error('db down');
+      });
+      const onCatalogUnavailable = vi.fn();
+
+      await getAvailableModels(null, { onCatalogUnavailable });
+      await getAvailableModels(null, { onCatalogUnavailable });
+
+      expect(onCatalogUnavailable).toHaveBeenCalledTimes(2);
+    });
+
+    it('reports a failed price overlay too', async () => {
+      setModelPriceRowsProvider(async () => {
+        throw new Error('db down');
+      });
+      const onCatalogUnavailable = vi.fn();
+
+      await getAvailableModels(null, { onCatalogUnavailable });
+
+      expect(onCatalogUnavailable).toHaveBeenCalledTimes(1);
+    });
+
+    it('stays quiet when both overlays were read', async () => {
+      setModelCatalogProvider(async () => [row]);
+      setModelPriceRowsProvider(async () => []);
+      const onCatalogUnavailable = vi.fn();
+
+      await getAvailableModels(null, { onCatalogUnavailable });
+
+      expect(onCatalogUnavailable).not.toHaveBeenCalled();
     });
   });
 
@@ -232,5 +369,20 @@ describe('getAvailableModels model catalog provider', () => {
 
     const models = await getAvailableModels({ xai: 'xai-key' });
     expect(models.find(m => m.id === 'grok-9')?.pricing).toEqual({ 0: { input: 1e-6, output: 3e-6 } });
+  });
+});
+
+describe('seededModelIds', () => {
+  it('covers every model a static-table backend of getAvailableModels lists, BFL included', async () => {
+    const keys = Object.fromEntries(
+      Object.values(ModelBackend)
+        .filter(backend => !RUNTIME_DISCOVERED_BACKENDS.includes(backend))
+        .map(backend => [backend, `${backend}-key`])
+    );
+    const listed = await getAvailableModels(keys, { isSelfHost: false, bedrockReachable: true });
+    const seeded = await seededModelIds();
+
+    expect(listed.some(model => model.backend === ModelBackend.BFL)).toBe(true);
+    expect(listed.map(model => model.id).filter(id => !seeded.has(id))).toEqual([]);
   });
 });
