@@ -224,9 +224,17 @@ describe('UserProfileHeader', () => {
 
     it('keeps that delegate off an account with admin access', async () => {
       mocks.currentUser = { id: 'd1', isAdmin: false, adminPermissions: ['users:impersonate'] };
-      renderHeader(buildProfile({ adminPermissions: ['support:read'] } as Partial<AdminUserProfile>));
+      const { onAction } = renderHeader(
+        buildProfile({ adminPermissions: ['support:read'] } as Partial<AdminUserProfile>)
+      );
 
-      expect(await openMenu()).toHaveAttribute('aria-disabled', 'true');
+      const item = await openMenu();
+      expect(item).toHaveAttribute('aria-disabled', 'true');
+      expect(screen.getByTestId('user-profile-menu-loginAs-hint')).toHaveTextContent(
+        'Only full administrators can act on accounts with admin access'
+      );
+      fireEvent.click(item);
+      expect(onAction).not.toHaveBeenCalled();
     });
 
     it('lets a full admin start it on an account with admin access', async () => {

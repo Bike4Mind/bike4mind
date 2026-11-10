@@ -137,8 +137,26 @@ describe('OverviewTab API key trust row', () => {
     renderTab();
     expect(screen.getByTestId('user-profile-key-trust-btn')).toBeDisabled();
     expect(screen.getByTestId('user-profile-key-trust-btn-reason')).toHaveAttribute(
-      'title',
+      'aria-label',
       'Missing permission: keys:revoke'
+    );
+  });
+
+  it('is disabled for a keys:revoke delegate on an account with admin access', () => {
+    mocks.currentUser = { id: 'd1', isAdmin: false, adminPermissions: ['keys:revoke'] };
+    render(
+      <OverviewTab
+        user={buildProfile({ isAdmin: true })}
+        onAction={vi.fn()}
+        onViewActivity={vi.fn()}
+        onViewCredits={vi.fn()}
+      />,
+      { wrapper: ProfileTestWrapper }
+    );
+    expect(screen.getByTestId('user-profile-key-trust-btn')).toBeDisabled();
+    expect(screen.getByTestId('user-profile-key-trust-btn-reason')).toHaveAttribute(
+      'aria-label',
+      'Only full administrators can act on accounts with admin access'
     );
   });
 

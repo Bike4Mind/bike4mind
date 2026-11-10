@@ -402,9 +402,10 @@ describe('POST /api/users/:id/loginAs - delegated users:impersonate', () => {
   const delegate = { id: 'd1', name: 'Delegate', email: 'd@example.com', isAdmin: false, mfa: { totpEnabled: true } };
   const run = (
     user: Record<string, unknown>,
-    body: Record<string, unknown> = { mfaToken: '123456', reason: REASON }
+    body: Record<string, unknown> = { mfaToken: '123456', reason: REASON },
+    targetId = 'target1'
   ) => {
-    const { req, res } = post(body);
+    const { req, res } = post(body, targetId);
     Object.assign(req, { user });
     const call = (async () => {
       route.guard!(req, res, () => {});
@@ -449,6 +450,23 @@ describe('POST /api/users/:id/loginAs - delegated users:impersonate', () => {
     await expect(call).rejects.toMatchObject({ statusCode: 403 });
     expect(mockRequestApproval).not.toHaveBeenCalled();
     expect(mockIssueSession).not.toHaveBeenCalled();
+  });
+
+  it('audits a delegate impersonating themselves as a denial', async () => {
+    mockDeny.mockReset().mockImplementation(async () => {
+      throw new ForbiddenError('Admins cannot perform this action on their own account.');
+    });
+    const { call } = run(
+      { ...delegate, adminPermissions: ['users:impersonate'] },
+      { mfaToken: '123456', reason: REASON },
+      'd1'
+    );
+    await expect(call).rejects.toBeInstanceOf(ForbiddenError);
+    expect(mockDeny).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ action: 'user.impersonation.denied', attempted: 'user.impersonation.started' })
+    );
+    expect(mockLoginAs).not.toHaveBeenCalled();
   });
 
   it('still answers 202 for a full admin on an admin target', async () => {

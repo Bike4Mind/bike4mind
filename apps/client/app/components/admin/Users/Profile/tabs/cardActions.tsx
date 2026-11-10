@@ -22,9 +22,7 @@ export const RowAction: React.FC<RowActionProps> = ({ onClick, children, disable
   // A disabled button gets no pointer events, so the reason hangs off a wrapper.
   return disabledReason ? (
     <Tooltip title={disabledReason}>
-      <span data-testid={`${testId}-reason`} title={disabledReason}>
-        {button}
-      </span>
+      <span data-testid={`${testId}-reason`}>{button}</span>
     </Tooltip>
   ) : (
     button

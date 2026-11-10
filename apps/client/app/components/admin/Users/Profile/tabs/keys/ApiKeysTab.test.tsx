@@ -317,47 +317,56 @@ describe('ApiKeysTab permission gating', () => {
   const actAs = (adminPermissions: string[]) =>
     useUser.setState({ currentUser: { id: 'd1', isAdmin: false, adminPermissions } as never });
 
-  it('disables every key action for a delegate without keys:revoke', () => {
+  // Joy's Tooltip puts the title on its child as aria-label; the row buttons sit inside that span.
+  const reasonOf = (el: HTMLElement) => (el.parentElement as HTMLElement).getAttribute('aria-label');
+  const rowRevoke = () => within(row('key-1')).getByTestId('user-keys-revoke-btn');
+  const rowRotate = () => within(row('key-1')).getByTestId('user-keys-rotate-btn');
+  const reason = (id: string) => screen.getByTestId(id).getAttribute('aria-label');
+  const ADMIN_TARGET = 'Only full administrators can act on accounts with admin access';
+
+  it('disables every key action for a delegate without keys:revoke, naming the permission', () => {
     actAs(['support:read']);
     renderTab();
-    expect(within(row('key-1')).getByTestId('user-keys-revoke-btn')).toBeDisabled();
-    expect(within(row('key-1')).getByTestId('user-keys-rotate-btn')).toBeDisabled();
+    const missing = 'Missing permission: keys:revoke';
+    expect(rowRevoke()).toBeDisabled();
+    expect(reasonOf(rowRevoke())).toBe(missing);
+    expect(rowRotate()).toBeDisabled();
+    expect(reasonOf(rowRotate())).toBe(missing);
     expect(screen.getByTestId('user-keys-revoke-all-btn')).toBeDisabled();
+    expect(reason('user-keys-revoke-all-reason')).toBe(missing);
     expect(screen.getByTestId('user-profile-generate-key-btn')).toBeDisabled();
-    expect(screen.getByTestId('user-profile-generate-key-btn')).toHaveAttribute(
-      'title',
-      'Missing permission: keys:revoke'
-    );
+    expect(reason('user-profile-generate-key-reason')).toBe(missing);
   });
 
   it('lets keys:revoke alone revoke but not rotate or generate, which hand back a secret', () => {
     actAs(['keys:revoke']);
     renderTab();
-    expect(within(row('key-1')).getByTestId('user-keys-revoke-btn')).toBeEnabled();
+    expect(rowRevoke()).toBeEnabled();
     expect(screen.getByTestId('user-keys-revoke-all-btn')).toBeEnabled();
-    expect(within(row('key-1')).getByTestId('user-keys-rotate-btn')).toBeDisabled();
-    expect(screen.getByTestId('user-profile-generate-key-btn')).toHaveAttribute(
-      'title',
-      'Missing permission: users:impersonate'
-    );
+    expect(rowRotate()).toBeDisabled();
+    expect(reasonOf(rowRotate())).toBe('Missing permission: users:impersonate');
+    expect(reason('user-profile-generate-key-reason')).toBe('Missing permission: users:impersonate');
   });
 
   it('enables everything for a delegate holding both permissions', () => {
     actAs(['keys:revoke', 'users:impersonate']);
     renderTab();
-    expect(within(row('key-1')).getByTestId('user-keys-rotate-btn')).toBeEnabled();
+    expect(rowRotate()).toBeEnabled();
     expect(screen.getByTestId('user-profile-generate-key-btn')).toBeEnabled();
   });
 
-  it('disables the actions for a delegate on an account with admin access', () => {
+  it('disables every action, with the reason, for a delegate on an account with admin access', () => {
     actAs(['keys:revoke', 'users:impersonate']);
     render(<ApiKeysTab user={buildProfile({ adminPermissions: ['support:read'] } as never)} />, {
       wrapper: ProfileTestWrapper,
     });
-    expect(within(row('key-1')).getByTestId('user-keys-revoke-btn')).toBeDisabled();
-    expect(screen.getByTestId('user-profile-generate-key-btn')).toHaveAttribute(
-      'title',
-      'Only full administrators can act on accounts with admin access'
-    );
+    expect(rowRevoke()).toBeDisabled();
+    expect(reasonOf(rowRevoke())).toBe(ADMIN_TARGET);
+    expect(rowRotate()).toBeDisabled();
+    expect(reasonOf(rowRotate())).toBe(ADMIN_TARGET);
+    expect(screen.getByTestId('user-keys-revoke-all-btn')).toBeDisabled();
+    expect(reason('user-keys-revoke-all-reason')).toBe(ADMIN_TARGET);
+    expect(screen.getByTestId('user-profile-generate-key-btn')).toBeDisabled();
+    expect(reason('user-profile-generate-key-reason')).toBe(ADMIN_TARGET);
   });
 });

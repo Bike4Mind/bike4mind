@@ -248,11 +248,12 @@ const handler = adminApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN], admi
         }
       }
 
-      // An admin-provisioned scope reaches past the owner's own data (granting credits, writing ingest
-      // streams), so its audit entry must say why. Self-service-only keys keep the reason optional.
+      // An admin-provisioned scope reaches past the owner's data, so only a full admin may mint it.
       if (requestedScopes.some(isAdminProvisionedApiKeyScope) && !isFullAdmin(req.user)) {
         throw new ForbiddenError('Only full administrators can create API keys with admin-provisioned scopes');
       }
+
+      // Its audit entry must say why. Self-service-only keys keep the reason optional.
       const reason = requestedScopes.some(isAdminProvisionedApiKeyScope)
         ? parseAdminActionReason(rawReason)
         : readAdminActionReason(rawReason);

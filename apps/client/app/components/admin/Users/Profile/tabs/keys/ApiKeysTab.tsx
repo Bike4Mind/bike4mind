@@ -338,28 +338,35 @@ export const ApiKeysTab: React.FC<{ user: AdminUserProfile }> = ({ user }) => {
             >
               Rate limits
             </Button>
-            <Button
-              size="sm"
-              variant="outlined"
-              color="danger"
-              disabled={activeCount === 0 || !!revokeBlocked}
-              title={revokeBlocked ?? undefined}
-              onClick={() => setRevokingAll(true)}
-              data-testid="user-keys-revoke-all-btn"
-            >
-              Revoke all
-            </Button>
-            <Button
-              size="sm"
-              variant="outlined"
-              color="neutral"
-              disabled={!!secretBlocked}
-              title={secretBlocked ?? undefined}
-              onClick={() => setModal('generate')}
-              data-testid="user-profile-generate-key-btn"
-            >
-              Generate key
-            </Button>
+            {/* A disabled button gets no pointer events, so the reason hangs off a wrapper. */}
+            <Tooltip title={revokeBlocked ?? ''}>
+              <span data-testid="user-keys-revoke-all-reason">
+                <Button
+                  size="sm"
+                  variant="outlined"
+                  color="danger"
+                  disabled={activeCount === 0 || !!revokeBlocked}
+                  onClick={() => setRevokingAll(true)}
+                  data-testid="user-keys-revoke-all-btn"
+                >
+                  Revoke all
+                </Button>
+              </span>
+            </Tooltip>
+            <Tooltip title={secretBlocked ?? ''}>
+              <span data-testid="user-profile-generate-key-reason">
+                <Button
+                  size="sm"
+                  variant="outlined"
+                  color="neutral"
+                  disabled={!!secretBlocked}
+                  onClick={() => setModal('generate')}
+                  data-testid="user-profile-generate-key-btn"
+                >
+                  Generate key
+                </Button>
+              </span>
+            </Tooltip>
           </Stack>
         }
       >

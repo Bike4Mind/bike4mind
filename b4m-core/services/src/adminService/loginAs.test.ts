@@ -167,6 +167,15 @@ describe('adminService.loginAs - delegated users:impersonate', () => {
     expect(mocks.send).not.toHaveBeenCalled();
   });
 
+  it('judges the admin target against the fresh record, not a stale full-admin JWT', async () => {
+    vi.clearAllMocks();
+    mockVerifyMFA.mockResolvedValue({ verified: true });
+    const { adapters, mocks } = makeAdapters(freshDelegate());
+    mocks.findById.mockResolvedValue({ ...targetUser, isAdmin: true } as never);
+    await expect(run(adminJwt, adapters)).rejects.toThrow('Only full administrators can impersonate');
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
   it('still lets a full admin impersonate an admin target', async () => {
     vi.clearAllMocks();
     mockVerifyMFA.mockResolvedValue({ verified: true });
