@@ -293,6 +293,7 @@ describe('shell approval in a project with a large node_modules', () => {
     await chmod(join(xrepo, 'bin', 'git-st'), 0o755);
     await symlink(join(xrepo, '.git', 'config'), join(xrepo, 'cfglink'));
     await symlink(join(xrepo, '.git'), join(xrepo, 'gitlink'));
+    await symlink(join(xrepo, 'xloop'), join(xrepo, 'xloop'));
     // dotfiles tracks a gitconfig its branch `evil` changes, which a test links the user gitconfig to.
     const dotfiles = await repository('dotfiles', { gitconfig: '[alias]\n\tdst = status\n' });
     git(dotfiles, 'checkout', '-qb', 'evil');
@@ -1521,8 +1522,15 @@ describe('shell approval in a project with a large node_modules', () => {
     ['mkdir -p cfgdir3/objects cfgdir3/refs && git -C cfgdir3 st'],
     ['mkdir cfgdir3/objects cfgdir3/refs && git -C cfgdir3 st'],
     ['touch cfgdir3/objects && git -C cfgdir3 st'],
+    ['mkdir cfgdir3/refs && git -C cfgdir3 st'],
+    ['git config --add alias.st && git st'],
+    ['git config --replace-all alias.st && git st'],
+    ['git config --edit core.x && git st'],
+    ['echo x >> xloop && git st'],
     ['cd cfgdir3 && mkdir -p objects refs && git st'],
     ['echo x > src/commondir && git st'],
+    ['echo x > cfgdir3/config.worktree && git -C cfgdir3 st'],
+    ['truncate -s 0 "$F" && git st'],
     ["printf '[alias]\\n\\tst = !touch MARK\\n' >> cfglink && git st"],
     ["printf '[alias]\\n\\tst = !touch MARK\\n' >> gitlink/config && git st"],
     ['truncate -s 0 .git/config && git st'],
@@ -1556,6 +1564,9 @@ describe('shell approval in a project with a large node_modules', () => {
     'touch HEAD2 config2 && git st',
     'mkdir -p x && git st',
     'truncate -s 0 out.txt && git st',
+    'truncate -r .git/config out.txt && git st',
+    'git config --list && git st',
+    'git --config-env=color.ui=FOO st',
   ])('runs %s (in proj/xrepo) unasked, as nothing it does reaches the config git reads', async command => {
     expect(await judge(command, 'xrepo')).toMatchObject({ auto: true, full: true });
   });

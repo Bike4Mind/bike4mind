@@ -388,6 +388,26 @@ describe('sessionScriptRun', () => {
     expect((await sessionScriptRun('git -C linked status', root, id))?.hooks).toHaveLength(1);
   });
 
+  it('does not flag a folder with objects and refs but no HEAD', async () => {
+    const id = 'session-scripts-no-head';
+    const folder = join(root, 'headless');
+    await mkdir(join(folder, 'objects'), { recursive: true });
+    await mkdir(join(folder, 'refs'), { recursive: true });
+    await writeFile(join(folder, 'config'), 'x\n', 'utf8');
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(folder, 'config'));
+    expect(await sessionScriptRun('git -C headless status', root, id)).toBeNull();
+  });
+
+  it('does not flag a folder with HEAD and refs but no objects', async () => {
+    const id = 'session-scripts-no-objects';
+    const folder = join(root, 'objectless');
+    await mkdir(join(folder, 'refs'), { recursive: true });
+    await writeFile(join(folder, 'HEAD'), 'ref: refs/heads/main\n', 'utf8');
+    await writeFile(join(folder, 'config'), 'x\n', 'utf8');
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(folder, 'config'));
+    expect(await sessionScriptRun('git -C objectless status', root, id)).toBeNull();
+  });
+
   it('does not flag a config file written in a folder that is no repository', async () => {
     const id = 'session-scripts-not-bare';
     const folder = join(root, 'plain');
@@ -400,9 +420,11 @@ describe('sessionScriptRun', () => {
   it('runs a launched file from the folder env -C names', async () => {
     const id = 'session-scripts-env-c';
     await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'sub', 'y.sh'));
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'sub', 'npx'));
     expect(await runs('env -C sub ./y.sh', id)).toEqual(['./y.sh']);
     expect(await runs('env -C sub bash y.sh', id)).toEqual(['y.sh']);
     expect(await runs('env -C sub bash < y.sh', id)).toEqual(['y.sh']);
+    expect(await runs('env -C sub ./npx ls', id)).toEqual(['./npx']);
     expect(await runs('env -C other ./y.sh', id)).toBeNull();
     expect(await runs('cd sub && ./y.sh', id)).toEqual(['./y.sh']);
   });
