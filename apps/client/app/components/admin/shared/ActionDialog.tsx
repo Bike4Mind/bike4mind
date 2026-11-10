@@ -1,6 +1,6 @@
 import React, { useId, useState } from 'react';
 import { Button, DialogContent, FormControl, FormLabel, Input, Stack, Typography } from '@mui/joy';
-import { AdminDialog } from './AdminDialog';
+import { AdminDialog, AdminDialogFooter } from './AdminDialog';
 import {
   ADMIN_REASON_HINT,
   type AdminReasonDraft,
@@ -37,7 +37,10 @@ export type ActionDialogProps = {
    * surfaces its own failures: a rejection is not caught here and leaves the dialog open.
    */
   onConfirm: (reason: string) => void | Promise<void>;
-  /** Solid danger is reserved for this final confirm of a destructive command. */
+  /**
+   * Solid danger is reserved for this final confirm of a destructive command. Also set as the confirm
+   * button's `data-tone`, so a test reads the tone without matching Joy's color class.
+   */
   tone?: 'neutral' | 'danger';
   /** Why the caller's own inputs block the commit, shown in place; `null` when they are ready. */
   blockedReason?: string | null;
@@ -164,14 +167,7 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
           </FormControl>
         )}
       </DialogContent>
-      <Stack
-        direction="row"
-        alignItems="center"
-        justifyContent="flex-end"
-        gap={1}
-        flexWrap="wrap"
-        sx={{ pt: 2, mt: 1, borderTop: '1px solid', borderColor: 'admin.border' }}
-      >
+      <AdminDialogFooter>
         {hint ? (
           <Typography id={hintId} level="body-sm" data-testid={`${testId}-hint`} sx={{ mr: 'auto' }}>
             {hint}
@@ -181,7 +177,8 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
             <Kbd>Enter</Kbd> to apply
           </Typography>
         )}
-        <Button variant="plain" color="neutral" onClick={onClose} data-testid={`${testId}-cancel-btn`}>
+        {/* Held while the write is in flight: closing then would not cancel it. */}
+        <Button variant="plain" color="neutral" onClick={onClose} disabled={busy} data-testid={`${testId}-cancel-btn`}>
           Cancel
         </Button>
         <Button
@@ -191,11 +188,12 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
           loading={busy}
           aria-describedby={hint ? hintId : undefined}
           type="submit"
+          data-tone={tone}
           data-testid={testIds.confirm ?? `${testId}-confirm-btn`}
         >
           {confirmLabel}
         </Button>
-      </Stack>
+      </AdminDialogFooter>
     </Stack>
   );
 };

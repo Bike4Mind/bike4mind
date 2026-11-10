@@ -6,7 +6,7 @@ import { isRotatedSecretWithinGraceWindow } from '@bike4mind/server-utils/auth/s
 import { decryptAtRest } from '@bike4mind/utils/security';
 import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
 import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
-import { refuseBlockedRotatedSession } from '@server/auth/refreshAccountGate';
+import { refuseBlockedRotatedSession, suspendedSessionRefusal } from '@server/auth/refreshAccountGate';
 import { redactUserSecretsForSelf } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
@@ -84,11 +84,14 @@ const handler = baseApi({ auth: false })
             }),
           logger: req.logger,
         })
-        .catch(error => {
+        .catch(async error => {
           if (useCookie && !bodyToken && readAdminReturnCookie(req) && error instanceof UnauthorizedError) {
             throw new UnauthorizedError('Support session ended. Return to admin.', {
               code: 'impersonation_return_required',
             });
+          }
+          if (error instanceof UnauthorizedError) {
+            throw (await suspendedSessionRefusal(token).catch(() => null)) ?? error;
           }
           throw error;
         });

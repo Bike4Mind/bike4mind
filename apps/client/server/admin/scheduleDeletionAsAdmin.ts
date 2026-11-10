@@ -1,5 +1,12 @@
 import { z } from 'zod';
-import { ConflictError, ForbiddenError, NotFoundError, canAccessAdmin, type AdminApproval } from '@bike4mind/common';
+import {
+  ConflictError,
+  ForbiddenError,
+  NotFoundError,
+  canAccessAdmin,
+  isFullAdmin,
+  type AdminApproval,
+} from '@bike4mind/common';
 import { userRepository } from '@bike4mind/database';
 import type { Request } from 'express';
 import { isSelfOrImpersonator, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
@@ -51,7 +58,11 @@ export async function scheduleDeletionAsAdmin(
       throw new ConflictError('This user is no longer an admin; request the deletion again.');
     }
     if (options.requireNonAdmin && canAccessAdmin(target)) {
-      throw new ConflictError('This user now has admin access; request the deletion again for approval.');
+      throw new ConflictError(
+        isFullAdmin(req.user)
+          ? 'This user now has admin access; request the deletion again for approval.'
+          : 'This user now has admin access; only a full administrator can schedule its deletion.'
+      );
     }
     return target;
   };

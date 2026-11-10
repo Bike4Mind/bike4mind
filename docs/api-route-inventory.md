@@ -34,7 +34,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-1075 routes: 83 contracted, 12 aliases of another route, 259 with no static caller in `apps/client/app`.
+1076 routes: 84 contracted, 12 aliases of another route, 260 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -146,7 +146,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | user | 2 | 0 | 1 | 1 | 0 | 0 | 0 |
 | user-api-keys | 8 | 0 | 7 | 1 | 0 | 0 | 1 |
 | users | 36 | 0 | 28 | 8 | 0 | 0 | 5 |
-| v1 | 81 | 77 | 74 | 1 | 0 | 6 | 70 |
+| v1 | 82 | 78 | 75 | 1 | 0 | 6 | 71 |
 | voice | 6 | 0 | 5 | 0 | 0 | 1 | 2 |
 | webhooks | 12 | 0 | 7 | 0 | 0 | 5 | 5 |
 | websocket | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
@@ -1684,6 +1684,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/v1/artifacts/[id]/versions/[version]` | GET | jwt+key | `notebooks:read`, `notebooks:write` | yes | - | 0 |
 | `/api/v1/artifacts/search` | GET | jwt+key | `notebooks:read`, `notebooks:write` | yes | - | 0 |
 | `/api/v1/artifacts/types` | GET | jwt+key | `notebooks:read`, `notebooks:write` | yes | - | 0 |
+| `/api/v1/client-config` | GET | jwt+key | `ai:chat`, `ai:generate`, `me:read` | yes | - | 0 |
 | `/api/v1/credits` | GET | jwt+key | `ai:chat`, `ai:decide`, `ai:generate`, `me:read` | yes | - | 0 |
 | `/api/v1/credits/transactions` | GET | jwt+key | `me:read` | yes | - | 0 |
 | `/api/v1/data-lakes` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | yes | - | 0 |

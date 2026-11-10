@@ -15,7 +15,7 @@ const LEGACY_SEED = `
 2ed882bb22ae 2ef37c2e2c94 2f0ab631adc3 2f234de390db 2f620478ac6a 2f91883ed973 2fc40391ca31 2fdc2e0b829c
 31617db73f2b 31c617980486 32f2089e6d27 3463552d7759 350efa8ccb14 35884ed714cb 369e060a227e 3781b2e67763
 37a70e432b71 37cba665495b 3979778768d8 3a1642518922 3a6efe7298ed 3aa0321b6274 3b86c658c0bf
-3bb083db8e64 3dc9363baa1a 3df999299a2d 3e3eaf9cd77c 3e4176be1c48 3ec72e3ac0a3 3effb03d9325
+3bb083db8e64 3df999299a2d 3e3eaf9cd77c 3e4176be1c48 3ec72e3ac0a3 3effb03d9325
 40f556547602 413f7c8082e4 419f21991350 41a8f5c2b662 41f918864b1c 42e07254368d 434a8e4932ed
 43d112295f48 46bd586deb06 49627b2c4d6b 49bddae03ab9 4b1fbd0505df 4b38e95bd3e3 4b56c2365175 4b7ce8871d5f
 4bd858496fa6 4bdf4b58eefe 4be8154314f1 4ca8d8bb3c82 4dc25ea3603f 5086931d9a00
@@ -365,7 +365,6 @@ export const ROUTE_SCOPE_BASELINE: ScopeBaseline = {
     '/api/users/[id]/activities',
     '/api/users/[id]/agents',
     '/api/users/[id]/collections',
-    '/api/users/[id]/delete',
     '/api/users/[id]/docx-template',
     '/api/users/[id]/email-settings',
     '/api/users/[id]/friend-requests',

@@ -1,18 +1,27 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import type { ReactNode } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
-import Card from '@mui/joy/Card';
-import CircularProgress from '@mui/joy/CircularProgress';
-import FormControl from '@mui/joy/FormControl';
-import FormLabel from '@mui/joy/FormLabel';
 import Input from '@mui/joy/Input';
-import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
+import RefreshIcon from '@mui/icons-material/Refresh';
 import type { OptionalPathRetrievalRate, RateArm } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
+import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
+import {
+  AdminPageHeader,
+  EmptyState,
+  ErrorState,
+  FilterInputLabel,
+  FilterToolbar,
+  LoadingState,
+  StatStrip,
+  StatTile,
+} from './shared';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
 
 /**
  * The measurement behind the per-turn retrieval-routing question (#1394): when the knowledge tools
@@ -66,27 +75,56 @@ const rateLift = (treatment: RateArm, control: RateArm): number | null =>
 const formatLift = (lift: number | null): string =>
   lift === null ? 'n/a' : `${lift < 0 ? '-' : '+'}${Math.abs(lift * 100).toFixed(1)} pp`;
 
-function StatCard({ label, value, caption }: { label: string; value: string; caption: string }) {
+/**
+ * A titled group of numbers. It is a page region rather than a card, so its StatStrip is the only
+ * surface and no card sits inside another.
+ */
+function StatSection({
+  title,
+  description,
+  note,
+  children,
+  'data-testid': testId,
+}: {
+  title: string;
+  description: ReactNode;
+  note?: ReactNode;
+  children: ReactNode;
+  'data-testid'?: string;
+}) {
   return (
-    <Card variant="soft" sx={{ flex: '1 1 200px', minWidth: 200 }}>
-      <Typography level="body-sm" textColor="text.secondary">
-        {label}
-      </Typography>
-      <Typography level="h2">{value}</Typography>
-      <Typography level="body-xs" textColor="text.secondary">
-        {caption}
-      </Typography>
-    </Card>
+    <Stack component="section" aria-label={title} gap={1.5} sx={{ minWidth: 0 }} data-testid={testId}>
+      <Box>
+        <Typography level="title-md" component="h2" sx={{ color: 'admin.ink' }}>
+          {title}
+        </Typography>
+        <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
+          {description}
+        </Typography>
+      </Box>
+      {children}
+      {note && (
+        <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+          {note}
+        </Typography>
+      )}
+    </Stack>
   );
 }
 
+// A blank cutoff means "let the server pick", which pins it to the live forced-retrieval floor
+// rather than to a number this component invented. Kept as a string so the field can be cleared.
+const NO_FILTERS = { startDate: '', endDate: '', answerableMinScore: '' };
+
 export default function RetrievalRateTab() {
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
-  // Blank means "let the server pick", which pins the cutoff to the live forced-retrieval floor
-  // rather than to a number this component invented. Kept as a string so the field can be cleared.
-  const [answerableMinScore, setAnswerableMinScore] = useState('');
-  const [appliedFilters, setAppliedFilters] = useState({ startDate: '', endDate: '', answerableMinScore: '' });
+  // Filters apply as they change. The pause keeps a typed cutoff or year from running one fold per
+  // keystroke, since each fold scans up to maxTurnsScanned turns.
+  const {
+    value: filters,
+    debouncedValue: appliedFilters,
+    setValue: setFilters,
+    setValueImmediately: applyFilters,
+  } = useDebounceValue(NO_FILTERS, 400);
 
   const { data, isLoading, isFetching, error, refetch } = useQuery<RetrievalRateResponse>({
     queryKey: ['retrievalRate', appliedFilters],
@@ -112,242 +150,262 @@ export default function RetrievalRateTab() {
     [data, summary]
   );
 
+  const errorMessage = error
+    ? `Could not load the retrieval rate: ${error instanceof Error ? error.message : 'unknown error'}`
+    : '';
+  const datesApplied = Boolean(appliedFilters.startDate || appliedFilters.endDate);
+  const clearDates = () => applyFilters({ ...filters, startDate: '', endDate: '' });
+
   return (
-    <Box data-testid="admin-retrieval-rate-tab">
-      <Typography level="h3" sx={{ mb: 0.5 }}>
-        Retrieval Rate
-      </Typography>
-      <Typography level="body-sm" textColor="text.secondary" sx={{ mb: 2 }}>
-        How often the model retrieves when the knowledge tools are offered but not forced.
-      </Typography>
+    <Stack gap={ADMIN_REGION_GAP} sx={{ minWidth: 0 }} data-testid="admin-retrieval-rate-tab">
+      <AdminPageHeader
+        title="Retrieval"
+        description="How often the model retrieves when the knowledge tools are offered but not forced."
+        actions={
+          <Button
+            size="sm"
+            variant="outlined"
+            startDecorator={<RefreshIcon />}
+            onClick={() => refetch()}
+            loading={isFetching}
+            data-testid="retrieval-rate-refresh-btn"
+          >
+            Refresh
+          </Button>
+        }
+      />
 
-      <Stack direction="row" spacing={1} sx={{ mb: 2, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-        <FormControl size="sm">
-          <FormLabel>Start date</FormLabel>
-          <Input
-            type="date"
-            value={startDate}
-            onChange={e => setStartDate(e.target.value)}
-            data-testid="retrieval-rate-start-input"
-          />
-        </FormControl>
-        <FormControl size="sm">
-          <FormLabel>End date</FormLabel>
-          <Input
-            type="date"
-            value={endDate}
-            onChange={e => setEndDate(e.target.value)}
-            data-testid="retrieval-rate-end-input"
-          />
-        </FormControl>
-        <FormControl size="sm">
-          <FormLabel>Answerable cutoff</FormLabel>
-          <Input
-            type="number"
-            slotProps={{ input: { min: 0, max: 1, step: 0.05 } }}
-            placeholder="default"
-            value={answerableMinScore}
-            onChange={e => setAnswerableMinScore(e.target.value)}
-            data-testid="retrieval-rate-cutoff-input"
-          />
-        </FormControl>
-        <Button
+      <FilterToolbar data-testid="retrieval-rate-filter-bar">
+        <Input
           size="sm"
-          onClick={() => setAppliedFilters({ startDate, endDate, answerableMinScore })}
-          loading={isFetching}
-          data-testid="retrieval-rate-apply-btn"
-        >
-          Apply
-        </Button>
-        <Button size="sm" variant="outlined" onClick={() => refetch()} data-testid="retrieval-rate-refresh-btn">
-          Refresh
-        </Button>
-      </Stack>
+          type="date"
+          startDecorator={<FilterInputLabel>From</FilterInputLabel>}
+          value={filters.startDate}
+          onChange={e => setFilters({ ...filters, startDate: e.target.value })}
+          slotProps={{ input: { 'aria-label': 'Start date' } }}
+          data-testid="retrieval-rate-start-input"
+        />
+        <Input
+          size="sm"
+          type="date"
+          startDecorator={<FilterInputLabel>To</FilterInputLabel>}
+          value={filters.endDate}
+          onChange={e => setFilters({ ...filters, endDate: e.target.value })}
+          slotProps={{ input: { 'aria-label': 'End date' } }}
+          data-testid="retrieval-rate-end-input"
+        />
+        <Input
+          size="sm"
+          type="number"
+          startDecorator={<FilterInputLabel>Answerable cutoff</FilterInputLabel>}
+          slotProps={{ input: { min: 0, max: 1, step: 0.05, 'aria-label': 'Answerable cutoff' } }}
+          placeholder="default"
+          value={filters.answerableMinScore}
+          onChange={e => setFilters({ ...filters, answerableMinScore: e.target.value })}
+          data-testid="retrieval-rate-cutoff-input"
+        />
+      </FilterToolbar>
 
-      {isLoading && (
-        <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }} data-testid="retrieval-rate-loading">
-          <CircularProgress size="sm" />
-          <Typography level="body-sm">Folding turns...</Typography>
-        </Stack>
-      )}
+      {isLoading && <LoadingState label="Folding turns" testId="retrieval-rate-loading" />}
 
-      {error && (
-        <Alert color="danger" data-testid="retrieval-rate-error">
-          {error instanceof Error ? error.message : 'Failed to load the retrieval rate.'}
-        </Alert>
-      )}
+      {/* With numbers on screen a failed refresh is a banner above them; with none it takes their place. */}
+      {error &&
+        (data ? (
+          <Alert color="danger" data-testid="retrieval-rate-error">
+            {errorMessage}
+          </Alert>
+        ) : (
+          <Box data-testid="retrieval-rate-error">
+            <ErrorState message={errorMessage} onRetry={() => void refetch()} retrying={isFetching} />
+          </Box>
+        ))}
 
-      {summary && !isLoading && (
-        <Stack spacing={2}>
-          {data?.truncated && (
-            <Alert color="warning" data-testid="retrieval-rate-truncated">
-              Window exceeds the {data.maxTurnsScanned.toLocaleString()}-turn scan ceiling. These numbers describe the
-              most recent {data.turnsScanned.toLocaleString()} turns only ({formatDate(data.window.oldestTurnAt)} to{' '}
-              {formatDate(data.window.newestTurnAt)}) - narrow the dates for a rate that covers the whole window.
-            </Alert>
-          )}
+      {summary &&
+        !isLoading &&
+        (data?.turnsScanned === 0 ? (
+          <EmptyState
+            title="No turns in this window"
+            description="Turns are counted here once users chat with the knowledge tools on offer."
+            action={
+              datesApplied ? (
+                <Button size="sm" variant="outlined" onClick={clearDates} data-testid="retrieval-rate-clear-dates-btn">
+                  Clear dates
+                </Button>
+              ) : null
+            }
+          />
+        ) : (
+          <>
+            {data?.truncated && (
+              <Alert color="warning" data-testid="retrieval-rate-truncated">
+                Window exceeds the {data.maxTurnsScanned.toLocaleString()}-turn scan ceiling. These numbers describe the
+                most recent {data.turnsScanned.toLocaleString()} turns only ({formatDate(data.window.oldestTurnAt)} to{' '}
+                {formatDate(data.window.newestTurnAt)}) - narrow the dates for a rate that covers the whole window.
+              </Alert>
+            )}
 
-          {hasNoRatePopulation && (
-            <Alert color="neutral" data-testid="retrieval-rate-empty">
-              No turns in this window reached the optional path, so there is no rate to report. Any forced or
-              unclassified turns below are counted but cannot answer this question - a turn only measures the offer when
-              the model was free to decline it.
-            </Alert>
-          )}
+            {hasNoRatePopulation && (
+              <Alert color="neutral" data-testid="retrieval-rate-empty">
+                No turns in this window reached the optional path, so there is no rate to report. Any forced or
+                unclassified turns below are counted but cannot answer this question - a turn only measures the offer
+                when the model was free to decline it.
+              </Alert>
+            )}
 
-          <Stack direction="row" spacing={2} sx={{ flexWrap: 'wrap' }}>
-            <StatCard
-              label="Optional-path retrieval rate"
-              value={formatRate(summary.rate)}
-              caption={`${summary.retrievedTurns.toLocaleString()} of ${summary.offeredTurns.toLocaleString()} offered turns`}
-            />
-            <StatCard
-              label="After a forced-retrieval skip"
-              value={formatRate(summary.forcedSuppressed.rate)}
-              caption={`${summary.forcedSuppressed.retrievedTurns.toLocaleString()} of ${summary.forcedSuppressed.turns.toLocaleString()} suppressed turns`}
-            />
-            <StatCard
-              label="Forced turns"
-              value={summary.forcedTurns.toLocaleString()}
-              caption="Forced retrieval enabled, nothing suppressed it"
-            />
-            <StatCard
-              label="Unclassified"
-              value={summary.unclassifiedTurns.toLocaleString()}
-              caption="No mode recorded - pre-deploy turns, agent-mode runs, or a tool-only write"
-            />
-          </Stack>
+            <StatStrip aria-label="Retrieval rate">
+              <StatTile
+                label="Optional-path retrieval rate"
+                value={formatRate(summary.rate)}
+                comparison={`${summary.retrievedTurns.toLocaleString()} of ${summary.offeredTurns.toLocaleString()} offered turns`}
+              />
+              <StatTile
+                label="After a forced-retrieval skip"
+                value={formatRate(summary.forcedSuppressed.rate)}
+                comparison={`${summary.forcedSuppressed.retrievedTurns.toLocaleString()} of ${summary.forcedSuppressed.turns.toLocaleString()} suppressed turns`}
+              />
+              <StatTile
+                label="Forced turns"
+                value={summary.forcedTurns.toLocaleString()}
+                comparison="Forced retrieval enabled, nothing suppressed it"
+              />
+              <StatTile
+                label="Unclassified"
+                value={summary.unclassifiedTurns.toLocaleString()}
+                comparison="No mode recorded - pre-deploy turns, agent-mode runs, or a tool-only write"
+              />
+            </StatStrip>
 
-          {/* The type says this is always present - the fold never omits it - but the client trusts a
-             live HTTP response, not the fold directly, and a response from an API pod one deploy behind
-             the client bundle predates this field. Guard rather than crash the whole tab over it. */}
-          {summary.answerability && (
-            <Sheet variant="outlined" sx={{ p: 2, borderRadius: 'sm' }} data-testid="retrieval-rate-answerability">
-              <Typography level="title-sm">Could the corpus have answered?</Typography>
-              <Typography level="body-xs" textColor="text.secondary" sx={{ mb: 1.5 }}>
-                Offered turns split by whether an offline replay found anything in the corpus at or above a cosine of{' '}
-                {summary.answerability.cutoff.toFixed(2)}. A turn where the model did not retrieve is only a defect if
-                there was something to find.
-              </Typography>
+            {/* The type says this is always present - the fold never omits it - but the client trusts a
+               live HTTP response, not the fold directly, and a response from an API pod one deploy behind
+               the client bundle predates this field. Guard rather than crash the whole tab over it. */}
+            {summary.answerability && (
+              <StatSection
+                title="Could the corpus have answered?"
+                description={
+                  <>
+                    Offered turns split by whether an offline replay found anything in the corpus at or above a cosine
+                    of {summary.answerability.cutoff.toFixed(2)}. A turn where the model did not retrieve is only a
+                    defect if there was something to find.
+                  </>
+                }
+                note="Replayed after the fact, not measured during the turn: the corpus may have moved since, and for turns where retrieval never ran the lake scope is reconstructed from the session as it stands now. Treat a replay run long after the window as weak evidence."
+                data-testid="retrieval-rate-answerability"
+              >
+                {summary.answerability.unknown.turns === summary.offeredTurns && summary.offeredTurns > 0 ? (
+                  <Alert color="neutral" data-testid="retrieval-rate-answerability-unreplayed">
+                    No turn in this window has been replayed, so the split below is empty. Run the answerability replay
+                    (packages/scripts/retrieval/answerability-replay.ts) over this window to populate it.
+                  </Alert>
+                ) : (
+                  <StatStrip aria-label="Answerability split">
+                    <StatTile
+                      label="Missed retrievals"
+                      value={formatRate(missRate(summary.answerability.answerable))}
+                      comparison={`${(
+                        summary.answerability.answerable.turns - summary.answerability.answerable.retrievedTurns
+                      ).toLocaleString()} of ${summary.answerability.answerable.turns.toLocaleString()} answerable turns where the model did not search`}
+                    />
+                    <StatTile
+                      label="Wasted retrievals"
+                      value={formatRate(summary.answerability.notAnswerable.rate)}
+                      comparison={`${summary.answerability.notAnswerable.retrievedTurns.toLocaleString()} of ${summary.answerability.notAnswerable.turns.toLocaleString()} turns with nothing to find where it searched anyway`}
+                    />
+                    <StatTile
+                      label="Not replayed"
+                      value={summary.answerability.unknown.turns.toLocaleString()}
+                      comparison={`Excluded from both figures${
+                        summary.answerability.inconclusiveTurns > 0
+                          ? `, including ${summary.answerability.inconclusiveTurns.toLocaleString()} whose scan hit its ceiling below the cutoff`
+                          : ''
+                      }`}
+                    />
+                  </StatStrip>
+                )}
+              </StatSection>
+            )}
 
-              {summary.answerability.unknown.turns === summary.offeredTurns && summary.offeredTurns > 0 ? (
-                <Alert color="neutral" data-testid="retrieval-rate-answerability-unreplayed">
-                  No turn in this window has been replayed, so the split below is empty. Run the answerability replay
-                  (packages/scripts/retrieval/answerability-replay.ts) over this window to populate it.
-                </Alert>
-              ) : (
-                <Stack direction="row" spacing={2} sx={{ flexWrap: 'wrap' }}>
-                  <StatCard
-                    label="Missed retrievals"
-                    value={formatRate(missRate(summary.answerability.answerable))}
-                    caption={`${(
-                      summary.answerability.answerable.turns - summary.answerability.answerable.retrievedTurns
-                    ).toLocaleString()} of ${summary.answerability.answerable.turns.toLocaleString()} answerable turns where the model did not search`}
+            {/* Guarded for the same reason the answerability section above is: a response from an API
+               pod one deploy behind the client bundle predates the field. */}
+            {summary.guidance && (
+              <StatSection
+                title="Does the when-to-retrieve guidance help?"
+                description="Offered turns split by whether the knowledge-base when-to-retrieve section shipped on the turn. The control arm is produced by clearing the KnowledgeBaseRetrievalPrompt admin setting, which needs no deploy to throw."
+                note="The arms are whatever traffic arrived, not a matched sample: they are not balanced on answerability, so a lift over few turns can be a difference in the questions asked rather than in the section. A non-zero Unrecorded count means the window reaches back before the flag shipped - narrow the dates to drop those turns rather than reading them as a third arm."
+                data-testid="retrieval-rate-guidance"
+              >
+                {/* Unlike the answerability split, the arms stay visible with no control traffic: the
+                   treatment arm is the live rate and is worth reading on its own. */}
+                {summary.guidance.injected.turns > 0 && summary.guidance.notInjected.turns === 0 && (
+                  <Alert color="neutral" data-testid="retrieval-rate-guidance-no-control">
+                    No offered turn in this window ran with the section cleared, so there is no control arm and no lift
+                    to read. Clear the KnowledgeBaseRetrievalPrompt admin setting to open one.
+                  </Alert>
+                )}
+
+                <StatStrip aria-label="Guidance arms">
+                  <StatTile
+                    label="Lift from guidance"
+                    value={formatLift(rateLift(summary.guidance.injected, summary.guidance.notInjected))}
+                    comparison="Retrieval rate with the section minus the rate without it"
                   />
-                  <StatCard
-                    label="Wasted retrievals"
-                    value={formatRate(summary.answerability.notAnswerable.rate)}
-                    caption={`${summary.answerability.notAnswerable.retrievedTurns.toLocaleString()} of ${summary.answerability.notAnswerable.turns.toLocaleString()} turns with nothing to find where it searched anyway`}
+                  <StatTile
+                    label="With guidance"
+                    value={formatRate(summary.guidance.injected.rate)}
+                    comparison={`${summary.guidance.injected.retrievedTurns.toLocaleString()} of ${summary.guidance.injected.turns.toLocaleString()} turns carrying the section`}
                   />
-                  <StatCard
-                    label="Not replayed"
-                    value={summary.answerability.unknown.turns.toLocaleString()}
-                    caption={`Excluded from both figures${
-                      summary.answerability.inconclusiveTurns > 0
-                        ? `, including ${summary.answerability.inconclusiveTurns.toLocaleString()} whose scan hit its ceiling below the cutoff`
-                        : ''
-                    }`}
+                  <StatTile
+                    label="Without guidance"
+                    value={formatRate(summary.guidance.notInjected.rate)}
+                    comparison={`${summary.guidance.notInjected.retrievedTurns.toLocaleString()} of ${summary.guidance.notInjected.turns.toLocaleString()} turns with the setting cleared`}
                   />
-                </Stack>
-              )}
+                  <StatTile
+                    label="Unrecorded"
+                    value={summary.guidance.unrecorded.turns.toLocaleString()}
+                    comparison="Excluded from both arms - offered turns from before the flag shipped, not a control group"
+                  />
+                </StatStrip>
+              </StatSection>
+            )}
 
-              <Typography level="body-xs" textColor="text.secondary" sx={{ mt: 1 }}>
-                Replayed after the fact, not measured during the turn: the corpus may have moved since, and for turns
-                where retrieval never ran the lake scope is reconstructed from the session as it stands now. Treat a
-                replay run long after the window as weak evidence.
-              </Typography>
-            </Sheet>
-          )}
-
-          {/* Guarded for the same reason the answerability section above is: a response from an API
-             pod one deploy behind the client bundle predates the field. */}
-          {summary.guidance && (
-            <Sheet variant="outlined" sx={{ p: 2, borderRadius: 'sm' }} data-testid="retrieval-rate-guidance">
-              <Typography level="title-sm">Does the when-to-retrieve guidance help?</Typography>
-              <Typography level="body-xs" textColor="text.secondary" sx={{ mb: 1.5 }}>
-                Offered turns split by whether the knowledge-base when-to-retrieve section shipped on the turn. The
-                control arm is produced by clearing the KnowledgeBaseRetrievalPrompt admin setting, which needs no
-                deploy to throw.
-              </Typography>
-
-              {/* Unlike the answerability split, the arms stay visible with no control traffic: the
-                 treatment arm is the live rate and is worth reading on its own. */}
-              {summary.guidance.injected.turns > 0 && summary.guidance.notInjected.turns === 0 && (
-                <Alert color="neutral" sx={{ mb: 1.5 }} data-testid="retrieval-rate-guidance-no-control">
-                  No offered turn in this window ran with the section cleared, so there is no control arm and no lift to
-                  read. Clear the KnowledgeBaseRetrievalPrompt admin setting to open one.
-                </Alert>
-              )}
-
-              <Stack direction="row" spacing={2} sx={{ flexWrap: 'wrap' }}>
-                <StatCard
-                  label="Lift from guidance"
-                  value={formatLift(rateLift(summary.guidance.injected, summary.guidance.notInjected))}
-                  caption="Retrieval rate with the section minus the rate without it"
+            <StatSection
+              title="Forced retrieval suppressed by"
+              description="These turns had forced retrieval enabled, but a rule suppressed it and left the model on the offered tool - the same position as an optional turn, reached a different way."
+              data-testid="retrieval-rate-suppressed"
+            >
+              <StatStrip aria-label="Suppression reasons">
+                <StatTile
+                  label="Attached files"
+                  value={
+                    <span data-testid="retrieval-rate-skip-attached-files">
+                      {summary.forcedSuppressed.byReason.attached_files.toLocaleString()}
+                    </span>
+                  }
                 />
-                <StatCard
-                  label="With guidance"
-                  value={formatRate(summary.guidance.injected.rate)}
-                  caption={`${summary.guidance.injected.retrievedTurns.toLocaleString()} of ${summary.guidance.injected.turns.toLocaleString()} turns carrying the section`}
+                <StatTile
+                  label="Personal corpus"
+                  value={
+                    <span data-testid="retrieval-rate-skip-personal-corpus">
+                      {summary.forcedSuppressed.byReason.personal_corpus.toLocaleString()}
+                    </span>
+                  }
                 />
-                <StatCard
-                  label="Without guidance"
-                  value={formatRate(summary.guidance.notInjected.rate)}
-                  caption={`${summary.guidance.notInjected.retrievedTurns.toLocaleString()} of ${summary.guidance.notInjected.turns.toLocaleString()} turns with the setting cleared`}
+                <StatTile
+                  label="No lake scope"
+                  value={
+                    <span data-testid="retrieval-rate-skip-no-lake-scope">
+                      {summary.forcedSuppressed.byReason.no_lake_scope.toLocaleString()}
+                    </span>
+                  }
                 />
-                <StatCard
-                  label="Unrecorded"
-                  value={summary.guidance.unrecorded.turns.toLocaleString()}
-                  caption="Excluded from both arms - offered turns from before the flag shipped, not a control group"
-                />
-              </Stack>
+              </StatStrip>
+            </StatSection>
 
-              <Typography level="body-xs" textColor="text.secondary" sx={{ mt: 1 }}>
-                The arms are whatever traffic arrived, not a matched sample: they are not balanced on answerability, so
-                a lift over few turns can be a difference in the questions asked rather than in the section. A non-zero
-                Unrecorded count means the window reaches back before the flag shipped - narrow the dates to drop those
-                turns rather than reading them as a third arm.
-              </Typography>
-            </Sheet>
-          )}
-
-          <Sheet variant="outlined" sx={{ p: 2, borderRadius: 'sm' }}>
-            <Typography level="title-sm" sx={{ mb: 1 }}>
-              Forced retrieval suppressed by
+            <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }} data-testid="retrieval-rate-window">
+              {data?.turnsScanned.toLocaleString()} turns scanned, {formatDate(data?.window.oldestTurnAt ?? null)} to{' '}
+              {formatDate(data?.window.newestTurnAt ?? null)}
             </Typography>
-            <Stack direction="row" spacing={3}>
-              <Typography level="body-sm" data-testid="retrieval-rate-skip-attached-files">
-                Attached files: {summary.forcedSuppressed.byReason.attached_files.toLocaleString()}
-              </Typography>
-              <Typography level="body-sm" data-testid="retrieval-rate-skip-personal-corpus">
-                Personal corpus: {summary.forcedSuppressed.byReason.personal_corpus.toLocaleString()}
-              </Typography>
-              <Typography level="body-sm" data-testid="retrieval-rate-skip-no-lake-scope">
-                No lake scope: {summary.forcedSuppressed.byReason.no_lake_scope.toLocaleString()}
-              </Typography>
-            </Stack>
-            <Typography level="body-xs" textColor="text.secondary" sx={{ mt: 1 }}>
-              These turns had forced retrieval enabled, but a rule suppressed it and left the model on the offered tool
-              - the same position as an optional turn, reached a different way.
-            </Typography>
-          </Sheet>
-
-          <Typography level="body-xs" textColor="text.secondary" data-testid="retrieval-rate-window">
-            {data?.turnsScanned.toLocaleString()} turns scanned, {formatDate(data?.window.oldestTurnAt ?? null)} to{' '}
-            {formatDate(data?.window.newestTurnAt ?? null)}
-          </Typography>
-        </Stack>
-      )}
-    </Box>
+          </>
+        ))}
+    </Stack>
   );
 }

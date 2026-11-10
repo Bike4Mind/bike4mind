@@ -54,8 +54,12 @@ export async function payActivityDripForDay(
   if (!user || !grant || !signupGrantDripOpen(grant)) return noGrant();
   const period = resolvedPeriod ?? (await resolveSignupDripPeriod(signupProtection.grantBudget?.now?.() ?? now));
   if (hasPaidSignupDrip(grant, period.day, period.key)) return noGrant();
-  const { dailyCredits, dripCap } = resolvedLimits ?? (await userService.resolveDripLimits(adminSettingsRepository));
-  if (!(dailyCredits > 0) || signupGrantDripRemaining(grant, dripCap) <= 0) return noGrant();
+  const limits = resolvedLimits ?? (await userService.resolveDripLimits(adminSettingsRepository));
+  if (!(limits.dailyCredits > 0)) return noGrant();
+  if (signupGrantDripRemaining(grant, limits.dripCap) <= 0) {
+    await userService.alertIfDripCapDefault(signupProtection, period.day, limits);
+    return noGrant();
+  }
   return userService.dripSignupGrant(
     userId,
     period.day,

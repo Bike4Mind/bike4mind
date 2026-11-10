@@ -77,11 +77,25 @@ export type AdminApprovalListQuery = {
   limit: number;
 };
 
+/**
+ * The live pending requests a viewer could decide: not requested by any of `viewerIds` (the viewer and,
+ * under impersonation, the real admin), needing one of `permissions`, and full-admin-only only for a full admin.
+ * Mirrors isOwnRequest and canDecideAs in apps/client/server/admin/approvals/service.ts.
+ */
+export type AdminApprovalDecidableQuery = {
+  now: Date;
+  viewerIds: readonly string[];
+  permissions: readonly AdminPermissionId[];
+  fullAdmin: boolean;
+  limit?: number;
+};
+
 export interface IAdminApprovalRepository {
   create(approval: NewAdminApproval): Promise<AdminApproval>;
   findById(id: string): Promise<AdminApproval | null>;
   /** Newest first. */
   list(query: AdminApprovalListQuery): Promise<AdminApproval[]>;
+  countDecidable(query: AdminApprovalDecidableQuery): Promise<number>;
   /** Atomic `from` -> `to` transition; null when another caller won, the record expired, or the guard missed. */
   claim(
     id: string,

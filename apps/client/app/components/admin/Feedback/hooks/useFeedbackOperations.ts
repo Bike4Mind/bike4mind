@@ -8,9 +8,11 @@ import {
   updateFeedbackOnServer,
 } from '@client/app/utils/feedbackAPICalls';
 import useToggle from '@client/app/hooks/useToggle';
+import { adminActionCountsQueryKey } from '@client/app/hooks/data/adminActionCounts';
 import { getFeedbackDisplayContent, FeedbackListParams, IExtendedFeedbackDocument } from '../types';
 import { UseFeedbackOperationsReturn } from '../types';
 import { FEEDBACK_LIST_QUERY_KEY, FEEDBACK_ORGANIZATIONS_QUERY_KEY, FEEDBACK_RECORD_QUERY_KEY } from '../queryKeys';
+import { FEEDBACK_STATUS_LABELS } from '../constants';
 
 const formatReporter = (feedbackItem: IExtendedFeedbackDocument | undefined) => {
   if (!feedbackItem) return 'Unknown user';
@@ -51,10 +53,10 @@ export const useFeedbackOperations = (params: FeedbackListParams): UseFeedbackOp
   const [feedbackToDelete, setFeedbackToDelete] = useState<string | null>(null);
   const [openDeleteFeedbackModal, toggleDeleteFeedbackModal] = useToggle();
 
-  // No status checked matches nothing by definition - the previous client-side predicate returned
-  // an empty list for it. Skipping the request rather than omitting the param is what preserves
-  // that: `status` absent means "any status" to the server, which would invert the filter into
-  // showing every report.
+  // No status checked matches nothing by definition. The tab never produces it (the status chip and
+  // the URL both fall back to a status set), but skipping the request rather than omitting the param
+  // keeps it matching nothing if a caller ever does: `status` absent means "any status" to the
+  // server, which would invert the filter into showing every report.
   const hasStatusSelection = (params.status?.length ?? 0) > 0;
 
   const listQuery = useQuery({
@@ -105,12 +107,13 @@ export const useFeedbackOperations = (params: FeedbackListParams): UseFeedbackOp
         await Promise.all([
           queryClient.invalidateQueries({ queryKey: FEEDBACK_LIST_QUERY_KEY }),
           queryClient.invalidateQueries({ queryKey: FEEDBACK_RECORD_QUERY_KEY }),
+          queryClient.invalidateQueries({ queryKey: adminActionCountsQueryKey }),
         ]);
 
         const content = getFeedbackDisplayContent(feedbackItem, 'No content');
         const preview = content.length > 50 ? content.substring(0, 50) + '...' : content;
         showFeedbackToast.success(
-          `"${preview}" feedback from ${formatReporter(feedbackItem)} updated to: ${updatedStatus}`
+          `"${preview}" feedback from ${formatReporter(feedbackItem)} updated to: ${FEEDBACK_STATUS_LABELS[updatedStatus]}`
         );
       } catch (error) {
         console.error('Error updating feedback status:', error);
@@ -156,6 +159,7 @@ export const useFeedbackOperations = (params: FeedbackListParams): UseFeedbackOp
     total,
     totalSettled,
     loading: (hasStatusSelection && listQuery.isFetching) || organizationsQuery.isFetching,
+    isError: hasStatusSelection && listQuery.isError,
     refreshFeedback,
     handleStatusChange,
     handleDeleteFeedbackClick,

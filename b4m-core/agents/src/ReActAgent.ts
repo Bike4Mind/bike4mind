@@ -45,6 +45,7 @@ import {
   SELF_REPORT_CONFIDENCE_PROMPT,
   SELF_REPORT_CONFIDENCE_REMINDER,
   SelfReportStreamFilter,
+  stripEmptyThink,
   type SelfReport,
 } from './selfReportConfidence';
 
@@ -570,7 +571,7 @@ export class ReActAgent extends EventEmitter {
         let hadToolCalls = false; // Track if this iteration had any tool calls
         let thoughtEmitted = false; // Dedupe per-iteration thought step across multi-frame streaming
         let selfReport: SelfReport | undefined; // The model's confidence report for this turn's tool calls
-        const selfReportFilter = this.context.selfReportConfidence ? new SelfReportStreamFilter() : undefined;
+        const selfReportFilter = new SelfReportStreamFilter({ thinkOnly: !this.context.selfReportConfidence });
         const reasoningWithholder = this.createReasoningWithholder();
 
         // Drop the previous iteration's workflow reminder BEFORE trimming so
@@ -637,7 +638,7 @@ export class ReActAgent extends EventEmitter {
                 const text = this.visibleText(reasoningWithholder, rawText, completionInfo?.channel);
                 if (text) {
                   currentText += text;
-                  const delta = selfReportFilter ? selfReportFilter.push(text) : text;
+                  const delta = selfReportFilter.push(text);
                   if (delta) this.emit('text_delta', { delta, iteration: iterationIndex });
                 }
               }
@@ -802,7 +803,7 @@ export class ReActAgent extends EventEmitter {
               }
             }
           );
-          const heldDelta = selfReportFilter?.flush();
+          const heldDelta = selfReportFilter.flush();
           if (heldDelta) this.emit('text_delta', { delta: heldDelta, iteration: iterationIndex });
           currentText += this.flushHeldText(reasoningWithholder, iterationIndex);
           if (!hadToolCalls) currentText = this.readSelfReport(currentText).text;
@@ -1089,7 +1090,7 @@ export class ReActAgent extends EventEmitter {
 
   /** The turn text split into the model's confidence report and the rest; a no-op when self-report is off. */
   private readSelfReport(text: string): { report?: SelfReport; text: string } {
-    return this.context.selfReportConfidence ? parseSelfReport(text) : { text };
+    return this.context.selfReportConfidence ? parseSelfReport(text) : { text: stripEmptyThink(text) };
   }
 
   private buildDefaultSystemPrompt(): string {
@@ -1531,7 +1532,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       let hadToolCalls = false;
       let thoughtEmitted = false; // Dedupe per-iteration thought step across multi-frame streaming
       let selfReport: SelfReport | undefined; // The model's confidence report for this turn's tool calls
-      const selfReportFilter = this.context.selfReportConfidence ? new SelfReportStreamFilter() : undefined;
+      const selfReportFilter = new SelfReportStreamFilter({ thinkOnly: !this.context.selfReportConfidence });
       const reasoningWithholder = this.createReasoningWithholder();
       const iterStartInputTokens = this.totalInputTokens;
       const iterStartOutputTokens = this.totalOutputTokens;
@@ -1568,7 +1569,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
             const text = this.visibleText(reasoningWithholder, rawText, completionInfo?.channel);
             if (text) {
               currentText += text;
-              const delta = selfReportFilter ? selfReportFilter.push(text) : text;
+              const delta = selfReportFilter.push(text);
               if (delta) this.emit('text_delta', { delta, iteration: iterationIndex });
             }
           }
@@ -1740,7 +1741,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
           }
         }
       );
-      const heldDelta = selfReportFilter?.flush();
+      const heldDelta = selfReportFilter.flush();
       if (heldDelta) this.emit('text_delta', { delta: heldDelta, iteration: iterationIndex });
       currentText += this.flushHeldText(reasoningWithholder, iterationIndex);
       if (!hadToolCalls) currentText = this.readSelfReport(currentText).text;

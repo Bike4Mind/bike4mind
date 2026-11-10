@@ -171,6 +171,7 @@ export enum ChatModels {
 
   // GPT-5 family
   GPT5 = 'gpt-5',
+  GPT5_2025_08_07 = 'gpt-5-2025-08-07',
   GPT5_MINI = 'gpt-5-mini',
   GPT5_NANO = 'gpt-5-nano',
   GPT5_CHAT_LATEST = 'gpt-5-chat-latest',
@@ -259,6 +260,7 @@ export enum ChatModels {
   CLAUDE_4_5_OPUS = 'claude-opus-4-5-20251101',
   CLAUDE_4_6_SONNET = 'claude-sonnet-4-6',
   CLAUDE_5_SONNET = 'claude-sonnet-5',
+  CLAUDE_5_5_SONNET = 'claude-sonnet-5-5',
   CLAUDE_4_6_OPUS = 'claude-opus-4-6',
   CLAUDE_4_7_OPUS = 'claude-opus-4-7',
   CLAUDE_4_8_OPUS = 'claude-opus-4-8',
@@ -337,9 +339,9 @@ export enum ChatModels {
   DEEPSEEK_FLASH = 'deepseek-flash',
   DEEPSEEK_V4_PRO = 'deepseek-v4-pro',
 }
-// The dated snapshot is excluded until it has a catalog row: the adapter tables hold no entry for
-// it, so getAvailableModels returns no ModelInfo (pricing, limits) for it unless a catalog row adds one.
-export const supportedChatModels = z.enum(ChatModels).exclude(['GPT5_4_MINI_2026_03_17']);
+// Dated snapshots are excluded until they have a catalog row: the adapter tables hold no entry for
+// them, so getAvailableModels returns no ModelInfo (pricing, limits) for them unless a catalog row adds one.
+export const supportedChatModels = z.enum(ChatModels).exclude(['GPT5_4_MINI_2026_03_17', 'GPT5_2025_08_07']);
 export type ChatModelName = z.infer<typeof supportedChatModels>;
 export const CHAT_MODELS: string[] = [...supportedChatModels.options];
 
@@ -369,6 +371,7 @@ export const REASONING_SUPPORTED_MODELS: ReadonlySet<string> = new Set([
   ChatModels.O3,
   ChatModels.O4_MINI,
   ChatModels.GPT5,
+  ChatModels.GPT5_2025_08_07,
   ChatModels.GPT5_MINI,
   ChatModels.GPT5_NANO,
   ChatModels.GPT5_1,
@@ -412,6 +415,7 @@ export const ANTHROPIC_OUTPUT_CONFIG_EFFORT_MODELS: ReadonlySet<string> = new Se
   ChatModels.CLAUDE_4_8_OPUS_BEDROCK,
   ChatModels.CLAUDE_5_SONNET,
   ChatModels.CLAUDE_5_SONNET_BEDROCK,
+  ChatModels.CLAUDE_5_5_SONNET,
   ChatModels.CLAUDE_5_5_SONNET_BEDROCK,
   ChatModels.CLAUDE_FABLE_5,
   ChatModels.CLAUDE_FABLE_5_BEDROCK,
@@ -459,6 +463,7 @@ export const ANTHROPIC_OUTPUT_CONFIG_EFFORT_MODELS: ReadonlySet<string> = new Se
  */
 export const REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS: ReadonlySet<string> = new Set([
   ChatModels.GPT5,
+  ChatModels.GPT5_2025_08_07,
   ChatModels.GPT5_MINI,
   ChatModels.GPT5_NANO,
   ChatModels.GPT5_1,
@@ -494,6 +499,7 @@ export const REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS: ReadonlySet<string
  */
 export const RESPONSES_API_TOOL_MODELS: ReadonlySet<string> = new Set([
   ChatModels.GPT5,
+  ChatModels.GPT5_2025_08_07,
   ChatModels.GPT5_MINI,
   ChatModels.GPT5_NANO,
   ChatModels.GPT5_1,
@@ -539,6 +545,7 @@ export const NO_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
   ChatModels.CLAUDE_4_8_OPUS_BEDROCK,
   ChatModels.CLAUDE_5_SONNET,
   ChatModels.CLAUDE_5_SONNET_BEDROCK,
+  ChatModels.CLAUDE_5_5_SONNET,
   ChatModels.CLAUDE_5_5_SONNET_BEDROCK,
   ChatModels.CLAUDE_FABLE_5,
   ChatModels.CLAUDE_FABLE_5_BEDROCK,
@@ -645,8 +652,8 @@ export type SpeechToTextModelName = z.infer<typeof supportedSpeechToTextModels>;
 /**
  * All supported models
  */
-// Deliberately not excluding the dated snapshot (unlike supportedChatModels): this is used as the
-// ModelName type only, and excluding it narrows ModelName so ChatModels values stop assigning to it.
+// Deliberately not excluding the dated snapshots (unlike supportedChatModels): this is used as the
+// ModelName type only, and excluding them narrows ModelName so ChatModels values stop assigning to it.
 export const supportedModels = z.enum({
   ...ChatModels,
   ...ImageModels,
@@ -701,6 +708,12 @@ export type ModelInfo = {
    * Defaults to 'legacy' if unset and can_think is true.
    */
   thinkingStyle?: 'legacy' | 'adaptive';
+  /**
+   * Thinking cannot be switched off for this model. Derived by getAvailableModels
+   * (thinkingCannotBeDisabled in @bike4mind/llm-adapters), never hand-set on a table
+   * entry. Absent means thinking is switchable, or the model does not think.
+   */
+  thinkingAlwaysOn?: true;
   /**
    * The catalog says this model takes OpenAI's `reasoning_effort`. Set only for a
    * record whose reasoning style is 'openai-effort'; absent means "not stated" and

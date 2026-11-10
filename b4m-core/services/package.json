@@ -110,6 +110,16 @@
         "default": "./dist/videoJobs/index.cjs"
       }
     },
+    "./imageJobs": {
+      "import": {
+        "types": "./dist/imageJobs/index.d.mts",
+        "default": "./dist/imageJobs/index.mjs"
+      },
+      "require": {
+        "types": "./dist/imageJobs/index.d.cts",
+        "default": "./dist/imageJobs/index.cjs"
+      }
+    },
     "./musicJobs": {
       "import": {
         "types": "./dist/musicJobs/index.d.mts",

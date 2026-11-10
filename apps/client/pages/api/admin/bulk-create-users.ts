@@ -13,14 +13,15 @@ import { respond } from '@server/utils/respond';
 import { referService, userService } from '@bike4mind/services';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { getLogoUrl, buildEmailLogoImg, escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
 import { emitSignupFunnelEvents, recordAccountLane } from '@server/analytics/funnel';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import { assertCanSeedAccount } from '@server/admin/assertCanSeedAccount';
 
 const AUDITED_USER_ID_LIMIT = 100;
 
@@ -53,12 +54,8 @@ const bulkCreateResponseSchema = z.object({
   ),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
+const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions: { POST: 'settings:manage' } }).post(
   asyncHandler<{}, unknown, { users: UserImportRow[]; grantPackageId?: string }>(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const { users, grantPackageId } = req.body;
 
     if (!Array.isArray(users) || users.length === 0) {
@@ -70,6 +67,19 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     const grantPackage = grantPackageId
       ? await referService.requireActiveGrantPackage(grantPackageId, grantPackageRepository)
       : null;
+
+    // Checked over the whole request before any row is created, so a refused grant creates nobody.
+    // Rows are unvalidated here; non-numeric credits and non-string tags fail per-row validation later.
+    const rowTags = users.flatMap(row => (Array.isArray(row?.tags) ? row.tags.filter(t => typeof t === 'string') : []));
+    assertCanSeedAccount(req, {
+      credits: grantPackage
+        ? grantPackage.credits
+        : users.reduce(
+            (max, row) => (typeof row?.startingCredits === 'number' ? Math.max(max, row.startingCredits) : max),
+            0
+          ),
+      tags: [...(grantPackage?.tags ?? []), ...rowTags],
+    });
 
     // Package rows create one at a time: each reserves against the same package caps, and parallel
     // transactions on one package document would contend on write conflicts and retry.

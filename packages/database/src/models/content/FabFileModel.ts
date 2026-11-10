@@ -1,6 +1,7 @@
 import {
   type AttachmentLakeAccess,
   CHUNK_STALL_REASONS,
+  EXTRACTION_REFUSAL_REASONS,
   CHUNKLESS_STALL_REASONS,
   type ChunkStallReason,
   DATALAKE_TAG_PREFIX,
@@ -3137,6 +3138,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
                 // written off (`noExtractableTextAt`) or the kill switch halted (`chunkStallReason`).
                 chunkStallReason: null,
                 noExtractableTextAt: null,
+                extractionRefusalReason: null,
                 // The four lake-health rollups go with the rest. They describe chunks this reset is
                 // about to invalidate, and the PR that added them states the rule for exactly this
                 // case (FAB_FILE_CONTENT_REWRITE_PATCH, and chunk.ts's rewrite path). Harmless today
@@ -4065,6 +4067,8 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     // typo cannot store a value `isChunkStalled` silently reads as "not stalled".
     chunkStallReason: { type: String, enum: [...CHUNK_STALL_REASONS, null], default: null },
     noExtractableTextAt: { type: Date, default: null },
+    // Why the chunker declined to read the file, refining noExtractableTextAt (see IFabFile).
+    extractionRefusalReason: { type: String, enum: [...EXTRACTION_REFUSAL_REASONS, null], default: null },
     contentHash: { type: String },
     // Server-verified SHA-256 over normalized extracted text, stamped by the admission contract at
     // chunk time (see IFabFile.serverTextHash). The trustworthy dedup input for #1671, distinct from
@@ -4159,7 +4163,7 @@ FabFileSchema.plugin(softDeletePlugin);
 // generic update(). Not `runValidators` via this hook: that would also validate every other path
 // in the same update. Pipeline updates are checked for literal values only; an expression (`$cond`,
 // a `$field` reference) is computed server-side and cannot be checked before the write.
-const ENUM_GATED_UPDATE_PATHS = ['status', 'moderationStatus', 'chunkStallReason'] as const;
+const ENUM_GATED_UPDATE_PATHS = ['status', 'moderationStatus', 'chunkStallReason', 'extractionRefusalReason'] as const;
 
 function rejectOutOfEnumStatusUpdate(this: mongoose.Query<unknown, unknown>): void {
   const update = this.getUpdate();

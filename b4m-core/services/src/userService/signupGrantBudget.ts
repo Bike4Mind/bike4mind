@@ -108,6 +108,16 @@ async function alertCrossing(
   }
 }
 
+/** Alerts once per trickle pool-day that the drip is paying with the built-in cap, not a stored one. */
+export async function alertDripCapDefault(
+  budgetConfig: NonNullable<SignupProtection['grantBudget']>,
+  day: string,
+  dripCap: number
+): Promise<void> {
+  const readSpent = () => budgetConfig.repository.getSpent(signupGrantBudgetKey('trickle', day));
+  await alertCrossing(budgetConfig, 'trickle', day, 'drip_cap_default', readSpent, dripCap);
+}
+
 /**
  * True when a newer grant must wait behind the queue: the pool's day could no longer cover the oldest
  * held reward that fits the daily budget once `amount` is drawn. No queue, or no wired budget, never

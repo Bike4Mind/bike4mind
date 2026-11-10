@@ -171,6 +171,26 @@ export const validateUserApiKey = async (
 };
 
 /**
+ * The owner of a DISABLED key matching `key`, or null. Lets API-key auth answer a key that suspension
+ * disabled (adminUpdateUser deactivates every key on suspend) with the owner's `account_suspended`
+ * notice rather than a bare "Invalid API key". The secret must match, so a guessed prefix learns nothing.
+ */
+export const findOwnerOfDisabledUserApiKey = async (
+  key: string,
+  adapters: { db: { userApiKeys: Pick<IUserApiKeyRepository, 'findDisabledByKeyPrefix'> } }
+): Promise<string | null> => {
+  const findDisabled = adapters.db.userApiKeys.findDisabledByKeyPrefix;
+  if (!findDisabled || !key.startsWith('b4m_live_')) return null;
+  for (const prefixLength of [KEY_PREFIX_LENGTH, LEGACY_KEY_PREFIX_LENGTH]) {
+    const candidates = await findDisabled.call(adapters.db.userApiKeys, key.substring(0, prefixLength));
+    for (const candidate of candidates) {
+      if (await matchStoredSecret(key, candidate)) return candidate.userId;
+    }
+  }
+  return null;
+};
+
+/**
  * Validate a key located BY ID - the embed session-token path holds the keyId but
  * not the raw secret, so there is no prefix lookup or bcrypt. It shares the exact
  * post-lookup gates (expiry, status, last-used) with validateUserApiKey via

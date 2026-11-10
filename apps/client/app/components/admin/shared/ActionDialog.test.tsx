@@ -117,6 +117,30 @@ describe('ActionDialog', () => {
     await waitFor(() => expect(onConfirm).toHaveBeenCalledWith('Goodwill credit'));
   });
 
+  it('holds Cancel and shows the commit loading while the write is in flight', () => {
+    const confirm = openDialog({ pending: true });
+
+    expect(confirm).toHaveClass('MuiButton-loading');
+    expect(screen.getByTestId('adjust-dialog-cancel-btn')).toBeDisabled();
+  });
+
+  it('holds Cancel until a confirm that returns a promise settles', async () => {
+    let finish: (() => void) | undefined;
+    const onConfirm = vi.fn(
+      () =>
+        new Promise<void>(resolve => {
+          finish = resolve;
+        })
+    );
+    const confirm = openDialog({ onConfirm });
+    fireEvent.click(screen.getByTestId('adjust-dialog-reason-input-preset-0'));
+    fireEvent.click(confirm);
+
+    await waitFor(() => expect(screen.getByTestId('adjust-dialog-cancel-btn')).toBeDisabled());
+    finish?.();
+    await waitFor(() => expect(screen.getByTestId('adjust-dialog-cancel-btn')).toBeEnabled());
+  });
+
   it('keeps the required star on the typed-confirm sentence instead of a line of its own', () => {
     openDialog({ typedConfirm: { expected: 'a-very-long-address-that-wraps@example.com', noun: 'email address' } });
 
@@ -137,7 +161,16 @@ describe('ActionDialog', () => {
     const confirm = openDialog({ tone: 'danger' });
 
     expect(confirm.className).toContain('MuiButton-colorDanger');
+    expect(confirm).toHaveAttribute('data-tone', 'danger');
     expect(screen.getByTestId('adjust-dialog-cancel-btn').className).not.toContain('MuiButton-colorDanger');
+  });
+
+  // Callers assert the tone through `data-tone`, so it has to follow the color the confirm renders.
+  it('marks the confirm neutral, and not danger-colored, by default', () => {
+    const confirm = openDialog();
+
+    expect(confirm).toHaveAttribute('data-tone', 'neutral');
+    expect(confirm.className).not.toContain('MuiButton-colorDanger');
   });
 
   it('commits on Enter from an input inside the dialog', async () => {

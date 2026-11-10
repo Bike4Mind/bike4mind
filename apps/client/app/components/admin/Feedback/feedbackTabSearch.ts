@@ -1,12 +1,6 @@
-import {
-  FEEDBACK_ID_PARAM,
-  FEEDBACK_LIST_DEFAULT_LIMIT,
-  FEEDBACK_SUBJECTS,
-  FeedbackStatus,
-  type FeedbackSubject,
-} from '@bike4mind/common';
+import { FEEDBACK_ID_PARAM, FEEDBACK_SUBJECTS, FeedbackStatus, type FeedbackSubject } from '@bike4mind/common';
 import { oneOf, parseObjectId, parsePage, parseStringList, toNumber } from '../adminSearchValues';
-import { FEEDBACK_PAGE_SIZE_OPTIONS } from './constants';
+import { FEEDBACK_DEFAULT_PAGE_SIZE, FEEDBACK_PAGE_SIZE_OPTIONS, FEEDBACK_STATUS_ORDER } from './constants';
 
 /**
  * The Feedback tab's `/admin` search params and their coercion. Pure and React-free: adminTabParams.ts
@@ -35,14 +29,10 @@ const FEEDBACK_VIEW_PARAMS = [
 
 export const FEEDBACK_TAB_PARAMS = [...FEEDBACK_VIEW_PARAMS, FEEDBACK_ID_PARAM] as const;
 
-/** Checkbox order in the filter bar, and the order statuses are written to the URL in. */
-const FEEDBACK_STATUS_ORDER = [FeedbackStatus.New, FeedbackStatus.InProgress, FeedbackStatus.Closed] as const;
-
-// `feedbackStatus` is the checked statuses joined with commas (`New,Closed`). No box checked is a real
-// state distinct from the default (it matches nothing; useFeedbackOperations skips the list query),
-// so it gets its own token.
+// `feedbackStatus` is the checked statuses joined with commas (`New,Closed`). An empty set has no form:
+// the status filter chip checks every status again when its last one is unpicked, and the retired
+// `none` token an older link may carry reads as the default.
 const STATUS_SEPARATOR = ',';
-const NO_STATUS_TOKEN = 'none';
 
 const FEEDBACK_ORDERS = ['asc', 'desc'] as const;
 type FeedbackOrder = (typeof FEEDBACK_ORDERS)[number];
@@ -68,13 +58,13 @@ export type FeedbackView = {
   limit: number;
 };
 
-const toStatusFilters = (checked: readonly FeedbackStatus[]): Record<FeedbackStatus, boolean> =>
+export const toStatusFilters = (checked: readonly FeedbackStatus[]): Record<FeedbackStatus, boolean> =>
   Object.fromEntries(FEEDBACK_STATUS_ORDER.map(status => [status, checked.includes(status)])) as Record<
     FeedbackStatus,
     boolean
   >;
 
-const checkedStatuses = (statusFilters: Record<FeedbackStatus, boolean>): FeedbackStatus[] =>
+export const checkedStatuses = (statusFilters: Record<FeedbackStatus, boolean>): FeedbackStatus[] =>
   FEEDBACK_STATUS_ORDER.filter(status => statusFilters[status]);
 
 export const DEFAULT_FEEDBACK_VIEW: FeedbackView = {
@@ -83,7 +73,7 @@ export const DEFAULT_FEEDBACK_VIEW: FeedbackView = {
   organizations: [],
   sortAscending: false,
   page: 1,
-  limit: FEEDBACK_LIST_DEFAULT_LIMIT,
+  limit: FEEDBACK_DEFAULT_PAGE_SIZE,
 };
 
 const isFeedbackStatus = (value: string): value is FeedbackStatus =>
@@ -91,15 +81,14 @@ const isFeedbackStatus = (value: string): value is FeedbackStatus =>
 
 /** The checked statuses a `feedbackStatus` value names, or undefined when it is malformed (one bad token voids it). */
 const decodeStatuses = (value: unknown): FeedbackStatus[] | undefined => {
-  if (value === NO_STATUS_TOKEN) return [];
   if (typeof value !== 'string' || value === '') return undefined;
   const tokens = value.split(STATUS_SEPARATOR);
   if (!tokens.every(isFeedbackStatus)) return undefined;
   return FEEDBACK_STATUS_ORDER.filter(status => tokens.includes(status));
 };
 
-const encodeStatuses = (statuses: readonly FeedbackStatus[]): string =>
-  statuses.length === 0 ? NO_STATUS_TOKEN : statuses.join(STATUS_SEPARATOR);
+const encodeStatuses = (statuses: readonly FeedbackStatus[]): string | undefined =>
+  statuses.length === 0 ? undefined : statuses.join(STATUS_SEPARATOR);
 
 const parseStatus = (value: unknown): string | undefined => {
   const statuses = decodeStatuses(value);

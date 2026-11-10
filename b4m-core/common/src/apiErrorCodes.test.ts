@@ -12,6 +12,8 @@ import {
   TOKEN_RATE_LIMIT_EXCEEDED_ERROR_CODE,
   CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE,
   DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+  UPGRADE_REQUIRED_ERROR_CODE,
+  ACCOUNT_SUSPENDED_ERROR_CODE,
 } from './apiErrorCodes';
 import { QUEST_ERROR_CODES } from './types/entities/SessionTypes';
 import { TTS_ERROR_CODES, ttsErrorResponseSchema } from './voiceGeneration';
@@ -77,6 +79,8 @@ describe('API_ERROR_CODES', () => {
     // apps/client/server/utils/untrustedCompletionQuota.test.ts.
     // MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE likewise; proven by services/src/llm/modelAdmission.test.ts.
     // DAILY_FREE_LIMIT_REACHED_ERROR_CODE likewise; proven by apps/client/server/billing/freeTierDailyCapGate.test.ts.
+    // UPGRADE_REQUIRED_ERROR_CODE likewise; proven by packages/server-utils/src/middlewares/clientVersionGate.test.ts.
+    // ACCOUNT_SUSPENDED_ERROR_CODE likewise; proven by packages/server-utils/src/auth/assertAccountStateUsable.test.ts.
     const emitted = new Set<string>([
       ...NARROWING_TUPLES.flat(),
       UNKNOWN_MODEL_ERROR_CODE,
@@ -91,6 +95,8 @@ describe('API_ERROR_CODES', () => {
       TOKEN_RATE_LIMIT_EXCEEDED_ERROR_CODE,
       CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE,
       DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+      UPGRADE_REQUIRED_ERROR_CODE,
+      ACCOUNT_SUSPENDED_ERROR_CODE,
     ]);
     expect(API_ERROR_CODES.filter(code => !emitted.has(code))).toEqual([]);
   });

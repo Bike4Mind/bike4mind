@@ -6,7 +6,7 @@ import { useSelectedAccount } from '@client/app/components/Credits/AccountSelect
 import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { useGetCreditTransactions } from '@client/app/hooks/data/credits';
 import { useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
-import { useGetSubscriptions } from '@client/app/hooks/data/subscriptions';
+import { useGetSubscriptions, useGetSubscriptionsByOwner } from '@client/app/hooks/data/subscriptions';
 import { useLowCreditsThreshold } from '@client/app/hooks/data/teamPlanSettings';
 import { useEffectiveCredits } from '@client/app/hooks/useEffectiveCredits';
 import { formatCreditAmount } from '@client/app/utils/formatCredits';
@@ -14,8 +14,9 @@ import type { BillingView } from '@client/app/utils/billingDeepLink';
 import {
   isDelinquentSubscriptionStatus,
   pickDisplayedSubscription,
+  SubscriptionOwnerType,
 } from '@bike4mind/server-utils/lib/subscriptions/types';
-import { SUBSCRIPTION_PLANS_MAP } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
+import { SUBSCRIPTION_PLANS_MAP, TEAM_PLAN } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
 import { CreditsSection } from './CreditsSection';
 import CreditsExplanation from './CreditsExplanation';
 import { PlansSection, PlansSectionSkeleton } from './PlansSection';
@@ -126,6 +127,10 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
   // An org balance is topped up by the org, not from these personal packs, so its banner has no action.
   const { selectedAccount } = useSelectedAccount();
   const isOrgAccount = !!selectedAccount && !selectedAccount.personal;
+  const teamAccount = isOrgAccount ? selectedAccount : null;
+  const teamSubscriptions = useGetSubscriptionsByOwner(SubscriptionOwnerType.Organization, teamAccount?.id ?? '', {
+    enabled: open && !!teamAccount,
+  });
   const { mutate: logEvent } = useLogEvent();
   const openedMetadataRef = useRef<{ entry: BillingEntry; focus: string; account: 'org' | 'personal' } | null>(null);
   const purchasedRef = useRef(false);
@@ -183,16 +188,35 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
     heading?.focus({ preventScroll: true });
   };
 
-  const planName = currentSubscription
-    ? (SUBSCRIPTION_PLANS_MAP[currentSubscription.priceId]?.name ?? t('billing.plan_fallback', 'Subscription'))
-    : t('billing.free_plan', 'Free');
-  const planDetail = !currentSubscription
-    ? t('billing.free_plan_detail', 'Pay as you go with credit packs')
-    : hasPaymentIssue
+  // The header's Plan stat follows the active account: with a team selected it is the team's plan, so
+  // the balance beside it and the plan describe the same payer. The sections below stay personal.
+  const teamSubscription = useMemo(
+    () => pickDisplayedSubscription(teamSubscriptions.data ?? []),
+    [teamSubscriptions.data]
+  );
+  const headerQuery = teamAccount ? teamSubscriptions : subscriptions;
+  const headerSubscription = teamAccount ? teamSubscription : currentSubscription;
+  const headerPlanUnknown = headerQuery.isError && !headerQuery.data;
+  const headerReady = teamAccount ? !teamSubscriptions.isPending : ready;
+  const headerPaymentIssue = !!headerSubscription && isDelinquentSubscriptionStatus(headerSubscription.status);
+
+  const planName = teamAccount
+    ? headerSubscription
+      ? t('billing.team_plan', TEAM_PLAN.name)
+      : t('billing.team_no_plan', 'No team plan')
+    : currentSubscription
+      ? (SUBSCRIPTION_PLANS_MAP[currentSubscription.priceId]?.name ?? t('billing.plan_fallback', 'Subscription'))
+      : t('billing.free_plan', 'Free');
+  const planDetail = !headerSubscription
+    ? teamAccount
+      ? t('billing.team_no_plan_detail', 'Credits are added by a team admin')
+      : t('billing.free_plan_detail', 'Pay as you go with credit packs')
+    : headerPaymentIssue
       ? t('billing.payment_failed', 'Payment failed')
-      : currentSubscription.canceledAt
-        ? t('subscriptions.expires_on', { date: dayjs(currentSubscription.periodEndsAt).format('MMM D, YYYY') })
-        : t('subscriptions.renews_on', { date: dayjs(currentSubscription.periodEndsAt).format('MMM D, YYYY') });
+      : headerSubscription.canceledAt
+        ? t('subscriptions.expires_on', { date: dayjs(headerSubscription.periodEndsAt).format('MMM D, YYYY') })
+        : t('subscriptions.renews_on', { date: dayjs(headerSubscription.periodEndsAt).format('MMM D, YYYY') });
+  const teamSeats = headerSubscription ? teamAccount?.seats : undefined;
 
   const plansSection = (
     <Section
@@ -320,7 +344,7 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
               <Typography level="body-xs" sx={statLabelSx}>
                 {t('billing.plan', 'Plan')}
               </Typography>
-              {planUnknown ? (
+              {headerPlanUnknown ? (
                 <Box sx={{ mt: 0.5 }} data-testid="billing-current-plan-unavailable">
                   <Typography level="title-md" sx={{ fontWeight: 600 }}>
                     {t('billing.plan_unavailable', 'Unavailable')}
@@ -333,22 +357,35 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
                       size="sm"
                       variant="plain"
                       data-testid="billing-current-plan-retry"
-                      loading={subscriptions.isFetching}
-                      onClick={() => void subscriptions.refetch()}
+                      loading={headerQuery.isFetching}
+                      onClick={() => void headerQuery.refetch()}
                       sx={{ minHeight: 0, py: 0, px: 0.5, fontSize: 'xs' }}
                     >
                       {t('billing.retry', 'Retry')}
                     </Button>
                   </Box>
                 </Box>
-              ) : ready ? (
+              ) : headerReady ? (
                 <Box sx={{ mt: 0.5 }}>
-                  <Typography level="title-md" sx={{ fontWeight: 600 }}>
+                  <Typography level="title-md" sx={{ fontWeight: 600 }} data-testid="billing-current-plan-name">
                     {planName}
                   </Typography>
-                  <Typography level="body-xs" sx={{ color: hasPaymentIssue ? 'danger.plainColor' : 'text.tertiary' }}>
+                  <Typography
+                    level="body-xs"
+                    data-testid="billing-current-plan-detail"
+                    sx={{ color: headerPaymentIssue ? 'danger.plainColor' : 'text.tertiary' }}
+                  >
                     {planDetail}
                   </Typography>
+                  {!!teamSeats && (
+                    <Typography
+                      level="body-xs"
+                      data-testid="billing-current-plan-seats"
+                      sx={{ color: 'text.tertiary' }}
+                    >
+                      {t('organization.x_seats', '{{count}} seats', { count: teamSeats })}
+                    </Typography>
+                  )}
                 </Box>
               ) : (
                 <Box sx={{ mt: 0.5 }}>

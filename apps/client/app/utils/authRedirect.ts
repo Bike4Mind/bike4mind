@@ -58,10 +58,12 @@ export function buildRedirectTo(pathname: string, search = '', hash = ''): strin
  */
 export function buildLoginRedirectUrl(
   errorCode: LoginErrorCode,
-  location: { pathname: string; search?: string; hash?: string }
+  location: { pathname: string; search?: string; hash?: string },
+  /** Extra detail the login page reads alongside the code, e.g. `reason` for `account_suspended`. */
+  detail: Record<string, string> = {}
 ): string {
   const redirectTo = buildRedirectTo(location.pathname, location.search, location.hash);
-  const params = new URLSearchParams({ error: errorCode });
+  const params = new URLSearchParams({ error: errorCode, ...detail });
   if (redirectTo) params.set('redirectTo', redirectTo);
   return `/login?${params.toString()}`;
 }
