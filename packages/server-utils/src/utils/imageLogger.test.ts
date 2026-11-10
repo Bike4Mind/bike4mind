@@ -61,4 +61,23 @@ describe('imageLogger', () => {
     expect(logger.debug).toHaveBeenCalledTimes(1);
     expect(logger.debug).toHaveBeenCalledWith('render', { durationMs: expect.any(Number) });
   });
+
+  it('logs a group label at debug level when verbose logging is on', async () => {
+    const log = await load('true');
+
+    log.group('batch');
+
+    expect(logger.debug).toHaveBeenCalledWith('[group] batch');
+  });
+
+  it('defaults to quiet when the env var is unset, but still logs errors', async () => {
+    const log = await load(undefined);
+
+    log.info('a');
+    log.error('failed');
+
+    expect(log.isEnabled()).toBe(false);
+    expect(logger.info).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith('failed');
+  });
 });

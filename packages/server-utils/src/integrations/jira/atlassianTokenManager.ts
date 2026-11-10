@@ -85,7 +85,7 @@ export class AtlassianTokenManager {
         throw new AtlassianReconnectRequiredError();
       }
 
-      throw new Error(`Token refresh failed: ${errorText}`);
+      throw new Error(`Token refresh failed with status ${response.status}`);
     }
 
     const tokenData = (await response.json()) as {

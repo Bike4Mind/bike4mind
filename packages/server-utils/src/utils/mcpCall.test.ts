@@ -88,6 +88,20 @@ describe('mcpCall rate-limit ingest', () => {
     expect(result).toEqual({ content: [], _rateLimitEvents: [JSON.parse(h.rateLimitLine)] });
   });
 
+  it('keeps the ingest response body out of the logged error', async () => {
+    h.fetch.mockResolvedValue(new Response('upstream-body-marker', { status: 502 }));
+    const errorSpy = vi.spyOn(Logger, 'error').mockImplementation(() => {});
+
+    await handler({ name: 'github', action: 'callTool', toolName: 'get_issue', userId: 'user-1', envVariables: [] });
+
+    expect(errorSpy).toHaveBeenCalled();
+    const logged = errorSpy.mock.calls.map(call =>
+      JSON.stringify(call, (_k, v) => (v instanceof Error ? v.message : v))
+    );
+    expect(logged.join('\n')).toContain('HTTP 502');
+    expect(logged.join('\n')).not.toContain('upstream-body-marker');
+  });
+
   it('posts events from a call with no user under the unattributed tenant', async () => {
     await handler({ name: 'github', action: 'callTool', toolName: 'get_issue', envVariables: [] });
 

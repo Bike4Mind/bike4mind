@@ -42,9 +42,13 @@ export async function throttleIfNearRateLimit(tenantKey: string, serverName: str
       if (latest.usagePercent >= THROTTLE_USAGE_PERCENT && latest.resetAt && latest.resetAt > new Date()) {
         const delayMs = Math.min(latest.resetAt.getTime() - Date.now(), MAX_THROTTLE_DELAY_MS);
         if (delayMs > 0) {
-          Logger.warn(
-            `[RateLimit] Throttling ${integration} for tenant ${tenantKey} for ${delayMs}ms (${latest.usagePercent}% usage, resets at ${latest.resetAt.toISOString()})`
-          );
+          Logger.warn('[RateLimit] Throttling integration', {
+            integration,
+            tenantKey,
+            delayMs,
+            usagePercent: latest.usagePercent,
+            resetAt: latest.resetAt.toISOString(),
+          });
           await new Promise(resolve => setTimeout(resolve, delayMs));
         }
       }

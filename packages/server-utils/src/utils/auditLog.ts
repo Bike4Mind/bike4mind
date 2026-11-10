@@ -90,7 +90,7 @@ export async function logAuditEvent(metadata: AuditLogMetadata, logger?: AuditLo
     if (logger) {
       logger.error('Failed to log audit event', payload);
     } else {
-      Logger.error('Failed to log audit event', { payload });
+      Logger.error('Failed to log audit event', payload);
     }
   }
 }

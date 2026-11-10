@@ -23,7 +23,7 @@ export const buildMcpEnvVariables = async (mcpServer: IMcpServerDocument): Promi
     // Throw AtlassianReconnectRequiredError so the tools layer catches it.
     // At getTools time: returns empty tool list. At callTool time: returns reconnect message.
     if (!user?.atlassianConnect) {
-      Logger.info(`Atlassian connection missing for user ${mcpServer.userId} - prompting reconnect`);
+      Logger.info('Atlassian connection missing - prompting reconnect', { userId: mcpServer.userId });
       throw new AtlassianReconnectRequiredError(
         'Your Atlassian account is not connected. Please connect it in Settings > Connected Apps.'
       );

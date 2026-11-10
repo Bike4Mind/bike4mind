@@ -167,7 +167,7 @@ export async function runOauthAbuseAutoBlock(
       );
       if (created) result.blocked.push({ ip, attempts, durationMs, escalationLevel });
     } catch (error) {
-      Logger.warn(`Failed to auto-block IP ${ip}`, { error });
+      Logger.warn('Failed to auto-block IP', { ip, error });
       result.failed.push(ip);
     }
   }

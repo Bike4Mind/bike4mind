@@ -360,7 +360,7 @@ export async function collectAccessReview(options: CollectAccessReviewOptions = 
 export async function sendAccessReviewReminder(now: Date, post: (text: string) => Promise<unknown>): Promise<string> {
   const quarter = reviewQuarter(now);
   const counts = await collectAccessReviewCounts(now);
-  Logger.info(JSON.stringify({ report: 'access-review', quarter, generatedAt: now.toISOString(), counts }));
+  Logger.info('access-review report', { report: 'access-review', quarter, generatedAt: now.toISOString(), counts });
   await post(formatAccessReviewSlackMessage({ quarter, counts }));
   return quarter;
 }

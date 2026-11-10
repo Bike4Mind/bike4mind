@@ -1,6 +1,5 @@
 // @vitest-environment node
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { Logger } from '@bike4mind/observability';
 
 const QUEUE = {
   name: 'exampleJobQueue',
@@ -43,7 +42,7 @@ describe('contributed DLQ registry', () => {
 
   beforeEach(async () => {
     vi.resetModules();
-    vi.spyOn(Logger, 'warn').mockImplementation(() => {});
+    vi.doMock('@bike4mind/observability', () => ({ Logger: { warn: vi.fn() } }));
     baseline = (await load([])).getDlqRegistry().map(d => d.label);
     vi.resetModules();
   });

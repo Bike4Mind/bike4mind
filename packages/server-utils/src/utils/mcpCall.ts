@@ -102,7 +102,7 @@ export const handler = async (params: any) => {
             body: JSON.stringify({ events: rateLimitEvents, tenantKey: resolveMcpTenantKey(userId) }),
           });
           if (!resp.ok) {
-            throw new Error(`HTTP ${resp.status}: ${await resp.text().catch(() => 'no body')}`);
+            throw new Error(`HTTP ${resp.status}`);
           }
           const result = (await resp.json()) as { persisted?: number };
           Logger.info(`[RateLimit] Persisted ${result.persisted}/${rateLimitEvents.length} events for ${name}`);

@@ -94,4 +94,22 @@ describe('AtlassianTokenManager.getValidTokens refresh', () => {
     expect(result).toBeNull();
     expect(userUpdate).not.toHaveBeenCalled();
   });
+
+  it('logs the status, not the response body, when a refresh fails', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: false, status: 503, text: () => Promise.resolve('provider-body-marker') })
+    );
+    const errorSpy = vi.spyOn(Logger, 'error').mockImplementation(() => {});
+
+    const result = await AtlassianTokenManager.getValidTokens('user-1');
+
+    expect(result).toBeNull();
+    expect(errorSpy).toHaveBeenCalled();
+    const logged = errorSpy.mock.calls.map(call =>
+      JSON.stringify(call, (_k, v) => (v instanceof Error ? v.message : v))
+    );
+    expect(logged.join('\n')).toContain('status 503');
+    expect(logged.join('\n')).not.toContain('provider-body-marker');
+  });
 });

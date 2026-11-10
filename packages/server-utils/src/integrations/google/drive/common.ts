@@ -199,7 +199,8 @@ export async function releaseDriveConnection(connectionId: string, owner: LakeCo
   const isBorrowed = !!connectionToken && connectionToken === (await personalRefreshTokenOf(connection.connectedBy));
   if (isBorrowed) {
     Logger.info(
-      `[googleDrive] revoke skipped (org connection ${connectionId}): credential is the connecting user's own personal Drive token - dropping the org copy only`
+      "[googleDrive] revoke skipped: credential is the connecting user's own personal Drive token - dropping the org copy only",
+      { connectionId }
     );
   } else {
     await revokeDriveGrant(connection.oauthRefreshToken, `org connection ${connectionId}`);

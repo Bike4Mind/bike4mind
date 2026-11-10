@@ -1,4 +1,3 @@
-import { Logger } from '@bike4mind/observability';
 /**
  * Generic subscription -> entitlement registry (ACCESS_MODEL.md §3).
  *
@@ -19,6 +18,7 @@ import { Logger } from '@bike4mind/observability';
  * at codegen and added to the built-in rows by `mergeContributedRows` (new territory only), so the
  * tag, implied, signup-credit and staff-domain maps below see both.
  */
+import { Logger } from '@bike4mind/observability';
 import type { DomainGrantRow, EntitlementKey, ImpliedEntitlementRow, PriceEntitlementRow, TagGrantRow } from './types';
 import { isTestMode } from '../subscriptions/constants';
 import {

@@ -184,6 +184,7 @@ describe('emitActiveEvent', () => {
 
     await emitActiveEvent({ pseudoUserId: 'pseudo', sessionId: 'sess', userType: 'free' });
 
+    expect(warnSpy).toHaveBeenCalled();
     for (const call of warnSpy.mock.calls) {
       const serialized = JSON.stringify(call);
       expect(serialized).not.toContain('b4m_live_');

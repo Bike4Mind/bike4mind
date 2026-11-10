@@ -18,7 +18,6 @@ import {
 import { withContext } from './utils';
 import { Resource } from 'sst';
 import { updateImportProgress, markImportComplete, markImportFailed } from '../utils/importHistoryProgress';
-import { Logger } from '@bike4mind/observability';
 
 const importHistory = async (
   userId: string,
@@ -117,7 +116,7 @@ export const dispatch = withContext(async (event, context, logger) => {
 
     const missing = [!userId && 'userId', !source && 'source', !file && 'file'].filter(Boolean);
     if (missing.length > 0) {
-      Logger.error(`Invalid key: ${key}, missing ${missing.join(', ')}`);
+      logger.error('Invalid history import key', { key, missing });
       continue;
     }
 
