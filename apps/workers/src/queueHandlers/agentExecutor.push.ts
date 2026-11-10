@@ -117,7 +117,8 @@ type LiveActivityFrame = {
 function liveActivityFrameFor(
   action: string,
   payload: Record<string, unknown>,
-  lastToolName: { current?: string }
+  executionId: string,
+  lastToolName: Map<string, string>
 ): LiveActivityFrame | null {
   switch (action) {
     case 'completed':
@@ -158,7 +159,7 @@ function liveActivityFrameFor(
           ? step.metadata.toolName
           : undefined;
       if (step.type === 'action' && typeof toolName === 'string') {
-        lastToolName.current = toolName;
+        lastToolName.set(executionId, toolName);
         return {
           event: 'update',
           contentState: {
@@ -167,12 +168,13 @@ function liveActivityFrameFor(
           },
         };
       }
-      if (step.type === 'observation' && lastToolName.current) {
+      const lastTool = lastToolName.get(executionId);
+      if (step.type === 'observation' && lastTool) {
         return {
           event: 'update',
           contentState: {
             status: 'running',
-            stageLabel: truncateForPush(`Finished ${lastToolName.current}`, LIVE_ACTIVITY_STAGE_LABEL_MAX),
+            stageLabel: truncateForPush(`Finished ${lastTool}`, LIVE_ACTIVITY_STAGE_LABEL_MAX),
           },
         };
       }
@@ -208,15 +210,20 @@ export function withAgentTerminalPush(
     ? createLiveActivityThrottle(deps.publishLiveActivity)
     : undefined;
   const targets = new Map<string, Promise<LiveActivityTarget | null>>();
-  const lastToolName: { current?: string } = {};
+  const lastToolName = new Map<string, string>();
 
   const emitLiveActivity = async (action: string, payload: Record<string, unknown>) => {
     if (!throttle || typeof payload.executionId !== 'string') return;
     try {
-      const frame = liveActivityFrameFor(action, payload, lastToolName);
-      if (!frame) return;
       const executionId = payload.executionId;
-      if (!targets.has(executionId)) targets.set(executionId, resolveLiveActivityTarget(executionId, deps));
+      const frame = liveActivityFrameFor(action, payload, executionId, lastToolName);
+      if (!frame) return;
+      if (!targets.has(executionId)) {
+        const resolving = resolveLiveActivityTarget(executionId, deps);
+        targets.set(executionId, resolving);
+        // A transient lookup failure must not disable the run's activity for the rest of the invocation.
+        resolving.catch(() => targets.delete(executionId));
+      }
       const target = await targets.get(executionId);
       if (!target) return;
       await throttle.emit(

@@ -243,6 +243,29 @@ describe('withAgentTerminalPush live activity', () => {
     expect(deps.publish).toHaveBeenCalledTimes(1);
   });
 
+  it('retries the target lookup after a transient failure', async () => {
+    const deps = makeLiveDeps();
+    deps.findExecution.mockRejectedValueOnce(new Error('db down'));
+    const sendWs = withAgentTerminalPush(async () => undefined, deps, logger);
+
+    await sendWs('progress', { executionId: 'exec-1', status: 'one' });
+    await sendWs('completed', { executionId: 'exec-1' });
+
+    expect(sentEvents(deps).map(e => e.event)).toEqual(['end']);
+  });
+
+  it('keeps each execution tool name separate', async () => {
+    const deps = makeLiveDeps();
+    const sendWs = withAgentTerminalPush(async () => undefined, deps, logger);
+    const step = (type: string, toolName?: string) => ({ type, content: 'x', metadata: { toolName, timestamp: 1 } });
+
+    await sendWs('iteration_step', { executionId: 'exec-1', step: step('action', 'parent_tool') });
+    await sendWs('iteration_step', { executionId: 'child', step: step('action', 'child_tool') });
+    await sendWs('iteration_step', { executionId: 'exec-1', step: step('observation') });
+
+    expect(sentEvents(deps).map(e => e.contentState.stageLabel)).toEqual(['Using parent_tool', 'Finished parent_tool']);
+  });
+
   it('throttles status lines to one per window with the latest flushed after it', async () => {
     vi.useFakeTimers();
     try {
