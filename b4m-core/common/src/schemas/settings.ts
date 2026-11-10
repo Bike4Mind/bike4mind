@@ -1159,6 +1159,13 @@ export interface BaseSetting {
   clearDeletesRow?: boolean;
   /** What a `clearDeletesRow` setting resolves to while unset, shown by the admin UI in place of a value. */
   unsetLabel?: string;
+  /**
+   * Opt-in: the admin editor badges this field and confirms the before-and-after value instead of
+   * saving on one click. Tag it when a customer's bill or entitlement moves - NOT free grants or
+   * spend caps, which change only platform cost.
+   * Must stay in sync with the "Changes customer price" column of docs/pricing-settings-inventory.md.
+   */
+  changesCustomerPrice?: boolean;
 }
 
 /** Default of the `lowCreditsThreshold` setting - the credit balance below which the UI warns. */
@@ -3893,6 +3900,7 @@ export const settingsMap = {
   }),
   pricePerCredit: makeNumberSetting({
     key: 'pricePerCredit',
+    changesCustomerPrice: true,
     userReadable: true,
     name: 'Price Per Credit',
     defaultValue: 50,
@@ -4761,6 +4769,7 @@ export const settingsMap = {
   }),
   enforceCredits: makeBooleanSetting({
     key: 'enforceCredits',
+    changesCustomerPrice: true,
     userReadable: true,
     name: 'Enforce Credits',
     // Self-host runs on the operator's own LLM keys with no billing stack (Stripe is
@@ -4773,6 +4782,7 @@ export const settingsMap = {
   }),
   billOperationalUsage: makeBooleanSetting({
     key: 'billOperationalUsage',
+    changesCustomerPrice: true,
     name: 'Bill Operational Usage',
     // Default OFF on hosted and self-host alike: free-tier accounts are billed for this spend
     // whenever Enforce Credits is on (isOperationalBillingEnabled), so the toggle only decides
@@ -5782,6 +5792,7 @@ export const settingsMap = {
   }),
   teamPlanMinSeats: makeNumberSetting({
     key: 'teamPlanMinSeats',
+    changesCustomerPrice: true,
     // Read by the create-team and billing UIs for non-admin org owners.
     userReadable: true,
     name: 'Team Plan Minimum Seats',
@@ -5807,6 +5818,7 @@ export const settingsMap = {
   }),
   teamPlanCreditsPerSeat: makeNumberSetting({
     key: 'teamPlanCreditsPerSeat',
+    changesCustomerPrice: true,
     name: 'Team Plan Credits Per Seat',
     defaultValue: ORGANIZATION_SUBSCRIPTION_CREDITS_PER_SEAT,
     int: true,
@@ -7920,6 +7932,7 @@ export const settingsMap = {
   }),
   HardwareComputeCreditsPerUsd: makeNumberSetting({
     key: 'HardwareComputeCreditsPerUsd',
+    changesCustomerPrice: true,
     name: 'Hardware Compute: Credits per USD',
     defaultValue: CREDITS_PER_USD_COST,
     min: 1,
@@ -7994,6 +8007,7 @@ export const settingsMap = {
   }),
   SimulatorComputeCreditsPerRound: makeNumberSetting({
     key: 'SimulatorComputeCreditsPerRound',
+    changesCustomerPrice: true,
     name: 'Simulator Compute: Credits per round',
     defaultValue: 50,
     min: 0,
