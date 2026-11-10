@@ -52,8 +52,7 @@ export async function storableModalImageUrl(imageUrl: string): Promise<string> {
   const key = extractModalImageKey(imageUrl);
   if (key) return key;
   if (!imageUrl.includes('amazonaws.com')) return cacheExternalImage(imageUrl);
-  if (imageUrl.includes('X-Amz-Algorithm')) return ModalImageHandler.processModalImageUrl(imageUrl);
-  return imageUrl;
+  return ModalImageHandler.processModalImageUrl(imageUrl);
 }
 
 // Modal operation functions that can be shared between server and API
