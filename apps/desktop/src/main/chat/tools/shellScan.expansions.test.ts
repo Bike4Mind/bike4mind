@@ -149,6 +149,44 @@ describe('shell expansions reaching a protected location', () => {
     await expectAsks(command);
   });
 
+  it.each(['{,}', '{,safe}', '{{,},safe}', '{safe,{,}}'])(
+    'asks in every mode when %s drops an operand before find reads it',
+    async alternative => {
+      const protectedChild = join(project, 'protected-child');
+      await mkdir(protectedChild, { recursive: true });
+      await writeFile(join(protectedChild, 'value'), 'value');
+      const command = `find ${alternative} -delete`;
+      expect((await scanShell(command, project, [project]))?.unread).toBe(true);
+      const approval = await shellApproval(
+        'bash_execute',
+        { command, cwd: project },
+        {
+          roots: [project],
+          workingDirectory: project,
+          signal: new AbortController().signal,
+          protectedPaths: [protectedChild],
+          uncoverablePaths: [protectedChild],
+        }
+      );
+      expect({ auto: !approval.askInAuto, full: !approval.askInFull }).toEqual({ auto: false, full: false });
+    }
+  );
+
+  it.each(['echo x{,}', 'echo {,}x', 'echo x{{,},safe}y', 'echo {"",\'\'}', 'echo ""{,}', "echo {,}''"])(
+    'retains quoted empty words and nonempty prefixes or suffixes in %s',
+    async command => {
+      expect((await scanShell(command, project, [project]))?.unread).toBeUndefined();
+      expect(await decide(command)).toEqual({ auto: true, full: true });
+    }
+  );
+
+  it('keeps glob offsets aligned after an empty quote', async () => {
+    const command = 'cat safe/""{-1,-2}/v?lue';
+    const scan = await scanShell(command, project, [project]);
+    expect(scan?.paths).toContain(join(protectedFolder, 'value'));
+    await expectAsks(command);
+  });
+
   it.each([
     // Within double quotes brace expansion opens no quote at a backtick or `${`, so the inner `"` ends the quote.
     'echo "`echo "{a,b}"`"',

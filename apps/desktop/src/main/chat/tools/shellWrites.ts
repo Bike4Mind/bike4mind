@@ -1582,6 +1582,9 @@ async function cleanWrites(read: GitArgs, cwd: string): Promise<TreeWrite> {
   const trees: string[] = [];
   for (const line of listed.split('\n')) {
     const removed = /^Would remove (.+)$/.exec(line)?.[1];
+    // Git C-quotes names with non-ASCII bytes, quotes, backslashes or controls, including the trailing `/`.
+    // Without decoding that format neither the path nor whether it is a whole folder is known.
+    if (removed?.startsWith('"')) return UNREAD_TREE;
     if (removed?.endsWith('/')) trees.push(resolveOperand(cwd, removed.slice(0, -1)));
     else if (removed) files.push(resolveOperand(cwd, removed));
     else if (line.trim() !== '' && !line.startsWith('Would skip')) return UNREAD_TREE;

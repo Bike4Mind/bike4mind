@@ -711,6 +711,26 @@ describe('shell approval in a project with a large node_modules', () => {
     expect(await judge(command, folder)).toMatchObject(asks);
   });
 
+  it.each(['üdir', ...(process.platform === 'win32' ? [] : ['line\ndir', 'back\\slash', '"quote'])])(
+    'asks when git quotes a removed folder named %j holding settings',
+    async name => {
+      const repository = join(proj, 'quoted-repo');
+      await mkdir(join(repository, name, '.claude'), { recursive: true });
+      try {
+        execFileSync('git', ['-C', repository, 'init', '-q']);
+        execFileSync('git', ['-C', repository, 'config', 'core.quotePath', 'true']);
+        await writeFile(join(repository, name, '.claude', 'settings.json'), '{}');
+        expect(execFileSync('git', ['-C', repository, 'clean', '-nfdx'], { encoding: 'utf8' })).toMatch(
+          /^Would remove "/
+        );
+
+        expect(await judge('git clean -fdx', 'quoted-repo')).toMatchObject(asks);
+      } finally {
+        await rm(repository, { recursive: true, force: true });
+      }
+    }
+  );
+
   it.each([
     "git cle''an -fdx",
     'git cle"an" -fdx',

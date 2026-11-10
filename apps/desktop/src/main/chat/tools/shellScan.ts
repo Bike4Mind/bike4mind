@@ -451,7 +451,8 @@ function globPrefix(text: string): string | null {
 
 /**
  * One character of a word with its quotes removed, `active` when unquoted so a glob or brace in it is live; or an
- * expansion, `unquoted` when it stands outside double quotes.
+ * expansion, `unquoted` when it stands outside double quotes. An empty quoted segment is a zero-width inactive
+ * character, so brace alternatives can distinguish a retained empty argument from an unquoted one bash drops.
  */
 type WordPiece = { char: string; active: boolean } | { expansion: string; unquoted?: true };
 
@@ -515,9 +516,11 @@ function wordPieces(word: string, unquotedAt?: number[]): WordPiece[] {
     } else if (char === "'") {
       const end = word.indexOf("'", at + 1);
       const stop = end === -1 ? word.length : end;
+      if (stop === at + 1) push('', false);
       for (let quoted = at + 1; quoted < stop; quoted++) push(word[quoted] as string, false);
       at = stop;
     } else if (char === '"') {
+      if (word[at + 1] === '"') push('', false);
       for (at++; at < word.length && word[at] !== '"'; at++) {
         const inner = word[at] as string;
         if (inner === '\\' && at + 1 < word.length && '$`"\\\n'.includes(word[at + 1] as string)) {
@@ -675,6 +678,13 @@ const extendsName = (word: readonly WordPiece[]): boolean =>
  * pairs a `{` with the first `}` past one at its own level), or for a word whose `$name` an option extends.
  */
 function expandBraces(pieces: readonly WordPiece[]): WordPiece[][] | null {
+  const words = braceAlternatives(pieces);
+  // Bash drops an unquoted empty alternative. Losing an operand can make find act on `.` instead.
+  return words?.some(word => word.length === 0) ? null : words;
+}
+
+/** Brace alternatives before empty unquoted words are removed; recursive parts may legitimately be empty. */
+function braceAlternatives(pieces: readonly WordPiece[]): WordPiece[][] | null {
   if (!pieces.some(piece => isActive(piece, '{'))) return [[...pieces]];
   if (pieces.length > BRACE_PIECES) return null;
   // bash reads `$${` as `$` and a `${` it skips whole, expanding no braces inside.
@@ -716,11 +726,11 @@ function expandBraces(pieces: readonly WordPiece[]): WordPiece[][] | null {
       continue;
     }
     // As bash: the text before stays as written, and each option and the rest expand on their own.
-    const tails = expandBraces(pieces.slice(close + 1));
+    const tails = braceAlternatives(pieces.slice(close + 1));
     if (tails === null) return null;
     const words: WordPiece[][] = [];
     for (const option of options) {
-      const middles = expandBraces(option);
+      const middles = braceAlternatives(option);
       if (middles === null) return null;
       for (const middle of middles) {
         for (const tail of tails) {
@@ -892,6 +902,7 @@ function resolveWord(pieces: readonly WordPiece[], scope: WordScope): OperandWor
   }
   for (const piece of pieces.slice(from)) {
     if ('char' in piece) {
+      if (piece.char === '') continue;
       text += piece.char;
       glob.push(piece.active && '*?['.includes(piece.char));
       active.push(piece.active);
@@ -2472,7 +2483,7 @@ function bashOption(word: string): string | null {
   if (expanded === null) return null;
   // An expansion that may be empty (`${X:+}--pre=f`, `$(true)-c`) leaves the dash after it to start the word.
   const option = expanded.some(variant => {
-    const first = variant.find(piece => 'char' in piece);
+    const first = variant.find(piece => 'char' in piece && piece.char !== '');
     return first !== undefined && 'char' in first && first.char === '-';
   });
   return option ? null : wordValue(word);
