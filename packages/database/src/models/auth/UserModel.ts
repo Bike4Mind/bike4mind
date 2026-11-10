@@ -536,6 +536,33 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     }
   }
 
+  /** Rotate only the pending change that was read, preserving its original expiry. */
+  async rotatePendingEmailToken(
+    user: Pick<
+      IUserDocument,
+      'id' | 'pendingEmail' | 'pendingEmailToken' | 'pendingEmailSentAt' | 'pendingEmailExpires'
+    >,
+    tokenHash: string,
+    expiresAt: Date,
+    now: Date
+  ): Promise<boolean> {
+    if (expiresAt <= now) return false;
+    const query = this.model.updateOne(
+      {
+        _id: user.id,
+        pendingEmail: user.pendingEmail,
+        pendingEmailToken: user.pendingEmailToken,
+        pendingEmailSentAt: user.pendingEmailSentAt ?? null,
+        pendingEmailExpires: user.pendingEmailExpires ?? null,
+        pendingEmailUsed: { $ne: true },
+      },
+      { $set: { pendingEmailToken: tokenHash, pendingEmailSentAt: now, pendingEmailExpires: expiresAt } }
+    );
+    if (this._txn) query.session(this._txn);
+    const result = await query;
+    return result.modifiedCount === 1;
+  }
+
   /** Takes the raw token from the email link; the stored value is its hash. */
   async findByEmailVerificationToken(token: string) {
     const values = emailTokenStoredValues(token);

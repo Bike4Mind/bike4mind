@@ -14,7 +14,7 @@ const h = vi.hoisted(() => ({
   options: null as unknown,
   handler: null as null | ((req: unknown, res: unknown) => Promise<unknown>),
   findById: vi.fn(),
-  update: vi.fn(),
+  rotate: vi.fn(),
   publish: vi.fn(),
   linkToken: vi.fn(),
 }));
@@ -43,8 +43,10 @@ vi.mock('@server/middlewares/adminApi', () => ({
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: vi.fn() }));
-vi.mock('@bike4mind/database', () => ({ userRepository: { findById: h.findById, update: h.update } }));
-vi.mock('@bike4mind/services', () => ({ userService: { cancelEmailChange: vi.fn() } }));
+vi.mock('@bike4mind/database', () => ({ userRepository: { findById: h.findById, rotatePendingEmailToken: h.rotate } }));
+vi.mock('@bike4mind/services', () => ({
+  userService: { cancelEmailChange: vi.fn(), EMAIL_VERIFICATION_TOKEN_EXPIRY: 86400000 },
+}));
 vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publish } } }));
 vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/mailer/emailHelpers')>()),
@@ -67,16 +69,19 @@ await import('../resend-email-change');
 describe('POST /api/admin/users/[userId]/resend-email-change', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    h.rotate.mockResolvedValue(true);
   });
 
   it('stores the hash of a fresh token and emails the raw token', async () => {
-    h.findById.mockResolvedValue({
+    const user = {
       id: 'user-1',
       username: 'u',
       email: 'a@b.test',
       pendingEmail: 'new@b.test',
       pendingEmailToken: 'tok',
-    });
+      pendingEmailSentAt: new Date(Date.now() - 60_000),
+    };
+    h.findById.mockResolvedValue(user);
     const json = vi.fn();
 
     await h.handler!(
@@ -89,14 +94,15 @@ describe('POST /api/admin/users/[userId]/resend-email-change', () => {
       { json }
     );
 
-    expect(h.update).toHaveBeenCalledTimes(1);
+    expect(h.rotate).toHaveBeenCalledTimes(1);
     const sentToken = h.linkToken.mock.calls[0][0] as string;
     expect(sentToken).not.toBe('tok');
-    expect(h.update.mock.calls[0][0]).toStrictEqual({
-      id: 'user-1',
-      pendingEmailToken: hashEmailToken(sentToken),
-      pendingEmailSentAt: expect.any(Date),
-    });
+    expect(h.rotate).toHaveBeenCalledWith(
+      user,
+      hashEmailToken(sentToken),
+      new Date(user.pendingEmailSentAt.getTime() + 86400000),
+      expect.any(Date)
+    );
     expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
@@ -113,6 +119,7 @@ describe('POST /api/admin/users/[userId]/resend-email-change', () => {
       email: 'a@b.test',
       pendingEmail: 'new@b.test',
       pendingEmailToken: 'tok',
+      pendingEmailSentAt: new Date(Date.now() - 60_000),
       pendingEmailExpires: new Date(Date.now() - 60_000),
     });
 
@@ -137,6 +144,40 @@ describe('POST /api/admin/users/[userId]/resend-email-change', () => {
     );
   });
 
+  it('does not send or audit when a concurrent pending change wins the rotation', async () => {
+    h.findById.mockResolvedValue({
+      id: 'user-1',
+      username: 'u',
+      email: 'old@example.test',
+      pendingEmail: 'first@example.test',
+      pendingEmailToken: 'old-token',
+      pendingEmailExpires: new Date(Date.now() + 60_000),
+    });
+    h.rotate.mockResolvedValue(false);
+    await expect(
+      h.handler!({ query: { userId: 'user-1' }, user: { isAdmin: true }, logger: { info: vi.fn() } }, { json: vi.fn() })
+    ).rejects.toThrow('pending email change was updated');
+    expect(h.publish).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a mail publication failure without recording a successful resend', async () => {
+    h.findById.mockResolvedValue({
+      id: 'user-1',
+      username: 'u',
+      email: 'old@example.test',
+      pendingEmail: 'next@example.test',
+      pendingEmailToken: 'old-token',
+      pendingEmailExpires: new Date(Date.now() + 60_000),
+    });
+    h.publish.mockRejectedValueOnce(new Error('mail unavailable'));
+    await expect(
+      h.handler!({ query: { userId: 'user-1' }, user: { isAdmin: true }, logger: { info: vi.fn() } }, { json: vi.fn() })
+    ).rejects.toThrow('mail unavailable');
+    expect(h.rotate).toHaveBeenCalledOnce();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+  });
+
   it('escapes the username and both addresses in the email body', async () => {
     h.findById.mockResolvedValue({
       id: 'user-1',
@@ -144,6 +185,7 @@ describe('POST /api/admin/users/[userId]/resend-email-change', () => {
       email: 'a&b@b.test',
       pendingEmail: '"new"@b.test',
       pendingEmailToken: 'tok',
+      pendingEmailSentAt: new Date(Date.now() - 60_000),
     });
 
     await h.handler!(
