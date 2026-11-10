@@ -342,14 +342,18 @@ async function pathOutside(roots: readonly string[]): Promise<string> {
   const separator = windows ? ';' : ':';
   const realRoots = await Promise.all(roots.map(root => realpath(root).catch(() => root)));
   const granted = [...roots, ...realRoots];
-  const kept: string[] = [];
-  for (const raw of (process.env.PATH ?? '').split(separator)) {
-    const entry = raw.trim().replace(/^"(.*)"$/, '$1');
-    if (windows ? !WINDOWS_ROOTED.test(entry) : !isAbsolute(entry)) continue;
-    const places = [entry, await realpath(entry).catch(() => entry)];
-    if (!places.some(place => granted.some(root => isWithin(root, place)))) kept.push(entry);
-  }
-  return kept.join(separator);
+  const entries = (process.env.PATH ?? '')
+    .split(separator)
+    .map(raw => raw.trim().replace(/^"(.*)"$/, '$1'))
+    .filter(entry => (windows ? WINDOWS_ROOTED.test(entry) : isAbsolute(entry)));
+  // Links are read side by side: each is a round trip over a WSL mount.
+  const kept = await Promise.all(
+    entries.map(async entry => {
+      const places = [entry, await realpath(entry).catch(() => entry)];
+      return places.some(place => granted.some(root => isWithin(root, place))) ? null : entry;
+    })
+  );
+  return kept.filter((entry): entry is string => entry !== null).join(separator);
 }
 
 /** Runs a listing program from its own folder with `path` as its only PATH, so it starts nothing from the project. */
