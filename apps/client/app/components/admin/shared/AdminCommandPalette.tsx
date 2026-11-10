@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Box, Button, Input, Modal, ModalClose, ModalDialog, Stack, Typography } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
 import { AdminTab } from '../adminSidebarConfig';
@@ -89,6 +89,11 @@ function CommandPalette({
   const [help, setHelp] = useState(false);
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
+  const openPalette = useCallback(() => {
+    setQuery('');
+    setActive(0);
+    setOpen(true);
+  }, []);
   useEffect(() => {
     onSearchQuery?.(open ? query : '');
   }, [open, query, onSearchQuery]);
@@ -158,9 +163,7 @@ function CommandPalette({
       const key = event.key.toLowerCase();
       if (isAdminChordEvent(event) && key === 'k' && !event.shiftKey) {
         event.preventDefault();
-        setQuery('');
-        setActive(0);
-        setOpen(true);
+        openPalette();
         return;
       }
       if (!isAdminShortcutEvent(event) || event.metaKey || event.ctrlKey) return;
@@ -182,24 +185,16 @@ function CommandPalette({
     // which then only takes `/` when this page has no visible search.
     window.addEventListener('keydown', handleKey, true);
     return () => window.removeEventListener('keydown', handleKey, true);
-  }, [commands]);
+  }, [commands, openPalette]);
 
-  useEffect(
-    () =>
-      onOpenAdminCommandPalette(() => {
-        setQuery('');
-        setActive(0);
-        setOpen(true);
-      }),
-    []
-  );
+  useEffect(() => onOpenAdminCommandPalette(openPalette), [openPalette]);
 
   useEffect(() => {
     if (open) document.getElementById(`admin-command-${selected?.id}`)?.scrollIntoView?.({ block: 'nearest' });
   }, [open, selected?.id]);
 
   return (
-    <Box ref={rootRef} sx={{ ...adminFocusScope, ...revealOnFocus, p: 1 }}>
+    <Box ref={rootRef} data-testid="admin-command-strip" sx={{ ...adminFocusScope, ...revealOnFocus, p: 1 }}>
       <Stack direction="row" gap={1} flexWrap="wrap">
         <Button
           variant="outlined"
@@ -207,11 +202,7 @@ function CommandPalette({
           size="sm"
           data-testid="admin-command-open-btn"
           aria-keyshortcuts="Meta+k Control+k"
-          onClick={() => {
-            setQuery('');
-            setActive(0);
-            setOpen(true);
-          }}
+          onClick={openPalette}
         >
           Commands (Cmd/Ctrl+K)
         </Button>

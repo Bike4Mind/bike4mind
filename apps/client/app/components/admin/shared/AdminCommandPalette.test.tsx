@@ -240,7 +240,7 @@ describe('AdminCommandPalette', () => {
 
   it('keeps its button strip out of the page flow until the strip takes focus', () => {
     setup();
-    const strip = screen.getByTestId('admin-command-open-btn').parentElement?.parentElement as HTMLElement;
+    const strip = screen.getByTestId('admin-command-strip');
     expect(getComputedStyle(strip).position).toBe('absolute');
     expect(getComputedStyle(strip).overflow).toBe('hidden');
   });
