@@ -1182,7 +1182,7 @@ export function PublishShareModal({
                 size="sm"
                 variant="outlined"
                 color="neutral"
-                disabled={busy}
+                disabled={busy || shareBusy}
                 onClick={() => {
                   setResult(null);
                   setReopened(false);
