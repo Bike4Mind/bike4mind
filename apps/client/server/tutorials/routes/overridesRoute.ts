@@ -252,7 +252,7 @@ export function overridesRoute({ api, isAdmin, models, content, repo, policy, kn
             },
             // An older instance saving mid-deploy never lowers the version a newer one recorded.
             ...(structuralDigest !== undefined && { $max: { digestRepoVersion: tutorial.version } }),
-            $inc: { contentSeq: 1, revision: revisionStep },
+            $inc: { contentSeq: fields !== undefined ? 1 : 0, revision: revisionStep },
           },
           { upsert: !prior, returnDocument: 'after', session }
         );

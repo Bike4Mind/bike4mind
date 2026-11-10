@@ -79,6 +79,20 @@ describe('core tutorial admin routes', () => {
     expect(res._getData()).toBe('');
   });
 
+  it.each([
+    ['overrides', overrides, { moduleId: 'fixture', enabled: false, reason: 'r' }],
+    ['settings', settings, { enabled: true }],
+  ])('%s refuses a delegated admin on PUT and writes nothing', async (_name, route, body) => {
+    const { req, res } = createMocks({ method: 'PUT', body });
+    Object.assign(req, { user: DELEGATED, logger: { info: vi.fn(), warn: vi.fn() } });
+    const outcome = await (route as unknown as Route)(req, res).then(
+      () => null,
+      (e: unknown) => e
+    );
+    expect(outcome).toBeInstanceOf(ForbiddenError);
+    expect(res._getData()).toBe('');
+  });
+
   it('summary lists the registry to a full admin while the switch is off', async () => {
     const { res, outcome } = await call(summary, FULL);
     expect(outcome).toBeNull();

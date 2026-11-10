@@ -35,7 +35,11 @@ export function progressStoreFor(Progress: TutorialModels['Progress']): Tutorial
     async setPosition(userId, moduleId, stepId, status, at) {
       const key = `modules.${moduleId}`;
       const updated = await Progress.findOneAndUpdate(
-        { userId, [key]: { $exists: true } },
+        {
+          userId,
+          [key]: { $exists: true },
+          ...(status === 'in_progress' && { [`${key}.status`]: { $ne: 'finished' } }),
+        },
         { $set: { [`${key}.stepId`]: stepId, [`${key}.status`]: status, [`${key}.updatedAt`]: at } }
       );
       return updated !== null;

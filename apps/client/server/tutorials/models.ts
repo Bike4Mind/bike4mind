@@ -187,7 +187,7 @@ function buildModels({ prefix, modelPrefix }: TutorialModelNames): TutorialModel
 
 const memo = new Map<string, TutorialModels>();
 
-/** One set of tutorial models per owner. The overlay passes `'optihashi'` / `'OptiHashi'` to read its existing rows. */
+/** One set of tutorial models per owner. An owner passes its own prefixes to keep reading rows it already stores. */
 export function tutorialModels(names: TutorialModelNames): TutorialModels {
   const key = `${names.prefix}\u0000${names.modelPrefix}`;
   let models = memo.get(key);

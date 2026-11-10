@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ForbiddenError, type SettingKey } from '@bike4mind/common';
-import { AdminSettings, adminSettingsRepository, withTransaction } from '@bike4mind/database';
+import { AdminSettings, withTransaction } from '@bike4mind/database';
+import { isFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { invalidateSettingsCache } from '@bike4mind/utils';
 import { recordAdminSettingChange } from '@server/utils/adminSettingsAudit';
 import type { AdminCheck, ApiBuilder } from './types';
@@ -25,8 +26,7 @@ export function settingsRoute({ api, settingName, isAdmin }: SettingsRouteOption
   return api()
     .get(async (req, res) => {
       await requireAdmin(req);
-      const [row] = await adminSettingsRepository.findBySettingNames([settingName]);
-      return res.json({ enabled: String(row?.settingValue).toLowerCase() === 'true' });
+      return res.json({ enabled: await isFeatureEnabled(settingName) });
     })
     .put(async (req, res) => {
       await requireAdmin(req);

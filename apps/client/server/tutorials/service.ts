@@ -293,6 +293,8 @@ export async function advanceModule(
     return fail(403, 'Not your tutorial session');
   }
   if (!walkIsCurrent(entry, mod)) return fail(409, 'Tutorial was updated, start over', 'VERSION_CHANGED');
+  if (entry.status === 'finished') return fail(409, 'Tutorial already finished', 'FINISHED');
+  if (entry.status !== 'in_progress') return fail(409, 'Tutorial is not running', 'NOT_RUNNING');
 
   const findQuest = async (n: number) =>
     (await deps.quests.findAllBySessionId(sessionId)).find(q => carriesMarker(q, moduleId, n));

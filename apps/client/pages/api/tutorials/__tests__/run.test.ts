@@ -176,7 +176,7 @@ describe('POST /api/tutorials/run', () => {
     expect((await post({ action: 'start', moduleId: 'fixture' })).status).toBe(403);
   });
 
-  describe.each(['caseys', 'deere'])('the overlay id %s', moduleId => {
+  describe.each(['example-overlay', 'another-overlay'])('the overlay id %s', moduleId => {
     const actions = [
       { action: 'start', moduleId },
       { action: 'resume', moduleId },

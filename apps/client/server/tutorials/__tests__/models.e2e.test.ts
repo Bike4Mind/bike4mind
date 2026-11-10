@@ -1,13 +1,16 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { mongoose } from '@bike4mind/database';
 import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../packages/database/src/__test__/createMongoServer';
 import { tutorialModels } from '../models';
+import { progressStoreFor } from '../progressStore';
+
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 let server: Awaited<ReturnType<typeof createMongoServer>>;
-const owner = tutorialModels({ prefix: 'optihashi', modelPrefix: 'OptiHashi' });
+const owner = tutorialModels({ prefix: 'acme', modelPrefix: 'Acme' });
 const core = tutorialModels({ prefix: '', modelPrefix: 'Core' });
 
 beforeAll(async () => {
@@ -29,7 +32,7 @@ describe('tutorial models against a real database', () => {
       },
       journeys: { tour: { dismissedAt: at } },
     });
-    const raw = await mongoose.connection.collection('optihashitutorialprogress').findOne({ userId: 'u1' });
+    const raw = await mongoose.connection.collection('acmetutorialprogress').findOne({ userId: 'u1' });
     expect(raw?.modules.demo).toMatchObject({ status: 'in_progress', sessionId: 's1', turn: -1 });
     const doc = await owner.Progress.findOne({ userId: 'u1' }).lean();
     expect(doc?.modules.get ? doc.modules.get('demo') : (doc?.modules as Record<string, unknown>).demo).toMatchObject({
@@ -82,5 +85,22 @@ describe('tutorial models against a real database', () => {
     await expect(
       core.Override.create({ moduleId: 'Bad Id', revision: 0, contentSeq: 0, updatedBy: 'c', reason: 'r' })
     ).rejects.toThrow();
+  });
+
+  it('does not move a finished walk back to in_progress, but still records a left one', async () => {
+    const store = progressStoreFor(owner.Progress);
+    const at = new Date('2026-10-28T12:00:00Z');
+    await store.begin('u2', 'demo', {
+      status: 'finished',
+      sessionId: 's1',
+      turn: 0,
+      moduleVersion: 1,
+      turnClaimedAt: at,
+      updatedAt: at,
+    });
+    expect(await store.setPosition('u2', 'demo', 'a', 'in_progress', at)).toBe(false);
+    expect((await store.read('u2', 'demo'))?.status).toBe('finished');
+    expect(await store.setPosition('u2', 'demo', 'a', 'left', at)).toBe(true);
+    expect((await store.read('u2', 'demo'))?.status).toBe('left');
   });
 });

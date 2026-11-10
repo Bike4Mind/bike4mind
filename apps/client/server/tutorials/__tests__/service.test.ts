@@ -337,6 +337,18 @@ describe('advanceModule', () => {
     expect(ctx.quests[2].fabFileIds).toBeUndefined();
   });
 
+  it('refuses to advance a left or finished walk and appends nothing', async () => {
+    for (const [status, code] of [
+      ['left', 'NOT_RUNNING'],
+      ['finished', 'FINISHED'],
+    ] as const) {
+      ctx.progress.get('u1')!.demo.status = status;
+      const r = await advanceModule(ctx.deps, 'u1', { moduleId: 'demo', sessionId, turn: 1 });
+      expect(r).toMatchObject({ ok: false, status: 409, code });
+      expect(ctx.quests).toHaveLength(1);
+    }
+  });
+
   it('rejects a session the progress row does not name', async () => {
     ctx.deps.ownsSession = async () => true;
     const r = await advanceModule(ctx.deps, 'u1', { moduleId: 'demo', sessionId: 'b'.repeat(24), turn: 1 });
