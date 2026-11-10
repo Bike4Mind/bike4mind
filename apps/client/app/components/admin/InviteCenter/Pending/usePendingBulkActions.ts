@@ -15,7 +15,10 @@ type ReleaseResult = {
 };
 type RevokeResult = {
   batchId: string;
-  results: { userId: string; outcome: 'reversed' | 'already_reversed' | 'insufficient_balance' | 'failed' }[];
+  results: {
+    userId: string;
+    outcome: 'reversed' | 'already_reversed' | 'insufficient_balance' | 'state_changed' | 'failed';
+  }[];
 };
 
 /** What the Undo toast reverses. A union so a release batch can never be sent to unblock, or the reverse. */
@@ -27,7 +30,12 @@ export type PendingBulkOutcome = {
   failedIds: string[];
   undo: PendingUndo | null;
 };
-export type PendingUndoOutcome = { restored: number; insufficientBalance: number; failed: number };
+export type PendingUndoOutcome = {
+  restored: number;
+  insufficientBalance: number;
+  stateChanged: number;
+  failed: number;
+};
 
 const PATH: Readonly<Record<PendingBulkKind, string>> = {
   release: '/api/admin/held-signup-grants/release',
@@ -137,6 +145,7 @@ export const usePendingBulkUndo = () => {
         return {
           restored: count('reversed'),
           insufficientBalance: count('insufficient_balance'),
+          stateChanged: count('state_changed'),
           failed: count('failed'),
         };
       }
@@ -146,7 +155,7 @@ export const usePendingBulkUndo = () => {
       });
       const count = (outcome: BulkRow['outcome']) =>
         response.data.results.filter(row => row.outcome === outcome).length;
-      return { restored: count('applied'), insufficientBalance: 0, failed: count('failed') };
+      return { restored: count('applied'), insufficientBalance: 0, stateChanged: 0, failed: count('failed') };
     },
     onSettled: (_data, _error, { affectedIds }) => invalidatePending(queryClient, affectedIds),
   });
