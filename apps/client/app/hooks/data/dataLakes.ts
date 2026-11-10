@@ -1218,15 +1218,18 @@ export type DataLakeMemberFile = IFabFileDocument & { membershipArm?: DataLakeMe
 /**
  * Hook: Fetch files belonging to a specific data lake by ID.
  * One lake's own file list (GET /api/data-lakes/{id}/articles) - not the cross-lake browse
- * query; see useGetDataLakeArticles.
+ * query; see useGetDataLakeArticles. `tag` narrows it to the members carrying that exact tag
+ * (one folder of the lake's tree). The route caps a page at 100 files.
  */
-export function useDataLakeFiles(dataLakeId: string | null, params?: { limit?: number }) {
+export function useDataLakeFiles(dataLakeId: string | null, params?: { limit?: number; tag?: string }) {
   return useQuery({
     queryKey: dataLakeKeys.files(dataLakeId, params),
     queryFn: async () => {
+      // One tag as a plain string: axios would write an array as `tags[]=`, which the route
+      // does not read (see useGetDataLakeArticles).
       const response = await api.get<{ data: DataLakeMemberFile[]; total: number; hasMore: boolean }>(
         `/api/data-lakes/${dataLakeId}/articles`,
-        { params: { limit: params?.limit ?? 100 } }
+        { params: { limit: params?.limit ?? 100, ...(params?.tag ? { tags: params.tag } : {}) } }
       );
       return response.data;
     },

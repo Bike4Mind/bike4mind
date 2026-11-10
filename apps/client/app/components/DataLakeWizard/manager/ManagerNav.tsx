@@ -29,13 +29,20 @@ import RestoreIcon from '@mui/icons-material/Restore';
 import ReplayIcon from '@mui/icons-material/Replay';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
-import { buildTagTree } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
+import {
+  buildTagTree,
+  getNodeAtPath,
+  getNodesAtPath,
+} from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import { HUES, inkFor } from '@client/app/components/datalake/deckChrome';
 import TreeRowLabel from '@client/app/components/datalake/TreeRowLabel';
 import LakeOwnerIcon from '@client/app/components/datalake/LakeOwnerIcon';
 import LakeDraftChip from '@client/app/components/datalake/LakeDraftChip';
 import { isDraftLake } from '@client/app/components/datalake/lakeVisibility';
-import DataLakeTreeView, { type DataLakeTreeChrome } from '@client/app/components/datalake/DataLakeTreeView';
+import DataLakeTreeView, {
+  UNCATEGORIZED_KEY,
+  type DataLakeTreeChrome,
+} from '@client/app/components/datalake/DataLakeTreeView';
 import {
   COUNT_CHIP_SX,
   FOOTER_BTN_SX,
@@ -55,7 +62,9 @@ import {
   useCleanupDataLake,
   useDataLakeFiles,
   useGetArchivedDataLakes,
+  useGetDataLakeUncategorizedFiles,
   useGetDeletedDataLakes,
+  useGetScopedDataLakeTagCounts,
   useGetTransitionalDataLakes,
   usePermanentDeleteDataLake,
   useRestoreDeletedDataLake,
@@ -67,9 +76,8 @@ import { RowMenuItem } from '@client/app/components/datalake/rowActionsMenu';
 import FieldTooltip from '@client/app/components/help/FieldTooltip';
 import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
 import type { IDataLakeBatchSummary, IFabFileDocument } from '@bike4mind/common';
-import { countTagPaths, satisfiesTagPrefix } from '@bike4mind/common';
 import type { ManagerLake } from './shared';
-import { normalizePrefix, prefixSegments } from './shared';
+import { prefixSegments } from './shared';
 import { EmptyHint, NavLifecycleSection, NavSectionHeader, NavSkeletons } from './navChrome';
 
 // Left sidebar
@@ -142,43 +150,55 @@ export default function ManagerNav({
   // the section - see useGetTransitionalDataLakes.
   const { data: transitionalLakes } = useGetTransitionalDataLakes();
 
-  const { data: filesResult, isLoading: filesLoading, isError: filesError } = useDataLakeFiles(activeLake?.id ?? null);
-  // Dep on .data, not the whole result: react-query returns a fresh result object on every
-  // state transition (isFetching flips), which would cascade a new `articles` identity into
-  // the tree/uncategorized memos below on every background refetch.
-  const articles = useMemo(() => filesResult?.data ?? [], [filesResult?.data]);
-
-  // Per-lake category tree from the lake's prefix-matching tags (datalake: meta-tags excluded).
-  const tree = useMemo(() => {
-    if (!activeLake) return [];
-    const prefix = normalizePrefix(activeLake.fileTagPrefix);
-    return buildTagTree(
-      countTagPaths(
-        articles.map(file =>
-          (file.tags ?? [])
-            .map(tag => tag.name)
-            .filter(name => name.startsWith(prefix) && !name.startsWith('datalake:'))
-        )
-      )
-    );
-  }, [articles, activeLake]);
-
-  // Files in the lake with no prefix-matching (non-meta) tag - surfaced under "Uncategorized".
-  // Shares the server's predicate so this bucket holds exactly the files the write doors and the
-  // backfill consider uncategorized; a local copy already drifted on the bare-prefix case.
-  const uncategorizedFiles = useMemo(() => {
-    if (!activeLake) return [];
-    const prefix = normalizePrefix(activeLake.fileTagPrefix);
-    return [...articles].filter(
-      f =>
-        !satisfiesTagPrefix(
-          (f.tags ?? []).map(t => t.name),
-          prefix
-        )
-    );
-  }, [articles, activeLake]);
-
   const seedDepth = activeLake ? prefixSegments(activeLake.fileTagPrefix).length : 0;
+
+  // The tree is counted server-side over the lake's whole membership by the same query the Data
+  // Lake mode browse tree uses for a selected lake (DataLakeExplorer), so both trees show the same
+  // counts. A tree built from the lake's file list saw only its first page of 100.
+  const activeLakeIds = useMemo(() => (activeLake ? [activeLake.id] : []), [activeLake]);
+  const {
+    data: tagCountsData,
+    isLoading: countsLoading,
+    isError: countsError,
+  } = useGetScopedDataLakeTagCounts('datalakes', activeLakeIds);
+  const tree = useMemo(() => buildTagTree(tagCountsData?.tagCounts ?? []), [tagCountsData?.tagCounts]);
+
+  // Members with no tag under the lake's prefix, from the route's own predicate. Fetched up front,
+  // not on open like the browse tree: its `total` is the row's count past the 100 files one page
+  // lists, and it sits under `filesOf`, which the doors that add a file to a lake refresh.
+  const {
+    data: uncategorizedResult,
+    isLoading: uncategorizedLoading,
+    isError: uncategorizedError,
+  } = useGetDataLakeUncategorizedFiles(activeLake?.id ?? null, true);
+  // Dep on .data, not the whole result: react-query returns a fresh result object on every
+  // state transition (isFetching flips), which would hand the tree a new list on every refetch.
+  const uncategorizedFiles = useMemo(() => uncategorizedResult?.data ?? [], [uncategorizedResult?.data]);
+
+  // The open folder's files are fetched by its tag, the way DataLakeExplorer fetches a leaf: the
+  // tree spans the whole lake, so they may sit past any first page. Gated like DataLakeTreeView's
+  // leaf and own-files rows, the only places that read `articles`.
+  const currentNodes = useMemo(() => getNodesAtPath(tree, path), [tree, path]);
+  const currentNode = useMemo(() => getNodeAtPath(tree, path), [tree, path]);
+  const folderTag =
+    activeLake &&
+    tagCountsData &&
+    path.length > seedDepth &&
+    path[path.length - 1] !== UNCATEGORIZED_KEY &&
+    (currentNodes.length === 0 || (currentNode?.ownFileCount ?? 0) > 0)
+      ? path.join(':')
+      : null;
+  const {
+    data: folderResult,
+    isLoading: folderLoading,
+    isError: folderError,
+  } = useDataLakeFiles(folderTag ? (activeLake?.id ?? null) : null, folderTag ? { tag: folderTag } : undefined);
+  const folderFiles = folderResult?.data;
+  const articles = useMemo(() => (folderTag ? (folderFiles ?? []) : []), [folderTag, folderFiles]);
+  // A branch's subfolders render without its own files, so only a true leaf waits on the fetch.
+  const treeLoading =
+    countsLoading || uncategorizedLoading || (!!folderTag && folderLoading && currentNodes.length === 0);
+  const treeError = countsError || uncategorizedError || (!!folderTag && folderError);
 
   // TreeView highlights a SET of files (chat mode attaches several); the manager opens one at a
   // time, so this is that one id as a set.
@@ -700,10 +720,14 @@ export default function ManagerNav({
           onNavigate={navigate}
           selectedFileIds={selectedFileIds}
           onSelectFile={onSelectFile}
-          isLoading={filesLoading}
-          isError={filesError}
+          isLoading={treeLoading}
+          isError={treeError}
           chrome={managerTreeChrome}
-          uncategorized={{ files: uncategorizedFiles, renderRow: renderUncategorizedRow }}
+          uncategorized={{
+            files: uncategorizedFiles,
+            count: uncategorizedResult?.total,
+            renderRow: renderUncategorizedRow,
+          }}
           search={searchQuery}
           onSearchChange={setSearchQuery}
           sort={sortBy}
