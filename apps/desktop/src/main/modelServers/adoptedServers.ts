@@ -21,6 +21,8 @@ export interface OwnedRecord {
   settings: ModelServerLaunchSettings;
   /** llama-server's per-process key, which every request to it needs; held decrypted, written sealed. */
   apiKey?: string;
+  /** Its ServerHandle.warning, for a launch that takes it back: a new check tests the binary, not this process. */
+  warning?: string;
   /** Launches that could not read this process; the record is dropped after a few. */
   unverifiedLaunches?: number;
 }
@@ -81,6 +83,7 @@ export function readOwnedRecords(text: string | null, open?: (sealed: string) =>
         startedAt: raw.startedAt,
         settings: readLaunchShape(raw.settings),
         ...(apiKey ? { apiKey } : {}),
+        ...(typeof raw.warning === 'string' && raw.warning ? { warning: raw.warning } : {}),
         ...(whole(raw.unverifiedLaunches) ? { unverifiedLaunches: whole(raw.unverifiedLaunches) ?? 0 } : {}),
       },
     ];
@@ -261,6 +264,7 @@ export function adoptedHandle(
     },
     exited,
     ...(record.apiKey ? { apiKey: record.apiKey } : {}),
+    ...(record.warning ? { warning: record.warning } : {}),
     log: () => [],
     async stop() {
       if (!running) return exited;

@@ -378,6 +378,10 @@ export function ollamaHardware(hw: HardwareProfile): HardwareProfile {
   return { ...hw, memoryKind: 'cpu', gpuMemoryBytes: null, gpuName: null, gpuCount: 0, gpuVendor: null };
 }
 
+/** Says why an Intel integrated GPU is planned as CPU only (ollamaHardware), for a machine description. */
+export const OLLAMA_SKIPS_INTEL_IGPU =
+  'Ollama does not use Intel integrated graphics, so picks and badges assume the CPU.';
+
 /** Whether models run from system RAM on this machine: no GPU, or a discrete GPU of unknown memory. */
 export function isCpuOnly(hw: HardwareProfile): boolean {
   return memoryBudgets(hw).cpuOnly;

@@ -8,6 +8,7 @@ import { createInterface } from 'readline';
 import { lookup } from 'dns/promises';
 import { Writable } from 'stream';
 import {
+  OLLAMA_SKIPS_INTEL_IGPU,
   vramNeedsLlamaServer,
   type CuratedSlot,
   type HubBuild,
@@ -120,7 +121,6 @@ import {
   fitForHubBuild,
   fitForPlan,
   LLAMA_SERVER_VRAM_HELP,
-  OLLAMA_SKIPS_INTEL_IGPU,
   machineLabel,
   machineReader,
   type MachineReader,
