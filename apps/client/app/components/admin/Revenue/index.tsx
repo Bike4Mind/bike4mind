@@ -27,7 +27,7 @@ import {
   formatMoney,
   type DataColumn,
 } from '../shared';
-import { adminFocus } from '../shared/adminStyles';
+import { ADMIN_REGION_GAP, adminFocus } from '../shared/adminStyles';
 import { subscriptionsColumns } from '../Subscriptions/subscriptionsColumns';
 import { MrrDefinitionHelp, atRiskNote, mrrExclusionNote } from '../Subscriptions/subscriptionsMrr';
 import type { SubscriptionsBuiltInView } from '../Subscriptions/subscriptionsListViews';
@@ -602,7 +602,7 @@ const AdminRevenue: React.FC = () => {
   }
 
   return (
-    <Stack gap={2} sx={{ width: '100%', minWidth: 0, px: { xs: 2, sm: 3 }, py: 2.5 }} data-testid="admin-revenue-tab">
+    <Stack gap={ADMIN_REGION_GAP} sx={{ width: '100%', minWidth: 0 }} data-testid="admin-revenue-tab">
       {header}
       {content}
     </Stack>

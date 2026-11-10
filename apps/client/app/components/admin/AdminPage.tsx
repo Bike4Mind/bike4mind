@@ -242,10 +242,8 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.PartnerSignupRules}>
             {activeTab === AdminTab.PartnerSignupRules && <PartnerSignupRulesTab />}
           </TabPanel>
-          <TabPanel value={AdminTab.Revenue} {...selfFramed}>
-            {activeTab === AdminTab.Revenue && <AdminRevenue />}
-          </TabPanel>
-          <TabPanel value={AdminTab.Subscriptions} {...selfFramed}>
+          <TabPanel value={AdminTab.Revenue}>{activeTab === AdminTab.Revenue && <AdminRevenue />}</TabPanel>
+          <TabPanel value={AdminTab.Subscriptions}>
             {activeTab === AdminTab.Subscriptions && <AdminSubscriptions />}
           </TabPanel>
           <TabPanel value={AdminTab.Organizations} {...selfFramed}>

@@ -52,6 +52,14 @@ describe('SubscriptionDetailPage', () => {
     expect(view).toHaveAttribute('data-id', SUBSCRIPTION_ID);
   });
 
+  it('scrolls through the admin layout, not its own container', () => {
+    mocks.useAdminSubscriptionDetail.mockReturnValue(query({ data: buildDetail() }));
+    renderPage();
+    const root = getComputedStyle(screen.getByTestId('subscription-detail-page'));
+    expect(root.minHeight).not.toBe('100vh');
+    expect(root.overflowY).not.toBe('auto');
+  });
+
   it('shows a skeleton while loading', () => {
     mocks.useAdminSubscriptionDetail.mockReturnValue(query({ isLoading: true, isFetching: true }));
     renderPage();
