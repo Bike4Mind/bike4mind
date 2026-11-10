@@ -48,8 +48,9 @@ describe('scheduled signup baseline', () => {
       testPattern: 'test',
     });
     expect(Logger.info).toHaveBeenCalledTimes(2);
-    expect(String(vi.mocked(Logger.info).mock.calls[0][0])).not.toContain('userId');
-    expect(JSON.parse(String(vi.mocked(Logger.info).mock.calls[1][0]))).toMatchObject({
+    expect(vi.mocked(Logger.info).mock.calls[0][1]).toMatchObject({ report: 'signup-baseline' });
+    expect(vi.mocked(Logger.info).mock.calls[0][1]).not.toHaveProperty('userId');
+    expect(vi.mocked(Logger.info).mock.calls[1][1]).toMatchObject({
       report: 'signup-baseline-census',
       userId: 'user',
     });

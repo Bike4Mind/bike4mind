@@ -22,13 +22,16 @@ export async function handler() {
     staffDomains: process.env.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS,
     testPattern: process.env.ANALYTICS_TEST_PATTERN,
   });
-  Logger.info(JSON.stringify({ report: 'signup-baseline', ...summary }));
+  Logger.info('signup baseline report', { report: 'signup-baseline', ...summary });
   for (const { timeline, ...account } of census) {
-    Logger.info(JSON.stringify({ report: 'signup-baseline-census', window: summary.window, ...account }));
+    Logger.info('signup baseline census', { report: 'signup-baseline-census', window: summary.window, ...account });
     for (const event of timeline) {
-      Logger.info(
-        JSON.stringify({ report: 'signup-baseline-event', window: summary.window, userId: account.userId, ...event })
-      );
+      Logger.info('signup baseline event', {
+        report: 'signup-baseline-event',
+        window: summary.window,
+        userId: account.userId,
+        ...event,
+      });
     }
   }
   return { status: 'success', signups: summary.total.signups };

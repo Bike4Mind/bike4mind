@@ -1,4 +1,3 @@
-import { Logger } from '@bike4mind/observability';
 /**
  * DataSyncer Lambda Handler
  *
@@ -8,6 +7,7 @@ import { Logger } from '@bike4mind/observability';
  *
  * Triggered during deployment by scripts/invoke-data-syncer.mjs when SYNC_PREVIEW_SETTINGS=true.
  */
+import { Logger } from '@bike4mind/observability';
 
 import { Resource } from 'sst';
 import { ciphertextPatternSource } from '@bike4mind/utils/security';
@@ -245,7 +245,7 @@ async function syncPreviewSettingsFromStaging(strict = false): Promise<{
           }
         });
       } catch (error) {
-        Logger.error(`Error syncing ${collectionName}`, error instanceof Error ? error.message : error);
+        Logger.error('Error syncing collection', { collectionName, error });
 
         if (backupComplete) {
           try {

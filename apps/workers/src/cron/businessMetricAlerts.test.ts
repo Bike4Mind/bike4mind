@@ -105,7 +105,10 @@ describe('scheduled business metric alert', () => {
     const log = vi.spyOn(Logger, 'info').mockImplementation(() => undefined);
     try {
       expect(await handler({})).toEqual({ status: 'skipped', reason: 'missing-webhook' });
-      expect(log).toHaveBeenCalledWith(expect.stringContaining('SlackUserActivityWebhookUrl'));
+      expect(log).toHaveBeenCalledWith(
+        'business metric alerts skipped',
+        expect.objectContaining({ report: 'business-metric-alerts', setting: 'SlackUserActivityWebhookUrl' })
+      );
     } finally {
       log.mockRestore();
     }

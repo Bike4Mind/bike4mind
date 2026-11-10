@@ -14,13 +14,13 @@ const { handler } = await import('./scheduler');
 const { TaskScheduleHandler } = await import('@bike4mind/common');
 
 describe('scheduler custom task handler', () => {
-  const info = vi.spyOn(Logger.prototype, 'info');
-  const consoleLog = vi.spyOn(console, 'log');
+  const levels = (['debug', 'info', 'warn', 'error'] as const).map(level => vi.spyOn(Logger.prototype, level));
+  const info = levels[1];
+  const consoleSpies = (['log', 'info', 'warn', 'error', 'debug'] as const).map(method => vi.spyOn(console, method));
 
   beforeEach(() => {
     vi.clearAllMocks();
-    info.mockImplementation(() => undefined);
-    consoleLog.mockImplementation(() => undefined);
+    for (const spy of [...levels, ...consoleSpies]) spy.mockImplementation(() => undefined);
   });
 
   it('logs the payload keys only, never its values', async () => {
@@ -34,7 +34,7 @@ describe('scheduler custom task handler', () => {
       handler: TaskScheduleHandler.CUSTOM_TASK_PROCESS,
       payloadKeys: ['secret'],
     });
-    expect(JSON.stringify(info.mock.calls)).not.toContain('hunter2');
-    expect(consoleLog).not.toHaveBeenCalled();
+    for (const spy of levels) expect(JSON.stringify(spy.mock.calls)).not.toContain('hunter2');
+    for (const spy of consoleSpies) expect(spy).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,3 @@
-import { Logger } from '@bike4mind/observability';
 /**
  * Names the accounts behind a young-account spend alarm. The alarm's metric is a filter over the
  * `llm-usage-settled` lines in every log group that settles completions (infra/llmSpendLogGroups.ts),
@@ -6,6 +5,7 @@ import { Logger } from '@bike4mind/observability';
  * account and model. Slack gets account ids, spend, age, model mix and an admin link; never an
  * email or a name. Every failure degrades to a one-line note so the alarm itself still posts.
  */
+import { Logger } from '@bike4mind/observability';
 
 import type { ResultField } from '@aws-sdk/client-cloudwatch-logs';
 

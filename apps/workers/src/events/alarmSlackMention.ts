@@ -1,9 +1,9 @@
-import { Logger } from '@bike4mind/observability';
 /**
  * Reads the per-stage Slack mention setting the alarm relays prepend to production page-level
  * alarms. It lives in an SSM parameter (created in infra/alarmSlackMention.ts, value ignored
  * after creation) rather than a secret so an operator can flip it without a deploy.
  */
+import { Logger } from '@bike4mind/observability';
 
 import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
 

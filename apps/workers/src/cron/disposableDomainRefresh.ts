@@ -116,7 +116,7 @@ export async function handler() {
         }
       }
     }
-    Logger.info(JSON.stringify({ job: 'disposable-domain-refresh', failures, results }));
+    Logger.info('disposable domain refresh', { job: 'disposable-domain-refresh', failures, results });
     await emitMetrics('Lumina5/DisposableDomains', [{ name: 'SourceFailures', value: failures, dimensions }]);
     return { status: failures ? 'partial' : 'success', results };
   } catch (error) {

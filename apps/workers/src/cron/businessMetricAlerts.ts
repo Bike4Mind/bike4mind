@@ -32,14 +32,12 @@ export async function handler(event: unknown) {
   });
   const webhook = await reportWebhook(Resource.App.stage);
   if (!webhook) {
-    Logger.info(
-      JSON.stringify({
-        report: 'business-metric-alerts',
-        status: 'skipped',
-        reason: 'missing-webhook',
-        setting: isProductionStage(Resource.App.stage) ? 'SlackUserActivityWebhookUrl' : 'SLACK_ALARMS_WEBHOOK_URL',
-      })
-    );
+    Logger.info('business metric alerts skipped', {
+      report: 'business-metric-alerts',
+      status: 'skipped',
+      reason: 'missing-webhook',
+      setting: isProductionStage(Resource.App.stage) ? 'SlackUserActivityWebhookUrl' : 'SLACK_ALARMS_WEBHOOK_URL',
+    });
     return { status: 'skipped', reason: 'missing-webhook' };
   }
   const result = await collectBusinessMetrics(window);
@@ -53,17 +51,15 @@ export async function handler(event: unknown) {
     undefined,
     { appUrl: appUrlFromEnv(), stage: stageLabel(Resource.App.stage) }
   );
-  Logger.info(
-    JSON.stringify({
-      report: 'business-metric-alerts',
-      end: window.end.toISOString(),
-      mode: window.mode,
-      metrics: metrics.length,
-      anomalies: anomalies.length,
-      delivered,
-      subscriberBaselineReady: subscribers.values[1] !== null,
-    })
-  );
+  Logger.info('business metric alerts report', {
+    report: 'business-metric-alerts',
+    end: window.end.toISOString(),
+    mode: window.mode,
+    metrics: metrics.length,
+    anomalies: anomalies.length,
+    delivered,
+    subscriberBaselineReady: subscribers.values[1] !== null,
+  });
   return { status: 'success', anomalies: anomalies.length, delivered };
 }
 

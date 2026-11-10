@@ -10,7 +10,6 @@ import { withEventContext } from '@workers/utils/eventContext';
 import { LLMEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { apiKeyRepository, adminSettingsRepository, Memento } from '@bike4mind/database';
 import { getSettingsByNames } from '@bike4mind/utils';
-import { Logger } from '@bike4mind/observability';
 
 import {
   ChatModels,
@@ -179,7 +178,7 @@ export const handler = withEventContext(async (event, logger) => {
   let updatedCount = 0;
 
   for (const evaluation of evaluations) {
-    Logger.debug('Processing evaluation', { importance: evaluation.importance });
+    logger.debug('Processing evaluation', { importance: evaluation.importance });
 
     // V2 persists the fact on its own terms - its own subject resolution and its own semantic de-dup
     // against its own ledger, in the 3-small space. It does not wait on, or read, anything V1 does below.
@@ -214,7 +213,7 @@ export const handler = withEventContext(async (event, logger) => {
 
       // STEP 5: Handle similar personal information - update existing memento
       if (highestSimilarity >= SIMILARITY_THRESHOLD && mostSimilarMemento) {
-        Logger.info('Similar personal information found, updating existing memento', {
+        logger.info('Similar personal information found, updating existing memento', {
           existingMementoId: mostSimilarMemento.id,
           similarity: highestSimilarity.toFixed(3),
         });
@@ -239,7 +238,7 @@ export const handler = withEventContext(async (event, logger) => {
           }
         );
 
-        Logger.info('Successfully updated existing memento with new information', {
+        logger.info('Successfully updated existing memento with new information', {
           mementoId: mostSimilarMemento.id,
           newWeight,
         });
@@ -248,7 +247,7 @@ export const handler = withEventContext(async (event, logger) => {
         continue;
       }
 
-      Logger.debug(
+      logger.debug(
         `No similar personal information found (highest similarity: ${highestSimilarity.toFixed(3)}), creating new memento`
       );
     }
