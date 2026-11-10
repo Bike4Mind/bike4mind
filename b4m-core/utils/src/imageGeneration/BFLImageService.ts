@@ -284,7 +284,9 @@ export class BFLImageService extends AIImageService {
     try {
       const flux2 = isFlux2ImageModel(model);
       const flux3 = isFlux3ImageModel(model);
-      if (flux2 && 1 + referenceImages.length > getMaxReferenceImages(model)) {
+      if (edit_regions?.length && !flux3) throw new Error('edit_regions are only supported on FLUX 3 models');
+      if (flux3 && mask) throw new Error('FLUX 3 edits take no mask');
+      if ((flux2 || flux3) && 1 + referenceImages.length > getMaxReferenceImages(model)) {
         throw new Error(
           `Model ${model} accepts at most ${getMaxReferenceImages(model)} input images (the source plus references)`
         );
@@ -293,18 +295,17 @@ export class BFLImageService extends AIImageService {
       // grid. The source image rides in the `images` array as a reference. The request goes to
       // the standard FLUX 3 generation endpoint (additionalProperties: false, so only
       // allowlisted fields are sent).
-      const flux3Body =
-        flux3 && edit_regions?.length
-          ? {
-              prompt: formatBflEditRegionsPrompt(prompt, edit_regions),
-              images: [image, ...referenceImages],
-              safety_tolerance: this.clampSafetyTolerance(safety_tolerance),
-              ...(supportsBflSeed(model) ? { seed } : {}),
-              ...(supportsBflOutputFormat(model)
-                ? { output_format: toNonWebpOutputFormat(output_format) || 'jpeg' }
-                : {}),
-            }
-          : undefined;
+      const flux3Body = flux3
+        ? {
+            prompt: edit_regions?.length ? formatBflEditRegionsPrompt(prompt, edit_regions) : prompt,
+            images: [image, ...referenceImages],
+            safety_tolerance: this.clampSafetyTolerance(safety_tolerance),
+            ...(supportsBflSeed(model) ? { seed } : {}),
+            ...(supportsBflOutputFormat(model)
+              ? { output_format: toNonWebpOutputFormat(output_format) || 'jpeg' }
+              : {}),
+          }
+        : undefined;
       // FLUX.2 edits on its generation endpoint: no mask, steps or guidance, and the source rides as input_image.
       const flux2Body = flux2
         ? {

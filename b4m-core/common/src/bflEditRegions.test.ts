@@ -15,6 +15,16 @@ describe('BflEditRegionSchema', () => {
     expect(BflEditRegionSchema.parse(validRegion)).toEqual(validRegion);
   });
 
+  it.each([
+    [-0.1, 0.2, 0.8, 0.9],
+    [0.1, 0.2, 1.1, 0.9],
+    [0.8, 0.2, 0.1, 0.9],
+    [0.1, 0.8, 0.8, 0.2],
+    [0.1001, 0.2, 0.1002, 0.9],
+  ])('rejects invalid or grid-degenerate coordinates %j at the canonical schema', (...bbox) => {
+    expect(BflEditRegionSchema.safeParse({ prompt: 'edit', bbox }).success).toBe(false);
+  });
+
   it('rejects an empty prompt', () => {
     expect(BflEditRegionSchema.safeParse({ prompt: '', bbox: [0, 0, 1, 1] }).success).toBe(false);
   });
@@ -92,7 +102,7 @@ describe('EditImageRequestBodySchema edit_regions field', () => {
       sessionId: 's1',
       image: 'https://example.com/img.png',
       prompt: 'edit it',
-      model: 'flux-pro-1.0-fill',
+      model: 'flux-3-image',
       edit_regions: [validRegion],
     });
     expect(result.success).toBe(true);
@@ -104,7 +114,7 @@ describe('EditImageRequestBodySchema edit_regions field', () => {
       sessionId: 's1',
       image: 'https://example.com/img.png',
       prompt: 'edit it',
-      model: 'flux-pro-1.0-fill',
+      model: 'flux-3-image',
     });
     expect(result.success).toBe(true);
     expect(result.data?.edit_regions).toBeUndefined();
@@ -115,7 +125,7 @@ describe('EditImageRequestBodySchema edit_regions field', () => {
       sessionId: 's1',
       image: 'https://example.com/img.png',
       prompt: 'edit it',
-      model: 'flux-pro-1.0-fill',
+      model: 'flux-3-image',
       edit_regions: [{ prompt: 'hi', bbox: [0, 0, 1] }],
     });
     const regionIssues = result.error?.issues?.filter(i => String(i.path[0]) === 'edit_regions') ?? [];
@@ -128,13 +138,15 @@ describe('formatBflEditRegionsPrompt', () => {
     const result = formatBflEditRegionsPrompt('paint it red', [{ prompt: 'a red square', bbox: [0.1, 0.2, 0.5, 0.8] }]);
     expect(result).toContain('<region_0>');
     const layout = JSON.parse(result.split('\n\n')[1]);
-    expect(layout).toEqual([{ id: 'region_0', bbox: [100, 200, 500, 800], desc: 'a red square' }]);
+    expect(layout).toEqual([
+      { id: 'region_0', from: null, src_bbox: null, tgt_bbox: [100, 200, 500, 800], desc: 'a red square' },
+    ]);
   });
 
   it('scales coordinates to 0-1000 integers with rounding', () => {
     const result = formatBflEditRegionsPrompt('test', [{ prompt: 'desc', bbox: [0.333, 0.667, 0.999, 1.0] }]);
     const layout = JSON.parse(result.split('\n\n')[1]);
-    expect(layout[0].bbox).toEqual([333, 667, 999, 1000]);
+    expect(layout[0].tgt_bbox).toEqual([333, 667, 999, 1000]);
   });
 
   it('embeds multiple regions with separate ids', () => {
@@ -152,6 +164,6 @@ describe('formatBflEditRegionsPrompt', () => {
 
   it('preserves the original prompt before the region refs', () => {
     const result = formatBflEditRegionsPrompt('a scenic landscape', [{ prompt: 'mountains', bbox: [0, 0, 0.5, 1] }]);
-    expect(result.startsWith('a scenic landscape')).toBe(true);
+    expect(result.split('\n\n')[0]).toContain('a scenic landscape');
   });
 });

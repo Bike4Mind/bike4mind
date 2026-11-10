@@ -25,6 +25,9 @@ const handler = nextRouteForContract(editImageContract).post(async (req, res) =>
   const { callbackUrl, organization_id: _orgAlias, ...body } = req.validated;
   assertReferenceImagesSupported(body.model, body.referenceImageFabFileIds);
 
+  if (isFlux3ImageModel(body.model) && body.fabFileIds.length)
+    return res.status(400).json({ error: 'FLUX 3 edits take no mask; omit fabFileIds' });
+
   if (body.edit_regions?.length) {
     if (!isFlux3ImageModel(body.model)) {
       return res.status(400).json({ error: 'edit_regions are only supported on FLUX 3 models' });

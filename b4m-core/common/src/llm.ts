@@ -113,59 +113,59 @@ export type GenerateImageIvokeParams = z.infer<typeof GenerateImageIvokeParamsSc
  * (`resolveBillingOrgInput`) rather than the schema, which a public request schema may not
  * `.transform()`. Same rules as `organizationId`: null bills personal, blank is a 422.
  */
-/**
- * A single BFL region-edit bounding box in normalised [0, 1] coordinates.
- * BFL convention: `[y_min, x_min, y_max, x_max]`, so the first axis is vertical.
- */
+/** A FLUX 3 edit region, using normalized [y_min, x_min, y_max, x_max] coordinates. */
+const bflCoordinate = (axis: string) =>
+  z.number().min(0, `${axis} must be in [0, 1]`).max(1, `${axis} must be in [0, 1]`);
+
 export const BflEditRegionSchema = z.object({
   prompt: z.string().min(1),
-  bbox: z.tuple([z.number(), z.number(), z.number(), z.number()]),
+  bbox: z
+    .tuple([bflCoordinate('y_min'), bflCoordinate('x_min'), bflCoordinate('y_max'), bflCoordinate('x_max')])
+    .superRefine(([yMin, xMin, yMax, xMax], context) => {
+      if (yMin >= yMax) context.addIssue({ code: 'custom', message: 'y_min must be less than y_max' });
+      else if (Math.round(yMin * 1000) >= Math.round(yMax * 1000))
+        context.addIssue({ code: 'custom', message: 'y_min and y_max must span at least one unit on the 0-1000 grid' });
+      if (xMin >= xMax) context.addIssue({ code: 'custom', message: 'x_min must be less than x_max' });
+      else if (Math.round(xMin * 1000) >= Math.round(xMax * 1000))
+        context.addIssue({ code: 'custom', message: 'x_min and x_max must span at least one unit on the 0-1000 grid' });
+    }),
 });
 export type BflEditRegion = z.infer<typeof BflEditRegionSchema>;
-
 export const MAX_BFL_EDIT_REGIONS = 8;
+export const BflEditRegionsSchema = z
+  .array(BflEditRegionSchema)
+  .max(MAX_BFL_EDIT_REGIONS, `At most ${MAX_BFL_EDIT_REGIONS} edit_regions are allowed`);
 
 export function validateBflEditRegions(regions: BflEditRegion[]): string[] {
-  const issues: string[] = [];
-  if (regions.length > MAX_BFL_EDIT_REGIONS) {
-    issues.push(`At most ${MAX_BFL_EDIT_REGIONS} edit_regions are allowed; got ${regions.length}`);
-  }
-  for (let i = 0; i < regions.length; i++) {
-    const [yMin, xMin, yMax, xMax] = regions[i].bbox;
-    const tag = `edit_regions[${i}].bbox`;
-    for (const [label, v] of [
-      ['y_min', yMin],
-      ['x_min', xMin],
-      ['y_max', yMax],
-      ['x_max', xMax],
-    ] as const) {
-      if (v < 0 || v > 1) issues.push(`${tag} ${label} must be in [0, 1]; got ${v}`);
-    }
-    if (yMin >= yMax) issues.push(`${tag} y_min (${yMin}) must be less than y_max (${yMax})`);
-    if (xMin >= xMax) issues.push(`${tag} x_min (${xMin}) must be less than x_max (${xMax})`);
-  }
-  return issues;
+  const parsed = BflEditRegionsSchema.safeParse(regions);
+  if (parsed.success) return [];
+  return parsed.error.issues.map(issue => {
+    const [index, ...path] = issue.path;
+    const prefix = typeof index === 'number' ? `edit_regions[${index}]` : 'edit_regions';
+    const field = path.filter(part => typeof part === 'string').join('.');
+    return `${prefix}${field ? `.${field}` : ''}: ${issue.message}`;
+  });
 }
 
 /**
- * Embed validated `edit_regions` into a FLUX 3 prompt as an inline JSON layout.
- *
- * FLUX 3 accepts bounding-box layouts as text appended to the prompt: a JSON array
- * of `{id, bbox, desc}` objects where `bbox` is `[top, left, bottom, right]` on a
- * 0-1000 integer grid (see https://api.bfl.ai/openapi.json - the layout rides inside
- * the `prompt` field, not as a separate request property).
- *
- * Each region ID is referenced in the prompt as `<region_N>` so the model can ground
- * the layout element to the caption.
+ * FLUX 3's edit-with-boxes example uses prompt-inline entries with `from`, `src_bbox`, and
+ * `tgt_bbox`, rather than the `bbox` entries used for text-to-image layouts. Replacement regions
+ * have no copied source pixels; the source image is the first entry in `images` (`ref_image_0`).
+ * Coordinates use the documented 0-1000 integer grid, vertical axis first.
+ * https://docs.bfl.ai/api-reference/utility/generate-an-image-with-flux-3-klein
  */
 export function formatBflEditRegionsPrompt(prompt: string, regions: BflEditRegion[]): string {
-  const layout = regions.map((r, i) => ({
-    id: `region_${i}`,
-    bbox: r.bbox.map(v => Math.round(v * 1000)),
-    desc: r.prompt,
+  const validated = BflEditRegionsSchema.parse(regions);
+  if (validated.length === 0) return prompt;
+  const layout = validated.map((region, index) => ({
+    id: `region_${index}`,
+    from: null,
+    src_bbox: null,
+    tgt_bbox: region.bbox.map(coordinate => Math.round(coordinate * 1000)),
+    desc: region.prompt,
   }));
-  const refs = regions.map((_, i) => `<region_${i}>`).join(' ');
-  return `${prompt} ${refs}\n\n${JSON.stringify(layout)}`;
+  const references = validated.map((_, index) => `<region_${index}>`).join(' ');
+  return `In <ref_image_0>, ${prompt} Edit ${references}. Keep everything outside the edited regions unchanged.\n\n${JSON.stringify(layout)}`;
 }
 
 const BillingOrgIdAliasSchema = BillingOrganizationIdSchema.describe(
@@ -262,7 +262,7 @@ export const EditImageRequestBodySchema = OpenAIImageGenerationInput.extend({
   // `...rest` spread silently strips any client-sent output_format before it ever reaches
   // ImageEditBodySchema's own (narrower) field.
   output_format: ImageOutputFormatSchema.nullable().optional(),
-  // Same `...rest` strip as output_format. Only BFL edits honour it; gpt-image and Gemini ignore it.
+  // Same `...rest` strip as output_format. Supporting BFL models honour it; FLUX 3 Image, gpt-image and Gemini ignore it.
   seed: z.number().nullable().optional(),
   /**
    * BFL region-edit bounding boxes. Each entry carries a per-region prompt and a
@@ -272,7 +272,7 @@ export const EditImageRequestBodySchema = OpenAIImageGenerationInput.extend({
    * JSON layout format (0-1000 integer grid) by {@link formatBflEditRegionsPrompt} before the
    * request reaches the provider.
    */
-  edit_regions: z.array(BflEditRegionSchema).optional(),
+  edit_regions: BflEditRegionsSchema.optional(),
   callbackUrl: GenerationCallbackUrlSchema.optional(),
 });
 
