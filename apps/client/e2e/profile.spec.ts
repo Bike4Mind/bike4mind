@@ -224,6 +224,9 @@ test.describe('Profile - Agent connect', () => {
 // Every test here mints keys as a throwaway account of its own: the trust cap counts keys per owner,
 // and a key on the spec user would unlock a gear and break the Sidenav - Gears test below.
 test.describe('Profile - API key gates', () => {
+  // installWafBypass adds its header with page.route, which cannot see a request the service worker
+  // answers; without the header the edge refuses CI runners on /api/user-api-keys/*.
+  test.use({ serviceWorkers: 'block' });
   const KEY_ACCESS_DENIED = 'API keys require an active paid subscription';
   // formatRateLimitReset: whole seconds under a minute, "1m" for a window that has just opened.
   const RESETS_IN = '(?:[1-5]?\\ds|1m)';
