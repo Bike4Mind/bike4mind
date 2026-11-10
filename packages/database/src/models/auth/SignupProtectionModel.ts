@@ -100,10 +100,15 @@ export const signupProtectionRepository: SignupProtectionRepository = {
       .lean();
   },
   async reholdWatched(review) {
+    const { cohortUserIds, ...rest } = review;
     const result = await SignupDomainReviewModel.updateOne(
       { domain: review.domain, status: 'released', 'autoDecision.policy': 'advisory-decision' },
       // The old verdict goes too: it judged the released cohort, not this burst, and would read as a fresh one.
-      { $set: review, $unset: { autoDecision: 1, reviewedAt: 1, reviewedBy: 1, assessment: 1 } }
+      {
+        $set: rest,
+        $addToSet: { cohortUserIds: { $each: cohortUserIds ?? [] } },
+        $unset: { autoDecision: 1, reviewedAt: 1, reviewedBy: 1, assessment: 1 },
+      }
     );
     return result.modifiedCount === 1;
   },

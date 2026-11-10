@@ -382,7 +382,7 @@ describe('signup protection persistence', () => {
       expect(row).toMatchObject({
         status: 'held_pending_review',
         reason: BURST_REASON,
-        cohortUserIds: ['user-2', 'user-3'],
+        cohortUserIds: ['user-1', 'user-2', 'user-3'],
         signupCount: 5,
       });
       expect(row).not.toHaveProperty('autoDecision');
@@ -426,6 +426,20 @@ describe('signup protection persistence', () => {
         cohortUserIds: ['user-1'],
         assessment: { judgment: 'legitimate' },
       });
+    });
+  });
+
+  describe('reholdWatched after autoRelease', () => {
+    it('keeps the ids the auto-release judged alongside the new cohort', async () => {
+      await seed('merge.test', {});
+      await signupDomainReviewRepository.autoRelease('merge.test', YOUNG_REASON, 'advisory-decision', autoDecidedAt, [
+        'paid-a',
+      ]);
+      const review = { ...burstHold('merge.test'), cohortUserIds: ['new-b'] };
+      expect(await signupProtectionRepository.reholdWatched!(review)).toBe(true);
+      const row = await stored('merge.test');
+      expect(row?.status).toBe('held_pending_review');
+      expect(row?.cohortUserIds).toEqual(expect.arrayContaining(['paid-a', 'new-b']));
     });
   });
 
