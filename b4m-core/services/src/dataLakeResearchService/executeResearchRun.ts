@@ -1,9 +1,9 @@
-import type { ResearchRunLevers, ResearchRunStopReason, ResearchRunTotals } from '@bike4mind/common';
-import { emptyResearchRunTotals, RESEARCH_RUN_PRODUCER } from '@bike4mind/common';
+import type { LegacyResearchRunLevers, ResearchRunStopReason, ResearchRunTotals } from '@bike4mind/common';
+import { emptyResearchRunTotals, RESEARCH_RUN_PRODUCER, upgradeLegacyResearchLevers } from '@bike4mind/common';
 import { isPlaceholderTitle } from '@bike4mind/fab-pipeline';
 import type { ProposalCandidate, ProposalOutcome } from '../dataLakeService/proposeDataLakeContent';
 import type { RelevanceJudgement } from './RelevanceJudgeService';
-import { classifySource } from './sourceFilter';
+import { classifySource, isQueueableVerdict } from './sourceFilter';
 
 /**
  * The run loop (#1682): search -> filter by source -> judge -> fetch -> propose, once per candidate,
@@ -99,10 +99,12 @@ const TIME_BUDGET_RESERVE_MS = 90_000;
 const JUDGE_BREAKER_FAILURES = 3;
 
 export async function executeResearchRun(
-  levers: ResearchRunLevers,
+  storedLevers: LegacyResearchRunLevers,
   runId: string,
   ports: ResearchRunPorts
 ): Promise<ResearchRunResult> {
+  // A run snapshot can predate the tiers, so it is upgraded here rather than trusted to be current.
+  const levers = upgradeLegacyResearchLevers(storedLevers);
   const totals = emptyResearchRunTotals();
   let spentMicroUsd = 0;
   let scored = 0;
@@ -124,7 +126,8 @@ export async function executeResearchRun(
 
   for (const [index, candidate] of candidates.entries()) {
     // Rule 1: the free filter, before anything is spent.
-    if (classifySource(candidate.url, levers) !== 'allowed') {
+    const verdict = classifySource(candidate.url, levers);
+    if (!isQueueableVerdict(verdict)) {
       totals.filteredBySource += 1;
       continue;
     }
@@ -145,7 +148,7 @@ export async function executeResearchRun(
       // Only before the first score: once the judge has worked, a later failure is a blip, not an outage.
       if (scored === 0 && totals.judgeFailed >= JUDGE_BREAKER_FAILURES) {
         for (const unreached of candidates.slice(index + 1)) {
-          if (classifySource(unreached.url, levers) !== 'allowed') totals.filteredBySource += 1;
+          if (!isQueueableVerdict(classifySource(unreached.url, levers))) totals.filteredBySource += 1;
           else totals.notJudged += 1;
         }
         return settle('judge_unavailable');
@@ -187,6 +190,8 @@ export async function executeResearchRun(
         // When the producer RETRIEVED it, which is the fetch that just happened - not when the row
         // is written, and not when the run started.
         retrievedAt: ports.now(),
+        // Admission is never decided by score: the tier comes from the source alone.
+        sourceTier: verdict,
       },
     });
 

@@ -1,5 +1,10 @@
 import type { ResearchRunLevers } from '@bike4mind/common';
 import {
+  boundedStringList,
+  deriveLegacyAllowedDomains,
+  isResearchUnlistedSources,
+  normalizeDomainList,
+  upgradeLegacyResearchLevers,
   RESEARCH_COST_CEILING_MICRO_USD_DEFAULT,
   RESEARCH_COST_CEILING_MICRO_USD_LIMIT,
   RESEARCH_CONFIG_QUERY_MAX_CHARS,
@@ -26,61 +31,6 @@ import { BadRequestError } from '@bike4mind/utils';
  * an empty query, which has no sane substitute and is refused. Rejecting the rest would turn a
  * tightened bound into a config that can no longer be opened, let alone fixed.
  */
-
-/** Trim, dedupe, drop empties and cap the length of a user-supplied string list. */
-const boundedStringList = (values: readonly unknown[] | undefined, max: number): string[] =>
-  Array.from(
-    new Set(
-      (values ?? [])
-        .filter((value): value is string => typeof value === 'string')
-        .map(value => value.trim())
-        .filter(value => value.length > 0)
-    )
-  ).slice(0, max);
-
-/**
- * Reduce one free-text list entry to the hostname `hostMatchesDomain` will compare against, or ''
- * when it cannot be one (dropped by the caller's `boundedStringList`).
- *
- * The field is a textarea whose placeholder is `example.net`, so what actually arrives is a mix of
- * `example.net`, `*.example.net`, `https://example.net/blog` and the occasional pasted URL with a
- * port or a trailing dot. Every spelling that does not reduce to a hostname fails OPEN on a deny
- * list (nothing matches, so nothing is blocked) and CLOSED on an allow list, silently, with nothing
- * telling the manager their rule did not take - the worst of the available failures on a
- * security-shaped list.
- *
- * Parsing rather than string-surgery is what makes that exhaustive: one `new URL` drops the scheme,
- * credentials, port, path and query, lowercases the host, punycodes an IDN so a Cyrillic entry can
- * match the `xn--` hostname a URL actually carries, and leaves a trailing root dot for us to strip
- * (`sourceHostname` strips it on the other side, so the two meet).
- *
- * A leading `www.` is dropped too: `hostMatchesDomain` already covers subdomains, so the bare domain
- * is what a manager means by `www.example.com`, and keeping the prefix would leave `example.com`
- * itself unmatched. Only when a registrable name remains, so `www.com` never widens to all of `com`.
- */
-const stripWww = (hostname: string): string => {
-  const rest = hostname.replace(/^www\./, '');
-  return rest.includes('.') ? rest : hostname;
-};
-
-const normalizeDomainEntry = (value: string): string => {
-  const bare = value
-    .trim()
-    .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
-    .replace(/^[*.]+/, '');
-  if (!bare) return '';
-  try {
-    return stripWww(new URL(`https://${bare}`).hostname.replace(/\.$/, ''));
-  } catch {
-    return '';
-  }
-};
-
-const normalizeDomainList = (values: readonly unknown[] | undefined): string[] =>
-  boundedStringList(
-    boundedStringList(values, RESEARCH_DOMAIN_LIST_MAX).map(normalizeDomainEntry),
-    RESEARCH_DOMAIN_LIST_MAX
-  );
 
 const clampInt = (value: unknown, fallback: number, min: number, max: number): number => {
   const parsed = typeof value === 'number' && Number.isFinite(value) ? Math.floor(value) : fallback;
@@ -110,6 +60,37 @@ export function normalizeResearchLevers(input: ResearchLeversDraft): ResearchRun
 
   const recencyDays = clampInt(input.recencyDays, 0, 0, RESEARCH_RECENCY_DAYS_LIMIT);
 
+  // Legacy `allowedDomains` is normalized BEFORE the upgrade so emptiness is judged on what the
+  // filter will actually use: a list like `*.` normalizes to nothing and stays unrestricted.
+  // A stored `unlistedSources` that is not a valid value fails closed on the tier lists.
+  const trustedDomains = normalizeDomainList(input.trustedDomains);
+  const reviewDomains = normalizeDomainList(input.reviewDomains);
+  const rawUnlisted: unknown = input.unlistedSources;
+  const unlistedSources =
+    rawUnlisted === undefined || rawUnlisted === null
+      ? // Neither shape given: nothing restricts the run, and the upgrade must not read it as legacy.
+        input.allowedDomains === undefined
+        ? 'review'
+        : undefined
+      : isResearchUnlistedSources(rawUnlisted)
+        ? rawUnlisted
+        : trustedDomains.length + reviewDomains.length > 0
+          ? 'drop'
+          : 'review';
+  const tiers = upgradeLegacyResearchLevers({
+    ...input,
+    query,
+    trustedDomains,
+    reviewDomains,
+    unlistedSources: unlistedSources as ResearchRunLevers['unlistedSources'] | undefined,
+    allowedDomains: input.allowedDomains === undefined ? undefined : normalizeDomainList(input.allowedDomains),
+  } as Parameters<typeof upgradeLegacyResearchLevers>[0]);
+  const tierFields = {
+    trustedDomains: tiers.trustedDomains,
+    reviewDomains: tiers.reviewDomains,
+    unlistedSources: tiers.unlistedSources,
+  };
+
   return {
     query: query.slice(0, RESEARCH_CONFIG_QUERY_MAX_CHARS),
     // Left exactly as given, including absent: the run resolves the model against the deployment's
@@ -120,7 +101,8 @@ export function normalizeResearchLevers(input: ResearchLeversDraft): ResearchRun
     // 0 is the storable spelling of "no recency constraint"; it becomes absent so the search call
     // and the UI both see one representation of it instead of two.
     ...(recencyDays > 0 ? { recencyDays } : {}),
-    allowedDomains: normalizeDomainList(input.allowedDomains),
+    ...tierFields,
+    allowedDomains: deriveLegacyAllowedDomains(tierFields),
     blockedDomains: normalizeDomainList(input.blockedDomains),
     minRelevance: clampUnitInterval(input.minRelevance, RESEARCH_MIN_RELEVANCE_DEFAULT),
     costCeilingMicroUsd: clampInt(

@@ -95,7 +95,7 @@ that state and is safe to act on from there. Re-run the action you wanted if it 
 
 **I saved a research configuration and nothing new appeared in the lake's History tab. Why?**
 The History tab records a research-configuration edit only when a setting meaningfully changes.
-Saving the same values again, or reordering the same entries in **Only these sites**, **Never these
+Saving the same values again, or reordering the same entries in **Sites to review**, **Never these
 sites** or **Tags to propose**, does not add a row.
 
 **Who can connect a Google Drive folder to a Data Lake?**
