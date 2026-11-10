@@ -29,10 +29,6 @@ type DayRange = (typeof DAY_RANGES)[number];
 
 type OrgOption = { id: string; name: string };
 
-// Events can sit a little above the ledger (chat records before the final reconcile, rounding), so
-// a gap this small is not a residual worth a row.
-const RESIDUAL_TOLERANCE_CREDITS = 1;
-
 /**
  * One owner's AI spend: a credits burn chart over the selected window plus
  * model / feature / API key / source breakdowns (and, for organizations, a
@@ -93,11 +89,12 @@ export const UsageDashboard: React.FC<{
   // The ledger is what the owner was charged; events miss charges written without a per-call record.
   const ledgerCredits = reconcileLedger ? (data?.ledger?.creditsCharged ?? eventCredits) : eventCredits;
   const residualCredits = ledgerCredits - eventCredits;
-  const hasResidual = residualCredits > RESIDUAL_TOLERANCE_CREDITS;
+  const hasResidual = residualCredits > 0;
   const hasEvents = (data?.totals.requests ?? 0) > 0;
   const hasUsage = hasEvents || hasResidual;
-  // Below the tolerance (or under the events) the ledger figure would disagree with the rows shown.
-  const totalCredits = hasResidual ? ledgerCredits : eventCredits;
+  // The posted ledger remains authoritative even when per-call records exceed it.
+  const totalCredits = ledgerCredits;
+  const detailExceedsLedger = reconcileLedger && eventCredits > ledgerCredits;
   const chartData = useMemo(() => zeroFillDailySeries(data?.overTime ?? [], days, d => d.creditsCharged), [data, days]);
 
   return (
@@ -210,7 +207,20 @@ export const UsageDashboard: React.FC<{
                 height={260}
               />
             )}
+            {hasResidual && hasEvents && (
+              <Typography level="body-xs" color="neutral" data-testid="usage-chart-detail-note">
+                Chart covers charges with a per-call record only.
+              </Typography>
+            )}
           </Box>
+
+          {detailExceedsLedger && (
+            <Typography level="body-xs" color="neutral" data-testid="usage-ledger-detail-note">
+              Per-call records total {formatCredits(eventCredits)} credits, above the posted ledger total of{' '}
+              {formatCredits(ledgerCredits)} credits. The chart and per-call breakdown show those records; the headline
+              shows the posted ledger.
+            </Typography>
+          )}
 
           {isOrg && (
             <BreakdownTable

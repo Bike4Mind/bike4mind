@@ -198,7 +198,7 @@ describe('UsageDashboard ledger reconciliation', () => {
     expect(screen.getByTestId('usage-range-toggle')).toBeInTheDocument();
   });
 
-  it('shows the events when they exceed the ledger, so the chip matches the rows', () => {
+  it('keeps the posted ledger total and explains larger per-call detail', () => {
     setData({
       ownerType: CreditHolderType.User,
       ownerId: 'user-1',
@@ -208,27 +208,34 @@ describe('UsageDashboard ledger reconciliation', () => {
     });
     renderUser();
 
-    expect(screen.getByTestId('usage-total-credits')).toHaveTextContent('1,050 credits');
+    expect(screen.getByTestId('usage-total-credits')).toHaveTextContent('1,000 credits');
+    expect(screen.getByTestId('usage-ledger-detail-note')).toHaveTextContent(
+      'Per-call records total 1,050 credits, above the posted ledger total of 1,000 credits.'
+    );
     expect(screen.queryByTestId('usage-residual-note')).not.toBeInTheDocument();
   });
 
-  it('reads as no usage when the ledger is under the tolerance and there are no events', () => {
+  it('keeps a real sub-credit ledger charge visible', () => {
+    setData({ ownerType: CreditHolderType.User, ownerId: 'user-1', ledger: { creditsCharged: 0.6, transactions: 1 } });
+    renderUser();
+    expect(screen.getByTestId('usage-total-credits')).toHaveTextContent('<1 credits');
+    expect(screen.getByTestId('usage-no-events-note')).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId('usage-feature-table')).getByText('Other charges (no per-call detail)')
+    ).toBeInTheDocument();
+  });
+
+  it('explains why the daily chart omits ledger-only charges', () => {
     setData({
       ownerType: CreditHolderType.User,
       ownerId: 'user-1',
-      ledger: { creditsCharged: 0.6, transactions: 1 },
+      totals: { requests: 1, cogsUsd: 0, creditsCharged: 50 },
+      ledger: { creditsCharged: 100, transactions: 2 },
     });
     renderUser();
-
-    expect(screen.getAllByText('No usage in this window.').length).toBeGreaterThan(0);
-    expect(screen.queryByTestId('usage-no-events-note')).not.toBeInTheDocument();
-    for (const id of ['usage-model-table', 'usage-source-table']) {
-      const table = screen.getByTestId(id);
-      expect(within(table).getByText('No usage in this window.')).toBeInTheDocument();
-      expect(within(table).queryByText(/No per-call detail|No metered AI/)).not.toBeInTheDocument();
-    }
-    expect(screen.queryByText(/Metered AI usage only/)).not.toBeInTheDocument();
-    expect(screen.getByTestId('usage-total-credits')).toHaveTextContent('0 credits');
+    expect(screen.getByTestId('usage-chart-detail-note')).toHaveTextContent(
+      'Chart covers charges with a per-call record only.'
+    );
   });
 
   it('leaves an organization dashboard on usage events only, even with ledger spend', () => {
