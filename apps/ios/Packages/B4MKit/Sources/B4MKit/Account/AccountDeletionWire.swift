@@ -18,7 +18,8 @@ public struct AccountOrganization: Equatable, Sendable, Identifiable {
 /// - `POST` requests deletion. 202 `{deletion: {requestedAt, scheduledFor, source}, canceledSubscriptions}`,
 ///   after which every session, this one included, is revoked. Behind a step-up gate: 403
 ///   `{code: "step_up_required" | "step_up_unavailable"}` until the session passes
-///   `POST /api/auth/step-up` (a fresh sign-in alone does not count).
+///   `POST /api/auth/step-up` (a fresh sign-in alone does not count); `step_up_unavailable` means the
+///   token has no session id.
 ///   403 without a code: an impersonating admin. 409 `{code: "ACCOUNT_DELETION_ORG_OWNER",
 ///   organizations: [{id, name}]}`: owned organizations need a new owner first; 409 without it: already
 ///   scheduled.
@@ -31,7 +32,8 @@ enum AccountDeletionWire {
   static let path = "api/account/deletion"
   static let orgOwnerCode = "ACCOUNT_DELETION_ORG_OWNER"
   static let pendingCode = "ACCOUNT_DELETION_PENDING"
-  static let stepUpCodes: Set<String> = ["step_up_required", "step_up_unavailable"]
+  static let stepUpRequiredCode = "step_up_required"
+  static let stepUpUnavailableCode = "step_up_unavailable"
 
   private struct ErrorEnvelope: Decodable {
     struct Organization: Decodable {
@@ -58,10 +60,11 @@ enum AccountDeletionWire {
       let receipt = try? JSONDecoder().decode(Receipt.self, from: body)
       return AccountDeletionReceipt(scheduledFor: receipt?.deletion?.scheduledFor.flatMap(parseDate))
     case 403:
-      if let code = errorCode(body: body), stepUpCodes.contains(code) {
-        throw AccountDeletionFailure.recentSignInRequired
+      switch errorCode(body: body) {
+      case stepUpRequiredCode: throw AccountDeletionFailure.stepUpRequired
+      case stepUpUnavailableCode: throw AccountDeletionFailure.stepUpUnavailable
+      default: throw AccountDeletionFailure.notPermitted
       }
-      throw AccountDeletionFailure.notPermitted
     case 409:
       if let organizations = organizationsBlockingDeletion(body: body) {
         throw AccountDeletionFailure.organizationTransferRequired(organizations)

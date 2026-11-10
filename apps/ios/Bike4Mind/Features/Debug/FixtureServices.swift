@@ -13,6 +13,7 @@
     static let pushTokenAPI: any PushTokenAPI = NoopPushTokenAPI()
     static let agentRunAPI: any AgentRunAPI = FixtureAgentRunAPI()
     static let account: any AccountAPI = FixtureAccountAPI()
+    static let stepUp: any StepUpAPI = FixtureStepUpAPI()
     /// The first fixture session's turn that starts out working and settles a few seconds after it is opened.
     static let workingQuestID = "fixture-0-q4"
 
@@ -38,6 +39,14 @@
       }
 
       func restoreDeletion() async throws {}
+    }
+
+    private struct FixtureStepUpAPI: StepUpAPI {
+      func fetchOptions() async throws -> StepUpOptions {
+        StepUpOptions(methods: [.password, .email], stepUpUntil: nil)
+      }
+      func sendEmailCode() async throws -> String { "fixture-pending-token" }
+      func verify(_ proof: StepUpProof) async throws -> Date { Date().addingTimeInterval(300) }
     }
 
     private struct NoopPushTokenAPI: PushTokenAPI {

@@ -9,6 +9,7 @@ struct DeleteAccountView: View {
   var body: some View {
     DeleteAccountContent(
       api: services.account,
+      stepUpAPI: services.stepUp,
       endSession: { [services] in
         // The server revoked every session with the request; the shared sign-out path still runs so
         // Live Activities end, push unregisters (best effort) and the Keychain is wiped.
@@ -20,9 +21,12 @@ struct DeleteAccountView: View {
 
 private struct DeleteAccountContent: View {
   @State private var model: AccountDeletionViewModel
+  @State private var isShowingStepUp = false
   @FocusState private var isFieldFocused: Bool
+  private let stepUpAPI: any StepUpAPI
 
-  init(api: any AccountAPI, endSession: @escaping @MainActor () async -> Void) {
+  init(api: any AccountAPI, stepUpAPI: any StepUpAPI, endSession: @escaping @MainActor () async -> Void) {
+    self.stepUpAPI = stepUpAPI
     _model = State(initialValue: AccountDeletionViewModel(api: api, endSession: endSession))
   }
 
@@ -39,6 +43,16 @@ private struct DeleteAccountContent: View {
     .navigationBarTitleDisplayMode(.inline)
     .interactiveDismissDisabled(model.isDeleting)
     .navigationBarBackButtonHidden(model.isDeleting)
+    .onChange(of: model.state) { _, state in
+      if state == .stepUpRequired { isShowingStepUp = true }
+    }
+    .sheet(isPresented: $isShowingStepUp) {
+      StepUpSheet(api: stepUpAPI) {
+        // The step-up window lasts minutes, so the refused request goes straight back out.
+        isShowingStepUp = false
+        await model.submit()
+      }
+    }
   }
 
   @ViewBuilder
@@ -57,6 +71,15 @@ private struct DeleteAccountContent: View {
 
     if case .blockedByOrganizations(let organizations) = model.state {
       organizationsSection(organizations)
+    }
+
+    if model.state == .stepUpRequired {
+      Section {
+        Button("Confirm it's you") { isShowingStepUp = true }
+          .accessibilityIdentifier("delete-account-step-up-btn")
+      } footer: {
+        Text("Confirm it's you to continue. Your account is not deleted until you do.")
+      }
     }
 
     Section {
@@ -114,9 +137,9 @@ private struct DeleteAccountContent: View {
     switch model.state {
     case .failed(let error): error.message
     case .notPermitted: "Account deletion isn't available for this session."
-    case .recentSignInRequired:
-      "Deleting your account needs you to confirm your identity, which this app can't do yet. Delete your account from Bike4Mind on the web."
-    case .idle, .deleting, .blockedByOrganizations, .completed: nil
+    case .stepUpUnavailable:
+      "This sign-in can't confirm your identity. Sign out and sign in again, then retry. You can also delete your account from Bike4Mind on the web."
+    case .idle, .deleting, .blockedByOrganizations, .stepUpRequired, .completed: nil
     }
   }
 }

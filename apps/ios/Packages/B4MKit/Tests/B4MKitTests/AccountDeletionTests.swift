@@ -92,11 +92,14 @@ final class AccountClientWireTests: XCTestCase {
     await assertFailure(client, .notPermitted)
   }
 
-  func testTheStepUpGateAsksForARecentSignIn() async {
-    for code in ["step_up_required", "step_up_unavailable"] {
+  func testTheStepUpGateCodesMapToDistinctFailures() async {
+    let expectations: [(String, AccountDeletionFailure)] = [
+      ("step_up_required", .stepUpRequired), ("step_up_unavailable", .stepUpUnavailable),
+    ]
+    for (code, expected) in expectations {
       let transport = FakeTransport { _ in (403, json(#"{"code":"\#(code)","error":"Recent verification required"}"#)) }
       let client = AccountClient(baseURL: base, tokens: FakeTokens(), transport: transport)
-      await assertFailure(client, .recentSignInRequired)
+      await assertFailure(client, expected)
     }
   }
 
@@ -275,12 +278,29 @@ final class AccountDeletionViewModelTests: XCTestCase {
   }
 
   func testTheStepUpGateGetsItsOwnStateRatherThanAGenericRefusal() async {
-    let api = ScriptedAccountAPI(deletion: .failure(AccountDeletionFailure.recentSignInRequired))
+    let api = ScriptedAccountAPI(deletion: .failure(AccountDeletionFailure.stepUpRequired))
     let model = makeModel(api)
     model.confirmation = "DELETE"
     await model.submit()
-    XCTAssertEqual(model.state, .recentSignInRequired)
+    XCTAssertEqual(model.state, .stepUpRequired)
     XCTAssertEqual(endedSessions, 0)
+
+    await api.setDeletion(.failure(AccountDeletionFailure.stepUpUnavailable))
+    await model.submit()
+    XCTAssertEqual(model.state, .stepUpUnavailable)
+  }
+
+  func testRetryingAfterStepUpCompletesTheDeletion() async {
+    let api = ScriptedAccountAPI(deletion: .failure(AccountDeletionFailure.stepUpRequired))
+    let model = makeModel(api)
+    model.confirmation = "DELETE"
+    await model.submit()
+    XCTAssertTrue(model.canSubmit)
+
+    await api.setDeletion(.success(AccountDeletionReceipt(scheduledFor: nil)))
+    await model.submit()
+    XCTAssertEqual(model.state, .completed(scheduledFor: nil))
+    XCTAssertEqual(endedSessions, 1)
   }
 
   func testForbiddenAndNetworkFailuresKeepTheSessionAndAllowARetry() async {

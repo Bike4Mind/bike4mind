@@ -81,6 +81,10 @@ Against a backend that has the deletion routes deployed:
 
 - [ ] Settings > Delete Account: the button stays disabled until `DELETE` is typed; success signs the app out immediately, clears the
       keychain, ends activities and shows the "scheduled for deletion" note on sign-in.
+- [ ] Tapping "Delete my account" prompts "Confirm it's you" (password; an emailed code via "Send code"; authenticator code for
+      MFA accounts; a segmented picker when several apply). A correct proof dismisses the sheet and the deletion completes on its own.
+      A wrong password or code shows the error and attempts remaining. The proof is good for 5 minutes. Five wrong passwords revoke the
+      session and the app drops to the signed-out screen. A passkey-only account sees the "use the web" note.
 - [ ] An account that owns an organization gets the 409 list of organization names; the session stays signed in.
 - [ ] An impersonating admin session gets the "not available for this session" message.
 - [ ] **Pending account sign-in:** sign in again with the account inside the 30 days. Confirm how an iOS (JWT, PKCE) session

@@ -19,6 +19,7 @@ final class AppServices {
     let media: MediaClient
     let capture: CaptureStack
     let account: AccountClient
+    let stepUp: StepUpClient
   }
 
   @ObservationIgnored private let auth: AuthController
@@ -112,6 +113,13 @@ final class AppServices {
       if FixtureServices.isEnabled { return FixtureServices.account }
     #endif
     return current.account
+  }
+
+  var stepUp: any StepUpAPI {
+    #if DEBUG
+      if FixtureServices.isEnabled { return FixtureServices.stepUp }
+    #endif
+    return current.stepUp
   }
 
   /// Ends the session everywhere the app can reach: Live Activities, agent run polling, the push token and
@@ -213,7 +221,8 @@ final class AppServices {
       cache: FileSessionListCache(directory: FileSessionListCache.defaultDirectory(), environment: environment),
       media: MediaClient(baseURL: environment.baseURL, tokens: auth),
       capture: .live(baseURL: environment.baseURL, tokens: auth, ownIdentifier: BackgroundSessionIdentifier.app),
-      account: AccountClient(baseURL: environment.baseURL, tokens: auth)
+      account: AccountClient(baseURL: environment.baseURL, tokens: auth),
+      stepUp: StepUpClient(baseURL: environment.baseURL, tokens: auth)
     )
     built = fresh
     return fresh
