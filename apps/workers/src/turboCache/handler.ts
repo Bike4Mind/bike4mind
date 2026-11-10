@@ -1,9 +1,10 @@
 import { S3Client, GetObjectCommand, PutObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
+import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
 import { timingSafeEqual } from 'node:crypto';
 import { Resource } from 'sst';
 import { z } from 'zod';
+import { handleEvents } from './eventsRoute';
 
 // The body is uploaded later by Turbo; do not sign a checksum of an empty body.
 const s3 = new S3Client({ requestChecksumCalculation: 'WHEN_REQUIRED' });
@@ -111,10 +112,10 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   const path = event.rawPath;
   const team = event.queryStringParameters?.slug ?? event.queryStringParameters?.teamId;
 
-  // POST /v8/artifacts/events -- Turborepo analytics events (accepted but not stored)
+  // POST /v8/artifacts/events -- Turborepo analytics events (contract-routed via eventsRoute)
   if (requestedMethod === 'POST' && path === '/v8/artifacts/events') {
     if (method === 'OPTIONS') return preflightResponse;
-    return { statusCode: 200, body: '{}' };
+    return handleEvents(event) as Promise<APIGatewayProxyStructuredResultV2>;
   }
 
   const hashMatch = path.match(/^\/v8\/artifacts\/([a-f0-9]+)$/);

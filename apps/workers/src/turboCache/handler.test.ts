@@ -43,6 +43,14 @@ vi.mock('sst', () => ({
   },
 }));
 
+vi.mock('./eventsRoute', () => ({
+  handleEvents: vi.fn().mockResolvedValue({
+    statusCode: 200,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  }),
+}));
+
 function makeEvent(
   overrides: Partial<APIGatewayProxyEventV2> & { method?: string; path?: string }
 ): APIGatewayProxyEventV2 {
