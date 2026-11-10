@@ -55,7 +55,11 @@ describe('logAuthAudit', () => {
 
   it('keeps the IP and user agent out of the log message and off the console', async () => {
     getClientIp.mockReturnValue('203.0.113.7');
-    await logAuthAudit(req, { userId: 'user-1', event: 'session_reuse_revoked', metadata: { issuedIp: '198.51.100.9' } });
+    await logAuthAudit(req, {
+      userId: 'user-1',
+      event: 'session_reuse_revoked',
+      metadata: { issuedIp: '198.51.100.9' },
+    });
 
     const [message] = logger.warn.mock.calls[0];
     expect(message).toBe('[auth] session_reuse_revoked');

@@ -9,7 +9,12 @@ export type StderrLogLevel = 'debug' | 'info' | 'warn' | 'error';
  * JSON-RPC stream these servers speak. Everything here goes to stderr. Keys named like secrets
  * (token, data, message, ...) are redacted by `redactLogValue`, so put payloads under a neutral key.
  */
-export function stderrLog(level: StderrLogLevel, scope: string, message: string, fields?: Record<string, unknown>): void {
+export function stderrLog(
+  level: StderrLogLevel,
+  scope: string,
+  message: string,
+  fields?: Record<string, unknown>
+): void {
   const line = redactLogValue({ severity: level, scope, msg: message, ...fields });
   process.stderr.write(`${JSON.stringify(line)}\n`);
 }

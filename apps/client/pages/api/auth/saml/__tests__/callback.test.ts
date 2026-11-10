@@ -149,7 +149,8 @@ describe('/api/auth/saml/callback - OAuth client source tag', () => {
 
 describe('/api/auth/saml/callback - structured logging', () => {
   const relay = new URLSearchParams({ idp: 'idp-1' }).toString();
-  const loggedText = () => JSON.stringify(Object.values(logger).flatMap(fn => fn.mock.calls.map(([message]) => message)));
+  const loggedText = () =>
+    JSON.stringify(Object.values(logger).flatMap(fn => fn.mock.calls.map(([message]) => message)));
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -170,7 +171,10 @@ describe('/api/auth/saml/callback - structured logging', () => {
     expect(res._getRedirectUrl()).toBe('/login?error=saml_signature_error');
     const failures = logger.error.mock.calls.filter(([m]) => m === 'SAML signature validation failed');
     expect(failures).toHaveLength(1);
-    expect(logger.error).toHaveBeenCalledWith('SAML callback error', expect.objectContaining({ idpId: 'idp-1', error: err }));
+    expect(logger.error).toHaveBeenCalledWith(
+      'SAML callback error',
+      expect.objectContaining({ idpId: 'idp-1', error: err })
+    );
     expect(loggedText()).not.toContain('invalid signature');
     expect(loggedText()).not.toContain('203.0.113.7');
     expect(console.error).not.toHaveBeenCalled();
