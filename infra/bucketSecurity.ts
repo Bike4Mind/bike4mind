@@ -1,6 +1,6 @@
 /**
  * Shared S3 security settings. Every `new sst.aws.Bucket` must pass BLOCK_ALL_PUBLIC_ACCESS as
- * `transform.publicAccessBlock` and be followed by `encryptBucketAtRest(...)`;
+ * `transform.publicAccessBlock` and have a matching `encryptBucketAtRest(...)` call.
  * infra/__tests__/bucketSecurity.test.ts enforces both.
  *
  * Block Public Access goes through SST's transform because SST already owns that resource; encryption
