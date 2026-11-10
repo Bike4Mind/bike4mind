@@ -207,9 +207,9 @@ export function shouldTriggerFallback(error: Error): boolean {
     'is not available',
     // Google's 404 for a model closed upstream: "models/<id> is no longer available to new users".
     'no longer available to new users',
-    // Claude Fable 5 GA safety-classifier refusal: the Anthropic backend surfaces a
-    // stop_reason: 'refusal' as a thrown error when the model's refusalFallback resolves true so blocked
-    // requests continue on Opus 5 via the claude-fable-5 fallback chain below.
+    // Safety-classifier refusal: the Anthropic backends surface a stop_reason: 'refusal' as a thrown
+    // error when the model's refusalFallback resolves true, so blocked requests continue on the
+    // model's chain in FALLBACK_PREFERENCES below.
     SAFETY_REFUSAL_MESSAGE,
   ];
 
@@ -325,6 +325,9 @@ export const FALLBACK_PREFERENCES: Record<string, string[]> = {
     'claude-sonnet-4-6',
     'gpt-5',
   ],
+  // Fable 5.1 and 5.2 refusals (refusalFallback) and outages lead with Opus 5.5.
+  'claude-fable-5-2': ['claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8'],
+  'claude-fable-5-1': ['claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8'],
   'claude-haiku-5-5': ['claude-haiku-4-5-20251001', 'gpt-4o-mini'],
   'claude-opus-5-5': [
     'claude-opus-5',

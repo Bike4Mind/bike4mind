@@ -2212,12 +2212,12 @@ export class AnthropicBackend implements ICompletionBackend {
                 return;
               }
 
-              // Safety-classifier refusal (Claude Fable 5 GA). The API returns HTTP 200 with
-              // stop_reason: 'refusal' and empty/partial content when its cyber/bio classifiers
-              // decline a request - which can false-positive on benign adjacent work. Rather than
-              // surfacing a hard refusal, throw a recognized error so the completion loop's
-              // existing fallback machinery (shouldTriggerFallback -> getLlmWithFallback) continues
-              // on Opus 4.8. Scoped to models whose refusalFallback resolves true so a *genuine*
+              // Safety-classifier refusal. The API returns HTTP 200 with stop_reason: 'refusal' and
+              // empty/partial content when its cyber/bio classifiers decline a request - which can
+              // false-positive on benign adjacent work. Rather than surfacing a hard refusal, throw a
+              // recognized error so the completion loop's existing fallback machinery
+              // (shouldTriggerFallback -> getLlmWithFallback) continues on the model's fallback chain.
+              // Scoped to models whose refusalFallback resolves true so a *genuine*
               // refusal from any other model still surfaces unchanged; any partial output here is
               // discarded by the retry (the loop resets streaming state before re-running).
               if (stopReason === 'refusal' && this.apiSurfaceFor(model).refusalFallback) {
@@ -2866,9 +2866,9 @@ export class AnthropicBackend implements ICompletionBackend {
 
         // Safety-classifier refusal on the non-streaming path (mirrors the streaming branch
         // above). A stream=false request for a refusalFallback model - reachable when a
-        // caller sets stream:false even for Fable 5 - returns HTTP 200 with stop_reason:'refusal'
+        // caller sets stream:false even for a Fable model - returns HTTP 200 with stop_reason:'refusal'
         // and empty content; without this the caller would see a silently-empty completion and no
-        // fallback. Throw the same recognized error so the completion loop continues on Opus 4.8.
+        // fallback. Throw the same recognized error so the completion loop continues on the fallback chain.
         const nonStreamStopReason =
           'stop_reason' in response ? (response as { stop_reason?: string }).stop_reason : undefined;
         if (nonStreamStopReason === 'refusal' && this.apiSurfaceFor(model).refusalFallback) {

@@ -1,17 +1,17 @@
 /**
- * Pins the Claude Fable 5 safety-classifier refusal contract in the Anthropic backend.
+ * Pins the Claude Fable safety-classifier refusal contract in the Anthropic backend.
  *
- * When Fable 5's cyber/bio classifiers decline, the API returns a successful HTTP 200 stream
- * ending in message_delta with stop_reason: 'refusal' and empty content. complete() converts
- * that into a thrown error the fallback loop recognizes (shouldTriggerFallback ->
- * getLlmWithFallback), rather than surfacing a silently-empty completion. Scoped to
- * REFUSAL_FALLBACK_MODELS, so a refusal from any other model (a genuine decline) still
- * resolves normally and surfaces to the caller unchanged.
+ * When a Fable model's cyber/bio classifiers decline, the API returns a successful HTTP 200
+ * ending in stop_reason: 'refusal' and empty content. complete() converts that into a thrown
+ * error the fallback loop recognizes (shouldTriggerFallback -> getLlmWithFallback), rather than
+ * surfacing a silently-empty completion. Scoped to models whose refusalFallback resolves true, so
+ * a refusal from any other model (a genuine decline) still resolves and surfaces unchanged.
  */
 
 import { describe, it, expect } from 'vitest';
 import { AnthropicBackend } from '../anthropicBackend';
-import { ChatModels, ModelBackend, type ModelInfo } from '@bike4mind/common';
+import type { CompletionInfo, ICompletionOptionTools } from '../backend';
+import { ChatModels, ModelBackend, type IMessage, type ModelInfo } from '@bike4mind/common';
 
 function asyncIterable(events: unknown[]) {
   return {
@@ -22,16 +22,25 @@ function asyncIterable(events: unknown[]) {
   };
 }
 
+// An array is a streamed turn's events; an object is a non-streaming response body.
 function buildBackend() {
   const backend = new AnthropicBackend('test-key');
-  const responseQueue: unknown[][] = [];
-  type AnthropicApiMock = { messages: { create: (...args: unknown[]) => unknown } };
+  const responseQueue: unknown[] = [];
+  const requests: Record<string, unknown>[] = [];
+  type AnthropicApiMock = { messages: { create: (params: Record<string, unknown>) => unknown } };
   (backend as unknown as { _api: AnthropicApiMock })._api = {
-    messages: { create: async () => asyncIterable(responseQueue.shift() ?? []) },
+    messages: {
+      create: async params => {
+        requests.push(structuredClone(params));
+        const next = responseQueue.shift() ?? [];
+        return Array.isArray(next) ? asyncIterable(next) : next;
+      },
+    },
   };
   return {
     backend,
-    enqueue: (...turns: unknown[][]) => turns.forEach(t => responseQueue.push(t)),
+    requests,
+    enqueue: (...turns: unknown[]) => turns.forEach(t => responseQueue.push(t)),
   };
 }
 
@@ -45,35 +54,87 @@ function refusalTurn(): unknown[] {
   ];
 }
 
-describe('AnthropicBackend — safety-classifier refusal fallback', () => {
-  it('rejects with a recognized error when Fable 5 refuses (routes to the fallback loop)', async () => {
-    const { backend, enqueue } = buildBackend();
-    enqueue(refusalTurn());
+const refusalResponse = () => ({
+  content: [],
+  stop_reason: 'refusal',
+  usage: { input_tokens: 12, output_tokens: 0 },
+});
 
-    await expect(
-      backend.complete(
-        ChatModels.CLAUDE_FABLE_5,
-        [{ role: 'user', content: 'benign adjacent request' }],
-        { stream: true },
-        async () => {}
-      )
-    ).rejects.toThrow(/safety classifier refusal/i);
+function textTurn(text: string): unknown[] {
+  return [
+    { type: 'message_start', message: { usage: { input_tokens: 5, output_tokens: 0 } } },
+    { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } },
+    { type: 'content_block_stop', index: 0 },
+    { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { input_tokens: 5, output_tokens: 3 } },
+    { type: 'message_stop' },
+  ];
+}
+
+const run = (backend: AnthropicBackend, model: string, stream: boolean, infos: CompletionInfo[] = []) =>
+  backend.complete(model, [{ role: 'user', content: 'benign adjacent request' }], { stream }, async (_text, info) => {
+    infos.push(info);
   });
 
-  it('does NOT convert a refusal from a non-fallback model into an error (genuine decline surfaces)', async () => {
+describe('AnthropicBackend - safety-classifier refusal fallback', () => {
+  it.each([
+    [ChatModels.CLAUDE_FABLE_5, true],
+    ['claude-fable-5-1', true],
+    ['claude-fable-5-1', false],
+    ['claude-fable-5-2', true],
+    ['claude-fable-5-2', false],
+  ])('rejects with a recognized error when %s refuses (stream=%s)', async (model, stream) => {
     const { backend, enqueue } = buildBackend();
-    enqueue(refusalTurn());
+    enqueue(stream ? refusalTurn() : refusalResponse());
 
-    // Opus 4.8 is not in REFUSAL_FALLBACK_MODELS - a refusal here is a genuine decline and must
-    // resolve normally (empty completion), not be rerouted to another model.
-    await expect(
-      backend.complete(
-        ChatModels.CLAUDE_4_8_OPUS,
-        [{ role: 'user', content: 'a request the model declines' }],
-        { stream: true },
-        async () => {}
-      )
-    ).resolves.not.toThrow();
+    await expect(run(backend, model, stream)).rejects.toThrow(/safety classifier refusal/i);
+  });
+
+  it.each([
+    [ChatModels.CLAUDE_4_8_OPUS, true],
+    [ChatModels.CLAUDE_5_5_OPUS, true],
+    [ChatModels.CLAUDE_5_5_OPUS, false],
+  ])('surfaces a refusal from %s, whose refusalFallback is false, unchanged (stream=%s)', async (model, stream) => {
+    const { backend, enqueue } = buildBackend();
+    enqueue(stream ? refusalTurn() : refusalResponse());
+    const infos: CompletionInfo[] = [];
+
+    await expect(run(backend, model, stream, infos)).resolves.not.toThrow();
+    // Only the streaming path reports the stop reason to the caller.
+    if (stream) expect(infos.some(info => info.stopReason === 'refusal')).toBe(true);
+  });
+
+  it('replays a refused Fable 5.2 tool round to the Opus 5.5 fallback with its thinking block unchanged', async () => {
+    // What the completion loop hands the fallback hop after Fable 5.2 ran a tool round and then
+    // refused: the round's assistant content as the backend pushed it, signed thinking first.
+    // Opus 5.5 cannot read a Fable 5.2 block; the API drops it unbilled, and stripping it here
+    // instead would break the tool turn's block order.
+    const fableThinking = { type: 'thinking', thinking: '', signature: 'fable-5-2-signature' };
+    const history = [
+      { role: 'user', content: 'check the host' },
+      {
+        role: 'assistant',
+        content: [fableThinking, { type: 'tool_use', id: 'call_1', name: 'lookup', input: { host: 'a' } }],
+      },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_1', content: 'up' }] },
+    ] as IMessage[];
+    const lookup: ICompletionOptionTools = {
+      toolSchema: {
+        name: 'lookup',
+        description: 'Look a host up.',
+        parameters: { type: 'object', properties: { host: { type: 'string' } }, required: ['host'] },
+      },
+      toolFn: async () => 'up',
+    };
+    const { backend, enqueue, requests } = buildBackend();
+    enqueue(textTurn('the host is up'));
+
+    await backend.complete(ChatModels.CLAUDE_5_5_OPUS, history, { stream: true, tools: [lookup] }, async () => {});
+
+    const sent = requests[0] as { messages: Array<{ role: string; content: unknown }>; thinking?: { type: string } };
+    const assistant = sent.messages.find(message => message.role === 'assistant');
+    expect(assistant?.content).toEqual([fableThinking, expect.objectContaining({ type: 'tool_use', id: 'call_1' })]);
+    expect(sent.thinking?.type).not.toBe('disabled');
   });
 });
 
@@ -92,30 +153,39 @@ describe('AnthropicBackend refusal fallback read from the catalog', () => {
       thinkingStyle: 'adaptive',
       ...patch,
     }) as ModelInfo;
-  const complete = (backend: AnthropicBackend, model: string) =>
-    backend.complete(model, [{ role: 'user', content: 'a request' }], { stream: true }, async () => {});
 
-  it('surfaces a decline from a catalog-only model whose row states no refusalFallback', async () => {
+  it('throws for a catalog-only Fable 5.2 whose row states no refusalFallback, from the seed', async () => {
     const { backend, enqueue } = buildBackend();
     backend.setDispatchModel(record('claude-fable-5-2', {}));
     enqueue(refusalTurn());
 
-    await expect(complete(backend, 'claude-fable-5-2')).resolves.not.toThrow();
+    await expect(run(backend, 'claude-fable-5-2', true)).rejects.toThrow(/safety classifier refusal/i);
+  });
+
+  it('surfaces a decline from an unlisted catalog-only model whose row states no refusalFallback', async () => {
+    const { backend, enqueue } = buildBackend();
+    backend.setDispatchModel(record('claude-fable-5-3', {}));
+    enqueue(refusalTurn());
+
+    await expect(run(backend, 'claude-fable-5-3', true)).resolves.not.toThrow();
   });
 
   it('throws into the fallback chain when the row states refusalFallback', async () => {
     const { backend, enqueue } = buildBackend();
-    backend.setDispatchModel(record('claude-fable-5-2', { refusalFallback: true }));
+    backend.setDispatchModel(record('claude-fable-5-3', { refusalFallback: true }));
     enqueue(refusalTurn());
 
-    await expect(complete(backend, 'claude-fable-5-2')).rejects.toThrow(/safety classifier refusal/i);
+    await expect(run(backend, 'claude-fable-5-3', true)).rejects.toThrow(/safety classifier refusal/i);
   });
 
-  it('lets an operator row turn the seeded fallback off for a listed model', async () => {
-    const { backend, enqueue } = buildBackend();
-    backend.setDispatchModel(record(ChatModels.CLAUDE_FABLE_5, { refusalFallback: false }));
-    enqueue(refusalTurn());
+  it.each([ChatModels.CLAUDE_FABLE_5, 'claude-fable-5-2'])(
+    'lets an operator row turn the seeded fallback off for %s',
+    async model => {
+      const { backend, enqueue } = buildBackend();
+      backend.setDispatchModel(record(model, { refusalFallback: false }));
+      enqueue(refusalTurn());
 
-    await expect(complete(backend, ChatModels.CLAUDE_FABLE_5)).resolves.not.toThrow();
-  });
+      await expect(run(backend, model, true)).resolves.not.toThrow();
+    }
+  );
 });
