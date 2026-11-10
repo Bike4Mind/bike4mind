@@ -939,8 +939,9 @@ describe('Credits System group', () => {
       expect(settingsMap[key].schema.safeParse('2500').success).toBe(true);
     });
 
-    it('is indexed in the Credits group with an order no sibling reuses', () => {
-      expect(API_SERVICE_GROUPS.CREDITS.settings.map(entry => entry.key)).toContain(key);
+    // Edited in the Invite Center Schedule section, so it is outside the Credits group.
+    it('is not indexed in the Credits group, whose orders stay unique', () => {
+      expect(API_SERVICE_GROUPS.CREDITS.settings.map(entry => entry.key)).not.toContain(key);
       const orders = API_SERVICE_GROUPS.CREDITS.settings.map(entry => entry.order);
       expect(new Set(orders).size).toBe(orders.length);
     });

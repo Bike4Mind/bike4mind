@@ -136,7 +136,9 @@ describe('UserProfileView', () => {
     vi.clearAllMocks();
     mocks.update.mockResolvedValue(undefined);
     // A delegate rather than a full admin keeps full-admin-only extras, like entity search, out of these tests.
-    useUser.setState({ currentUser: { id: 'admin1', isAdmin: false, adminPermissions: ['users:delete'] } as never });
+    useUser.setState({
+      currentUser: { id: 'admin1', isAdmin: false, adminPermissions: ['users:delete', 'users:impersonate'] } as never,
+    });
   });
 
   describe('shortcuts', () => {

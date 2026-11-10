@@ -103,7 +103,7 @@ export type IndexStateFile = {
  * upstream of this partition entirely, so the hole was not even served-stale - it was silent.
  *
  * So the pending stamp (#1939) overrides the guard: a member with a rebuild outstanding is withheld
- * and REPORTED as re-indexing. The cost is naming a file whose stale passages could still have been
+ * and REPORTED as still indexing. The cost is naming a file whose stale passages could still have been
  * ranked for the minutes between reset and commit; the prose below is worded to be true of that
  * member too. Refuse-and-report over degrade-silently, the same rule as everywhere else here.
  */
@@ -223,9 +223,9 @@ export function describeRetrievalUnavailable(report: RetrievalUnavailableReport 
   const sentences: string[] = [];
   if (report.indexing.count > 0) {
     // States the remedy is TIME, not an action: the reader must not be sent to re-embed a file that
-    // is already re-embedding. Worded as "being replaced" rather than "no longer exist" because a
-    // member reset but not yet committed still has its old chunk rows (#1939) - the claim has to be
-    // true of the earliest point in the window as well as the rest of it.
+    // is already embedding. Worded as "still being indexed" because this bucket holds both a first
+    // embedding and a rebuild, and nothing reliable tells them apart (the rebuild stamp is cleared on
+    // commit); "re-indexed" would be false for the first.
     //
     // The trailing sentence is what keeps "returns on its own" from being a FALSE promise. A pending
     // rebuild whose enqueue never landed (a producer killed between the reset and its sends) is
@@ -236,11 +236,10 @@ export function describeRetrievalUnavailable(report: RetrievalUnavailableReport 
     // should do FIRST (wait vs act), which is what these buckets encode, and this keeps that split
     // honest without giving a pure reporting function a clock or `paused` a cause it does not have.
     sentences.push(
-      `Partial knowledge-base results: ${report.indexing.count} file(s)${namesOf(report.indexing)} are being ` +
-        're-indexed right now and were withheld - their passages are being replaced and the replacements are ' +
-        'not searchable yet. They return on their own once indexing completes; re-run the search then. If they ' +
-        'are still missing much later, the rebuild did not finish - use the lake\'s "Rebuild passages" action, ' +
-        'or reprocess the files individually.'
+      `Partial knowledge-base results: ${report.indexing.count} file(s)${namesOf(report.indexing)} are still ` +
+        'being indexed and were withheld - their passages are not searchable yet. They return on their own once ' +
+        'indexing completes; re-run the search then. If they are still missing long after that, indexing may ' +
+        'have stalled - then use the lake\'s "Rebuild passages" action, or reprocess the files individually.'
     );
   }
   if (report.paused.count > 0) {
@@ -266,7 +265,7 @@ export function describeRetrievalUnavailable(report: RetrievalUnavailableReport 
     // lake, so it is the honest primary instruction.
     sentences.push(
       `${report.paused.count} file(s)${namesOf(report.paused)} have no searchable passages at all: re-processing ` +
-        'them was paused partway, so they were withheld. Unlike re-indexing files these do NOT return on ' +
+        'them was paused partway, so they were withheld. Unlike files still being indexed these do NOT return on ' +
         'their own - use the lake\'s "Rebuild passages" action, or reprocess the files individually, to ' +
         'restore them. If background lake work is still paused, an administrator has to resume it first.'
     );

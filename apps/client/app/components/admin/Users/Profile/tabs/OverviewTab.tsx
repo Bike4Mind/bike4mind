@@ -28,6 +28,7 @@ import { timelineItems } from './timelineItems';
 import {
   ADMIN_PERMISSION_LABELS,
   USER_ROLE_LABELS,
+  adminActionBlockedReason,
   isManagedTag,
   userRole,
   type AdminUserProfile,
@@ -51,6 +52,7 @@ const AccountCard: React.FC<{ user: AdminUserProfile; onAction: (action: Profile
   user,
   onAction,
 }) => {
+  const { currentUser } = useUser();
   const storage = resolveUserStorageLimit(user);
   const network = user.signupMeta;
   const signupParts = [
@@ -92,7 +94,11 @@ const AccountCard: React.FC<{ user: AdminUserProfile; onAction: (action: Profile
       <Fact label="Personal API keys" data-testid="user-profile-fact-key-trust">
         <Stack direction="row" alignItems="center" gap={0.75} flexWrap="wrap">
           {user.apiKeyTrustApproved ? 'Trusted' : 'Usual checks'}
-          <RowAction onClick={() => onAction('apiKeyTrust')} data-testid="user-profile-key-trust-btn">
+          <RowAction
+            onClick={() => onAction('apiKeyTrust')}
+            disabledReason={adminActionBlockedReason(currentUser, user, 'keys:revoke')}
+            data-testid="user-profile-key-trust-btn"
+          >
             Change
           </RowAction>
         </Stack>

@@ -27,6 +27,7 @@ import { postFeedbackToSlack } from '@bike4mind/server-utils/integrations/slack/
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { hydrateFeedbackText, toRedactedFeedback } from '@server/utils/redactedFeedback';
+import { recordFeedbackRead } from '@server/utils/feedbackReadAudit';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { resolveFeedbackContext } from '@server/utils/feedbackContext';
 import { resolveFeedbackOrganization } from '@server/utils/feedbackOrganization';
@@ -281,6 +282,22 @@ const handler = baseApi()
       // full-collection scan on an unindexed field and must not ride along on unrelated reads.
       query.includeOrganizations === 'true' ? FeedbackModel.distinct('organization', readable) : undefined,
     ]);
+
+    // An admin's read grant spans every reporter, so the page they are about to read is audited.
+    await recordFeedbackRead(
+      req,
+      items.map(item => ({ id: item.id, userId: item.userId })),
+      {
+        page: query.page,
+        limit: query.limit,
+        search: query.search,
+        userId: query.userId,
+        sessionId: query.sessionId,
+        questId: query.questId,
+        organizationId: query.organizationId,
+        subject: query.subject,
+      }
+    );
 
     return res.json({
       items: await hydrateFeedbackText(items.map(toRedactedFeedback)),

@@ -16,7 +16,9 @@ import {
   type SettingKey,
 } from '@bike4mind/common';
 import { useSettingsFromServer } from '@client/app/hooks/data/settings';
-import AdminSettingInputField from './AdminSettingInputField';
+import { SettingKeyRow } from './InviteCenter/shared/SettingKeyRow';
+import { SectionHeading } from './InviteCenter/shared/SettingBlocks';
+import { useStoredByKey } from './InviteCenter/shared/useStoredByKey';
 import { CheckoutCatalogPanel } from './CheckoutCatalogPanel';
 import { AdminTab } from './adminSidebarConfig';
 import {
@@ -27,6 +29,7 @@ import {
   type AdminSearch,
 } from './adminTabParams';
 import { useAdminModal } from './useAdminModal';
+import { useOpenSettingHome } from './useOpenSettingHome';
 import { useCreditAnalysisStore } from './CreditAnalysis/store';
 import { SettingsDraftProvider } from './SettingsDraftProvider';
 import { AdminPageHeader, ErrorState, LoadingState, SettingsSection } from './shared';
@@ -35,8 +38,7 @@ import { ADMIN_DETAIL_MAX_WIDTH, ADMIN_REGION_GAP } from './shared/adminStyles';
 /**
  * The growth and monetization knobs, grouped on one page so they can be tuned without hunting
  * through Admin Settings. Storage is the ordinary admin-settings collection. This tab is the only
- * editor for these keys (GROWTH_PRICING_ONLY_KEYS in AdminSettingsTab, whose Credits System group
- * links here).
+ * editor for these keys (the growth-pricing home in settingHomes.ts; Admin Settings links here).
  * docs/pricing-settings-inventory.md lists every key in this area; update it when a key moves.
  */
 export const GROWTH_PRICING_SECTIONS: ReadonlyArray<{
@@ -52,24 +54,10 @@ export const GROWTH_PRICING_SECTIONS: ReadonlyArray<{
     keys: ['allowOpenRegistration', 'ReferralCreditsAmount'],
   },
   {
-    id: 'referral-rewards',
-    title: 'Referral rewards for inviters',
-    description:
-      'What an inviter earns when an invited friend becomes active or subscribes, plus the hold, starting-invite and alert settings. The starting-invite count, first-answer reward, payment rewards (held for the hold period, then released) and alert are all active today; a reward amount of 0 turns that reward off.',
-    keys: [
-      'ReferralFirstAnswerCredits',
-      'ReferralFirstPaymentCredits',
-      'ReferralSecondPaymentCredits',
-      'ReferralHoldDays',
-      'ReferralInvitesPerUser',
-      'ReferralAlertRewardsPerDay',
-    ],
-  },
-  {
     id: 'credits',
     title: 'Credits and pricing',
     description: 'How usage is metered and what credits cost.',
-    keys: ['enforceCredits', 'pricePerCredit', 'lowCreditsThreshold'],
+    keys: ['enforceCredits', 'billOperationalUsage', 'pricePerCredit', 'lowCreditsThreshold'],
   },
   {
     id: 'preference-arena',
@@ -131,15 +119,16 @@ export const GROWTH_PRICING_LINKS = [
     description: 'Per-minute request limits for each subscription tier. Edited in Admin Settings.',
     linkLabel: `Open ${API_SERVICE_GROUPS.RATE_LIMITING.name} settings`,
   },
+  {
+    id: 'invite-center-rewards',
+    title: 'Referral rewards for inviters',
+    description:
+      'What an inviter earns when an invited friend becomes active or subscribes, plus the hold, starting-invite and alert settings. Edited in the Invite Center.',
+    linkLabel: 'Open Invite Center rewards',
+  },
 ] as const;
 
 type GrowthPricingLinkId = (typeof GROWTH_PRICING_LINKS)[number]['id'];
-
-const formatValue = (value: unknown): string => {
-  if (value === undefined || value === null || value === '') return 'not set';
-  if (typeof value === 'number') return value.toLocaleString();
-  return String(value);
-};
 
 /**
  * Unit and derived value shown under a setting's current value, so a bare number reads as money.
@@ -166,22 +155,12 @@ export const describeDerivedValue = (key: SettingKey, value: unknown): string | 
   }
 };
 
-const SectionHeading = ({ title, description }: { title: string; description: string }) => (
-  <Stack sx={{ gap: 0.5, mb: 2 }}>
-    <Typography level="title-md" component="h2" sx={{ color: 'admin.ink' }}>
-      {title}
-    </Typography>
-    <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
-      {description}
-    </Typography>
-  </Stack>
-);
-
 const AdminGrowthPricingTab = () => {
   const { data, isLoading, isError, isFetching, refetch } = useSettingsFromServer();
   const navigate = useNavigate();
   const setAdminTab = useAdminModal(state => state.setActiveTab);
   const setCreditAnalysisTab = useCreditAnalysisStore(state => state.setActiveTab);
+  const openSettingHome = useOpenSettingHome();
 
   // Already inside /admin, so each link is an in-console navigation, as in ModelLifecycleTab.
   const openLink: Record<GrowthPricingLinkId, () => void> = {
@@ -201,13 +180,10 @@ const AdminGrowthPricingTab = () => {
         }),
         replace: true,
       }),
+    'invite-center-rewards': () => openSettingHome({ inviteSection: 'rewards' }),
   };
 
-  const storedByKey = useMemo(() => {
-    const map = new Map<string, unknown>();
-    for (const row of data ?? []) map.set(row.settingName, row.settingValue);
-    return map;
-  }, [data]);
+  const storedByKey = useStoredByKey(data);
 
   // A failed read renders ErrorState below. No data and no error means the query is paused (offline) or
   // disabled (no token yet); the catalog then shows the Team grant as unknown rather than defaults.
@@ -280,42 +256,21 @@ const AdminGrowthPricingTab = () => {
                 <SectionHeading title={section.title} description={section.description} />
                 <Stack sx={{ gap: 1 }}>
                   {section.keys.map((key, index) => {
-                    const setting = settingsMap[key];
                     const stored = storedByKey.get(key);
-                    const current = stored ?? setting.defaultValue;
-                    const derived = describeDerivedValue(key, current);
                     return (
-                      <div key={key}>
-                        <Typography
-                          level="body-xs"
-                          sx={{ color: 'text.tertiary', mb: 0.5 }}
-                          data-testid={`admin-growth-pricing-current-${key}`}
-                        >
-                          Current: {formatValue(current)}
-                          {stored === undefined ? ' (default)' : ` - default ${formatValue(setting.defaultValue)}`}
-                        </Typography>
-                        {derived && (
-                          <Typography
-                            level="body-xs"
-                            sx={{ color: 'text.tertiary', mb: 0.5 }}
-                            data-testid={`admin-growth-pricing-derived-${key}`}
-                          >
-                            {derived}
-                          </Typography>
-                        )}
-                        <AdminSettingInputField
-                          // Remount when the stored value changes so the editor never shows a stale draft.
-                          key={`${key}-${JSON.stringify(stored ?? null)}`}
-                          index={index}
-                          setting={setting}
-                          defaultValue={current}
-                          lockedNote={
-                            key === 'enforceCredits' && isEnforceCreditsLocked()
-                              ? 'Always on for hosted deployments'
-                              : undefined
-                          }
-                        />
-                      </div>
+                      <SettingKeyRow
+                        key={key}
+                        settingKey={key}
+                        stored={stored}
+                        index={index}
+                        testIdPrefix="admin-growth-pricing"
+                        derived={describeDerivedValue(key, stored ?? settingsMap[key].defaultValue)}
+                        lockedNote={
+                          key === 'enforceCredits' && isEnforceCreditsLocked()
+                            ? 'Always on for hosted deployments'
+                            : undefined
+                        }
+                      />
                     );
                   })}
                 </Stack>

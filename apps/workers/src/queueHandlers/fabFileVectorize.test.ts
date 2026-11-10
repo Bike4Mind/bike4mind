@@ -46,6 +46,7 @@ const h = vi.hoisted(() => ({
   markFailureCounted: vi.fn(async () => undefined),
   claimFileStatus: vi.fn(),
   deferFailureIfRetryable: vi.fn(),
+  returnRecordForRedelivery: vi.fn(async () => ({ batchItemFailures: [{ itemIdentifier: 'm1' }] })),
   fabFileUpdate: vi.fn(),
   advanceVectorizeProgress: vi.fn(async () => true),
   computeChunkVectorRollup: vi.fn(async () => ({ terminalChunkCount: 0, embeddedChunkCount: 0, embeddedCharCount: 0 })),
@@ -141,10 +142,12 @@ vi.mock('@bike4mind/services', () => ({
     // Mirror the real class's retryable flag so the handler's terminal-denial branch classifies correctly.
     EmbeddingSpendDeniedError: class EmbeddingSpendDeniedError extends Error {
       retryable: boolean;
-      constructor(reason: string, options?: { retryable?: boolean }) {
+      retryAfterMs?: number;
+      constructor(reason: string, options?: { retryable?: boolean; retryAfterMs?: number }) {
         super(reason);
         this.name = 'EmbeddingSpendDeniedError';
         this.retryable = options?.retryable ?? false;
+        this.retryAfterMs = options?.retryAfterMs;
       }
     },
   },
@@ -157,6 +160,9 @@ vi.mock('@bike4mind/server-utils/dataLakes/dataLakeBatchProgress', () => ({
   finalizeBatchIfComplete: vi.fn(),
   completedBatchStatus: vi.fn(),
   deferFailureIfRetryable: (...a: unknown[]) => h.deferFailureIfRetryable(...a),
+}));
+vi.mock('@bike4mind/server-utils/utils/sqsRedelivery', () => ({
+  returnRecordForRedelivery: (...a: unknown[]) => h.returnRecordForRedelivery(...a),
 }));
 vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: vi.fn(async () => undefined) }));
 // #2027: its own dedicated unit tests (notifySlackIndexingComplete.test.ts) cover the resolution
@@ -231,9 +237,13 @@ const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(),
 import { fabFileChunkRepository, User } from '@bike4mind/database';
 import { FabFileSourceType } from '@bike4mind/common';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
-import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@bike4mind/server-utils/utils/sqsDelivery';
+import {
+  FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT,
+  FAB_FILE_VECTORIZE_RATE_DENIAL_MIN_REDELIVERY_SEC,
+  FAB_FILE_VECTORIZE_VISIBILITY_TIMEOUT_SEC,
+} from '@bike4mind/server-utils/utils/sqsDelivery';
 import { embeddingBackendForModel } from '@bike4mind/utils/embeddingProviders';
-import { dispatch } from './fabFileVectorize';
+import { dispatch, rateDenialRedeliveryDelaySeconds } from './fabFileVectorize';
 
 const makeEvent = (body: Record<string, unknown>) => ({ Records: [{ body: JSON.stringify(body) }] }) as never;
 // Fully-vectorized file -> idempotency early-return right after the batchId metadata attach.
@@ -490,7 +500,7 @@ describe('fabFileVectorize handler - file deleted mid-run', () => {
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
 
     expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
-    expect(mockLogger.error).not.toHaveBeenCalled();
+    expect((mockLogger as { error: ReturnType<typeof vi.fn> }).error).not.toHaveBeenCalled();
   });
 });
 
@@ -610,14 +620,55 @@ describe('fabFileVectorize handler - spend gate', () => {
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow('openai 500');
   });
 
-  it('a retryable (rate-limit) denial keeps the normal SQS retry path', async () => {
+  it('a retryable (rate-limit) denial on a non-final attempt is handed back for a delayed redelivery, not thrown', async () => {
     h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
-    h.enforceEmbeddingSpendGate.mockRejectedValueOnce(await denial('rate limit stayed exhausted', true));
+    const rateDenial = await denial('rate limit stayed exhausted', true);
+    Object.assign(rateDenial, { retryAfterMs: 42_100 });
+    h.enforceEmbeddingSpendGate.mockRejectedValueOnce(rateDenial);
     h.deferFailureIfRetryable.mockResolvedValue(true);
 
-    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow();
+    const result = await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(result).toEqual({ batchItemFailures: [{ itemIdentifier: 'm1' }] });
     expect(h.deferFailureIfRetryable).toHaveBeenCalled();
+    expect(h.returnRecordForRedelivery).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ delaySeconds: FAB_FILE_VECTORIZE_RATE_DENIAL_MIN_REDELIVERY_SEC, jitterSeconds: 60 })
+    );
     expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
+    expect((mockLogger as { error: ReturnType<typeof vi.fn> }).error).not.toHaveBeenCalled();
+  });
+
+  it('floors the redelivery delay so the delivery budget spans what a thrown failure spanned', () => {
+    // A thrown failure waits out the visibility timeout (pinned to infra/queues.ts by
+    // sqsDelivery.test.ts); a near-reset window must not bring the message back sooner, or the
+    // deliveries burn out in a couple of minutes.
+    expect(FAB_FILE_VECTORIZE_RATE_DENIAL_MIN_REDELIVERY_SEC).toBeGreaterThanOrEqual(
+      FAB_FILE_VECTORIZE_VISIBILITY_TIMEOUT_SEC
+    );
+    expect(rateDenialRedeliveryDelaySeconds(1)).toBe(FAB_FILE_VECTORIZE_RATE_DENIAL_MIN_REDELIVERY_SEC);
+    expect(rateDenialRedeliveryDelaySeconds(undefined)).toBe(FAB_FILE_VECTORIZE_RATE_DENIAL_MIN_REDELIVERY_SEC);
+    // A reset beyond the floor is still honoured (rounded up to whole seconds).
+    expect(rateDenialRedeliveryDelaySeconds(400_100)).toBe(401);
+  });
+
+  it('a retryable denial on the final attempt marks the file failed and throws to the DLQ', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.enforceEmbeddingSpendGate.mockRejectedValueOnce(await denial('rate limit stayed exhausted', true));
+    h.deferFailureIfRetryable.mockResolvedValue(false);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow('rate limit stayed exhausted');
+    expect(h.returnRecordForRedelivery).not.toHaveBeenCalled();
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', 'rate limit stayed exhausted');
+  });
+
+  it('a non-spend failure on a non-final attempt still throws for SQS to retry', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.getVector.mockRejectedValueOnce(new Error('openai 500'));
+    h.deferFailureIfRetryable.mockResolvedValue(true);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow('openai 500');
+    expect(h.returnRecordForRedelivery).not.toHaveBeenCalled();
   });
 });
 

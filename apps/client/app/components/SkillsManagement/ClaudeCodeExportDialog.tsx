@@ -100,7 +100,8 @@ const ClaudeCodeExportDialog: FC<ClaudeCodeExportDialogProps> = ({
       ) : null}
       {skill.files?.length ? (
         <Alert color="warning" variant="soft" data-testid="skill-claude-code-files-not-included">
-          Only SKILL.md is written here; its {skill.files.length} supporting file(s) are not.
+          Only SKILL.md is written here; its {skill.files.length} supporting{' '}
+          {skill.files.length === 1 ? 'file is' : 'files are'} not.
           {marketplace ? ' Install it from the Team marketplace tab to get them.' : ''}
         </Alert>
       ) : null}

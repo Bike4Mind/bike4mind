@@ -11,6 +11,7 @@ const {
   mockWithTransaction,
   mockCommitted,
   transactionSession,
+  mockInvalidate,
 } = vi.hoisted(() => ({
   mockUserFindOneAndUpdate: vi.fn(),
   mockAppFileFindById: vi.fn(),
@@ -21,6 +22,7 @@ const {
   mockWithTransaction: vi.fn(),
   mockCommitted: vi.fn(),
   transactionSession: { id: 'photo-transaction' },
+  mockInvalidate: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -64,6 +66,10 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
 }));
 
 vi.mock('sst', () => ({ Resource: { appFilesBucket: { name: 'bucket' } } }));
+vi.mock('@server/services/cdn/invalidateRouterCdn', async importActual => ({
+  ...(await importActual<typeof import('@server/services/cdn/invalidateRouterCdn')>()),
+  invalidateRouterPaths: (...a: unknown[]) => mockInvalidate(...a),
+}));
 vi.mock('@bike4mind/server-utils/utils/objectId', () => ({ isValidObjectId: (id: unknown) => id !== 'not-an-id' }));
 vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   BadRequestError: class extends Error {},
@@ -103,6 +109,7 @@ beforeEach(() => {
   mockStorageDelete.mockReset().mockResolvedValue(undefined);
   mockStorageGetMetadata.mockReset().mockResolvedValue({ size: 123, contentType: 'image/png' });
   mockCommitted.mockReset();
+  mockInvalidate.mockReset().mockResolvedValue(undefined);
   mockWithTransaction.mockReset().mockImplementation(async (callback: (session: unknown) => Promise<unknown>) => {
     const result = await callback(transactionSession);
     mockCommitted();
@@ -136,6 +143,8 @@ describe('POST /api/users/:id/confirm-photo', () => {
       mockUserFindOneAndUpdate.mock.invocationCallOrder[0]
     );
     expect(mockCommitted.mock.invocationCallOrder[0]).toBeLessThan(mockStorageDelete.mock.invocationCallOrder[0]);
+    expect(mockInvalidate).toHaveBeenCalledWith(['/profile-photos/u1/old.png'], expect.objectContaining({}));
+    expect(mockStorageDelete.mock.invocationCallOrder[0]).toBeLessThan(mockInvalidate.mock.invocationCallOrder[0]);
   });
 
   it('leaves photoUrl untouched and rejects when the object is not in storage yet', async () => {
@@ -177,6 +186,7 @@ describe('POST /api/users/:id/confirm-photo', () => {
 
     expect(mockCommitted).not.toHaveBeenCalled();
     expect(mockStorageDelete).not.toHaveBeenCalled();
+    expect(mockInvalidate).not.toHaveBeenCalled();
   });
 
   it('rechecks the candidate when a write conflict retries the transaction', async () => {

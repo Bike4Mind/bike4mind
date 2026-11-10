@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { CHAT_MESSAGE_WITHHELD_FIELDS, OWNER_ONLY_PROMPT_META_PROJECTION_PATHS } from '@bike4mind/common';
+import {
+  CHAT_MESSAGE_WITHHELD_FIELDS,
+  OWNER_ONLY_PROMPT_META_PROJECTION_PATHS,
+  SERVER_OWNED_SESSION_FIELDS,
+  SERVER_OWNED_SESSION_ORIGIN_FIELDS,
+} from '@bike4mind/common';
 
 /**
  * Regression test for the WS subscribe handler's rotation-grace wiring: this path
@@ -267,6 +272,77 @@ describe('dataSubscribeRequest WS handler - quest field scoping', () => {
     expect(noopLogger.warn).toHaveBeenCalledWith(expect.stringContaining('Dropping inclusion fields'), {
       fields: { reply: 1 },
     });
+  });
+});
+
+describe('dataSubscribeRequest WS handler - session field scoping', () => {
+  const sessionEvent = (fields: Record<string, number> = {}) => ({
+    requestContext: { connectionId: 'conn-1' },
+    body: JSON.stringify({
+      action: 'subscribe_query',
+      accessToken: 'token-123',
+      subscriptionId: 'sub-1',
+      collectionName: 'sessions',
+      query: {},
+      fields,
+      fetchInitialData: false,
+    }),
+  });
+  const expectedFields = {
+    ...Object.fromEntries(SERVER_OWNED_SESSION_FIELDS.map(field => [field, false])),
+    ...Object.fromEntries(SERVER_OWNED_SESSION_ORIGIN_FIELDS.map(field => [`origin.${field}`, false])),
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    connectionRow = { userId: 'caller-1' };
+    mockFindByKeyName.mockResolvedValue(null);
+    mockIsWithinGraceWindow.mockReturnValue(false);
+    mockVerifyToken.mockReturnValue({ id: 'caller-1' });
+    (User.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
+      _id: 'caller-1',
+      id: 'caller-1',
+      tokenVersion: undefined,
+    });
+    mockUpsertSubscriber.mockResolvedValue({ id: 'sub-doc-1' });
+  });
+
+  it.each(['owner', 'sharee'])('uses and persists the same exclusions for a session %s', async viewer => {
+    const scope = { userId: viewer === 'owner' ? 'caller-1' : 'someone-else' };
+    vi.mocked(accessibleBy).mockReturnValue({ ofType: vi.fn().mockReturnValue(scope) } as never);
+    const find = vi.fn().mockReturnValue({
+      setOptions: vi.fn().mockReturnValue({ getQuery: () => ({ $and: [{}, scope] }) }),
+    });
+    mockFindModelByCollectionName.mockReturnValue({ find });
+
+    await func(
+      sessionEvent() as Parameters<typeof func>[0],
+      {} as Parameters<typeof func>[1],
+      noopLogger as unknown as Parameters<typeof func>[2]
+    );
+
+    expect(find).toHaveBeenCalledWith({ $and: [{}, scope] }, expectedFields);
+    expect(mockUpsertSubscriber).toHaveBeenCalledWith(
+      expect.objectContaining({ collectionName: 'sessions', fields: expectedFields }),
+      expect.anything()
+    );
+  });
+
+  it('keeps exclusions when a session subscriber requests inclusion fields', async () => {
+    const find = vi.fn().mockReturnValue({ setOptions: vi.fn().mockReturnValue({ getQuery: () => ({}) }) });
+    mockFindModelByCollectionName.mockReturnValue({ find });
+
+    await func(
+      sessionEvent({ name: 1 }) as Parameters<typeof func>[0],
+      {} as Parameters<typeof func>[1],
+      noopLogger as unknown as Parameters<typeof func>[2]
+    );
+
+    expect(find.mock.calls[0][1]).toEqual(expectedFields);
+    expect(mockUpsertSubscriber).toHaveBeenCalledWith(
+      expect.objectContaining({ fields: expectedFields }),
+      expect.anything()
+    );
   });
 });
 

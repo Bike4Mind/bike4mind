@@ -18,6 +18,7 @@ export type MetricSignal = 'abuse' | 'dip' | 'growth';
 export interface MetricFamily {
   label: string;
   unit: MetricUnit;
+  /** `{baseline}` is filled per window by metricMeaning ("the day before", "in the same hours yesterday"). */
   meaning: Record<MetricDirection, string>;
   signal: Record<MetricDirection, MetricSignal>;
 }
@@ -45,9 +46,9 @@ export const METRIC_FAMILIES: Record<string, MetricFamily> = {
     unit: 'count',
     meaning: {
       increase:
-        'More accounts verified their email than in the same hours yesterday. On a weekday with no campaign running, a sharp rise is the signup-farm pattern.',
+        'More new accounts signed up and verified their email than {baseline}. On a weekday with no campaign running, a sharp rise is the signup-farm pattern.',
       decrease:
-        'Fewer accounts verified their email than yesterday. Usually traffic or verification-email delivery; check bounces and the email provider if it keeps falling.',
+        'Fewer new accounts signed up and verified their email than {baseline}. Usually traffic or verification-email delivery; check bounces and the email provider if it keeps falling.',
     },
     signal: { increase: 'abuse', decrease: 'dip' },
   },
@@ -56,9 +57,9 @@ export const METRIC_FAMILIES: Record<string, MetricFamily> = {
     unit: 'count',
     meaning: {
       increase:
-        'More distinct external users were active than yesterday. Check it is real traffic and not one script spread across many accounts.',
+        'More distinct external users were active than {baseline}. Check it is real traffic and not one script spread across many accounts.',
       decrease:
-        'Fewer distinct external users were active than yesterday. A dip across the whole day points at an outage or a sign-in problem; a one-hour dip is usually noise.',
+        'Fewer distinct external users were active than {baseline}. A dip across the whole day points at an outage or a sign-in problem; a one-hour dip is usually noise.',
     },
     signal: { increase: 'abuse', decrease: 'dip' },
   },
@@ -67,8 +68,8 @@ export const METRIC_FAMILIES: Record<string, MetricFamily> = {
     unit: 'count',
     meaning: {
       increase:
-        'More active paid subscriptions than yesterday. Confirm the new subscriptions granted plan access and look normal in Stripe.',
-      decrease: 'Fewer active paid subscriptions than yesterday. Check Stripe for cancellations and failed renewals.',
+        'More active paid subscriptions than {baseline}. Confirm the new subscriptions granted plan access and look normal in Stripe.',
+      decrease: 'Fewer active paid subscriptions than {baseline}. Check Stripe for cancellations and failed renewals.',
     },
     signal: { increase: 'growth', decrease: 'dip' },
   },
@@ -88,9 +89,9 @@ export const METRIC_FAMILIES: Record<string, MetricFamily> = {
     unit: 'credits',
     meaning: {
       increase:
-        'More credits were charged than yesterday. Check whether young accounts are burning free credits and which models carry the increase.',
+        'More credits were charged than {baseline}. Check whether young accounts are burning free credits and which models carry the increase.',
       decrease:
-        'Fewer credits were charged than yesterday. Fine if usage fell too; otherwise check that metering still charges every completion.',
+        'Fewer credits were charged than {baseline}. Fine if usage fell too; otherwise check that metering still charges every completion.',
     },
     signal: { increase: 'abuse', decrease: 'dip' },
   },
@@ -142,8 +143,8 @@ const FALLBACK_FAMILY: MetricFamily = {
   label: '',
   unit: 'count',
   meaning: {
-    increase: 'This metric rose past its threshold against the same period yesterday.',
-    decrease: 'This metric fell past its threshold against the same period yesterday.',
+    increase: 'This metric rose past its threshold: it is higher than {baseline}.',
+    decrease: 'This metric fell past its threshold: it is lower than {baseline}.',
   },
   signal: { increase: 'growth', decrease: 'dip' },
 };
@@ -166,7 +167,17 @@ export function describeMetric(name: string): MetricDescription {
   return { name, family, cut, label: `${known.label} (${SOURCE_CUTS[cut] ?? cut})`, unit: known.unit };
 }
 
-export const metricMeaning = (name: string, direction: MetricDirection): string => familyFor(name).meaning[direction];
+/** Which comparison the cron ran; the meaning text names the matching baseline. */
+export type MetricWindowMode = 'intraday' | 'daily';
+
+const BASELINE: Record<MetricWindowMode, string> = {
+  intraday: 'in the same hours yesterday',
+  daily: 'the day before',
+};
+
+/** Meaning text with its `{baseline}` placeholder filled for the window the cron compared. */
+export const metricMeaning = (name: string, direction: MetricDirection, mode: MetricWindowMode): string =>
+  familyFor(name).meaning[direction].replace('{baseline}', BASELINE[mode]);
 
 export const metricSignal = (name: string, direction: MetricDirection): MetricSignal =>
   familyFor(name).signal[direction];

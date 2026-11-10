@@ -72,7 +72,7 @@ export default {
   'Users/ComplianceModal.tsx': [[1, '8e6086deb2b73718']],
   'Users/CreateUserModal.tsx': [[2, '616ffa1b9b560954']],
   'Users/Details/AdminApiKeysModal.tsx': [[8, 'dcd0d06f9acad42f']],
-  'Users/Details/AdminGenerateApiKeyModal.tsx': [[10, '3c6d2bee4baf8acf']],
+  'Users/Details/AdminGenerateApiKeyModal.tsx': [[17, '3c6d2bee4baf8acf']],
   'Users/Details/CountersDetails.tsx': [[2, 'f212e3583e33dd41']],
   'Users/MigrationDetails.tsx': [[1, 'b8abb7928748f7fe']],
   'Users/Views/RecentActivityView.tsx': [[1, '4761ad3c8a441a88']],

@@ -1,9 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import Stripe from 'stripe';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { creditTransactionRepository, organizationRepository, userRepository } from '@bike4mind/database';
 import { creditService, organizationService } from '@bike4mind/services';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import {
   handleOrganizationSubscriptionInvoice,
   handleUserSubscriptionInvoice,
@@ -505,6 +506,95 @@ describe('handleOrganizationSubscriptionInvoice - new team on event redelivery',
     expect(organizationRepository.findByStripeCustomerId).toHaveBeenCalledWith('cus_test');
     expect(organizationService.create).not.toHaveBeenCalled();
     expect(subscriptionRepository.create).not.toHaveBeenCalled();
+    expect(creditService.addCredits).not.toHaveBeenCalled();
+  });
+});
+
+describe('handleOrganizationSubscriptionInvoice - purchaser no longer exists', () => {
+  const metadata = {
+    userId: 'u_gone',
+    stage: 'test',
+    ownerType: SubscriptionOwnerType.Organization,
+    organizationId: 'org_team',
+  } as unknown as Parameters<typeof handleOrganizationSubscriptionInvoice>[2];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(userRepository.findById).mockResolvedValue(null);
+    vi.mocked(subscriptionRepository.findByStripeSubscriptionId).mockResolvedValue(null);
+    vi.mocked(subscriptionRepository.findNonTerminalSubscriptionsByOwner).mockResolvedValue([]);
+    vi.mocked(organizationRepository.findById).mockResolvedValue({
+      id: 'org_team',
+      name: 'Team',
+      users: [],
+      seats: 4,
+    } as unknown as Awaited<ReturnType<typeof organizationRepository.findById>>);
+  });
+
+  afterEach(() => {
+    vi.mocked(userRepository.findById).mockResolvedValue({ id: 'u1', email: 'owner@acme.com' } as never);
+  });
+
+  it('still grants credits for an existing org when the subscription metadata names a deleted user', async () => {
+    await handleOrganizationSubscriptionInvoice(buildInvoice(), buildSubscription(), metadata, logger);
+
+    expect(creditService.addCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerId: 'org_team', credits: 4 * 50000 }),
+      expect.anything()
+    );
+  });
+
+  it('notifies the current owner when it differs from the checkout purchaser', async () => {
+    vi.mocked(organizationRepository.findById).mockResolvedValue({
+      id: 'org_team',
+      name: 'Team',
+      userId: 'u_current_owner',
+      users: [],
+      seats: 4,
+    } as unknown as Awaited<ReturnType<typeof organizationRepository.findById>>);
+
+    await handleOrganizationSubscriptionInvoice(buildInvoice(), buildSubscription(), metadata, logger);
+
+    for (const queryKey of [['subscriptions'], ['organizations']]) {
+      expect(sendToClient).toHaveBeenCalledWith('u_current_owner', 'ws://test', {
+        action: 'invalidate_query',
+        queryKey,
+      });
+    }
+  });
+
+  it('grants renewal credits when the purchaser no longer exists', async () => {
+    vi.mocked(organizationRepository.findByStripeCustomerId).mockResolvedValue({
+      id: 'org_team',
+      name: 'Team',
+      users: [],
+      seats: 4,
+    } as unknown as Awaited<ReturnType<typeof organizationRepository.findByStripeCustomerId>>);
+
+    await handleOrganizationSubscriptionInvoice(
+      { ...buildInvoice(), billing_reason: 'subscription_cycle' } as Stripe.Invoice,
+      buildSubscription(),
+      metadata,
+      logger
+    );
+
+    expect(creditService.addCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerId: 'org_team', credits: 4 * 50000 }),
+      expect.anything()
+    );
+  });
+
+  it('does not create a new team for a purchaser that no longer exists', async () => {
+    vi.mocked(organizationRepository.findByStripeCustomerId).mockResolvedValue(null);
+
+    await handleOrganizationSubscriptionInvoice(
+      buildInvoice(),
+      buildSubscription(),
+      { ...metadata, organizationId: undefined, newOrganizationName: 'Ghost Team' } as typeof metadata,
+      logger
+    );
+
+    expect(organizationService.create).not.toHaveBeenCalled();
     expect(creditService.addCredits).not.toHaveBeenCalled();
   });
 });

@@ -156,9 +156,36 @@ describe('share-token route against real storage', () => {
     expect((await raw()).shareTokens).toHaveLength(3);
   });
 
+  it('mints a fresh link when every existing entry has expired, and rotates only live entries', async () => {
+    const expired = new Date(Date.now() - 60_000);
+    await seed({
+      shareTokens: [
+        { _id: new mongoose.Types.ObjectId(), token: 'EXPIRED', createdAt: new Date(), expiresAt: expired },
+      ],
+    });
+    expect((await call({ method: 'GET' })).body.shareLinks).toEqual([]);
+
+    // Expired entries must not satisfy the "a live entry exists" side of the mint precondition.
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const minted = await call({ body: { expiresAt } });
+    expect(minted.status).toBe(200);
+    expect(minted.body.shareToken).not.toBe('EXPIRED');
+    const stored = (await raw()).shareTokens;
+    expect(stored).toHaveLength(2);
+    expect(stored[1].expiresAt.toISOString()).toBe(expiresAt);
+
+    const rotated = await call({ body: { regenerate: true } });
+    expect(rotated.status).toBe(200);
+    const after = (await raw()).shareTokens;
+    // The expired entry was not live, so the rotate leaves it unstamped; the minted one is revoked.
+    expect(after[0].revokedAt ?? null).toBeNull();
+    expect(after[1].revokedAt).toBeInstanceOf(Date);
+    expect(after[2].expiresAt).toBeNull();
+  });
+
   it('treats an entry with NO revokedAt field as live', async () => {
     // The backfill writes an explicit null, but a hand-edited or older row may simply omit it,
-    // and IS_LIVE has to read the same way liveShareTokens does.
+    // and isLive has to read the same way liveShareTokens does.
     await seed({
       shareTokens: [{ _id: new mongoose.Types.ObjectId(), token: 'NOFIELD', createdAt: new Date(), viewCount: 0 }],
     });

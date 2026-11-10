@@ -361,6 +361,12 @@ export interface IOwnerSpendModel extends IUsageSpendBucket {
   model: string;
 }
 
+/** Admin-only spend row: executed* is the provider/model that actually ran (coalesced to requested). Never return to users. */
+export interface IAdminSpendModel extends IOwnerSpendModel {
+  executedProvider?: string;
+  executedModel?: string;
+}
+
 /** Owner spend for one product surface (chat, agent_execution, operations, embedding, ...). */
 export interface IOwnerSpendFeature extends IUsageSpendBucket {
   feature: UsageEventFeature;
@@ -430,7 +436,7 @@ export interface IPlatformUsageSummary {
   overTime: IOwnerSpendDay[];
   byFeature: IOwnerSpendFeature[];
   byConsumer: IPlatformConsumerUsage[];
-  byModel: IOwnerSpendModel[];
+  byModel: IAdminSpendModel[];
   totals: IUsageSpendBucket;
 }
 
@@ -484,7 +490,7 @@ export interface IPlatformUsageDashboardResponse {
   overTime: IOwnerSpendDay[];
   byFeature: IOwnerSpendFeature[];
   byConsumer: NamedPlatformConsumerUsage[];
-  byModel: IOwnerSpendModel[];
+  byModel: IAdminSpendModel[];
   totals: IUsageSpendBucket;
 }
 
@@ -518,6 +524,9 @@ export interface ISessionQuestUsage extends IUsageSpendWithTokens {
 export interface ISessionModelUsage extends IUsageSpendWithTokens {
   provider: string;
   model: string;
+  /** Admin-only: the provider/model that actually ran. Present only when requested via includeExecuted. */
+  executedProvider?: string;
+  executedModel?: string;
 }
 
 /**
@@ -599,7 +608,7 @@ export interface ISpendSummary {
   activeAccounts: number;
   latency: ISpendLatency;
   status: ISpendStatusCounts;
-  byModel: IOwnerSpendModel[];
+  byModel: IAdminSpendModel[];
   byAccount: ISpendAccountBucket[];
   dailyCost: ISpendCostDay[];
 }
@@ -846,10 +855,12 @@ export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocume
    * can carry events billed to more than one owner (billing owner is resolved
    * per-request, not pinned to the session), so a non-admin caller must scope to
    * their org or they would see another owner's spend in the same session.
+   * `includeExecuted` splits byModel by the model that ran; admin callers only.
    */
   sessionUsageSummary(
     sessionId: string,
-    owner?: { ownerId: string; ownerType: CreditHolderType }
+    owner?: { ownerId: string; ownerType: CreditHolderType },
+    options?: { includeExecuted?: boolean }
   ): Promise<ISessionUsageSummary>;
 
   /**

@@ -10,6 +10,7 @@ import {
 import { assertApiKeyScope } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 import { buildSessionUpdateAdapters } from '@server/sessions/sessionUpdateAdapters';
 import { queueSessionTags } from '@server/sessions/queueSessionTags';
+import { purgeDeletedNotebookMedia } from '@server/sessions/purgeDeletedNotebookMedia';
 import type { Request } from 'express';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -139,12 +140,17 @@ const handler = baseApi()
         const userId = req.user?.id;
         const { sessionIds } = req.body;
 
-        if (!sessionIds || !Array.isArray(sessionIds) || sessionIds.length === 0) {
+        if (!Array.isArray(sessionIds) || sessionIds.length === 0) {
           return res.status(400).json({ deletedCount: 0, newLastNotebookId: null });
+        }
+        // The cap keeps the serial deletes plus the media purge inside the request's time budget.
+        if (sessionIds.length > MAX_BULK_ITEMS) {
+          throw new BadRequestError(`At most ${MAX_BULK_ITEMS} sessions can be deleted per request`);
         }
 
         let newLastNotebook: { id: string } | null = null;
         let deletedCount = 0;
+        const deletedIds: string[] = [];
 
         // Delete sessions one by one to get proper newLastNotebook result
         for (const sessionId of sessionIds) {
@@ -178,6 +184,7 @@ const handler = baseApi()
               newLastNotebook = result;
             }
             deletedCount++;
+            deletedIds.push(sessionId);
 
             await logEvent(
               { userId, type: SessionEvents.DELETE_SESSION, metadata: { sessionId } },
@@ -190,6 +197,8 @@ const handler = baseApi()
             console.error(`Failed to delete session ${sessionId}:`, error);
           }
         }
+
+        await purgeDeletedNotebookMedia(deletedIds, { logger: req.logger });
 
         return res.json({
           deletedCount,

@@ -195,6 +195,56 @@ describe('UserProfileHeader', () => {
     });
   });
 
+  describe('login as user', () => {
+    const openMenu = async () => {
+      fireEvent.click(screen.getByTestId('user-profile-more-btn'));
+      return screen.findByTestId('user-profile-menu-loginAs-item');
+    };
+
+    it('disables it for a delegate without users:impersonate, naming the permission', async () => {
+      mocks.currentUser = { id: 'd1', isAdmin: false, adminPermissions: ['support:read'] };
+      const { onAction } = renderHeader();
+
+      const item = await openMenu();
+      expect(item).toHaveAttribute('aria-disabled', 'true');
+      expect(screen.getByTestId('user-profile-menu-loginAs-hint')).toHaveTextContent(
+        'Missing permission: users:impersonate'
+      );
+      fireEvent.click(item);
+      expect(onAction).not.toHaveBeenCalled();
+    });
+
+    it('lets a delegate with users:impersonate start it on a non-admin account', async () => {
+      mocks.currentUser = { id: 'd1', isAdmin: false, adminPermissions: ['users:impersonate'] };
+      const { onAction } = renderHeader();
+
+      fireEvent.click(await openMenu());
+      expect(onAction).toHaveBeenCalledWith('loginAs');
+    });
+
+    it('keeps that delegate off an account with admin access', async () => {
+      mocks.currentUser = { id: 'd1', isAdmin: false, adminPermissions: ['users:impersonate'] };
+      const { onAction } = renderHeader(
+        buildProfile({ adminPermissions: ['support:read'] } as Partial<AdminUserProfile>)
+      );
+
+      const item = await openMenu();
+      expect(item).toHaveAttribute('aria-disabled', 'true');
+      expect(screen.getByTestId('user-profile-menu-loginAs-hint')).toHaveTextContent(
+        'Only full administrators can act on accounts with admin access'
+      );
+      fireEvent.click(item);
+      expect(onAction).not.toHaveBeenCalled();
+    });
+
+    it('lets a full admin start it on an account with admin access', async () => {
+      const { onAction } = renderHeader(buildProfile({ isAdmin: true }));
+
+      fireEvent.click(await openMenu());
+      expect(onAction).toHaveBeenCalledWith('loginAs');
+    });
+  });
+
   it('the More menu opens the compliance record through onCompliance, not onAction', async () => {
     const { onAction, onCompliance } = renderHeader();
 

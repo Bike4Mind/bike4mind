@@ -24,6 +24,9 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => ({
+    use() {
+      return this;
+    },
     put: (handler: (...a: unknown[]) => unknown) => handler,
     get: (handler: (...a: unknown[]) => unknown) => handler,
   }),

@@ -42,8 +42,15 @@ describe('business metric labels', () => {
     for (const [family, entry] of Object.entries(METRIC_FAMILIES)) {
       expect(entry.meaning.increase.length).toBeGreaterThan(20);
       expect(entry.meaning.decrease.length).toBeGreaterThan(20);
-      expect(metricMeaning(`${family}:cut`, 'increase')).toBe(entry.meaning.increase);
+      expect(metricMeaning(`${family}:cut`, 'increase', 'daily')).not.toContain('{baseline}');
     }
+    expect(metricMeaning('credits', 'decrease', 'daily')).toMatch(/^Fewer credits were charged than the day before\./);
+    expect(metricMeaning('credits', 'decrease', 'intraday')).toMatch(
+      /^Fewer credits were charged than in the same hours yesterday\./
+    );
+    expect(metricMeaning('unknownFamily', 'increase', 'daily')).toBe(
+      'This metric rose past its threshold: it is higher than the day before.'
+    );
     expect(metricSignal('verifiedSignups', 'increase')).toBe('abuse');
     expect(metricSignal('credits', 'increase')).toBe('abuse');
     expect(metricSignal('requests:user', 'increase')).toBe('abuse');

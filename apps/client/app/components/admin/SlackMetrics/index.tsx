@@ -72,12 +72,12 @@ const SlackMetricsPage: React.FC = () => {
   else if (isError && metrics.length === 0) body = errorState;
   else
     body = (
-      <>
-        <UpdatingBar active={isFetching} testId="slack-metrics-updating" />
+      <Stack gap={ADMIN_REGION_GAP} sx={{ position: 'relative' }}>
+        <UpdatingBar active={isFetching} testId="slack-metrics-updating" placement="overlay" />
         {errorState}
         <EventMetricsStats metrics={metrics} filteredMetrics={filteredAndSortedMetrics} />
         <SlackMetricsTab chartData={chartData} filtered={hasFilters} emptyAction={emptyAction} />
-      </>
+      </Stack>
     );
 
   return (
