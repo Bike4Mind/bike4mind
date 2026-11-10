@@ -875,6 +875,7 @@ jobs:
       # can stay scoped to its inputs and skip on a new commit that leaves them unchanged. Pinned
       # to misc so it runs once; scripts/__tests__/turbo-test-cache.test.mjs pins the command and
       # the naming.
+      # TEMPORARY: warm-run measurement commit, touches no turbo input.
       - name: Run repo-scan tests
         if: ${{ !cancelled() && matrix.shard.name == 'misc' && steps.codegen.outcome == 'success' }}
         run: pnpm --recursive --if-present run test:repo
