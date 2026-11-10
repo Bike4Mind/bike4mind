@@ -326,6 +326,7 @@ export const UsageDashboard: React.FC<{
               {isOrg
                 ? 'Where this org\'s spend originated (from the ledger; credits only, no COGS). "Unclassified" is usage with no source recorded on the ledger row.'
                 : 'Where your spend originated (from the ledger; credits only, no COGS). "Unclassified" is usage with no source recorded on the ledger row.'}
+              {hasResidual && ' Metered AI usage only; other charges are not attributed to a source.'}
             </Typography>
             <Sheet sx={{ maxHeight: 320, overflow: 'auto' }}>
               <Table stickyHeader hoverRow size="sm" data-testid="usage-source-table">
@@ -348,7 +349,7 @@ export const UsageDashboard: React.FC<{
                     <tr>
                       <td colSpan={3}>
                         <Typography level="body-sm" color="neutral">
-                          No usage in this window.
+                          {hasResidual ? 'No metered AI usage in this window.' : 'No usage in this window.'}
                         </Typography>
                       </td>
                     </tr>

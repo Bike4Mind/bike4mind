@@ -162,6 +162,10 @@ describe('UsageDashboard ledger reconciliation', () => {
     expect(within(modelTable).queryByText('No usage in this window.')).not.toBeInTheDocument();
     expect(within(modelTable).getByText("No per-call detail for this window's charges.")).toBeInTheDocument();
     expect(screen.getByText(/appear as Other charges/)).toBeInTheDocument();
+    const sourceTable = screen.getByTestId('usage-source-table');
+    expect(within(sourceTable).queryByText('No usage in this window.')).not.toBeInTheDocument();
+    expect(within(sourceTable).getByText('No metered AI usage in this window.')).toBeInTheDocument();
+    expect(screen.getByText(/Metered AI usage only/)).toBeInTheDocument();
   });
 
   it('adds no residual row when events and ledger agree', () => {
@@ -218,6 +222,12 @@ describe('UsageDashboard ledger reconciliation', () => {
 
     expect(screen.getAllByText('No usage in this window.').length).toBeGreaterThan(0);
     expect(screen.queryByTestId('usage-no-events-note')).not.toBeInTheDocument();
+    for (const id of ['usage-model-table', 'usage-source-table']) {
+      const table = screen.getByTestId(id);
+      expect(within(table).getByText('No usage in this window.')).toBeInTheDocument();
+      expect(within(table).queryByText(/No per-call detail|No metered AI/)).not.toBeInTheDocument();
+    }
+    expect(screen.queryByText(/Metered AI usage only/)).not.toBeInTheDocument();
     expect(screen.getByTestId('usage-total-credits')).toHaveTextContent('0 credits');
   });
 
@@ -231,6 +241,8 @@ describe('UsageDashboard ledger reconciliation', () => {
 
     expect(screen.getByTestId('usage-total-credits')).toHaveTextContent('0 credits');
     expect(screen.getAllByText('No usage in this window.').length).toBeGreaterThan(0);
+    expect(within(screen.getByTestId('usage-source-table')).getByText('No usage in this window.')).toBeInTheDocument();
+    expect(screen.queryByText(/Metered AI usage only/)).not.toBeInTheDocument();
     expect(screen.queryByTestId('usage-residual-note')).not.toBeInTheDocument();
     expect(screen.queryByText(/Other charges \(no per-call/)).not.toBeInTheDocument();
     expect(screen.queryByText(/appear as Other charges/)).not.toBeInTheDocument();

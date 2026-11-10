@@ -113,8 +113,9 @@ const CreditAnalyticsTabContent: React.FC = () => {
     );
 
     // Separate transactions by type.
-    // When adding a new transaction type: add filtering here, include in allDeductTransactions,
-    // add to daily data processing, and add a tooltip label in getTooltipLabel().
+    // When adding a new transaction type: add filtering here, add to daily data processing, and add a
+    // tooltip label in getTooltipLabel(). A new deduct type goes in CREDIT_DEDUCT_TRANSACTION_TYPES
+    // (b4m-core/common), which feeds allDeductTransactions and GET /api/usage.
     const purchaseTransactions = sortedTransactions.filter(t => t.type === 'purchase');
     const subscriptionTransactions = sortedTransactions.filter(t => t.type === 'subscription');
     const referralRewardTransactions = sortedTransactions.filter(
