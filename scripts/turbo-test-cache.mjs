@@ -38,9 +38,10 @@ export const CONTEXT_ENV = ['TZ', 'TMPDIR', 'NODE_OPTIONS', 'VITEST_MAX_WORKERS'
 // root config. No input glob list stays honest for those, so their context carries the whole
 // tracked tree: they re-run on every new commit and hit only on a re-run of the same commit (a
 // flaky queue entry). A package lands here when the guard in
-// scripts/__tests__/turbo-test-cache.test.mjs finds such a read in its tests.
+// scripts/__tests__/turbo-test-cache.test.mjs finds such a read in its tests. The cheaper way out
+// is to name those tests `*.repo.test.*` and run them from a `test:repo` script, which CI runs
+// uncached ("Run repo-scan tests" in ci.yml); apps/client does that.
 export const WHOLE_REPO_TEST_PACKAGES = [
-  '@bike4mind/client',
   '@bike4mind/database',
   '@bike4mind/infra',
   '@bike4mind/resource',

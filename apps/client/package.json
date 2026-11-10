@@ -29,6 +29,7 @@
     "typecheck:fast": "tsgo --noEmit || NODE_OPTIONS='--max-old-space-size=8192' tsc --noEmit",
     "test": "vitest run",
     "test:integration": "CLIENT_TEST_LANE=integration vitest run",
+    "test:repo": "CLIENT_TEST_LANE=repo vitest run",
     "test:e2e:setup": "node scripts/setup-e2e.mjs",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",

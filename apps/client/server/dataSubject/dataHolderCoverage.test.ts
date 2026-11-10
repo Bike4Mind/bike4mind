@@ -1,5 +1,3 @@
-import { execFileSync } from 'node:child_process';
-import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { mongoose } from '@bike4mind/database';
 // Registered outside the `@bike4mind/database` barrel, so they register only when imported.
@@ -288,22 +286,6 @@ describe('data holder registry', () => {
     const isArray = (candidate: string) => /Array/.test(schema.path(candidate)?.instance ?? '');
     const parentPath = path.includes('.') ? path.slice(0, path.lastIndexOf('.')) : '';
     expect(isArray(path) || (parentPath !== '' && isArray(parentPath))).toBe(true);
-  });
-
-  it.each(
-    classifiedModels.flatMap(name => {
-      const holder = DATA_HOLDER_REGISTRY[name];
-      return holder.kind === 'holder' ? (holder.beforeErasure ?? []).map(fn => [name, fn] as const) : [];
-    })
-  )('%s: beforeErasure function %s is exported from the repo', (_modelName, functionName) => {
-    const repoRoot = path.resolve(__dirname, '../../../..');
-    // A text match, not a type check: it accepts `export [async] function fn` and `export const fn`.
-    const pattern = `export ((async )?function|const) ${functionName}([^A-Za-z0-9_]|$)`;
-    const matches = execFileSync('git', ['grep', '-l', '-E', pattern, '--', '*.ts'], {
-      cwd: repoRoot,
-      encoding: 'utf8',
-    });
-    expect(matches.trim()).not.toBe('');
   });
 });
 

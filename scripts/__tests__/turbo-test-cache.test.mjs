@@ -55,8 +55,13 @@ function testFiles(dir) {
     .filter(file => /\.[cm]?[jt]sx?$/.test(file));
 }
 
-// An exec of `git grep` / `git ls-files`, not a command string a shell-tool test feeds its parser.
-const GIT_SCAN = /['"`]git['"`]\s*,\s*\[\s*['"`](grep|ls-files)['"`]|exec(File)?Sync\(\s*['"`]git (grep|ls-files)\b/;
+// An exec of `git grep` / `git ls-files` / `git rev-parse --show-toplevel`, not a command string a
+// shell-tool test feeds its parser.
+const GIT_SCAN =
+  /['"`]git['"`]\s*,\s*\[\s*['"`](grep|ls-files|rev-parse['"`]\s*,\s*['"`]--show-toplevel)['"`]|exec(File)?Sync\(\s*['"`]git (grep|ls-files|rev-parse --show-toplevel)\b/;
+// A package's whole-repo reads live in `*.repo.test.*` files, which its `test:repo` script runs and
+// CI never caches (the "Run repo-scan tests" step), so they stay out of the `test` hash.
+const REPO_LANE_FILE = /\.repo\.test\.[cm]?[jt]sx?$/;
 const CLIMBING_LITERAL = /['"`](\.\.(?:\/[^'"`\s$]*)?)['"`]/g;
 
 /** Repo-relative paths a package's test files name with a `..` literal that leaves the package. */
@@ -137,10 +142,32 @@ describe('test reads outside the package', () => {
     expect(packages.flatMap(pkg => pkg.files).length).toBeGreaterThan(100);
   });
 
-  it.each(packages.map(pkg => [pkg.manifest.name, pkg]))('%s: git scans are keyed on the whole repo', (name, pkg) => {
-    const scanning = pkg.files.filter(file => GIT_SCAN.test(fs.readFileSync(path.join(repoRoot, file), 'utf8')));
-    if (scanning.length === 0) return;
-    expect(WHOLE_REPO_TEST_PACKAGES, `${name} tests scan the repo with git: ${scanning.join(', ')}`).toContain(name);
+  it.each(packages.map(pkg => [pkg.manifest.name, pkg]))(
+    '%s: git scans run uncached or are keyed on the whole repo',
+    (name, pkg) => {
+      if (WHOLE_REPO_TEST_PACKAGES.includes(name)) return;
+      const scanning = pkg.files.filter(
+        file => !REPO_LANE_FILE.test(file) && GIT_SCAN.test(fs.readFileSync(path.join(repoRoot, file), 'utf8'))
+      );
+      expect(
+        scanning,
+        `${name}: these tests scan the repo with git; rename them *.repo.test.* (and give the package a test:repo script), or add the package to WHOLE_REPO_TEST_PACKAGES`
+      ).toEqual([]);
+    }
+  );
+
+  it.each(packages.map(pkg => [pkg.manifest.name, pkg]))('%s: repo-lane files have a lane to run in', (name, pkg) => {
+    const repoLane = pkg.files.filter(file => REPO_LANE_FILE.test(file));
+    if (repoLane.length === 0) return;
+    expect(
+      pkg.manifest.scripts?.['test:repo'],
+      `${name} has ${repoLane.join(', ')} but no test:repo script`
+    ).toBeDefined();
+  });
+
+  it('runs every test:repo script in CI', () => {
+    const workflow = fs.readFileSync(path.join(repoRoot, '.github/workflows/ci.yml'), 'utf8');
+    expect(workflow).toContain('pnpm --recursive --if-present run test:repo');
   });
 
   it.each(packages.map(pkg => [pkg.manifest.name, pkg]))(
@@ -157,7 +184,8 @@ describe('test reads outside the package', () => {
       // (`resolve(__dirname, '../../..')`); the joined path is not visible here, so accept it only
       // where the package's own entry already names files from the root.
       const rootCovered = ownInputs.some(glob => glob.startsWith('$TURBO_ROOT$/'));
-      const uncovered = escapedPaths(pkg.dir, pkg.files).filter(
+      const cachedFiles = pkg.files.filter(file => !REPO_LANE_FILE.test(file));
+      const uncovered = escapedPaths(pkg.dir, cachedFiles).filter(
         target => !(target === '.' ? rootCovered : inputCovers(pkg.dir, inputs, target))
       );
       expect(
@@ -208,10 +236,10 @@ describe('buildContexts', () => {
         dependencies: [],
       },
       {
-        taskId: '@bike4mind/client#test',
+        taskId: '@bike4mind/scripts#test',
         task: 'test',
-        package: '@bike4mind/client',
-        directory: 'apps/client',
+        package: '@bike4mind/scripts',
+        directory: 'packages/scripts',
         hash: 'h-e',
         command: 'vitest run',
         dependencies: [],
@@ -226,7 +254,7 @@ describe('buildContexts', () => {
 
   it('writes the sorted dependency hashes, runtime and test env for each package with the script', () => {
     const contexts = buildContexts(dryRun, 'test', options);
-    expect([...contexts.keys()]).toEqual(['packages/c', 'apps/client']);
+    expect([...contexts.keys()]).toEqual(['packages/c', 'packages/scripts']);
     const body = contexts.get('packages/c');
     expect(body).toContain('runtime node=v24 platform=linux-x64\n');
     expect(body).toContain('env MONGOMS_VERSION=7\nenv TZ=UTC\n');
@@ -236,7 +264,7 @@ describe('buildContexts', () => {
   });
 
   it('keys whole-repo packages on the tree', () => {
-    expect(buildContexts(dryRun, 'test', options).get('apps/client')).toContain('repo-tree tree1\n');
+    expect(buildContexts(dryRun, 'test', options).get('packages/scripts')).toContain('repo-tree tree1\n');
     expect(() => buildContexts(dryRun, 'test', { ...options, repoTree: '' })).toThrow(/repo tree/);
   });
 

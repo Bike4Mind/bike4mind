@@ -241,25 +241,44 @@
         "!../../packages/server-utils/.turbo/**"
       ]
     },
+    // Keyed on its own files plus the outside files its unit and integration suites read. Tests
+    // that scan the whole repo are `*.repo.test.ts`, run uncached by `test:repo` (see
+    // apps/client/vitest.config.mts), which is what keeps this package off WHOLE_REPO_TEST_PACKAGES.
     "@bike4mind/client#test": {
-      "dependsOn": ["^build"],
+      "dependsOn": ["codegen", "^build"],
       "inputs": [
         "$TURBO_DEFAULT$",
         ".turbo/test-context",
         "../../packages/server-utils/**",
         "!../../packages/server-utils/node_modules/**",
-        "!../../packages/server-utils/.turbo/**"
+        "!../../packages/server-utils/.turbo/**",
+        "$TURBO_ROOT$/sst.config.ts",
+        "$TURBO_ROOT$/infra/**",
+        "$TURBO_ROOT$/packages/premium/*/package.json",
+        "$TURBO_ROOT$/packages/premium/*/src/**",
+        "$TURBO_ROOT$/packages/scripts/migrate/migrations/**",
+        "$TURBO_ROOT$/scripts/check-no-overlay-literals.sh",
+        "$TURBO_ROOT$/scripts/qa-backfill-slack.mjs",
+        "$TURBO_ROOT$/scripts/__tests__/fixtures/**"
       ]
     },
     // Mirrors the entry above for the real-Mongo lane; turboTestCache.test.ts keeps them equal.
     "@bike4mind/client#test:integration": {
-      "dependsOn": ["^build"],
+      "dependsOn": ["codegen", "^build"],
       "inputs": [
         "$TURBO_DEFAULT$",
         ".turbo/test-context",
         "../../packages/server-utils/**",
         "!../../packages/server-utils/node_modules/**",
-        "!../../packages/server-utils/.turbo/**"
+        "!../../packages/server-utils/.turbo/**",
+        "$TURBO_ROOT$/sst.config.ts",
+        "$TURBO_ROOT$/infra/**",
+        "$TURBO_ROOT$/packages/premium/*/package.json",
+        "$TURBO_ROOT$/packages/premium/*/src/**",
+        "$TURBO_ROOT$/packages/scripts/migrate/migrations/**",
+        "$TURBO_ROOT$/scripts/check-no-overlay-literals.sh",
+        "$TURBO_ROOT$/scripts/qa-backfill-slack.mjs",
+        "$TURBO_ROOT$/scripts/__tests__/fixtures/**"
       ]
     },
     // server-utils reads src/premium-generated/ (written by @bike4mind/client's codegen and
