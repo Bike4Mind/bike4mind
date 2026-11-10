@@ -1,8 +1,11 @@
 import { S3Client, GetObjectCommand, PutObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
+import { timingSafeEqual } from 'node:crypto';
 import { Resource } from 'sst';
 
 const s3 = new S3Client({});
+const PRESIGNED_URL_EXPIRY = 900; // 15 minutes
 
 function bucketName(): string {
   return (Resource as unknown as Record<string, { name: string }>).turboCacheBucket.name;
@@ -23,31 +26,19 @@ function verifyToken(event: APIGatewayProxyEventV2): boolean {
   const token = auth.replace(/^Bearer\s+/i, '');
   const expected = (Resource as unknown as Record<string, { value: string }>).TURBO_CACHE_TOKEN.value;
   if (!expected || expected === 'not-configured') return false;
-  // Constant-time comparison to prevent timing attacks
   if (token.length !== expected.length) return false;
-  let mismatch = 0;
-  for (let i = 0; i < token.length; i++) {
-    mismatch |= token.charCodeAt(i) ^ expected.charCodeAt(i);
-  }
-  return mismatch === 0;
+  return timingSafeEqual(Buffer.from(token), Buffer.from(expected));
 }
 
 async function handleGet(hash: string, team?: string): Promise<APIGatewayProxyStructuredResultV2> {
   try {
-    const result = await s3.send(new GetObjectCommand({ Bucket: bucketName(), Key: artifactKey(hash, team) }));
-    const body = await result.Body?.transformToByteArray();
-    if (!body) return { statusCode: 404, body: JSON.stringify({ error: 'Not found' }) };
-    return {
-      statusCode: 200,
-      headers: {
-        'content-type': 'application/octet-stream',
-        ...(result.ContentLength != null && { 'content-length': String(result.ContentLength) }),
-      },
-      body: Buffer.from(body).toString('base64'),
-      isBase64Encoded: true,
-    };
+    await s3.send(new HeadObjectCommand({ Bucket: bucketName(), Key: artifactKey(hash, team) }));
+    const url = await getSignedUrl(s3, new GetObjectCommand({ Bucket: bucketName(), Key: artifactKey(hash, team) }), {
+      expiresIn: PRESIGNED_URL_EXPIRY,
+    });
+    return { statusCode: 302, headers: { location: url } };
   } catch (err: unknown) {
-    if ((err as { name?: string }).name === 'NoSuchKey') {
+    if ((err as { name?: string }).name === 'NotFound') {
       return { statusCode: 404, body: JSON.stringify({ error: 'Not found' }) };
     }
     throw err;
@@ -72,22 +63,17 @@ async function handleHead(hash: string, team?: string): Promise<APIGatewayProxyS
   }
 }
 
-async function handlePut(
-  hash: string,
-  body: string | undefined,
-  isBase64: boolean,
-  team?: string
-): Promise<APIGatewayProxyStructuredResultV2> {
-  const content = body ? (isBase64 ? Buffer.from(body, 'base64') : Buffer.from(body)) : Buffer.alloc(0);
-  await s3.send(
+async function handlePut(hash: string, team?: string): Promise<APIGatewayProxyStructuredResultV2> {
+  const url = await getSignedUrl(
+    s3,
     new PutObjectCommand({
       Bucket: bucketName(),
       Key: artifactKey(hash, team),
-      Body: content,
       ContentType: 'application/octet-stream',
-    })
+    }),
+    { expiresIn: PRESIGNED_URL_EXPIRY }
   );
-  return { statusCode: 202, body: JSON.stringify({ urls: [`${hash}`] }) };
+  return { statusCode: 307, headers: { location: url } };
 }
 
 // Protocol: https://turbo.build/repo/docs/core-concepts/remote-caching
@@ -115,7 +101,7 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
     case 'HEAD':
       return handleHead(hash, team);
     case 'PUT':
-      return handlePut(hash, event.body, event.isBase64Encoded, team);
+      return handlePut(hash, team);
     default:
       return { statusCode: 405, body: JSON.stringify({ error: 'Method not allowed' }) };
   }

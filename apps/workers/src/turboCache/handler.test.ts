@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 const mockSend = vi.fn();
+const mockGetSignedUrl = vi.fn().mockResolvedValue('https://s3.example.com/presigned');
 vi.mock('@aws-sdk/client-s3', () => {
   class MockS3Client {
     send = mockSend;
@@ -28,6 +29,10 @@ vi.mock('@aws-sdk/client-s3', () => {
     },
   };
 });
+
+vi.mock('@aws-sdk/s3-request-presigner', () => ({
+  getSignedUrl: (...args: unknown[]) => mockGetSignedUrl(...args),
+}));
 
 vi.mock('sst', () => ({
   Resource: {
@@ -100,24 +105,20 @@ describe('turboCache handler', () => {
     expect(result.statusCode).toBe(200);
   });
 
-  it('returns artifact on GET hit', async () => {
-    const content = Buffer.from('cached-data');
-    mockSend.mockResolvedValueOnce({
-      Body: { transformToByteArray: () => Promise.resolve(content) },
-      ContentLength: content.length,
-    });
+  it('returns 302 redirect on GET hit', async () => {
+    mockSend.mockResolvedValueOnce({ ContentLength: 1024 });
 
     const event = makeEvent({ method: 'GET', path: '/v8/artifacts/abc123def456' });
     const result = await handler(event);
 
-    expect(result.statusCode).toBe(200);
-    expect(result.isBase64Encoded).toBe(true);
-    expect(Buffer.from(result.body!, 'base64').toString()).toBe('cached-data');
+    expect(result.statusCode).toBe(302);
+    expect(result.headers?.location).toBe('https://s3.example.com/presigned');
+    expect(mockGetSignedUrl).toHaveBeenCalledOnce();
   });
 
   it('returns 404 on GET miss', async () => {
     const err = new Error('not found');
-    (err as Error & { name: string }).name = 'NoSuchKey';
+    (err as Error & { name: string }).name = 'NotFound';
     mockSend.mockRejectedValueOnce(err);
 
     const event = makeEvent({ method: 'GET', path: '/v8/artifacts/abc123def456' });
@@ -126,9 +127,7 @@ describe('turboCache handler', () => {
     expect(result.statusCode).toBe(404);
   });
 
-  it('uploads artifact on PUT', async () => {
-    mockSend.mockResolvedValueOnce({});
-
+  it('returns 307 redirect on PUT', async () => {
     const event = makeEvent({
       method: 'PUT',
       path: '/v8/artifacts/abc123def456',
@@ -137,8 +136,9 @@ describe('turboCache handler', () => {
     });
     const result = await handler(event);
 
-    expect(result.statusCode).toBe(202);
-    expect(mockSend).toHaveBeenCalledOnce();
+    expect(result.statusCode).toBe(307);
+    expect(result.headers?.location).toBe('https://s3.example.com/presigned');
+    expect(mockGetSignedUrl).toHaveBeenCalledOnce();
   });
 
   it('returns 200 on HEAD hit', async () => {
@@ -151,9 +151,36 @@ describe('turboCache handler', () => {
     expect(result.headers?.['content-length']).toBe('42');
   });
 
-  it('namespaces artifacts by team slug', async () => {
-    mockSend.mockResolvedValueOnce({});
+  it('returns 404 on HEAD miss', async () => {
+    const err = new Error('not found');
+    (err as Error & { name: string }).name = 'NotFound';
+    mockSend.mockRejectedValueOnce(err);
 
+    const event = makeEvent({ method: 'HEAD', path: '/v8/artifacts/abc123def456' });
+    const result = await handler(event);
+
+    expect(result.statusCode).toBe(404);
+  });
+
+  it('rethrows unexpected S3 errors on HEAD', async () => {
+    const err = new Error('InternalError');
+    (err as Error & { name: string }).name = 'InternalError';
+    mockSend.mockRejectedValueOnce(err);
+
+    const event = makeEvent({ method: 'HEAD', path: '/v8/artifacts/abc123def456' });
+    await expect(handler(event)).rejects.toThrow('InternalError');
+  });
+
+  it('rethrows unexpected S3 errors on GET', async () => {
+    const err = new Error('InternalError');
+    (err as Error & { name: string }).name = 'InternalError';
+    mockSend.mockRejectedValueOnce(err);
+
+    const event = makeEvent({ method: 'GET', path: '/v8/artifacts/abc123def456' });
+    await expect(handler(event)).rejects.toThrow('InternalError');
+  });
+
+  it('namespaces artifacts by team slug', async () => {
     const event = makeEvent({
       method: 'PUT',
       path: '/v8/artifacts/abc123def456',
@@ -162,7 +189,7 @@ describe('turboCache handler', () => {
     });
     await handler(event);
 
-    const putCmd = mockSend.mock.calls[0][0];
+    const putCmd = mockGetSignedUrl.mock.calls[0][1];
     expect(putCmd.input.Key).toBe('bike4mind/abc123def456');
   });
 
