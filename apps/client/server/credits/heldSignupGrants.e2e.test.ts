@@ -245,6 +245,89 @@ describe('held signup grant release', () => {
     expect(await creditsOf(held.id)).toBe(0);
   });
 
+  it('revoke returns the account to the held queue so a later release pays it again', async () => {
+    const users = await holdUsers(2);
+    const held = users[1];
+    const batches = signupGrantReleaseRepository;
+    const revokeAdapters = { batches, users: userRepository, creditTransactions: txRepo, logger: { error: vi.fn() } };
+    const heldBefore = (await User.findById(held.id))?.toJSON();
+    const out = await userService.bulkReleaseHeldGrants(
+      { actorId: 'admin-1', userIds: [held.id] },
+      { ...heldAdapters, batches }
+    );
+    expect(await creditsOf(held.id)).toBe(12);
+    expect(await signupGrantReleaseRepository.countHeld()).toBe(0);
+
+    const revoked = await userService.revokeHeldGrantRelease(
+      { batchId: out.batchId, actorId: 'admin-1' },
+      revokeAdapters
+    );
+
+    expect(revoked?.results).toEqual([{ userId: held.id, outcome: 'reversed', credits: 12 }]);
+    const heldAfter = (await User.findById(held.id))?.toJSON();
+    expect(heldAfter?.currentCredits).toBe(0);
+    expect(heldAfter?.tags).toContain(PENDING_FREE_CREDITS_TAG);
+    expect(heldAfter?.signupGrantHeldReason).toBe('budget_exhausted');
+    expect(heldAfter?.signupGrantHeldAt).toEqual(heldBefore?.signupGrantHeldAt);
+    expect(heldAfter?.signupGrant).toEqual(heldBefore?.signupGrant);
+    expect(await signupGrantReleaseRepository.countHeld()).toBe(1);
+    expect(await ledgerRows(held.id)).toBe(0);
+    expect(
+      await CreditTransaction.countDocuments({ transactionId: `reversed-signup-grant:${held.id}:${out.batchId}` })
+    ).toBe(1);
+
+    const again = await userService.bulkReleaseHeldGrants(
+      { actorId: 'admin-1', userIds: [held.id] },
+      { ...heldAdapters, batches }
+    );
+    expect(again.results).toEqual([{ userId: held.id, outcome: 'released', credits: 12 }]);
+    expect(await creditsOf(held.id)).toBe(12);
+    expect(await ledgerRows(held.id)).toBe(1);
+  });
+
+  it('lets the daily cron pay an undone account again, once', async () => {
+    const users = await holdUsers(2);
+    const held = users[1];
+    const batches = signupGrantReleaseRepository;
+    const out = await userService.bulkReleaseHeldGrants(
+      { actorId: 'admin-1', userIds: [held.id] },
+      { ...heldAdapters, batches }
+    );
+    await userService.revokeHeldGrantRelease(
+      { batchId: out.batchId, actorId: 'admin-1' },
+      { batches, users: userRepository, creditTransactions: txRepo, logger: { error: vi.fn() } }
+    );
+    expect(await creditsOf(held.id)).toBe(0);
+
+    clock = new Date('2030-01-02T00:00:01Z');
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '24';
+    expect(await cron()).toMatchObject({ released: 1, creditsPaid: 12 });
+    expect(await creditsOf(held.id)).toBe(12);
+    expect(await ledgerRows(held.id)).toBe(1);
+    expect(await cron()).toMatchObject({ released: 0 });
+    expect(await creditsOf(held.id)).toBe(12);
+  });
+
+  it('leaves an account alone when it was granted more credits after the release', async () => {
+    const users = await holdUsers(2);
+    const held = users[1];
+    const batches = signupGrantReleaseRepository;
+    const out = await userService.bulkReleaseHeldGrants(
+      { actorId: 'admin-1', userIds: [held.id] },
+      { ...heldAdapters, batches }
+    );
+    await User.updateOne({ _id: held.id }, { $inc: { 'signupGrant.creditsReleased': 5, currentCredits: 5 } });
+
+    const revoked = await userService.revokeHeldGrantRelease(
+      { batchId: out.batchId, actorId: 'admin-1' },
+      { batches, users: userRepository, creditTransactions: txRepo, logger: { error: vi.fn() } }
+    );
+
+    expect(revoked?.results).toEqual([{ userId: held.id, outcome: 'state_changed', credits: 12 }]);
+    expect(await creditsOf(held.id)).toBe(17);
+    expect(await ledgerRows(held.id)).toBe(1);
+  });
+
   it('refuses to reclaim credits the account already spent', async () => {
     const users = await holdUsers(2);
     const out = await userService.bulkReleaseHeldGrants(
