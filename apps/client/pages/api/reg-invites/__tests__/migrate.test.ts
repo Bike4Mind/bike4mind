@@ -9,14 +9,23 @@ const h = vi.hoisted(() => ({
   audit: vi.fn(),
 }));
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({
-    post: (fn: (req: unknown, res: unknown) => Promise<unknown>) => {
-      h.handler = fn;
-      return {};
+vi.mock('@server/middlewares/baseApi', () => {
+  let guard: (req: unknown, res: unknown, next: () => void) => void;
+  const chain = {
+    use: (fn: typeof guard) => {
+      guard = fn;
+      return chain;
     },
-  }),
-}));
+    post: (fn: (req: unknown, res: unknown) => Promise<unknown>) => {
+      h.handler = async (req: unknown, res: unknown) => {
+        guard({ method: 'POST', ...(req as object) }, res, () => {});
+        return fn(req, res);
+      };
+      return chain;
+    },
+  };
+  return { baseApi: () => chain };
+});
 vi.mock('@bike4mind/database', () => ({ withTransaction: async (fn: () => Promise<unknown>) => fn() }));
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: { findById: h.findOrg } }));
 vi.mock('@bike4mind/database/auth', () => ({ userRepository: { findByEmail: h.findByEmail } }));
@@ -31,11 +40,9 @@ vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: 
 process.env.APP_URL = 'https://app.test';
 await import('../migrate');
 
-const run = (usersData: unknown[], sendEmail = false, orgId?: string) =>
-  h.handler!(
-    { body: { usersData, sendEmail, orgId }, user: { id: 'admin-1', isAdmin: true }, ability: {}, logger: {} },
-    { json: vi.fn() }
-  );
+const ADMIN = { id: 'admin-1', isAdmin: true };
+const run = (usersData: unknown[], sendEmail = false, orgId?: string, user: object = ADMIN) =>
+  h.handler!({ body: { usersData, sendEmail, orgId }, user, ability: {}, logger: {} }, { json: vi.fn() });
 
 describe('POST /api/reg-invites/migrate', () => {
   beforeEach(() => {
@@ -133,6 +140,23 @@ describe('POST /api/reg-invites/migrate', () => {
     expect(res.json).toHaveBeenCalledWith(
       expect.objectContaining({ createdUsers: [expect.objectContaining({ email: 'a@b.test' })] })
     );
+  });
+
+  describe('a settings:manage delegate', () => {
+    const DELEGATE = { id: 'delegate-1', isAdmin: false, adminPermissions: ['settings:manage'] };
+
+    it('migrates users without an organization', async () => {
+      await run([{ email: 'a@b.test', name: 'A' }], false, undefined, DELEGATE);
+      expect(h.createUser).toHaveBeenCalledTimes(1);
+    });
+
+    it('is refused before any user is created when an organization is named', async () => {
+      await expect(run([{ email: 'a@b.test', name: 'A' }], false, 'org-1', DELEGATE)).rejects.toThrow(
+        'Only full administrators can migrate users into an organization'
+      );
+      expect(h.createUser).not.toHaveBeenCalled();
+      expect(h.audit).not.toHaveBeenCalled();
+    });
   });
 
   it('does not audit a run that migrated nobody', async () => {
