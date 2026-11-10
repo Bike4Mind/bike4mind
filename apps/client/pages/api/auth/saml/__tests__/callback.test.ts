@@ -20,10 +20,12 @@ vi.mock('@server/middlewares/baseApi', () => {
 vi.mock('@server/middlewares/checkBlockedIP', () => ({ checkBlockedIP: () => () => undefined }));
 
 const mockSamlUser = vi.fn();
+const mockSamlErr = vi.fn<() => Error | null>(() => null);
+const mockSamlInfo = vi.fn<() => unknown>(() => ({}));
 vi.mock('passport', () => ({
   default: {
     authenticate: (_name: string, cb: (err: Error | null, user: unknown, info: unknown) => Promise<unknown>) => () =>
-      cb(null, mockSamlUser(), {}),
+      cb(mockSamlErr(), mockSamlUser(), mockSamlInfo()),
   },
 }));
 
@@ -67,20 +69,25 @@ import '../callback';
 
 const AUTHORIZE_REDIRECT = '/oauth/authorize?client_id=b4m_sat_0123abcd&response_type=code';
 
-async function runCallback(relayState: string) {
+const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+async function runCallback(relayState: string, redirectPattern: RegExp = /\/auth\/success/) {
   const { req, res } = createMocks<NextApiRequest, NextApiResponse>({
     method: 'GET',
     query: { RelayState: relayState },
+    headers: { 'user-agent': 'UA/9' },
   });
-  Object.assign(req, { ip: '127.0.0.1' });
+  Object.assign(req, { ip: '203.0.113.7', logger });
   await captured.handler!(req, res);
-  await vi.waitFor(() => expect(res._getRedirectUrl()).toMatch(/\/auth\/success/));
+  await vi.waitFor(() => expect(res._getRedirectUrl()).toMatch(redirectPattern));
   return res;
 }
 
 describe('/api/auth/saml/callback - OAuth client source tag', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockSamlErr.mockReturnValue(null);
+    mockSamlInfo.mockReturnValue({});
   });
 
   it('stamps a new account with the client_id from the authorize redirectTo', async () => {
@@ -137,5 +144,51 @@ describe('/api/auth/saml/callback - OAuth client source tag', () => {
     mockSamlUser.mockReturnValue({ id: 'u-new', isBanned: false, isNewUser: true });
     await runCallback(new URLSearchParams({ idp: 'idp-1', redirectTo: '/settings?client_id=x' }).toString());
     expect(mockStampSourceTag).toHaveBeenCalledWith('u-new', undefined);
+  });
+});
+
+describe('/api/auth/saml/callback - structured logging', () => {
+  const relay = new URLSearchParams({ idp: 'idp-1' }).toString();
+  const loggedText = () => JSON.stringify(Object.values(logger).flatMap(fn => fn.mock.calls.map(([message]) => message)));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSamlErr.mockReturnValue(null);
+    mockSamlInfo.mockReturnValue({});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'debug').mockImplementation(() => {});
+  });
+
+  it('logs a signature failure once with the error as metadata and redirects as before', async () => {
+    const err = new Error('invalid signature');
+    mockSamlErr.mockReturnValue(err);
+    mockSamlUser.mockReturnValue(undefined);
+
+    const res = await runCallback(relay, /saml_signature_error/);
+
+    expect(res._getRedirectUrl()).toBe('/login?error=saml_signature_error');
+    const failures = logger.error.mock.calls.filter(([m]) => m === 'SAML signature validation failed');
+    expect(failures).toHaveLength(1);
+    expect(logger.error).toHaveBeenCalledWith('SAML callback error', expect.objectContaining({ idpId: 'idp-1', error: err }));
+    expect(loggedText()).not.toContain('invalid signature');
+    expect(loggedText()).not.toContain('203.0.113.7');
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it('logs the failure reason as metadata and keeps the email and IP out of the message', async () => {
+    mockSamlUser.mockReturnValue(undefined);
+    mockSamlInfo.mockReturnValue({ reason: 'domain_mismatch', email: 'person@example.com' });
+
+    const res = await runCallback(relay, /saml_auth_failed/);
+
+    expect(res._getRedirectUrl()).toBe('/login?error=saml_auth_failed');
+    expect(logger.error).toHaveBeenCalledWith(
+      'SAML authentication failed',
+      expect.objectContaining({ idpId: 'idp-1', reason: 'domain_mismatch' })
+    );
+    expect(loggedText()).not.toContain('person@example.com');
+    expect(loggedText()).not.toContain('203.0.113.7');
+    expect(console.error).not.toHaveBeenCalled();
   });
 });
