@@ -7,6 +7,9 @@ import { ApiKeyScope } from '@bike4mind/common';
 const find = vi.fn();
 const writeScopedOverride = vi.fn();
 const clearScopedOverride = vi.fn();
+const claimScopedSettingChange = vi.fn();
+const claimRelease = vi.fn();
+const txRetries = { count: 0 };
 const findOverrides = vi.fn();
 const recordAdminActionFromRequest = vi.fn();
 const order: string[] = [];
@@ -23,7 +26,9 @@ vi.mock('@bike4mind/database', () => ({
   cacheRepository: { name: 'cacheRepository' },
   withTransaction: async (fn: () => Promise<unknown>) => {
     order.push('tx:start');
-    const result = await fn();
+    let result = await fn();
+    // Mirrors the driver's retry of the callback on a transient commit failure.
+    for (let i = 0; i < txRetries.count; i++) result = await fn();
     order.push('tx:end');
     return result;
   },
@@ -37,6 +42,7 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
 vi.mock('@bike4mind/services', () => ({
   adminAuditService: { REDACTED_PLACEHOLDER: '[REDACTED]' },
   scopedSettingsService: {
+    claimScopedSettingChange: (...args: unknown[]) => claimScopedSettingChange(...args),
     writeScopedOverride: async (...args: unknown[]) => {
       const result = await writeScopedOverride(...args);
       await (args[4] as { afterWrite?: () => Promise<void> } | undefined)?.afterWrite?.();
@@ -108,6 +114,8 @@ const expectStatus = (method: 'get' | 'put' | 'delete', req: Parameters<typeof i
 
 beforeEach(() => {
   order.length = 0;
+  claimScopedSettingChange.mockReset().mockResolvedValue(null);
+  claimRelease.mockReset().mockResolvedValue(undefined);
   findOverrides.mockResolvedValue([]);
   recordAdminActionFromRequest.mockResolvedValue(null);
 });
@@ -276,7 +284,7 @@ describe('admin/scoped-settings writes', () => {
           scopedSettings: expect.anything(),
         },
       },
-      { logger, afterWrite: expect.any(Function) }
+      { logger, claim: null, afterWrite: expect.any(Function) }
     );
     expect(response).toMatchObject({
       settingName: 'PauseLakeConvergence',
@@ -284,6 +292,38 @@ describe('admin/scoped-settings writes', () => {
       scopeId: 'lake-1',
       settingValue,
     });
+  });
+
+  it('takes the cooldown claim once, outside the transaction, even when the callback is retried', async () => {
+    const claim = { release: claimRelease };
+    claimScopedSettingChange.mockImplementation(async () => {
+      order.push('claim');
+      return claim;
+    });
+    writeScopedOverride.mockResolvedValue(undefined);
+    txRetries.count = 1;
+    order.length = 0;
+
+    try {
+      await invoke('put', { body: { ...lakePause, value: true } });
+    } finally {
+      txRetries.count = 0;
+    }
+
+    expect(claimScopedSettingChange).toHaveBeenCalledTimes(1);
+    expect(order.indexOf('claim')).toBeLessThan(order.indexOf('tx:start'));
+    expect(writeScopedOverride).toHaveBeenCalledTimes(2);
+    expect(writeScopedOverride.mock.calls[1][4]).toMatchObject({ claim });
+    expect(claimRelease).not.toHaveBeenCalled();
+  });
+
+  it('releases the claim when the transaction fails', async () => {
+    claimScopedSettingChange.mockResolvedValue({ release: claimRelease });
+    writeScopedOverride.mockRejectedValue(new Error('commit failed'));
+
+    await expect(invoke('put', { body: { ...lakePause, value: true } })).rejects.toThrow('commit failed');
+
+    expect(claimRelease).toHaveBeenCalledTimes(1);
   });
 
   it('carries ownerType through on an owner-rung write', async () => {
@@ -327,7 +367,7 @@ describe('admin/scoped-settings writes', () => {
           scopedSettings: expect.anything(),
         },
       },
-      { logger, afterWrite: expect.any(Function) }
+      { logger, claim: null, afterWrite: expect.any(Function) }
     );
     expect(response).toEqual({ cleared: true });
   });

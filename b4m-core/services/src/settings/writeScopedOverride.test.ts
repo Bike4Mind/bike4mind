@@ -142,3 +142,24 @@ describe('writeScopedOverride / clearScopedOverride: read-your-writes against th
     expect(after).toEqual({ value: 3000, source: SettingScopeLevel.Platform });
   });
 });
+
+describe('writeScopedOverride with a claim the caller already took', () => {
+  const release = vi.fn(async () => undefined);
+  beforeEach(() => release.mockClear());
+
+  it('writes without claiming again or needing the cooldown dependencies, and leaves the release to the caller', async () => {
+    const db = makeWritableDb();
+    await expect(
+      writeScopedOverride('DefaultChunkSize', orgRef, '512', db, { claim: { release } })
+    ).resolves.toBeUndefined();
+
+    const failing = {
+      ...db,
+      scopedSettings: { ...db.scopedSettings, upsertOverride: vi.fn().mockRejectedValue(new Error('boom')) },
+    };
+    await expect(
+      writeScopedOverride('DefaultChunkSize', orgRef, '256', failing, { claim: { release } })
+    ).rejects.toThrow('boom');
+    expect(release).not.toHaveBeenCalled();
+  });
+});

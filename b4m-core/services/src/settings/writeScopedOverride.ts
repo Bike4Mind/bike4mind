@@ -41,7 +41,30 @@ export interface ScopedOverrideWriteDb {
   changeCooldown?: ScopedSettingCooldownDb;
 }
 
-async function releaseOnFailure(claim: ScopedSettingChangeClaim | null, write: () => Promise<unknown>): Promise<void> {
+export interface ScopedOverrideWriteOpts {
+  logger?: Logger;
+  afterWrite?: () => Promise<unknown>;
+  /**
+   * A cooldown claim the caller already took (`null`: none needed), for a caller that runs this
+   * writer inside a retried transaction: the claim must be taken once, outside the retry, and
+   * released by the caller. Omit to have the writer claim, and release on a write failure.
+   */
+  claim?: ScopedSettingChangeClaim | null;
+}
+
+async function claimAndWrite(
+  key: SettingKey,
+  ref: ScopeRef,
+  nextValue: string | null,
+  db: ScopedOverrideWriteDb,
+  opts: ScopedOverrideWriteOpts | undefined,
+  write: () => Promise<unknown>
+): Promise<void> {
+  if (opts?.claim !== undefined) {
+    await write();
+    return;
+  }
+  const claim = await claimScopedSettingChange(key, ref, nextValue, db.changeCooldown, opts);
   try {
     await write();
   } catch (err) {
@@ -63,7 +86,7 @@ export async function writeScopedOverride<K extends SettingKey>(
   ref: ScopeRef & { ownerType?: SettingOwnerType },
   rawValue: string,
   db: ScopedOverrideWriteDb,
-  opts?: { logger?: Logger; afterWrite?: () => Promise<unknown> }
+  opts?: ScopedOverrideWriteOpts
 ): Promise<void> {
   const def = settingsMap[key] as {
     scope?: { settableAt: readonly SettingScopeLevel[] };
@@ -91,8 +114,7 @@ export async function writeScopedOverride<K extends SettingKey>(
     throw new Error(`[scopedSettings] ownerType is only meaningful at the owner scope, not '${ref.scopeLevel}'`);
   }
 
-  const claim = await claimScopedSettingChange(key, ref, rawValue, db.changeCooldown, opts);
-  await releaseOnFailure(claim, async () => {
+  await claimAndWrite(key, ref, rawValue, db, opts, async () => {
     await db.scopedSettings.upsertOverride({
       scopeLevel: ref.scopeLevel,
       scopeId: ref.scopeId,
@@ -113,10 +135,9 @@ export async function clearScopedOverride<K extends SettingKey>(
   key: K,
   ref: ScopeRef,
   db: ScopedOverrideWriteDb,
-  opts?: { logger?: Logger; afterWrite?: () => Promise<unknown> }
+  opts?: ScopedOverrideWriteOpts
 ): Promise<void> {
-  const claim = await claimScopedSettingChange(key, ref, null, db.changeCooldown, opts);
-  await releaseOnFailure(claim, async () => {
+  await claimAndWrite(key, ref, null, db, opts, async () => {
     await db.scopedSettings.clearOverride({ scopeLevel: ref.scopeLevel, scopeId: ref.scopeId, settingName: key });
     await opts?.afterWrite?.();
   });
