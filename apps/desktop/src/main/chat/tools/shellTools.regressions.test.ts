@@ -237,12 +237,30 @@ describe('shell approval in a project with a large node_modules', () => {
       ['loop', 'loop2'],
       ['loop2', 'loop'],
       ['bare', ''],
+      ['bang', '!touch x'],
+      ['ci', 'commit'],
+      ['tabbed', 'status\t--short'],
+      // git runs its own show-branch over an alias, and an alias over pack-redundant, which it lists as deprecated.
+      ['show-branch', 'clean -fdx'],
+      ['pack-redundant', '!touch x'],
     ]) {
       git(qrepo, 'config', `alias.${name}`, value as string);
     }
     git(qrepo, 'config', 'help.autocorrect', '0');
+    // Relative to .git/config, so proj/qinc.cfg, outside qrepo's work tree; it need not exist.
+    git(qrepo, 'config', 'include.path', '../../qinc.cfg');
+    // irepo includes a file in its own work tree, which a git command may rewrite.
+    const irepo = await repository('irepo', { 'src/b.ts': 'b' });
+    git(irepo, 'config', 'alias.st', 'status');
+    git(irepo, 'config', 'include.path', '../inc.cfg');
     const zrepo = await repository('zrepo', { 'src/b.ts': 'b' });
     git(zrepo, 'config', 'help.autocorrect', '1');
+    // trepo's index records `sub` as a submodule whose work tree holds settings.
+    const trepo = await repository('trepo', { 'src/b.ts': 'b' });
+    await mkdir(join(trepo, 'sub', '.claude'), { recursive: true });
+    await writeFile(join(trepo, 'sub', '.claude', 'settings.json'), '{}');
+    const head = execFileSync('git', ['-C', trepo, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    git(trepo, 'update-index', '--add', '--cacheinfo', `160000,${head},sub`);
     // prepo is a treeless partial clone whose missing trees would come from a host through core.sshCommand.
     git(proj, 'config', 'uploadpack.allowFilter', 'true');
     execFileSync('git', ['clone', '-q', '--filter=tree:0', '--no-checkout', `file://${proj}`, join(proj, 'prepo')]);
@@ -969,8 +987,57 @@ describe('shell approval in a project with a large node_modules', () => {
     '! for i in 1; do git -c core.fsmonitor=./x.sh status; done',
     'time while true; do git -c core.fsmonitor=./x.sh status; break; done',
     'time { git -c core.fsmonitor=./x.sh status; }',
+    "export 'GIT_EDITOR'=./x.sh; git commit --allow-empty",
+    'export "GIT_EDITOR"=./x.sh; git commit --allow-empty',
+    'export GIT_EDI\\TOR=./x.sh; git commit --allow-empty',
+    "declare -x GIT_E''DITOR=./x.sh; git commit --allow-empty",
+    "set -a; printf -v GIT_E''DITOR %s ./x.sh; git commit --allow-empty",
+    "set -a; printf -vGIT_E''DITOR %s ./x.sh; git commit --allow-empty",
+    'set -a; read -r GIT_EDITOR[0] <<< ./x.sh; git commit --allow-empty',
+    'GIT_TRACE=""/tmp/t git status',
+    "GIT_TRACE=''/tmp/t git status",
+    'SSH_ASKPASS=./x.sh git fetch',
+    'GIT_DIFFTOOL_EXTCMD=./x.sh git difftool HEAD~1',
+    'GIT_DIFF_TOOL=../../x git difftool HEAD~1',
+    'GIT_MERGE_TOOL=../x git mergetool',
+    'GIT_MERGE_TOOL=$T git mergetool',
+    "GIT_EDITOR=./x.sh bash -c 'git commit --allow-empty'",
+    "GIT_EDITOR=./x.sh sh -c 'git commit --allow-empty'",
+    "export GIT_EXEC_PATH=./bin; bash -c 'git help clean'",
+    "export GIT_EXEC_PATH=./bin; sh -ec 'git help clean'",
+    "export GIT_PAGER=./x.sh; eval 'git log'",
+    'GIT_PAGER=less git log',
+    'GIT_EDITOR=vi git commit --allow-empty',
   ])('asks in every mode for %s, which sets a variable git runs a program from', async command => {
     expect(await judge(command)).toMatchObject(asks);
+  });
+
+  it.each([
+    'GIT_PAGER=cat git log -1',
+    'PAGER=cat git log -1',
+    'GIT_PAGER= git log -1',
+    'export GIT_PAGER=cat; git diff',
+    'GIT_EDITOR=true git commit --amend',
+    'EDITOR=true git commit --amend',
+    'GIT_EDITOR=: git commit --amend',
+    'GIT_DIFF_TOOL=vimdiff git diff',
+    "git commit -m 'docs: let users run `pnpm dev`'",
+    "git commit -m 'fix: read `args[0]` safely'",
+    "echo 'see `a[0]`' > notes.md",
+    'git --no-pager log -1',
+    'GIT_TERMINAL_PROMPT=0 git fetch',
+    'git config --get user.email',
+    'cd src && git status',
+  ])('runs %s unasked, as git runs no program it is handed', async command => {
+    expect(await judge(command)).toMatchObject({ auto: true, full: true });
+  });
+
+  it('asks in every mode for a -c key that names a program, whatever its value', async () => {
+    expect(await judge('git -c core.pager=cat log -1')).toMatchObject(asks);
+  });
+
+  it('asks in every mode for a rebase continued with an editor that runs nothing', async () => {
+    expect(await judge('GIT_EDITOR=true git rebase --continue')).toMatchObject(asks);
   });
 
   it.each([
@@ -1032,6 +1099,8 @@ describe('shell approval in a project with a large node_modules', () => {
     ['git rm -r w', 'vrepo'],
     ['git mv w y', 'vrepo'],
     ['git mv -k w src y', 'vrepo'],
+    ['git rm sub', 'trepo'],
+    ['git rm --ignore-unmatch sub', 'trepo'],
   ])(
     'asks in every mode for %s (in proj/%s), which removes or moves a folder holding a settings file',
     async (command, folder) => {
@@ -1049,6 +1118,8 @@ describe('shell approval in a project with a large node_modules', () => {
     '[[ 1 -lt a[\\$(touch x)] ]]',
     "(( 'a[$(touch x)]' ))",
     "a['$(touch x)']=1",
+    'let n=a[\\`touch\\ x\\`]',
+    'declare -i n=a[\\`touch\\ x\\`]',
   ])('asks in every mode for %s, where bash runs a quoted command in an arithmetic subscript', async command => {
     expect(await judge(command)).toMatchObject(asks);
   });
@@ -1155,6 +1226,19 @@ describe('shell approval in a project with a large node_modules', () => {
     "git send-email --to-cmd='touch x' x.patch",
     "git send-email -to-cmd='touch x' x.patch",
     'git send-email --smtp-server=./x.sh x.patch',
+    "git remote-ext x 'sh -c touch% x'",
+    'git daemon --access-hook=./x.sh',
+    'git -c gc.recentObjectsHook=./x.sh gc',
+    'git difftool -t ../../x HEAD~1',
+    'git difftool --tool=../../x HEAD~1',
+    'git difftool -yt../../x HEAD~1',
+    'git difftool -t "$T" HEAD~1',
+    'git mergetool -t ../x',
+    'git mergetool --tool ../x',
+    'git mergetool --tool=..\\\\x',
+    'git -c diff.tool=../../x difftool HEAD~1',
+    'git -c merge.tool=../x mergetool',
+    'git -c merge.guitool=../x mergetool -g',
   ])('asks in every mode for %s, which has git run a command line its words give', async command => {
     expect(await judge(command)).toMatchObject(asks);
   });
@@ -1175,6 +1259,8 @@ describe('shell approval in a project with a large node_modules', () => {
     'git diff',
     'git commit -m x',
     'git -c gpg.format=ssh log -1',
+    'git -c diff.tool=meld log -1',
+    'git difftool --tool-help',
   ])('runs %s unasked, as git runs no command line its words give', async command => {
     expect(await judge(command)).toMatchObject({ auto: true, full: true });
   });
@@ -1209,6 +1295,28 @@ describe('shell approval in a project with a large node_modules', () => {
     ['git -c core.x=y st', 'qrepo'],
     ['git cleen -fdx', 'zrepo'],
     ['git -c help.autocorrect=1 cleen -fdx', 'qrepo'],
+    ['git bang', 'qrepo'],
+    ['git TIDY', 'qrepo'],
+    ['git st > .git/config', 'qrepo'],
+    ['git st | tee .git/config', 'qrepo'],
+    ['tee -a .git/config < /dev/null | git st', 'qrepo'],
+    ['sed -i s/a/b/ .git/config && git st', 'qrepo'],
+    ['cp x.cfg .git/config; git st', 'qrepo'],
+    ['rm -rf .git && git st', 'qrepo'],
+    ['git branch -u origin/main && git st', 'qrepo'],
+    ['git worktree add ../w && git st', 'qrepo'],
+    ['git worktree add w && git st', 'qrepo'],
+    ['coproc git config alias.st x; git st', 'qrepo'],
+    ['git st & echo x > .git/config', 'qrepo'],
+    ['echo x > ../qinc.cfg && git st', 'qrepo'],
+    ['git st > ../qinc.cfg', 'qrepo'],
+    ['git st & echo x > ../qinc.cfg', 'qrepo'],
+    ['coproc git st; echo x > ../qinc.cfg', 'qrepo'],
+    ['git worktree repair && git st', 'qrepo'],
+    ['git stash && git st', 'irepo'],
+    ['git checkout -- inc.cfg && git st', 'irepo'],
+    ['git st & git reset --hard', 'irepo'],
+    ['export GIT_CONFIG_NOSYSTEM=1; git st', 'qrepo'],
   ])(
     'asks in every mode for %s (in proj/%s), whose git alias the scan cannot read as git runs it',
     async (command, folder) => {
@@ -1218,15 +1326,48 @@ describe('shell approval in a project with a large node_modules', () => {
 
   it.each([
     'git st',
+    'git ST',
     'git st --short',
     'git lg -5',
     'git lq -3',
     'git co main',
+    'git tabbed',
+    'git show-branch',
     'git st && git lg -1',
     'git st | head -1',
-    'git cleen -fdx',
+    'git add -A && git ci -m x',
+    'echo x > out.txt && git st',
+    'git stash && git st',
+    'git st | tee status.txt',
+    'coproc git st',
+    'git log --grep=GIT_PAGER && git st',
+    'mkdir -p x && git st',
+    'rm -f out.txt && git st',
+    'git worktree prune && git st',
   ])('runs %s (in proj/qrepo) unasked, reading the git alias it names as git expands it', async command => {
     expect(await judge(command, 'qrepo')).toMatchObject({ auto: true, full: true });
+  });
+
+  it('runs a mistyped command unasked where help.autocorrect only names its guess', async () => {
+    expect(await judge('git cleen -fdx', 'qrepo')).toMatchObject({ auto: true, full: true });
+  });
+
+  it('reads an alias over pack-redundant first only where git lists the command as deprecated', async () => {
+    let listed = '';
+    try {
+      listed = execFileSync('git', ['--list-cmds=deprecated'], { encoding: 'utf8' });
+    } catch {
+      // A git with no such listing runs its own pack-redundant.
+    }
+    const overridden = listed.split('\n').includes('pack-redundant');
+    expect(await judge('git pack-redundant', 'qrepo')).toMatchObject(overridden ? asks : { auto: true, full: true });
+    // zrepo autocorrects, which git does only for a name it has no command for.
+    expect(await judge('git pack-redundant', 'zrepo')).toMatchObject({ auto: true, full: true });
+  });
+
+  it('remembers a command as written only where it names no alias', async () => {
+    expect(await judge('git status', 'qrepo')).toMatchObject({ auto: true, full: true, allowed: true });
+    expect(await judge('git st', 'qrepo')).toMatchObject({ auto: true, full: true, allowed: false });
   });
 
   it('reads a git alias for push as the push it expands to', async () => {
@@ -1274,6 +1415,8 @@ describe('shell approval in a project with a large node_modules', () => {
     ['git clean -fdX -e a', 'brepo'],
     ['git rm src/a.ts', ''],
     ['git mv src/a.ts src/z.ts', ''],
+    ['git mv src/b.ts .', 'srepo'],
+    ['git rm src/b.ts', 'trepo'],
   ])('runs %s (in proj/%s) unasked, naming no protected path', async (command, folder) => {
     expect(await judge(command, folder)).toMatchObject({ auto: true, full: true });
   });

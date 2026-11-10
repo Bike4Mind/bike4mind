@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { lstat, readFile, readlink, realpath, stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import type { Node } from 'web-tree-sitter';
 import { gitArgumentPath, gitCommand, gitCommandEnv, hostGitArgs, quickGitTimeout } from '../../git/hostGitArgs';
@@ -665,7 +666,23 @@ const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
  * the empty tree with no lazy fetch, so no filter, textconv or fetch the repository configures runs. Its exit code
  * and output; null when it could not run, timed out or overran.
  */
-async function gitRun(directory: string, args: readonly string[]): Promise<{ code: number; stdout: string } | null> {
+async function gitRun(directory: string, args: readonly string[]): Promise<GitResult | null> {
+  const launch = await gitLaunch(directory, args);
+  return launch && gitExec(launch);
+}
+
+type GitResult = { code: number; stdout: string };
+
+interface GitLaunch {
+  file: string;
+  args: string[];
+  cwd?: string;
+  env: NodeJS.ProcessEnv;
+  timeout: number;
+}
+
+/** How gitRun runs `git args` in `directory`; null when there is no git to run. */
+async function gitLaunch(directory: string, args: readonly string[]): Promise<GitLaunch | null> {
   const inherited = await gitCommandEnv(directory);
   const env: NodeJS.ProcessEnv = Object.fromEntries(
     Object.entries(inherited ?? process.env).filter(([name]) => !name.toUpperCase().startsWith('GIT_'))
@@ -700,16 +717,15 @@ async function gitRun(directory: string, args: readonly string[]): Promise<{ cod
     env.PATH = path;
     command.file = file;
   }
+  return { ...command, env, timeout: quickGitTimeout(inherited) };
+}
+
+function gitExec({ file, args, cwd, env, timeout }: GitLaunch): Promise<GitResult | null> {
   return new Promise(done => {
-    execFile(
-      command.file,
-      command.args,
-      { cwd: command.cwd, env, timeout: quickGitTimeout(inherited), maxBuffer: GIT_OUTPUT_BYTES, windowsHide: true },
-      (error, stdout) => {
-        if (!error) done({ code: 0, stdout });
-        else done(typeof error.code === 'number' && !error.killed ? { code: error.code, stdout } : null);
-      }
-    );
+    execFile(file, args, { cwd, env, timeout, maxBuffer: GIT_OUTPUT_BYTES, windowsHide: true }, (error, stdout) => {
+      if (!error) done({ code: 0, stdout });
+      else done(typeof error.code === 'number' && !error.killed ? { code: error.code, stdout } : null);
+    });
   });
 }
 
@@ -725,10 +741,49 @@ async function gitQuery(directory: string, args: readonly string[]): Promise<str
   return result?.code === 0 ? result.stdout : null;
 }
 
-/** The commands git runs under their own name before it reads any alias: builtins and the `git-<name>` programs it finds. */
-export async function gitCommandNames(directory: string): Promise<ReadonlySet<string> | null> {
-  const listed = await gitQuery(directory, ['--list-cmds=builtins,main,others']);
-  return listed === null ? null : new Set(listed.split(/\r?\n/).filter(Boolean));
+/** `git --list-cmds` answers by git binary, PATH and WSL distro, and none of them changes while the app runs. */
+const commandListings = new Map<string, Promise<GitResult | null>>();
+
+/**
+ * The names git lists for `categories` (`builtins,main`) from `directory`; an empty set when this git has no such
+ * listing, and null when it could not tell.
+ */
+async function gitCommandListing(directory: string, categories: string): Promise<ReadonlySet<string> | null> {
+  const launch = await gitLaunch(directory, [`--list-cmds=${categories}`]);
+  if (launch === null) return null;
+  const path = Object.entries(launch.env).find(([name]) => name.toUpperCase() === 'PATH')?.[1] ?? '';
+  const key = JSON.stringify([launch.file, path, wslLocation(directory)?.distro ?? '', categories]);
+  let listed = commandListings.get(key);
+  if (listed === undefined) {
+    listed = gitExec(launch);
+    commandListings.set(key, listed);
+    // A failed or timed-out listing is asked again next time.
+    void listed.then(result => {
+      if (result?.code !== 0 && commandListings.get(key) === listed) commandListings.delete(key);
+    });
+  }
+  const result = await listed;
+  if (result === null) return null;
+  // git exits 128 on a category it does not know.
+  return new Set(result.code === 0 ? result.stdout.split(/\r?\n/).filter(Boolean) : []);
+}
+
+/**
+ * How git takes `name` as its subcommand from `directory` before it reads any alias: `own` for a builtin or a
+ * `git-<name>` program it finds, which no alias overrides; `deprecated` for a builtin an alias of that name overrides;
+ * `none` for a name that is only an alias, if anything. Null when git could not tell.
+ */
+export async function gitCommandKind(directory: string, name: string): Promise<'own' | 'deprecated' | 'none' | null> {
+  const own = await gitCommandListing(directory, 'builtins,main');
+  if (own === null) return null;
+  if (own.has(name)) {
+    const deprecated = await gitCommandListing(directory, 'deprecated');
+    if (deprecated === null) return null;
+    return deprecated.has(name) ? 'deprecated' : 'own';
+  }
+  const others = await gitCommandListing(directory, 'others');
+  if (others === null) return null;
+  return others.has(name) ? 'own' : 'none';
 }
 
 /** The aliases git reads in a folder, by lowercased name, and whether help.autocorrect may run a command it guesses. */
@@ -736,27 +791,57 @@ export interface GitAliases {
   /** Null for an alias set with no value, which git refuses. */
   aliases: ReadonlyMap<string, string | null>;
   autocorrect: boolean;
+  /** The files config includes name, as host paths; null when they cannot be placed (a WSL folder). */
+  includes: readonly string[] | null;
 }
 
 /** help.autocorrect values under which git only names the command it guesses. */
 const SHOWS_GUESS = /^(0|false|off|no|show|never)$/i;
 
-/** What git reads of aliases and help.autocorrect in `directory`; null when git could not tell. */
+/** What git reads of aliases, help.autocorrect and includes in `directory`; null when git could not tell. */
 export async function gitAliases(directory: string): Promise<GitAliases | null> {
-  const listed = await gitRun(directory, ['config', '-z', '--get-regexp', String.raw`^alias\.|^help\.autocorrect$`]);
+  const keys = String.raw`^alias\.|^help\.autocorrect$|^include\.path$|^includeif\..*\.path$`;
+  const listed = await gitRun(directory, ['config', '-z', '--show-origin', '--get-regexp', keys]);
   // git config exits 1, printing nothing, when no key matches.
   if (listed === null || (listed.code !== 0 && (listed.code !== 1 || listed.stdout !== ''))) return null;
   const aliases = new Map<string, string | null>();
   let autocorrect = false;
-  for (const entry of listed.stdout.split('\0')) {
-    if (entry === '') continue;
+  const included: { origin: string; path: string }[] = [];
+  // `-z --show-origin` prints `origin\0key\nvalue\0` per entry.
+  const fields = listed.stdout.split('\0');
+  for (let at = 0; at + 1 < fields.length; at += 2) {
+    const origin = fields[at] as string;
+    const entry = fields[at + 1] as string;
     const newline = entry.indexOf('\n');
     const key = (newline === -1 ? entry : entry.slice(0, newline)).toLowerCase();
     const value = newline === -1 ? null : entry.slice(newline + 1);
     if (key === 'help.autocorrect') autocorrect = value === null || !SHOWS_GUESS.test(value.trim());
     else if (key.startsWith('alias.')) aliases.set(key.slice('alias.'.length), value);
+    else if (value) included.push({ origin, path: value });
   }
-  return { aliases, autocorrect };
+  return { aliases, autocorrect, includes: await includeTargets(directory, included) };
+}
+
+/**
+ * Where includes read in `directory` point: a relative path is taken from the folder of the file that names it, which
+ * git reports from the top of the work tree it moved to.
+ */
+async function includeTargets(
+  directory: string,
+  included: readonly { origin: string; path: string }[]
+): Promise<string[] | null> {
+  if (included.length === 0) return [];
+  if (wslLocation(directory)) return null;
+  const top = included.some(({ origin }) => !isAbsolute(origin.replace(/^file:/, '')))
+    ? ((await gitToplevel(directory)) ?? directory)
+    : directory;
+  const targets: string[] = [];
+  for (const { origin, path } of included) {
+    if (!origin.startsWith('file:')) return null;
+    const from = dirname(resolve(top, origin.slice('file:'.length)));
+    targets.push(path === '~' || path.startsWith('~/') ? join(homedir(), path.slice(1)) : resolve(from, path));
+  }
+  return targets;
 }
 
 /** An alias value split into words as git splits it (split_cmdline); null for an unclosed quote or a trailing backslash. */
