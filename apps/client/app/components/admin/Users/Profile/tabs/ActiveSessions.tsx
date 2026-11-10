@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { Box, Button, Stack, Typography } from '@mui/joy';
 import { toast } from 'sonner';
 import type { AdminUserSession, AuthSessionCreatedVia } from '@bike4mind/common';
+import { hasAdminPermission } from '@bike4mind/common';
+import { useUser } from '@client/app/contexts/UserContext';
 import { useRevokeUserSessions, useUserSessions } from '@client/app/hooks/data/adminUserSessions';
 import { describeUserAgent } from '@client/app/utils/describeUserAgent';
 import {
@@ -56,6 +58,7 @@ type RevokeTarget = { kind: 'one'; session: AdminUserSession } | { kind: 'all' }
  * version and drops trusted devices, so it takes effect on the next request.
  */
 export const ActiveSessions: React.FC<{ user: AdminUserProfile }> = ({ user }) => {
+  const { currentUser } = useUser();
   const sessions = useUserSessions(user.id);
   const revoke = useRevokeUserSessions(user.id);
   const [target, setTarget] = useState<RevokeTarget | null>(null);
@@ -121,7 +124,7 @@ export const ActiveSessions: React.FC<{ user: AdminUserProfile }> = ({ user }) =
 
   return (
     <>
-      <SupportAccessHistory userId={user.id} />
+      {hasAdminPermission(currentUser, 'users:impersonate') && <SupportAccessHistory userId={user.id} />}
       <SectionCard
         title="Active sessions"
         body="custom"
