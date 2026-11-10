@@ -10,6 +10,8 @@ import {
   createReasoningWithholder,
   reasoningChannelOf,
   withholdsReasoning,
+  isProviderRefusalStopReason,
+  MODEL_DECLINED_MESSAGE,
 } from '@bike4mind/common';
 import type { ICompletionOptionTools, CompletionInfo, ToolResultScore } from '@bike4mind/llm-adapters';
 import { isContextLimitError } from './errors';
@@ -567,6 +569,7 @@ export class ReActAgent extends EventEmitter {
 
         let iterationComplete = false;
         let currentText = '';
+        let turnStopReason: string | undefined;
         const processedToolIds = new Set<string>(); // Track which tool calls we've already processed
         let hadToolCalls = false; // Track if this iteration had any tool calls
         let thoughtEmitted = false; // Dedupe per-iteration thought step across multi-frame streaming
@@ -684,6 +687,7 @@ export class ReActAgent extends EventEmitter {
                 // Early streaming frames carry none; the final frame does.
                 if (completionInfo.stopReason != null) {
                   this.lastStopReason = completionInfo.stopReason;
+                  turnStopReason = completionInfo.stopReason;
                 }
 
                 // Handle tool calls.
@@ -847,8 +851,10 @@ export class ReActAgent extends EventEmitter {
         // was visible mid-stream. When subagent LLM calls use `stream: true`,
         // an in-callback guard would fire on the model's preamble before
         // tool_use blocks assembled, terminating tool-using runs at iteration 1.
+        // A declined turn ends the run: re-sending it would be refused again, and billed again.
+        const refused = isProviderRefusalStopReason(turnStopReason);
         const finalFeedback =
-          !hadToolCalls && currentText.trim() && iterations < maxIterations
+          !refused && !hadToolCalls && currentText.trim() && iterations < maxIterations
             ? await drainHostFeedback(options.drainFeedback, 'final', this.context.logger, options.signal)
             : null;
         if (finalFeedback) {
@@ -877,6 +883,16 @@ export class ReActAgent extends EventEmitter {
 
           this.steps.push(finalStep);
           this.emit('final_answer', finalStep);
+          iterationComplete = true;
+        } else if (refused) {
+          finalAnswer = MODEL_DECLINED_MESSAGE;
+          const declineStep: AgentStep = {
+            type: 'final_answer',
+            content: finalAnswer,
+            metadata: { timestamp: Date.now() },
+          };
+          this.steps.push(declineStep);
+          this.emit('final_answer', declineStep);
           iterationComplete = true;
         }
 
@@ -1527,6 +1543,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       let iterationComplete = false;
       let currentText = '';
       let finalAnswer = '';
+      let turnStopReason: string | undefined;
       const processedToolIds = new Set<string>();
       const gatedToolCalls: GatedToolCall[] = [];
       let hadToolCalls = false;
@@ -1616,6 +1633,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
             // A prior tool_use turn is overwritten by the final completion.
             if (completionInfo.stopReason != null) {
               this.lastStopReason = completionInfo.stopReason;
+              turnStopReason = completionInfo.stopReason;
             }
 
             // Handle tool calls.
@@ -1747,9 +1765,10 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       if (!hadToolCalls) currentText = this.readSelfReport(currentText).text;
 
       // Final-answer decision deferred from the streaming callback. See the
-      // matching comment in `run()` for full rationale.
+      // matching comment in `run()` for full rationale, and for why a declined turn ends the run.
+      const refused = isProviderRefusalStopReason(turnStopReason);
       const finalFeedback =
-        !hadToolCalls && currentText.trim() && this.iterations < maxIterations
+        !refused && !hadToolCalls && currentText.trim() && this.iterations < maxIterations
           ? await drainHostFeedback(options.drainFeedback, 'final', this.context.logger, options.signal)
           : null;
       if (finalFeedback) {
@@ -1777,10 +1796,21 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
         iterationSteps.push(finalStep);
         this.emit('final_answer', finalStep);
         iterationComplete = true;
+      } else if (refused) {
+        finalAnswer = MODEL_DECLINED_MESSAGE;
+        const declineStep: AgentStep = {
+          type: 'final_answer',
+          content: finalAnswer,
+          metadata: { timestamp: Date.now(), iteration: this.iterations - 1 },
+        };
+        this.steps.push(declineStep);
+        iterationSteps.push(declineStep);
+        this.emit('final_answer', declineStep);
+        iterationComplete = true;
       }
 
       // Confidence gate check
-      if (hadToolCalls && options.confidenceGate && this.iterationConfidences.length > 0) {
+      if (hadToolCalls && !iterationComplete && options.confidenceGate && this.iterationConfidences.length > 0) {
         const iterAvg = this.iterationConfidences.reduce((a, b) => a + b, 0) / this.iterationConfidences.length;
         const decision = options.confidenceGate(iterAvg, this.iterations);
 

@@ -47,6 +47,9 @@ export function isProviderRefusalStopReason(stopReason: string | undefined | nul
   return stopReason === REFUSAL_FINISH_REASON || stopReason === CONTENT_FILTER_FINISH_REASON;
 }
 
+/** Shown when the model declined and produced no answer; same copy as the completions API's content_blocked frame (sseRoute.ts). */
+export const MODEL_DECLINED_MESSAGE = 'The model declined this request';
+
 /**
  * Stamped on `promptMeta.finishReason` when recovery settles a quest whose run died without
  * finishing: the liveness timeout (the process was hard-killed, e.g. at the server Lambda's

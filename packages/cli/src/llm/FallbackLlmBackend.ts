@@ -1,4 +1,4 @@
-import type { IMessage, ModelInfo } from '@bike4mind/common';
+import { isProviderRefusalStopReason, MODEL_DECLINED_MESSAGE, type IMessage, type ModelInfo } from '@bike4mind/common';
 import type {
   ICompletionBackend,
   ICompletionOptions,
@@ -6,6 +6,7 @@ import type {
   IChoiceEndToolUse,
 } from '@bike4mind/llm-adapters';
 import { logger } from '../utils/Logger';
+import { ModelCallError } from './modelCallError';
 
 const SERVER_MODEL_PREFIX = 'local:srv-';
 
@@ -70,17 +71,27 @@ export class FallbackLlmBackend implements ICompletionBackend {
       // double-content bug). Failures before any output, like rate limits and
       // auth errors, still fall back.
       let delivered = false;
+      // A refusal settled before anything reached the caller is held back so the next model can answer,
+      // as the server's declined-request error frame once was. The last model's refusal is delivered.
+      let refused = false;
+      const canFallBack = i + 1 < modelsToTry.length;
       const trackingCallback = async (
         text: (string | null | undefined)[],
         completionInfo?: CompletionInfo
       ): Promise<void> => {
+        if (refused) return;
+        if (!delivered && canFallBack && isProviderRefusalStopReason(completionInfo?.stopReason)) {
+          refused = true;
+          return;
+        }
         delivered = true;
         await callback(text, completionInfo);
       };
 
       try {
         await this.inner.complete(modelToTry, messages, options, trackingCallback);
-        return;
+        if (!refused) return;
+        throw new ModelCallError('refused', MODEL_DECLINED_MESSAGE);
       } catch (error) {
         // Abort, or output already delivered: propagate - no fallback
         if (options.abortSignal?.aborted || delivered) {
