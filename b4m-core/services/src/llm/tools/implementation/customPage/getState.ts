@@ -22,8 +22,8 @@ export const pageGetStateTool: ToolDefinition = {
     toolSchema: {
       name: 'page_get_state',
       description:
-        'Read this page: its name, the stored state (the source of truth for what the user told you) and the ' +
-        'ids, types and titles of the widgets currently shown. Call it before changing a page you have not seen this turn.',
+        'Read the page: name, stored state (source of truth for what the user told you) and the widgets shown. ' +
+        'Call it before changing a page you have not seen this turn.',
       parameters: { type: 'object', properties: {} },
     },
   }),

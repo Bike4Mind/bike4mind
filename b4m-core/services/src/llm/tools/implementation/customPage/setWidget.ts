@@ -7,73 +7,26 @@ interface SetWidgetParams {
   widgetId?: string;
 }
 
-const WIDGET_ID = {
-  type: 'string',
-  description:
-    'Stable lowercase id (letters, digits, "-" or "_"), e.g. "shopping-list". Reusing an id replaces that widget.',
-};
-const TITLE = { type: 'string', description: 'Heading shown above the widget.' };
-const ORDER = { type: 'integer', description: 'Sort position; lower comes first.' };
-
-const cardListWidget = {
+// One flat shape instead of a oneOf per type: the registry-wide schema budget is tight, and the
+// service validates the real discriminated union (PageWidgetSchema) on every call anyway.
+const widgetShape = {
   type: 'object',
   properties: {
-    type: { type: 'string', enum: ['card-list'] },
-    id: WIDGET_ID,
-    title: TITLE,
-    order: ORDER,
+    type: { type: 'string', enum: ['card-list', 'checklist', 'markdown'] },
+    id: {
+      type: 'string',
+      description: 'Stable lowercase slug, e.g. "shopping-list".',
+    },
+    title: { type: 'string' },
+    order: { type: 'integer', description: 'Lower sorts first.' },
     items: {
       type: 'array',
-      maxItems: 50,
-      items: {
-        type: 'object',
-        properties: {
-          id: { type: 'string' },
-          title: { type: 'string' },
-          subtitle: { type: 'string' },
-          body: { type: 'string' },
-        },
-        required: ['id', 'title'],
-      },
+      description: 'card-list: {id, title, subtitle?, body?}. checklist: {id, label, checked?}.',
+      items: { type: 'object' },
     },
+    markdown: { type: 'string', description: 'markdown type only.' },
   },
-  required: ['type', 'id', 'items'],
-};
-
-const checklistWidget = {
-  type: 'object',
-  properties: {
-    type: { type: 'string', enum: ['checklist'] },
-    id: WIDGET_ID,
-    title: TITLE,
-    order: ORDER,
-    items: {
-      type: 'array',
-      maxItems: 100,
-      items: {
-        type: 'object',
-        properties: {
-          id: { type: 'string' },
-          label: { type: 'string' },
-          checked: { type: 'boolean' },
-        },
-        required: ['id', 'label'],
-      },
-    },
-  },
-  required: ['type', 'id', 'items'],
-};
-
-const markdownWidget = {
-  type: 'object',
-  properties: {
-    type: { type: 'string', enum: ['markdown'] },
-    id: WIDGET_ID,
-    title: TITLE,
-    order: ORDER,
-    markdown: { type: 'string' },
-  },
-  required: ['type', 'id', 'markdown'],
+  required: ['type', 'id'],
 };
 
 export const pageSetWidgetTool: ToolDefinition = {
@@ -108,20 +61,14 @@ export const pageSetWidgetTool: ToolDefinition = {
     toolSchema: {
       name: 'page_set_widget',
       description:
-        'Show or remove a display on the page. action "upsert" adds the widget, or replaces the one with the same id ' +
-        '(prefer reusing an id over adding another). action "remove" deletes a widget by `widgetId`. ' +
-        'Widget types: card-list (items with id, title, optional subtitle/body), checklist (items with id, label, checked), ' +
-        'markdown (markdown text).',
+        'Show or remove a display on the page. "upsert" adds or replaces the widget with that id (prefer reusing ' +
+        'ids); "remove" deletes by widgetId. card-list and checklist need items; markdown needs markdown.',
       parameters: {
         type: 'object',
         properties: {
-          action: { type: 'string', description: 'What to do with the widget.', enum: ['upsert', 'remove'] },
-          widgetId: { type: 'string', description: 'Required for action "remove".' },
-          widget: {
-            type: 'object',
-            description: 'Required for action "upsert". One of the three widget shapes.',
-            oneOf: [cardListWidget, checklistWidget, markdownWidget],
-          },
+          action: { type: 'string', description: 'Operation.', enum: ['upsert', 'remove'] },
+          widgetId: { type: 'string', description: 'For "remove".' },
+          widget: { ...widgetShape, description: 'For "upsert".' },
         },
         required: ['action'],
       },

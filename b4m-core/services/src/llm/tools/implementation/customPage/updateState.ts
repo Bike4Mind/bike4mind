@@ -27,13 +27,12 @@ export const pageUpdateStateTool: ToolDefinition = {
     toolSchema: {
       name: 'page_update_state',
       description:
-        'Merge facts into the page state using a JSON merge patch (RFC 7386): objects merge key by key, ' +
-        'a null value deletes that key, and arrays are replaced whole (send the full new array). ' +
-        'Example: {"ingredients":["eggs","rice"],"diet":null}. Keys cannot start with "$" or contain ".".',
+        'Merge facts into the page state (JSON merge patch): objects merge by key, null deletes a key, ' +
+        'arrays are replaced whole. Example: {"ingredients":["eggs","rice"],"diet":null}.',
       parameters: {
         type: 'object',
         properties: {
-          patch: { type: 'object', description: 'The merge patch to apply to the page state.' },
+          patch: { type: 'object', description: 'Merge patch.' },
         },
         required: ['patch'],
       },

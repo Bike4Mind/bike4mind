@@ -41,11 +41,12 @@ const UNLISTED_TOOL_CEILING = 600;
 const AUTO_ADDED_CEILING = 1650;
 const AUTO_ADDED_PLUS_KNOWLEDGE_CEILING = 2450;
 /**
- * Headroom for a few new tools, so legitimate growth does not force a ceiling bump. Raised once,
- * for `decide`, whose nested question schema is structure rather than prose: the per-tool ceiling
- * below is what keeps a single description honest.
+ * Headroom for a few new tools, so legitimate growth does not force a ceiling bump. Raised for
+ * `decide`, whose nested question schema is structure rather than prose, and again for the three
+ * custom-page tools (about 630 tokens together, offered only to page sessions): the per-tool
+ * ceiling below is what keeps a single description honest.
  */
-const WHOLE_REGISTRY_CEILING = 11400;
+const WHOLE_REGISTRY_CEILING = 11600;
 
 /**
  * Derived, never hand-copied: the knowledge offer drags its companions along via addPairedTool
