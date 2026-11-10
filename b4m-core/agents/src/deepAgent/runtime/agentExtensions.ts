@@ -89,8 +89,9 @@ export interface ResolvedOrchestrationProfile {
    */
   confidenceGateMode?: ConfidenceGateMode;
   /**
-   * Whether the agent self-reports confidence scores. When false the executor skips the
-   * confidence callback and the gate never fires. Omitted => true.
+   * Whether the executor consumes the agent's confidence scores. The agent still scores its
+   * tool calls; when false the executor drops those scores (and scripted overrides), so no
+   * streak is recorded and neither gate site fires, like `off`. Omitted => true.
    */
   confidenceGateSelfReport?: boolean;
 }

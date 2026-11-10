@@ -78,6 +78,9 @@ export async function resolveTopLevelProfile(args: ResolveTopLevelProfileArgs): 
           agent.defaultThoroughness ?? args.adminDefaults?.defaultThoroughness ?? DEFAULT_THOROUGHNESS,
         isSynthetic: false,
         allowedToolsFromDefaults: !curatedAllowedTools,
+        // Persona for the ReActAgent - generated `systemPrompt` if present, else
+        // composed from personality/identity fields. Same builder the classic
+        // chat path uses, so the agent behaves identically in both paths.
         systemPrompt: buildAgentPersonaPrompt(agent),
         confidenceGateThreshold: agent.confidenceGateThreshold ?? args.adminDefaults?.confidenceGateThreshold,
         confidenceGateMode: agent.confidenceGateMode ?? args.adminDefaults?.confidenceGateMode,
