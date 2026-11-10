@@ -2,6 +2,7 @@ import { ISessionDocument } from '@bike4mind/common';
 import { useShallow } from 'zustand/react/shallow';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useMcpServers } from '@client/app/hooks/data/mcpServers';
+import { useComposerMcpConnections } from '@client/app/hooks/useComposerMcpConnections';
 import { useConfig } from '@client/app/hooks/data/settings';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
@@ -59,6 +60,13 @@ export function useActiveTools(currentSession: ISessionDocument | null) {
   // so they aren't double-counted.
   const iconedMcpCount = activeMcpServers.filter(name => ICONED_MCP_SERVERS.includes(name)).length;
   const enabledNonIconMcpCount = activeMcpServers.length - iconedMcpCount;
+  // Custom connectors have no icon, so each active one feeds the "+N" badge. Their slugs can never
+  // be agent-only, so "Only tools I pick" withholds them like any other integration.
+  const { offered: customConnections } = useComposerMcpConnections();
+  const disabledMcpConnections = useLLM(s => s.disabledMcpConnections) ?? [];
+  const activeCustomConnectionCount = skipAutoOffers
+    ? 0
+    : customConnections.filter(connection => !disabledMcpConnections.includes(connection.slug)).length;
   // Feature-gated switches outside the `tools` array (Quest Master, Agent Detection,
   // Lattice). Must stay in sync with pinnedCount's specialToolsCount in ToolsSection.
   const specialToolsCount =
@@ -70,7 +78,8 @@ export function useActiveTools(currentSession: ISessionDocument | null) {
       tool => !PRIMARY_TOOLS.includes(tool as unknown as (typeof PRIMARY_TOOLS)[number]) && tool !== 'dice_roll'
     ).length +
     specialToolsCount +
-    enabledNonIconMcpCount;
+    enabledNonIconMcpCount +
+    activeCustomConnectionCount;
 
   // Fast mode and a model without tool support send no tools, so nothing counts (ToolsButton
   // hides its indicators for the same reason). Same fail-open as ToolsButton while the catalog

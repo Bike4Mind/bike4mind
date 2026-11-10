@@ -99,6 +99,9 @@ vi.mock('@client/app/hooks/data/useModelInfo', () => ({
 vi.mock('@client/app/hooks/data/mcpServers', () => ({
   useMcpServers: () => ({ data: [], isPending: false, isFetching: false }),
 }));
+vi.mock('@client/app/hooks/useComposerMcpConnections', () => ({
+  useComposerMcpConnections: () => ({ all: [], offered: [], loaded: true }),
+}));
 vi.mock('@client/app/hooks/data/settings', () => ({
   useConfig: () => ({ data: { toolAvailability: mocks.toolAvailability.value } }),
 }));
