@@ -7166,7 +7166,7 @@ export const settingsMap = {
       'Require TOTP (Time-based One-Time Password) for all users when logging in. When disabled, MFA is optional and users can enable/disable it in their profiles.',
     defaultValue: false,
     category: 'Users',
-    // publicSafe: gates the startup "Checking security settings..." spinner (M2.5).
+    // publicSafe: gates the startup MFA loader (MFAEnforcementWrapper) (M2.5).
     // A policy boolean - exposing it reveals nothing exploitable.
     publicSafe: true,
   }),
