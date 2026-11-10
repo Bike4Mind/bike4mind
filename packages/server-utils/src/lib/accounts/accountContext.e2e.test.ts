@@ -128,6 +128,25 @@ describe('account context database adapters', () => {
     expect(projectedOwner).not.toHaveProperty('password');
   });
 
+  it('projects the ban flag so a banned account context reports banned', async () => {
+    await User.collection.insertMany([
+      { _id: OWNER_ID, createdAt: ago(60), emailVerified: true, isBanned: true },
+      { _id: CREATOR_ID, createdAt: ago(60), emailVerified: true },
+    ]);
+
+    const contexts = await resolveAccountContexts(
+      [
+        { ownerType: 'User', ownerId: String(OWNER_ID) },
+        { ownerType: 'User', ownerId: String(CREATOR_ID) },
+      ],
+      NOW,
+      defaultAccountContextDeps()
+    );
+
+    expect(contexts.get(`User:${String(OWNER_ID)}`)).toMatchObject({ banned: true });
+    expect(contexts.get(`User:${String(CREATOR_ID)}`)).toMatchObject({ banned: false });
+  });
+
   it('aggregates only the requested users and retained time window, including both boundary dates', async () => {
     const since = ago(90);
     const payment = (

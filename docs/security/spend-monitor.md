@@ -49,9 +49,10 @@ facts. Keys and agents inherit their actual payer's context, rather than their c
 
 Automatic paid limits require verified email, known account and responsible-owner ages at least
 `spendMonitorPaidAccountMinAgeDays` (default 7), and a known review state that allows the policy.
-An account created before signup risk scoring has neither a review state nor a score; once it meets
-the age requirement, that absence alone does not block paid limits (its alerts name it as
-`unscored_account`), and every recorded risk flag below still applies.
+An account with neither a review state nor a signup risk score (it predates scoring, or its scoring
+never completed) is treated the same way: once it meets the age requirement, that absence alone does
+not block paid limits (its alerts name it as `unscored_account`), and every recorded risk flag below
+still applies.
 An active recognized subscription or a dated unreversed credit-purchase stamp supplies paid standing.
 A purchase stamp with an invalid or future date cannot supply automatic paid standing. Credit
 purchase standing uses the existing purchase stamp, not a checkout/customer ID. A refund or dispute

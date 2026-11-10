@@ -34,8 +34,8 @@ export function selectSpendAccountPolicy(input: {
   }
   // Explicit operator trust can accommodate a new partner, but never overrides recorded risk flags.
   if (explicitlyTrusted) return decide('trusted', ['explicit_trust']);
-  // Accounts created before signup risk scoring have no score; past the minimum age that absence is
-  // not a risk signal, while every recorded risk flag above still applies.
+  // Any account without a signup risk score (predates scoring, or scoring never completed) passes
+  // once past the minimum age; recorded risk flags above still apply.
   const unscored = context.reviewState === 'unknown' && context.riskScore === null;
   const reasons = [
     ...(context.emailVerified !== true ? ['email_not_verified'] : []),
