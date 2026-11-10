@@ -10,9 +10,9 @@ import { AdminPageHeader, SegmentedControl, type SegmentedOption } from './share
 import { ADMIN_REGION_GAP } from './shared/adminStyles';
 
 const markdownStyles = {
-  '& h2': { fontSize: '1.4rem', fontWeight: 600, mt: 2.5, mb: 1.5 },
-  '& [data-markdown-title]': { fontSize: '1.8rem', fontWeight: 700, mt: 3, mb: 2 },
-  '& h3': { fontSize: '1.15rem', fontWeight: 600, mt: 2, mb: 1 },
+  '& h2': { fontSize: '1.2rem', fontWeight: 600, mt: 2.5, mb: 1.5 },
+  '& [data-markdown-title]': { fontSize: '1.375rem', fontWeight: 700, mt: 3, mb: 2 },
+  '& h3': { fontSize: '1.05rem', fontWeight: 600, mt: 2, mb: 1 },
   '& p': { mb: 1.5, lineHeight: 1.7 },
   '& ul, & ol': { pl: 3, mb: 1.5 },
   '& li': { mb: 0.5 },
