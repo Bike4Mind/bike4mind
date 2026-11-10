@@ -90,6 +90,41 @@ describe('selectSpendAccountPolicy', () => {
     expect(select({ ...context, paymentRiskEvent: true }, true, true).tier).toBe('standard');
     expect(select({ ...context, paymentRiskEvent: null, reviewReopened: null }, true, true).tier).toBe('standard');
   });
+  it('keeps a pending review standard even with explicit trust', () => {
+    expect(select({ ...context, reviewState: 'pending' }, true, true)).toMatchObject({
+      tier: 'standard',
+      reasons: ['review_pending'],
+    });
+  });
+  describe('accounts created before signup risk scoring', () => {
+    const unscored: AccountContext = { ...context, reviewState: 'unknown', riskScore: null };
+    it('uses paid limits once established, naming the missing score', () => {
+      expect(select(unscored)).toMatchObject({
+        tier: 'paid',
+        reasons: ['established_account', 'unscored_account', 'active_subscription'],
+      });
+      expect(select({ ...unscored, hasCreditPurchase: true, lastCreditPurchaseAgeDays: 20 }, false).reasons).toEqual([
+        'established_account',
+        'unscored_account',
+        'unreversed_credit_purchase',
+      ]);
+    });
+    it.each<Partial<AccountContext>>([
+      { accountAgeDays: 6.99 },
+      { responsibleAccountAgeDays: null },
+      { emailVerified: false },
+      { paymentRiskEvent: true },
+      { reviewReopened: true },
+      { reviewReopened: null },
+      { payments: { ...context.payments, status: 'observed', radarBlocked: 1 } },
+    ])('still keeps limits standard with %j', patch => {
+      expect(select({ ...unscored, ...patch }).tier).toBe('standard');
+    });
+    it('treats a review state without a score, or a score without a review state, as unknown', () => {
+      expect(select({ ...context, reviewState: 'unknown', riskScore: 10 }).reasons).toEqual(['risk_profile_unknown']);
+      expect(select({ ...context, reviewState: 'none', riskScore: null }).reasons).toEqual(['risk_score_unknown']);
+    });
+  });
   it('fails closed when account context is unavailable, including for an explicitly trusted payer', () => {
     expect(
       selectSpendAccountPolicy({

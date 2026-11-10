@@ -7,6 +7,8 @@ import type {
   SpendSourceTotal,
 } from '@bike4mind/common';
 import type { SlackAlarmMessage } from '../../events/alarmSlackMessage';
+import { CreditHolderType } from '@bike4mind/common';
+import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { evaluateSpend, type EvaluateDeps } from './evaluate';
 import type { SpendThresholds } from './rules';
 import { createSpendPost } from './slackPost';
@@ -743,7 +745,27 @@ describe('evaluateSpend', () => {
       expect(fakes.alerts[0].status).toBe('resolved');
     });
 
-    it.each(['young', 'unknown-risk', 'pending', 'payment-risk', 'blocked-payment'])(
+    it('gives an established subscriber created before risk scoring paid limits', async () => {
+      const fakes = createFakes();
+      vi.mocked(fakes.paidScopeDeps.findActiveSubscriptionsByOwners).mockResolvedValue(paidRows);
+      vi.mocked(fakes.accountContextDeps.findUsers).mockImplementation(async ids =>
+        ids.map(id => ({ id, createdAt: new Date('2026-01-01'), emailVerified: true, riskScore: null }))
+      );
+      fakes.setRollups([
+        ...windowBuckets('platform', 'all', 15000).map(bucket => ({ ...bucket, costUsd: 1 })),
+        ...windowBuckets('User', 'subscriber', 15000),
+      ]);
+      await run(fakes);
+      expect(fakes.alerts[0]).toMatchObject({
+        rule: 'account_ceiling',
+        context: {
+          accountTier: 'paid',
+          policyReasons: ['established_account', 'unscored_account', 'active_subscription'],
+        },
+      });
+    });
+
+    it.each(['young', 'pending', 'payment-risk', 'blocked-payment'])(
       'keeps a paid account with %s context on standard limits',
       async condition => {
         const fakes = createFakes();
@@ -753,10 +775,7 @@ describe('evaluateSpend', () => {
             id,
             createdAt: condition === 'young' ? new Date(NOW.getTime() - DAY_MS) : new Date('2026-01-01'),
             emailVerified: true,
-            riskScore:
-              condition === 'unknown-risk'
-                ? null
-                : { score: 10, reviewState: condition === 'pending' ? ('pending' as const) : ('none' as const) },
+            riskScore: { score: 10, reviewState: condition === 'pending' ? ('pending' as const) : ('none' as const) },
             paymentRiskEventAt: condition === 'payment-risk' ? NOW : null,
           }))
         );
@@ -830,6 +849,101 @@ describe('evaluateSpend', () => {
       expect(fakes.alerts).toContainEqual(expect.objectContaining({ rule: 'account_ceiling' }));
       expect(fakes.deps.logger.error).toHaveBeenCalledWith('spend-monitor-paid-lookup-failed', expect.anything());
     });
+  });
+
+  describe('account context follows the payer', () => {
+    const platform = windowBuckets('platform', 'all', 100).map(bucket => ({ ...bucket, costUsd: 1 }));
+    const spenders = [...windowBuckets('apiKey', 'k1', 2000), ...windowBuckets('Agent', 'a1', 2000)];
+
+    const orgBilledSpenders = (fakes: ReturnType<typeof createFakes>, creatorId: string, riskyIds: string[]) => {
+      fakes.deps.resolveScopeDeps = {
+        ...fakes.deps.resolveScopeDeps,
+        findApiKeysByIds: async ids =>
+          ids.map(id => ({
+            id,
+            name: 'ci-key',
+            userId: creatorId,
+            billingOwnerType: CreditHolderType.Organization,
+            organizationId: 'o1',
+          })),
+        findAgentsByIds: async ids => ids.map(id => ({ id, name: 'helper', organizationId: 'o1' })),
+        findOrganizationsByIds: async ids => ids.map(id => ({ id, name: `Org ${id}` })),
+      };
+      vi.mocked(fakes.accountContextDeps.findUsers).mockImplementation(async ids =>
+        ids.map(id => ({
+          id,
+          createdAt: new Date('2026-01-01'),
+          emailVerified: true,
+          riskScore: { score: 10, reviewState: 'none' as const },
+          paymentRiskEventAt: riskyIds.includes(id) ? NOW : null,
+        }))
+      );
+      fakes.setRollups([...platform, ...spenders]);
+    };
+
+    it('gives keys and agents the paid tier of a clean paying organization despite a risky creator', async () => {
+      const fakes = createFakes();
+      orgBilledSpenders(fakes, 'creator', ['creator']);
+      vi.mocked(fakes.paidScopeDeps.findActiveSubscriptionsByOwners).mockImplementation(async ownerType =>
+        ownerType === SubscriptionOwnerType.Organization
+          ? [{ ownerId: 'o1', priceId: SUBSCRIPTION_PLANS[0].priceId, status: 'active' }]
+          : []
+      );
+      await run(fakes);
+      expect(fakes.alerts).toHaveLength(0);
+      expect(fakes.accountContextDeps.findUsers).toHaveBeenCalledExactlyOnceWith(['owner-o1']);
+    });
+
+    it('applies the risk flags of the paying organization to keys and agents despite a clean creator', async () => {
+      const fakes = createFakes();
+      orgBilledSpenders(fakes, 'creator', ['owner-o1']);
+      vi.mocked(fakes.paidScopeDeps.findActiveSubscriptionsByOwners).mockImplementation(async ownerType =>
+        ownerType === SubscriptionOwnerType.User
+          ? [{ ownerId: 'creator', priceId: SUBSCRIPTION_PLANS[0].priceId, status: 'active' }]
+          : []
+      );
+      await run(fakes);
+      expect(fakes.alerts.map(alert => [alert.scopeType, alert.rule])).toEqual([
+        ['Agent', 'account_ceiling'],
+        ['apiKey', 'apikey_ceiling'],
+      ]);
+      for (const alert of fakes.alerts) {
+        expect(alert.context).toMatchObject({ accountTier: 'standard', policyReasons: ['payment_risk_event'] });
+      }
+    });
+  });
+
+  it('resolves an incident with the tier and policy context stored by its last breach, not a fresh lookup', async () => {
+    const fakes = createFakes();
+    const platform = windowBuckets('platform', 'all', 100).map(bucket => ({ ...bucket, costUsd: 1 }));
+    const accountCreatedAt = (createdAt: Date) =>
+      vi.mocked(fakes.accountContextDeps.findUsers).mockImplementation(async ids =>
+        ids.map(id => ({
+          id,
+          createdAt,
+          emailVerified: true,
+          riskScore: { score: 10, reviewState: 'none' as const },
+        }))
+      );
+    accountCreatedAt(new Date(NOW.getTime() - DAY_MS));
+    fakes.setRollups([...platform, ...windowBuckets('User', 'u1', 2000)]);
+    await run(fakes);
+    const lastBreachContext = structuredClone(fakes.alerts[0].context);
+    expect(lastBreachContext).toMatchObject({ accountTier: 'standard' });
+
+    accountCreatedAt(new Date('2026-01-01'));
+    vi.mocked(fakes.paidScopeDeps.findActiveSubscriptionsByOwners).mockResolvedValue([
+      { ownerId: 'u1', priceId: SUBSCRIPTION_PLANS[0].priceId, status: 'active' },
+    ]);
+    fakes.setRollups(platform);
+    fakes.nextWindow();
+    await run(fakes);
+    fakes.nextWindow();
+    await run(fakes);
+
+    expect(fakes.alerts[0].status).toBe('resolved');
+    expect(fakes.alerts[0].context).toEqual(lastBreachContext);
+    expect(JSON.stringify(fakes.posts.at(-1))).toContain('(standard)');
   });
 
   describe('trusted accounts', () => {

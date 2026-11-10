@@ -33,6 +33,9 @@ export function selectSpendAccountPolicy(input: {
   }
   // Explicit operator trust can accommodate a new partner, but never overrides recorded risk flags.
   if (explicitlyTrusted) return decide('trusted', ['explicit_trust']);
+  // Accounts created before signup risk scoring have no score; past the minimum age that absence is
+  // not a risk signal, while every recorded risk flag above still applies.
+  const unscored = context.reviewState === 'unknown' && context.riskScore === null;
   const reasons = [
     ...(context.emailVerified !== true ? ['email_not_verified'] : []),
     ...(context.accountAgeDays === null || context.responsibleAccountAgeDays === null
@@ -40,12 +43,13 @@ export function selectSpendAccountPolicy(input: {
       : Math.min(context.accountAgeDays, context.responsibleAccountAgeDays) < minimumPaidAgeDays
         ? ['account_young']
         : []),
-    ...(context.reviewState === 'unknown' ? ['risk_profile_unknown'] : []),
-    ...(context.reviewState !== 'approved' && context.riskScore === null ? ['risk_score_unknown'] : []),
+    ...(context.reviewState === 'unknown' && !unscored ? ['risk_profile_unknown'] : []),
+    ...(context.reviewState !== 'approved' && context.riskScore === null && !unscored ? ['risk_score_unknown'] : []),
   ];
   if (reasons.length > 0) return decide('standard', reasons);
-  if (subscribed) return decide('paid', ['established_account', 'active_subscription']);
+  const established = unscored ? ['established_account', 'unscored_account'] : ['established_account'];
+  if (subscribed) return decide('paid', [...established, 'active_subscription']);
   if (context.hasCreditPurchase === true && context.lastCreditPurchaseAgeDays !== null)
-    return decide('paid', ['established_account', 'unreversed_credit_purchase']);
+    return decide('paid', [...established, 'unreversed_credit_purchase']);
   return decide('standard', ['no_paid_standing']);
 }

@@ -142,6 +142,29 @@ describe('resolveAccountContexts', () => {
     expect(deps.findPaymentHistory).toHaveBeenCalledWith(['owner'], ago(90), NOW);
   });
 
+  it.each([
+    { name: 'the organization has the stamp and the owner does not', orgStamp: ago(4), ownerStamp: undefined },
+    { name: 'the owner has the stamp and the organization does not', orgStamp: undefined, ownerStamp: ago(4) },
+  ])(
+    'takes credit-purchase standing from the organization stamp, not the owner stamp, when $name',
+    async ({ orgStamp, ownerStamp }) => {
+      const deps = createDeps({
+        findOrganizations: vi.fn(async () => [
+          { id: 'org', userId: 'owner', createdAt: ago(30), lastCreditsPurchasedAt: orgStamp },
+        ]),
+        findUsers: vi.fn(async () => [{ ...user('owner'), lastCreditsPurchasedAt: ownerStamp }]),
+      });
+      const context = (await resolveAccountContexts([{ ownerType: 'Organization', ownerId: 'org' }], NOW, deps)).get(
+        'Organization:org'
+      );
+      expect(context).toMatchObject(
+        orgStamp
+          ? { hasCreditPurchase: true, lastCreditPurchaseAgeDays: 4 }
+          : { hasCreditPurchase: false, lastCreditPurchaseAgeDays: null }
+      );
+    }
+  );
+
   it('batches and deduplicates shared billing owners without querying nonexistent organization owners', async () => {
     const deps = createDeps({
       findOrganizations: vi.fn(async () => [{ id: 'org', userId: 'user', createdAt: ago(2) }]),

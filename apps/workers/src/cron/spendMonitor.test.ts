@@ -43,7 +43,10 @@ vi.mock('@bike4mind/observability', () => ({
   },
 }));
 
+import type { AccountContext } from '@bike4mind/server-utils/lib/accounts/accountContext';
 import { handler } from './spendMonitor';
+import { selectSpendAccountPolicy } from './spendMonitor/accountPolicy';
+import type { SpendThresholds } from './spendMonitor/rules';
 
 const event = { time: '2026-10-30T10:12:00Z' };
 
@@ -170,6 +173,47 @@ describe('spendMonitor handler', () => {
       emailDomains: new Set(['example.com', 'corp.example.org']),
       accountIds: new Set(['org-1', 'user-2']),
     });
+  });
+
+  it('applies the paid minimum age and risk review threshold from settings to the account tier', async () => {
+    mocks.latestBucketStart.mockResolvedValue(new Date('2026-10-30T10:05:00.000Z'));
+    const establishedFor10Days: AccountContext = {
+      accountAgeDays: 10,
+      responsibleAccountAgeDays: 10,
+      emailVerified: true,
+      reviewState: 'none',
+      riskScore: 40,
+      reviewReopened: false,
+      paymentRiskEvent: false,
+      hasCreditPurchase: false,
+      lastCreditPurchaseAgeDays: null,
+      payments: {
+        status: 'observed',
+        succeeded: 0,
+        failed: 0,
+        radarBlocked: 0,
+        elevatedRisk: 0,
+        latestSucceededAgeDays: null,
+      },
+      evidence: { status: 'observed', ageHours: 1 },
+    };
+    const tierUnder = async (overrides: Record<string, unknown>) => {
+      useSettings(overrides);
+      mocks.evaluateSpend.mockClear();
+      await handler(event);
+      const thresholds: SpendThresholds = mocks.evaluateSpend.mock.calls[0][2];
+      return selectSpendAccountPolicy({
+        context: establishedFor10Days,
+        subscribed: true,
+        explicitlyTrusted: false,
+        minimumPaidAgeDays: thresholds.paidAccountMinAgeDays,
+        riskReviewScoreThreshold: thresholds.riskReviewScoreThreshold,
+      }).tier;
+    };
+
+    expect(await tierUnder({})).toBe('paid');
+    expect(await tierUnder({ spendMonitorPaidAccountMinAgeDays: 14 })).toBe('standard');
+    expect(await tierUnder({ signupRiskScoring: { reviewThreshold: 30 } })).toBe('standard');
   });
 
   it('wires the post to Slack only when spendMonitorSlackEnabled is true', async () => {

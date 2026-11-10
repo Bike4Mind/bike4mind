@@ -235,6 +235,15 @@ describe('decideIncidents', () => {
     });
   });
 
+  it('leaves the stored tier and policy context untouched when an incident resolves', () => {
+    const context = { accountTier: 'standard', policyReasons: ['account_young'], baseline: 10, ratio: 10 };
+    const [decision] = decideIncidents([active({ clearRuns: 1, context })], [], now, windowEnd);
+
+    expect(decision.kind).toBe('resolve');
+    if (decision.kind === 'open') throw new Error('expected an existing incident decision');
+    expect(decision.patch).not.toHaveProperty('context');
+  });
+
   it('resets clearRuns when a breach follows a clear run', () => {
     const [decision] = decideIncidents([active({ clearRuns: 1 })], [breach({ value: 100 })], now, windowEnd);
 
