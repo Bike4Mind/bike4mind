@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
-import { AdminAuditLogModel, User } from '@bike4mind/database';
+import { AdminAuditLogModel, Organization, PartnerSignupRule, User } from '@bike4mind/database';
 import {
   createMongoReplSet,
   MONGO_TEST_TIMEOUT_MS,
@@ -11,10 +11,14 @@ const h = vi.hoisted(() => ({ purgeFiles: vi.fn(), purgeContent: vi.fn(), sendCo
 vi.mock('./purgeAccountFiles', () => ({ purgeAccountFiles: h.purgeFiles }));
 vi.mock('./purgeAccountContent', () => ({ purgeAccountContent: h.purgeContent }));
 vi.mock('./accountDeletionEmail', () => ({ sendAccountDeletionCompleteEmail: h.sendComplete }));
-vi.mock('@bike4mind/services', async importOriginal => ({
-  adminAuditService: (await importOriginal<typeof import('@bike4mind/services')>()).adminAuditService,
-  authSessionService: { endRealtimeConnections: vi.fn() },
-}));
+vi.mock('@bike4mind/services', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/services')>();
+  return {
+    adminAuditService: actual.adminAuditService,
+    organizationService: actual.organizationService,
+    authSessionService: { endRealtimeConnections: vi.fn() },
+  };
+});
 vi.mock('@server/services/hardDeleteUser', async () => {
   const { User: UserModel } = await import('@bike4mind/database');
   return {
@@ -103,6 +107,50 @@ describe('account deletion purge claims with Mongo', () => {
       target: { kind: 'user', id: userId },
       context: { source: 'worker' },
     });
+  });
+  it('deletes an organization the user owns alone, then deletes the user', async () => {
+    const userId = await seedUser();
+    const org = await Organization.create({ name: 'Solo', userId, personal: false });
+    await expect(complete(userId)).resolves.toEqual({ deleted: true });
+    expect(await Organization.exists({ _id: org.id })).toBeNull();
+    expect(await Organization.exists({ _id: org.id }).setOptions({ includeDeleted: true } as never)).not.toBeNull();
+    expect(await User.exists({ _id: userId })).toBeNull();
+  });
+  it('deletes an organization whose only manager entry is the owner and clears partner rules pointing at it', async () => {
+    const userId = await seedUser();
+    const org = await Organization.create({ name: 'Solo', userId, personal: false, adminUserIds: [userId] });
+    await PartnerSignupRule.collection.insertOne({ domain: 'solo.example.test', organizationId: String(org.id) });
+    await expect(complete(userId)).resolves.toEqual({ deleted: true });
+    expect(await Organization.exists({ _id: org.id })).toBeNull();
+    expect(await PartnerSignupRule.collection.countDocuments({ organizationId: String(org.id) })).toBe(0);
+  });
+  it('leaves an organization that gained a member after the check and refuses the delete', async () => {
+    const userId = await seedUser();
+    const org = await Organization.create({ name: 'Racing', userId, personal: false });
+    const { classifyOwnedOrganizations } = await import('./ownedOrganizations');
+    const before = await classifyOwnedOrganizations(userId);
+    expect(before.solo).toHaveLength(1);
+    await Organization.collection.updateOne(
+      { _id: org._id },
+      { $push: { users: { userId: new mongoose.Types.ObjectId().toString(), permissions: ['read'] } } as never }
+    );
+    const { deleteSoleOwnedOrganizations } = await import('./ownedOrganizations');
+    const deleted = await deleteSoleOwnedOrganizations(userId, { logger: logger as never });
+    expect(deleted).toEqual([]);
+    expect(await Organization.exists({ _id: org.id })).not.toBeNull();
+  });
+  it('refuses an owner of an organization with other members and keeps both the user and the organization', async () => {
+    const userId = await seedUser();
+    const org = await Organization.create({
+      name: 'Shared',
+      userId,
+      personal: false,
+      users: [{ userId: new mongoose.Types.ObjectId().toString(), permissions: ['read'] }],
+    });
+    await expect(complete(userId)).rejects.toThrow('still owns an organization with other members');
+    expect(await Organization.exists({ _id: org.id })).not.toBeNull();
+    expect(await User.exists({ _id: userId })).not.toBeNull();
+    expect(h.purgeFiles).not.toHaveBeenCalled();
   });
   it('admits one worker and skips a competing live claim', async () => {
     const userId = await seedUser();
