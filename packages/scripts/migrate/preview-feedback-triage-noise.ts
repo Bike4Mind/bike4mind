@@ -1,12 +1,11 @@
-import { connectDB, countNewFeedback, whenCatalogSeeded, mongoose } from '@bike4mind/database';
+import { countNewFeedback, mongoose } from '@bike4mind/database';
 import { Resource } from 'sst';
 import { realpathSync } from 'fs';
 import { pathToFileURL } from 'url';
-import { Config } from '../utils/config';
 import { countTriageNoise } from './feedbackTriageNoise';
 
 /**
- * READ-ONLY dry run for 20260921240060_close-feedback-triage-noise: how many New feedback rows it
+ * READ-ONLY dry run for 20260921240070_close-feedback-triage-noise: how many New feedback rows it
  * would close, over the last 30 days and in total. Its own script rather than a flag on the
  * migration because the migrator records a migration as applied as soon as `up()` resolves.
  *
@@ -17,10 +16,10 @@ import { countTriageNoise } from './feedbackTriageNoise';
 const RECENT_DAYS = 30;
 
 export async function main(): Promise<void> {
-  const dbUri = Config.MONGODB_URI;
+  const dbUri = Resource.MONGODB_URI.value;
   if (!dbUri) throw new Error('MONGODB_URI is required');
   const stage = Resource.App.stage;
-  await connectDB(dbUri.replace('%STAGE%', stage));
+  await mongoose.connect(dbUri.replace('%STAGE%', stage), { autoIndex: false, autoCreate: false });
 
   const since = new Date(Date.now() - RECENT_DAYS * 24 * 60 * 60 * 1000);
   const [newTotal, recent, total] = await Promise.all([
@@ -33,13 +32,7 @@ export async function main(): Promise<void> {
   console.log(
     `  waitlist signups:      ${recent.waitlistSignups} in the last ${RECENT_DAYS} days, ${total.waitlistSignups} in all`
   );
-  console.log(
-    `  comment-less thumbs-up: ${recent.bareThumbsUps} in the last ${RECENT_DAYS} days, ${total.bareThumbsUps} in all`
-  );
-  console.log(
-    `  placeholder-only thumbs-up: ${recent.placeholderThumbsUps} in the last ${RECENT_DAYS} days, ${total.placeholderThumbsUps} in all`
-  );
-  console.log(`WOULD CLOSE ${total.waitlistSignups + total.bareThumbsUps + total.placeholderThumbsUps} row(s).`);
+  console.log(`WOULD CLOSE ${total.waitlistSignups} waitlist row(s). Historical thumbs-ups are preserved.`);
 }
 
 const isMainModule = (() => {
@@ -59,7 +52,9 @@ if (isMainModule)
       console.error(e);
       process.exitCode = 1;
     } finally {
-      await whenCatalogSeeded().catch(() => {});
-      await mongoose.disconnect().catch(() => {});
+      await mongoose.disconnect().catch((error: unknown) => {
+        console.error('Failed to disconnect the feedback preview database', error);
+        process.exitCode = 1;
+      });
     }
   })();

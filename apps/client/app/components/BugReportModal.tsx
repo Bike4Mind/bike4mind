@@ -123,6 +123,7 @@ const BugReportModal: React.FC<BugReportModalProps> = ({
         <Stack direction="row" justifyContent="start" spacing={5}>
           <Tooltip title="Good AI output">
             <ThumbUpIcon
+              data-testid="bug-report-modal-thumbs-up"
               sx={getIconStyle(FeedbackType.THUMBS_UP)}
               onClick={() => handleFeedbackTypeChange(FeedbackType.THUMBS_UP)}
             />

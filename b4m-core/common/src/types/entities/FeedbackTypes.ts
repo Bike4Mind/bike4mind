@@ -33,7 +33,8 @@ export function hasFeedbackComment(content: string): boolean {
  * Whether a new report has nothing for triage to act on, so it is stored Closed rather than New:
  * a thumbs-up with no comment (it still counts in trends), or an untyped waitlist signup - a typed
  * report carrying the tag is still a real report. A comment-less thumbs-down stays New. Keep in
- * sync with the backfill filters in packages/scripts/migrate/feedbackTriageNoise.ts.
+ * sync with the waitlist filter in packages/scripts/migrate/feedbackTriageNoise.ts. Historical
+ * thumbs-ups are preserved by that migration because their original comments may be unavailable.
  */
 export function isFeedbackTriageNoise(report: { type?: string; hasContent: boolean; tags?: string[] }): boolean {
   if (!report.type && report.tags?.includes(WAITLIST_FEEDBACK_TAG)) return true;
