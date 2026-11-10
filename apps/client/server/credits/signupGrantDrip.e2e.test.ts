@@ -289,11 +289,22 @@ describe('signup activity drip', () => {
     expect((await drip(user.id, 2)).creditsGranted).toBe(0);
   });
 
-  it('drips nothing while the cap is unset', async () => {
+  it('drips nothing while the cap is unset, and alerts that once per day', async () => {
     delete config.signupGrantDripCap;
     const user = await createSignupStageUser();
+    const other = await createSignupStageUser(1);
     expect((await drip(user.id, 0)).creditsGranted).toBe(0);
+    expect((await drip(other.id, 0)).creditsGranted).toBe(0);
     expect((await User.findById(user.id))?.signupGrant).toMatchObject({ unlockCredits: 0 });
+    const capAlerts = notify.mock.calls.filter(([alert]) => alert.threshold === 'drip_cap_default');
+    expect(capAlerts).toEqual([[expect.objectContaining({ pool: 'trickle', day: day(0), budget: 0 })]]);
+  });
+
+  it.each(['0', '9000'])('does not alert the default cap with a stored cap of %s', async cap => {
+    config.signupGrantDripCap = cap;
+    const user = await createSignupStageUser();
+    await drip(user.id, 0);
+    expect(notify.mock.calls.filter(([alert]) => alert.threshold === 'drip_cap_default')).toEqual([]);
   });
 
   it('draws the daily budget, and an exhausted budget pays nothing and retries on a later day', async () => {

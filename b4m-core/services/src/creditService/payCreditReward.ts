@@ -5,7 +5,7 @@ import {
   type SignupGrant,
   type SignupProtection,
 } from '@bike4mind/common';
-import { accountBlockReasons, type AccountStateFields } from '../userService/accountState';
+import { accountBlockReasons, isAiAccessRevoked, type AccountStateFields } from '../userService/accountState';
 import {
   drawnInRefundScope,
   queueHeadBlocks,
@@ -14,7 +14,7 @@ import {
 } from '../userService/signupGrantBudget';
 import { addCreditsWithLedgerRow, DuplicateCreditTransactionError, type AddCreditsAdapters } from './addCredits';
 
-export type CreditRewardSource = 'gear' | 'referral_first_answer';
+export type CreditRewardSource = 'gear' | 'referral_first_answer' | 'preference_arena' | 'referral_subscription';
 
 /** `source` is stamped on the ledger row as metadata.rewardSource; `reason` keeps each caller's existing label. */
 export type HeldCreditRewardInput = {
@@ -25,6 +25,8 @@ export type HeldCreditRewardInput = {
   reason: string;
   description: string;
   metadata?: Record<string, unknown>;
+  /** Stamped as the paid lot's stripeRef, so a refund take-back can find the lot (clawbackCreditLotsByStripeRef). */
+  lotRef?: string;
 };
 
 /** `paused` is a blocked account's reward, out of the queue until unblock restores it to `held`. */
@@ -41,7 +43,8 @@ export interface HeldCreditRewardRepository {
   oldestHeldCredits(maxCredits?: number): Promise<number | null>;
   /** Oldest held rewards first; `maxCredits` leaves out rewards larger than that (a whole day's pool). */
   listHeld(limit: number, maxCredits?: number): Promise<HeldCreditRewardRow[]>;
-  settle(transactionId: string, status: 'paid' | 'void'): Promise<void>;
+  /** Settles a `held` row; with `credits`, only while it still holds that amount. Returns how many rows moved. */
+  settle(transactionId: string, status: 'paid' | 'void', options?: { credits?: number }): Promise<number>;
   /** Moves a user's held rewards out of the queue; returns how many moved. */
   pauseForUser(userId: string): Promise<number>;
   /** Moves one held reward out of the queue, leaving the user's other rows alone; returns how many moved. */
@@ -53,7 +56,9 @@ export interface HeldCreditRewardRepository {
 export type RewardPartyFields = AccountStateFields & {
   isSynthetic?: boolean | null;
   deletedAt?: Date | null;
-  signupGrant?: Pick<SignupGrant, 'blocked'> | null;
+  signupGrant?: Pick<SignupGrant, 'blocked' | 'unlockForfeited'> | null;
+  isModerated?: boolean | null;
+  riskScore?: { reviewState?: string | null } | null;
 };
 
 /**
@@ -68,13 +73,13 @@ export const isRewardPartyBlocked = (party: RewardPartyFields) =>
   party.moderation?.status === 'suspend_pending';
 
 /**
- * isRewardPartyBlocked plus an admin's grant block, for the account a reward pays. Hold time
+ * isRewardPartyBlocked plus an admin's grant block or a forfeited signup unlock, for the account a reward pays. Hold time
  * (packages/server-utils/src/referrals/firstAnswerReward.ts, the gears catalog) and release time both use it, so a
  * reward never pays on release what it would have refused up front. It never applies to the invited friend of a
  * referral reward, so blocking a friend cannot hold the inviter's reward in the queue.
  */
 export const isRewardRecipientBlocked = (party: RewardPartyFields) =>
-  isRewardPartyBlocked(party) || isSignupGrantBlocked(party);
+  isRewardPartyBlocked(party) || isSignupGrantBlocked(party) || !!party.signupGrant?.unlockForfeited;
 
 /** Metadata key naming the invited friend on a referral reward; that friend is re-checked before paying. */
 export const REFERRED_USER_ID_METADATA_KEY = 'referredUserId';
@@ -97,28 +102,52 @@ export type PayCreditRewardOutcome =
 
 /**
  * 'transient' covers states an account can leave (dispute pending, suspension or suspend_pending, both
- * appealable, or an admin grant block on the recipient, which unblock lifts): the release keeps such a reward
- * queued rather than voiding it, which would forfeit it for good.
+ * appealable, or an admin grant block on the recipient, which an admin can lift): the release keeps such a reward
+ * queued rather than voiding it, which would forfeit it for good. A forfeited signup unlock is never cleared
+ * (userService.forfeitPaymentUnlock), so the recipient's queued rewards are voided instead of holding the queue head.
  */
 type PartyBlock = 'terminal' | 'transient' | null;
 
 const partyBlock = (party: RewardPartyFields | null, isRecipient = false): PartyBlock => {
   if (!party || party.deletedAt || party.isSynthetic || party.isBanned) return 'terminal';
+  if (isRecipient && party.signupGrant?.unlockForfeited) return 'terminal';
   return (isRecipient ? isRewardRecipientBlocked(party) : isRewardPartyBlocked(party)) ? 'transient' : null;
 };
 
+/** The vote-time arena gates (apps/client/server/preferenceArena/arenaService.ts ineligibleReason) beyond the account gate. */
+const arenaRecipientBlocked = (party: RewardPartyFields) =>
+  isAiAccessRevoked(party) || party.riskScore?.reviewState === 'pending';
+
+const recipientBlock = (party: RewardPartyFields | null, source: CreditRewardSource): PartyBlock =>
+  partyBlock(party, true) ??
+  (source === 'preference_arena' && party && arenaRecipientBlocked(party) ? 'transient' : null);
+
 async function partiesBlock(reward: HeldCreditRewardInput, adapters: PayCreditRewardAdapters): Promise<PartyBlock> {
-  const userBlock = partyBlock(await adapters.users.findById(reward.userId), true);
+  const recipient = await adapters.users.findById(reward.userId);
+  const userBlock = recipientBlock(recipient, reward.source);
   if (userBlock === 'terminal') return userBlock;
   const friendId = reward.metadata?.[REFERRED_USER_ID_METADATA_KEY];
-  if (reward.source !== 'referral_first_answer' || typeof friendId !== 'string') return userBlock;
+  const isReferral = reward.source === 'referral_first_answer' || reward.source === 'referral_subscription';
+  if (!isReferral || typeof friendId !== 'string') return userBlock;
   return partyBlock(await adapters.users.findById(friendId)) ?? userBlock;
 }
 
 type PayNowResult =
-  { status: 'paid'; creditTransactionId: string } | { status: 'exhausted' | 'contended' | 'duplicate' | 'blocked' };
+  | { status: 'paid'; creditTransactionId: string }
+  | { status: 'exhausted' | 'contended' | 'duplicate' | 'blocked' | 'changed' };
 
-async function payNow(reward: HeldCreditRewardInput, adapters: PayCreditRewardAdapters): Promise<PayNowResult> {
+/** Thrown inside the payout transaction when the held row changed since it was listed, to roll the payout back. */
+class HeldRewardChangedError extends Error {}
+
+/**
+ * `settleHeld` (release only) settles the queued row as paid in the payout transaction, provided it still holds
+ * `reward.credits`: a refund that reduced or voided it conflicts with that write, and the payout rolls back as 'changed'.
+ */
+async function payNow(
+  reward: HeldCreditRewardInput,
+  adapters: PayCreditRewardAdapters,
+  { settleHeld = false }: { settleHeld?: boolean } = {}
+): Promise<PayNowResult> {
   const reservation = await reserveSignupGrantBudget(adapters, reward.transactionId, reward.credits, {
     pool: 'trickle',
   });
@@ -128,14 +157,16 @@ async function payNow(reward: HeldCreditRewardInput, adapters: PayCreditRewardAd
   if (reservation.outcome === 'reserved' && !reservation.fresh) return { status: 'contended' };
   const { withTransaction } = adapters;
   // A duplicate insert aborts an owned transaction, so it must throw out of it rather than read on.
-  const creditAdapters: AddCreditsAdapters = withTransaction
-    ? { ...adapters, duplicateTransactionId: 'throw' }
-    : adapters;
+  const creditAdapters: AddCreditsAdapters = {
+    ...adapters,
+    ...(withTransaction ? { duplicateTransactionId: 'throw' as const } : {}),
+    lotRef: reward.lotRef ?? adapters.lotRef,
+  };
   const credit = async () => {
     // Read inside the payout transaction: a block that commits after the caller's check conflicts with this
     // write, and the retry then sees the flag. Without an owned transaction this narrows the window only.
-    if (isSignupGrantBlocked((await adapters.users.findById(reward.userId)) ?? {})) return null;
-    return addCreditsWithLedgerRow(
+    if (recipientBlock(await adapters.users.findById(reward.userId), reward.source)) return null;
+    const credited = await addCreditsWithLedgerRow(
       {
         ownerId: reward.userId,
         ownerType: CreditHolderType.User,
@@ -148,6 +179,14 @@ async function payNow(reward: HeldCreditRewardInput, adapters: PayCreditRewardAd
       },
       creditAdapters
     );
+    if (
+      settleHeld &&
+      withTransaction &&
+      credited.creditTransactionId &&
+      !(await adapters.heldRewards.settle(reward.transactionId, 'paid', { credits: reward.credits }))
+    )
+      throw new HeldRewardChangedError();
+    return credited;
   };
   try {
     const credited = withTransaction ? await withTransaction(credit) : await credit();
@@ -162,6 +201,10 @@ async function payNow(reward: HeldCreditRewardInput, adapters: PayCreditRewardAd
     }
     return { status: 'paid', creditTransactionId };
   } catch (error) {
+    if (error instanceof HeldRewardChangedError) {
+      await reservation.release();
+      return { status: 'changed' };
+    }
     if (withTransaction && error instanceof DuplicateCreditTransactionError) {
       await reservation.release();
       return { status: 'duplicate' };
@@ -184,7 +227,7 @@ async function payNow(reward: HeldCreditRewardInput, adapters: PayCreditRewardAd
 }
 
 /**
- * Pays a free reward (gear, referral) from the trickle pool. A dry pool, or a queued older reward the
+ * Pays a free reward (gear, referral, arena vote) from the trickle pool. A dry pool, or a queued older reward the
  * pool could no longer cover after this one, holds it for releaseHeldCreditRewards; a blocked account
  * gets nothing and nothing is queued, except that a block landing after the queue insert pauses that row.
  * Idempotent on `transactionId`.
@@ -217,8 +260,14 @@ export async function payCreditReward(
   }
   await adapters.heldRewards.hold(reward);
   // A block can commit between the check above and this insert, after its pause already ran; the flag is
-  // read again once the row exists, so either that pause or this one takes it out of the queue.
-  if (isSignupGrantBlocked((await adapters.users.findById(reward.userId)) ?? {})) {
+  // read again once the row exists, so either that pause or this one takes it out of the queue. A grant block
+  // pauses, since unblock resumes paused rows; a forfeit is never lifted, so its row is voided.
+  const recipient = (await adapters.users.findById(reward.userId)) ?? {};
+  if (recipient.signupGrant?.unlockForfeited) {
+    await adapters.heldRewards.settle(reward.transactionId, 'void');
+    return { outcome: 'blocked' };
+  }
+  if (isSignupGrantBlocked(recipient)) {
     await adapters.heldRewards.pauseOne(reward.transactionId);
     return { outcome: 'blocked' };
   }
@@ -272,7 +321,7 @@ export async function releaseHeldCreditRewards(
         result.voided++;
         continue;
       }
-      const paid = await payNow(reward, adapters);
+      const paid = await payNow(reward, adapters, { settleHeld: true });
       if (paid.status === 'exhausted') {
         // A reward above the whole daily budget never fits; stopping at it would starve the queue behind it.
         // The scan already leaves those out; this covers a pool lowered while the run is under way.
@@ -281,8 +330,9 @@ export async function releaseHeldCreditRewards(
         result.budgetExhausted = true;
         break;
       }
-      // Another attempt owns today's draw; it settles the row, or a later run retries.
-      if (paid.status === 'contended') continue;
+      // Another attempt owns today's draw; it settles the row, or a later run retries. A row a refund changed
+      // after it was listed pays its new amount on a later run.
+      if (paid.status === 'contended' || paid.status === 'changed') continue;
       // Blocked after the check above; the row stays queued like any other transient block.
       if (paid.status === 'blocked') {
         result.deferred++;

@@ -13,9 +13,10 @@ const VOTE_BUTTONS: ReadonlyArray<{ choice: ArenaChoice; label: string }> = [
   { choice: 'b', label: 'B is better' },
 ];
 
-function formatVoteToast(creditsAwarded: number): string {
+function formatVoteToast(creditsAwarded: number, queued?: boolean): string {
   if (creditsAwarded <= 0) return 'Thanks for your feedback';
-  return creditsAwarded === 1 ? '+1 credit' : `+${creditsAwarded} credits`;
+  const amount = creditsAwarded === 1 ? '+1 credit' : `+${creditsAwarded} credits`;
+  return queued ? `${amount} pending` : amount;
 }
 
 function AnswerCard({ label, text, testId }: { label: string; text: string; testId: string }) {
@@ -99,7 +100,7 @@ export default function ArenaPage() {
           voteInFlight.current = false;
         },
         onSuccess: result => {
-          toast.success(formatVoteToast(result.creditsAwarded));
+          toast.success(formatVoteToast(result.creditsAwarded, result.queued));
           void refetch();
         },
         onError: voteError => {
