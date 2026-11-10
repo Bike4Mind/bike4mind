@@ -1,4 +1,4 @@
-import { FC, useMemo, useState } from 'react';
+import { FC, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Box,
@@ -19,6 +19,7 @@ import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import {
   COPY_FIELDS,
+  TEXT_MAX,
   TUTORIAL_CARD_SIDES,
   type AnchorUnit,
   type TutorialStep,
@@ -116,10 +117,12 @@ interface Props {
   choices: TutorialAnchorChoices;
   /** The host's own step renderers, on top of the generic ones, so a step nothing renders can be flagged. */
   steps?: TutorialStepRegistry;
+  /** Told whenever the draft gains or loses unsaved changes. */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 /** Live edits to one repo module: copy, anchors, order, and a turn's prompt or reply, saved as one set. */
-const TutorialOverrideEditor: FC<Props> = ({ apiBase, row, choices, steps }) => {
+const TutorialOverrideEditor: FC<Props> = ({ apiBase, row, choices, steps, onDirtyChange }) => {
   const save = useSaveTutorialEdits(apiBase);
   const modules = useTutorialModules(apiBase);
   const renderers = useMemo(() => resolveTutorialSteps(apiBase, steps), [apiBase, steps]);
@@ -137,6 +140,10 @@ const TutorialOverrideEditor: FC<Props> = ({ apiBase, row, choices, steps }) => 
   const stateOf = useMemo(() => new Map(row.report.states.map(s => [s.key, s.state])), [row.report.states]);
   const order = orderOf(draft, repoIds);
   const dirty = !sameDraft(draft, saved);
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+    return () => onDirtyChange?.(false);
+  }, [dirty, onDirtyChange]);
   const reasonGiven = reason.trim().length > 0;
 
   const submit = (fields: ReturnType<typeof unitsOf>) =>
@@ -272,10 +279,10 @@ const TutorialOverrideEditor: FC<Props> = ({ apiBase, row, choices, steps }) => 
                         value={copyValue(draft, step, field)}
                         onChange={event => setDraft(d => setCopy(d, step, field, event.target.value))}
                         slotProps={{
-                          textarea: { 'data-testid': `tutorial-override-field-${stepId}-${field}` } as Record<
-                            string,
-                            unknown
-                          >,
+                          textarea: {
+                            maxLength: TEXT_MAX,
+                            'data-testid': `tutorial-override-field-${stepId}-${field}`,
+                          } as Record<string, unknown>,
                         }}
                       />
                     </FormControl>
@@ -303,10 +310,10 @@ const TutorialOverrideEditor: FC<Props> = ({ apiBase, row, choices, steps }) => 
                             setDraft(d => setTurn(d, turn, { ...turnValue(d, turn), prompt: event.target.value }))
                           }
                           slotProps={{
-                            textarea: { 'data-testid': `tutorial-override-field-${stepId}-prompt` } as Record<
-                              string,
-                              unknown
-                            >,
+                            textarea: {
+                              maxLength: TEXT_MAX,
+                              'data-testid': `tutorial-override-field-${stepId}-prompt`,
+                            } as Record<string, unknown>,
                           }}
                         />
                       </FormControl>
@@ -323,10 +330,10 @@ const TutorialOverrideEditor: FC<Props> = ({ apiBase, row, choices, steps }) => 
                           setDraft(d => setTurn(d, turn, { ...turnValue(d, turn), reply: event.target.value }))
                         }
                         slotProps={{
-                          textarea: { 'data-testid': `tutorial-override-field-${stepId}-reply` } as Record<
-                            string,
-                            unknown
-                          >,
+                          textarea: {
+                            maxLength: TEXT_MAX,
+                            'data-testid': `tutorial-override-field-${stepId}-reply`,
+                          } as Record<string, unknown>,
                         }}
                       />
                     </FormControl>

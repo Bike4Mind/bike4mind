@@ -1,4 +1,4 @@
-import { FC, useState } from 'react';
+import { FC, useCallback, useRef, useState } from 'react';
 import {
   Box,
   Button,
@@ -21,6 +21,7 @@ import type { TutorialStepRegistry } from '../types';
 import TutorialOverrideEditor from './TutorialOverrideEditor';
 
 const REASON_MAX = 500;
+const DISCARD_PROMPT = 'Discard your unsaved edits to this tutorial?';
 
 interface Props {
   apiBase: string;
@@ -35,6 +36,14 @@ const TutorialModulesCard: FC<Props> = ({ apiBase, steps }) => {
   const save = useSetTutorialModule(apiBase);
   const [reason, setReason] = useState('');
   const [editing, setEditing] = useState<string | null>(null);
+  const dirty = useRef(false);
+  const setDirty = useCallback((value: boolean) => {
+    dirty.current = value;
+  }, []);
+  const toggleEditor = (moduleId: string) => {
+    if (dirty.current && !window.confirm(DISCARD_PROMPT)) return;
+    setEditing(prev => (prev === moduleId ? null : moduleId));
+  };
   const reasonGiven = reason.trim().length > 0;
 
   return (
@@ -102,7 +111,7 @@ const TutorialModulesCard: FC<Props> = ({ apiBase, steps }) => {
                     size="sm"
                     variant="plain"
                     disabled={!choices.data}
-                    onClick={() => setEditing(prev => (prev === row.moduleId ? null : row.moduleId))}
+                    onClick={() => toggleEditor(row.moduleId)}
                     data-testid={`tutorial-module-edit-${row.moduleId}`}
                   >
                     {editing === row.moduleId ? 'Close' : 'Edit'}
@@ -132,6 +141,7 @@ const TutorialModulesCard: FC<Props> = ({ apiBase, steps }) => {
                   row={row}
                   choices={choices.data}
                   steps={steps}
+                  onDirtyChange={setDirty}
                 />
               )}
             </Box>

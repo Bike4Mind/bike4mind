@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, GlobalStyles, Stack, Typography } from '@mui/joy';
 import { useWorkBenchFiles } from '@client/app/contexts/SessionsContext';
 import { useChatInput } from '@client/app/hooks/useChatInput';
@@ -246,21 +246,37 @@ export function PointStep({ step, complete }: TutorialStepProps) {
   );
 }
 
+const DISMISS_GRACE_MS = 1000;
+
 /** Waits for the user to close whatever the step's anchor belongs to, so the next card is not hidden behind it. */
-export function DismissStep({ step, complete }: TutorialStepProps) {
+export function DismissStep(props: TutorialStepProps) {
+  const { step, complete } = props;
+  const anchor = props.anchor ?? step.anchor;
+  const scope = 'anchorScope' in props ? props.anchorScope : step.anchorScope;
   const open = useCallback(
-    () => Boolean(step.anchor && document.querySelector(`${step.anchorScope ?? ''} [data-testid="${step.anchor}"]`)),
-    [step.anchor, step.anchorScope]
+    () => Boolean(anchor && document.querySelector(`${scope ? `${scope} ` : ''}[data-testid="${CSS.escape(anchor)}"]`)),
+    [anchor, scope]
   );
-  const [shown, setShown] = useState(open);
+  const seen = useRef(false);
+  const [gone, setGone] = useState(!anchor);
   useEffect(() => {
-    const observer = new MutationObserver(() => setShown(open()));
+    const check = () => {
+      if (open()) seen.current = true;
+      else if (seen.current) setGone(true);
+    };
+    check();
+    const observer = new MutationObserver(check);
     observer.observe(document.body, { childList: true, subtree: true });
-    return () => observer.disconnect();
+    // An anchor that never shows up has nothing to wait for.
+    const grace = setTimeout(() => !seen.current && setGone(true), DISMISS_GRACE_MS);
+    return () => {
+      observer.disconnect();
+      clearTimeout(grace);
+    };
   }, [open]);
   useEffect(() => {
-    if (!shown) complete();
-  }, [shown, complete]);
+    if (gone) complete();
+  }, [gone, complete]);
   return null;
 }
 

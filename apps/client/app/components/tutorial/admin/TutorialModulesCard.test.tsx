@@ -12,7 +12,11 @@ vi.mock('@client/app/hooks/tutorials/useTutorialModules', () => ({
   useTutorialAnchorChoices: () => ({ data: { anchors: [], anchorScopes: [], avoids: [] } }),
 }));
 vi.mock('./TutorialOverrideEditor', () => ({
-  default: ({ row }: { row: { moduleId: string } }) => <div data-testid={`mock-editor-${row.moduleId}`} />,
+  default: ({ row, onDirtyChange }: { row: { moduleId: string }; onDirtyChange: (dirty: boolean) => void }) => (
+    <div data-testid={`mock-editor-${row.moduleId}`}>
+      <button data-testid={`mock-dirty-${row.moduleId}`} onClick={() => onDirtyChange(true)} />
+    </div>
+  ),
 }));
 
 import TutorialModulesCard from './TutorialModulesCard';
@@ -109,6 +113,30 @@ describe('TutorialModulesCard', () => {
     fireEvent.click(screen.getByTestId('tutorial-module-edit-beta'));
     expect(screen.queryByTestId('mock-editor-alpha')).not.toBeInTheDocument();
     expect(screen.getByTestId('mock-editor-beta')).toBeInTheDocument();
+  });
+
+  it('asks before switching or closing over an unsaved draft, and keeps it on cancel', () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    renderCard();
+    fireEvent.click(screen.getByTestId('tutorial-module-edit-alpha'));
+    fireEvent.click(screen.getByTestId('mock-dirty-alpha'));
+    fireEvent.click(screen.getByTestId('tutorial-module-edit-beta'));
+    fireEvent.click(screen.getByTestId('tutorial-module-edit-alpha'));
+    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId('mock-editor-alpha')).toBeInTheDocument();
+    confirm.mockReturnValue(true);
+    fireEvent.click(screen.getByTestId('tutorial-module-edit-beta'));
+    expect(screen.getByTestId('mock-editor-beta')).toBeInTheDocument();
+    confirm.mockRestore();
+  });
+
+  it('does not ask when the draft is clean', () => {
+    const confirm = vi.spyOn(window, 'confirm');
+    renderCard();
+    fireEvent.click(screen.getByTestId('tutorial-module-edit-alpha'));
+    fireEvent.click(screen.getByTestId('tutorial-module-edit-alpha'));
+    expect(confirm).not.toHaveBeenCalled();
+    confirm.mockRestore();
   });
 
   it('says so when the read fails', () => {

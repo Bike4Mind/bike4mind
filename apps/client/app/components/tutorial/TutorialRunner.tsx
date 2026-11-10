@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { useChatInput } from '@client/app/hooks/useChatInput';
@@ -112,6 +112,7 @@ export function TutorialRunner({
   >(null);
   const override = anchorOverride?.stepId === step?.id ? anchorOverride : null;
   const anchor = override?.testid ?? step?.anchor;
+  const anchorScope = override && 'scope' in override ? override.scope : step?.anchorScope;
 
   // Ends the walk once the server says its module moved under it. Start over only when there is a module to start.
   const endChanged = useCallback(
@@ -135,14 +136,22 @@ export function TutorialRunner({
     [store, onChanged, onStartModule, script.id]
   );
 
+  const inFlight = useRef<Promise<void> | null>(null);
   const report = useCallback(
     (stepId: string, status: TutorialStatus) => {
       const current = store.getState().active;
       const identity = current?.moduleId === script.id ? { version: current.version, revision: current.revision } : {};
-      transport.position({ moduleId: script.id, stepId, status, ...identity }).catch(error => {
-        // Leaving or finishing is never refused for this, so only a running walk hears it.
-        const change = status === 'in_progress' ? moduleChangeOf(error) : undefined;
-        if (change) endChanged(change);
+      const send = () =>
+        transport.position({ moduleId: script.id, stepId, status, ...identity }).catch(error => {
+          // Leaving or finishing is never refused for this, so only a running walk hears it.
+          const change = status === 'in_progress' ? moduleChangeOf(error) : undefined;
+          if (change) endChanged(change);
+        });
+      // One write at a time per run, so a slow earlier position cannot land after a later one.
+      const next = inFlight.current ? inFlight.current.then(send) : send();
+      inFlight.current = next;
+      void next.then(() => {
+        if (inFlight.current === next) inFlight.current = null;
       });
     },
     [store, transport, script.id, endChanged]
@@ -265,7 +274,7 @@ export function TutorialRunner({
         body={doneStepId === step.id && step.doneBody ? step.doneBody : step.body}
         done={doneStepId === step.id}
         anchor={anchor}
-        anchorScope={override && 'scope' in override ? override.scope : step.anchorScope}
+        anchorScope={anchorScope}
         placement={override?.placement ?? step.placement}
         avoid={override?.avoid ?? step.avoid}
         width={step.cardWidth}
@@ -286,6 +295,8 @@ export function TutorialRunner({
           startModule={onStartModule}
           exit={onExit}
           setAnchor={setAnchor}
+          anchor={anchor}
+          anchorScope={anchorScope}
           markDone={markDone}
           sheetFileId={sheetFileId}
         />

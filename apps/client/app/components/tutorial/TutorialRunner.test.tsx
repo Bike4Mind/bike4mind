@@ -340,7 +340,7 @@ describe('TutorialRunner', () => {
     expect(useTutorialStore.getState().active).toBeNull();
   });
 
-  it('leaves only from Leave tutorial; close and Escape hide the card for the step without leaving', () => {
+  it('leaves only from Leave tutorial; close and Escape hide the card for the step without leaving', async () => {
     const t = transport();
     renderRunner(t);
     begin('intro');
@@ -362,7 +362,9 @@ describe('TutorialRunner', () => {
 
     fireEvent.click(screen.getByTestId('tutorial-coach-pill'));
     fireEvent.click(screen.getByTestId('tutorial-coach-leave'));
-    expect(t.position).toHaveBeenLastCalledWith({ moduleId: 'demo', stepId: 'ask', status: 'left' });
+    await waitFor(() =>
+      expect(t.position).toHaveBeenLastCalledWith({ moduleId: 'demo', stepId: 'ask', status: 'left' })
+    );
     expect(useTutorialStore.getState().active).toBeNull();
     expect(mockToast).toHaveBeenLastCalledWith(PAUSED_NOTICE);
   });
@@ -696,10 +698,57 @@ describe('the dismiss step', () => {
     await waitFor(() => expect(useTutorialStore.getState().active?.stepId).toBe('after'));
   });
 
-  it('moves straight on when it is already closed', async () => {
+  it('moves on once the anchor has stayed away past the grace period', async () => {
     renderRunner(transport(), undefined, { using: closing });
     begin('close');
+    await waitFor(() => expect(useTutorialStore.getState().active?.stepId).toBe('after'), { timeout: 3000 });
+  });
+});
+
+describe('the dismiss step anchoring', () => {
+  const closing: TutorialScript = {
+    id: 'demo',
+    steps: [
+      { id: 'close', type: 'dismiss', anchor: 'late:panel', body: 'Close it.' },
+      { id: 'after', type: 'point', body: 'Next one.' },
+    ],
+  };
+
+  it('waits for an anchor that renders late, and one whose id needs escaping', async () => {
+    renderRunner(transport(), undefined, { using: closing });
+    begin('close');
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(useTutorialStore.getState().active?.stepId).toBe('close');
+    const panel = document.createElement('button');
+    panel.dataset.testid = 'late:panel';
+    act(() => {
+      document.body.appendChild(panel);
+    });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(useTutorialStore.getState().active?.stepId).toBe('close');
+    act(() => panel.remove());
     await waitFor(() => expect(useTutorialStore.getState().active?.stepId).toBe('after'));
+  });
+});
+
+describe('position writes', () => {
+  it('sends them in order, one at a time', async () => {
+    const t = transport();
+    const releases: Array<() => void> = [];
+    t.position.mockImplementation(() => new Promise<void>(resolve => releases.push(resolve)));
+    const points: TutorialScript = {
+      id: 'demo',
+      steps: ['a', 'b', 'c'].map(id => ({ id, type: 'point', body: id })),
+    };
+    renderRunner(t, undefined, { using: points });
+    begin('a');
+    fireEvent.click(screen.getByTestId('tutorial-step-next'));
+    fireEvent.click(screen.getByTestId('tutorial-step-next'));
+    expect(t.position).toHaveBeenCalledTimes(1);
+    expect(t.position).toHaveBeenLastCalledWith(expect.objectContaining({ stepId: 'b' }));
+    releases[0]();
+    await waitFor(() => expect(t.position).toHaveBeenCalledTimes(2));
+    expect(t.position).toHaveBeenLastCalledWith(expect.objectContaining({ stepId: 'c' }));
   });
 });
 

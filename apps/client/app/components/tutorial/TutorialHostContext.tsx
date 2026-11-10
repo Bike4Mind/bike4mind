@@ -1,6 +1,8 @@
 import { useMemo, type ReactNode } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { GENERIC_TUTORIAL_STEPS } from './genericSteps';
 import { TutorialHostContext, type TutorialHostValue } from './hostBase';
+import { trackedTransport } from './progressCache';
 import { createTutorialTransport } from './transport';
 import type { TutorialStepRegistry } from './types';
 
@@ -34,9 +36,14 @@ interface ProviderProps {
 }
 
 export function TutorialHostProvider({ apiBase, steps, children }: ProviderProps) {
+  const queryClient = useQueryClient();
   const value = useMemo<TutorialHostValue>(
-    () => ({ apiBase, steps: resolveTutorialSteps(apiBase, steps), transport: createTutorialTransport(apiBase) }),
-    [apiBase, steps]
+    () => ({
+      apiBase,
+      steps: resolveTutorialSteps(apiBase, steps),
+      transport: trackedTransport(queryClient, createTutorialTransport(apiBase), apiBase),
+    }),
+    [apiBase, steps, queryClient]
   );
   return <TutorialHostContext.Provider value={value}>{children}</TutorialHostContext.Provider>;
 }

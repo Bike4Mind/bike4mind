@@ -16,6 +16,8 @@ export function trackedTransport(
   return {
     ...base,
     position: async input => {
+      // An in-flight refetch would otherwise land after the write below and restore the stale status.
+      await queryClient.cancelQueries({ queryKey: key });
       queryClient.setQueryData<Record<string, TutorialProgressEntry>>(key, modules => {
         const entry = modules?.[input.moduleId];
         return entry

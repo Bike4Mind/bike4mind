@@ -63,6 +63,9 @@ export interface TutorialStepProps {
    * searches the whole page, for a stage whose control sits outside the step's scope (in a modal, say).
    */
   setAnchor: (testid: string | undefined, options?: TutorialAnchorOptions) => void;
+  /** The anchor and scope the card is watching now, after any `setAnchor` override. */
+  anchor?: string;
+  anchorScope?: string;
   /** Switches the card to the step's `doneBody` while its action is done and it waits for Next; `false` switches back. */
   markDone?: (done?: boolean) => void;
   /** The module's sheet in the user's files, for a step that has them attach it. */

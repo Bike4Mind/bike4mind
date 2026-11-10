@@ -21,9 +21,10 @@ function setup() {
 }
 
 describe('trackedTransport', () => {
-  it('marks the module finished in the cache before the request lands', () => {
+  it('marks the module finished in the cache before the request lands', async () => {
     const { queryClient, base } = setup();
     void trackedTransport(queryClient, base, BASE).position({ moduleId: 'beta', stepId: 'bridge', status: 'finished' });
+    await vi.waitFor(() => expect(base.position).toHaveBeenCalled());
     expect(queryClient.getQueryData(TUTORIAL_PROGRESS_KEY)).toEqual({
       beta: { status: 'finished', stepId: 'bridge', sessionId: 's1', moduleVersion: 2 },
     });
@@ -36,15 +37,38 @@ describe('trackedTransport', () => {
       stepId: 'bridge',
       status: 'finished',
     });
+    await vi.waitFor(() => expect(base.position).toHaveBeenCalled());
     expect(invalidate).not.toHaveBeenCalled();
     land();
     await saving;
     expect(invalidate).toHaveBeenCalledWith({ queryKey: TUTORIAL_PROGRESS_KEY });
   });
 
-  it('adds no entry for a module the cache does not hold', () => {
+  it('cancels an in-flight progress refetch so it cannot restore the stale status', async () => {
+    const { queryClient, base } = setup();
+    let release = () => undefined as void;
+    void queryClient.fetchQuery({
+      queryKey: TUTORIAL_PROGRESS_KEY,
+      queryFn: () =>
+        new Promise(resolve => {
+          release = () => resolve({ beta: { status: 'in_progress', stepId: 'setup' } });
+        }),
+    });
+    const cancel = vi.spyOn(queryClient, 'cancelQueries');
+    void trackedTransport(queryClient, base, BASE).position({ moduleId: 'beta', stepId: 'bridge', status: 'finished' });
+    await vi.waitFor(() => expect(base.position).toHaveBeenCalled());
+    expect(cancel).toHaveBeenCalledWith({ queryKey: TUTORIAL_PROGRESS_KEY });
+    release();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(queryClient.getQueryData<Record<string, { status: string }>>(TUTORIAL_PROGRESS_KEY)?.beta.status).toBe(
+      'finished'
+    );
+  });
+
+  it('adds no entry for a module the cache does not hold', async () => {
     const { queryClient, base } = setup();
     void trackedTransport(queryClient, base, BASE).position({ moduleId: 'alpha', stepId: 'intro', status: 'left' });
+    await vi.waitFor(() => expect(base.position).toHaveBeenCalled());
     expect(queryClient.getQueryData<Record<string, unknown>>(TUTORIAL_PROGRESS_KEY)).not.toHaveProperty('alpha');
   });
 });
