@@ -534,7 +534,7 @@ export const handler = async (): Promise<void> => {
     await securityDashboardSnapshotRepository.create(snapshotInput);
   } catch (error) {
     Logger.error('Cloud security scan failed', {
-      message: error instanceof Error ? error.message : 'Unknown error',
+      error: error instanceof Error ? error.message : 'Unknown error',
     });
     throw error;
   }
