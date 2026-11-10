@@ -11,6 +11,7 @@ const SPILL_SETTING = 'OLLAMA_WSL_GPU_SPILL';
 export const WSL_MEMORY_PATCH_MARKERS = [SHARED_MEMORY_SETTING, SPILL_SETTING] as const;
 
 const PROBE_TIMEOUT_MS = 10_000;
+const UNREAD_RETRY_MS = 30_000;
 const CHUNK_BYTES = 1 << 20;
 const TCP_LISTEN = '0A';
 // strconv.ParseBool's false spellings; any other value, an unparsable one included, leaves the patch on.
@@ -207,6 +208,8 @@ export interface OllamaWslPatchProbeOptions {
   /** The pid of the `ollama serve` answering at `url`; null when it cannot be told. */
   serverPid?: (url: string) => Promise<number | null>;
   timeoutMs?: number;
+  /** Binary reader; injectable so deadline/backoff tests need no slow disk. */
+  openFile?: typeof open;
 }
 
 /**
@@ -222,6 +225,7 @@ export function createOllamaWslPatchProbe(
   const serverPid = options.serverPid ?? ((url: string) => servingOllamaPid(url, root));
   let last: { url: string; pid: number; build: OllamaBuild } | null = null;
   let running: { url: string; read: Promise<OllamaBuild | null> } | null = null;
+  let unread: { server: string; retryAt: number } | null = null;
 
   const identity = async (pid: number): Promise<string | null> => {
     const dir = join(procDir, String(pid));
@@ -242,13 +246,20 @@ export function createOllamaWslPatchProbe(
     const server = await identity(pid);
     if (!server) return null;
     if (last?.build.server === server) return last.build;
+    if (unread?.server === server && Date.now() < unread.retryAt) return { server, patched: null };
+    // Record before I/O: the outer deadline may win before the binary read settles.
+    const attempt = { server, retryAt: deadline + UNREAD_RETRY_MS };
+    unread = attempt;
     const dir = join(procDir, String(pid));
     const [markers, environ] = await Promise.all([
-      fileMarkers(join(dir, 'exe'), WSL_MEMORY_PATCH_MARKERS, deadline),
+      fileMarkers(join(dir, 'exe'), WSL_MEMORY_PATCH_MARKERS, deadline, undefined, options.openFile),
       readFile(join(dir, 'environ'), 'latin1').catch(() => null),
     ]);
     const build = { server, patched: markers === null ? null : carriesFix(markers, environ) };
-    if (build.patched !== null) last = { url, pid, build };
+    if (build.patched !== null) {
+      last = { url, pid, build };
+      if (unread === attempt) unread = null;
+    }
     return build;
   };
 

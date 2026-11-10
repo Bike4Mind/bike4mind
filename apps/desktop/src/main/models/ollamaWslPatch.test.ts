@@ -360,6 +360,38 @@ describe('createOllamaWslPatchProbe', () => {
     expect(build?.server).toMatch(/^100:5000:/);
   });
 
+  it.each([false, true])('backs off a timed-out binary read; restart=%s bypasses the backoff', async restart => {
+    await serving({ image: imageWith(SHARED) });
+    vi.useFakeTimers();
+    try {
+      let signalOpened: () => void = () => {};
+      const opened = new Promise<void>(resolve => (signalOpened = resolve));
+      const openFile = vi
+        .fn<typeof open>()
+        .mockImplementation(open)
+        .mockImplementationOnce(() => {
+          signalOpened();
+          return new Promise(() => {});
+        });
+      const probe = createOllamaWslPatchProbe({ root, timeoutMs: 100, openFile });
+      const first = probe(OLLAMA_URL);
+      await opened;
+      await vi.advanceTimersByTimeAsync(100);
+      expect(await first).toBeNull();
+      expect(await probe(OLLAMA_URL)).toMatchObject({ patched: null });
+      expect(openFile).toHaveBeenCalledTimes(1);
+      if (restart) {
+        await writeServer({ pid: 100, sockets: [5001], image: imageWith(SHARED), started: 9000 });
+      } else {
+        await vi.advanceTimersByTimeAsync(30_000);
+      }
+      expect(await probe(OLLAMA_URL)).toMatchObject({ patched: true });
+      expect(openFile).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('shares one read between listings asked at once', async () => {
     await serving({ image: imageWith(SHARED) });
     const serverPid = vi.fn((url: string) => servingOllamaPid(url, root));

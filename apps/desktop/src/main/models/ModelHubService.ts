@@ -820,6 +820,7 @@ export class ModelHubService {
   /** The server `#gpuCap` was seen on; the limit is not shown once another one answers. */
   #gpuCapServer: ServerIdentity | null = null;
   #buildUnreadLogged = false;
+  #publishedFitWarning: string | null = null;
   #warnedChecks = new Set<string>();
   #lastPush = 0;
   #pushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -907,7 +908,7 @@ export class ModelHubService {
           this.#integrated = answer ?? null;
           return this.#queueGpuCap(async () => {
             if (await this.#confirmGpuCap(target)) return;
-            if (this.#integrated === true && (await this.#wslFitWarning(target))) this.#ratingsChanged(target.id);
+            if (this.#integrated === true) this.#publishFitWarning(target, await this.#wslFitWarning(target));
           });
         });
     }
@@ -1000,6 +1001,13 @@ export class ModelHubService {
     return { version: health?.ok ? health.version : null, server: build?.server ?? null };
   }
 
+  /** Keep all visible ratings current when a later probe adds or clears the advisory. */
+  #publishFitWarning(target: Target, warning: string | null): void {
+    if (warning === this.#publishedFitWarning) return;
+    this.#publishedFitWarning = warning;
+    this.#ratingsChanged(target.id);
+  }
+
   #ratingsChanged(serverId: string): void {
     if (this.#disposed) return;
     (this.#deps.onRatingsChanged ?? this.#deps.onInstalledChanged)(serverId);
@@ -1009,6 +1017,7 @@ export class ModelHubService {
   async #sizing(target: Target): Promise<Sizing | null> {
     if (target.local) {
       const [sizing, fitWarning] = await Promise.all([this.#localSizing(), this.#wslFitWarning(target)]);
+      this.#publishFitWarning(target, fitWarning);
       return fitWarning ? { ...sizing, fitWarning } : sizing;
     }
     const specs = this.#deps.specs?.(target.id) ?? null;

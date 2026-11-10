@@ -1479,6 +1479,24 @@ describe('ModelHubService WSL GPU memory flag on fit badges', () => {
       for (const build of entry.builds) expect(build.fit).not.toHaveProperty('warning');
   });
 
+  it.each([false, null])(
+    'publishes a rating change when a later binary read changes the warning: %s',
+    async patched => {
+      const onRatingsChanged = vi.fn();
+      const { service, ollamaWslPatch } = flagHarness({ patched, deps: { onRatingsChanged } });
+      await settledFits(service);
+      onRatingsChanged.mockClear();
+      ollamaWslPatch.mockResolvedValue({ server: 'pid-2', patched: patched === false });
+      const fit = (await installedFits(service)).get('small:q4');
+      if (patched === false) expect(fit).not.toHaveProperty('warning');
+      else expect(fit?.warning).toMatch(RELEASE_FLAG);
+      expect(onRatingsChanged).toHaveBeenCalledExactlyOnceWith('local');
+      onRatingsChanged.mockClear();
+      await installedFits(service);
+      expect(onRatingsChanged).not.toHaveBeenCalled();
+    }
+  );
+
   it('follows the running binary from one read to the next', async () => {
     const { service, ollamaWslPatch } = flagHarness({ version: '0.40.13' });
     expect((await settledFits(service)).get('small:q4')?.warning).toMatch(/^Ollama 0\.40\.13 in WSL limits/);
