@@ -14,8 +14,11 @@ const HEX_GROUP = '[0-9a-f]{1,4}';
 const HEX_RUN = `${HEX_GROUP}(?::${HEX_GROUP}){0,6}`;
 // Full eight-group form, or one `::` with at least one group on either side. Runs after IPv4, so an
 // IPv4-mapped address (`::ffff:192.0.2.1`) arrives as `::ffff:[IP]` and the tail is taken with it.
+// A match may start after one `label:` prefix (`ip:2001:db8::1`), but only when the label has a
+// non-hex character: an all-hex label could itself be a group, so `1:2:3:4:5:6:7:8:9` stays whole.
+const IPV6_START = '(?:(?<![\\w:])|(?<=(?<![\\w:])\\w*[g-z_]\\w*:))';
 const IPV6 = new RegExp(
-  `(?<![\\w:])(?:(?:${HEX_GROUP}:){7}${HEX_GROUP}|${HEX_RUN}::(?:${HEX_RUN})?|::${HEX_RUN})(?::\\[IP\\])?(?![\\w:])`,
+  `${IPV6_START}(?:(?:${HEX_GROUP}:){7}${HEX_GROUP}|${HEX_RUN}::(?:${HEX_RUN})?|::${HEX_RUN})(?::\\[IP\\])?(?![\\w:])`,
   'gi'
 );
 

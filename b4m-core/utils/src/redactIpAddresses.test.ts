@@ -12,6 +12,8 @@ describe('redactIpAddresses', () => {
     ['loopback ::1 only', 'loopback [IP] only'],
     ['mapped ::ffff:192.0.2.1', 'mapped [IP]'],
     ['FE80::ABCD (upper case)', '[IP] (upper case)'],
+    ['ip:2001:db8::1', 'ip:[IP]'],
+    ['ip:203.0.113.9', 'ip:[IP]'],
   ])('redacts %j', (input, expected) => {
     expect(redactIpAddresses(input)).toBe(expected);
   });
@@ -23,6 +25,9 @@ describe('redactIpAddresses', () => {
     'chain 1.2.3.4.5 is not an address',
     'v1.2.3.4',
     'mac aa:bb:cc:dd:ee:ff',
+    'mac:aa:bb:cc:dd:ee:ff',
+    'chain 1:2:3:4:5:6:7:8:9 is too long',
+    'at:10:00:00',
     'Module::new and std::fs',
     'octet out of range 256.1.1.1',
     'Root=1-6743ca93-7e4c11143e5cf9251819409d',
