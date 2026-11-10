@@ -145,6 +145,8 @@ import { prefersReducedMotion } from './orchestrator/motion';
 import { ThreadDock, type ThreadDockMode } from './orchestrator/ThreadDock';
 import { useOrchestratorPrefs } from './orchestrator/useOrchestrator';
 import { useNeedsYouAlerts } from './orchestrator/useNeedsYouAlerts';
+import { SidebarSyncHints } from './SyncHints';
+import type { ClaudeImportKind } from '@shared/claudeImport';
 
 /** How long the orchestrator's "Read the report" keeps the summary highlighted (ms). */
 const REPORT_HIGHLIGHT_MS = 2400;
@@ -269,10 +271,13 @@ export function ChatShell({
   auth,
   account,
   onOpenModelServers,
+  onOpenImportSettings,
 }: {
   auth?: AuthState | null;
   account?: AccountStrip;
   onOpenModelServers?: () => void;
+  /** Settings > Import, scrolled to one source; the sidebar's sync hints are shown only with it. */
+  onOpenImportSettings?: (focus: ClaudeImportKind) => void;
 }) {
   const {
     sessions,
@@ -1592,6 +1597,13 @@ export function ChatShell({
         onDismissSectionError={dismissSectionError}
         customize={<CustomizeNavItem onOpen={() => setScreen('customize')} />}
         onOpenModels={() => setScreen('models')}
+        syncHints={
+          onOpenImportSettings
+            ? (empty, fallback) => (
+                <SidebarSyncHints empty={empty} fallback={fallback} onOpenSettings={onOpenImportSettings} />
+              )
+            : undefined
+        }
         footer={account?.(
           <TurnDot state={turnState({ streaming: turnOpen, disabled: !activeId || creatingCode, notReady: unbound })} />
         )}

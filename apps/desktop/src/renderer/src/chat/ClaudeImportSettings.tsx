@@ -110,11 +110,14 @@ export function ClaudeImportSettings({
   onState,
   loadError,
   onRetry,
+  focus,
 }: {
   state: ClaudeImportState | null;
   onState: (state: ClaudeImportState) => void;
   loadError: string | null;
   onRetry: () => void;
+  /** The source to scroll into view once loaded, when opened from a sidebar sync hint. */
+  focus?: ClaudeImportKind;
 }) {
   const api = claudeImportApi();
   const [inline, setInline] = useImportedInline();
@@ -143,6 +146,14 @@ export function ClaudeImportSettings({
     },
     [onState]
   );
+  const sectionRefs = useRef<Partial<Record<ClaudeImportKind, HTMLDivElement | null>>>({});
+  const focused = useRef(false);
+  useEffect(() => {
+    if (!loaded || !focus || focused.current) return;
+    focused.current = true;
+    sectionRefs.current[focus]?.scrollIntoView?.({ block: 'start' });
+  }, [loaded, focus]);
+
   // Two quick clicks would each build on the selection drawn before either reply arrived.
   const pendingProjects = useRef<{ selection: Set<string>; inFlight: number } | null>(null);
 
@@ -210,8 +221,18 @@ export function ClaudeImportSettings({
         </Alert>
       )}
 
-      <Stack spacing={1.25} data-testid="claude-import-code-section">
+      <Stack
+        spacing={1.25}
+        ref={node => {
+          sectionRefs.current['claude-code'] = node;
+        }}
+        data-testid="claude-import-code-section"
+      >
         <Typography level="title-sm">Claude Code sessions</Typography>
+        <Typography level="body-xs" textColor="text.secondary" data-testid="claude-import-code-explainer">
+          Mirrors your Claude Code sessions here, read-only: Claude Code&apos;s files are never changed. Continue one
+          here and it stops syncing.
+        </Typography>
         <Switch
           size="sm"
           checked={enabled}
@@ -358,8 +379,18 @@ export function ClaudeImportSettings({
 
       <Divider />
 
-      <Stack spacing={1.25} data-testid="claude-import-chat-section">
+      <Stack
+        spacing={1.25}
+        ref={node => {
+          sectionRefs.current['claude-chat'] = node;
+        }}
+        data-testid="claude-import-chat-section"
+      >
         <Typography level="title-sm">Claude chats</Typography>
+        <Typography level="body-xs" textColor="text.secondary" data-testid="claude-import-chat-explainer">
+          Copies the chats in your claude.ai export, read-only: your claude.ai account is never changed. A chat you
+          continue here is your own copy.
+        </Typography>
         <Typography level="body-xs" textColor="text.tertiary">
           claude.ai has no way for other apps to read your chats, so they come from your data export: in claude.ai open
           Settings, then Privacy, then Export data, and pick the .zip it emails you (or the conversations.json inside
@@ -440,8 +471,18 @@ export function ClaudeImportSettings({
 
       <Divider />
 
-      <Stack spacing={1.25} data-testid="claude-import-web-section">
+      <Stack
+        spacing={1.25}
+        ref={node => {
+          sectionRefs.current['b4m-web'] = node;
+        }}
+        data-testid="claude-import-web-section"
+      >
         <Typography level="title-sm">Bike4Mind web conversations</Typography>
+        <Typography level="body-xs" textColor="text.secondary" data-testid="claude-import-web-explainer">
+          Mirrors your Bike4Mind web notebooks here, read-only: nothing on the web is changed. Continue one here and it
+          stops syncing.
+        </Typography>
         <Switch
           size="sm"
           checked={web.settings.enabled}
