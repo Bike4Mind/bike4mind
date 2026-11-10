@@ -8,6 +8,7 @@ import { z } from 'zod';
 // The body is uploaded later by Turbo; do not sign a checksum of an empty body.
 const s3 = new S3Client({ requestChecksumCalculation: 'WHEN_REQUIRED' });
 const PRESIGNED_URL_EXPIRY = 900; // 15 minutes
+const TEAM_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
 function bucketName(): string {
   return (Resource as unknown as Record<string, { name: string }>).turboCacheBucket.name;
@@ -110,6 +111,10 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   };
   const path = event.rawPath;
   const team = event.queryStringParameters?.slug ?? event.queryStringParameters?.teamId;
+  // The team becomes the S3 key prefix; keep every key in the `<team>/<hash>` shape.
+  if (team !== undefined && !TEAM_PATTERN.test(team)) {
+    return { statusCode: 400, body: JSON.stringify({ error: 'Invalid team' }) };
+  }
 
   // POST /v8/artifacts/events -- Turborepo analytics events (accepted but not stored)
   if (requestedMethod === 'POST' && path === '/v8/artifacts/events') {

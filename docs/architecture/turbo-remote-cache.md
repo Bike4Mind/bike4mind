@@ -21,6 +21,11 @@ Self-hosted Turborepo remote cache backed by S3 and a Lambda Function URL.
 - The stack deploys only on hosted stages (`production`, `dev`), outside SST dev.
   Developer and preview stages create no cache resources. Each hosted stage has
   its own bucket; choose one endpoint for a shared cache.
+- The Function URL is public with bearer auth in the handler, so the function runs
+  under a reserved concurrency cap. The `slug`/`teamId` query value becomes the key
+  prefix and must match `[A-Za-z0-9_-]{1,64}`; anything else returns 400.
+- Both tokens are declared in `infra/turborepoCache.ts` and linked into the cache
+  handler only, never into the shared `infra/secrets.ts` map that every app Lambda links.
 
 ## Contract-gate exception
 

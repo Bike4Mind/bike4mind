@@ -220,6 +220,32 @@ describe('turboCache handler', () => {
     expect(putCmd.input.Key).toBe('bike4mind/abc123def456');
   });
 
+  it.each(['../escape', 'a/b', '', 'x'.repeat(65)])('rejects team %j before any S3 call or signed URL', async slug => {
+    const result = await handler(
+      makeEvent({
+        method: 'OPTIONS',
+        headers: { authorization: 'Bearer test-token-abc123', 'access-control-request-method': 'PUT' },
+        path: '/v8/artifacts/abc123def456',
+        queryStringParameters: { slug },
+      })
+    );
+    expect(result.statusCode).toBe(400);
+    expect(mockGetSignedUrl).not.toHaveBeenCalled();
+    expect(mockSend).not.toHaveBeenCalled();
+  });
+
+  it('accepts a teamId-style team as the key prefix', async () => {
+    await handler(
+      makeEvent({
+        method: 'OPTIONS',
+        headers: { authorization: 'Bearer test-token-abc123', 'access-control-request-method': 'PUT' },
+        path: '/v8/artifacts/abc123def456',
+        queryStringParameters: { teamId: 'team_Ab-9' },
+      })
+    );
+    expect(mockGetSignedUrl.mock.calls[0][1].input.Key).toBe('team_Ab-9/abc123def456');
+  });
+
   it('returns 405 for unsupported methods', async () => {
     const event = makeEvent({ method: 'DELETE', path: '/v8/artifacts/abc123def456' });
     const result = await handler(event);
