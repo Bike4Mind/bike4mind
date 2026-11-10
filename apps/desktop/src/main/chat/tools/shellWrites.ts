@@ -313,8 +313,8 @@ export function withGrantedRoots<T>(roots: readonly string[], scan: () => Promis
   return scanRoots.run({ roots, paths: new Map(), programs: new Map() }, scan);
 }
 
-/** `program` on pathOutside(roots), looked up once per scan: reading PATH entries is slow over a WSL mount. */
-async function scanProgram(program: string, roots: readonly string[]): Promise<{ path: string; file: string } | null> {
+/** pathOutside(roots), read once per scan. */
+function outsidePath(roots: readonly string[]): Promise<string> {
   const store = scanRoots.getStore();
   const key = JSON.stringify(roots);
   let path = store?.paths.get(key);
@@ -322,7 +322,13 @@ async function scanProgram(program: string, roots: readonly string[]): Promise<{
     path = pathOutside(roots);
     store?.paths.set(key, path);
   }
-  const outside = await path;
+  return path;
+}
+
+/** `program` on pathOutside(roots), looked up once per scan: reading PATH entries is slow over a WSL mount. */
+async function scanProgram(program: string, roots: readonly string[]): Promise<{ path: string; file: string } | null> {
+  const store = scanRoots.getStore();
+  const outside = await outsidePath(roots);
   const name = `${program}\0${outside}`;
   let file = store?.programs.get(name);
   if (file === undefined) {
@@ -808,7 +814,23 @@ export async function gitCommandKind(directory: string, name: string): Promise<'
   }
   const others = await gitCommandListing(directory, 'others');
   if (others === null) return null;
-  return others.has(name) ? 'own' : 'none';
+  if (others.has(name)) return 'own';
+  // git runs `git-<name>` from any PATH entry, including the ones gitLaunch leaves out as the project's.
+  return (await projectPathProgram(directory, `git-${name}`)) ? null : 'none';
+}
+
+/** Whether `program` is in a PATH entry the scan's git does not search: a relative or empty one, or one in a granted root. */
+async function projectPathProgram(directory: string, program: string): Promise<boolean> {
+  if (wslLocation(directory) !== null) return false;
+  const windows = process.platform === 'win32';
+  const separator = windows ? ';' : ':';
+  const outside = new Set((await outsidePath(scanRoots.getStore()?.roots ?? [])).split(separator));
+  const inside = (process.env.PATH ?? '')
+    .split(separator)
+    .map(raw => raw.trim().replace(/^"(.*)"$/, '$1'))
+    .filter(entry => !outside.has(entry))
+    .map(entry => ((windows ? WINDOWS_ROOTED.test(entry) : isAbsolute(entry)) ? entry : resolve(directory, entry)));
+  return inside.length > 0 && (await findOnPath(program, inside.join(separator))) !== null;
 }
 
 /** The aliases git reads in a folder, by lowercased name, and whether help.autocorrect may run a command it guesses. */

@@ -49,6 +49,7 @@ describe('gitCommandKind answers kept across scans', () => {
   it('lists again for other roots, which pick the git and the programs it finds', async () => {
     vi.stubEnv('PATH', [withProgram, plain].join(delimiter));
     expect(await kind([])).toBe('own');
-    expect(await kind([withProgram])).toBe('none');
+    // A program in a granted root is not one the scan's git lists, but git itself runs it.
+    expect(await kind([withProgram])).toBeNull();
   });
 });
