@@ -1,12 +1,21 @@
 import mongoose, { Schema } from 'mongoose';
-import { PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
+import { PENDING_FREE_CREDITS_TAG, type SignupGrant, type SignupRiskReviewState } from '@bike4mind/common';
 import { User } from './UserModel';
+
+export type SignupGrantReleaseRestore = {
+  signupGrant: SignupGrant | null;
+  signupGrantHeldReason: 'budget_exhausted' | 'risk_review' | null;
+  signupGrantHeldAt: Date | null;
+  pendingCreditGrant: number | null;
+  riskReviewState: SignupRiskReviewState | null;
+};
 
 export type SignupGrantReleaseEntry = {
   userId: string;
   outcome: 'released' | 'not_held' | 'withheld' | 'failed';
   credits: number;
   reversed?: boolean;
+  restore?: SignupGrantReleaseRestore;
 };
 
 type SignupGrantReleaseBatch = {
@@ -25,6 +34,7 @@ const batchSchema = new Schema<SignupGrantReleaseBatch>(
         outcome: { type: String, enum: ['released', 'not_held', 'withheld', 'failed'], required: true },
         credits: { type: Number, default: 0, min: 0 },
         reversed: { type: Boolean, default: false },
+        restore: { type: Schema.Types.Mixed, default: undefined },
       },
     ],
   },
