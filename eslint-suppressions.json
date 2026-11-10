@@ -3597,11 +3597,6 @@
       "count": 1
     }
   },
-  "b4m-core/services/src/artifactService/get.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
   "b4m-core/services/src/artifactService/list.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
