@@ -25,7 +25,7 @@ const OBJECT_ID = /^[0-9a-f]{24}$/i;
 
 export type StaleDetectionGradeDeps = {
   listStale: (before: Date, limit: number) => Promise<ShadowDetectionItem[]>;
-  /** Of these users, those suspended right now. */
+  /** Of these users, those banned now; containing an account also sets isBanned (admin/usersBulk/execute.ts). */
   suspendedUserIds: (userIds: string[]) => Promise<Set<string>>;
   /** Each user's latest suspend or reinstate at or after `since`; users with none are absent. */
   latestStatusChanges: (userIds: string[], since: Date) => Promise<Map<string, Date>>;
