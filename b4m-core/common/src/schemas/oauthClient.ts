@@ -144,6 +144,14 @@ const allowedScopesSchema = z
   .refine(scopes => new Set(scopes).size === scopes.length, 'Scopes must be unique')
   .refine(scopes => scopes.includes('openid'), "Scopes must include 'openid'");
 
+/** An Overwatch product id, as every Overwatch event names its product. */
+export const oauthOverwatchProductIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(64)
+  .regex(/^[a-z0-9][a-z0-9_-]*$/, 'Use lower-case letters, digits, - and _');
+
 /** Update payload: name, type and auth method are fixed at registration. `federatedIdp: null` removes the trust config.
  * `expectedUpdatedAt` (the updatedAt the admin loaded) makes the write conflict if the client changed since. */
 export const updateOAuthClientSchema = z
@@ -152,6 +160,8 @@ export const updateOAuthClientSchema = z
     isActive: z.boolean().optional(),
     allowedScopes: allowedScopesSchema.optional(),
     federatedIdp: oauthFederatedIdpInputSchema.nullable().optional(),
+    // null removes it: the client's new sign-ups stop being credited to a product.
+    overwatchProductId: oauthOverwatchProductIdSchema.nullable().optional(),
     expectedUpdatedAt: z.string().datetime().nullable().optional(),
   })
   .strict()
@@ -174,6 +184,7 @@ export interface OAuthClientView {
   allowedScopes: string[];
   isActive: boolean;
   federatedIdp?: OAuthFederatedIdpConfig;
+  overwatchProductId?: string;
   // Null for legacy documents written before timestamps were enabled.
   createdAt: string | null;
   updatedAt: string | null;

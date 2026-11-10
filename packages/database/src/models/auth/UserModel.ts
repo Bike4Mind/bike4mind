@@ -1420,6 +1420,8 @@ const UserAcquisitionSchema = new Schema(
     lastTouch: { type: AcquisitionTouchSchema, required: false },
     // A verified hop the signup followed - see IUserAcquisition.verifiedTouch.
     verifiedTouch: { type: VerifiedTouchSchema, required: false },
+    // The OAuth client the account was created to sign in to - see IUserAcquisition.oauthTouch.
+    oauthTouch: { type: AcquisitionTouchSchema, required: false },
     signupMethod: { type: String, required: true },
     capturedAt: { type: Date, required: true },
   },
