@@ -4,28 +4,12 @@ import { lambdaVpc } from './vpc';
 
 const websocketApi = new sst.aws.ApiGatewayWebSocket('websocket', {});
 
-// Memory sizing
-// Every route sets memory explicitly so changes are visible in code review.
-// SST default is 1024 MB; relying on it silently masks whether a route
-// needs that much.
-//
-// Tiers (cold-start stack drives the floor):
-//   LIFECYCLE  1024 MB -- $connect/$disconnect/$default and voice_session_*: full
-//                         Mongoose + AWS SDK init. 256 MB hit OOM + 10s init timeouts
-//                         on preview envs.
-//   HEAVY      2048 MB -- cli_completion_request: streams Bedrock responses.
-//   MEDIUM      512 MB -- heartbeat, cli_tool_request: lighter handlers but
-//                         still init the DB + SDK stack.
-//   LIGHT       256 MB -- keep_command_*, jupyter_cell_output, cc_agent_*:
-//                         thin relay / fanout handlers with minimal heap.
-//
-// When CloudWatch max-memory-used data becomes available, update the values
-// here and reference the measurement window in the commit message.
-
+// Memory is set per route so a change shows in review. The cold-start Mongoose + AWS SDK
+// init sets the floor: lifecycle handlers at 256 MB hit OOM and init timeouts on previews.
 const LIFECYCLE_MEMORY = '1024 MB';
-const HEAVY_MEMORY = '2048 MB';
-const MEDIUM_MEMORY = '512 MB';
-const LIGHT_MEMORY = '256 MB';
+const STREAMING_MEMORY = '2048 MB';
+const DB_HANDLER_MEMORY = '512 MB';
+const RELAY_MEMORY = '256 MB';
 
 const defaultRoute = websocketApi.route('$default', {
   handler: 'apps/client/server/websocket/default.handler',
@@ -69,7 +53,7 @@ const disconnectRoute = websocketApi.route('$disconnect', {
 const heartbeatRoute = websocketApi.route('heartbeat', {
   handler: 'apps/client/server/websocket/heartbeat.func',
   runtime: 'nodejs24.x',
-  memory: MEDIUM_MEMORY,
+  memory: DB_HANDLER_MEMORY,
   timeout: '30 seconds',
   vpc: lambdaVpc,
   link: [...allSecrets, websocketApi],
@@ -115,7 +99,7 @@ const cliCompletionRoute = websocketApi.route('cli_completion_request', {
   handler: 'apps/client/server/websocket/cliCompletion.func',
   runtime: 'nodejs24.x',
   timeout: '10 minutes',
-  memory: HEAVY_MEMORY,
+  memory: STREAMING_MEMORY,
   vpc: lambdaVpc,
   link: [...allSecrets, websocketApi],
   environment: {
@@ -134,11 +118,11 @@ const cliCompletionRoute = websocketApi.route('cli_completion_request', {
 });
 
 // CLI Tool Execution — request-response
-websocketApi.route('cli_tool_request', {
+const cliToolRoute = websocketApi.route('cli_tool_request', {
   handler: 'apps/client/server/websocket/cliToolExecution.func',
   runtime: 'nodejs24.x',
   timeout: '10 minutes',
-  memory: MEDIUM_MEMORY,
+  memory: DB_HANDLER_MEMORY,
   vpc: lambdaVpc,
   link: [...allSecrets, websocketApi],
   environment: {
@@ -153,11 +137,11 @@ websocketApi.route('cli_tool_request', {
 });
 
 // Keep Command Relay — Web HUD ↔ CLI bidirectional command execution
-websocketApi.route('keep_command_request', {
+const keepCommandRequestRoute = websocketApi.route('keep_command_request', {
   handler: 'apps/client/server/websocket/keepCommandRequest.func',
   runtime: 'nodejs24.x',
   timeout: '30 seconds',
-  memory: LIGHT_MEMORY,
+  memory: RELAY_MEMORY,
   vpc: lambdaVpc,
   link: [...allSecrets, websocketApi],
   environment: {
@@ -171,11 +155,11 @@ websocketApi.route('keep_command_request', {
   ],
 });
 
-websocketApi.route('keep_command_response', {
+const keepCommandResponseRoute = websocketApi.route('keep_command_response', {
   handler: 'apps/client/server/websocket/keepCommandResponse.func',
   runtime: 'nodejs24.x',
   timeout: '30 seconds',
-  memory: LIGHT_MEMORY,
+  memory: RELAY_MEMORY,
   vpc: lambdaVpc,
   link: [...allSecrets, websocketApi],
   environment: {
@@ -190,11 +174,11 @@ websocketApi.route('keep_command_response', {
 });
 
 // Jupyter Notebook Cell Output — streaming cell execution results from CLI
-websocketApi.route('jupyter_cell_output', {
+const jupyterCellOutputRoute = websocketApi.route('jupyter_cell_output', {
   handler: 'apps/client/server/websocket/jupyterNotebookProgress.func',
   runtime: 'nodejs24.x',
   timeout: '30 seconds',
-  memory: LIGHT_MEMORY,
+  memory: RELAY_MEMORY,
   vpc: lambdaVpc,
   link: [...allSecrets, websocketApi],
   environment: {
@@ -209,11 +193,11 @@ websocketApi.route('jupyter_cell_output', {
 });
 
 // Claude Code Bridge — a user's local `cc-bridge` daemon announces CC sessions
-websocketApi.route('cc_agent_register', {
+const ccAgentRegisterRoute = websocketApi.route('cc_agent_register', {
   handler: 'apps/client/server/websocket/ccAgentRegister.func',
   runtime: 'nodejs24.x',
   timeout: '30 seconds',
-  memory: LIGHT_MEMORY,
+  memory: RELAY_MEMORY,
   vpc: lambdaVpc,
   link: [...allSecrets, websocketApi],
   environment: {
@@ -228,11 +212,11 @@ websocketApi.route('cc_agent_register', {
 });
 
 // Claude Code Bridge — stream per-session events (status, message preview)
-websocketApi.route('cc_agent_event', {
+const ccAgentEventRoute = websocketApi.route('cc_agent_event', {
   handler: 'apps/client/server/websocket/ccAgentEvent.func',
   runtime: 'nodejs24.x',
   timeout: '30 seconds',
-  memory: LIGHT_MEMORY,
+  memory: RELAY_MEMORY,
   vpc: lambdaVpc,
   link: [...allSecrets, websocketApi],
   environment: {
@@ -247,11 +231,11 @@ websocketApi.route('cc_agent_event', {
 });
 
 // Claude Code Bridge — clean session teardown (safety net is $disconnect)
-websocketApi.route('cc_agent_disconnect', {
+const ccAgentDisconnectRoute = websocketApi.route('cc_agent_disconnect', {
   handler: 'apps/client/server/websocket/ccAgentDisconnect.func',
   runtime: 'nodejs24.x',
   timeout: '30 seconds',
-  memory: LIGHT_MEMORY,
+  memory: RELAY_MEMORY,
   vpc: lambdaVpc,
   link: [...allSecrets, websocketApi],
   environment: {
@@ -277,4 +261,11 @@ export {
   heartbeatRoute,
   voiceSendTranscriptRoute,
   voiceEndedRoute,
+  cliToolRoute,
+  keepCommandRequestRoute,
+  keepCommandResponseRoute,
+  jupyterCellOutputRoute,
+  ccAgentRegisterRoute,
+  ccAgentEventRoute,
+  ccAgentDisconnectRoute,
 };

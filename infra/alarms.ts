@@ -29,6 +29,14 @@ import {
   heartbeatRoute,
   voiceSendTranscriptRoute,
   voiceEndedRoute,
+  cliCompletionRoute,
+  cliToolRoute,
+  keepCommandRequestRoute,
+  keepCommandResponseRoute,
+  jupyterCellOutputRoute,
+  ccAgentRegisterRoute,
+  ccAgentEventRoute,
+  ccAgentDisconnectRoute,
 } from './websocket';
 import { dlqAlarmTopic } from './dlqAlarms';
 import { websocketRouteLogGroup } from './websocketRouteLogGroup';
@@ -792,7 +800,7 @@ if (isMonitoredStage) {
    *
    * Lambda OOM/SIGKILL events surface only in logs (no native CloudWatch metric) and often during
    * INIT with no application output — exactly the failure mode that hit agent_execute at 256 MB.
-   * Every WebSocket route whose memory was explicitly sized gets a log-metric filter on
+   * Every WebSocket route defined in websocket.ts and subscriberFanout.ts gets a log-metric filter on
    * the OOM signatures so a future regression (memory drop, dependency bloat) pages loudly instead
    * of degrading silently. Each route publishes to its OWN metric name and gets its own alarm
    * (sharing one SNS topic), so a firing alarm names the culprit route directly.
@@ -809,12 +817,20 @@ if (isMonitoredStage) {
   for (const { key, metricName, route } of [
     { key: 'subscribe-query', metricName: 'SubscribeQueryOutOfMemory', route: subscribeQueryRoute },
     { key: 'unsubscribe-query', metricName: 'UnsubscribeQueryOutOfMemory', route: unsubscribeQueryRoute },
-    { key: 'default', metricName: 'DefaultRouteOutOfMemory', route: defaultRoute },
-    { key: 'connect', metricName: 'ConnectRouteOutOfMemory', route: connectRoute },
-    { key: 'disconnect', metricName: 'DisconnectRouteOutOfMemory', route: disconnectRoute },
+    { key: 'ws-default', metricName: 'DefaultRouteOutOfMemory', route: defaultRoute },
+    { key: 'ws-connect', metricName: 'ConnectRouteOutOfMemory', route: connectRoute },
+    { key: 'ws-disconnect', metricName: 'DisconnectRouteOutOfMemory', route: disconnectRoute },
     { key: 'heartbeat', metricName: 'HeartbeatRouteOutOfMemory', route: heartbeatRoute },
     { key: 'voice-send-transcript', metricName: 'VoiceSendTranscriptOutOfMemory', route: voiceSendTranscriptRoute },
     { key: 'voice-ended', metricName: 'VoiceEndedOutOfMemory', route: voiceEndedRoute },
+    { key: 'cli-completion', metricName: 'CliCompletionOutOfMemory', route: cliCompletionRoute },
+    { key: 'cli-tool', metricName: 'CliToolOutOfMemory', route: cliToolRoute },
+    { key: 'keep-command-request', metricName: 'KeepCommandRequestOutOfMemory', route: keepCommandRequestRoute },
+    { key: 'keep-command-response', metricName: 'KeepCommandResponseOutOfMemory', route: keepCommandResponseRoute },
+    { key: 'jupyter-cell-output', metricName: 'JupyterCellOutputOutOfMemory', route: jupyterCellOutputRoute },
+    { key: 'cc-agent-register', metricName: 'CcAgentRegisterOutOfMemory', route: ccAgentRegisterRoute },
+    { key: 'cc-agent-event', metricName: 'CcAgentEventOutOfMemory', route: ccAgentEventRoute },
+    { key: 'cc-agent-disconnect', metricName: 'CcAgentDisconnectOutOfMemory', route: ccAgentDisconnectRoute },
   ]) {
     new aws.cloudwatch.LogMetricFilter(`websocketRouteOomFilter-${key}`, {
       name: `${$app.name}-${$app.stage}-${key}-oom`,
