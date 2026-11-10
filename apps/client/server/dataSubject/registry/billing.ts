@@ -1,8 +1,11 @@
 import type { DataHolderRegistry } from '../types';
-
-const FINANCIAL_RECORD_REASON = 'Financial record kept for accounting and tax obligations (GDPR Art. 17(3)(b))';
-const PAYMENT_DISPUTE_REASON =
-  'Payment dispute kept to establish and defend a legal claim against the chargeback (GDPR Art. 17(3)(e))';
+import {
+  FINANCIAL_RECORD,
+  FINANCIAL_RECORD_REASON,
+  PAYMENT_DISPUTE,
+  SIGNUP_GRANT_CLAIM,
+  expiresAfterTtl,
+} from './retention';
 
 export const billingHolders = {
   // Mostly conversation content (query, checkpoint, result, tool inputs). Its charge is already on
@@ -22,8 +25,7 @@ export const billingHolders = {
         path: 'ownerId',
         matchBy: 'userId',
         action: 'retain',
-        reason:
-          'Abuse-prevention record that stops a repeat signup credit grant (legitimate interest, GDPR Art. 6(1)(f))',
+        ...SIGNUP_GRANT_CLAIM,
       },
     ],
   },
@@ -35,7 +37,7 @@ export const billingHolders = {
         matchBy: 'userId',
         where: { ownerType: 'User' },
         action: 'retain',
-        reason: FINANCIAL_RECORD_REASON,
+        ...FINANCIAL_RECORD,
       },
     ],
   },
@@ -47,24 +49,24 @@ export const billingHolders = {
         matchBy: 'userId',
         where: { ownerType: 'User' },
         action: 'retain',
-        reason: FINANCIAL_RECORD_REASON,
+        ...FINANCIAL_RECORD,
       },
       {
         path: 'recipientId',
         matchBy: 'userId',
         where: { recipientType: 'User' },
         action: 'retain',
-        reason: FINANCIAL_RECORD_REASON,
+        ...FINANCIAL_RECORD,
       },
       {
         path: 'senderId',
         matchBy: 'userId',
         where: { senderType: 'User' },
         action: 'retain',
-        reason: FINANCIAL_RECORD_REASON,
+        ...FINANCIAL_RECORD,
       },
       // Deprecated alias of ownerId, still present on older rows.
-      { path: 'userId', matchBy: 'userId', action: 'retain', reason: FINANCIAL_RECORD_REASON },
+      { path: 'userId', matchBy: 'userId', action: 'retain', ...FINANCIAL_RECORD },
       // The admin who made a manual adjustment: attribution, not a party to the transaction.
       { path: 'metadata.actorId', matchBy: 'userId', action: 'anonymize' },
       // The invited friend on a referral reward: attribution, not a party to the transaction.
@@ -79,7 +81,7 @@ export const billingHolders = {
         matchBy: 'userId',
         where: { ownerType: 'User' },
         action: 'retain',
-        reason: FINANCIAL_RECORD_REASON,
+        ...FINANCIAL_RECORD,
       },
     ],
   },
@@ -112,12 +114,20 @@ export const billingHolders = {
   },
   PaymentAttempt: {
     kind: 'holder',
-    references: [{ path: 'userId', matchBy: 'userId', action: 'retain', reason: FINANCIAL_RECORD_REASON }],
+    references: [
+      {
+        path: 'userId',
+        matchBy: 'userId',
+        action: 'retain',
+        reason: FINANCIAL_RECORD_REASON,
+        retention: expiresAfterTtl('createdAt', 90),
+      },
+    ],
     secretPaths: ['cardFingerprints'],
   },
   PaymentRiskAction: {
     kind: 'holder',
-    references: [{ path: 'userId', matchBy: 'userId', action: 'retain', reason: FINANCIAL_RECORD_REASON }],
+    references: [{ path: 'userId', matchBy: 'userId', action: 'retain', ...FINANCIAL_RECORD }],
   },
   PendingCreditHold: {
     kind: 'holder',
@@ -128,8 +138,15 @@ export const billingHolders = {
         where: { ownerType: 'User' },
         action: 'retain',
         reason: FINANCIAL_RECORD_REASON,
+        retention: expiresAfterTtl('settledAt', 7),
       },
-      { path: 'userId', matchBy: 'userId', action: 'retain', reason: FINANCIAL_RECORD_REASON },
+      {
+        path: 'userId',
+        matchBy: 'userId',
+        action: 'retain',
+        reason: FINANCIAL_RECORD_REASON,
+        retention: expiresAfterTtl('settledAt', 7),
+      },
     ],
   },
   ProviderInvoice: {
@@ -139,8 +156,8 @@ export const billingHolders = {
   ReferralSubscriptionReward: {
     kind: 'holder',
     references: [
-      { path: 'payerId', matchBy: 'userId', action: 'retain', reason: FINANCIAL_RECORD_REASON },
-      { path: 'inviterId', matchBy: 'userId', action: 'retain', reason: FINANCIAL_RECORD_REASON },
+      { path: 'payerId', matchBy: 'userId', action: 'retain', ...FINANCIAL_RECORD },
+      { path: 'inviterId', matchBy: 'userId', action: 'retain', ...FINANCIAL_RECORD },
     ],
   },
   RevenueSnapshot: {
@@ -156,7 +173,7 @@ export const billingHolders = {
         matchBy: 'userId',
         where: { scopeType: 'User' },
         action: 'retain',
-        reason: FINANCIAL_RECORD_REASON,
+        ...FINANCIAL_RECORD,
       },
       { path: 'acknowledgedBy', matchBy: 'userId', action: 'anonymize' },
     ],
@@ -175,6 +192,7 @@ export const billingHolders = {
         where: { scopeType: 'User' },
         action: 'retain',
         reason: FINANCIAL_RECORD_REASON,
+        retention: expiresAfterTtl('bucketStart', 35),
       },
     ],
   },
@@ -187,7 +205,7 @@ export const billingHolders = {
         matchBy: 'userId',
         where: { ownerType: 'user' },
         action: 'retain',
-        reason: FINANCIAL_RECORD_REASON,
+        ...FINANCIAL_RECORD,
       },
     ],
   },
@@ -209,7 +227,7 @@ export const billingHolders = {
         matchBy: 'userId',
         where: { subject: 'user' },
         action: 'retain',
-        reason: PAYMENT_DISPUTE_REASON,
+        ...PAYMENT_DISPUTE,
       },
       { path: 'resolution.resolvedBy', matchBy: 'userId', action: 'anonymize' },
       { path: 'contain.undoneBy', matchBy: 'userId', action: 'anonymize' },
@@ -223,7 +241,7 @@ export const billingHolders = {
         matchBy: 'userId',
         where: { ownerType: 'User' },
         action: 'retain',
-        reason: FINANCIAL_RECORD_REASON,
+        ...FINANCIAL_RECORD,
         // Marketing attribution (UTM parameters, referrer) is not part of the billing record.
         alsoRedact: ['acquisition'],
       },
@@ -234,13 +252,13 @@ export const billingHolders = {
   UsageEvent: {
     kind: 'holder',
     references: [
-      { path: 'userId', matchBy: 'userId', action: 'retain', reason: FINANCIAL_RECORD_REASON },
+      { path: 'userId', matchBy: 'userId', action: 'retain', ...FINANCIAL_RECORD },
       {
         path: 'ownerId',
         matchBy: 'userId',
         where: { ownerType: 'User' },
         action: 'retain',
-        reason: FINANCIAL_RECORD_REASON,
+        ...FINANCIAL_RECORD,
       },
     ],
   },
@@ -250,6 +268,6 @@ export const billingHolders = {
   },
   UserSubscription: {
     kind: 'holder',
-    references: [{ path: 'userId', matchBy: 'userId', action: 'retain', reason: FINANCIAL_RECORD_REASON }],
+    references: [{ path: 'userId', matchBy: 'userId', action: 'retain', ...FINANCIAL_RECORD }],
   },
 } satisfies DataHolderRegistry;
