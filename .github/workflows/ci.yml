@@ -894,7 +894,7 @@ jobs:
       # job's runs used, so the cache holds the leg's current state and does not grow per save.
       - name: Prune turbo test cache
         id: prune-turbo-cache
-        if: ${{ !cancelled() && (github.event_name == 'push' || github.event_name == 'merge_group') && hashFiles('.turbo/runs/*.json') != '' }}
+        if: ${{ !cancelled() && (github.event_name == 'push' || github.event_name == 'merge_group' || github.head_ref == 'perf/ci-turbo-test-cache') && hashFiles('.turbo/runs/*.json') != '' }}
         run: node scripts/turbo-test-cache.mjs prune .turbo/runs .turbo/cache
 
       - name: Save turbo test cache
