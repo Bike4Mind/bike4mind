@@ -22,6 +22,10 @@ vi.mock('./InviteCenter/Pending/PendingSection', () => ({
   PendingSection: () => <div data-testid="pending-section-stub" />,
 }));
 
+vi.mock('./InviteCenter/Schedule/ScheduleSection', () => ({
+  ScheduleSection: () => <div data-testid="schedule-section-stub" />,
+}));
+
 vi.mock('@tanstack/react-router', () => ({
   useSearch: () => routerMock.search,
   useNavigate: () => routerMock.navigate,
@@ -89,10 +93,16 @@ describe('InviteCenterShell', () => {
     });
   });
 
-  it.each([
-    ['schedule', 'The signup credit schedule is coming here'],
-    ['rewards', 'Rewards are coming here'],
-  ])('shows the %s empty state', (id, title) => {
+  it('renders the schedule editor, not a stub, in the schedule section', () => {
+    routerMock.search = { inviteSection: 'schedule' };
+    renderShell();
+    expect(screen.getByTestId('invite-center-section-schedule')).toContainElement(
+      screen.getByTestId('schedule-section-stub')
+    );
+    expect(screen.queryByTestId('admin-empty-state')).not.toBeInTheDocument();
+  });
+
+  it.each([['rewards', 'Rewards are coming here']])('shows the %s empty state', (id, title) => {
     routerMock.search = { inviteSection: id };
     renderShell();
     expect(screen.getByText(title)).toBeInTheDocument();
@@ -107,8 +117,8 @@ describe('InviteCenterShell', () => {
     expect(screen.queryByTestId('admin-empty-state')).not.toBeInTheDocument();
   });
 
-  it('has no action buttons on the schedule and rewards stubs', () => {
-    for (const id of ['schedule', 'rewards']) {
+  it('has no action buttons on the rewards stub', () => {
+    for (const id of ['rewards']) {
       routerMock.search = { inviteSection: id };
       const { unmount } = renderShell();
       expect(screen.getByTestId('admin-empty-state').querySelector('button')).toBeNull();

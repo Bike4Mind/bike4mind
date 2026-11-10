@@ -16,7 +16,7 @@ import {
   type SettingKey,
 } from '@bike4mind/common';
 import { useSettingsFromServer } from '@client/app/hooks/data/settings';
-import AdminSettingInputField from './AdminSettingInputField';
+import { SettingKeyRow } from './InviteCenter/shared/SettingKeyRow';
 import { CheckoutCatalogPanel } from './CheckoutCatalogPanel';
 import { AdminTab } from './adminSidebarConfig';
 import {
@@ -127,12 +127,6 @@ export const GROWTH_PRICING_LINKS = [
 ] as const;
 
 type GrowthPricingLinkId = (typeof GROWTH_PRICING_LINKS)[number]['id'];
-
-const formatValue = (value: unknown): string => {
-  if (value === undefined || value === null || value === '') return 'not set';
-  if (typeof value === 'number') return value.toLocaleString();
-  return String(value);
-};
 
 /**
  * Unit and derived value shown under a setting's current value, so a bare number reads as money.
@@ -275,42 +269,21 @@ const AdminGrowthPricingTab = () => {
                 <SectionHeading title={section.title} description={section.description} />
                 <Stack sx={{ gap: 1 }}>
                   {section.keys.map((key, index) => {
-                    const setting = settingsMap[key];
                     const stored = storedByKey.get(key);
-                    const current = stored ?? setting.defaultValue;
-                    const derived = describeDerivedValue(key, current);
                     return (
-                      <div key={key}>
-                        <Typography
-                          level="body-xs"
-                          sx={{ color: 'text.tertiary', mb: 0.5 }}
-                          data-testid={`admin-growth-pricing-current-${key}`}
-                        >
-                          Current: {formatValue(current)}
-                          {stored === undefined ? ' (default)' : ` - default ${formatValue(setting.defaultValue)}`}
-                        </Typography>
-                        {derived && (
-                          <Typography
-                            level="body-xs"
-                            sx={{ color: 'text.tertiary', mb: 0.5 }}
-                            data-testid={`admin-growth-pricing-derived-${key}`}
-                          >
-                            {derived}
-                          </Typography>
-                        )}
-                        <AdminSettingInputField
-                          // Remount when the stored value changes so the editor never shows a stale draft.
-                          key={`${key}-${JSON.stringify(stored ?? null)}`}
-                          index={index}
-                          setting={setting}
-                          defaultValue={current}
-                          lockedNote={
-                            key === 'enforceCredits' && isEnforceCreditsLocked()
-                              ? 'Always on for hosted deployments'
-                              : undefined
-                          }
-                        />
-                      </div>
+                      <SettingKeyRow
+                        key={key}
+                        settingKey={key}
+                        stored={stored}
+                        index={index}
+                        testIdPrefix="admin-growth-pricing"
+                        derived={describeDerivedValue(key, stored ?? settingsMap[key].defaultValue)}
+                        lockedNote={
+                          key === 'enforceCredits' && isEnforceCreditsLocked()
+                            ? 'Always on for hosted deployments'
+                            : undefined
+                        }
+                      />
                     );
                   })}
                 </Stack>

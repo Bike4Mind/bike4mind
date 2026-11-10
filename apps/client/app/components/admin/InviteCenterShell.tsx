@@ -15,6 +15,7 @@ import { AdminPageHeader } from './shared/AdminPageHeader';
 import { EmptyState } from './shared/EmptyState';
 import GrantPackagesTab from './InviteCenter/Packages/GrantPackagesTab';
 import { PendingSection } from './InviteCenter/Pending/PendingSection';
+import { ScheduleSection } from './InviteCenter/Schedule/ScheduleSection';
 import { ViewTabs } from './shared/ViewTabs';
 import { ADMIN_REGION_GAP } from './shared/adminStyles';
 
@@ -38,13 +39,10 @@ const parseSection = INVITE_CENTER_SEARCH_PARSERS[INVITE_CENTER_SECTION_PARAM];
 
 const VIEWS = INVITE_CENTER_SECTION_IDS.map(id => ({ id, label: SECTION_LABELS[id] }));
 
-const STUB_SECTIONS: Record<Exclude<InviteCenterSectionId, 'waitlist' | 'packages' | 'pending'>, StubSection> = {
-  schedule: {
-    title: 'The signup credit schedule is coming here',
-    description:
-      'The initial grant, daily credits, drip cap, invite bonus and the signup and trickle pools will be set in this section.',
-    links: [],
-  },
+const STUB_SECTIONS: Record<
+  Exclude<InviteCenterSectionId, 'waitlist' | 'packages' | 'pending' | 'schedule'>,
+  StubSection
+> = {
   rewards: {
     title: 'Rewards are coming here',
     description: 'Referral and gear rewards will be set in this section.',
@@ -150,6 +148,8 @@ export function InviteCenterShell({ waitlist }: { waitlist: ReactNode }) {
           <PackagesSection />
         ) : section === 'pending' ? (
           <PendingSection />
+        ) : section === 'schedule' ? (
+          <ScheduleSection />
         ) : (
           <StubSectionBody section={STUB_SECTIONS[section]} />
         )}
