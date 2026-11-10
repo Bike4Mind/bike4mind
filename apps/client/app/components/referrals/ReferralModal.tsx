@@ -234,24 +234,26 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
               {[
                 {
                   testId: 'first-answer',
-                  when: 'when your friend verifies their email and gets their first answer',
+                  when: t('referral.reward_when_first_answer'),
                   credits: referralSummary.rewards.firstAnswer,
                 },
                 {
                   testId: 'first-payment',
-                  when: "on your friend's first full-price Professional subscription payment, usable after a hold",
+                  when: t('referral.reward_when_first_payment'),
                   credits: referralSummary.rewards.firstPayment,
                 },
                 {
                   testId: 'second-payment',
-                  when: "on your friend's second full-price Professional subscription payment, usable after a hold",
+                  when: t('referral.reward_when_second_payment'),
                   credits: referralSummary.rewards.secondPayment,
                 },
               ]
                 .filter(({ credits }) => credits > 0)
                 .map(({ testId, when, credits }) => (
                   <Typography key={testId} level="body-sm" data-testid={`referral-modal-reward-${testId}`}>
-                    You earn <strong>{credits.toLocaleString('en-US')} credits</strong> {when}.
+                    {t('referral.reward_you_earn')}{' '}
+                    <strong>{t('referral.reward_credits', { credits: credits.toLocaleString('en-US') })}</strong> {when}
+                    .
                   </Typography>
                 ))}
             </Box>
