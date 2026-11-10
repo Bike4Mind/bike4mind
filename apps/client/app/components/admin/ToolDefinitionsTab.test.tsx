@@ -12,11 +12,13 @@ const mocks = vi.hoisted(() => ({
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
   toastInfo: vi.fn(),
+  currentUser: { isAdmin: true } as { isAdmin: boolean; adminPermissions?: string[] },
 }));
 
 vi.mock('@client/app/contexts/ApiContext', () => ({
   api: { get: mocks.get, put: mocks.put, delete: mocks.delete },
 }));
+vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: mocks.currentUser }) }));
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({
   default: ({ helpId }: { helpId: string }) => <span data-testid="context-help" data-help-id={helpId} />,
 }));
@@ -81,13 +83,15 @@ const listCalls = () => mocks.get.mock.calls.map(([url]) => url as string).filte
 
 const renderTab = () => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  return render(
+  const tree = () => (
     <QueryClientProvider client={queryClient}>
       <CssVarsProvider theme={appTheme}>
         <ToolDefinitionsTab />
       </CssVarsProvider>
     </QueryClientProvider>
   );
+  const view = render(tree());
+  return { ...view, rerenderTab: () => view.rerender(tree()) };
 };
 
 const openRowMenu = async (toolId: string) => fireEvent.click(await screen.findByTestId(`tool-row-actions-${toolId}`));
@@ -95,6 +99,7 @@ const openRowMenu = async (toolId: string) => fireEvent.click(await screen.findB
 describe('ToolDefinitionsTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.currentUser = { isAdmin: true };
     respondWith();
     mocks.put.mockImplementation((url: string, body: object) =>
       Promise.resolve({ data: { toolId: url.split('/').pop(), ...body } })
@@ -261,6 +266,70 @@ describe('ToolDefinitionsTab', () => {
     await waitFor(() => expect(mocks.delete).toHaveBeenCalledWith('/api/admin/tool-definitions/github_search'));
     expect(mocks.delete).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(screen.queryByTestId('tool-revert-dialog')).toBeNull());
+  });
+
+  it('disables Edit tool and Revert for a delegate without settings:manage, with the missing-permission message', async () => {
+    mocks.currentUser = { isAdmin: false, adminPermissions: ['support:read'] };
+    renderTab();
+    await openRowMenu('github_search');
+
+    const edit = await screen.findByTestId('tool-row-edit-github_search');
+    const revert = screen.getByTestId('tool-row-revert-github_search');
+    expect(edit).toHaveAttribute('aria-disabled', 'true');
+    expect(revert).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getAllByTestId('admin-missing-permission-action')).toHaveLength(2);
+    expect(screen.getByTestId('tool-row-view-github_search')).not.toHaveAttribute('aria-disabled');
+
+    fireEvent.click(edit);
+    fireEvent.click(revert);
+    expect(screen.queryByTestId('tool-edit-dialog')).toBeNull();
+    expect(screen.queryByTestId('tool-revert-dialog')).toBeNull();
+  });
+
+  it('disables Save in an open edit dialog once settings:manage is gone', async () => {
+    renderTab();
+    await openRowMenu('weather_info');
+    fireEvent.click(await screen.findByTestId('tool-row-edit-weather_info'));
+    const dialog = await screen.findByTestId('tool-edit-dialog');
+
+    mocks.currentUser = { isAdmin: false, adminPermissions: ['support:read'] };
+    fireEvent.change(within(dialog).getByTestId('tool-edit-short-description-input'), {
+      target: { value: 'Current weather and forecast for a place' },
+    });
+
+    expect(within(dialog).getByTestId('tool-edit-save-btn')).toBeDisabled();
+    expect(within(dialog).getByTestId('admin-missing-permission-action')).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByTestId('tool-edit-save-btn'));
+    expect(mocks.put).not.toHaveBeenCalled();
+  });
+
+  it('disables the revert confirm in an open revert dialog once settings:manage is gone', async () => {
+    const { rerenderTab } = renderTab();
+    await openRowMenu('github_search');
+    fireEvent.click(await screen.findByTestId('tool-row-revert-github_search'));
+    const dialog = await screen.findByTestId('tool-revert-dialog');
+    expect(within(dialog).getByTestId('tool-revert-confirm-btn')).toBeEnabled();
+
+    mocks.currentUser = { isAdmin: false, adminPermissions: ['support:read'] };
+    rerenderTab();
+
+    expect(within(dialog).getByTestId('tool-revert-confirm-btn')).toBeDisabled();
+    fireEvent.click(within(dialog).getByTestId('tool-revert-confirm-btn'));
+    expect(mocks.delete).not.toHaveBeenCalled();
+  });
+
+  it('enables Edit tool, Revert and the revert confirm for a settings:manage delegate', async () => {
+    mocks.currentUser = { isAdmin: false, adminPermissions: ['settings:manage'] };
+    renderTab();
+    await openRowMenu('github_search');
+
+    expect(await screen.findByTestId('tool-row-edit-github_search')).not.toHaveAttribute('aria-disabled');
+    expect(screen.getByTestId('tool-row-revert-github_search')).not.toHaveAttribute('aria-disabled');
+    expect(screen.queryByTestId('admin-missing-permission-action')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('tool-row-revert-github_search'));
+    const dialog = await screen.findByTestId('tool-revert-dialog');
+    expect(within(dialog).getByTestId('tool-revert-confirm-btn')).toBeEnabled();
   });
 
   it('keeps the revert confirm open on Esc and the X while the revert is in flight', async () => {

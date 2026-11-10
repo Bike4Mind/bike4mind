@@ -140,8 +140,8 @@ export const SystemPromptsManager: React.FC = () => {
               file: response.data,
               status: 'loaded',
             };
-          } catch (error: any) {
-            if (error?.response?.status === 404) {
+          } catch (error: unknown) {
+            if ((error as { response?: { status?: number } } | null)?.response?.status === 404) {
               console.warn(`❌ System prompt file ${id} not found (404)`);
               return {
                 id,

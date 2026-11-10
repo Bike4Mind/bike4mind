@@ -42,6 +42,7 @@ import {
   type DataColumn,
 } from './shared';
 import { ADMIN_REGION_GAP, adminFocus } from './shared/adminStyles';
+import { AdminPermissionAction } from './shared/MissingPermission';
 import { Dash, DialogFooter, Field, TruncatedText } from './promptAndToolParts';
 
 const PAGE_SIZE = 50;
@@ -92,15 +93,27 @@ function ToolRowMenu({
         <MenuItem onClick={() => onView(tool)} data-testid={`tool-row-view-${tool.toolId}`}>
           View details
         </MenuItem>
-        <MenuItem onClick={() => onEdit(tool)} data-testid={`tool-row-edit-${tool.toolId}`}>
-          Edit tool
-        </MenuItem>
+        <AdminPermissionAction requirement="settings:manage">
+          {disabled => (
+            <MenuItem disabled={disabled} onClick={() => onEdit(tool)} data-testid={`tool-row-edit-${tool.toolId}`}>
+              Edit tool
+            </MenuItem>
+          )}
+        </AdminPermissionAction>
         {tool.hasOverride && (
           <>
             <ListDivider />
-            <MenuItem onClick={() => onRevert(tool)} data-testid={`tool-row-revert-${tool.toolId}`}>
-              Revert to code defaults
-            </MenuItem>
+            <AdminPermissionAction requirement="settings:manage">
+              {disabled => (
+                <MenuItem
+                  disabled={disabled}
+                  onClick={() => onRevert(tool)}
+                  data-testid={`tool-row-revert-${tool.toolId}`}
+                >
+                  Revert to code defaults
+                </MenuItem>
+              )}
+            </AdminPermissionAction>
           </>
         )}
       </Menu>
@@ -560,17 +573,21 @@ const ToolDefinitionsTab: React.FC = () => {
           <Button variant="outlined" onClick={handleCancel} data-testid="tool-edit-cancel-btn">
             Cancel
           </Button>
-          <Button
-            onClick={handleSubmit}
-            loading={updateTool.isPending}
-            disabled={!hasChanges}
-            aria-label={!hasChanges ? 'Save disabled - no changes' : undefined}
-            data-testid="tool-edit-save-btn"
-          >
-            {editingTool?.hasOverride
-              ? `Save changes (create v${(editingTool.version || 0) + 1})`
-              : 'Create override (v1)'}
-          </Button>
+          <AdminPermissionAction requirement="settings:manage">
+            {disabled => (
+              <Button
+                onClick={handleSubmit}
+                loading={updateTool.isPending}
+                disabled={disabled || !hasChanges}
+                aria-label={!hasChanges ? 'Save disabled - no changes' : undefined}
+                data-testid="tool-edit-save-btn"
+              >
+                {editingTool?.hasOverride
+                  ? `Save changes (create v${(editingTool.version || 0) + 1})`
+                  : 'Create override (v1)'}
+              </Button>
+            )}
+          </AdminPermissionAction>
         </DialogFooter>
       </AdminDialog>
 
@@ -601,14 +618,19 @@ const ToolDefinitionsTab: React.FC = () => {
           >
             Cancel
           </Button>
-          <Button
-            color="danger"
-            loading={deleteTool.isPending}
-            onClick={handleRevert}
-            data-testid="tool-revert-confirm-btn"
-          >
-            Revert to code defaults
-          </Button>
+          <AdminPermissionAction requirement="settings:manage">
+            {disabled => (
+              <Button
+                color="danger"
+                loading={deleteTool.isPending}
+                disabled={disabled}
+                onClick={handleRevert}
+                data-testid="tool-revert-confirm-btn"
+              >
+                Revert to code defaults
+              </Button>
+            )}
+          </AdminPermissionAction>
         </DialogFooter>
       </AdminDialog>
     </Stack>

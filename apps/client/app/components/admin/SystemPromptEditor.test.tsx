@@ -282,6 +282,95 @@ describe('SystemPromptEditor', () => {
     expect(mocks.post).toHaveBeenCalledTimes(2);
   });
 
+  it('saves to the active version, then uses and save-and-uses an older stored version with the same requests', async () => {
+    const V2 = {
+      promptId: 'optimizer_system',
+      version: 2,
+      content: 'You are the optimizer, v2.',
+      name: 'Optimizer system prompt',
+      description: 'Sets how the optimizer behaves',
+      category: 'system',
+      tags: ['system-message'],
+      variables: ['userName'],
+      createdBy: 'admin-id',
+      createdByName: 'Admin',
+      createdAt: STAMP,
+    };
+    mocks.get.mockImplementation((url: string) => {
+      if (url.startsWith(LIST_URL)) return Promise.resolve(listResponse(PROMPTS));
+      if (url.endsWith('/history'))
+        return Promise.resolve({
+          data: { success: true, data: { history: [V2], defaultPrompt: CODE_DEFAULT, currentVersion: 3 } },
+        });
+      return Promise.reject(new Error(`unexpected GET ${url}`));
+    });
+    renderEditor();
+    await openRowMenu('optimizer_system');
+    fireEvent.click(await screen.findByTestId('system-prompt-row-edit-optimizer_system'));
+    const dialog = await screen.findByTestId('system-prompt-edit-dialog');
+    const contentInput = () => within(dialog).getByTestId('system-prompt-content-input');
+
+    fireEvent.change(contentInput(), { target: { value: 'You are the optimizer, v3 edited.' } });
+    expect(within(dialog).queryByTestId('system-prompt-use-version-btn')).toBeNull();
+    const saveTo = within(dialog).getByTestId('system-prompt-save-version-btn');
+    expect(saveTo).toHaveTextContent('Save to v3');
+    fireEvent.click(saveTo);
+    await waitFor(() =>
+      expect(mocks.post).toHaveBeenCalledWith('/api/admin/system-prompts/optimizer_system/save-version', {
+        version: 3,
+        content: 'You are the optimizer, v3 edited.',
+        name: 'Optimizer system prompt',
+        description: 'Sets how the optimizer behaves',
+        category: 'system',
+        tags: ['system-message', 'optimizer', 'scheduling', 'extra'],
+        variables: ['userName'],
+        enabled: true,
+      })
+    );
+    await waitFor(() => expect(within(dialog).queryByTestId('system-prompt-save-version-btn')).toBeNull());
+
+    fireEvent.click(within(within(dialog).getByTestId('system-prompt-version-select')).getByRole('combobox'));
+    fireEvent.click(await screen.findByRole('option', { name: /^v2 / }));
+    await waitFor(() => expect(contentInput()).toHaveValue('You are the optimizer, v2.'));
+
+    const use = within(dialog).getByTestId('system-prompt-use-version-btn');
+    expect(use).toHaveTextContent('Use v2');
+    fireEvent.click(use);
+    await waitFor(() =>
+      expect(mocks.post).toHaveBeenLastCalledWith('/api/admin/system-prompts/optimizer_system/switch-version', {
+        targetVersion: 2,
+      })
+    );
+    // The switch reloads the history, which resets the fields; edit only once that settles.
+    await waitFor(() => expect(mocks.get.mock.calls.filter(([url]) => url.endsWith('/history'))).toHaveLength(2));
+    await waitFor(() => expect(within(dialog).queryByRole('progressbar')).toBeNull());
+
+    fireEvent.change(contentInput(), { target: { value: 'You are the optimizer, v2 edited.' } });
+    expect(within(dialog).queryByTestId('system-prompt-use-version-btn')).toBeNull();
+    expect(within(dialog).queryByTestId('system-prompt-save-version-btn')).toBeNull();
+    const saveUse = within(dialog).getByTestId('system-prompt-save-use-btn');
+    expect(saveUse).toHaveTextContent('Save + Use v2');
+    mocks.post.mockClear();
+    fireEvent.click(saveUse);
+    await waitFor(() => expect(mocks.post).toHaveBeenCalledTimes(2));
+    expect(mocks.post.mock.calls).toEqual([
+      [
+        '/api/admin/system-prompts/optimizer_system/save-version',
+        {
+          version: 2,
+          content: 'You are the optimizer, v2 edited.',
+          name: 'Optimizer system prompt',
+          description: 'Sets how the optimizer behaves',
+          category: 'system',
+          tags: ['system-message'],
+          variables: ['userName'],
+          enabled: true,
+        },
+      ],
+      ['/api/admin/system-prompts/optimizer_system/switch-version', { targetVersion: 2 }],
+    ]);
+  });
+
   it('creates the first override of a code-only prompt with the same PUT', async () => {
     renderEditor();
     await openRowMenu('briefing_main');

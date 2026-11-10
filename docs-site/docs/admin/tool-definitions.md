@@ -42,6 +42,8 @@ Names and descriptions do not wrap: a long one is cut short with an ellipsis. On
 
 The row actions are in the "..." menu at the end of each row: **View details**, **Edit tool**, and, for a tool with a database override, **Revert to code defaults**.
 
+**Edit tool** and **Revert to code defaults** need the `settings:manage` permission (see [Delegated permissions](./delegated-permissions.md)). A delegate with only `support:read` can open the page and view details, but sees both actions disabled, with the missing permission named on hover.
+
 ## Actions
 
 ### View Details
