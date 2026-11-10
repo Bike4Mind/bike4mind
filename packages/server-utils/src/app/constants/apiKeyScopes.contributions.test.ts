@@ -12,6 +12,7 @@ async function loadCatalog(premiumApiKeyScopes: unknown) {
 
 afterEach(() => {
   vi.doUnmock(GENERATED);
+  vi.doUnmock('@bike4mind/observability');
   vi.restoreAllMocks();
 });
 
@@ -135,7 +136,9 @@ describe('the catalog with a contributed scope', () => {
   });
 
   it('warns once at load about a dropped row', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // loadCatalog resets modules, so mock the Logger the fresh module will import.
+    const warn = vi.fn();
+    vi.doMock('@bike4mind/observability', () => ({ Logger: { warn } }));
     const catalog = await loadCatalog([{ ...ACME_READ, value: 'me:read' }]);
     expect(catalog.USER_API_KEY_SCOPE_VALUES.filter(v => v === 'me:read')).toHaveLength(1);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('me:read'));

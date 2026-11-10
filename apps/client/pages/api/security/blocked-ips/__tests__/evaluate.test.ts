@@ -1,21 +1,30 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
+type Handler = (req: { method?: string }, res: unknown, next?: () => void) => unknown;
+
 /**
  * blocked-ips/evaluate writes to the IP blocklist (auto-blocking high-attempt
- * IPs), so like the rest of that control it must be admin-only. Prove a
- * non-admin is rejected before any evaluation or write runs.
+ * IPs), so like the rest of that control it needs settings:manage. Prove a
+ * caller without it is rejected before any evaluation or write runs.
  */
 
 const mockRefs = vi.hoisted(() => ({
-  postHandler: null as null | ((req: any, res: any) => unknown),
+  postHandler: null as null | Handler,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
-  const chain: any = {
-    use: () => chain,
-    post: (fn: any) => {
-      mockRefs.postHandler = fn;
+  let guard: Handler;
+  const chain = {
+    use: (fn: Handler) => {
+      guard = fn;
+      return chain;
+    },
+    post: (fn: Handler) => {
+      mockRefs.postHandler = async (req: { method?: string }, res: unknown) => {
+        guard(req, res, () => {});
+        return fn(req, res);
+      };
       return chain;
     },
   };
@@ -49,7 +58,7 @@ import '@pages/api/security/blocked-ips/evaluate';
 
 function mocks(user: unknown) {
   const { req, res } = createMocks({ method: 'POST' });
-  (req as any).user = user;
+  Object.assign(req, { user });
   Object.assign(req, { logger: { warn: vi.fn(), error: vi.fn() } });
   return { req, res };
 }
@@ -84,7 +93,7 @@ describe('POST /api/security/blocked-ips/evaluate - admin gate', () => {
 
   it('rejects a non-admin before the runner is called', async () => {
     const { req, res } = mocks({ id: 'u1', isAdmin: false });
-    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/admin/i);
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/Missing permission/);
     expect(runner.runOauthAbuseAutoBlock).not.toHaveBeenCalled();
   });
 

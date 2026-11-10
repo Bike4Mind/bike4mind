@@ -286,6 +286,7 @@ export {
 export {
   DEFAULT_LLAMA_SERVER_PULL_QUANT,
   LLAMA_SERVER_RUNTIME_ID,
+  binaryIdentity,
   LlamaServerRuntime,
   ROUTER_LOG_NAME,
   parseLlamaServerPullRef,
@@ -294,12 +295,14 @@ export {
   type StartRouterOptions,
 } from './llamaServerRuntime';
 export {
+  LISTING_TIMEOUT_MS,
   gpuQueries,
   parseMeminfo,
   parseNvidiaSmiUsage,
   parseRocmSmiVram,
   probeHardware,
   probeMemoryUsage,
+  withTimeout,
   type ExecLike,
   type GpuQueries,
   type GpuUsage,

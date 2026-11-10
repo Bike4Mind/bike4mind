@@ -25,11 +25,14 @@ interface ProbeResult {
   };
 }
 
-interface HealthSummary {
+/** 'no_data' (with a null lastCheckedAt) means no check has been stored for the integration yet. */
+export type HealthSummaryStatus = IntegrationHealthStatus | 'no_data';
+
+export interface HealthSummary {
   integration: IntegrationName;
-  status: IntegrationHealthStatus;
+  status: HealthSummaryStatus;
   latencyMs: number;
-  lastCheckedAt: Date;
+  lastCheckedAt: Date | null;
   successRate: number;
   consecutiveFailures: number;
   error: string | null;
@@ -199,9 +202,9 @@ export async function getHealthSummary(logger: Logger): Promise<HealthSummary[]>
 
     summaries.push({
       integration,
-      status: latest?.status ?? 'unhealthy',
+      status: latest?.status ?? 'no_data',
       latencyMs: latest?.latencyMs ?? 0,
-      lastCheckedAt: latest?.checkedAt ?? new Date(0),
+      lastCheckedAt: latest?.checkedAt ?? null,
       successRate: rate,
       consecutiveFailures,
       error: latest?.error ?? null,

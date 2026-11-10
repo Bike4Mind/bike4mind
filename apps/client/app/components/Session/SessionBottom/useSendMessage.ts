@@ -231,6 +231,7 @@ export function useSendMessage({
     skipAutoOffers,
     thinking,
     enabledMcpServers,
+    disabledMcpConnections,
     deepResearchConfig,
     organizationId,
     agentMode,
@@ -258,6 +259,7 @@ export function useSendMessage({
       s.skipAutoOffers,
       s.thinking,
       s.enabledMcpServers,
+      s.disabledMcpConnections,
       s.deepResearchConfig,
       s.organizationId,
       s.agentMode,
@@ -852,6 +854,7 @@ export function useSendMessage({
           addMessageToSession,
           ...llmSettings,
           mcpServers: enabledMcpServers ?? undefined,
+          disabledMcpConnections,
           // TODO: Remove this once. New one is in imageConfig
           size,
           quality,
@@ -897,6 +900,7 @@ export function useSendMessage({
           setChatCompletion,
           ...llmSettings,
           mcpServers: enabledMcpServers ?? undefined,
+          disabledMcpConnections,
           optimisticSessionId: optimisticTmpId ?? undefined,
           // Forward Agent-mode state for telemetry / future server-side
           // routing. The chat completion path doesn't branch on this -

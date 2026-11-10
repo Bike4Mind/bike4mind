@@ -529,3 +529,19 @@ describe('DataLakeLakePicker - draft marker', () => {
     expect(screen.queryByTestId(`datalake-lake-picker-draft-chip-${DATA_LAKES[0].id}`)).not.toBeInTheDocument();
   });
 });
+
+describe('DataLakeLakePicker - refresh on open', () => {
+  it('tells the host each time the list opens, and not when it closes', () => {
+    const onOpen = vi.fn();
+    renderPicker({ onOpen, lakes: [lake({ id: 'a', name: 'Research Corpus' })] });
+
+    openMenu();
+    expect(onOpen).toHaveBeenCalledTimes(1);
+
+    openMenu();
+    expect(onOpen).toHaveBeenCalledTimes(1);
+
+    openMenu();
+    expect(onOpen).toHaveBeenCalledTimes(2);
+  });
+});

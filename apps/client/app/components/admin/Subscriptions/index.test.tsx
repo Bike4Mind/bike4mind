@@ -143,6 +143,15 @@ beforeEach(() => {
 });
 
 describe('AdminSubscriptions', () => {
+  it('leaves the outer padding to the admin page frame', async () => {
+    renderTab();
+    const root = await screen.findByTestId('admin-subscriptions-tab');
+    const style = getComputedStyle(root);
+    for (const side of [style.paddingTop, style.paddingRight, style.paddingBottom, style.paddingLeft]) {
+      expect(parseFloat(side || '0')).toBe(0);
+    }
+  });
+
   it('opens on the Paying view and asks the server for paying Stripe rows', async () => {
     renderTab();
     expect(await screen.findByTestId('admin-subscriptions-row-s1')).toBeTruthy();

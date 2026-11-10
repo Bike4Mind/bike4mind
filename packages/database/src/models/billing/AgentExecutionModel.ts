@@ -13,6 +13,7 @@ import {
   type AudioGenerationToolCall,
   type AuthOrigin,
   AuthOriginSchema,
+  type PromptMeta,
 } from '@bike4mind/common';
 export { AGENT_EXECUTION_STATUSES, ACTIVE_AGENT_EXECUTION_STATUSES, type AgentExecutionStatus };
 
@@ -77,6 +78,28 @@ export interface IPendingGate {
   confidence: number;
   reason: string;
   requestedAt: Date;
+}
+
+/**
+ * The finished result a completion-time `block` pause holds back (see `low_confidence_completion`
+ * in agentExecutor). The executor's per-invocation state (images, side effects, retrieval) is gone
+ * by the time the user answers, so `gate_response: stop` finalizes from this snapshot to persist
+ * the same result a normal completion would. Cleared with `pendingGate`.
+ */
+export interface IPendingCompletion {
+  answer?: string;
+  /** `answer` plus any DAG child artifact blocks, as written to the Quest. */
+  replyText: string;
+  totalTokens: number;
+  totalIterations: number;
+  reachedMaxIterations: boolean;
+  /** Whether the answer landed below the iteration ceiling, so Continue has room to reconsider it. */
+  canReconsider: boolean;
+  lowConfidence: { confidence: number; reason: string };
+  generatedImages: string[];
+  finishReason?: string;
+  allSideEffects: { type: string; payload: unknown }[];
+  retrievalSummary?: PromptMeta['retrieval'];
 }
 
 // --- Confidence Telemetry ---
@@ -441,6 +464,9 @@ export interface IAgentExecution {
    * the gate threshold; cleared when the client responds via `gate_response`.
    */
   pendingGate?: IPendingGate;
+
+  /** Set alongside `pendingGate` only when the pause holds a finished answer. */
+  pendingCompletion?: IPendingCompletion;
 
   /**
    * Confidence-gate telemetry (issue #56 M1.1). Accumulated every iteration the
@@ -836,6 +862,7 @@ const AgentExecutionSchema = new mongoose.Schema(
 
     // Confidence-gate state
     pendingGate: { type: PendingGateSchema, required: false },
+    pendingCompletion: { type: mongoose.Schema.Types.Mixed, required: false },
 
     // Confidence-gate telemetry (#56 M1.1). `default: () => ({})` instantiates
     // the subdoc so its field defaults (evaluatedCount 0, minConfidence 1, ...)
@@ -1548,6 +1575,8 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
       status: 'awaiting_permission' | 'paused';
       pendingPermission?: IPendingPermission;
       pendingGate?: IPendingGate;
+      pendingCompletion?: IPendingCompletion;
+      checkpoint?: unknown;
     }
   ): Promise<boolean> {
     const result = await this.model.updateOne(
@@ -1694,13 +1723,25 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    * over a doc that's already logically aborted. Caller checks the return and
    * bails when `false`.
    *
-   * Resets `lowConfidenceStreak`: the pause consumes the streak, so after resume the
-   * run must build a fresh one before it can pause again.
+   * A mid-run pause resets `lowConfidenceStreak`: the pause consumes the streak, so after resume
+   * the run must build a fresh one before it can pause again. A completion-time pause (`held`) keeps
+   * it, so a reconsidered answer that gathers no better evidence is flagged again, and writes the
+   * final checkpoint with the result so both reflect the same end-of-run state.
    */
-  async setPendingGate(id: string, pendingGate: IPendingGate): Promise<boolean> {
+  async setPendingGate(
+    id: string,
+    pendingGate: IPendingGate,
+    held?: { completion: IPendingCompletion; checkpoint: unknown }
+  ): Promise<boolean> {
     const result = await this.model.updateOne(
       { _id: id, abortedAt: { $exists: false } },
-      { $set: { pendingGate, status: 'paused', lowConfidenceStreak: 0 } }
+      {
+        $set: {
+          pendingGate,
+          status: 'paused',
+          ...(held ? { pendingCompletion: held.completion, checkpoint: held.checkpoint } : { lowConfidenceStreak: 0 }),
+        },
+      }
     );
     return result.modifiedCount > 0;
   }
@@ -1709,12 +1750,20 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    * Clear the gate marker. Caller is responsible for any subsequent status
    * transition (continuing -> re-invoke Lambda, completed -> markComplete).
    * Mirrors the `clearWaitingOnChild` `abortedAt`-not-exists guard so a
-   * concurrent abort doesn't get resurrected.
+   * concurrent abort doesn't get resurrected. `checkpoint`, when given, is written in the
+   * same update so a resumed run never reads a checkpoint older than the gate decision.
+   *
+   * Also CAS-guarded on a live gate: `timestamps: true` bumps `updatedAt` on every write, so
+   * without the `pendingGate` filter a repeated or racing response would still report a
+   * modification and act on the same pause twice.
    */
-  async clearPendingGate(id: string): Promise<boolean> {
+  async clearPendingGate(id: string, opts?: { checkpoint?: unknown; keepCompletion?: boolean }): Promise<boolean> {
     const result = await this.model.updateOne(
-      { _id: id, abortedAt: { $exists: false } },
-      { $unset: { pendingGate: '' } }
+      { _id: id, status: 'paused', pendingGate: { $exists: true }, abortedAt: { $exists: false } },
+      {
+        $unset: opts?.keepCompletion ? { pendingGate: '' } : { pendingGate: '', pendingCompletion: '' },
+        ...(opts?.checkpoint !== undefined && { $set: { checkpoint: opts.checkpoint } }),
+      }
     );
     return result.modifiedCount > 0;
   }
@@ -1785,6 +1834,7 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
           result,
           completedAt: new Date(),
         },
+        $unset: { pendingCompletion: '' },
       }
     );
   }

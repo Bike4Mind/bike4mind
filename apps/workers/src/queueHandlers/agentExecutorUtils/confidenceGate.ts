@@ -156,9 +156,10 @@ export interface LowConfidenceCompletion {
 /**
  * Whether a run that just produced its final answer did so on low confidence. A final-answer
  * iteration runs no tools, so the gate never evaluates it; the signal is the persisted streak
- * left by the last evaluated iteration (`recordIterationConfidence`), which `setPendingGate`
- * clears - an answer that follows a human review is never flagged. Null for `off`, a clean
- * streak, or a run whose confidence was never recorded.
+ * left by the last evaluated iteration (`recordIterationConfidence`). A mid-run pause clears it,
+ * so an answer that follows that review is not flagged; a completion-time pause keeps it, so an
+ * answer reconsidered without better evidence is flagged again. Null for `off`, a clean streak,
+ * or a run whose confidence was never recorded.
  */
 export function evaluateLowConfidenceCompletion({
   mode,

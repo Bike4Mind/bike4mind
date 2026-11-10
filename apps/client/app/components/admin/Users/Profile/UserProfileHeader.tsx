@@ -1,11 +1,5 @@
 import React from 'react';
-import {
-  canAccessAdmin,
-  hasAdminPermission,
-  isFullAdmin,
-  isThrottleExempt,
-  missingAdminPermissionMessage,
-} from '@bike4mind/common';
+import { hasAdminPermission, isThrottleExempt } from '@bike4mind/common';
 import { Avatar, Button, Dropdown, ListDivider, Menu, MenuButton, MenuItem, Stack, Typography } from '@mui/joy';
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -14,6 +8,7 @@ import type { ProfileAction } from './actions/profileActions';
 import {
   LEVEL_LABELS,
   accountStatus,
+  adminActionBlockedReason,
   displayName,
   initials,
   organizationName,
@@ -27,19 +22,19 @@ type MenuEntry =
 type AdminIdentity = Parameters<typeof hasAdminPermission>[0];
 
 /** Mirrors the server gate on the deletion routes: `users:delete`, and full admin for a target with admin access. */
-export const deletionBlockedReason = (actor: AdminIdentity, target: AdminUserProfile): string | null => {
-  if (!hasAdminPermission(actor, 'users:delete')) return missingAdminPermissionMessage('users:delete');
-  if (canAccessAdmin(target) && !isFullAdmin(actor))
-    return 'Only full administrators can act on accounts with admin access';
-  return null;
-};
+export const deletionBlockedReason = (actor: AdminIdentity, target: AdminUserProfile): string | null =>
+  adminActionBlockedReason(actor, target, 'users:delete');
 
-const gateDeletion = (entry: Exclude<MenuEntry, 'divider'>, blocked: string | null): MenuEntry =>
+const gateEntry = (entry: Exclude<MenuEntry, 'divider'>, blocked: string | null): MenuEntry =>
   blocked ? { ...entry, disabled: true, hint: blocked } : entry;
 
-const menuEntries = (user: AdminUserProfile, deletionBlocked: string | null): MenuEntry[] => [
+const menuEntries = (
+  user: AdminUserProfile,
+  deletionBlocked: string | null,
+  loginAsBlocked: string | null
+): MenuEntry[] => [
   { action: 'editProfile', label: 'Edit profile' },
-  { action: 'loginAs', label: 'Log in as user' },
+  gateEntry({ action: 'loginAs', label: 'Log in as user' }, loginAsBlocked),
   { action: 'message', label: 'Send message' },
   { action: 'subscription', label: 'Grant subscription' },
   { action: 'role', label: 'Change role' },
@@ -48,7 +43,7 @@ const menuEntries = (user: AdminUserProfile, deletionBlocked: string | null): Me
   { action: 'compliance', label: 'Compliance record' },
   { action: 'restrict', label: user.isModerated ? 'Lift restriction' : 'Restrict account' },
   { action: 'shadowTier', label: user.throttle?.tier === 'shadow' ? 'Remove limited tier' : 'Move to limited tier' },
-  gateDeletion(
+  gateEntry(
     user.deletion
       ? {
           action: 'cancelDeletion',
@@ -60,7 +55,7 @@ const menuEntries = (user: AdminUserProfile, deletionBlocked: string | null): Me
       : { action: 'scheduleDeletion', label: 'Schedule deletion (user request)', danger: true },
     deletionBlocked
   ),
-  gateDeletion({ action: 'delete', label: 'Delete user', danger: true }, deletionBlocked),
+  gateEntry({ action: 'delete', label: 'Delete user', danger: true }, deletionBlocked),
 ];
 
 const SIGNUP_METHOD_LABELS: Readonly<Record<string, string>> = {
@@ -160,7 +155,11 @@ export const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({ user, onAc
               <MoreHorizIcon />
             </MenuButton>
             <Menu placement="bottom-end" sx={{ minWidth: 240 }} data-testid="user-profile-more-menu">
-              {menuEntries(user, deletionBlockedReason(currentUser, user)).map((entry, index) =>
+              {menuEntries(
+                user,
+                deletionBlockedReason(currentUser, user),
+                adminActionBlockedReason(currentUser, user, 'users:impersonate')
+              ).map((entry, index) =>
                 entry === 'divider' ? (
                   <ListDivider key={`divider-${index}`} />
                 ) : (

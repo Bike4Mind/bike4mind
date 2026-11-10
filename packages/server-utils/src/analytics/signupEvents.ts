@@ -5,6 +5,7 @@ import { minorUnitsPerMajor } from '../integrations/stripe/currency';
 import { emitProductEvent, HOST_PRODUCT_ID, ingestKeyFor } from './emitActiveEvent';
 import { pseudonymizeUserId } from './pseudonymize';
 import { laneMetadata, type LaneAccount } from './lane';
+import { Logger } from '@bike4mind/observability';
 
 // Kept apart from acquisition.ts, which is pure: this is the one piece that sends, so importing
 // the touch helpers (checkout, the subscription write path) does not pull in the emitter and its
@@ -235,13 +236,13 @@ export async function emitBillingEvent(opts: {
           ...(utm && { utm }),
           metadata: { ...callerMetadata, ...credit, userAction: false, ...laneMetadata(user) },
         }).catch(() => {
-          console.warn('[b4m-analytics] billing event emit failed', { productId, event });
+          Logger.warn('[b4m-analytics] billing event emit failed', { productId, event });
         })
       )
     );
     return copies.map(c => c.productId);
   } catch {
-    console.warn('[b4m-analytics] billing event failed', { event: opts.event });
+    Logger.warn('[b4m-analytics] billing event failed', { event: opts.event });
     return [];
   }
 }

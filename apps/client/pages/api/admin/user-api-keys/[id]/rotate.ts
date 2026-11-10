@@ -9,10 +9,11 @@ import {
 import { organizationRepository, withTransaction } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { userApiKeyService } from '@bike4mind/services';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi, requireAdminPermission } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import {
+  assertCanActOnKeyOwner,
   auditKeyRef,
   endKeyRealtimeConnections,
   loadApiKeyOrThrow,
@@ -24,7 +25,7 @@ import { respond } from '@server/utils/respond';
 /**
  * POST /api/admin/user-api-keys/[id]/rotate  { reason }
  *
- * Admin-only: mints a new secret for an active key on the key's behalf and returns it ONCE. The
+ * Requires keys:revoke and users:impersonate: mints a new secret for an active key on the key's behalf and returns it ONCE. The
  * rotation runs as the key's OWNER, so the key is never re-owned to the admin and billing, org,
  * agent, product and metadata stay exactly as they were. The paid-subscription switch is not applied
  * (an admin action), so a gated owner can hold a rotated key that is still refused at use. The
@@ -45,14 +46,16 @@ function assertRotatable(key: IUserApiKeyDocument): void {
   }
 }
 
-const handler = baseApi({ auth: 'jwtOnly' })
+const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'keys:revoke' } })
   .use(csrfProtection())
   .post(async (req, res) => {
-    if (!req.user?.isAdmin) throw new ForbiddenError('Admin access required');
+    // Rotation returns a working secret for the owner, so it also needs the impersonation grant.
+    requireAdminPermission(req, 'users:impersonate');
     const keyId = readApiKeyIdParam(req);
     const reason = parseAdminActionReason(req.body?.reason);
 
     const key = await loadApiKeyOrThrow(keyId);
+    await assertCanActOnKeyOwner(req.user, key.userId, 'rotate API keys of');
     assertRotatable(key);
 
     const target = await ownerAuditTarget(key.userId);

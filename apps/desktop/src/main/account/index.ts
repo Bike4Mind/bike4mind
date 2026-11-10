@@ -20,6 +20,9 @@ export function registerAccount(auth: AuthService): AccountService {
 
   ipcMain.handle(IPC_CHANNELS.accountGetCredits, () => service.credits());
   ipcMain.handle(IPC_CHANNELS.accountGetProfile, () => service.profile());
+  ipcMain.handle(IPC_CHANNELS.accountSendFeedback, (_event, content: unknown) =>
+    service.sendFeedback(content, auth.getState().user)
+  );
 
   return service;
 }

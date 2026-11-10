@@ -4,6 +4,7 @@ import { ApiKeyStatus, BadRequestError, ConflictError, ForbiddenError, NotFoundE
 const h = vi.hoisted(() => ({
   handler: null as null | ((req: unknown, res: unknown) => Promise<unknown>),
   config: null as unknown,
+  guard: null as null | ((req: unknown, res: unknown, next: () => void) => void),
   findKey: vi.fn(),
   revoke: vi.fn(),
   findUser: vi.fn(),
@@ -15,14 +16,17 @@ const h = vi.hoisted(() => ({
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (config: unknown) => {
     h.config = config;
-    return {
-      use: () => ({
-        post: (fn: typeof h.handler) => {
-          h.handler = fn;
-          return {};
-        },
-      }),
+    const chain = {
+      use: (guard: unknown) => {
+        h.guard ??= guard as typeof h.guard;
+        return chain;
+      },
+      post: (fn: typeof h.handler) => {
+        h.handler = fn;
+        return chain;
+      },
     };
+    return chain;
   },
 }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: vi.fn() }));
@@ -58,6 +62,7 @@ const activeKey = {
   keyDigest: 'SECRET-DIGEST',
 };
 const request = (overrides: Record<string, unknown> = {}) => ({
+  method: 'POST',
   query: { id: 'key-1' },
   user: { id: 'admin-1', isAdmin: true },
   body: { reason: 'Leaked in a public repo' },
@@ -70,6 +75,12 @@ const response = () => {
   return res;
 };
 
+// Runs the permission guard adminApi installs, then the handler, as the router would.
+const guarded = async (req: unknown) => {
+  h.guard!(req, {}, () => {});
+  return h.handler!(req, response());
+};
+
 describe('POST /api/admin/user-api-keys/[id]/revoke', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -80,9 +91,9 @@ describe('POST /api/admin/user-api-keys/[id]/revoke', () => {
   });
 
   it('is jwt-only and rejects non-admins before any read', async () => {
-    expect(h.config).toEqual({ auth: 'jwtOnly' });
+    expect(h.config).toEqual({ auth: 'jwtOnly', allowedMethods: ['POST'] });
     const req = request({ user: { id: 'u', isAdmin: false } });
-    await expect(h.handler!(req, response())).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(guarded(req)).rejects.toBeInstanceOf(ForbiddenError);
     expect(h.findKey).not.toHaveBeenCalled();
   });
 
@@ -134,5 +145,44 @@ describe('POST /api/admin/user-api-keys/[id]/revoke', () => {
     h.audit.mockRejectedValue(new Error('audit down'));
     await expect(h.handler!(request(), response())).rejects.toThrow('audit down');
     expect(h.endConnections).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/admin/user-api-keys/[id]/revoke - delegated admins', () => {
+  const delegate = (adminPermissions: string[]) => ({ id: 'admin-1', isAdmin: false, adminPermissions });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.audit.mockResolvedValue(undefined);
+    h.withTransaction.mockImplementation(async (fn: () => Promise<unknown>) => fn());
+    h.findKey.mockResolvedValue(activeKey);
+    h.findUser.mockResolvedValue({ id: 'owner-1', email: 'owner@example.com' });
+    h.revoke.mockResolvedValue(true);
+  });
+
+  it('refuses a delegate without the permission before any read', async () => {
+    await expect(guarded(request({ user: delegate(['support:read']) }))).rejects.toMatchObject({
+      statusCode: 403,
+      message: 'Missing permission: keys:revoke',
+    });
+    expect(h.findKey).not.toHaveBeenCalled();
+  });
+
+  it('lets a delegate with the permission act on a non-admin owner', async () => {
+    await expect(guarded(request({ user: delegate(['keys:revoke']) }))).resolves.not.toThrow();
+    expect(h.revoke).toHaveBeenCalled();
+  });
+
+  it('refuses a delegate on an admin owner without writing', async () => {
+    h.findUser.mockResolvedValue({ id: 'owner-1', isAdmin: false, adminPermissions: ['support:read'] });
+    await expect(guarded(request({ user: delegate(['keys:revoke']) }))).rejects.toMatchObject({ statusCode: 403 });
+    expect(h.revoke).not.toHaveBeenCalled();
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+
+  it('lets a full admin act on an admin owner', async () => {
+    h.findUser.mockResolvedValue({ id: 'owner-1', isAdmin: true });
+    await expect(guarded(request())).resolves.not.toThrow();
+    expect(h.revoke).toHaveBeenCalled();
   });
 });

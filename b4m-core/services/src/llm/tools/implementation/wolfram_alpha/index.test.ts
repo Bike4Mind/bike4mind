@@ -126,7 +126,7 @@ describe('wolfram_alpha', () => {
         const result = await resultPromise;
 
         expect(result).toBe('The answer is 4');
-        expect(mockLogger.log).toHaveBeenCalledWith('🔢 Wolfram Alpha: Querying:', '2+2');
+        expect(mockLogger.log).toHaveBeenCalledWith('Wolfram Alpha: Querying', { queryLength: 3 });
         expect(mockLogger.log).toHaveBeenCalledWith('📡 Wolfram Alpha: Response status:', 200);
       });
 

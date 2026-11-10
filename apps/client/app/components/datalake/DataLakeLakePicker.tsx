@@ -80,6 +80,8 @@ export interface DataLakeLakePickerProps {
   onCreate?: () => void;
   /** Opens the public-lake browse catalog (the manager's Discover tab). */
   onDiscover?: () => void;
+  /** Called each time the list opens, so the host can refresh names and counts a background sync changed. */
+  onOpen?: () => void;
 }
 
 /** Below this many lakes a filter box is noise rather than help. */
@@ -173,6 +175,7 @@ export default function DataLakeLakePicker({
   totalFileCount,
   onCreate,
   onDiscover,
+  onOpen,
 }: DataLakeLakePickerProps) {
   const { copy } = useDataLakeSurface();
   const [query, setQuery] = useState('');
@@ -225,7 +228,7 @@ export default function DataLakeLakePicker({
       {/* The filter is scratch state for one browse, not a setting: a query left over from a
           previous open would greet the next one with a narrowed list and a "1 of 10 lakes"
           chip, which reads as a broken picker rather than a remembered choice. */}
-      <Dropdown onOpenChange={(_, isOpen) => !isOpen && setQuery('')}>
+      <Dropdown onOpenChange={(_, isOpen) => (isOpen ? onOpen?.() : setQuery(''))}>
         <MenuButton
           variant="outlined"
           color="neutral"

@@ -203,7 +203,7 @@ describe('DELETE /api/google-drive/disconnect', () => {
     const { res } = makeRes();
     await run(res);
     expect(h.revokeToken).not.toHaveBeenCalled();
-    expect(consoleError).toHaveBeenCalledWith(expect.stringMatching(/revoke failed/), expect.anything());
+    expect(consoleError).toHaveBeenCalledWith(expect.stringMatching(/revoke failed/));
     expect(h.userFindByIdAndUpdate).toHaveBeenCalledWith('u1', { googleDrive: null });
     consoleError.mockRestore();
   });

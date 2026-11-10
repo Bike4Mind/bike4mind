@@ -27,6 +27,8 @@ export interface InstalledModel {
   contextLength?: number;
   /** Other names the server answers to for this same model, such as vLLM's extra `--served-model-name`s. */
   aliases?: string[];
+  /** A llama-server router's `status.value` for the model ("loaded", "unloaded", "sleeping", ...); absent on single-model servers. */
+  loadState?: string;
   /** A LoRA adapter's base model, by the name this list shows it under. */
   baseModel?: string;
 }

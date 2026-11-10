@@ -6,6 +6,7 @@ import {
 import { userRepository } from '@bike4mind/database';
 import { AtlassianTokenManager, AtlassianReconnectRequiredError } from '../integrations/jira/atlassianTokenManager';
 import { decryptEnvVariables } from '../security/tokenEncryption';
+import { Logger } from '@bike4mind/observability';
 
 export type EnvVariable = { key: string; value: string };
 
@@ -22,7 +23,7 @@ export const buildMcpEnvVariables = async (mcpServer: IMcpServerDocument): Promi
     // Throw AtlassianReconnectRequiredError so the tools layer catches it.
     // At getTools time: returns empty tool list. At callTool time: returns reconnect message.
     if (!user?.atlassianConnect) {
-      console.log(`Atlassian connection missing for user ${mcpServer.userId} — prompting reconnect`);
+      Logger.info('Atlassian connection missing - prompting reconnect', { userId: mcpServer.userId });
       throw new AtlassianReconnectRequiredError(
         'Your Atlassian account is not connected. Please connect it in Settings > Connected Apps.'
       );
@@ -34,7 +35,7 @@ export const buildMcpEnvVariables = async (mcpServer: IMcpServerDocument): Promi
       // Fallback: Use stored environment variables if token refresh fails.
       // Stored tokens may also be expired - the MCP call will fail and the tools layer will prompt reconnection.
       if (Array.isArray(mcpServer.envVariables) && mcpServer.envVariables.length > 0) {
-        console.warn('⚠️ Atlassian token refresh failed, falling back to stored tokens');
+        Logger.warn('Atlassian token refresh failed, falling back to stored tokens');
         return decryptEnvVariables(mcpServer.envVariables, mcpServer);
       }
 
@@ -80,7 +81,7 @@ function withGitHubRepositorySelection(
     .map(({ fullName }) => fullName)
     .filter(fullName => {
       if (GITHUB_REPOSITORY_FULL_NAME_PATTERN.test(fullName)) return true;
-      console.warn(`Ignoring saved GitHub repository "${fullName}": not an "owner/repo" name`);
+      Logger.warn(`Ignoring saved GitHub repository "${fullName}": not an "owner/repo" name`);
       return false;
     });
 

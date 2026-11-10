@@ -17,6 +17,7 @@ import {
   Divider,
 } from '@mui/joy';
 import { MODEL_LOGS_MAX_PAGE } from '@client/shared/modelLogs';
+import { isValidSupportCase, SUPPORT_CASE_MAX_LENGTH } from '@client/shared/supportCase';
 import { useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 import RefreshIcon from '@mui/icons-material/Refresh';
@@ -104,9 +105,11 @@ const PaginationControls = ({
 );
 
 // The full promptMeta is fetched only when expanded; the list response carries just the card fields.
-const ModelLogDetails = ({ id }: { id: string }) => {
+// It is the user's own prompt text, so it is a support read and needs a case.
+const ModelLogDetails = ({ id, supportCase }: { id: string; supportCase: string }) => {
   const [expanded, setExpanded] = useState(false);
-  const detailQuery = useModelLogDetail(id, expanded);
+  const hasSupportCase = isValidSupportCase(supportCase);
+  const detailQuery = useModelLogDetail(id, supportCase, expanded);
 
   return (
     <Box>
@@ -116,11 +119,13 @@ const ModelLogDetails = ({ id }: { id: string }) => {
         color="neutral"
         onClick={() => setExpanded(value => !value)}
         aria-expanded={expanded}
+        disabled={!hasSupportCase}
         data-testid="model-logs-details-toggle-btn"
       >
-        {expanded ? 'Hide details' : 'Show details'}
+        {!hasSupportCase ? 'Enter a support case to show details' : expanded ? 'Hide details' : 'Show details'}
       </Button>
       {expanded &&
+        hasSupportCase &&
         (detailQuery.isError ? (
           <ErrorState message="Could not load log details." onRetry={() => detailQuery.refetch()} />
         ) : detailQuery.data ? (
@@ -153,12 +158,20 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
   const { page: currentPage, limit: itemsPerPage, startDate, endDate } = view;
   const modelFilter = view.model ?? ALL_MODELS;
   const { value: searchQuery, debouncedValue: debouncedSearch, setValue: setSearchQuery } = useDebounceValue('');
+  // Committed on blur or Enter, never on a debounce: every request carrying the case writes an audit
+  // row under it, so a half-typed case must not reach the server.
+  const [supportCaseInput, setSupportCaseInput] = useState('');
+  const [supportCase, setSupportCase] = useState('');
+  const commitSupportCase = () => setSupportCase(supportCaseInput.trim());
+  // A text search matches users' prompt text, so the server refuses it without a case.
+  const canSearch = isValidSupportCase(supportCase);
 
   const modelLogsQuery = useModelLogs({
     startDate,
     endDate,
     model: view.model,
-    search: debouncedSearch || undefined,
+    search: (canSearch && debouncedSearch) || undefined,
+    supportCase: canSearch ? supportCase : undefined,
     page: currentPage,
     limit: itemsPerPage,
   });
@@ -222,7 +235,7 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
             <Grid xs={12}>
               <DateFilterComponent value={{ startDate, endDate }} onChange={setDateRange} />
             </Grid>
-            <Grid xs={12} md={6}>
+            <Grid xs={12} md={4}>
               <FormControl>
                 <Select
                   value={modelFilter}
@@ -242,10 +255,30 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
                 </Select>
               </FormControl>
             </Grid>
-            <Grid xs={12} md={6}>
+            <Grid xs={12} md={4}>
               <Input
-                placeholder="Search logs..."
-                value={searchQuery}
+                placeholder="Support case, then Enter (required for search and details)"
+                value={supportCaseInput}
+                slotProps={{
+                  input: {
+                    'data-testid': 'model-logs-support-case-input',
+                    'aria-label': 'Support case',
+                    maxLength: SUPPORT_CASE_MAX_LENGTH,
+                  },
+                }}
+                onChange={e => setSupportCaseInput(e.target.value)}
+                onBlur={commitSupportCase}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') commitSupportCase();
+                }}
+              />
+            </Grid>
+            <Grid xs={12} md={4}>
+              <Input
+                placeholder={canSearch ? 'Search logs...' : 'Enter a support case to search'}
+                // Without a case the term is not sent, so showing it would read as an active filter.
+                value={canSearch ? searchQuery : ''}
+                disabled={!canSearch}
                 slotProps={{ input: { 'data-testid': 'model-logs-search-input' } }}
                 onChange={e => handleSearchChange(e.target.value)}
               />
@@ -256,6 +289,8 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
 
       <Alert variant="soft" color="neutral" startDecorator={<InfoIcon />} sx={{ mb: 2 }}>
         View detailed logs of model responses, including performance metrics, token usage, and execution tracking.
+        Searching and opening a log&apos;s details read the user&apos;s own prompts, so each one is recorded against the
+        support case you enter.
       </Alert>
 
       {/* Only the results swap while loading: re-rendering the filters in another layout would
@@ -343,7 +378,7 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
                     </>
                   )}
 
-                  <ModelLogDetails id={log.id} />
+                  <ModelLogDetails id={log.id} supportCase={supportCase} />
                 </Stack>
               </Card>
             ))}

@@ -1,12 +1,12 @@
 import React from 'react';
-import { Box, Button, Sheet, Skeleton, Stack, Typography } from '@mui/joy';
+import { Box, Button, Skeleton, Stack, Typography } from '@mui/joy';
 import {
   isNotFoundError,
   isSubscriptionObjectId,
   useAdminSubscriptionDetail,
 } from '@client/app/hooks/data/adminSubscriptionDetail';
 import { ErrorState, UndoToastProvider } from '../../shared';
-import { ADMIN_DETAIL_MAX_WIDTH } from '../../shared/adminStyles';
+import { ADMIN_DETAIL_MAX_WIDTH, adminPageFrame } from '../../shared/adminStyles';
 import { SubscriptionDetailView } from './SubscriptionDetailView';
 import { useSubscriptionNavigation } from './useSubscriptionNavigation';
 import type { SubscriptionDetailTab } from './subscriptionDetailSearch';
@@ -72,16 +72,11 @@ export const SubscriptionDetailPage: React.FC<SubscriptionDetailPageProps> = ({ 
   };
 
   return (
-    <Sheet
-      data-testid="subscription-detail-page"
-      sx={{ minHeight: '100vh', overflowY: 'auto', bgcolor: 'admin.canvas' }}
-    >
+    <Box data-testid="subscription-detail-page" sx={adminPageFrame}>
       {/* Keyed so an undo offered on one subscription never carries over to the next. */}
       <UndoToastProvider key={subscriptionId}>
-        <Box sx={{ maxWidth: ADMIN_DETAIL_MAX_WIDTH, mx: 'auto', px: { xs: 2, sm: 4 }, pt: 2.5, pb: 12 }}>
-          {renderBody()}
-        </Box>
+        <Box sx={{ maxWidth: ADMIN_DETAIL_MAX_WIDTH }}>{renderBody()}</Box>
       </UndoToastProvider>
-    </Sheet>
+    </Box>
   );
 };

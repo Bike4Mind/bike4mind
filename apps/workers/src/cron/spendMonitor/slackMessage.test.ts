@@ -40,6 +40,100 @@ const build = (overrides: Partial<SpendAlertMessageInput> = {}) =>
 const json = (message: ReturnType<typeof build>) => JSON.stringify(message);
 
 describe('buildSpendAlertMessage', () => {
+  const accountContext = {
+    accountAgeDays: 30,
+    responsibleAccountAgeDays: 60,
+    emailVerified: true,
+    reviewState: 'approved',
+    riskScore: 12,
+    reviewReopened: false,
+    banned: false,
+    paymentRiskEvent: false,
+    hasCreditPurchase: true,
+    lastCreditPurchaseAgeDays: 5,
+    payments: {
+      status: 'observed',
+      succeeded: 3,
+      failed: 1,
+      radarBlocked: 0,
+      elevatedRisk: 0,
+      latestSucceededAgeDays: 2,
+    },
+    evidence: { status: 'observed', ageHours: 72 },
+  };
+
+  it('explains age, risk, retained payments, and the age of behavioral evidence', () => {
+    const out = json(
+      build({ alert: { ...baseAlert, context: { accountContext, policyReasons: ['established_paid_account'] } } })
+    );
+    expect(out).toContain('Account age: 30.0 days; responsible owner: 60.0 days');
+    expect(out).toContain('Email verified: yes; review: approved; risk score: 12');
+    expect(out).toContain('Review reopened: no; payment-risk event: no');
+    expect(out).toContain('Unreversed credit purchase: yes');
+    expect(out).toContain('3 succeeded, 1 failed, 0 blocked, 0 elevated-risk');
+    expect(out).toContain('72.0 hours old');
+    expect(out).toContain('established_paid_account');
+  });
+
+  it('keeps absent history and evidence unknown and renders risk flags on resolutions', () => {
+    const out = json(
+      build({
+        kind: 'resolve',
+        alert: {
+          ...baseAlert,
+          context: {
+            accountContext: {
+              ...accountContext,
+              accountAgeDays: null,
+              responsibleAccountAgeDays: null,
+              reviewState: 'unknown',
+              riskScore: null,
+              paymentRiskEvent: true,
+              reviewReopened: true,
+              banned: false,
+              hasCreditPurchase: null,
+              lastCreditPurchaseAgeDays: null,
+              payments: {
+                status: 'missing',
+                succeeded: 0,
+                failed: 0,
+                radarBlocked: 0,
+                elevatedRisk: 0,
+                latestSucceededAgeDays: null,
+              },
+              evidence: { status: 'missing', ageHours: null },
+            },
+            policyReasons: ['payment_risk_event'],
+          },
+        },
+      })
+    );
+    expect(out).toContain('Account age: unknown');
+    expect(out).toContain('review: unknown; risk score: unknown');
+    expect(out).toContain('Review reopened: yes; payment-risk event: yes');
+    expect(out).toContain('unknown (no retained payment history)');
+    expect(out).toContain('unknown (no behavioral evidence)');
+    expect(out).toContain('payment_risk_event');
+  });
+
+  it('rejects malformed persisted context and bounds and escapes policy reasons', () => {
+    const out = json(
+      build({
+        alert: {
+          ...baseAlert,
+          context: {
+            accountContext: { accountAgeDays: 'clean' },
+            policyReasons: ['<!channel>\nwrong', ...Array.from({ length: 10 }, () => 'x'.repeat(1000))],
+          },
+        },
+      })
+    );
+    expect(out).toContain('unknown (unavailable or invalid)');
+    expect(out).toContain('&lt;!channel&gt; wrong');
+    expect(out).not.toContain('x'.repeat(101));
+    expect(out).not.toContain('Account age: clean');
+  });
+
   it('renders a critical account alert with figures, mention and user button', () => {
     const out = json(build());
     expect(out).toContain('Spend critical: Account spend spike');
@@ -153,6 +247,30 @@ describe('buildSpendAlertMessage', () => {
     const resolved = json(build({ kind: 'resolve', alert: { ...trustedAlert, resolvedAt: openedAt } }));
     expect(resolved).toContain('jane@example.com (trusted), peak');
     expect(json(build())).not.toContain('trusted');
+  });
+
+  it('shows the paid tier and applied limits on open and resolved alerts', () => {
+    const paidAlert = {
+      ...baseAlert,
+      context: {
+        baseline: null,
+        ratio: null,
+        accountTier: 'paid',
+        spikeFloorCredits: 20000,
+        ceilingCredits: 40000,
+      },
+    };
+    for (const kind of ['open', 'resolve'] as const) {
+      const out = json(build({ kind, alert: paidAlert }));
+      expect(out).toContain('jane@example.com (paid)');
+      expect(out).toContain('paid-account limits');
+      expect(out).toContain('spike floor: 20,000 credits / 15m');
+      expect(out).toContain('critical ceiling: 40,000 credits / 15m');
+      expect(out).not.toContain('trusted');
+    }
+    const out = json(build({ alert: paidAlert }));
+    expect(out).toContain('no history');
+    expect(out).toContain('n/a');
   });
 
   it('renders a short resolve message with peak and duration', () => {

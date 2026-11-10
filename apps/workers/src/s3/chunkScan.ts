@@ -78,7 +78,7 @@ export const CHUNK_CLAIM_STALE_MS = 30 * 60_000;
  * reset took the file's state away and the enqueue that should have followed never landed - and this
  * sweep is the only door that reaches a file outside every data lake, so excluding it by mimeType
  * would leave the stamp with no automatic exit at all. `partitionByIndexAvailability` withholds a
- * stamped file, so the cost of no exit is a search that reports the file as "being re-indexed,
+ * stamped file, so the cost of no exit is a search that reports the file as "still being indexed,
  * returns on its own" forever: a permanently false partial-results warning, which is the cries-wolf
  * failure this whole feature is built to avoid, reached from the other side.
  *

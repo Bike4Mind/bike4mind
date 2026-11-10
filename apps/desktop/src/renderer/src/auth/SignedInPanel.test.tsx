@@ -34,7 +34,14 @@ describe('the account strip', () => {
 });
 
 describe('the account menu', () => {
-  const html = markup(<AccountMenu state={signedIn} onOpenSettings={() => {}} onProfile={() => {}} />);
+  const html = markup(
+    <AccountMenu state={signedIn} onOpenSettings={() => {}} onProfile={() => {}} onSendFeedback={() => {}} />
+  );
+
+  it('offers Send Feedback in the avatar menu', () => {
+    expect(html).toContain('data-testid="account-feedback-btn"');
+    expect(html).toContain('Send Feedback');
+  });
 
   /**
    * Settings has no nav row - a second config row under Customize said the same thing twice -

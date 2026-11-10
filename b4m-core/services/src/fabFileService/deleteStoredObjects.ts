@@ -11,7 +11,7 @@ export type ObjectStorage = { delete: (path: string) => Promise<unknown> };
 /** The generated-content bucket, plus the reply lookup that tells whether another notebook still shows a copy. */
 export type GeneratedCopyStore = {
   storage: ObjectStorage;
-  quests: Pick<IChatHistoryItemRepository, 'findSessionIdsByImage'>;
+  quests: Pick<IChatHistoryItemRepository, 'findSessionIdsByMedia'>;
 };
 
 export type StoredObjectBuckets = {
@@ -96,14 +96,14 @@ async function deleteGeneratedCopy(
   await generated.storage.delete(copyKey);
 }
 
-// Clone, fork and snip copy a reply's `quest.images` verbatim, so another notebook can play the same key. Without
-// a notebook link of its own, any reply showing the key counts as another notebook's.
+// Clone, fork and snip copy a reply's `quest.images` and `quest.videos` verbatim, so another notebook can play the
+// same key. Without a notebook link of its own, any reply showing the key counts as another notebook's.
 async function isShownInAnotherNotebook(
   file: StoredFile,
   copyKey: string,
   quests: GeneratedCopyStore['quests']
 ): Promise<boolean> {
   const ownSessionId = file.sourceMetadata?.sessionId;
-  const sessionIds = await quests.findSessionIdsByImage(copyKey);
+  const sessionIds = await quests.findSessionIdsByMedia(copyKey);
   return sessionIds.some(sessionId => sessionId !== ownSessionId);
 }

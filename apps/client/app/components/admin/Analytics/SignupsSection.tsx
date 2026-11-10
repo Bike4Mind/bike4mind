@@ -5,7 +5,7 @@ import type { AnalyticsOverview, SignupBucket } from '@client/app/utils/analytic
 import type { AdminUsersFilter } from '@client/app/utils/adminUsersFilter';
 import { SIGNUP_SIGNAL_LABELS, type SignupSignal } from '@bike4mind/server-utils/app/utils/signupSignals';
 import { DataTable, InlineBar, type DataColumn } from '../shared';
-import { SIGNUP_STATUS_COLORS } from '../Signups/SignupChart';
+import { signupStatusColors } from '../Signups/SignupChart';
 import { AnalyticsSection } from './AnalyticsSection';
 import { formatCount, formatDayLabel } from './analyticsFormat';
 
@@ -36,7 +36,7 @@ const toWindow = (bucket: SignupBucket) => ({
 export function SignupsSection({ data, loading, error, onRetry, onShowDefaultRange, onSelectWindow }: Props) {
   const theme = useTheme();
   const admin = theme.palette.admin;
-  const colors = SIGNUP_STATUS_COLORS[theme.palette.mode === 'dark' ? 'dark' : 'light'];
+  const colors = signupStatusColors(admin);
   const bucket = data?.window.bucket ?? 'day';
   const buckets = useMemo(() => data?.signups.buckets ?? [], [data]);
   const rows = useMemo(() => buckets.map(b => ({ ...b, label: formatDayLabel(b.start, bucket) })), [buckets, bucket]);

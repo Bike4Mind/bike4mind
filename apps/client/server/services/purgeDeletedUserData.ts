@@ -6,6 +6,7 @@ import {
   hideDeletedAuthorAnnotations,
   integrationRequestRepository,
   shadowDetectionRepository,
+  campaignWatchRepository,
 } from '@bike4mind/database';
 import type { IUserDocument } from '@bike4mind/common';
 import { retainDeletedSignupTraces } from '@server/auth/signupNetworkLimits';
@@ -134,6 +135,12 @@ export async function purgeDeletedUserData(
     logger.info(`Removed deleted user ${userId} from shadow detections (${deleted} record(s) deleted)`);
   } catch (err) {
     logger.error(`Failed to remove deleted user ${userId} from shadow detections: ${String(err)}`);
+  }
+
+  try {
+    await campaignWatchRepository.removeUser(userId);
+  } catch (err) {
+    logger.error(`Failed to remove deleted user ${userId} from campaign watches: ${String(err)}`);
   }
 
   // Last: the revokes call out to the providers, and a slow provider must not cost the local steps above.

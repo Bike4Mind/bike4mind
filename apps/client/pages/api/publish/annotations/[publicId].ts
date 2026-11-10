@@ -1,5 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { optionalAuth } from '@server/middlewares/optionalAuth';
+import { rateLimit } from '@server/middlewares/rateLimit';
 import type { Request } from 'express';
 import { Annotation, PublishedArtifact } from '@bike4mind/database';
 import {
@@ -35,6 +36,7 @@ import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 /** Per-author comment throttle (anti-spam) - see the write handler. */
 const COMMENT_RATE_WINDOW_MS = 60_000;
 const COMMENT_RATE_MAX = 30;
+const listRateLimit = rateLimit({ limit: 120, windowMs: 60_000, bucket: 'publish-annotations-list' });
 
 interface ArtifactGateLean {
   publicId: string;
@@ -78,6 +80,11 @@ const isOpenPublic = (a: ArtifactGateLean) => a.visibility === 'public' && !a.ac
 
 const handler = baseApi({ auth: false })
   .use(optionalAuth)
+  .use((req, res, next) => {
+    if (req.method !== 'GET') return next();
+    res.setHeader('Cache-Control', 'private, no-store');
+    return listRateLimit(req, res, next);
+  })
   .get(async (req, res) => {
     // Default every response (incl. 400/401/403/404) to no-store BEFORE the gate,
     // so a cached error can't poison subsequent authorized reads on the shared,

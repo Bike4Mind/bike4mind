@@ -97,14 +97,14 @@ Generate a detailed image prompt for a featured blog image that captures the ess
       throw new Error('Generated prompt was empty');
     }
 
-    logger.log('[BlogImagePrompt] Generated prompt:', generatedPrompt.substring(0, 100) + '...');
+    logger.info('Blog image prompt generated', { generatedPromptLength: generatedPrompt.length });
 
     return {
       success: true,
       prompt: generatedPrompt.trim(),
     };
   } catch (error) {
-    if (!isTerminalCreditRefusal(error)) logger.error('[BlogImagePrompt] Error:', error);
+    if (!isTerminalCreditRefusal(error)) logger.error('Blog image prompt generation failed', { error });
     throw error;
   }
 }
@@ -135,7 +135,7 @@ const handler = baseApi().post(
     } catch (error) {
       // A credit refusal (422 out of credits, 429 free-tier daily cap) must surface with its own status instead of degrading to a generic 500; the error handler logs it at warn.
       if (error instanceof UnprocessableEntityError || isTerminalCreditRefusal(error)) throw error;
-      console.error('Blog image prompt generation error:', error);
+      req.logger.error('Blog image prompt generation error', { error });
       return res.status(500).json({
         success: false,
         message: error instanceof Error ? error.message : 'Failed to generate image prompt',

@@ -106,11 +106,13 @@ export function useGetUser(id: string | null | undefined) {
   });
 }
 
+export type UserByEmail = { id: string; name?: string };
+
 export function useGetUserByEmail(email: string, options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ['users', 'by-email', email],
     queryFn: async () => {
-      const { data } = await api.get<WithOrgRef<IUserDocument>>(`/api/users/by-email/${email}`);
+      const { data } = await api.get<UserByEmail | null>(`/api/users/by-email/${encodeURIComponent(email)}`);
       return data;
     },
     staleTime: 1000 * 60 * 3, // 3 minutes

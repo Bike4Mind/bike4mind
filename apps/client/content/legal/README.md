@@ -14,7 +14,7 @@ These agreements go **into force as drafted** to gate the public launch. Formal 
 
 | Bike4Mind doc | Version | Mirrors — Anthropic | Mirrors — OpenAI |
 |---|---|---|---|
-| [`terms-of-service.md`](./terms-of-service.md) | `1.0.0` (draft) | [Consumer Terms of Service](https://www.anthropic.com/legal/consumer-terms) | [Terms of Use](https://openai.com/policies/terms-of-use/) |
+| [`terms-of-service.md`](./terms-of-service.md) | `1.0.0` (effective 2026-11-09) | [Consumer Terms of Service](https://www.anthropic.com/legal/consumer-terms) | [Terms of Use](https://openai.com/policies/terms-of-use/) |
 | [`usage-policy.md`](./usage-policy.md) | `1.0.0` (effective 2026-10-10) | [Usage Policy](https://www.anthropic.com/legal/aup) | [Usage Policies](https://openai.com/policies/usage-policies/) |
 | Privacy Policy — *separate track* | — | [Privacy Policy](https://www.anthropic.com/legal/privacy) | [Privacy Policy](https://openai.com/policies/privacy-policy/) |
 

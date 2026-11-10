@@ -17,28 +17,16 @@ import {
   SIGNUP_SIGNALS,
   type SignupTimeseries,
 } from '@bike4mind/server-utils/app/utils/signupSignals';
+import type { AdminPalette } from '@client/app/utils/themes/admin';
 import { formatBucketLabel } from './useSignupTimeseries';
 
 export type SignupChartMode = 'status' | 'signals';
 
-/**
- * Validated with the dataviz palette checker against the admin surfaces (light #FFFFFF, dark #1E1E22).
- * Likely legit takes the admin accent and suspected the warn tone; the dark steps are deeper than the
- * dark accent/warn tokens, which are text colors and fail the chart lightness band.
- */
-export const SIGNUP_STATUS_COLORS = {
-  light: { likelyLegit: '#4F46E5', suspected: '#8A4B00' },
-  dark: { likelyLegit: '#7B83F2', suspected: '#D95926' },
-} as const;
-
-/**
- * Categorical slots in SIGNUP_SIGNALS order, so a signal keeps its color whatever the range. The
- * Analytics page's by-surface chart takes the same slots in its own fixed order.
- */
-export const SIGNAL_COLORS = {
-  light: ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#0f8c9e', '#9a6a3a', '#b03fc4'],
-  dark: ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9', '#2aa9ba', '#b8875a', '#c869d6'],
-} as const;
+/** Likely legit is the primary series (accent); suspected takes the warn status tone. */
+export const signupStatusColors = (admin: AdminPalette) => ({
+  likelyLegit: admin.accent,
+  suspected: admin.status.warn.foreground,
+});
 
 type SignupChartProps = {
   data: SignupTimeseries;
@@ -60,8 +48,8 @@ export function SignupChart({
   testId,
 }: SignupChartProps) {
   const theme = useTheme();
-  const scheme = theme.palette.mode === 'dark' ? 'dark' : 'light';
   const admin = theme.palette.admin;
+  const statusColors = signupStatusColors(admin);
   const rows = useMemo(
     () =>
       data.buckets.map(bucket => ({
@@ -127,7 +115,7 @@ export function SignupChart({
                 dataKey="likelyLegit"
                 name="Likely legit"
                 stackId="signups"
-                fill={SIGNUP_STATUS_COLORS[scheme].likelyLegit}
+                fill={statusColors.likelyLegit}
                 stroke={admin.surface}
                 strokeWidth={1}
                 isAnimationActive={false}
@@ -136,7 +124,7 @@ export function SignupChart({
                 dataKey="suspected"
                 name="Suspected"
                 stackId="signups"
-                fill={SIGNUP_STATUS_COLORS[scheme].suspected}
+                fill={statusColors.suspected}
                 stroke={admin.surface}
                 strokeWidth={1}
                 isAnimationActive={false}
@@ -158,7 +146,7 @@ export function SignupChart({
                 key={signal}
                 dataKey={signal}
                 name={SIGNUP_SIGNAL_LABELS[signal].label}
-                stroke={SIGNAL_COLORS[scheme][index]}
+                stroke={admin.chartSeries[index % admin.chartSeries.length]}
                 strokeWidth={2}
                 dot={false}
                 type="monotone"

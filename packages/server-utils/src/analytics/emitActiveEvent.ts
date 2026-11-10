@@ -11,6 +11,7 @@ import { Config } from '../utils/config';
 import { emitMetric } from '../utils/cloudwatch';
 import { laneMetadata } from './lane';
 import { pseudonymizeUserId } from './pseudonymize';
+import { Logger } from '@bike4mind/observability';
 
 const NOT_CONFIGURED = 'not-configured';
 const EMIT_TIMEOUT_MS = 2_000;
@@ -276,15 +277,15 @@ async function postEvent(
       // reaches the receiver and is almost always a misconfigured OVERWATCH_INGEST_URL (scheme,
       // host, or trailing-slash redirect). Log it so the misconfig is diagnosable instead of every
       // emit silently dropping. Status only, never the key or body.
-      console.warn('[b4m-analytics] ingest URL returned a redirect \u2014 check OVERWATCH_INGEST_URL', {
+      Logger.warn('[b4m-analytics] ingest URL returned a redirect \u2014 check OVERWATCH_INGEST_URL', {
         status: res.status,
         productId,
       });
     } else if (res.status >= 400 && res.status < 500) {
       // Permanent client error - log status only, never the key or body
-      console.warn('[b4m-analytics] permanent ingest error', { status: res.status, productId });
+      Logger.warn('[b4m-analytics] permanent ingest error', { status: res.status, productId });
     } else if (reportFailure && res.status >= 500) {
-      console.warn('[b4m-analytics] ingest server error', { status: res.status, productId });
+      Logger.warn('[b4m-analytics] ingest server error', { status: res.status, productId });
     }
     // 503 / 5xx -> drop, with a warning only when the caller requested one. Note:
     // OverwatchUserDay's (productId, date, userId) upsert is
@@ -295,7 +296,7 @@ async function postEvent(
   } catch {
     failed = true;
     if (reportFailure) {
-      console.warn('[b4m-analytics] ingest request failed', { productId });
+      Logger.warn('[b4m-analytics] ingest request failed', { productId });
     }
   } finally {
     clearTimeout(timer);

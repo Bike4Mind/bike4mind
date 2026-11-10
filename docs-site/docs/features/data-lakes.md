@@ -85,7 +85,7 @@ budget -- and they skip documents whose embeddings came from a different model t
 the query. When any of that applies, the reply carries a warning banner, and expanding it lists the
 specific reasons. The important consequence is what the answer does *not* prove: a "nothing found"
 on a partial scan is not evidence that the library holds nothing relevant. Narrow the question, or
-wait if the banner says documents are still being re-indexed.
+wait if the banner says documents are still being indexed.
 
 **I got "this data lake moved to '...' while it was being archived/deleted/restored". What happened?**
 Two lifecycle actions ran on the same lake at once -- for example Archive and Delete were both

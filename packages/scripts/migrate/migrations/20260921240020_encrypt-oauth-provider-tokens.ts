@@ -1,5 +1,10 @@
 import { User } from '@bike4mind/database';
-import { encryptAtRest, isEncrypted, isSecretsAtRestConfigured } from '@bike4mind/utils/security';
+import {
+  ciphertextPatternSource,
+  encryptAtRest,
+  isEncrypted,
+  isSecretsAtRestConfigured,
+} from '@bike4mind/utils/security';
 import { type MigrationFile } from './index';
 
 type StoredTokens = {
@@ -13,8 +18,11 @@ type UserTokenRow = { _id: unknown; authProviders?: StoredTokens[]; oauthCredent
 
 const TOKEN_FIELDS = ['accessToken', 'refreshToken'] as const;
 
+const ciphertext = new RegExp(ciphertextPatternSource, 'i');
+
+// Excludes ciphertext so a re-run (20260921241020) scans and counts only rows still plaintext.
 const plaintextTokenFilter = (prefix: string) =>
-  TOKEN_FIELDS.map(field => ({ [`${prefix}${field}`]: { $type: 'string', $ne: '' } }));
+  TOKEN_FIELDS.map(field => ({ [`${prefix}${field}`]: { $type: 'string', $ne: '', $not: ciphertext } }));
 
 /** The non-empty plaintext token fields of one stored token holder, keyed by field name. */
 export function plaintextTokens(holder: StoredTokens | null | undefined): Partial<Record<string, string>> {

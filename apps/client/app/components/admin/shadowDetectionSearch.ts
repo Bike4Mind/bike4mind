@@ -12,7 +12,11 @@ export const SHADOW_DETECTION_SEARCH_KEYS = {
   view: 'detectionView',
   filters: { detector: 'detectionDetector', verdict: 'detectionVerdict' },
 } as const;
-export const SHADOW_DETECTION_TAB_PARAMS = Object.values(SHADOW_DETECTION_SEARCH_KEYS.filters);
+export const CAMPAIGN_WATCH_SEARCH_PARAM = 'campaignWatch';
+export const SHADOW_DETECTION_TAB_PARAMS = [
+  ...Object.values(SHADOW_DETECTION_SEARCH_KEYS.filters),
+  CAMPAIGN_WATCH_SEARCH_PARAM,
+] as const;
 
 /** The verdict filter value that lists every detection; an absent filter means Unreviewed. */
 export const ALL_VERDICTS_FILTER = 'all';

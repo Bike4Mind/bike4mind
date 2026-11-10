@@ -1,9 +1,9 @@
 import { z } from 'zod';
-import { ApiKeyScope } from '@bike4mind/common';
+import { assertCanActOnAdminTarget } from '@bike4mind/common';
 import { userRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
-import { BadRequestError, ensureAdmin } from '@bike4mind/server-utils/utils/errors';
-import { baseApi } from '@server/middlewares/baseApi';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import {
@@ -22,11 +22,10 @@ const bodySchema = z.object({
   dryRun: z.boolean().optional(),
 });
 
-const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:adjust' } })
   .use(csrfProtection())
   .post(
     asyncHandler(async (req, res) => {
-      ensureAdmin(req.user?.isAdmin);
       const parsed = bodySchema.safeParse(req.body);
       if (!parsed.success)
         throw new BadRequestError(`Expected 1 to ${userService.MAX_BULK_RELEASE} user ids in userIds`);
@@ -40,6 +39,8 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
           target: { kind: 'user', id: userId, displayName: userId },
         });
       }
+      for (const account of await userRepository.findAdminTargetsByIds(userIds))
+        assertCanActOnAdminTarget(req.user, account, 'release signup credits for');
       if (parsed.data.dryRun) {
         const preview = await userService.previewSignupGrantAction(
           { action: 'release_held', userIds },

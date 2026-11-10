@@ -63,7 +63,7 @@ vi.mock('@bike4mind/database', async importOriginal => ({
     activateIfDraft: h.activateIfDraft,
   },
   lakeConfigChangeEventRepository: { record: h.recordConfigChange },
-  questRepository: { findSessionIdsByImage: async () => ['s1'] },
+  questRepository: { findSessionIdsByMedia: async () => ['s1'] },
   fabFileChunkRepository: { deleteManyByFabFileId: h.deleteManyByFabFileId },
   fabFileRepository: {
     findByIdAndUserId: h.findByIdAndUserId,
@@ -77,7 +77,11 @@ vi.mock('@bike4mind/database', async importOriginal => ({
     findBySettingNames: vi.fn().mockResolvedValue([]),
     findAll: vi.fn().mockResolvedValue([]),
   },
-  sessionRepository: { findAllWithKnowledgeId: h.findAllWithKnowledgeId, update: h.sessionUpdate },
+  sessionRepository: {
+    findAllWithKnowledgeId: h.findAllWithKnowledgeId,
+    update: h.sessionUpdate,
+    findAllByIds: async () => [{ id: 's1' }],
+  },
   userRepository: { findById: h.userFindById },
   withTransaction: (fn: (session?: unknown) => Promise<unknown>) => fn(undefined),
   User: { findById: () => ({ session: async () => null }) },

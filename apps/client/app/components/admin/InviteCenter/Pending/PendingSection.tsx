@@ -10,6 +10,7 @@ import {
 import { AdminTab } from '../../adminSidebarConfig';
 import {
   PENDING_HELD_REASONS,
+  PENDING_INVITES,
   PENDING_SEARCH_KEYS,
   PENDING_SORTS,
   PENDING_SOURCES,
@@ -45,6 +46,14 @@ const SOURCE_LABEL: Readonly<Record<(typeof PENDING_SOURCES)[number], string>> =
   default: 'Default schedule',
   package: 'Grant package',
 };
+const INVITE_LABEL: Readonly<Record<(typeof PENDING_INVITES)[number], string>> = {
+  invited: 'Invited',
+  uninvited: 'Not invited',
+};
+const INVITE_SOURCE_LABEL: Readonly<Record<NonNullable<AdminSignupGrantPendingRow['inviteSource']>, string>> = {
+  referral: 'Referral invite',
+  organization: 'Organization invite',
+};
 const SORT_LABEL: Readonly<Record<(typeof PENDING_SORTS)[number], string>> = {
   oldest: 'Oldest first',
   remaining: 'Most remaining',
@@ -57,6 +66,7 @@ const FILTERS: readonly AdminFilter[] = [
   { id: 'status', label: 'Status', options: options(STATUS_LABEL) },
   { id: 'heldReason', label: 'Held reason', options: options(REASON_LABEL) },
   { id: 'source', label: 'Source', options: options(SOURCE_LABEL) },
+  { id: 'invite', label: 'Invite', options: options(INVITE_LABEL) },
   { id: 'sort', label: 'Sort', options: options(SORT_LABEL) },
 ];
 
@@ -71,11 +81,17 @@ const SECTION_LINKS = [
   { label: 'Open Risk review queue', tab: AdminTab.SignupRiskReview, testId: 'pending-open-risk-review-btn' },
 ] as const;
 
+/** The activity window the header counts over; the route accepts 1 to 90. */
+const PENDING_ACTIVE_DAYS = 7;
+
 const PendingHeader = () => {
-  const { data, isError } = useAdminSignupGrantPendingSummary();
+  const { data, isError } = useAdminSignupGrantPendingSummary(PENDING_ACTIVE_DAYS);
   const exposure = data?.exposure;
   const trickle = data?.trickle;
   const queue = data?.queue;
+  const activity = data?.activity;
+  const drip = data?.drip;
+  const poolLeft = trickle && !trickle.missing ? Math.max(0, trickle.limit - trickle.spentToday) : null;
   const blank = isError ? UNAVAILABLE : '-';
   return (
     <StatStrip aria-label="Pending signup credit exposure">
@@ -87,6 +103,20 @@ const PendingHeader = () => {
         label="Remaining to drip"
         value={exposure ? credits(exposure.totalDripRemaining) : exposure === null ? UNAVAILABLE : blank}
         comparison={exposure ? `${credits(exposure.totalRemaining)} left in all grants` : undefined}
+      />
+      <StatTile
+        label={`Active in last ${PENDING_ACTIVE_DAYS} days`}
+        value={activity ? activity.accounts : activity === null ? UNAVAILABLE : blank}
+        comparison={activity ? `${credits(activity.remaining)} left in their grants` : undefined}
+      />
+      <StatTile
+        label="Drip due today (UTC)"
+        value={drip ? credits(drip.committed) : drip === null ? UNAVAILABLE : blank}
+        comparison={
+          drip
+            ? `Upper bound if all ${drip.accounts} are active${poolLeft !== null ? `; ${credits(poolLeft)} left in the pool` : ''}${poolLeft !== null && drip.committed > poolLeft ? ` (${credits(drip.committed - poolLeft)} over)` : ''}`
+            : undefined
+        }
       />
       <StatTile
         label="Trickle pool today"
@@ -131,11 +161,12 @@ export function PendingSection() {
     status: pick(PENDING_STATUSES, listState.filters.status),
     heldReason: pick(PENDING_HELD_REASONS, listState.filters.heldReason),
     source: pick(PENDING_SOURCES, listState.filters.source),
+    invite: pick(PENDING_INVITES, listState.filters.invite),
     sort: pick(PENDING_SORTS, listState.filters.sort) ?? 'oldest',
   };
   const list = useAdminSignupGrantPendingList(filters);
   const rows = list.data?.pages.flatMap(page => page.data) ?? [];
-  const filtered = Boolean(filters.status || filters.heldReason || filters.source);
+  const filtered = Boolean(filters.status || filters.heldReason || filters.source || filters.invite);
   const canRelease = list.data?.pages[0]?.viewer.canRelease === true;
   const [selection, setSelection] = useState<AdminSelection>(NO_SELECTION);
   const [dialog, setDialog] = useState<PendingBulkKind | null>(null);
@@ -180,10 +211,22 @@ export function PendingSection() {
       id: 'source',
       label: 'Source',
       sortable: false,
-      render: row =>
-        row.source ? (
-          <StatusChip tone={row.source === 'package' ? 'info' : 'neutral'} label={SOURCE_LABEL[row.source]} />
-        ) : null,
+      // Fits the longest chip label on one line; two chips wrap instead of truncating.
+      width: '11rem',
+      render: row => (
+        <Stack direction="row" flexWrap="wrap" gap={0.75}>
+          {row.source ? (
+            <StatusChip tone={row.source === 'package' ? 'info' : 'neutral'} label={SOURCE_LABEL[row.source]} />
+          ) : null}
+          {row.inviteSource ? (
+            <StatusChip
+              tone="info"
+              label={INVITE_SOURCE_LABEL[row.inviteSource]}
+              data-testid={`pending-row-invite-${row.id}`}
+            />
+          ) : null}
+        </Stack>
+      ),
     },
     { id: 'state', label: 'State', sortable: false, render: row => <StateChips row={row} /> },
     {
@@ -231,7 +274,7 @@ export function PendingSection() {
           color="neutral"
           size="sm"
           data-testid="pending-clear-filters-btn"
-          onClick={() => updateList({ filters: { status: '', heldReason: '', source: '', sort: '' } })}
+          onClick={() => updateList({ filters: { status: '', heldReason: '', source: '', invite: '', sort: '' } })}
         >
           Clear filters
         </Button>

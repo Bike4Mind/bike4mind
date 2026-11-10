@@ -308,6 +308,39 @@ describe('LocalServerSupervisor after Desktop exits without stopping its servers
     expect(listed(file)[0].sealedKey).toBe(sealed('k-zz'));
   });
 
+  it("keeps a router's warning, so the router it takes back still shows it until it stops", async () => {
+    const warning = 'llama-server at /bin/x is a SYCL build but lists no GPU, so it runs on the CPU.';
+    const file = memoryFile();
+    const running = processes({ 4321: RECORD.startTime });
+    const first = adopter(file, running.probe, { handle: { ...handle('k-zz'), warning } });
+    await first.instance.start('a', { runtime: 'llama-server', port: 8090, settings: { modelsDir: '/m' } });
+    expect(listed(file)[0].warning).toBe(warning);
+
+    const { instance, warn } = adopter(file, running.probe);
+    await instance.adopt(() => true);
+    expect(warn).toHaveBeenCalledWith(`MODEL SERVERS: ${warning}`);
+    expect(instance.warning('a')).toBe(warning);
+    expect(listed(file)[0].warning).toBe(warning);
+    await instance.stop('a');
+    expect(instance.warning('a')).toBeNull();
+  });
+
+  it('takes back a server without a warning when its record has none or an unreadable one', async () => {
+    const records = [
+      { ...ROUTER, sealedKey: sealed('k-zz') },
+      { ...ROUTER, id: 'b', pid: 4322, sealedKey: sealed('k-yy'), warning: 42 },
+      { ...ROUTER, id: 'c', pid: 4323, sealedKey: sealed('k-xx'), warning: '' },
+    ];
+    const file = memoryFile(JSON.stringify({ version: 1, servers: records }));
+    const starts = { 4321: RECORD.startTime, 4322: RECORD.startTime, 4323: RECORD.startTime };
+    const { instance } = adopter(file, processes(starts).probe);
+    await instance.adopt(() => true);
+    for (const id of ['a', 'b', 'c']) {
+      expect(instance.owned(id)).not.toBeNull();
+      expect(instance.warning(id)).toBeNull();
+    }
+  });
+
   it("never writes a router's key in the clear, and lists no router it cannot seal the key of", async () => {
     const file = memoryFile();
     const { instance } = adopter(file, processes({ 4321: RECORD.startTime }).probe, { handle: handle('k-zz') });

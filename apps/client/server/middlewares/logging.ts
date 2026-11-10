@@ -2,6 +2,7 @@ import { RequestHandler } from 'express';
 import invert from 'lodash/invert';
 import { LEGACY_REQUEST_ID_HEADER, REQUEST_ID_HEADER, resolveRequestId } from '@bike4mind/common';
 import { createRequestLogger, runWithRequestLogger } from './requestLogger';
+import { requestLogUrl } from './requestLogUrl';
 
 export const logging: RequestHandler = (req, res, next) => {
   const invertedParams = invert(req.query ?? {});
@@ -18,6 +19,6 @@ export const logging: RequestHandler = (req, res, next) => {
   );
   res.setHeader(REQUEST_ID_HEADER, req.requestId);
 
-  req.logger = createRequestLogger(req, { requestId: req.requestId, path: req.baseUrl.split('?')[0] });
+  req.logger = createRequestLogger(req, { requestId: req.requestId, path: requestLogUrl(req.baseUrl.split('?')[0]) });
   runWithRequestLogger(req.logger, next);
 };

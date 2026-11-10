@@ -19,6 +19,7 @@ import {
   metricSignal,
   modelDisplayName,
   type MetricDescription,
+  type MetricDirection,
   type MetricSignal,
 } from './businessMetricLabels';
 
@@ -41,10 +42,12 @@ const SEPARATOR = '  |  ';
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const COLOR: Record<MetricSignal, string> = { abuse: '#E01E5A', dip: '#ECB22E', growth: '#36C5F0' };
 const SIGNAL_RANK: Record<MetricSignal, number> = { abuse: 0, dip: 1, growth: 2 };
-const GLYPH: Record<MetricSignal, string> = {
-  abuse: ':small_red_triangle:',
-  dip: ':small_red_triangle_down:',
-  growth: ':arrow_up_small:',
+/** The arrow is the direction only; whether the move is good or bad is said in words (SIGNAL_TAG). */
+const ARROW: Record<MetricDirection, string> = { increase: ':arrow_up_small:', decrease: ':arrow_down_small:' };
+const SIGNAL_TAG: Record<MetricSignal, string | undefined> = {
+  abuse: ':mag: check for abuse',
+  dip: ':warning: check for a problem',
+  growth: undefined,
 };
 
 export const escapeMrkdwn = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -138,15 +141,16 @@ export function describeContributors(
   return [...byKind].map(([heading, rows]) => `${heading}: ${capped(rows, render)}`).join('\n');
 }
 
-function anomalySection(anomaly: BusinessMetricAnomaly, appUrl: string | undefined): string {
+function anomalySection(anomaly: BusinessMetricAnomaly, window: ComparisonWindow, appUrl: string | undefined): string {
   const metric = describeMetric(anomaly.metricName);
-  const signal = metricSignal(anomaly.metricName, anomaly.direction);
+  const tag = SIGNAL_TAG[metricSignal(anomaly.metricName, anomaly.direction)];
   const median =
     anomaly.median === null ? 'median warming up' : `7-day median ${formatMetricValue(anomaly.median, metric)}`;
+  const heading = `${ARROW[anomaly.direction]} *${escapeMrkdwn(metric.label)}* ${percentLabel(anomaly)}`;
   const lines = [
-    `${GLYPH[signal]} *${escapeMrkdwn(metric.label)}* ${percentLabel(anomaly)}`,
+    tag ? `${heading}${SEPARATOR}${tag}` : heading,
     `Now *${formatMetricValue(anomaly.current, metric)}*, previous ${formatMetricValue(anomaly.previous, metric)}, ${median}`,
-    `_${escapeMrkdwn(metricMeaning(anomaly.metricName, anomaly.direction))}_`,
+    `_${escapeMrkdwn(metricMeaning(anomaly.metricName, anomaly.direction, window.mode))}_`,
   ];
   const movers = describeContributors(anomaly, metric, appUrl);
   if (movers) lines.push(movers);
@@ -183,7 +187,7 @@ export function formatBusinessMetricSlackMessage(
     { type: 'context', elements: [{ type: 'mrkdwn', text: escapeMrkdwn(explainWindow(window)) }] },
     ...anomalies.slice(0, MAX_SECTIONS).map(anomaly => ({
       type: 'section',
-      text: { type: 'mrkdwn', text: anomalySection(anomaly, options.appUrl) },
+      text: { type: 'mrkdwn', text: anomalySection(anomaly, window, options.appUrl) },
     })),
   ];
   if (anomalies.length > MAX_SECTIONS) {
