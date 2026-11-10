@@ -296,7 +296,7 @@ async function handleFileEmail(
           body: emailBody,
           attachments,
         },
-        req.user?.email || 'unknown',
+        userId,
         userName
       );
 
@@ -575,7 +575,7 @@ async function handleNotebookEmail(
           body: emailBody,
           attachments,
         },
-        req.user?.email || 'unknown',
+        userId,
         userName
       );
 

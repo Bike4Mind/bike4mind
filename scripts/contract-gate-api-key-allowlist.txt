@@ -411,6 +411,7 @@ apps/client/pages/api/feedback/[id]/delete.ts
 apps/client/pages/api/feedback/[id]/read.ts
 apps/client/pages/api/feedback/[id]/update.ts
 apps/client/pages/api/feedback/index.ts
+apps/client/pages/api/file-links/[token].ts  # deliberately unauthenticated (auth: false): emailed and Slack links are opened signed out; the signed token is the credential, access is rechecked per click, rate limited
 apps/client/pages/api/files/[id]/index.ts
 apps/client/pages/api/files/[id]/moderate.ts
 apps/client/pages/api/files/[id]/upload.ts
@@ -518,6 +519,7 @@ apps/client/pages/api/mementos/groom.ts
 apps/client/pages/api/mementos/index.ts
 apps/client/pages/api/memory/[kind]/[id].ts
 apps/client/pages/api/memory/[kind]/[id]/events.ts
+apps/client/pages/api/modal-images/[name].ts  # deliberately unauthenticated (auth: false): email clients load modal images signed out; serves only keys a modal references, rate limited, read-only
 apps/client/pages/api/modals/[id]/delete.ts
 apps/client/pages/api/modals/[id]/update.ts
 apps/client/pages/api/modals/create.ts
