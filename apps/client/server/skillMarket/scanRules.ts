@@ -656,9 +656,10 @@ const ROUTINE_COMMAND =
   /^(?:\$\s+)?(?:sudo\s+)?(?:git|gh|pnpm|npm|npx|yarn|ls|cat|head|tail|grep|rg|find|pwd|cd|mkdir|cp|mv|touch|echo|wc|diff|node|env)\s+\S/;
 const SHELL_COMMAND_HEAD =
   /^(?:\$\s+)?(?:sudo\s+)?(?:git|gh|pnpm|npm|npx|yarn|ls|cat|head|tail|grep|rg|find|pwd|cd|mkdir|cp|mv|touch|echo|wc|diff|node|curl|wget|rm|printenv|env)(?:\s|$)/;
-// A home-relative or absolute credential path is a read on its own; bare filenames need a command word.
+// Private keys, cloud credentials and token files under a home or absolute path are a read on their own.
+// Directories, public keys, config files and anything after a URL authority need a command word.
 const CREDENTIAL_ABSOLUTE_PATH =
-  /(?:^|[\s"'`=:(<])(?:~|\$\{?HOME\}?|\/[\w.@/-]*)\/(?:\.ssh\b|\.gnupg\b|\.aws\/credentials|\.netrc\b|\.npmrc\b|id_(?:rsa|ed25519|ecdsa)\b)/;
+  /(?:^|[\s"'`=(<])(?:(?:~|\$\{?HOME\}?)\/(?:[\w.@-]+\/)*|\/[\w.@/-]*\/)(?:id_(?:rsa|ed25519|ecdsa|dsa)(?![\w-]|\.pub\b)|\.aws\/credentials\b|\.netrc\b|\.(?:npmrc|pypirc)\b)/;
 // A non-shell fence line with a comment marker or a negation is probably not an instruction, but the
 // marker is also trivial to add to a real one, so a match there is held for review, never High or clean.
 const NON_INSTRUCTION_LINE = /^(?:\/\/|#|\/\*|\*|--)|\b(?:not|never|don't|dont|avoid|without)\b/i;
@@ -666,7 +667,7 @@ const CREDENTIAL_PATH =
   /(?:^|[\s"'=:])(?:~|\$HOME)?\/?\.(?:ssh|gnupg)(?:\/|\b)|\.aws\/credentials|\.netrc\b|\.npmrc\b|\bid_(?:rsa|ed25519|ecdsa)\b/;
 // 'segment' patterns run on each part of a chained command so a flag on one command is never read
 // as belonging to another; 'whole' patterns need the unsplit line (a pipe is part of the match).
-const DANGEROUS_COMMANDS: { pattern: RegExp; label: string; scope: 'segment' | 'whole' }[] = [
+const DANGEROUS_COMMANDS: { pattern: RegExp; label: string; scope: 'segment' | 'whole'; skip?: RegExp }[] = [
   {
     pattern: /\b(?:curl|wget)\b[^|\n]*\|\s*(?:sudo\s+)?(?:ba|z|da|k)?sh\b/,
     label: 'pipes a download into a shell',
@@ -691,6 +692,8 @@ const DANGEROUS_COMMANDS: { pattern: RegExp; label: string; scope: 'segment' | '
     ),
     label: 'reads or writes credential files',
     scope: 'segment',
+    // A Dockerfile COPY/ADD line places a file in an image; it does not read it into the conversation.
+    skip: /^(?:COPY|ADD)\s/,
   },
   {
     pattern:
@@ -759,8 +762,9 @@ function scanShellCommands(text: string): ISkillScanFinding[] {
     // A lone `env` in inline code is a mention (the "env" key of a config) unless told to run it.
     const mention = candidate.inline && candidate.text === 'env' && !candidate.instructed;
     const forbidden = !candidate.shell && !candidate.inline && NON_INSTRUCTION_LINE.test(candidate.text);
-    for (const { pattern, label, scope } of DANGEROUS_COMMANDS) {
+    for (const { pattern, label, scope, skip } of DANGEROUS_COMMANDS) {
       if (danger.has(label) || mention) continue;
+      if (skip?.test(candidate.text)) continue;
       if (scope === 'whole' ? pattern.test(candidate.text) : segments.some(part => pattern.test(part))) {
         (forbidden ? softDanger : danger).set(label, candidate.text);
       }
