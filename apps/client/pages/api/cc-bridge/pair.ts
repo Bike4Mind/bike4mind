@@ -76,7 +76,7 @@ const handler = baseApi({ auth: true })
         return res.status(500).json({ error: 'Server misconfigured: public URL not set' });
       }
 
-      req.logger.info(`[CC_BRIDGE] Minted pairing token ${tokenPrefix}… for user ${userId}, device "${deviceLabel}"`);
+      req.logger.info(`[CC_BRIDGE] Minted pairing token ${tokenPrefix}... for user ${userId}`);
 
       return res.status(201).json({
         pairingToken: token,
