@@ -13,6 +13,15 @@ describe('resolveGitHubLakeCallbackStep', () => {
     });
   });
 
+  it('still exchanges code and state when the handoff is gone, leaving the lake to the server', () => {
+    expect(resolveGitHubLakeCallbackStep({ code: 'c1', state: 's1' }, null)).toEqual({
+      kind: 'authorize',
+      dataLakeId: undefined,
+      state: 's1',
+      code: 'c1',
+    });
+  });
+
   it('reopens the picker with no server call when the install fallback returns with an installation id but no code', () => {
     expect(resolveGitHubLakeCallbackStep({ installation_id: '42', state: 's1' }, handoff)).toEqual({
       kind: 'resume',
@@ -58,7 +67,7 @@ describe('resolveGitHubLakeCallbackStep', () => {
 
   it.each([
     ['another GitHub error', { error: 'redirect_uri_mismatch', state: 's1' }, handoff],
-    ['no handoff (a different tab, or storage cleared)', { code: 'c1', state: 's1' }, null],
+    ['a GitHub error and no handoff', { error: 'redirect_uri_mismatch', code: 'c1', state: 's1' }, null],
     ['a code with no state', { code: 'c1' }, handoff],
     ['nothing at all', {}, handoff],
   ])('fails with %s', (_name, search, h) => {
