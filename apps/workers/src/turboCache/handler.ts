@@ -18,7 +18,7 @@ function unauthorized(): APIGatewayProxyStructuredResultV2 {
 }
 
 function verifyToken(event: APIGatewayProxyEventV2): boolean {
-  const auth = event.headers.authorization ?? event.headers.Authorization;
+  const auth = event.headers.authorization;
   if (!auth) return false;
   const token = auth.replace(/^Bearer\s+/i, '');
   const expected = (Resource as unknown as Record<string, { value: string }>).TURBO_CACHE_TOKEN.value;
@@ -90,7 +90,6 @@ async function handlePut(
   return { statusCode: 202, body: JSON.stringify({ urls: [`${hash}`] }) };
 }
 
-// Turborepo remote cache API handler
 // Protocol: https://turbo.build/repo/docs/core-concepts/remote-caching
 export async function handler(event: APIGatewayProxyEventV2): Promise<APIGatewayProxyStructuredResultV2> {
   if (!verifyToken(event)) return unauthorized();
@@ -104,7 +103,6 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
     return { statusCode: 200, body: '{}' };
   }
 
-  // Extract hash from /v8/artifacts/:hash
   const hashMatch = path.match(/\/v8\/artifacts\/([a-f0-9]+)$/);
   if (!hashMatch) {
     return { statusCode: 404, body: JSON.stringify({ error: 'Not found' }) };
