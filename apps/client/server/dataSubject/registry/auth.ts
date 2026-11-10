@@ -2,12 +2,13 @@ import type { DataHolderRegistry } from '../types';
 import { ADMIN_NOTE, FINANCIAL_RECORD, expiresAfterTtl } from './retention';
 
 export const authHolders = {
-  // `userId` and `author` are immutable and every identity field is required, and revisions refuse any
-  // update or delete, so neither anonymize nor delete can run on these records.
+  // Notes about the person go with them: the account purge removes them through the raw collection,
+  // past the model's immutability hooks. A note this person wrote or edited as an admin about someone
+  // else is that other account's record, and its identity fields are required and immutable, so it stays.
   AdminUserNote: {
     kind: 'holder',
     references: [
-      { path: 'userId', matchBy: 'userId', action: 'retain', ...ADMIN_NOTE },
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
       { path: 'author.id', matchBy: 'userId', action: 'retain', ...ADMIN_NOTE },
       { path: 'editor.id', matchBy: 'userId', action: 'retain', ...ADMIN_NOTE },
     ],
@@ -15,7 +16,7 @@ export const authHolders = {
   AdminUserNoteRevision: {
     kind: 'holder',
     references: [
-      { path: 'userId', matchBy: 'userId', action: 'retain', ...ADMIN_NOTE },
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
       { path: 'author.id', matchBy: 'userId', action: 'retain', ...ADMIN_NOTE },
       { path: 'editor.id', matchBy: 'userId', action: 'retain', ...ADMIN_NOTE },
     ],
@@ -318,15 +319,7 @@ export const authHolders = {
   },
   UserUsagePatternSignals: {
     kind: 'holder',
-    references: [
-      {
-        path: 'userId',
-        matchBy: 'userId',
-        action: 'retain',
-        reason: 'Fraud-detection score kept for its 30-day retention window to prevent abuse (legitimate interest)',
-        retention: expiresAfterTtl('computedAt', 30),
-      },
-    ],
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
   },
   Voice: {
     kind: 'holder',

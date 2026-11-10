@@ -251,16 +251,21 @@ export const billingHolders = {
       { path: 'grantedBy', matchBy: 'userId', action: 'anonymize' },
     ],
   },
+  // Mirrors `purgePersonalUsage` (server/users/purgeAccountContent.ts): the person's own usage goes,
+  // and an organization's rows keep their quantities and prices with the person's links severed. The
+  // charges themselves stay on the credit ledger (CreditTransaction). The purge also deletes the
+  // organization-owned rows of the person's personal workspaces, which no equality filter here can say.
   UsageEvent: {
     kind: 'holder',
     references: [
-      { path: 'userId', matchBy: 'userId', action: 'retain', ...FINANCIAL_RECORD },
+      { path: 'ownerId', matchBy: 'userId', where: { ownerType: 'User' }, action: 'deleteDocument' },
+      { path: 'userId', matchBy: 'userId', where: { ownerType: 'User' }, action: 'deleteDocument' },
+      { path: 'userId', matchBy: 'userId', where: { ownerType: 'Agent' }, action: 'deleteDocument' },
       {
-        path: 'ownerId',
+        path: 'userId',
         matchBy: 'userId',
-        where: { ownerType: 'User' },
-        action: 'retain',
-        ...FINANCIAL_RECORD,
+        action: 'anonymize',
+        alsoRedact: ['sessionId', 'dataLakeId', 'apiKeyId', 'requestId'],
       },
     ],
   },

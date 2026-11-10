@@ -343,18 +343,13 @@ export const infraHolders = {
     kind: 'holder',
     references: [{ path: 'createdBy', matchBy: 'userId', action: 'anonymize' }],
   },
-  // A fraud-detection record naming several accounts and a network: kept to prevent repeat abuse, so the reviewer
-  // verdicts are anonymized but `userIds` and `network` are not removed.
+  // A fraud-detection record naming several accounts and a network. The person is pulled from
+  // `userIds` (`shadowDetectionRepository.removeUser`), which also deletes a record left naming no one
+  // and rebuilds or deletes a campaign group; reviewer verdicts are anonymized.
   ShadowDetection: {
     kind: 'holder',
     references: [
-      {
-        path: 'userIds',
-        matchBy: 'userId',
-        action: 'retain',
-        reason: 'Fraud signal kept for the legitimate interest in preventing repeat abuse (GDPR Art. 6(1)(f))',
-        retention: expiresAfterTtl('detectedAt', 365),
-      },
+      { path: 'userIds', matchBy: 'userId', action: 'pullFromArray' },
       { path: 'verdicts.reviewerId', matchBy: 'userId', action: 'anonymize' },
     ],
   },
