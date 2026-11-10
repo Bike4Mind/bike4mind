@@ -245,6 +245,34 @@ describe('shell expansions reaching a protected location', () => {
   });
 
   it.each([
+    'echo $${a,b}',
+    'echo x$${a,b}',
+    'echo $${a,b}x',
+    'echo x$${a,b}y',
+    'echo $${a..c}',
+    'echo $${a,{b,c}}',
+    'echo $$ $${a,b}',
+    'echo $${a,b} && echo ok',
+    'echo $(echo $${a,b})',
+    'echo "$(echo x$${a,b})"',
+    'local x$${a,b}',
+    'echo hi > x$${a,b}',
+    'echo hi > $${a,b}.txt',
+  ])('asks in every mode, reading nothing, for %s, as bash expands no braces after a `$$`', async command => {
+    expect((await scanShell(command, project, [project]))?.unread).toBe(true);
+    await expectAsks(command);
+  });
+
+  it.each(['echo "$$"{a,b}', 'echo x$$', 'echo x$$a', 'echo \\$${a,b}', "echo '$'${a,b}", 'echo ${a,b}'])(
+    'does not apply the `$$` brace reading to %s',
+    async command => {
+      const scan = await scanShell(command, project, [project]);
+      if (scan !== null) expect(scan.unread).toBeUndefined();
+      expect(await decide(command)).toEqual({ auto: true, full: true });
+    }
+  );
+
+  it.each([
     ['cat "$PWD"{_,x}', ['project_', 'projectx']],
     ['cat ${PWD}{_,x}', ['project_', 'projectx']],
     ['cat $PWD{/safe/value,.x}', ['project/safe/value', 'project.x']],
