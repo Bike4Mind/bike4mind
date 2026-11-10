@@ -9,6 +9,8 @@ import {
 } from '@bike4mind/common';
 import {
   createImageProviderRegistry,
+  ProviderOutputTooLargeError,
+  ProviderOutputUnavailableError,
   ProviderSubmitError,
   type AsyncImageProvider,
   type ImageProvider,
@@ -511,5 +513,69 @@ describe('image job handler with an async (submit then poll) provider', () => {
     expect(t.jobOf(created)).toMatchObject({ state: 'failed', error: { code: 'provider_error' } });
     expect(t.deps.moderate).not.toHaveBeenCalled();
     expect(t.deps.saveToFiles).not.toHaveBeenCalled();
+  });
+
+  it('fails an expired delivery link without retrying the download', async () => {
+    const t = setupAsync([readyPoll]);
+    t.bfl.fetchOutput.mockRejectedValue(new ProviderOutputUnavailableError(410));
+    const created = await create(t, fluxRequest());
+    await t.runToCompletion();
+    expect(t.jobOf(created)).toMatchObject({ state: 'failed', error: { code: 'provider_error' } });
+    expect(t.bfl.fetchOutput).toHaveBeenCalledTimes(1);
+    expect(releaseCreditHold).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails an output over the size cap as output_too_large and releases the hold', async () => {
+    const t = setupAsync([readyPoll]);
+    t.bfl.fetchOutput.mockRejectedValue(new ProviderOutputTooLargeError(10, 11));
+    const created = await create(t, fluxRequest());
+    await t.runToCompletion();
+    expect(t.jobOf(created)).toMatchObject({ state: 'failed', error: { code: 'output_too_large' } });
+    expect(t.deps.saveToFiles).not.toHaveBeenCalled();
+    expect(releaseCreditHold).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails a poll that reports a definitive failure and releases the hold', async () => {
+    const t = setupAsync([{ status: 'failed', retryable: false, message: 'render failed', raw: {} }]);
+    const created = await create(t, fluxRequest());
+    await t.runToCompletion();
+    expect(t.jobOf(created)).toMatchObject({ state: 'failed', error: { code: 'provider_error' } });
+    expect(t.bfl.fetchOutput).not.toHaveBeenCalled();
+    expect(releaseCreditHold).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries the store step when the moderation scan throws, saving once', async () => {
+    const t = setupAsync([readyPoll]);
+    vi.mocked(t.deps.moderate).mockRejectedValueOnce(new Error('scan down'));
+    const created = await create(t, fluxRequest());
+    await t.runToCompletion();
+    expect(t.jobOf(created).state).toBe('succeeded');
+    expect(t.bfl.poll).toHaveBeenCalledTimes(1);
+    expect(t.deps.moderate).toHaveBeenCalledTimes(2);
+    expect(t.deps.saveToFiles).toHaveBeenCalledTimes(1);
+    expect(settleCreditHold).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries the store step when saving throws, saving once it succeeds', async () => {
+    const t = setupAsync([readyPoll]);
+    const saved = t.deps.saveToFiles as ReturnType<typeof vi.fn>;
+    const original = saved.getMockImplementation()!;
+    saved.mockRejectedValueOnce(new Error('db down')).mockImplementation(original);
+    const created = await create(t, fluxRequest());
+    await t.runToCompletion();
+    expect(t.jobOf(created).state).toBe('succeeded');
+    expect(releaseCreditHold).not.toHaveBeenCalled();
+  });
+
+  it.each(['poll', 'store'] as const)('fails provider_error when the API key is gone at the %s step', async step => {
+    const t = setupAsync([readyPoll]);
+    const created = await create(t, fluxRequest());
+    if (step === 'store') await t.engine.step(t.jobOf(created).id);
+    await t.engine.step(t.jobOf(created).id);
+    if (step === 'store') await t.engine.step(t.jobOf(created).id);
+    vi.mocked(t.deps.resolveApiKey).mockResolvedValue(null as never);
+    await t.runToCompletion();
+    expect(t.jobOf(created)).toMatchObject({ state: 'failed', error: { code: 'provider_error' } });
+    expect(releaseCreditHold).toHaveBeenCalledTimes(1);
   });
 });
