@@ -153,12 +153,12 @@ export async function resolveRetrievalLakeScope(
  * `{ user, ability, logger }`, a queue handler, an overlay service - and the request-shaped resolver
  * above cannot serve them.
  *
- * COVERAGE, stated precisely because an earlier version of this comment overstated it: of the four
+ * COVERAGE, stated precisely because an earlier version of this comment overstated it: of the three
  * call sites wired to this function, only `sessionCrud.getOrCreateSession` currently reaches the
  * derivation. The two route sites (voice-sessions, voice/v2/sessions) create
  * sessions with no `knowledgeIds`, and `sessionService.createSession` skips the derivation entirely
  * for an empty list - so their thunks cannot fire today. They are wired deliberately, so a route that
- * later attaches files is correct by default rather than silently unscoped; do not read them as four
+ * later attaches files is correct by default rather than silently unscoped; do not read them as three
  * live derivation paths. The mainline public-API path is covered separately by the request-shaped
  * wrapper above, via `POST /api/sessions/create`.
  *
