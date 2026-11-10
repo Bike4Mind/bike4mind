@@ -8,7 +8,7 @@ import {
   LLMEventPayload,
   LLMEvents,
   BFL_SAFETY_TOLERANCE,
-  BflEditRegion,
+  BflEditRegionSchema,
   validateBflEditRegions,
   IChatHistoryItemRepository,
   IUserRepository,
@@ -108,7 +108,7 @@ export const ImageEditBodySchema = OpenAIImageGenerationInput.extend({
   // Declared here as well as on EditImageRequestBodySchema: invoke() parses the queue payload
   // through this schema, and an undeclared key is stripped before it reaches process().
   referenceImageFabFileIds: z.array(z.string()).max(MAX_REFERENCE_IMAGES).optional(),
-  edit_regions: z.array(z.object({ prompt: z.string(), bbox: z.tuple([z.number(), z.number(), z.number(), z.number()]) })).optional(),
+  edit_regions: z.array(BflEditRegionSchema).optional(),
   image: z.string(),
   /** Minted per invoke(); see ImageGenerationBodySchema.generationId. */
   generationId: z.string().optional(),

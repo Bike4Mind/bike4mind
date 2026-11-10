@@ -97,7 +97,8 @@ describe('EditImageRequestBodySchema edit_regions field', () => {
       model: 'flux-pro-1.0-fill',
       edit_regions: [validRegion],
     });
-    expect(result.error?.issues?.filter(i => i.path[0] === 'edit_regions') ?? []).toEqual([]);
+    expect(result.success).toBe(true);
+    expect(result.data?.edit_regions).toEqual([validRegion]);
   });
 
   it('accepts a body without edit_regions', () => {
@@ -107,7 +108,8 @@ describe('EditImageRequestBodySchema edit_regions field', () => {
       prompt: 'edit it',
       model: 'flux-pro-1.0-fill',
     });
-    expect(result.error?.issues?.filter(i => i.path[0] === 'edit_regions') ?? []).toEqual([]);
+    expect(result.success).toBe(true);
+    expect(result.data?.edit_regions).toBeUndefined();
   });
 
   it('rejects invalid bbox tuple in edit_regions', () => {
