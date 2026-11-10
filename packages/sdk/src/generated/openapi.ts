@@ -4054,6 +4054,9 @@ export interface components {
             | 'fmp_financial_data'
             | 'bob_panel_read'
             | 'skill'
+            | 'page_get_state'
+            | 'page_update_state'
+            | 'page_set_widget'
           )
         | string
       )[];
