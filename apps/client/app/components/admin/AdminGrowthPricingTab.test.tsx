@@ -256,12 +256,9 @@ describe('AdminGrowthPricingTab', () => {
   });
 
   it('values referral credits in dollars at the floor rate', () => {
-    renderTab();
-
     const floor = formatUsdPerCredit(MIN_PRICE_PER_CREDIT_USD);
-    // The first-answer reward is at its default (0).
-    expect(screen.getByTestId('admin-growth-pricing-derived-ReferralFirstAnswerCredits').textContent).toBe(
-      `0 credits = ${formatUsdAmount(0)} at the floor ${floor} per credit`
+    expect(describeDerivedValue('ReferralFirstAnswerCredits', 10000)).toBe(
+      `10,000 credits = ${formatUsdAmount(10000 * MIN_PRICE_PER_CREDIT_USD)} at the floor ${floor} per credit`
     );
   });
 
