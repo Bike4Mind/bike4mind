@@ -21,7 +21,8 @@ export type AdminPalette = {
   danger: string;
   status: Record<AdminStatusTone, { foreground: string; background: string }>;
   /**
-   * Categorical chart colors for more series than `accent` opacity steps can keep apart (about six).
+   * Categorical chart colors for more series than `accent` opacity steps can keep apart (about six); for
+   * fewer, use `adminChartSeries` in EventMetrics/utils/chartTheme.ts instead.
    * Validated with the dataviz palette checker against `surface` in each scheme; a chart takes them in a
    * fixed slot order so a category keeps its color whatever the range.
    */
