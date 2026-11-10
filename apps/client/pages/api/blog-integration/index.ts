@@ -39,7 +39,7 @@ const handler = baseApi()
         connected: true,
         settings: {
           ...settings,
-          apiKeyPreview: `${apiKey.substring(0, 8)}...`, // Show first 8 chars only
+          apiKeyPreview: apiKey.length > 4 ? `...${apiKey.slice(-4)}` : '****',
         },
       });
     } catch (error) {
