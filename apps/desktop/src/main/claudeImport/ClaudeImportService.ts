@@ -188,7 +188,7 @@ export class ClaudeImportService {
       hints: {
         dismissed: scope?.dismissedHints ?? [],
         codeSessions: this.codeSessions,
-        webNotebooks: (scopeKey && this.webNotebooks.get(scopeKey)) ?? null,
+        webNotebooks: scopeKey ? (this.webNotebooks.get(scopeKey) ?? null) : null,
       },
       code: {
         settings: settings.code,
