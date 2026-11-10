@@ -26,6 +26,7 @@ import type {
   ResearchScheduleCadence,
   ResearchScheduleOutcome,
   ResearchScheduleSkipReason,
+  ResearchUnlistedSources,
 } from '@bike4mind/common';
 import {
   isResearchRunInFlight,
@@ -45,6 +46,7 @@ import {
   RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT,
   RESEARCH_REVIEW_BACKLOG_LIMIT_MAX,
   RESEARCH_SCHEDULE_CADENCES,
+  upgradeLegacyResearchLevers,
 } from '@bike4mind/common';
 import type { ResearchConfigInput } from '@client/app/hooks/data/dataLakes';
 import type { ResearchModelOption } from '@client/app/utils/researchJudgeModels';
@@ -87,7 +89,8 @@ interface ConfigDraft {
   recencyDays: string;
   minRelevance: string;
   costCeilingUsd: string;
-  allowedDomains: string;
+  reviewDomains: string;
+  unlistedSources: ResearchUnlistedSources;
   blockedDomains: string;
   proposedTags: string;
   cadence: ResearchScheduleCadence;
@@ -129,30 +132,37 @@ const emptyDraft = (): ConfigDraft => ({
   recencyDays: '',
   minRelevance: String(RESEARCH_MIN_RELEVANCE_DEFAULT),
   costCeilingUsd: microUsdToUsdInput(RESEARCH_COST_CEILING_MICRO_USD_DEFAULT),
-  allowedDomains: '',
+  reviewDomains: '',
+  unlistedSources: 'review',
   blockedDomains: '',
   proposedTags: '',
   cadence: 'off',
   reviewBacklogLimit: String(RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT),
 });
 
-const draftFromConfig = (config: IDataLakeResearchConfigDocument): ConfigDraft => ({
-  name: config.name,
-  query: config.query,
-  model: config.model ?? '',
-  maxResults: String(config.maxResults),
-  maxProposals: String(config.maxProposals),
-  recencyDays: config.recencyDays == null ? '' : String(config.recencyDays),
-  minRelevance: String(config.minRelevance),
-  costCeilingUsd: microUsdToUsdDraftInput(config.costCeilingMicroUsd),
-  allowedDomains: config.allowedDomains.join('\n'),
-  blockedDomains: config.blockedDomains.join('\n'),
-  proposedTags: config.proposedTags.join(', '),
-  // A config saved before this feature carries neither field on the wire - read that as off/default
-  // rather than leaving the form blank.
-  cadence: config.cadence ?? 'off',
-  reviewBacklogLimit: String(config.reviewBacklogLimit ?? RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT),
-});
+const draftFromConfig = (config: IDataLakeResearchConfigDocument): ConfigDraft => {
+  // A response from a server that predates the tiers carries only `allowedDomains`; the upgrader
+  // applies the same mapping the migration does, so the form shows the restriction that is in force.
+  const { reviewDomains, unlistedSources } = upgradeLegacyResearchLevers(config);
+  return {
+    name: config.name,
+    query: config.query,
+    model: config.model ?? '',
+    maxResults: String(config.maxResults),
+    maxProposals: String(config.maxProposals),
+    recencyDays: config.recencyDays == null ? '' : String(config.recencyDays),
+    minRelevance: String(config.minRelevance),
+    costCeilingUsd: microUsdToUsdDraftInput(config.costCeilingMicroUsd),
+    reviewDomains: reviewDomains.join('\n'),
+    unlistedSources,
+    blockedDomains: config.blockedDomains.join('\n'),
+    proposedTags: config.proposedTags.join(', '),
+    // A config saved before this feature carries neither field on the wire - read that as off/default
+    // rather than leaving the form blank.
+    cadence: config.cadence ?? 'off',
+    reviewBacklogLimit: String(config.reviewBacklogLimit ?? RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT),
+  };
+};
 
 const parseList = (value: string): string[] =>
   value
@@ -243,6 +253,10 @@ const validateDraft = (draft: ConfigDraft): DraftErrors => {
       message: `Enter a whole number from 1 to ${RESEARCH_REVIEW_BACKLOG_LIMIT_MAX}.`,
     }),
   };
+  // Ignoring other sites with nothing listed would ignore every result.
+  if (draft.unlistedSources === 'drop' && parseList(draft.reviewDomains).length === 0) {
+    errors.unlistedSources = 'List at least one site to review, or send other sites to review.';
+  }
   return Object.fromEntries(Object.entries(errors).filter(([, message]) => message)) as DraftErrors;
 };
 
@@ -257,7 +271,8 @@ const draftToInput = (draft: ConfigDraft): ResearchConfigInput => ({
   costCeilingMicroUsd: Math.round(
     parseNumber(draft.costCeilingUsd, RESEARCH_COST_CEILING_MICRO_USD_DEFAULT / 1_000_000) * 1_000_000
   ),
-  allowedDomains: parseList(draft.allowedDomains),
+  reviewDomains: parseList(draft.reviewDomains),
+  unlistedSources: draft.unlistedSources,
   blockedDomains: parseList(draft.blockedDomains),
   proposedTags: parseList(draft.proposedTags),
   cadence: draft.cadence,
@@ -328,7 +343,8 @@ const hasNonPresetLeverSet = (draft: ConfigDraft): boolean => {
   const pick = ({
     recencyDays,
     minRelevance,
-    allowedDomains,
+    reviewDomains,
+    unlistedSources,
     blockedDomains,
     proposedTags,
     reviewBacklogLimit,
@@ -337,7 +353,8 @@ const hasNonPresetLeverSet = (draft: ConfigDraft): boolean => {
     JSON.stringify([
       recencyDays,
       minRelevance,
-      allowedDomains,
+      reviewDomains,
+      unlistedSources,
       blockedDomains,
       proposedTags,
       // Only rendered with a schedule, so it cannot be the reason to unfold an unscheduled config.
@@ -1083,15 +1100,17 @@ export function DataLakeResearchPanel({
 
               <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
                 <FormControl size="sm" sx={{ flex: 1 }}>
-                  <FormLabel>Only these sites</FormLabel>
+                  <FormLabel>Sites to review</FormLabel>
                   <Textarea
                     minRows={2}
                     placeholder="example.com"
-                    value={draft.allowedDomains}
-                    onChange={e => setField('allowedDomains')(e.target.value)}
-                    slotProps={{ textarea: { 'data-testid': 'datalake-research-allowed-input' } }}
+                    value={draft.reviewDomains}
+                    onChange={e => setField('reviewDomains')(e.target.value)}
+                    slotProps={{ textarea: { 'data-testid': 'datalake-research-review-input' } }}
                   />
-                  <FormHelperText>One per line, subdomains included. Leave blank to allow any site.</FormHelperText>
+                  <FormHelperText>
+                    One per line, subdomains included. This only narrows results when other sites are ignored.
+                  </FormHelperText>
                 </FormControl>
 
                 <FormControl size="sm" sx={{ flex: 1 }}>
@@ -1103,9 +1122,24 @@ export function DataLakeResearchPanel({
                     onChange={e => setField('blockedDomains')(e.target.value)}
                     slotProps={{ textarea: { 'data-testid': 'datalake-research-blocked-input' } }}
                   />
-                  <FormHelperText>One per line, subdomains included. Wins over the allow list.</FormHelperText>
+                  <FormHelperText>One per line, subdomains included. Wins over every other setting.</FormHelperText>
                 </FormControl>
               </Stack>
+
+              <FormControl size="sm" error={!!errors.unlistedSources}>
+                <FormLabel>Other sites</FormLabel>
+                <Select
+                  value={draft.unlistedSources}
+                  onChange={(_e, value) => setDraft(prev => ({ ...prev, unlistedSources: value ?? 'review' }))}
+                  slotProps={{ button: { 'data-testid': 'datalake-research-unlisted-select' } }}
+                >
+                  <Option value="review">Send to review</Option>
+                  <Option value="drop">Ignore</Option>
+                </Select>
+                <FormHelperText data-testid={errors.unlistedSources ? 'datalake-research-unlisted-error' : undefined}>
+                  {errors.unlistedSources ?? 'What happens to a result from a site that is not in the lists above.'}
+                </FormHelperText>
+              </FormControl>
 
               <FormControl size="sm">
                 <FormLabel>Tags to propose</FormLabel>

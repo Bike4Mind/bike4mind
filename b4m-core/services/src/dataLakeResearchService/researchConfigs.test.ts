@@ -41,6 +41,9 @@ const storedConfig = (overrides: Partial<IDataLakeResearchConfigDocument> = {}) 
     maxResults: 10,
     maxProposals: 5,
     recencyDays: 30,
+    trustedDomains: [],
+    reviewDomains: ['example.com'],
+    unlistedSources: 'drop',
     allowedDomains: ['example.com'],
     blockedDomains: [],
     minRelevance: 0.6,
@@ -376,7 +379,8 @@ describe('updateResearchConfig', () => {
         maxResults: 10,
         maxProposals: 5,
         recencyDays: 30,
-        allowedDomains: ['example.com'],
+        reviewDomains: ['example.com'],
+        unlistedSources: 'drop',
         blockedDomains: [],
         minRelevance: 0.6,
         costCeilingMicroUsd: 50_000,
@@ -407,7 +411,8 @@ describe('updateResearchConfig', () => {
         query: defaultStored.query,
         maxResults: defaultStored.maxResults,
         maxProposals: defaultStored.maxProposals,
-        allowedDomains: defaultStored.allowedDomains,
+        reviewDomains: defaultStored.reviewDomains,
+        unlistedSources: defaultStored.unlistedSources,
         blockedDomains: defaultStored.blockedDomains,
         minRelevance: defaultStored.minRelevance,
         costCeilingMicroUsd: defaultStored.costCeilingMicroUsd,
@@ -419,8 +424,9 @@ describe('updateResearchConfig', () => {
     expect(record).not.toHaveBeenCalled();
   });
 
-  it('does not record a history event when allowedDomains, blockedDomains and proposedTags are resubmitted reordered', async () => {
+  it('does not record a history event when reviewDomains, blockedDomains and proposedTags are resubmitted reordered', async () => {
     const stored = storedConfig({
+      reviewDomains: ['a.example.com', 'b.example.com'],
       allowedDomains: ['a.example.com', 'b.example.com'],
       blockedDomains: ['x.example.com', 'y.example.com'],
       proposedTags: ['one', 'two'],
@@ -437,7 +443,8 @@ describe('updateResearchConfig', () => {
         query: stored.query,
         maxResults: stored.maxResults,
         maxProposals: stored.maxProposals,
-        allowedDomains: ['b.example.com', 'a.example.com'],
+        reviewDomains: ['b.example.com', 'a.example.com'],
+        unlistedSources: 'drop',
         blockedDomains: ['y.example.com', 'x.example.com'],
         minRelevance: stored.minRelevance,
         costCeilingMicroUsd: stored.costCeilingMicroUsd,
@@ -464,7 +471,8 @@ describe('updateResearchConfig - a real lever change still records history', () 
         query: stored.query,
         maxResults: stored.maxResults,
         maxProposals: stored.maxProposals,
-        allowedDomains: stored.allowedDomains,
+        reviewDomains: stored.reviewDomains,
+        unlistedSources: stored.unlistedSources,
         blockedDomains: stored.blockedDomains,
         minRelevance: stored.minRelevance,
         costCeilingMicroUsd: stored.costCeilingMicroUsd,
@@ -477,11 +485,149 @@ describe('updateResearchConfig - a real lever change still records history', () 
   };
 
   it.each([
-    ['an added allowed domain', { allowedDomains: ['example.com', 'other.example.org'] }],
+    ['an added review domain', { reviewDomains: ['example.com', 'other.example.org'] }],
+    ['a changed unlisted-sources setting', { unlistedSources: 'review' }],
     ['an added blocked domain', { blockedDomains: ['spam.example.net'] }],
     ['a replaced proposed tag', { proposedTags: ['different'] }],
   ])('records for %s', async (_label, patch) => {
     expect(await put(patch)).toHaveBeenCalled();
+  });
+});
+
+describe('research config source tiers', () => {
+  const reviewModeStored = () =>
+    storedConfig({ reviewDomains: ['kept.example'], unlistedSources: 'review', allowedDomains: [] });
+
+  it('derives allowedDomains on create for old readers', async () => {
+    const { adapters, repo } = makeAdapters();
+    await createResearchConfig(
+      lake(),
+      actor(),
+      NO_GRANTS,
+      { name: 'n', query: 'q', reviewDomains: ['a.example'], unlistedSources: 'drop' },
+      adapters
+    );
+    expect(repo.createConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reviewDomains: ['a.example'],
+        unlistedSources: 'drop',
+        trustedDomains: [],
+        allowedDomains: ['a.example'],
+      })
+    );
+  });
+
+  it('maps a legacy-shaped create (an old tab) so the restriction is kept', async () => {
+    const { adapters, repo } = makeAdapters();
+    await createResearchConfig(
+      lake(),
+      actor(),
+      NO_GRANTS,
+      { name: 'n', query: 'q', allowedDomains: ['a.example'] },
+      adapters
+    );
+    expect(repo.createConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ reviewDomains: ['a.example'], unlistedSources: 'drop' })
+    );
+  });
+
+  it('refuses a drop with nothing listed on create and update', async () => {
+    const { adapters } = makeAdapters();
+    await expect(
+      createResearchConfig(lake(), actor(), NO_GRANTS, { name: 'n', query: 'q', unlistedSources: 'drop' }, adapters)
+    ).rejects.toThrow(/at least one site/i);
+    await expect(
+      updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, { reviewDomains: [] }, adapters)
+    ).rejects.toThrow(/at least one site/i);
+  });
+
+  it('applies a new-shape edit over the stale derived allowedDomains', async () => {
+    const { adapters, repo } = makeAdapters();
+    await updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, { reviewDomains: ['other.example'] }, adapters);
+    expect(repo.updateConfig).toHaveBeenCalledWith(
+      'config-1',
+      LAKE_ID,
+      expect.objectContaining({
+        reviewDomains: ['other.example'],
+        unlistedSources: 'drop',
+        allowedDomains: ['other.example'],
+      })
+    );
+  });
+
+  it('keeps the review list on an old-tab query-only edit of a review-mode config', async () => {
+    const stored = reviewModeStored();
+    const { adapters, repo, record } = makeAdapters({ findByIdInLake: vi.fn(async () => stored) });
+    await updateResearchConfig(
+      'config-1',
+      lake(),
+      actor(),
+      NO_GRANTS,
+      { query: 'a new question', allowedDomains: [] },
+      adapters
+    );
+    expect(repo.updateConfig).toHaveBeenCalledWith(
+      'config-1',
+      LAKE_ID,
+      expect.objectContaining({ reviewDomains: ['kept.example'], unlistedSources: 'review', allowedDomains: [] })
+    );
+    expect(record).toHaveBeenCalled();
+  });
+
+  it('records no history event when an old tab resubmits what the config already derives', async () => {
+    const stored = storedConfig();
+    const { adapters, record } = makeAdapters({ findByIdInLake: vi.fn(async () => stored) });
+    await updateResearchConfig(
+      'config-1',
+      lake(),
+      actor(),
+      NO_GRANTS,
+      { name: stored.name, query: stored.query, allowedDomains: ['example.com'] },
+      adapters
+    );
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('maps an old-tab edit of the site list onto the review list, never the trusted list', async () => {
+    const stored = storedConfig({ trustedDomains: ['t.example'], allowedDomains: ['t.example', 'example.com'] });
+    const { adapters, repo } = makeAdapters({ findByIdInLake: vi.fn(async () => stored) });
+    await updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, { allowedDomains: ['new.example'] }, adapters);
+    expect(repo.updateConfig).toHaveBeenCalledWith(
+      'config-1',
+      LAKE_ID,
+      expect.objectContaining({
+        trustedDomains: ['t.example'],
+        reviewDomains: ['new.example'],
+        unlistedSources: 'drop',
+      })
+    );
+  });
+
+  it('turns an old-tab emptied site list into other-sites-to-review, keeping the review list', async () => {
+    const { adapters, repo } = makeAdapters();
+    await updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, { allowedDomains: [] }, adapters);
+    expect(repo.updateConfig).toHaveBeenCalledWith(
+      'config-1',
+      LAKE_ID,
+      expect.objectContaining({ reviewDomains: ['example.com'], unlistedSources: 'review', allowedDomains: [] })
+    );
+  });
+
+  it('uses the tier fields and ignores allowedDomains when both shapes are sent', async () => {
+    const { adapters, repo } = makeAdapters();
+    await updateResearchConfig(
+      'config-1',
+      lake(),
+      actor(),
+      NO_GRANTS,
+      { reviewDomains: ['new.example'], allowedDomains: ['ignored.example'] },
+      adapters
+    );
+    expect(repo.updateConfig).toHaveBeenCalledWith(
+      'config-1',
+      LAKE_ID,
+      expect.objectContaining({ reviewDomains: ['new.example'], allowedDomains: ['new.example'] })
+    );
   });
 });
 
