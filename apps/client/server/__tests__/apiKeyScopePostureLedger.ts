@@ -273,6 +273,7 @@ export const KNOWN_UNPOSTURED = new Set<string>([
   'sessions/index.ts',
   'sessions/recent-proactive-messages.ts',
   'sessions/shared.ts',
+  // Mixed audience: user-readable keys need authentication only; the full catalog also requires ADMIN scope.
   'settings/fetch.ts',
   'settings/serverConfig.ts',
   'skills/[id]/index.ts',

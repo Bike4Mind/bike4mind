@@ -52,12 +52,13 @@ const handler = adminApi({ adminPermissions: { POST: 'users:moderate' } }).post(
     try {
       const { result, removedPasskeys, revokedDevices } = await withTransaction(async () => {
         auditWriteStarted = false;
+        // Authorize the target inside the transaction before deleting any credentials.
+        const result = await mfaService.forceResetMFA({ targetUserId: userId, adminUser }, userRepository);
+
         // A suspected-compromise reset must not leave an enrolled passkey able to satisfy MFA.
         // Removed in the same transaction as the reset, so a failure leaves MFA intact rather
         // than leaving passkeys behind a reset that succeeded.
         const removedPasskeys = await passkeyCredentialRepository.removeAllForUser(userId);
-
-        const result = await mfaService.forceResetMFA({ targetUserId: userId, adminUser }, userRepository);
 
         // This is the lost-authenticator / suspected-compromise action, and trusts are
         // deliberately not keyed on tokenVersion (see trustedDevice.ts). Leaving them alive

@@ -26,11 +26,17 @@ vi.mock('@server/utils/publicSettingsArtifact', () => ({
 }));
 
 import handler from '../fetch';
-import { SENSITIVE_SETTING_MASK, allSettingDefinitions, settingsMap, userReadableSettingKeys } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  SENSITIVE_SETTING_MASK,
+  allSettingDefinitions,
+  settingsMap,
+  userReadableSettingKeys,
+} from '@bike4mind/common';
 
-const runHandler = async (user: object = { isAdmin: true }) => {
+const runHandler = async (user: object = { isAdmin: true }, apiKeyInfo?: { scopes: string[] }) => {
   const json = vi.fn((x: unknown) => x);
-  const req = { user, logger: { info: vi.fn(), error: vi.fn() } };
+  const req = { user, apiKeyInfo, logger: { info: vi.fn(), error: vi.fn() } };
   await (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(req, { json });
   return json.mock.calls[0][0] as Array<{ settingName: string; settingValue: unknown }>;
 };
@@ -47,6 +53,25 @@ describe('settings/fetch catalog by caller', () => {
     stored = [];
     await runHandler(user);
     expect(lastFilter?.settingName.$in).toEqual(expected ?? userReadableSettingKeys());
+  });
+});
+
+describe('settings/fetch API key catalog scope', () => {
+  it.each([
+    ['full admin', { isAdmin: true }, true],
+    ['settings delegate', { isAdmin: false, adminPermissions: ['settings:manage'] }, true],
+    ['other delegate', { isAdmin: false, adminPermissions: ['support:read'] }, false],
+    ['non-admin', { isAdmin: false }, false],
+  ])('requires ADMIN scope as well as settings:manage for a %s', async (_label, user, hasSettingsPermission) => {
+    stored = [];
+    for (const scopes of [[], [ApiKeyScope.AI_CHAT], [ApiKeyScope.ADMIN]]) {
+      await runHandler(user, { scopes });
+      const expected =
+        hasSettingsPermission && scopes.includes(ApiKeyScope.ADMIN)
+          ? allSettingDefinitions().map(setting => setting.key)
+          : userReadableSettingKeys();
+      expect(lastFilter?.settingName.$in).toEqual(expected);
+    }
   });
 });
 

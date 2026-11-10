@@ -66,8 +66,13 @@ vi.mock('@server/utils/resolveDefaultEmbeddingModel', () => ({
   resolveDefaultEmbeddingModel: () => Promise.resolve('text-embedding-3-small'),
 }));
 
-import handler from '../update';
-import { formatUsdPerCredit, MIN_PRICE_PER_CREDIT_USD, SENSITIVE_SETTING_MASK } from '@bike4mind/common';
+import handler, { FULL_ADMIN_SETTING_KEYS } from '../update';
+import {
+  formatUsdPerCredit,
+  MIN_PRICE_PER_CREDIT_USD,
+  SENSITIVE_SETTING_MASK,
+  resolveSettingDefinition,
+} from '@bike4mind/common';
 import { invalidateSettingsCache } from '@bike4mind/utils';
 import { adminAuditService } from '@bike4mind/services';
 
@@ -104,19 +109,44 @@ describe('settings/update settings that constrain delegated admins', () => {
     vi.clearAllMocks();
   });
 
-  it.each(['AdminApprovalsEnabled', 'AdminApprovalCreditThreshold', 'AdminAuditCriticalGrantCredits'])(
+  it.each([...FULL_ADMIN_SETTING_KEYS])(
     'refuses a settings:manage delegate changing %s before any write',
     async key => {
       await expect(runHandler(key, 0, {}, DELEGATE)).rejects.toThrow(
         'Only full administrators can change this setting'
       );
       expect(findOneAndUpdate).not.toHaveBeenCalled();
+      expect(deleteOne).not.toHaveBeenCalled();
+      expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
     }
   );
 
-  it('lets a full admin change them', async () => {
-    stageWriteResult('AdminApprovalsEnabled', false);
-    await runHandler('AdminApprovalsEnabled', false);
+  it('protects approval, audit alerting and MFA policy settings', () => {
+    expect([...FULL_ADMIN_SETTING_KEYS]).toEqual(
+      expect.arrayContaining([
+        'AdminApprovalsEnabled',
+        'AdminApprovalBulkUserThreshold',
+        'AdminApprovalCreditThreshold',
+        'AdminApprovalExpiryHours',
+        'AdminAuditCriticalGrantCredits',
+        'AdminAuditDailyGrantCredits',
+        'SlackSecurityAlertsWebhookUrl',
+        'enforceMFA',
+        'allowTrustedDevices',
+      ])
+    );
+  });
+
+  it.each([...FULL_ADMIN_SETTING_KEYS])('lets a full admin change %s', async key => {
+    const value = resolveSettingDefinition(key)!.defaultValue;
+    stageWriteResult(key, value);
+    await runHandler(key, value, { confirmClear: true });
+    expect(findOneAndUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets a settings:manage delegate update an ordinary setting', async () => {
+    stageWriteResult('defaultEmbeddingModel', 'text-embedding-3-small');
+    await runHandler('defaultEmbeddingModel', 'text-embedding-3-small', {}, DELEGATE);
     expect(findOneAndUpdate).toHaveBeenCalledTimes(1);
   });
 });

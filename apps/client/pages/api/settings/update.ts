@@ -36,13 +36,16 @@ import { recordAdminSettingChange } from '@server/utils/adminSettingsAudit';
 let warnedSelfHostPlaintext = false;
 
 // These settings constrain delegated admins themselves, so settings:manage alone must not loosen them.
-const FULL_ADMIN_SETTING_KEYS = new Set([
+export const FULL_ADMIN_SETTING_KEYS = new Set([
   'AdminApprovalsEnabled',
   'AdminApprovalBulkUserThreshold',
   'AdminApprovalCreditThreshold',
   'AdminApprovalExpiryHours',
   'AdminAuditCriticalGrantCredits',
   'AdminAuditDailyGrantCredits',
+  'SlackSecurityAlertsWebhookUrl',
+  'enforceMFA',
+  'allowTrustedDevices',
 ]);
 
 // Update Admin Setting

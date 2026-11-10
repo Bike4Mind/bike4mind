@@ -105,6 +105,7 @@ describe('POST /api/auth/mfa/force-reset', () => {
       const { run } = post({ userId: 'target1', reason: REASON }, DELEGATE);
       await expect(run()).rejects.toBeInstanceOf(ForbiddenError);
 
+      expect(mockRemovePasskeys).not.toHaveBeenCalled();
       expect(mockRevokeDevices).not.toHaveBeenCalled();
       expect(mockRecord).not.toHaveBeenCalled();
     });
@@ -180,7 +181,7 @@ describe('POST /api/auth/mfa/force-reset', () => {
     const { res, run } = post({ userId: 'target1', reason: `  ${REASON}  ` });
     await run();
 
-    expect(txEvents).toEqual(['tx:start', 'passkeys', 'reset', 'devices', 'record', 'tx:end']);
+    expect(txEvents).toEqual(['tx:start', 'reset', 'passkeys', 'devices', 'record', 'tx:end']);
     expect(mockRecord).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
