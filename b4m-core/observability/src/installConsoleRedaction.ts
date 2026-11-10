@@ -3,6 +3,8 @@ import { redactLogText, redactLogValue } from './redactLogValue';
 const REDACTED_METHODS = ['log', 'info', 'warn', 'error', 'debug', 'trace', 'dir', 'table'] as const;
 /** `dir(obj, options)` and `table(data, columns)`: only the first argument is data. */
 const FIRST_ARG_ONLY: ReadonlySet<ConsoleMethod> = new Set(['dir', 'table']);
+/** Bounds the cause/errors chain rebuilt as real Errors; deeper links keep the plain redacted shape. */
+const MAX_ERROR_DEPTH = 5;
 
 type ConsoleMethod = (typeof REDACTED_METHODS)[number];
 type ConsoleLike = Pick<Console, ConsoleMethod>;
@@ -16,19 +18,34 @@ const INSTALLED = Symbol.for('@bike4mind/observability/consoleRedaction');
 /**
  * A top-level Error is rebuilt as a real Error from its redacted fields, so `util.inspect` keeps
  * the native stack layout. A provider error's redacted shape drops the stack, so it is scrubbed
- * from the original.
+ * from the original. An Error `cause` and AggregateError `errors` are rebuilt the same way, so Node
+ * still prints its `[cause]` and `[errors]` blocks. Never throws: on failure the plain redacted
+ * shape is logged instead.
  */
-function redactArg(arg: unknown): unknown {
+function redactArg(arg: unknown, depth = 0): unknown {
   const redacted = redactLogValue(arg);
-  if (!(arg instanceof Error) || typeof redacted !== 'object' || redacted === null) return redacted;
-  const { name, message, stack, ...rest } = redacted as Record<string, unknown>;
-  const error = new Error(typeof message === 'string' ? message : '');
-  error.name = typeof name === 'string' ? name : arg.name;
-  error.stack = typeof stack === 'string' ? stack : redactLogText(arg.stack ?? '');
-  for (const [key, value] of Object.entries(rest)) {
-    if (value !== undefined) (error as unknown as Record<string, unknown>)[key] = value;
+  try {
+    if (!(arg instanceof Error) || typeof redacted !== 'object' || redacted === null) return redacted;
+    if (depth >= MAX_ERROR_DEPTH) return redacted;
+    const { name, message, stack, cause, ...rest } = redacted as Record<string, unknown>;
+    const error = new Error(typeof message === 'string' ? message : '');
+    error.name = typeof name === 'string' ? name : arg.name;
+    error.stack = typeof stack === 'string' ? stack : redactLogText(arg.stack ?? '');
+    for (const [key, value] of Object.entries(rest)) {
+      if (value !== undefined) (error as unknown as Record<string, unknown>)[key] = value;
+    }
+    if (cause !== undefined) {
+      const rebuilt = arg.cause instanceof Error ? redactArg(arg.cause, depth + 1) : cause;
+      Object.defineProperty(error, 'cause', { value: rebuilt, configurable: true, writable: true });
+    }
+    if (arg instanceof AggregateError && Array.isArray(arg.errors)) {
+      const errors = arg.errors.map(inner => redactArg(inner, depth + 1));
+      Object.defineProperty(error, 'errors', { value: errors, configurable: true, writable: true });
+    }
+    return error;
+  } catch {
+    return redacted;
   }
-  return error;
 }
 
 /**

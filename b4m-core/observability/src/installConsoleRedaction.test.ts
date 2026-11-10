@@ -106,6 +106,35 @@ describe('installConsoleRedaction argument shapes', () => {
     expect(logged.stack).toContain('Error: rate limited for ***@example.com');
     expect(logged.stack).toContain('installConsoleRedaction.test');
   });
+
+  it('rebuilds AggregateError errors and an Error cause as real Errors', () => {
+    const target = fakeConsole();
+    const original = target.error;
+    installConsoleRedaction(target);
+    const connect = Object.assign(new Error('connect ECONNREFUSED for jane@example.com'), { code: 'ECONNREFUSED' });
+    const aggregate = new AggregateError([connect], 'all addresses failed');
+    const error = new TypeError('fetch failed', { cause: aggregate });
+    target.error(error);
+    const logged = original.mock.calls[0][0] as Error & { cause?: unknown };
+    expect(logged.cause).toBeInstanceOf(Error);
+    const cause = logged.cause as Error & { errors?: unknown[] };
+    expect(cause.message).toBe('all addresses failed');
+    expect(cause.errors).toHaveLength(1);
+    const inner = cause.errors?.[0] as Error & { code?: string };
+    expect(inner).toBeInstanceOf(Error);
+    expect(inner.message).toBe('connect ECONNREFUSED for ***@example.com');
+    expect(inner.code).toBe('ECONNREFUSED');
+  });
+
+  it('does not throw for a revoked Proxy', () => {
+    const target = fakeConsole();
+    const original = target.log;
+    installConsoleRedaction(target);
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+    expect(() => target.log(proxy)).not.toThrow();
+    expect(original).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('installConsoleRedaction with the Logger', () => {
