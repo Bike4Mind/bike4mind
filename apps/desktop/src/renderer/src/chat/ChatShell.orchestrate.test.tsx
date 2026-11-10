@@ -11,6 +11,7 @@ import type {
 } from '@shared/chat';
 import type { AttentionOpenEvent } from '@shared/attention';
 import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
+import { inheritancePolicy } from '@shared/orchestration';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
 import { ChatShell } from './ChatShell';
@@ -409,6 +410,36 @@ describe('orchestrate mode in the chat shell', () => {
     await act(async () => el('composer-orchestrate-toggle').click());
     expect(setSessionOrchestrate).toHaveBeenLastCalledWith(CODE.id, false);
     expect(query('orchestrate-example-quests')).toBeNull();
+  });
+
+  it('keeps the run policy off the composer and in the Orchestrate tooltip', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    const orchestrating = {
+      ...CODE,
+      orchestrate: true,
+      orchestrationPolicy: {
+        rootSessionId: CODE.id,
+        rootRunId: 'run-1',
+        policy: {
+          ...inheritancePolicy(),
+          roles: { implementation: 'gone', exploration: 'inherit', review: 'inherit' },
+        },
+      },
+    } as ChatSessionSummary;
+    listed = [...SESSIONS, orchestrating];
+    await openParent(CODE.title, 'code');
+    expect(el('composer-orchestrate-toggle').getAttribute('aria-pressed')).toBe('true');
+    expect(query('orchestration-policy-summary')).toBeNull();
+    expect(query('composer-orchestrate-unavailable')).not.toBeNull();
+
+    await act(async () => {
+      el('composer-orchestrate-toggle').dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      // Joy's Tooltip opens after its enter delay (100ms).
+      await new Promise(resolve => setTimeout(resolve, 150));
+    });
+    expect(el('orchestration-policy-summary').textContent).toContain(
+      'implementation: gone (unavailable; choose a replacement)'
+    );
   });
 
   it('does not offer example quests on an orchestrating session that already has a transcript', async () => {
