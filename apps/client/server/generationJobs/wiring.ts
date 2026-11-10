@@ -49,7 +49,12 @@ import {
   getSettingsValue,
 } from '@bike4mind/utils';
 import { ImageModerationBlockedError, RekognitionImageModerationService } from '@bike4mind/utils/imageModeration';
-import { createImageProviderRegistry, OpenAIImageProvider, type ImageProvider } from '@bike4mind/utils/imageProviders';
+import {
+  createImageProviderRegistry,
+  GeminiImageProvider,
+  OpenAIImageProvider,
+  type ImageProvider,
+} from '@bike4mind/utils/imageProviders';
 import {
   createMusicProviderRegistry,
   ElevenLabsMusicProvider,
@@ -213,7 +218,10 @@ const imageProcessorLambdaName = (): string | undefined => {
 };
 
 // Only the adapters that exist; a model whose provider is not registered is refused at create.
-export const buildImageProviders = (): ImageProvider[] => [new OpenAIImageProvider({ imageProcessorLambdaName })];
+export const buildImageProviders = (): ImageProvider[] => [
+  new OpenAIImageProvider({ imageProcessorLambdaName }),
+  new GeminiImageProvider(),
+];
 
 // Direct links (worker, sweep cron) win; API Lambdas only carry the sourceQueueUrls Linkable. sst's Resource
 // proxy throws on an unlinked key, hence the try.
