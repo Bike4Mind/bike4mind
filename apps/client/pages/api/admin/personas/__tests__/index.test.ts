@@ -1,0 +1,265 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+/**
+ * POST /api/admin/personas mints test personas for QA bots with the per-stage PERSONA_ADMIN_KEY.
+ * Every refusal here is a security property: no key = no endpoint, only the exact key works, the
+ * body cannot pick a username, email, role, flag or credits, and the caps hold.
+ */
+
+const KEY = 'p'.repeat(40);
+
+const h = vi.hoisted(() => ({
+  secret: { value: '' } as { value: string } | undefined,
+  production: false,
+  settings: {} as Record<string, unknown>,
+  mintedLast24h: 0,
+  live: 0,
+  createUser: vi.fn(),
+  recordAdminAction: vi.fn(),
+  issueSessionForRequest: vi.fn(),
+  disableExpiredPersonas: vi.fn(),
+}));
+
+vi.mock('@server/middlewares/baseApi', () => ({
+  baseApi: () => {
+    const routes: Record<string, (req: unknown, res: unknown) => unknown> = {};
+    const chain = Object.assign((req: { method?: string }, res: unknown) => routes[req.method ?? 'GET']?.(req, res), {
+      use: () => chain,
+      post: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((routes.POST = fns[fns.length - 1]), chain),
+    });
+    return chain;
+  },
+}));
+vi.mock('@server/middlewares/asyncHandler', () => ({
+  asyncHandler: (fn: (req: unknown, res: unknown) => unknown) => fn,
+}));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ isProduction: () => h.production }));
+vi.mock('@bike4mind/server-utils/utils/ip', () => ({ getClientIp: () => '203.0.113.9' }));
+vi.mock('@server/auth/issueSession', () => ({ issueSessionForRequest: h.issueSessionForRequest }));
+vi.mock('@server/auth/tokenGenerator', () => ({ ACCESS_TOKEN_TTL_SECONDS: 1800 }));
+vi.mock('sst', () => ({
+  Resource: {
+    get PERSONA_ADMIN_KEY() {
+      return h.secret;
+    },
+  },
+}));
+vi.mock('@bike4mind/database', () => ({
+  User: {
+    countDocuments: () => Promise.resolve(h.live),
+    find: () => ({ limit: () => ({ lean: () => Promise.resolve([]) }) }),
+  },
+  adminAuditLogRepository: { countActionsSince: () => Promise.resolve(h.mintedLast24h) },
+  adminSettingsRepository: {},
+  authSessionRepository: {},
+  realtimeConnectionRepository: {},
+  userRepository: {},
+  withTransaction: (fn: () => unknown) => fn(),
+  isTransientTransactionError: () => false,
+}));
+vi.mock('@bike4mind/services', () => ({
+  adminAuditService: { recordAdminAction: h.recordAdminAction },
+  userService: { createUser: h.createUser, revokeUserSessions: vi.fn() },
+}));
+vi.mock('@bike4mind/utils', () => ({
+  getSettingsMap: () => Promise.resolve({}),
+  getSettingsValue: (name: string, _map: unknown, fallback: unknown) =>
+    name in h.settings ? h.settings[name] : fallback,
+}));
+vi.mock('@server/personas/personaAccounts', async () => {
+  const actual = await vi.importActual<typeof import('@server/personas/personaAccounts')>(
+    '@server/personas/personaAccounts'
+  );
+  return { ...actual, disableExpiredPersonas: h.disableExpiredPersonas };
+});
+
+import handler from '../index';
+
+const makeReq = (
+  body: unknown = { name: 'alpha' },
+  headers: Record<string, string> = { 'x-persona-admin-key': KEY }
+) => ({
+  method: 'POST',
+  url: '/api/admin/personas',
+  query: {},
+  body,
+  headers,
+  logger: { error: vi.fn(), log: vi.fn(), info: vi.fn(), warn: vi.fn() },
+});
+
+const makeRes = () => {
+  const json = vi.fn();
+  const status = vi.fn(() => ({ json }));
+  return { res: { json, status } as never, json, status };
+};
+
+const post = async (...args: Parameters<typeof makeReq>) => {
+  const r = makeRes();
+  await handler(makeReq(...args) as never, r.res);
+  return r;
+};
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  h.secret = { value: KEY };
+  h.production = false;
+  h.settings = {};
+  h.mintedLast24h = 0;
+  h.live = 0;
+  delete process.env.PERSONA_ADMIN_KEY;
+  h.disableExpiredPersonas.mockResolvedValue({ disabled: 0 });
+  h.createUser.mockImplementation(async (params: { username: string; email: string }) => ({
+    id: '64b000000000000000000001',
+    username: params.username,
+    email: params.email,
+    tokenVersion: 0,
+  }));
+  h.recordAdminAction.mockResolvedValue({});
+  h.issueSessionForRequest.mockResolvedValue({ accessToken: 'at', refreshToken: 'rt', sid: 's1' });
+});
+
+describe('POST /api/admin/personas', () => {
+  describe('auth', () => {
+    it.each([
+      ['unset', undefined],
+      ['the placeholder', { value: 'not-configured' }],
+    ])('answers 404 when the stage secret is %s, so the endpoint does not exist', async (_label, secret) => {
+      h.secret = secret;
+      const { status } = await post();
+      expect(status).toHaveBeenCalledWith(404);
+      expect(h.createUser).not.toHaveBeenCalled();
+    });
+
+    it('refuses a request without the key header', async () => {
+      const { status } = await post({ name: 'alpha' }, {});
+      expect(status).toHaveBeenCalledWith(401);
+      expect(h.createUser).not.toHaveBeenCalled();
+    });
+
+    it('refuses a wrong key', async () => {
+      const { status } = await post({ name: 'alpha' }, { 'x-persona-admin-key': 'q'.repeat(40) });
+      expect(status).toHaveBeenCalledWith(401);
+    });
+
+    it('refuses a normal user API key or session token, which never reach the persona key check', async () => {
+      const { status } = await post(
+        { name: 'alpha' },
+        { authorization: 'Bearer b4m_live_0123456789abcdef', 'x-api-key': 'b4m_live_0123456789abcdef' }
+      );
+      expect(status).toHaveBeenCalledWith(401);
+      expect(h.createUser).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('fence', () => {
+    it.each([
+      ['a role', { name: 'alpha', role: 'admin' }],
+      ['the admin flag', { name: 'alpha', isAdmin: true }],
+      ['credits', { name: 'alpha', initialCredits: 5_000_000 }],
+      ['a chosen username', { name: 'alpha', username: 'erik' }],
+      ['a chosen email', { name: 'alpha', email: 'ceo@example.com' }],
+      ['isPersona: false', { name: 'alpha', isPersona: false }],
+    ])('refuses a body carrying %s', async (_label, body) => {
+      const { status } = await post(body);
+      expect(status).toHaveBeenCalledWith(400);
+      expect(h.createUser).not.toHaveBeenCalled();
+    });
+
+    it.each(['Admin', 'alpha-beta', '../x', 'a'.repeat(25)])(
+      'refuses the name %j, which would put the username outside persona-<name>-<digits>',
+      async name => {
+        const { status } = await post({ name });
+        expect(status).toHaveBeenCalledWith(400);
+        expect(h.createUser).not.toHaveBeenCalled();
+      }
+    );
+
+    it('refuses on production while PersonaEmailDomain is unset', async () => {
+      h.production = true;
+      const { status } = await post();
+      expect(status).toHaveBeenCalledWith(503);
+      expect(h.createUser).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('caps', () => {
+    it('refuses once the 24-hour mint cap is reached', async () => {
+      h.mintedLast24h = 20;
+      const { status } = await post();
+      expect(status).toHaveBeenCalledWith(429);
+      expect(h.createUser).not.toHaveBeenCalled();
+    });
+
+    it('refuses once the live persona cap is reached', async () => {
+      h.settings = { PersonaMaxLive: 3 };
+      h.live = 3;
+      const { status } = await post();
+      expect(status).toHaveBeenCalledWith(429);
+      expect(h.createUser).not.toHaveBeenCalled();
+    });
+
+    it('sweeps expired personas before counting, so they free their live slot', async () => {
+      await post();
+      expect(h.disableExpiredPersonas).toHaveBeenCalled();
+    });
+  });
+
+  describe('happy path', () => {
+    it('mints a flagged, credit-less, non-admin persona with server-built identity', async () => {
+      const { status } = await post();
+      expect(status).toHaveBeenCalledWith(201);
+      const [params] = h.createUser.mock.calls[0];
+      expect(params.username).toMatch(/^persona-alpha-\d+$/);
+      expect(params.email).toMatch(/^b4m-personaalpha-\d+-e2e@test\.com$/);
+      expect(params).toMatchObject({ isAdmin: false, initialCredits: 0, tags: [], allowReservedUsername: true });
+      expect(params.adminPermissions).toBeUndefined();
+      expect(params.record).toMatchObject({ isPersona: true, isSynthetic: true, password: null });
+      expect(params.record.personaExpiresAt).toBeInstanceOf(Date);
+    });
+
+    it('uses the configured domain on production', async () => {
+      h.production = true;
+      h.settings = { PersonaEmailDomain: 'Personas.Example.com' };
+      await post();
+      expect(h.createUser.mock.calls[0][0].email).toBe('alpha@personas.example.com');
+    });
+
+    it('audits the mint as the persona key', async () => {
+      await post();
+      expect(h.recordAdminAction).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'user.persona.created',
+          actor: expect.objectContaining({ kind: 'script', name: 'Persona admin key' }),
+          target: expect.objectContaining({ kind: 'user', id: '64b000000000000000000001' }),
+          context: expect.objectContaining({ source: 'script' }),
+        }),
+        expect.anything()
+      );
+    });
+
+    it('returns a persona-mint session for that account only, with a refresh token that dies within a day', async () => {
+      const { json } = await post();
+      const [req, userId, params] = h.issueSessionForRequest.mock.calls[0];
+      expect(req).toBeTruthy();
+      expect(userId).toBe('64b000000000000000000001');
+      expect(params.createdVia).toBe('persona-mint');
+      expect(params.refreshTtlMs).toBeLessThanOrEqual(24 * 60 * 60 * 1000);
+      expect(json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          accessToken: 'at',
+          refreshToken: 'rt',
+          accessTokenExpiresInSeconds: 1800,
+          user: expect.objectContaining({ id: '64b000000000000000000001', isPersona: true }),
+        })
+      );
+    });
+
+    it('answers 409 when that persona name already exists', async () => {
+      h.createUser.mockRejectedValue(new Error('Email already in use'));
+      const { status } = await post();
+      expect(status).toHaveBeenCalledWith(409);
+      expect(h.issueSessionForRequest).not.toHaveBeenCalled();
+    });
+  });
+});

@@ -37,6 +37,7 @@ export async function issueSessionForRequest(
     impersonationExpiresAt?: Date;
     clientId?: string | null;
     device?: IAuthSessionDevice;
+    refreshTtlMs?: number;
   }
 ): Promise<{ accessToken: string; refreshToken: string; sid: string }> {
   const session = await withAccountNotPurging(userId, () =>
@@ -49,6 +50,7 @@ export async function issueSessionForRequest(
         impersonationExpiresAt: params.impersonationExpiresAt,
         clientId: params.clientId,
         device: params.device ?? buildSessionDevice(req),
+        refreshTtlMs: params.refreshTtlMs,
       },
       {
         db: { authSessions: authSessionRepository },

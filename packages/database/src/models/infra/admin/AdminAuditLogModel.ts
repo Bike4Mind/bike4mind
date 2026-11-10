@@ -519,6 +519,12 @@ class AdminAuditLogRepository implements SubscriptionTimelineAuditLogRepository 
       .maxTimeMS(LIST_QUERY_MAX_TIME_MS);
   }
 
+  async countActionsSince(actions: readonly AdminAuditAction[], since: Date): Promise<number> {
+    return this.auditLogModel
+      .countDocuments({ action: { $in: [...actions] }, occurredAt: { $gte: since } })
+      .maxTimeMS(LIST_QUERY_MAX_TIME_MS);
+  }
+
   async sumCreditsGranted(
     actorUserId: string,
     since: Date,

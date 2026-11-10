@@ -31,6 +31,9 @@ const ROUTES_DIR = path.join(__dirname, '..', '..', 'pages', 'api', 'admin');
  */
 const NO_API_KEY_AUTH = new Set<string>([
   'emergency-login.ts',
+  // Authorized by the per-stage PERSONA_ADMIN_KEY header; persona accounts only.
+  'personas/[id].ts',
+  'personas/index.ts',
   // Authorized by the run-scoped token in its path, minted only by the gated qa/runs/[id].ts.
   'qa/report/[runId]/[token]/[...path].ts',
   'rate-limits/ingest.ts',

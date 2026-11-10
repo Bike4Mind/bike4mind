@@ -122,6 +122,8 @@ apps/client/pages/api/admin/overwatch/backfill-first-seen.ts
 apps/client/pages/api/admin/partner-signup-rules/[id].ts
 apps/client/pages/api/admin/partner-signup-rules/backfill.ts
 apps/client/pages/api/admin/partner-signup-rules/index.ts
+apps/client/pages/api/admin/personas/[id].ts  # deliberately unauthenticated (auth: false): QA bots mint and delete test personas with the per-stage PERSONA_ADMIN_KEY header (404 when unset), never a session or user API key; persona-fenced, capped, audited, rate limited
+apps/client/pages/api/admin/personas/index.ts  # deliberately unauthenticated (auth: false): QA bots mint and delete test personas with the per-stage PERSONA_ADMIN_KEY header (404 when unset), never a session or user API key; persona-fenced, capped, audited, rate limited
 apps/client/pages/api/admin/platform-usage.ts
 apps/client/pages/api/admin/platform-usage/endpoints.ts
 apps/client/pages/api/admin/pr-report/generate.ts

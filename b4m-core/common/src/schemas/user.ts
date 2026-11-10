@@ -223,6 +223,8 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   acquisition: true,
   isSynthetic: true,
   isInternal: true,
+  isPersona: true,
+  personaExpiresAt: true,
   firstValueAt: true,
   currentCredits: true,
   lastCreditsPurchasedAt: true,
