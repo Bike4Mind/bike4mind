@@ -60,7 +60,7 @@ const READY = {
   credits: 150,
   rungs: [
     { date: '2026-11-01', length: 5, hard: false },
-    { date: '2026-11-02', length: 7, hard: true },
+    { date: '2026-11-02', length: 7, hard: true, word: 'journal' },
   ],
   account: 'victor@example.com',
 };
@@ -99,6 +99,7 @@ describe('BedrockNewsClaimPage', () => {
     const rungs = screen.getAllByTestId('claim-rung');
     expect(rungs).toHaveLength(2);
     expect(rungs[0]).toHaveTextContent('2026-11-01 \u00b7 5-letter word');
+    expect(rungs[1]).toHaveTextContent('JOURNAL \u00b7 2026-11-02');
     expect(within(rungs[0]).queryByText('Hard mode')).not.toBeInTheDocument();
     expect(within(rungs[1]).getByText('Hard mode')).toBeInTheDocument();
     expect(screen.getByTestId('claim-card')).not.toHaveAttribute('aria-busy');

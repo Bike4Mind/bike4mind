@@ -36,6 +36,8 @@ interface Rung {
   date: string;
   length: number;
   hard: boolean;
+  /** The solved word; older BedrockNews builds leave it out. */
+  word?: string;
 }
 
 interface ClaimResult {
@@ -78,6 +80,10 @@ async function postClaim(url: string, ticket: string): Promise<ClaimState> {
     return toClaimState((error as { response?: { data?: unknown } })?.response?.data);
   }
 }
+
+// The preview passes rung fields through unchecked, so only a plain word of the rung's length is shown.
+const solvedWord = ({ word, length }: Rung): string | null =>
+  typeof word === 'string' && word.length === length && /^[a-z]+$/i.test(word) ? word.toUpperCase() : null;
 
 const headwordUrl = (appUrl: unknown, ticket: string | undefined) => {
   if (typeof appUrl !== 'string' || !/^https?:\/\//.test(appUrl)) return undefined;
@@ -415,30 +421,38 @@ const ReadyView = ({
           Solved words ({rungs.length})
         </Typography>
         <List sx={{ '--ListItem-paddingX': '0px', '--ListItem-minHeight': '38px', py: 0 }}>
-          {rungs.map((rung, index) => (
-            <ListItem
-              key={`${rung.date}-${rung.length}`}
-              data-testid="claim-rung"
-              sx={{
-                justifyContent: 'space-between',
-                gap: 1.25,
-                borderTop: index > 0 ? '1px solid' : 'none',
-                borderColor: 'divider',
-              }}
-            >
-              <Typography sx={{ fontSize: '14px' }}>
-                <Typography component="span" textColor="text.secondary" sx={{ fontVariantNumeric: 'tabular-nums' }}>
-                  {rung.date}
+          {rungs.map((rung, index) => {
+            const word = solvedWord(rung);
+            return (
+              <ListItem
+                key={`${rung.date}-${rung.length}`}
+                data-testid="claim-rung"
+                sx={{
+                  justifyContent: 'space-between',
+                  gap: 1.25,
+                  borderTop: index > 0 ? '1px solid' : 'none',
+                  borderColor: 'divider',
+                }}
+              >
+                <Typography textColor="text.primary" sx={{ fontSize: '14px' }}>
+                  {word && (
+                    <Typography component="span" sx={{ fontWeight: 700, letterSpacing: '0.04em' }}>
+                      {`${word} `}
+                    </Typography>
+                  )}
+                  <Typography component="span" textColor="text.secondary" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                    {word ? `\u00b7 ${rung.date}` : rung.date}
+                  </Typography>
+                  {!word && ` \u00b7 ${rung.length}-letter word`}
                 </Typography>
-                {` \u00b7 ${rung.length}-letter word`}
-              </Typography>
-              {rung.hard && (
-                <Chip size="sm" variant="soft" color="warning" sx={{ fontSize: '12px', fontWeight: 600 }}>
-                  Hard mode
-                </Chip>
-              )}
-            </ListItem>
-          ))}
+                {rung.hard && (
+                  <Chip size="sm" variant="soft" color="warning" sx={{ fontSize: '12px', fontWeight: 600 }}>
+                    Hard mode
+                  </Chip>
+                )}
+              </ListItem>
+            );
+          })}
         </List>
       </Box>
 
