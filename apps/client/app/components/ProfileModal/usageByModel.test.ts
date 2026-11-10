@@ -96,6 +96,36 @@ describe('aggregateUsageByModel', () => {
 
     const total = Object.values(usage).reduce((sum, credits) => sum + credits, 0);
     expect(total).toBeCloseTo(transactions.reduce((sum, t) => sum + Math.abs(t.credits), 0));
-    expect(usage).toEqual({ 'Claude Sonnet 5.5': 153.5, 'GPT-5.4 Mini': 10, 'retired-model': 4, Unknown: 3 });
+    expect(usage).toEqual({ 'Claude Sonnet 5.5': 153.5, 'GPT-5.4 Mini': 10, 'retired-model': 4, 'Other charges': 3 });
+  });
+
+  describe('app charges', () => {
+    const overlayLabels = { acme_security_scan: 'Security scan' };
+
+    it('labels a registered feature id, matching hyphens against underscores', () => {
+      const usage = aggregateUsageByModel(
+        [{ type: 'tool_usage', model: 'acme-security-scan', credits: -9 }],
+        models,
+        overlayLabels
+      );
+      expect(usage).toEqual({ 'Security scan': 9 });
+    });
+
+    it('humanizes an unregistered feature id and drops its namespace prefix', () => {
+      const usage = aggregateUsageByModel(
+        [
+          { type: 'generic_deduct', model: 'acme-custom-thing', credits: -2 },
+          { type: 'tool_usage', metadata: { modelName: 'acme_custom_thing' }, credits: -3 },
+        ],
+        models,
+        overlayLabels
+      );
+      expect(usage).toEqual({ 'Custom Thing': 5 });
+    });
+
+    it('keeps an unknown id on a model-usage row as the model id', () => {
+      const usage = aggregateUsageByModel([{ type: 'text_generation_usage', model: 'acme-new-model', credits: -1 }], models);
+      expect(usage).toEqual({ 'acme-new-model': 1 });
+    });
   });
 });
