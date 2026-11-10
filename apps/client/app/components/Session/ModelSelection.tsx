@@ -892,9 +892,9 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
   // other, and a bare /admin would strip ?tab= if the page is already mounted. The picker
   // lives in a modal that would otherwise stay mounted over the admin page, hence the close callback.
   const handleManageModels = useCallback(() => {
-    setAdminTab(AdminTab.LLMDashboard);
+    setAdminTab(AdminTab.Models);
     onSelectionComplete?.();
-    navigate({ to: '/admin', search: { tab: adminTabToSlug(AdminTab.LLMDashboard) } });
+    navigate({ to: '/admin', search: { tab: adminTabToSlug(AdminTab.Models) } });
   }, [navigate, onSelectionComplete, setAdminTab]);
 
   // Scroll the currently-selected model card into view on first paint so the
@@ -1422,7 +1422,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
           </Tooltip>
 
           {isAdmin && (
-            <Tooltip title="Manage models in the LLM Dashboard">
+            <Tooltip title="Manage models in Admin > Models">
               <IconButton
                 data-testid="model-selection-manage-models-btn"
                 onClick={handleManageModels}

@@ -31,7 +31,7 @@ import SecretsRotationTab from './SecretsRotationTab';
 import InviteCenter from './InviteCenter';
 import { ModelLogsTab } from './ModelLogsTab';
 import IdentityProvidersTab from './IdentityProvidersTab';
-import LLMDashboardTab from './LLMDashboardTab';
+import ModelsShell from './Models/ModelsShell';
 import RapidReplyTab from './RapidReplyTab';
 import VoiceSettingsTab from './VoiceSettingsTab';
 import DocumentationTab from './DocumentationTab';
@@ -82,7 +82,6 @@ const OAuthClientsTab = dynamic(() => import('./OAuthClientsTab'), { ssr: false 
 const PreferenceArenaTab = dynamic(() => import('./PreferenceArenaTab'), { ssr: false });
 const AdminGrowthPricingTab = dynamic(() => import('./AdminGrowthPricingTab'), { ssr: false });
 const ModelMetricsTab = dynamic(() => import('./ModelMetrics'), { ssr: false });
-const ModelLifecycleTab = dynamic(() => import('./ModelLifecycleTab'), { ssr: false });
 const EventMetricsTab = dynamic(() => import('./EventMetrics'), { ssr: false });
 const AnalyticsTab = dynamic(() => import('./Analytics'), { ssr: false });
 const SecurityDashboard = dynamic(() => import('./SecurityDashboard'), { ssr: false });
@@ -268,9 +267,6 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.ModelMetrics}>
             {activeTab === AdminTab.ModelMetrics && <ModelMetricsTab />}
           </TabPanel>
-          <TabPanel value={AdminTab.ModelLifecycle}>
-            {activeTab === AdminTab.ModelLifecycle && <ModelLifecycleTab />}
-          </TabPanel>
           <TabPanel value={AdminTab.ContextInspector}>
             {activeTab === AdminTab.ContextInspector && <ContextInspectorTab />}
           </TabPanel>
@@ -297,9 +293,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.AgentExecutions}>
             {activeTab === AdminTab.AgentExecutions && <AgentExecutionsTab />}
           </TabPanel>
-          <TabPanel value={AdminTab.LLMDashboard}>
-            {activeTab === AdminTab.LLMDashboard && <LLMDashboardTab />}
-          </TabPanel>
+          <TabPanel value={AdminTab.Models}>{activeTab === AdminTab.Models && <ModelsShell />}</TabPanel>
           <TabPanel value={AdminTab.RapidReply}>{activeTab === AdminTab.RapidReply && <RapidReplyTab />}</TabPanel>
           <TabPanel value={AdminTab.VoiceSettings}>
             {activeTab === AdminTab.VoiceSettings && <VoiceSettingsTab />}

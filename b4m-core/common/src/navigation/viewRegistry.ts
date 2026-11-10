@@ -347,12 +347,11 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'admin.llm_dashboard',
     section: 'admin',
-    label: 'LLM Dashboard',
-    description:
-      'Enable or disable LLM models, set model rank and fallback, and choose which user tags and entitlements can use each model',
+    label: 'Models',
+    description: 'Models users can pick: status, access, rank, prices and discovery',
     navigationType: 'tab',
-    target: '24', // AdminTab.LLMDashboard
-    keywords: ['llm', 'model', 'ai', 'enable model', 'model access', 'entitlements'],
+    target: '24', // AdminTab.Models
+    keywords: ['llm', 'models', 'model access', 'model pricing', 'rank', 'ai', 'dashboard', 'enable model', 'entitlements'],
     requiresAdmin: true,
   },
   {
@@ -888,9 +887,10 @@ export const VIEW_REGISTRY: NavigableView[] = [
     id: 'admin.model_lifecycle',
     section: 'admin',
     label: 'Model lifecycle',
-    description: 'Review detected LLM model deprecations, accept successor models and see stale model references',
+    description: 'Models > Discovery: discovery runs, lifecycle suggestions and stale model references',
     navigationType: 'tab',
-    target: '58', // AdminTab.ModelLifecycle
+    // AdminTab.ModelLifecycle, whose slug aliases to the Models tab's Discovery section.
+    target: '58',
     keywords: [
       'model lifecycle',
       'deprecation',

@@ -80,11 +80,11 @@ describe('useAdminTabUrlSync', () => {
   });
 
   it('applies a deep-linked tab instead of the store default', () => {
-    routerMock.search = { tab: 'llm-dashboard' };
+    routerMock.search = { tab: 'models' };
 
     const { result } = renderHook(() => useHarness(AdminTab.Users));
 
-    expect(result.current.activeTab).toBe(AdminTab.LLMDashboard);
+    expect(result.current.activeTab).toBe(AdminTab.Models);
     expect(routerMock.navigate).not.toHaveBeenCalled();
   });
 
@@ -111,6 +111,31 @@ describe('useAdminTabUrlSync', () => {
     });
   });
 
+  it('replaces a legacy llm-dashboard link with the models slug', () => {
+    routerMock.search = { tab: 'llm-dashboard' };
+
+    const { result } = renderHook(() => useHarness(AdminTab.Users));
+
+    expect(result.current.activeTab).toBe(AdminTab.Models);
+    expect(routerMock.navigate).toHaveBeenCalledTimes(1);
+    expect(lastNavigation().search({ tab: 'llm-dashboard' })).toMatchObject({
+      tab: 'models',
+      modelsSection: undefined,
+    });
+  });
+
+  it('opens the Discovery section of Models from a legacy model-lifecycle link', () => {
+    routerMock.search = { tab: 'model-lifecycle' };
+
+    const { result } = renderHook(() => useHarness(AdminTab.Users));
+
+    expect(result.current.activeTab).toBe(AdminTab.Models);
+    expect(routerMock.navigate).toHaveBeenCalledTimes(1);
+    const { replace, search } = lastNavigation();
+    expect(replace).toBe(true);
+    expect(search({ tab: 'model-lifecycle' })).toMatchObject({ tab: 'models', modelsSection: 'discovery' });
+  });
+
   it('drops the invite section when leaving the waitlist tab', () => {
     routerMock.search = { tab: 'waitlist', inviteSection: 'pending' };
     const { result } = renderHook(() => useHarness(AdminTab.Waitlist));
@@ -126,11 +151,11 @@ describe('useAdminTabUrlSync', () => {
   // Mount effects run twice in development; a first-run flag would let the store default
   // overwrite the deep link on the second pass.
   it('keeps a deep link on StrictMode double-run', () => {
-    routerMock.search = { tab: 'llm-dashboard' };
+    routerMock.search = { tab: 'models' };
 
     const { result } = renderHook(() => useHarness(AdminTab.Users), { wrapper: StrictMode });
 
-    expect(result.current.activeTab).toBe(AdminTab.LLMDashboard);
+    expect(result.current.activeTab).toBe(AdminTab.Models);
     expect(routerMock.navigate).not.toHaveBeenCalled();
   });
 
@@ -263,7 +288,7 @@ describe('useAdminTabUrlSync', () => {
 
   it("applies a delegate's deep link when the store default is a tab they cannot render", () => {
     routerMock.search = { tab: 'modals' };
-    const delegateGate: IsAdminTabRenderable = tab => tab === AdminTab.Modals || tab === AdminTab.LLMDashboard;
+    const delegateGate: IsAdminTabRenderable = tab => tab === AdminTab.Modals || tab === AdminTab.Models;
 
     const { result } = renderHook(() => useHarness(AdminTab.Dashboard, delegateGate));
 

@@ -43,6 +43,7 @@ import { parseQaStatusSearch } from './hooks/data/qaStatus';
 import { parseAdminSearch } from './components/admin/adminTabParams';
 import { legacyUserLinkRedirect, parseUserProfileSearch } from './components/admin/Users/Profile/userProfileSearch';
 import { parseSubscriptionDetailSearch } from './components/admin/Subscriptions/Detail/subscriptionDetailSearch';
+import { parseModelDetailSearch } from './components/admin/Models/modelDetailSearch';
 import { optionalStringSearchValue } from './utils/optionalStringSearchValue';
 import {
   isIntegrationsPageSource,
@@ -103,6 +104,8 @@ const HomePage = lazy(() => import('./routes/index'));
 const Admin = lazy(() => import('./routes/admin'));
 const AdminUserProfilePage = lazy(() => import('./routes/admin/users/$userId'));
 const AdminSubscriptionDetailPage = lazy(() => import('./routes/admin/subscriptions/$subscriptionId'));
+const AdminModelDetailPage = lazy(() => import('./routes/admin/models/$'));
+const AdminModelDiscoveryRunPage = lazy(() => import('./routes/admin/models/runs/$runId'));
 const AdminSubscriptionByStripeIdPage = lazy(
   () => import('./routes/admin/subscriptions/by-stripe/$stripeSubscriptionId')
 );
@@ -1261,6 +1264,22 @@ export const adminSubscriptionByStripeIdRoute = createRoute({
   component: AdminSubscriptionByStripeIdPage,
 });
 
+// Admin model detail. A splat, so model ids keep their `/`, `:` and spaces in the path (local-image/<checkpoint>,
+// Bedrock `...:0`); the Models tab's list rows open it.
+export const adminModelDetailRoute = createRoute({
+  getParentRoute: () => adminLayoutRoute,
+  path: '/admin/models/$',
+  component: AdminModelDetailPage,
+  validateSearch: parseModelDetailSearch,
+});
+
+// One model discovery run. The static `runs` segment outranks the detail splat in TanStack's ranking.
+export const adminModelDiscoveryRunRoute = createRoute({
+  getParentRoute: () => adminLayoutRoute,
+  path: '/admin/models/runs/$runId',
+  component: AdminModelDiscoveryRunPage,
+});
+
 // Email unsubscribe route - public page for managing email preferences
 const emailUnsubscribeRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -1407,6 +1426,8 @@ const routeTree = rootRoute.addChildren([
     adminUserProfileRoute,
     adminSubscriptionDetailRoute,
     adminSubscriptionByStripeIdRoute,
+    adminModelDetailRoute,
+    adminModelDiscoveryRunRoute,
   ]),
   ...builtStandalonePremiumRoutes,
   ...builtPublicPremiumRoutes,

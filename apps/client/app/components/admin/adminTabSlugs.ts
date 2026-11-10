@@ -22,6 +22,7 @@ import {
   ADMIN_WAITLIST_TAB_SLUG,
   ADMIN_WEBHOOK_AUDIT_LOGS_TAB_SLUG,
 } from './adminTabParams';
+import { MODELS_SECTION_PARAM, MODELS_TAB_SLUG } from './Models/modelsSearch';
 
 /**
  * AdminTab -> URL slug, for the console's `?tab=` param.
@@ -29,7 +30,7 @@ import {
  * `AdminTab`'s values are positional, so they must never reach a URL, and the slugs are written
  * out by hand rather than derived from the enum key names: links live in Slack messages and
  * emails, and renaming an enum member must not break them. `Record<AdminTab, string>` makes a
- * new tab without a slug a compile error. Never change an existing slug.
+ * new tab without a slug a compile error. Never drop a slug; a renamed slug stays as an alias.
  */
 const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
   [AdminTab.Dashboard]: 'dashboard',
@@ -55,7 +56,7 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
   [AdminTab.SystemPrompts]: 'system-prompts',
   [AdminTab.IdentityProviders]: 'identity-providers',
   [AdminTab.AgentOps]: 'agent-ops',
-  [AdminTab.LLMDashboard]: 'llm-dashboard',
+  [AdminTab.Models]: MODELS_TAB_SLUG,
   [AdminTab.RapidReply]: 'rapid-reply',
   [AdminTab.SecurityDashboard]: ADMIN_SECURITY_DASHBOARD_TAB_SLUG,
   [AdminTab.EmailVerification]: 'email-verification',
@@ -112,16 +113,37 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
  * lookup would resolve `?tab=toString` to an inherited Object.prototype member instead of
  * undefined - which then passes the caller's `!== undefined` guard.
  */
+type AdminTabAlias = { tab: AdminTab; search?: Readonly<Record<string, string>> };
+
+/**
+ * Slugs that shared links still carry but that no longer name their own page; useAdminTabUrlSync rewrites the URL
+ * to the current slug plus the alias's search params. Model lifecycle became the Models tab's Discovery section, so
+ * AdminTab.ModelLifecycle stays a member only to keep its slug (and the palette entry that targets it) working.
+ */
+const ADMIN_TAB_ALIASES: ReadonlyMap<string, AdminTabAlias> = new Map([
+  ['subscribers', { tab: AdminTab.Waitlist }],
+  ['llm-dashboard', { tab: AdminTab.Models }],
+  [
+    ADMIN_TAB_TO_SLUG[AdminTab.ModelLifecycle],
+    { tab: AdminTab.Models, search: { [MODELS_SECTION_PARAM]: 'discovery' } },
+  ],
+]);
+
 const SLUG_TO_ADMIN_TAB: ReadonlyMap<string, AdminTab> = new Map([
   ...Object.entries(ADMIN_TAB_TO_SLUG).map(([tab, slug]): [string, AdminTab] => [slug, Number(tab) as AdminTab]),
-  // Renamed slugs that shared links still carry; useAdminTabUrlSync rewrites the URL to the current slug.
-  ['subscribers', AdminTab.Waitlist],
+  ...[...ADMIN_TAB_ALIASES].map(([slug, alias]): [string, AdminTab] => [slug, alias.tab]),
 ]);
 
 /** Resolves a `?tab=` slug, or undefined when it is absent or not a known tab. */
 export function adminTabFromSlug(slug: string | undefined): AdminTab | undefined {
   if (!slug) return undefined;
   return SLUG_TO_ADMIN_TAB.get(slug);
+}
+
+/** The alias a legacy `?tab=` slug resolves through, or undefined for a current slug. */
+export function adminTabAlias(slug: string | undefined): AdminTabAlias | undefined {
+  if (!slug) return undefined;
+  return ADMIN_TAB_ALIASES.get(slug);
 }
 
 /**

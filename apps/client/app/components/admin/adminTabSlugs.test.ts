@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { ADMIN_AUDIT_LOG_TAB_SLUG, ADMIN_FEEDBACK_TAB_SLUG, ADMIN_USERS_TAB_SLUG } from '@bike4mind/common';
 import { AdminTab } from './adminSidebarConfig';
 import { ADMIN_WAITLIST_TAB_SLUG } from './adminTabParams';
-import { adminTabFromSlug, adminTabToSlug } from './adminTabSlugs';
+import { adminTabAlias, adminTabFromSlug, adminTabToSlug } from './adminTabSlugs';
 
 const ALL_TABS = Object.values(AdminTab).filter((value): value is AdminTab => typeof value === 'number');
 
@@ -19,7 +19,7 @@ describe('adminTabToSlug', () => {
   });
 
   it('round-trips every tab through its slug', () => {
-    for (const tab of ALL_TABS) {
+    for (const tab of ALL_TABS.filter(tab => tab !== AdminTab.ModelLifecycle)) {
       expect(adminTabFromSlug(adminTabToSlug(tab))).toBe(tab);
     }
   });
@@ -50,6 +50,17 @@ describe('adminTabFromSlug', () => {
     expect(adminTabFromSlug('subscribers')).toBe(AdminTab.Waitlist);
     expect(adminTabToSlug(AdminTab.Waitlist)).toBe(ADMIN_WAITLIST_TAB_SLUG);
     expect(ADMIN_WAITLIST_TAB_SLUG).toBe('waitlist');
+  });
+
+  it('resolves the renamed models slug and the retired model lifecycle slug to the models tab', () => {
+    expect(adminTabToSlug(AdminTab.Models)).toBe('models');
+    expect(adminTabFromSlug('models')).toBe(AdminTab.Models);
+    expect(adminTabFromSlug('llm-dashboard')).toBe(AdminTab.Models);
+    expect(adminTabAlias('llm-dashboard')).toEqual({ tab: AdminTab.Models });
+    expect(adminTabToSlug(AdminTab.ModelLifecycle)).toBe('model-lifecycle');
+    expect(adminTabFromSlug('model-lifecycle')).toBe(AdminTab.Models);
+    expect(adminTabAlias('model-lifecycle')).toEqual({ tab: AdminTab.Models, search: { modelsSection: 'discovery' } });
+    expect(adminTabAlias('models')).toBeUndefined();
   });
 
   it('resolves the users slug to the users tab', () => {

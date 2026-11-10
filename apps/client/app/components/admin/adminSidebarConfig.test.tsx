@@ -108,7 +108,7 @@ describe('findSectionKeyForTab', () => {
     expect(findSectionKeyForTab(AdminTab.EmailMarketing)).toBe('people');
     expect(findSectionKeyForTab(AdminTab.CreditAnalytics)).toBe('money');
     expect(findSectionKeyForTab(AdminTab.SecretsRotation)).toBe('trust');
-    expect(findSectionKeyForTab(AdminTab.LLMDashboard)).toBe('ai');
+    expect(findSectionKeyForTab(AdminTab.Models)).toBe('ai');
     expect(findSectionKeyForTab(AdminTab.SreAgent)).toBe('platform');
     expect(findSectionKeyForTab(AdminTab.AdminSettings)).toBe('settings');
   });

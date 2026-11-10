@@ -33,6 +33,7 @@ import {
   type WebhookAuditLogsSearch,
 } from './WebhookAuditLogs/webhookAuditLogsTabSearch';
 import { MODEL_LOGS_SEARCH_PARSERS, MODEL_LOGS_TAB_PARAMS, type ModelLogsSearch } from './modelLogsTabSearch';
+import { MODELS_SEARCH_PARSERS, MODELS_TAB_PARAMS, MODELS_TAB_SLUG, type ModelsSearch } from './Models/modelsSearch';
 import {
   ADMIN_ORGANIZATIONS_TAB_SLUG,
   ORGS_SEARCH_PARSERS,
@@ -104,6 +105,7 @@ export const ADMIN_TAB_PARAMS = {
   [ADMIN_WAITLIST_TAB_SLUG]: INVITE_CENTER_TAB_PARAMS,
   [ADMIN_STRIPE_DISPUTES_TAB_SLUG]: STRIPE_DISPUTE_TAB_PARAMS,
   [ADMIN_MODEL_METRICS_TAB_SLUG]: MODEL_METRICS_TAB_PARAMS,
+  [MODELS_TAB_SLUG]: MODELS_TAB_PARAMS,
 } as const satisfies Readonly<Record<string, readonly string[]>>;
 
 type AdminTabParam = (typeof ADMIN_TAB_PARAMS)[keyof typeof ADMIN_TAB_PARAMS][number];
@@ -123,7 +125,8 @@ type TypedAdminSearch = UsersSearch &
   OrganizationsSearch &
   SubscriptionsSearch &
   SecurityDashboardSearch &
-  InviteCenterSearch;
+  InviteCenterSearch &
+  ModelsSearch;
 
 /** Params with a typed parser; every other registered param is an optional string. */
 export type AdminSearch = Partial<Record<Exclude<AdminSearchParam, keyof TypedAdminSearch>, string>> & TypedAdminSearch;
@@ -139,6 +142,7 @@ const TYPED_PARAM_PARSERS: ReadonlyMap<string, (value: unknown, search: Record<s
     ...SUBSCRIPTIONS_SEARCH_PARSERS,
     ...SECURITY_DASHBOARD_SEARCH_PARSERS,
     ...INVITE_CENTER_SEARCH_PARSERS,
+    ...MODELS_SEARCH_PARSERS,
     ...RECORD_ID_SEARCH_PARSERS,
   })
 );
