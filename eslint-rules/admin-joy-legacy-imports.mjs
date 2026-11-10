@@ -18,7 +18,6 @@ export default {
   'CreditAnalysis/components/TransactionLedger.tsx': [[2, 'e95e565d6ab60401']],
   'CreditAnalysis/components/UsageDashboard.tsx': [[2, '647d55e913750371']],
   'CreditAnalysis/components/UserCreditsManager.tsx': [[2, '9d16c797d0b948e3']],
-  'DiscoveryRunDetailModal.tsx': [[2, '2dbf3bba4b9d6a8c']],
   'DlqReplayTab.tsx': [[2, 'c49941a37e1cc343']],
   'EventMetrics/components/CurationBreakdownTab.tsx': [[2, 'e2ae0a0feb2b939a']],
   'EventMetrics/components/OverviewTab.tsx': [[2, 'e2ae0a0feb2b939a']],

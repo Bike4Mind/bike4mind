@@ -17,7 +17,6 @@ const componentsByFile = {
   'CreditAnalysis/components/TransactionLedger.tsx': ['Table'],
   'CreditAnalysis/components/UsageDashboard.tsx': ['Table'],
   'CreditAnalysis/components/UserCreditsManager.tsx': ['Table', 'Card'],
-  'DiscoveryRunDetailModal.tsx': ['Modal', 'Table'],
   'DlqReplayTab.tsx': ['Card', 'Modal', 'Table'],
   'EventMetrics/components/CurationBreakdownTab.tsx': ['Card'],
   'EventMetrics/components/OverviewTab.tsx': ['Card'],
