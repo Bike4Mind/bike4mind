@@ -559,16 +559,6 @@
       "count": 1
     }
   },
-  "apps/client/app/components/admin/RapidReplyMetrics.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 2
-    }
-  },
-  "apps/client/app/components/admin/RapidReplyTab.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 11
-    }
-  },
   "apps/client/app/components/admin/SlackWorkspacesTab.tsx": {
     "@typescript-eslint/no-explicit-any": {
       "count": 4
