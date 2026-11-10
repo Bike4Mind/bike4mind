@@ -2,11 +2,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope } from '@bike4mind/common';
 
-const { handlers, baseOptions, release, preview } = vi.hoisted(() => ({
+const { handlers, baseOptions, release, preview, findUsers } = vi.hoisted(() => ({
   handlers: {} as Record<string, (req: unknown, res: unknown) => Promise<void>>,
   baseOptions: vi.fn(),
   release: vi.fn(),
   preview: vi.fn(),
+  findUsers: vi.fn(),
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: () => 'csrf' }));
@@ -30,7 +31,7 @@ vi.mock('@server/middlewares/adminApi', () => ({
 vi.mock('@bike4mind/services', () => ({
   userService: { MAX_BULK_RELEASE: 100, bulkReleaseHeldGrants: release, previewSignupGrantAction: preview },
 }));
-vi.mock('@bike4mind/database', () => ({ userRepository: { repo: true } }));
+vi.mock('@bike4mind/database', () => ({ userRepository: { repo: true, find: findUsers } }));
 vi.mock('@bike4mind/server-utils/credits/heldSignupGrantAdapters', () => ({
   buildHeldGrantAdapters: () => ({ grant: {} }),
   heldGrantBatches: { batches: true },
@@ -58,6 +59,7 @@ const run = async (body: unknown, isAdmin = true, user: Record<string, unknown> 
   return res;
 };
 beforeEach(() => {
+  findUsers.mockReset().mockResolvedValue([]);
   release.mockReset().mockResolvedValue({ batchId: 'b1', results: [] });
   preview.mockReset().mockResolvedValue({ dryRun: true, results: [], undoUserIds: [] });
   audit.record.mockReset();
@@ -65,6 +67,27 @@ beforeEach(() => {
 });
 
 describe('POST /api/admin/held-signup-grants/release', () => {
+  it.each([{ isAdmin: true }, { adminPermissions: ['support:read'] }])(
+    'refuses a delegate bulk release onto an admin-access target: %j',
+    async access => {
+      findUsers.mockResolvedValue([{ id: id(1) }, { id: id(2), ...access }]);
+      expect((await run({ userIds: [id(1), id(2)] }, false)).statusCode).toBe(403);
+      expect(findUsers).toHaveBeenCalledExactlyOnceWith(
+        { _id: { $in: [id(1), id(2)] } },
+        { isAdmin: 1, adminPermissions: 1 }
+      );
+      expect(release).not.toHaveBeenCalled();
+      expect(audit.record).not.toHaveBeenCalled();
+    }
+  );
+
+  it('refuses a delegate preview on an admin-access target', async () => {
+    findUsers.mockResolvedValue([{ id: id(1), isAdmin: true }]);
+    expect((await run({ userIds: [id(1)], dryRun: true }, false)).statusCode).toBe(403);
+    expect(preview).not.toHaveBeenCalled();
+    expect(release).not.toHaveBeenCalled();
+  });
+
   it('guards with the admin scope', () => {
     expect(baseOptions).toHaveBeenCalledWith({
       auth: 'jwtOnly',
@@ -151,7 +174,7 @@ describe('POST /api/admin/held-signup-grants/release', () => {
       expect(res.statusCode).toBe(200);
       expect(preview).toHaveBeenCalledExactlyOnceWith(
         { action: 'release_held', userIds: [id(1)] },
-        { users: { repo: true } }
+        { users: expect.objectContaining({ repo: true }) }
       );
       expect(release).not.toHaveBeenCalled();
       expect(audit.record).not.toHaveBeenCalled();

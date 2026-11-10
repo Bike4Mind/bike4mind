@@ -3,6 +3,7 @@ import { ApiKeyScope } from '@bike4mind/common';
 import { userRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { assertDelegateCanCreditUsers } from '@server/admin/creditGrants/delegateTargets';
 import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
@@ -43,6 +44,7 @@ const handler = adminApi({
           target: { kind: 'user', id: userId, displayName: userId },
         });
       }
+      await assertDelegateCanCreditUsers(req.user, userIds, 'release held signup grants for');
       if (parsed.data.dryRun) {
         const preview = await userService.previewSignupGrantAction(
           { action: 'release_held', userIds },

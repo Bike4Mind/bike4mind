@@ -3,6 +3,7 @@ import { ApiKeyScope } from '@bike4mind/common';
 import { creditTransactionRepository, userRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { assertDelegateCanCreditUsers } from '@server/admin/creditGrants/delegateTargets';
 import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
@@ -38,6 +39,10 @@ const handler = adminApi({
           target: { kind: 'user', id: entry.userId, displayName: entry.userId },
         });
       }
+      const userIds = batch.entries
+        .filter(entry => entry.outcome === 'released' && entry.credits > 0)
+        .map(entry => entry.userId);
+      await assertDelegateCanCreditUsers(req.user, userIds, 'revoke held signup grants for');
       const result = await userService.revokeHeldGrantRelease(
         { batchId: parsed.data.batchId, actorId: req.user.id },
         {

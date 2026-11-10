@@ -2,10 +2,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope } from '@bike4mind/common';
 
-const { handlers, baseOptions, revoke } = vi.hoisted(() => ({
+const { handlers, baseOptions, revoke, findUsers } = vi.hoisted(() => ({
   handlers: {} as Record<string, (req: unknown, res: unknown) => Promise<void>>,
   baseOptions: vi.fn(),
   revoke: vi.fn(),
+  findUsers: vi.fn(),
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: () => 'csrf' }));
@@ -26,7 +27,7 @@ vi.mock('@server/middlewares/adminApi', () => ({
     return chain;
   },
 }));
-vi.mock('@bike4mind/database', () => ({ creditTransactionRepository: {}, userRepository: {} }));
+vi.mock('@bike4mind/database', () => ({ creditTransactionRepository: {}, userRepository: { find: findUsers } }));
 vi.mock('@bike4mind/services', () => ({ userService: { revokeHeldGrantRelease: revoke } }));
 const findBatch = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/server-utils/credits/heldSignupGrantAdapters', () => ({ heldGrantBatches: { findBatch } }));
@@ -54,6 +55,7 @@ const run = async (body: unknown, isAdmin = true, user: Record<string, unknown> 
 };
 const BATCH = 'a'.repeat(24);
 beforeEach(() => {
+  findUsers.mockReset().mockResolvedValue([]);
   revoke.mockReset().mockResolvedValue({ batchId: 'b', results: [] });
   findBatch.mockReset().mockResolvedValue({
     id: BATCH,
@@ -65,6 +67,17 @@ beforeEach(() => {
 });
 
 describe('POST /api/admin/held-signup-grants/revoke', () => {
+  it.each([{ isAdmin: true }, { adminPermissions: ['support:read'] }])(
+    'refuses a delegate bulk revoke on an admin-access target: %j',
+    async access => {
+      findUsers.mockResolvedValue([{ id: 'u', ...access }]);
+      expect((await run({ batchId: BATCH }, false)).statusCode).toBe(403);
+      expect(findUsers).toHaveBeenCalledExactlyOnceWith({ _id: { $in: ['u'] } }, { isAdmin: 1, adminPermissions: 1 });
+      expect(revoke).not.toHaveBeenCalled();
+      expect(audit.record).not.toHaveBeenCalled();
+    }
+  );
+
   it('guards with the admin scope', () => {
     expect(baseOptions).toHaveBeenCalledWith({
       auth: 'jwtOnly',

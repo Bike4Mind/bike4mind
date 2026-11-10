@@ -1,4 +1,4 @@
-import { assertCanActOnAdminTarget, ForbiddenError, isFullAdmin } from '@bike4mind/common';
+import { assertCanActOnAdminTarget, ForbiddenError, isFullAdmin, NotFoundError } from '@bike4mind/common';
 import { organizationRepository, userRepository } from '@bike4mind/database';
 import { SubscriptionOwnerType, type ISubscription } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { isSelfOrImpersonator } from '@bike4mind/server-utils/utils/adminAudit';
@@ -19,6 +19,16 @@ export async function assertDelegateCanCreditUser(actor: Actor, userId: string, 
   if (isFullAdmin(actor)) return;
   if (isSelfOrImpersonator(actor, userId)) throw new ForbiddenError(`You cannot ${verb} your own account`);
   assertCanActOnAdminTarget(actor, await userRepository.findById(userId), verb);
+}
+
+/** Check a bulk request before any account in it is changed. */
+export async function assertDelegateCanCreditUsers(actor: Actor, userIds: string[], verb: string): Promise<void> {
+  if (isFullAdmin(actor) || userIds.length === 0) return;
+  if (userIds.some(userId => isSelfOrImpersonator(actor, userId))) {
+    throw new ForbiddenError(`You cannot ${verb} your own account`);
+  }
+  const users = await userRepository.find({ _id: { $in: userIds } }, { isAdmin: 1, adminPermissions: 1 });
+  for (const user of users) assertCanActOnAdminTarget(actor, user, verb);
 }
 
 export async function assertDelegateCanCreditOrganization(
@@ -46,7 +56,8 @@ export async function assertDelegateCanChangeSubscription(
   if (isFullAdmin(actor)) return;
   if (subscription.ownerType === SubscriptionOwnerType.Organization) {
     const organization = await organizationRepository.findById(subscription.ownerId);
-    if (organization) await assertDelegateCanCreditOrganization(actor, organization, verb);
+    if (!organization) throw new NotFoundError('Organization not found');
+    await assertDelegateCanCreditOrganization(actor, organization, verb);
     return;
   }
   await assertDelegateCanCreditUser(actor, subscription.ownerId, verb);

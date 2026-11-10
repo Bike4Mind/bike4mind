@@ -62,6 +62,17 @@ describe('admin release held signup grant', () => {
     expect(h.config).toEqual({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:adjust' } });
   });
 
+  it.each([{ isAdmin: true }, { adminPermissions: ['support:read'] }])(
+    'refuses a credit delegate targeting an admin-access account: %j',
+    async access => {
+      h.findById.mockResolvedValue({ id: 'user-1', ...access });
+      const req = { ...request(), user: { id: 'delegate-1', isAdmin: false, adminPermissions: ['credits:adjust'] } };
+      await expect(h.handler!(req, { json: vi.fn() })).rejects.toThrow('Only full administrators');
+      expect(h.release).not.toHaveBeenCalled();
+      expect(h.audit).not.toHaveBeenCalled();
+    }
+  );
+
   it('requires a reason before paying anything', async () => {
     await expect(h.handler!(request({ body: {} }), { json: vi.fn() })).rejects.toThrow('reason required');
     expect(h.release).not.toHaveBeenCalled();

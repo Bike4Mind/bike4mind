@@ -73,6 +73,17 @@ describe('admin signup unlock', () => {
   it('is jwt-only and gated on the credits permission', () => {
     expect(h.config).toEqual({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:adjust' } });
   });
+  it.each([{ isAdmin: true }, { adminPermissions: ['support:read'] }])(
+    'refuses a credit delegate targeting an admin-access account: %j',
+    async access => {
+      h.findById.mockResolvedValue({ id: 'user-1', ...access });
+      const req = { ...request(), user: { id: 'delegate-1', isAdmin: false, adminPermissions: ['credits:adjust'] } };
+      await expect(h.handler!(req, { json: vi.fn() })).rejects.toThrow('Only full administrators');
+      expect(h.unlock).not.toHaveBeenCalled();
+      expect(h.audit).not.toHaveBeenCalled();
+    }
+  );
+
   it('requires an audit reason', async () => {
     const req = request();
     req.body.reason = '';

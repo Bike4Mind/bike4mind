@@ -19,7 +19,7 @@ export const signupGrantAuditTarget = (userId: string, displayName: string = use
 /**
  * The checks every per-user signup grant action runs before touching the account: a valid target, no
  * self-service (denied and audited), a required reason, and - for actions that change an account's restriction
- * state (block, unblock) - the actor outranking the target. The caller has already passed adminApi's permission gate.
+ * state or release credits - the actor outranking the target. The caller has already passed adminApi's permission gate.
  */
 export async function readSignupGrantAdminAction(
   req: Request,

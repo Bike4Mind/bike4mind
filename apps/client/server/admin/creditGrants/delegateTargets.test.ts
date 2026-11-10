@@ -1,9 +1,9 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const h = vi.hoisted(() => ({ findUser: vi.fn(), findOrg: vi.fn() }));
+const h = vi.hoisted(() => ({ findUser: vi.fn(), findOrg: vi.fn(), findUsers: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
-  userRepository: { findById: h.findUser },
+  userRepository: { findById: h.findUser, find: h.findUsers },
   organizationRepository: { findById: h.findOrg },
 }));
 
@@ -12,12 +12,14 @@ import {
   assertDelegateCanChangeSubscription,
   assertDelegateCanCreditOrganization,
   assertDelegateCanCreditUser,
+  assertDelegateCanCreditUsers,
 } from './delegateTargets';
 
 const delegate = { id: 'delegate-1', isAdmin: false, adminPermissions: ['credits:adjust'] };
 const fullAdmin = { id: 'admin-1', isAdmin: true };
 
 beforeEach(() => {
+  h.findUsers.mockReset().mockResolvedValue([]);
   h.findUser.mockReset().mockResolvedValue({ id: 'user-1' });
   h.findOrg.mockReset().mockResolvedValue(null);
 });
@@ -95,5 +97,36 @@ describe('assertDelegateCanChangeSubscription', () => {
         'change'
       )
     ).rejects.toThrow('an organization you belong to');
+  });
+});
+
+describe('bulk delegate targets', () => {
+  it('loads all targets once and refuses admin-access accounts', async () => {
+    h.findUsers.mockResolvedValue([{ id: 'user-1' }, { id: 'user-2', adminPermissions: ['support:read'] }]);
+    await expect(assertDelegateCanCreditUsers(delegate, ['user-1', 'user-2'], 'credit')).rejects.toThrow(
+      'Only full administrators'
+    );
+    expect(h.findUsers).toHaveBeenCalledExactlyOnceWith(
+      { _id: { $in: ['user-1', 'user-2'] } },
+      { isAdmin: 1, adminPermissions: 1 }
+    );
+  });
+  it('does not read targets for an empty request or full admin', async () => {
+    await assertDelegateCanCreditUsers(delegate, [], 'credit');
+    await assertDelegateCanCreditUsers(fullAdmin, ['user-1'], 'credit');
+    expect(h.findUsers).not.toHaveBeenCalled();
+  });
+  it('propagates a failed target lookup', async () => {
+    h.findUsers.mockRejectedValue(new Error('lookup unavailable'));
+    await expect(assertDelegateCanCreditUsers(delegate, ['user-1'], 'credit')).rejects.toThrow('lookup unavailable');
+  });
+  it('refuses a missing organization for a delegate', async () => {
+    await expect(
+      assertDelegateCanChangeSubscription(
+        delegate,
+        { ownerType: SubscriptionOwnerType.Organization, ownerId: 'org-1' },
+        'change'
+      )
+    ).rejects.toThrow('Organization not found');
   });
 });
