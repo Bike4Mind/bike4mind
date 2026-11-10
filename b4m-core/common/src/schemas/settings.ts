@@ -602,6 +602,7 @@ export const SettingKeySchema = z.enum([
   'dataLakeVectorizeChunkBatchSize',
   'dataLakeEmbeddingTierMultiplierIndividual',
   'dataLakeEmbeddingTierMultiplierOrganization',
+  'dataLakeEmbeddingBudgetPerOwnerPeriodUsd',
 
   // LAKE ACCESS AUDIT SETTINGS
   'LakeAccessAuditRetentionDays',
@@ -1259,6 +1260,14 @@ export const DATA_LAKE_EMBEDDING_BUDGET_PER_LAKE_USD_DEFAULT = 100;
 export const DATA_LAKE_EMBEDDING_BUDGET_PER_LAKE_USD_MAX = 10_000;
 export const DATA_LAKE_EMBEDDING_BUDGET_PER_PERIOD_USD_DEFAULT = 50;
 export const DATA_LAKE_EMBEDDING_BUDGET_PER_PERIOD_USD_MAX = 5_000;
+/**
+ * Per-OWNER share of the period window: each lake owner (the organization for an org-owned lake,
+ * otherwise the creating user - see scopeForLake) gets its own fixed window of the same length,
+ * reserved BEFORE the platform window. An owner over its share pauses only its own lakes; the
+ * platform window still bounds the sum. Tiered like the per-run and per-lake budgets.
+ */
+export const DATA_LAKE_EMBEDDING_BUDGET_PER_OWNER_PERIOD_USD_DEFAULT = 5;
+export const DATA_LAKE_EMBEDDING_BUDGET_PER_OWNER_PERIOD_USD_MAX = 5_000;
 export const DATA_LAKE_EMBEDDING_BUDGET_PERIOD_HOURS_DEFAULT = 24;
 export const DATA_LAKE_EMBEDDING_BUDGET_PERIOD_HOURS_MAX = 720; // 30 days
 export const DATA_LAKE_EMBEDDING_MAX_CALLS_PER_MINUTE_DEFAULT = 120;
@@ -1300,9 +1309,9 @@ export const DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_MAX = 500;
  * operator tunes over time is literally "the ratio between them" - and so a change to the base
  * budget still moves both tiers together.
  *
- * Only the two per-resource budgets are tiered. The per-period budget and the rate limit meter
- * the whole platform through a single shared window, so they have no owner to tier by; the period
- * length and the chunk batch size are not spend values at all.
+ * The per-run, per-lake and per-owner-period budgets are tiered. The platform per-period budget
+ * and the rate limit meter the whole platform through a single shared window, so they have no
+ * owner to tier by; the period length and the chunk batch size are not spend values at all.
  *
  * Multiplier semantics follow the spend levers they scale: 0 is a valid "this tier spends nothing"
  * and the effective budget is clamped to the same MAX_* rail as the untiered value, so raising a
@@ -2266,7 +2275,7 @@ export const API_SERVICE_GROUPS = {
     description:
       'Spend levers for data-lake embedding work (ingestion, reprocessing, convergence). ' +
       'Budgets are USD; 0 means stop spending, not "use the default". The two tier multipliers ' +
-      'scale the per-run and per-lake budgets by whether a lake is individual- or organization-owned.',
+      'scale the per-run, per-lake and per-owner budgets by whether a lake is individual- or organization-owned.',
     icon: 'Savings',
     settings: [
       { key: 'dataLakeEmbeddingSpendEnabled', order: 1 },
@@ -2279,6 +2288,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'dataLakeVectorizeChunkBatchSize', order: 8 },
       { key: 'dataLakeEmbeddingTierMultiplierIndividual', order: 9 },
       { key: 'dataLakeEmbeddingTierMultiplierOrganization', order: 10 },
+      { key: 'dataLakeEmbeddingBudgetPerOwnerPeriodUsd', order: 11 },
     ],
   },
   VOICE_SESSION: {
@@ -7117,7 +7127,7 @@ export const settingsMap = {
     min: 0,
     max: DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_MAX,
     description:
-      'Scales the per-run and per-lake embedding budgets for lakes owned by an individual user. ' +
+      'Scales the per-run, per-lake and per-owner embedding budgets for lakes owned by an individual user. ' +
       '1 means those lakes get exactly the configured budgets; 0 stops them spending at all. ' +
       'The effective budget is still capped by the same hard rail as the untiered value.',
     category: 'AI',
@@ -7131,12 +7141,27 @@ export const settingsMap = {
     min: 0,
     max: DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_MAX,
     description:
-      'Scales the per-run and per-lake embedding budgets for lakes owned by an organization, ' +
+      'Scales the per-run, per-lake and per-owner embedding budgets for lakes owned by an organization, ' +
       'which serve a whole team rather than one person. 0 stops org-owned lakes spending at all. ' +
       'The effective budget is still capped by the same hard rail as the untiered value.',
     category: 'AI',
     group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
     order: 10,
+  }),
+  dataLakeEmbeddingBudgetPerOwnerPeriodUsd: makeNumberSetting({
+    key: 'dataLakeEmbeddingBudgetPerOwnerPeriodUsd',
+    name: 'Embedding Budget Per Owner Per Period (USD)',
+    defaultValue: DATA_LAKE_EMBEDDING_BUDGET_PER_OWNER_PERIOD_USD_DEFAULT,
+    min: 0,
+    max: DATA_LAKE_EMBEDDING_BUDGET_PER_OWNER_PERIOD_USD_MAX,
+    description:
+      'Most USD one lake owner (the organization for an org-owned lake, otherwise the user) may spend on ' +
+      "data-lake embedding calls per period (see the period-hours setting), scaled by that owner's cost tier. " +
+      'An owner over it pauses only its own lakes until the window resets; the platform per-period budget still ' +
+      'caps the total. 0 stops all spend.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
+    order: 11,
   }),
   // Analytics Bot (existing production bot - DO NOT CHANGE)
   slackSigningSecret: makeStringSetting({

@@ -98,6 +98,7 @@ export * from './resolveSearchBudgets';
 export * from './resolveSpendLevers';
 export * from './resolveIngestSpendScope';
 export * from './enforceEmbeddingSpendGate';
+export * from './reserveOwnerEmbeddingSpend';
 export * from './resolveLakeSpendAddressees';
 export * from './spendNotificationKeys';
 export * from './renderSpendNotificationEmail';

@@ -2,6 +2,8 @@ import {
   CreditHolderType,
   DATA_LAKE_EMBEDDING_BUDGET_PER_LAKE_USD_DEFAULT,
   DATA_LAKE_EMBEDDING_BUDGET_PER_LAKE_USD_MAX,
+  DATA_LAKE_EMBEDDING_BUDGET_PER_OWNER_PERIOD_USD_DEFAULT,
+  DATA_LAKE_EMBEDDING_BUDGET_PER_OWNER_PERIOD_USD_MAX,
   DATA_LAKE_EMBEDDING_BUDGET_PER_PERIOD_USD_DEFAULT,
   DATA_LAKE_EMBEDDING_BUDGET_PER_PERIOD_USD_MAX,
   DATA_LAKE_EMBEDDING_BUDGET_PER_RUN_USD_DEFAULT,
@@ -44,6 +46,7 @@ export const DATA_LAKE_SPEND_LEVER_KEYS = [
   'dataLakeVectorizeChunkBatchSize',
   'dataLakeEmbeddingTierMultiplierIndividual',
   'dataLakeEmbeddingTierMultiplierOrganization',
+  'dataLakeEmbeddingBudgetPerOwnerPeriodUsd',
 ] as const satisfies readonly SettingKey[];
 
 /**
@@ -58,6 +61,8 @@ export interface DataLakeSpendLevers {
   /** Tiered by lake ownership - see {@link pickTierMultiplier}. */
   perLakeBudgetMicroUsd: number;
   perPeriodBudgetMicroUsd: number;
+  /** One lake owner's share of each period window. Tiered - see {@link pickTierMultiplier}. */
+  perOwnerPeriodBudgetMicroUsd: number;
   periodHours: number;
   maxCallsPerMinute: number;
   /** The TPM half of the throughput cap. Untiered and platform-wide, like maxCallsPerMinute: it
@@ -93,7 +98,7 @@ export class SpendLeverResolutionError extends Error {
  * - settings read outage    -> SpendLeverResolutionError: fail closed
  * - value above the rail    -> clamped to the MAX_* constant, logged ("adjustable is not unbounded")
  *
- * `ownerType` selects the cost tier (#1675) applied to the two per-resource budgets: an
+ * `ownerType` selects the cost tier (#1675) applied to the per-run, per-lake and per-owner budgets: an
  * individual-owned lake and an organization-owned one are different economic cases. Omit it for a
  * caller that reads a platform-wide lever only (the chunk handler wants the batch size); see
  * {@link pickTierMultiplier} for what an absent owner means.
@@ -163,6 +168,14 @@ export async function resolveSpendLevers(
       DATA_LAKE_EMBEDDING_BUDGET_PER_PERIOD_USD_MAX,
       'dataLakeEmbeddingBudgetPerPeriodUsd',
       logger
+    ),
+    perOwnerPeriodBudgetMicroUsd: usdLeverToMicroUsd(
+      values.dataLakeEmbeddingBudgetPerOwnerPeriodUsd,
+      DATA_LAKE_EMBEDDING_BUDGET_PER_OWNER_PERIOD_USD_DEFAULT,
+      DATA_LAKE_EMBEDDING_BUDGET_PER_OWNER_PERIOD_USD_MAX,
+      'dataLakeEmbeddingBudgetPerOwnerPeriodUsd',
+      logger,
+      tierMultiplier
     ),
     periodHours: positiveIntLever(
       values.dataLakeEmbeddingBudgetPeriodHours,

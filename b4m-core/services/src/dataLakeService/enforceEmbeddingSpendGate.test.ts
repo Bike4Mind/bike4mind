@@ -6,8 +6,11 @@ import {
   EMBEDDING_SPEND_TOKEN_RATE_KEY,
   EmbeddingSpendDeniedError,
   enforceEmbeddingSpendGate,
+  type SpendGateDb,
 } from './enforceEmbeddingSpendGate';
 import { resolveSpendLevers, SpendLeverResolutionError, type DataLakeSpendLevers } from './resolveSpendLevers';
+import { ownerEmbeddingSpendKey } from './reserveOwnerEmbeddingSpend';
+import type { DataLakeSpendNotificationEvent } from './sendDataLakeSpendNotification';
 
 vi.mock('./resolveSpendLevers', async importOriginal => ({
   ...(await importOriginal<typeof import('./resolveSpendLevers')>()),
@@ -21,6 +24,7 @@ const levers = (overrides: Partial<DataLakeSpendLevers> = {}): DataLakeSpendLeve
   perRunBudgetMicroUsd: 5_000_000,
   perLakeBudgetMicroUsd: 100_000_000,
   perPeriodBudgetMicroUsd: 50_000_000,
+  perOwnerPeriodBudgetMicroUsd: 5_000_000,
   periodHours: 24,
   maxCallsPerMinute: 120,
   maxTokensPerMinute: 600_000,
@@ -72,7 +76,7 @@ describe('enforceEmbeddingSpendGate', () => {
     const db = grantAll();
     await expect(gate(db)).resolves.toBeUndefined();
 
-    // run -> lake -> period, with both throughput windows (calls, then tokens) checked first.
+    // run -> lake -> owner -> period, with both throughput windows (calls, then tokens) checked first.
     expect(db.cache.tryAddWithinLimitFixedWindow).toHaveBeenNthCalledWith(1, EMBEDDING_SPEND_RATE_KEY, 1, 120, 60_000);
     expect(db.cache.tryAddWithinLimitFixedWindow).toHaveBeenNthCalledWith(
       2,
@@ -85,6 +89,13 @@ describe('enforceEmbeddingSpendGate', () => {
     expect(db.dataLakes.tryAddEmbeddingSpendMetered).toHaveBeenCalledWith('lake1', 1_000, 100_000_000);
     expect(db.cache.tryAddWithinLimitFixedWindow).toHaveBeenNthCalledWith(
       3,
+      ownerEmbeddingSpendKey({ type: CreditHolderType.User, id: 'user1' }),
+      1_000,
+      5_000_000,
+      24 * 3_600_000
+    );
+    expect(db.cache.tryAddWithinLimitFixedWindow).toHaveBeenNthCalledWith(
+      4,
       EMBEDDING_SPEND_PERIOD_KEY,
       1_000,
       50_000_000,
@@ -566,5 +577,128 @@ describe('enforceEmbeddingSpendGate cost tier', () => {
     });
     expect(db.dataLakes.findById).not.toHaveBeenCalled();
     expect(ownerTypePassedToResolver()).toBeUndefined();
+  });
+});
+
+/**
+ * An in-memory stand-in for CacheModel.tryAddWithinLimitFixedWindow that actually meters, so the
+ * owner and platform windows interact the way they do against Mongo.
+ */
+const meteringCache = () => {
+  const counts = new Map<string, number>();
+  const expiresAt = new Date(Date.now() + 24 * 3_600_000);
+  return {
+    counts,
+    tryAddWithinLimitFixedWindow: vi.fn(async (key: string, amount: number, limit: number) => {
+      const next = (counts.get(key) ?? 0) + amount;
+      if (next > limit) return { success: false, count: counts.get(key) ?? 0, expiresAt };
+      counts.set(key, next);
+      return { success: true, count: next, expiresAt };
+    }),
+  };
+};
+
+describe('enforceEmbeddingSpendGate per-owner window', () => {
+  const lakesByOwner: Record<string, { id: string; createdByUserId: string; organizationId?: string }> = {
+    lakeA: { id: 'lakeA', createdByUserId: 'userA' },
+    lakeB: { id: 'lakeB', createdByUserId: 'userB' },
+    lakeOrg: { id: 'lakeOrg', createdByUserId: 'userA', organizationId: 'org1' },
+  };
+
+  const meteredDb = () => {
+    const base = grantAll();
+    const cache = meteringCache();
+    base.dataLakes.findById.mockImplementation(async (id: string) => lakesByOwner[id] ?? null);
+    const db: SpendGateDb = { ...base, cache: { tryAddWithinLimitFixedWindow: cache.tryAddWithinLimitFixedWindow } };
+    return { db, cache };
+  };
+
+  const gateFor = (
+    db: SpendGateDb,
+    dataLakeId: string,
+    estimatedMicroUsd: number,
+    notify?: (event: DataLakeSpendNotificationEvent) => Promise<unknown>
+  ) =>
+    enforceEmbeddingSpendGate({
+      estimatedMicroUsd,
+      estimatedTokens: 1_000,
+      dataLakeId,
+      db,
+      sleep: vi.fn().mockResolvedValue(undefined),
+      notify,
+    });
+
+  it('pauses only the owner that used up its window while another owner keeps embedding', async () => {
+    mockedLevers.mockResolvedValue(levers({ perOwnerPeriodBudgetMicroUsd: 2_000 }));
+    const { db } = meteredDb();
+
+    await expect(gateFor(db, 'lakeA', 1_500)).resolves.toBeUndefined();
+    await expect(gateFor(db, 'lakeA', 1_500)).rejects.toThrow(/lake owner's embedding budget/);
+    await expect(gateFor(db, 'lakeB', 1_500)).resolves.toBeUndefined();
+  });
+
+  it('still enforces the platform window when every owner is under its own share', async () => {
+    mockedLevers.mockResolvedValue(levers({ perOwnerPeriodBudgetMicroUsd: 2_000, perPeriodBudgetMicroUsd: 2_500 }));
+    const { db } = meteredDb();
+
+    await expect(gateFor(db, 'lakeA', 1_500)).resolves.toBeUndefined();
+    await expect(gateFor(db, 'lakeB', 1_500)).rejects.toThrow(/platform-wide embedding budget/);
+  });
+
+  it('charges an org-owned lake to the organization, not to the user who created it', async () => {
+    mockedLevers.mockResolvedValue(levers({ perOwnerPeriodBudgetMicroUsd: 2_000 }));
+    const { db, cache } = meteredDb();
+
+    await gateFor(db, 'lakeOrg', 1_500);
+    expect(cache.counts.get(ownerEmbeddingSpendKey({ type: CreditHolderType.Organization, id: 'org1' }))).toBe(1_500);
+    expect(cache.counts.has(ownerEmbeddingSpendKey({ type: CreditHolderType.User, id: 'userA' }))).toBe(false);
+    // userA's personal lake still has its own full share.
+    await expect(gateFor(db, 'lakeA', 1_500)).resolves.toBeUndefined();
+  });
+
+  it('does not reserve platform spend for a call the owner window denied', async () => {
+    mockedLevers.mockResolvedValue(levers({ perOwnerPeriodBudgetMicroUsd: 1_000 }));
+    const { db, cache } = meteredDb();
+
+    await expect(gateFor(db, 'lakeA', 1_500)).rejects.toThrow(EmbeddingSpendDeniedError);
+    expect(cache.counts.has(EMBEDDING_SPEND_PERIOD_KEY)).toBe(false);
+  });
+
+  it('notifies owner/budget_exhausted keyed on the window, carrying when it ends', async () => {
+    mockedLevers.mockResolvedValue(levers({ perOwnerPeriodBudgetMicroUsd: 2_000 }));
+    const { db } = meteredDb();
+    const notify = vi.fn().mockResolvedValue(undefined);
+
+    await gateFor(db, 'lakeA', 1_500, notify);
+    await gateFor(db, 'lakeA', 1_500, notify).catch(() => {});
+
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dataLakeId: 'lakeA',
+        kind: 'budget_exhausted',
+        scope: 'owner',
+        periodKey: expect.stringMatching(/^w:/),
+        detail: expect.objectContaining({ budgetMicroUsd: 2_000, periodHours: 24, windowEndsAt: expect.any(Date) }),
+      })
+    );
+  });
+
+  it('withholds windowEndsAt and keys on the clock when the owner budget is 0 (a stuck denial)', async () => {
+    mockedLevers.mockResolvedValue(levers({ perOwnerPeriodBudgetMicroUsd: 0 }));
+    const { db } = meteredDb();
+    const notify = vi.fn().mockResolvedValue(undefined);
+
+    await expect(gateFor(db, 'lakeA', 1, notify)).rejects.toThrow(EmbeddingSpendDeniedError);
+    const event = notify.mock.calls
+      .map(([sent]) => sent as DataLakeSpendNotificationEvent)
+      .find(sent => sent.scope === 'owner');
+    expect(event?.periodKey).toMatch(/^t:\d+$/);
+    expect(event?.detail.windowEndsAt).toBeUndefined();
+  });
+
+  it('skips the owner window when the run has no lake', async () => {
+    const { db, cache } = meteredDb();
+    await enforceEmbeddingSpendGate({ estimatedMicroUsd: 1_000, estimatedTokens: 1_000, db, sleep: vi.fn() });
+    expect([...cache.counts.keys()].some(key => key.startsWith('dataLakeEmbeddingSpend:owner:'))).toBe(false);
   });
 });
