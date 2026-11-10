@@ -37,10 +37,9 @@ import AdminSchemaSettingField from './AdminSchemaSettingField';
 import { getStructuredSetting } from './schemaSettingForm';
 import AdminSettingInputField from './AdminSettingInputField';
 import AdminStringListSettingField from './AdminStringListSettingField';
-import { AdminOperationsModelSetting } from './AdminOperationsModelSetting';
 import { AdminTurnstileStatusNotice } from './AdminTurnstileStatusNotice';
-import { AdminGenerationModelsSetting } from './AdminGenerationModelsSetting';
-import { AdminRecommendedModelsSetting } from './AdminRecommendedModelsSetting';
+import { useModelsNavigation } from './Models/modelsNavigation';
+import { MODEL_SETTINGS_ONLY_KEYS } from './Models/Settings/modelSettingsKeys';
 import { ScopedOverridesByScope } from './ScopedOverridesByScope';
 import { HOME_BY_KEY, SETTING_HOMES } from './settingHomes';
 import { useOpenSettingHome } from './useOpenSettingHome';
@@ -152,6 +151,9 @@ type SettingConfig = SettingDefinition<string>;
 // runtime shape, and the update route accepts its key once registered.
 type CoreSettingConfig = (typeof settingsMap)[keyof typeof settingsMap];
 
+const MODEL_SETTINGS_LINK_TEXT =
+  'Model discovery, default, recommended, operations, free-tier and video and music models are edited in';
+
 // Settings whose value is a list of plain strings get the one-entry-per-line editor.
 const STRING_LIST_SETTING_KEYS = new Set<string>([
   'ImageModerationReviewerEmails',
@@ -164,6 +166,7 @@ const AdminSettingsTab: React.FC = () => {
   const [allTabs, setAllTabs] = useState<boolean>(false);
   const settingsFromServer = useSettingsFromServer();
   const openSettingHome = useOpenSettingHome();
+  const { openSection } = useModelsNavigation();
   const serverConfig = useConfig();
 
   // Until the server reports this stage's list, hide every stage-gated setting rather than flash it.
@@ -218,6 +221,11 @@ const AdminSettingsTab: React.FC = () => {
     [searchTerm, matchesSearch]
   );
 
+  const modelSettingsMatchSearch = useMemo(
+    () => !!searchTerm && [...MODEL_SETTINGS_ONLY_KEYS].some(key => matchesSearch(settingsMap[key], searchTerm)),
+    [searchTerm, matchesSearch]
+  );
+
   // Keys with a home page have no editor here, so a search for one points to its home instead.
   const matchedHomes = useMemo(
     () =>
@@ -237,15 +245,12 @@ const AdminSettingsTab: React.FC = () => {
 
       if (HOME_BY_KEY.has(settingConfig.key)) return false;
 
+      if ((MODEL_SETTINGS_ONLY_KEYS as ReadonlySet<string>).has(settingConfig.key)) return false;
+
       // Hide settings that have dedicated custom UI in other admin tabs
       if (
         [
           'logoSettings',
-          // Per-model video and music toggles are rendered by <AdminGenerationModelsSetting />
-          'videoGeneration',
-          'musicGeneration',
-          // Ordered model list is rendered by <AdminRecommendedModelsSetting />
-          'recommendedModelIds',
           'RapidReplySettings',
           'SystemFiles',
           // Release notes config is edited in the Release notes tab
@@ -531,12 +536,19 @@ const AdminSettingsTab: React.FC = () => {
           </Typography>
         </Stack>
 
-        {/* Operations Model component for the AI category */}
-        {category === 'AI' && <AdminOperationsModelSetting />}
-
-        {category === 'AI' && <AdminRecommendedModelsSetting />}
-
-        {category === 'AI' && <AdminGenerationModelsSetting />}
+        {category === 'AI' && (
+          <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
+            {MODEL_SETTINGS_LINK_TEXT}{' '}
+            <Link
+              component="button"
+              onClick={() => void openSection('settings')}
+              data-testid="admin-settings-models-link"
+            >
+              Models settings
+            </Link>
+            .
+          </Typography>
+        )}
 
         {category === 'Users' && (
           <AdminTurnstileStatusNotice enabled={String(settingValueByName.get('turnstileEnabled')) === 'true'} />
@@ -628,6 +640,20 @@ const AdminSettingsTab: React.FC = () => {
               </Tooltip>
             </FormControl>
           </Stack>
+
+          {modelSettingsMatchSearch && (
+            <Typography level="body-sm" sx={{ px: '1rem', pt: 1 }} data-testid="admin-settings-search-models-hint">
+              {MODEL_SETTINGS_LINK_TEXT}{' '}
+              <Link
+                component="button"
+                onClick={() => void openSection('settings')}
+                data-testid="admin-settings-search-models-link"
+              >
+                Models settings
+              </Link>
+              .
+            </Typography>
+          )}
 
           {matchedHomes.map(home => (
             <Typography

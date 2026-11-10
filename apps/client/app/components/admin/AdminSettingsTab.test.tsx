@@ -13,7 +13,6 @@ vi.mock('@client/app/hooks/data/settings', () => ({
 }));
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
 vi.mock('./EmbeddingProviderLimits', () => ({ EmbeddingProviderLimits: () => null }));
-vi.mock('./AdminOperationsModelSetting', () => ({ AdminOperationsModelSetting: () => null }));
 vi.mock('./AdminSchemaSettingField', () => ({ default: () => null }));
 vi.mock('./AdminTurnstileStatusNotice', () => ({
   AdminTurnstileStatusNotice: ({ enabled }: { enabled: boolean }) => (
@@ -22,12 +21,6 @@ vi.mock('./AdminTurnstileStatusNotice', () => ({
 }));
 vi.mock('./ScopedOverridesByScope', () => ({ ScopedOverridesByScope: () => null }));
 vi.mock('./AdminLogoUpload', () => ({ default: () => null }));
-vi.mock('./AdminGenerationModelsSetting', () => ({
-  AdminGenerationModelsSetting: () => <div data-testid="admin-generation-models-card" />,
-}));
-vi.mock('./AdminRecommendedModelsSetting', () => ({
-  AdminRecommendedModelsSetting: () => <div data-testid="admin-recommended-models-card" />,
-}));
 vi.mock('./AdminSettingInputField', () => ({
   default: ({ setting, defaultValue }: { setting: { key: SettingKey }; defaultValue: unknown }) => (
     <div data-testid={`generic-setting-${setting.key}`} data-default-value={JSON.stringify(defaultValue)} />
@@ -51,6 +44,7 @@ vi.mock('@tanstack/react-router', () => ({
 import AdminSettingsTab from './AdminSettingsTab';
 import { HOME_BY_KEY, SETTING_HOMES } from './settingHomes';
 import { GROWTH_PRICING_SECTIONS } from './AdminGrowthPricingTab';
+import { MODEL_SETTINGS_ONLY_KEYS } from './Models/Settings/modelSettingsKeys';
 import { AdminTab } from './adminSidebarConfig';
 import { useAdminModal } from './useAdminModal';
 import { SEARCH_TERM_URL_DEBOUNCE_MS } from './shared/useAdminListUrlState';
@@ -223,22 +217,61 @@ describe('AdminSettingsTab URL state', () => {
   });
 });
 
-describe('AdminSettingsTab generation models setting', () => {
-  it('renders the bespoke generation models card and no generic video or music card', () => {
-    renderAiTab();
+describe('AdminSettingsTab model settings', () => {
+  const moved = [...MODEL_SETTINGS_ONLY_KEYS];
 
-    expect(screen.getByTestId('admin-generation-models-card')).toBeTruthy();
-    expect(screen.queryByTestId('generic-setting-videoGeneration')).toBeNull();
-    expect(screen.queryByTestId('generic-setting-musicGeneration')).toBeNull();
+  it('covers the discovery, default, free-tier and generation keys', () => {
+    for (const key of [
+      'enableModelDiscovery',
+      'modelDiscoveryMode',
+      'DefaultAPIModel',
+      'recommendedModelIds',
+      'freeTierModelGateEnabled',
+      'freeTierAllowedModels',
+      'videoGeneration',
+      'musicGeneration',
+    ] as const) {
+      expect(MODEL_SETTINGS_ONLY_KEYS.has(key), key).toBe(true);
+    }
   });
-});
 
-describe('AdminSettingsTab recommended models setting', () => {
-  it('renders the bespoke recommended models editor and no generic recommendedModelIds card', () => {
+  it.each([
+    ['AI', aiTab],
+    ['SecOps', findTab(settingsMap.freeTierModelGateEnabled.category)],
+  ] as const)('renders no editor for a moved key in the %s sections', (_name, tab) => {
+    renderTab(tab);
+
+    for (const key of moved) {
+      expect(screen.queryByTestId(`generic-setting-${key}`), key).toBeNull();
+      expect(screen.queryByTestId(`string-list-setting-${key}`), key).toBeNull();
+    }
+    expect(screen.queryByTestId('admin-generation-models-card')).toBeNull();
+  });
+
+  it('still lists the other AI settings and links to Models > Settings', () => {
     renderAiTab();
 
-    expect(screen.getByTestId('admin-recommended-models-card')).toBeTruthy();
-    expect(screen.queryByTestId('generic-setting-recommendedModelIds')).toBeNull();
+    expect(screen.getByTestId('generic-setting-agentVideoClipsPerRun')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('admin-settings-models-link'));
+    const call = router.navigate.mock.calls.at(-1)?.[0] as { to: string; search: Record<string, unknown> };
+    expect(call.to).toBe('/admin');
+    expect(call.search).toMatchObject({ tab: 'models', modelsSection: 'settings' });
+  });
+
+  it('points a search for a moved key to Models > Settings', () => {
+    router.search = { tab: 'admin-settings', q: 'free-tier model gate' };
+    renderSettings();
+
+    expect(screen.queryByTestId('generic-setting-freeTierModelGateEnabled')).toBeNull();
+    fireEvent.click(screen.getByTestId('admin-settings-search-models-link'));
+    expect(router.navigate).toHaveBeenCalledWith(expect.objectContaining({ to: '/admin' }));
+  });
+
+  it('shows no Models pointer for an unrelated search', () => {
+    router.search = { tab: 'admin-settings', q: 'slack' };
+    renderSettings();
+
+    expect(screen.queryByTestId('admin-settings-search-models-hint')).toBeNull();
   });
 });
 
