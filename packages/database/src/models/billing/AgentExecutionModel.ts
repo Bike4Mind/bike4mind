@@ -14,6 +14,8 @@ import {
   type AuthOrigin,
   AuthOriginSchema,
   type PromptMeta,
+  CONFIDENCE_GATE_MODES,
+  type ConfidenceGateMode,
 } from '@bike4mind/common';
 export { AGENT_EXECUTION_STATUSES, ACTIVE_AGENT_EXECUTION_STATUSES, type AgentExecutionStatus };
 
@@ -372,6 +374,12 @@ export interface IAgentExecution {
   profileDeniedTools?: string[];
   /** Whether the start payload pinned an agent; absent on executions predating this marker. */
   profileIsPinned?: boolean;
+  /**
+   * Confidence-gate settings resolved on the first invocation (agent -> admin defaults -> built-in).
+   * Continuations re-read them because the resolved profile does not survive a Lambda handoff.
+   * Absent on executions predating this field.
+   */
+  confidenceGate?: { threshold: number; mode: ConfidenceGateMode; selfReport: boolean };
   /**
    * The toolbelt names the first invocation resolved (profile + payload, ambient Smart Tools
    * included, denials already subtracted). Continuations replay this instead of recomputing,
@@ -813,6 +821,17 @@ const AgentExecutionSchema = new mongoose.Schema(
     // materialize [] on every doc, indistinguishable from "profile denies nothing").
     profileDeniedTools: { type: [String], default: undefined },
     profileIsPinned: { type: Boolean },
+    confidenceGate: {
+      type: new mongoose.Schema(
+        {
+          threshold: { type: Number, required: true, min: 0, max: 1 },
+          mode: { type: String, enum: CONFIDENCE_GATE_MODES, required: true },
+          selfReport: { type: Boolean, required: true },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
     resolvedEnabledTools: { type: [String], default: undefined },
     scopeDeniedTools: { type: [String], default: undefined },
     apiKeyId: { type: String },
@@ -1535,6 +1554,14 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
       { _id: id },
       { $set: { profileDeniedTools, ...(profileIsPinned !== undefined ? { profileIsPinned } : {}) } }
     );
+  }
+
+  /** Written on the first invocation; continuations re-read it (see IAgentExecution.confidenceGate). */
+  async persistConfidenceGate(
+    id: string,
+    confidenceGate: NonNullable<IAgentExecution['confidenceGate']>
+  ): Promise<void> {
+    await this.model.updateOne({ _id: id }, { $set: { confidenceGate } });
   }
 
   /** Written once on the first invocation; continuations re-read it
