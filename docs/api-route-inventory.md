@@ -36,7 +36,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-1098 routes: 91 contracted, 11 aliases of another route, 278 with no static caller in `apps/client/app`.
+1098 routes: 91 contracted, 11 aliases of another route, 274 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -44,7 +44,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | [type] | 4 | 0 | 4 | 0 | 0 | 0 | 0 |
 | account | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
 | activities | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
-| admin | 315 | 0 | 202 | 106 | 0 | 7 | 60 |
+| admin | 315 | 0 | 202 | 106 | 0 | 7 | 56 |
 | agent-executions | 2 | 0 | 2 | 0 | 0 | 0 | 0 |
 | agent-quest | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | agents | 10 | 0 | 10 | 0 | 0 | 0 | 0 |
@@ -209,7 +209,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/approvals` | GET | jwt | - | GET: `support:read` | no | - | 1: `hooks/data/adminApprovals.ts` |
 | `/api/admin/approvals/[id]/approve` | POST | jwt | - | POST: `support:read` | no | - | 1: `hooks/data/adminApprovals.ts` |
 | `/api/admin/approvals/[id]/reject` | POST | jwt | - | POST: `support:read` | no | - | 1: `hooks/data/adminApprovals.ts` |
-| `/api/admin/audit-log` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/adminAuditLog.ts` |
+| `/api/admin/audit-log` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 2: `hooks/data/adminAuditLog.ts`, `hooks/data/adminModels.ts` |
 | `/api/admin/audit-log/[id]` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/adminAuditLog.ts` |
 | `/api/admin/audit-log/alert-status` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/adminAuditLog.ts` |
 | `/api/admin/audit-log/export` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/adminAuditLog.ts` |
@@ -287,16 +287,16 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/mementos/reembed-ledger` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 0 |
 | `/api/admin/modal-tool` | POST | jwt+key | `admin:*` | - | no | - | 0 |
 | `/api/admin/modals/variants` | GET, PUT, DELETE | jwt+key | `admin:*` | GET: `settings:manage`; PUT: `settings:manage`; DELETE: `settings:manage` | no | - | 1: `hooks/data/whatsNewModals.ts` |
-| `/api/admin/model-deprecation-status` | GET, POST | jwt+key | `admin:*` | GET: `settings:manage`; POST: `settings:manage` | no | - | 1: `components/admin/ModelLifecycleTab.tsx` |
-| `/api/admin/model-discovery` | GET, POST | jwt+key | `admin:*` | GET: `support:read`; POST: `settings:manage` | no | - | 2: `components/admin/DiscoveryRunDetailModal.tsx`, `components/admin/DiscoveryStatusCard.tsx` |
+| `/api/admin/model-deprecation-status` | GET, POST | jwt+key | `admin:*` | GET: `settings:manage`; POST: `settings:manage` | no | - | 1: `components/admin/Models/Discovery/discoveryApi.ts` |
+| `/api/admin/model-discovery` | GET, POST | jwt+key | `admin:*` | GET: `support:read`; POST: `settings:manage` | no | - | 1: `components/admin/Models/Discovery/discoveryApi.ts` |
 | `/api/admin/model-hub/curated/versions` | POST | jwt+key | `admin:*` | POST: `models:curate` | no | - | 0 |
 | `/api/admin/model-logs` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/useModelLogs.ts` |
 | `/api/admin/model-logs/[id]` | GET | jwt | `admin:*` | GET: `support:read` | no | - | 1: `hooks/useModelLogs.ts` |
 | `/api/admin/model-metrics` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `components/admin/ModelMetrics/hooks/useModelMetrics.ts` |
-| `/api/admin/model-prices` | GET, POST | jwt+key | `admin:*` | GET: `support:read`; POST: `settings:manage` | no | - | 1: `components/admin/CreditAnalysis/components/ModelPricingCatalog.tsx` |
-| `/api/admin/models` | GET | jwt | `admin:*` | GET: `support:read` | no | - | 0 |
-| `/api/admin/models/access` | PATCH | jwt | - | PATCH: `settings:manage` | no | - | 0 |
-| `/api/admin/models/access/bulk` | POST | jwt | - | POST: `settings:manage` | no | - | 0 |
+| `/api/admin/model-prices` | GET, POST | jwt+key | `admin:*` | GET: `support:read`; POST: `settings:manage` | no | - | 2: `components/admin/CreditAnalysis/components/ModelPricingCatalog.tsx`, `components/admin/Models/Prices/AddPriceDialog.tsx` |
+| `/api/admin/models` | GET | jwt | `admin:*` | GET: `support:read` | no | - | 2: `components/admin/Models/Discovery/useModelIndex.ts`, `hooks/data/adminModels.ts` |
+| `/api/admin/models/access` | PATCH | jwt | - | PATCH: `settings:manage` | no | - | 1: `hooks/data/adminModels.ts` |
+| `/api/admin/models/access/bulk` | POST | jwt | - | POST: `settings:manage` | no | - | 1: `hooks/data/adminModels.ts` |
 | `/api/admin/moderation-incidents` | GET | jwt+key | `admin:*` | - | no | - | 1: `hooks/data/moderationIncidents.ts` |
 | `/api/admin/moderation-incidents/[id]/verdict` | POST | jwt+key | `admin:*` | - | no | - | 1: `hooks/data/moderationIncidents.ts` |
 | `/api/admin/moderation-incidents/[id]/view` | GET | jwt | `admin:*` | GET: `users:moderate` | no | - | 1: `hooks/data/moderationIncidents.ts` |
@@ -496,7 +496,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/users/linked-suspend-propagation` | POST | jwt | `admin:*` | POST: `users:moderate` | no | - | 1: `components/admin/Users/Profile/DetectionLinkedAccountsCard.tsx` |
 | `/api/admin/users/signup-verdicts` | GET | jwt | `admin:*` | GET: ? | no | - | 1: `components/admin/Signups/useSignupTimeseries.ts` |
 | `/api/admin/users/summary` | GET | jwt | `admin:*` | GET: ? | no | - | 1: `components/admin/Users/List/useAdminUsersList.ts` |
-| `/api/admin/users/tags` | GET | jwt | - | GET: ? | no | - | 0 |
+| `/api/admin/users/tags` | GET | jwt | - | GET: ? | no | - | 1: `hooks/data/adminModels.ts` |
 | `/api/admin/voice-agents` | GET, POST | jwt+key | `admin:*` | GET: `support:read`; POST: `settings:manage` | no | - | 1: `components/admin/VoiceSettingsTab.tsx` |
 | `/api/admin/voice-agents/[id]` | GET, PATCH, DELETE | jwt+key | `admin:*` | GET: `settings:manage`; PATCH: `settings:manage`; DELETE: `settings:manage` | no | - | 1: `components/admin/VoiceSettingsTab.tsx` |
 | `/api/admin/webhook-logs` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/webhookAuditLogs.ts` |
