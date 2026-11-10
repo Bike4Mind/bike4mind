@@ -62,6 +62,7 @@ vi.mock('./CampaignWatches/WatchAccountsButton', async importOriginal => {
           data-testid="watch-accounts-stub"
           data-label={props.label}
           data-incomplete={String(props.incomplete)}
+          data-hint={props.incompleteHint}
           disabled={props.incomplete}
         >
           Watch cohort
@@ -594,6 +595,10 @@ describe('ShadowDetectionsTab', () => {
     );
     renderTab();
     expect(screen.getByTestId('watch-accounts-stub')).toHaveAttribute('data-incomplete', 'true');
+    expect(screen.getByTestId('watch-accounts-stub')).toHaveAttribute(
+      'data-hint',
+      'This group was cut to its stored cap, so it cannot be saved as a watch.'
+    );
   });
 
   it('ignores verdict shortcuts from the nested Watch campaign dialog', async () => {

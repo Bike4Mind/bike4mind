@@ -21,6 +21,13 @@ import {
   StatusChip,
 } from '../shared';
 
+const REASON_PRESETS: Record<CampaignWatchChange['action'], string[]> = {
+  check: ['Reviewed account activity'],
+  claim: ['Take responsibility for this watch'],
+  close: ['Monitoring complete'],
+  reopen: ['Continue monitoring'],
+};
+
 function WatchCommands({ watch }: { watch: CampaignWatch }) {
   const { currentUser: user } = useUser();
   const change = useChangeCampaignWatch(watch.id);
@@ -60,11 +67,7 @@ function WatchCommands({ watch }: { watch: CampaignWatch }) {
               ? 'Records that you manually checked this group. It does not run an automated review.'
               : 'Updates this shared watch; account access and the AI verdict stay unchanged.'
           }
-          reasonPresets={
-            action === 'check'
-              ? ['Reviewed account activity']
-              : ['Monitoring complete', 'Continue monitoring', 'Take responsibility for this watch']
-          }
+          reasonPresets={REASON_PRESETS[action]}
           confirmLabel={labels[action]}
           pending={change.isPending}
           data-testid="campaign-watch-action-dialog"

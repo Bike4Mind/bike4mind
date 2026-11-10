@@ -899,6 +899,8 @@ type VerdictDialogProps = {
   onBulkResult: (result: ShadowDetectionBulkVerdictResult) => void;
 };
 
+const CAPPED_GROUP_HINT = 'This group was cut to its stored cap, so it cannot be saved as a watch.';
+
 // Choices are keyed by the row they were made for, so "Save and next" starts the next row blank while
 // the reason draft (inside ActionDialog) carries over.
 type RowChoice<T> = { rowId: string; value: T } | null;
@@ -1088,6 +1090,7 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({
           sourceDetectionId={row.id}
           label="Watch campaign"
           incomplete={row.group?.truncated}
+          incompleteHint={CAPPED_GROUP_HINT}
           onCreated={onClose}
         />
       )}
@@ -1325,7 +1328,7 @@ export const ShadowDetectionsTab: React.FC = () => {
         />
       ),
       sortable: true,
-      width: '8.5rem',
+      width: '11.5rem',
     },
     { id: 'actor', label: 'Actor', render: row => <Actor row={row} context={context} />, width: '18rem' },
     {
@@ -1366,6 +1369,7 @@ export const ShadowDetectionsTab: React.FC = () => {
           sourceDetectionId={row.id}
           label="Watch"
           incomplete={row.group?.truncated}
+          incompleteHint={CAPPED_GROUP_HINT}
         />
       )}
     </Stack>
