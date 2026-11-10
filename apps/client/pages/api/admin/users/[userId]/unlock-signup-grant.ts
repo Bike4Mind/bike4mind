@@ -15,9 +15,11 @@ import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/admi
 const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:adjust' } })
   .use(csrfProtection())
   .post(async (req, res) => {
-    const { userId, reason, target } = await readSignupGrantAdminAction(req, 'user.credits.adjusted', {
-      guardTargetVerb: 'release signup credits for',
-    });
+    const { userId, reason, target } = await readSignupGrantAdminAction(
+      req,
+      'user.credits.adjusted',
+      'release signup credits for'
+    );
     const actorId = req.user.id;
     const result = await userService.releaseRemainingSignupGrant(userId, {
       db: {
