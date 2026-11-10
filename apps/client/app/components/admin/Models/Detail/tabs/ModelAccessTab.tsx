@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import {
   Autocomplete,
   Box,
@@ -14,7 +14,7 @@ import {
 } from '@mui/joy';
 import { normalizeEntitlementKey, type AdminModelRow, type ModelAccessChange } from '@bike4mind/common';
 import { KNOWN_ENTITLEMENT_KEYS } from '@bike4mind/server-utils/lib/entitlements/registry';
-import { useAdminModelsOfType, useAdminUserTags } from '@client/app/hooks/data/adminModels';
+import { useAccessTagOptions, useAdminModelsOfType } from '@client/app/hooks/data/adminModels';
 import { Fact, SectionCard } from '../../../shared';
 import { ModelAccessDialog, ModelToggleDialog } from '../../Access/ModelAccessDialog';
 import { diffAccess, effectiveAccess } from '../../Access/modelAccessChange';
@@ -60,12 +60,7 @@ function AudienceEditor({ model, onClose }: { model: AdminModelRow; onClose: () 
   const before = effectiveAccess(model.access.entry);
   const [tags, setTags] = useState<string[]>(before.allowedUserTags);
   const [entitlements, setEntitlements] = useState<string[]>(before.allowedEntitlements);
-  const tagCounts = useAdminUserTags();
-  const entryTags = model.access.entry?.allowedUserTags;
-  const tagOptions = useMemo(
-    () => [...new Set([...(tagCounts.data ?? []).map(entry => entry.tag), ...(entryTags ?? [])])],
-    [tagCounts.data, entryTags]
-  );
+  const tagOptions = useAccessTagOptions();
   const change = diffAccess(before, { ...before, allowedUserTags: tags, allowedEntitlements: entitlements });
   return (
     <ModelAccessDialog
@@ -85,8 +80,8 @@ function AudienceEditor({ model, onClose }: { model: AdminModelRow; onClose: () 
           freeSolo
           size="sm"
           placeholder="Pick or type a tag"
-          options={tagOptions}
-          loading={tagCounts.isLoading}
+          options={tagOptions.options}
+          loading={tagOptions.isLoading}
           value={tags}
           onChange={(_event, next) => setTags(dedupe(next, value => value.trim()))}
           slotProps={{ input: { 'data-testid': 'model-access-tags-input' } }}

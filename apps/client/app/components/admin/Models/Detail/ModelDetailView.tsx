@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { Alert, Box, Button, Link, Stack, Tab, TabList, Tabs, Typography } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
 import type { AdminModelRow } from '@bike4mind/common';
-import { EntityHeader, StatStrip, StatTile, StatusChip } from '../../shared';
+import { EntityHeader, StatStrip, StatTile, StatusChip, UpdatingBar } from '../../shared';
+import { ADMIN_REGION_GAP } from '../../shared/adminStyles';
 import { ADMIN_MODEL_LOGS_TAB_SLUG, ADMIN_MODEL_METRICS_TAB_SLUG } from '../../adminTabParams';
 import { MODEL_LOGS_MODEL_PARAM } from '../../modelLogsTabSearch';
 import { MODEL_METRICS_SEARCH_KEYS } from '../../ModelMetrics/modelMetricsSearch';
@@ -60,10 +61,13 @@ export function ModelDetailView({
   model,
   tab,
   onTabChange,
+  updating = false,
 }: {
   model: AdminModelRow;
   tab: ModelDetailTab;
   onTabChange: (tab: ModelDetailTab) => void;
+  /** A refetch with this model on screen. */
+  updating?: boolean;
 }) {
   const navigate = useNavigate();
   const { openSection } = useModelsNavigation();
@@ -93,7 +97,7 @@ export function ModelDetailView({
   };
 
   return (
-    <Stack gap={2.5} data-testid="model-detail-view">
+    <Stack gap={ADMIN_REGION_GAP} data-testid="model-detail-view">
       <Breadcrumb name={model.name} onBack={() => void openSection('list')} />
       <EntityHeader
         title={model.name}
@@ -237,11 +241,12 @@ export function ModelDetailView({
             ))}
           </TabList>
         </Tabs>
+        <UpdatingBar active={updating} testId="model-detail-updating" />
         <Box
           role="tabpanel"
           id={panelId(tab)}
           aria-labelledby={tabId(tab)}
-          sx={{ pt: 2.5 }}
+          sx={{ pt: 0.5 }}
           data-testid={`model-detail-panel-${tab}`}
         >
           {panel()}

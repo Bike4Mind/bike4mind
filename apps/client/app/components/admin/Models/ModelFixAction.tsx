@@ -1,10 +1,9 @@
 import type { ReactElement } from 'react';
 import { Button } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
-import { toast } from 'sonner';
 import type { AdminModelFixAction } from '@bike4mind/common';
 import { ADMIN_SETTINGS_SEARCH_PARAM, ADMIN_SETTINGS_TAB_SLUG } from '../adminTabParams';
-import { useRunDiscoveryNow } from './Discovery/runDiscoveryNow';
+import { useRunDiscoveryWithToasts } from './Discovery/RunDiscoveryButton';
 import { MODEL_FIX_ACTION_LABEL } from './modelPresentation';
 import { ModelWriteAction } from './ModelWriteAction';
 import { useModelsNavigation } from './modelsNavigation';
@@ -19,23 +18,7 @@ type Props = {
 
 /** Starts the shared Run now, so this and the header's Run discovery disable together while a run is in flight. */
 function RunDiscoveryFix({ button }: { button: (onClick: () => void, disabled: boolean) => ReactElement }) {
-  const { runNow, announceFinished, busy } = useRunDiscoveryNow();
-  const { openSection } = useModelsNavigation();
-
-  const run = async () => {
-    const outcome = await runNow(announceFinished);
-    if (outcome.kind === 'failed') {
-      toast.error(
-        outcome.message,
-        outcome.discoveryOff
-          ? { action: { label: 'Open settings', onClick: () => void openSection('settings') } }
-          : undefined
-      );
-    } else if (outcome.kind === 'gave-up') {
-      toast(outcome.message);
-    }
-  };
-
+  const { run, busy } = useRunDiscoveryWithToasts();
   return <ModelWriteAction>{disabled => button(() => void run(), disabled || busy)}</ModelWriteAction>;
 }
 

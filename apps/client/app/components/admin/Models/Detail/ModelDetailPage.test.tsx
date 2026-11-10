@@ -50,7 +50,11 @@ const auditEntry = (id: string, at: string, summary: string) => ({
   context: { source: 'console' },
 });
 
-const serve = (rows: ReturnType<typeof modelRow>[], audit: Record<string, unknown[]> = {}) =>
+const serve = (
+  rows: ReturnType<typeof modelRow>[],
+  audit: Record<string, unknown[]> = {},
+  entries: { id: string; enabled: boolean; allowedUserTags: string[] }[] = []
+) =>
   get.mockImplementation(async (url: string, config?: { params?: Record<string, string> }) => {
     if (url === '/api/admin/models') {
       const search = config?.params?.search ?? '';
@@ -60,6 +64,7 @@ const serve = (rows: ReturnType<typeof modelRow>[], audit: Record<string, unknow
       return { data: { entries: audit[config?.params?.targetId ?? ''] ?? [], nextCursor: null } };
     }
     if (url === '/api/admin/users/tags') return { data: { tags: [{ tag: 'beta', count: 4 }] } };
+    if (url === '/api/admin/llm-models/configurations') return { data: { settingValue: entries }, headers: {} };
     throw new Error(`unexpected GET ${url}`);
   });
 
@@ -116,7 +121,10 @@ describe('ModelDetailPage', () => {
     serve([]);
     await renderModelsRoute('/admin/models/missing-model', () => null, { Detail: DetailRoute });
 
-    expect(await screen.findByTestId('model-detail-not-found')).toHaveTextContent('No model with id missing-model');
+    const notFound = await screen.findByTestId('model-detail-not-found');
+    expect(notFound).toHaveTextContent('No model with id missing-model');
+    fireEvent.click(screen.getByTestId('model-detail-not-found-back-btn'));
+    await waitFor(() => expect(screen.queryByTestId('model-detail-not-found')).not.toBeInTheDocument());
   });
 
   it('shows the status, the reason with its fix action and the access summary', async () => {
@@ -177,13 +185,8 @@ describe('ModelDetailPage', () => {
     );
   });
 
-  it('offers the tags already on the model in the tag picker', async () => {
-    serve([
-      modelRow({
-        ...offRow,
-        access: { ...offRow.access, entry: { ...offRow.access.entry!, allowedUserTags: ['legacy'] } },
-      }),
-    ]);
+  it('offers tags set only on model access entries in the tag picker', async () => {
+    serve([offRow], {}, [{ id: 'another-model', enabled: true, allowedUserTags: ['legacy'] }]);
     await renderModelsRoute(`/admin/models/${BEDROCK_ID}?tab=access`, () => null, { Detail: DetailRoute });
 
     fireEvent.click(await screen.findByTestId('model-access-audience-btn'));

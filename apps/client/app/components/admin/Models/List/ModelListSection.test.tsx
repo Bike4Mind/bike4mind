@@ -161,6 +161,15 @@ describe('ModelListSection views', () => {
     await waitFor(() => expect(listCalls().at(-1)).toMatchObject({ sort: 'rank', dir: 'desc', page: '1' }));
   });
 
+  it('shows why the models could not be loaded', async () => {
+    get.mockRejectedValue(apiFailure(503, { error: 'Model catalog is unavailable' }));
+    await renderModelsRoute('/admin?tab=models&modelsView=all', ModelListSection);
+
+    expect(await screen.findByTestId('admin-error-state')).toHaveTextContent(
+      "Couldn't load the models. Model catalog is unavailable"
+    );
+  });
+
   it('follows a deep-linked view, filters and sort', async () => {
     serveList(() => listResponse([listedRow], { viewCounts: { 'needs-review': 3 } }));
     await renderModelsRoute(
@@ -271,7 +280,8 @@ describe('ModelListSection single-model access', () => {
     expect(fix).toHaveTextContent('Run discovery');
     fireEvent.click(fix);
 
-    await waitFor(() => expect(post).toHaveBeenCalledWith('/api/admin/model-discovery'));
+    await waitFor(() => expect(useRunNowStore.getState().phase).toBe('waiting'));
+    expect(post).toHaveBeenCalledWith('/api/admin/model-discovery');
     expect(fix).toBeDisabled();
     expect(screen.queryByTestId('probe-detail')).not.toBeInTheDocument();
   });
@@ -319,6 +329,7 @@ describe('ModelListSection bulk access', () => {
       change: { addTags: ['beta'] },
     });
     expect(screen.getByTestId('models-bulk-no-audience-change')).toHaveTextContent('No audience change for 2 models');
+    expect(screen.getByTestId('models-bulk-audience')).toHaveTextContent('Afterwards 2 reach the same users');
     fireEvent.click(screen.getByTestId('models-bulk-changed-toggle-btn'));
     const [firstChanged] = screen.getAllByTestId('models-bulk-changed-item');
     expect(firstChanged).toHaveTextContent('example-text-1: Tags: none \u2192 beta');
@@ -382,12 +393,75 @@ describe('ModelListSection bulk access', () => {
     fireEvent.click(screen.getByTestId('models-bulk-dialog-confirm-btn'));
     fireEvent.click(await screen.findByRole('button', { name: 'Undo' }));
 
-    expect(await screen.findByTestId('undo-toast-error')).toHaveTextContent(
-      'Undo: Updated 1 of 2. 1 failed. 1 model not reverted.'
-    );
-    const failed = screen.getByTestId('models-bulk-failed');
+    const failed = await screen.findByTestId('models-bulk-failed');
+    expect(failed).toHaveTextContent('Undo: Updated 1 of 2. 1 failed. 1 model not reverted.');
     expect(failed).toHaveTextContent('example-text-2: changed by someone else since the preview');
-    expect(screen.queryByTestId('models-bulk-retry-btn')).not.toBeInTheDocument();
+    expect(screen.getByTestId('undo-toast-message')).toHaveTextContent('1 model not reverted.');
+    // The spent token is not offered again: a second undo would report the reverted models as moved.
+    expect(screen.queryByTestId('undo-toast-undo-btn')).not.toBeInTheDocument();
+
+    const retry = screen.getByTestId('models-bulk-retry-btn');
+    expect(retry).toHaveTextContent('Revert the rest');
+    fireEvent.click(retry);
+    await waitFor(() =>
+      expect(bulkBodies().at(-1)).toEqual({ selection: { ids: ['example-text-2'] }, change: { enabled: true } })
+    );
+    expect(screen.getByTestId('models-bulk-dialog')).toBeInTheDocument();
+    expect(screen.queryByTestId('models-bulk-failed')).not.toBeInTheDocument();
+  });
+
+  it('reverts the rest of an add-tag that removed base by removing the tag and giving base back', async () => {
+    serveList(twoRows);
+    const applied: ModelAccessBulkResult = {
+      batchId: 'b1',
+      results: [
+        { id: 'example-text-1', outcome: 'updated' },
+        { id: 'example-text-2', outcome: 'updated' },
+      ],
+      counts: { selected: 2, updated: 2, unchanged: 0, failed: 0 },
+      summary: 'Updated 2 of 2',
+      undoToken: 'undo-1',
+      revision: 'r2',
+    };
+    const undone: ModelAccessBulkResult = {
+      batchId: 'b2',
+      results: [
+        { id: 'example-text-1', outcome: 'failed', reason: 'write-error' },
+        { id: 'example-text-2', outcome: 'updated' },
+      ],
+      counts: { selected: 2, updated: 1, unchanged: 0, failed: 1 },
+      summary: 'Updated 1 of 2. 1 failed',
+      undoToken: null,
+      revision: 'r3',
+    };
+    post.mockImplementation(async (_url: string, body: { dryRunToken?: string; undoToken?: string }) => ({
+      data: body.undoToken ? undone : body.dryRunToken ? applied : dryRun(),
+    }));
+    await renderModelsRoute('/admin?tab=models&modelsView=all', ModelListSection);
+
+    await selectPage();
+    fireEvent.click(screen.getByTestId('models-bulk-add-tag-btn'));
+    const input = screen.getByTestId('models-bulk-values-input');
+    fireEvent.change(input, { target: { value: 'beta' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.click(await screen.findByTestId('models-bulk-also-remove-base-checkbox'));
+    pickReason('models-bulk-dialog');
+    await waitFor(() => expect(screen.getByTestId('models-bulk-dialog-confirm-btn')).not.toBeDisabled());
+    fireEvent.click(screen.getByTestId('models-bulk-dialog-confirm-btn'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Undo' }));
+
+    fireEvent.click(await screen.findByTestId('models-bulk-retry-btn'));
+    await waitFor(() =>
+      expect(bulkBodies().at(-1)).toEqual({
+        selection: { ids: ['example-text-1'] },
+        change: { removeTags: ['beta'], alsoRestoreBase: true },
+      })
+    );
+    const restore = screen.getByTestId('models-bulk-also-restore-base-checkbox');
+    expect(restore).toBeChecked();
+    fireEvent.click(restore);
+    await waitFor(() => expect(bulkBodies().at(-1)).toMatchObject({ change: { removeTags: ['beta'] } }));
+    expect(bulkBodies().at(-1)).not.toHaveProperty('change.alsoRestoreBase');
   });
 
   it('reports failed models and retries only those through a fresh dry run', async () => {
@@ -426,6 +500,47 @@ describe('ModelListSection bulk access', () => {
     await waitFor(() =>
       expect(bulkBodies().at(-1)).toEqual({ selection: { ids: ['example-text-2'] }, change: { enabled: false } })
     );
+  });
+
+  it('dismisses the failed-models report', async () => {
+    serveList(twoRows);
+    const result: ModelAccessBulkResult = {
+      batchId: 'b1',
+      results: [{ id: 'example-text-2', outcome: 'failed', reason: 'write-error' }],
+      counts: { selected: 2, updated: 0, unchanged: 1, failed: 1 },
+      summary: 'Updated 0 of 1. 1 failed',
+      undoToken: null,
+      revision: null,
+    };
+    post.mockImplementation(async (_url: string, body: { dryRunToken?: string }) => ({
+      data: body.dryRunToken ? result : dryRun(),
+    }));
+    await renderModelsRoute('/admin?tab=models&modelsView=all', ModelListSection);
+
+    await selectPage();
+    fireEvent.click(screen.getByTestId('models-bulk-turn-off-btn'));
+    await screen.findByTestId('models-bulk-summary');
+    pickReason('models-bulk-dialog');
+    fireEvent.click(screen.getByTestId('models-bulk-dialog-confirm-btn'));
+
+    await screen.findByTestId('models-bulk-failed');
+    fireEvent.click(screen.getByTestId('models-bulk-failed-dismiss-btn'));
+    expect(screen.queryByTestId('models-bulk-failed')).not.toBeInTheDocument();
+  });
+
+  it('retries a failed preview', async () => {
+    serveList(twoRows);
+    post.mockRejectedValueOnce(apiFailure(500, { error: 'Preview store is down' }));
+    post.mockResolvedValue({ data: dryRun() });
+    await renderModelsRoute('/admin?tab=models&modelsView=all', ModelListSection);
+
+    await selectPage();
+    fireEvent.click(screen.getByTestId('models-bulk-turn-off-btn'));
+    expect(await screen.findByTestId('models-bulk-preview-error')).toHaveTextContent('Preview store is down');
+
+    fireEvent.click(screen.getByTestId('models-bulk-preview-retry-btn'));
+    expect(await screen.findByTestId('models-bulk-summary')).toHaveTextContent('Turn off: 2 change');
+    expect(bulkBodies()).toHaveLength(2);
   });
 
   it('swaps in the fresh dry run a 409 carries and asks for a second look', async () => {
@@ -491,16 +606,44 @@ describe('ModelListSection bulk access', () => {
     expect(screen.queryByTestId('models-bulk-apply-error')).not.toBeInTheDocument();
   });
 
-  it('suggests tags already on the selected models alongside the tags users hold', async () => {
-    const taggedRow = modelRow({
-      access: {
-        entry: { enabled: true, allowedUserTags: ['legacy'], allowedEntitlements: [], updatedAt: null },
-        everyone: false,
-        adminsOnly: false,
-        freeTierLocked: false,
-      },
+  it('drops the server admins-only list once a fresh dry run replaces the one it was for', async () => {
+    serveList(twoRows);
+    const fresh = dryRun({ token: 'token-2', counts: { ...dryRun().counts, change: 1, unchanged: 1 } });
+    let applies = 0;
+    post.mockImplementation(async (_url: string, body: { dryRunToken?: string }) => {
+      if (!body.dryRunToken) return { data: dryRun() };
+      applies += 1;
+      if (applies === 1) throw apiFailure(422, { error: 'Only admins', adminOnlyIds: ['example-text-1'] });
+      throw apiFailure(409, { error: 'Access changed', dryRun: fresh });
     });
-    serveList(() => listResponse([taggedRow, reviewRow]));
+    await renderModelsRoute('/admin?tab=models&modelsView=all', ModelListSection);
+
+    await selectPage();
+    fireEvent.click(screen.getByTestId('models-bulk-turn-on-btn'));
+    await screen.findByTestId('models-bulk-summary');
+    pickReason('models-bulk-dialog');
+    fireEvent.click(screen.getByTestId('models-bulk-dialog-confirm-btn'));
+    expect(await screen.findByTestId('models-bulk-admin-only')).toHaveTextContent('example-text-1');
+    fireEvent.click(screen.getByTestId('models-bulk-admin-only-checkbox'));
+    fireEvent.click(screen.getByTestId('models-bulk-dialog-confirm-btn'));
+
+    expect(await screen.findByTestId('models-bulk-stale')).toBeInTheDocument();
+    expect(screen.queryByTestId('models-bulk-admin-only')).not.toBeInTheDocument();
+    expect(screen.getByTestId('models-bulk-dialog-confirm-btn')).not.toBeDisabled();
+  });
+
+  it('suggests tags set only on model access entries alongside the tags users hold', async () => {
+    get.mockImplementation(async (url: string) => {
+      if (url === '/api/admin/models') return { data: twoRows() };
+      if (url === '/api/admin/users/tags') return { data: { tags: [{ tag: 'beta', count: 37 }] } };
+      if (url === '/api/admin/llm-models/configurations') {
+        return {
+          data: { settingValue: [{ id: 'another-model', enabled: true, allowedUserTags: ['legacy'] }] },
+          headers: {},
+        };
+      }
+      throw new Error(`unexpected GET ${url}`);
+    });
     post.mockResolvedValue({ data: dryRun() });
     await renderModelsRoute('/admin?tab=models&modelsView=all', ModelListSection);
 

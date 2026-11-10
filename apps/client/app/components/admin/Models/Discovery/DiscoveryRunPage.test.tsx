@@ -18,17 +18,22 @@ import type { DiscoveryRun, RunPriceRow } from './discoveryApi';
 
 const m = vi.hoisted(() => ({
   get: vi.fn(),
+  post: vi.fn(),
   currentUser: { id: 'admin-1', isAdmin: true } as Record<string, unknown>,
   nav: { openModel: vi.fn(), openRun: vi.fn(), openSection: vi.fn(), openPrices: vi.fn() },
   navigate: vi.fn(),
 }));
 
-vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: (...a: unknown[]) => m.get(...a) } }));
+vi.mock('@client/app/contexts/ApiContext', () => ({
+  api: { get: (...a: unknown[]) => m.get(...a), post: (...a: unknown[]) => m.post(...a) },
+}));
+vi.mock('sonner', () => ({ toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }) }));
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: m.currentUser }) }));
 vi.mock('../modelsNavigation', () => ({ useModelsNavigation: () => m.nav }));
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => m.navigate }));
 
 import { DiscoveryRunPage } from './DiscoveryRunPage';
+import { useRunNowStore } from './runDiscoveryNow';
 
 let queryClient = newQueryClient();
 let run: DiscoveryRun | Error | ReturnType<typeof apiError> = RUN;
@@ -163,7 +168,6 @@ describe('DiscoveryRunPage decisions', () => {
   it.each([
     ['price-none', 'add-price', 'Add price', 'openPrices', 'gpt-new'],
     ['lifecycle-suggestion', 'review-lifecycle', 'Review suggestion', 'openSection', 'discovery'],
-    ['awaiting-discovery-run', 'run-discovery', 'Run discovery', 'openSection', 'discovery'],
   ] as const)('renders the server fix action for a %s reason (%s)', async (code, fixAction, label, navCall, navArg) => {
     run = runWith({ priceFlags: [], changes: { ...EMPTY_CHANGES, added: ['gpt-new'] } });
     rows = [needsReview('gpt-new', code, 'The reason the server wrote', fixAction)];
@@ -175,6 +179,28 @@ describe('DiscoveryRunPage decisions', () => {
     expect(action).toHaveAttribute('data-action', fixAction);
     fireEvent.click(action);
     expect(m.nav[navCall]).toHaveBeenCalledWith(navArg);
+  });
+
+  it('starts a discovery run from a run-discovery fix action', async () => {
+    run = runWith({ priceFlags: [], changes: { ...EMPTY_CHANGES, added: ['gpt-new'] } });
+    rows = [needsReview('gpt-new', 'awaiting-discovery-run', 'The reason the server wrote', 'run-discovery')];
+    const served = m.get.getMockImplementation()!;
+    m.get.mockImplementation(async (url: string, config?: { params?: { runId?: string } }) =>
+      url === '/api/admin/model-discovery' && !config ? { data: { enabled: true, lastRun: null } } : served(url, config)
+    );
+    m.post.mockResolvedValue({ data: { dispatched: 'lambda' } });
+    const { unmount } = await renderLoaded();
+
+    const action = screen.getByTestId('discovery-decision-action-gpt-new');
+    expect(action).toHaveTextContent('Run discovery');
+    fireEvent.click(action);
+
+    await waitFor(() => expect(useRunNowStore.getState().phase).toBe('waiting'));
+    expect(m.post).toHaveBeenCalledWith('/api/admin/model-discovery');
+    expect(action).toBeDisabled();
+    expect(m.nav.openSection).not.toHaveBeenCalled();
+    unmount();
+    await waitFor(() => expect(useRunNowStore.getState().phase).toBe('idle'));
   });
 
   it('opens key settings for the model provider', async () => {
@@ -344,7 +370,9 @@ describe('DiscoveryRunPage what changed', () => {
     expect(lifecycle).toHaveTextContent('Active to deprecated, deprecates 2026-08-01, replaced by GPT Live');
     expect(lifecycle).toHaveTextContent('Applied');
 
-    fireEvent.click(within(screen.getByTestId('discovery-changed-added-gpt-new')).getByRole('button'));
+    fireEvent.click(
+      within(screen.getByTestId('discovery-changed-added-gpt-new')).getByTestId('discovery-changed-open-model-link')
+    );
     expect(m.nav.openModel).toHaveBeenCalledWith('gpt-new');
   });
 

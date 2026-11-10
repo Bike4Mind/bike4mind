@@ -67,7 +67,14 @@ import {
 import { MODELS_LIST_SEARCH_KEYS, parseModelSort, parseModelView } from '../modelsSearch';
 import { useModelsNavigation } from '../modelsNavigation';
 import { ModelBulkAccessDialog, type ModelBulkApplied, type ModelBulkRequest } from './ModelBulkAccessDialog';
-import { BULK_FAILURE_LABEL, MODEL_BULK_KINDS, MODEL_BULK_LABEL, countOf, failedResults } from './modelBulkAccess';
+import {
+  BULK_FAILURE_LABEL,
+  MODEL_BULK_KINDS,
+  MODEL_BULK_LABEL,
+  countOf,
+  failedResults,
+  reverseBulkChange,
+} from './modelBulkAccess';
 
 const DEFAULT_PAGE_SIZE = 50;
 const SEARCH_MAX = 200;
@@ -94,8 +101,13 @@ const positiveInt = (value: string, fallback: number) => {
 };
 
 type AccessEdit = { target: ModelAccessTarget; change: ModelAccessChange; title: string; confirmLabel: string };
-/** Models a bulk apply or its undo could not write; `retry` is the apply to rerun on just those. */
-type BulkOutcome = { summary: string; failed: ReturnType<typeof failedResults>; retry?: ModelBulkApplied };
+/** Models a bulk apply or its undo could not write, and the bulk change that retries just those. */
+type BulkOutcome = {
+  summary: string;
+  failed: ReturnType<typeof failedResults>;
+  retry: ModelBulkRequest;
+  retryLabel: string;
+};
 
 const toggleEdit = (row: AdminModelRow): AccessEdit => {
   const on = effectiveAccess(row.access.entry).enabled;
@@ -178,19 +190,28 @@ export function ModelListSection() {
   const selectedCount = selection.mode === 'allMatching' ? total : selection.ids.length;
   const bulkSelection = (): ModelAccessSelection =>
     selection.mode === 'allMatching' ? { filter: { ...baseFilter, view } } : { ids: [...selection.ids] };
-  const selectedEntryTags = () => {
-    const rows = data?.models ?? [];
-    const picked = selection.mode === 'allMatching' ? rows : rows.filter(row => selection.ids.includes(row.id));
-    return [...new Set(picked.flatMap(row => row.access.entry?.allowedUserTags ?? []))];
-  };
 
   const onBulkApplied = (applied: ModelBulkApplied) => {
-    const { result, reason } = applied;
+    const { request, result, reason, values, alsoRemoveBase, alsoRestoreBase } = applied;
     setBulk(null);
     setSelection(NO_SELECTION);
     void invalidate();
     const failed = failedResults(result);
-    setOutcome(failed.length > 0 ? { summary: result.summary, failed, retry: applied } : null);
+    const retryOn = (entries: typeof failed) => ({
+      selection: { ids: entries.map(entry => entry.id) },
+      count: entries.length,
+      values,
+    });
+    setOutcome(
+      failed.length > 0
+        ? {
+            summary: result.summary,
+            failed,
+            retry: { kind: request.kind, ...retryOn(failed), alsoRemoveBase, alsoRestoreBase },
+            retryLabel: 'Retry failed',
+          }
+        : null
+    );
     const { undoToken } = result;
     showUndo({
       message: `${result.summary} ${MODEL_PICKER_FRESHNESS}`,
@@ -202,28 +223,28 @@ export function ModelListSection() {
             });
             await invalidate();
             const notReverted = failedResults(undone);
-            if (notReverted.length > 0) {
-              const message = `Undo: ${undone.summary}. ${countOf(notReverted.length, 'model')} not reverted.`;
-              setOutcome({ summary: message, failed: notReverted });
-              throw new Error(message);
-            }
+            if (notReverted.length === 0) return;
+            const summary = `Undo: ${undone.summary}. ${countOf(notReverted.length, 'model')} not reverted.`;
+            setOutcome({
+              summary,
+              failed: notReverted,
+              retry: {
+                ...reverseBulkChange(request.kind, { alsoRemoveBase, alsoRestoreBase }),
+                ...retryOn(notReverted),
+              },
+              retryLabel: 'Revert the rest',
+            });
+            // Replaces this toast, so its Undo cannot resend a token whose reverted entries have since moved.
+            showUndo({ message: summary });
           }
         : undefined,
     });
   };
 
   const retryFailed = () => {
-    if (!outcome?.retry) return;
-    const { retry: applied, failed } = outcome;
+    if (!outcome) return;
     setOutcome(null);
-    setBulk({
-      kind: applied.request.kind,
-      selection: { ids: failed.map(entry => entry.id) },
-      count: failed.length,
-      values: applied.values,
-      alsoRemoveBase: applied.alsoRemoveBase,
-      entryTags: applied.request.entryTags,
-    });
+    setBulk(outcome.retry);
   };
 
   const columns: DataColumn<AdminModelRow>[] = [
@@ -417,17 +438,15 @@ export function ModelListSection() {
           data-testid="models-bulk-failed"
           endDecorator={
             <Stack direction="row" gap={0.5}>
-              {outcome.retry && (
-                <Button
-                  size="sm"
-                  variant="outlined"
-                  color="neutral"
-                  onClick={retryFailed}
-                  data-testid="models-bulk-retry-btn"
-                >
-                  Retry failed
-                </Button>
-              )}
+              <Button
+                size="sm"
+                variant="outlined"
+                color="neutral"
+                onClick={retryFailed}
+                data-testid="models-bulk-retry-btn"
+              >
+                {outcome.retryLabel}
+              </Button>
               <IconButton
                 size="sm"
                 variant="plain"
@@ -565,9 +584,7 @@ export function ModelListSection() {
                 variant="outlined"
                 disabled={disabled}
                 data-testid={`models-bulk-${kind}-btn`}
-                onClick={() =>
-                  setBulk({ kind, selection: bulkSelection(), count: selectedCount, entryTags: selectedEntryTags() })
-                }
+                onClick={() => setBulk({ kind, selection: bulkSelection(), count: selectedCount })}
               >
                 {MODEL_BULK_LABEL[kind]}
               </Button>

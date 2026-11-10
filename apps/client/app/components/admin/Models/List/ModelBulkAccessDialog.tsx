@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { Alert, Autocomplete, Box, Button, Checkbox, FormControl, FormLabel, Stack, Typography } from '@mui/joy';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import {
@@ -10,12 +10,13 @@ import {
 } from '@bike4mind/common';
 import { KNOWN_ENTITLEMENT_KEYS } from '@bike4mind/server-utils/lib/entitlements/registry';
 import { getErrorMessage } from '@client/app/utils/error';
-import { apiErrorOf, postModelAccessBulk, useAdminUserTags } from '@client/app/hooks/data/adminModels';
+import { apiErrorOf, postModelAccessBulk, useAccessTagOptions } from '@client/app/hooks/data/adminModels';
 import { ADMIN_REASON_PRESETS, ActionDialog } from '../../shared';
 import { MODEL_PICKER_FRESHNESS } from '../Access/ModelAccessDialog';
 import {
   BULK_AUDIENCE_LABEL,
   MODEL_BULK_LABEL,
+  bulkAudienceSummary,
   bulkChangeOf,
   bulkDiffSummary,
   bulkKindIsTags,
@@ -32,17 +33,18 @@ export type ModelBulkRequest = {
   selection: ModelAccessSelection;
   /** What the list showed as selected, for the title before the dry run resolves it. */
   count: number;
-  /** Prefilled tags or entitlements, for Retry failed. */
+  /** Prefilled tags or entitlements, for a retry. */
   values?: string[];
   alsoRemoveBase?: boolean;
-  /** Tags already on the selected models' entries, offered alongside the tags users hold. */
-  entryTags?: string[];
+  /** A remove-tag that also gives base back; offered only when the request asks for it (reversing an add-tag). */
+  alsoRestoreBase?: boolean;
 };
 
 export type ModelBulkApplied = {
   request: ModelBulkRequest;
   values: string[];
   alsoRemoveBase: boolean;
+  alsoRestoreBase: boolean;
   reason: string;
   result: ModelAccessBulkResult;
 };
@@ -104,12 +106,13 @@ function BulkDialogBody({
   const isTags = bulkKindIsTags(kind);
   const [values, setValues] = useState<string[]>(request.values ?? []);
   const [alsoRemoveBase, setAlsoRemoveBase] = useState(request.alsoRemoveBase ?? false);
+  const [alsoRestoreBase, setAlsoRestoreBase] = useState(kind === 'remove-tag' && !!request.alsoRestoreBase);
   const [showChanged, setShowChanged] = useState(false);
   /** A fresh dry run from a 409, for the change it was computed for. */
   const [replaced, setReplaced] = useState<{ changeKey: string; dryRun: ModelAccessBulkDryRun } | null>(null);
 
-  const tags = useAdminUserTags(isTags);
-  const change = bulkChangeOf(kind, values, alsoRemoveBase);
+  const tags = useAccessTagOptions(isTags);
+  const change = bulkChangeOf(kind, values, { alsoRemoveBase, alsoRestoreBase });
   const changeKey = JSON.stringify(change);
   const tooMany = 'ids' in selection && selection.ids.length > MODEL_ACCESS_BULK_MAX_IDS;
 
@@ -139,12 +142,8 @@ function BulkDialogBody({
       }),
   });
 
-  const entryTags = request.entryTags;
-  const options = useMemo(() => {
-    if (!isTags) return [...KNOWN_ENTITLEMENT_KEYS];
-    return [...new Set([...(tags.data ?? []).map(entry => entry.tag), ...(entryTags ?? [])])];
-  }, [isTags, tags.data, entryTags]);
-  const tagCounts = useMemo(() => new Map((tags.data ?? []).map(entry => [entry.tag, entry.count])), [tags.data]);
+  const options: readonly string[] = isTags ? tags.options : KNOWN_ENTITLEMENT_KEYS;
+  const tagCounts = tags.counts;
 
   const adminOnlyIds = serverAdminOnlyIds ?? dryRun?.adminOnlyIds ?? [];
   const quiet = dryRun ? noAudienceChangeItems(dryRun) : [];
@@ -174,7 +173,7 @@ function BulkDialogBody({
     if (!change || !dryRun) return;
     try {
       const result = await apply.mutateAsync({ reason, previewKey });
-      onApplied({ request, values, alsoRemoveBase, reason, result });
+      onApplied({ request, values, alsoRemoveBase, alsoRestoreBase, reason, result });
     } catch (error) {
       const { status, data } = apiErrorOf(error);
       if (status === 409 && data.dryRun) {
@@ -262,6 +261,11 @@ function BulkDialogBody({
               {bulkDiffSummary(kind, values, dryRun.counts)}
             </Typography>
             {changed.length > 0 && (
+              <Typography level="body-sm" sx={{ color: 'admin.inkSecondary' }} data-testid="models-bulk-audience">
+                {bulkAudienceSummary(changed)}
+              </Typography>
+            )}
+            {changed.length > 0 && (
               <Box>
                 <Button
                   size="sm"
@@ -337,6 +341,18 @@ function BulkDialogBody({
                 slotProps={{ input: { 'data-testid': 'models-bulk-also-remove-base-checkbox' } }}
               />
             </Stack>
+          </Alert>
+        )}
+
+        {kind === 'remove-tag' && request.alsoRestoreBase && (
+          <Alert color="neutral" variant="soft" data-testid="models-bulk-restoring-base">
+            <Checkbox
+              size="sm"
+              label="Also give base back, so every signed-in user can pick them again"
+              checked={alsoRestoreBase}
+              onChange={event => setAlsoRestoreBase(event.target.checked)}
+              slotProps={{ input: { 'data-testid': 'models-bulk-also-restore-base-checkbox' } }}
+            />
           </Alert>
         )}
 

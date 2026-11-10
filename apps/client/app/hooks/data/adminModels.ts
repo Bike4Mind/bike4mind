@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { keepPreviousData, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import type {
@@ -16,7 +17,7 @@ import type {
   ModelUserTagCount,
 } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
-import { LLM_MODEL_CONFIGURATIONS_QUERY_KEY } from './llmModelConfig';
+import { LLM_MODEL_CONFIGURATIONS_QUERY_KEY, useLLMModelConfigurations } from './llmModelConfig';
 import { reviveAuditEntry, type WireAuditEntry } from './adminAuditLog';
 
 /**
@@ -103,6 +104,23 @@ export const useAdminUserTags = (enabled = true) =>
     staleTime: 60_000,
     enabled,
   });
+
+/** Tag choices for the access editors: the tags users hold, with counts, plus tags set only on access entries. */
+export const useAccessTagOptions = (enabled = true) => {
+  const userTags = useAdminUserTags(enabled);
+  const entries = useLLMModelConfigurations();
+  const options = useMemo(
+    () => [
+      ...new Set([
+        ...(userTags.data ?? []).map(entry => entry.tag),
+        ...(entries.data ?? []).flatMap(entry => entry.allowedUserTags ?? []),
+      ]),
+    ],
+    [userTags.data, entries.data]
+  );
+  const counts = useMemo(() => new Map((userTags.data ?? []).map(entry => [entry.tag, entry.count])), [userTags.data]);
+  return { options, counts, isLoading: userTags.isLoading };
+};
 
 /** Refreshes everything that shows access: this console and every open picker in this tab. */
 export const useInvalidateModelAccess = () => {

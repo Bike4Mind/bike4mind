@@ -217,7 +217,13 @@ function ChangeItem({
       rowGap={0.25}
       data-testid={`discovery-changed-${group}-${itemKey ?? modelId}`}
     >
-      <Link component="button" type="button" level="body-sm" onClick={() => void openModel(modelId)}>
+      <Link
+        component="button"
+        type="button"
+        level="body-sm"
+        onClick={() => void openModel(modelId)}
+        data-testid="discovery-changed-open-model-link"
+      >
         {modelName(index, modelId)}
       </Link>
       {children}

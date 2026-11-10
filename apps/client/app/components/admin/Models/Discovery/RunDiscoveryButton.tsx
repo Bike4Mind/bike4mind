@@ -4,11 +4,8 @@ import { ModelWriteAction } from '../ModelWriteAction';
 import { useModelsNavigation } from '../modelsNavigation';
 import { useRunDiscoveryNow } from './runDiscoveryNow';
 
-/**
- * The Models page's "Run discovery" header action: the Discovery section's Run now. When the run reports, the list
- * and prices refetch and a toast links to the run.
- */
-export function RunDiscoveryButton({ 'data-testid': testId }: { 'data-testid'?: string }) {
+/** The shared Run now with its outcome as toasts, for a control outside the Discovery section. */
+export function useRunDiscoveryWithToasts() {
   const { runNow, announceFinished, busy } = useRunDiscoveryNow();
   const { openSection } = useModelsNavigation();
 
@@ -25,6 +22,16 @@ export function RunDiscoveryButton({ 'data-testid': testId }: { 'data-testid'?: 
       toast(outcome.message);
     }
   };
+
+  return { run, busy };
+}
+
+/**
+ * The Models page's "Run discovery" header action: the Discovery section's Run now. When the run reports, the list
+ * and prices refetch and a toast links to the run.
+ */
+export function RunDiscoveryButton({ 'data-testid': testId }: { 'data-testid'?: string }) {
+  const { run, busy } = useRunDiscoveryWithToasts();
 
   return (
     <ModelWriteAction>
