@@ -15,7 +15,6 @@ import {
 } from 'recharts';
 import { ANALYTICS_OTHER_FEATURE, type AnalyticsOverview, type UsageDay } from '@client/app/utils/analyticsOverview';
 import { DataTable, InlineBar, type DataColumn } from '../shared';
-import { SIGNAL_COLORS } from '../Signups/SignupChart';
 import { AnalyticsSection } from './AnalyticsSection';
 import { featureLabel, formatCount, formatDayLabel, formatShare, modelAxisLabel } from './analyticsFormat';
 import { isIsolatedPoint } from './isolatedPoint';
@@ -35,7 +34,6 @@ function useChartStyle() {
   const admin = theme.palette.admin;
   return {
     admin,
-    scheme: theme.palette.mode === 'dark' ? ('dark' as const) : ('light' as const),
     axisTick: { fontSize: 12, fill: admin.inkMuted },
     tooltipStyle: {
       background: admin.surface,
@@ -61,7 +59,7 @@ const summaryPeriod = ({ window, usage }: AnalyticsOverview) => {
 };
 
 export function FeatureUsageSection({ data, loading, error, onRetry, onShowDefaultRange }: Props) {
-  const { admin, scheme, axisTick, tooltipStyle } = useChartStyle();
+  const { admin, axisTick, tooltipStyle } = useChartStyle();
   const usage = data?.usage;
   const features = useMemo(() => usage?.features ?? [], [usage]);
   const days = useMemo(() => usage?.days ?? [], [usage]);
@@ -79,7 +77,7 @@ export function FeatureUsageSection({ data, loading, error, onRetry, onShowDefau
   const color = (feature: string) =>
     feature === ANALYTICS_OTHER_FEATURE
       ? admin.inkMuted
-      : SIGNAL_COLORS[scheme][features.indexOf(feature) % SIGNAL_COLORS[scheme].length];
+      : admin.chartSeries[features.indexOf(feature) % admin.chartSeries.length];
 
   const total = usage?.totals.requests ?? 0;
   const top = features[0];

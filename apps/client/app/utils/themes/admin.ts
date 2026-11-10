@@ -20,6 +20,12 @@ export type AdminPalette = {
   selection: { background: string; border: string; foreground: string };
   danger: string;
   status: Record<AdminStatusTone, { foreground: string; background: string }>;
+  /**
+   * Categorical chart colors for more series than `accent` opacity steps can keep apart (about six).
+   * Validated with the dataviz palette checker against `surface` in each scheme; a chart takes them in a
+   * fixed slot order so a category keeps its color whatever the range.
+   */
+  chartSeries: readonly string[];
 };
 
 export const adminPalette = {
@@ -44,6 +50,18 @@ export const adminPalette = {
       bad: { foreground: '#9F1C12', background: '#FDECEA' },
       neutral: { foreground: '#52525B', background: '#F1F1EE' },
     },
+    chartSeries: [
+      '#2A78D6',
+      '#EB6834',
+      '#1BAF7A',
+      '#EDA100',
+      '#E87BA4',
+      '#008300',
+      '#6250D6',
+      '#0F8C9E',
+      '#9A6A3A',
+      '#B03FC4',
+    ],
   },
   dark: {
     canvas: '#141416',
@@ -66,6 +84,18 @@ export const adminPalette = {
       bad: { foreground: '#FECACA', background: '#7F1D1D' },
       neutral: { foreground: '#E4E4E7', background: '#3F3F46' },
     },
+    chartSeries: [
+      '#3987E5',
+      '#D95926',
+      '#199E70',
+      '#C98500',
+      '#D55181',
+      '#008300',
+      '#9085E9',
+      '#2AA9BA',
+      '#B8875A',
+      '#C869D6',
+    ],
   },
 } satisfies Record<'light' | 'dark', AdminPalette>;
 

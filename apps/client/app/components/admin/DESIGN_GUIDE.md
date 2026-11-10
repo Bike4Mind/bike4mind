@@ -36,6 +36,7 @@ The admin is a **monochrome UI with one accent**. Ink and warm greys do the work
 | `link` | `#3F3BC9` | `#A5B4FC` | Text links |
 | `selection` | `#F3F2FE` / `#C7C4F7` / `#2B27A3` | `#26244A` / `#4B47A8` / `#C7C4F7` | Selected row, set filter chip (fill / border / text) |
 | `danger` | `#B42318` | `#FCA5A5` | Destructive actions only |
+| `chartSeries` | 10 colors, see `utils/themes/admin.ts` | 10 colors | Categorical chart series beyond what `accent` steps can separate |
 
 **Using tokens.** Reference a token by its palette path, never by its hex: `sx={{ color: 'admin.inkMuted', bgcolor: 'admin.surface', borderColor: 'admin.border' }}`, a status tone as `'admin.status.bad.foreground'`, and in a raw CSS string `var(--joy-palette-admin-ink)`. That is what makes dark mode free. No hex, `rgb()`, `rgba()`, named colors, gradients or `white`/`black` in admin code, and no pixel sizes outside the scales below; a translucent overlay or shadow belongs in the skin, not in a page.
 
@@ -76,7 +77,7 @@ Shared terms: **Suspended** (not "banned"), **Restricted** (not "moderated"), **
 
 ### Data visualization
 
-Charts read every color from the admin tokens (no hex in a chart config, and never a library's default palette such as `['#0088FE', '#00C49F', ...]`), so they work in both themes. They use `accent` for the primary series and `inkMuted` at 40% for comparisons; categorical charts take the status tones only when the categories are statuses, and otherwise step `accent` down in opacity. Chart backgrounds are transparent. Inline bars (spend, risk, storage) are 6 px tall with a 3 px radius on a `selection` fill track. Gridlines use `border`; axis labels use `inkMuted` 12 px.
+Charts read every color from the admin tokens (no hex in a chart config, and never a library's default palette such as `['#0088FE', '#00C49F', ...]`), so they work in both themes. They use `accent` for the primary series and `inkMuted` at 40% for comparisons; categorical charts take the status tones only when the categories are statuses, and otherwise step `accent` down in opacity (`adminChartSeries`). Past about six series the steps blur together, so a chart with more categories takes the `chartSeries` slots in a fixed order instead. Chart backgrounds are transparent. Inline bars (spend, risk, storage) are 6 px tall with a 3 px radius on a `selection` fill track. Gridlines use `border`; axis labels use `inkMuted` 12 px.
 
 ### Type (Inter, IDs in JetBrains Mono)
 
