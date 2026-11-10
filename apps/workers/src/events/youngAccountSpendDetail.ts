@@ -1,3 +1,4 @@
+import { Logger } from '@bike4mind/observability';
 /**
  * Names the accounts behind a young-account spend alarm. The alarm's metric is a filter over the
  * `llm-usage-settled` lines in every log group that settles completions (infra/llmSpendLogGroups.ts),
@@ -255,7 +256,7 @@ export async function youngAccountSpendSection(
       try {
         result = await fetchSpenders(window, { logGroups });
       } catch {
-        console.warn('[youngAccountSpendDetail] catch-up lookup failed; retaining the first result');
+        Logger.warn('[youngAccountSpendDetail] catch-up lookup failed; retaining the first result');
       }
     }
     return formatYoungAccountSpenders(result.spenders, {
@@ -266,7 +267,7 @@ export async function youngAccountSpendSection(
     });
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    console.warn(`[youngAccountSpendDetail] could not list accounts for ${alarm.AlarmName}: ${reason}`);
+    Logger.warn(`[youngAccountSpendDetail] could not list accounts for ${alarm.AlarmName}: ${reason}`);
     return fallback(`Could not be loaded (${reason}). Query the LLM spend log groups for the window instead.`);
   }
 }

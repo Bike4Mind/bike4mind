@@ -1,3 +1,4 @@
+import { Logger } from '@bike4mind/observability';
 /**
  * Reads the per-stage Slack mention setting the alarm relays prepend to production page-level
  * alarms. It lives in an SSM parameter (created in infra/alarmSlackMention.ts, value ignored
@@ -53,7 +54,7 @@ export async function readAlarmMention(
   } catch (error) {
     const code = (error as { name?: string })?.name;
     if (code !== 'ParameterNotFound') {
-      console.warn(`[alarmSlackMention] could not read ${name}: ${code ?? String(error)}`);
+      Logger.warn(`[alarmSlackMention] could not read ${name}: ${code ?? String(error)}`);
     }
   }
   cache = { name, value, readAt: now() };

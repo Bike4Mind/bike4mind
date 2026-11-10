@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 import type { Context } from 'aws-lambda';
 
 // The Resource links only MONGODB_URI: the handler must not need a prod API key.
@@ -276,7 +277,7 @@ describe('dataSyncerHandler', () => {
     process.env.SEED_STAGE_NAME = 'pr123';
     state.failInsertInto = 'rapidreplymappings';
     state.failRollbackBulkWrite = true;
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(Logger, 'error').mockImplementation(() => undefined);
 
     try {
       const result = await invoke();
@@ -285,12 +286,11 @@ describe('dataSyncerHandler', () => {
       expect(result?.message).toContain('rollback of rapidreplymappings failed');
       expect(state.markerWrites).toHaveLength(0);
       // The combined error keeps the original failure as its cause, so the log shows both.
-      expect(errorSpy).toHaveBeenCalledWith(
-        'Error syncing preview settings from staging:',
-        expect.objectContaining({
+      expect(errorSpy).toHaveBeenCalledWith('Error syncing preview settings from staging', {
+        error: expect.objectContaining({
           cause: expect.objectContaining({ message: 'insert into rapidreplymappings failed' }),
-        })
-      );
+        }),
+      });
     } finally {
       errorSpy.mockRestore();
     }
@@ -391,7 +391,7 @@ describe('strict seed result', () => {
   );
   it('logs a safe connection failure category without exposing credentials', async () => {
     state.failConnect = true;
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(Logger, 'error').mockImplementation(() => undefined);
     try {
       const response = await strict();
       expect(response).toEqual({ schemaVersion: 1, status: 'failed', stage: 'pr123', copiedCount: 0 });

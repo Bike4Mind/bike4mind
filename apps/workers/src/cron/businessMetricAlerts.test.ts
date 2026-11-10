@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 import type { Metric } from '@bike4mind/server-utils/analytics/businessMetricAnomalies';
 
 const mocks = vi.hoisted(() => ({
@@ -101,7 +102,7 @@ describe('scheduled business metric alert', () => {
   it.each(['', '   '])('skips collection and delivery for a blank production webhook (%j)', async webhook => {
     mocks.resource.App.stage = 'production';
     mocks.settings.mockResolvedValue({ webhook });
-    const log = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const log = vi.spyOn(Logger, 'info').mockImplementation(() => undefined);
     try {
       expect(await handler({})).toEqual({ status: 'skipped', reason: 'missing-webhook' });
       expect(log).toHaveBeenCalledWith(expect.stringContaining('SlackUserActivityWebhookUrl'));

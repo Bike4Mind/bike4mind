@@ -11,6 +11,7 @@ import { userService } from '@bike4mind/services';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { emitMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
+import { Logger } from '@bike4mind/observability';
 
 /**
  * Upstream lists, fetched at runtime into our DB; nothing is redistributed. The tier each source
@@ -111,11 +112,11 @@ export async function handler() {
         try {
           await disposableDomainRepository.recordDisposableSource(source, { error: message, at: runAt });
         } catch (recordError) {
-          console.warn('Could not record source failure', { source, error: String(recordError) });
+          Logger.warn('Could not record source failure', { source, error: String(recordError) });
         }
       }
     }
-    console.log(JSON.stringify({ job: 'disposable-domain-refresh', failures, results }));
+    Logger.info(JSON.stringify({ job: 'disposable-domain-refresh', failures, results }));
     await emitMetrics('Lumina5/DisposableDomains', [{ name: 'SourceFailures', value: failures, dimensions }]);
     return { status: failures ? 'partial' : 'success', results };
   } catch (error) {

@@ -235,7 +235,7 @@ export function defineLambdaRoute<C extends EndpointContract>(
         // No schema => the contract declares a raw (non-JSON) body for this status.
         const check = spec?.schema?.safeParse(result.body);
         if (check && !check.success) {
-          console.warn(
+          Logger.warn(
             `[contract] ${contract.operationId} response ${result.statusCode} violates schema: ${check.error.message}`
           );
         }

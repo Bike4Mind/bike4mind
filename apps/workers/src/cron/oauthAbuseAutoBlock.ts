@@ -1,3 +1,4 @@
+import { Logger } from '@bike4mind/observability';
 /**
  * Blocks IPs with a burst of failed OAuth sign-ins, with escalating block durations. The logic and
  * its settings live in server-utils; the admin evaluate endpoint calls the same runner.
@@ -14,7 +15,7 @@ export { runOauthAbuseAutoBlock };
 export const handler = async () => {
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', Resource.App.stage));
   const result = await runOauthAbuseAutoBlock();
-  if (result.blocked.length > 0) console.info('[oauthAbuseAutoBlock] blocked', result.blocked);
-  if (result.failed.length > 0) console.error('[oauthAbuseAutoBlock] failed to block', result.failed);
+  if (result.blocked.length > 0) Logger.info('[oauthAbuseAutoBlock] blocked', { blocked: result.blocked });
+  if (result.failed.length > 0) Logger.error('[oauthAbuseAutoBlock] failed to block', { failed: result.failed });
   return result;
 };

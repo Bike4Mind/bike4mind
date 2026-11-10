@@ -17,6 +17,7 @@ import {
 } from '../events/alarmSlackMessage';
 import { collectBusinessMetrics } from './businessMetrics/collect';
 import { deliverAnomalies, subscriberMetric } from './businessMetrics/deliver';
+import { Logger } from '@bike4mind/observability';
 
 const eventSchema = z.object({ time: z.iso.datetime().optional() });
 
@@ -31,7 +32,7 @@ export async function handler(event: unknown) {
   });
   const webhook = await reportWebhook(Resource.App.stage);
   if (!webhook) {
-    console.info(
+    Logger.info(
       JSON.stringify({
         report: 'business-metric-alerts',
         status: 'skipped',
@@ -52,7 +53,7 @@ export async function handler(event: unknown) {
     undefined,
     { appUrl: appUrlFromEnv(), stage: stageLabel(Resource.App.stage) }
   );
-  console.info(
+  Logger.info(
     JSON.stringify({
       report: 'business-metric-alerts',
       end: window.end.toISOString(),
