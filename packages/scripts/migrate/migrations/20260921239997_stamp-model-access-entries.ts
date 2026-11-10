@@ -1,3 +1,4 @@
+import { canonicalApprovalJson } from '@bike4mind/common';
 import { AdminAuditLogModel, AdminSettings } from '@bike4mind/database';
 import { type MigrationFile } from './index';
 
@@ -10,7 +11,9 @@ type AuditRow = { occurredAt: Date; changes?: { field: string; before?: unknown;
 const entryById = (list: unknown, id: string): string | undefined => {
   if (!Array.isArray(list)) return undefined;
   const entry = (list as Entry[]).find(item => item?.id === id);
-  return entry === undefined ? undefined : JSON.stringify(entry);
+  // Key order differs between writers (the base-entitlement migration appended allowedEntitlements), so it
+  // must not read as a change.
+  return entry === undefined ? undefined : canonicalApprovalJson(entry);
 };
 
 /**
@@ -43,20 +46,21 @@ const migration: MigrationFile = {
     }
 
     const stamps = new Map<string, Date>();
-    const audits = (await AdminAuditLogModel.find({
-      action: 'settings.admin_settings.updated',
-      'target.kind': 'settings',
-      'target.id': SETTING_NAME,
-    })
+    const audits = AdminAuditLogModel.find(
+      { action: 'settings.admin_settings.updated', 'target.kind': 'settings', 'target.id': SETTING_NAME },
+      { occurredAt: 1, changes: 1 }
+    )
       .sort({ occurredAt: -1 })
-      .lean()) as AuditRow[];
-    for (const audit of audits) {
+      .lean()
+      .cursor();
+    for await (const audit of audits as AsyncIterable<AuditRow>) {
       const change = audit.changes?.find(item => item.field === SETTING_NAME);
       if (!change) continue;
       for (const id of unstamped) {
         if (stamps.has(id)) continue;
         if (entryById(change.before, id) !== entryById(change.after, id)) stamps.set(id, audit.occurredAt);
       }
+      if (stamps.size === unstamped.size) break;
     }
     const fallback = setting.updatedAt instanceof Date ? setting.updatedAt : new Date();
 

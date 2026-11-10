@@ -1,14 +1,41 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { findSetting, findAudits, updateOne } = vi.hoisted(() => ({
+type AuditRow = { occurredAt: Date; changes: { field: string; before: unknown; after: unknown }[] };
+
+const { findSetting, findAudits, updateOne, auditRows } = vi.hoisted(() => ({
   findSetting: vi.fn(),
   findAudits: vi.fn(),
   updateOne: vi.fn(),
+  auditRows: { rows: [] as AuditRow[], read: 0 },
 }));
 vi.mock('@bike4mind/database', () => ({
   AdminSettings: { findOne: () => ({ lean: findSetting }), updateOne },
-  AdminAuditLogModel: { find: () => ({ sort: () => ({ lean: findAudits }) }) },
+  AdminAuditLogModel: {
+    find: (...args: unknown[]) => {
+      findAudits(...args);
+      return {
+        sort: () => ({
+          lean: () => ({
+            cursor: async function* () {
+              for (const row of auditRows.rows) {
+                auditRows.read++;
+                yield row;
+              }
+            },
+          }),
+        }),
+      };
+    },
+  },
 }));
+const auditsNewestFirst = (rows: AuditRow[]) => {
+  auditRows.rows = rows;
+  auditRows.read = 0;
+};
+const accessChange = (occurredAt: string, before: unknown, after: unknown): AuditRow => ({
+  occurredAt: new Date(occurredAt),
+  changes: [{ field: 'llmModelConfigurations', before, after }],
+});
 
 const { default: migration } = await import('./20260921239997_stamp-model-access-entries');
 
@@ -31,27 +58,19 @@ describe('stamp-model-access-entries migration', () => {
         { id: 'c', enabled: true, allowedUserTags: [], updatedAt: stamped },
       ],
     });
-    findAudits.mockResolvedValue([
-      {
-        occurredAt: new Date('2026-10-25T00:00:00Z'),
-        changes: [
-          {
-            field: 'llmModelConfigurations',
-            before: [
-              { id: 'a', enabled: true, allowedUserTags: [] },
-              { id: 'b', enabled: true, allowedUserTags: [] },
-            ],
-            after: [
-              { id: 'a', enabled: true, allowedUserTags: [] },
-              { id: 'b', enabled: false, allowedUserTags: [] },
-            ],
-          },
+    auditsNewestFirst([
+      accessChange(
+        '2026-10-25T00:00:00Z',
+        [
+          { id: 'a', enabled: true, allowedUserTags: [] },
+          { id: 'b', enabled: true, allowedUserTags: [] },
         ],
-      },
-      {
-        occurredAt: new Date('2026-10-23T00:00:00Z'),
-        changes: [{ field: 'llmModelConfigurations', before: null, after: [{ id: 'b', enabled: true }] }],
-      },
+        [
+          { id: 'a', enabled: true, allowedUserTags: [] },
+          { id: 'b', enabled: false, allowedUserTags: [] },
+        ]
+      ),
+      accessChange('2026-10-23T00:00:00Z', null, [{ id: 'b', enabled: true }]),
     ]);
 
     await migration.up();
@@ -60,11 +79,45 @@ describe('stamp-model-access-entries migration', () => {
     expect(stampFor('b')).toEqual({ $set: { 'settingValue.$[entry].updatedAt': new Date('2026-10-25T00:00:00Z') } });
     expect(stampFor('a')).toEqual({ $set: { 'settingValue.$[entry].updatedAt': DOC_UPDATED } });
     expect(stampFor('c')).toBeUndefined();
+    expect(findAudits).toHaveBeenCalledWith(expect.any(Object), { occurredAt: 1, changes: 1 });
+  });
+
+  it('ignores a save that only reordered the keys of an entry', async () => {
+    findSetting.mockResolvedValue({
+      updatedAt: DOC_UPDATED,
+      settingValue: [{ id: 'a', enabled: true, allowedUserTags: [], fallbackModel: 'm', rank: 2 }],
+    });
+    auditsNewestFirst([
+      accessChange(
+        '2026-10-25T00:00:00Z',
+        [{ id: 'a', enabled: true, allowedUserTags: [], fallbackModel: 'm', rank: 2, allowedEntitlements: ['base'] }],
+        [{ id: 'a', enabled: true, allowedUserTags: [], allowedEntitlements: ['base'], fallbackModel: 'm', rank: 2 }]
+      ),
+      accessChange('2026-10-20T00:00:00Z', [], [{ id: 'a', enabled: true }]),
+    ]);
+
+    await migration.up();
+
+    expect(stampFor('a')).toEqual({ $set: { 'settingValue.$[entry].updatedAt': new Date('2026-10-20T00:00:00Z') } });
+  });
+
+  it('stops reading audits once every unstamped entry has its stamp', async () => {
+    findSetting.mockResolvedValue({ updatedAt: DOC_UPDATED, settingValue: [{ id: 'a', enabled: false }] });
+    auditsNewestFirst([
+      accessChange('2026-10-25T00:00:00Z', [{ id: 'a', enabled: true }], [{ id: 'a', enabled: false }]),
+      accessChange('2026-10-20T00:00:00Z', [], [{ id: 'a', enabled: true }]),
+      accessChange('2026-10-15T00:00:00Z', [], []),
+    ]);
+
+    await migration.up();
+
+    expect(auditRows.read).toBe(1);
+    expect(stampFor('a')).toEqual({ $set: { 'settingValue.$[entry].updatedAt': new Date('2026-10-25T00:00:00Z') } });
   });
 
   it('writes only to an entry that is still unstamped', async () => {
     findSetting.mockResolvedValue({ updatedAt: DOC_UPDATED, settingValue: [{ id: 'a', enabled: true }] });
-    findAudits.mockResolvedValue([]);
+    auditsNewestFirst([]);
 
     await migration.up();
 
