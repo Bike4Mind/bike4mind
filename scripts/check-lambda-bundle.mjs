@@ -169,7 +169,7 @@ export function dedupeMessages(messages) {
 
 // One esbuild pass over every entry point. Returns the raw esbuild messages and
 // the resolved-module count; the caller decides what that means.
-export async function bundleEntryPoints({ root, files, external, inject = [] }) {
+export async function bundleEntryPoints({ root, files, external, banner }) {
   const result = await esbuild
     .build({
       absWorkingDir: root,
@@ -185,7 +185,7 @@ export async function bundleEntryPoints({ root, files, external, inject = [] }) 
       mainFields: ['module', 'main'],
       keepNames: true,
       external,
-      inject,
+      ...(banner ? { banner: { js: banner } } : {}),
       // Required for path computation under `splitting`; `write: false` means it
       // is never created. Under node_modules so a future `write: true` debug run
       // still cannot dirty the tree.
@@ -240,13 +240,14 @@ async function main() {
   }
   console.log(`External: ${external.join(', ')}`);
 
+  const { consoleRedactionBanner } = await import('../infra/consoleRedactionBanner.ts');
   const started = Date.now();
   const { errors, modules } = await bundleEntryPoints({
     root: repoRoot,
     files: entries.map(e => e.file),
     external,
-    // Mirrors the inject the sst.aws.Function transform in sst.config.ts adds to every Function.
-    inject: [path.join(repoRoot, 'packages/server-utils/src/bootstrap/lambdaConsoleRedaction.ts')],
+    // Mirrors the nodejs.banner the sst.aws.Function transform in sst.config.ts adds to every Function.
+    banner: consoleRedactionBanner(repoRoot),
   });
   const elapsed = ((Date.now() - started) / 1000).toFixed(1);
 

@@ -74,7 +74,8 @@ export default $config({
     // SST rejects top-level imports in sst.config.ts, so load the helper at run() time.
     const { resolveDefaultLogging } = await import('@bike4mind/infra');
     // Runs ahead of every Function's handler module so raw console output is redacted like Logger output.
-    const CONSOLE_REDACTION_INJECT = `${$cli.paths.root}/packages/server-utils/src/bootstrap/lambdaConsoleRedaction.ts`;
+    const { consoleRedactionBanner } = await import('./infra/consoleRedactionBanner');
+    const CONSOLE_REDACTION_BANNER = consoleRedactionBanner($cli.paths.root);
     $transform(sst.aws.Function, args => {
       args.nodejs = $output(args.nodejs).apply(nodejs => {
         const esbuild = { ...(nodejs?.esbuild ?? {}) };
@@ -82,9 +83,8 @@ export default $config({
         for (const dep of ALWAYS_EXTERNAL) {
           if (!external.includes(dep)) external.push(dep);
         }
-        const inject = Array.isArray(esbuild.inject) ? [...esbuild.inject] : [];
-        if (!inject.includes(CONSOLE_REDACTION_INJECT)) inject.unshift(CONSOLE_REDACTION_INJECT);
-        return { ...nodejs, esbuild: { ...esbuild, external, inject } };
+        const banner = nodejs?.banner ? `${CONSOLE_REDACTION_BANNER}\n${nodejs.banner}` : CONSOLE_REDACTION_BANNER;
+        return { ...nodejs, banner, esbuild: { ...esbuild, external } };
       });
       // Default log retention where a Function sets none (SST's own default is "1 month").
       // dev and every other non-production stage deliberately get 1 week, so this is a
