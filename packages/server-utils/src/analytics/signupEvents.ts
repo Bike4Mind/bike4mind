@@ -90,12 +90,12 @@ function sourceProducts(touches: CreditTouches | undefined): Map<string, SourceT
  * Called once, where an account is created with the new user's own request in hand (their cookies
  * carry the touches), and once more by oauthSignupCredit.ts (apps/client) for a new account's first
  * authorization code to a client with an Overwatch product. Both key the eventId the same way, so
- * a product both name is credited once. An internal account's credit carries `internal: true` (lane.ts), so the
- * credited product can keep the team's own signups out of its counts; callers skip synthetic
- * accounts before this. The user's pseudonym makes the eventId, since an account signs up once, so a
- * retry sends the same id and the receiver keeps one event. Awaited by the caller but never throws
- * (emitProductEvent fails open and times out on its own), and resolves at once when no touch names
- * a product, which is most signups.
+ * a product both name is credited once. An internal account's credit carries `internal: true`
+ * (lane.ts), so the credited product can keep the team's own signups out of its counts; callers
+ * skip synthetic accounts before this. The user's pseudonym makes the eventId, since an account
+ * signs up once, so a retry sends the same id and the receiver keeps one event. Awaited by the
+ * caller but never throws (emitProductEvent fails open and times out on its own), and resolves at
+ * once when no touch names a product, which is most signups.
  *
  * Resolves to the products it ATTEMPTED, not the ones that succeeded: each emit swallows its own
  * rejection, so a product whose post failed is still in this list. Do not treat the return value

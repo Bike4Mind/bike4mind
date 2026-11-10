@@ -41,8 +41,9 @@ type CreditUser = {
  * Record the credit and send the product its signup, at most once per account. Gated on the same
  * consent as the campaign touches (readConsentedAcquisitionTouches), skipped for synthetic accounts
  * as signups skip them, and only for an account created within OAUTH_SIGNUP_WINDOW_MS. The write
- * is conditional, so an account is credited to one client however many codes it is issued. Never throws: a code must not fail
- * on analytics. Resolves to the products a signup was attempted for (see emitSignupForSourceProducts).
+ * is conditional, so an account is credited to one client however many codes it is issued. Never
+ * throws: a code must not fail on analytics. Resolves to the products a signup was attempted for
+ * (see emitSignupForSourceProducts).
  */
 export async function creditOAuthSignup(opts: {
   req: Pick<Request, 'headers'>;
