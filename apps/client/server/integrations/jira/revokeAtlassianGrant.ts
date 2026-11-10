@@ -1,3 +1,4 @@
+import { Logger } from '@bike4mind/observability';
 import { getAtlassianOAuthConfig } from '@bike4mind/server-utils/integrations/jira/atlassianConfig';
 import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 
@@ -25,13 +26,13 @@ export async function revokeAtlassianGrant(
   try {
     const token = decryptToken(encryptedToken);
     if (!token) {
-      console.warn(`[atlassian] revoke skipped (${context}): stored credential decrypted to empty`);
+      Logger.warn('[atlassian] revoke skipped: stored credential decrypted to empty', { context });
       return 'no_credential';
     }
 
     const { clientId, clientSecret } = await getAtlassianOAuthConfig();
     if (!clientId || !clientSecret) {
-      console.warn(`[atlassian] revoke skipped (${context}): OAuth client is not configured`);
+      Logger.warn('[atlassian] revoke skipped: OAuth client is not configured', { context });
       return 'not_configured';
     }
 
@@ -42,14 +43,15 @@ export async function revokeAtlassianGrant(
       signal: AbortSignal.timeout(REVOKE_TIMEOUT_MS),
     });
     if (!response.ok) {
-      console.warn(`[atlassian] revoke failed (${context}): ${response.status} ${await response.text()}`);
+      // Status only: the upstream body is never read into a log line.
+      Logger.warn('[atlassian] revoke failed', { context, status: response.status });
       return 'failed';
     }
 
-    console.log(`[atlassian] revoked token at Atlassian (${context})`);
+    Logger.info('[atlassian] revoked token at Atlassian', { context });
     return 'revoked';
   } catch (e) {
-    console.error(`[atlassian] revoke failed (${context}) - the token may still be live at Atlassian`, e);
+    Logger.error('[atlassian] revoke failed - the token may still be live at Atlassian', { context, error: e });
     return 'failed';
   }
 }

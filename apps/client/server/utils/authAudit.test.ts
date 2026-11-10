@@ -1,13 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request } from 'express';
 
-const { createLog, getClientIp, recordSessionReuseRevoked, recordSessionRecovered } = vi.hoisted(() => ({
+const { createLog, getClientIp, recordSessionReuseRevoked, recordSessionRecovered, logger } = vi.hoisted(() => ({
+  logger: { warn: vi.fn(), debug: vi.fn() },
   createLog: vi.fn(),
   getClientIp: vi.fn(),
   recordSessionReuseRevoked: vi.fn(),
   recordSessionRecovered: vi.fn(),
 }));
 
+vi.mock('@bike4mind/observability', () => ({ Logger: logger }));
 vi.mock('@bike4mind/database', () => ({ userAuthAuditLogRepository: { createLog } }));
 vi.mock('@bike4mind/server-utils/utils/ip', () => ({ getClientIp }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ recordSessionReuseRevoked, recordSessionRecovered }));
@@ -20,6 +22,7 @@ describe('logAuthAudit', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'debug').mockImplementation(() => {});
   });
 
   it('records that a reusing request came from the issuing IP', async () => {
@@ -37,11 +40,41 @@ describe('logAuthAudit', () => {
         metadata: { sid: 'sid-1', issuedIp: '203.0.113.7', requestIpMatchesIssuedIp: true },
       })
     );
-    expect(console.warn).toHaveBeenCalledWith(
+    expect(logger.warn).toHaveBeenCalledWith(
       '[auth] session_reuse_revoked',
-      expect.objectContaining({ userId: 'user-1', actorIp: '203.0.113.7', userAgent: 'UA/2', sid: 'sid-1' })
+      expect.objectContaining({
+        userId: 'user-1',
+        actorIp: '203.0.113.7',
+        userAgent: 'UA/2',
+        sid: 'sid-1',
+        requestIpMatchesIssuedIp: true,
+      })
     );
     expect(recordSessionReuseRevoked).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the IP and user agent out of the log message and off the console', async () => {
+    getClientIp.mockReturnValue('203.0.113.7');
+    await logAuthAudit(req, { userId: 'user-1', event: 'session_reuse_revoked', metadata: { issuedIp: '198.51.100.9' } });
+
+    const [message] = logger.warn.mock.calls[0];
+    expect(message).toBe('[auth] session_reuse_revoked');
+    expect(message).not.toContain('203.0.113.7');
+    expect(message).not.toContain('UA/2');
+    expect(console.warn).not.toHaveBeenCalled();
+  });
+
+  it('logs a failed audit write with the error as metadata', async () => {
+    const failure = new Error('db down');
+    getClientIp.mockReturnValue('203.0.113.7');
+    createLog.mockRejectedValueOnce(failure);
+    await logAuthAudit(req, { userId: 'user-1', event: 'session_recovered' });
+
+    expect(logger.debug).toHaveBeenCalledWith('Failed to write UserAuthAuditLog', {
+      event: 'session_recovered',
+      error: failure,
+    });
+    expect(console.debug).not.toHaveBeenCalled();
   });
 
   it('records a mismatch when the reusing request came from elsewhere', async () => {
@@ -119,7 +152,7 @@ describe('logAuthAudit', () => {
     await logAuthAudit(req, { userId: 'user-1', event: 'session_recovered', metadata: { issuedIp: '203.0.113.7' } });
 
     expect(createLog.mock.calls[0][0].metadata).toEqual({ issuedIp: '203.0.113.7' });
-    expect(console.warn).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalled();
     expect(recordSessionRecovered).toHaveBeenCalledOnce();
   });
 });
