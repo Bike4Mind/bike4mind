@@ -1,11 +1,7 @@
 import type { ImageInputRole } from '@bike4mind/common';
 import { ImageInputRejectedError, ImageModerationBlockedError } from '../imageGeneration/imageGenerationErrors';
-import {
-  ProviderOutputUnavailableError,
-  readBoundedResponse,
-  type ProviderOutput,
-  type ProviderTerminalResult,
-} from '../generationProviders/types';
+import { downloadDeliveryUrl } from '../generationProviders/http';
+import type { ProviderOutput, ProviderTerminalResult } from '../generationProviders/types';
 import type { ImageInputs, ResolvedImageInput } from './types';
 
 const MAX_CAUSE_DEPTH = 5;
@@ -89,28 +85,8 @@ export const decodeInlineOutput = (output: ProviderOutput): Buffer => {
   return Buffer.from(output.base64, 'base64');
 };
 
-const assertHttps = (url: URL): void => {
-  if (url.protocol !== 'https:') throw new Error(`image output url must be https, got ${url.protocol}`);
-};
-
-/**
- * Downloads a provider's delivery URL (an unauthenticated, short-lived link) under the image size cap. One redirect
- * is followed, and both hops must be https. An expired or purged link throws ProviderOutputUnavailableError.
- */
+/** Downloads a provider's delivery URL (an unauthenticated, short-lived link) under the image size cap. */
 export const downloadImageOutput = async (output: ProviderOutput, signal: AbortSignal): Promise<Buffer> => {
   if (output.kind !== 'url') throw new Error('expected url image output');
-  const url = new URL(output.url);
-  assertHttps(url);
-  let response = await fetch(url, { redirect: 'manual', signal });
-  if (response.status >= 300 && response.status < 400) {
-    const location = response.headers.get('location');
-    if (!location) throw new Error('image output redirect without a location');
-    const target = new URL(location, url);
-    assertHttps(target);
-    await response.body?.cancel();
-    response = await fetch(target, { redirect: 'error', signal });
-  }
-  if ([403, 404, 410].includes(response.status)) throw new ProviderOutputUnavailableError(response.status);
-  if (!response.ok) throw new Error(`image output download failed with HTTP ${response.status}`);
-  return readBoundedResponse(response, MAX_IMAGE_OUTPUT_BYTES);
+  return downloadDeliveryUrl(output.url, MAX_IMAGE_OUTPUT_BYTES, signal);
 };
