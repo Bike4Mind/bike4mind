@@ -1351,6 +1351,8 @@ describe('shell approval in a project with a large node_modules', () => {
     ['git -c core.worktree=.. st', 'qrepo'],
     ['git -c safe.bareRepository=all st', 'qrepo'],
     ['git -c "$X" st', 'qrepo'],
+    ['git $O st', 'qrepo'],
+    ['git -C . "$O" st', 'qrepo'],
     ['git --config-env=alias.st=X st', 'qrepo'],
     ['git --config-env alias.st=X st', 'qrepo'],
     ['PATH=./bin:$PATH git st', 'qrepo'],
@@ -1358,6 +1360,9 @@ describe('shell approval in a project with a large node_modules', () => {
     ['git config --remove-section alias && git st', 'qrepo'],
     ['git config set include.path ../x && git st', 'qrepo'],
     ['git config help.autocorrect 1 && git st', 'qrepo'],
+    ['git config includeIf.onbranch:main.path ../x && git st', 'qrepo'],
+    ['git config safe.bareRepository all && git st', 'qrepo'],
+    ['git config core.worktree .. && git st', 'qrepo'],
     ['git config "$K" x && git st', 'qrepo'],
     ['git config --add && git st', 'qrepo'],
     ['git init -q x && git st', 'qrepo'],
@@ -1367,6 +1372,17 @@ describe('shell approval in a project with a large node_modules', () => {
     ["node -e 'x' && git st", 'yrepo'],
     ["perl -e 'x' && git st", 'yrepo'],
     ["ruby -e 'x' && git st", 'yrepo'],
+    ["python3.12 -c 'x' && git st", 'yrepo'],
+    ["python3 -Bc 'x' && git st", 'yrepo'],
+    ["pypy3 -c 'x' && git st", 'yrepo'],
+    ["nodejs -e 'x' && git st", 'yrepo'],
+    ["node -pe 'x' && git st", 'yrepo'],
+    ['node --eval=x && git st', 'yrepo'],
+    ["bun -e 'x' && git st", 'yrepo'],
+    ["deno eval 'x' && git st", 'yrepo'],
+    ["perl -E 'x' && git st", 'yrepo'],
+    ["ruby -ne 'x' && git st", 'yrepo'],
+    ["php -r 'x;' && git st", 'yrepo'],
     ['python3 -c \'open(".git/config", "a").write("x")\' && git st', 'yrepo'],
     ['true && bash -c \'git config alias.st "!touch x"\' && git st', 'yrepo'],
     ['true && bash -c "$c" && git st', 'yrepo'],
@@ -1492,6 +1508,17 @@ describe('shell approval in a project with a large node_modules', () => {
       expect(await judge('make && git dst')).toMatchObject(asks);
     } finally {
       await rm(link, { force: true });
+    }
+  });
+
+  it('asks in every mode for an alias read where a config place cannot be resolved', async () => {
+    const config = join(proj, '..', '.config');
+    await chmod(config, 0o000);
+    try {
+      expect(await judge('git st', 'qrepo')).toMatchObject({ auto: true, full: true });
+      expect(await judge('echo x > out.txt && git st', 'qrepo')).toMatchObject(asks);
+    } finally {
+      await chmod(config, 0o755);
     }
   });
 
