@@ -8,6 +8,7 @@ import {
   applyModelPriceCatalog,
   bedrockClientCredentials,
   isModelDeprecated,
+  MODEL_LIST_REVISION_MEMO_MS,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { backendForAdapterFamily } from './adapterFamilyDispatch';
@@ -266,7 +267,9 @@ const _inFlightBuilds = new Map<string, Promise<BuiltModelList>>();
  * one chat accepts. Read at most once per REVISION_MEMO_MS per process.
  */
 export type ModelListRevisionProvider = () => Promise<string | null>;
-const REVISION_MEMO_MS = 5_000;
+const REVISION_MEMO_MS = MODEL_LIST_REVISION_MEMO_MS;
+// A stalled Mongo must not hold up a request the cached list could serve; see CATALOG_READ_TIMEOUT_MS.
+export const MODEL_LIST_REVISION_READ_DEADLINE_MS = 1_500;
 let _revisionProvider: ModelListRevisionProvider | null = null;
 let _knownRevision: string | undefined;
 let _revisionFreshUntil = 0;
@@ -282,6 +285,18 @@ export function setModelListRevisionProvider(provider: ModelListRevisionProvider
   _revisionEpoch += 1;
   _modelCache = null;
   _inFlightBuilds.clear();
+}
+
+async function settlesWithin(promise: Promise<void>, ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<false>(resolve => {
+    timer = setTimeout(() => resolve(false), ms);
+  });
+  try {
+    return await Promise.race([promise.then(() => true as const), deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function readModelListRevision(provider: ModelListRevisionProvider): Promise<void> {
@@ -307,7 +322,10 @@ async function resolveModelListRevision(reported: string | undefined): Promise<s
     _revisionRead ??= readModelListRevision(_revisionProvider).finally(() => {
       _revisionRead = null;
     });
-    await _revisionRead;
+    // Past the deadline the last known revision serves; the read stays shared and lands when it lands.
+    if (!(await settlesWithin(_revisionRead, MODEL_LIST_REVISION_READ_DEADLINE_MS))) {
+      _revisionFreshUntil = Date.now() + REVISION_MEMO_MS;
+    }
   }
   return _knownRevision;
 }

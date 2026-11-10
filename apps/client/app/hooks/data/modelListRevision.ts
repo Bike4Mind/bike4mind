@@ -1,15 +1,18 @@
 import { hashKey, type QueryClient } from '@tanstack/react-query';
-import { settingsMap } from '@bike4mind/common';
+import { MODEL_LIST_REVISION_MEMO_MS, settingsMap } from '@bike4mind/common';
 import type { ModelCatalog } from '@client/app/utils/llm';
 import { MODEL_CATALOG_QUERY_KEY } from '@client/app/hooks/data/useModelInfo';
 
-/** Spreads the refetch one bump sets off across every connected tab. */
+/**
+ * Spreads the refetch one bump sets off across every connected tab. It starts after MODEL_LIST_REVISION_MEMO_MS,
+ * by which time every server process has dropped the list it built under the previous revision.
+ */
 export const MODEL_LIST_REFETCH_JITTER_MS = 10_000;
 
 interface RevisionWatch {
   /** The last revision the adminsettings subscription pushed. */
   pushed?: string;
-  /** The pushed revision a refetch was already spent on; one per revision, so a lagging server cannot loop it. */
+  /** The pushed revision a refetch already landed for; one per revision, so a lagging server cannot loop it. */
   refetchedFor?: string;
   timer?: ReturnType<typeof setTimeout>;
 }
@@ -41,13 +44,20 @@ function reconcile(queryClient: QueryClient, random: () => number): void {
   const listed = listedRevision(queryClient);
   // undefined: no list yet; this runs again when it lands.
   if (listed === undefined || listed === pushed) return;
-  watch.refetchedFor = pushed;
-  watch.timer = setTimeout(() => {
-    watch.timer = undefined;
-    // Another path (a finished manual discovery run) may have refetched during the wait.
-    if (listedRevision(queryClient) === watch.pushed) return;
-    void queryClient.invalidateQueries({ queryKey: MODEL_CATALOG_QUERY_KEY });
-  }, random() * MODEL_LIST_REFETCH_JITTER_MS);
+  watch.timer = setTimeout(
+    () => {
+      watch.timer = undefined;
+      // Another path (a finished manual discovery run) may have refetched during the wait.
+      const target = watch.pushed;
+      if (!target || listedRevision(queryClient) === target) return;
+      watch.refetchedFor = target;
+      void queryClient.invalidateQueries({ queryKey: MODEL_CATALOG_QUERY_KEY }).then(() => {
+        // A failed refetch has not used up the revision: the next push or landing tries again.
+        if (queryClient.getQueryState(MODEL_CATALOG_QUERY_KEY)?.status === 'error') watch.refetchedFor = undefined;
+      });
+    },
+    MODEL_LIST_REVISION_MEMO_MS + random() * MODEL_LIST_REFETCH_JITTER_MS
+  );
 }
 
 export function handleModelListRevisionSetting(

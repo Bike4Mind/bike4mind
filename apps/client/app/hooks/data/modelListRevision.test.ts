@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { QueryClient } from '@tanstack/react-query';
+import { MODEL_LIST_REVISION_MEMO_MS } from '@bike4mind/common';
 import { MODEL_CATALOG_QUERY_KEY } from './useModelInfo';
 import {
   MODEL_LIST_REFETCH_JITTER_MS,
@@ -32,14 +33,47 @@ describe('handleModelListRevisionSetting', () => {
     vi.useRealTimers();
   });
 
-  it('refetches a list built under a different revision, within the jitter window', () => {
+  it('refetches a list built under a different revision, within the jitter window after the server memo', () => {
     queryClient.setQueryData(MODEL_CATALOG_QUERY_KEY, catalogAt('rev-1'));
 
     handleModelListRevisionSetting(queryClient, pushed('rev-2'), () => 0.5);
+    vi.advanceTimersByTime(MODEL_LIST_REVISION_MEMO_MS + MODEL_LIST_REFETCH_JITTER_MS / 2 - 1);
     expect(invalidate).not.toHaveBeenCalled();
 
-    vi.advanceTimersByTime(MODEL_LIST_REFETCH_JITTER_MS);
+    vi.advanceTimersByTime(1);
     expect(invalidate).toHaveBeenCalledWith({ queryKey: MODEL_CATALOG_QUERY_KEY });
+  });
+
+  it('never refetches before every server process has dropped the previous revision', () => {
+    queryClient.setQueryData(MODEL_CATALOG_QUERY_KEY, catalogAt('rev-1'));
+
+    handleModelListRevisionSetting(queryClient, pushed('rev-2'), () => 0);
+    vi.advanceTimersByTime(MODEL_LIST_REVISION_MEMO_MS - 1);
+    expect(invalidate).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1);
+    expect(invalidate).toHaveBeenCalledTimes(1);
+  });
+
+  it('tries the same revision again after a failed refetch', async () => {
+    queryClient.setQueryData(MODEL_CATALOG_QUERY_KEY, catalogAt('rev-1'));
+    invalidate.mockImplementation(async () => {
+      queryClient
+        .getQueryCache()
+        .find({ queryKey: MODEL_CATALOG_QUERY_KEY })
+        ?.setState({
+          status: 'error',
+          error: new Error('offline'),
+        });
+    });
+
+    handleModelListRevisionSetting(queryClient, pushed('rev-2'), () => 0);
+    await vi.runAllTimersAsync();
+    expect(invalidate).toHaveBeenCalledTimes(1);
+
+    handleModelListRevisionSetting(queryClient, pushed('rev-2'), () => 0);
+    await vi.runAllTimersAsync();
+    expect(invalidate).toHaveBeenCalledTimes(2);
   });
 
   it('refetches a list that carries no revision', () => {

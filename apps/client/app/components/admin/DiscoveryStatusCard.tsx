@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Alert, Box, Button, CircularProgress, Link, Stack, Tooltip, Typography } from '@mui/joy';
-import type { IDiscoverySkippedSource } from '@bike4mind/common';
+import { MODEL_LIST_REVISION_MEMO_MS, type IDiscoverySkippedSource } from '@bike4mind/common';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import { api } from '@client/app/contexts/ApiContext';
 import { MODEL_CATALOG_QUERY_KEY } from '@client/app/hooks/data/useModelInfo';
@@ -192,7 +192,11 @@ export const DiscoveryStatusCard: React.FC<{ onRunFinished?: () => void }> = ({ 
           if (!isAwaitedRun(latest.lastRun, baselineMs)) continue;
           sawNewRun = true;
           if (latest.lastRun?.finishedAt) {
-            void queryClient.invalidateQueries({ queryKey: MODEL_CATALOG_QUERY_KEY });
+            // Not before every server process has dropped the list it built under the previous revision.
+            setTimeout(
+              () => void queryClient.invalidateQueries({ queryKey: MODEL_CATALOG_QUERY_KEY }),
+              MODEL_LIST_REVISION_MEMO_MS
+            );
             if (!unmounted.current) {
               setNotice(`Run finished: ${latest.lastRun.status}.`);
               onRunFinished?.();

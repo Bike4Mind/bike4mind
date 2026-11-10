@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { ChatModels, ModelBackend } from '@bike4mind/common';
 import type { IModelCatalogRow } from '@bike4mind/common';
 import {
+  MODEL_LIST_REVISION_READ_DEADLINE_MS,
   RUNTIME_DISCOVERED_BACKENDS,
   getAvailableModels,
   seededModelIds,
@@ -216,6 +217,51 @@ describe('getAvailableModels model catalog provider', () => {
       await getAvailableModels(null);
 
       expect(calls.count).toBe(1);
+    });
+
+    it('serves the cached list within the deadline while the revision read hangs, then applies the late answer', async () => {
+      vi.useFakeTimers();
+      const calls = { count: 0 };
+      setModelCatalogProvider(async () => {
+        calls.count += 1;
+        return [row];
+      });
+      let answerLate: (revision: string) => void = () => {};
+      let hanging = false;
+      setModelListRevisionProvider(async () => {
+        if (!hanging) return 'rev-1';
+        return new Promise<string>(resolve => {
+          answerLate = resolve;
+        });
+      });
+      await getAvailableModels(null);
+
+      hanging = true;
+      vi.advanceTimersByTime(5_000);
+      let served = false;
+      const stalled = getAvailableModels(null).then(models => {
+        served = true;
+        return models;
+      });
+      await vi.advanceTimersByTimeAsync(MODEL_LIST_REVISION_READ_DEADLINE_MS - 1);
+      expect(served).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(served).toBe(true);
+      expect((await stalled).find(m => m.id === TARGET)?.rank).toBe(4242);
+      expect(calls.count).toBe(1);
+
+      // Inside the memo window that the timeout opened, a caller does not wait on the stuck read again.
+      let servedAgain = false;
+      void getAvailableModels(null).then(() => {
+        servedAgain = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(servedAgain).toBe(true);
+
+      answerLate('rev-2');
+      await vi.advanceTimersByTimeAsync(0);
+      await getAvailableModels(null);
+      expect(calls.count).toBe(2);
     });
 
     it('prefers a revision the caller passes over the memoized one', async () => {
