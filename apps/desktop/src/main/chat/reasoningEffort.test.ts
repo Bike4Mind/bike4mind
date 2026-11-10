@@ -1,6 +1,7 @@
 import { ChatModels } from '@bike4mind/common';
 import type { ChatModelOption, ReasoningEffortSetting } from '@shared/chat';
 import { describe, expect, it } from 'vitest';
+import { hostedControls } from './modelControls';
 import {
   parseReasoningEffortSetting,
   reasoningEffortFor,
@@ -64,6 +65,20 @@ describe('reasoningEffortFor', () => {
     expect(reasoningEffortFor('minimal', ChatModels.GPT5, listed('none', 'low', 'xhigh'))).toBe('low');
     expect(reasoningEffortFor('none', ChatModels.GPT5, listed('low', 'high'))).toBe('low');
     expect(reasoningEffortFor('low', ChatModels.GPT5, listed('none'))).toBeUndefined();
+  });
+
+  it('sends the lowest listed effort, still thinking, for a stored none on a model that cannot stop thinking', () => {
+    const opus = {
+      id: ChatModels.CLAUDE_5_5_OPUS,
+      backend: 'anthropic',
+      canThink: true,
+      thinkingStyle: 'adaptive',
+      thinkingAlwaysOn: true,
+    };
+    const option = { controls: hostedControls(opus, ['none', 'low', 'high'], false) };
+    const effort = reasoningEffortFor('none', ChatModels.CLAUDE_5_5_OPUS, option);
+    expect(effort).toBe('low');
+    expect(requestsThinking('none', option, effort)).toBe(true);
   });
 
   it('keeps none and xhigh off a model whose levels are unknown, at the nearest of the old four', () => {

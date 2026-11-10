@@ -20,9 +20,9 @@ const describeDuration = (caps: VideoModelCapabilities): string =>
 const describeModel = (id: VideoModelId): string => {
   const caps = VIDEO_MODEL_CATALOG[id];
   return (
-    `- ${id} (${caps.displayName}): ${caps.modes.join(', ')}; duration ${describeDuration(caps)}; ` +
-    `aspect ${caps.aspectRatios.join(', ')}; resolution ${caps.resolutions.join(', ')}; ` +
-    `renders in about ${caps.typicalRenderSeconds}s`
+    `- ${id}: ${caps.modes.join('/')}; ${describeDuration(caps)}; ` +
+    `aspect ${caps.aspectRatios.join('/')}; resolution ${caps.resolutions.join('/')}; ` +
+    `about ${caps.typicalRenderSeconds}s${caps.audio === 'optional' ? '; audio optional (default on)' : ''}`
   );
 };
 
@@ -53,6 +53,7 @@ export function buildVideoToolSchema(usableModels: readonly [VideoModelId, ...Vi
     durationSeconds: z.number().int().min(min).max(max).optional().describe('Clip length; must fit the chosen model'),
     aspectRatio: z.enum(aspectRatios).optional(),
     resolution: z.enum(resolutions).optional(),
+    ...(usableCaps.some(caps => caps.audio === 'optional') ? { audio: z.boolean().optional() } : {}),
     inputImageFileId: z
       .string()
       .optional()
@@ -66,8 +67,7 @@ export function buildVideoToolSchema(usableModels: readonly [VideoModelId, ...Vi
       ),
   });
   const description = [
-    'Start generating a short video clip. Returns immediately with a job id; the clip renders in the background',
-    'and appears in the reply as a card. Do not wait for it or promise a result time beyond the estimate.',
+    'Start a background video job; returns its id immediately and delivers a card. Do not wait or promise a time beyond the estimate.',
     'Available models:',
     ...usableModels.map(describeModel),
   ].join('\n');

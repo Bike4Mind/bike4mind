@@ -8,6 +8,7 @@ import {
 import type { PremiumApiKeyScope } from '@bike4mind/common';
 import { premiumApiKeyScopes } from '../../premium-generated/premiumApiKeyScopes.generated';
 import { DERIVED_API_KEY_SCOPE_ENDPOINTS } from './apiKeyScopeEndpoints.generated';
+import { Logger } from '@bike4mind/observability';
 
 export interface ApiKeyScopeOption {
   value: ApiKeyScopeValue;
@@ -122,7 +123,7 @@ const HAND_WRITTEN_USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     value: ApiKeyScope.SKILLS_WRITE,
     label: 'Skill Market: Write',
     description:
-      'Publish your skills to the Skill Market, submit new versions, manage and withdraw your listings, and browse and import listings. Unlike skills:read, it is not confined: it also reaches API routes that declare no scope',
+      'Create, update and read your own skills from a SKILL.md, publish them to the Skill Market, submit new versions, manage and withdraw your listings, and browse and import listings. Unlike skills:read, it is not confined: it also reaches API routes that declare no scope',
     endpoints: [],
   },
   {
@@ -361,7 +362,7 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = mergeContributedScopes(
   { onReject: reason => REJECTED_SCOPE_CONTRIBUTIONS.push(reason) }
 );
 if (REJECTED_SCOPE_CONTRIBUTIONS.length > 0) {
-  console.warn(`[api-keys] dropped contributed scope rows: ${REJECTED_SCOPE_CONTRIBUTIONS.join('; ')}`);
+  Logger.warn(`[api-keys] dropped contributed scope rows: ${REJECTED_SCOPE_CONTRIBUTIONS.join('; ')}`);
 }
 
 /** All user-selectable scope values, e.g. for a "Select All" action. */

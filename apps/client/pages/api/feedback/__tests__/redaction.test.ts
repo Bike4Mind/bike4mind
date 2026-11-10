@@ -71,6 +71,8 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
 }));
 
+// The audit write pulls the admin audit chain; feedbackReadAudit.test.ts covers it.
+vi.mock('@server/utils/feedbackReadAudit', () => ({ recordFeedbackRead: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
 const mockPostFeedbackToSlack = vi.fn().mockResolvedValue({ outcome: 'delivered' });

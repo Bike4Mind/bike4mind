@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import noRawEntityResponse from './eslint-rules/no-raw-entity-response.mjs';
 import noRawAdminJoy from './eslint-rules/no-raw-admin-joy.mjs';
+import noContentInLogMessage from './eslint-rules/no-content-in-log-message.mjs';
 
 /**
  * ESLint Flat Config for Bike4Mind Monorepo
@@ -385,6 +386,7 @@ const localRuleSources = [
   './eslint-rules/no-raw-admin-joy.mjs',
   './eslint-rules/admin-joy-legacy.mjs',
   './eslint-rules/admin-joy-legacy-imports.mjs',
+  './eslint-rules/no-content-in-log-message.mjs',
 ];
 const localRulesPlugin = {
   meta: {
@@ -394,7 +396,11 @@ const localRulesPlugin = {
       .digest('hex')
       .slice(0, 12),
   },
-  rules: { 'no-raw-entity-response': noRawEntityResponse, 'no-raw-admin-joy': noRawAdminJoy },
+  rules: {
+    'no-raw-entity-response': noRawEntityResponse,
+    'no-raw-admin-joy': noRawAdminJoy,
+    'no-content-in-log-message': noContentInLogMessage,
+  },
 };
 
 export default defineConfig([
@@ -791,6 +797,20 @@ export default defineConfig([
     },
   },
 
+  // Server code logs through the structured Logger (redaction + metadata), never console.* directly;
+  // see b4m-core/observability. Its own rule id, so the no-restricted-imports blocks above are untouched.
+  // server-utils/src/bootstrap patches console by design, so it is exempt.
+  {
+    files: ['packages/server-utils/src/**/*.{ts,tsx,mts,cts}'],
+    ignores: [
+      '**/*.{test,spec}.{ts,tsx}',
+      '**/__tests__/**',
+      '**/__test__/**',
+      'packages/server-utils/src/bootstrap/**',
+    ],
+    rules: { 'no-console': 'error' },
+  },
+
   // #9627 — ban filesystem tree-walking in test files anywhere under apps/client/pages/**. Uses
   // no-restricted-syntax (a different rule id than no-restricted-imports), so the apps/client
   // Next.js block's import restrictions still apply to these files unchanged. See
@@ -841,5 +861,19 @@ export default defineConfig([
     rules: {
       'b4m/no-raw-entity-response': 'error',
     },
+  },
+
+  // Server log lines stay free of prompts, queries and model output; see eslint-rules/no-content-in-log-message.mjs.
+  {
+    files: [
+      'apps/client/pages/api/**/*.{ts,tsx}',
+      'apps/client/server/**/*.ts',
+      'apps/workers/src/**/*.ts',
+      'b4m-core/*/src/**/*.ts',
+      'packages/server-utils/src/**/*.ts',
+    ],
+    ignores: ['**/*.{test,spec}.{ts,tsx}', '**/__tests__/**', '**/__test__/**'],
+    plugins: { b4m: localRulesPlugin },
+    rules: { 'b4m/no-content-in-log-message': 'error' },
   },
 ]);

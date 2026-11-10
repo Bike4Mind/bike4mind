@@ -85,6 +85,15 @@ const specProjects = [
     auth: './e2e/.auth/teams-user.json',
     skipWarmup: true,
   },
+  // Generates only cheap audio (one short speech clip, one sound effect); video and music stay at
+  // form level. Makes no chat-model call, so it skips the AI warmup.
+  {
+    name: 'studio',
+    setupMatch: /(?:^|\/)studio\.setup\.ts$/,
+    testMatch: /(?:^|\/)studio\.spec\.ts$/,
+    auth: './e2e/.auth/studio-user.json',
+    skipWarmup: true,
+  },
   {
     name: 'credits',
     setupMatch: /(?:^|\/)credits\.setup\.ts$/,

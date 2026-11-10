@@ -30,11 +30,14 @@ vi.mock('@bike4mind/observability', () => {
     updateMetadata: vi.fn(),
   };
   mockLogger.withMetadata = vi.fn(() => mockLogger);
-  return {
-    Logger: vi.fn(function () {
+  // Static Logger.warn is called by server-utils config at import time.
+  const Logger = Object.assign(
+    vi.fn(function () {
       return mockLogger;
     }),
-  };
+    { warn: vi.fn() }
+  );
+  return { Logger };
 });
 
 vi.mock('@bike4mind/llm-adapters', async importOriginal => {

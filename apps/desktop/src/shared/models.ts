@@ -76,6 +76,8 @@ export interface ModelFit {
   basis: 'arch' | 'size';
   /** Tokens of context the estimate assumes: the num_ctx local chat sends for this model. */
   context: number;
+  /** A GPU limit the verdict does not count, flagged on the badge: Ollama in WSL holding the GPU to the VM's memory. */
+  warning?: string;
 }
 
 export interface MachineView {
@@ -104,10 +106,6 @@ export function anIntelGpu(name: string | null): string {
 /** What makes an Intel card's memory readable on Linux, for a machine with `vramNeedsLlamaServer`. */
 export const LLAMA_SERVER_VRAM_HELP =
   "Linux does not report an Intel card's memory. Install a llama.cpp SYCL or Vulkan build of llama-server, with its ggml-sycl or ggml-vulkan library in the same folder, or enter its path for a llama-server model server, then save it (or restart Desktop) to read it.";
-
-/** For Intel integrated graphics, which Ollama, the runtime Curated picks are rated for, does not use. */
-export const OLLAMA_SKIPS_INTEL_IGPU =
-  'Ollama does not use Intel integrated graphics, so picks and badges assume the CPU.';
 
 export interface LocalModelEntry {
   name: string;

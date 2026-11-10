@@ -1,5 +1,11 @@
 import type { Request } from 'express';
-import { BadRequestError, NotFoundError, type AuditTarget, type IUserApiKeyDocument } from '@bike4mind/common';
+import {
+  BadRequestError,
+  NotFoundError,
+  assertCanActOnAdminTarget,
+  type AuditTarget,
+  type IUserApiKeyDocument,
+} from '@bike4mind/common';
 import { realtimeConnectionRepository, userRepository } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { authSessionService } from '@bike4mind/services';
@@ -21,6 +27,15 @@ export async function loadApiKeyOrThrow(keyId: string): Promise<IUserApiKeyDocum
 export async function ownerAuditTarget(ownerUserId: string): Promise<AuditTarget> {
   const owner = await userRepository.findById(ownerUserId);
   return { kind: 'user', id: ownerUserId, displayName: owner?.email ?? owner?.username ?? ownerUserId };
+}
+
+/** A delegate may not act on a key whose owner has admin access; call before any write or secret is issued. */
+export async function assertCanActOnKeyOwner(
+  actor: { isAdmin?: boolean | null; adminPermissions?: readonly string[] | null },
+  ownerUserId: string,
+  action: string
+): Promise<void> {
+  assertCanActOnAdminTarget(actor, await userRepository.findById(ownerUserId), action);
 }
 
 /** Identifies a key in audit details: id and public prefix only, never any secret material. */

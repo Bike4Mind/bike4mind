@@ -88,6 +88,10 @@ function tooLarge(needBytes: number, usable: number, machine: number, where: Fit
 const withTightNote = (fit: { level: FitLevel; detail: string }, where: FitWhere) =>
   fit.level === 'tight' ? { ...fit, detail: `${fit.detail} ${WORDS[where].tight}` } : fit;
 
+/** A GPU limit the verdict leaves out changes nothing for a model too large anyway or planned on the CPU. */
+const withWarning = (fit: ModelFit, warning: string | undefined, cpuOnly: boolean): ModelFit =>
+  warning && !cpuOnly && fit.level !== 'too-large' ? { ...fit, warning } : fit;
+
 type ModelExtras = Pick<FitModel, 'mmprojBytes' | 'expertBytesPerLayer' | 'activeParamsFraction'> & {
   /** Draft tokens per step while the model speculates (MTP or a draft layer); 0 or absent when it does not. */
   draftMax?: number;
@@ -157,13 +161,14 @@ export function fitFromArch(
   weightsBytes: number,
   hardware: HardwareProfile,
   context: number,
-  options: ModelExtras & { where?: FitWhere } = {}
+  options: ModelExtras & { where?: FitWhere; warning?: string } = {}
 ): ModelFit {
-  const { where = 'local', ...extras } = options;
+  const { where = 'local', warning, ...extras } = options;
   const planned = plan(arch, weightsBytes, hardware, context, extras);
   const cpuOnly = memoryBudgets(ollamaHardware(hardware)).cpuOnly;
   const { level, detail } = withTightNote(describe(planned, cpuOnly, where), where);
-  return { level, detail: detail + replySpeed(planned), basis: 'arch', context: planned.context };
+  const fit: ModelFit = { level, detail: detail + replySpeed(planned), basis: 'arch', context: planned.context };
+  return withWarning(fit, warning, cpuOnly);
 }
 
 /**
@@ -174,7 +179,7 @@ export function fitFromSize(
   sizeBytes: number,
   hardware: HardwareProfile,
   context: number,
-  options: { limitKnown?: boolean; where?: FitWhere } = {}
+  options: { limitKnown?: boolean; where?: FitWhere; warning?: string } = {}
 ): ModelFit {
   const where = options.where ?? 'local';
   const { level, needBytes, budgetBytes, offloadBytes, marginBytes, ramPoolBytes, cpuOnly } = estimateFitFromSize(
@@ -204,7 +209,7 @@ export function fitFromSize(
   else if (offloadBytes > 0)
     detail = `${about}, more than ${budget}, so part of it runs from system RAM and replies are slower.`;
   else detail = level === 'tight' ? `${about}, close to ${budget}.${note}` : `${about}, of ${budget}.${note}`;
-  return { ...withTightNote({ level, detail }, where), basis: 'size', context };
+  return withWarning({ ...withTightNote({ level, detail }, where), basis: 'size', context }, options.warning, cpuOnly);
 }
 
 export function machineView(hardware: HardwareProfile): MachineView {

@@ -27,7 +27,10 @@ type KindCache = {
   patch: (queryClient: QueryClient, job: JobUpdate) => boolean;
 };
 
-const KIND_CACHES: Record<GenerationJobKind, KindCache> = {
+// Image jobs have no client cache yet (Studio reads them itself); they only move the credit balances.
+type CachedKind = Exclude<GenerationJobKind, 'image'>;
+
+const KIND_CACHES: Record<CachedKind, KindCache> = {
   video: {
     keys: videoGenerationKeys,
     patch: (queryClient, { id, state, progress }) => patchVideoGeneration(queryClient, { id, state, progress }),
@@ -39,10 +42,13 @@ const KIND_CACHES: Record<GenerationJobKind, KindCache> = {
 };
 
 // A server newer than this client can send a kind it has no cache for.
-const isCachedKind = (kind: string): kind is GenerationJobKind => Object.hasOwn(KIND_CACHES, kind);
+const isCachedKind = (kind: string): kind is CachedKind => Object.hasOwn(KIND_CACHES, kind);
 
 const handleUpdate = async (queryClient: QueryClient, job: JobUpdate): Promise<void> => {
-  if (!isCachedKind(job.kind)) return;
+  if (!isCachedKind(job.kind)) {
+    if (isTerminalGenerationState(job.state)) await invalidateGenerationCreditBalances(queryClient);
+    return;
+  }
   const { keys, patch } = KIND_CACHES[job.kind];
   const cached = patch(queryClient, job);
   const pending: Promise<void>[] = [];

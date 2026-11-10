@@ -54,6 +54,28 @@ describe('errorHandler - logged URL', () => {
     );
     expect(JSON.stringify(req.logger.error.mock.calls)).not.toContain('REF-123');
   });
+
+  describe('redacts a share-link token', () => {
+    const token = 'synthetic-share-token-0123456789';
+    const logged = (req: { logger: { error: ReturnType<typeof vi.fn>; warn: ReturnType<typeof vi.fn> } }) =>
+      JSON.stringify([req.logger.error.mock.calls, req.logger.warn.mock.calls]);
+
+    it.each([`/a/${token}`, `/api/publish/serve/a/${token}/index.html`])('from %s', url => {
+      const cases: unknown[] = [
+        new BadRequestError('bad'),
+        new ServiceUnavailableError('down'),
+        { name: 'CastError', message: 'Cast to ObjectId failed', path: '_id' },
+        'totally unknown',
+      ];
+      for (const error of cases) {
+        const { req, res } = makeReqRes();
+        req.url = url;
+        errorHandler(error, req, res);
+        expect(logged(req)).toContain('[redacted]');
+        expect(logged(req)).not.toContain(token);
+      }
+    });
+  });
 });
 
 describe('errorHandler - the body carries no keys the envelope does not document', () => {

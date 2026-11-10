@@ -544,7 +544,7 @@ const DlqReplayTab: React.FC = () => {
       {showHistory && (
         <>
           <Typography level="title-md" sx={{ mb: 1 }} startDecorator={<HistoryIcon />}>
-            Replay History {selectedQueue ? `(${selectedQueue})` : '(all queues)'}
+            Replay History {selectedQueue ? `(${selectedQueueInfo?.displayName ?? selectedQueue})` : '(all queues)'}
           </Typography>
 
           {/* History Filters */}
@@ -581,7 +581,7 @@ const DlqReplayTab: React.FC = () => {
             <FormControl size="sm">
               <FormLabel>Search</FormLabel>
               <Input
-                placeholder="Search body or error..."
+                placeholder="Search message ID or error..."
                 value={historySearch}
                 onChange={e => setHistorySearch(e.target.value)}
                 startDecorator={<SearchIcon fontSize="small" />}
@@ -611,24 +611,25 @@ const DlqReplayTab: React.FC = () => {
             <Table stickyHeader hoverRow data-testid="dlq-history-table">
               <thead>
                 <tr>
-                  <th style={{ width: 140 }}>Queue</th>
+                  <th style={{ width: 160 }}>Feature</th>
                   <th style={{ width: 200 }}>Message ID</th>
                   <th style={{ width: 80 }}>Status</th>
                   <th>Error</th>
+                  <th style={{ width: 120 }}>By</th>
                   <th style={{ width: 160 }}>Replayed At</th>
                 </tr>
               </thead>
               <tbody>
                 {historyLoading && (
                   <tr>
-                    <td colSpan={5} style={{ textAlign: 'center', padding: 24 }}>
+                    <td colSpan={6} style={{ textAlign: 'center', padding: 24 }}>
                       <CircularProgress size="sm" />
                     </td>
                   </tr>
                 )}
                 {!historyLoading && historyError && (
                   <tr>
-                    <td colSpan={5} style={{ textAlign: 'center', padding: 24 }}>
+                    <td colSpan={6} style={{ textAlign: 'center', padding: 24 }}>
                       <Typography level="body-sm" color="danger">
                         Failed to load history. Try refreshing.
                       </Typography>
@@ -637,7 +638,7 @@ const DlqReplayTab: React.FC = () => {
                 )}
                 {!historyLoading && !historyError && (!history || history.length === 0) && (
                   <tr>
-                    <td colSpan={5} style={{ textAlign: 'center', padding: 24 }}>
+                    <td colSpan={6} style={{ textAlign: 'center', padding: 24 }}>
                       <Typography level="body-sm" color="neutral">
                         No replay history
                       </Typography>
@@ -645,9 +646,9 @@ const DlqReplayTab: React.FC = () => {
                   </tr>
                 )}
                 {history?.map((entry: DlqReplayLogEntry) => (
-                  <tr key={entry.id}>
+                  <tr key={entry.id} data-testid={`dlq-history-row-${entry.id}`}>
                     <td>
-                      <Typography level="body-xs">{entry.queueLabel}</Typography>
+                      <Typography level="body-xs">{entry.sourceQueue}</Typography>
                     </td>
                     <td>
                       <Typography level="body-xs" sx={{ fontFamily: 'monospace' }}>
@@ -660,6 +661,11 @@ const DlqReplayTab: React.FC = () => {
                     <td>
                       <Typography level="body-xs" noWrap sx={{ maxWidth: 200 }}>
                         {entry.errorMessage || '-'}
+                      </Typography>
+                    </td>
+                    <td>
+                      <Typography level="body-xs" data-testid={`dlq-history-by-${entry.id}`}>
+                        {entry.replayedByName}
                       </Typography>
                     </td>
                     <td>

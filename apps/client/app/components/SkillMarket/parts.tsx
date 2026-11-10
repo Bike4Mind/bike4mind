@@ -97,7 +97,11 @@ const TIER: Record<SkillRiskTier, { label: string; color: 'success' | 'warning' 
     color: 'warning',
     hint: 'Medium findings, low classifier confidence, or a description mismatch',
   },
-  high: { label: 'High risk', color: 'danger', hint: 'Declares tools that act outside the conversation' },
+  high: {
+    label: 'High risk',
+    color: 'danger',
+    hint: 'High-risk findings that need a reviewer, listed under What the scan found',
+  },
 };
 
 export const TierChip: FC<{ tier?: SkillRiskTier }> = ({ tier }) =>
@@ -228,7 +232,7 @@ export const HonestSummaryPanel: FC<{ summary?: ISkillHonestSummary; tools?: str
 
 /** Line diff of two skill bodies (added lines green, removed red). */
 export const BodyDiff: FC<{ before: string; after: string; testId?: string }> = ({ before, after, testId }) => {
-  const parts = useMemo(() => diffLines(before, after), [before, after]);
+  const parts = useMemo(() => diffLines(before, after, { ignoreNewlineAtEof: true }), [before, after]);
   const unchanged = parts.every(p => !p.added && !p.removed);
   return (
     <Box
@@ -330,3 +334,9 @@ export const SupportingFiles: FC<{ files?: ISkillFile[] }> = ({ files }) =>
       </Stack>
     </Box>
   ) : null;
+
+/** An open Select listbox keeps focus on its button and bubbles Escape to the Modal, which must not treat it as a close. */
+export const isEscapeFromOpenListbox = (event: unknown): boolean => {
+  const target = (event as { target?: unknown } | null)?.target;
+  return target instanceof Element && !!target.closest('[aria-expanded="true"], [role="listbox"]');
+};

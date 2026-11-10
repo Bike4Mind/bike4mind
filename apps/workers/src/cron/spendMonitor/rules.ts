@@ -1,3 +1,4 @@
+import type { AccountContext } from '@bike4mind/server-utils/lib/accounts/accountContext';
 import type { SpendAlertSeverity, SpendRollupScopeType, SpendRuleId } from '@bike4mind/common';
 
 export type SpendThresholds = {
@@ -6,14 +7,18 @@ export type SpendThresholds = {
   platformSpikeFloorCredits: number;
   platformCostFloorUsd: number;
   accountSpikeRatio: number;
+  paidAccountMinAgeDays: number;
+  riskReviewScoreThreshold: number;
   accountSpikeFloorCredits: number;
   accountCeilingCredits: number;
+  paidAccountSpikeFloorCredits: number;
+  paidAccountCeilingCredits: number;
   /** Replace the account floor and ceiling for scopes resolved as trusted (see trust.ts). */
   trustedAccountSpikeFloorCredits: number;
   trustedAccountCeilingCredits: number;
 };
 
-export type AccountTier = 'standard' | 'trusted';
+export type AccountTier = 'standard' | 'paid' | 'trusted';
 
 export type SpendBreach = {
   rule: SpendRuleId;
@@ -25,6 +30,11 @@ export type SpendBreach = {
   ratio: number | null;
   /** Set on account-level breaches of a trusted scope. */
   trusted?: true;
+  accountTier?: AccountTier;
+  accountContext?: AccountContext;
+  policyReasons?: string[];
+  spikeFloorCredits?: number;
+  ceilingCredits?: number;
   /** Names of API keys whose own breach was folded into this payer's, and their ids. */
   viaKeys?: string[];
   viaKeyIds?: string[];
@@ -107,7 +117,7 @@ export function evaluatePlatform(
   ];
 }
 
-/** A trusted scope gets higher limits, never a mute: past its own ceiling it still pages. */
+/** Each account tier retains an absolute ceiling regardless of its baseline. */
 export function evaluateScope(
   obs: ScopeObservation,
   t: SpendThresholds,
@@ -116,10 +126,20 @@ export function evaluateScope(
   const rules = scopeRules(obs.scopeType);
   if (!rules) return []; // platform and model scopes are not account-level spend
   const trusted = tier === 'trusted';
-  const spikeFloor = trusted ? t.trustedAccountSpikeFloorCredits : t.accountSpikeFloorCredits;
-  const ceiling = trusted ? t.trustedAccountCeilingCredits : t.accountCeilingCredits;
+  const limits = {
+    standard: { spikeFloor: t.accountSpikeFloorCredits, ceiling: t.accountCeilingCredits },
+    paid: { spikeFloor: t.paidAccountSpikeFloorCredits, ceiling: t.paidAccountCeilingCredits },
+    trusted: { spikeFloor: t.trustedAccountSpikeFloorCredits, ceiling: t.trustedAccountCeilingCredits },
+  };
+  const { spikeFloor, ceiling } = limits[tier];
   const ratio = ratioOf(obs);
-  const mark = (b: SpendBreach): SpendBreach => (trusted ? { ...b, trusted: true as const } : b);
+  const mark = (breach: SpendBreach): SpendBreach => ({
+    ...breach,
+    accountTier: tier,
+    spikeFloorCredits: spikeFloor,
+    ceilingCredits: ceiling,
+    ...(trusted ? { trusted: true } : {}),
+  });
   if (obs.value >= ceiling) return [mark(breach(rules.ceiling, obs, 'critical', ratio))];
   if (isSpike(obs, ratio, t.accountSpikeRatio, spikeFloor)) {
     return [mark(breach(rules.spike, obs, 'warning', ratio))];

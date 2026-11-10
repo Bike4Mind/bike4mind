@@ -7,7 +7,7 @@ import {
   seedSignupGrantPools,
 } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { Logger } from '@bike4mind/observability';
+import { installConsoleRedaction, Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { dispatch as researchEngineDispatch } from '@workers/queueHandlers/researchEngineQueue';
@@ -113,6 +113,7 @@ const CHUNK_SCAN_INTERVAL_MS = 60_000;
 const DRAIN_GRACE_MS = 20_000;
 
 async function main() {
+  installConsoleRedaction();
   // This process only makes sense in self-host: it uses the env-backed Resource shim and
   // ElasticMQ. Refuse to run elsewhere so it can never poll a real AWS queue by accident.
   if (process.env.B4M_SELF_HOST !== 'true') {

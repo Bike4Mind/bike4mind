@@ -1,3 +1,4 @@
+import { AccountContextSchema } from '@bike4mind/server-utils/lib/accounts/accountContext';
 import { escapeSlackLine, type ISpendAlert, type SpendRuleId } from '@bike4mind/common';
 import {
   ADMIN_LINKS,
@@ -87,21 +88,79 @@ function listPriceContext(stage: string, rule: SpendRuleId, creditUsd: number): 
   return context;
 }
 
+function accountTierLabel(alert: ISpendAlert): string | null {
+  const tier = alert.context.accountTier;
+  if (tier === 'standard' || tier === 'paid' || tier === 'trusted') return tier;
+  return alert.context.trusted === true ? 'trusted' : null;
+}
+
+function accountLimitContext(alert: ISpendAlert): string[] {
+  const tier = accountTierLabel(alert);
+  const spikeFloor = numberOrNull(alert.context.spikeFloorCredits);
+  const ceiling = numberOrNull(alert.context.ceilingCredits);
+  return [
+    ...(tier ? [`${tier}-account limits`] : []),
+    ...(spikeFloor !== null ? [`spike floor: ${formatCredits(spikeFloor)} credits / ${WINDOW_LABEL}`] : []),
+    ...(ceiling !== null ? [`critical ceiling: ${formatCredits(ceiling)} credits / ${WINDOW_LABEL}`] : []),
+  ];
+}
+
+const formatAge = (days: number | null): string => (days === null ? 'unknown' : `${days.toFixed(1)} days`);
+const formatFlag = (value: boolean | null): string => (value === null ? 'unknown' : value ? 'yes' : 'no');
+
+function accountContextSections(alert: ISpendAlert): string[] {
+  if (alert.context.accountContext === undefined && alert.context.policyReasons === undefined) return [];
+  const parsed = AccountContextSchema.safeParse(alert.context.accountContext);
+  const reasons = Array.isArray(alert.context.policyReasons)
+    ? alert.context.policyReasons
+        .filter((reason): reason is string => typeof reason === 'string')
+        .slice(0, 6)
+        .map(reason => escapeSlackLine(reason.slice(0, 100)))
+    : [];
+  const explanation = reasons.length > 0 ? [`Policy: ${reasons.join(', ')}`] : [];
+  if (!parsed.success)
+    return [
+      `*Account context*\nunknown (unavailable or invalid)${explanation.length > 0 ? `\n${explanation[0]}` : ''}`,
+    ];
+  const context = parsed.data;
+  const paymentHistory =
+    context.payments.status === 'observed'
+      ? `${context.payments.succeeded} succeeded, ${context.payments.failed} failed, ${context.payments.radarBlocked} blocked, ${context.payments.elevatedRisk} elevated-risk; latest succeeded attempt started ${formatAge(context.payments.latestSucceededAgeDays)} ago`
+      : 'unknown (no retained payment history)';
+  const evidence =
+    context.evidence.status === 'observed'
+      ? `observed, ${context.evidence.ageHours === null ? 'age unknown' : `${context.evidence.ageHours.toFixed(1)} hours old`}`
+      : 'unknown (no behavioral evidence)';
+  return [
+    [
+      '*Account context*',
+      `Account age: ${formatAge(context.accountAgeDays)}; responsible owner: ${formatAge(context.responsibleAccountAgeDays)}`,
+      `Email verified: ${formatFlag(context.emailVerified)}; review: ${context.reviewState}; risk score: ${context.riskScore ?? 'unknown'}`,
+      `Review reopened: ${formatFlag(context.reviewReopened)}; payment-risk event: ${formatFlag(context.paymentRiskEvent)}`,
+      `Unreversed credit purchase: ${formatFlag(context.hasCreditPurchase)}; latest purchase: ${formatAge(context.lastCreditPurchaseAgeDays)}`,
+      `Retained payment history: ${paymentHistory}`,
+      `Behavioral evidence: ${evidence}`,
+      ...explanation,
+    ].join('\n'),
+  ];
+}
+
 function buildResolveMessage(input: SpendAlertMessageInput, title: string): SlackAlarmMessage {
   const { alert, scope, creditUsd } = input;
   const peak =
     alert.rule === 'platform_cost_spike' ? formatUsd(alert.peakValue) : `${formatCredits(alert.peakValue)} credits`;
   const endedAt = alert.resolvedAt ?? new Date();
   const duration = formatDuration(endedAt.getTime() - alert.openedAt.getTime());
-  const tier = alert.context.trusted === true ? ' (trusted)' : '';
+  const accountTier = accountTierLabel(alert);
+  const tier = accountTier ? ` (${accountTier})` : '';
   const line = `Resolved: ${title} - ${scope.label}${tier}, peak ${peak}, lasted ${duration}`;
 
   return composeAlarmMessage({
     stage: input.stage,
     level: 'info',
     title: line,
-    sections: [],
-    context: listPriceContext(input.stage, alert.rule, creditUsd),
+    sections: accountContextSections(alert),
+    context: [...listPriceContext(input.stage, alert.rule, creditUsd), ...accountLimitContext(alert)],
     summary: 'spend incident resolved',
   });
 }
@@ -116,12 +175,12 @@ export function buildSpendAlertMessage(input: SpendAlertMessageInput): SlackAlar
   const baseline = numberOrNull(alert.context.baseline);
   const ratio = numberOrNull(alert.context.ratio);
   const isCost = alert.rule === 'platform_cost_spike';
-  const trusted = alert.context.trusted === true;
+  const tier = accountTierLabel(alert);
   const excluded = numberOrNull(alert.context.trustedExcluded);
   const trustedExcluded = excluded !== null && excluded > 0 ? excluded : null;
 
   const fields = [
-    `*Scope*\n${safe(scope.label)}${trusted ? ' (trusted)' : ''}`,
+    `*Scope*\n${safe(scope.label)}${tier ? ` (${tier})` : ''}`,
     `*Last ${WINDOW_LABEL}*\n${formatAmount(alert.rule, alert.lastValue, creditUsd)}`,
     `*${trustedExcluded === null ? 'Normal' : 'Normal excl. trusted'} (${WINDOW_LABEL})*\n${baseline === null ? 'no history' : formatAmount(alert.rule, baseline, creditUsd)}`,
     `*Ratio*\n${ratio === null ? 'n/a' : `x${ratio.toFixed(1)}`}`,
@@ -137,7 +196,7 @@ export function buildSpendAlertMessage(input: SpendAlertMessageInput): SlackAlar
     fields.push(`*Trusted accounts, not in ratio*\n${formatAmount(alert.rule, trustedExcluded, creditUsd)}${estimate}`);
   }
 
-  const sections: string[] = [];
+  const sections: string[] = accountContextSections(alert);
   if (breakdown?.topModels.length) {
     const lines = breakdown.topModels.map(m => `${safe(m.model)}: ${formatCredits(m.credits)}`);
     sections.push(`*Top models (credits)*\n${lines.join('\n')}`);
@@ -161,7 +220,7 @@ export function buildSpendAlertMessage(input: SpendAlertMessageInput): SlackAlar
   }
 
   const context = [safe(stage), `${kind === 'escalate' ? 'escalated, ' : ''}${alert.severity}`];
-  if (trusted) context.push('trusted-account limits');
+  context.push(...accountLimitContext(alert));
   if (!isCost) context.push(listPriceNote(creditUsd));
 
   return composeAlarmMessage({

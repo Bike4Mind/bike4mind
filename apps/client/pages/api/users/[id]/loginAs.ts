@@ -1,13 +1,13 @@
 import { adminService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { userRepository, withTransaction, SupportAccess } from '@bike4mind/database';
 import { impersonationLifetimeMs } from '@bike4mind/server-utils/auth/impersonation';
 import { issueSessionForRequest } from '@server/auth/issueSession';
 import { readRefreshCookie, setAdminReturnCookie, setRefreshCookie } from '@bike4mind/server-utils/auth/refreshCookie';
 import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
-import { canAccessAdmin, ConflictError, redactUserSecretsForSelf } from '@bike4mind/common';
+import { canAccessAdmin, ConflictError, hasAdminPermission, redactUserSecretsForSelf } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
 import { selfSessionResponseSchema } from '@server/auth/selfSessionResponseSchema';
 import {
@@ -21,7 +21,7 @@ import { approvalDetails } from '@server/admin/creditGrants/approval';
 
 // jwtOnly: impersonation mints a full session, so an API key must never reach it
 // (see sessionGrantRoutesRejectApiKeys.test.ts).
-const handler = baseApi({ auth: 'jwtOnly' }).post(
+const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'users:impersonate' } }).post(
   asyncHandler<{}, unknown, unknown, { id: string }>(async (req, res) => {
     const targetUserId = req.query.id;
     const adminUser = req.user;
@@ -36,7 +36,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
       throw new BadRequestError('MFA token is required to use loginAs');
     }
 
-    if (adminUser.isAdmin && isSameUserId(adminUser.id, targetUserId)) {
+    if (hasAdminPermission(adminUser, 'users:impersonate') && isSameUserId(adminUser.id, targetUserId)) {
       await denySelfAdminAction(req, {
         action: 'user.impersonation.denied',
         attempted: 'user.impersonation.started',

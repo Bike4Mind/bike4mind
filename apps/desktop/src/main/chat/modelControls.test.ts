@@ -279,6 +279,22 @@ describe('hostedControls', () => {
     expect(hostedControls(gpt, [], true)).not.toHaveProperty('effort');
   });
 
+  it('offers no `none` on a model that cannot stop thinking, which the server would run at its lowest effort', () => {
+    const opus = {
+      id: ChatModels.CLAUDE_5_5_OPUS,
+      backend: 'anthropic',
+      canThink: true,
+      thinkingStyle: 'adaptive',
+      thinkingAlwaysOn: true,
+    };
+    expect(hostedControls(opus, ['none', 'low', 'high'], false).effort?.levels).toEqual(['low', 'high']);
+    expect(hostedControls(opus, ['none'], false)).not.toHaveProperty('effort');
+    expect(hostedControls({ ...opus, thinkingAlwaysOn: false }, ['none', 'low'], false).effort?.levels).toEqual([
+      'none',
+      'low',
+    ]);
+  });
+
   it('floors max output where reasoning is spent from it, by the server word or else the known sets', () => {
     const reasoner = { id: ChatModels.GPT5, backend: 'openai', canThink: true, maxOutputTokens: 128_000 };
     expect(hostedControls(reasoner, undefined, true).maxOutputTokens).toMatchObject({

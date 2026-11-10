@@ -136,7 +136,7 @@ export const AdminSettingsProvider: React.FC<AdminSettingsProviderProps> = ({
 
   // Public CDN artifact (M2.5): ungated, runs immediately without a token, served in ms
   // from CloudFront. Seeds startup-critical publicSafe settings (e.g. enforceMFA) so the
-  // "Checking security settings..." gate resolves before the authenticated fetch returns.
+  // MFA gate (MFAEnforcementWrapper) resolves before the authenticated fetch returns.
   const { data: publicSettings } = useQuery({
     queryKey: PUBLIC_SETTINGS_QUERY_KEY,
     queryFn: fetchPublicSettingsArtifact,

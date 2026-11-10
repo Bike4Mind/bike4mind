@@ -1,10 +1,9 @@
 import { AdminSettings } from '@bike4mind/database/infra';
 import { redactSettingSecrets, type AdminSettingDoc } from '@bike4mind/common';
 import { decryptAtRest } from '@bike4mind/utils/security';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
 
-// Get Admin Settings - returns the FULL AdminSettings collection, and is admin-only.
+// Get Admin Settings - returns the FULL AdminSettings collection, and needs settings:manage.
 //
 // A CASL `req.ability.can('read', AdminSettings)` check is NOT sufficient here: every
 // authenticated user holds a *conditional* read rule for feature-flag settings
@@ -16,9 +15,7 @@ import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 // the stored value is encrypted at rest, and only the mask (real last-4) is returned for
 // any setting tagged `isSensitive` in the merged core/contributed definitions, or for a
 // `settingName` with no definition at all (fail closed - an orphaned/renamed key defaults to masked, not plaintext).
-const handler = baseApi().get(async (req, res) => {
-  ensureAdmin(req.user?.isAdmin);
-
+const handler = adminApi({ adminPermissions: { GET: 'settings:manage' } }).get(async (_req, res) => {
   const settings = await AdminSettings.find().lean();
 
   const redacted: AdminSettingDoc[] = (settings ?? []).map(setting => {

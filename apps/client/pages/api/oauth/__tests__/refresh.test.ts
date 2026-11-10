@@ -137,7 +137,7 @@ describe('POST /api/oauth/refresh client allowlist', () => {
 
 describe('POST /api/oauth/refresh account state', () => {
   it.each([
-    ['banned', { isBanned: true }, 401],
+    ['banned', { isBanned: true }, 403],
     ['dispute-suspended', { disputePending: true }, 403],
     ['content-suspended', { moderation: { status: 'suspended' } }, 403],
   ])('refuses a %s account, revokes the rotated session and returns no tokens', async (_label, state, status) => {
@@ -162,7 +162,7 @@ describe('POST /api/oauth/refresh account state', () => {
 
     const res = await call('b4m-cli');
 
-    expect(res.statusCode).toBe(401);
+    expect(res.statusCode).toBe(403);
     expect(h.issueSession).not.toHaveBeenCalled();
   });
 

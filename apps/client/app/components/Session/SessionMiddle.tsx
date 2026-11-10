@@ -183,6 +183,7 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
     organizationId,
     thinking,
     enabledMcpServers,
+    disabledMcpConnections,
     imageModel,
   ] = useLLM(
     useShallow(s => [
@@ -205,6 +206,7 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
       s.organizationId,
       s.thinking,
       s.enabledMcpServers,
+      s.disabledMcpConnections,
       s.imageModel,
     ])
   );
@@ -380,6 +382,7 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
           ...llmSettings,
           imageConfig: imageConfig,
           mcpServers: enabledMcpServers ?? undefined,
+          disabledMcpConnections,
         });
       }
     }

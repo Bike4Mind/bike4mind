@@ -215,6 +215,7 @@ describe('POST /api/gears/claim', () => {
       deletedAt: 1,
       isSynthetic: 1,
       'signupGrant.blocked': 1,
+      'signupGrant.unlockForfeited': 1,
     });
     expect(mocks.addCredits).toHaveBeenCalledTimes(1);
     expect(mocks.addCredits.mock.calls[0][0]).toMatchObject({

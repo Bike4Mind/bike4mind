@@ -19,6 +19,13 @@ import {
   getGeneratedImageStorage,
 } from '@bike4mind/server-utils/utils/storage/index';
 import { getGeneratedCopyStore } from '@server/files/generatedCopyStore';
+import {
+  type CdnInvalidationBatch,
+  appFileCdnPath,
+  createCdnInvalidationBatch,
+  generatedCdnPath,
+} from '@server/services/cdn/invalidateRouterCdn';
+import { NOTEBOOK_DOWNLOAD_KEY_PREFIX } from '@server/notebooks/downloadCopyKeys';
 import { Resource } from 'sst';
 import { z } from 'zod';
 
@@ -47,7 +54,11 @@ async function isOrganizationFile(file: IFabFileDocument, userId: string): Promi
   return !personalWorkspace;
 }
 
-async function purgeFile(file: IFabFileDocument, { logger, assertLease }: PurgeOptions): Promise<void> {
+async function purgeFile(
+  file: IFabFileDocument,
+  { logger, assertLease }: PurgeOptions,
+  cdn: CdnInvalidationBatch
+): Promise<void> {
   const storage = getFilesStorage();
   const generated = getGeneratedCopyStore();
   const files = {
@@ -94,7 +105,10 @@ async function purgeFile(file: IFabFileDocument, { logger, assertLease }: PurgeO
             })
               .setOptions({ includeDeleted: true })
               .select('_id');
-            if (!other) await getGeneratedImageStorage().deletePermanently(key);
+            if (!other) {
+              await getGeneratedImageStorage().deletePermanently(key);
+              cdn.add(generatedCdnPath(key));
+            }
           },
         },
       },
@@ -112,7 +126,7 @@ async function purgeFile(file: IFabFileDocument, { logger, assertLease }: PurgeO
   await fabFileRepository.hardDeleteWithChunks(file.id, BATCH_SIZE, assertLease);
 }
 
-async function purgeKnowledgeFiles(userId: string, options: PurgeOptions): Promise<void> {
+async function purgeKnowledgeFiles(userId: string, options: PurgeOptions, cdn: CdnInvalidationBatch): Promise<void> {
   const personalWorkspaces = await Organization.find({ userId, personal: true })
     .setOptions({ includeDeleted: true })
     .select('_id');
@@ -136,7 +150,7 @@ async function purgeKnowledgeFiles(userId: string, options: PurgeOptions): Promi
       if (file.moderationStatus === 'pending') {
         throw new Error(`Account purge is waiting for moderation of file ${file.id}`);
       }
-      await purgeFile(file, options);
+      await purgeFile(file, options, cdn);
     }
     afterId = batch[batch.length - 1].id;
   }
@@ -145,7 +159,11 @@ async function purgeKnowledgeFiles(userId: string, options: PurgeOptions): Promi
 const storedFileSchema = z.object({ path: z.string().min(1) });
 const importFileSchema = z.object({ s3Bucket: z.string().min(1), s3Key: z.string().min(1) });
 
-async function purgeAppFiles(userId: string, assertLease: () => Promise<void>): Promise<void> {
+async function purgeAppFiles(
+  userId: string,
+  assertLease: () => Promise<void>,
+  cdn: CdnInvalidationBatch
+): Promise<void> {
   while (true) {
     await assertLease();
     const batch = await AppFile.collection.find({ userId }).limit(BATCH_SIZE).toArray();
@@ -154,6 +172,7 @@ async function purgeAppFiles(userId: string, assertLease: () => Promise<void>): 
       const { path } = storedFileSchema.parse(row);
       await assertLease();
       await getAppFilesStorage().deletePermanently(path);
+      cdn.add(appFileCdnPath(path));
       await assertLease();
       await AppFile.collection.deleteOne({ _id: row._id, userId });
     }
@@ -186,9 +205,20 @@ async function purgeImportArchives(userId: string, assertLease: () => Promise<vo
 export async function purgeAccountFiles(userId: string, options: PurgeOptions): Promise<void> {
   // Importing the repository registers its Mongoose model before the raw tombstone-inclusive read.
   void importHistoryJobRepository;
-  await purgeKnowledgeFiles(userId, options);
-  await purgeAppFiles(userId, options.assertLease);
+  // One CDN invalidation for everything erased, flushed even when a step throws: the bytes are gone either way.
+  const cdn = createCdnInvalidationBatch('account-files', options.logger);
+  try {
+    await purgeKnowledgeFiles(userId, options, cdn);
+    await purgeAppFiles(userId, options.assertLease, cdn);
+  } finally {
+    await cdn.flush();
+  }
   await purgeImportArchives(userId, options.assertLease);
-  await options.assertLease();
-  await getFilesStorage().deletePrefixPermanently(`exports/account-data/${encodeURIComponent(userId)}/`);
+  // Notebook download copies: the current exports/ location plus the legacy one no lifecycle rule reaps.
+  // Safe only while durable curated files stay at curated-notebooks/<uuid> (fabFileService create.ts)
+  // and curated-notebooks/jobs/<sha> (workers queueHandlers/notebookCuration.ts), never under a user id.
+  for (const prefix of ['exports/account-data', NOTEBOOK_DOWNLOAD_KEY_PREFIX, 'curated-notebooks']) {
+    await options.assertLease();
+    await getFilesStorage().deletePrefixPermanently(`${prefix}/${encodeURIComponent(userId)}/`);
+  }
 }

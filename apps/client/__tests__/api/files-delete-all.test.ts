@@ -38,7 +38,7 @@ vi.mock('@bike4mind/services', async importOriginal => {
 vi.mock('@server/files/generatedCopyStore', () => ({
   getGeneratedCopyStore: () => ({
     storage: { delete: generatedDelete },
-    quests: { findSessionIdsByImage: async () => [] },
+    quests: { findSessionIdsByMedia: async () => [] },
   }),
 }));
 

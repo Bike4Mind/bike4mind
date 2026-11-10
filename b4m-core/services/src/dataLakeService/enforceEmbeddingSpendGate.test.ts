@@ -167,6 +167,34 @@ describe('enforceEmbeddingSpendGate', () => {
     expect(denial).toBeInstanceOf(EmbeddingSpendDeniedError);
     expect((denial as EmbeddingSpendDeniedError).retryable).toBe(true);
     expect((denial as Error).message).toMatch(/stayed exhausted after waiting/);
+    expect((denial as EmbeddingSpendDeniedError).retryAfterMs).toBeGreaterThan(0);
+  });
+
+  it('denies without sleeping when the window resets later than the whole wait budget, and says when it resets', async () => {
+    const db = grantAll();
+    // 45s to reset > the 30s budget: sleeping first would only burn reserved concurrency before
+    // denying anyway, so the gate denies at once and reports the reset for the consumer's back-off.
+    db.cache.tryAddWithinLimitFixedWindow.mockResolvedValue({
+      success: false,
+      count: 120,
+      expiresAt: new Date(Date.now() + 45_000),
+    });
+    const sleep = vi.fn(async () => undefined);
+    let denial: unknown;
+    await enforceEmbeddingSpendGate({
+      estimatedMicroUsd: 1_000,
+      estimatedTokens: 1_000,
+      batchId: 'batch1',
+      dataLakeId: 'lake1',
+      db,
+      sleep,
+    }).catch(err => (denial = err));
+    expect(sleep).not.toHaveBeenCalled();
+    expect((denial as EmbeddingSpendDeniedError).retryable).toBe(true);
+    expect((denial as EmbeddingSpendDeniedError).retryAfterMs).toBeGreaterThan(40_000);
+    expect((denial as Error).message).toMatch(
+      /after waiting 0ms \(it resets in 4\ds, past the 30s in-handler wait budget\)/
+    );
   });
 
   it("meters the token window with the call's own token count, not one unit", async () => {

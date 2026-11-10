@@ -75,6 +75,31 @@ describe('admin signup grant pending', () => {
     expect(h.totals).toHaveBeenCalledExactlyOnceWith('user-1');
   });
 
+  it('returns the invite and its bonus through the response schema', async () => {
+    h.findById.mockResolvedValue({
+      id: 'user-1',
+      tags: [],
+      signupInvite: { source: 'organization', inviteId: 'inv-1', organizationId: 'org-1', at: new Date() },
+      signupGrant: {
+        stage: 'signup',
+        signupCredits: 100,
+        unlockCredits: 900,
+        creditsReleased: 300,
+        nextCondition: 'verification',
+        inviteBonusPaid: 40,
+      },
+    });
+    const { res, promise } = run();
+    await promise;
+    expect(res._getJSONData().invite).toEqual({ source: 'organization', bonusPaid: 40 });
+  });
+
+  it('returns a null invite for an account that signed up without one', async () => {
+    const { res, promise } = run();
+    await promise;
+    expect(res._getJSONData().invite).toBeNull();
+  });
+
   it('lowercases the id before looking the account up', async () => {
     const { promise } = run({ userId: 'USER-1' });
     await promise;

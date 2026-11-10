@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 import {
   MANAGEMENT_RATE_LIMIT,
   buildRateLimitKeys,
@@ -554,7 +555,7 @@ describe('apiKeyRateLimitCheck', () => {
     });
 
     it('still clears and reports the request counter when clearing management fails, and logs the failure', async () => {
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const warnSpy = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
       const request = buildRateLimitKeys(mockKeyId);
       const management = buildRateLimitKeys(mockKeyId, 'management');
       vi.mocked(cacheRepository.deleteByKeyAndReturn).mockImplementation(async key => {

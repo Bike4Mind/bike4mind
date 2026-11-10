@@ -10,6 +10,7 @@ import { adminSettingsRepository, cacheRepository } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue, TooManyRequestsError } from '@bike4mind/utils';
 import { isDevelopment } from '@bike4mind/server-utils/utils/config';
 import type { NextFunction, Request, Response } from 'express';
+import { requestLogUrl } from './requestLogUrl';
 
 /**
  * Default per-user cap on write requests, installed by baseApi on every authenticated route. One
@@ -118,7 +119,7 @@ export async function defaultWriteRateLimit(req: Request, res: Response, next: N
       userId: user.id,
       // Set during an admin's support session, whose writes count against the user it acts as.
       impersonatedBy: user.impersonatedBy,
-      path: req.url?.split('?')[0],
+      path: requestLogUrl((req.url ?? '').split('?')[0]),
       method: req.method,
       perMin,
       mode,

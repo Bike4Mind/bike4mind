@@ -203,8 +203,10 @@ const fabFileVectorizeQueueSubscription = fabFileVectorizeQueue.subscribe(
   {
     // Handler is single-record (reads event.Records[0]); pin batch size to 1 so
     // multi-record deliveries can't silently drop the un-read records. Matches
-    // sreJobQueue / overwatchAnalyticsQueue below.
-    batch: { size: 1 },
+    // sreJobQueue / overwatchAnalyticsQueue below. partialResponses: a retryable spend-gate
+    // (rate window) denial is handed back as a batch item failure rather than thrown, so it
+    // retries without an Invoke Error (see returnRecordForRedelivery).
+    batch: { size: 1, partialResponses: true },
   }
 );
 
@@ -1197,7 +1199,11 @@ const generationJobQueueSubscription = generationJobQueue.subscribe(
       eventBus,
       generationCallbackQueue,
       generationJobQueue,
+      // A masked image edit converts the mask to PNG there.
+      imageProcessor,
     ],
+    // Image jobs run our post-generation scan before the image is stored.
+    permissions: [{ actions: ['rekognition:DetectModerationLabels'], resources: ['*'] }],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
       ...TEST_GENERATION_PROVIDER_ENVIRONMENT,
@@ -1651,7 +1657,8 @@ const bobRunQueueSubscription = bobRunQueue.subscribe(
     timeout: '5 minutes',
     memory: '1024 MB',
     vpc: lambdaVpc,
-    link: [...allSecrets, websocketApi],
+    // appFilesBucket: a run's first-screen screenshots are stored under bob-screenshots/<runId>/.
+    link: [...allSecrets, websocketApi, appFilesBucket],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },

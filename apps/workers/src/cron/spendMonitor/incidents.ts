@@ -31,6 +31,11 @@ function breachContext(breach: SpendBreach, previous: Record<string, unknown> = 
   return {
     baseline: breach.baseline,
     ratio: breach.ratio,
+    ...(breach.accountContext ? { accountContext: breach.accountContext } : {}),
+    ...(breach.policyReasons ? { policyReasons: breach.policyReasons } : {}),
+    ...(breach.accountTier ? { accountTier: breach.accountTier } : {}),
+    ...(breach.spikeFloorCredits !== undefined ? { spikeFloorCredits: breach.spikeFloorCredits } : {}),
+    ...(breach.ceilingCredits !== undefined ? { ceilingCredits: breach.ceilingCredits } : {}),
     ...(breach.trusted ? { trusted: true } : {}),
     ...(breach.trustedExcluded ? { trustedExcluded: breach.trustedExcluded } : {}),
     ...(breach.viaKeys ? { viaKeys: breach.viaKeys } : {}),

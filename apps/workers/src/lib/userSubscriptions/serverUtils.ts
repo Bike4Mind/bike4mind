@@ -133,12 +133,6 @@ export const handleOrganizationSubscriptionInvoice = async (
 
   const customerId = typeof invoice.customer === 'string' ? invoice.customer : invoice.customer.id;
 
-  const user = await userRepository.findById(metadata.userId);
-  if (!user) {
-    logger.debug(`No user found for ID: ${metadata.userId}`);
-    return;
-  }
-
   const [item] = subscription.items.data;
   const subscriptionQuantity = item.quantity ?? 1;
   const periodStart = item.current_period_start;
@@ -209,6 +203,13 @@ export const handleOrganizationSubscriptionInvoice = async (
               `Organization for customer ${customerId} already exists (${existingOrganization.id}); not creating another`
             );
           } else {
+            // Only a new team needs the purchaser: metadata.userId is the owner at checkout time and can
+            // name a user who no longer owns (or exists after) an ownership transfer.
+            const user = await userRepository.findById(metadata.userId);
+            if (!user) {
+              logger.debug(`No user found for ID: ${metadata.userId}`);
+              return;
+            }
             organization = await organizationService.create(
               user,
               {
@@ -488,6 +489,19 @@ export const handleOrganizationSubscriptionInvoice = async (
       queryKey: ['organizations'],
     })
   );
+
+  if (org?.userId && String(org.userId) !== String(metadata.userId)) {
+    promises.push(
+      sendToClient(org.userId, Resource.websocket.managementEndpoint, {
+        action: 'invalidate_query',
+        queryKey: ['subscriptions'],
+      }),
+      sendToClient(org.userId, Resource.websocket.managementEndpoint, {
+        action: 'invalidate_query',
+        queryKey: ['organizations'],
+      })
+    );
+  }
 
   await Promise.all(promises);
 };

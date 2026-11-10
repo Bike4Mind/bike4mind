@@ -25,6 +25,8 @@ export type MarketVersionView = {
   snapshot: ISkillSnapshot;
   honestSummary?: ISkillHonestSummary;
   riskTier?: SkillRiskTier;
+  /** The listing's author approved it themselves; no second reviewer. */
+  selfApproved?: boolean;
   createdAt: string;
 };
 
@@ -221,6 +223,16 @@ export const useWithdrawListing = () => {
   return useMutation({
     mutationFn: async (listingId: string) => {
       await api.delete(`/api/skills/market/${listingId}`);
+    },
+    onSuccess: invalidate,
+  });
+};
+
+export const useDeleteListing = () => {
+  const invalidate = useInvalidateMarket();
+  return useMutation({
+    mutationFn: async (listingId: string) => {
+      await api.delete(`/api/skills/market/${listingId}/permanent`);
     },
     onSuccess: invalidate,
   });

@@ -481,16 +481,20 @@ export class OpenAIImageService extends AIImageService {
         // require the OpenAI organization to be verified and to have active billing/quota.
         if (error.status === 402) {
           throw new Error(
-            `OpenAI image generation requires payment or verification (402). Ensure the OpenAI account has active billing/quota and that the organization is verified for GPT Image models, or pick a different image model (e.g. Flux Pro).`
+            `OpenAI image generation requires payment or verification (402). Ensure the OpenAI account has active billing/quota and that the organization is verified for GPT Image models, or pick a different image model (e.g. Flux Pro).`,
+            { cause: error }
           );
         }
         if (error.status === 401 || error.status === 403) {
           throw new Error(
-            `OpenAI API access denied (${error.status}). The OpenAI API key may be missing, invalid, or lack access to this image model.`
+            `OpenAI API access denied (${error.status}). The OpenAI API key may be missing, invalid, or lack access to this image model.`,
+            { cause: error }
           );
         }
         if (error.status === 429) {
-          throw new Error(`OpenAI API rate limit exceeded (429). Please wait a moment and try again.`);
+          throw new Error(`OpenAI API rate limit exceeded (429). Please wait a moment and try again.`, {
+            cause: error,
+          });
         }
       }
 

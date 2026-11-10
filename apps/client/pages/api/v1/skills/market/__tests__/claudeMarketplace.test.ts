@@ -394,6 +394,12 @@ describe('GET /api/v1/skills/market/{id}/claude-plugin.zip', () => {
     expect(text).not.toContain('web_search');
   });
 
+  it("carries the author's Claude Code model into the plugin's SKILL.md", async () => {
+    const v = version(LISTING_A);
+    mockFindVersion.mockResolvedValue(doc({ ...v, snapshot: { ...v.snapshot, claudeCodeModel: 'haiku' } }));
+    expect((await zipOf(LISTING_A)).toString('utf8')).toContain('model: haiku');
+  });
+
   it("404s a caller who is not a member of the listing's org", async () => {
     mockMemberOrgs.mockResolvedValue(['65a0000000000000000000bb']);
     const { error } = await call(zipHandler, { id: LISTING_A });

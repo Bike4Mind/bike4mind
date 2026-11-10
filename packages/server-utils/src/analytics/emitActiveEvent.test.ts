@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { z } from 'zod';
+import { Logger } from '@bike4mind/observability';
 
 // Config is module-scoped; mock it so tests can control analytics configuration state.
 vi.mock('../utils/config', () => ({
@@ -180,10 +181,11 @@ describe('emitActiveEvent', () => {
   it('does not log the API key on 4xx errors', async () => {
     resetConfig();
     mockFetch.mockResolvedValue({ status: 403 });
-    const warnSpy = vi.spyOn(console, 'warn');
+    const warnSpy = vi.spyOn(Logger, 'warn');
 
     await emitActiveEvent({ pseudoUserId: 'pseudo', sessionId: 'sess', userType: 'free' });
 
+    expect(warnSpy).toHaveBeenCalled();
     for (const call of warnSpy.mock.calls) {
       const serialized = JSON.stringify(call);
       expect(serialized).not.toContain('b4m_live_');
@@ -194,7 +196,7 @@ describe('emitActiveEvent', () => {
   it('warns (without leaking the key) when the ingest URL returns an opaque redirect', async () => {
     resetConfig();
     mockFetch.mockResolvedValue({ status: 0, type: 'opaqueredirect' });
-    const warnSpy = vi.spyOn(console, 'warn');
+    const warnSpy = vi.spyOn(Logger, 'warn');
 
     await emitActiveEvent({ pseudoUserId: 'pseudo', sessionId: 'sess', userType: 'free' });
 
@@ -356,7 +358,7 @@ describe('emitProductEvent', () => {
 
   it('validates a product-owned vocabulary independently of host fields', async () => {
     resetConfig();
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(Logger, 'warn').mockImplementation(() => {});
     await emitProductEvent({
       productId: 'widgets',
       event: 'report_generated',
@@ -368,7 +370,7 @@ describe('emitProductEvent', () => {
 
   it('keeps valid product fields when a sibling field fails validation', async () => {
     resetConfig();
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(Logger, 'warn').mockImplementation(() => {});
     await emitProductEvent({
       productId: 'widgets',
       event: 'report_generated',
@@ -380,7 +382,7 @@ describe('emitProductEvent', () => {
 
   it('reports a throwing product validator and still emits valid sibling fields', async () => {
     resetConfig();
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
     await expect(
       emitProductEvent({
         productId: 'widgets',
@@ -405,7 +407,7 @@ describe('emitProductEvent', () => {
 
   it('preserves shared marks and prevents product validators from weakening them', async () => {
     resetConfig();
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(Logger, 'warn').mockImplementation(() => {});
     await emitProductEvent({
       productId: 'widgets',
       event: 'report_generated',
@@ -426,7 +428,7 @@ describe('emitProductEvent', () => {
 
   it('reports unknown prototype-named keys as dropped fields', async () => {
     resetConfig();
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
     await emitProductEvent({
       productId: 'widgets',
       event: 'e',
@@ -475,7 +477,7 @@ describe('emitProductEvent', () => {
 
   it.each(realPayloads)('passes the real %s payload through unchanged', async (_name, metadata) => {
     resetConfig();
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
     await emitProductEvent({ productId: 'widgets', event: 'e', metadata });
     expect(sent().metadata).toEqual(metadata);
     expect(warn).not.toHaveBeenCalled();
@@ -491,7 +493,7 @@ describe('emitProductEvent', () => {
     ['hopId', 'xyz'],
   ] as const)('drops an invalid %s value', async (key, bad) => {
     resetConfig();
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
     await emitProductEvent({ productId: 'widgets', event: 'e', metadata: { [key]: bad } });
     expect(sent().metadata).toBeUndefined();
     warn.mockRestore();
@@ -499,7 +501,7 @@ describe('emitProductEvent', () => {
 
   it('warns once with key names only when fields are dropped, and stays silent for clean metadata', async () => {
     resetConfig();
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
     await emitProductEvent({
       productId: 'widgets',
       event: 'e',
@@ -635,7 +637,7 @@ describe('emitProductEvent', () => {
   it('logs the product, never the key, on a permanent ingest error', async () => {
     resetConfig();
     mockFetch.mockResolvedValue({ status: 403 });
-    const warnSpy = vi.spyOn(console, 'warn');
+    const warnSpy = vi.spyOn(Logger, 'warn');
 
     await emitProductEvent({ productId: 'widgets', event: 'active', userId: 'u' });
 
@@ -646,7 +648,7 @@ describe('emitProductEvent', () => {
   it.each([503, 500])('warns for a purchase ingest %s response without failing the caller', async status => {
     resetConfig();
     mockFetch.mockResolvedValue({ status });
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
 
     await expect(
       emitProductEvent({ productId: 'widgets', event: 'purchase', reportFailure: true })
@@ -662,7 +664,7 @@ describe('emitProductEvent', () => {
   it('warns for a purchase network failure without failing the caller', async () => {
     resetConfig();
     mockFetch.mockRejectedValue(new Error('network failure'));
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
 
     await expect(
       emitProductEvent({ productId: 'widgets', event: 'purchase', reportFailure: true })
@@ -680,7 +682,7 @@ describe('emitProductEvent', () => {
   ])('counts %s on a reported emit, for the failed-ingest alarm', async (_label, fail) => {
     resetConfig();
     fail();
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(Logger, 'warn').mockImplementation(() => {});
 
     await emitProductEvent({ productId: 'widgets', event: 'purchase', reportFailure: true });
 
@@ -702,7 +704,7 @@ describe('emitProductEvent', () => {
     resetConfig();
     mockFetch.mockResolvedValue({ status: 500 });
     mockEmitMetric.mockRejectedValue(new Error('cloudwatch down'));
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(Logger, 'warn').mockImplementation(() => {});
 
     await expect(
       emitProductEvent({ productId: 'widgets', event: 'purchase', reportFailure: true })

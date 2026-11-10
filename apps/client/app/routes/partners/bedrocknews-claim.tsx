@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useNavigate, useSearch, Link } from '@tanstack/react-router';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
   Avatar,
@@ -22,6 +23,8 @@ import HighlightOffRounded from '@mui/icons-material/HighlightOffRounded';
 import MailOutlineRounded from '@mui/icons-material/MailOutlineRounded';
 import WarningAmberRounded from '@mui/icons-material/WarningAmberRounded';
 import { api } from '@client/app/contexts/ApiContext';
+import { syncCreditBalance } from '@client/app/components/CreditBalanceSyncListener';
+import { formatCreditAmount } from '@client/app/utils/formatCredits';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { useUserLogout } from '@client/app/hooks/data/user';
@@ -33,6 +36,8 @@ interface Rung {
   date: string;
   length: number;
   hard: boolean;
+  /** The solved word; older BedrockNews builds leave it out. */
+  word?: string;
 }
 
 interface ClaimResult {
@@ -75,6 +80,10 @@ async function postClaim(url: string, ticket: string): Promise<ClaimState> {
     return toClaimState((error as { response?: { data?: unknown } })?.response?.data);
   }
 }
+
+// The preview passes rung fields through unchecked, so only a plain word of the rung's length is shown.
+const solvedWord = ({ word, length }: Rung): string | null =>
+  typeof word === 'string' && word.length === length && /^[a-z]+$/i.test(word) ? word.toUpperCase() : null;
 
 const headwordUrl = (appUrl: unknown, ticket: string | undefined) => {
   if (typeof appUrl !== 'string' || !/^https?:\/\//.test(appUrl)) return undefined;
@@ -247,7 +256,7 @@ const MessageView = ({ state, action, backHref }: { state: MessageState; action?
         sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1, textAlign: 'center', pt: 1.5 }}
       >
         <ToneCircle tone={tone}>{icon}</ToneCircle>
-        <Typography component="h1" sx={{ mt: 0.5, fontSize: '20px', fontWeight: 700 }}>
+        <Typography textColor="text.primary" component="h1" sx={{ mt: 0.5, fontSize: '20px', fontWeight: 700 }}>
           {title}
         </Typography>
         <Typography textColor="text.secondary" sx={{ fontSize: '15px', maxWidth: 340 }}>
@@ -272,8 +281,8 @@ const DoneView = ({ result, account, backHref }: { result: ClaimResult; account?
         <ToneCircle tone="success">
           <CheckRounded />
         </ToneCircle>
-        <Typography component="h1" sx={{ mt: 0.5, fontSize: '22px', fontWeight: 700 }}>
-          {total} credits added
+        <Typography textColor="text.primary" component="h1" sx={{ mt: 0.5, fontSize: '22px', fontWeight: 700 }}>
+          {formatCreditAmount(total)} credits added
         </Typography>
         {account && (
           <Typography textColor="text.secondary" sx={{ fontSize: '14px' }}>
@@ -291,8 +300,8 @@ const DoneView = ({ result, account, backHref }: { result: ClaimResult; account?
               <Typography component="dt" textColor="text.tertiary" sx={{ fontSize: '13px' }}>
                 New balance
               </Typography>
-              <Typography component="dd" sx={{ m: 0, fontSize: '22px', fontWeight: 700 }}>
-                {balance}
+              <Typography textColor="text.primary" component="dd" sx={{ m: 0, fontSize: '22px', fontWeight: 700 }}>
+                {formatCreditAmount(balance)}
               </Typography>
             </Sheet>
           )}
@@ -302,7 +311,7 @@ const DoneView = ({ result, account, backHref }: { result: ClaimResult; account?
                 First-solve bonus
               </Typography>
               <Typography component="dd" textColor="inherit" sx={{ m: 0, fontSize: '22px', fontWeight: 700 }}>
-                +{firstSolveCredits}
+                +{formatCreditAmount(firstSolveCredits)}
               </Typography>
             </Sheet>
           )}
@@ -347,7 +356,11 @@ const ReadyView = ({
         >
           From BedrockNews Headword
         </Chip>
-        <Typography component="h1" sx={{ fontSize: '22px', fontWeight: 700, lineHeight: 1.25 }}>
+        <Typography
+          textColor="text.primary"
+          component="h1"
+          sx={{ fontSize: '22px', fontWeight: 700, lineHeight: 1.25 }}
+        >
           Claim your Headword credits
         </Typography>
       </Box>
@@ -360,7 +373,7 @@ const ReadyView = ({
       >
         <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1 }}>
           <Typography textColor="inherit" sx={{ fontSize: '36px', fontWeight: 800, lineHeight: 1.1 }}>
-            {credits}
+            {formatCreditAmount(credits)}
           </Typography>
           <Typography textColor="inherit" sx={{ fontSize: '16px', fontWeight: 600 }}>
             credits
@@ -374,7 +387,8 @@ const ReadyView = ({
       {limitReached && <LimitNote>{CAPPED_NOTE} Another Bike4Mind account can still claim them.</LimitNote>}
       {!limitReached && payable != null && payable < credits && (
         <LimitNote>
-          Your daily limit allows <strong>up to {payable}</strong> today. The rest stays waiting in Headword.
+          Your daily limit allows <strong>up to {formatCreditAmount(payable)}</strong> today. The rest stays waiting in
+          Headword.
         </LimitNote>
       )}
 
@@ -387,7 +401,12 @@ const ReadyView = ({
             {account.charAt(0).toUpperCase()}
           </Avatar>
           <Box sx={{ minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-            <Typography noWrap data-testid="claim-account" sx={{ fontSize: '15px', fontWeight: 600 }}>
+            <Typography
+              textColor="text.primary"
+              noWrap
+              data-testid="claim-account"
+              sx={{ fontSize: '15px', fontWeight: 600 }}
+            >
               {account}
             </Typography>
             <Typography textColor="text.tertiary" sx={{ fontSize: '13px' }}>
@@ -402,30 +421,38 @@ const ReadyView = ({
           Solved words ({rungs.length})
         </Typography>
         <List sx={{ '--ListItem-paddingX': '0px', '--ListItem-minHeight': '38px', py: 0 }}>
-          {rungs.map((rung, index) => (
-            <ListItem
-              key={`${rung.date}-${rung.length}`}
-              data-testid="claim-rung"
-              sx={{
-                justifyContent: 'space-between',
-                gap: 1.25,
-                borderTop: index > 0 ? '1px solid' : 'none',
-                borderColor: 'divider',
-              }}
-            >
-              <Typography sx={{ fontSize: '14px' }}>
-                <Typography component="span" textColor="text.secondary" sx={{ fontVariantNumeric: 'tabular-nums' }}>
-                  {rung.date}
+          {rungs.map((rung, index) => {
+            const word = solvedWord(rung);
+            return (
+              <ListItem
+                key={`${rung.date}-${rung.length}`}
+                data-testid="claim-rung"
+                sx={{
+                  justifyContent: 'space-between',
+                  gap: 1.25,
+                  borderTop: index > 0 ? '1px solid' : 'none',
+                  borderColor: 'divider',
+                }}
+              >
+                <Typography textColor="text.primary" sx={{ fontSize: '14px' }}>
+                  {word && (
+                    <Typography component="span" sx={{ fontWeight: 700, letterSpacing: '0.04em' }}>
+                      {`${word} `}
+                    </Typography>
+                  )}
+                  <Typography component="span" textColor="text.secondary" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                    {word ? `\u00b7 ${rung.date}` : rung.date}
+                  </Typography>
+                  {!word && ` \u00b7 ${rung.length}-letter word`}
                 </Typography>
-                {` \u00b7 ${rung.length}-letter word`}
-              </Typography>
-              {rung.hard && (
-                <Chip size="sm" variant="soft" color="warning" sx={{ fontSize: '12px', fontWeight: 600 }}>
-                  Hard mode
-                </Chip>
-              )}
-            </ListItem>
-          ))}
+                {rung.hard && (
+                  <Chip size="sm" variant="soft" color="warning" sx={{ fontSize: '12px', fontWeight: 600 }}>
+                    Hard mode
+                  </Chip>
+                )}
+              </ListItem>
+            );
+          })}
         </List>
       </Box>
 
@@ -439,7 +466,7 @@ const ReadyView = ({
             onClick={onConfirm}
             sx={ACTION_SX}
           >
-            {confirming ? 'Adding credits\u2026' : `Add ${credits} credits`}
+            {confirming ? 'Adding credits\u2026' : `Add ${formatCreditAmount(credits)} credits`}
           </Button>
         )}
         <Button
@@ -466,6 +493,7 @@ const BedrockNewsClaimPage = () => {
   const logoUrl = useGetLogo();
   const logout = useUserLogout();
   const appUrl = useGetSettingsValue('BedrockNewsAppUrl');
+  const queryClient = useQueryClient();
 
   const [view, setView] = useState<View>(
     ticket ? { kind: 'loading' } : { kind: 'claim', claim: { state: 'not-found' } }
@@ -501,6 +529,8 @@ const BedrockNewsClaimPage = () => {
     setConfirming(true);
     const claim = await postClaim(REDEEM_URL, ticket);
     setView({ kind: 'claim', claim });
+    // "Open Bike4Mind" is an in-app link, so the app would keep the balance cached from before the credits landed.
+    if (claim.state === 'done') void syncCreditBalance(queryClient);
     confirmingRef.current = false;
     setConfirming(false);
   };

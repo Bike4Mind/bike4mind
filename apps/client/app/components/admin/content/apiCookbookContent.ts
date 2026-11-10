@@ -10,7 +10,7 @@ export interface CookbookRecipe {
 }
 
 export const API_COOKBOOK_INTRO: string =
-  `${getBrandName()}'s API Cookbook is a collection of practical, copy-paste-ready recipes ` +
+  `${getBrandName()}'s API cookbook is a collection of practical, copy-paste-ready recipes ` +
   'for common integration tasks. Each recipe walks through a real workflow end-to-end ' +
   'with curl examples, expected responses, and tips for production use. ' +
   'Set `B4M_API_KEY` and `B4M_BASE_URL` in your environment before running any recipe.';

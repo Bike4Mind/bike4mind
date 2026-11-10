@@ -469,6 +469,12 @@ Every authenticated request to a `baseApi` route records which client the accoun
 | Client seen    | `clientUsage.<web, desktop, cli or api>.firstSeenAt`, `lastSeenAt` | Account lifetime; deleted with the account | Usage statistics, hiding the desktop app prompt |
 | Client version | `clientUsage.<desktop or cli>.version`, at most 32 characters   | Account lifetime; deleted with the account | Usage statistics                                |
 
+## Manual campaign watches
+
+Admins can save a fixed group of accounts for manual follow-up independently of the rolling AI advisory. A watch contains its name, member user ids, an optional source detection id, owner id, status, revision and lifecycle timestamps. It also stores a hash of the originally selected ids to avoid duplicate open watches. It does not copy account names, emails, IPs, fingerprints or request histories. Account details are read from current user records when a watch is opened.
+
+Watch records have no automatic expiry; closing a watch retains it in the Closed list. Account purge removes that account's membership and clears its ownership without deleting a watch shared with other accounts. Lifecycle writes require an audit reason and use the admin audit log's retention policy. Watches enable no automated alerts or enforcement.
+
 ## Usage pattern signals
 
 A scheduled job, off by default behind the `usagePatternSignalsEnabled` admin setting, derives a usage profile for recently active free-tier accounts and stores the latest result per user in the `UserUsagePatternSignals` collection. It collects no new raw data: every input already exists in `UsageEvent`, `ApiKeyUsageLog` or `UserApiKey`. The result is for admin review only and triggers no automatic action on the account, its keys or its balance. Paid accounts get a marker with no signals.
@@ -616,6 +622,28 @@ message. You use these records to identify broken model references and review
 lifecycle changes. Metrics follow CloudWatch retention, and logs follow the
 deployment's configured log retention. This operational monitoring does not send
 product usage events to third-party analytics services.
+
+## API request and web-fetch diagnostics
+
+Outside development mode, `req-timing` records request duration, database-connect
+duration, whether the container is cold, response status, whether headers were
+sent, and whether the response ended before completion. It includes `userId`
+when the request has a user. Treat these records as account-associated operational
+data. A status is only a sent response status when `headersSent` is true.
+
+After input validation, the `web-fetch` API route records the target hostname and
+an outcome of `ok`, `refused`, or `error`. The target's user information, port,
+path, query, and fragment are excluded. Validation failures emit no `web-fetch`
+line, and insufficient credits count as `error`. These lines inherit the request
+logger's request id, method, API route path, deployment stage, client IP, and
+trace id when present; the API route path is distinct from the fetched URL.
+
+You use these logs to diagnose request latency, response failures, and fetch
+outcomes. They are operational logs rather than consent-gated product analytics
+events. Hosted API logs go to CloudWatch with one-week retention configured by
+the deployment. Self-hosted logs go to the runtime's console output; you control
+their collection and retention. These log additions do not send events to
+third-party analytics services.
 
 ## Credit hold monitoring
 

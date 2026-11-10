@@ -9,6 +9,7 @@ import {
   isStorageLimitError,
   type IGenerationJobDocument,
   type IGenerationJobUpdatedAction,
+  type ImageProviderId,
   type MusicProviderId,
   type VideoProviderId,
 } from '@bike4mind/common';
@@ -32,6 +33,8 @@ import { modelDiscoveryService } from '@bike4mind/services';
 import { GenerationJobEngine } from '@bike4mind/services/generationJobs';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import { createMusicJobHandler, type CreateMusicJobDeps, type MusicJobDeps } from '@bike4mind/services/musicJobs';
+import { createImageJobHandler, type CreateImageJobsDeps, type ImageJobDeps } from '@bike4mind/services/imageJobs';
+import { moderateImageOrThrow } from '@bike4mind/services/llm/imageModerationGate';
 import {
   callerOwnsGeneratedImage,
   createVideoJobHandler,
@@ -45,6 +48,13 @@ import {
   getSettingsMap,
   getSettingsValue,
 } from '@bike4mind/utils';
+import { ImageModerationBlockedError, RekognitionImageModerationService } from '@bike4mind/utils/imageModeration';
+import {
+  createImageProviderRegistry,
+  GeminiImageProvider,
+  OpenAIImageProvider,
+  type ImageProvider,
+} from '@bike4mind/utils/imageProviders';
 import {
   createMusicProviderRegistry,
   ElevenLabsMusicProvider,
@@ -53,6 +63,7 @@ import {
   type MusicProvider,
 } from '@bike4mind/utils/musicProviders';
 import {
+  BflVideoProvider,
   createVideoProviderRegistry,
   GeminiOmniVideoProvider,
   TestVideoProvider,
@@ -67,6 +78,7 @@ import { saveGeneratedAssetToFiles } from '@bike4mind/server-utils/utils/saveGen
 import { deliverJobToSlack } from '@bike4mind/server-utils/generationJobs/slackJobDelivery';
 import { createSlackJobDeliveryDeps } from './slackJobDeliveryDeps';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { imageModerationIncidents } from '@bike4mind/server-utils/moderation/imageModerationIncidents';
 
 // Must outlive the worker timeout (5 min, infra/queues.ts generationJobQueue) so two workers never overlap on
 // one job, and stay under the queue visibility timeout (6 min).
@@ -100,6 +112,8 @@ export const selectProviderKey = (
     // The same key as xAI chat (user key, admin setting, then XAI_API_KEY).
     case 'xai':
       return keys.xai;
+    case 'bfl':
+      return keys.bfl;
     default: {
       const unhandled: never = providerId;
       throw new Error(`no API key mapping for video provider '${String(unhandled)}'`);
@@ -130,6 +144,27 @@ export const selectMusicProviderKey = (
   }
 };
 
+/** As selectProviderKey, for the image providers. The same keys the chat image paths use. */
+export const selectImageProviderKey = (
+  providerId: ImageProviderId,
+  keys: Awaited<ReturnType<typeof apiKeyService.getEffectiveLLMApiKeys>>
+): string | null | undefined => {
+  switch (providerId) {
+    case 'openai':
+      return keys.openai;
+    case 'gemini':
+      return keys.gemini;
+    // No image job adapter yet: no key, so createImageJobs refuses the model instead of holding credits.
+    case 'bfl':
+    case 'xai':
+      return null;
+    default: {
+      const unhandled: never = providerId;
+      throw new Error(`no API key mapping for image provider '${String(unhandled)}'`);
+    }
+  }
+};
+
 export const toJobUpdate = (job: IGenerationJobDocument): IGenerationJobUpdatedAction => {
   const { output } = job.payload;
   return {
@@ -144,17 +179,22 @@ export const toJobUpdate = (job: IGenerationJobDocument): IGenerationJobUpdatedA
         output: {
           ...(output.fileId && { fileId: output.fileId }),
           contentType: output.contentType,
-          durationSeconds: output.durationSeconds,
+          ...('durationSeconds' in output && { durationSeconds: output.durationSeconds }),
         },
       }),
     },
   };
 };
 
-// Gemini, xAI and Veo are registered everywhere; whether a caller can use one depends on a resolvable key
+// Gemini, xAI, Veo and BFL are registered everywhere; whether a caller can use one depends on a resolvable key
 // (hasUsableKey in packages/server-utils/src/videoGenerations/listUsableVideoModels.ts).
 export const buildProviders = (): VideoProvider[] => {
-  const providers: VideoProvider[] = [new GeminiOmniVideoProvider(), new XaiVideoProvider(), new VeoVideoProvider()];
+  const providers: VideoProvider[] = [
+    new GeminiOmniVideoProvider(),
+    new XaiVideoProvider(),
+    new VeoVideoProvider(),
+    new BflVideoProvider(),
+  ];
   // Set only on non-production stages by infra (TEST_GENERATION_PROVIDER_ENVIRONMENT); never registered in production.
   if (process.env.ENABLE_TEST_VIDEO_PROVIDER === 'true') providers.push(new TestVideoProvider());
   return providers;
@@ -167,6 +207,21 @@ export const buildMusicProviders = (): MusicProvider[] => {
   if (process.env.ENABLE_TEST_MUSIC_PROVIDER === 'true') providers.push(new TestMusicProvider());
   return providers;
 };
+
+// sst's Resource proxy throws on an unlinked key; without the Lambda only a masked edit fails.
+const imageProcessorLambdaName = (): string | undefined => {
+  try {
+    return Resource.ImageProcessor.name;
+  } catch {
+    return undefined;
+  }
+};
+
+// Only the adapters that exist; a model whose provider is not registered is refused at create.
+export const buildImageProviders = (): ImageProvider[] => [
+  new OpenAIImageProvider({ imageProcessorLambdaName }),
+  new GeminiImageProvider(),
+];
 
 // Direct links (worker, sweep cron) win; API Lambdas only carry the sourceQueueUrls Linkable. sst's Resource
 // proxy throws on an unlinked key, hence the try.
@@ -219,6 +274,9 @@ const musicProviderKeys = async (providerId: MusicProviderId, userId: string): P
 const resolveMusicApiKey: MusicJobDeps['resolveApiKey'] = async (providerId, userId) =>
   usableApiKey(selectMusicProviderKey(providerId, await musicProviderKeys(providerId, userId)));
 
+const resolveImageApiKey: ImageJobDeps['resolveApiKey'] = async (providerId, userId) =>
+  usableApiKey(selectImageProviderKey(providerId, await effectiveKeys(userId)));
+
 // Owner-only on purpose for both kinds: the image becomes provider input, and a shared image is not the
 // requester's to send out.
 export const loadInputImage: VideoJobDeps['loadInputImage'] = async (userId, ref) =>
@@ -229,11 +287,12 @@ const loadInputFabFile = async (userId: string, fileId: string) => {
   if (!isValidObjectId(fileId)) return null;
   const fabFile = await fabFileRepository.findByIdAndUserId(fileId, userId);
   if (!fabFile || fabFile.deletedAt) return null;
-  if (!fabFile.filePath || !fabFile.mimeType?.startsWith('image/')) return null;
+  const mimeType = fabFile.mimeType?.split(';')[0].trim().toLowerCase();
+  if (!fabFile.filePath || !mimeType?.startsWith('image/')) return null;
   // Same upload moderation gate as every other FabFile read: a pending or blocked image is not sent to a provider.
   if (!isImageServeable(fabFile)) return null;
   const bytes = await getFilesStorage().download(fabFile.filePath);
-  return { bytes, mimeType: fabFile.mimeType };
+  return { bytes, mimeType };
 };
 
 // Keyed by the extensions GENERATED_IMAGE_KEY_RE admits; callerOwnsGeneratedImage refuses any other key first.
@@ -292,6 +351,44 @@ const getMusicSettings: MusicJobDeps['getSettings'] = async () => {
     enforceCredits: Boolean(getSettingsValue('enforceCredits', settings)),
     musicGeneration: getSettingsValue('musicGeneration', settings),
   };
+};
+
+const getImageSettings: ImageJobDeps['getSettings'] = async () => {
+  const settings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    { names: ['enforceCredits'], skipCache: true }
+  );
+  return { enforceCredits: Boolean(getSettingsValue('enforceCredits', settings)) };
+};
+
+// The same gate, settings and incident store as the chat image paths; a confirmed block becomes a verdict and
+// anything else (the scan could not run) propagates so the image is not kept.
+export const moderateImage: ImageJobDeps['moderate'] = async ({ job, bytes, mimeType }) => {
+  const settings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    { names: ['ImageModerationEnabled'], skipCache: true }
+  );
+  try {
+    await moderateImageOrThrow({
+      service: new RekognitionImageModerationService(logger),
+      enabled: getSettingsValue('ImageModerationEnabled', settings) ?? true,
+      incidents: imageModerationIncidents,
+      buffer: bytes,
+      mimeType,
+      incidentMeta: {
+        userId: job.requestedBy,
+        ...(job.questId !== undefined && { questId: job.questId }),
+        provider: job.payload.providerId,
+        model: job.payload.request.model,
+        surface: job.payload.request.mode === 'edit' ? 'edit' : 'generation',
+      },
+      logger,
+    });
+    return { blocked: false };
+  } catch (error) {
+    if (error instanceof ImageModerationBlockedError) return { blocked: true, reason: error.message };
+    throw error;
+  }
 };
 
 // The same per-user quota createFabFile enforces on the save (saveGeneratedAsset passes no organization).
@@ -364,6 +461,32 @@ const recordUsage: VideoJobDeps['recordUsage'] = async ({ job, creditsCharged, c
   } catch (error) {
     // Analytics only, never billing: a lost row must not fail the job.
     logger.warn('failed to record video usage event', { jobId: job.id, error });
+  }
+};
+
+export const recordImageUsage: ImageJobDeps['recordUsage'] = async ({ job, creditsCharged, costUsd, status }) => {
+  try {
+    await usageEventRepository.record({
+      requestId: job.questId ?? job.id,
+      userId: job.requestedBy,
+      ownerId: job.ownerId,
+      ownerType: job.ownerType,
+      feature: job.payload.request.mode === 'edit' ? 'image_edit' : 'image_generation',
+      provider: job.payload.providerId,
+      model: job.payload.request.model,
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedInputTokens: 0,
+      cacheWriteTokens: 0,
+      units: 1,
+      costUsd,
+      creditsCharged,
+      status,
+      latencyMs: Date.now() - (job.createdAt?.getTime() ?? Date.now()),
+    });
+  } catch (error) {
+    // Analytics only, never billing: a lost row must not fail the job.
+    logger.warn('failed to record image usage event', { jobId: job.id, error });
   }
 };
 
@@ -441,11 +564,48 @@ export const getCreateMusicJobDeps = (): CreateMusicJobDeps => ({
   checkStorageFor,
 });
 
+let imageJobDeps: ImageJobDeps | undefined;
+export const getImageJobDeps = (): ImageJobDeps => {
+  imageJobDeps ??= {
+    repository: generationJobRepository,
+    providers: createImageProviderRegistry(buildImageProviders()),
+    getSettings: getImageSettings,
+    resolveApiKey: resolveImageApiKey,
+    loadInputFile: (userId, fileId) => loadInputFabFile(userId, fileId),
+    moderate: moderateImage,
+    saveToFiles,
+    saveToGeneratedBucket,
+    credits: {
+      users: userRepository,
+      organizations: organizationRepository,
+      creditTransactions: creditTransactionRepository,
+      newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
+      onInsufficientCredits: recordInsufficientCredits,
+    },
+    enqueue: enqueueGenerationJob,
+    recordUsage: recordImageUsage,
+    now: () => new Date(),
+    logger,
+  };
+  return imageJobDeps;
+};
+
+export const getCreateImageJobsDeps = (): CreateImageJobsDeps => ({
+  ...getImageJobDeps(),
+  assertModelAdmission: assertMediaModelAdmission,
+  engine: getGenerationJobEngine(),
+  checkStorageFor,
+});
+
 let generationJobEngine: GenerationJobEngine | undefined;
 export const getGenerationJobEngine = (): GenerationJobEngine => {
   generationJobEngine ??= new GenerationJobEngine({
     repository: generationJobRepository,
-    handlers: [createVideoJobHandler(getVideoJobDeps()), createMusicJobHandler(getMusicJobDeps())],
+    handlers: [
+      createVideoJobHandler(getVideoJobDeps()),
+      createMusicJobHandler(getMusicJobDeps()),
+      createImageJobHandler(getImageJobDeps()),
+    ],
     enqueue: enqueueGenerationJob,
     notify,
     now: () => new Date(),

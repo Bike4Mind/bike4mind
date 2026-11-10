@@ -45,6 +45,7 @@ import {
   useSuggestListingTags,
   type SubmitResult,
 } from '@client/app/hooks/data/skillMarket';
+import { isEscapeFromOpenListbox } from './parts';
 import ScanResult from './ScanResult';
 
 const MY_LISTINGS = 'My listings';
@@ -184,7 +185,13 @@ const PublishDialog: FC<PublishDialogProps> = ({ onClose, skill, ownSkills = [] 
   };
 
   return (
-    <Modal open onClose={onClose}>
+    <Modal
+      open
+      onClose={(event, reason) => {
+        if (reason === 'escapeKeyDown' && isEscapeFromOpenListbox(event)) return;
+        onClose();
+      }}
+    >
       <ModalDialog
         sx={{ width: 620, maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto' }}
         data-testid="market-publish-dialog"
@@ -206,6 +213,7 @@ const PublishDialog: FC<PublishDialogProps> = ({ onClose, skill, ownSkills = [] 
               <ScanResult
                 version={result.version}
                 visibility={result.listing.visibility}
+                authorUserId={result.listing.authorUserId}
                 onRescan={retryScan}
                 rescanning={rescan.isPending}
               />

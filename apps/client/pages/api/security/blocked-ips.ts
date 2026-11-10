@@ -6,9 +6,9 @@ import {
   parseIpRange,
   PERMANENT_IP_BLOCK_EXPIRES_AT,
 } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { blockedIPRepository, withTransaction } from '@bike4mind/database';
-import { BadRequestError, ensureAdmin } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
@@ -17,24 +17,24 @@ import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind
 // DELETE: unblock { id, reason } (or the legacy ?ip=1.2.3.4)
 // POST /evaluate endpoint lives in blocked-ips/evaluate.ts
 //
-// Managing the IP blocklist is an administrative security control; every method
-// is restricted to admins.
+// Managing the IP blocklist is an administrative security control: reading it needs
+// support:read, changing it settings:manage.
 
 const UnblockSchema = z.union([
   z.object({ id: z.string().min(1).max(64) }),
   z.object({ ip: z.string().min(1).max(64) }),
 ]);
 
-const handler = baseApi()
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read', POST: 'settings:manage', DELETE: 'settings:manage' },
+})
   .get(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
     const query = req.query as { limit?: string };
     const limit = Math.min(parseInt(query.limit || '10', 10), 50);
     const items = await blockedIPRepository.list(limit);
     res.status(200).json({ items });
   })
   .post(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
     const parsed = CreateIpBlockRequestSchema.safeParse(req.body ?? {});
     if (!parsed.success) return res.status(400).json({ error: 'Invalid request', details: parsed.error.issues });
     const { scope, duration, reason } = parsed.data;
@@ -72,7 +72,6 @@ const handler = baseApi()
     res.status(created ? 201 : 200).json({ item: doc, alreadyBlocked: !created, extended });
   })
   .delete(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
     const query = req.query as { ip?: string; id?: string };
     const body = req.body as { ip?: string; id?: string; reason?: unknown } | undefined;
     const id = query.id ?? body?.id;

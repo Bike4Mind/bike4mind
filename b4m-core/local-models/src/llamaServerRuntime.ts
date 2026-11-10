@@ -29,6 +29,11 @@ export const LLAMA_SERVER_RUNTIME_ID = 'llama-server';
 /** The quant `pull` takes for a ref without one, as Ollama does for `hf.co/<repo>`. */
 export const DEFAULT_LLAMA_SERVER_PULL_QUANT = 'Q4_K_M';
 
+/** What a binary file is: its resolved path, mtime and size. Rejects when it cannot be read. */
+export function binaryIdentity(path: string): Promise<string> {
+  return realpath(path).then(real => stat(real).then(info => `${real}:${info.mtimeMs}:${info.size}`));
+}
+
 const noop = () => undefined;
 const HUB_REF_RE = /^(?:(?:hf|huggingface)\.co\/)?([^:]+)(?::([A-Za-z0-9_.-]+))?$/i;
 
@@ -147,12 +152,10 @@ export class LlamaServerRuntime implements LocalRuntime {
   /** The binary's version and build, probed once until the binary file changes; start needs the build for its flags. */
   async #binary(): Promise<LlamaServerBinary> {
     // Keyed on what actually runs: a symlink swapped to another build, or a changed script in binaryArgs.
-    const identify = (path: string) =>
-      realpath(path).then(real => stat(real).then(info => `${real}:${info.mtimeMs}:${info.size}`));
-    const key = await identify(this.binaryPath).then(
+    const key = await binaryIdentity(this.binaryPath).then(
       async binary => {
         const args = this.#options.binaryArgs ?? [];
-        return JSON.stringify([binary, ...(await Promise.all(args.map(arg => identify(arg).catch(() => arg))))]);
+        return JSON.stringify([binary, ...(await Promise.all(args.map(arg => binaryIdentity(arg).catch(() => arg))))]);
       },
       () => null
     );

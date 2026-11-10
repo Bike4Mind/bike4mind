@@ -6,3 +6,4 @@ export { TestVideoProvider } from './test/TestVideoProvider';
 export { GeminiOmniVideoProvider } from './geminiOmni/GeminiOmniVideoProvider';
 export { XaiVideoProvider } from './xai/XaiVideoProvider';
 export { VeoVideoProvider } from './veo/VeoVideoProvider';
+export { BflVideoProvider } from './bfl/BflVideoProvider';

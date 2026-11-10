@@ -40,6 +40,7 @@ const toRequest = (args: VideoToolArgs) => {
     durationSeconds: args.durationSeconds ?? caps.defaults.durationSeconds,
     aspectRatio: args.aspectRatio ?? caps.defaults.aspectRatio,
     resolution: args.resolution ?? caps.defaults.resolution,
+    ...(args.audio !== undefined ? { audio: args.audio } : {}),
     ...(args.inputImageFileId ? { inputImageFileId: args.inputImageFileId } : {}),
     ...(args.inputGeneratedImageKey ? { inputGeneratedImageKey: args.inputGeneratedImageKey } : {}),
   };

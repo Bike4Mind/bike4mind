@@ -5,6 +5,7 @@ import type { AdminApprovalAction, AdminApprovalStatus } from '@bike4mind/common
 import { ActionDialog } from '@client/app/components/admin/shared/ActionDialog';
 import { AdminDialog } from '@client/app/components/admin/shared/AdminDialog';
 import { AdminPageHeader } from '@client/app/components/admin/shared/AdminPageHeader';
+import { ADMIN_REGION_GAP } from '@client/app/components/admin/shared/adminStyles';
 import { DataTable, type DataColumn } from '@client/app/components/admin/shared/DataTable';
 import { EmptyState } from '@client/app/components/admin/shared/EmptyState';
 import { StatusChip } from '@client/app/components/admin/shared/StatusChip';
@@ -58,10 +59,8 @@ const summaryOf = (row: AdminApprovalRow) => row.summary ?? ACTION_LABELS[row.ac
 const REJECT_PRESETS = ['Not justified', 'Wrong target', 'Needs more detail'] as const;
 const IMPERSONATION_PRESETS = ['Reproducing a customer issue', 'Investigating a reported problem'] as const;
 
-const decideHint = (row: AdminApprovalRow, ownId: string | undefined) =>
-  !!row.requestedBy && row.requestedBy.id === ownId
-    ? 'Another admin must approve your own request.'
-    : 'You do not have the permission this request needs.';
+const decideHint = (row: AdminApprovalRow) =>
+  row.own ? 'Another admin must approve your own request.' : 'You do not have the permission this request needs.';
 
 const formatTime = (iso: string) => new Date(iso).toLocaleString();
 
@@ -275,8 +274,8 @@ const Approvals: React.FC = () => {
       );
     }
     if (row.status !== 'pending') return null;
-    const isRequester = !!currentUser?.id && row.requestedBy?.id === currentUser.id;
-    const hint = row.canDecide ? '' : decideHint(row, currentUser?.id);
+    const isRequester = !!row.own;
+    const hint = row.canDecide ? '' : decideHint(row);
     return (
       <Stack direction="row" spacing={0.5}>
         <Tooltip title={hint} disableHoverListener={row.canDecide}>
@@ -293,21 +292,27 @@ const Approvals: React.FC = () => {
             </Button>
           </span>
         </Tooltip>
-        <Button
-          size="sm"
-          variant="plain"
-          color="neutral"
-          onClick={() => setRejecting(row)}
-          data-testid={isRequester ? 'admin-withdraw-btn' : 'admin-reject-btn'}
-        >
-          {isRequester ? 'Withdraw' : 'Reject'}
-        </Button>
+        {/* The server lets the requester withdraw, and otherwise rejects on the same check as approve. */}
+        <Tooltip title={hint} disableHoverListener={isRequester || row.canDecide}>
+          <span>
+            <Button
+              size="sm"
+              variant="plain"
+              color="neutral"
+              disabled={!isRequester && !row.canDecide}
+              onClick={() => setRejecting(row)}
+              data-testid={isRequester ? 'admin-withdraw-btn' : 'admin-reject-btn'}
+            >
+              {isRequester ? 'Withdraw' : 'Reject'}
+            </Button>
+          </span>
+        </Tooltip>
       </Stack>
     );
   };
 
   return (
-    <Box data-testid="admin-approvals-queue">
+    <Stack spacing={ADMIN_REGION_GAP} data-testid="admin-approvals-queue">
       <AdminPageHeader
         title="Approvals"
         count={approvals.data?.length}
@@ -364,6 +369,7 @@ const Approvals: React.FC = () => {
           color="neutral"
           onClick={() => void approvals.fetchNextPage()}
           loading={approvals.isFetchingNextPage}
+          sx={{ alignSelf: 'flex-start' }}
           data-testid="admin-approvals-load-more-btn"
         >
           Load more requests
@@ -373,18 +379,10 @@ const Approvals: React.FC = () => {
         <ActionDialog
           open
           onClose={() => setRejecting(null)}
-          title={
-            !!rejecting.requestedBy && rejecting.requestedBy.id === currentUser?.id
-              ? 'Withdraw request'
-              : 'Reject request'
-          }
+          title={rejecting.own ? 'Withdraw request' : 'Reject request'}
           description={`Closes "${summaryOf(rejecting)}" without running it.`}
           reasonPresets={REJECT_PRESETS}
-          confirmLabel={
-            !!rejecting.requestedBy && rejecting.requestedBy.id === currentUser?.id
-              ? 'Withdraw request'
-              : 'Reject request'
-          }
+          confirmLabel={rejecting.own ? 'Withdraw request' : 'Reject request'}
           tone="danger"
           pending={reject.isPending}
           onConfirm={async reason => {
@@ -400,7 +398,7 @@ const Approvals: React.FC = () => {
       )}
       {inspecting && <ParamsDialog row={inspecting} onClose={() => setInspecting(null)} />}
       {impersonating && <StartImpersonationDialog row={impersonating} onClose={() => setImpersonating(null)} />}
-    </Box>
+    </Stack>
   );
 };
 

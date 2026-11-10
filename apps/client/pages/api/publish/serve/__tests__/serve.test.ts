@@ -71,8 +71,13 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
 // real Mongo. liveShareTokens mirrors the real fold (legacy scalar first, revoked entries out).
 vi.mock('@bike4mind/database', () => ({
   shareTokenFilter: (token: string) => ({ __shareFilterFor: token }),
-  liveShareTokens: (a: { shareToken?: string | null; shareTokens?: { token?: string; revokedAt?: Date | null }[] }) => {
-    const live = (a.shareTokens ?? []).filter(e => !!e?.token && !e.revokedAt);
+  liveShareTokens: (a: {
+    shareToken?: string | null;
+    shareTokens?: { token?: string; revokedAt?: Date | null; expiresAt?: Date | null }[];
+  }) => {
+    const live = (a.shareTokens ?? []).filter(
+      e => !!e?.token && !e.revokedAt && (!e.expiresAt || e.expiresAt > new Date())
+    );
     const legacy = a.shareToken;
     return legacy && !live.some(e => e.token === legacy) ? [{ token: legacy, revokedAt: null }, ...live] : live;
   },
@@ -110,6 +115,7 @@ type RunOpts = {
   sign?: boolean;
   fetchDest?: string;
   fetchMode?: string;
+  accept?: string;
 };
 const run = (
   segments: string[],
@@ -129,6 +135,7 @@ const run = (
     sign,
     fetchDest,
     fetchMode,
+    accept,
   }: RunOpts = {}
 ) => {
   const query: Record<string, unknown> = { path: segments };
@@ -147,6 +154,7 @@ const run = (
   if (userAgent) headers['user-agent'] = userAgent;
   if (fetchDest) headers['sec-fetch-dest'] = fetchDest;
   if (fetchMode) headers['sec-fetch-mode'] = fetchMode;
+  if (accept) headers.accept = accept;
   const { req, res } = createMocks({ method: 'GET', query, headers });
   if (user) (req as Record<string, unknown>).user = user;
   return { res, promise: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res) };
@@ -1786,6 +1794,45 @@ describe('GET /api/publish/serve - /a/<shareToken> no-sign-in links', () => {
     expect(data).not.toContain('b4m-frame'); // no loader shell on the share path
   });
 
+  describe('link expiry', () => {
+    const HOUR_MS = 60 * 60 * 1000;
+    const entryId = 'entry-tok123';
+    // Stands in for shareTokenFilter's Mongo semantics (pinned against real Mongo in
+    // PublishedArtifactModel.shareToken.test.ts): the row resolves only while the entry is live.
+    function serveIfLive(expiresAt: Date | null | undefined) {
+      const artifact = bundle({
+        shareTokens: [{ _id: entryId, token: 'tok123', createdAt: new Date(), revokedAt: null, expiresAt }],
+      });
+      mockArtifactFindOne.mockImplementation(() => {
+        const entry = artifact.shareTokens[0];
+        return !entry.expiresAt || entry.expiresAt > new Date() ? artifact : null;
+      });
+      mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Hi</h1></body></html>'));
+    }
+
+    it('404s an expired link', async () => {
+      serveIfLive(new Date(Date.now() - HOUR_MS));
+      const { res, promise } = run(['a', 'tok123']);
+      await promise;
+      expect(res._getStatusCode()).toBe(404);
+    });
+
+    it.each([
+      ['an unexpired', new Date(Date.now() + HOUR_MS)],
+      ['a no-expiry', null],
+    ])('serves %s link and counts the view against its entry', async (_label, expiresAt) => {
+      serveIfLive(expiresAt);
+      const { res, promise } = run(['a', 'tok123']);
+      await promise;
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockUpdateOne).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ arrayFilters: [{ 'entry._id': entryId }] })
+      );
+    });
+  });
+
   it('404s an unknown/revoked token (never 401/403, no enumeration signal)', async () => {
     mockArtifactFindOne.mockReturnValue(null);
 
@@ -1794,6 +1841,47 @@ describe('GET /api/publish/serve - /a/<shareToken> no-sign-in links', () => {
 
     expect(res._getStatusCode()).toBe(404);
     expect(mockDownload).not.toHaveBeenCalled();
+  });
+
+  describe('not-found page for a browser', () => {
+    const BROWSER_ACCEPT = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8';
+    const notFoundBody = async (segments: string[], accept?: string) => {
+      const { res, promise } = run(segments, { accept });
+      await promise;
+      return res;
+    };
+
+    it('renders the same HTML 404 for an unknown or revoked token, a malformed token and a removed owner', async () => {
+      mockArtifactFindOne.mockReturnValue(null);
+      const unknown = await notFoundBody(['a', 'gone'], BROWSER_ACCEPT);
+      const malformed = await notFoundBody(['a', ':path*'], BROWSER_ACCEPT);
+      mockArtifactFindOne.mockReturnValue(bundle({ shareToken: 'tok' }));
+      mockUserFindById.mockReturnValueOnce(null);
+      const ownerGone = await notFoundBody(['a', 'tok'], BROWSER_ACCEPT);
+
+      for (const res of [unknown, malformed, ownerGone]) {
+        expect(res._getStatusCode()).toBe(404);
+        expect(res.getHeader('Content-Type')).toBe('text/html; charset=utf-8');
+        expect(res.getHeader('Cache-Control')).toBe('no-store');
+        expect(res.getHeader('Referrer-Policy')).toBe('no-referrer');
+        expect(res.getHeader('X-Robots-Tag')).toBe('noindex, nofollow');
+        expect(res.getHeader('Vary')).toBe('Accept');
+        expect(res._getData()).toContain('This link is no longer available');
+      }
+      // Byte-identical, so the page never hints which case it was.
+      expect(malformed._getData()).toBe(unknown._getData());
+      expect(ownerGone._getData()).toBe(unknown._getData());
+      expect(unknown._getData()).not.toMatch(/revoked|expired|gone/i);
+    });
+
+    it.each([undefined, '*/*', 'application/json'])('keeps the JSON body for Accept %j', async accept => {
+      mockArtifactFindOne.mockReturnValue(null);
+      const res = await notFoundBody(['a', 'gone'], accept);
+      expect(res._getStatusCode()).toBe(404);
+      expect(res._getJSONData()).toEqual({ error: 'Not found' });
+      expect(res.getHeader('Vary')).toBe('Accept');
+      expect(res.getHeader('Cache-Control')).toBe('no-store');
+    });
   });
 
   it('serves a bundle asset through the token path with no-store + noindex', async () => {

@@ -14,7 +14,7 @@ export class ProfilePage extends BasePage {
     await this.page.goto('/profile');
     await this.page.waitForLoadState('domcontentloaded');
     await this.dismissModals();
-    // "Checking security settings..." overlay runs an MFA enforcement check on every
+    // MFA gate loader (MFAEnforcementWrapper) runs an MFA enforcement check on every
     // navigation. It must clear before any profile content is interactive.
     await this.waitForLoaderToDisappear('mfa-enforcement-loading-message');
     await this.waitForLoaderToDisappear('profile-detail-loading');

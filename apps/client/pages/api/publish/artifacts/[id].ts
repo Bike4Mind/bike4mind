@@ -23,7 +23,7 @@ import { deletePublishThumbnails } from '@bike4mind/server-utils/utils/publishTh
 
 /**
  * /api/publish/artifacts/[id] - manage one published artifact by its publicId.
- *   GET    -> full record (owner/admin, or anyone if public and the owner is active)
+ *   GET    -> management metadata (owner/admin) or public display fields
  *   PATCH  -> update title/description/visibility/commentPolicy (owner/admin)
  *   DELETE -> soft-delete / archive (owner/admin)
  */
@@ -115,8 +115,9 @@ const handler = baseApi()
     // artifact, and .lean() bypasses the schema's toJSON strip - so project it out here.
     // The thumbnail record goes too: thumbnails reach only the owner, and only as the signed
     // link on GET /api/publish/artifacts?mine=true, never as a stored key on a manager/admin read.
+    // Content snapshots are served through the viewer path, not the management metadata read.
     const artifact = await PublishedArtifact.findOne({ publicId, deletedAt: null })
-      .select('-shareTokens.token -thumbnail')
+      .select('-shareTokens.token -thumbnail -accessGate.passphraseHash -citables -renderedBody')
       .lean<(Record<string, unknown> & { ownerId: string; visibility: string }) | null>();
     if (!artifact) {
       return res.status(404).json({ error: 'Artifact not found' });
@@ -140,9 +141,18 @@ const handler = baseApi()
     if (!isManager && !(await loadLiveOwner(artifact.ownerId))) {
       return res.status(404).json({ error: 'Artifact not found' });
     }
-    // Owner/admin get the full record (the manage modal needs it); any other viewer
-    // of an ungated public artifact gets only the public display DTO.
-    return res.status(200).json({ artifact: isManager ? artifact : toPublicArtifact(artifact) });
+    // Owner/admin keep the metadata needed by the manage modal; other viewers
+    // of an ungated public artifact get only the public display DTO.
+    if (!isManager) return res.status(200).json({ artifact: toPublicArtifact(artifact) });
+    const managed = { ...artifact };
+    delete managed.citables;
+    delete managed.renderedBody;
+    if (managed.accessGate && typeof managed.accessGate === 'object') {
+      const gate = { ...managed.accessGate } as Record<string, unknown>;
+      delete gate.passphraseHash;
+      managed.accessGate = gate;
+    }
+    return res.status(200).json({ artifact: managed });
   })
   .patch(async (req, res) => {
     if (!req.user) return res.status(401).json({ error: 'Authentication required' });
@@ -232,8 +242,9 @@ const handler = baseApi()
     // act on. Unscoped, a stored inconsistency holds title/description/tags hostage.
     const touchesGateSurface = parsed.data.accessGate !== undefined || parsed.data.visibility !== undefined;
     // Reads the ARRAY, not the legacy scalar (#3255 step 3): with several links per artifact
-    // the enforcing surface is "at least one LIVE link", and liveShareTokens() still folds in
-    // a pre-backfill scalar-only link.
+    // the enforcing surface is "at least one LIVE link" (not revoked, not expired), and
+    // liveShareTokens() still folds in a pre-backfill scalar-only link. When the last link
+    // expires, this refuses gate/visibility edits until the gate is cleared or made public.
     if (
       touchesGateSurface &&
       artifact.accessGate &&

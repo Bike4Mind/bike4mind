@@ -30,6 +30,7 @@ export const ADMIN_REASON_PRESETS = {
   apiKeyRevokeAll: ['Compromised or leaked keys', 'Abuse / automated signups', 'Customer request'],
   apiKeyRotate: ['Compromised or leaked key', 'Customer request', 'Routine rotation'],
   apiKeyAdminScope: ['Partner integration', 'Internal service', 'Requested by the account owner'],
+  embedKeyRevoke: ['Compromised or leaked key', 'Site no longer embeds the agent', 'Customer request'],
   accountTags: ['Account review', 'Support request', 'Internal testing'],
   productAccess: ['Pilot or partner access', 'Plan change', 'Support request'],
   systemMessage: ['Account notice', 'Support follow-up', 'Policy warning'],
@@ -96,6 +97,7 @@ export const ADMIN_REASON_PRESETS = {
     'Requested by the app owner',
   ],
   identityProviderDelete: ['Replaced by another provider', 'Domain no longer uses single sign-on', 'Created in error'],
+  knowledgeFileRemoval: ['File no longer needed', 'Outdated instructions', 'Missing file reference'],
 } as const satisfies Record<string, readonly string[]>;
 
 export type AdminReasonPresetKey = keyof typeof ADMIN_REASON_PRESETS;

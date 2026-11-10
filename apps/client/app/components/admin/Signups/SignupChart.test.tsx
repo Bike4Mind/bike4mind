@@ -25,7 +25,8 @@ vi.mock('recharts', () => {
   };
 });
 
-import { SignupChart } from './SignupChart';
+import { adminPalette } from '@client/app/utils/themes/admin';
+import { SignupChart, signupStatusColors } from './SignupChart';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
@@ -76,5 +77,15 @@ describe('SignupChart bucket click', () => {
     chart.onClick!({ activeTooltipIndex: null });
     chart.onClick!({});
     expect(onBucketClick).not.toHaveBeenCalled();
+  });
+});
+
+describe('signupStatusColors', () => {
+  it.each(['light', 'dark'] as const)('maps likely legit to accent and suspected to warn in %s', scheme => {
+    const admin = adminPalette[scheme];
+    expect(signupStatusColors(admin)).toEqual({
+      likelyLegit: admin.accent,
+      suspected: admin.status.warn.foreground,
+    });
   });
 });

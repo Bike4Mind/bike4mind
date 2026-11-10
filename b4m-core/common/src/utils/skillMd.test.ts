@@ -88,10 +88,37 @@ describe('parseSkillMd', () => {
         argumentHint: '[pr]',
         disableModelInvocation: true,
         claudeCodeAllowedTools: ['Bash', 'Read'],
+        claudeCodeModel: 'opus',
         body: 'Do it.',
       },
-      dropped: ['model', 'hooks'],
+      dropped: ['hooks'],
     });
+  });
+
+  it.each(['haiku', 'opus', 'inherit', 'claude-haiku-4-5', 'claude-opus-4-1-20250805', 'sonnet:1m'])(
+    'keeps model %s as claudeCodeModel',
+    model => {
+      const result = parseSkillMd(`---\nname: x\nmodel: ${model}\n---\nDo it.`);
+      expect(result).toMatchObject({ ok: true, fields: { claudeCodeModel: model }, dropped: [] });
+    }
+  );
+
+  it.each([
+    ['a value with spaces', '"two words"'],
+    ['a value over 64 characters', 'a'.repeat(65)],
+    ['a list', '[a, b]'],
+  ])('reports a model it cannot use as dropped (%s)', (_label, value) => {
+    const result = parseSkillMd(`---\nname: x\nmodel: ${value}\n---\nDo it.`);
+    expect(result).toMatchObject({ ok: true, dropped: ['model'] });
+    expect(result.ok && result.fields.claudeCodeModel).toBeUndefined();
+  });
+
+  it('round-trips model through toSkillMd and omits it when unset', () => {
+    const md = toSkillMd({ name: 'x', description: 'y', body: 'z', claudeCodeModel: 'haiku' });
+    expect(md).toContain('model: haiku');
+    const parsed = parseSkillMd(md);
+    expect(parsed.ok && parsed.fields.claudeCodeModel).toBe('haiku');
+    expect(toSkillMd({ name: 'x', description: 'y', body: 'z' })).not.toContain('model:');
   });
 
   it.each([
@@ -338,6 +365,27 @@ describe('referencedRelativePaths', () => {
       'img/chart.png',
       'scripts/lint.sh',
       './tools/fix.py',
+    ]);
+  });
+
+  it('skips repo-level docs and placeholder paths, keeps README.md and real paths', () => {
+    const body = [
+      'Follow CLAUDE.md and CONTRIBUTING.md, plus ./AGENTS.md.',
+      'Edit `path/to/file.ts`, `src/foo.ts` and `src/foo.test.ts`; match src/foo*.',
+      'Run scripts/run.sh, see [guide](reference.md) and [skip](CLAUDE.md), [ex](path/to/x.md), README.md.',
+    ].join('\n');
+    expect(referencedRelativePaths(body)).toEqual(['reference.md', 'scripts/run.sh', 'README.md']);
+  });
+
+  it('skips a repo doc reached through ./ or ../', () => {
+    expect(referencedRelativePaths('See ../CLAUDE.md, ../../AGENTS.md and ./CONTRIBUTING.md.')).toEqual([]);
+  });
+
+  it('still reports a shipped file that shares a repo doc name in a subfolder or other case', () => {
+    expect(referencedRelativePaths('See references/agents.md and docs/CLAUDE.md and claude.md.')).toEqual([
+      'references/agents.md',
+      'docs/CLAUDE.md',
+      'claude.md',
     ]);
   });
 

@@ -1,6 +1,7 @@
 import { encryptSecret, decryptSecret, isEncrypted, isValidEncryptionKey } from './secretEncryption';
 import { mcpEnvSecretContext } from '@bike4mind/utils/security';
 import { Config } from '../utils/config';
+import { Logger } from '@bike4mind/observability';
 
 function requireKey(): string {
   const key = Config.SECRET_ENCRYPTION_KEY;
@@ -43,7 +44,7 @@ export function decryptToken(value: string | null | undefined, context?: string)
   const hasPrevious = keysToTry.length > 1;
   const errorDetail = lastError instanceof Error ? lastError.message : String(lastError);
   const errorContext = hasPrevious ? 'both current and previous keys' : 'no previous key configured';
-  console.error(`[tokenEncryption] Decryption failed (${errorContext}): ${errorDetail}`);
+  Logger.error(`[tokenEncryption] Decryption failed (${errorContext}): ${errorDetail}`);
 
   throw new Error(
     hasPrevious

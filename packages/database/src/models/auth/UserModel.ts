@@ -1,5 +1,6 @@
 import {
   THROTTLE_SOURCES,
+  SUSPENSION_REASON_CATEGORIES,
   ACCOUNT_DELETION_SOURCES,
   THROTTLE_TIERS,
   USER_RISK_SIGNAL_TYPES,
@@ -616,6 +617,25 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return result.modifiedCount === 1;
   }
 
+  async restoreReleasedGrantState(
+    userId: string,
+    input: { creditsReleased: number | null; set: Partial<IUserDocument>; unset: (keyof IUserDocument)[] }
+  ): Promise<boolean> {
+    const result = await this.model.updateOne(
+      {
+        _id: userId,
+        ...(input.creditsReleased === null
+          ? { signupGrant: { $exists: false } }
+          : { 'signupGrant.creditsReleased': input.creditsReleased }),
+      },
+      {
+        $set: input.set,
+        ...(input.unset.length ? { $unset: Object.fromEntries(input.unset.map(key => [key, ''])) } : {}),
+      }
+    );
+    return result.matchedCount === 1;
+  }
+
   async markInviteBonusPaid(userId: string, credits: number): Promise<boolean> {
     const result = await this.model.updateOne(
       { _id: userId, signupGrant: { $type: 'object' }, 'signupGrant.inviteBonusPaid': { $exists: false } },
@@ -1141,8 +1161,10 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       .exec();
   }
 
-  async countPendingRiskReviews(): Promise<number> {
-    return this.model.countDocuments({ 'riskScore.reviewState': 'pending', isBanned: { $ne: true } }).exec();
+  async countPendingRiskReviews(options: { limit?: number } = {}): Promise<number> {
+    return this.model
+      .countDocuments({ 'riskScore.reviewState': 'pending', isBanned: { $ne: true } }, { limit: options.limit })
+      .exec();
   }
 
   async setRiskReviewState(userId: string, from: SignupRiskReviewState, to: SignupRiskReviewState): Promise<boolean> {
@@ -1539,6 +1561,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     tags: { type: [String], default: [] },
     level: { type: String, default: 'DemoUser' },
     isBanned: { type: Boolean, default: false },
+    // Told to the user on the suspension notice; cleared on reinstatement. See accountSuspensionCategories.ts.
+    suspensionReasonCategory: { type: String, enum: [...SUSPENSION_REASON_CATEGORIES, null], default: null },
     isModerated: { type: Boolean, default: false },
     apiKeyTrustApproved: { type: Boolean, default: false },
     newAccountSpendCapLifted: { type: Boolean, default: false },

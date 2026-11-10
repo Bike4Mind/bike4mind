@@ -162,7 +162,7 @@ const handler = nextRouteForContract(searchSessionsContract).post(
 
         queryExpansionTimeMs = Date.now() - expansionStart;
         req.logger?.info?.(
-          `Query expansion: "${query}" → "${correctedQuery}" with ${keywords.length} keywords in ${queryExpansionTimeMs}ms`
+          `Query expansion: ${query.length} -> ${correctedQuery.length} chars with ${keywords.length} keywords in ${queryExpansionTimeMs}ms`
         );
       } catch (expansionError) {
         throwIfExpansionRefused();

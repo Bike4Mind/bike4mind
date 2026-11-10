@@ -3585,7 +3585,9 @@ async function processExecution(
     const finalCheckpoint = agent.toCheckpoint();
 
     // A final-answer iteration runs no tools, so the per-iteration gate never scores it; `block`
-    // parks the run paused with the answer in the checkpoint (Continue iterates, Stop accepts).
+    // parks the run paused with the finished result snapshotted on `pendingCompletion`. Stop
+    // finalizes that snapshot; Continue reopens the answer with a verify nudge (handleGateResponse in
+    // apps/client/server/websocket/agentExecute.ts).
     const completedOnAnswer =
       iterationResult?.isComplete && !iterationResult.reachedMaxIterations && !iterationResult.reachedMaxTotalTokens;
     const lowConfidenceCompletion =
@@ -3611,29 +3613,6 @@ async function processExecution(
       const { mode, confidence, reason } = lowConfidenceCompletion;
       logger.info('[ConfidenceGate] Low-confidence completion', { executionId, mode, confidence });
       await sendWs('low_confidence_completion', { executionId, confidence, reason, mode });
-      if (mode === 'block') {
-        // Stop on this pause finishes via handleGateResponse (apps/client/server/websocket/agentExecute.ts),
-        // which persists a thinner result than the completion below (no resolveDisplayAnswer, artifacts, images).
-        const paused = await agentExecutionRepository.setPendingGate(executionId, {
-          iteration: Math.max(0, finalCheckpoint.iteration - 1),
-          confidence,
-          reason,
-          requestedAt: new Date(),
-        });
-        if (!paused) {
-          logger.info('[ConfidenceGate] Aborted concurrently - bailing without pausing');
-          await sendWs('failed', { executionId, reason: 'aborted' });
-          return;
-        }
-        await sendWs('confidence_gate', {
-          executionId,
-          iteration: Math.max(0, finalCheckpoint.iteration - 1),
-          confidence,
-          reason,
-        });
-        await sendWs('progress', { executionId, status: 'paused' });
-        return;
-      }
     }
 
     const finalAnswer = extractFinalAnswer(finalCheckpoint.steps);
@@ -3660,6 +3639,76 @@ async function processExecution(
       }),
     });
 
+    const buildReplyText = async (): Promise<string> => {
+      let replyText = displayAnswer ?? 'Agent execution completed without a final answer.';
+
+      // DAG subagent artifact bubble-up. The parent re-summarizes the aggregated
+      // child report and may drop the raw `<artifact>` blocks the workers emitted,
+      // so append the ones the parent didn't reproduce to the reply text - the
+      // client renders cards from the text (see collectDagChildArtifactBlocks).
+      // Re-read children here (rather than carrying from the DAG-resume block)
+      // so it survives a parent self-dispatch after resume; gated on the same
+      // `EnableArtifacts` flag as emission. Best-effort - never fails the run.
+      if (enableArtifacts && execution.dagSpec) {
+        try {
+          const dagChildren = await agentExecutionRepository.findDagChildrenLean(executionId);
+          const completedChildren = dagChildren.filter(c => c.status === 'completed');
+          const childAnswers = completedChildren.map(c => (c.result as { answer?: string } | undefined)?.answer ?? '');
+          const childSteps = completedChildren.map(c => persistedExecutionSteps(c));
+          // The parent may reproduce what a child quoted from the web, so its own reply is
+          // checked against every child's tool output too (its own steps are checked at persist).
+          replyText = createAgentToolEchoMarker(childSteps.flat())(replyText);
+          const extraBlocks = collectDagChildArtifactBlocks({ parentAnswer: replyText, childAnswers, childSteps });
+          if (extraBlocks.length > 0) {
+            replyText = `${replyText}\n\n${extraBlocks.join('\n\n')}`;
+            logger.info('[Artifacts] Surfaced DAG subagent artifacts on parent completion', {
+              executionId,
+              count: extraBlocks.length,
+            });
+          }
+        } catch (bubbleErr) {
+          logger.warn('[Artifacts] Failed to bubble up DAG subagent artifacts - continuing', {
+            executionId,
+            error: bubbleErr instanceof Error ? bubbleErr.message : String(bubbleErr),
+          });
+        }
+      }
+      return replyText;
+    };
+
+    if (lowConfidenceCompletion?.mode === 'block') {
+      const { confidence, reason } = lowConfidenceCompletion;
+      const gateIteration = Math.max(0, finalCheckpoint.iteration - 1);
+      const paused = await agentExecutionRepository.setPendingGate(
+        executionId,
+        { iteration: gateIteration, confidence, reason, requestedAt: new Date() },
+        {
+          checkpoint: finalCheckpoint,
+          completion: {
+            answer: displayAnswer,
+            replyText: await buildReplyText(),
+            totalTokens: finalCheckpoint.totalTokens,
+            totalIterations: finalCheckpoint.iteration,
+            reachedMaxIterations,
+            canReconsider: finalCheckpoint.iteration < maxIterations,
+            lowConfidence: { confidence, reason },
+            generatedImages,
+            finishReason: finalCheckpoint.finishReason,
+            allSideEffects,
+            retrievalSummary,
+          },
+        }
+      );
+      if (!paused) {
+        logger.info('[ConfidenceGate] Aborted concurrently - bailing without pausing');
+        await sendWs('failed', { executionId, reason: 'aborted' });
+        return;
+      }
+      await sendWs('confidence_gate', { executionId, iteration: gateIteration, confidence, reason });
+      await sendWs('progress', { executionId, status: 'paused' });
+      return;
+    }
+
     await agentExecutionRepository.markComplete(executionId, {
       answer: displayAnswer,
       steps: finalCheckpoint.steps,
@@ -3685,40 +3734,7 @@ async function processExecution(
 
     // Persist a Quest so the run survives page refresh - see persistRunAsQuest
     // docstring. Best-effort; failures are logged but don't fail the run.
-    let replyText = displayAnswer ?? 'Agent execution completed without a final answer.';
-
-    // DAG subagent artifact bubble-up. The parent re-summarizes the aggregated
-    // child report and may drop the raw `<artifact>` blocks the workers emitted,
-    // so append the ones the parent didn't reproduce to the reply text - the
-    // client renders cards from the text (see collectDagChildArtifactBlocks).
-    // Re-read children here (rather than carrying from the DAG-resume block)
-    // so it survives a parent self-dispatch after resume; gated on the same
-    // `EnableArtifacts` flag as emission. Best-effort - never fails the run.
-    if (enableArtifacts && execution.dagSpec) {
-      try {
-        const dagChildren = await agentExecutionRepository.findDagChildrenLean(executionId);
-        const completedChildren = dagChildren.filter(c => c.status === 'completed');
-        const childAnswers = completedChildren.map(c => (c.result as { answer?: string } | undefined)?.answer ?? '');
-        const childSteps = completedChildren.map(c => persistedExecutionSteps(c));
-        // The parent may reproduce what a child quoted from the web, so its own reply is
-        // checked against every child's tool output too (its own steps are checked at persist).
-        replyText = createAgentToolEchoMarker(childSteps.flat())(replyText);
-        const extraBlocks = collectDagChildArtifactBlocks({ parentAnswer: replyText, childAnswers, childSteps });
-        if (extraBlocks.length > 0) {
-          replyText = `${replyText}\n\n${extraBlocks.join('\n\n')}`;
-          logger.info('[Artifacts] Surfaced DAG subagent artifacts on parent completion', {
-            executionId,
-            count: extraBlocks.length,
-          });
-        }
-      } catch (bubbleErr) {
-        logger.warn('[Artifacts] Failed to bubble up DAG subagent artifacts — continuing', {
-          executionId,
-          error: bubbleErr instanceof Error ? bubbleErr.message : String(bubbleErr),
-        });
-      }
-    }
-
+    const replyText = await buildReplyText();
     await persistRunAsQuest(
       executionId,
       replyText,

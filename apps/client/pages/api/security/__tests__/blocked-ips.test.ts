@@ -1,30 +1,42 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
+type Handler = (req: { method?: string }, res: unknown, next?: () => void) => unknown;
+
 /**
- * Managing the IP blocklist is an administrative security control: every method is admin-only,
+ * Managing the IP blocklist is an administrative security control: every method is permission-gated,
  * every change is audited with a reason, and a block takes a validated target, scope and duration.
  */
 
 const mockRefs = vi.hoisted(() => ({
-  getHandler: null as null | ((req: any, res: any) => unknown),
-  postHandler: null as null | ((req: any, res: any) => unknown),
-  deleteHandler: null as null | ((req: any, res: any) => unknown),
+  getHandler: null as null | Handler,
+  postHandler: null as null | Handler,
+  deleteHandler: null as null | Handler,
 }));
 
+// The chain runs adminApi's real permission guard ahead of each handler.
 vi.mock('@server/middlewares/baseApi', () => {
-  const chain: any = {
-    use: () => chain,
-    get: (fn: any) => {
-      mockRefs.getHandler = fn;
+  let guard: Handler;
+  const gated = (method: string, fn: Handler) => async (req: { method?: string }, res: unknown) => {
+    req.method = method;
+    guard(req, res, () => {});
+    return fn(req, res);
+  };
+  const chain = {
+    use: (fn: Handler) => {
+      guard = fn;
       return chain;
     },
-    post: (fn: any) => {
-      mockRefs.postHandler = fn;
+    get: (fn: Handler) => {
+      mockRefs.getHandler = gated('GET', fn);
       return chain;
     },
-    delete: (fn: any) => {
-      mockRefs.deleteHandler = fn;
+    post: (fn: Handler) => {
+      mockRefs.postHandler = gated('POST', fn);
+      return chain;
+    },
+    delete: (fn: Handler) => {
+      mockRefs.deleteHandler = gated('DELETE', fn);
       return chain;
     },
   };
@@ -70,7 +82,7 @@ import '@pages/api/security/blocked-ips';
 
 function mocks(user: unknown, extra: Record<string, unknown> = {}) {
   const { req, res } = createMocks({ method: 'GET', ...extra });
-  (req as any).user = user;
+  Object.assign(req, { user });
   return { req, res };
 }
 
@@ -106,7 +118,7 @@ describe('/api/security/blocked-ips', () => {
     ['DELETE', () => mockRefs.deleteHandler!, () => repo.unblock],
   ])('%s rejects a non-admin without touching the repository', async (_method, getHandler, getRepoFn) => {
     const { req, res } = mocks(NON_ADMIN, { body: { ...BLOCK, ip: '1.2.3.4' }, query: { ip: '1.2.3.4' } });
-    await expect(getHandler()(req, res)).rejects.toThrow(/admin/i);
+    await expect(getHandler()(req, res)).rejects.toThrow(/Missing permission/);
     expect(getRepoFn()).not.toHaveBeenCalled();
   });
 

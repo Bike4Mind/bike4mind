@@ -1615,6 +1615,9 @@ importers:
       '@bike4mind/fab-pipeline':
         specifier: workspace:*
         version: link:../fab-pipeline
+      '@bike4mind/observability':
+        specifier: workspace:*
+        version: link:../observability
       '@modelcontextprotocol/sdk':
         specifier: 1.32.1
         version: 1.32.1(zod@4.6.6)
@@ -2710,6 +2713,9 @@ importers:
       '@aws-sdk/client-secrets-manager':
         specifier: ^3.1150.0
         version: 3.1151.0
+      '@aws-sdk/client-sesv2':
+        specifier: ^3.1150.0
+        version: 3.1151.0
       '@aws-sdk/client-sqs':
         specifier: ^3.1150.0
         version: 3.1151.0
@@ -2979,6 +2985,10 @@ packages:
 
   '@aws-sdk/client-secrets-manager@3.1151.0':
     resolution: {integrity: sha512-TGqF12bgdX9V1tXoEJS0DNP5mS1ngMMPeO27qyYQYUMsZeKKpDbRV/7LeL742NLzNQafofp36MOE+rJr3oQkPg==}
+    engines: {node: '>=20.0.0'}
+
+  '@aws-sdk/client-sesv2@3.1151.0':
+    resolution: {integrity: sha512-Gann1GbKHVmksv0igE+7t96NIIWU83tPKyYvqzpYzbskVGzc4GOC6D98pxzucNQHKmwagK4OweR7LoPLZjiLSA==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/client-sqs@3.1151.0':
@@ -14378,6 +14388,18 @@ snapshots:
     dependencies:
       '@aws-sdk/core': 3.978.3
       '@aws-sdk/credential-provider-node': 3.972.86
+      '@aws-sdk/types': 3.974.6
+      '@smithy/core': 3.36.1
+      '@smithy/fetch-http-handler': 5.8.0
+      '@smithy/node-http-handler': 4.12.1
+      '@smithy/types': 4.19.0
+      tslib: 2.8.1
+
+  '@aws-sdk/client-sesv2@3.1151.0':
+    dependencies:
+      '@aws-sdk/core': 3.978.3
+      '@aws-sdk/credential-provider-node': 3.972.86
+      '@aws-sdk/signature-v4-multi-region': 3.996.48
       '@aws-sdk/types': 3.974.6
       '@smithy/core': 3.36.1
       '@smithy/fetch-http-handler': 5.8.0

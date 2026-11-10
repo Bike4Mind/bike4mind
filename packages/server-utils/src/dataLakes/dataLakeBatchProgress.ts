@@ -67,7 +67,7 @@ export async function finalizeBatchIfComplete(
   batch: IDataLakeBatchDocument | null,
   // `warn` as well as `error`: this is the highest-volume producer of the auto-activate config
   // event, and `recordLakeConfigChange` is best-effort - it warns and swallows rather than failing
-  // the batch. Without a real logger threaded to it that warning lands on `console.warn`, which is
+  // the batch. Without a real logger threaded to it that warning lands on the unscoped global logger, which is
   // invisible to log-based alerting, so an audit trail could go quietly dark here of all places.
   logger: { warn: (msg: string, ...args: unknown[]) => void; error: (msg: string) => void }
 ): Promise<void> {

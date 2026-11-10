@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, Button, LinearProgress, Sheet, Stack, Typography } from '@mui/joy';
+import { Box, Button, LinearProgress, Stack, Typography } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
 import { isAxiosError } from 'axios';
 import { ADMIN_TAB_PARAM, ADMIN_USERS_TAB_SLUG } from '@bike4mind/common';
@@ -9,7 +9,7 @@ import { useGetUser } from '@client/app/hooks/data/user';
 import { parseUserId } from '../usersTabSearch';
 import ComplianceModal from '../ComplianceModal';
 import { UndoToastProvider } from '../../shared';
-import { ADMIN_DETAIL_MAX_WIDTH } from '../../shared/adminStyles';
+import { ADMIN_DETAIL_MAX_WIDTH, adminPageFrame } from '../../shared/adminStyles';
 import { UserProfileView } from './UserProfileView';
 import type { UserProfileTab } from './userProfileSearch';
 
@@ -74,17 +74,15 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({ userId, tab, o
   };
 
   return (
-    <Sheet data-testid="user-profile-page" sx={{ minHeight: '100vh', overflowY: 'auto', bgcolor: 'admin.canvas' }}>
+    <Box data-testid="user-profile-page" sx={adminPageFrame}>
       <UndoToastProvider>
         {(isNotFound || user.isLoading || !user.data) && (
           <AdminCommandPalette enableEntitySearch={!!currentUser?.isAdmin} />
         )}
-        <Box sx={{ maxWidth: ADMIN_DETAIL_MAX_WIDTH, mx: 'auto', px: { xs: 2, sm: 4 }, pt: 2.5, pb: 12 }}>
-          {renderBody()}
-        </Box>
+        <Box sx={{ maxWidth: ADMIN_DETAIL_MAX_WIDTH }}>{renderBody()}</Box>
         {/* Opened from the header's More menu; on /admin the Users tab mounts it instead. */}
         <ComplianceModal />
       </UndoToastProvider>
-    </Sheet>
+    </Box>
   );
 };

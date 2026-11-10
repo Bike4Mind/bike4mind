@@ -182,6 +182,7 @@ export const toSnapshot = (skill: ISkill): ISkillSnapshot => ({
   ...(skill.argumentHint ? { argumentHint: skill.argumentHint } : {}),
   ...(skill.allowedTools?.length ? { allowedTools: [...skill.allowedTools] } : {}),
   ...(skill.claudeCodeAllowedTools?.length ? { claudeCodeAllowedTools: [...skill.claudeCodeAllowedTools] } : {}),
+  ...(skill.claudeCodeModel ? { claudeCodeModel: skill.claudeCodeModel } : {}),
   disableModelInvocation: Boolean(skill.disableModelInvocation),
   ...(skill.files?.length
     ? {
@@ -235,13 +236,20 @@ export function serializeListing(listing: ISkillListing | ISkillListingDocument,
   };
 }
 
+/** True when the listing's author is the one who approved the version, so no second person looked at it. */
+export const isSelfApproved = (
+  v: Pick<ISkillListingVersion, 'reviewStatus' | 'reviewerUserId'>,
+  authorUserId: string
+) => v.reviewStatus === 'approved' && !!v.reviewerUserId && String(v.reviewerUserId) === String(authorUserId);
+
 /** Fields of a version a non-author viewer may see: the approved snapshot and its honest summary. */
-export const publicVersionView = (v: ISkillListingVersion) => ({
+export const publicVersionView = (v: ISkillListingVersion, authorUserId: string) => ({
   id: String(v.id),
   version: v.version,
   snapshot: v.snapshot,
   honestSummary: v.honestSummary,
   riskTier: v.riskTier,
+  selfApproved: isSelfApproved(v, authorUserId),
   createdAt: v.createdAt,
 });
 
@@ -287,6 +295,19 @@ export async function withdrawListing(listingId: string): Promise<boolean> {
 export async function withdrawAuthorListings(authorUserId: string): Promise<number> {
   const listings = await SkillListing.find(
     { authorUserId, deletedAt: null, status: { $nin: ['withdrawn', 'delisted'] } },
+    { _id: 1 }
+  ).lean();
+  let withdrawn = 0;
+  for (const { _id } of listings) {
+    if (await withdrawListing(String(_id))) withdrawn += 1;
+  }
+  return withdrawn;
+}
+
+/** Skill deletion: withdraw every live listing of the skill, whoever authored it. Returns how many. */
+export async function withdrawSkillListings(sourceSkillId: string): Promise<number> {
+  const listings = await SkillListing.find(
+    { sourceSkillId, deletedAt: null, status: { $nin: ['withdrawn', 'delisted'] } },
     { _id: 1 }
   ).lean();
   let withdrawn = 0;
