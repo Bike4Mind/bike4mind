@@ -140,6 +140,13 @@ export async function createAgent(
       ...(agentData.deniedTools && { deniedTools: agentData.deniedTools }),
       ...(agentData.maxIterations && { maxIterations: agentData.maxIterations }),
       ...(agentData.defaultThoroughness && { defaultThoroughness: agentData.defaultThoroughness }),
+      ...(agentData.confidenceGateThreshold !== undefined && {
+        confidenceGateThreshold: agentData.confidenceGateThreshold,
+      }),
+      ...(agentData.confidenceGateMode && { confidenceGateMode: agentData.confidenceGateMode }),
+      ...(agentData.confidenceGateSelfReport !== undefined && {
+        confidenceGateSelfReport: agentData.confidenceGateSelfReport,
+      }),
       ...(agentData.defaultVariables && { defaultVariables: agentData.defaultVariables }),
       ...(agentData.exclusiveMcpServers && { exclusiveMcpServers: agentData.exclusiveMcpServers }),
       ...(agentData.fallbackModels && { fallbackModels: agentData.fallbackModels }),
