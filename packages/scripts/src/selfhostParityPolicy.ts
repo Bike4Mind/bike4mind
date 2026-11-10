@@ -193,7 +193,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     },
     ['bedrock:*']
   ),
-  gap('event:infra/llm.ts:slack-completion-start', '1ca54eff9738ee1e3169864154840f12f91361c9e0004a1c01432b6833d595bb', [
+  gap('event:infra/llm.ts:slack-completion-start', 'e80a5f00c4201c8da63cd429f20cfe5dcf975fe40ce4598f745ffbb84bca54ac', [
     'bedrock:*',
     'cloudwatch:PutMetricData',
     'events:PutEvents',
@@ -204,7 +204,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'function:infra/agentExecutor.ts:AgentExecutor',
-    'b401b627e97518bc60e35fd988dded43e9eda5c9cff5c5f4f20a66f49f9ed719',
+    '32f570f7423a44e0b327d306cbb37683612197ec278c4a335fd0e2118c803d34',
     ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'cloudwatch:PutMetricData', 'events:PutEvents']
   ),
   gap('function:infra/database.ts:DatabaseCleaner', 'e52f8c2f59b621e25176f06917724c82cd678c213de7325e2d9ad064c2971b70'),
@@ -322,7 +322,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'queue:infra/queues.ts:agentContinuationQueue',
-    '35ab6f7807d26e4eb9a22116bd7304e727a9a14f40ba18081934855af7621a58',
+    'abefcf3386331352b7181eded1605dde85f7126b28ecca7daad1fdbc88bf5ec6',
     ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'cloudwatch:PutMetricData', 'events:PutEvents']
   ),
   broker(
@@ -339,7 +339,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/queues.ts:agentProactiveMessageQueueDLQ',
     '1990fa893bed28bef2523e156f10d9e0a787552590a76489415b59814359c2a9'
   ),
-  gap('queue:infra/queues.ts:bobRunQueue', 'aef0f4e51359d595889cb102882041be898c01f461dad344cd2b4113654352d2', [
+  gap('queue:infra/queues.ts:bobRunQueue', '903653f0e95e0d11ad1d45a911e39c5de9d452fa07a0a53a72418cb15e382d23', [
     'cloudwatch:PutMetricData',
     'execute-api:ManageConnections',
   ]),
@@ -439,7 +439,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'queue:infra/queues.ts:fabFileVectorizeQueue',
-    'f96989f888043bc01078ec5cf647c7d170804a24ce34179715ab4711f69d33bb',
+    '2b015fed70c2193e7dcf0ce1e2914b937e08496ee131ca75746dfd65c4f37834',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:fabFileVectorizeQueue',
@@ -468,7 +468,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   broker('queue:infra/queues.ts:generationJobDLQ', '0eb29387a6952921e713298ba6acf3cd1aef5f60d84e67cffe177843b714f38f'),
   wired(
     'queue:infra/queues.ts:generationJobQueue',
-    '7e6d813e5a702b47db2e77d65f3f5f406ea5485e3468ff549448ea2b21df875d',
+    'c4f95cb16265f5e19fafe58860974530ac5808982d2721750d13b0ccf9a62ab6',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:generationJobQueue',
@@ -501,7 +501,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/queues.ts:githubLakeRevokeQueueDLQ',
     '4491856037e8f9226cdeb137466706aa7bc84abb90e191d01aef7f42424825d1'
   ),
-  gap('queue:infra/queues.ts:githubWebhookQueue', '0d5f852ab7293bf1dd375c19ee17f03006d89d78fed2c68c53458035d6afd0e5', [
+  gap('queue:infra/queues.ts:githubWebhookQueue', '4192f10e03c4ac66965d6ddd93247bf86a87e99359dc4fcf2a55ec0379ec2e9a', [
     'import:@aws-sdk/client-cloudwatch',
   ]),
   broker(
@@ -561,7 +561,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gapBecause(
     'queue:infra/queues.ts:liveOpsTriageQueue',
-    'f1b35887edc629c0531ca46e4ab16bebb2158c382423485e61adf2a40d79f215',
+    'd8f13c3640b95ae8284910bf131d03a3917df90b8712332d0de064dc873b48b0',
     'The admin live-ops trigger route enqueues here and no self-host consumer drains it. The hosted handler uses the CloudWatch client, so wiring needs a local metrics decision first.',
     ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
   ),
@@ -1175,7 +1175,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'service:infra/chatCompletion.ts:ChatCompletion',
-    '4349ea53ff464352da8b7fbeff1d18613608af3994f605444ec5c62a9fa83e9d',
+    'e5e07a9f3e59a6bd1283f0aa5b56220e471f43b199707e0f6f4c8c0cd6bd7e74',
     ['bedrock:*', 'cloudwatch:PutMetricData', 'events:PutEvents', 'execute-api:ManageConnections']
   ),
   gap('service:infra/searxng.ts:Searxng', '16fc0b23bc4d075e5c4e98cbb502ff6dfc37aac7fbf9bd4f7429cd4202b2f370'),

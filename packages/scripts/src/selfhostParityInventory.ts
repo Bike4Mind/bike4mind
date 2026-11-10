@@ -135,7 +135,10 @@ export const NOT_COVERED: readonly { shape: string; reason: string }[] = [
   { shape: 'aws.ses.ConfigurationSet', reason: 'Outbound mail metric configuration, no compute.' },
   { shape: 'aws.ses.EventDestination', reason: 'Outbound mail metrics sent to CloudWatch, no compute.' },
   { shape: 'aws.s3.BucketLifecycleConfigurationV2', reason: 'Storage retention policy, not a compute trigger.' },
-  { shape: 'aws.s3.BucketServerSideEncryptionConfiguration', reason: 'Storage encryption policy, not a compute trigger.' },
+  {
+    shape: 'aws.s3.BucketServerSideEncryptionConfiguration',
+    reason: 'Storage encryption policy, not a compute trigger.',
+  },
   { shape: 'sst.aws.Vpc', reason: 'Network plumbing.' },
   { shape: 'sst.aws.Cluster', reason: 'Container host for inventoried sst.aws.Service declarations.' },
   { shape: 'aws.ec2.SecurityGroup', reason: 'Network plumbing.' },
