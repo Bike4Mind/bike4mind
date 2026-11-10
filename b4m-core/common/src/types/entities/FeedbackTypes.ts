@@ -16,6 +16,21 @@ export enum FeedbackType {
   THUMBS_DOWN = 'Thumbs Down',
 }
 
+/** Tag the pre-subscriber "coming soon" form put on the waitlist signups it stored as feedback,
+ * always with no `type`. Those rows, and any a stale client still sends, are kept out of triage. */
+export const WAITLIST_FEEDBACK_TAG = 'comingSoon';
+
+/**
+ * Whether a new report has nothing for triage to act on, so it is stored Closed rather than New:
+ * a thumbs-up with no comment (it still counts in trends), or an untyped waitlist signup - a typed
+ * report carrying the tag is still a real report. A comment-less thumbs-down stays New. Keep in
+ * sync with the backfill filters in packages/scripts/migrate/feedbackTriageNoise.ts.
+ */
+export function isFeedbackTriageNoise(report: { type?: string; hasContent: boolean; tags?: string[] }): boolean {
+  if (!report.type && report.tags?.includes(WAITLIST_FEEDBACK_TAG)) return true;
+  return report.type === FeedbackType.THUMBS_UP && !report.hasContent;
+}
+
 /** What a feedback report is about - server-derived from what the submission actually resolved
  * to, never client-set (see the create handler). 'help' is derived from the route that wrote the
  * report rather than from a resolved quest/session, so `resolveFeedbackContext` never returns it;
