@@ -44,6 +44,14 @@ const httpError = (status: number) =>
     response: { status, data: { detail: 'nope' } },
   });
 
+const BAD_POLLING_URLS = [
+  'https://attacker.example/poll',
+  'http://api.bfl.ai/v1/get_result?id=task-1',
+  'https://notbfl.ai/v1/get_result',
+  'https://bfl.ai.evil.com/v1/get_result',
+  'not a url',
+];
+
 let post: ReturnType<typeof vi.spyOn>;
 let get: ReturnType<typeof vi.spyOn>;
 const fetchMock = vi.fn();
@@ -180,11 +188,20 @@ describe('BflImageProvider.submit: outcomes', () => {
     expect(error).toBe(failure);
   });
 
-  it('treats a polling URL outside BFL as an unknown outcome, never following it', async () => {
-    post.mockResolvedValue({ data: { id: 'task-1', polling_url: 'https://attacker.example/poll' } });
+  it.each(BAD_POLLING_URLS)('treats the polling URL %s as an unknown outcome, never following it', async url => {
+    post.mockResolvedValue({ data: { id: 'task-1', polling_url: url } });
     const error = await provider.submit(request(), {}, context()).catch((e: unknown) => e);
     expect(error).not.toBeInstanceOf(ProviderSubmitError);
     expect((error as Error).message).toMatch(/outside its own hosts/);
+  });
+});
+
+describe('BflImageProvider: the API key stays off redirects', () => {
+  it('submits and polls without following redirects', async () => {
+    await provider.submit(request(), {}, context());
+    await provider.poll(handle(), context());
+    expect(post.mock.calls[0][2]).toMatchObject({ maxRedirects: 0 });
+    expect(get.mock.calls[0][1]).toMatchObject({ maxRedirects: 0 });
   });
 });
 
@@ -229,8 +246,8 @@ describe('BflImageProvider.poll', () => {
     await expect(provider.poll(handle(), context())).rejects.toThrow('503');
   });
 
-  it('refuses a handle whose polling URL is not a BFL host, without sending the key', async () => {
-    const result = await provider.poll(handle({ id: 'task-1', pollingUrl: 'https://attacker.example/x' }), context());
+  it.each(BAD_POLLING_URLS)('refuses a handle polling %s, without sending the key', async pollingUrl => {
+    const result = await provider.poll(handle({ id: 'task-1', pollingUrl }), context());
     expect(result).toMatchObject({ status: 'failed', retryable: false });
     expect(get).not.toHaveBeenCalled();
   });
