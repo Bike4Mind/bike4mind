@@ -44,14 +44,16 @@ const bootLogger = new Logger({ metadata: { service: 'chatCompletion' } });
 // `stopTimeout` (infra/chatCompletion.ts) so the drain-expiry error below can log before SIGKILL -
 // a window equal to stopTimeout starts after SIGTERM and can never fire. The margin is pinned by
 // server.test.ts; work still running when the window closes (e.g. a multi-minute deep-research
-// generation) is still cut off. Scale-in and deploys avoid busy tasks via scale-in protection
-// (taskProtection.ts), so this window mostly matters when protection has expired. Requires node as PID 1 with tsx loaded in-process (see
-// Dockerfile.chatcompletion) - a wrapper that exits first SIGKILLs the drain.
+// generation) is still cut off. Scale-in and deploys skip a task while its scale-in protection
+// holds (taskProtection.ts, capped per busy stretch), so this window covers a task busy past that
+// cap, an unhealthy-task replacement, or a failed protection call. Requires node as PID 1 with
+// tsx loaded in-process (see Dockerfile.chatcompletion) - a wrapper that exits first SIGKILLs the
+// drain.
 export const DRAIN_TIMEOUT_MS = 110_000;
 
 // In-flight processing promises, tracked so SIGTERM can drain before exit. Both route
 // modules register their work here via the shared `track` callback. The same count drives
-// ECS scale-in protection (taskProtection.ts), so scale-in prefers a task with nothing to drain.
+// ECS scale-in protection (taskProtection.ts), so scale-in picks a task with nothing to drain.
 const inFlight = new Set<Promise<void>>();
 const taskProtection = createTaskProtection({ agentUri: process.env.ECS_AGENT_URI, logger: bootLogger });
 const track = (p: Promise<void>) => {

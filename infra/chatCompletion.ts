@@ -30,8 +30,9 @@ import { websocketApi } from './websocket';
  * Shutdown trade-off: on SIGTERM (deploy / scale-in / unhealthy-task replacement) in-flight
  * quests drain for up to DRAIN_TIMEOUT_MS (server.ts), which is set under this task's
  * stopTimeout; a quest still running is cut off. To keep scale-in and deploys off busy tasks, the
- * service sets ECS task scale-in protection while it has in-flight work (taskProtection.ts, bounded
- * by its expiry so a busy task cannot hold a deploy open for long). The container removes the
+ * service sets ECS task scale-in protection while it has in-flight work (taskProtection.ts). It is
+ * refreshed through a busy stretch up to a cap, which bounds how long one task can hold off a
+ * deploy; a task busy past the cap falls back on the drain. The container removes the
  * cold-start + 15-min ceiling for normal processing, but not shutdown-time cancellation. The drain only runs at all
  * because the image makes node PID 1 with tsx as an in-process loader - see Dockerfile.chatcompletion.
  *
