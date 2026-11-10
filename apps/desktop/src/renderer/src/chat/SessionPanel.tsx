@@ -1,8 +1,10 @@
 import { useEffect, useId, useRef, type ComponentProps, type ReactNode, type RefObject } from 'react';
 import Box from '@mui/joy/Box';
 import Divider from '@mui/joy/Divider';
+import IconButton from '@mui/joy/IconButton';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
+import { keyframes } from '@mui/system';
 import type { ChatProject } from '@shared/chat';
 import type { PrBarState } from '@shared/pullRequest';
 import { countTodos, type TodoItem } from '@shared/todos';
@@ -10,7 +12,7 @@ import type { WorkspaceChanges } from '@shared/workspaceChanges';
 import { ChangesBar, CreatePullRequestButton } from './ChangesBar';
 import { ContextBreakdown } from './ContextBreakdown';
 import { DiffCount } from './DiffCount';
-import { DisclosureIcon } from './icons';
+import { CloseIcon, DisclosureIcon } from './icons';
 import { thinScrollbarSx } from './layout';
 import { PrHeadline, PrStatusBar } from './PrStatusBar';
 import { SessionChips } from './SessionChips';
@@ -108,13 +110,14 @@ function SummaryText({ children }: { children: ReactNode }) {
 }
 
 export interface SessionPanelProps {
-  /** Docked beside the thread, or opened over it from the header button on a narrow window. */
-  variant: 'docked' | 'popover';
+  /** Docked beside the thread, or opened over it from the header button when the region is narrow. */
+  variant: 'docked' | 'overlay';
   collapsed: ReadonlySet<SessionPanelSectionId>;
   onToggleSection: (id: SessionPanelSectionId) => void;
-  /** Popover only: shut it on Escape or a click outside. */
+  /** Overlay only: shut it on Escape, a click outside, or its close button. */
   onDismiss?: () => void;
-  /** Popover only: the element that opened it, whose own click must not count as outside. */
+  /** Overlay only: the element that opened it, whose own click must not count as outside, and
+   * where focus goes back to when it shuts. */
   anchor?: RefObject<HTMLElement | null>;
   environment: {
     project: ChatProject | undefined;
@@ -271,29 +274,85 @@ function useDismiss(
   }, [card, anchor, onDismiss]);
 }
 
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select, [tabindex]:not([tabindex="-1"])';
+
+/**
+ * Keeps Tab inside the card while it is modal: focus moves in when it opens, wraps at either end,
+ * and goes back to the anchor when it shuts.
+ */
+function useFocusTrap(card: RefObject<HTMLElement | null>, active: boolean, anchor?: RefObject<HTMLElement | null>) {
+  useEffect(() => {
+    const node = card.current;
+    if (!active || !node) return;
+    const focusables = () => [...node.querySelectorAll<HTMLElement>(FOCUSABLE)];
+    (focusables()[0] ?? node).focus();
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab' || event.defaultPrevented) return;
+      // A menu the card opened is portalled out of it and handles its own Tab.
+      if (event.target instanceof Element && event.target.closest('[role="menu"], [role="listbox"]')) return;
+      const items = focusables();
+      const first = items[0];
+      const last = items[items.length - 1];
+      const current = document.activeElement;
+      const inside = current instanceof Node && node.contains(current);
+      if (!first || !last) {
+        event.preventDefault();
+        node.focus();
+      } else if (event.shiftKey && (!inside || current === first)) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (!inside || current === last)) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      // Passive cleanup runs after the card left the DOM, so focus that was in it has fallen to the
+      // body. A card that only docked keeps its focus, and a click elsewhere keeps where it landed.
+      const current = document.activeElement;
+      if (!current || current === document.body) anchor?.current?.focus();
+    };
+  }, [card, active, anchor]);
+}
+
+const overlayIn = keyframes({
+  from: { opacity: 0, transform: 'translateY(-4px)' },
+  to: { opacity: 1, transform: 'none' },
+});
+const scrimIn = keyframes({ from: { opacity: 0 }, to: { opacity: 1 } });
+const OVERLAY_ENTER = '140ms ease-out';
+
 /**
  * A Code session's status in one floating card over the top-right of the thread: where it runs,
  * what it has changed or the PR it opened, the plan, and what it has running in the background.
  *
  * Positioned against the thread region (see ChatShell), never the whole column, so it cannot reach
- * the composer; ChatShell docks it only when it fits beside the reading column
- * (panelFitsBesideThread) and otherwise opens it as a popover from the header button.
+ * the composer; ChatShell docks it while the region has room (sessionPanelLayout) and otherwise
+ * opens it from the header button as a modal overlay over a light scrim.
  */
 export function SessionPanel(props: SessionPanelProps) {
   const { variant, collapsed, onToggleSection, onDismiss, anchor } = props;
   const card = useRef<HTMLDivElement | null>(null);
-  useDismiss(card, variant === 'popover' ? onDismiss : undefined, anchor);
+  const overlay = variant === 'overlay';
+  useDismiss(card, overlay ? onDismiss : undefined, anchor);
+  useFocusTrap(card, overlay, anchor);
 
   const sections = SESSION_PANEL_SECTIONS.map(id => SECTION_BUILDERS[id](props)).filter(
     (section): section is SectionSpec => !!section
   );
 
-  return (
+  const panel = (
     <Box
       ref={card}
       id={SESSION_PANEL_ID}
-      role="complementary"
+      role={overlay ? 'dialog' : 'complementary'}
+      aria-modal={overlay || undefined}
       aria-label="Session"
+      tabIndex={overlay ? -1 : undefined}
       sx={{
         position: 'absolute',
         top: SESSION_PANEL_INSET,
@@ -307,13 +366,39 @@ export function SessionPanel(props: SessionPanelProps) {
         border: '1px solid',
         borderColor: 'neutral.outlinedBorder',
         borderRadius: 'md',
-        boxShadow: variant === 'popover' ? 'lg' : 'sm',
-        zIndex: variant === 'popover' ? 'popup' : 'table',
+        boxShadow: overlay ? 'lg' : 'sm',
+        zIndex: overlay ? 'popup' : 'table',
+        outline: 'none',
+        ...(overlay && {
+          animation: `${overlayIn} ${OVERLAY_ENTER}`,
+          '@media (prefers-reduced-motion: reduce)': { animation: 'none' },
+        }),
         ...thinScrollbarSx,
       }}
       data-testid="session-panel"
       data-variant={variant}
     >
+      {overlay && onDismiss && (
+        <>
+          <Stack direction="row" alignItems="center" sx={{ pl: 1.5, pr: 0.75, py: 0.5 }}>
+            <Typography level="body-xs" fontWeight="lg" textColor="text.secondary" sx={{ flex: 1 }}>
+              Session
+            </Typography>
+            <IconButton
+              size="sm"
+              variant="plain"
+              color="neutral"
+              aria-label="Close the session panel"
+              onClick={onDismiss}
+              data-testid="session-panel-close-btn"
+              sx={{ '--IconButton-size': '28px' }}
+            >
+              <CloseIcon />
+            </IconButton>
+          </Stack>
+          <Divider />
+        </>
+      )}
       {sections.map((section, index) => (
         <Box key={section.id}>
           {index > 0 && <Divider />}
@@ -325,5 +410,24 @@ export function SessionPanel(props: SessionPanelProps) {
         </Box>
       ))}
     </Box>
+  );
+  if (!overlay) return panel;
+  return (
+    <>
+      {/* Presses on it count as outside the card, so useDismiss shuts the overlay. */}
+      <Box
+        aria-hidden
+        data-testid="session-panel-scrim"
+        sx={{
+          position: 'absolute',
+          inset: 0,
+          bgcolor: 'background.backdrop',
+          zIndex: 'popup',
+          animation: `${scrimIn} ${OVERLAY_ENTER}`,
+          '@media (prefers-reduced-motion: reduce)': { animation: 'none' },
+        }}
+      />
+      {panel}
+    </>
   );
 }
