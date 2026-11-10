@@ -114,7 +114,6 @@ beforeAll(async () => {
   server = await createMongoReplSet();
   await mongoose.connect(server.getUri(), { autoIndex: false });
   await settleAutoIndexBuilds(mongoose);
-  await AdminSettings.createIndexes();
   // Every deployment has the cache's unique key index; the single-use claim on a dry-run token relies on it.
   await Cache.createIndexes();
 });
@@ -212,8 +211,21 @@ describe('PATCH /api/admin/models/access', () => {
   });
 
   it('a duplicate create returns 409 and never inserts a second document', async () => {
-    await AdminSettings.init();
-    await patch('model-x', { change: { allowedUserTags: ['beta'] }, expectedUpdatedAt: null });
+    // As on a fresh deployment: autoIndex on, no settingName index yet, and no init() run, so only the create
+    // path's own AdminSettings.init() can build the index the duplicate has to collide with.
+    await AdminSettings.collection.dropIndexes();
+    AdminSettings.schema.set('autoIndex', true);
+    (AdminSettings as unknown as { $init?: Promise<unknown> }).$init = undefined;
+    const settingNameIsUnique = async () =>
+      (await AdminSettings.collection.indexes()).some(index => index.key.settingName === 1 && index.unique);
+    expect(await settingNameIsUnique()).toBe(false);
+
+    try {
+      await patch('model-x', { change: { allowedUserTags: ['beta'] }, expectedUpdatedAt: null });
+    } finally {
+      AdminSettings.schema.set('autoIndex', null);
+    }
+    expect(await settingNameIsUnique()).toBe(true);
 
     await expect(
       patch('model-x', { change: { allowedUserTags: ['gamma'] }, expectedUpdatedAt: null })
