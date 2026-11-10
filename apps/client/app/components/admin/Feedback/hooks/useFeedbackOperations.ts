@@ -8,6 +8,7 @@ import {
   updateFeedbackOnServer,
 } from '@client/app/utils/feedbackAPICalls';
 import useToggle from '@client/app/hooks/useToggle';
+import { adminActionCountsQueryKey } from '@client/app/hooks/data/adminActionCounts';
 import { getFeedbackDisplayContent, FeedbackListParams, IExtendedFeedbackDocument } from '../types';
 import { UseFeedbackOperationsReturn } from '../types';
 import { FEEDBACK_LIST_QUERY_KEY, FEEDBACK_ORGANIZATIONS_QUERY_KEY, FEEDBACK_RECORD_QUERY_KEY } from '../queryKeys';
@@ -106,6 +107,7 @@ export const useFeedbackOperations = (params: FeedbackListParams): UseFeedbackOp
         await Promise.all([
           queryClient.invalidateQueries({ queryKey: FEEDBACK_LIST_QUERY_KEY }),
           queryClient.invalidateQueries({ queryKey: FEEDBACK_RECORD_QUERY_KEY }),
+          queryClient.invalidateQueries({ queryKey: adminActionCountsQueryKey }),
         ]);
 
         const content = getFeedbackDisplayContent(feedbackItem, 'No content');

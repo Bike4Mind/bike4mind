@@ -7,6 +7,31 @@ import ReplayIcon from '@mui/icons-material/Replay';
 import type { ISkillListingVersion, SkillListingVisibility } from '@bike4mind/common';
 import { FindingsList, HonestSummaryPanel, MismatchAlert, TierChip } from './parts';
 
+const MAX_HOLD_CAUSES = 3;
+
+/** The findings that put a version in its tier, as one sentence fragment; empty when none apply. */
+export function heldCauses(findings: { severity: string; message: string }[], tier?: string): string {
+  const severity = tier === 'high' ? 'high' : 'medium';
+  const messages = [
+    ...new Set(findings.filter(f => f.severity === severity).map(f => f.message.replace(/[.\s]+$/, ''))),
+  ];
+  if (messages.length === 0) return '';
+  const extra = messages.length - MAX_HOLD_CAUSES;
+  return `${messages.slice(0, MAX_HOLD_CAUSES).join('; ')}${extra > 0 ? `; and ${extra} more` : ''}`;
+}
+
+function heldBody(tier: string | undefined, findings: { severity: string; message: string }[]): string {
+  const causes = heldCauses(findings, tier);
+  if (tier === 'high') {
+    return causes
+      ? `A reviewer must approve it first because of: ${causes}.`
+      : 'It has high-risk findings, so a reviewer must approve it first.';
+  }
+  return causes
+    ? `A person checks it before it goes live because of: ${causes}.`
+    : 'Listings with findings are checked by a person before they go live.';
+}
+
 /** Plain-language outcome of a version's scan + review state. */
 export function versionOutcome(v: ISkillListingVersion, visibility: SkillListingVisibility) {
   if (v.scanStatus === 'scanning')
@@ -41,10 +66,7 @@ export function versionOutcome(v: ISkillListingVersion, visibility: SkillListing
       return {
         color: 'warning' as const,
         title: 'Waiting for a human reviewer',
-        body:
-          v.riskTier === 'high'
-            ? 'It declares tools that act outside the conversation, so a reviewer must approve it first.'
-            : 'Listings with findings are checked by a person before they go live.',
+        body: heldBody(v.riskTier, v.scanFindings),
       };
     case 'rejected':
       return {

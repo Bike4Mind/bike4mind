@@ -9,6 +9,8 @@ import IconButton from '@mui/joy/IconButton';
 import { useTheme } from '@mui/joy/styles';
 import React, { memo, useEffect, useMemo, useState } from 'react';
 import { useGetSessionQuests } from '@client/app/hooks/data/sessions';
+import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
+import { thinkingForSend } from '@client/app/utils/thinkingPayload';
 import { useConversationalVoiceStore } from '@client/app/components/Session/ConversationalVoice/useConversationalVoice';
 import { LLMSettings, handleLLMCommand } from '../commands/LLMCommand';
 import { selectTurnPreferences } from '../commands/turnPreferences';
@@ -207,6 +209,7 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
     ])
   );
   const turnPreferences = useLLM(useShallow(selectTurnPreferences));
+  const { data: modelInfo } = useModelInfo();
 
   // Ensure max_tokens is never undefined
   const safeMaxTokens = max_tokens ?? 2048;
@@ -368,7 +371,10 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
           tools,
           projectId,
           organizationId,
-          thinking,
+          thinking: thinkingForSend(
+            thinking,
+            modelInfo?.find(m => m.id === model)
+          ),
           ...turnPreferences,
           setChatCompletion,
           ...llmSettings,

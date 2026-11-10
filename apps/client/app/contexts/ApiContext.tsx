@@ -1,5 +1,6 @@
 import axios, { isAxiosError } from 'axios';
 import React, { PropsWithChildren } from 'react';
+import { ACCOUNT_SUSPENDED_ERROR_CODE } from '@bike4mind/common';
 import { useAccessToken } from '../hooks/useAccessToken';
 import { clearClientCaches } from '@client/app/utils/clearClientCaches';
 import { buildLoginRedirectUrl } from '@client/app/utils/authRedirect';
@@ -34,7 +35,7 @@ export function resetRedirectingGuard() {
  * accept-policies.tsx, whose consent gate has no server session to fall back
  * on) can reuse this teardown instead of duplicating it.
  */
-export async function forceSessionExpiredRedirect(): Promise<void> {
+async function tearDownSessionAndRedirect(loginUrl: () => string): Promise<void> {
   // markSessionExpired() clears the tokens AND sets expired: true in a
   // single store write, so localStorage doesn't retain stale credentials
   // and background tabs receive exactly one storage event with the final
@@ -57,7 +58,39 @@ export async function forceSessionExpiredRedirect(): Promise<void> {
   // keeps the redirect firing even if a delete rejects; login-page mount also
   // re-clears as a backstop.
   await clearClientCaches().catch(() => {});
-  window.location.replace(buildLoginRedirectUrl('session_expired', window.location));
+  window.location.replace(loginUrl());
+}
+
+export async function forceSessionExpiredRedirect(): Promise<void> {
+  await tearDownSessionAndRedirect(() => buildLoginRedirectUrl('session_expired', window.location));
+}
+
+/**
+ * The same teardown for an account an admin suspended, landing on the login page's suspension notice
+ * (category, policy, appeal) instead of a misleading "session expired".
+ */
+export async function forceAccountSuspendedRedirect(category: string): Promise<void> {
+  await tearDownSessionAndRedirect(() =>
+    buildLoginRedirectUrl('account_suspended', window.location, category ? { reason: category } : {})
+  );
+}
+
+/**
+ * The reason category of a 403 `account_suspended` (server: accountSuspendedError), '' when the body
+ * names none, or null for any other error. A suspended session is refused on its next request or refresh.
+ */
+export function accountSuspendedCategory(error: unknown): string | null {
+  if (!isAxiosError(error) || error.response?.status !== 403) return null;
+  const data: unknown = error.response.data;
+  if (
+    !data ||
+    typeof data !== 'object' ||
+    (data as { errorCode?: unknown }).errorCode !== ACCOUNT_SUSPENDED_ERROR_CODE
+  ) {
+    return null;
+  }
+  const category = (data as { suspension?: { reason_category?: unknown } }).suspension?.reason_category;
+  return typeof category === 'string' ? category : '';
 }
 
 // Exported so callers outside the interceptor (e.g. accept-policies.tsx) can apply the
@@ -116,6 +149,12 @@ api.interceptors.response.use(
             : error.response?.data?.message || error.message
         );
         */
+    const suspendedCategory = accountSuspendedCategory(error);
+    if (suspendedCategory !== null && !isPublicPath(window.location.pathname)) {
+      await forceAccountSuspendedRedirect(suspendedCategory);
+      return Promise.reject(error);
+    }
+
     if (error.response?.status === 401 && !isPublicPath(window.location.pathname)) {
       // Skip refresh for requests that opted out (e.g., endpoints that return
       // 401 for non-auth reasons like missing API keys).
@@ -211,6 +250,11 @@ api.interceptors.response.use(
         //
         // Every queued caller runs this, but forceSessionExpiredRedirect is idempotent, so the
         // burst still produces exactly one teardown and one redirect.
+        const refreshSuspendedCategory = accountSuspendedCategory(e);
+        if (refreshSuspendedCategory !== null) {
+          await forceAccountSuspendedRedirect(refreshSuspendedCategory);
+          return Promise.reject(error);
+        }
         const refreshStatus = getAxiosErrorStatus(e);
         if (refreshStatus === 400 || refreshStatus === 401) {
           await forceSessionExpiredRedirect();

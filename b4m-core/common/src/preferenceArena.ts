@@ -19,13 +19,11 @@ export type ArenaPairSource = (typeof ARENA_PAIR_SOURCES)[number];
  */
 export const ARENA_VERIFIED_UNLOCK_REASONS: readonly SignupGrantUnlockReason[] = ['card_verified', 'phone_verified'];
 
-/**
- * Ledger rows written by the retired GitHub and work-email unlocks. They never stamped the signup
- * grant, so accounts that already hold one stay verified through the row alone.
- */
+/** @deprecated Retained for source compatibility; retired unlocks do not establish arena eligibility. */
 export const ARENA_LEGACY_UNLOCK_REASONS = ['github_verified', 'work_email_verified'] as const;
 export type ArenaLegacyUnlockReason = (typeof ARENA_LEGACY_UNLOCK_REASONS)[number];
 
+/** @deprecated Retained for reading historical ledger rows only. */
 export function arenaLegacyUnlockTransactionId(reason: ArenaLegacyUnlockReason, userId: string): string {
   return `unlock-grant:${reason}:${userId}`;
 }
@@ -33,7 +31,14 @@ export function arenaLegacyUnlockTransactionId(reason: ArenaLegacyUnlockReason, 
 export type ArenaIneligibleReason = 'disabled' | 'unverified' | 'blocked';
 
 export type ArenaRejectReason =
-  'rewards_off' | 'too_fast' | 'gold_missed' | 'unqualified' | 'low_gold_accuracy' | 'daily_cap' | 'lifetime_cap';
+  | 'rewards_off'
+  | 'too_fast'
+  | 'gold_missed'
+  | 'unqualified'
+  | 'low_gold_accuracy'
+  | 'daily_cap'
+  | 'lifetime_cap'
+  | 'reward_blocked';
 
 export const PREFERENCE_ARENA_REWARD_REASON = 'preference_arena_vote';
 
@@ -111,14 +116,13 @@ export interface ArenaEligibilityFields {
   isSynthetic?: boolean | null;
   deletedAt?: Date | null;
   signupGrant?: Pick<SignupGrant, 'stage' | 'unlockedBy'> | null;
-  /** Retired unlocks this user holds a ledger row for. */
+  /** @deprecated Ignored for eligibility; retained for source compatibility. */
   noCardUnlocks?: readonly ArenaLegacyUnlockReason[];
 }
 
-/** Account-block checks (ban, dispute, suspension) are the caller's, via `accountBlockReasons`. */
+/** Account-block checks are the caller's, via creditService.isRewardRecipientBlocked. */
 export function isArenaVerifiedUser(user: ArenaEligibilityFields): boolean {
   if (!user.emailVerified || user.isSynthetic || user.deletedAt) return false;
-  if ((user.noCardUnlocks?.length ?? 0) > 0) return true;
   const grant = user.signupGrant;
   return grant?.stage === 'unlocked' && !!grant.unlockedBy && ARENA_VERIFIED_UNLOCK_REASONS.includes(grant.unlockedBy);
 }
@@ -207,6 +211,8 @@ export type ArenaVoteRequest = z.infer<typeof arenaVoteRequestSchema>;
  */
 export interface ArenaVoteResponse {
   creditsAwarded: number;
+  /** The reward pool is dry: creditsAwarded is owed and pays when the pool refills, not added yet. */
+  queued?: true;
 }
 
 const arenaAnswerSchema = z.object({

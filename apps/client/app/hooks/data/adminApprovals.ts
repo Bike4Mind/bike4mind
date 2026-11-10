@@ -26,6 +26,8 @@ export type AdminApprovalRow = {
   params: unknown;
   stalled: boolean;
   canDecide: boolean;
+  /** The caller, or anyone impersonating or impersonated by them, made the request. */
+  own?: boolean;
 };
 
 /** The 202 body a gated admin action answers with instead of running. */

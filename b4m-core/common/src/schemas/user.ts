@@ -227,6 +227,7 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   apiKeyTrustApproved: true,
   newAccountSpendCapLifted: true,
   deletion: true,
+  suspensionReasonCategory: true,
 } as const satisfies Record<SelfViewPassthroughField, true>;
 
 /** A redacted integration object: only the named non-secret subfields survive. */

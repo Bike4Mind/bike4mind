@@ -682,6 +682,29 @@ export class AnthropicBackend implements ICompletionBackend {
           "Anthropic's newest Claude 5 Sonnet model. Near-Opus quality on coding and agentic work at Sonnet cost, with adaptive extended thinking and a 1M-token context window.",
       },
       {
+        id: ChatModels.CLAUDE_5_5_SONNET,
+        type: 'text',
+        name: 'Claude Sonnet 5.5',
+        backend: ModelBackend.Anthropic,
+        contextWindow: 1_000_000,
+        max_tokens: 128_000,
+        can_stream: true,
+        can_think: true,
+        thinkingStyle: 'adaptive',
+        pricing: {
+          // Cache hits are 0.05x input on Sonnet 5.5, not the default 0.1x; the 5m cache write is the default 1.25x.
+          1_000_000: { input: 2 / 1_000_000, output: 10 / 1_000_000, cache_read: 0.1 / 1_000_000 }, // $2 / 1M Input tokens, $10 / 1M Output tokens
+        },
+        supportsVision: true,
+        supportsTools: true,
+        supportsImageVariation: false,
+        logoFile: 'Anthropic_logo.png',
+        rank: 1, // the Opus and Fable flagships hold rank 0
+        trainingCutoff: '2026-06-01',
+        description:
+          "Anthropic's Claude 5.5 Sonnet model. Combines speed and intelligence for coding and agentic work, with adaptive extended thinking and a 1M-token context window.",
+      },
+      {
         id: ChatModels.CLAUDE_4_6_OPUS,
         type: 'text',
         name: 'Claude Opus 4.6',

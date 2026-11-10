@@ -97,7 +97,11 @@ const TIER: Record<SkillRiskTier, { label: string; color: 'success' | 'warning' 
     color: 'warning',
     hint: 'Medium findings, low classifier confidence, or a description mismatch',
   },
-  high: { label: 'High risk', color: 'danger', hint: 'Declares tools that act outside the conversation' },
+  high: {
+    label: 'High risk',
+    color: 'danger',
+    hint: 'High-risk findings that need a reviewer, listed under What the scan found',
+  },
 };
 
 export const TierChip: FC<{ tier?: SkillRiskTier }> = ({ tier }) =>

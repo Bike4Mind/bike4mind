@@ -4,7 +4,7 @@
  * iterations, so each kind is capped by a setting (platform default, org override; 0 removes the
  * tool) and counted atomically on the run's Quest (QuestRepository.claimAgentGenerationSlot).
  */
-import type { GenerationJobKind } from '@bike4mind/common';
+import type { QuestGenerationJobKind } from '@bike4mind/common';
 import { questRepository, adminSettingsRepository, scopedSettingsRepository } from '@bike4mind/database';
 import { scopedSettingsService } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
@@ -61,7 +61,7 @@ export function limitJobsPerRun<TInput, TResult extends CreateJobResult>(
 }
 
 /** Production slots for one job kind, counted on the run's Quest. */
-export const questGenerationSlots = (kind: GenerationJobKind): AgentGenerationSlots => ({
+export const questGenerationSlots = (kind: QuestGenerationJobKind): AgentGenerationSlots => ({
   claim: (questId, limit) => questRepository.claimAgentGenerationSlot(questId, kind, limit),
   release: questId => questRepository.releaseAgentGenerationSlot(questId, kind),
 });

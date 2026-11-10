@@ -71,6 +71,7 @@ export * from './projectContentPublic';
 export * from './projectSharingPublic';
 export * from './claudeMarketplace';
 export * from './skillMarketPublic';
+export * from './skillsPublic';
 export * from './publicModel';
 export * from './briefcasePrompt';
 export * from './imageGenerationTemplate';

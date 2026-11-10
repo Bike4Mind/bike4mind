@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import {
   Box,
   Button,
@@ -12,23 +12,37 @@ import {
   Textarea,
   Typography,
 } from '@mui/joy';
-import CheckIcon from '@mui/icons-material/Check';
 import AddIcon from '@mui/icons-material/Add';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 
 import { useGetSettingsValue, useUpdateSettings } from '@client/app/hooks/data/settings';
 import type { SettingKey } from '@bike4mind/common';
+import { useSettingsDraft } from '../SettingsDraftProvider';
+import { SettingsSection, StatusChip } from '../shared';
 
 /**
- * Inline editors for the four `prReport*` admin settings, so an admin configures the
- * digest from the same tab that runs it rather than hunting through the generic Admin
- * Settings screen. Each field is its own save unit (one PUT per key), mirroring how the
- * generic editor writes settings. The identity map is optional (blank posts with no
- * mentions) and the egress allowlist fails closed (empty blocks every send).
+ * Inline editors for the four `prReport*` admin settings, so an admin configures the digest from
+ * the same tab that runs it rather than hunting through the generic Admin Settings screen. Each
+ * field stages its edit for the page's one SaveBar (the SettingsDraftProvider in PrReportTab), which
+ * writes one PUT per changed key, as the generic editor does. The identity map is optional (blank
+ * posts with no mentions) and the egress allowlist fails closed (empty blocks every send).
  */
 
 /** Slack incoming webhooks live here - the out-of-the-box egress target. */
 const DEFAULT_EGRESS_HOSTS = ['hooks.slack.com'];
+
+const FIELD_MAX_WIDTH = '40rem';
+
+// FormHelperText is a flex row, which squeezes each text run and <code> into a column of its own
+// so they overlap at narrow widths; as a block the help wraps as one paragraph. Same trap as the
+// helpers in PartnerSignupRulesTab and ApiKeyScopePreflightTab, which wrap their text in one span.
+const helperSx = {
+  display: 'block',
+  mt: 0,
+  color: 'admin.inkMuted',
+  overflowWrap: 'anywhere',
+  '& code': { fontFamily: 'code' },
+} as const;
 
 /** Reduce a pasted URL or bare host to a comparable hostname. */
 function normalizeHost(raw: string): string {
@@ -57,128 +71,43 @@ function readHosts(value: unknown): string[] {
 const sameHosts = (a: string[], b: string[]) =>
   a.length === b.length && [...a].sort().join('\n') === [...b].sort().join('\n');
 
-/**
- * Local draft over a stored string setting: dirty when edited, "Saved" until the next
- * edit.
- *
- * `sensitive` fields (a stored secret is returned masked, never in the clear) never
- * render the stored value: the field stays empty and only a freshly typed replacement
- * is dirty, so an untouched field can never re-submit the mask. Clearing a stored secret
- * is a separate, explicit action carrying `confirmClear`.
- */
-function useStringSetting(key: SettingKey, { sensitive = false }: { sensitive?: boolean } = {}) {
-  const stored = useGetSettingsValue(key);
-  const saved = typeof stored === 'string' ? stored : '';
-  const update = useUpdateSettings();
-  const [draft, setDraft] = useState<string | null>(null);
-  const [justSaved, setJustSaved] = useState(false);
-  const [justCleared, setJustCleared] = useState(false);
+const SectionHeading = ({ title, description }: { title: string; description: string }) => (
+  <Stack sx={{ gap: 0.5, mb: 2 }}>
+    <Typography level="title-md" component="h2" sx={{ color: 'admin.ink' }}>
+      {title}
+    </Typography>
+    <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
+      {description}
+    </Typography>
+  </Stack>
+);
 
-  const hasStoredSecret = sensitive && saved.length > 0;
-  // A sensitive field shows a fresh draft only, never the stored mask.
-  const value = draft ?? (sensitive ? '' : saved);
-  const isDirty = sensitive ? draft !== null && draft.trim() !== '' : draft !== null && draft !== saved;
-
-  return {
-    value,
-    isDirty,
-    hasStoredSecret,
-    justSaved: justSaved && !isDirty,
-    justCleared: justCleared && !isDirty,
-    saving: update.isPending,
-    onChange: (next: string) => {
-      setDraft(next);
-      setJustSaved(false);
-      setJustCleared(false);
-    },
-    save: () => {
-      if (draft === null) return;
-      update.mutate(
-        { key, value: draft },
-        {
-          onSuccess: () => {
-            setDraft(null);
-            setJustSaved(true);
-            setJustCleared(false);
-          },
-        }
-      );
-    },
-    // Unset a stored secret. Explicit `confirmClear` because an empty write to a
-    // sensitive key destroys a live credential, so the server requires deliberate intent.
-    clear: () => {
-      update.mutate(
-        { key, value: '', confirmClear: true },
-        {
-          onSuccess: () => {
-            setDraft(null);
-            setJustSaved(false);
-            setJustCleared(true);
-          },
-        }
-      );
-    },
-  };
-}
-
-/** Save button that flips to a "Saved" chip once a clean write lands. */
-function SaveAffordance({
-  isDirty,
-  saving,
-  justSaved,
-  onSave,
-  testId,
-}: {
-  isDirty: boolean;
-  saving: boolean;
-  justSaved: boolean;
-  onSave: () => void;
-  testId: string;
-}) {
-  if (justSaved) {
-    return (
-      <Chip size="sm" variant="soft" color="success" startDecorator={<CheckIcon fontSize="small" />}>
-        Saved
-      </Chip>
-    );
-  }
-  return (
-    <Button size="sm" variant="soft" onClick={onSave} disabled={!isDirty} loading={saving} data-testid={testId}>
-      Save
-    </Button>
-  );
-}
-
-/** Shared frame: label row with an optional badge and a right-aligned action, then the control and helper. */
-function FieldFrame({
+/** Label row with an optional right-aligned action, then the control and its help. */
+function Field({
   label,
-  badge,
-  badgeColor = 'neutral',
+  required,
   helper,
   action,
+  testId,
   children,
 }: {
   label: string;
-  badge?: string;
-  badgeColor?: 'neutral' | 'primary' | 'warning' | 'success';
-  helper?: React.ReactNode;
-  action?: React.ReactNode;
-  children: React.ReactNode;
+  required?: boolean;
+  helper: ReactNode;
+  action?: ReactNode;
+  testId: string;
+  children: ReactNode;
 }) {
   return (
-    <FormControl sx={{ gap: 1 }}>
-      <Stack direction="row" alignItems="center" spacing={1}>
-        <FormLabel sx={{ m: 0 }}>{label}</FormLabel>
-        {badge && (
-          <Chip size="sm" variant="soft" color={badgeColor}>
-            {badge}
-          </Chip>
-        )}
-        <Box sx={{ flex: 1 }} />
+    <FormControl required={required} sx={{ gap: 1, maxWidth: FIELD_MAX_WIDTH }}>
+      <Stack direction="row" alignItems="center" gap={1}>
+        <FormLabel sx={{ m: 0, mr: 'auto' }}>{label}</FormLabel>
         {action}
       </Stack>
       {children}
-      {helper && <FormHelperText sx={{ mt: 0 }}>{helper}</FormHelperText>}
+      <FormHelperText sx={helperSx} data-testid={`${testId}-helper`}>
+        {helper}
+      </FormHelperText>
     </FormControl>
   );
 }
@@ -186,102 +115,138 @@ function FieldFrame({
 function StringSettingField({
   settingKey,
   label,
-  badge,
-  badgeColor,
+  required,
   helper,
   placeholder,
   multiline,
-  sensitive,
   testId,
 }: {
   settingKey: SettingKey;
   label: string;
-  badge?: string;
-  badgeColor?: 'neutral' | 'primary' | 'warning' | 'success';
-  helper?: React.ReactNode;
+  required?: boolean;
+  helper: ReactNode;
   placeholder?: string;
   multiline?: boolean;
-  sensitive?: boolean;
   testId: string;
 }) {
-  const field = useStringSetting(settingKey, { sensitive });
-  const storedPlaceholder =
-    sensitive && field.hasStoredSecret ? 'A value is saved. Paste a new one to replace it.' : placeholder;
+  const stored = useGetSettingsValue(settingKey);
+  const update = useUpdateSettings();
+  const { value, setValue, pending } = useSettingsDraft(settingKey, typeof stored === 'string' ? stored : '', {
+    name: label,
+    save: next => update.mutateAsync({ key: settingKey, value: next }),
+  });
 
   return (
-    <FieldFrame
-      label={label}
-      badge={badge}
-      badgeColor={badgeColor}
-      helper={helper}
-      action={
-        <Stack direction="row" spacing={1} alignItems="center">
-          {sensitive && field.hasStoredSecret && !field.isDirty && (
-            <Button size="sm" variant="plain" color="neutral" onClick={field.clear} data-testid={`${testId}-clear-btn`}>
-              Clear
-            </Button>
-          )}
-          {field.justCleared ? (
-            <Chip size="sm" variant="soft" color="neutral" startDecorator={<CheckIcon fontSize="small" />}>
-              Cleared
-            </Chip>
-          ) : (
-            <SaveAffordance
-              isDirty={field.isDirty}
-              saving={field.saving}
-              justSaved={field.justSaved}
-              onSave={field.save}
-              testId={`${testId}-save-btn`}
-            />
-          )}
-        </Stack>
-      }
-    >
+    <Field label={label} required={required} helper={helper} testId={testId}>
       {multiline ? (
         <Textarea
           minRows={3}
           maxRows={8}
-          value={field.value}
-          placeholder={storedPlaceholder}
-          onChange={event => field.onChange(event.target.value)}
-          slotProps={{
-            textarea: {
-              'data-testid': `${testId}-input`,
-              style: { fontFamily: 'monospace', fontSize: '0.8rem' },
-            },
-          }}
+          value={value}
+          placeholder={placeholder}
+          disabled={pending}
+          onChange={event => setValue(event.target.value)}
+          sx={{ fontFamily: 'code' }}
+          slotProps={{ textarea: { 'data-testid': `${testId}-input` } }}
         />
       ) : (
         <Input
-          type={sensitive ? 'password' : 'text'}
-          value={field.value}
-          placeholder={storedPlaceholder}
-          onChange={event => field.onChange(event.target.value)}
-          slotProps={{ input: { 'data-testid': `${testId}-input`, autoComplete: sensitive ? 'off' : undefined } }}
+          value={value}
+          placeholder={placeholder}
+          disabled={pending}
+          onChange={event => setValue(event.target.value)}
+          slotProps={{ input: { 'data-testid': `${testId}-input` } }}
         />
       )}
-    </FieldFrame>
+    </Field>
+  );
+}
+
+/**
+ * The webhook URL is a secret: the server only ever returns it masked, so the field never shows the
+ * stored value and an untouched field can never re-submit the mask. The draft is a freshly typed
+ * replacement, or null to clear the stored URL. Clearing sends `confirmClear`, because an empty write
+ * to a sensitive key destroys a live credential and the server requires deliberate intent.
+ */
+function WebhookUrlField() {
+  const stored = useGetSettingsValue('prReportWebhookUrl');
+  const hasStoredSecret = typeof stored === 'string' && stored.length > 0;
+  const update = useUpdateSettings();
+  const { value, setValue, pending, dirty } = useSettingsDraft<string | null>('prReportWebhookUrl', '', {
+    name: 'Slack webhook URL',
+    // Whitespace alone is not a replacement.
+    equals: (left, right) => (left === null || right === null ? left === right : left.trim() === right.trim()),
+    save: next =>
+      update.mutateAsync(
+        next === null
+          ? { key: 'prReportWebhookUrl', value: '', confirmClear: true }
+          : { key: 'prReportWebhookUrl', value: next }
+      ),
+  });
+  const clearing = value === null;
+  const placeholder = clearing
+    ? 'The saved URL is removed when you save.'
+    : hasStoredSecret
+      ? 'A value is saved. Paste a new one to replace it.'
+      : 'https://hooks.slack.com/services/T00000000/B00000000/your-webhook-token';
+
+  return (
+    <Field
+      label="Slack webhook URL"
+      required
+      testId="pr-report-webhook"
+      helper={
+        <>
+          Required to send. The Slack Incoming Webhook URL the digest posts to; it encodes its own channel and
+          workspace, so no bot token or channel ID is needed. Stored encrypted and never shown again - paste a new one
+          to replace it.
+        </>
+      }
+      action={
+        hasStoredSecret &&
+        !dirty && (
+          <Button
+            size="sm"
+            variant="plain"
+            color="neutral"
+            disabled={pending}
+            onClick={() => setValue(null)}
+            data-testid="pr-report-webhook-clear-btn"
+          >
+            Clear
+          </Button>
+        )
+      }
+    >
+      <Input
+        type="password"
+        value={value ?? ''}
+        placeholder={placeholder}
+        disabled={pending}
+        onChange={event => setValue(event.target.value)}
+        slotProps={{ input: { 'data-testid': 'pr-report-webhook-input', autoComplete: 'off' } }}
+      />
+    </Field>
   );
 }
 
 /** Chip-list editor for the egress allowlist object setting. */
 function EgressAllowlistField() {
   const stored = useGetSettingsValue('prReportEgressAllowlist');
-  const saved = readHosts(stored);
   const update = useUpdateSettings();
-  const [draft, setDraft] = useState<string[] | null>(null);
+  const {
+    value: hosts,
+    setValue: setHosts,
+    pending,
+  } = useSettingsDraft('prReportEgressAllowlist', readHosts(stored), {
+    name: 'Egress allowlist',
+    equals: sameHosts,
+    save: next => update.mutateAsync({ key: 'prReportEgressAllowlist', value: { hosts: next } }),
+  });
   const [entry, setEntry] = useState('');
-  const [justSaved, setJustSaved] = useState(false);
 
-  const hosts = draft ?? saved;
-  const isDirty = draft !== null && !sameHosts(draft, saved);
   const isEmpty = hosts.length === 0;
   const isDefault = sameHosts(hosts, DEFAULT_EGRESS_HOSTS);
-
-  const setHosts = (next: string[]) => {
-    setDraft(next);
-    setJustSaved(false);
-  };
 
   const addEntry = () => {
     const host = normalizeHost(entry);
@@ -293,37 +258,16 @@ function EgressAllowlistField() {
     setEntry('');
   };
 
-  const save = () => {
-    if (draft === null) return;
-    update.mutate(
-      { key: 'prReportEgressAllowlist', value: { hosts: draft } },
-      {
-        onSuccess: () => {
-          setDraft(null);
-          setJustSaved(true);
-        },
-      }
-    );
-  };
-
   return (
-    <FieldFrame
+    <Field
       label="Egress allowlist"
+      testId="pr-report-egress"
       helper={
         <>
           Hostnames the digest is allowed to POST to, checked against the webhook URL&apos;s own host. Slack incoming
           webhooks live at <code>hooks.slack.com</code>, so keep the default unless you route sends through a proxy.
           Fails closed: an empty list blocks every send by design.
         </>
-      }
-      action={
-        <SaveAffordance
-          isDirty={isDirty}
-          saving={update.isPending}
-          justSaved={justSaved && !isDirty}
-          onSave={save}
-          testId="pr-report-egress-save-btn"
-        />
       }
     >
       <Box
@@ -332,25 +276,24 @@ function EgressAllowlistField() {
           display: 'flex',
           flexWrap: 'wrap',
           gap: 0.75,
-          minHeight: 40,
+          minHeight: '2.5rem',
           alignItems: 'center',
           p: 1,
-          borderRadius: 'sm',
+          borderRadius: 'md',
           border: '1px solid',
-          borderColor: isEmpty ? 'danger.outlinedBorder' : 'neutral.outlinedBorder',
-          bgcolor: 'background.level1',
+          borderColor: 'admin.borderStrong',
+          bgcolor: 'admin.surface',
         }}
       >
         {isEmpty ? (
-          <Typography level="body-xs" color="danger" sx={{ px: 0.5 }}>
-            No hosts - every send is blocked.
-          </Typography>
+          <StatusChip tone="bad" label="No hosts - every send is blocked" data-testid="pr-report-egress-empty" />
         ) : (
           hosts.map(host => (
             <Chip
               key={host}
               variant="soft"
-              color="primary"
+              color="neutral"
+              disabled={pending}
               endDecorator={<ChipDelete onDelete={() => setHosts(hosts.filter(h => h !== host))} />}
             >
               {host}
@@ -359,11 +302,12 @@ function EgressAllowlistField() {
         )}
       </Box>
 
-      <Stack direction="row" spacing={1} sx={{ mt: 0.5 }}>
+      <Stack direction="row" flexWrap="wrap" gap={1} sx={{ mt: 0.5 }}>
         <Input
           size="sm"
           value={entry}
           placeholder="add a host (e.g. slack.com)"
+          disabled={pending}
           onChange={event => setEntry(event.target.value)}
           onKeyDown={event => {
             if (event.key === 'Enter') {
@@ -371,7 +315,7 @@ function EgressAllowlistField() {
               addEntry();
             }
           }}
-          sx={{ flex: 1 }}
+          sx={{ flex: 1, minWidth: '12rem' }}
           slotProps={{ input: { 'data-testid': 'pr-report-egress-add-input' } }}
         />
         <Button
@@ -379,7 +323,7 @@ function EgressAllowlistField() {
           variant="outlined"
           startDecorator={<AddIcon fontSize="small" />}
           onClick={addEntry}
-          disabled={!normalizeHost(entry)}
+          disabled={pending || !normalizeHost(entry)}
           data-testid="pr-report-egress-add-btn"
         >
           Add
@@ -390,6 +334,7 @@ function EgressAllowlistField() {
             variant="plain"
             color="neutral"
             startDecorator={<RestartAltIcon fontSize="small" />}
+            disabled={pending}
             onClick={() => setHosts(DEFAULT_EGRESS_HOSTS)}
             data-testid="pr-report-egress-reset-btn"
           >
@@ -397,61 +342,56 @@ function EgressAllowlistField() {
           </Button>
         )}
       </Stack>
-    </FieldFrame>
+    </Field>
   );
 }
 
-/** The editable configuration block for the PR Status Digest. */
+/** The PR digest settings, grouped into sections. Render inside a SettingsDraftProvider. */
 export function PrReportSettings() {
   return (
-    <Stack spacing={2.5}>
-      <StringSettingField
-        settingKey="prReportRepo"
-        label="Repository"
-        badge="Required"
-        badgeColor="primary"
-        placeholder="owner/repo"
-        helper={
-          <>
-            The <code>owner/repo</code> whose open pull requests the digest reports on.
-          </>
-        }
-        testId="pr-report-repo"
-      />
+    <Stack sx={{ gap: 2 }}>
+      <SettingsSection component="section" sx={{ mb: 0 }} data-testid="pr-report-section-repository">
+        <SectionHeading
+          title="Source"
+          description="Every digest reports on this repository. Settings on this page apply to the whole deployment."
+        />
+        <StringSettingField
+          settingKey="prReportRepo"
+          label="Repository"
+          required
+          placeholder="owner/repo"
+          helper={
+            <>
+              The <code>owner/repo</code> whose open pull requests the digest reports on.
+            </>
+          }
+          testId="pr-report-repo"
+        />
+      </SettingsSection>
 
-      <StringSettingField
-        settingKey="prReportWebhookUrl"
-        label="Slack webhook URL"
-        badge="Required to send"
-        badgeColor="primary"
-        sensitive
-        placeholder="https://hooks.slack.com/services/T00000000/B00000000/your-webhook-token"
-        helper={
-          <>
-            Slack Incoming Webhook URL the digest posts to. It encodes its own channel and workspace, so no bot token or
-            channel ID is needed. Stored encrypted and never shown again - paste a new one to replace it.
-          </>
-        }
-        testId="pr-report-webhook"
-      />
-
-      <StringSettingField
-        settingKey="prReportIdentityMap"
-        label="Identity map"
-        badge="Optional"
-        badgeColor="neutral"
-        multiline
-        placeholder={'octocat            U01ABCD2EF\nreviewer_backend   U03GHIJ4KL\ndevops_primary     U05MNOP6QR'}
-        helper={
-          <>
-            Maps GitHub logins and role keys (<code>reviewer_</code>, <code>devops_</code>, <code>qa_</code>) to Slack
-            member IDs, one per line. Leave blank to post the digest with no @-mentions.
-          </>
-        }
-        testId="pr-report-identity-map"
-      />
-
-      <EgressAllowlistField />
+      <SettingsSection component="section" sx={{ mb: 0 }} data-testid="pr-report-section-slack">
+        <SectionHeading
+          title="Slack delivery"
+          description="Where the digest posts, who it mentions and which hosts it may reach."
+        />
+        <Stack sx={{ gap: 2.5 }}>
+          <WebhookUrlField />
+          <StringSettingField
+            settingKey="prReportIdentityMap"
+            label="Identity map"
+            multiline
+            placeholder={'octocat            U01ABCD2EF\nreviewer_backend   U03GHIJ4KL\ndevops_primary     U05MNOP6QR'}
+            helper={
+              <>
+                Optional. Maps GitHub logins and role keys (<code>reviewer_</code>, <code>devops_</code>,{' '}
+                <code>qa_</code>) to Slack member IDs, one per line. Leave blank to post the digest with no @-mentions.
+              </>
+            }
+            testId="pr-report-identity-map"
+          />
+          <EgressAllowlistField />
+        </Stack>
+      </SettingsSection>
     </Stack>
   );
 }

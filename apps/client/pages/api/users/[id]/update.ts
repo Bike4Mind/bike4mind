@@ -1,5 +1,6 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { emailSuspensionNoticeIfEnabled } from '@server/users/suspensionNoticeEmail';
 import {
   adminSettingsRepository,
   Organization,
@@ -146,6 +147,7 @@ async function handleTelemetryConsentChange(
 
 type AccountStateSnapshot = Parameters<typeof userService.entersBlockedState>[0] & {
   isAdmin?: boolean;
+  suspensionReasonCategory?: string | null;
   isModerated?: boolean;
   email?: string | null;
 };
@@ -320,7 +322,7 @@ const handler = baseApi().put(
           // Read inside the transaction so the reason sees the state the write saw; an
           // outside read can be stale by the time the write commits.
           const snapshot = (await User.findById(userId)
-            .select('isAdmin email isBanned isModerated disputePending moderation')
+            .select('isAdmin email isBanned suspensionReasonCategory isModerated disputePending moderation')
             .lean()) as AccountStateSnapshot | null;
           const {
             user: updated,
@@ -367,6 +369,16 @@ const handler = baseApi().put(
                 { field, before, after },
                 ...(field === 'isBanned' && bannedRiskReviewFrom
                   ? [{ field: 'riskScore.reviewState', before: bannedRiskReviewFrom, after: 'banned' }]
+                  : []),
+                ...(field === 'isBanned' &&
+                (snapshot?.suspensionReasonCategory ?? null) !== (updated?.suspensionReasonCategory ?? null)
+                  ? [
+                      {
+                        field: 'suspensionReasonCategory',
+                        before: snapshot?.suspensionReasonCategory ?? null,
+                        after: updated?.suspensionReasonCategory ?? null,
+                      },
+                    ]
                   : []),
               ],
             });
@@ -431,6 +443,11 @@ const handler = baseApi().put(
           },
           { writeAudit: requestAuditWriter(req), logger: req.logger }
         );
+      }
+
+      // Only the admin suspension (isBanned), not a moderation auto-suspension, which has its own notice.
+      if (blockSnapshot && blockUpdated && !blockSnapshot.isBanned && blockUpdated.isBanned) {
+        await emailSuspensionNoticeIfEnabled(userId, blockUpdated.suspensionReasonCategory, req.logger);
       }
 
       let cancellation: AccountSubscriptionCancellation | null = null;

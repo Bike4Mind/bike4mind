@@ -7,6 +7,7 @@ import {
   canAccessAdmin,
   hasAdminPermission,
   isFullAdmin,
+  meetsAdminPermissionRequirement,
   missingAdminPermissionMessage,
 } from './adminPermissions';
 import { ForbiddenError } from './errors';
@@ -80,6 +81,18 @@ describe('admin permissions', () => {
 
   it('builds the shared missing-permission message', () => {
     expect(missingAdminPermissionMessage('users:delete')).toBe('Missing permission: users:delete');
+    expect(missingAdminPermissionMessage(['support:read', 'settings:manage'])).toBe(
+      'Missing permission: support:read or settings:manage'
+    );
+  });
+
+  it('meets an any-of requirement with any one listed permission', () => {
+    const requirement = ['support:read', 'settings:manage'] as const;
+    expect(meetsAdminPermissionRequirement({ adminPermissions: ['settings:manage'] }, requirement)).toBe(true);
+    expect(meetsAdminPermissionRequirement({ adminPermissions: ['support:read'] }, requirement)).toBe(true);
+    expect(meetsAdminPermissionRequirement({ adminPermissions: ['users:moderate'] }, requirement)).toBe(false);
+    expect(meetsAdminPermissionRequirement({ isAdmin: true }, 'users:delete')).toBe(true);
+    expect(meetsAdminPermissionRequirement({ isAdmin: true }, [])).toBe(false);
   });
 
   it('does not grant access from arbitrary persisted values', () => {

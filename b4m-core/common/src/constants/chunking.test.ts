@@ -7,6 +7,8 @@ import {
   CHUNK_STALL_REASONS,
   CHUNKLESS_STALL_REASONS,
   LEGACY_CHUNK_STALL_NOTES,
+  EXTRACTION_REFUSAL_NOTICES,
+  EXTRACTION_REFUSAL_REASONS,
   NO_EXTRACTABLE_TEXT_NOTICE,
   describePipelineStall,
   isChunkStalled,
@@ -64,6 +66,20 @@ describe('describePipelineStall', () => {
     expect(describePipelineStall({ noExtractableTextAt: new Date() })).toBe(NO_EXTRACTABLE_TEXT_NOTICE);
     expect(describePipelineStall({ chunkStallReason: 'rechunkPaused', noExtractableTextAt: new Date() })).toBe(
       CHUNK_STALL_NOTICES.rechunkPaused
+    );
+  });
+
+  it('names the refusal reason instead of the generic zero-chunk notice', () => {
+    for (const reason of EXTRACTION_REFUSAL_REASONS) {
+      expect(describePipelineStall({ noExtractableTextAt: new Date(), extractionRefusalReason: reason })).toBe(
+        EXTRACTION_REFUSAL_NOTICES[reason]
+      );
+    }
+    expect(
+      describePipelineStall({ chunkStallReason: 'rechunkPaused', extractionRefusalReason: 'unopenableContainer' })
+    ).toBe(CHUNK_STALL_NOTICES.rechunkPaused);
+    expect(describePipelineStall({ noExtractableTextAt: new Date(), extractionRefusalReason: 'somethingElse' })).toBe(
+      NO_EXTRACTABLE_TEXT_NOTICE
     );
   });
 

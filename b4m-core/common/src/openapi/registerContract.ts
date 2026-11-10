@@ -222,7 +222,8 @@ export function registerContract(contract: EndpointContract): void {
   }
 
   // Same reasoning for the auth failures every authenticated route can return:
-  // apiKeyAuth 401s a missing/invalid credential and 403s an under-scoped key.
+  // apiKeyAuth 401s a missing/invalid credential, and 403s an under-scoped key or a
+  // suspended owner (`errorCode: account_suspended`), so every authenticated route gets the 403.
   // Documenting them centrally keeps generated SDKs honest without every author
   // remembering to declare them. Streaming contracts authenticate before the stream
   // opens, so they get them too. A contract may still override either.
@@ -233,9 +234,11 @@ export function registerContract(contract: EndpointContract): void {
         content: { 'application/json': { schema: ErrorResponse } },
       };
     }
-    if (contract.scopes?.length && !responses['403']) {
+    if (!responses['403']) {
       responses['403'] = {
-        description: 'The API key does not hold any of the required scopes.',
+        description: contract.scopes?.length
+          ? 'The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`).'
+          : 'The account is suspended (`errorCode: account_suspended`).',
         content: { 'application/json': { schema: SCOPE_FORBIDDEN_RESPONSE } },
       };
     }
