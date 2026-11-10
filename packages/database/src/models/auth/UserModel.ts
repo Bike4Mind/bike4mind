@@ -43,7 +43,7 @@ import {
 } from '@bike4mind/common';
 import bcrypt from 'bcryptjs';
 import mongoose, { Document, Model, model, Schema, Query, type PipelineStage } from 'mongoose';
-import { NotFoundError } from '@bike4mind/utils';
+import { emailTokenStoredValues, NotFoundError } from '@bike4mind/utils';
 import { decryptAtRest, encryptAtRest, isEncrypted } from '@bike4mind/utils/security';
 import { convertIds } from '../../utils/mongo';
 import { CountersSchema } from '../infra/ops/CounterModel';
@@ -536,12 +536,18 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     }
   }
 
+  /** Takes the raw token from the email link; the stored value is its hash. */
   async findByEmailVerificationToken(token: string) {
-    return this.model.findOne({ emailVerificationToken: token });
+    const values = emailTokenStoredValues(token);
+    if (values.length === 0) return null;
+    return this.model.findOne({ emailVerificationToken: { $in: values } });
   }
 
+  /** Takes the raw token from the email link; the stored value is its hash. */
   async findByPendingEmailToken(token: string) {
-    return this.model.findOne({ pendingEmailToken: token });
+    const values = emailTokenStoredValues(token);
+    if (values.length === 0) return null;
+    return this.model.findOne({ pendingEmailToken: { $in: values } });
   }
 
   async findByIdWithPassword(id: string): Promise<IUserDocument | null> {

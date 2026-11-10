@@ -3,7 +3,8 @@ import { userRepository } from '@bike4mind/database';
 import { ApiKeyScope, assertCanActOnAdminTarget } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
-import { BadRequestError } from '@bike4mind/utils';
+import { BadRequestError, hashEmailToken } from '@bike4mind/utils';
+import { randomUUID } from 'crypto';
 import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { buildEmailChangeMailer, type EmailChangeMessage } from '@server/users/emailChangeMailer';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
@@ -71,19 +72,24 @@ const handler = adminApi({
         );
       }
 
-      // Resend the email change verification email
+      // Only a hash of the token is stored, so a resend issues a fresh token (keeping the original
+      // expiry); the link in any earlier email stops working.
+      const token = randomUUID();
+      await userRepository.update({
+        id: user.id,
+        pendingEmailToken: hashEmailToken(token),
+        pendingEmailSentAt: new Date(),
+      });
+
       const outbox: EmailChangeMessage[] = [];
       await buildEmailChangeMailer(outbox, { adminNote: 'resent' }).sendEmailChangeVerification(
         user,
         user.pendingEmail,
-        user.pendingEmailToken
+        token
       );
       for (const email of outbox) {
         await EmailEvents.Send.publish(email);
       }
-
-      // Update the resent timestamp
-      await userRepository.update({ id: user.id, pendingEmailSentAt: new Date() });
 
       // Log admin action
       await recordAdminActionFromRequest(req, {

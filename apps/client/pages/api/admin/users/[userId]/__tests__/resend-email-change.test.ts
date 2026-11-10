@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
   findById: vi.fn(),
   update: vi.fn(),
   publish: vi.fn(),
+  linkToken: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/adminApi', () => ({
@@ -47,7 +48,10 @@ vi.mock('@bike4mind/services', () => ({ userService: { cancelEmailChange: vi.fn(
 vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publish } } }));
 vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/mailer/emailHelpers')>()),
-  generateVerificationLink: () => 'http://x/verify-email?t=1',
+  generateVerificationLink: (token: string) => {
+    h.linkToken(token);
+    return 'http://x/verify-email?t=1';
+  },
   getLogoUrl: () => 'logo',
   buildEmailLogoImg: () => '',
 }));
@@ -56,6 +60,7 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
 }));
 
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import { hashEmailToken } from '@bike4mind/utils';
 
 await import('../resend-email-change');
 
@@ -64,7 +69,7 @@ describe('POST /api/admin/users/[userId]/resend-email-change', () => {
     vi.clearAllMocks();
   });
 
-  it('writes exactly the resent timestamp', async () => {
+  it('stores the hash of a fresh token and emails the raw token', async () => {
     h.findById.mockResolvedValue({
       id: 'user-1',
       username: 'u',
@@ -85,7 +90,13 @@ describe('POST /api/admin/users/[userId]/resend-email-change', () => {
     );
 
     expect(h.update).toHaveBeenCalledTimes(1);
-    expect(h.update.mock.calls[0][0]).toStrictEqual({ id: 'user-1', pendingEmailSentAt: expect.any(Date) });
+    const sentToken = h.linkToken.mock.calls[0][0] as string;
+    expect(sentToken).not.toBe('tok');
+    expect(h.update.mock.calls[0][0]).toStrictEqual({
+      id: 'user-1',
+      pendingEmailToken: hashEmailToken(sentToken),
+      pendingEmailSentAt: expect.any(Date),
+    });
     expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
