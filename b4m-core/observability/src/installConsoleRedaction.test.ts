@@ -126,6 +126,24 @@ describe('installConsoleRedaction argument shapes', () => {
     expect(inner.code).toBe('ECONNREFUSED');
   });
 
+  it('stops rebuilding a self-referencing cause at the depth bound', () => {
+    const target = fakeConsole();
+    const original = target.error;
+    installConsoleRedaction(target);
+    const error: Error & { cause?: unknown } = new Error('loop for jane@example.com');
+    error.cause = error;
+    target.error(error);
+    expect(original).toHaveBeenCalledTimes(1);
+    const maxErrorDepth = 5;
+    let link: unknown = original.mock.calls[0][0];
+    for (let depth = 0; depth < maxErrorDepth; depth++) {
+      expect(link).toBeInstanceOf(Error);
+      expect((link as Error).message).toBe('loop for ***@example.com');
+      link = (link as Error & { cause?: unknown }).cause;
+    }
+    expect(link).not.toBeInstanceOf(Error);
+  });
+
   it('does not throw for a revoked Proxy', () => {
     const target = fakeConsole();
     const original = target.log;
