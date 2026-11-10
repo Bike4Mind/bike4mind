@@ -14,6 +14,7 @@
  * folds every catch-all miss into `/api/:unmatchedApiPath`. Neither carries the query string.
  */
 
+import { INGEST_TOKEN_REFUSED_MESSAGE } from '@server/security/ingestToken';
 import { rowToObject } from '../utils/logsInsights';
 import type { ResultField } from '@aws-sdk/client-cloudwatch-logs';
 
@@ -65,6 +66,7 @@ export const BREADTH_GATE_PATHS = 10;
  * Many non-admin screens call an /api/admin route that answers 401/403 for them, so a denied admin
  * path scores only once the pair was denied on this many distinct ones, and then per path, not per
  * request: a page polling the same few admin routes never adds up, a sweep across them does.
+ * A denied admin line also counts under `denied`, so a broad admin sweep is weighted by both on purpose.
  */
 export const ADMIN_GATE_PATHS = 5;
 
@@ -75,8 +77,12 @@ const ARROW = '\u2192';
 /** Captures the request path, query string dropped, from an error handler status line. */
 export const REQUEST_PATH_PATTERN = `^[A-Z]+ (?<reqPath>[^ ?]+)[^ ]* ${ARROW} [0-9]{3}:`;
 
-/** Captures the path of an /api/admin request the handler answered 401 or 403. */
-export const ADMIN_DENIED_PATH_PATTERN = `^[A-Z]+ (?<adminDeniedPath>/api/admin/[^ ?]+)[^ ]* ${ARROW} 40[13]:`;
+/**
+ * Captures the route of an /api/admin request the handler answered 401 or 403, cut before the first
+ * segment holding anything but letters, `-` or `_`, so record ids (ObjectIds, UUIDs) are not counted
+ * as distinct routes.
+ */
+export const ADMIN_DENIED_PATH_PATTERN = `^[A-Z]+ (?<adminDeniedPath>/api/admin(?:/[A-Za-z_-]+)*)[^ ]* ${ARROW} 40[13]:`;
 
 /** Per-line 0/1 indicator for each line signal, as Logs Insights expressions over `message`. */
 const SIGNAL_EXPRESSIONS: Record<LineSignal, string> = {
@@ -84,7 +90,7 @@ const SIGNAL_EXPRESSIONS: Record<LineSignal, string> = {
   webhookSignature: 'strcontains(message, "Stripe webhook signature verification failed")',
   // The error handler also writes the 404 status line for a remapped request, so it counts as notFound too.
   invalidId: 'strcontains(message, "[cast-id-remap]")',
-  ingestTokenRefused: 'strcontains(message, "[ingest-token-refused]")',
+  ingestTokenRefused: `strcontains(message, "${INGEST_TOKEN_REFUSED_MESSAGE}")`,
   denied: `strcontains(message, "${ARROW} 401:") + strcontains(message, "${ARROW} 403:")`,
   notFound: `strcontains(message, "${ARROW} 404:")`,
 };

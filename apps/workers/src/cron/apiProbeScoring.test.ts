@@ -71,6 +71,12 @@ describe('PROBE_QUERY', () => {
     const adminPath = (line: string) => new RegExp(ADMIN_DENIED_PATH_PATTERN).exec(line)?.groups?.adminDeniedPath;
     expect(adminPath('GET /api/admin/users \u2192 403: Forbidden')).toBe('/api/admin/users');
     expect(adminPath('POST /api/admin/system-secrets/x \u2192 401: Unauthorized')).toBe('/api/admin/system-secrets/x');
+    expect(adminPath('GET /api/admin/users/65a1b2c3d4e5f6a7b8c9d0e1/credits \u2192 403: Forbidden')).toBe(
+      '/api/admin/users'
+    );
+    expect(adminPath('GET /api/admin/sessions/0f8e2a4c-1b3d-4e5f-9a7b-2c4d6e8f0a1b?x=1 \u2192 401: No')).toBe(
+      '/api/admin/sessions'
+    );
     expect(adminPath('GET /api/admin/users \u2192 404: Not found')).toBeUndefined();
     expect(adminPath('GET /api/users \u2192 403: Forbidden')).toBeUndefined();
   });
