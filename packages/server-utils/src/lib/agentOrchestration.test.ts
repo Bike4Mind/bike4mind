@@ -39,6 +39,16 @@ describe('hasOrchestrationFields', () => {
     expect(hasOrchestrationFields({ ...baseAgent, deniedTools: ['shell'] } as IAgent)).toBe(true);
   });
 
+  it.each([
+    { confidenceGateThreshold: 0 },
+    { confidenceGateMode: 'off' as const },
+    { confidenceGateSelfReport: false },
+  ])('routes a confidence-only profile through orchestration: %j', settings => {
+    const configured = { ...baseAgent, ...settings };
+    expect(hasOrchestrationFields(configured)).toBe(true);
+    expect(pickOrchestrationAgent([baseAgent, configured])).toBe(configured);
+  });
+
   it('returns true when defaultThoroughness is set', () => {
     expect(hasOrchestrationFields({ ...baseAgent, defaultThoroughness: 'medium' } as IAgent)).toBe(true);
   });

@@ -9,6 +9,7 @@ import { BadRequestError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import {
   CONFIDENCE_GATE_MODES,
+  OrchestrationDefaultsSchema,
   type ConfidenceGateMode,
   IAgent,
   IUserDocument,
@@ -81,26 +82,29 @@ export function validateDefaultThoroughness(value: unknown): (typeof THOROUGHNES
 
 export function validateConfidenceGateThreshold(value: unknown): number | undefined {
   if (value === undefined || value === null) return undefined;
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) {
+  const parsed = OrchestrationDefaultsSchema.shape.confidenceGateThreshold.safeParse(value);
+  if (!parsed.success) {
     throw new AgentValidationError('confidenceGateThreshold must be a number between 0 and 1');
   }
-  return value;
+  return parsed.data;
 }
 
 export function validateConfidenceGateMode(value: unknown): ConfidenceGateMode | undefined {
   if (value === undefined || value === null || value === '') return undefined;
-  if (typeof value !== 'string' || !CONFIDENCE_GATE_MODES.includes(value as ConfidenceGateMode)) {
+  const parsed = OrchestrationDefaultsSchema.shape.confidenceGateMode.safeParse(value);
+  if (!parsed.success) {
     throw new AgentValidationError(`confidenceGateMode must be one of: ${CONFIDENCE_GATE_MODES.join(', ')}`);
   }
-  return value as ConfidenceGateMode;
+  return parsed.data;
 }
 
 export function validateConfidenceGateSelfReport(value: unknown): boolean | undefined {
   if (value === undefined || value === null) return undefined;
-  if (typeof value !== 'boolean') {
+  const parsed = OrchestrationDefaultsSchema.shape.confidenceGateSelfReport.safeParse(value);
+  if (!parsed.success) {
     throw new AgentValidationError('confidenceGateSelfReport must be a boolean');
   }
-  return value;
+  return parsed.data;
 }
 
 /**

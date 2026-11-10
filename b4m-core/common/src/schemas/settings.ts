@@ -945,9 +945,9 @@ export const OrchestrationDefaultsSchema = z.object({
    */
   confidenceGateThreshold: z.number().min(0).max(1).default(0.6),
   /**
-   * Which gate sites are active: `iteration` pauses on low-confidence iterations, `answer`
-   * pauses on low-confidence final answers, `both` enables both sites, `off` disables the
-   * gate entirely. Default `both`.
+   * Which sites use confidence: `iteration` enables pauses on low-confidence streaks,
+   * `answer` applies the lowConfidenceCompletion policy (annotate or block), `both`
+   * enables both sites, and `off` enables neither. Default `both`.
    */
   confidenceGateMode: z.enum(CONFIDENCE_GATE_MODES).default('both'),
   /**

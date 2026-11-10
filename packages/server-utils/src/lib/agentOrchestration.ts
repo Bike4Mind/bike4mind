@@ -23,7 +23,10 @@ export function hasOrchestrationFields(agent: IAgent): boolean {
   if (agent.allowedTools && agent.allowedTools.length > 0) return true;
   if (agent.deniedTools && agent.deniedTools.length > 0) return true;
   if (agent.defaultThoroughness) return true;
-  return false;
+  // Explicit zero, off and false still configure an orchestration profile.
+  return [agent.confidenceGateThreshold, agent.confidenceGateMode, agent.confidenceGateSelfReport].some(
+    value => value !== undefined && value !== null
+  );
 }
 
 /**
@@ -71,7 +74,7 @@ export interface SyntheticOrchestrationProfile {
   confidenceGateThreshold: number;
   /** Which gate sites are active. */
   confidenceGateMode: ConfidenceGateMode;
-  /** Whether the agent self-reports confidence scores. */
+  /** Whether the executor consumes confidence scores reported by the agent. */
   confidenceGateSelfReport: boolean;
   /** Discriminator vs `IAgent`. */
   isSynthetic: true;

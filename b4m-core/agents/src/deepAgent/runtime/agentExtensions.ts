@@ -83,8 +83,9 @@ export interface ResolvedOrchestrationProfile {
    */
   lowConfidenceCompletion?: LowConfidenceCompletionMode;
   /**
-   * Which gate sites are active: `iteration` pauses on low-confidence iterations, `answer`
-   * pauses on low-confidence final answers, `both` enables both, `off` disables the gate.
+   * Which sites use confidence: `iteration` enables pauses on low-confidence streaks,
+   * `answer` applies lowConfidenceCompletion (annotate or block), `both` enables both,
+   * and `off` enables neither.
    * Omitted => the executor's global default (`both`).
    */
   confidenceGateMode?: ConfidenceGateMode;
