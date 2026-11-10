@@ -62,16 +62,17 @@ const handler = adminApi({
       throw error;
     };
 
-    // Get system settings
-    const settings = await adminSettingsRepository
-      .getSettingsValue('RapidReplySettings')
-      .catch(recordFailedRunAndRethrow);
+    const [settings, enableRapidReply] = await Promise.all([
+      adminSettingsRepository.getSettingsValue('RapidReplySettings'),
+      adminSettingsRepository.getSettingsValue('EnableRapidReply'),
+    ]).catch(recordFailedRunAndRethrow);
     if (!settings) {
       return recordFailedRunAndRethrow(new Error('Rapid Reply settings not found. Please configure settings first.'));
     }
 
-    // Check if Rapid Reply is enabled
-    if (!settings.enabled) {
+    // Same toggle chat reads in pages/api/ai/rapid-reply.ts; RapidReplySettings.enabled is never written.
+    const globalEnabled = enableRapidReply === true;
+    if (!globalEnabled) {
       await recordTestRun(false);
       return res.json({
         success: false,
@@ -488,7 +489,7 @@ const handler = adminApi({
             : [],
       },
       settings: {
-        globalEnabled: settings.enabled,
+        globalEnabled,
         allowedUserTags: settings.allowedUserTags,
         transitionMode: settings.transitionMode,
         showIndicator: settings.showIndicator,

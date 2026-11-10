@@ -1829,6 +1829,7 @@ export type LogoSettings = z.infer<typeof LogoSettingsSchema>;
 
 // RapidReply Settings Schema
 export const RapidReplySettingsSchema = z.object({
+  /** @deprecated Nothing writes this; the global toggle is the `EnableRapidReply` setting. */
   enabled: z.boolean().prefault(false),
   allowedUserTags: z.array(z.string()).prefault([]),
   defaultMaxTokens: z.number().prefault(150),
