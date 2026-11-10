@@ -42,14 +42,25 @@ const seed: Array<Record<string, unknown> & { _id: mongoose.Types.ObjectId; key:
     tags: [PENDING_FREE_CREDITS_TAG],
     signupGrant: grant({ creditsReleased: 0 }),
   },
-  { key: 'dripping', _id: oid(3), signupGrant: grant({ creditsReleased: 150, dripCredits: 50 }) },
+  {
+    key: 'dripping',
+    _id: oid(3),
+    signupInvite: { source: 'referral', inviteId: 'inv-1', at: heldAt },
+    signupGrant: grant({ creditsReleased: 150, dripCredits: 50 }),
+  },
   {
     key: 'fullyDripped',
     _id: oid(4),
     signupGrant: grant({ stage: 'unlocked', unlockedBy: 'verification', creditsReleased: 300 }),
   },
   { key: 'blocked', _id: oid(5), signupGrant: grant({ blocked: { at: heldAt } }) },
-  { key: 'package', _id: oid(6), grantPackageId: 'pkg-1', signupGrant: grant({ creditsReleased: 250 }) },
+  {
+    key: 'package',
+    _id: oid(6),
+    grantPackageId: 'pkg-1',
+    signupInvite: { source: 'organization', inviteId: 'inv-2', organizationId: 'org-1', at: heldAt },
+    signupGrant: grant({ creditsReleased: 250 }),
+  },
   {
     key: 'forfeited',
     _id: oid(7),
@@ -157,6 +168,24 @@ describe('signupGrantPendingRepository.listPending', () => {
     expect(await ids({ status: 'locked' })).toEqual([idOf('forfeited'), idOf('pendingEmail')].sort());
     expect(await ids({ status: 'held', heldReason: 'budget_exhausted' })).toEqual([idOf('heldNoGrant')]);
     expect(await ids({ status: 'dripping', source: 'package' })).toEqual([idOf('package')]);
+  });
+
+  it('filters by whether the account signed up through an invite', async () => {
+    const ids = async (input: Parameters<typeof listAll>[0]) => (await listAll(input)).map(r => r.id).sort();
+    const all = await ids({});
+    const invited = await ids({ invite: 'invited' });
+    const uninvited = await ids({ invite: 'uninvited' });
+    expect(invited).toEqual([idOf('dripping'), idOf('package')].sort());
+    expect(uninvited).toEqual(all.filter(id => !invited.includes(id)));
+    expect(await ids({ invite: 'invited', source: 'package' })).toEqual([idOf('package')]);
+    expect(await ids({ invite: 'uninvited', source: 'package' })).toEqual([]);
+    expect(await ids({ invite: 'invited', status: 'blocked' })).toEqual([]);
+
+    const rows = await listAll();
+    const inviteSourceOf = new Map(rows.map(r => [r.id, r.inviteSource]));
+    expect(inviteSourceOf.get(idOf('dripping'))).toBe('referral');
+    expect(inviteSourceOf.get(idOf('package'))).toBe('organization');
+    expect(inviteSourceOf.get(idOf('blocked'))).toBeNull();
   });
 
   it('labels a row dripping only while its drip can still pay, and locked otherwise', async () => {

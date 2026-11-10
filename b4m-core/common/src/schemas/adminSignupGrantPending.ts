@@ -74,6 +74,8 @@ export const adminSignupGrantPendingRowSchema = z.object({
   email: z.string().nullable(),
   createdAt: z.string().nullable(),
   source: z.enum(['default', 'package']).nullable(),
+  /** How the account was invited (signupInvite), or null when it signed up without an invite. */
+  inviteSource: z.enum(['referral', 'organization']).nullable(),
   stage: z.enum(['pending_email', 'signup', 'unlocked']).nullable(),
   /** `locked`: credits remain but nothing pays them without an unlock or an admin. */
   status: z.enum(['held', 'dripping', 'locked', 'blocked']),

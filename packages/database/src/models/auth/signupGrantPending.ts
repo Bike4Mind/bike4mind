@@ -14,6 +14,7 @@ export type SignupGrantPendingRow = {
   email: string | null;
   createdAt: Date | null;
   source: 'default' | 'package' | null;
+  inviteSource: 'referral' | 'organization' | null;
   stage: 'pending_email' | 'signup' | 'unlocked' | null;
   status: SignupGrantPendingStatus;
   heldReason: SignupGrantPendingHeldReason | null;
@@ -171,6 +172,7 @@ type ListPendingInput = {
   status?: SignupGrantPendingStatus;
   heldReason?: SignupGrantPendingHeldReason;
   source?: 'default' | 'package';
+  invite?: 'invited' | 'uninvited';
   sort: SignupGrantPendingSort;
   cursor?: SignupGrantPendingCursor;
   limit: number;
@@ -199,6 +201,8 @@ export const buildListPendingPipeline = (input: ListPendingInput): PipelineStage
   if (input.heldReason) pre.push({ signupGrantHeldReason: input.heldReason, tags: PENDING_FREE_CREDITS_TAG });
   if (input.source === 'package') pre.push({ 'signupGrant.stage': { $type: 'string' }, ...fromPackage });
   if (input.source === 'default') pre.push({ 'signupGrant.stage': { $type: 'string' }, $nor: [fromPackage] });
+  if (input.invite === 'invited') pre.push({ signupInvite: { $type: 'object' } });
+  if (input.invite === 'uninvited') pre.push({ signupInvite: { $not: { $type: 'object' } } });
 
   const cursor = input.cursor;
   const cursorId = cursor ? new mongoose.Types.ObjectId(cursor.id) : null;
@@ -219,6 +223,7 @@ export const buildListPendingPipeline = (input: ListPendingInput): PipelineStage
         email: 1,
         createdAt: 1,
         grantPackageId: 1,
+        inviteSource: '$signupInvite.source',
         stage: '$signupGrant.stage',
         status: 1,
         signupGrantHeldReason: 1,
@@ -246,6 +251,7 @@ export const signupGrantPendingRepository = {
       email: doc.email ?? null,
       createdAt: doc.createdAt ?? null,
       source: doc._hasGrant ? (doc.grantPackageId ? 'package' : 'default') : null,
+      inviteSource: doc.inviteSource ?? null,
       stage: doc.stage ?? null,
       status: doc.status,
       heldReason: doc._held ? doc.signupGrantHeldReason : null,

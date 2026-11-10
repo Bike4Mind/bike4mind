@@ -65,6 +65,7 @@ export type PendingListFilters = {
   status?: 'held' | 'dripping' | 'locked' | 'blocked';
   heldReason?: 'budget_exhausted' | 'risk_review';
   source?: 'default' | 'package';
+  invite?: 'invited' | 'uninvited';
   sort: 'oldest' | 'remaining';
 };
 

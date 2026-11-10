@@ -43,6 +43,7 @@ const row = (overrides: Partial<AdminSignupGrantPendingRow> = {}): AdminSignupGr
   email: 'held@example.com',
   createdAt: '2026-11-01T00:00:00.000Z',
   source: 'default',
+  inviteSource: null,
   stage: 'signup',
   status: 'held',
   held: { reason: 'budget_exhausted', since: '2026-11-02T00:00:00.000Z', credits: 500 },
@@ -164,6 +165,7 @@ describe('PendingSection', () => {
       status: 'held',
       heldReason: undefined,
       source: undefined,
+      invite: undefined,
       sort: 'remaining',
     });
 
@@ -237,6 +239,27 @@ describe('PendingSection', () => {
     expect(screen.getByTestId('pending-bulk-dialog-stub')).toHaveAttribute('data-ids', 'a'.repeat(24));
   });
 
+  it('passes the invite filter to the list query, writes it to the URL and labels invited rows', () => {
+    const invited = row({ id: 'c'.repeat(24), inviteSource: 'organization' });
+    mocks.list = listOf([row(), invited]);
+    mocks.search = { pendingInvite: 'invited' };
+    render(<PendingSection />, { wrapper: Wrapper });
+    expect(mocks.listArgs.at(-1)).toMatchObject({ invite: 'invited' });
+    expect(screen.getByTestId(`pending-row-invite-${'c'.repeat(24)}`)).toHaveTextContent('Organization invite');
+    expect(screen.queryByTestId(`pending-row-invite-${'a'.repeat(24)}`)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('admin-filter-invite'));
+    fireEvent.click(screen.getByTestId('admin-filter-invite-uninvited'));
+    const { search } = mocks.navigate.mock.calls.at(-1)![0];
+    expect(search({ pendingInvite: 'invited' })).toMatchObject({ pendingInvite: 'uninvited' });
+  });
+
+  it('ignores an unknown invite value in the URL', () => {
+    mocks.search = { pendingInvite: 'maybe' };
+    render(<PendingSection />, { wrapper: Wrapper });
+    expect(mocks.listArgs.at(-1)).toMatchObject({ invite: undefined });
+  });
+
   it('offers to clear filters when filters match nothing', () => {
     mocks.list = listOf([]);
     mocks.search = { pendingStatus: 'blocked' };
@@ -244,8 +267,9 @@ describe('PendingSection', () => {
     expect(screen.getByText('No accounts match these filters')).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('pending-clear-filters-btn'));
     const { search } = mocks.navigate.mock.calls.at(-1)![0];
-    expect(search({ pendingStatus: 'blocked', pendingSort: 'remaining' })).toMatchObject({
+    expect(search({ pendingStatus: 'blocked', pendingInvite: 'invited', pendingSort: 'remaining' })).toMatchObject({
       pendingStatus: undefined,
+      pendingInvite: undefined,
       pendingSort: undefined,
     });
   });
