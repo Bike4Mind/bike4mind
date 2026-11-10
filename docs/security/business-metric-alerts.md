@@ -9,12 +9,18 @@ previous contributors whose current value is zero.
 
 ## Slack message
 
-Each run posts one message to the user-activity channel grouping every anomaly it found, in the
-same shape as the CloudWatch alarm relay: a header naming the compare and the count, a
-colour-barred attachment with one section per metric, admin buttons and a `category business`
-footer. The bar is red when any metric moved the way abuse would push it (signups, active
-users, API requests, credits, spend or receipts up), amber for a fall, blue for growth such as
-new paying subscribers.
+Each run posts one message grouping every anomaly it found, in the same shape as the CloudWatch
+alarm relay: a header naming the compare and the count, a colour-barred attachment with one
+section per metric, admin buttons and a `category business` footer. Production posts to the
+user-activity channel; staging posts to its alarms channel (see Configuration).
+
+Each section's arrow shows only the direction of the change. Whether the move needs a look is
+said in words after it: `:mag: check for abuse` when the metric moved the way abuse would push it
+(signups, active users, API requests, credits, spend or receipts up), `:warning: check for a
+problem` for a fall, and nothing for growth such as new paying subscribers. The bar is red when
+any section says check for abuse, amber when the worst is a fall, blue for growth only. The
+meaning line names the baseline of the compare: "in the same hours yesterday" for an intraday
+run, "the day before" for the closed-day run.
 
 ```
 :bar_chart: Business metrics, 16:00 UTC intraday compare: 3 anomalies
@@ -22,20 +28,20 @@ new paying subscribers.
 00:00 to 16:00 UTC today (16h) against the same hours yesterday. The median is the same 16h
 over the previous 7 days. The day closes at midnight UTC with its own compare.
 
-:small_red_triangle_down: Verified signups down 18.6%
+:arrow_down_small: Verified signups down 18.6%  |  :warning: check for a problem
 Now 192, previous 236, 7-day median 285
-Fewer accounts verified their email than yesterday. Usually traffic or verification-email
-delivery; check bounces and the email provider if it keeps falling.
+Fewer new accounts signed up and verified their email than in the same hours yesterday. Usually
+traffic or verification-email delivery; check bounces and the email provider if it keeps falling.
 
-:small_red_triangle_down: Active users down 19.6%
+:arrow_down_small: Active users down 19.6%  |  :warning: check for a problem
 Now 45, previous 56, 7-day median 56
-Fewer distinct external users were active than yesterday. A dip across the whole day points at
-an outage or a sign-in problem; a one-hour dip is usually noise.
+Fewer distinct external users were active than in the same hours yesterday. A dip across the
+whole day points at an outage or a sign-in problem; a one-hour dip is usually noise.
 
-:small_red_triangle_down: Credits charged down 60.8%
+:arrow_down_small: Credits charged down 60.8%  |  :warning: check for a problem
 Now 2,667 credits, previous 6,811 credits, 7-day median 6,811 credits
-Fewer credits were charged than yesterday. Fine if usage fell too; otherwise check that
-metering still charges every completion.
+Fewer credits were charged than in the same hours yesterday. Fine if usage fell too; otherwise
+check that metering still charges every completion.
 Top users: user ...e89e -2,965 credits, user ...61f4 -517 credits
 Top models: Claude Opus 5.5 -2,958 credits, Claude Haiku 5.5 -1,269 credits
 Top orgs: org ...484a -524 credits
@@ -64,10 +70,14 @@ rose, `Credit analytics` when credits or spend rose.
 
 ## Configuration
 
-- Set the existing **User Activity Channel Webhook URL** (`SlackUserActivityWebhookUrl`) in
-  Admin Settings > Feedback to the destination channel's incoming webhook. Configure it
-  separately in staging (`dev`) and production. There is no general-channel fallback. A missing
-  webhook logs the configuration gap and returns `status: 'skipped'` before collecting metrics.
+- Production: set the existing **User Activity Channel Webhook URL** (`SlackUserActivityWebhookUrl`)
+  in Admin Settings > Feedback to the destination channel's incoming webhook. There is no
+  general-channel fallback. A missing webhook logs the configuration gap and returns
+  `status: 'skipped'` before collecting metrics.
+- Staging (`dev`) ignores that setting and posts to the stage's alarms channel
+  (`SLACK_ALARMS_WEBHOOK_URL`, falling back to `SLACK_ERROR_REPORTING_WEBHOOK_URL`), the same
+  route the CloudWatch alarm relay uses, so test-traffic numbers never land in a team-wide
+  channel. Preview stages do not run the cron.
 - Scheduled resources exist only on `dev` and `production`. Set
   `BUSINESS_METRIC_ALERTS_ENABLED=false` in the deployment environment to disable the schedule.
 - `BUSINESS_METRIC_THRESHOLDS` is a JSON object in the deployment environment. Each entry has
@@ -135,7 +145,7 @@ delivery receipts are retained for ten days.
    concurrent delivery claims, and rejected-delivery retries.
 2. Run `pnpm --filter @bike4mind/workers exec vitest run src/cron/businessMetricAlerts.test.ts`
    for the full handler's seeded >5% and <5% decisions with an isolated Slack transport.
-3. Deploy to `dev` with a test-channel webhook. Seed source records for two comparable periods
+3. Deploy to `dev`; it posts to the stage's alarms channel. Seed source records for two comparable periods
    with a change above both configured guards; invoke the worker with an EventBridge-shaped
    `{ "time": "<scheduled UTC ISO timestamp>" }`. Confirm the grouped message names the metric
    in Slack. Repeat with a change under 5%, using a new period, and confirm no post. Never seed
