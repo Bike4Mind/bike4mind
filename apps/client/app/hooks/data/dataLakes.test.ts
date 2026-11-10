@@ -71,6 +71,7 @@ import {
   IDLE_BATCHES_POLL_MS,
   useBrowsePublicDataLakes,
   useCleanupDataLake,
+  useDataLakeFiles,
   useDataLakeSkippedFiles,
   useDataLakeResearchRuns,
   useDataLakeSpend,
@@ -254,6 +255,37 @@ it('sends selected lake ids with a leaf article request', async () => {
   expect(apiGet).toHaveBeenCalledWith(
     '/api/data-lakes/articles?tags=docs%3Aalpha&lakeId=lake-a&lakeId=lake-b&limit=50'
   );
+});
+
+describe('useDataLakeFiles', () => {
+  beforeEach(() => {
+    apiGet.mockReset();
+    apiGet.mockResolvedValue({ data: { data: [], total: 0, hasMore: false } });
+  });
+
+  const mount = (params?: { tag?: string }) => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return renderHook(() => useDataLakeFiles('lake-a', params), { wrapper });
+  };
+
+  // A bare `tags` key: axios writes an array as `tags[]`, which the route never reads.
+  it('narrows the lake list to one folder with a plain tags param', async () => {
+    const { result } = mount({ tag: 'docs:alpha' });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(apiGet).toHaveBeenCalledWith('/api/data-lakes/lake-a/articles', {
+      params: { limit: 100, tags: 'docs:alpha' },
+    });
+  });
+
+  it('sends no tag filter for the whole lake list', async () => {
+    const { result } = mount();
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(apiGet).toHaveBeenCalledWith('/api/data-lakes/lake-a/articles', { params: { limit: 100 } });
+  });
 });
 
 describe('useDataLakeSkippedFiles', () => {
