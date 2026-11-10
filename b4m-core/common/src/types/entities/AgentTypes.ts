@@ -255,6 +255,9 @@ export interface IAgent extends ICreditHolder, IModelConfig {
   deniedTools?: string[];
   maxIterations?: { quick: number; medium: number; very_thorough: number };
   defaultThoroughness?: 'quick' | 'medium' | 'very_thorough';
+  confidenceGateThreshold?: number;
+  confidenceGateMode?: 'iteration' | 'answer' | 'both' | 'off';
+  confidenceGateSelfReport?: boolean;
   defaultVariables?: Record<string, string>;
   exclusiveMcpServers?: string[];
   fallbackModels?: string[];

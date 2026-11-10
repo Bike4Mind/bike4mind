@@ -62,6 +62,12 @@ export interface SyntheticOrchestrationProfile {
   fallbackModels: string[];
   /** Whether `coordinate_task` (DAG decomposition) is enabled. */
   dagEnabled: boolean;
+  /** Per-profile confidence-gate threshold. */
+  confidenceGateThreshold: number;
+  /** Which gate sites are active. */
+  confidenceGateMode: 'iteration' | 'answer' | 'both' | 'off';
+  /** Whether the agent self-reports confidence scores. */
+  confidenceGateSelfReport: boolean;
   /** Discriminator vs `IAgent`. */
   isSynthetic: true;
 }
@@ -103,6 +109,9 @@ export function buildDefaultOrchestrationProfile(
     defaultThoroughness: defaults.defaultThoroughness,
     fallbackModels: defaults.fallbackModels,
     dagEnabled: defaults.dagEnabled,
+    confidenceGateThreshold: defaults.confidenceGateThreshold,
+    confidenceGateMode: defaults.confidenceGateMode,
+    confidenceGateSelfReport: defaults.confidenceGateSelfReport,
     isSynthetic: true,
   };
 }

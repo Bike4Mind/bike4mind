@@ -72,6 +72,17 @@ export interface ResolvedOrchestrationProfile {
    * `off` does neither. Omitted => the executor's global default (`annotate`).
    */
   lowConfidenceCompletion?: LowConfidenceCompletionMode;
+  /**
+   * Which gate sites are active: `iteration` pauses on low-confidence iterations, `answer`
+   * pauses on low-confidence final answers, `both` enables both, `off` disables the gate.
+   * Omitted => the executor's global default (`both`).
+   */
+  confidenceGateMode?: 'iteration' | 'answer' | 'both' | 'off';
+  /**
+   * Whether the agent self-reports confidence scores. When false the executor skips the
+   * confidence callback and the gate never fires. Omitted => true.
+   */
+  confidenceGateSelfReport?: boolean;
 }
 
 export interface AgentExtensionLogger {
@@ -193,6 +204,8 @@ const orchestrationProfileSchema = z.object({
   systemPrompt: z.string().optional(),
   confidenceGateThreshold: z.number().min(0).max(1).optional(),
   lowConfidenceCompletion: z.enum(LOW_CONFIDENCE_COMPLETION_MODES).optional(),
+  confidenceGateMode: z.enum(['iteration', 'answer', 'both', 'off'] as const).optional(),
+  confidenceGateSelfReport: z.boolean().optional(),
 });
 
 function isProfileShaped(value: unknown): value is ResolvedOrchestrationProfile {

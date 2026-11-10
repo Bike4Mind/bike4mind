@@ -331,7 +331,13 @@ const AGENT_HISTORY_QUEST_COUNT = 20;
  * or until the stale-active sweep reaps it (`cleanupStaleActive` includes
  * `paused`).
  */
-const CONFIDENCE_GATE_THRESHOLD = 0.6;
+// Confidence-gate defaults: used only as a last-resort fallback when the
+// orchestration profile is unavailable (e.g. a legacy continuation row).
+// The canonical defaults live in OrchestrationDefaultsSchema; new runs
+// always resolve them through the profile.
+const DEFAULT_CONFIDENCE_GATE_THRESHOLD = 0.6;
+const DEFAULT_CONFIDENCE_GATE_MODE: 'iteration' | 'answer' | 'both' | 'off' = 'both';
+const DEFAULT_CONFIDENCE_GATE_SELF_REPORT = true;
 
 // `persistRunAsQuest` moved to `@server/utils/persistRunAsQuest` so the
 // WebSocket `gate_response: stop` handler can share the same chat-history
@@ -2851,18 +2857,21 @@ async function processExecution(
     const resetLastIterationConfidence = () => {
       lastIterationConfidenceState = null;
     };
-    const confidenceGate = (iterationConfidence: number, agentIterationIndex: number) => {
-      lastIterationConfidenceState = { iteration: agentIterationIndex, confidence: iterationConfidence };
-      // Always proceed - the actual gate decision is made post-iteration by
-      // the block below. `confidence` and `reason` are echoed back only to
-      // satisfy the `ConfidenceGateDecision` type; the agent ignores both
-      // when `action === 'proceed'`.
-      return {
-        action: 'proceed' as const,
-        confidence: iterationConfidence,
-        reason: '',
-      };
-    };
+    const selfReportEnabled = orchestrationProfile?.confidenceGateSelfReport ?? DEFAULT_CONFIDENCE_GATE_SELF_REPORT;
+    const confidenceGate = !selfReportEnabled
+      ? undefined
+      : (iterationConfidence: number, agentIterationIndex: number) => {
+          lastIterationConfidenceState = { iteration: agentIterationIndex, confidence: iterationConfidence };
+          // Always proceed - the actual gate decision is made post-iteration by
+          // the block below. `confidence` and `reason` are echoed back only to
+          // satisfy the `ConfidenceGateDecision` type; the agent ignores both
+          // when `action === 'proceed'`.
+          return {
+            action: 'proceed' as const,
+            confidence: iterationConfidence,
+            reason: '',
+          };
+        };
 
     // See `toolGate` below for why these two are exempt from the pre-execution gate.
     // Reuses `DELEGATION_TOOLS` so the exemption cannot drift from the tools it names.
@@ -2926,7 +2935,7 @@ async function processExecution(
           approvedToolCallId: approvedPause.toolCallId,
           approvedTools,
           deniedTools,
-          confidenceGateThreshold: orchestrationProfile?.confidenceGateThreshold ?? CONFIDENCE_GATE_THRESHOLD,
+          confidenceGateThreshold: orchestrationProfile?.confidenceGateThreshold ?? DEFAULT_CONFIDENCE_GATE_THRESHOLD,
           confidenceOverrides: execution.confidenceOverrides,
           guardedToolNames: customToolNameSet,
         },
@@ -3499,32 +3508,23 @@ async function processExecution(
       // each step (thought / action / observation / final_answer) already
       // reached the client mid-iteration.
 
-      // Confidence gate - pause low-confidence runs for human
-      // review. Evaluated AFTER the permission gate so a tool that needs
-      // approval pauses for that more specific signal first, and only
-      // checked on non-terminal iterations (a final_answer iteration is
-      // complete by definition; pausing it would discard the answer).
-      // Failed tool calls do not count toward it - see `evaluateConfidenceGate`.
-      // It pauses on a streak of low iterations, not one (`LOW_CONFIDENCE_STREAK_TO_PAUSE`);
-      // the streak is persisted on the execution doc so it survives continuations.
-      // Per-profile override wins over the global default; a profile threshold of 0
-      // disables the gate entirely (confidence is never < 0) for unattended loops.
-      const confidenceGateThreshold = orchestrationProfile?.confidenceGateThreshold ?? CONFIDENCE_GATE_THRESHOLD;
-      const gate = evaluateConfidenceGate({
-        gate: readLastIterationConfidence(),
-        isComplete: iterationResult.isComplete,
-        reachedMaxIterations: iterationResult.reachedMaxIterations,
-        threshold: confidenceGateThreshold,
-        iterationSteps: iterationResult.allSteps,
-        confidenceOverrides: execution.confidenceOverrides,
-      });
-      // Telemetry: record every iteration the gate evaluates -
-      // including ones that complete in the same turn (isComplete=true) or
-      // clear the threshold - so `evaluatedCount` is the true denominator for
-      // fire rate. `recordGateEmitted` below increments the numerator only on
-      // a real pause. Baseline observability before touching signal quality.
-      // A scripted (`overridden`) iteration advances the streak but skips the
-      // telemetry counters: it would skew the real fire rate.
+      // Confidence gate - pause low-confidence runs for human review.
+      // `confidenceGateMode` controls which sites are active: `iteration` and `both`
+      // enable this site; `answer` and `off` skip it.
+      const confidenceGateThreshold =
+        orchestrationProfile?.confidenceGateThreshold ?? DEFAULT_CONFIDENCE_GATE_THRESHOLD;
+      const gateMode = orchestrationProfile?.confidenceGateMode ?? DEFAULT_CONFIDENCE_GATE_MODE;
+      const iterationGateEnabled = gateMode === 'iteration' || gateMode === 'both';
+      const gate = iterationGateEnabled
+        ? evaluateConfidenceGate({
+            gate: readLastIterationConfidence(),
+            isComplete: iterationResult.isComplete,
+            reachedMaxIterations: iterationResult.reachedMaxIterations,
+            threshold: confidenceGateThreshold,
+            iterationSteps: iterationResult.allSteps,
+            confidenceOverrides: execution.confidenceOverrides,
+          })
+        : null;
       const decision = await decideIterationConfidencePause(gate, (confidence, options) =>
         agentExecutionRepository.recordIterationConfidence(executionId, confidence, options)
       );
@@ -3590,8 +3590,10 @@ async function processExecution(
     // apps/client/server/websocket/agentExecute.ts).
     const completedOnAnswer =
       iterationResult?.isComplete && !iterationResult.reachedMaxIterations && !iterationResult.reachedMaxTotalTokens;
+    const answerGateMode = orchestrationProfile?.confidenceGateMode ?? DEFAULT_CONFIDENCE_GATE_MODE;
+    const answerGateEnabled = answerGateMode === 'answer' || answerGateMode === 'both';
     const lowConfidenceCompletion =
-      completedOnAnswer && (updatedExecution?.lowConfidenceStreak ?? 0) > 0
+      answerGateEnabled && completedOnAnswer && (updatedExecution?.lowConfidenceStreak ?? 0) > 0
         ? evaluateLowConfidenceCompletion({
             mode:
               orchestrationProfile?.lowConfidenceCompletion ??
@@ -3606,7 +3608,7 @@ async function processExecution(
               DEFAULT_LOW_CONFIDENCE_COMPLETION,
             lowConfidenceStreak: updatedExecution?.lowConfidenceStreak,
             lastConfidence: updatedExecution?.lastConfidence,
-            threshold: orchestrationProfile?.confidenceGateThreshold ?? CONFIDENCE_GATE_THRESHOLD,
+            threshold: orchestrationProfile?.confidenceGateThreshold ?? DEFAULT_CONFIDENCE_GATE_THRESHOLD,
           })
         : null;
     if (lowConfidenceCompletion) {
