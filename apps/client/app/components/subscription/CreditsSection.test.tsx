@@ -127,6 +127,15 @@ describe('CreditsSection', () => {
       expect(navigate).toHaveBeenCalledWith(personalUsage);
     });
 
+    it('opens the selected team, not the first org in the list', () => {
+      orgs.list = [
+        { id: 'org0', userId: 'u1' },
+        { id: 'org1', userId: 'u1' },
+      ];
+      clickUsage();
+      expect(navigate).toHaveBeenCalledWith(teamUsage);
+    });
+
     it('keeps personal usage while the org list has not loaded', () => {
       clickUsage();
       expect(navigate).toHaveBeenCalledWith(personalUsage);
