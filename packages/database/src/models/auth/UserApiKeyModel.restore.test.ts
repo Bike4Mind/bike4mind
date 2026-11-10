@@ -54,6 +54,40 @@ describe('UserApiKeyRepository.revokeIfNotDisabled', () => {
   });
 });
 
+describe('UserApiKeyRepository.findDisabledByKeyPrefix', () => {
+  it('returns a key disabled in bulk', async () => {
+    await UserApiKey.collection.insertOne({
+      userId: 'bulk-owner',
+      keyPrefix: 'b4m_live_bulk',
+      status: ApiKeyStatus.ACTIVE,
+    });
+    await userApiKeyRepository.deactivateAllByUserId('bulk-owner');
+
+    const keys = await userApiKeyRepository.findDisabledByKeyPrefix('b4m_live_bulk');
+
+    expect(keys).toHaveLength(1);
+    expect(keys[0].userId).toBe('bulk-owner');
+    expect(await userApiKeyRepository.findDisabledByKeyPrefix('b4m_live_other')).toEqual([]);
+  });
+
+  it('excludes a manually revoked key after bulk deactivation', async () => {
+    await seedRevoked({ keyPrefix: 'b4m_live_manual' });
+    await userApiKeyRepository.deactivateAllByUserId('owner-1');
+
+    expect(await userApiKeyRepository.findDisabledByKeyPrefix('b4m_live_manual')).toEqual([]);
+  });
+
+  it('excludes an active key', async () => {
+    await UserApiKey.collection.insertOne({
+      userId: 'active-owner',
+      keyPrefix: 'b4m_live_active',
+      status: ApiKeyStatus.ACTIVE,
+    });
+
+    expect(await userApiKeyRepository.findDisabledByKeyPrefix('b4m_live_active')).toEqual([]);
+  });
+});
+
 describe('UserApiKeyRepository.restoreRevoked', () => {
   it('reactivates the key and clears the revoke stamps', async () => {
     const id = await seedRevoked();

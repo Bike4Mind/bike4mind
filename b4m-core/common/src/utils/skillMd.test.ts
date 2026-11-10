@@ -377,6 +377,10 @@ describe('referencedRelativePaths', () => {
     expect(referencedRelativePaths(body)).toEqual(['reference.md', 'scripts/run.sh', 'README.md']);
   });
 
+  it('skips a repo doc reached through ./ or ../', () => {
+    expect(referencedRelativePaths('See ../CLAUDE.md, ../../AGENTS.md and ./CONTRIBUTING.md.')).toEqual([]);
+  });
+
   it('still reports a shipped file that shares a repo doc name in a subfolder or other case', () => {
     expect(referencedRelativePaths('See references/agents.md and docs/CLAUDE.md and claude.md.')).toEqual([
       'references/agents.md',

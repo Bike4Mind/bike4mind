@@ -3,6 +3,7 @@ import { ApiKeyScope, type IUserDocument } from '@bike4mind/common';
 import { oauthClientRepository, userRepository, type IOAuthClientDocument } from '@bike4mind/database/auth';
 import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
 import { hasAcceptedPolicy } from '@bike4mind/server-utils/auth/consentGate';
+import { ACCOUNT_BANNED_MESSAGE } from '@bike4mind/services/userService/accountState';
 import { checkFederatedGrant } from '@server/auth/federatedGrantGate';
 import { verifyFederatedIdToken, FederatedIdTokenError } from '@server/auth/verifyFederatedIdToken';
 
@@ -186,7 +187,11 @@ export async function loadIdentifiedEmbedUser(userId: string): Promise<{ user: I
       rejection: {
         status: 403,
         error: 'access_denied',
-        error_description: err instanceof Error ? err.message : 'Account is not usable',
+        error_description: user.isBanned
+          ? ACCOUNT_BANNED_MESSAGE
+          : err instanceof Error
+            ? err.message
+            : 'Account is not usable',
       },
     };
   }

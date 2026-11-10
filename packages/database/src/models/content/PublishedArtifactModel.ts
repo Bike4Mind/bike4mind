@@ -411,6 +411,13 @@ export class PublishedArtifactRepository extends BaseRepository<IPublishedArtifa
     super(model);
   }
 
+  /** Live artifacts awaiting a moderation decision: the admin list's `status=reported` view. */
+  async countReported(options: { limit?: number } = {}): Promise<number> {
+    return this.model
+      .countDocuments({ moderationStatus: 'reported', deletedAt: null }, { limit: options.limit })
+      .exec();
+  }
+
   async findByPublicId(publicId: string) {
     return this.findOne({ publicId, deletedAt: null });
   }

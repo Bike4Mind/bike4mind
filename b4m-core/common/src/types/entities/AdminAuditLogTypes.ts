@@ -109,6 +109,7 @@ export interface IAdminAuditLogRepository {
   findByIds(ids: string[]): Promise<AuditEntry[]>;
   /** Critical entries joined to their reviews: see adminAuditReview.ts. */
   listReviewQueue: ListAuditReviewQueue;
+  countUnreviewed(query: { viewerUserId: string }, options: { limit: number }): Promise<number>;
   summarize(since: Date): Promise<Omit<AuditSummary, 'windowDays' | 'since'>>;
   /** Oldest first: entries strictly after `after` (or from the start) up to and including `until`. */
   listAscending(page: { after: AuditLogCursor | null; until: Date; limit: number }): Promise<AuditEntry[]>;

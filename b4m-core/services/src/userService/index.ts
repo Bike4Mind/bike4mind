@@ -48,3 +48,4 @@ export * from './heldSignupGrants';
 export * from './signupGrantActionClassifier';
 export * from './signupGrantAdminActions';
 export * from './bulkSignupGrantActions';
+export * from './notifyAccountSuspended';

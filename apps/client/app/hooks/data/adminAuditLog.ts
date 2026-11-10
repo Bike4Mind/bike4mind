@@ -2,6 +2,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type QueryClie
 import { toast } from 'sonner';
 import { isAxiosError } from 'axios';
 import { api } from '@client/app/contexts/ApiContext';
+import { adminActionCountsQueryKey } from './adminActionCounts';
 import type {
   AuditAlertStatus,
   AuditEntry,
@@ -142,20 +143,6 @@ export const useAuditReviewQueue = (status: AuditReviewQueueStatus, options: Rev
   });
 };
 
-/** How many critical entries wait for this admin; a one-row page is enough because `total` counts them all. */
-export const useUnreviewedAuditCount = ({ enabled }: { enabled: boolean }) =>
-  useQuery({
-    queryKey: ['admin', 'audit-log', 'review-queue', 'count'],
-    queryFn: async (): Promise<number> => {
-      const response = await api.get<{ total: number }>('/api/admin/audit-log/review-queue', {
-        params: { status: 'unreviewed', limit: '1' },
-      });
-      return response.data.total;
-    },
-    staleTime: 1000 * 60,
-    enabled,
-  });
-
 export const useAuditReview = (entryId: string | null) =>
   useQuery({
     queryKey: ['admin', 'audit-log', 'review', entryId],
@@ -173,6 +160,7 @@ const invalidateReviewQueries = (queryClient: QueryClient) =>
   Promise.all([
     queryClient.invalidateQueries({ queryKey: ['admin', 'audit-log', 'review-queue'] }),
     queryClient.invalidateQueries({ queryKey: ['admin', 'audit-log', 'review'] }),
+    queryClient.invalidateQueries({ queryKey: adminActionCountsQueryKey }),
   ]);
 
 export const useMarkAuditReviewed = () => {

@@ -464,3 +464,159 @@ describe('SkillForm SKILL.md import', () => {
     });
   });
 });
+
+describe('SkillForm update from SKILL.md (edit mode)', () => {
+  const EXISTING = {
+    name: 'summarize',
+    description: 'Old description',
+    body: 'Old body',
+    argumentHint: '[file]',
+    files: [{ path: 'scripts/run.sh', content: 'echo old' }],
+  };
+  const NEW_MD = '---\nname: summarize\ndescription: New description\n---\nNew body';
+
+  const renderEdit = (initial: typeof EXISTING & { claudeCodeModel?: string } = EXISTING, onSubmit = vi.fn()) => {
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <SkillForm
+          initialValue={initial}
+          submitLabel="Save changes"
+          onSubmit={onSubmit}
+          onCancel={vi.fn()}
+          updateFromSkillMd
+        />
+      </CssVarsProvider>
+    );
+    return onSubmit;
+  };
+
+  it('shows the changed fields and leaves the form alone until applied', async () => {
+    renderEdit();
+    upload(NEW_MD);
+    expect(await screen.findByTestId('skill-form-update-preview')).toBeInTheDocument();
+    expect(screen.getByTestId('skill-form-update-change-description')).toHaveTextContent('New description');
+    expect(screen.getByTestId('skill-form-update-change-body')).toBeInTheDocument();
+    expect(screen.getByTestId('skill-form-update-change-argument-hint')).toHaveTextContent('(none)');
+    expect(value('skill-description-input')).toBe('Old description');
+    expect(value('skill-body-input')).toBe('Old body');
+  });
+
+  it('applies on confirm and submits the updated fields with the same name', async () => {
+    const onSubmit = renderEdit();
+    upload(NEW_MD);
+    fireEvent.click(await screen.findByTestId('skill-form-update-apply'));
+    expect(value('skill-description-input')).toBe('New description');
+    expect(screen.queryByTestId('skill-form-update-preview')).toBeNull();
+    expect(onSubmit).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('skill-form-submit'));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'summarize', description: 'New description', body: 'New body' })
+    );
+  });
+
+  it('discards without touching the form', async () => {
+    renderEdit();
+    upload(NEW_MD);
+    fireEvent.click(await screen.findByTestId('skill-form-update-discard'));
+    expect(screen.queryByTestId('skill-form-update-preview')).toBeNull();
+    expect(value('skill-description-input')).toBe('Old description');
+  });
+
+  it('warns on a name mismatch and keeps the existing name', async () => {
+    renderEdit();
+    upload('---\nname: other-name\ndescription: New description\n---\nNew body');
+    expect(await screen.findByTestId('skill-form-update-name-mismatch')).toHaveTextContent('other-name');
+    fireEvent.click(screen.getByTestId('skill-form-update-apply'));
+    expect(value('skill-name-input')).toBe('summarize');
+  });
+
+  it('keeps edits made after the preview to fields the preview did not list', async () => {
+    renderEdit();
+    upload('---\nname: summarize\ndescription: New description\nargument-hint: "[file]"\n---\nOld body');
+    const apply = await screen.findByTestId('skill-form-update-apply');
+    fireEvent.change(screen.getByTestId('skill-body-input'), { target: { value: 'My later edit' } });
+    fireEvent.click(apply);
+    expect(value('skill-description-input')).toBe('New description');
+    expect(value('skill-body-input')).toBe('My later edit');
+  });
+
+  it('lists a model change in the preview and writes it on apply', async () => {
+    const onSubmit = renderEdit({ ...EXISTING, claudeCodeModel: 'opus' });
+    upload('---\nname: summarize\ndescription: Old description\nmodel: haiku\n---\nOld body');
+    expect(await screen.findByTestId('skill-form-update-change-claude-code-model')).toHaveTextContent('opus');
+    expect(screen.getByTestId('skill-form-update-change-claude-code-model')).toHaveTextContent('haiku');
+    expect(screen.getByTestId('skill-form-claude-code-model')).toHaveTextContent('opus');
+    fireEvent.click(screen.getByTestId('skill-form-update-apply'));
+    fireEvent.click(screen.getByTestId('skill-form-submit'));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ claudeCodeModel: 'haiku' }));
+  });
+
+  it('keeps a model removed after the preview when the preview did not list the model', async () => {
+    const onSubmit = renderEdit({ ...EXISTING, claudeCodeModel: 'opus' });
+    upload('---\nname: summarize\ndescription: New description\nmodel: opus\n---\nOld body');
+    const apply = await screen.findByTestId('skill-form-update-apply');
+    expect(screen.queryByTestId('skill-form-update-change-claude-code-model')).toBeNull();
+    fireEvent.click(screen.getByTestId('skill-form-claude-code-model-remove'));
+    fireEvent.click(apply);
+    fireEvent.click(screen.getByTestId('skill-form-submit'));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ description: 'New description', claudeCodeModel: '' })
+    );
+  });
+
+  it('does not show the make-a-copy banner for a same-origin export on edit', async () => {
+    renderEdit();
+    upload(
+      toSkillMd(
+        { name: 'summarize', description: 'New description', body: 'New body' },
+        { sourceUrl: `${window.location.origin}/skills/1` }
+      )
+    );
+    expect(await screen.findByTestId('skill-form-update-preview')).toBeInTheDocument();
+    expect(screen.queryByTestId('skill-form-import-from-b4m')).toBeNull();
+  });
+
+  it('says so when the file matches the skill', async () => {
+    renderEdit();
+    upload('---\nname: summarize\ndescription: Old description\nargument-hint: "[file]"\n---\nOld body');
+    expect(await screen.findByTestId('skill-form-update-preview')).toHaveTextContent('Nothing would change');
+    expect(screen.getByTestId('skill-form-update-apply')).toBeDisabled();
+  });
+
+  it('shows invalid files the same actionable error as create', async () => {
+    renderEdit();
+    upload('no frontmatter here');
+    expect(await screen.findByTestId('skill-form-import-error')).toHaveTextContent('No frontmatter found');
+    expect(screen.queryByTestId('skill-form-update-preview')).toBeNull();
+  });
+
+  it('previews a folder import, flags changed scripts and replaces files only on apply', async () => {
+    const onSubmit = renderEdit();
+    fireEvent.change(screen.getByTestId('skill-form-import-folder'), {
+      target: {
+        files: [inFolder('s/SKILL.md', NEW_MD), inFolder('s/scripts/run.sh', 'echo new')],
+      },
+    });
+    expect(await screen.findByTestId('skill-form-update-change-files')).toHaveTextContent('changed scripts/run.sh');
+    expect(screen.getByTestId('skill-form-update-scripts-note')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('skill-form-update-apply'));
+    fireEvent.click(screen.getByTestId('skill-form-submit'));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ files: [{ path: 'scripts/run.sh', content: 'echo new' }] })
+    );
+  });
+
+  it('keeps existing files when a lone SKILL.md is applied', async () => {
+    const onSubmit = renderEdit();
+    upload(NEW_MD);
+    fireEvent.click(await screen.findByTestId('skill-form-update-apply'));
+    fireEvent.click(screen.getByTestId('skill-form-submit'));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ files: EXISTING.files }));
+  });
+
+  it('accepts a pasted SKILL.md', async () => {
+    renderEdit();
+    paste(NEW_MD);
+    expect(await screen.findByTestId('skill-form-update-preview')).toBeInTheDocument();
+  });
+});
