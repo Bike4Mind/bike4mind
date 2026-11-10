@@ -4,6 +4,7 @@ import {
   MAX_REFRESHED_BUSY_MS,
   PROTECTION_EXPIRES_IN_MINUTES,
   PROTECTION_REFRESH_MS,
+  REFRESH_TOLERANCE_MS,
 } from './taskProtection';
 
 const AGENT_URI = 'http://169.254.170.2/api/task-id';
@@ -68,7 +69,7 @@ describe('createTaskProtection', () => {
 
     protection.update(1);
     await protection.idle();
-    vi.advanceTimersByTime(PROTECTION_REFRESH_MS - 1);
+    vi.advanceTimersByTime(PROTECTION_REFRESH_MS - REFRESH_TOLERANCE_MS - 1);
     protection.update(2);
     protection.update(5);
     await protection.idle();
@@ -85,6 +86,27 @@ describe('createTaskProtection', () => {
     vi.advanceTimersByTime(PROTECTION_REFRESH_MS);
     await protection.idle();
     vi.advanceTimersByTime(PROTECTION_REFRESH_MS);
+    await protection.idle();
+
+    expect(sentBodies(fetchFn)).toEqual([ENABLE, ENABLE, ENABLE]);
+  });
+
+  it('refreshes on every timer tick when the agent call takes time to return', async () => {
+    const latencyMs = 250;
+    const fetchFn = vi.fn().mockImplementation(async () => {
+      // Yield first so the latency lands after the timer tick that issued the call has returned.
+      await Promise.resolve();
+      vi.advanceTimersByTime(latencyMs);
+      return okResponse();
+    });
+    const protection = createTaskProtection({ agentUri: AGENT_URI, logger: makeLogger(), fetchFn });
+
+    protection.update(1);
+    await protection.idle();
+    // Each step stops the clock exactly on the next tick, as a real interval fires.
+    vi.advanceTimersByTime(PROTECTION_REFRESH_MS - latencyMs);
+    await protection.idle();
+    vi.advanceTimersByTime(PROTECTION_REFRESH_MS - latencyMs);
     await protection.idle();
 
     expect(sentBodies(fetchFn)).toEqual([ENABLE, ENABLE, ENABLE]);

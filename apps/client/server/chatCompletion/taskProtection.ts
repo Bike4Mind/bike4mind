@@ -21,6 +21,9 @@ export const PROTECTION_EXPIRES_IN_MINUTES = 15;
 export const PROTECTION_REFRESH_MS = 5 * 60_000;
 export const MAX_REFRESHED_BUSY_MS = 30 * 60_000;
 export const AGENT_REQUEST_TIMEOUT_MS = 5_000;
+// `armedAt` is stamped when the agent call returns, after the refresh timer's phase. Without
+// this slack every tick finds the refresh just short of due and only every other tick refreshes.
+export const REFRESH_TOLERANCE_MS = 30_000;
 
 // The agent answers 200 with either `protection` or `failure`; a non-2xx carries `error`.
 const AgentResponseSchema = z.object({
@@ -65,7 +68,10 @@ export function createTaskProtection({
   let timer: ReturnType<typeof setInterval> | null = null;
 
   const refreshDue = (now: number) =>
-    desired && applied && now - armedAt >= PROTECTION_REFRESH_MS && now - busySince < MAX_REFRESHED_BUSY_MS;
+    desired &&
+    applied &&
+    now - armedAt >= PROTECTION_REFRESH_MS - REFRESH_TOLERANCE_MS &&
+    now - busySince < MAX_REFRESHED_BUSY_MS;
   const callNeeded = () => desired !== applied || refreshDue(Date.now());
 
   const setProtection = async (enabled: boolean): Promise<void> => {

@@ -33,8 +33,9 @@ import { websocketApi } from './websocket';
  * service sets ECS task scale-in protection while it has in-flight work (taskProtection.ts). It is
  * refreshed through a busy stretch up to a cap, which bounds how long one task can hold off a
  * deploy; a task busy past the cap falls back on the drain. The container removes the
- * cold-start + 15-min ceiling for normal processing, but not shutdown-time cancellation. The drain only runs at all
- * because the image makes node PID 1 with tsx as an in-process loader - see Dockerfile.chatcompletion.
+ * cold-start + 15-min ceiling for normal processing, but not shutdown-time cancellation. The
+ * drain only runs at all because the image makes node PID 1 with tsx as an in-process loader -
+ * see Dockerfile.chatcompletion.
  *
  * Ingress: the frontend (`/api/ai/llm`, `/api/chat`) POSTs the QuestStartBody to this
  * service's load balancer and gets a 202 back immediately; the service processes the quest
