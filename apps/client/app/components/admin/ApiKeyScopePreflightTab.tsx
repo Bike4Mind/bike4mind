@@ -23,6 +23,7 @@ import { ALL_KNOWN_API_KEY_SCOPE_VALUES } from '@bike4mind/server-utils/app/cons
 import type { IApiKeyScopePreflightRow } from '@bike4mind/common';
 import { useApiKeyScopePreflight, type ScopePreflightParams } from '@client/app/hooks/data/apiKeyScopePreflight';
 import { AdminPageHeader, DataTable, EmptyState, ErrorState, FilterBar } from './shared';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
 
 const WINDOW_OPTIONS = [7, 30, 90];
 
@@ -92,7 +93,7 @@ export const ApiKeyScopePreflightTab: React.FC = () => {
   }, [data]);
 
   return (
-    <Stack spacing={2} data-testid="admin-scope-preflight-tab">
+    <Stack spacing={ADMIN_REGION_GAP} data-testid="admin-scope-preflight-tab">
       <AdminPageHeader
         title="API key scope preflight"
         count={data && !isFetching && !error ? data.rows.length : undefined}
