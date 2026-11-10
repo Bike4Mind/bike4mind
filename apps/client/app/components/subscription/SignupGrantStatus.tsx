@@ -4,6 +4,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { useSignupGrantSchedule } from '@client/app/hooks/useSignupGrantSchedule';
 import { advertisedDripCredits, unlockPathsCopy } from '@client/app/components/Session/newUserWelcomeModel';
+import { isSignupGrantHeldForReview } from '@client/app/utils/onboarding';
 
 const formatUnlockDate = (date: Date | string) =>
   new Date(date).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
@@ -18,6 +19,14 @@ export default function SignupGrantStatus() {
     return (
       <Typography level="body-sm" data-testid="signup-grant-status">
         Your free credits are being prepared.
+      </Typography>
+    );
+  }
+  if (isSignupGrantHeldForReview(currentUser)) {
+    return (
+      <Typography level="body-sm" data-testid="signup-grant-under-review">
+        Your free credits are on hold while we review new signups from your email domain, which we do to keep free
+        credits fair. You can keep using Bike4Mind in the meantime.
       </Typography>
     );
   }

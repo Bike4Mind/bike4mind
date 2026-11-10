@@ -93,10 +93,24 @@ After the rule, the same job runs the advisory assessment of pending `young-doma
 (`apps/client/server/security/signupDomainHoldAssessment`) while **Advisory Assessment of Young-Domain Holds** is on
 (default off). For each hold without a current verdict it asks one Decisions question (`abuse`, `legitimate` or
 `insufficient_evidence`) over a summary of counts and flags only: domain age, mail provider class, whether
-`https://<domain>/` answers with real content (derived in code; the page itself is never sent), signup count and
-timing, and how many distinct networks, ASNs and countries the accounts came from. No email, IP, domain name or site
-text reaches the model. It only ever confirms: an `abuse` verdict at or above `minConfirmConfidence` (default 0.9)
-confirms the hold exactly like the rule (strict system audit entry, "Auto-confirmed by the advisory assessment").
+`https://<domain>/` answers with real content and whether that page describes a temporary or disposable mail
+service (both derived in code; the page itself is never sent), signup count and timing, and how many distinct networks,
+ASNs and countries the accounts came from. No email, IP, domain name or site text reaches the model. An `abuse` verdict
+at or above `minConfirmConfidence` (default 0.9) confirms the hold exactly like the rule (strict system audit entry,
+"Auto-confirmed by the advisory assessment").
+
+A `legitimate` verdict releases the hold only when **Auto-release legitimate holds** is on (default off), the
+confidence is at or above `minReleaseConfidence` (default 0.95), and every code guard passes: the site has real
+content and no disposable-mail wording, mail runs on Google Workspace or Microsoft, every summarized signup has known
+network data and none came from a datacenter, and the domain has between 1 and `maxAutoReleaseSignups` (default 2)
+verified accounts still waiting, counted live (a hold's own signup count is fixed when it is created). The payout is
+capped at that same number. At most `maxAutoReleasesPerDay` holds (default 5) are released a day; the rest wait for an
+admin. Unlike an admin release, an automated release does not exempt the domain for good: it stays under burst
+detection whatever **Auto-hold Signup Bursts** says, and a burst re-holds it (reason `Verified signup burst`) for an
+admin. A release writes a strict `signup_domain_hold.auto_released` system audit entry in the same
+transaction as the status change, then pays out the held credits within the daily free-grant budget (an admin
+Release bypasses that budget); grants the budget or a payout error leaves pending can be retried from the tab.
+
 Every other outcome, including refusals and provider failures, leaves the hold pending with the verdict shown on the
 row; failures retry up to three times, an hour apart, and a domain gets at most three provider calls a day whatever was
 stored. An overloaded or unconfigured provider, a spent budget or a reached call cap ends the run without storing

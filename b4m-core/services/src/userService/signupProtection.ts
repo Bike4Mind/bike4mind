@@ -65,7 +65,14 @@ export async function protectSignupCredits(
   )
     return false;
 
-  if (existing) return (await repository.findReview(domain))?.status !== 'released';
+  // An admin release exempts a domain for good. An automated release only pays out the cohort it judged,
+  // so the domain stays under burst detection (below) and a burst re-holds it for an admin.
+  const watched =
+    existing?.status === 'released' &&
+    existing.autoDecision?.policy === 'advisory-decision' &&
+    !!repository.reholdWatched;
+  if (existing && (!watched || protection.mode === 'enforce'))
+    return (await repository.findReview(domain))?.status !== 'released';
   if (protection.mode === 'enforce') return false;
 
   const threshold = settingsMap.signupBurstThreshold.schema.parse(valueOf('signupBurstThreshold') ?? 5);
@@ -92,8 +99,24 @@ export async function protectSignupCredits(
     return (await repository.findReview(domain))?.status !== 'released';
   };
 
+  const rehold = async (reason: string, signupCount: number, signups: { userId: string; email: string }[]) => {
+    const review = {
+      domain,
+      status: 'held_pending_review' as const,
+      reason,
+      triggeredAt: now,
+      cohortUserIds: signups.map(signup => signup.userId),
+      sampleEmails: signups.slice(0, 5).map(signup => signup.email),
+      signupCount,
+    };
+    const reheld = (await repository.reholdWatched?.(review)) ?? false;
+    if (reheld && protection.notifyHold) await protection.notifyHold(review);
+    // An admin decision since the automated release wins, as with a fresh hold.
+    return (await repository.findReview(domain))?.status !== 'released';
+  };
+
   // Independent of signupBurstAutoHold, which only governs the burst detector below.
-  if (settingsMap.enableDomainIntelligence.schema.parse(valueOf('enableDomainIntelligence') ?? true)) {
+  if (!watched && settingsMap.enableDomainIntelligence.schema.parse(valueOf('enableDomainIntelligence') ?? true)) {
     const reason = await domainHoldReason(user.email, {
       repository,
       youngerThanDays: settingsMap.holdSignupsFromDomainsYoungerThanDays.schema.parse(
@@ -105,10 +128,12 @@ export async function protectSignupCredits(
     if (reason) return hold(reason, 1, [{ userId, email: user.email }]);
   }
 
-  if (!autoHold) return false;
+  // A watched domain is checked for bursts whatever signupBurstAutoHold says.
+  if (!autoHold && !watched) return false;
   await repository.observe({ userId, email: user.email, domain, verifiedAt });
   const cohort = await repository.recent(domain, since);
   const verdict = detectSignupBurst(cohort, { domain, threshold, since });
   if (!verdict.suspicious) return false;
+  if (watched) return rehold(verdict.reason, verdict.signupCount, cohort);
   return hold(verdict.reason, verdict.signupCount, cohort);
 }

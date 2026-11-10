@@ -1627,6 +1627,25 @@ export const SignupDomainHoldAssessmentConfigSchema = z.object({
     title: 'Confirm confidence',
     description: 'Least confidence in an abuse verdict that confirms the hold; anything lower leaves it pending.',
   }),
+  autoReleaseEnabled: z.boolean().prefault(false).meta({
+    title: 'Auto-release legitimate holds',
+    description:
+      'Release a hold, paying out its held free credits, when the model judges it legitimate and every guard passes: a site with real content, Google or Microsoft mail, no disposable-mail wording on the site, known residential signup networks, and few waiting accounts. An auto-released domain stays under burst detection.',
+  }),
+  minReleaseConfidence: z.number().min(0.8).max(1).prefault(0.95).meta({
+    title: 'Release confidence',
+    description: 'Least confidence in a legitimate verdict that releases the hold; anything lower leaves it pending.',
+  }),
+  maxAutoReleasesPerDay: z.number().int().min(0).max(50).prefault(5).meta({
+    title: 'Auto-releases per day',
+    description:
+      'Holds released automatically per 24h window (opened by the first release); further ones wait for an admin.',
+  }),
+  maxAutoReleaseSignups: z.number().int().min(1).max(10).prefault(2).meta({
+    title: 'Most accounts to auto-release',
+    description:
+      'A domain with more verified accounts waiting than this always waits for an admin; it also caps the payout.',
+  }),
 });
 
 export type SignupDomainHoldAssessmentConfig = z.infer<typeof SignupDomainHoldAssessmentConfigSchema>;

@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
-import type { SignupDomainReview, SignupObservation, SignupProtectionRepository } from '@bike4mind/common';
+import type {
+  SignupDomainReview,
+  SignupObservation,
+  SignupProtection,
+  SignupProtectionRepository,
+} from '@bike4mind/common';
 import { protectSignupCredits } from './signupProtection';
 import { grantFreeCredits, releasePendingFreeCredits } from './freeCredits';
 import * as creditService from '../creditService';
@@ -290,5 +295,67 @@ describe('domain intelligence holds', () => {
     vi.mocked(fixture.repository.disposableSources!).mockRejectedValue(new Error('db down'));
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     expect(await protectSignupCredits(fixture.user(1, 'a@any.test').id, fixture.db)).toBe(false);
+  });
+});
+
+describe('domains the advisory assessment auto-released', () => {
+  const released = (autoDecision?: SignupDomainReview['autoDecision']): SignupDomainReview => ({
+    domain: 'example.net',
+    status: 'released',
+    reason: 'young-domain (<30 days)',
+    triggeredAt: new Date(),
+    cohortUserIds: [],
+    sampleEmails: [],
+    signupCount: 1,
+    ...(autoDecision ? { autoDecision } : {}),
+  });
+  const watchedFixture = (review: SignupDomainReview) => {
+    const fixture = buildFixture();
+    let current: SignupDomainReview | null = review;
+    fixture.repository.findReview = vi.fn(async () => current);
+    fixture.repository.reholdWatched = vi.fn(async input => {
+      if (current?.status !== 'released' || current.autoDecision?.policy !== 'advisory-decision') return false;
+      current = input;
+      return true;
+    });
+    // Burst auto-hold off: the watch must not depend on it.
+    fixture.findBySettingNames.mockResolvedValue([]);
+    return fixture;
+  };
+
+  it('pays a quiet signup on an auto-released domain', async () => {
+    const fixture = watchedFixture(released({ policy: 'advisory-decision', decidedAt: new Date() }));
+    const user = fixture.user(1);
+    expect(await protectSignupCredits(user.id, fixture.db)).toBe(false);
+    expect(fixture.repository.reholdWatched).not.toHaveBeenCalled();
+  });
+
+  it('re-holds an auto-released domain on a signup burst, even with burst auto-hold off', async () => {
+    const fixture = watchedFixture(released({ policy: 'advisory-decision', decidedAt: new Date() }));
+    for (const index of [1, 2, 3, 4])
+      expect(await protectSignupCredits(fixture.user(index).id, fixture.db)).toBe(false);
+    const user = fixture.user(5);
+    expect(await protectSignupCredits(user.id, fixture.db)).toBe(true);
+    expect(fixture.repository.reholdWatched).toHaveBeenCalledWith(
+      expect.objectContaining({ domain: 'example.net', status: 'held_pending_review', signupCount: 5 })
+    );
+    expect(fixture.notifyHold).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps an admin release exempt for good, bursts included', async () => {
+    const fixture = watchedFixture(released());
+    for (const index of [1, 2, 3, 4, 5])
+      expect(await protectSignupCredits(fixture.user(index).id, fixture.db)).toBe(false);
+    expect(fixture.repository.reholdWatched).not.toHaveBeenCalled();
+    expect(fixture.repository.observe).not.toHaveBeenCalled();
+  });
+
+  it('neither watches nor re-holds in enforce mode', async () => {
+    const fixture = watchedFixture(released({ policy: 'advisory-decision', decidedAt: new Date() }));
+    (fixture.db.signupProtection as SignupProtection).mode = 'enforce';
+    for (const index of [1, 2, 3, 4, 5])
+      expect(await protectSignupCredits(fixture.user(index).id, fixture.db)).toBe(false);
+    expect(fixture.repository.observe).not.toHaveBeenCalled();
+    expect(fixture.repository.reholdWatched).not.toHaveBeenCalled();
   });
 });

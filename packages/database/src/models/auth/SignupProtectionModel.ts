@@ -99,6 +99,13 @@ export const signupProtectionRepository: SignupProtectionRepository = {
       .limit(1000)
       .lean();
   },
+  async reholdWatched(review) {
+    const result = await SignupDomainReviewModel.updateOne(
+      { domain: review.domain, status: 'released', 'autoDecision.policy': 'advisory-decision' },
+      { $set: review, $unset: { autoDecision: 1, reviewedAt: 1, reviewedBy: 1 } }
+    );
+    return result.modifiedCount === 1;
+  },
   async findReview(domain) {
     return SignupDomainReviewModel.findOne({ domain }).lean();
   },
@@ -224,6 +231,25 @@ export const signupDomainReviewRepository = {
       { domain, reason, status: 'held_pending_review' },
       {
         $set: { status: 'blocked', reviewedAt: decidedAt, autoDecision: { policy, decidedAt } },
+        $unset: { reviewedBy: 1 },
+      }
+    );
+    return result.modifiedCount === 1;
+  },
+  /**
+   * Moves a still-pending hold to `released` on behalf of an automated policy; paying out the held
+   * credits is the caller's next step. False when an admin (or another run) decided it first.
+   */
+  async autoRelease(
+    domain: string,
+    reason: string,
+    policy: SignupDomainHoldAutoPolicy,
+    decidedAt: Date
+  ): Promise<boolean> {
+    const result = await SignupDomainReviewModel.updateOne(
+      { domain, reason, status: 'held_pending_review' },
+      {
+        $set: { status: 'released', reviewedAt: decidedAt, autoDecision: { policy, decidedAt } },
         $unset: { reviewedBy: 1 },
       }
     );

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import type { SignupGrant } from '@bike4mind/common';
+import { PENDING_FREE_CREDITS_TAG, type SignupGrant } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   grant: undefined as SignupGrant | undefined,
@@ -10,9 +10,18 @@ const h = vi.hoisted(() => ({
   daily: 1000 as number | string | undefined,
   minSeconds: undefined as number | undefined,
   holdHours: undefined as number | undefined,
+  emailVerified: undefined as boolean | undefined,
+  tags: undefined as string[] | undefined,
 }));
 vi.mock('@client/app/contexts/UserContext', () => ({
-  useUser: () => ({ currentUser: { signupGrant: h.grant, signupGrantHeldReason: h.held } }),
+  useUser: () => ({
+    currentUser: {
+      signupGrant: h.grant,
+      signupGrantHeldReason: h.held,
+      emailVerified: h.emailVerified,
+      tags: h.tags,
+    },
+  }),
 }));
 vi.mock('@client/app/hooks/data/settings', () => ({
   useGetSettingsValue: (key: string) =>
@@ -43,6 +52,8 @@ describe('signup grant status', () => {
     h.held = undefined;
     h.minSeconds = undefined;
     h.holdHours = undefined;
+    h.emailVerified = undefined;
+    h.tags = undefined;
     h.grant = {
       stage: 'signup',
       signupCredits: 1000,
@@ -168,5 +179,34 @@ describe('signup grant status', () => {
     h.held = 'budget_exhausted';
     show();
     expect(screen.queryByText('Your free credits are being prepared.')).toBeNull();
+  });
+
+  describe('held for review', () => {
+    it('tells a verified account whose credits are still pending that they are being reviewed', () => {
+      h.emailVerified = true;
+      h.tags = [PENDING_FREE_CREDITS_TAG];
+      h.grant = undefined;
+      show();
+      expect(screen.getByTestId('signup-grant-under-review')).toHaveTextContent(
+        'Your free credits are on hold while we review'
+      );
+    });
+
+    it('keeps the budget copy when the daily budget is what holds the credits', () => {
+      h.emailVerified = true;
+      h.tags = [PENDING_FREE_CREDITS_TAG];
+      h.held = 'budget_exhausted';
+      h.grant = undefined;
+      show();
+      expect(screen.queryByTestId('signup-grant-under-review')).toBeNull();
+      expect(screen.getByText('Your free credits are being prepared.')).toBeTruthy();
+    });
+
+    it('says nothing about a review to an account that still owes email verification', () => {
+      h.emailVerified = false;
+      h.tags = [PENDING_FREE_CREDITS_TAG];
+      show();
+      expect(screen.queryByTestId('signup-grant-under-review')).toBeNull();
+    });
   });
 });

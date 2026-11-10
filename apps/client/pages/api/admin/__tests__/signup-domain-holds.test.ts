@@ -14,6 +14,7 @@ const {
   handlers,
   find,
   reviewUpdate,
+  reviewFind,
   release,
   eligible,
   count,
@@ -29,6 +30,7 @@ const {
   settings: vi.fn(async (): Promise<Record<string, unknown>> => ({})),
   find: vi.fn(),
   reviewUpdate: vi.fn(),
+  reviewFind: vi.fn(),
   release: vi.fn(),
   eligible: vi.fn(),
   count: vi.fn(),
@@ -77,7 +79,7 @@ vi.mock('@bike4mind/database', () => {
   return {
     adminSettingsRepository: {},
     signupDomainHoldListRepository: { list: listed, countByStatus },
-    SignupDomainReviewModel: { findOneAndUpdate: reviewUpdate },
+    SignupDomainReviewModel: { findOneAndUpdate: reviewUpdate, findOne: reviewFind },
     DomainIntelligenceModel: { estimatedDocumentCount: async () => 12 },
     disposableDomainRepository: {
       getDisposableSourceStatus: async () => [
@@ -105,7 +107,8 @@ const makeRequest = (body: unknown, user: Record<string, unknown> = { id: 'admin
   return { req, res };
 };
 beforeEach(() => {
-  reviewUpdate.mockReset().mockResolvedValue({ domain: 'example.net', status: 'released' });
+  reviewUpdate.mockReset().mockResolvedValue({ domain: 'example.net', status: 'held_pending_review' });
+  reviewFind.mockReset().mockResolvedValue(null);
   find.mockReset().mockReturnValue({
     sort: vi.fn().mockReturnValue({
       limit: vi
@@ -294,7 +297,7 @@ describe('signup domain hold decisions', () => {
     const { req, res } = makeRequest({ domain: 'example.net', action: 'release' });
     await handlers.post(req, res);
     expect(reviewUpdate).toHaveBeenCalledWith(
-      { domain: 'example.net', status: { $in: ['held_pending_review', 'blocked', 'released'] } },
+      { domain: 'example.net', status: { $in: ['held_pending_review', 'blocked'] } },
       {
         $set: { status: 'released', reviewedBy: 'admin-1', reviewedAt: expect.any(Date) },
         $unset: { autoDecision: 1 },
@@ -427,7 +430,12 @@ describe('signup domain hold decisions', () => {
     }
   );
   it('writes no new decision entry when a release is re-posted for an already released hold', async () => {
-    reviewUpdate.mockResolvedValue({ domain: 'example.net', status: 'released', reason: 'pattern' });
+    reviewFind.mockResolvedValue({
+      domain: 'example.net',
+      status: 'released',
+      reason: 'pattern',
+      autoDecision: { policy: 'advisory-decision', decidedAt: new Date() },
+    });
     const { req, res } = makeRequest({
       domain: 'example.net',
       action: 'release',
@@ -435,6 +443,8 @@ describe('signup domain hold decisions', () => {
     });
     await handlers.post(req, res);
     expect(recordAudit).not.toHaveBeenCalled();
+    // The retry leaves the stored decision (and its auto-release marker) as it was.
+    expect(reviewUpdate).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalled();
   });
   it('records the overridden policy when an admin confirms an auto-confirmed hold', async () => {
