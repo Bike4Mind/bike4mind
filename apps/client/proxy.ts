@@ -19,6 +19,7 @@ const NULL_BYTE_PATTERN = /%00|\0/;
 const BACKSLASH_PATTERN = /\\/;
 // Must match the filenames scripts/copy-pdf-worker.mjs writes: versioned and legacy unversioned.
 const PDF_WORKER_PATH = /^\/pdf\.worker(-\d+\.\d+\.\d+)?\.min\.mjs$/;
+const SIGNED_FILE_CONTENT_PATH = /^\/api\/files\/[^/]+\/content$/;
 
 // Stamped by the router's viewer-request function on every request it forwards; must stay in
 // sync with ORIGIN_VERIFY_HEADER in infra/router.ts. ORIGIN_VERIFY_SECRET is set only on
@@ -286,10 +287,11 @@ export function proxy(request: NextRequest) {
   // `/a/*` share links set their own `Referrer-Policy: no-referrer` (the token must not
   // leak via Referer on author outbound links) - don't clobber it with the app default.
   // `/embed/*` likewise: its URL carries the embed key in the query string.
+  // The signed file content route's URL carries a signed capability and it sets its own no-referrer.
   // A verified-hop landing carries a single-use token in its query until the page takes it off the
   // URL at bootstrap (visitBeacon.ts). `strict-origin` keeps it out of the Referer of everything the
   // page requests before then, same-origin requests included, which the default would send in full.
-  if (!pathname.startsWith('/a/') && !pathname.startsWith('/embed/')) {
+  if (!pathname.startsWith('/a/') && !pathname.startsWith('/embed/') && !SIGNED_FILE_CONTENT_PATH.test(pathname)) {
     response.headers.set(
       'Referrer-Policy',
       request.nextUrl.searchParams.has(HOP_PARAM) ? 'strict-origin' : 'strict-origin-when-cross-origin'

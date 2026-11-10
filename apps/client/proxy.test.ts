@@ -222,6 +222,15 @@ describe('proxy CSP header', () => {
     expect(embed.headers.get('Referrer-Policy')).toBeNull();
   });
 
+  it('does NOT clobber Referrer-Policy on the signed file content route (the URL carries ?exp=&sig=)', () => {
+    const content = proxy(
+      makeRequest('https://app.bike4mind.com/api/files/0123456789abcdef01234567/content?exp=1&sig=x')
+    );
+    expect(content.headers.get('Referrer-Policy')).toBeNull();
+    const sibling = proxy(makeRequest('https://app.bike4mind.com/api/files/0123456789abcdef01234567'));
+    expect(sibling.headers.get('Referrer-Policy')).toBe('strict-origin-when-cross-origin');
+  });
+
   it('serves a verified-hop landing with strict-origin, so the token never rides a Referer', () => {
     const landing = proxy(makeRequest('https://app.bike4mind.com/new?utm_source=x&b4m_hop=abc.123.def'));
     expect(landing.headers.get('Referrer-Policy')).toBe('strict-origin');
