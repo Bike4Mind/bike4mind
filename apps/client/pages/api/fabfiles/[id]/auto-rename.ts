@@ -243,7 +243,7 @@ Return only the filename (without extension) in kebab-case:`;
           if (!suggestedName || suggestedName.length < 2) {
             req.logger.error('[Auto-Rename API] AI model returned invalid filename', {
               model: modelId,
-              rawResponseLength: suggestedName.length,
+              sanitizedLength: suggestedName.length,
               contentLength: originalContent.length,
             });
             throw new InternalServerError(

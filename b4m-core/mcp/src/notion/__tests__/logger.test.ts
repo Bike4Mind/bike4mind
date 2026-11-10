@@ -4,10 +4,13 @@ import { debug, debugError, debugWarn } from '../logger.js';
 describe('notion debug logger', () => {
   let stderr: ReturnType<typeof vi.spyOn>;
   let stdout: ReturnType<typeof vi.spyOn>;
+  let consoleCalls: ReturnType<typeof vi.spyOn>[];
 
   beforeEach(() => {
     stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    // vitest intercepts console.* before process.stdout, so spy on them directly
+    consoleCalls = (['log', 'info', 'debug'] as const).map(m => vi.spyOn(console, m).mockImplementation(() => {}));
     vi.stubEnv('NOTION_DEBUG', '1');
   });
 
@@ -26,6 +29,7 @@ describe('notion debug logger', () => {
     expect(lines()[0].detail).toEqual({ token: '[REDACTED]', pageId: 'p1' });
     expect(String(stderr.mock.calls[0][0])).not.toContain('abc-secret-value');
     expect(stdout).not.toHaveBeenCalled();
+    consoleCalls.forEach(spy => expect(spy).not.toHaveBeenCalled());
   });
 
   it('keeps the warn and error levels and serializes errors', () => {
@@ -37,6 +41,7 @@ describe('notion debug logger', () => {
     expect(error).toMatchObject({ severity: 'error', msg: 'boom' });
     expect(error.error.message).toBe('failed for ***@example.com');
     expect(stdout).not.toHaveBeenCalled();
+    consoleCalls.forEach(spy => expect(spy).not.toHaveBeenCalled());
   });
 
   it('is silent unless NOTION_DEBUG is set', () => {

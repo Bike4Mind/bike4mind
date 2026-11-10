@@ -38,7 +38,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@server/auth/auth', () => ({ setupSamlStrategy: () => 'saml-idp-1' }));
 vi.mock('@server/auth/issueSession', () => ({
-  issueBrowserSession: vi.fn().mockResolvedValue({ accessToken: 'tok' }),
+  issueBrowserSession: vi.fn().mockResolvedValue({ accessToken: 'access-token-canary' }),
 }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn() }));
@@ -71,10 +71,11 @@ const AUTHORIZE_REDIRECT = '/oauth/authorize?client_id=b4m_sat_0123abcd&response
 
 const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
-async function runCallback(relayState: string, redirectPattern: RegExp = /\/auth\/success/) {
+async function runCallback(relayState: string, redirectPattern: RegExp = /\/auth\/success/, body?: unknown) {
   const { req, res } = createMocks<NextApiRequest, NextApiResponse>({
     method: 'GET',
     query: { RelayState: relayState },
+    body: body as Record<string, unknown> | undefined,
     headers: { 'user-agent': 'UA/9' },
   });
   Object.assign(req, { ip: '203.0.113.7', logger });
@@ -194,5 +195,17 @@ describe('/api/auth/saml/callback - structured logging', () => {
     expect(loggedText()).not.toContain('person@example.com');
     expect(loggedText()).not.toContain('203.0.113.7');
     expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it('keeps the SAMLResponse, access token and email out of every logger argument', async () => {
+    const samlResponse = 'PHNhbWxwOlJlc3BvbnNlLXNpZ25lZA==';
+    mockSamlUser.mockReturnValue({ id: 'u-1', isBanned: false, email: 'person@example.com' });
+
+    await runCallback(relay, /\/auth\/success/, { SAMLResponse: samlResponse, RelayState: relay });
+
+    const everything = JSON.stringify(Object.values(logger).flatMap(fn => fn.mock.calls));
+    expect(everything).not.toContain(samlResponse);
+    expect(everything).not.toContain('access-token-canary');
+    expect(everything).not.toContain('person@example.com');
   });
 });

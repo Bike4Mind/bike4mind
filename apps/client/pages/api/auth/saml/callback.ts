@@ -192,7 +192,10 @@ const handleSamlCallback = async (req: any, res: any) => {
       const signupFragment = user.isNewUser ? '&firstSignupSession=1' : '';
       const redirectUrl = `${baseUrl}/auth/success${successQuery}#token=${tokens.accessToken}&userId=${user.id}${signupFragment}`;
 
-      req.logger.debug('Redirecting after SAML login', { url: redirectUrl.substring(0, LOG_URL_TRUNCATE_LENGTH) });
+      // The fragment carries the access token, so log only what precedes it.
+      req.logger.debug('Redirecting after SAML login', {
+        url: redirectUrl.split('#')[0].substring(0, LOG_URL_TRUNCATE_LENGTH),
+      });
       return res.redirect(redirectUrl);
     })(req, res);
   } catch (error) {
