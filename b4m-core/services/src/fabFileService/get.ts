@@ -92,7 +92,10 @@ export const getFabFile = async (
   return generateSignedUrl(fabFile, { db, storage });
 };
 
-export const generateSignedUrl = async (fabFileIn: IFabFileDocument, { storage }: GetFabFileAdapter) => {
+export const generateSignedUrl = async (
+  fabFileIn: IFabFileDocument,
+  { storage }: Pick<GetFabFileAdapter, 'storage'> & Partial<GetFabFileAdapter>
+) => {
   // Curator ruling metadata (who ruled, when, which lake) is `select: false` on the schema (see
   // FabFileModel.ts), so it is normally already absent here. This strip is a second, defensive
   // layer for a caller that explicitly opted back in upstream (the curator-supersession collapse's
@@ -115,12 +118,14 @@ export const generateSignedUrl = async (fabFileIn: IFabFileDocument, { storage }
   if (!isImageServeable(fabFile)) {
     fabFile.fileUrl = undefined;
     fabFile.fileUrlExpireAt = undefined;
+    fabFile.presignedUrl = undefined;
     return fabFile;
   }
 
   // Signed URLs are response-only: never trust a stored one, a legacy row may still carry it.
   fabFile.fileUrl = undefined;
   fabFile.fileUrlExpireAt = undefined;
+  fabFile.presignedUrl = undefined;
 
   if (!fabFile.filePath) return fabFile;
 

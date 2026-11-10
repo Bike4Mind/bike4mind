@@ -108,6 +108,17 @@ describe('generateSignedUrl - sign on read, never persisted', () => {
     expect(adapter.db.fabFiles.update).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['serveable', {}],
+    ['held', { moderationStatus: 'pending' as const }],
+  ])('drops a stored presignedUrl on a %s legacy row', async (_label, over) => {
+    const result = await generateSignedUrl(
+      legacyFile({ presignedUrl: 'https://stored.example.invalid/put', ...over }),
+      signingAdapter()
+    );
+    expect(result.presignedUrl).toBeUndefined();
+  });
+
   it('withholds the URL for a held image without signing', async () => {
     const adapter = signingAdapter();
     const held = await generateSignedUrl(legacyFile({ moderationStatus: 'pending' }), adapter);

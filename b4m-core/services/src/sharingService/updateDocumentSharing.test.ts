@@ -5,6 +5,8 @@ import { updateDocumentSharing } from './updateDocumentSharing';
 describe('sharingService - updateDocumentSharing', () => {
   const user = { id: 'user-1' } as any;
 
+  const storage = { generateSignedUrl: vi.fn() };
+
   let db: {
     sessions: { shareable: { findShareAccessById: Mock }; update: Mock };
     fabFiles: { shareable: { findShareAccessById: Mock }; update: Mock };
@@ -12,6 +14,7 @@ describe('sharingService - updateDocumentSharing', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    storage.generateSignedUrl.mockResolvedValue('https://fresh.example.invalid/f1');
     db = {
       sessions: { shareable: { findShareAccessById: vi.fn() }, update: vi.fn() },
       fabFiles: { shareable: { findShareAccessById: vi.fn() }, update: vi.fn() },
@@ -27,12 +30,14 @@ describe('sharingService - updateDocumentSharing', () => {
     const result = await updateDocumentSharing(
       user,
       { id: 's1', type: 'sessions', isGlobalRead: true, isGlobalWrite: false },
-      { db } as any
+      { db, storage } as any
     );
 
     // exact payload: only the two flags are written (never the whole doc)
     expect(db.sessions.update).toHaveBeenCalledWith({ id: 's1', isGlobalRead: true, isGlobalWrite: false });
     expect(result).toMatchObject({ isGlobalRead: true, isGlobalWrite: false });
+    expect(result).not.toHaveProperty('fileUrl');
+    expect(storage.generateSignedUrl).not.toHaveBeenCalled();
   });
 
   it('falls back to the pre-write doc but still returns the written flags when the re-read races to null', async () => {
@@ -44,7 +49,7 @@ describe('sharingService - updateDocumentSharing', () => {
     const result: any = await updateDocumentSharing(
       user,
       { id: 's1', type: 'sessions', isGlobalRead: true, isGlobalWrite: true },
-      { db } as any
+      { db, storage } as any
     );
 
     // the param override wins over the stale fallback doc, so the response is accurate
@@ -52,9 +57,10 @@ describe('sharingService - updateDocumentSharing', () => {
     expect(result.isGlobalWrite).toBe(true);
   });
 
-  it('keeps fileUrl for an image-serveable file', async () => {
+  it('returns a freshly signed fileUrl for an image-serveable file', async () => {
     db.fabFiles.shareable.findShareAccessById.mockResolvedValue({
       id: 'f1',
+      filePath: 'owned/f1.png',
       mimeType: 'image/png',
       moderationStatus: 'clean',
       fileUrl: 'https://signed',
@@ -64,10 +70,12 @@ describe('sharingService - updateDocumentSharing', () => {
     const result: any = await updateDocumentSharing(
       user,
       { id: 'f1', type: 'files', isGlobalRead: true, isGlobalWrite: true },
-      { db } as any
+      { db, storage } as any
     );
 
-    expect(result.fileUrl).toBe('https://signed');
+    expect(result.fileUrl).toBe('https://fresh.example.invalid/f1');
+    expect(result.fileUrlExpireAt).toBeInstanceOf(Date);
+    expect(storage.generateSignedUrl).toHaveBeenCalledWith('owned/f1.png', 3600, { signingDate: expect.any(Date) });
   });
 
   it('strips fileUrl from the response for a non-serveable file (targeted write never touches it)', async () => {
@@ -82,11 +90,12 @@ describe('sharingService - updateDocumentSharing', () => {
     const result: any = await updateDocumentSharing(
       user,
       { id: 'f1', type: 'files', isGlobalRead: true, isGlobalWrite: true },
-      { db } as any
+      { db, storage } as any
     );
 
-    // response is stripped
+    // response is stripped, and nothing is signed
     expect(result.fileUrl).toBeUndefined();
+    expect(storage.generateSignedUrl).not.toHaveBeenCalled();
     expect(result.fileUrlExpireAt).toBeUndefined();
     // the persisted write is targeted to the two flags only - it never carries fileUrl,
     // so the stored URL is left intact.
@@ -111,7 +120,7 @@ describe('sharingService - updateDocumentSharing', () => {
     const result: any = await updateDocumentSharing(
       user,
       { id: 'f1', type: 'files', isGlobalRead: true, isGlobalWrite: false },
-      { db } as any
+      { db, storage } as any
     );
 
     // toJSON branch ran (flags applied to the normalized object) and the leak-gate stripped the URL

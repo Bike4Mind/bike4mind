@@ -235,13 +235,8 @@ export const updateFabFile = async (
     }),
   };
 
-  // An edit (rename/tag/notes/etc.) must not echo back a working GET url for an image
-  // that isn't clean (pending scan) or was quarantined (blocked) by upload moderation.
-  // Mirrors the withhold-but-keep-metadata pattern in fabFileService/get.ts
-  // generateSignedUrl so the client can still render a placeholder instead of the file
-  // vanishing. MUST run BEFORE db.fabFiles.update() below - clearing after the write would
-  // still persist the stale fileUrl (only the in-memory/returned object was cleared), so a
-  // subsequent read would resurrect a working URL for a file that isn't serveable.
+  // Withholds the URL from the response for an image that is pending scan or blocked, keeping its metadata
+  // so the client can render a placeholder (same pattern as fabFileService/get.ts generateSignedUrl).
   const serveable = isImageServeable(updatedFabFile);
   if (!serveable) {
     updatedFabFile.fileUrl = undefined;
