@@ -1,0 +1,49 @@
+{
+  "scenario": "text-to-video.synthetic",
+  "synthetic": true,
+  "basis": "Hand-built from BFL docs (https://docs.bfl.ai). Submit returns { id, polling_url }; poll returns { status, result } with x-key auth. Replace with a recording when a BFL key is available.",
+  "exchanges": [
+    {
+      "name": "submit",
+      "request": {
+        "method": "POST",
+        "path": "/v1/flux-3-video",
+        "body": {
+          "prompt": "A slow dolly shot of a red lighthouse on a rocky coast at dusk, waves breaking.",
+          "duration_seconds": 5,
+          "aspect_ratio": "16:9",
+          "resolution": "720p"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": { "content-type": "application/json" },
+        "body": { "id": "synthetic-text-to-video", "polling_url": "https://api.bfl.ai/v1/get_result?id=synthetic-text-to-video" }
+      }
+    },
+    {
+      "name": "poll_first",
+      "request": { "method": "GET", "path": "/v1/get_result?id=synthetic-text-to-video" },
+      "response": {
+        "status": 200,
+        "headers": { "content-type": "application/json" },
+        "body": { "status": "Generating" }
+      }
+    },
+    {
+      "name": "poll_terminal",
+      "request": { "method": "GET", "path": "/v1/get_result?id=synthetic-text-to-video" },
+      "response": {
+        "status": 200,
+        "headers": { "content-type": "application/json" },
+        "body": {
+          "status": "Ready",
+          "result": {
+            "sample": "https://delivery.bfl.ai/synthetic/text-to-video.mp4",
+            "duration_seconds": 5
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "scenario": "invalid-param.synthetic",
+  "synthetic": true,
+  "basis": "BFL rejects invalid requests with a 422 status and an error detail.",
+  "exchanges": [
+    {
+      "name": "submit",
+      "request": {
+        "method": "POST",
+        "path": "/v1/flux-3-video",
+        "body": {
+          "prompt": "A test",
+          "duration_seconds": 999,
+          "aspect_ratio": "16:9",
+          "resolution": "720p"
+        }
+      },
+      "response": {
+        "status": 422,
+        "headers": { "content-type": "application/json" },
+        "body": { "detail": [{ "msg": "ensure this value is less than or equal to 10", "type": "value_error" }] }
+      }
+    }
+  ]
+}

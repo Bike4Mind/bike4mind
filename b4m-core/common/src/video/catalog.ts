@@ -7,6 +7,7 @@ export const VIDEO_MODEL_IDS = [
   'gemini-omni-1.1-flash',
   'grok-imagine-video-1.5',
   'veo-3.1-fast-generate-preview',
+  'flux-3-video',
 ] as const;
 export type VideoModelId = (typeof VIDEO_MODEL_IDS)[number];
 export const VideoModelIdSchema = z.enum(VIDEO_MODEL_IDS);
@@ -77,6 +78,22 @@ export const VIDEO_MODEL_CATALOG: Record<VideoModelId, VideoModelCapabilities> =
     pricing: { unit: 'per_second', usdByResolution: { '720p': 0.1 } },
     defaultEnabled: false,
     retired: { date: '2026-10-22', replacement: 'gemini-omni-1.1-flash' },
+  },
+  // BFL FLUX 3 Video. Text-to-video only; audio is optional (off by default). Pricing is per second by resolution,
+  // matching BFL's published tiers (https://docs.bfl.ai/quick_start/pricing).
+  'flux-3-video': {
+    provider: 'bfl',
+    displayName: 'FLUX 3 Video',
+    modes: ['text_to_video'],
+    inputs: {},
+    duration: { kind: 'range', min: 2, max: 10, step: 1 },
+    aspectRatios: ['16:9', '9:16', '1:1'],
+    resolutions: ['480p', '720p', '1080p'],
+    defaults: { durationSeconds: 5, aspectRatio: '16:9', resolution: '720p' },
+    typicalRenderSeconds: 120,
+    audio: 'optional',
+    pricing: { unit: 'per_second', usdByResolution: { '480p': 0.05, '720p': 0.065, '1080p': 0.1 } },
+    defaultEnabled: true,
   },
 };
 
