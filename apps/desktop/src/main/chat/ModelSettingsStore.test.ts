@@ -125,6 +125,8 @@ describe('ModelSettingsStore', () => {
   it.each([
     ['FF FE', Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('{"models": {}}', 'utf16le')])],
     ['FE FF', Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from('{"models": {}}', 'utf16le').swap16()])],
+    ['no', Buffer.from('{"models": {}}', 'utf16le')],
+    ['no', Buffer.from('{"models": {}}', 'utf16le').swap16()],
   ])('names the encoding of a file saved as UTF-16 with a %s mark, and never writes over it', async (_mark, bytes) => {
     const path = await fileIn();
     await writeFile(path, bytes);
@@ -136,6 +138,21 @@ describe('ModelSettingsStore', () => {
       expect((error as Error).message).not.toContain('is not valid JSON');
     }
     expect(await readFile(path)).toEqual(bytes);
+  });
+
+  it.each([
+    ['an empty file', ''],
+    ['a file holding only a byte order mark', String.fromCharCode(0xfeff)],
+  ])('reports %s as not valid JSON, and never writes over it', async (_name, content) => {
+    const path = await fileIn();
+    await writeFile(path, content, 'utf8');
+    const store = new ModelSettingsStore(path);
+    for (const call of [() => store.get(QWEN), () => store.set(QWEN, { effort: 'low' })]) {
+      const error = await call().catch((reason: unknown) => reason);
+      expect(error).toBeInstanceOf(ModelSettingsFileError);
+      expect((error as Error).message).toContain(`${path} is not valid JSON`);
+    }
+    expect(await readFile(path, 'utf8')).toBe(content);
   });
 
   it('lets a retry succeed after a corrupt file is deleted by hand', async () => {

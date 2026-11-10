@@ -55,8 +55,40 @@ describe('parseModelSettingsJson', () => {
     }
   });
 
+  it.each([
+    ['UTF-16 LE without a mark', Buffer.from(text, 'utf16le').toString('utf8')],
+    ['UTF-16 BE without a mark', Buffer.from(text, 'utf16le').swap16().toString('utf8')],
+  ])('names UTF-16 for %s', (_name, decoded) => {
+    expect(() => parseModelSettingsJson(decoded)).toThrow(ModelSettingsEncodingError);
+    try {
+      parseModelSettingsJson(decoded);
+    } catch (error) {
+      expect(modelSettingsJsonProblem(error)).toBe('is saved as UTF-16, which cannot be read. Save it as UTF-8');
+    }
+  });
+
+  const utf32le = Buffer.alloc(text.length * 4);
+  for (let i = 0; i < text.length; i++) utf32le.writeUInt32LE(text.charCodeAt(i), i * 4);
+  const utf32be = Buffer.from(utf32le).swap32();
+
+  it.each([
+    ['UTF-32 LE with a mark', Buffer.concat([Buffer.from([0xff, 0xfe, 0, 0]), utf32le])],
+    ['UTF-32 BE with a mark', Buffer.concat([Buffer.from([0, 0, 0xfe, 0xff]), utf32be])],
+    ['UTF-32 LE without a mark', utf32le],
+    ['UTF-32 BE without a mark', utf32be],
+  ])('names UTF-32, not UTF-16, for %s', (_name, bytes) => {
+    let thrown: unknown;
+    try {
+      parseModelSettingsJson(bytes.toString('utf8'));
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(ModelSettingsEncodingError);
+    expect(modelSettingsJsonProblem(thrown)).toBe('is saved as UTF-32, which cannot be read. Save it as UTF-8');
+  });
+
   it('reports ordinary bad JSON as not valid JSON, including a single replacement character', () => {
-    for (const bad of ['{"models": ', '�{}', `{"a": "��"`]) {
+    for (const bad of ['{"models": ', '\u{FFFD}{}', `{"a": "\u{FFFD}\u{FFFD}"`]) {
       let thrown: unknown;
       try {
         parseModelSettingsJson(bad);

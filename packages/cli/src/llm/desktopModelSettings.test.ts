@@ -139,6 +139,8 @@ describe('readDesktopModelSettings', () => {
 
   it.each([
     ['{"models": ', 'is not valid JSON'],
+    ['', 'is not valid JSON'],
+    [BOM, 'is not valid JSON'],
     [` ${BOM}{"models": {}}`, 'is not valid JSON'],
     ['[]', 'does not hold model settings'],
     ['{"models": []}', 'does not hold model settings'],
@@ -151,6 +153,8 @@ describe('readDesktopModelSettings', () => {
   it.each([
     ['FF FE', Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('{"models": {}}', 'utf16le')])],
     ['FE FF', Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from('{"models": {}}', 'utf16le').swap16()])],
+    ['no', Buffer.from('{"models": {}}', 'utf16le')],
+    ['no', Buffer.from('{"models": {}}', 'utf16le').swap16()],
   ])('names the encoding of a file saved as UTF-16 with a %s mark', async (_mark, bytes) => {
     await writeFile(file, bytes);
     const failure = readDesktopModelSettings(at(file), QWEN);

@@ -215,23 +215,35 @@ function parseStoredEntry(
   return { settings, unsupported };
 }
 
-/** Thrown for a file saved as UTF-16; `problem` completes "The model settings file <path> ...". */
+/** Thrown for a file saved as UTF-16 or UTF-32; `problem` completes "The model settings file <path> ...". */
 export class ModelSettingsEncodingError extends SyntaxError {
-  readonly problem = 'is saved as UTF-16, which cannot be read. Save it as UTF-8';
-  constructor() {
-    super('The model settings file is saved as UTF-16, which cannot be read. Save it as UTF-8.');
+  readonly problem: string;
+  constructor(encoding: 'UTF-16' | 'UTF-32' = 'UTF-16') {
+    super(`The model settings file is saved as ${encoding}, which cannot be read. Save it as UTF-8.`);
     this.name = 'ModelSettingsEncodingError';
+    this.problem = `is saved as ${encoding}, which cannot be read. Save it as UTF-8`;
   }
+}
+
+const REPLACEMENT = '\ufffd';
+
+function wideEncoding(text: string): 'UTF-16' | 'UTF-32' | null {
+  // FF FE or FE FF read as UTF-8 is two U+FFFD; read as UTF-16 LE, FF FE is U+FEFF and FE FF is U+FFFE.
+  const marked = text.startsWith(REPLACEMENT + REPLACEMENT) || text.charCodeAt(0) === 0xfffe;
+  // Valid JSON never holds U+0000; ASCII in UTF-16 alternates it with text, in UTF-32 it runs in threes.
+  if (text.includes('\u0000\u0000')) return 'UTF-32';
+  if (marked || text.includes('\u0000')) return 'UTF-16';
+  return null;
 }
 
 /**
  * The file's text, read as UTF-8, as JSON; throws as JSON.parse does. A leading UTF-8 byte order mark is
- * skipped: Notepad and PowerShell 5 can save a hand edit with one, which JSON.parse refuses. A UTF-16 mark
- * (PowerShell 5 `>`) decodes as UTF-8 to two U+FFFD, or U+FFFE when the text was decoded as UTF-16, and
- * throws ModelSettingsEncodingError.
+ * skipped: Notepad and PowerShell 5 can save a hand edit with one, which JSON.parse refuses. Text that is
+ * UTF-16 or UTF-32 read as UTF-8 (marked or not) throws ModelSettingsEncodingError.
  */
 export function parseModelSettingsJson(text: string): unknown {
-  if (text.startsWith('��') || text.charCodeAt(0) === 0xfffe) throw new ModelSettingsEncodingError();
+  const encoding = wideEncoding(text);
+  if (encoding) throw new ModelSettingsEncodingError(encoding);
   return JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
 }
 
