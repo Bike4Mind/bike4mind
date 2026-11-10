@@ -25,7 +25,7 @@ const QuerySchema = z.object({
  * and decides whether to replay individual messages.
  */
 const handler = adminApi({
-  adminPermissions: { GET: 'settings:manage' },
+  adminPermissions: { GET: 'support:read' },
   requiredScopes: [ApiKeyScope.ADMIN],
 }).get(async (req, res) => {
   const result = QuerySchema.safeParse(req.query);

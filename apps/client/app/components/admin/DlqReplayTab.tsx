@@ -43,6 +43,7 @@ import {
   DlqReplayLogEntry,
   DlqHistoryFilters,
 } from '@client/app/hooks/data/dlqManagement';
+import { AdminPermissionAction } from './shared/MissingPermission';
 
 const StatusChip: React.FC<{ status: 'success' | 'failed' | 'skipped' }> = ({ status }) => {
   const config = {
@@ -405,16 +406,20 @@ const DlqReplayTab: React.FC = () => {
                   ` (${selectedQueueInfo.approximateNotVisibleCount} in flight)`}
               </Typography>
             </Stack>
-            <Button
-              color="warning"
-              startDecorator={<ReplayIcon />}
-              onClick={handleReplayAll}
-              loading={replayMutation.isPending}
-              disabled={!selectedQueueInfo || selectedQueueInfo.approximateMessageCount === 0}
-              data-testid="dlq-replay-all"
-            >
-              Replay All (up to 100)
-            </Button>
+            <AdminPermissionAction requirement="settings:manage">
+              {permissionDisabled => (
+                <Button
+                  color="warning"
+                  startDecorator={<ReplayIcon />}
+                  onClick={handleReplayAll}
+                  loading={replayMutation.isPending}
+                  disabled={permissionDisabled || !selectedQueueInfo || selectedQueueInfo.approximateMessageCount === 0}
+                  data-testid="dlq-replay-all"
+                >
+                  Replay All (up to 100)
+                </Button>
+              )}
+            </AdminPermissionAction>
           </Stack>
         </Card>
       )}
@@ -517,20 +522,24 @@ const DlqReplayTab: React.FC = () => {
                           <VisibilityIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
-                      <Tooltip title="Replay this message">
-                        <IconButton
-                          size="sm"
-                          color="warning"
-                          onClick={e => {
-                            e.stopPropagation();
-                            setSingleReplayConfirm(msg);
-                          }}
-                          disabled={replayMutation.isPending}
-                          data-testid={`dlq-replay-single-${msg.messageId}`}
-                        >
-                          <ReplayIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
+                      <AdminPermissionAction requirement="settings:manage">
+                        {permissionDisabled => (
+                          <Tooltip title="Replay this message">
+                            <IconButton
+                              size="sm"
+                              color="warning"
+                              onClick={e => {
+                                e.stopPropagation();
+                                setSingleReplayConfirm(msg);
+                              }}
+                              disabled={permissionDisabled || replayMutation.isPending}
+                              data-testid={`dlq-replay-single-${msg.messageId}`}
+                            >
+                              <ReplayIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        )}
+                      </AdminPermissionAction>
                     </Stack>
                   </td>
                 </tr>
