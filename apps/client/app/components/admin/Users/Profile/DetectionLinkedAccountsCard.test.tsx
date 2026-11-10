@@ -17,6 +17,9 @@ vi.mock('@client/app/hooks/data/adminUserTimeline', () => ({ useUserDetectionLin
 vi.mock('@client/app/utils/userAPICalls', () => ({ updateUserToServer: mocks.updateUser }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: mocks.post } }));
 vi.mock('./useOpenUserProfile', () => ({ useOpenUserProfile: () => vi.fn() }));
+vi.mock('@client/app/hooks/data/settings', () => ({
+  usePublicConfig: () => ({ data: { supportEmail: 'support@example.com' } }),
+}));
 
 const account = (
   id: string,
@@ -55,9 +58,15 @@ const setup = (data: UserDetectionLinks | undefined = LINKS) => {
   return render(<DetectionLinkedAccountsCard userId="subject" />, { wrapper: ProfileTestWrapper });
 };
 
+const chooseCategory = () => {
+  fireEvent.mouseDown(screen.getByTestId('suspend-linked-dialog-category-select'));
+  fireEvent.click(screen.getByTestId('suspend-linked-dialog-category-option-multiple_accounts'));
+};
+
 const openDialog = () => {
   fireEvent.click(screen.getByTestId('detection-links-suspend-all-btn'));
   fireEvent.click(screen.getByTestId('suspend-linked-dialog-reason-input-preset-0'));
+  chooseCategory();
 };
 
 describe('DetectionLinkedAccountsCard', () => {
@@ -97,11 +106,13 @@ describe('DetectionLinkedAccountsCard', () => {
     expect(mocks.updateUser).toHaveBeenNthCalledWith(1, 'one', {
       isBanned: true,
       statusChangeReason: 'Abuse / automated signups',
+      suspensionReasonCategory: 'multiple_accounts',
       deferLinkPropagation: true,
     });
     expect(mocks.updateUser).toHaveBeenNthCalledWith(2, 'two', {
       isBanned: true,
       statusChangeReason: 'Abuse / automated signups',
+      suspensionReasonCategory: 'multiple_accounts',
       deferLinkPropagation: true,
     });
     expect(await screen.findByTestId('undo-toast-message')).toHaveTextContent('2 linked accounts suspended.');
@@ -110,6 +121,20 @@ describe('DetectionLinkedAccountsCard', () => {
     expect(mocks.post).toHaveBeenCalledWith('/api/admin/users/linked-suspend-propagation', {
       userIds: ['one', 'two'],
     });
+  });
+
+  it('cannot suspend until the reason shown to the user is chosen, and previews what they see', () => {
+    setup();
+    fireEvent.click(screen.getByTestId('detection-links-suspend-all-btn'));
+    fireEvent.click(screen.getByTestId('suspend-linked-dialog-reason-input-preset-0'));
+    expect(screen.getByTestId('suspend-linked-dialog-confirm-btn')).toBeDisabled();
+
+    chooseCategory();
+
+    expect(screen.getByTestId('suspend-linked-dialog-confirm-btn')).toBeEnabled();
+    expect(screen.getByTestId('suspend-linked-dialog-category-preview')).toHaveTextContent(
+      'using multiple accounts to obtain free credits'
+    );
   });
 
   it('undoes by reinstating each account as an undo, so the suspend grades are removed rather than flipped', async () => {

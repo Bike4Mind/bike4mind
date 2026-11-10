@@ -1,12 +1,6 @@
 import React, { useState } from 'react';
-import { Checkbox, FormControl, FormHelperText, FormLabel, Option, Select, Sheet, Typography } from '@mui/joy';
-import {
-  SUSPENSION_REASON_CATEGORIES,
-  SUSPENSION_REASONS,
-  buildSuspensionNotice,
-  isFullAdmin,
-  type SuspensionReasonCategory,
-} from '@bike4mind/common';
+import { Checkbox, Sheet, Typography } from '@mui/joy';
+import { isFullAdmin, type SuspensionReasonCategory } from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
 import { ActionDialog, ADMIN_REASON_PRESETS, undoAdminReason, useUndoToast } from '../../../shared';
 import { formatCredits } from './creditAdjustment';
@@ -15,7 +9,7 @@ import { warnSubscriptionCancelFailures } from './warnSubscriptionCancelFailures
 import { BALANCE_REFRESH_FAILED, useRefreshedUser } from './useRefreshedUser';
 import type { ProfileDialogProps } from './profileActions';
 import { displayName } from '../userProfileModel';
-import { usePublicConfig } from '@client/app/hooks/data/settings';
+import { SUSPENSION_CATEGORY_REQUIRED, SuspensionCategoryField } from './SuspensionCategoryField';
 
 /**
  * Suspend (DESIGN_GUIDE.md section 4, "changes access"). Suspending signs the user out everywhere;
@@ -32,7 +26,6 @@ export const SuspendDialog: React.FC<ProfileDialogProps> = ({ user, onClose, onA
   const update = useAdminUserUpdate(user.id);
   const showUndo = useUndoToast();
   const name = displayName(user);
-  const { data: publicConfig } = usePublicConfig();
 
   const handleConfirm = async (reason: string) => {
     const removed = zeroCredits && balance > 0 ? balance : 0;
@@ -70,32 +63,13 @@ export const SuspendDialog: React.FC<ProfileDialogProps> = ({ user, onClose, onA
       tone="danger"
       // Suspending alone needs no balance; only the wipe and its refund do.
       blockedReason={
-        !category ? 'Choose the reason the user is told.' : zeroCredits && refreshFailed ? BALANCE_REFRESH_FAILED : null
+        !category ? SUSPENSION_CATEGORY_REQUIRED : zeroCredits && refreshFailed ? BALANCE_REFRESH_FAILED : null
       }
       pending={refreshing}
       onConfirm={handleConfirm}
       data-testid="suspend-dialog"
     >
-      <FormControl required>
-        <FormLabel>Reason shown to the user</FormLabel>
-        <Select
-          placeholder="Choose a Terms of Service reason"
-          value={category}
-          onChange={(_event, value) => setCategory(value)}
-          slotProps={{ button: { 'data-testid': 'suspend-dialog-category-select' } }}
-        >
-          {SUSPENSION_REASON_CATEGORIES.map(option => (
-            <Option key={option} value={option} data-testid={`suspend-dialog-category-option-${option}`}>
-              {SUSPENSION_REASONS[option].adminLabel}
-            </Option>
-          ))}
-        </Select>
-        <FormHelperText data-testid="suspend-dialog-category-preview">
-          {category
-            ? `They will see: "${buildSuspensionNotice(category, { email: publicConfig?.supportEmail }).message}"`
-            : 'They see this category and how to appeal. Never which signals flagged them.'}
-        </FormHelperText>
-      </FormControl>
+      <SuspensionCategoryField value={category} onChange={setCategory} testIdPrefix="suspend-dialog" />
       {balance > 0 && (
         <Sheet
           variant="outlined"

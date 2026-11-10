@@ -2,7 +2,7 @@ import React, { useRef, useState } from 'react';
 import { Box, Button, Link, Sheet, Stack, Typography } from '@mui/joy';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
-import { DETECTION_LINK_SPEND_DAYS, type UserDetectionLinks } from '@bike4mind/common';
+import { DETECTION_LINK_SPEND_DAYS, type SuspensionReasonCategory, type UserDetectionLinks } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { useUserDetectionLinks } from '@client/app/hooks/data/adminUserTimeline';
 import { updateUserToServer } from '@client/app/utils/userAPICalls';
@@ -23,6 +23,7 @@ import { VERDICT_DISPLAY } from '../../ShadowDetectionsTab';
 import { formatCredits } from './actions/creditAdjustment';
 import { useOpenUserProfile } from './useOpenUserProfile';
 import type { AdminUserUpdate } from './actions/useAdminUserUpdate';
+import { SUSPENSION_CATEGORY_REQUIRED, SuspensionCategoryField } from './actions/SuspensionCategoryField';
 
 type LinkedAccount = UserDetectionLinks['accounts'][number];
 
@@ -34,7 +35,7 @@ const accountNoun = (count: number) => (count === 1 ? 'account' : 'accounts');
 /** Runs the single-account admin suspend once per account, so each gets its own audit entry and detection grading. */
 async function setSuspended(
   accounts: readonly LinkedAccount[],
-  isBanned: boolean,
+  change: { isBanned: true; category: SuspensionReasonCategory } | { isBanned: false },
   reason: string,
   shouldStop: () => boolean = () => false
 ): Promise<{ done: LinkedAccount[]; failed: LinkedAccount[] }> {
@@ -48,9 +49,11 @@ async function setSuspended(
       // A suspend defers its linked-account alert; propagateOnce sends one for the whole action. A
       // reinstate here is only ever the Undo of this action, so it removes the suspend's detection grades.
       const update: AdminUserUpdate & { deferLinkPropagation?: boolean } = {
-        isBanned,
+        isBanned: change.isBanned,
         statusChangeReason: reason,
-        ...(isBanned ? { deferLinkPropagation: true } : { undoSuspension: true }),
+        ...(change.isBanned
+          ? { suspensionReasonCategory: change.category, deferLinkPropagation: true }
+          : { undoSuspension: true }),
       };
       await updateUserToServer(account.id, update);
       done.push(account);
@@ -82,6 +85,7 @@ const SuspendLinkedDialog: React.FC<{
 }> = ({ accounts, onClose, onDone }) => {
   const showUndo = useUndoToast();
   const [failed, setFailed] = useState<LinkedAccount[]>([]);
+  const [category, setCategory] = useState<SuspensionReasonCategory | null>(null);
   // Accounts suspended by an earlier attempt of this dialog: a retry skips them, and undo covers them.
   const [suspended, setSuspendedAccounts] = useState<LinkedAccount[]>([]);
   const propagated = useRef(false);
@@ -104,7 +108,7 @@ const SuspendLinkedDialog: React.FC<{
     showUndo({
       message: `${message} Undo does not restore API keys or canceled subscriptions.`,
       onUndo: async () => {
-        const result = await setSuspended(undoPending, false, undoAdminReason(reason));
+        const result = await setSuspended(undoPending, { isBanned: false }, undoAdminReason(reason));
         undoPending = result.failed;
         onDone();
         if (result.failed.length > 0)
@@ -116,11 +120,12 @@ const SuspendLinkedDialog: React.FC<{
   };
 
   const handleConfirm = async (reason: string) => {
+    if (!category) return;
     const remaining = accounts.filter(account => !suspended.some(done => done.id === account.id));
     inFlight.current = true;
     let result;
     try {
-      result = await setSuspended(remaining, true, reason, () => closed.current);
+      result = await setSuspended(remaining, { isBanned: true, category }, reason, () => closed.current);
     } finally {
       inFlight.current = false;
     }
@@ -162,11 +167,13 @@ const SuspendLinkedDialog: React.FC<{
       reasonPresets={ADMIN_REASON_PRESETS.suspension}
       confirmLabel={`Suspend ${accounts.length} ${accountNoun(accounts.length)}`}
       tone="danger"
+      blockedReason={category ? null : SUSPENSION_CATEGORY_REQUIRED}
       onConfirm={handleConfirm}
       // handleConfirm checks `closed` between accounts, so Cancel mid-run stops the ones not yet sent.
       cancelStopsWrite
       data-testid="suspend-linked-dialog"
     >
+      <SuspensionCategoryField value={category} onChange={setCategory} testIdPrefix="suspend-linked-dialog" />
       <Sheet
         variant="outlined"
         sx={{
