@@ -95,7 +95,7 @@ describe('releaseDriveConnection', () => {
     expect(h.release).toHaveBeenCalled();
     // The only signal that the grant may still be live - a smoke test must be able to tell this
     // from "the revoke never ran".
-    expect(consoleError).toHaveBeenCalledWith(expect.stringMatching(/revoke failed/), expect.anything());
+    expect(consoleError).toHaveBeenCalledWith(expect.stringMatching(/revoke failed/));
     consoleError.mockRestore();
   });
 
@@ -117,7 +117,7 @@ describe('releaseDriveConnection', () => {
     );
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
     await releaseDriveConnection('conn1', orgA);
-    expect(consoleError).toHaveBeenCalledWith(expect.stringMatching(/revoke failed/), expect.anything());
+    expect(consoleError).toHaveBeenCalledWith(expect.stringMatching(/revoke failed/));
     consoleError.mockRestore();
   });
 

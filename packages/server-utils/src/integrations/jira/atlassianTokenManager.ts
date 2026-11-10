@@ -2,6 +2,7 @@ import { userRepository, mcpServerRepository } from '@bike4mind/database';
 import { McpServerName } from '@bike4mind/common';
 import { getAtlassianOAuthConfig } from './atlassianConfig';
 import { encryptToken, decryptToken, encryptEnvVariables } from '../../security/tokenEncryption';
+import { Logger } from '@bike4mind/observability';
 
 /**
  * Custom error class for Atlassian reconnection required scenarios.
@@ -71,7 +72,7 @@ export class AtlassianTokenManager {
         errorText.includes('invalid') || errorText.includes('expired') || errorText.includes('unauthorized_client');
 
       if (isInvalidRefreshToken) {
-        console.log('🔴 Atlassian refresh token is invalid/expired. Marking for reconnection.');
+        Logger.info('Atlassian refresh token is invalid/expired. Marking for reconnection.');
         await userRepository.update({
           id: userId,
           atlassianConnect: {
@@ -84,7 +85,7 @@ export class AtlassianTokenManager {
         throw new AtlassianReconnectRequiredError();
       }
 
-      throw new Error(`Token refresh failed: ${errorText}`);
+      throw new Error(`Token refresh failed with status ${response.status}`);
     }
 
     const tokenData = (await response.json()) as {
@@ -145,8 +146,8 @@ export class AtlassianTokenManager {
           atlassianServer
         ),
       });
-      console.log(
-        `✅ Updated Atlassian MCP server with refreshed tokens (site: ${selectedResource.name || selectedResource.id})`
+      Logger.info(
+        `Updated Atlassian MCP server with refreshed tokens (site: ${selectedResource.name || selectedResource.id})`
       );
     }
 
@@ -184,7 +185,7 @@ export class AtlassianTokenManager {
       const user = await userRepository.findById(userId);
 
       if (!user || !user.atlassianConnect) {
-        console.warn('⚠️ Atlassian connection not found for user:', userId);
+        Logger.warn('Atlassian connection not found for user', { userId });
         return null;
       }
 
@@ -203,14 +204,14 @@ export class AtlassianTokenManager {
         : atlassianConnect.resources?.[0]; // Fallback for legacy users without selectedResourceId
 
       if (!selectedResource) {
-        console.warn('⚠️ No Atlassian resource found for user:', userId);
+        Logger.warn('No Atlassian resource found for user', { userId });
         return null;
       }
 
       const siteUrl = selectedResource.url?.endsWith('/wiki') ? selectedResource.url : `${selectedResource.url}/wiki`;
 
       if (tokenExpiresIn >= 5 * 60 * 1000) {
-        console.log(`✅ Using existing valid Atlassian token (site: ${selectedResource.name || selectedResource.id})`);
+        Logger.info(`Using existing valid Atlassian token (site: ${selectedResource.name || selectedResource.id})`);
         return {
           accessToken: decryptToken(atlassianConnect.accessToken)!,
           refreshToken: decryptToken(atlassianConnect.refreshToken)!,
@@ -219,7 +220,7 @@ export class AtlassianTokenManager {
         };
       }
 
-      console.log('🔄 Refreshing Atlassian token (expires soon)');
+      Logger.info('Refreshing Atlassian token (expires soon)');
       const refreshed = await this.refreshToken(userId);
       return {
         accessToken: refreshed.accessToken,
@@ -231,7 +232,7 @@ export class AtlassianTokenManager {
       if (error instanceof AtlassianReconnectRequiredError) {
         throw error;
       }
-      console.error('❌ Error in getValidTokens:', error);
+      Logger.error('Error in getValidTokens', { error });
       return null;
     }
   }

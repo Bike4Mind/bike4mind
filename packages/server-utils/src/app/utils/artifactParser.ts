@@ -9,6 +9,7 @@ import {
 } from '@bike4mind/utils/artifactParser';
 import { tryParseChartJSON } from './chartJsonParser';
 import { scanImportStatements } from '@bike4mind/utils/importStatements';
+import { Logger } from '@bike4mind/observability';
 
 // Block extraction, the shared types and every fence-promotion detector live in core, so the
 // server's chat pass and this module agree on what a reply contains; this module keeps the
@@ -61,7 +62,7 @@ export function parseArtifacts(
               cleanedContent.slice(0, artifact.startIndex) + inlineBlock + cleanedContent.slice(artifact.endIndex);
           } else {
             // Parsing failed - fallback to original content for debugging
-            console.warn('Failed to parse recharts artifact, falling back to original content');
+            Logger.warn('Failed to parse recharts artifact, falling back to original content');
             const inlineBlock = `\n\`\`\`recharts\n${artifact.content}\n\`\`\`\n`;
             cleanedContent =
               cleanedContent.slice(0, artifact.startIndex) + inlineBlock + cleanedContent.slice(artifact.endIndex);
@@ -328,7 +329,7 @@ export function hasCompleteOpeningTag(tail: string): boolean {
  * container over a warning that was never load-bearing. Fails OPEN: no warning beats no reply.
  *
  * Lives CLIENT-side rather than next to the detector in `@bike4mind/utils` on purpose: it reports
- * through `console.warn`, which is this file's convention for a degraded path but wrong on the Lambda,
+ * through the unscoped global logger, which is this file's convention for a degraded path but wrong on the Lambda,
  * where the server call sites wrap their own calls with `logger.warn` instead. Shared code would have
  * to pick one. `publishApi` imports it from here for that reason.
  */
@@ -338,8 +339,8 @@ export function detectElidedSafe(content: string, type?: ArtifactType): boolean 
   } catch (error) {
     // Logged rather than swallowed silently: the server call sites log their failures, and a detector
     // that starts throwing in the browser would otherwise look exactly like a detector that finds
-    // nothing. Matches the console.warn convention used elsewhere in this file for degraded paths.
-    console.warn('Elision detection failed; treating artifact as complete:', error);
+    // nothing. Matches the Logger.warn convention used elsewhere in this file for degraded paths.
+    Logger.warn('Elision detection failed; treating artifact as complete', { error });
     return false;
   }
 }

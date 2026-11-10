@@ -1,6 +1,7 @@
 import type { IFabFileDocument, IMessage, InferTaxonomyResponse } from '@bike4mind/common';
 import { withMeteredCompletion, type CompletionUsage, type MeteredCompletion } from '@bike4mind/services';
 import OpenAI from 'openai';
+import { Logger } from '@bike4mind/observability';
 
 /**
  * One sampled file, enough signal for the model to infer a taxonomy from: path/name/size/type
@@ -203,7 +204,7 @@ export async function runTaxonomyInference(
 
     return parsed;
   } catch (error) {
-    console.warn('Taxonomy inference response was malformed; returning empty taxonomy (non-blocking):', error);
+    Logger.warn('Taxonomy inference response was malformed; returning empty taxonomy (non-blocking)', { error });
     return emptyTaxonomyResponse(options?.existingPrefix);
   }
 }

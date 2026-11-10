@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 
 type StoredSnapshot = {
   integration: string;
@@ -88,7 +89,7 @@ describe('mcpRateLimitSnapshots', () => {
 
   it('leaves an event uncounted when its snapshot write fails and still persists the next one', async () => {
     vi.mocked(rateLimitSnapshotRepository.create).mockRejectedValueOnce(new Error('mongo down'));
-    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(Logger, 'error').mockImplementation(() => {});
 
     const persisted = await persistRateLimitEvents([exhaustedGitHubEvent(), exhaustedGitHubEvent()], TENANT_A);
 
@@ -98,7 +99,7 @@ describe('mcpRateLimitSnapshots', () => {
 
   it('does not change the persisted count when the CloudWatch metric emit fails', async () => {
     vi.mocked(recordRateLimitEvent).mockRejectedValueOnce(new Error('cloudwatch down'));
-    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(Logger, 'error').mockImplementation(() => {});
 
     const persisted = await persistRateLimitEvents([exhaustedGitHubEvent()], TENANT_A);
 

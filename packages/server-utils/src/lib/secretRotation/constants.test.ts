@@ -24,7 +24,7 @@ async function load(
 describe('secret rotation registry', () => {
   beforeEach(() => {
     vi.resetModules();
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.doMock('@bike4mind/observability', () => ({ Logger: { warn: vi.fn() } }));
   });
 
   afterEach(() => {

@@ -1,4 +1,5 @@
 import { ExpectedToolError } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const h = vi.hoisted(() => {
@@ -74,7 +75,7 @@ describe('mcpCall rate-limit ingest', () => {
     h.fetch.mockResolvedValue(
       new Response(JSON.stringify({ error: 'events array and tenantKey required' }), { status: 400 })
     );
-    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(Logger, 'error').mockImplementation(() => {});
 
     const result = await handler({
       name: 'github',
@@ -85,6 +86,20 @@ describe('mcpCall rate-limit ingest', () => {
     });
 
     expect(result).toEqual({ content: [], _rateLimitEvents: [JSON.parse(h.rateLimitLine)] });
+  });
+
+  it('keeps the ingest response body out of the logged error', async () => {
+    h.fetch.mockResolvedValue(new Response('upstream-body-marker', { status: 502 }));
+    const errorSpy = vi.spyOn(Logger, 'error').mockImplementation(() => {});
+
+    await handler({ name: 'github', action: 'callTool', toolName: 'get_issue', userId: 'user-1', envVariables: [] });
+
+    expect(errorSpy).toHaveBeenCalled();
+    const logged = errorSpy.mock.calls.map(call =>
+      JSON.stringify(call, (_k, v) => (v instanceof Error ? v.message : v))
+    );
+    expect(logged.join('\n')).toContain('HTTP 502');
+    expect(logged.join('\n')).not.toContain('upstream-body-marker');
   });
 
   it('posts events from a call with no user under the unattributed tenant', async () => {
@@ -111,8 +126,8 @@ describe('mcpCall connect failures', () => {
       throw new h.McpServerConfigError('github', ['GITHUB_ACCESS_TOKEN']);
     });
     h.connect = connect;
-    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const error = vi.spyOn(Logger, 'error').mockImplementation(() => {});
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
 
     await expect(handler({ name: 'github', action: 'getTools', envVariables: [] })).rejects.toMatchObject({
       name: 'McpServerConfigError',
@@ -131,8 +146,8 @@ describe('mcpCall connect failures', () => {
         onStderrLine('Error: something the server could not survive');
         throw new Error('MCP error -32000: Connection closed');
       };
-      const error = vi.spyOn(console, 'error').mockImplementation(() => {});
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const error = vi.spyOn(Logger, 'error').mockImplementation(() => {});
+      const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
 
       const failure = handler({ name: 'github', action, toolName: 'get_issue', envVariables: [] });
       await expect(failure).rejects.toBeInstanceOf(ExpectedToolError);
@@ -149,8 +164,8 @@ describe('mcpCall connect failures', () => {
     h.connect = async () => {
       throw new Error('MCP error -32000: database write failed');
     };
-    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const error = vi.spyOn(Logger, 'error').mockImplementation(() => {});
+    vi.spyOn(Logger, 'warn').mockImplementation(() => {});
     await expect(handler({ name: 'github', action: 'getTools', envVariables: [] })).rejects.toThrow(
       'database write failed'
     );

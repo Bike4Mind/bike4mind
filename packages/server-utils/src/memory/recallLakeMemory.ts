@@ -4,6 +4,7 @@ import { MEMENTO_MIN_SIMILARITY, isDocumentSource } from '@bike4mind/common';
 import { createKeyProvider } from './factCipher';
 import { createLedgerMemoryStore } from './ledgerMemoryStore';
 import { embedMementoQuery } from './mementoQueryEmbedding';
+import { Logger } from '@bike4mind/observability';
 
 /**
  * How far heat (ACT-R activation) may move a belief relative to topicality, matching the user-memento
@@ -125,7 +126,7 @@ export async function recallLakeMemory(opts: RecallLakeMemoryOptions): Promise<L
   );
   const profiles = settled.map((result, i) => {
     if (result.status === 'fulfilled') return result.value;
-    console.warn(
+    Logger.warn(
       `[lakeMemory] profile read failed for lake ${opts.lakes[i].datalakeTag}; skipping it this turn: ${
         result.reason instanceof Error ? result.reason.message : String(result.reason)
       }`
@@ -160,7 +161,7 @@ export async function recallLakeMemory(opts: RecallLakeMemoryOptions): Promise<L
     embedMementoQuery(opts.userId, opts.query).catch(err => {
       // Degrade to the lexical scorer, but LOUDLY: a silent empty vector makes a failed embed look
       // identical to an empty profile, which is a painful misdiagnosis during the eval.
-      console.warn(
+      Logger.warn(
         `[lakeMemory] query embedding failed; recall degraded to lexical this turn: ${
           err instanceof Error ? err.message : String(err)
         }`
@@ -188,7 +189,7 @@ export async function recallLakeMemory(opts: RecallLakeMemoryOptions): Promise<L
 
   // Dating is a nicety, not the grounding itself: a failed read costs the dates, never the facts.
   const dates = await opts.resolveSourceDates([...new Set(recalled.flatMap(r => r.sources))]).catch((err: unknown) => {
-    console.warn(
+    Logger.warn(
       `[lakeMemory] source date read failed; beliefs render undated this turn: ${
         err instanceof Error ? err.message : String(err)
       }`

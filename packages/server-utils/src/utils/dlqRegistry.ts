@@ -7,6 +7,7 @@ import {
 } from '@bike4mind/infra';
 import type { DlqDescriptor, DlqResolvers } from '@bike4mind/infra';
 import * as generatedInfraResources from '../premium-generated/infraResources.generated';
+import { Logger } from '@bike4mind/observability';
 
 /**
  * SQS queue URLs are stored via sst.Linkable in resource.enc.
@@ -312,7 +313,7 @@ function contributedDescriptors(): DlqDescriptor[] {
   if (specs.length === 0) return [];
   const reserved = reservedQueueNames(generatedInfraResources);
   if (reserved === null) {
-    console.warn(
+    Logger.warn(
       '[dlqRegistry] core resource names unknown (codegen ran without infra/); no contributed DLQ registered'
     );
     return [];
@@ -321,14 +322,14 @@ function contributedDescriptors(): DlqDescriptor[] {
   const names = new Set(reserved.resourceNames);
   const unknown = DLQ_REGISTRY.filter(d => !labels.has(d.label) || !names.has(d.sourceQueue)).map(d => d.label);
   if (unknown.length > 0) {
-    console.warn(
+    Logger.warn(
       `[dlqRegistry] generated core names miss DLQ_REGISTRY entries (${unknown.join(', ')}); re-run pnpm codegen. ` +
         'No contributed DLQ registered'
     );
     return [];
   }
   const result = partitionContributedQueues(specs, reserved);
-  for (const line of describeDroppedContributions('contributed queue', result)) console.warn(`[dlqRegistry] ${line}`);
+  for (const line of describeDroppedContributions('contributed queue', result)) Logger.warn(`[dlqRegistry] ${line}`);
   return result.registered.map(({ label, displayName, application, name }) => ({
     label,
     displayName,
