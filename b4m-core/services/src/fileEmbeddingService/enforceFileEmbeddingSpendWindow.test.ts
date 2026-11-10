@@ -49,7 +49,7 @@ function setup(settings: Record<string, string> = {}) {
   const db = { adminSettings: makeAdminSettings(settings) as never, cache };
   const reserve = (userId: string, estimatedTokens: number, estimatedMicroUsd = 1) =>
     enforceFileEmbeddingSpendWindow({ userId, estimatedTokens, estimatedMicroUsd, db });
-  return { clock, cache, reserve };
+  return { clock, cache, db, reserve };
 }
 
 const denial = async (promise: Promise<unknown>): Promise<FileEmbeddingSpendDeniedError> => {
@@ -172,5 +172,55 @@ describe('enforceFileEmbeddingSpendWindow', () => {
 
     const err = await denial(reserve('u1', 1));
     expect(err.resetsAt).toEqual(new Date(T0 + 720 * HOUR_MS));
+  });
+
+  it('fails closed when the settings cannot be read', async () => {
+    const { db, reserve } = setup();
+    (db.adminSettings as { findBySettingNames: ReturnType<typeof vi.fn> }).findBySettingNames.mockRejectedValueOnce(
+      new Error('db down')
+    );
+    (db.adminSettings as { findAll: ReturnType<typeof vi.fn> }).findAll.mockRejectedValueOnce(new Error('db down'));
+
+    await expect(reserve('u1', 1)).rejects.toBeInstanceOf(FileEmbeddingLimitResolutionError);
+  });
+
+  it('gives the tokens back when the USD claim throws', async () => {
+    const { cache, reserve } = setup();
+    cache.tryAddWithinLimitFixedWindow
+      .mockImplementationOnce(async (_k, _a, _l, ttlMs) => ({
+        success: true,
+        count: 5,
+        expiresAt: new Date(T0 + ttlMs),
+      }))
+      .mockRejectedValueOnce(new Error('cache down'));
+
+    await expect(reserve('u1', 5)).rejects.toThrow('cache down');
+
+    expect(cache.releaseFromFixedWindow).toHaveBeenCalledWith(
+      fileEmbeddingWindowCacheKeys('u1').tokens,
+      5,
+      expect.any(Date)
+    );
+  });
+
+  it('still reports the denial when the token rollback fails', async () => {
+    const { reserve, cache } = setup({ fileEmbeddingUserBudgetPerWindowUsd: '1' });
+    await reserve('u1', 1, 1_000_000);
+    cache.releaseFromFixedWindow.mockRejectedValueOnce(new Error('cache down'));
+    expect((await denial(reserve('u1', 1, 1_000_000))).reason).toBe('exhausted');
+  });
+
+  it('releases the USD window even when the tokens release fails', async () => {
+    const { cache, reserve } = setup();
+    const grant = await reserve('u1', 5, 7);
+    cache.releaseFromFixedWindow.mockRejectedValueOnce(new Error('cache down'));
+
+    await expect(grant.release()).rejects.toThrow('cache down');
+
+    expect(cache.releaseFromFixedWindow).toHaveBeenCalledWith(
+      fileEmbeddingWindowCacheKeys('u1').microUsd,
+      7,
+      expect.any(Date)
+    );
   });
 });

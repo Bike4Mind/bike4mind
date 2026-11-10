@@ -174,21 +174,37 @@ export async function enforceFileEmbeddingSpendWindow(params: {
     ttlMs
   );
   if (!tokens.success) deny('exhausted', tokens.expiresAt);
-  const spend = await db.cache.tryAddWithinLimitFixedWindow(
-    keys.microUsd,
-    estimatedMicroUsd,
-    limits.budgetPerWindowMicroUsd,
-    ttlMs
-  );
+  const releaseTokens = () => db.cache.releaseFromFixedWindow(keys.tokens, estimatedTokens, tokens.expiresAt);
+  let spend: Awaited<ReturnType<typeof db.cache.tryAddWithinLimitFixedWindow>>;
+  try {
+    spend = await db.cache.tryAddWithinLimitFixedWindow(
+      keys.microUsd,
+      estimatedMicroUsd,
+      limits.budgetPerWindowMicroUsd,
+      ttlMs
+    );
+  } catch (err) {
+    await releaseTokens().catch(releaseErr =>
+      logger?.warn?.('file-embedding-window-release-failed', { userId, error: String(releaseErr) })
+    );
+    throw err;
+  }
   if (!spend.success) {
-    await db.cache.releaseFromFixedWindow(keys.tokens, estimatedTokens, tokens.expiresAt);
+    // A failed rollback must not replace the terminal denial with a retried database error.
+    await releaseTokens().catch(releaseErr =>
+      logger?.warn?.('file-embedding-window-release-failed', { userId, error: String(releaseErr) })
+    );
     deny('exhausted', spend.expiresAt);
   }
 
   return {
     release: async () => {
-      await db.cache.releaseFromFixedWindow(keys.tokens, estimatedTokens, tokens.expiresAt);
-      await db.cache.releaseFromFixedWindow(keys.microUsd, estimatedMicroUsd, spend.expiresAt);
+      const results = await Promise.allSettled([
+        releaseTokens(),
+        db.cache.releaseFromFixedWindow(keys.microUsd, estimatedMicroUsd, spend.expiresAt),
+      ]);
+      const failed = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+      if (failed) throw failed.reason;
     },
   };
 }
