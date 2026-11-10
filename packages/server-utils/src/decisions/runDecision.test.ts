@@ -42,6 +42,7 @@ vi.mock('./providers', async () => {
   };
 });
 vi.mock('../files/loadAccessibleFabFile', () => ({ loadAccessibleFabFile: vi.fn() }));
+vi.mock('../utils/storage/index', () => ({ getFilesStorage: () => ({ download: vi.fn() }) }));
 vi.mock('@bike4mind/utils/imageResize', () => ({ ensureImageWithinDimensionLimit: vi.fn(async (b: Buffer) => b) }));
 
 import { getSettingsMap } from '@bike4mind/utils';

@@ -1,9 +1,14 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createIssueTracker } from '@bike4mind/server-utils/services/issueTrackers/index';
-import { GitHubIssueTracker } from '@bike4mind/server-utils/services/issueTrackers/githubIssueTracker';
-import { JiraIssueTracker } from '@bike4mind/server-utils/services/issueTrackers/jiraIssueTracker';
+import { createIssueTracker } from './index';
+import { GitHubIssueTracker } from './githubIssueTracker';
+import { JiraIssueTracker } from './jiraIssueTracker';
 import type { ILiveopsTriageConfigDocument } from '@bike4mind/database/infra';
 import { Logger } from '@bike4mind/observability';
+
+// The package has no global sst mock; these trackers read Resource at import.
+vi.mock('sst', () => ({
+  Resource: new Proxy({} as Record<string, unknown>, { get: (_, key) => ({ value: `test-${String(key)}` }) }),
+}));
 
 const mockLogger = {
   info: vi.fn(),

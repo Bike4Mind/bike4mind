@@ -100,7 +100,7 @@ vi.mock('@bike4mind/database/auth', () => ({
 vi.mock('@bike4mind/common', async importOriginal => ({
   isSessionPinnableAttachment: (await importOriginal<typeof import('@bike4mind/common')>()).isSessionPinnableAttachment,
   Permission: { create: 'create', read: 'read', update: 'update', delete: 'delete' },
-  // @server/utils/errors re-exports NotFoundError from here, so it must be provided.
+  // ../utils/errors re-exports NotFoundError from here, so it must be provided.
   NotFoundError: class NotFoundError extends Error {},
 }));
 

@@ -3,7 +3,7 @@
  * resolve a key, reserve, call the provider (one same-model retry), normalize and settle.
  *
  * Who pays and whose key is used is the `DecisionAccounting` policy's job. `runDecision` is the
- * user policy (the caller's keys and credits); `server/security/abuseAssessment` is the internal
+ * user policy (the caller's keys and credits); `../security/abuseAssessment` is the internal
  * policy (platform keys only, a platform budget, never the assessed user's credits). Keeping one
  * core means both get the same validation, deadlines, retry and answer normalization.
  */

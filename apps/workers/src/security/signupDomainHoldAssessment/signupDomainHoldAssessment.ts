@@ -12,7 +12,7 @@
  * (insufficient_evidence, low confidence, a failed guard, refusal, provider failure, skip) leaves the
  * hold pending for an admin in apps/client/pages/api/admin/signup-domain-holds.ts.
  *
- * Bounded like apps/client/server/security/abuseAssessment: settings gate everything (off, no model or
+ * Bounded like packages/server-utils/src/security/abuseAssessment: settings gate everything (off, no model or
  * a zero budget means no provider call), and the shared platform policy
  * (packages/server-utils/src/decisions/platformDecision.ts) meters this feature's own budget, call cap and
  * concurrency under its own key prefix. Runs from the triage cron

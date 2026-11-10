@@ -12,7 +12,7 @@ import { applyAutoContainment, liveAutoContainmentDeps } from '@workers/security
 const STOP_MARGIN_MS = 60_000;
 
 /**
- * Hourly assessments of unreviewed shadow detections (apps/client/server/security/abuseAssessment),
+ * Hourly assessments of unreviewed shadow detections (packages/server-utils/src/security/abuseAssessment),
  * each judgment handed to automated containment (security/autoContainment, autoContainmentConfig).
  * A no-op unless abuseAssessmentEnabled, the sweep, a rollout percent and a model are all configured.
  */

@@ -13,11 +13,11 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'https://ws.example.test' } } }));
-vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
+vi.mock('../utils/storage/index', () => ({
   getFilesStorage: () => ({ download: mocks.download, upload: mocks.upload, getSignedUrl: vi.fn() }),
   getGeneratedImageStorage: () => ({ download: mocks.generatedDownload }),
 }));
-vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: vi.fn() }));
+vi.mock('../utils/sqs', () => ({ sendToQueue: vi.fn() }));
 vi.mock('@bike4mind/database', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/database')>();
   return {
@@ -27,11 +27,11 @@ vi.mock('@bike4mind/database', async importOriginal => {
     sessionRepository: { findAllByIds: mocks.findAllByIds },
   };
 });
-vi.mock('@bike4mind/server-utils/utils/saveGeneratedAssetToFiles', () => ({
+vi.mock('../utils/saveGeneratedAssetToFiles', () => ({
   saveGeneratedAssetToFiles: (...a: unknown[]) => mocks.saveGeneratedAssetToFiles(...a),
 }));
 
-import { loadInputImage, saveToFiles } from '@bike4mind/server-utils/generationJobs/wiring';
+import { loadInputImage, saveToFiles } from './wiring';
 
 const FILE_ID = '64b7f1c2a1b2c3d4e5f60718';
 const image = { id: FILE_ID, filePath: 'uploads/a.png', mimeType: 'image/png', moderationStatus: 'clean' };
