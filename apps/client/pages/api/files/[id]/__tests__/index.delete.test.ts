@@ -63,7 +63,7 @@ vi.mock('@bike4mind/database', async importOriginal => ({
     activateIfDraft: h.activateIfDraft,
   },
   lakeConfigChangeEventRepository: { record: h.recordConfigChange },
-  questRepository: { findSessionIdsByImage: async () => ['s1'] },
+  questRepository: { findSessionIdsByMedia: async () => ['s1'] },
   fabFileChunkRepository: { deleteManyByFabFileId: h.deleteManyByFabFileId },
   fabFileRepository: {
     findByIdAndUserId: h.findByIdAndUserId,

@@ -92,10 +92,10 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
       const fabFileIds = (await FabFile.find(ownedFilter).select('_id').lean()).map(f => String(f._id));
       await unpublishUserArtifactsBySource(userId, { kind: 'fabfile', fabFileIds }, { logger: req.logger });
 
-      // The files this transaction actually deleted, returned out of it so a rolled-back attempt
-      // never drives the reference cleanup below.
       // Flushed whether or not the transaction commits: deleted bytes do not come back on a rollback.
       const generatedCdn = createCdnInvalidationBatch('delete-all-files', req.logger);
+      // The files this transaction actually deleted, returned out of it so a rolled-back attempt
+      // never drives the reference cleanup below.
       const deleted = await withTransaction(async session => {
         try {
           // sessionId feeds deleteStoredObjects' fork guard: without it the file's own notebook reads as another's.

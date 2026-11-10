@@ -132,10 +132,18 @@ describe('POST /api/organizations/[id]/upload-logo', () => {
     expect(invalidate).toHaveBeenCalledWith(['/org-files/old.png'], expect.objectContaining({ label: 'org-logo' }));
   });
 
-  it('does not invalidate the old logo when the replacement transaction fails', async () => {
+  it('still invalidates the old logo when the transaction fails after its bytes were deleted', async () => {
     storageGetSignedUrl.mockRejectedValueOnce(new Error('presign failed'));
 
     await expect(invoke({ id: OWNER, isAdmin: false })).rejects.toThrow('presign failed');
+    expect(storageDelete).toHaveBeenCalledWith('organizations/old.png');
+    expect(invalidate).toHaveBeenCalledWith(['/org-files/old.png'], expect.objectContaining({ label: 'org-logo' }));
+  });
+
+  it('does not invalidate the old logo when deleting its bytes fails', async () => {
+    storageDelete.mockRejectedValueOnce(new Error('s3 down'));
+
+    await expect(invoke({ id: OWNER, isAdmin: false })).rejects.toThrow('s3 down');
     expect(invalidate).not.toHaveBeenCalled();
   });
 

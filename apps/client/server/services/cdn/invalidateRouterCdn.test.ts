@@ -46,10 +46,19 @@ describe('invalidateRouterPaths', () => {
     expect((sendMock.mock.calls[0][0] as { input: SentInput }).input.DistributionId).toBe(DIST_ID);
   });
 
-  it('chunks at MAX_PATHS_PER_BATCH', async () => {
-    const paths = Array.from({ length: MAX_PATHS_PER_BATCH + 1 }, (_, i) => `/generated/${i}.png`);
+  it('sends up to MAX_PATHS_PER_BATCH exact paths in a single request', async () => {
+    const paths = Array.from({ length: MAX_PATHS_PER_BATCH }, (_, i) => `/generated/${i}.png`);
     await invalidateRouterPaths(paths, { label: 't' });
-    expect(sentPaths().map(p => p.length)).toEqual([MAX_PATHS_PER_BATCH, 1]);
+    expect(sentPaths()).toEqual([paths]);
+  });
+
+  it('coalesces a larger set into one wildcard per top-level prefix', async () => {
+    const paths = [
+      ...Array.from({ length: MAX_PATHS_PER_BATCH }, (_, i) => `/generated/${i}.png`),
+      '/org-files/a/b.png',
+    ];
+    await invalidateRouterPaths(paths, { label: 't' });
+    expect(sentPaths()).toEqual([['/generated/*', '/org-files/*']]);
   });
 
   it('makes no call for an empty list', async () => {

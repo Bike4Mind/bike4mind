@@ -93,7 +93,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
 vi.mock('@server/files/generatedCopyStore', () => ({
   getGeneratedCopyStore: () => ({
     storage: { delete: h.generatedDelete },
-    quests: { findSessionIdsByImage: h.findSessions },
+    quests: { findSessionIdsByMedia: h.findSessions },
   }),
 }));
 vi.mock('@server/services/cdn/invalidateRouterCdn', async importActual => ({

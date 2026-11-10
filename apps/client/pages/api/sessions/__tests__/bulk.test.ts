@@ -256,6 +256,15 @@ describe('DELETE /api/sessions/bulk', () => {
     expect(mockDeleteSession).not.toHaveBeenCalled();
     expect(mockWithTransaction).not.toHaveBeenCalled();
   });
+
+  it('rejects more ids than the bulk cap before deleting or purging anything', async () => {
+    const { req, res } = fire(Array.from({ length: 101 }, (_, i) => `s${i}`));
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(400);
+    expect(mockDeleteSession).not.toHaveBeenCalled();
+    expect(mockPurgeMedia).not.toHaveBeenCalled();
+  });
 });
 
 describe('POST /api/sessions/bulk - favorite', () => {

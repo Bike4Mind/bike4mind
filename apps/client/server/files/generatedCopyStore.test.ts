@@ -2,13 +2,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
   storageDelete: vi.fn(),
-  findSessionIdsByImage: vi.fn(),
+  findSessionIdsByMedia: vi.fn(),
   findAllByIds: vi.fn(),
   invalidate: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
-  questRepository: { findSessionIdsByImage: h.findSessionIdsByImage },
+  questRepository: { findSessionIdsByMedia: h.findSessionIdsByMedia },
   sessionRepository: { findAllByIds: h.findAllByIds },
 }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
@@ -56,19 +56,19 @@ describe('getGeneratedCopyStore', () => {
   });
 
   it('counts only live notebooks as still showing a copy', async () => {
-    h.findSessionIdsByImage.mockResolvedValue(['deleted-fork', 'live-fork']);
+    h.findSessionIdsByMedia.mockResolvedValue(['deleted-fork', 'live-fork']);
     h.findAllByIds.mockResolvedValue([{ id: 'live-fork' }]);
 
-    const ids = await getGeneratedCopyStore().quests.findSessionIdsByImage('copy-1.png');
+    const ids = await getGeneratedCopyStore().quests.findSessionIdsByMedia('copy-1.png');
 
     expect(h.findAllByIds).toHaveBeenCalledWith(['deleted-fork', 'live-fork']);
     expect(ids).toEqual(['live-fork']);
   });
 
   it('skips the session lookup when no reply shows the copy', async () => {
-    h.findSessionIdsByImage.mockResolvedValue([]);
+    h.findSessionIdsByMedia.mockResolvedValue([]);
 
-    expect(await getGeneratedCopyStore().quests.findSessionIdsByImage('copy-1.png')).toEqual([]);
+    expect(await getGeneratedCopyStore().quests.findSessionIdsByMedia('copy-1.png')).toEqual([]);
     expect(h.findAllByIds).not.toHaveBeenCalled();
   });
 });

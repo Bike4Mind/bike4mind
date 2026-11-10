@@ -12,7 +12,9 @@ import type { MinimalLogger } from '../publish/minimalLogger';
 
 const cfClient = new CloudFrontClient({});
 
-// Well under CloudFront's cap on paths in flight per distribution.
+// CloudFront allows 3,000 exact paths in flight per distribution across all callers, and its
+// rejection (TooManyInvalidationsInProgress) is only logged here. One request stays at a third of
+// that; a larger set is coalesced into per-prefix wildcards instead (see invalidateRouterPaths).
 export const MAX_PATHS_PER_BATCH = 1000;
 
 export interface InvalidationLogOptions {
@@ -61,8 +63,10 @@ export async function sendInvalidation(
 }
 
 /**
- * Invalidate exact Router paths, deduped and chunked. Wildcards are dropped: CloudFront allows only
- * a handful in flight per distribution, shared with publish takedowns. Never throws.
+ * Invalidate exact Router paths in one request. Caller wildcards are dropped: CloudFront allows only
+ * a handful in flight per distribution, shared with publish takedowns. A set over
+ * MAX_PATHS_PER_BATCH becomes one `/<first segment>/*` wildcard per prefix, so a large purge spends
+ * a few wildcard slots rather than the shared exact-path quota. Never throws.
  */
 export async function invalidateRouterPaths(
   paths: string[],
@@ -73,13 +77,8 @@ export async function invalidateRouterPaths(
   const logTag = '[CDN]';
   const distributionId = getRouterDistributionId(logTag, logger);
   if (!distributionId) return;
-  for (let i = 0; i < exact.length; i += MAX_PATHS_PER_BATCH) {
-    await sendInvalidation(distributionId, `${label}-${i}`, exact.slice(i, i + MAX_PATHS_PER_BATCH), {
-      logTag,
-      referencePrefix: 'media',
-      logger,
-    });
-  }
+  const batch = exact.length <= MAX_PATHS_PER_BATCH ? exact : [...new Set(exact.map(p => `/${p.split('/')[1]}/*`))];
+  await sendInvalidation(distributionId, label, batch, { logTag, referencePrefix: 'media', logger });
 }
 
 export interface CdnInvalidationBatch {
@@ -87,7 +86,7 @@ export interface CdnInvalidationBatch {
   flush: () => Promise<void>;
 }
 
-/** Collects paths across a bulk delete so it costs one CreateInvalidation per 1000 paths. */
+/** Collects paths across a bulk delete so it costs one CreateInvalidation. */
 export function createCdnInvalidationBatch(label: string, logger?: MinimalLogger): CdnInvalidationBatch {
   const paths = new Set<string>();
   return {

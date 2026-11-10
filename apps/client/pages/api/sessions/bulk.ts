@@ -140,7 +140,8 @@ const handler = baseApi()
         const userId = req.user?.id;
         const { sessionIds } = req.body;
 
-        if (!sessionIds || !Array.isArray(sessionIds) || sessionIds.length === 0) {
+        // The cap keeps the serial deletes plus the media purge inside the request's time budget.
+        if (!Array.isArray(sessionIds) || sessionIds.length === 0 || sessionIds.length > MAX_BULK_ITEMS) {
           return res.status(400).json({ deletedCount: 0, newLastNotebookId: null });
         }
 
