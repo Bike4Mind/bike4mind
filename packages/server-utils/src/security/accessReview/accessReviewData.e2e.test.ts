@@ -371,19 +371,23 @@ describe('collectAccessReview', () => {
 });
 
 describe('sendAccessReviewReminder', () => {
-  it('logs the counts as one JSON line and posts the reminder', async () => {
+  it('logs the counts as metadata and posts the reminder', async () => {
     const log = vi.spyOn(Logger, 'info').mockImplementation(() => undefined);
     const post = vi.fn().mockResolvedValue(undefined);
 
     await expect(sendAccessReviewReminder(now, post)).resolves.toBe('2027-Q1');
 
-    const logged = JSON.parse(String(log.mock.calls[0][0]));
-    expect(logged).toEqual(
+    const [message, metadata] = log.mock.calls[0] as [
+      string,
+      Record<string, unknown> & { counts: { fullAdmins: number } },
+    ];
+    expect(message).toBe('access-review report');
+    expect(metadata).toEqual(
       expect.objectContaining({ report: 'access-review', quarter: '2027-Q1', generatedAt: now.toISOString() })
     );
-    expect(logged.counts.fullAdmins).toBe(2);
+    expect(metadata.counts.fullAdmins).toBe(2);
     expect(post).toHaveBeenCalledWith(expect.stringContaining('*Quarterly access review due: 2027-Q1*'));
-    const posted = `${log.mock.calls[0][0]}${post.mock.calls[0][0]}`;
+    const posted = `${JSON.stringify(log.mock.calls[0])}${post.mock.calls[0][0]}`;
     for (const detail of ['@example.org', 'root', fullId, 'ops key']) expect(posted).not.toContain(detail);
     log.mockRestore();
   });
