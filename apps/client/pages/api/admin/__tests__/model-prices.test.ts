@@ -36,7 +36,9 @@ const mockRowsInForce = vi.fn();
 const mockHistoryForModel = vi.fn();
 const mockAppend = vi.fn();
 const mockGenerateSeed = vi.fn();
+const mockCatalogRowsInForce = vi.fn(async (): Promise<unknown[]> => []);
 vi.mock('@bike4mind/database', () => ({
+  modelCatalogRepository: { rowsInForce: () => mockCatalogRowsInForce() },
   modelPriceRepository: {
     rowsInForce: (...a: unknown[]) => mockRowsInForce(...a),
     historyForModel: (...a: unknown[]) => mockHistoryForModel(...a),
@@ -87,11 +89,18 @@ interface GuardrailError {
   additionalInfo?: { code?: string; confirmToken?: string };
 }
 
-function call(options: { method: 'GET' | 'POST'; isAdmin?: boolean; query?: object; body?: object }) {
+function call(options: {
+  method: 'GET' | 'POST';
+  isAdmin?: boolean;
+  adminPermissions?: string[];
+  query?: object;
+  body?: object;
+}) {
   const { req, res } = createMocks({ method: options.method, query: options.query ?? {}, body: options.body });
-  (req as unknown as { user: { isAdmin: boolean; id: string } }).user = {
+  (req as unknown as { user: { isAdmin: boolean; id: string; adminPermissions?: string[] } }).user = {
     isAdmin: options.isAdmin ?? true,
     id: 'admin-1',
+    ...(options.adminPermissions ? { adminPermissions: options.adminPermissions } : {}),
   };
   return { req, res, run: () => (handler as unknown as (rq: unknown, rs: unknown) => Promise<unknown>)(req, res) };
 }
@@ -134,6 +143,104 @@ describe('GET /api/admin/model-prices', () => {
     await run();
     expect(mockHistoryForModel).toHaveBeenCalledWith('gpt-x');
     expect(res._getJSONData().history).toHaveLength(1);
+  });
+});
+
+/** A discovery row for a catalog-only model, as resolveCatalogRecords reads it. */
+const discoveredRow = (modelId: string, type: string) => ({
+  modelId,
+  schemaVersion: 2,
+  source: 'discovery',
+  ownedGroups: ['identity', 'limits', 'lifecycle', 'availability'],
+  patch: {
+    id: modelId,
+    vendor: 'openai',
+    backend: 'openai',
+    type,
+    name: modelId,
+    contextWindow: 200_000,
+    lifecycle: { status: 'discovered' },
+    autoDisabled: true,
+    autoDisabledReason: 'discovered, awaiting price',
+  },
+  effectiveFrom: new Date('2026-07-01T00:00:00Z'),
+});
+
+describe('POST /api/admin/model-prices first price', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAppend.mockResolvedValue({ id: 'row1' });
+    mockGenerateSeed.mockResolvedValue([]);
+    mockRowsInForce.mockResolvedValue([]);
+    mockCatalogRowsInForce.mockResolvedValue([]);
+  });
+
+  it('accepts a first per-token price for a discovered text model and bumps the model list revision', async () => {
+    mockCatalogRowsInForce.mockResolvedValue([discoveredRow('gpt-new', 'text')]);
+    const { res, run } = call({
+      method: 'POST',
+      body: { modelId: 'gpt-new', unit: 'per_token', pricing: { '0': TIER }, note: 'provider price page' },
+    });
+    await run();
+
+    expect(mockAppend).toHaveBeenCalledTimes(1);
+    expect(mockAppend.mock.calls[0][0]).toMatchObject({
+      modelId: 'gpt-new',
+      unit: 'per_token',
+      pricing: { '0': TIER },
+    });
+    expect(mockBumpModelListRevision).toHaveBeenCalledTimes(1);
+    expect(res._getJSONData()).toEqual({ row: { id: 'row1' } });
+  });
+
+  it('checks a first price against the per-token ceiling, since it has no baseline', async () => {
+    mockCatalogRowsInForce.mockResolvedValue([discoveredRow('gpt-new', 'text')]);
+    const err = await expectGuardrail({
+      modelId: 'gpt-new',
+      unit: 'per_token',
+      pricing: { '0': { input: MANUAL_REPRICE_MAX_PER_TOKEN_USD * 2, output: 16e-6 } },
+      note: 'typed per 1M into per token',
+    });
+    expect(err.message).toContain('has no rate in force and none in the seed');
+  });
+
+  it('refuses a first price for an image model with 422, from an adapter literal or a catalog row', async () => {
+    mockCatalogRowsInForce.mockResolvedValue([discoveredRow('flux-new', 'image')]);
+    for (const modelId of ['gpt-image-2', 'flux-new']) {
+      const err = (await post({
+        modelId,
+        unit: 'per_token',
+        pricing: { '0': TIER },
+        note: 'image price',
+      })) as GuardrailError;
+      expect(err.statusCode).toBe(422);
+      expect(err.message).toBe("Prices for non-text models come from this build's model tables");
+    }
+    expect(mockAppend).not.toHaveBeenCalled();
+  });
+
+  it('refuses a first price for a text model in any unit but per_token', async () => {
+    mockCatalogRowsInForce.mockResolvedValue([discoveredRow('gpt-new', 'text')]);
+    const err = await post({ modelId: 'gpt-new', unit: 'per_image', pricing: { '0': TIER }, note: 'wrong unit' });
+    expect(err.statusCode).toBe(400);
+    expect(err.message).toMatch(/must be per_token/);
+    expect(mockAppend).not.toHaveBeenCalled();
+  });
+
+  it('refuses every write to a delegate holding settings:manage, and still lets it read', async () => {
+    const delegate = { isAdmin: false, adminPermissions: ['settings:manage', 'support:read'] };
+    for (const body of [
+      { modelId: 'gpt-x', unit: 'per_token', pricing: { '0': TIER }, note: 'reprice' },
+      { modelId: 'gpt-x', unit: 'per_token', action: 'revert-to-seed' },
+    ]) {
+      const { run } = call({ method: 'POST', ...delegate, body });
+      await expect(run()).rejects.toMatchObject({ statusCode: 403 });
+    }
+    expect(mockAppend).not.toHaveBeenCalled();
+
+    const { res, run } = call({ method: 'GET', ...delegate });
+    await run();
+    expect(res._getStatusCode()).toBe(200);
   });
 });
 
