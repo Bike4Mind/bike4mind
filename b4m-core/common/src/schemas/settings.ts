@@ -696,6 +696,7 @@ export const SettingKeySchema = z.enum([
 
   // HELP CENTER SETTINGS
   'EnableHelpChat',
+  'EnableCoreTutorials',
 
   // B4M PI SETTINGS
   'EnableBmPi',
@@ -2483,6 +2484,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableResearchEngineDefault', order: 111 },
       // Admin-only features
       { key: 'EnableHelpChat', order: 200 },
+      { key: 'EnableCoreTutorials', order: 205 },
       { key: 'EnableKnowledgeBaseSearch', order: 210 },
       { key: 'EnableMcpToolFiltering', order: 220 },
       { key: 'McpToolFilteringMaxTools', order: 221 },
@@ -7562,6 +7564,16 @@ export const settingsMap = {
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 200,
+  }),
+  EnableCoreTutorials: makeBooleanSetting({
+    key: 'EnableCoreTutorials',
+    name: 'Enable Core Tutorials',
+    defaultValue: false,
+    description: 'Serve the guided tutorials that ship with the app. Premium tutorials have their own switches.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 205,
+    userReadable: true,
   }),
   // B4M Pi (Project Intelligence) Settings
   EnableBmPi: makeBooleanSetting({
