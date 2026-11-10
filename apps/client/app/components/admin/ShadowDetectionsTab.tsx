@@ -735,8 +735,9 @@ export const ShadowDetectionsTab: React.FC = () => {
         error={detections.error ? "Couldn't load detections." : undefined}
         onRetry={() => void detections.refetch()}
         rowActions={rowActions}
-        // The fixed-width columns plus room for the summary; narrower screens scroll sideways.
-        minWidth="64rem"
+        // Fixed-width columns (incl. row actions) total 61rem, leaving Summary a 12rem floor; keep in
+        // sync with the column widths above. Narrower screens scroll sideways.
+        minWidth="73rem"
         empty={
           <EmptyState
             title={emptyTitle}
