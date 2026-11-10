@@ -650,8 +650,24 @@ describe('shell approval in a project with a large node_modules', () => {
     '[ "$(rm -rf "{x,.claude}")" ]',
     'unset "`rm -rf "{x,.claude}"`"',
     '[ "`cat "{x,../.config/Bike4Mind/value}"`" ]',
+    'f() { local x="`rm -rf "{x,.claude}"`"; }; f',
+    'rm -rf "${x:-$"{x,.claude}"}"',
+    'rm -rf {x,\\\n.claude}',
+    'echo $(( `rm -rf "{x,.claude}"` 1 ))',
   ])('asks in every mode for %s, reading its braces by bash quote rules', async command => {
     expect(await judge(command)).toMatchObject(asks);
+  });
+
+  it.each([
+    // bash brace-expands no here-string, `case` word, `[[` test, assignment, comment or `$"..."` string.
+    'cat <<< "`rm -rf "{x,.claude}"`"',
+    'case "`rm -rf "{x,.claude}"`" in *) ;; esac',
+    '[[ "`rm -rf "{x,.claude}"`" ]]',
+    'x="`rm -rf "{x,.claude}"`"',
+    'rm -rf x #{x,.claude}',
+    'rm -rf $"{x,.claude}"',
+  ])('runs %s unasked, as bash passes its braces as written', async command => {
+    expect(await judge(command)).toMatchObject({ auto: true, full: true });
   });
 
   it.each([

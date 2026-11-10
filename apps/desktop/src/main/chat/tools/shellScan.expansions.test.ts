@@ -167,6 +167,7 @@ describe('shell expansions reaching a protected location', () => {
     '[ "`echo "{a,b}"`" ]',
     '[ -n x -a "`echo "{a,b}"`" = y ]',
     'unset "`echo "{a,b}"`"',
+    'f() { local x="`echo "{a,b}"`"; }',
   ])('leaves %s unread, as bash brace-expands a word the scan reads as quoted', async command => {
     expect((await scanShell(command, project, [project]))?.unread).toBe(true);
     await expectAsks(command);
@@ -183,7 +184,14 @@ describe('shell expansions reaching a protected location', () => {
     'echo ${HOME}/{a,b}',
     'echo "${x//,/ }"',
     'cat <(echo {a,b})',
+    // bash brace-expands no assignment, here-string, `case` word or pattern, `[[` test or comment.
     'x="`echo "{a,b}"`"',
+    'cat <<< "`echo "{a,b}"`"',
+    'case "`echo "{a,b}"`" in *) ;; esac',
+    'case x in "`echo "{a,b}"`") ;; esac',
+    '[[ "`echo "{a,b}"`" ]]',
+    'echo x #{a,b}',
+    'echo $"{a,b}"',
   ])('reads %s as each bash brace-expands it, running it unasked', async command => {
     const scan = await scanShell(command, project, [project]);
     expect(scan).not.toBeNull();
@@ -191,8 +199,21 @@ describe('shell expansions reaching a protected location', () => {
     expect(await decide(command)).toEqual({ auto: true, full: true });
   });
 
-  it.each(['echo ${x:-{a,b}}'])('asks in every mode for %s, which the parser does not read', async command => {
-    expect(await scanShell(command, project, [project])).toBeNull();
+  it.each(['echo ${x:-{a,b}}', 'echo "${x:-$"{a,b}"}"', 'echo $(( `echo "{a,b}"` 1 ))'])(
+    'asks in every mode for %s, which the parser does not read',
+    async command => {
+      expect(await scanShell(command, project, [project])).toBeNull();
+      await expectAsks(command);
+    }
+  );
+
+  it.each([
+    // An ANSI-C string, and a line continuation inside braces, which the scan does not join.
+    "echo $'{a,b}'",
+    'echo {a,\\\nb}',
+    'cat {safe,\\\n../protected}/value',
+  ])('leaves %s unread, asking in every mode', async command => {
+    expect((await scanShell(command, project, [project]))?.unread).toBe(true);
     await expectAsks(command);
   });
 
@@ -201,6 +222,11 @@ describe('shell expansions reaching a protected location', () => {
     ['"${x:-"{a,b}"}"', ['a', 'b']],
     ['"${x:-"}"}"{a,b}', ['}a', '}b']],
     ['a"$(printf %s ")")"{a,b}', ['a)a', 'a)b']],
+    ['"${x:-$"{a,b}"}"', ['a', 'b']],
+    ['{a,\\\nb}', ['a', 'b']],
+    ["$'{a,b}'", ['{a,b}']],
+    ['$"{a,b}"', ['{a,b}']],
+    ['x #{a,b}', ['x']],
   ] as const)('expands %s in host bash as the scan expects', (word, expected) => {
     // Whichever bash is first in PATH; each of these expands the same in 3.2 and 5.
     const printed = execFileSync('bash', ['-c', `printf '%s\\n' ${word}`], { encoding: 'utf8' });
@@ -248,7 +274,13 @@ describe('shell expansions reaching a protected location', () => {
   it.each([
     [`[ -n ${counted} ]`, ['a', 'b']],
     [`unset ${counted}`, ['a', 'b']],
-  ])('brace-expands the words of %s in host bash as the scan expects', (script, expected) => {
+    [`f() { local x=${counted}; }; f`, ['a', 'b']],
+    [`[[ -n ${counted} ]]`, ['{a,b}']],
+    [`: <<< ${counted}`, ['{a,b}']],
+    [`case ${counted} in *) ;; esac`, ['{a,b}']],
+    [`case x in ${counted}) ;; esac`, ['{a,b}']],
+    [`x=${counted}`, ['{a,b}']],
+  ])('expands the words of %s in host bash as the scan expects', (script, expected) => {
     // Whichever bash is first in PATH; each of these expands the same in 3.2 and 5.
     const printed = execFileSync('bash', ['-c', `exec 3>&1; ${script}; :`], {
       encoding: 'utf8',
