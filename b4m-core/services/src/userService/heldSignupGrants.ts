@@ -191,10 +191,17 @@ export async function revokeHeldGrantRelease(
 ) {
   const batch = await adapters.batches.findBatch(input.batchId);
   if (!batch) return null;
-  const results: { userId: string; outcome: RevokeOutcome; credits: number }[] = [];
+  // heldRestored marks a reversal that also returned the account to the queue; batches without a saved state only debit.
+  const results: { userId: string; outcome: RevokeOutcome; credits: number; heldRestored?: true }[] = [];
   for (const entry of batch.entries) {
     if (entry.outcome !== 'released' || entry.credits <= 0) continue;
-    const row = (outcome: RevokeOutcome) => results.push({ userId: entry.userId, outcome, credits: entry.credits });
+    const row = (outcome: RevokeOutcome, heldRestored = false) =>
+      results.push({
+        userId: entry.userId,
+        outcome,
+        credits: entry.credits,
+        ...(heldRestored ? { heldRestored } : {}),
+      });
     if (!(await adapters.batches.claimReversal(batch.id, entry.userId))) {
       row('already_reversed');
       continue;
@@ -239,7 +246,7 @@ export async function revokeHeldGrantRelease(
         );
         await restoreHeldState(entry.userId, entry.restore, entry.credits, current, adapters.users);
       }
-      row('reversed');
+      row('reversed', !!entry.restore);
     } catch (error) {
       // Unclaiming an uncompensated debit would let a retry debit the same grant twice.
       if (outstanding > 0) {
