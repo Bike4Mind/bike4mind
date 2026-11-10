@@ -29,8 +29,10 @@ import { websocketApi } from './websocket';
  *
  * Shutdown trade-off: on SIGTERM (deploy / scale-in / unhealthy-task replacement) in-flight
  * quests drain for up to DRAIN_TIMEOUT_MS (server.ts), which is set under this task's
- * stopTimeout; a quest still running is cut off. The container removes the cold-start + 15-min
- * ceiling for normal processing, but not shutdown-time cancellation. The drain only runs at all
+ * stopTimeout; a quest still running is cut off. To keep scale-in and deploys off busy tasks, the
+ * service sets ECS task scale-in protection while it has in-flight work (taskProtection.ts, bounded
+ * by its expiry so a busy task cannot hold a deploy open for long). The container removes the
+ * cold-start + 15-min ceiling for normal processing, but not shutdown-time cancellation. The drain only runs at all
  * because the image makes node PID 1 with tsx as an in-process loader - see Dockerfile.chatcompletion.
  *
  * Ingress: the frontend (`/api/ai/llm`, `/api/chat`) POSTs the QuestStartBody to this
@@ -154,6 +156,9 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
     // Lumina5/ModelSunset (deprecated model pins) and Lumina5/AnthropicAPI (rate limits)
     // are emitted from llm-adapters on this path. PutMetricData takes no resource scope.
     { actions: ['cloudwatch:PutMetricData'], resources: ['*'] },
+    // Scale-in protection while quests are in flight, set through the ECS agent endpoint
+    // (apps/client/server/chatCompletion/taskProtection.ts), which signs with the task role.
+    { actions: ['ecs:UpdateTaskProtection'], resources: ['*'] },
     {
       actions: [
         'transcribe:StartTranscriptionJob',
