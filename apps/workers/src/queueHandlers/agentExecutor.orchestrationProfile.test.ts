@@ -29,6 +29,9 @@ const ADMIN_DEFAULTS: OrchestrationDefaults = {
   defaultThoroughness: 'medium',
   fallbackModels: [],
   dagEnabled: true,
+  confidenceGateThreshold: 0.6,
+  confidenceGateMode: 'both',
+  confidenceGateSelfReport: true,
 };
 
 function makeAgent(overrides: Partial<IAgent> = {}): IAgent {

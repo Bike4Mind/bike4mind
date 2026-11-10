@@ -70,6 +70,9 @@ describe('buildDefaultOrchestrationProfile', () => {
     fallbackModels: ['claude-haiku'],
     dagEnabled: true,
     intentClassifier: OrchestrationDefaultsSchema.parse({}).intentClassifier,
+    confidenceGateThreshold: 0.6,
+    confidenceGateMode: 'both',
+    confidenceGateSelfReport: true,
   };
 
   it('marks the result as synthetic with a stable id', () => {
