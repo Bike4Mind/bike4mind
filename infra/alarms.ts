@@ -21,7 +21,7 @@ import {
   voiceHoldSweepCron,
 } from './cron';
 import { whatsNewGenerationQueueSubscription, webhookDeliveryQueueSubscription } from './queues';
-import { subscribeQueryRoute, unsubscribeQueryRoute } from './subscriberFanout';
+import { reauthConnectionRoute, subscribeQueryRoute, unsubscribeQueryRoute } from './subscriberFanout';
 import {
   defaultRoute,
   connectRoute,
@@ -817,6 +817,7 @@ if (isMonitoredStage) {
   for (const { key, metricName, route } of [
     { key: 'subscribe-query', metricName: 'SubscribeQueryOutOfMemory', route: subscribeQueryRoute },
     { key: 'unsubscribe-query', metricName: 'UnsubscribeQueryOutOfMemory', route: unsubscribeQueryRoute },
+    { key: 'reauth-connection', metricName: 'ReauthConnectionOutOfMemory', route: reauthConnectionRoute },
     { key: 'ws-default', metricName: 'DefaultRouteOutOfMemory', route: defaultRoute },
     { key: 'ws-connect', metricName: 'ConnectRouteOutOfMemory', route: connectRoute },
     { key: 'ws-disconnect', metricName: 'DisconnectRouteOutOfMemory', route: disconnectRoute },
