@@ -102,9 +102,33 @@ describe('buildSignupGrantPending', () => {
     expect(build({ signupGrant: grant(), grantPackageId: 'pkg-1', tags: [] }).source).toBe('package');
   });
 
+  it('reports the invite and its bonus: undecided, settled with none, paid, or no invite at all', () => {
+    const referral = { source: 'referral' as const, inviteId: 'inv-1', at: new Date('2026-11-01T00:00:00Z') };
+    expect(build({ signupGrant: grant(), signupInvite: referral, tags: [] }).invite).toEqual({
+      source: 'referral',
+      bonusPaid: null,
+    });
+    expect(build({ signupGrant: grant({ inviteBonusPaid: 0 }), signupInvite: referral, tags: [] }).invite).toEqual({
+      source: 'referral',
+      bonusPaid: 0,
+    });
+    const organization = { ...referral, source: 'organization' as const, organizationId: 'org-1' };
+    expect(build({ signupGrant: grant({ inviteBonusPaid: 25 }), signupInvite: organization, tags: [] }).invite).toEqual(
+      { source: 'organization', bonusPaid: 25 }
+    );
+    expect(build({ signupGrant: grant({ inviteBonusPaid: 25 }), tags: [] }).invite).toBeNull();
+  });
+
   it('answers an account with no grant: nothing pending and every action explains itself', () => {
     const pending = build({ tags: [] });
-    expect(pending).toMatchObject({ hasGrant: false, source: null, stage: null, schedule: null, held: null });
+    expect(pending).toMatchObject({
+      hasGrant: false,
+      source: null,
+      stage: null,
+      schedule: null,
+      held: null,
+      invite: null,
+    });
     expect(pending.actions.block).toMatchObject({ available: false, reason: 'no_grant' });
     expect(pending.actions.releaseRemaining).toMatchObject({ available: false, reason: 'no_grant' });
     expect(pending.actions.releaseHeld).toMatchObject({ available: false, reason: 'no_grant' });

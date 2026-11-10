@@ -43,6 +43,7 @@ const GRANTED: AdminSignupGrantPending = {
   blocked: null,
   rewards: { queuedCount: 2, queuedCredits: 40, pausedCount: 0, pausedCredits: 0 },
   lastActivityCreditDay: '2026-11-03',
+  invite: null,
   actions: {
     releaseHeld: unavailable('not_held'),
     releaseRemaining: available,
@@ -125,6 +126,22 @@ describe('SignupGrantPendingCard', () => {
     expect(screen.getByTestId('pending-credits-chip-held')).toBeInTheDocument();
     expect(screen.getByTestId('pending-credits-held')).toHaveTextContent('100 credits, waiting for the daily pool');
     expect(screen.getByTestId('user-pending-releaseHeld-btn')).toBeInTheDocument();
+  });
+
+  it.each([
+    [{ source: 'referral' as const, bonusPaid: 25 }, 'Invite bonus: 25 paid'],
+    [{ source: 'organization' as const, bonusPaid: 0 }, 'Invite bonus: none'],
+    [{ source: 'referral' as const, bonusPaid: null }, 'Invite bonus: pending'],
+  ])('shows the invite bonus state of an invited account (%j)', (invite, label) => {
+    ready({ ...GRANTED, invite });
+    renderCard();
+    expect(screen.getByTestId('user-pending-invite-bonus')).toHaveTextContent(label);
+  });
+
+  it('shows no invite bonus chip for an account that was not invited', () => {
+    ready(GRANTED);
+    renderCard();
+    expect(screen.queryByTestId('user-pending-invite-bonus')).not.toBeInTheDocument();
   });
 
   it('marks a grant package account', () => {

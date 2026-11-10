@@ -37,6 +37,20 @@ export const pendingNoopCopy = (reason: string | null | undefined): string =>
   (reason && NOOP_COPY[reason]) || 'Nothing changed.';
 
 /** Chips naming the states that change what an admin should do with the account. */
+const InviteBonusChip: React.FC<{ bonusPaid: number | null }> = ({ bonusPaid }) => (
+  <StatusChip
+    tone={bonusPaid ? 'good' : 'neutral'}
+    label={
+      bonusPaid === null
+        ? 'Invite bonus: pending'
+        : bonusPaid > 0
+          ? `Invite bonus: ${credits(bonusPaid)} paid`
+          : 'Invite bonus: none'
+    }
+    data-testid="user-pending-invite-bonus"
+  />
+);
+
 export const PendingCreditsChips: React.FC<{ pending: AdminSignupGrantPending }> = ({ pending }) => (
   <Stack direction="row" flexWrap="wrap" gap={0.75} data-testid="pending-credits-chips">
     {pending.blocked && <StatusChip tone="bad" dot label="Blocked" data-testid="pending-credits-chip-blocked" />}
@@ -47,6 +61,7 @@ export const PendingCreditsChips: React.FC<{ pending: AdminSignupGrantPending }>
     {pending.source === 'package' && (
       <StatusChip tone="info" label="Grant package" data-testid="pending-credits-chip-package" />
     )}
+    {pending.invite && <InviteBonusChip bonusPaid={pending.invite.bonusPaid} />}
     {!pending.hasGrant && !pending.held && (
       <StatusChip tone="neutral" label="No signup grant" data-testid="pending-credits-chip-no-grant" />
     )}

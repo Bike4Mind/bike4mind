@@ -59,6 +59,11 @@ export const adminSignupGrantPendingSchema = z.object({
   }),
   /** UTC day (YYYY-MM-DD) of the latest activity drip payout. */
   lastActivityCreditDay: z.string().nullable(),
+  /**
+   * The invite the account signed up through, or null without one. `bonusPaid`: null while the invite bonus
+   * is undecided, 0 once settled with nothing paid, otherwise the credits paid.
+   */
+  invite: z.object({ source: z.enum(['referral', 'organization']), bonusPaid: z.number().nullable() }).nullable(),
   actions: z.object({
     releaseHeld: adminSignupGrantActionStateSchema,
     releaseRemaining: adminSignupGrantActionStateSchema,

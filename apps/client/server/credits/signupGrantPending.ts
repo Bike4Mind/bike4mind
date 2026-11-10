@@ -14,7 +14,7 @@ type RewardTotals = Record<'held' | 'paused', { count: number; credits: number }
 
 export type SignupGrantPendingInput = {
   user: userService.ClassifiableUser &
-    Partial<Pick<IUserDocument, 'grantPackageId' | 'pendingCreditGrant' | 'signupGrantHeldAt'>>;
+    Partial<Pick<IUserDocument, 'grantPackageId' | 'pendingCreditGrant' | 'signupGrantHeldAt' | 'signupInvite'>>;
   schedule: { dripCap: number; dailyCredits: number };
   rewards: RewardTotals;
   /** Release-remaining is the one budget-exempt payout, so it needs `credits:adjust`, not just the read. */
@@ -85,6 +85,7 @@ export function buildSignupGrantPending({
       pausedCredits: rewards.paused.credits,
     },
     lastActivityCreditDay: grant?.lastDripDay ?? null,
+    invite: user.signupInvite ? { source: user.signupInvite.source, bonusPaid: grant?.inviteBonusPaid ?? null } : null,
     actions: {
       releaseHeld: actionState(classify('release_held'), true),
       releaseRemaining: actionState(classify('release_remaining'), viewerCanRelease),
