@@ -797,6 +797,8 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       await removeSkippedExport();
       return;
     }
+    // Admin and self-serve exports share this one lease, so an overlapping job waits on SQS redelivery
+    // (infra/queues.ts: 16-minute visibility, 2 retries) and a long build can use up the other's retries.
     throw new Error('Another account data export holds the account lease');
   }
   const leaseFilter = () => ({
