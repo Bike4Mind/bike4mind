@@ -48,6 +48,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.unstubAllEnvs();
   mocks.resource.App.stage = 'dev';
+  mocks.resource.SLACK_ALARMS_WEBHOOK_URL.value = 'https://example.test/alarms-dev';
+  mocks.resource.SLACK_ERROR_REPORTING_WEBHOOK_URL.value = 'https://example.test/errors';
   mocks.settings.mockResolvedValue({ webhook: 'https://example.test/slack' });
   mocks.post.mockResolvedValue(true);
   mocks.sample.mockResolvedValue({ name: 'payingSubscribers', values: [1, null], contributors: [] });
@@ -109,6 +111,20 @@ describe('scheduled business metric alert', () => {
     expect(mocks.collect).not.toHaveBeenCalled();
     expect(mocks.sample).not.toHaveBeenCalled();
     expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it('skips staging when no alarm webhook is configured', async () => {
+    mocks.resource.SLACK_ALARMS_WEBHOOK_URL.value = 'not-configured';
+    mocks.resource.SLACK_ERROR_REPORTING_WEBHOOK_URL.value = 'not-configured';
+    expect(await handler({})).toEqual({ status: 'skipped', reason: 'missing-webhook' });
+    expect(mocks.collect).not.toHaveBeenCalled();
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it('posts staging anomalies to the error-reporting channel when no alarms channel is set', async () => {
+    mocks.resource.SLACK_ALARMS_WEBHOOK_URL.value = 'not-configured';
+    expect(await handler({ time: '2026-10-26T12:05:00Z' })).toMatchObject({ delivered: 1 });
+    expect(mocks.post).toHaveBeenCalledWith('https://example.test/errors', expect.anything());
   });
 
   it('skips preview stages before querying settings', async () => {
