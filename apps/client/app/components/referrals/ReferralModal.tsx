@@ -23,7 +23,7 @@ import { useGetReferralSummary } from '@client/app/hooks/data/referralSummary';
 import type { IReferralResult } from '@client/app/utils/regInviteAPICalls';
 import { getErrorMessage } from '@client/app/utils/error';
 import { create } from 'zustand';
-import { useTranslation } from 'react-i18next';
+import { Trans, useTranslation } from 'react-i18next';
 import { green, blue, blackAlpha } from '@client/app/utils/themes/colors';
 
 export enum ReferralInviteType {
@@ -72,7 +72,7 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
 
   const [friendEmail, setFriendEmail] = useState<string>('');
   const [numReferralsAvailable, setNumReferralsAvailable] = useState<number>(0);
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [loading, setLoading] = React.useState<boolean>(false);
 
   const [emailTitle, setEmailTitle] = useState<string>(t('referral.email_title_default'));
@@ -234,26 +234,28 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
               {[
                 {
                   testId: 'first-answer',
-                  when: t('referral.reward_when_first_answer'),
+                  i18nKey: 'referral.reward_first_answer',
                   credits: referralSummary.rewards.firstAnswer,
                 },
                 {
                   testId: 'first-payment',
-                  when: t('referral.reward_when_first_payment'),
+                  i18nKey: 'referral.reward_first_payment',
                   credits: referralSummary.rewards.firstPayment,
                 },
                 {
                   testId: 'second-payment',
-                  when: t('referral.reward_when_second_payment'),
+                  i18nKey: 'referral.reward_second_payment',
                   credits: referralSummary.rewards.secondPayment,
                 },
               ]
                 .filter(({ credits }) => credits > 0)
-                .map(({ testId, when, credits }) => (
+                .map(({ testId, i18nKey, credits }) => (
                   <Typography key={testId} level="body-sm" data-testid={`referral-modal-reward-${testId}`}>
-                    {t('referral.reward_you_earn')}{' '}
-                    <strong>{t('referral.reward_credits', { credits: credits.toLocaleString('en-US') })}</strong> {when}
-                    .
+                    <Trans
+                      i18nKey={i18nKey}
+                      values={{ credits: credits.toLocaleString(i18n.language) }}
+                      components={{ strong: <strong /> }}
+                    />
                   </Typography>
                 ))}
             </Box>

@@ -31,7 +31,12 @@ vi.mock('@client/app/utils/regInviteAPICalls', () => ({
 const { useGetReferralSummary } = vi.hoisted(() => ({ useGetReferralSummary: vi.fn() }));
 vi.mock('@client/app/hooks/data/referralSummary', () => ({ useGetReferralSummary }));
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string, opts?: { credits?: string }) => opts?.credits ?? key }),
+  useTranslation: () => ({
+    t: (key: string, opts?: { credits?: string }) => opts?.credits ?? key,
+    i18n: { language: 'en-US' },
+  }),
+  Trans: ({ i18nKey, values }: { i18nKey: string; values?: { credits?: string } }) =>
+    `${i18nKey} ${values?.credits ?? ''}`,
 }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
@@ -154,11 +159,11 @@ it("shows the inviter's non-zero rewards and no invitee credit amount", () => {
   const queryClient = renderModal();
 
   expect(screen.getByTestId('referral-modal-reward-first-answer')).toHaveTextContent(
-    'referral.reward_you_earn 1,000 referral.reward_when_first_answer'
+    'referral.reward_first_answer 1,000'
   );
   expect(screen.queryByTestId('referral-modal-reward-first-payment')).toBeNull();
   expect(screen.getByTestId('referral-modal-reward-second-payment')).toHaveTextContent(
-    'referral.reward_you_earn 2,500 referral.reward_when_second_payment'
+    'referral.reward_second_payment 2,500'
   );
   expect(screen.queryByText(/Invited person gets/)).toBeNull();
   queryClient.clear();
