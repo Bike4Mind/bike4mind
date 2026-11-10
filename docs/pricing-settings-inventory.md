@@ -44,24 +44,24 @@ compute per-run and per-day USD caps) and settings that only toggle a feature.
 | Key | Admin tab | Code readers | Changes customer price | Proposed section |
 |---|---|---|---|---|
 | `allowOpenRegistration` | Growth and Pricing > Signup and starter credits | Registration (`b4m-core/services/src/userService/register.ts`), the login and register pages through `/api/settings/serverConfigPublic`, OTP and OAuth sign-in through `isOpenRegistrationAllowed` (`apps/client/server/utils/auth/openRegistration.ts`), and the starter-credit amount (`getOpenSignupStarterCredits` in `apps/client/server/utils/starterCredits.ts`). | no. Decides who receives the signup grant (`signupGrantInitialCredits`), so it changes platform cost, not price. | Signup and starter credits |
-| `signupGrantSignupPoolDaily` | Admin Settings > User Management > Credits System > Signup Pool (credits per day) | The per-pool budget reservation (`resolvePoolBudget` and `reserveSignupGrantBudget` in `b4m-core/services/src/userService/signupGrantBudget.ts`), drawn by the initial signup grant (`freeCredits.ts`, the first tranche in `stagedSignupGrant.ts`) and held-grant releases (`heldSignupGrants.ts`). Paid credits (purchases, plan credits, seat grants) and operator-issued invite grants never draw it. | no. Caps free signup credits per UTC day; 0 or a missing/invalid value pauses them (missing alerts admins) and overflow is held, then paid oldest first by the hourly release. | Signup and starter credits |
-| `signupGrantTricklePoolDaily` | Admin Settings > User Management > Credits System > Trickle Pool (credits per day) | The same reservation with the trickle pool, drawn by the daily signup drip (`dripSignupGrant` in `stagedSignupGrant.ts`) and by gear and first-answer referral rewards (`payCreditReward` in `b4m-core/services/src/creditService/payCreditReward.ts`). | no. Caps free drip and reward credits per UTC day; 0 or a missing/invalid value pauses them (missing alerts admins). A drip past it is skipped for the day; a reward past it is queued and paid oldest first by the hourly release, and a drip waits while it would leave the pool unable to pay the oldest queued reward. It is independent of signup-pool holds. | Signup and starter credits |
+| `signupGrantSignupPoolDaily` | Invite Center > Schedule | The per-pool budget reservation (`resolvePoolBudget` and `reserveSignupGrantBudget` in `b4m-core/services/src/userService/signupGrantBudget.ts`), drawn by the initial signup grant (`freeCredits.ts`, the first tranche in `stagedSignupGrant.ts`) and held-grant releases (`heldSignupGrants.ts`). Paid credits (purchases, plan credits, seat grants) and operator-issued invite grants never draw it. | no. Caps free signup credits per UTC day; 0 or a missing/invalid value pauses them (missing alerts admins) and overflow is held, then paid oldest first by the hourly release. | Signup and starter credits |
+| `signupGrantTricklePoolDaily` | Invite Center > Schedule | The same reservation with the trickle pool, drawn by the daily signup drip (`dripSignupGrant` in `stagedSignupGrant.ts`) and by gear and first-answer referral rewards (`payCreditReward` in `b4m-core/services/src/creditService/payCreditReward.ts`). | no. Caps free drip and reward credits per UTC day; 0 or a missing/invalid value pauses them (missing alerts admins). A drip past it is skipped for the day; a reward past it is queued and paid oldest first by the hourly release, and a drip waits while it would leave the pool unable to pay the oldest queued reward. It is independent of signup-pool holds. | Signup and starter credits |
 | `signupGrantActivityMinActiveSeconds` | Admin Settings > User Management > Credits System > Signup Activity Minimum Active Seconds | The server-accrued active time a UTC day needs before the drip pays (`resolveRequiredActiveSeconds` in `activityUnlock.ts`, `recordActiveSession.ts`) and the "about N minutes" unlock copy (`newUserWelcomeModel.ts`). Clamped to 60-7200, default 60. | no. Sets how long a free drip takes to earn. | Signup and starter credits |
 | `signupGrantActivityPreviewTestMode` | Admin Settings > User Management > Credits System > Signup Drip Preview Test Mode (not shown on `production` or `dev`) | Preview-only five-minute earning windows in `signupDripPeriod.ts`; default off. Only `pr<number>` stages honor the switch. Production/staging keep UTC days, and the platform budget still uses real UTC days. | no. Accelerates free-grant testing only. | Signup and starter credits |
-| `signupGrantInitialCredits` | Admin Settings > User Management > Credits System > Signup Grant Initial Credits | The post-verification tranche snapshotted at enrollment (`resolveSignupGrantSchedule` in `b4m-core/common/src/signupGrant.ts`) and the signup copy (`useSignupGrantSchedule.ts`, `useSignupGrantCredits.ts`). Unset reads as 0. | no. A free grant. | Signup and starter credits |
-| `signupGrantDailyCredits` | Admin Settings > User Management > Credits System > Signup Grant Daily Credits | The per-day drip amount (`resolveSignupGrantSchedule`, read by `resolveDripLimits` in `stagedSignupGrant.ts`). Unset reads as 0. | no. A free grant. | Signup and starter credits |
-| `signupGrantDripCap` | Admin Settings > User Management > Credits System > Signup Grant Drip Cap | The per-account drip total and the unlock pool snapshotted at enrollment (`resolveSignupGrantSchedule`). Unset reads as the registry default, 0: nothing drips and an invite pays its initial share at signup, the rest on unlock. A stored cap of 0 also drips nothing but pays an invite in full at signup. | no. Caps free credits. | Signup and starter credits |
-| `signupGrantInviteBonusCredits` | Admin Settings > User Management > Credits System > Signup Grant Invite Bonus Credits | Registered only; no reader yet. Default 0. | no. | Signup and starter credits |
+| `signupGrantInitialCredits` | Invite Center > Schedule | The post-verification tranche snapshotted at enrollment (`resolveSignupGrantSchedule` in `b4m-core/common/src/signupGrant.ts`) and the signup copy (`useSignupGrantSchedule.ts`, `useSignupGrantCredits.ts`). Unset reads as 0. | no. A free grant. | Signup and starter credits |
+| `signupGrantDailyCredits` | Invite Center > Schedule | The per-day drip amount (`resolveSignupGrantSchedule`, read by `resolveDripLimits` in `stagedSignupGrant.ts`). Unset reads as 0. | no. A free grant. | Signup and starter credits |
+| `signupGrantDripCap` | Invite Center > Schedule | The per-account drip total and the unlock pool snapshotted at enrollment (`resolveSignupGrantSchedule`). Unset reads as the registry default, 0: nothing drips and an invite pays its initial share at signup, the rest on unlock. A stored cap of 0 also drips nothing but pays an invite in full at signup. | no. Caps free credits. | Signup and starter credits |
+| `signupGrantInviteBonusCredits` | Invite Center > Schedule | Registered only; no reader yet. Default 0. | no. | Signup and starter credits |
 | `ReferralCreditsAmount` | Growth and Pricing > Signup and starter credits | The referred-user grant at registration (`register.ts`), the referral send route (`apps/client/pages/api/reg-invites/refer.ts`) and the "invited person gets N credits" line (`ReferralModal.tsx`). | no. A free grant. | Signup and starter credits |
-| `ReferralFirstAnswerCredits` | Growth and Pricing > Referral rewards for inviters | The inviter payout when the invited friend has a first answer and a verified email (`packages/server-utils/src/referrals/firstAnswerReward.ts`). Only friends who signed up on or after the first-value launch date (`FIRST_VALUE_LAUNCH_AT` in `apps/client/server/analytics/funnel.ts`) qualify. Default 0 (off). | no. A free grant. | Signup and starter credits |
+| `ReferralFirstAnswerCredits` | Invite Center > Rewards | The inviter payout when the invited friend has a first answer and a verified email (`packages/server-utils/src/referrals/firstAnswerReward.ts`). Only friends who signed up on or after the first-value launch date (`FIRST_VALUE_LAUNCH_AT` in `apps/client/server/analytics/funnel.ts`) qualify. Default 0 (off). | no. A free grant. | Signup and starter credits |
 | `preferenceArenaCreditsPerVote` | Growth and Pricing > Preference arena | The arena vote reward (`apps/client/server/preferenceArena/`), judged by `judgeArenaVote` in `b4m-core/common/src/preferenceArena.ts`. Default 0 (off). | no. A free grant. | Signup and starter credits |
 | `preferenceArenaDailyVoteCap` | Growth and Pricing > Preference arena | The same arena vote judge. Default 0 earns nothing. | no. A limit. | Usage limits |
 | `preferenceArenaLifetimeCreditCap` | Growth and Pricing > Preference arena | The same arena vote judge. Default 0 earns nothing. | no. A limit. | Usage limits |
-| `ReferralFirstPaymentCredits` | Growth and Pricing > Referral rewards for inviters | The reward held for the inviter on the invited friend's first full-price Professional payment (`packages/server-utils/src/referrals/subscriptionReward.ts`), locked when the payment is recorded. Payments made while both payment rewards are 0 are not counted, so after activation the next eligible payment takes the first step. Default 0 (off). | no. A free grant. | Signup and starter credits |
-| `ReferralSecondPaymentCredits` | Growth and Pricing > Referral rewards for inviters | The reward held for the inviter on the invited friend's second full-price Professional payment (`packages/server-utils/src/referrals/subscriptionReward.ts`), locked when the payment is recorded. Payments made while both payment rewards are 0 are not counted, so after activation the next eligible payment takes the first step. Default 0 (off). | no. A free grant. | Signup and starter credits |
-| `ReferralHoldDays` | Growth and Pricing > Referral rewards for inviters | Days a payment reward is held before the release job credits it (`packages/server-utils/src/referrals/subscriptionReward.ts`, `apps/workers/src/cron/referralRewardRelease.ts`). | no. A hold period. | Signup and starter credits |
-| `ReferralInvitesPerUser` | Growth and Pricing > Referral rewards for inviters | The starting invite count at registration (`register.ts`). New signups only. | no. A limit. | Usage limits |
-| `ReferralAlertRewardsPerDay` | Growth and Pricing > Referral rewards for inviters | The 24-hour reward-count alert in `packages/server-utils/src/referrals/firstAnswerReward.ts`, also checked when a held reward is released (`packages/server-utils/src/referrals/subscriptionReward.ts`). | no. An alert threshold. | Usage limits |
+| `ReferralFirstPaymentCredits` | Invite Center > Rewards | The reward held for the inviter on the invited friend's first full-price Professional payment (`packages/server-utils/src/referrals/subscriptionReward.ts`), locked when the payment is recorded. Payments made while both payment rewards are 0 are not counted, so after activation the next eligible payment takes the first step. Default 0 (off). | no. A free grant. | Signup and starter credits |
+| `ReferralSecondPaymentCredits` | Invite Center > Rewards | The reward held for the inviter on the invited friend's second full-price Professional payment (`packages/server-utils/src/referrals/subscriptionReward.ts`), locked when the payment is recorded. Payments made while both payment rewards are 0 are not counted, so after activation the next eligible payment takes the first step. Default 0 (off). | no. A free grant. | Signup and starter credits |
+| `ReferralHoldDays` | Invite Center > Rewards | Days a payment reward is held before the release job credits it (`packages/server-utils/src/referrals/subscriptionReward.ts`, `apps/workers/src/cron/referralRewardRelease.ts`). | no. A hold period. | Signup and starter credits |
+| `ReferralInvitesPerUser` | Invite Center > Rewards | The starting invite count at registration (`register.ts`). New signups only. | no. A limit. | Usage limits |
+| `ReferralAlertRewardsPerDay` | Invite Center > Rewards | The 24-hour reward-count alert in `packages/server-utils/src/referrals/firstAnswerReward.ts`, also checked when a held reward is released (`packages/server-utils/src/referrals/subscriptionReward.ts`). | no. An alert threshold. | Usage limits |
 | `blockDisposableEmails` | Admin Settings > User Management > Credits System | `shouldBlockDisposableEmail` (`b4m-core/services/src/userService/disposableEmail.ts`), called from registration, the email-verified grant (`apps/client/server/auth/emailVerifiedGrants.ts`) and the OAuth starting-grant backfill. | no. Stops free-credit farming. | Signup and starter credits |
 | `blockedEmailDomains` | Admin Settings > User Management > Credits System | `isAdminBlockedEmailDomain` inside `shouldBlockDisposableEmail` (`b4m-core/services/src/userService/disposableEmail.ts`), so the same readers as `blockDisposableEmails`. Entries are normalized and validated on save in `apps/client/pages/api/settings/update.ts`. | no. Stops free-credit farming from domains the disposable list misses. | Signup and starter credits |
 | `syntheticUserEmailDomains` | Admin Settings > User Management > Credits System | Funnel analytics (`apps/client/server/analytics/funnel.ts`), and the reserved `persona-` username check (`b4m-core/services/src/userService/reservedUsername.ts`), which lets a verified email on one of these domains choose that prefix. | no. Flags test accounts. | Signup and starter credits |
@@ -127,13 +127,12 @@ git grep -lw <key> -- ':!*.test.ts' ':!*.test.tsx' ':!**/__tests__/**' ':!**/__t
 ## Appendix: git grep results
 
 The full result of the command above for each key, as of this document's last update. The admin editor
-files (`AdminGrowthPricingTab.tsx`, `AdminSettingsTab.tsx`) appear because they name the keys they render.
+files (`AdminGrowthPricingTab.tsx`, `AdminSettingsTab.tsx`, `settingHomes.ts`) appear because they name the keys they render or route.
 
-<details><summary><code>allowOpenRegistration</code> (8 files)</summary>
+<details><summary><code>allowOpenRegistration</code> (7 files)</summary>
 
 - `apps/client/app/components/Register.tsx`
 - `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
-- `apps/client/app/components/admin/AdminSettingsTab.tsx`
 - `apps/client/app/routes/login.tsx`
 - `apps/client/pages/api/settings/serverConfigPublic.ts`
 - `apps/client/server/utils/auth/openRegistration.ts`
@@ -145,87 +144,91 @@ files (`AdminGrowthPricingTab.tsx`, `AdminSettingsTab.tsx`) appear because they 
 <details><summary><code>ReferralCreditsAmount</code> (5 files)</summary>
 
 - `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
-- `apps/client/app/components/admin/AdminSettingsTab.tsx`
 - `apps/client/app/components/referrals/ReferralModal.tsx`
 - `apps/client/pages/api/reg-invites/refer.ts`
 - `b4m-core/services/src/userService/register.ts`
+- `b4m-core/services/src/userService/registrationInvite.ts`
 
 </details>
 
-<details><summary><code>ReferralFirstAnswerCredits</code> (3 files)</summary>
+<details><summary><code>ReferralFirstAnswerCredits</code> (4 files)</summary>
 
 - `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
-- `apps/client/app/components/admin/AdminSettingsTab.tsx`
+- `apps/client/app/components/admin/settingHomes.ts`
+- `apps/client/server/referrals/inviterSummary.ts`
 - `packages/server-utils/src/referrals/firstAnswerReward.ts`
 
 </details>
 
-<details><summary><code>ReferralFirstPaymentCredits</code> (3 files)</summary>
+<details><summary><code>ReferralFirstPaymentCredits</code> (4 files)</summary>
 
 - `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
-- `apps/client/app/components/admin/AdminSettingsTab.tsx`
+- `apps/client/app/components/admin/settingHomes.ts`
+- `apps/client/server/referrals/inviterSummary.ts`
 - `packages/server-utils/src/referrals/subscriptionReward.ts`
 
 </details>
 
-<details><summary><code>ReferralSecondPaymentCredits</code> (3 files)</summary>
+<details><summary><code>ReferralSecondPaymentCredits</code> (4 files)</summary>
 
 - `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
-- `apps/client/app/components/admin/AdminSettingsTab.tsx`
+- `apps/client/app/components/admin/settingHomes.ts`
+- `apps/client/server/referrals/inviterSummary.ts`
 - `packages/server-utils/src/referrals/subscriptionReward.ts`
 
 </details>
 
-<details><summary><code>ReferralHoldDays</code> (3 files)</summary>
+<details><summary><code>ReferralHoldDays</code> (2 files)</summary>
 
-- `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
-- `apps/client/app/components/admin/AdminSettingsTab.tsx`
+- `apps/client/app/components/admin/settingHomes.ts`
 - `packages/server-utils/src/referrals/subscriptionReward.ts`
 
 </details>
 
-<details><summary><code>ReferralInvitesPerUser</code> (3 files)</summary>
+<details><summary><code>ReferralInvitesPerUser</code> (2 files)</summary>
 
-- `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
-- `apps/client/app/components/admin/AdminSettingsTab.tsx`
+- `apps/client/app/components/admin/settingHomes.ts`
 - `b4m-core/services/src/userService/register.ts`
 
 </details>
 
-<details><summary><code>ReferralAlertRewardsPerDay</code> (4 files)</summary>
+<details><summary><code>ReferralAlertRewardsPerDay</code> (3 files)</summary>
 
-- `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
-- `apps/client/app/components/admin/AdminSettingsTab.tsx`
+- `apps/client/app/components/admin/settingHomes.ts`
 - `packages/server-utils/src/referrals/firstAnswerReward.ts`
 - `packages/server-utils/src/referrals/subscriptionReward.ts`
 
 </details>
 
-<details><summary><code>blockDisposableEmails</code> (1 file)</summary>
+<details><summary><code>blockDisposableEmails</code> (2 files)</summary>
 
 - `b4m-core/services/src/userService/disposableEmail.ts`
+- `b4m-core/services/src/userService/refreshSignupRiskScore.ts`
 
 </details>
 
-<details><summary><code>syntheticUserEmailDomains</code> (2 files)</summary>
+<details><summary><code>syntheticUserEmailDomains</code> (6 files)</summary>
 
 - `apps/client/server/analytics/funnel.ts`
+- `apps/client/server/analytics/signupCohort.ts`
+- `b4m-core/common/src/utils/syntheticIdentity.ts`
 - `b4m-core/services/src/userService/reservedUsername.ts`
+- `b4m-core/services/src/userService/signupProtection.ts`
+- `packages/scripts/migrate/migrations/20260921238100_backfill-user-lane-flags.ts`
 
 </details>
 
-<details><summary><code>pricePerCredit</code> (6 files)</summary>
+<details><summary><code>pricePerCredit</code> (5 files)</summary>
 
 - `apps/client/app/components/Credits/PaymentButton.tsx`
 - `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
-- `apps/client/app/components/admin/AdminSettingsTab.tsx`
 - `apps/client/lib/credits/utils.ts`
 - `apps/client/pages/api/settings/update.ts`
 - `b4m-core/common/src/pricing.ts`
 
 </details>
 
-<details><summary><code>enforceCredits</code> (62 files)</summary>
+<details><summary><code>enforceCredits</code> (77 files)</summary>
 
 - `apps/client/app/components/Credits/GenerationPayerNote.tsx`
 - `apps/client/app/components/CreditsModal/CreditsModal.tsx`
@@ -235,6 +238,7 @@ files (`AdminGrowthPricingTab.tsx`, `AdminSettingsTab.tsx`) appear because they 
 - `apps/client/app/components/Session/CreditButton.tsx`
 - `apps/client/app/components/Session/CreditPayerNote.tsx`
 - `apps/client/app/components/Session/MessageContent.tsx`
+- `apps/client/app/components/Session/ModelSelection.tsx`
 - `apps/client/app/components/Session/NewUserWelcome.tsx`
 - `apps/client/app/components/Session/SessionBottom/SessionBottom.tsx`
 - `apps/client/app/components/Session/SessionBottom/composerCreditUi.ts`
@@ -243,7 +247,6 @@ files (`AdminGrowthPricingTab.tsx`, `AdminSettingsTab.tsx`) appear because they 
 - `apps/client/app/components/Session/newUserWelcomeModel.ts`
 - `apps/client/app/components/Session/useAffordableModelOffer.ts`
 - `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
-- `apps/client/app/components/admin/AdminSettingsTab.tsx`
 - `apps/client/app/components/inbox/Invites.tsx`
 - `apps/client/app/components/layouts/Notebook/Sidenav/ProfileMenu.tsx`
 - `apps/client/app/components/subscription/BillingDeepLinkModals.tsx`
@@ -251,14 +254,22 @@ files (`AdminGrowthPricingTab.tsx`, `AdminSettingsTab.tsx`) appear because they 
 - `apps/client/app/hooks/data/stripe.ts`
 - `apps/client/app/routes/subscriptions/checkout.tsx`
 - `apps/client/app/utils/validateChatInput.ts`
+- `apps/client/pages/api/admin/users/[userId]/credit-summary.ts`
 - `apps/client/pages/api/ai/music.ts`
 - `apps/client/pages/api/ai/sound-effects.ts`
 - `apps/client/pages/api/ai/test-realtime-voice.ts`
 - `apps/client/pages/api/ai/voice-sessions/index.ts`
 - `apps/client/pages/api/blog/generate-featured-image.ts`
+- `apps/client/pages/api/settings/fetch.ts`
+- `apps/client/pages/api/settings/update.ts`
+- `apps/client/pages/api/v1/client-config.ts`
 - `apps/client/pages/api/v1/embeddings.ts`
 - `apps/client/pages/api/v1/voice/sessions/[id]/end.ts`
 - `apps/client/pages/api/v1/voice/sessions/index.ts`
+- `apps/client/server/adminAssistant/tools/getSetting.ts`
+- `apps/client/server/agents/authoring/generateAgentAvatar.ts`
+- `apps/client/server/billing/billedWebTools.ts`
+- `apps/client/server/billing/freeTierDailyCapGate.ts`
 - `apps/client/server/billing/meterPlatformCompletion.ts`
 - `apps/client/server/billing/reserveRequestCredits.ts`
 - `apps/client/server/chatCompletion/external/embedRoute.ts`
@@ -270,14 +281,19 @@ files (`AdminGrowthPricingTab.tsx`, `AdminSettingsTab.tsx`) appear because they 
 - `apps/client/server/websocket/voiceSessionEnded.ts`
 - `apps/workers/src/queueHandlers/agentExecutor.billing.ts`
 - `apps/workers/src/queueHandlers/agentExecutor.iterationCreditGate.ts`
+- `apps/workers/src/queueHandlers/agentExecutor.roundOutputCap.ts`
 - `apps/workers/src/queueHandlers/agentExecutor.ts`
+- `apps/workers/src/queueHandlers/fabFileVectorize.ts`
 - `b4m-core/services/src/billing/assertKeySpendWithinCap.ts`
 - `b4m-core/services/src/billing/assertOwnerHasCredits.ts`
 - `b4m-core/services/src/billing/isOperationalBillingEnabled.ts`
 - `b4m-core/services/src/billing/recordOperationalUsage.ts`
 - `b4m-core/services/src/cliCompletions.ts`
+- `b4m-core/services/src/creditService/newAccountSpendCap.ts`
 - `b4m-core/services/src/dataLakeResearchService/startResearchRun.ts`
 - `b4m-core/services/src/generationJobs/createJob.ts`
+- `b4m-core/services/src/imageJobs/createImageJobs.ts`
+- `b4m-core/services/src/imageJobs/types.ts`
 - `b4m-core/services/src/llm/ChatCompletionInvoke.ts`
 - `b4m-core/services/src/llm/ChatCompletionProcess.ts`
 - `b4m-core/services/src/llm/ImageEdit.ts`
@@ -289,12 +305,14 @@ files (`AdminGrowthPricingTab.tsx`, `AdminSettingsTab.tsx`) appear because they 
 - `b4m-core/services/src/videoJobs/createVideoJob.ts`
 - `b4m-core/services/src/videoJobs/types.ts`
 - `b4m-core/slack/src/constants/slack-model-options.ts`
+- `b4m-core/utils/src/settings.ts`
+- `packages/database/src/models/infra/ops/AdminSettingsModel.ts`
 
 </details>
 
 <details><summary><code>billOperationalUsage</code> (4 files)</summary>
 
-- `apps/workers/src/dataLakes/runLakeResearch.ts` (mentions the key only in a comment)
+- `apps/workers/src/dataLakes/runLakeResearch.ts`
 - `b4m-core/common/src/types/entities/UsageEventTypes.ts`
 - `b4m-core/services/src/billing/isOperationalBillingEnabled.ts`
 - `b4m-core/services/src/billing/recordOperationalUsage.ts`
@@ -303,64 +321,60 @@ files (`AdminGrowthPricingTab.tsx`, `AdminSettingsTab.tsx`) appear because they 
 
 <details><summary><code>HardwareComputeCreditsPerUsd</code> (0 files)</summary>
 
-No match outside the definition and tests.
 
 </details>
 
 <details><summary><code>SimulatorComputeCreditsPerRound</code> (0 files)</summary>
 
-No match outside the definition and tests.
 
 </details>
 
-<details><summary><code>enableTeamPlan</code> (5 files)</summary>
+<details><summary><code>enableTeamPlan</code> (6 files)</summary>
 
 - `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
-- `apps/client/app/components/admin/AdminSettingsTab.tsx`
 - `apps/client/app/hooks/data/teamPlanSettings.ts`
+- `apps/client/lib/checkoutCatalog.ts`
 - `apps/client/pages/api/organizations/subscriptions/subscribe.ts`
+- `apps/client/server/utils/clientConfigFeatures.ts`
 - `packages/server-utils/src/lib/subscriptions/constants.ts`
 
 </details>
 
-<details><summary><code>teamPlanMinSeats</code> (8 files)</summary>
+<details><summary><code>teamPlanMinSeats</code> (7 files)</summary>
 
 - `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
-- `apps/client/app/components/admin/AdminSettingsTab.tsx`
 - `apps/client/app/hooks/data/teamPlanSettings.ts`
-- `packages/server-utils/src/lib/subscriptions/schema.ts`
-- `apps/client/pages/api/admin/users/[userId]/grant-subscription.ts`
-- `packages/server-utils/src/services/organizationService.ts`
+- `apps/client/server/admin/creditGrants/grantSubscription.ts`
 - `b4m-core/common/src/constants/organization.ts`
 - `b4m-core/common/src/utils/teamPlanSettings.ts`
+- `packages/server-utils/src/lib/subscriptions/schema.ts`
+- `packages/server-utils/src/services/organizationService.ts`
 
 </details>
 
-<details><summary><code>teamPlanMaxSeats</code> (16 files)</summary>
+<details><summary><code>teamPlanMaxSeats</code> (15 files)</summary>
 
 - `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
-- `apps/client/app/components/admin/AdminSettingsTab.tsx`
 - `apps/client/app/components/admin/OrganizationsTab.tsx`
 - `apps/client/app/hooks/data/teamPlanSettings.ts`
-- `packages/server-utils/src/lib/subscriptions/schema.ts`
 - `apps/client/pages/api/admin/organizations/[id]/convert-to-paid.ts`
 - `apps/client/pages/api/admin/organizations/[id]/seats.ts`
-- `apps/client/pages/api/admin/organizations/grant.ts`
 - `apps/client/pages/api/admin/partner-signup-rules/backfill.ts`
-- `apps/client/pages/api/admin/users/[userId]/grant-subscription.ts`
-- `packages/server-utils/src/services/organizationService.ts`
+- `apps/client/server/admin/creditGrants/grantOrg.ts`
+- `apps/client/server/admin/creditGrants/grantSubscription.ts`
 - `b4m-core/common/src/constants/organization.ts`
 - `b4m-core/common/src/types/entities/OrganizationTypes.ts`
 - `b4m-core/common/src/utils/teamPlanSettings.ts`
 - `b4m-core/services/src/organizationService/applyPartnerRuleMembership.ts`
 - `packages/database/src/models/infra/admin/OrganizationModel.ts`
+- `packages/server-utils/src/lib/subscriptions/schema.ts`
+- `packages/server-utils/src/services/organizationService.ts`
 
 </details>
 
-<details><summary><code>teamPlanCreditsPerSeat</code> (5 files)</summary>
+<details><summary><code>teamPlanCreditsPerSeat</code> (4 files)</summary>
 
 - `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
-- `apps/client/app/components/admin/AdminSettingsTab.tsx`
 - `apps/client/app/hooks/data/teamPlanSettings.ts`
 - `b4m-core/common/src/constants/organization.ts`
 - `b4m-core/common/src/utils/teamPlanSettings.ts`
@@ -374,10 +388,10 @@ No match outside the definition and tests.
 - `apps/client/app/components/Session/CreditButton.tsx`
 - `apps/client/app/components/Session/SessionBottom/SessionBottom.tsx`
 - `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
-- `apps/client/app/components/admin/AdminSettingsTab.tsx`
 - `apps/client/app/components/subscription/BillingModal.tsx`
 - `apps/client/app/constants/agentForm.ts`
 - `apps/client/app/hooks/data/teamPlanSettings.ts`
+- `apps/client/pages/api/v1/client-config.ts`
 - `b4m-core/common/src/utils/teamPlanSettings.ts`
 
 </details>

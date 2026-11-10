@@ -27,6 +27,7 @@ import {
   type AdminSearch,
 } from './adminTabParams';
 import { useAdminModal } from './useAdminModal';
+import { useOpenSettingHome } from './useOpenSettingHome';
 import { useCreditAnalysisStore } from './CreditAnalysis/store';
 import { SettingsDraftProvider } from './SettingsDraftProvider';
 import { AdminPageHeader, ErrorState, LoadingState, SettingsSection } from './shared';
@@ -35,8 +36,7 @@ import { ADMIN_DETAIL_MAX_WIDTH, ADMIN_REGION_GAP } from './shared/adminStyles';
 /**
  * The growth and monetization knobs, grouped on one page so they can be tuned without hunting
  * through Admin Settings. Storage is the ordinary admin-settings collection. This tab is the only
- * editor for these keys (GROWTH_PRICING_ONLY_KEYS in AdminSettingsTab, whose Credits System group
- * links here).
+ * editor for these keys (the growth-pricing home in settingHomes.ts; Admin Settings links here).
  * docs/pricing-settings-inventory.md lists every key in this area; update it when a key moves.
  */
 export const GROWTH_PRICING_SECTIONS: ReadonlyArray<{
@@ -50,20 +50,6 @@ export const GROWTH_PRICING_SECTIONS: ReadonlyArray<{
     title: 'Signup and starter credits',
     description: 'Who can sign up on their own, and what a referred user starts with.',
     keys: ['allowOpenRegistration', 'ReferralCreditsAmount'],
-  },
-  {
-    id: 'referral-rewards',
-    title: 'Referral rewards for inviters',
-    description:
-      'What an inviter earns when an invited friend becomes active or subscribes, plus the hold, starting-invite and alert settings. The starting-invite count, first-answer reward, payment rewards (held for the hold period, then released) and alert are all active today; a reward amount of 0 turns that reward off.',
-    keys: [
-      'ReferralFirstAnswerCredits',
-      'ReferralFirstPaymentCredits',
-      'ReferralSecondPaymentCredits',
-      'ReferralHoldDays',
-      'ReferralInvitesPerUser',
-      'ReferralAlertRewardsPerDay',
-    ],
   },
   {
     id: 'credits',
@@ -131,6 +117,13 @@ export const GROWTH_PRICING_LINKS = [
     description: 'Per-minute request limits for each subscription tier. Edited in Admin Settings.',
     linkLabel: `Open ${API_SERVICE_GROUPS.RATE_LIMITING.name} settings`,
   },
+  {
+    id: 'invite-center-rewards',
+    title: 'Referral rewards for inviters',
+    description:
+      'What an inviter earns when an invited friend becomes active or subscribes, plus the hold, starting-invite and alert settings. Edited in the Invite Center.',
+    linkLabel: 'Open Invite Center rewards',
+  },
 ] as const;
 
 type GrowthPricingLinkId = (typeof GROWTH_PRICING_LINKS)[number]['id'];
@@ -182,6 +175,7 @@ const AdminGrowthPricingTab = () => {
   const navigate = useNavigate();
   const setAdminTab = useAdminModal(state => state.setActiveTab);
   const setCreditAnalysisTab = useCreditAnalysisStore(state => state.setActiveTab);
+  const openSettingHome = useOpenSettingHome();
 
   // Already inside /admin, so each link is an in-console navigation, as in ModelLifecycleTab.
   const openLink: Record<GrowthPricingLinkId, () => void> = {
@@ -201,6 +195,7 @@ const AdminGrowthPricingTab = () => {
         }),
         replace: true,
       }),
+    'invite-center-rewards': () => openSettingHome({ inviteSection: 'rewards' }),
   };
 
   const storedByKey = useMemo(() => {
