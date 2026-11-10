@@ -104,7 +104,7 @@ describe('buildSignupGrantPending', () => {
 
   it('reports the invite and its bonus: undecided, settled with none, paid, or no invite at all', () => {
     const referral = { source: 'referral' as const, inviteId: 'inv-1', at: new Date('2026-11-01T00:00:00Z') };
-    expect(build({ signupGrant: grant(), signupInvite: referral, tags: [] }).invite).toEqual({
+    expect(build({ signupGrant: grant({ stage: 'pending_email' }), signupInvite: referral, tags: [] }).invite).toEqual({
       source: 'referral',
       bonusPaid: null,
     });
@@ -131,16 +131,24 @@ describe('buildSignupGrantPending', () => {
       policyVersion: null,
       status: 'evaluated',
     });
+    const paidOut = grant({ stage: 'unlocked', unlockedBy: 'verification', creditsReleased: 1000 });
     for (const user of [
       { signupInvite: referral, tags: [] },
       { signupGrant: forfeited, signupInvite: referral, tags: [] },
       { signupGrant: grant(), signupGrantAssessment: assessment(40), signupInvite: referral, tags: [] },
+      { signupGrant: grant(), signupInvite: referral, tags: [] },
+      { signupGrant: paidOut, signupGrantAssessment: assessment(100), signupInvite: referral, tags: [] },
     ]) {
       expect(build(user).invite).toEqual({ source: 'referral', bonusPaid: 0 });
     }
     expect(
       build({ signupGrant: grant(), signupGrantAssessment: assessment(100), signupInvite: referral, tags: [] }).invite
     ).toEqual({ source: 'referral', bonusPaid: null });
+    const organization = { ...referral, source: 'organization' as const, organizationId: 'org-1' };
+    expect(
+      build({ signupGrant: paidOut, signupGrantAssessment: assessment(100), signupInvite: organization, tags: [] })
+        .invite
+    ).toEqual({ source: 'organization', bonusPaid: null });
   });
 
   it('answers an account with no grant: nothing pending and every action explains itself', () => {

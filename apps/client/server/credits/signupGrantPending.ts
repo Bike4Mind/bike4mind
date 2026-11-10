@@ -36,11 +36,16 @@ const actionState = (verdict: userService.SignupGrantActionClass, permitted: boo
  * States isInviteBonusEligible (b4m-core/services/src/userService/inviteBonus.ts) refuses for good: no later
  * release can pay the bonus, so the panel reports it settled with none rather than pending.
  */
-const inviteBonusUnpayable = ({
-  signupGrant: grant,
-  signupGrantAssessment: assessment,
-}: SignupGrantPendingInput['user']) =>
-  !grant || !!grant.unlockForfeited || (!!assessment && assessment.credits !== grant.signupCredits);
+const inviteBonusUnpayable = (
+  { signupGrant: grant, signupGrantAssessment: assessment, signupInvite: invite }: SignupGrantPendingInput['user'],
+  dripCap: number
+) => {
+  if (!grant || grant.unlockForfeited) return true;
+  if (!assessment) return grant.stage !== 'pending_email';
+  if (assessment.credits !== grant.signupCredits) return true;
+  // A referral bonus is retried only by a later paying release; orgInviteBonus.ts retries an organization one.
+  return invite?.source !== 'organization' && !signupGrantDripOpen(grant) && signupGrantRemaining(grant, dripCap) === 0;
+};
 
 /**
  * Everything the profile pending panel shows, read from the account and the live schedule only. Each action's
@@ -98,7 +103,7 @@ export function buildSignupGrantPending({
     invite: user.signupInvite
       ? {
           source: user.signupInvite.source,
-          bonusPaid: grant?.inviteBonusPaid ?? (inviteBonusUnpayable(user) ? 0 : null),
+          bonusPaid: grant?.inviteBonusPaid ?? (inviteBonusUnpayable(user, schedule.dripCap) ? 0 : null),
         }
       : null,
     actions: {
