@@ -31,8 +31,9 @@ export function useAgentAnnouncements(
   agents: readonly AgentView[],
   nameOf: (agent: AgentView) => string,
   debounceMs: number = ANNOUNCE_DEBOUNCE_MS
-): string {
-  const [message, setMessage] = useState('');
+): { key: number; text: string } {
+  // Keyed by flush so a repeat of the same text still changes the DOM and is spoken again.
+  const [spoken, setSpoken] = useState({ key: 0, text: '' });
   const known = useRef<Map<string, AgentState> | null>(null);
   // Keyed by agent so one that flips twice in a burst is spoken once, in its latest state.
   const pending = useRef(new Map<string, string>());
@@ -44,24 +45,34 @@ export function useAgentAnnouncements(
     if (!previous) return;
     let changed = false;
     for (const agent of agents) {
-      const from = previous.get(agent.id);
-      if (from === undefined || from === agent.state) continue;
-      changed = true;
-      const spoken = stateAnnouncement(nameOf(agent), from, agent.state);
-      if (spoken) pending.current.set(agent.id, spoken);
+      // An agent that first shows up already needing you or failed is news; one that arrives done is not.
+      const from = previous.get(agent.id) ?? (agent.state === 'done' ? 'done' : 'idle');
+      if (from === agent.state) continue;
+      const text = stateAnnouncement(nameOf(agent), from, agent.state);
+      const before = pending.current.get(agent.id);
+      if (text) pending.current.set(agent.id, text);
       else pending.current.delete(agent.id);
+      if (pending.current.get(agent.id) !== before) changed = true;
     }
-    // Activity ticks re-render without a state change; they must not keep pushing the message back.
+    for (const id of pending.current.keys()) {
+      if (!known.current.has(id)) {
+        pending.current.delete(id);
+        changed = true;
+      }
+    }
+    // Only a change to what will be spoken restarts the wait: activity ticks and silent moves must not
+    // keep pushing a pending message back.
     if (!changed) return;
     window.clearTimeout(timer.current);
     if (pending.current.size === 0) return;
     timer.current = window.setTimeout(() => {
-      setMessage(joinAnnouncements([...pending.current.values()]));
+      const text = joinAnnouncements([...pending.current.values()]);
       pending.current.clear();
+      setSpoken(last => ({ key: last.key + 1, text }));
     }, debounceMs);
   }, [agents, nameOf, debounceMs]);
 
   useEffect(() => () => window.clearTimeout(timer.current), []);
 
-  return message;
+  return spoken;
 }

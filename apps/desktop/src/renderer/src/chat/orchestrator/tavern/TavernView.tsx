@@ -58,6 +58,8 @@ const VISUALLY_HIDDEN = {
 // Not a session id shape, so it never collides with an agent in the label layout.
 const INNKEEPER_KEY = ' innkeeper';
 const INNKEEPER_NAME = 'Innkeeper';
+const withPersona = (persona: { label: string } | undefined, title: string) =>
+  persona ? `${persona.label}: ${title}` : title;
 const STACK_KEY = ' stack-';
 /** Shortest visit (ms): the walk over plus a moment beside the agent, however quick the read was. */
 const VISIT_HOLD_MS = 2400;
@@ -361,7 +363,7 @@ function Sprite({
   const bubble = bubbleText(agent);
   const displayName = persona?.label ?? agent.title;
   const viaSuffix = via ? ` \u00B7 via ${via}` : '';
-  const fullName = `${persona ? `${persona.label}: ${agent.title}` : agent.title}${viaSuffix}`;
+  const fullName = `${withPersona(persona, agent.title)}${viaSuffix}`;
   const tooltip = `${persona ? `${persona.label}: ${persona.shortTitle}` : agent.title}${viaSuffix}`;
   return (
     <Box
@@ -618,7 +620,7 @@ export function TavernView({
     stack.stacked[placement.index] = {
       agent,
       character: characters.get(agent.id) ?? 1,
-      name: persona ? `${persona.label}: ${agent.title}` : agent.title,
+      name: withPersona(persona, agent.title),
     };
     stacks.set(placement.zone, stack);
   }
@@ -688,7 +690,7 @@ export function TavernView({
         {summary}
       </Box>
       <Box data-testid="orchestrator-tavern-announcer" aria-live="polite" aria-atomic sx={VISUALLY_HIDDEN}>
-        {announcement}
+        <span key={announcement.key}>{announcement.text}</span>
       </Box>
       {/* Quiet, the room spills past its frame: a soft, dim copy of it fills the bars around the picture. */}
       <Box

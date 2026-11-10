@@ -714,4 +714,68 @@ describe('TavernView screen reader announcements', () => {
       vi.useRealTimers();
     }
   });
+
+  it('speaks the same announcement again when it repeats', async () => {
+    vi.useFakeTimers();
+    try {
+      const start = [agentFixture('a', 'working')];
+      const name = assignPersonas(start).get('a')?.label;
+      await renderTavern(start);
+      await renderTavern([agentFixture('a', 'done')]);
+      await act(async () => vi.advanceTimersByTime(ANNOUNCE_DEBOUNCE_MS));
+      const first = announcer().firstElementChild;
+      expect(announcer().textContent).toBe(`${name} finished.`);
+      await renderTavern(start);
+      await renderTavern([agentFixture('a', 'done')]);
+      await act(async () => vi.advanceTimersByTime(ANNOUNCE_DEBOUNCE_MS));
+      expect(announcer().textContent).toBe(`${name} finished.`);
+      expect(announcer().firstElementChild).not.toBe(first);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('announces an agent that arrives already needing you', async () => {
+    vi.useFakeTimers();
+    try {
+      const roster = [agentFixture('a', 'working'), agentFixture('b', 'needs-you')];
+      const name = assignPersonas(roster).get('b')?.label;
+      await renderTavern([roster[0]]);
+      await renderTavern(roster);
+      await act(async () => vi.advanceTimersByTime(ANNOUNCE_DEBOUNCE_MS));
+      expect(announcer().textContent).toBe(`${name} needs you.`);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not let silent state changes hold a pending announcement back', async () => {
+    vi.useFakeTimers();
+    try {
+      const start = [agentFixture('a', 'working'), agentFixture('b', 'working')];
+      const name = assignPersonas(start).get('a')?.label;
+      await renderTavern(start);
+      await renderTavern([agentFixture('a', 'needs-you'), start[1]]);
+      await act(async () => vi.advanceTimersByTime(ANNOUNCE_DEBOUNCE_MS - 100));
+      await renderTavern([agentFixture('a', 'needs-you'), agentFixture('b', 'idle')]);
+      await act(async () => vi.advanceTimersByTime(100));
+      expect(announcer().textContent).toBe(`${name} needs you.`);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('drops a pending announcement for an agent that left the roster', async () => {
+    vi.useFakeTimers();
+    try {
+      const start = [agentFixture('a', 'working'), agentFixture('b', 'working')];
+      await renderTavern(start);
+      await renderTavern([agentFixture('a', 'needs-you'), start[1]]);
+      await renderTavern([start[1]]);
+      await act(async () => vi.advanceTimersByTime(ANNOUNCE_DEBOUNCE_MS * 2));
+      expect(announcer().textContent).toBe('');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
