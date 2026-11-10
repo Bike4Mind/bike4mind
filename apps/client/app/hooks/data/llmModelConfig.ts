@@ -1,67 +1,36 @@
 import { api } from '@client/app/contexts/ApiContext';
-import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { toast } from 'sonner';
+import { useQuery } from '@tanstack/react-query';
 import { useMemo } from 'react';
-import { LLMModelConfig, ModelInfo } from '@bike4mind/common';
+import { LLMModelConfig, MODEL_ACCESS_REVISION_HEADER, ModelInfo } from '@bike4mind/common';
 import { BASE_ENTITLEMENT_KEY } from '@bike4mind/server-utils/lib/entitlements/registry';
 
-/**
- * Hook to fetch LLM model configurations from admin settings
- */
+export const LLM_MODEL_CONFIGURATIONS_QUERY_KEY = ['llm-model-configurations'] as const;
+
+/** The access entries plus the access revision they were read under (modelAccessRevision.ts compares it). */
+export type LLMModelConfigurationsData = { configurations: LLMModelConfig[]; revision: string | null };
+
+/** Model access entries. Writes go through the per-model and bulk access endpoints (hooks/data/adminModels.ts). */
 export function useLLMModelConfigurations() {
   return useQuery({
-    queryKey: ['llm-model-configurations'],
-    queryFn: async () => {
+    queryKey: LLM_MODEL_CONFIGURATIONS_QUERY_KEY,
+    queryFn: async (): Promise<LLMModelConfigurationsData> => {
       try {
         const response = await api.get<{ settingValue: LLMModelConfig[] }>(`/api/admin/llm-models/configurations`);
-        return response.data?.settingValue || [];
+        const revision = response.headers?.[MODEL_ACCESS_REVISION_HEADER];
+        return {
+          configurations: response.data?.settingValue || [],
+          revision: typeof revision === 'string' && revision.length > 0 ? revision : null,
+        };
       } catch (error) {
         // If setting doesn't exist yet, return empty array
-        return [];
+        return { configurations: [], revision: null };
       }
     },
+    select: (data: LLMModelConfigurationsData) => data.configurations,
     staleTime: 1000 * 30, // 30 seconds - reduced from 5 minutes for quicker updates
     refetchOnReconnect: true,
     refetchOnWindowFocus: true,
     refetchOnMount: false,
-  });
-}
-
-/**
- * Hook to save LLM model configurations to admin settings
- */
-export function useSaveLLMModelConfigurations(onSuccessCallback?: () => void) {
-  const queryClient = useQueryClient();
-  const { refetch: refetchAdminSettings } = useAdminSettings();
-
-  return useMutation({
-    mutationFn: async (configurations: LLMModelConfig[]) => {
-      const { data } = await api.put(`/api/admin/llm-models/configurations`, {
-        configurations,
-      });
-      return data;
-    },
-    onSuccess: async () => {
-      // Force immediate refetch of configurations
-      queryClient.invalidateQueries({ queryKey: ['llm-model-configurations'] });
-      queryClient.refetchQueries({ queryKey: ['llm-model-configurations'] });
-      queryClient.invalidateQueries({ queryKey: ['adminsettings'] });
-
-      // Also refetch AdminSettingsContext to ensure UI updates immediately
-      try {
-        await refetchAdminSettings();
-      } catch (error) {
-        console.warn('Failed to refetch admin settings context:', error);
-      }
-
-      toast.success('LLM model configurations saved successfully');
-      onSuccessCallback?.();
-    },
-    onError: (error: any) => {
-      console.log(JSON.stringify(error, null, 2));
-      toast.error(`Failed to save configurations: ${error?.message || 'Unknown error'}`);
-    },
   });
 }
 

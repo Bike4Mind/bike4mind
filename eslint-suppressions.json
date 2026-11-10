@@ -789,11 +789,6 @@
       "count": 2
     }
   },
-  "apps/client/app/hooks/data/llmModelConfig.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
   "apps/client/app/hooks/data/mfa.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 4
