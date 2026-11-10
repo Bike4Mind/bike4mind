@@ -12,7 +12,7 @@ export const FILE_EMBEDDING_USER_BUDGET_PER_WINDOW_USD_MAX = 1_000;
 /**
  * Embedded tokens a single user may send per window. Metered beside the USD budget because the
  * USD estimate is model-priced: a model with no listed price meters as free, and tokens are what
- * become stored vectors either way. 5M tokens is roughly 10K passages at the default chunk size.
+ * become stored vectors either way.
  */
 export const FILE_EMBEDDING_USER_TOKENS_PER_WINDOW_DEFAULT = 5_000_000;
 export const FILE_EMBEDDING_USER_TOKENS_PER_WINDOW_MAX = 1_000_000_000;

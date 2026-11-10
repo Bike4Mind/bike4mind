@@ -69,7 +69,8 @@ const h = vi.hoisted(() => ({
     owner: { type: 'user', id: 'owner-1' } as { type: string; id: string } | undefined,
   })),
   releaseOwnerEmbeddingSpend: vi.fn(async () => undefined),
-  enforceFileEmbeddingSpendWindow: vi.fn(async () => undefined),
+  fileWindowRelease: vi.fn(async () => undefined),
+  enforceFileEmbeddingSpendWindow: vi.fn(),
   FileEmbeddingSpendDeniedError: class FileEmbeddingSpendDeniedError extends Error {
     constructor(message: string) {
       super(message);
@@ -165,6 +166,7 @@ vi.mock('@bike4mind/services', () => ({
   fileEmbeddingService: {
     enforceFileEmbeddingSpendWindow: h.enforceFileEmbeddingSpendWindow,
     FileEmbeddingSpendDeniedError: h.FileEmbeddingSpendDeniedError,
+    FileEmbeddingLimitResolutionError: class FileEmbeddingLimitResolutionError extends Error {},
   },
   scopedSettingsService: { resolveScopedSetting: vi.fn(), scopeForLake: vi.fn() },
 }));
@@ -1674,6 +1676,44 @@ describe('fabFileVectorize handler - credit billing outside a data lake', () => 
     h.reserveRequestCredits.mockResolvedValue({ refund: h.reservationRefund, settle: h.reservationSettle });
     h.reservationSettle.mockResolvedValue(1);
     h.deferFailureIfRetryable.mockReset().mockResolvedValue(false);
+    h.enforceFileEmbeddingSpendWindow.mockResolvedValue({ release: h.fileWindowRelease });
+  });
+
+  it('gives the window reservation back when the provider call fails', async () => {
+    h.getVector.mockRejectedValueOnce(new Error('provider 503'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow('provider 503');
+
+    expect(h.fileWindowRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives the window reservation back when the holder cannot cover the credit hold', async () => {
+    h.reserveRequestCredits.mockRejectedValueOnce(new Error('insufficient credits'));
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger).catch(() => undefined);
+
+    expect(h.fileWindowRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the window reservation once the embedding succeeded', async () => {
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.fileWindowRelease).not.toHaveBeenCalled();
+  });
+
+  it('stores user-safe copy when the window limits cannot be read on the last delivery', async () => {
+    const { fileEmbeddingService } = await import('@bike4mind/services');
+    h.enforceFileEmbeddingSpendWindow.mockRejectedValueOnce(
+      new fileEmbeddingService.FileEmbeddingLimitResolutionError('could not resolve file embedding limits')
+    );
+    h.markFailedIfNotAlready.mockResolvedValue(true);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger).catch(() => undefined);
+
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledWith(
+      'ff1',
+      'File indexing is temporarily unavailable. Re-index the file to try again.'
+    );
   });
 
   it("reserves the uploader's file embedding window before any credit hold", async () => {

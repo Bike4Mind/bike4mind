@@ -361,6 +361,16 @@ describe('CacheRepository.releaseFromFixedWindow', () => {
     await cacheRepository.releaseFromFixedWindow(key, 15);
     expect(((await Cache.findOne({ key }))?.result as { count: number }).count).toBe(40);
   });
+
+  it('gives an amount back to a live window so it can be granted again', async () => {
+    const key = `release:${Date.now()}-5`;
+    await cacheRepository.tryAddWithinLimitFixedWindow(key, 8, 10, windowMs);
+
+    await cacheRepository.releaseFromFixedWindow(key, 5);
+
+    const regranted = await cacheRepository.tryAddWithinLimitFixedWindow(key, 7, 10, windowMs);
+    expect(regranted).toMatchObject({ success: true, count: 10 });
+  });
 });
 
 describe('CacheRepository leases', () => {

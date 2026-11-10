@@ -35,7 +35,7 @@ export interface FileEmbeddingLimits {
 
 export interface FileEmbeddingWindowDb {
   adminSettings: Pick<IAdminSettingsRepository, 'findBySettingNames' | 'findAll'>;
-  cache: Pick<ICacheRepository, 'tryAddWithinLimitFixedWindow'>;
+  cache: Pick<ICacheRepository, 'tryAddWithinLimitFixedWindow' | 'releaseFromFixedWindow'>;
 }
 
 /** The settings could not be read or hold an invalid value. Not a denial: the caller retries. */
@@ -44,6 +44,10 @@ export class FileEmbeddingLimitResolutionError extends Error {
     super(message, options);
     this.name = 'FileEmbeddingLimitResolutionError';
   }
+}
+
+export interface FileEmbeddingWindowGrant {
+  release: () => Promise<void>;
 }
 
 export type FileEmbeddingDenialReason = 'paused' | 'exhausted' | 'oversized';
@@ -137,9 +141,10 @@ export async function resolveFileEmbeddingLimits(
  * whether or not the embedding is billed to the user; the lake path has its own gate
  * (`dataLakeService.enforceEmbeddingSpendGate`).
  *
- * A grant is never released: a provider failure after the grant still counts, as the lake gate's
- * period window does. When the tokens window grants and the USD window then denies, the token
- * reservation also stays; the call is already refused, so that only brings the reset forward.
+ * Returns a grant whose `release` gives both reservations back; the caller releases only when the
+ * embedding it was reserved for never ran (a provider or pre-embed failure), so a retried delivery
+ * does not pay twice. When the tokens window grants and the USD window denies, the token
+ * reservation is given back here.
  */
 export async function enforceFileEmbeddingSpendWindow(params: {
   userId: string;
@@ -147,7 +152,7 @@ export async function enforceFileEmbeddingSpendWindow(params: {
   estimatedTokens: number;
   db: FileEmbeddingWindowDb;
   logger?: Logger;
-}): Promise<void> {
+}): Promise<FileEmbeddingWindowGrant> {
   const { userId, estimatedMicroUsd, estimatedTokens, db, logger } = params;
   const limits = await resolveFileEmbeddingLimits(db, logger);
   const deny = (reason: FileEmbeddingDenialReason, resetsAt?: Date): never => {
@@ -175,5 +180,15 @@ export async function enforceFileEmbeddingSpendWindow(params: {
     limits.budgetPerWindowMicroUsd,
     ttlMs
   );
-  if (!spend.success) deny('exhausted', spend.expiresAt);
+  if (!spend.success) {
+    await db.cache.releaseFromFixedWindow(keys.tokens, estimatedTokens);
+    deny('exhausted', spend.expiresAt);
+  }
+
+  return {
+    release: async () => {
+      await db.cache.releaseFromFixedWindow(keys.tokens, estimatedTokens);
+      await db.cache.releaseFromFixedWindow(keys.microUsd, estimatedMicroUsd);
+    },
+  };
 }

@@ -45,7 +45,9 @@ async function releaseOnFailure(claim: ScopedSettingChangeClaim | null, write: (
   try {
     await write();
   } catch (err) {
-    await claim?.release();
+    // Best-effort: a failed release (e.g. inside an aborted transaction, which rolls the claim
+    // back anyway) must not mask the write error.
+    await claim?.release().catch(() => undefined);
     throw err;
   }
 }

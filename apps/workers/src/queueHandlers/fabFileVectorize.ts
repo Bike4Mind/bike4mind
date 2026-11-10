@@ -50,6 +50,7 @@ import {
   isOperationalBillingEnabled,
   recordOperationalUsage,
 } from '@bike4mind/services';
+import type { Logger } from '@bike4mind/observability';
 import { reserveRequestCredits, type CreditReservation } from '@server/billing/reserveRequestCredits';
 import { isAiAccessRefusal } from '@bike4mind/services/userService/accountState';
 import { activePlanResolver } from '@bike4mind/server-utils/entitlements/activeSubscriptions';
@@ -113,6 +114,24 @@ export function rateDenialRedeliveryDelaySeconds(retryAfterMs: number | undefine
   const windowResetSeconds = Math.ceil((retryAfterMs ?? RATE_DENIAL_FALLBACK_DELAY_MS) / 1000);
   return Math.max(FAB_FILE_VECTORIZE_RATE_DENIAL_MIN_REDELIVERY_SEC, windowResetSeconds);
 }
+
+/** Best-effort: a failed release must not mask the error that triggered it. */
+async function releaseFileEmbeddingWindow(
+  grant: fileEmbeddingService.FileEmbeddingWindowGrant | null,
+  cause: string,
+  logger: Logger
+): Promise<void> {
+  if (!grant) return;
+  try {
+    await grant.release();
+    logger.warn(`[fileEmbeddingWindow] released reservation after ${cause}`);
+  } catch (releaseErr) {
+    logger.warn(`[fileEmbeddingWindow] failed to release reservation after ${cause}: ${releaseErr}`);
+  }
+}
+
+const isFileEmbeddingLimitUnresolved = (err: unknown): boolean =>
+  err instanceof fileEmbeddingService.FileEmbeddingLimitResolutionError;
 
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   const body = event.Records[0].body;
@@ -407,9 +426,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       const missCostUsd = getEmbeddingModelCost(embeddingModel, missTokenTotal);
       let creditReservation: CreditReservation | null = null;
       let billingOrganization: Awaited<ReturnType<typeof organizationRepository.findById>> = null;
+      let fileWindowGrant: fileEmbeddingService.FileEmbeddingWindowGrant | null = null;
       if (!spendScope) {
         // Per-user window, reserved before any credit hold so a refused file is never charged.
-        await fileEmbeddingService.enforceFileEmbeddingSpendWindow({
+        // Released on every failure before the embed succeeds, so a retry does not pay twice.
+        fileWindowGrant = await fileEmbeddingService.enforceFileEmbeddingSpendWindow({
           userId,
           estimatedMicroUsd: Math.ceil(missCostUsd * 1_000_000),
           estimatedTokens: missTokenTotal,
@@ -431,15 +452,21 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
             fabFileId,
             error: err instanceof Error ? err.message : String(err),
           });
+          await releaseFileEmbeddingWindow(fileWindowGrant, 'billing check failure', logger);
           throw new Error('File indexing is temporarily unavailable. Re-index the file to try again.', { cause: err });
         }
         if (billable) {
-          creditReservation = await reserveRequestCredits({
-            req: { user, logger },
-            requiredCredits: usdToCredits(missCostUsd),
-            enforceCredits: true,
-            featureLabel: 'file indexing',
-          });
+          try {
+            creditReservation = await reserveRequestCredits({
+              req: { user, logger },
+              requiredCredits: usdToCredits(missCostUsd),
+              enforceCredits: true,
+              featureLabel: 'file indexing',
+            });
+          } catch (err) {
+            await releaseFileEmbeddingWindow(fileWindowGrant, 'credit refusal', logger);
+            throw err;
+          }
         }
       }
 
@@ -451,6 +478,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         else newVectors = await getVectors(embeddingProvider, missTexts);
       } catch (providerErr) {
         await creditReservation?.refund();
+        await releaseFileEmbeddingWindow(fileWindowGrant, 'provider failure', logger);
         // The provider call failed, so the reserved money was never spent: return it to the
         // run, lake and owner meters (the platform period window drains on its own). Scoped to EXACTLY the
         // provider call - a failure after embeddings succeeded is real spend and stays
@@ -828,13 +856,15 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // the one action that does resolve it.
     const isAuthFailure = isEmbeddingAuthError(err);
     const isEmbeddingSpaceConflict = isEmbeddingSpaceConflictError(err);
-    const storedError = isEmbeddingSpaceConflict
-      ? 'This file could not be finished indexing for semantic search because the embedding service changed while it was being indexed. Re-index the file to complete it.'
-      : isAuthFailure
-        ? existingFabFile.batchId
-          ? 'This file could not be indexed for semantic search because the embedding service was unavailable. It will not be found by knowledge search until it is re-indexed.'
-          : 'This file could not be indexed for semantic search because the embedding service was unavailable. You can still ask about it directly in chat.'
-        : errorMessage;
+    const storedError = isFileEmbeddingLimitUnresolved(err)
+      ? 'File indexing is temporarily unavailable. Re-index the file to try again.'
+      : isEmbeddingSpaceConflict
+        ? 'This file could not be finished indexing for semantic search because the embedding service changed while it was being indexed. Re-index the file to complete it.'
+        : isAuthFailure
+          ? existingFabFile.batchId
+            ? 'This file could not be indexed for semantic search because the embedding service was unavailable. It will not be found by knowledge search until it is re-indexed.'
+            : 'This file could not be indexed for semantic search because the embedding service was unavailable. You can still ask about it directly in chat.'
+          : errorMessage;
     if (isAuthFailure) {
       logger.warn(`Vectorization failed for ${fabFileId} (embedding auth): ${errorMessage}`);
     }

@@ -27,6 +27,10 @@ function makeFixedWindowCache(clock: { now: number }) {
       windows.set(key, window);
       return { success: true, count: window.count, expiresAt: new Date(window.expiresAt) };
     }),
+    releaseFromFixedWindow: vi.fn(async (key: string, amount: number) => {
+      const live = windows.get(key);
+      if (live && live.expiresAt > clock.now) live.count = Math.max(0, live.count - amount);
+    }),
   };
 }
 
@@ -64,13 +68,13 @@ describe('enforceFileEmbeddingSpendWindow', () => {
   it('allows reservations until the window is spent, then refuses with the reset time', async () => {
     const { reserve } = setup({ fileEmbeddingUserTokensPerWindow: '1000' });
 
-    await expect(reserve('u1', 600)).resolves.toBeUndefined();
+    await expect(reserve('u1', 600)).resolves.toBeDefined();
     const err = await denial(reserve('u1', 600));
 
     expect(err.reason).toBe('exhausted');
     expect(err.resetsAt).toEqual(new Date(T0 + 24 * HOUR_MS));
     expect(err.message).toContain(new Date(T0 + 24 * HOUR_MS).toISOString());
-    await expect(reserve('u1', 400)).resolves.toBeUndefined();
+    await expect(reserve('u1', 400)).resolves.toBeDefined();
   });
 
   it('grants again once the window rolls over', async () => {
@@ -80,25 +84,39 @@ describe('enforceFileEmbeddingSpendWindow', () => {
 
     clock.now = T0 + 24 * HOUR_MS + 1;
 
-    await expect(reserve('u1', 1000)).resolves.toBeUndefined();
+    await expect(reserve('u1', 1000)).resolves.toBeDefined();
   });
 
   it('meters each user separately', async () => {
     const { reserve } = setup({ fileEmbeddingUserTokensPerWindow: '1000' });
     await reserve('u1', 1000);
 
-    await expect(reserve('u2', 1000)).resolves.toBeUndefined();
+    await expect(reserve('u2', 1000)).resolves.toBeDefined();
     await denial(reserve('u1', 1));
   });
 
   it('refuses on the USD window even when tokens remain', async () => {
     const { cache, reserve } = setup({ fileEmbeddingUserBudgetPerWindowUsd: '0.001' });
 
-    await expect(reserve('u1', 10, 800)).resolves.toBeUndefined();
+    await expect(reserve('u1', 10, 800)).resolves.toBeDefined();
     const err = await denial(reserve('u1', 10, 800));
 
     expect(err.reason).toBe('exhausted');
     expect(cache.windows.get(fileEmbeddingWindowCacheKeys('u1').microUsd)?.count).toBe(800);
+    // The refused call's token reservation is given back, so only the granted call's 10 remain.
+    expect(cache.windows.get(fileEmbeddingWindowCacheKeys('u1').tokens)?.count).toBe(10);
+  });
+
+  it('gives both reservations back when the grant is released', async () => {
+    const { cache, reserve } = setup({ fileEmbeddingUserTokensPerWindow: '1000' });
+    const grant = await reserve('u1', 1000, 500);
+
+    await grant.release();
+
+    const keys = fileEmbeddingWindowCacheKeys('u1');
+    expect(cache.windows.get(keys.tokens)?.count).toBe(0);
+    expect(cache.windows.get(keys.microUsd)?.count).toBe(0);
+    await expect(reserve('u1', 1000)).resolves.toBeDefined();
   });
 
   it('refuses a single reservation larger than the whole window without touching the meters', async () => {
@@ -125,7 +143,7 @@ describe('enforceFileEmbeddingSpendWindow', () => {
   it('uses the defaults when no setting is stored', async () => {
     const { reserve } = setup();
 
-    await expect(reserve('u1', FILE_EMBEDDING_USER_TOKENS_PER_WINDOW_DEFAULT)).resolves.toBeUndefined();
+    await expect(reserve('u1', FILE_EMBEDDING_USER_TOKENS_PER_WINDOW_DEFAULT)).resolves.toBeDefined();
     const err = await denial(reserve('u1', 1));
     expect(err.resetsAt).toEqual(new Date(T0 + 24 * HOUR_MS));
   });
@@ -138,7 +156,7 @@ describe('enforceFileEmbeddingSpendWindow', () => {
     expect(err.resetsAt).toEqual(new Date(T0 + 2 * HOUR_MS));
 
     clock.now = T0 + 2 * HOUR_MS + 1;
-    await expect(reserve('u1', 1000)).resolves.toBeUndefined();
+    await expect(reserve('u1', 1000)).resolves.toBeDefined();
   });
 
   it('fails closed on an invalid stored value', async () => {
