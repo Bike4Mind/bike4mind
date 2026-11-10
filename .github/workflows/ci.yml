@@ -713,6 +713,21 @@ jobs:
           pnpm --filter @bike4mind/database exec node -e
           "require('mongodb-memory-server').MongoBinary.getPath({}).then(p => console.log('mongod binary ready:', p)).catch(e => console.warn('prewarm skipped:', e.message))"
 
+      # Turborepo's local cache of this leg's passing package test tasks: a package whose hash
+      # (its inputs plus .turbo/test-context, see scripts/turbo-test-cache.mjs) matches a cached
+      # pass is skipped. Read-only here; only push-to-main and merge_group runs save (the save
+      # step below), so a pull_request run can never put a result where another ref reads it -
+      # GitHub scopes a PR's caches to that PR anyway, and main reads only main's.
+      # `restore-keys` takes the newest save for this leg; the run attempt keeps a re-run's save
+      # from colliding with the first attempt's key.
+      - name: Restore turbo test cache
+        uses: actions/cache/restore@v5
+        with:
+          path: .turbo/cache
+          key: turbo-test-v1-${{ runner.os }}-${{ matrix.shard.name }}-${{ github.sha }}-${{ github.run_attempt }}
+          restore-keys: |
+            turbo-test-v1-${{ runner.os }}-${{ matrix.shard.name }}-
+
       # Paired with "Report shard duration" at the end of this job. Set before the test steps
       # rather than derived from the job's own start so the number is test runtime, not
       # test runtime plus install and core-build restore.
@@ -721,11 +736,20 @@ jobs:
 
       # The unit `test` script; the real-Mongo `test:integration` lanes run in their own step
       # below. `matrix.shard.args` is set only on the three client unit legs, where it carries
-      # `--shard=i/3` - deliberately with no `--` separator before it, see the matrix
-      # entries above for why that is load-bearing.
+      # `--shard=i/3`. It reaches vitest through turbo's own `--` (turbo then runs
+      # `pnpm run test --shard=i/3`, with no separator), never through a pnpm `--`: see the
+      # matrix entries above for why that is load-bearing. Turbo hashes the args, so each shard
+      # index has its own cache entry, and the file set it covers is a function of the hashed inputs.
+      #
+      # `--only`: the full graph would also run every dependency's `build`, which core-build's
+      # artifact already covers; the context file carries the dependency hashes --only drops.
+      # `--env-mode=loose` hands the suites the job's whole env, as pnpm did.
+      # `--continue=always` runs every package even after a failure, so the log names every
+      # failing package and the passing ones are cached for the re-run.
       - name: Run Tests (${{ matrix.shard.name }})
         env:
           CI: true
+          TURBO_TELEMETRY_DISABLED: '1'
           VITEST_MAX_WORKERS: ${{ matrix.shard.workers }}
           # mongod data on tmpfs for the real-Mongo lane. Every file boots a mongod that creates
           # ~200 collections plus their indexes on connect, which is fsync-bound: on a slow runner
@@ -762,11 +786,15 @@ jobs:
 
           # One package at a time: vitest sizes each package's pool to the whole runner, so N
           # concurrent packages meant N pools (and N sets of mongods) on the same cores, and a
-          # per-package cap cannot fix that because pnpm runs dependents last - the heaviest
+          # per-package cap cannot fix that because the scheduler runs dependents last - the heaviest
           # packages (database, scripts) ended up alone on a pool capped at a quarter of the box.
           # Serial with full pools measured faster on the data and misc legs, with no
           # oversubscription by construction. vitestWorkerBudget.test.ts pins this.
-          pnpm --recursive --workspace-concurrency=1 "${filter_args[@]}" "$SHARD_SCRIPT" "${script_args[@]}"
+          node scripts/turbo-test-cache.mjs context "$SHARD_SCRIPT" "${filter_args[@]}"
+          status=0
+          pnpm exec turbo run "$SHARD_SCRIPT" "${filter_args[@]}" --only --concurrency=1 --continue=always --env-mode=loose --ui=stream --cache-dir=.turbo/cache --summarize --output-logs=new-only -- "${script_args[@]}" || status=$?
+          node scripts/turbo-test-cache.mjs report .turbo/runs
+          exit "$status"
 
       # The leg's real-Mongo lane, from `integration-filter` (see the matrix). A step of its own
       # so its log and timing stay apart from the unit run; `!cancelled()` so a red unit run still
@@ -776,6 +804,7 @@ jobs:
         if: ${{ !cancelled() && matrix.shard.integration-filter && steps.codegen.outcome == 'success' }}
         env:
           CI: true
+          TURBO_TELEMETRY_DISABLED: '1'
           VITEST_MAX_WORKERS: '2'
           TMPDIR: /dev/shm
           SHARD_NAME: ${{ matrix.shard.name }}
@@ -789,7 +818,11 @@ jobs:
             echo "::error title=Empty test shard::The ${SHARD_NAME} leg's integration-filter matches no workspace package, so it would run no tests. Check the --filter tokens in the matrix."
             exit 1
           fi
-          pnpm --recursive --workspace-concurrency=1 "${filter_args[@]}" "$SHARD_SCRIPT"
+          node scripts/turbo-test-cache.mjs context "$SHARD_SCRIPT" "${filter_args[@]}"
+          status=0
+          pnpm exec turbo run "$SHARD_SCRIPT" "${filter_args[@]}" --only --concurrency=1 --continue=always --env-mode=loose --ui=stream --cache-dir=.turbo/cache --summarize --output-logs=new-only || status=$?
+          node scripts/turbo-test-cache.mjs report .turbo/runs
+          exit "$status"
 
       # The scheduler suite is a unit test, so it runs under `test` (the integration lane collects
       # only *.e2e.test.ts). It sets TZ itself at runtime; this step's TZ is for the retention file.
@@ -854,6 +887,22 @@ jobs:
           if [ "$elapsed" -gt "$SHARD_SOFT_BUDGET_SECONDS" ]; then
             echo "::warning title=Slow test shard::${summary} - over its ${SHARD_SOFT_BUDGET_SECONDS}s soft budget. Not a failure: split or speed up the shard before it reaches the job timeout."
           fi
+
+      # Trusted refs only: a pull_request run restores but never saves (see the restore step).
+      # Saved even when a package failed - turbo caches passing tasks only, so a re-run of a
+      # flaky queue entry re-runs just the failed package. Pruned first to the entries this
+      # job's runs used, so the cache holds the leg's current state and does not grow per save.
+      - name: Prune turbo test cache
+        id: prune-turbo-cache
+        if: ${{ !cancelled() && (github.event_name == 'push' || github.event_name == 'merge_group') && hashFiles('.turbo/runs/*.json') != '' }}
+        run: node scripts/turbo-test-cache.mjs prune .turbo/runs .turbo/cache
+
+      - name: Save turbo test cache
+        if: ${{ !cancelled() && steps.prune-turbo-cache.outcome == 'success' }}
+        uses: actions/cache/save@v5
+        with:
+          path: .turbo/cache
+          key: turbo-test-v1-${{ runner.os }}-${{ matrix.shard.name }}-${{ github.sha }}-${{ github.run_attempt }}
 
       # The workspace typecheck, carried by the one leg with `typecheck: 'true'` instead of its own
       # runner, which would repeat this job's install, core restore, codegen and SST types. After
