@@ -83,7 +83,7 @@ describe('handler logging', () => {
       expect(typeof message).toBe('string');
       expect(metadata === undefined || typeof metadata === 'object').toBe(true);
       const serialized = JSON.stringify([message, metadata]);
-      for (const secret of [email, username, 'do-not-log-this-payload', JSON.stringify(event)]) {
+      for (const secret of [email, username, 'someone', 'do-not-log-this-payload', JSON.stringify(event)]) {
         expect(serialized).not.toContain(secret);
       }
     }

@@ -16,6 +16,22 @@ import { MongoClient } from 'mongodb';
 import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
 import { allSettingDefinitions } from '@bike4mind/common';
 
+/**
+ * Name, message, code, stack and cause of an error. Logging the error object itself would serialize its
+ * enumerable fields, and a Mongo bulk-write error carries the whole documents being written.
+ */
+function describeError(error: unknown): Record<string, unknown> {
+  if (!(error instanceof Error)) return { message: String(error) };
+  const { code } = error as { code?: unknown };
+  return {
+    name: error.name,
+    message: error.message,
+    ...(code !== undefined && { code }),
+    stack: error.stack,
+    ...(error.cause !== undefined && { cause: describeError(error.cause) }),
+  };
+}
+
 interface DataSyncerEvent {
   // Whether to sync preview settings from staging on preview deploys; the syncmarker makes repeat runs skip
   syncPreviewSettings?: boolean;
@@ -245,7 +261,7 @@ async function syncPreviewSettingsFromStaging(strict = false): Promise<{
           }
         });
       } catch (error) {
-        Logger.error('Error syncing collection', { collectionName, error });
+        Logger.error('Error syncing collection', { collectionName, error: describeError(error) });
 
         if (backupComplete) {
           try {
@@ -416,7 +432,7 @@ export const handler: Handler<DataSyncerEvent, DataSyncerResponse | StrictSeedRe
         );
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-        Logger.error('Error syncing preview settings from staging', { error });
+        Logger.error('Error syncing preview settings from staging', { error: describeError(error) });
         messages.push(`Preview settings sync failed: ${errorMsg}`);
       }
     } else {
@@ -431,7 +447,7 @@ export const handler: Handler<DataSyncerEvent, DataSyncerResponse | StrictSeedRe
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    Logger.error('Error in DataSyncer', { error });
+    Logger.error('Error in DataSyncer', { error: describeError(error) });
 
     // Log warning but don't fail deployment
     Logger.warn('WARNING: DataSyncer failed but will not block deployment');

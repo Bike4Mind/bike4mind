@@ -15,6 +15,7 @@ const state = vi.hoisted(() => ({
   failConnect: false,
   failMarker: false,
   failInsertInto: undefined as string | undefined,
+  failInsertWith: undefined as Error | undefined,
   emptyTarget: false,
   failFirstDeleteOn: undefined as string | undefined,
   ops: [] as string[],
@@ -57,7 +58,7 @@ vi.mock('mongodb', () => {
         };
       }),
       insertMany: vi.fn(async (docs: unknown[]) => {
-        if (name === state.failInsertInto) throw new Error(`insert into ${name} failed`);
+        if (name === state.failInsertInto) throw state.failInsertWith ?? new Error(`insert into ${name} failed`);
         inserted.set(name, (inserted.get(name) ?? 0) + docs.length);
         return { insertedCount: docs.length };
       }),
@@ -118,6 +119,7 @@ beforeEach(() => {
   state.failConnect = false;
   state.marker = null;
   state.failInsertInto = undefined;
+  state.failInsertWith = undefined;
   state.emptyTarget = false;
   state.failFirstDeleteOn = undefined;
   state.ops = [];
@@ -271,6 +273,28 @@ describe('dataSyncerHandler', () => {
 
     expect(state.markerWrites).toHaveLength(0);
     expect(result?.message).toContain('no documents copied; will retry next deploy');
+  });
+
+  it('keeps the documents carried by a bulk-write error out of the logged error', async () => {
+    process.env.SEED_STAGE_NAME = 'pr123';
+    state.failInsertInto = 'rapidreplymappings';
+    const marker = 'doc-marker-do-not-log';
+    const failure = Object.assign(new Error('bulk write failed'), { code: 11000, writeErrors: [{ op: { marker } }] });
+    state.failInsertWith = failure;
+    const errorSpy = vi.spyOn(Logger, 'error').mockImplementation(() => undefined);
+
+    try {
+      await invoke();
+
+      expect(errorSpy).toHaveBeenCalled();
+      expect(JSON.stringify(errorSpy.mock.calls)).not.toContain(marker);
+      expect(errorSpy).toHaveBeenCalledWith(
+        'Error syncing collection',
+        expect.objectContaining({ error: expect.objectContaining({ message: 'bulk write failed', code: 11000 }) })
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   it('surfaces both the copy failure and the rollback failure', async () => {
