@@ -214,35 +214,57 @@ export function TutorialRunner({
     active && state.pendingJump?.moduleId === script.id ? state.pendingJump : null
   );
   const jumpSeq = useRef(0);
+  const jumpInFlight = useRef<Promise<void> | null>(null);
+  useEffect(() => {
+    const unsubscribe = store.subscribe((state, prior) => {
+      if (state.active?.sessionId !== prior.active?.sessionId || state.active?.moduleId !== prior.active?.moduleId) {
+        jumpSeq.current++;
+      }
+    });
+    return () => {
+      unsubscribe();
+      jumpSeq.current++;
+    };
+  }, [store]);
   useEffect(() => {
     if (!jump) return;
     store.getState().clearJump();
     const target = script.steps.findIndex(s => s.id === jump.stepId);
-    if (target < 0) return;
+    const sessionId = store.getState().active?.sessionId;
+    if (target < 0 || !sessionId) return;
     const seq = ++jumpSeq.current;
-    void (async () => {
+    const isCurrent = () => {
+      const current = store.getState().active;
+      return seq === jumpSeq.current && current?.moduleId === script.id && current.sessionId === sessionId;
+    };
+    const previous = jumpInFlight.current;
+    const pending = (async () => {
       try {
-        // Every turn before the target, in order: the server seeds a turn only after the one before it.
-        // Any step that sends one counts, not only `prompt`: a host's own type can carry a turn too.
+        // Let an older seed settle before retrying its turn, even when a newer jump supersedes it.
+        if (previous) await previous;
+        if (!isCurrent()) return;
         for (const s of script.steps.slice(0, target)) {
-          if (seq !== jumpSeq.current) return;
+          if (!isCurrent()) return;
           if (s.turn !== undefined) await advance(s.turn);
         }
+        if (!isCurrent()) return;
+        const current = store.getState().active!;
+        const landing = landOn ? landOn(jump.stepId, sessionId) : jump.stepId;
+        if (landing !== current.stepId) clearStalePrompt(script, sessionId);
+        store.getState().goTo(landing);
+        report(landing, 'in_progress');
+        if (landing !== jump.stepId) toast(LANDED_EARLIER_NOTICE);
       } catch (error) {
-        if (seq !== jumpSeq.current) return;
+        if (!isCurrent()) return;
         const change = moduleChangeOf(error);
         if (change) endChanged(change);
         else toast(JUMP_FAILED_NOTICE);
-        return;
       }
-      const current = store.getState().active;
-      if (seq !== jumpSeq.current || current?.moduleId !== script.id) return;
-      const landing = landOn ? landOn(jump.stepId, current.sessionId) : jump.stepId;
-      if (landing !== current.stepId) clearStalePrompt(script, current.sessionId);
-      store.getState().goTo(landing);
-      report(landing, 'in_progress');
-      if (landing !== jump.stepId) toast(LANDED_EARLIER_NOTICE);
-    })();
+    })().catch(error => console.warn('Tutorial jump callback failed', error));
+    jumpInFlight.current = pending;
+    void pending.then(() => {
+      if (jumpInFlight.current === pending) jumpInFlight.current = null;
+    });
   }, [store, jump, script, advance, landOn, report, endChanged]);
 
   const stepId = step?.id;

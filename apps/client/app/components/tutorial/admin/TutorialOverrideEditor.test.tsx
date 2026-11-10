@@ -79,7 +79,10 @@ const type = (el: Element, value: string) => fireEvent.change(el, { target: { va
 const save = () => screen.getByTestId('tutorial-override-save') as HTMLButtonElement;
 
 describe('TutorialOverrideEditor', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    mockMutate.mockReset();
+    mockRefetch.mockReset();
+  });
 
   it('edits only the listed fields and keeps the rest read-only', () => {
     renderEditor();
@@ -233,6 +236,24 @@ describe('TutorialOverrideEditor', () => {
     expect(onDirtyChange).toHaveBeenLastCalledWith(true);
     fireEvent.click(save());
     expect(sentSeq(0)).toBe(5);
+  });
+
+  it('rebases an untouched no-row editor after a switch creates sequence zero', () => {
+    const view = renderEditor({ ...ROW, contentSeq: null });
+    rerenderRow(view, { ...ROW, contentSeq: 0, enabled: false });
+    expect(save().disabled).toBe(true);
+    editOpening('First edit.');
+    fireEvent.click(save());
+    expect(sentSeq(0)).toBe(0);
+  });
+
+  it('keeps a touched no-row draft after a switch creates sequence zero', () => {
+    const view = renderEditor({ ...ROW, contentSeq: null });
+    editOpening('First edit.');
+    rerenderRow(view, { ...ROW, contentSeq: 0, enabled: false });
+    expect(field('opening', 'body').value).toBe('First edit.');
+    fireEvent.click(save());
+    expect(sentSeq(0)).toBeNull();
   });
 
   it('keeps a touched draft and its original sequence when the row moves under it', () => {

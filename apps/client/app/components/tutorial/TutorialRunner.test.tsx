@@ -558,12 +558,36 @@ describe('jumping from the journey panel', () => {
     jumpTo('wrap');
     await waitFor(() => expect(release).toHaveLength(1));
     jumpTo('ask');
-    await waitFor(() => expect(release).toHaveLength(2));
+    expect(release).toHaveLength(1);
     await act(async () => release[0]());
+    await waitFor(() => expect(release).toHaveLength(2));
     await act(async () => release[1]());
     await waitFor(() => expect(useTutorialStore.getState().active?.stepId).toBe('ask'));
     expect(t.advance.mock.calls.map(([input]) => input.turn)).toEqual([0, 0]);
     expect(t.position).not.toHaveBeenCalledWith(expect.objectContaining({ stepId: 'wrap' }));
+  });
+
+  it.each(['s1', 's2'])('does not continue a pending jump after restarting into session %s', async sessionId => {
+    const t = transport();
+    let release = () => {};
+    t.advance.mockImplementationOnce(
+      () =>
+        new Promise(resolve => {
+          release = () => resolve({ quest: marked('q1') });
+        })
+    );
+    renderRunner(t, undefined, { using: twoTurns });
+    begin('intro');
+    jumpTo('wrap');
+    await waitFor(() => expect(t.advance).toHaveBeenCalledTimes(1));
+    act(() => {
+      useTutorialStore.getState().end();
+      useTutorialStore.getState().begin({ moduleId: 'demo', sessionId, stepId: 'intro' });
+    });
+    await act(async () => release());
+    expect(t.advance).toHaveBeenCalledTimes(1);
+    expect(t.position).not.toHaveBeenCalled();
+    expect(useTutorialStore.getState().active).toMatchObject({ sessionId, stepId: 'intro' });
   });
 
   it('stays quiet when a superseded jump fails', async () => {
