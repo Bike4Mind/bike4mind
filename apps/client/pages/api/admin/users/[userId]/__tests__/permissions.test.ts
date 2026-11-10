@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   audit: vi.fn(),
   deny: vi.fn(),
   stepUp: vi.fn(),
+  csrfGuard: ((_req: unknown, _res: unknown, next: () => void) => next()) as Guard,
 }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (options: unknown) => {
@@ -32,7 +33,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@server/middlewares/csrfProtection', () => ({
-  csrfProtection: () => (_req: Request, _res: Response, next: () => void) => next(),
+  csrfProtection: () => mocks.csrfGuard,
 }));
 vi.mock('@server/auth/stepUp', () => ({ requireStepUp: mocks.stepUp }));
 vi.mock('@bike4mind/database', () => ({
@@ -82,6 +83,10 @@ beforeEach(() => {
 describe('PUT /api/admin/users/:userId/permissions', () => {
   it('is session-only and PUT-only', () => {
     expect(mocks.options).toMatchObject({ auth: 'jwtOnly', allowedMethods: ['PUT'] });
+  });
+
+  it('mounts csrf protection on the route', () => {
+    expect(mocks.guards).toContain(mocks.csrfGuard);
   });
 
   it('admits only settings:manage holders past the route guard', async () => {
@@ -134,6 +139,7 @@ describe('PUT /api/admin/users/:userId/permissions', () => {
       { $set: { adminPermissions: [] } },
       { runValidators: true }
     );
+    expect(mocks.audit.mock.calls[0][1].changes[0].before).toEqual(['support:read', 'support:read', 'retired:perm']);
   });
 
   it('rejects delegates, even ones holding settings:manage', async () => {
