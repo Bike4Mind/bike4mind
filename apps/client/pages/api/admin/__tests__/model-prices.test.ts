@@ -219,6 +219,38 @@ describe('POST /api/admin/model-prices first price', () => {
     expect(mockAppend).not.toHaveBeenCalled();
   });
 
+  it('refuses a reprice of a non-text model with 422 too, though rows for it are already in force', async () => {
+    mockCatalogRowsInForce.mockResolvedValue([discoveredRow('flux-new', 'image')]);
+    mockRowsInForce.mockResolvedValue([
+      { modelId: 'gpt-image-2', unit: 'per_image', pricing: { '0': { input: 0.04, output: 0 } }, note: 'old' },
+      { modelId: 'flux-new', unit: 'per_token', pricing: { '0': TIER }, note: 'old' },
+    ]);
+    for (const [modelId, unit] of [
+      ['gpt-image-2', 'per_image'],
+      ['flux-new', 'per_token'],
+    ]) {
+      const err = await post({ modelId, unit, pricing: { '0': { input: 0.05, output: 0 } }, note: 'reprice' });
+      expect(err.statusCode).toBe(422);
+      expect(err.message).toBe("Prices for non-text models come from this build's model tables");
+    }
+    expect(mockAppend).not.toHaveBeenCalled();
+  });
+
+  it('still reprices a realtime voice model, whose per-token rows voice settlement bills', async () => {
+    mockCatalogRowsInForce.mockResolvedValue([discoveredRow('gpt-realtime-new', 'realtime-voice')]);
+    mockRowsInForce.mockResolvedValue([
+      { modelId: 'gpt-realtime-new', unit: 'per_token', pricing: { '0': TIER }, note: 'invoice V' },
+    ]);
+    const { run } = call({
+      method: 'POST',
+      body: { modelId: 'gpt-realtime-new', unit: 'per_token', pricing: { '0': TIER }, note: 'invoice W' },
+    });
+    await run();
+
+    expect(mockAppend).toHaveBeenCalledTimes(1);
+    expect(mockAppend.mock.calls[0][0]).toMatchObject({ modelId: 'gpt-realtime-new', unit: 'per_token' });
+  });
+
   it('refuses a first price for a text model in any unit but per_token', async () => {
     mockCatalogRowsInForce.mockResolvedValue([discoveredRow('gpt-new', 'text')]);
     const err = await post({ modelId: 'gpt-new', unit: 'per_image', pricing: { '0': TIER }, note: 'wrong unit' });

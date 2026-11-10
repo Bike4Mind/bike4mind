@@ -14,6 +14,7 @@ import {
   DISCOVERY_PRICE_NOTE_PREFIX,
   MODEL_PRICE_UNITS,
   ModelPriceTier,
+  PRICE_ROW_BILLED_MODEL_TYPES,
   type ModelPriceUnit,
 } from '@bike4mind/common';
 import { resolveCatalogRecords, staticAdapterModels } from '@bike4mind/llm-adapters';
@@ -219,15 +220,14 @@ async function knownModelType(modelId: string): Promise<string | undefined> {
   return typeof record.type === 'string' ? record.type : 'unknown';
 }
 
+const NON_TEXT_PRICE_MESSAGE = "Prices for non-text models come from this build's model tables";
+
 /** A first price is per token, for a text model an adapter literal or catalog row knows (spec 7.7). */
-async function assertFirstPriceAllowed(modelId: string, unit: ModelPriceUnit): Promise<void> {
-  const type = await knownModelType(modelId);
+function assertFirstPriceAllowed(modelId: string, unit: ModelPriceUnit, type: string | undefined): void {
   if (type === undefined) {
     throw new BadRequestError(`unknown model ${modelId} (${unit}): reprice targets an existing catalog model`);
   }
-  // Price rows bill only text models (applyModelPriceCatalog); other types bill from code catalogs.
-  if (type !== 'text')
-    throw new UnprocessableEntityError("Prices for non-text models come from this build's model tables");
+  if (type !== 'text') throw new UnprocessableEntityError(NON_TEXT_PRICE_MESSAGE);
   if (unit !== 'per_token') {
     throw new BadRequestError(`a first price for ${modelId} must be per_token: price rows bill text models per token`);
   }
@@ -337,7 +337,12 @@ const handler = adminApi({
     ]);
     const seedEntry = seedEntries.find(e => e.modelId === modelId && e.unit === unit);
     const knownModel = seedEntry !== undefined || newestRows.some(r => r.modelId === modelId && r.unit === unit);
-    if (!knownModel) await assertFirstPriceAllowed(modelId, unit);
+    const type = await knownModelType(modelId);
+    // Reprices too: a row never bills a type outside PRICE_ROW_BILLED_MODEL_TYPES, whatever rows it already has.
+    if (type !== undefined && !PRICE_ROW_BILLED_MODEL_TYPES.has(type)) {
+      throw new UnprocessableEntityError(NON_TEXT_PRICE_MESSAGE);
+    }
+    if (!knownModel) assertFirstPriceAllowed(modelId, unit, type);
 
     // Idempotency: a resubmit of the identical reprice (double-click, network
     // retry, second tab) returns the existing row instead of appending a
