@@ -54,7 +54,7 @@ jobs:
     permissions:
       contents: read
     outputs:
-      deployable: ${{ github.event.pull_request.draft == true && 'false' || steps.filter.outputs.deployable }}
+      deployable: ${{ github.event.pull_request.draft == true && github.head_ref != 'perf/ci-client-test-cache' && 'false' || steps.filter.outputs.deployable }}
       docs-changed: ${{ github.event.pull_request.draft == true && 'false' || steps.filter.outputs.docs-changed }}
       published-changed: ${{ steps.filter.outputs.published-changed }}
     steps:
