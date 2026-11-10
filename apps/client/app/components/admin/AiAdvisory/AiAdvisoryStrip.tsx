@@ -10,6 +10,7 @@ import { AI_ADVISORY_MARK } from '../Users/List/AiAdvisoryBadge';
 import { usersTabLinkSearch } from '../Users/usersTabSearch';
 import { DETECTOR_LABELS } from '../shadowDetectorLabels';
 import { SectionCard } from '../shared/SectionCard';
+import { WatchAccountsButton } from '../CampaignWatches/WatchAccountsButton';
 
 // Enough to point at the worst offenders without turning the strip into a table.
 const MAX_SHOWN_CANDIDATES = 3;
@@ -62,6 +63,7 @@ export function AiAdvisoryStrip() {
       }
     >
       <Stack spacing={1} sx={{ px: 2, py: 1.5 }}>
+        <WatchAccountsButton userIds={advisories.map(item => item.userId)} incomplete={data?.truncated} />
         <Typography level="body-sm" sx={{ color: 'admin.ink' }} data-testid="admin-dashboard-ai-advisory-summary">
           {`${count} ${advisories.length === 1 ? 'account' : 'accounts'} likely abuse (last ${AI_ADVISORY_WINDOW_HOURS}h, unreviewed)`}
           {detector && ` \u00b7 top signal: ${DETECTOR_LABELS[detector]}`}
