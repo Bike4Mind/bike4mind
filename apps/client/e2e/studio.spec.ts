@@ -22,6 +22,10 @@ test.describe('Studio - navigation', () => {
     await page.getByTestId('sidenav-nav-more').click();
     await page.getByTestId('sidenav-more-studio').click();
 
+    await expect(
+      page,
+      'Studio opens on the first usable modality; this assumes staging has a usable video model'
+    ).toHaveURL(/\/studio\/video(?:[?#]|$)/, { timeout: TIMEOUTS.NAVIGATION });
     await studioPage.waitForModality('video');
     await expect(page).toHaveTitle(/Video Studio/);
   });
@@ -37,18 +41,11 @@ test.describe('Studio - navigation', () => {
 
     // Speech/sound effects may already be populated by the generation tests (fullyParallel), so
     // accept either the empty state or a populated gallery.
-    const galleries = {
-      video: 'video-gallery',
-      music: 'music-gallery',
-      speech: 'speech-gallery',
-      'sound-effects': 'sound-effects-gallery',
-    } as const;
-
     for (const modality of STUDIO_MODALITIES) {
       await test.step(`switch to ${modality}`, async () => {
         await studioPage.tab(modality).click();
         await studioPage.waitForModality(modality);
-        const gallery = galleries[modality];
+        const gallery = `${modality}-gallery`;
         await expect(page.getByTestId(`${gallery}-empty`).or(page.getByTestId(gallery))).toBeVisible({
           timeout: TIMEOUTS.ACTION,
         });
@@ -96,8 +93,10 @@ test.describe('Studio - video and music forms', () => {
       await expect(submit).toBeEnabled();
     });
 
-    await test.step('image-to-video needs a picked image before it can submit', async () => {
-      await page.getByTestId('video-form-mode-image_to_video-btn').click();
+    await test.step('image-to-video needs a picked image before it can submit', async step => {
+      const imageMode = page.getByTestId('video-form-mode-image_to_video-btn');
+      step.skip((await imageMode.count()) === 0, 'the default video model has no image-to-video mode');
+      await imageMode.click();
       await expect(page.getByTestId('video-form-image-pick-btn')).toBeVisible();
       await expect(submit).toBeDisabled();
       await page.getByTestId('video-form-mode-text_to_video-btn').click();
@@ -105,12 +104,24 @@ test.describe('Studio - video and music forms', () => {
       await expect(submit).toBeEnabled();
     });
 
-    await test.step('a longer duration raises the estimate', async () => {
+    // The duration control is a slider for a range model and a segmented toggle for fixed values.
+    await test.step('a longer duration raises the estimate', async step => {
       const slider = page.getByTestId('video-form-duration-slider');
-      await slider.focus();
-      await slider.press('Home');
-      const shortest = parseCredits(await estimate.textContent());
-      await slider.press('End');
+      const toggle = page.getByTestId('video-form-duration-toggle');
+      await expect(slider.or(toggle)).toBeVisible();
+      let shortest: number;
+      if ((await slider.count()) > 0) {
+        await slider.focus();
+        await slider.press('Home');
+        shortest = parseCredits(await estimate.textContent());
+        await slider.press('End');
+      } else {
+        const options = toggle.getByRole('button');
+        step.skip((await options.count()) < 2, 'the default video model has a single duration');
+        await options.first().click();
+        shortest = parseCredits(await estimate.textContent());
+        await options.last().click();
+      }
       await expect.poll(async () => parseCredits(await estimate.textContent())).toBeGreaterThan(shortest);
     });
   });
@@ -130,10 +141,12 @@ test.describe('Studio - video and music forms', () => {
     await page.getByTestId('music-form-prompt-input').fill('Upbeat lo-fi beat for studying, soft piano');
     await expect(submit).toBeEnabled();
 
-    // Lyric snippets exist only for a model that takes user lyrics; the default staging model does.
-    const verse = page.getByTestId('music-form-lyrics-verse-snippet-btn');
-    await expect(verse).toBeVisible();
-    await test.step('lyric snippet buttons insert section tags', async () => {
+    await test.step('lyric snippet buttons insert section tags', async step => {
+      // Snippets exist only for a model that takes user lyrics; otherwise the form shows a note or no lyrics.
+      const verse = page.getByTestId('music-form-lyrics-verse-snippet-btn');
+      const noLyrics = page.getByTestId('music-form-lyrics-note').or(page.getByTestId('music-form-instrumental-note'));
+      await expect(verse.or(noLyrics)).toBeVisible();
+      step.skip((await verse.count()) === 0, 'the default music model does not take user lyrics');
       const instrumental = page.getByTestId('music-form-instrumental-switch');
       if ((await instrumental.count()) > 0 && (await instrumental.isChecked())) await instrumental.click();
       await verse.click();
@@ -243,10 +256,9 @@ test.describe('Studio - generated media', () => {
 
     await test.step('the clip is saved and listed first in the gallery', async () => {
       await expect(card).toBeVisible({ timeout: TIMEOUTS.ACTION });
-      await expect(page.getByTestId('generated-audio-card').first()).toHaveAttribute(
-        'data-file-id',
-        (await card.getAttribute('data-file-id'))!
-      );
+      const fileId = await card.getAttribute('data-file-id');
+      expect(fileId, 'generated-audio-card has no data-file-id').toBeTruthy();
+      await expect(page.getByTestId('generated-audio-card').first()).toHaveAttribute('data-file-id', fileId ?? '');
       await expect(card.getByTestId('generated-audio-card-settings')).not.toHaveText('');
     });
 
