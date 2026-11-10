@@ -1,4 +1,4 @@
-import { AdminSettings, withTransaction } from '@bike4mind/database';
+import { AdminSettings, cacheRepository, withTransaction } from '@bike4mind/database';
 import { invalidateSettingsCache } from '@bike4mind/utils';
 import { recordAdminSettingChange } from '@bike4mind/server-utils/utils/adminSettingsAudit';
 import {
@@ -14,6 +14,12 @@ type AuditRequest = Parameters<typeof recordAdminSettingChange>[0];
 export async function readAccessEntries(): Promise<Map<string, StoredAccessEntry>> {
   const doc = await AdminSettings.findOne({ settingName: ACCESS_SETTING_NAME }).lean();
   return indexEntries((doc as { settingValue?: unknown } | null)?.settingValue);
+}
+
+/** Marks a dry-run token spent; true for the one caller that claims it. The row outlives the token it covers. */
+export async function claimDryRun(jti: string, actor: string, ttlMs: number): Promise<boolean> {
+  const { claimed } = await cacheRepository.claimDedup(`model-access-dry-run:${jti}`, { actor }, ttlMs);
+  return claimed;
 }
 
 class StaleAccessEntryError extends Error {

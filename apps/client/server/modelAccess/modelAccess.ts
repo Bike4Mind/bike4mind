@@ -31,7 +31,7 @@ import {
   type AccessFields,
   type StoredAccessEntry,
 } from './modelAccessEntries';
-import { commitAccessEntry, readAccessEntries } from './modelAccessStore';
+import { claimDryRun, commitAccessEntry, readAccessEntries } from './modelAccessStore';
 import {
   ACCESS_TOKEN_TTL_MS,
   canonicalJson,
@@ -125,6 +125,7 @@ type Plan = { items: PlannedItem[]; dryRun: ModelAccessBulkDryRun; digest: strin
 
 type DryRunTokenPayload = {
   kind: 'model-access-dry-run';
+  jti: string;
   actor: string;
   change: string;
   selection: string;
@@ -158,6 +159,7 @@ async function plan(actor: string, selection: ModelAccessSelection, change: Mode
   const exp = Date.now() + ACCESS_TOKEN_TTL_MS;
   const payload: DryRunTokenPayload = {
     kind: 'model-access-dry-run',
+    jti: randomUUID(),
     actor,
     change: canonicalJson(change),
     selection: canonicalSelection(selection),
@@ -264,8 +266,9 @@ async function finishBatch(
 
 /**
  * Apply a dry run. The selection is re-resolved and the stamps re-read; any difference from what the token
- * was minted over (actor, change, selection, id set, a stamp, or expiry) is a 409 carrying a fresh dry run.
- * Entries are then written one by one, each conditional on its stamp, with no transaction across them.
+ * was minted over (actor, change, selection, id set, a stamp, or expiry) is a 409 carrying a fresh dry run, as
+ * is a token already applied once. Entries are then written one by one, each conditional on its stamp, with no
+ * transaction across them.
  */
 export async function applyModelAccessBulk(
   req: AccessRequest,
@@ -287,7 +290,7 @@ export async function applyModelAccessBulk(
     payload.change !== canonicalJson(input.change) ||
     payload.selection !== canonicalSelection(input.selection) ||
     payload.ids !== fresh.idSet;
-  if (mismatch || typeof payload.exp !== 'number' || payload.exp <= Date.now()) {
+  if (mismatch || typeof payload.jti !== 'string' || typeof payload.exp !== 'number' || payload.exp <= Date.now()) {
     throw new ConflictError('This preview no longer applies. Review the new one and apply again.', {
       dryRun: fresh.dryRun,
     });
@@ -299,6 +302,12 @@ export async function applyModelAccessBulk(
   }
   if (fresh.dryRun.adminOnlyIds.length > 0 && !input.confirmAdminOnly) {
     throw new UnprocessableEntityError(ADMIN_ONLY_MESSAGE, { adminOnlyIds: fresh.dryRun.adminOnlyIds });
+  }
+  // Spent before any write: after an undo restores the stamps, a replay would otherwise pass every check above.
+  if (!(await claimDryRun(payload.jti, actorOf(req), ACCESS_TOKEN_TTL_MS))) {
+    throw new ConflictError('This preview was already applied. Review the new one and apply again.', {
+      dryRun: fresh.dryRun,
+    });
   }
 
   const batchId = randomUUID();

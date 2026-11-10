@@ -7,7 +7,7 @@ import {
   settleAutoIndexBuilds,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
-import { AdminAuditLogModel, AdminSettings, User } from '@bike4mind/database';
+import { AdminAuditLogModel, AdminSettings, Cache, User } from '@bike4mind/database';
 import { MODEL_ACCESS_BULK_MAX_IDS } from '@bike4mind/common';
 import { resolveAdminModelFilterIds } from '@server/admin/models/adminModelFilter';
 import { commitAccessEntry } from './modelAccessStore';
@@ -116,6 +116,8 @@ beforeAll(async () => {
   await mongoose.connect(server.getUri(), { autoIndex: false });
   await settleAutoIndexBuilds(mongoose);
   await AdminSettings.createIndexes();
+  // Every deployment has the cache's unique key index; the single-use claim on a dry-run token relies on it.
+  await Cache.createIndexes();
 });
 afterAll(async () => {
   await mongoose.disconnect();
@@ -124,7 +126,7 @@ afterAll(async () => {
 beforeEach(async () => {
   vi.mocked(commitAccessEntry).mockImplementation(realCommit);
   vi.mocked(resolveAdminModelFilterIds).mockReset();
-  for (const model of [AdminSettings, AdminAuditLogModel, User]) await model.collection.deleteMany({});
+  for (const model of [AdminSettings, AdminAuditLogModel, User, Cache]) await model.collection.deleteMany({});
 });
 
 describe('PATCH /api/admin/models/access', () => {
@@ -434,6 +436,37 @@ describe('POST /api/admin/models/access/bulk', () => {
     expect((restored?.updatedAt as Date).getTime()).toBeGreaterThan((before?.updatedAt as Date).getTime());
     const undoAudits = (await audits()).filter(row => (row.details as { undoOf?: string }).undoOf === result.batchId);
     expect(undoAudits).toHaveLength(2);
+  });
+
+  it('refuses a replayed preview with 409 after its batch was undone, and applies nothing', async () => {
+    const change = { addTags: ['beta'] };
+    const preview = await dryRun(['model-0', 'model-1'], change);
+    const result = await apply(['model-0', 'model-1'], change, preview.token);
+    await bulk<ModelAccessBulkResult>({ undoToken: result.undoToken, reason: REASON });
+    expect(await storedValue()).toEqual([]);
+
+    await expect(apply(['model-0', 'model-1'], change, preview.token)).rejects.toMatchObject({
+      statusCode: 409,
+      message: 'This preview was already applied. Review the new one and apply again.',
+      additionalInfo: { dryRun: { ids: ['model-0', 'model-1'] } },
+    });
+    expect(await storedValue()).toEqual([]);
+  });
+
+  it('applies a preview submitted twice at once exactly once', async () => {
+    await seed(ids.map(id => entry(id)));
+    const preview = await dryRun(ids, { enabled: false });
+
+    const outcomes = await Promise.allSettled([
+      apply(ids, { enabled: false }, preview.token),
+      apply(ids, { enabled: false }, preview.token),
+    ]);
+
+    expect(outcomes.filter(outcome => outcome.status === 'fulfilled')).toHaveLength(1);
+    expect(outcomes.find(outcome => outcome.status === 'rejected')).toMatchObject({
+      reason: { statusCode: 409 },
+    });
+    expect(await audits()).toHaveLength(ids.length);
   });
 
   it('"Also remove base" narrows models to the tag, and its undo restores base and drops the tag in one write each', async () => {
