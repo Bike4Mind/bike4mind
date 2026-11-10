@@ -3,11 +3,11 @@
  *
  * `/subscriptions/checkout?plan=<plan>&return_to=<url>`: `plan` is a Stripe price id, or a name in
  * CHECKOUT_PLAN_ALIASES (routes/subscriptions/checkout.tsx) so an app outside this repo never has to
- * carry one. `return_to` is honoured only for an origin in CHECKOUT_RETURN_ORIGINS. Stripe still returns to this app's own origin (the
- * subscribe route allows no other), carrying the target as CHECKOUT_RETURN_PARAM, and
- * StripeCheckoutSuccessHandler forwards there once the purchase is confirmed and reported, or at
- * once on a cancel. Nothing here touches the server: the open-redirect guard on Stripe's callback
- * URLs (server/integrations/stripe/callbackUrl.ts) is unchanged.
+ * carry one. `return_to` is honoured only for an origin in CHECKOUT_RETURN_ORIGINS. Stripe still
+ * returns to this app's own origin (the subscribe route allows no other), carrying the target as
+ * CHECKOUT_RETURN_PARAM, and StripeCheckoutSuccessHandler forwards there once the purchase is
+ * confirmed and reported, or at once on a cancel. Nothing here touches the server: the open-redirect
+ * guard on Stripe's callback URLs (server/integrations/stripe/callbackUrl.ts) is unchanged.
  */
 
 /** Apps a checkout may return to. Exact origins, https only. */
