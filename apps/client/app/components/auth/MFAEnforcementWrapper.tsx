@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
 import { useMFAStatus, useSetupMFA, useVerifyMFASetup } from '@client/app/hooks/data/mfa';
@@ -112,8 +112,9 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
   // refusal so the enrollment flow renders instead of an app whose every call fails. One refetch
   // at a time: a burst of refusals would otherwise re-run the settings load once per 403. Re-arm
   // when it settles, since a failed or stale refetch must not leave later refusals ignored.
+  // Layout effect: must register before any child's on-mount request (child effects run first).
   const refusalRefetchInFlightRef = useRef(false);
-  useEffect(
+  useLayoutEffect(
     () =>
       registerMfaEnrollmentInterceptor(api, () => {
         if (refusalRefetchInFlightRef.current) return;

@@ -455,6 +455,31 @@ describe('MFAEnforcementWrapper - a user this browser knows is enrolled', () => 
     expect(screen.queryByTestId('app-content')).toBeNull();
   });
 
+  it('has the refusal interceptor registered before a child effect issues its first request', () => {
+    writeMfaEnrolledHint('u1', true);
+    get.mockImplementation(neverSettles);
+    let registeredAtChildEffect = -1;
+    const Child = () => {
+      React.useEffect(() => {
+        registeredAtChildEffect = interceptorUse.mock.calls.length;
+      }, []);
+      return <div data-testid="app-content" />;
+    };
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <QueryClientProvider client={queryClient}>
+          <MFAEnforcementWrapper>
+            <Child />
+          </MFAEnforcementWrapper>
+        </QueryClientProvider>
+      </CssVarsProvider>
+    );
+
+    expect(registeredAtChildEffect).toBeGreaterThan(0);
+  });
+
   it('blocks on a server refusal even when the background status check fails', async () => {
     writeMfaEnrolledHint('u1', true);
     let fail: (error: Error) => void = () => {};
