@@ -5,6 +5,8 @@ import SwiftUI
 /// streaming replies with the same view by swapping the message's text.
 struct MessageBubble: View {
   let message: TranscriptMessage
+  @Environment(\.openWebPage) private var openWebPage
+  @Environment(AuthController.self) private var auth
 
   private var isUser: Bool { message.role == .user }
 
@@ -13,6 +15,7 @@ struct MessageBubble: View {
       if isUser { Spacer(minLength: Tokens.Spacing.xxl) }
       VStack(alignment: isUser ? .trailing : .leading, spacing: Tokens.Spacing.xs) {
         bubble
+          .contextMenu { if !message.text.isEmpty { contextActions } }
         footer
       }
       if !isUser { Spacer(minLength: Tokens.Spacing.xxl) }
@@ -20,6 +23,12 @@ struct MessageBubble: View {
     .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(message.accessibilityLabel())
+  }
+
+  @ViewBuilder
+  private var contextActions: some View {
+    Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = message.text }
+    ShareLink(item: message.text) { Label("Share", systemImage: "square.and.arrow.up") }
   }
 
   @ViewBuilder
@@ -33,7 +42,7 @@ struct MessageBubble: View {
           .textSelection(.enabled)
       }
       if let action = message.pendingAction {
-        PendingActionCard(action: action)
+        PendingActionCard(action: action, openWeb: { openWebPage(auth.environment.baseURL) })
       }
     }
     .padding(.horizontal, Tokens.Spacing.m)
@@ -55,6 +64,11 @@ struct MessageBubble: View {
     HStack(spacing: Tokens.Spacing.s) {
       if let badge = message.badge {
         StatusBadge(badge: badge)
+        if case .outOfCredits = badge {
+          Button("Manage credits") { openWebPage(auth.environment.baseURL) }
+            .buttonStyle(.borderless)
+            .accessibilityIdentifier("message-manage-credits-btn")
+        }
       }
       Text(RelativeTime.describe(message.createdAt))
       if !isUser, let credits = message.creditsUsed {
@@ -111,18 +125,25 @@ struct StatusBadge: View {
 /// API contract yet (see `ApprovalState.canRespondInApp`), so the card points to the web.
 private struct PendingActionCard: View {
   let action: PendingAction
+  let openWeb: () -> Void
 
   var body: some View {
     VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
       Label(action.tool, systemImage: "wrench.and.screwdriver")
         .font(Tokens.Typography.caption.weight(.semibold))
       TimelineView(.periodic(from: .now, by: 30)) { context in
-        Text(
-          action.hasLapsed(at: context.date)
-            ? "This request expired." : "Approve or deny this on Bike4Mind for the web."
-        )
-        .font(Tokens.Typography.meta)
-        .foregroundStyle(Tokens.Palette.secondaryText)
+        let hasLapsed = action.hasLapsed(at: context.date)
+        VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
+          Text(hasLapsed ? "This request expired." : "Approve or deny this on Bike4Mind for the web.")
+            .font(Tokens.Typography.meta)
+            .foregroundStyle(Tokens.Palette.secondaryText)
+          if !hasLapsed {
+            Button("Review on the web", action: openWeb)
+              .font(Tokens.Typography.meta.weight(.semibold))
+              .buttonStyle(.borderless)
+              .accessibilityIdentifier("message-review-on-web-btn")
+          }
+        }
       }
       ForEach(action.parameters.sorted(by: { $0.key < $1.key }), id: \.key) { name, value in
         Text("\(name): \(value)")
@@ -136,5 +157,17 @@ private struct PendingActionCard: View {
     .background(Tokens.Palette.background.opacity(0.6))
     .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.control, style: .continuous))
     .accessibilityIdentifier("message-pending-action")
+  }
+}
+
+private struct OpenWebPageKey: EnvironmentKey {
+  static let defaultValue: @MainActor (URL) -> Void = { _ in }
+}
+
+extension EnvironmentValues {
+  /// Opens a page in the in-app Safari sheet owned by the enclosing screen (see `View.inAppSafari`).
+  var openWebPage: @MainActor (URL) -> Void {
+    get { self[OpenWebPageKey.self] }
+    set { self[OpenWebPageKey.self] = newValue }
   }
 }

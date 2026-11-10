@@ -7,7 +7,7 @@ public enum Route: Hashable, Sendable {
   /// The Sessions tab root.
   case sessions
   case session(id: String)
-  /// The Lakes tab root.
+  /// The Lakes root. There is no Lakes tab, so `AppNavigator` opens it on the web and stays on the current tab.
   case lakes
   /// No native lake screen exists yet, so `AppNavigator` opens the lake on the web and stays on the current tab.
   /// `DeepLinkRouter` already sends lake links as `.web` with the original URL; this case is for other producers.
@@ -25,10 +25,9 @@ public enum Route: Hashable, Sendable {
   public var tab: AppTab? {
     switch self {
     case .sessions, .session, .compose: .sessions
-    case .lakes: .lakes
     case .media: .media
     case .settings: .settings
-    case .lake, .web: nil
+    case .lakes, .lake, .web: nil
     }
   }
 }

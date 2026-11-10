@@ -19,6 +19,15 @@ struct MediaDetailView: View {
     .navigationTitle(model.item.displayTitle)
     .navigationBarTitleDisplayMode(.inline)
     .toolbarBackground(.visible, for: .navigationBar)
+    .toolbar {
+      if let url = model.item.url {
+        ToolbarItem(placement: .topBarTrailing) {
+          // The bytes are not on disk (AsyncImage and AVPlayer stream the signed URL), so the link is what is shared.
+          ShareLink(item: url)
+            .accessibilityIdentifier("media-share-btn")
+        }
+      }
+    }
     .task { await model.prepare() }
   }
 

@@ -78,7 +78,7 @@ final class DeepLinkRouterTests: XCTestCase {
   func testRoutesKnowTheirTab() {
     XCTAssertEqual(Route.session(id: "a").tab, .sessions)
     XCTAssertNil(Route.lake(id: "a").tab)
-    XCTAssertEqual(Route.lakes.tab, .lakes)
+    XCTAssertNil(Route.lakes.tab)
     XCTAssertEqual(Route.media.tab, .media)
     XCTAssertEqual(Route.settings.tab, .settings)
     XCTAssertNil(Route.web(URL(string: "https://app.bike4mind.com/x")!).tab)

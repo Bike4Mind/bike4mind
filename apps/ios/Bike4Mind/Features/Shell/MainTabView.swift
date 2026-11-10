@@ -16,12 +16,6 @@ struct MainTabView: View {
       .tag(AppTab.sessions)
 
       NavigationStack {
-        LakesPlaceholderScreen()
-      }
-      .tabItem { Label("Lakes", systemImage: "drop") }
-      .tag(AppTab.lakes)
-
-      NavigationStack {
         MediaGalleryView()
       }
       .tabItem { Label("Media", systemImage: "photo.on.rectangle") }
@@ -52,24 +46,4 @@ struct MainTabView: View {
 private struct NewConversationSheet: Identifiable {
   let request: ComposeRequest
   var id: ComposeRequest { request }
-}
-
-/// The Lakes tab has no native screen yet, so it points at the web app instead of promising one.
-struct LakesPlaceholderScreen: View {
-  @Environment(AuthController.self) private var auth
-  @State private var webPage: URL?
-
-  var body: some View {
-    ContentUnavailableView {
-      Label("Data Lakes", systemImage: "drop")
-    } description: {
-      Text("Browsing data lakes isn't in the app yet. Open Bike4Mind on the web to work with them.")
-    } actions: {
-      Button("Open Bike4Mind on the Web") { webPage = auth.environment.baseURL }
-        .buttonStyle(.borderedProminent)
-        .accessibilityIdentifier("lakes-open-web-btn")
-    }
-    .navigationTitle("Lakes")
-    .inAppSafari(url: $webPage)
-  }
 }

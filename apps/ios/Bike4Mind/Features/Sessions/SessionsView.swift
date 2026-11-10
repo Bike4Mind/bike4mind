@@ -83,6 +83,7 @@ private struct SessionsListScreen: View {
     Button(action: startConversation) {
       Label("New Conversation", systemImage: "square.and.pencil")
     }
+    .accessibilityLabel("New conversation")
     .accessibilityIdentifier("sessions-new-conversation-btn")
   }
 

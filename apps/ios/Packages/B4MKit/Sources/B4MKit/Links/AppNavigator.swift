@@ -52,8 +52,10 @@ public final class AppNavigator {
       if case .session(let id) = request.target, sessionPath.last?.id != id {
         sessionPath = [.placeholder(id: id, name: request.sessionName)]
       }
-    case .lakes, .media, .settings:
+    case .media, .settings:
       break
+    case .lakes:
+      externalURL = Self.webURLForLakes
     case .lake(let id):
       externalURL = Self.webURL(forLake: id)
     case .web(let url):
@@ -78,6 +80,8 @@ public final class AppNavigator {
     return composeRequest
   }
 
+  static var webURLForLakes: URL? { URL(string: "https://\(DeepLinkRouter.appHost)/lakes") }
+
   /// Same shape as the universal link `DeepLinkRouter` reads, so the web app resolves it the same way.
   static func webURL(forLake id: String) -> URL? {
     guard DeepLinkRouter.isValidIdentifier(id) else { return nil }
@@ -95,8 +99,8 @@ public final class AppNavigator {
     switch route {
     case .session(let id): return sessionPath.last?.id == id
     case .sessions: return sessionPath.isEmpty
-    case .lakes, .media, .settings: return true
-    case .lake, .web, .compose: return false
+    case .media, .settings: return true
+    case .lakes, .lake, .web, .compose: return false
     }
   }
 }

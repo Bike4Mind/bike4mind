@@ -41,8 +41,9 @@ struct CaptureMenu: View {
       Button("Voice Note", systemImage: "mic") { flow = .voice }
         .accessibilityIdentifier("capture-voice-btn")
     } label: {
-      Label("Capture", systemImage: "plus.circle")
+      Label("Capture", systemImage: "plus.viewfinder")
     }
+    .accessibilityLabel("Capture")
     .accessibilityIdentifier("capture-menu")
     .photosPicker(isPresented: $isPickingPhotos, selection: $pickedPhotos, maxSelectionCount: 10, matching: .images)
     .onChange(of: pickedPhotos) { _, picked in

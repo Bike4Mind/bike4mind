@@ -46,6 +46,7 @@ private struct ChatScreen: View {
       .background(Tokens.Palette.background)
       .safeAreaInset(edge: .bottom) { composer }
       .inAppSafari(url: $linkedPage)
+      .environment(\.openWebPage, { linkedPage = $0 })
       .sheet(isPresented: $isRecordingVoice) {
         VoiceRecorderPanel(
           onTranscript: { text in
