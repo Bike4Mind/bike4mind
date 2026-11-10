@@ -106,8 +106,11 @@ async function confirmCheckout(sessionId: string): Promise<void> {
 /** How long the confirmation stays on screen before a checkout started elsewhere returns there. */
 export const CHECKOUT_RETURN_DELAY_MS = 1500;
 
-/** Sends the buyer back to the app that started the checkout. Exported for its test. */
-export const checkoutReturnNavigator = { assign: (url: string) => window.location.assign(url) };
+/**
+ * Sends the buyer back to the app that started the checkout. Exported for its test. replace, not assign:
+ * this page only forwards, so Back from that app must not land here and be forwarded again.
+ */
+export const checkoutReturnNavigator = { replace: (url: string) => window.location.replace(url) };
 
 const StripeCheckoutSuccessHandler = () => {
   const queryClient = useQueryClient();
@@ -123,7 +126,7 @@ const StripeCheckoutSuccessHandler = () => {
 
     if (subscriptionSuccess !== 'true' && returnTo) {
       // Stripe's cancel_url carries no success marker: nothing was bought, so go straight back.
-      checkoutReturnNavigator.assign(returnTo);
+      checkoutReturnNavigator.replace(returnTo);
       return;
     }
 
@@ -142,7 +145,7 @@ const StripeCheckoutSuccessHandler = () => {
       if (returnTo) {
         void confirmed
           .catch(() => undefined)
-          .then(() => setTimeout(() => checkoutReturnNavigator.assign(returnTo), CHECKOUT_RETURN_DELAY_MS));
+          .then(() => setTimeout(() => checkoutReturnNavigator.replace(returnTo), CHECKOUT_RETURN_DELAY_MS));
       }
 
       // Clean up URL without triggering a refresh. Strip only OUR two params and
@@ -153,6 +156,7 @@ const StripeCheckoutSuccessHandler = () => {
       if (searchParams.has(BILLING_SEARCH_PARAM)) markBillingCheckoutReturn();
       searchParams.delete('subscription_success');
       searchParams.delete('checkout_session_id');
+      searchParams.delete(CHECKOUT_RETURN_PARAM);
       const remaining = searchParams.toString();
       const newUrl = `${window.location.pathname}${remaining ? `?${remaining}` : ''}${window.location.hash}`;
       window.history.replaceState({}, '', newUrl);

@@ -163,37 +163,38 @@ describe('checkoutConfirmation', () => {
     });
 
     it('returns there only after the purchase is confirmed and reported', async () => {
-      const assign = vi.spyOn(checkoutReturnNavigator, 'assign').mockImplementation(() => undefined);
+      const replace = vi.spyOn(checkoutReturnNavigator, 'replace').mockImplementation(() => undefined);
       vi.useFakeTimers({ shouldAdvanceTime: true });
       try {
         returnTo(`?${back}&subscription_success=true&checkout_session_id=cs_test_1`);
         await waitFor(() => expect(mockTrackPurchaseConversion).toHaveBeenCalledOnce());
-        expect(assign).not.toHaveBeenCalled();
+        expect(replace).not.toHaveBeenCalled();
+        expect(window.location.search).toBe('');
         await vi.advanceTimersByTimeAsync(CHECKOUT_RETURN_DELAY_MS);
-        expect(assign).toHaveBeenCalledExactlyOnceWith(PAINTBOX);
+        expect(replace).toHaveBeenCalledExactlyOnceWith(PAINTBOX);
       } finally {
         vi.useRealTimers();
-        assign.mockRestore();
+        replace.mockRestore();
       }
     });
 
     it('returns there at once from a cancelled checkout', () => {
-      const assign = vi.spyOn(checkoutReturnNavigator, 'assign').mockImplementation(() => undefined);
+      const replace = vi.spyOn(checkoutReturnNavigator, 'replace').mockImplementation(() => undefined);
       returnTo(`?${back}`);
-      expect(assign).toHaveBeenCalledExactlyOnceWith(PAINTBOX);
+      expect(replace).toHaveBeenCalledExactlyOnceWith(PAINTBOX);
       expect(mockToastSuccess).not.toHaveBeenCalled();
-      assign.mockRestore();
+      replace.mockRestore();
     });
 
     it('never follows a return target it does not allow', async () => {
-      const assign = vi.spyOn(checkoutReturnNavigator, 'assign').mockImplementation(() => undefined);
+      const replace = vi.spyOn(checkoutReturnNavigator, 'replace').mockImplementation(() => undefined);
       for (const target of ['https://evil.example/', 'http://paintbox.bike4mind.com/', 'javascript:alert(1)']) {
         returnTo(`?checkout_return_to=${encodeURIComponent(target)}`);
         returnTo(`?checkout_return_to=${encodeURIComponent(target)}&subscription_success=true`);
       }
       await settle();
-      expect(assign).not.toHaveBeenCalled();
-      assign.mockRestore();
+      expect(replace).not.toHaveBeenCalled();
+      replace.mockRestore();
     });
   });
 });
