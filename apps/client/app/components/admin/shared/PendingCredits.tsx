@@ -36,7 +36,6 @@ const NOOP_COPY: Readonly<Record<string, string>> = {
 export const pendingNoopCopy = (reason: string | null | undefined): string =>
   (reason && NOOP_COPY[reason]) || 'Nothing changed.';
 
-/** Chips naming the states that change what an admin should do with the account. */
 const InviteBonusChip: React.FC<{ bonusPaid: number | null }> = ({ bonusPaid }) => (
   <StatusChip
     tone={bonusPaid ? 'good' : 'neutral'}
@@ -51,6 +50,7 @@ const InviteBonusChip: React.FC<{ bonusPaid: number | null }> = ({ bonusPaid }) 
   />
 );
 
+/** Chips naming the states that change what an admin should do with the account. */
 export const PendingCreditsChips: React.FC<{ pending: AdminSignupGrantPending }> = ({ pending }) => (
   <Stack direction="row" flexWrap="wrap" gap={0.75} data-testid="pending-credits-chips">
     {pending.blocked && <StatusChip tone="bad" dot label="Blocked" data-testid="pending-credits-chip-blocked" />}

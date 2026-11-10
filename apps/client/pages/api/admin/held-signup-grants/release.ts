@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { assertCanActOnAdminTarget } from '@bike4mind/common';
 import { userRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
@@ -38,6 +39,8 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:a
           target: { kind: 'user', id: userId, displayName: userId },
         });
       }
+      for (const account of await userRepository.findAdminTargetsByIds(userIds))
+        assertCanActOnAdminTarget(req.user, account, 'release signup credits for');
       if (parsed.data.dryRun) {
         const preview = await userService.previewSignupGrantAction(
           { action: 'release_held', userIds },

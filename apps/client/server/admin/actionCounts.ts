@@ -96,7 +96,7 @@ export const ADMIN_ACTION_COUNTERS: Record<AdminActionCountKey, AdminActionCount
     count: ({ cap }) => imageModerationIncidentRepository.countPendingReview({ limit: cap }),
   },
   heldSignupGrants: {
-    access: 'fullAdmin',
+    access: 'credits:adjust',
     count: ({ cap }) => signupGrantReleaseRepository.countHeld(undefined, { limit: cap }),
   },
   signupDomainHolds: {

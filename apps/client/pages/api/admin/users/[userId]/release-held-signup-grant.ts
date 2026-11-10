@@ -8,7 +8,9 @@ import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/admi
 const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:adjust' } })
   .use(csrfProtection())
   .post(async (req, res) => {
-    const { userId, reason, target } = await readSignupGrantAdminAction(req, 'user.credits.adjusted');
+    const { userId, reason, target } = await readSignupGrantAdminAction(req, 'user.credits.adjusted', {
+      guardTargetVerb: 'release signup credits for',
+    });
     const result = await userService.releaseHeldSignupGrant(userId, buildHeldGrantAdapters(req.logger));
     if (result.outcome === 'applied') {
       // The payout has committed, so a failed audit write is logged rather than failing a paid release.

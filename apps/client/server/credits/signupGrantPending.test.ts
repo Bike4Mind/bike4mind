@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PENDING_FREE_CREDITS_TAG, type SignupGrant } from '@bike4mind/common';
+import { PENDING_FREE_CREDITS_TAG, type SignupGrant, type SignupGrantAssessment } from '@bike4mind/common';
 import { buildSignupGrantPending, type SignupGrantPendingInput } from './signupGrantPending';
 
 const SCHEDULE = { dripCap: 900, dailyCredits: 50 };
@@ -117,6 +117,30 @@ describe('buildSignupGrantPending', () => {
       { source: 'organization', bonusPaid: 25 }
     );
     expect(build({ signupGrant: grant({ inviteBonusPaid: 25 }), tags: [] }).invite).toBeNull();
+  });
+
+  it('reports no invite bonus, not pending, for an invited account that can never earn it', () => {
+    const referral = { source: 'referral' as const, inviteId: 'inv-1', at: new Date('2026-11-01T00:00:00Z') };
+    const forfeited = grant({ unlockForfeited: { cause: 'dispute', at: new Date('2026-11-02T00:00:00Z') } });
+    const assessment = (credits: number): SignupGrantAssessment => ({
+      band: credits === 100 ? 'full' : 'reduced',
+      credits,
+      score: null,
+      reasons: [],
+      missing: [],
+      policyVersion: null,
+      status: 'evaluated',
+    });
+    for (const user of [
+      { signupInvite: referral, tags: [] },
+      { signupGrant: forfeited, signupInvite: referral, tags: [] },
+      { signupGrant: grant(), signupGrantAssessment: assessment(40), signupInvite: referral, tags: [] },
+    ]) {
+      expect(build(user).invite).toEqual({ source: 'referral', bonusPaid: 0 });
+    }
+    expect(
+      build({ signupGrant: grant(), signupGrantAssessment: assessment(100), signupInvite: referral, tags: [] }).invite
+    ).toEqual({ source: 'referral', bonusPaid: null });
   });
 
   it('answers an account with no grant: nothing pending and every action explains itself', () => {

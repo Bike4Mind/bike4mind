@@ -61,7 +61,8 @@ export const adminSignupGrantPendingSchema = z.object({
   lastActivityCreditDay: z.string().nullable(),
   /**
    * The invite the account signed up through, or null without one. `bonusPaid`: null while the invite bonus
-   * is undecided, 0 once settled with nothing paid, otherwise the credits paid.
+   * may still be paid, 0 once settled with nothing paid or when the account can no longer earn it (no grant, a
+   * forfeited unlock, a reduced tranche), otherwise the credits paid.
    */
   invite: z.object({ source: z.enum(['referral', 'organization']), bonusPaid: z.number().nullable() }).nullable(),
   actions: z.object({

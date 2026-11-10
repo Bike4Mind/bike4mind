@@ -149,4 +149,20 @@ describe('admin signup unlock', () => {
       })
     );
   });
+  it.each([
+    ['a full admin', { id: 'user-1', isAdmin: true }],
+    ['another delegate', { id: 'user-1', adminPermissions: ['support:read'] }],
+  ])('refuses a delegate acting on %s before any credits move', async (_label, target) => {
+    h.findById.mockResolvedValue(target);
+    const delegate = { id: 'admin-1', isAdmin: false, adminPermissions: ['credits:adjust'] };
+    await expect(h.handler!({ ...request(), user: delegate }, { json: vi.fn() })).rejects.toThrow(
+      'Only full administrators can release signup credits for users with admin access'
+    );
+    expect(h.unlock).not.toHaveBeenCalled();
+  });
+  it('lets a full admin act on an account with admin access', async () => {
+    h.findById.mockResolvedValue({ id: 'user-1', isAdmin: true });
+    await h.handler!(request(), { json: vi.fn() });
+    expect(h.unlock).toHaveBeenCalledOnce();
+  });
 });

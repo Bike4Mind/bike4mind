@@ -33,7 +33,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@bike4mind/services', () => ({
   userService: { MAX_BULK_RELEASE: 100, bulkReleaseHeldGrants: release, previewSignupGrantAction: preview },
 }));
-vi.mock('@bike4mind/database', () => ({ userRepository: { repo: true } }));
+const findAdminTargetsByIds = vi.hoisted(() => vi.fn());
+const userRepository = vi.hoisted(() => ({ repo: true, findAdminTargetsByIds }));
+vi.mock('@bike4mind/database', () => ({ userRepository }));
 vi.mock('@bike4mind/server-utils/credits/heldSignupGrantAdapters', () => ({
   buildHeldGrantAdapters: () => ({ grant: {} }),
   heldGrantBatches: { batches: true },
@@ -65,6 +67,7 @@ const run = async (body: unknown, isAdmin = true, user: Record<string, unknown> 
 };
 beforeEach(() => {
   release.mockReset().mockResolvedValue({ batchId: 'b1', results: [] });
+  findAdminTargetsByIds.mockReset().mockResolvedValue([]);
   preview.mockReset().mockResolvedValue({ dryRun: true, results: [], undoUserIds: [] });
   audit.record.mockReset();
   audit.deny.mockReset().mockRejectedValue(Object.assign(new Error('own account'), { statusCode: 403 }));
@@ -163,7 +166,7 @@ describe('POST /api/admin/held-signup-grants/release', () => {
       expect(res.statusCode).toBe(200);
       expect(preview).toHaveBeenCalledExactlyOnceWith(
         { action: 'release_held', userIds: [id(1)] },
-        { users: { repo: true } }
+        { users: userRepository }
       );
       expect(release).not.toHaveBeenCalled();
       expect(audit.record).not.toHaveBeenCalled();
@@ -173,6 +176,28 @@ describe('POST /api/admin/held-signup-grants/release', () => {
       expect((await run({ userIds: [id(1)], dryRun: true }, false)).statusCode).toBe(403);
       expect((await run({ userIds: [id(1)], dryRun: true }, true, { id: id(1) })).statusCode).toBe(403);
       expect(preview).not.toHaveBeenCalled();
+    });
+  });
+  describe('accounts with admin access', () => {
+    const otherAdmin = { id: id(2), isAdmin: true };
+    const otherDelegate = { id: id(3), adminPermissions: ['support:read'] };
+    it.each([
+      ['a full admin', otherAdmin],
+      ['another delegate', otherDelegate],
+    ])('refuses a delegate releasing to %s, dry run included, before anything is paid', async (_label, target) => {
+      findAdminTargetsByIds.mockResolvedValue([{ id: id(1) }, target]);
+      for (const dryRun of [false, true]) {
+        const res = await run({ userIds: [id(1), target.id], dryRun }, false, { adminPermissions: ['credits:adjust'] });
+        expect(res.statusCode).toBe(403);
+      }
+      expect(findAdminTargetsByIds).toHaveBeenCalledWith([id(1), target.id]);
+      expect(release).not.toHaveBeenCalled();
+      expect(preview).not.toHaveBeenCalled();
+    });
+    it('lets a full admin release to an account with admin access', async () => {
+      findAdminTargetsByIds.mockResolvedValue([otherAdmin]);
+      expect((await run({ userIds: [otherAdmin.id] })).statusCode).toBe(200);
+      expect(release).toHaveBeenCalledOnce();
     });
   });
 });

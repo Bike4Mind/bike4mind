@@ -53,6 +53,7 @@ A page whose edits need `settings:manage` also opens to `settings:manage` alone 
 | Modals | `settings:manage` |
 | Retrieval, Webhook logs, Help analytics, API key scopes, Integration demand, Audit log, Approvals, Stripe disputes, Shadow detections | `support:read` |
 | Tools, Gears, Stuck executions | `support:read` or `settings:manage` |
+| Held signup grants | `credits:adjust` |
 
 Other tabs require full admin access. Inside an open tab, an action the delegate cannot perform is disabled and names the permission it needs, such as "Missing permission: users:moderate". A detail page under a tab the delegate cannot open, such as a user profile, shows "Full admin access required" in place of the page.
 
@@ -78,7 +79,7 @@ Holding every explicit permission is not the same as being a full admin. A user 
 
 On routes using `assertCanActOnAdminTarget`, delegated admins cannot act on users who themselves have admin access. For example, a delegated admin with `settings:manage` can change a regular user's free-form tags but cannot change another admin's tags. The error message is: "Only full administrators can [action] users with admin access".
 
-Routes that call `assertCanActOnAdminTarget` enforce this guard: deletion scheduling and cancellation, tag changes, internal-mark changes, and signup grant actions. A full administrator is not subject to this particular restriction.
+Routes that call `assertCanActOnAdminTarget` enforce this guard: deletion scheduling and cancellation, tag changes, internal-mark changes, and signup grant actions (blocking, unblocking, releasing held or remaining signup credits, and revoking a held grant release). A full administrator is not subject to this particular restriction.
 
 ## Declaring a permission on an admin route
 

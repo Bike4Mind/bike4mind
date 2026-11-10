@@ -33,6 +33,16 @@ const actionState = (verdict: userService.SignupGrantActionClass, permitted: boo
     : { available: false, reason: verdict.reason, permitted };
 
 /**
+ * States isInviteBonusEligible (b4m-core/services/src/userService/inviteBonus.ts) refuses for good: no later
+ * release can pay the bonus, so the panel reports it settled with none rather than pending.
+ */
+const inviteBonusUnpayable = ({
+  signupGrant: grant,
+  signupGrantAssessment: assessment,
+}: SignupGrantPendingInput['user']) =>
+  !grant || !!grant.unlockForfeited || (!!assessment && assessment.credits !== grant.signupCredits);
+
+/**
  * Everything the profile pending panel shows, read from the account and the live schedule only. Each action's
  * state comes from the same classifier the mutators and the bulk dry-run gate on, so the panel never offers
  * what the real run would refuse.
@@ -85,7 +95,12 @@ export function buildSignupGrantPending({
       pausedCredits: rewards.paused.credits,
     },
     lastActivityCreditDay: grant?.lastDripDay ?? null,
-    invite: user.signupInvite ? { source: user.signupInvite.source, bonusPaid: grant?.inviteBonusPaid ?? null } : null,
+    invite: user.signupInvite
+      ? {
+          source: user.signupInvite.source,
+          bonusPaid: grant?.inviteBonusPaid ?? (inviteBonusUnpayable(user) ? 0 : null),
+        }
+      : null,
     actions: {
       releaseHeld: actionState(classify('release_held'), true),
       releaseRemaining: actionState(classify('release_remaining'), viewerCanRelease),

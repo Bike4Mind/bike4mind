@@ -99,7 +99,7 @@ describe('computeAdminActionCounts access gating', () => {
     );
 
     expect(Object.keys(counts).sort()).toEqual(
-      ['deadLetters', 'modelLifecycle', 'sreAgent', 'stripeDisputes', 'waitingSubscribers'].sort()
+      ['deadLetters', 'heldSignupGrants', 'modelLifecycle', 'sreAgent', 'stripeDisputes', 'waitingSubscribers'].sort()
     );
   });
 
