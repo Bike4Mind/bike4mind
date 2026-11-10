@@ -589,11 +589,6 @@
       "count": 4
     }
   },
-  "apps/client/app/components/admin/SystemPromptsManager.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 2
-    }
-  },
   "apps/client/app/components/admin/Users/CreateUserModal.tsx": {
     "@typescript-eslint/no-explicit-any": {
       "count": 4
