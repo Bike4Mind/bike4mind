@@ -85,9 +85,12 @@ describe('POST /api/admin/held-signup-grants/revoke', () => {
     expect((await run({ batchId: 'a'.repeat(24) })).statusCode).toBe(404);
   });
   it('returns the per-user outcomes', async () => {
-    revoke.mockResolvedValue({ batchId: 'b', results: [{ userId: 'u', outcome: 'reversed', credits: 12 }] });
+    revoke.mockResolvedValue({
+      batchId: 'b',
+      results: [{ userId: 'u', outcome: 'reversed', credits: 12, heldRestored: true }],
+    });
     const res = await run({ batchId: 'a'.repeat(24) });
-    expect(res._getJSONData().results[0].outcome).toBe('reversed');
+    expect(res._getJSONData().results[0]).toMatchObject({ outcome: 'reversed', heldRestored: true });
     expect(revoke).toHaveBeenCalledWith({ batchId: 'a'.repeat(24), actorId: 'admin-1' }, expect.anything());
   });
   it('writes one audit entry per revoked account', async () => {
@@ -111,12 +114,10 @@ describe('POST /api/admin/held-signup-grants/revoke', () => {
     );
   });
   it('records in the audit entry that the account went back to the held queue', async () => {
-    findBatch.mockResolvedValue({
-      id: BATCH,
-      actorId: 'x',
-      entries: [{ userId: 'u', outcome: 'released', credits: 12, restore: { signupGrant: null } }],
+    revoke.mockResolvedValue({
+      batchId: 'b',
+      results: [{ userId: 'u', outcome: 'reversed', credits: 12, heldRestored: true }],
     });
-    revoke.mockResolvedValue({ batchId: 'b', results: [{ userId: 'u', outcome: 'reversed', credits: 12 }] });
     await run({ batchId: BATCH });
     expect(audit.record).toHaveBeenCalledExactlyOnceWith(
       expect.anything(),
