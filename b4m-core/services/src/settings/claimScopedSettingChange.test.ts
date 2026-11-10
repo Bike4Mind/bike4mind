@@ -140,6 +140,38 @@ describe('DefaultChunkSize change cooldown', () => {
     expect(cache.tryAddWithinLimitFixedWindow).not.toHaveBeenCalled();
   });
 
+  it('takes no claim and writes nothing when the cooldown setting cannot be read', async () => {
+    const { db, cache, scopedSettings } = setup({ DefaultChunkSizeChangeCooldownHours: 'soon' });
+
+    await expect(writeScopedOverride('DefaultChunkSize', ownerRef, '512', db)).rejects.toThrow();
+
+    expect(cache.tryAddWithinLimitFixedWindow).not.toHaveBeenCalled();
+    expect(scopedSettings.upsertOverride).not.toHaveBeenCalled();
+  });
+
+  it('runs afterWrite after the write, and not at all when the write rejects', async () => {
+    const { clock, db, scopedSettings } = setup();
+    const order: string[] = [];
+    scopedSettings.upsertOverride.mockImplementationOnce(async () => {
+      order.push('upsert');
+      return {} as never;
+    });
+    const afterWrite = vi.fn(async () => {
+      order.push('afterWrite');
+    });
+
+    await writeScopedOverride('DefaultChunkSize', ownerRef, '512', db, { afterWrite });
+    expect(order).toEqual(['upsert', 'afterWrite']);
+
+    clock.now = T0 + 25 * HOUR_MS;
+    scopedSettings.upsertOverride.mockRejectedValueOnce(new Error('db down'));
+    afterWrite.mockClear();
+    await expect(writeScopedOverride('DefaultChunkSize', ownerRef, '256', db, { afterWrite })).rejects.toThrow(
+      'db down'
+    );
+    expect(afterWrite).not.toHaveBeenCalled();
+  });
+
   it('claims and releases outside the caller transaction', async () => {
     const { cache, write, scopedSettings } = setup();
     scopedSettings.upsertOverride.mockRejectedValueOnce(new Error('db down'));

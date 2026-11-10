@@ -1688,11 +1688,39 @@ describe('fabFileVectorize handler - credit billing outside a data lake', () => 
   });
 
   it('gives the window reservation back when the holder cannot cover the credit hold', async () => {
-    h.reserveRequestCredits.mockRejectedValueOnce(new Error('insufficient credits'));
+    h.reserveRequestCredits.mockRejectedValueOnce(
+      Object.assign(new Error('insufficient credits'), { additionalInfo: { errorCode: 'insufficient_credits' } })
+    );
+    h.markFailedIfNotAlready.mockResolvedValue(true);
 
-    await dispatch(makeEvent(payload), {} as never, mockLogger).catch(() => undefined);
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
 
     expect(h.fileWindowRelease).toHaveBeenCalledTimes(1);
+    expect(h.deferFailureIfRetryable).not.toHaveBeenCalled();
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', 'insufficient credits');
+  });
+
+  it('keeps the provider error when giving the window reservation back also fails', async () => {
+    h.getVector.mockRejectedValueOnce(new Error('provider 503'));
+    h.fileWindowRelease.mockRejectedValueOnce(new Error('cache down'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow('provider 503');
+
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('failed to release reservation'));
+  });
+
+  it('defers, without failing the file, when the window limits cannot be read on a non-final delivery', async () => {
+    const { fileEmbeddingService } = await import('@bike4mind/services');
+    h.enforceFileEmbeddingSpendWindow.mockRejectedValueOnce(
+      new fileEmbeddingService.FileEmbeddingLimitResolutionError('could not resolve file embedding limits')
+    );
+    h.deferFailureIfRetryable.mockResolvedValue(true);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(
+      'could not resolve file embedding limits'
+    );
+
+    expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
   });
 
   it('gives the window reservation back, and rethrows for a retry, when the billing check fails', async () => {
