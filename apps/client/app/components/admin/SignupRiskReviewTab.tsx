@@ -25,6 +25,7 @@ import {
   type AdminSelection,
   type DataColumn,
 } from './shared';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
 import { SIGNUP_RISK_REVIEW_SEARCH_KEYS } from './signupRiskReviewSearch';
 import BulkAbuseResponseModal from './Users/BulkAbuseResponseModal';
 import { SignupRiskAutoApprovals } from './SignupRiskAutoApprovals';
@@ -323,7 +324,7 @@ export const SignupRiskReviewTab: React.FC = () => {
 
   return (
     <Stack
-      spacing={2}
+      spacing={ADMIN_REGION_GAP}
       sx={{ bgcolor: 'admin.canvas', color: 'admin.ink', borderRadius: 'md' }}
       data-testid="admin-signup-risk-review-tab"
     >
