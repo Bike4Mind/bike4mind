@@ -36,6 +36,12 @@ const handler = adminApi({
     await denySelfDataExport(req, target, ADMIN_DATA_EXPORT_REQUESTED_ACTION);
     const { user, auditTarget } = target;
 
+    // Mirrors the worker's skip, which would otherwise leave the export "building" with no reason given.
+    const { scheduledFor, purgeStartedAt } = user.deletion ?? {};
+    if (purgeStartedAt || (scheduledFor && new Date(scheduledFor).getTime() <= Date.now())) {
+      return res.status(409).json({ error: 'This account is being permanently deleted, so it cannot be exported.' });
+    }
+
     // Counted here rather than by the rateLimit middleware so a failed enqueue can give the slot back.
     const rateKey = `rate-limit:${user.id}:admin-data-export`;
     const quota = await cacheRepository.tryIncrementWithinLimitFixedWindow(rateKey, 1, EXPORT_WINDOW_MS);

@@ -159,6 +159,33 @@ describe('admin data subject export requests', () => {
     expect(h.send).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['permanent deletion has started', { purgeStartedAt: new Date() }],
+    ['permanent deletion is due', { scheduledFor: new Date(Date.now() - 1000) }],
+  ])('refuses with 409 when %s', async (_label, deletion) => {
+    h.findTarget.mockResolvedValue({ user: { id: USER_ID, deletion }, auditTarget: TARGET });
+    const { req, res } = mocks('POST', { reason: 'Art. 15 request' });
+
+    await h.post!(req, res);
+
+    expect(res._getStatusCode()).toBe(409);
+    expect(h.quota).not.toHaveBeenCalled();
+    expect(h.record).not.toHaveBeenCalled();
+    expect(h.send).not.toHaveBeenCalled();
+  });
+
+  it('queues an export of an account whose deletion is scheduled later', async () => {
+    h.findTarget.mockResolvedValue({
+      user: { id: USER_ID, deletion: { scheduledFor: new Date(Date.now() + 86_400_000) } },
+      auditTarget: TARGET,
+    });
+    const { req, res } = mocks('POST', { reason: 'Art. 15 request' });
+
+    await h.post!(req, res);
+
+    expect(res._getStatusCode()).toBe(202);
+  });
+
   it('allows one export of a user per 15 minutes and hands back the one in flight', async () => {
     h.quota.mockResolvedValue({ success: false, expiresAt: new Date(Date.now() + 90_000) });
     h.list.mockResolvedValue([
