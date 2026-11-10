@@ -198,8 +198,7 @@ export default function ManagerNav({
   // A branch's subfolders render without its own files, so only a true leaf waits on the fetch.
   const treeLoading =
     countsLoading || uncategorizedLoading || (!!folderTag && folderLoading && currentNodes.length === 0);
-  const treeError =
-    countsError || uncategorizedError || (!!folderTag && folderError && currentNodes.length === 0);
+  const treeError = countsError || uncategorizedError || (!!folderTag && folderError && currentNodes.length === 0);
 
   // TreeView highlights a SET of files (chat mode attaches several); the manager opens one at a
   // time, so this is that one id as a set.
