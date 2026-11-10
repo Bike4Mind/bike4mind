@@ -655,6 +655,14 @@ describe('/api/otc/send', () => {
         expect(second._getJSONData()).toEqual(first._getJSONData());
       });
 
+      it('adds the reuse signal next to the other signals', async () => {
+        mockVerifiedTokenId.mockReturnValue(tokenId('j1'));
+        mockEvaluateSignals.mockReturnValue(['signup_honeypot']);
+        await send({ formToken: 't' });
+        await send({ formToken: 't' }, OTHER);
+        expect(storedSignals()).toEqual([['signup_honeypot'], ['signup_honeypot', 'signup_token_reused']]);
+      });
+
       it('does not flag the same token resent for the same email, however it is cased', async () => {
         mockVerifiedTokenId.mockReturnValue(tokenId('j1'));
         await send({ formToken: 't' });
