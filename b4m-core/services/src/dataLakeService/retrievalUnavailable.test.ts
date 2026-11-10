@@ -188,7 +188,7 @@ describe('buildRetrievalUnavailableReport', () => {
 
     // Waiting still LEADS - it is the right first action for the ordinary case, which is the common one.
     expect(prose.indexOf('re-run the search then')).toBeLessThan(prose.indexOf('Rebuild passages'));
-    expect(prose).toContain('the rebuild did not finish');
+    expect(prose).toContain('indexing may have stalled');
     expect(prose).toContain('reprocess the files individually');
   });
 
@@ -228,6 +228,18 @@ describe('buildRetrievalUnavailableReport', () => {
 });
 
 describe('describeRetrievalUnavailable', () => {
+  // A first embedding (chunks written, vectors still landing, no rebuild requested) is withheld too;
+  // the notice must not claim a re-index or a replacement for it.
+  it('does not call a first embedding a re-index', () => {
+    const report = buildRetrievalUnavailableReport([
+      { id: 'f1', fileName: 'new.pdf', chunkCount: 4, vectorizedChunkCount: 1 },
+    ]);
+    expect(report.indexing.count).toBe(1);
+    const text = describeRetrievalUnavailable(report)!;
+    expect(text).toContain('still being indexed');
+    expect(text).not.toMatch(/re-index|being replaced/i);
+  });
+
   it('says nothing when the search was complete', () => {
     expect(describeRetrievalUnavailable(emptyRetrievalUnavailableReport())).toBeNull();
     expect(describeRetrievalUnavailable(undefined)).toBeNull();
@@ -275,7 +287,7 @@ describe('describeSearchLimitations / isPartialSearch', () => {
   it('reports an unavailable-content search as partial', () => {
     const s = search({ retrievalUnavailable: buildRetrievalUnavailableReport([{ id: 'f1' }]) });
     expect(isPartialSearch(s)).toBe(true);
-    expect(describeSearchLimitations(s)).toContain('being re-indexed');
+    expect(describeSearchLimitations(s)).toContain('still being indexed');
   });
 
   it('reports both reasons in one notice when both apply', () => {
@@ -288,7 +300,7 @@ describe('describeSearchLimitations / isPartialSearch', () => {
       search({ embeddingMismatch: mismatch, retrievalUnavailable: buildRetrievalUnavailableReport([{ id: 'f1' }]) })
     );
     expect(text).toContain('ada-002');
-    expect(text).toContain('being re-indexed');
+    expect(text).toContain('still being indexed');
   });
 
   const superseded = () =>
@@ -317,7 +329,7 @@ describe('describeSearchLimitations / isPartialSearch', () => {
       })
     );
     expect(text).toContain('ada-002');
-    expect(text).toContain('being re-indexed');
+    expect(text).toContain('still being indexed');
     expect(text).toContain('Protocol.pdf');
   });
 

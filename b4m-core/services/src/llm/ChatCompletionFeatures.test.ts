@@ -2814,7 +2814,7 @@ describe('KnowledgeRetrievalFeature supersession collapse (forced path)', () => 
     const { quest } = await run(ctx);
     const reasons =
       (quest.promptMeta as { retrievalCoverage?: { reasons: string[] } }).retrievalCoverage?.reasons ?? [];
-    expect(reasons.some(r => r.includes('re-indexed right now'))).toBe(true);
+    expect(reasons.some(r => r.includes('still being indexed'))).toBe(true);
     expect(reasons.some(r => r.includes('not ranked') || r.includes('superseded') || r.includes('old'))).toBe(false);
     expect((quest.promptMeta as { warnings?: string[] }).warnings?.[0]).toContain('superseded by new');
   });
@@ -2843,7 +2843,7 @@ describe('KnowledgeRetrievalFeature supersession collapse (forced path)', () => 
     expect(content).toContain('content of old');
     const reasons =
       (quest.promptMeta as { retrievalCoverage?: { reasons: string[] } }).retrievalCoverage?.reasons ?? [];
-    expect(reasons.some(r => r.includes('re-indexed right now'))).toBe(true);
+    expect(reasons.some(r => r.includes('still being indexed'))).toBe(true);
     expect(reasons.some(r => r.includes('were not ranked because this lake holds a version'))).toBe(false);
   });
 
