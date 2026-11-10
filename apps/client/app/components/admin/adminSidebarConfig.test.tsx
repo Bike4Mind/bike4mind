@@ -100,8 +100,6 @@ describe('SIDEBAR_SECTIONS', () => {
     expect(labelOf(AdminTab.GitHubConnection)).toBe('GitHub connection');
   });
 
-  });
-
   it('badges each counted queue once, and Subscriptions with its dot', () => {
     const badges = allItems.flatMap(item => (item.badge ? [item.badge] : []));
     expect(badges.sort()).toEqual([...ADMIN_ACTION_COUNT_KEYS, 'newSubscriptions'].sort());
