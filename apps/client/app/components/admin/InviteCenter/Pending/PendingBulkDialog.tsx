@@ -93,6 +93,10 @@ export function PendingBulkDialog({
               `${plural(restored.stateChanged)} received more credits since, so they were left as they are.`
             );
           if (restored.failed > 0) toast.warning(`${plural(restored.failed)} could not be restored.`);
+          if (restored.creditsOnly > 0)
+            toast.warning(
+              `${plural(restored.creditsOnly)} had no saved account state, so only the credits were taken back and they were not returned to the held queue.`
+            );
           if (restored.restored > 0)
             toast.success(
               kind === 'release'
