@@ -1,6 +1,7 @@
 import { beforeAll, afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { creditService, userService } from '@bike4mind/services';
 import { rerunDomainGrantAfterUnblock } from './rerunDomainGrantAfterUnblock';
+import { holdsPaidStanding } from '../entitlements/paidStanding';
 import { newSignupGrant, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 import type { SignupProtection } from '@bike4mind/common';
 import {
@@ -149,6 +150,12 @@ const reward = (userId: string, key: string, extra: Record<string, unknown> = {}
 });
 const balance = async (id: string) => (await User.findById(id).lean())?.currentCredits ?? 0;
 const rawUser = (id: string) => User.collection.findOne({ _id: new mongoose.Types.ObjectId(id) });
+const expectNoPaidStanding = async (id: string) => {
+  const user = await rawUser(id);
+  expect(user?.lastCreditsPurchasedAt ?? null).toBeNull();
+  expect(holdsPaidStanding({ lastCreditsPurchasedAt: user?.lastCreditsPurchasedAt ?? null }, [])).toBe(false);
+  expect(await CreditTransaction.countDocuments({ ownerId: id, type: 'purchase' })).toBe(0);
+};
 
 describe('block and unblock against a real database', () => {
   it('stores only a time on the grant, and unblock removes it while keeping the rest of the grant', async () => {
@@ -227,7 +234,7 @@ describe('a blocked grant pays nothing, from any path', () => {
     const row = await CreditTransaction.findOne({ reason: 'signup_unlock:admin' }).lean();
     expect(row).toMatchObject({ type: 'generic_add', credits: 28 });
     // Only a purchase stamps this; it confers paid standing, which a released grant must not.
-    expect((await rawUser(user.id))?.lastCreditsPurchasedAt ?? null).toBeNull();
+    await expectNoPaidStanding(user.id);
     expect(await userService.releaseRemainingSignupGrant(user.id, grantAdapters)).toEqual({
       outcome: 'noop',
       reason: 'nothing_remaining',
@@ -674,7 +681,7 @@ describe('admin release of a held tranche against a real database', () => {
     const paid = await rawUser(user.id);
     expect(paid?.tags ?? []).not.toContain(PENDING_FREE_CREDITS_TAG);
     expect(paid?.signupGrantHeldReason ?? null).toBeNull();
-    expect(paid?.lastCreditsPurchasedAt ?? null).toBeNull();
+    await expectNoPaidStanding(user.id);
 
     expect(await userService.releaseHeldSignupGrant(user.id, heldAdapters())).toEqual({
       outcome: 'noop',

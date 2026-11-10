@@ -124,7 +124,7 @@ vi.mock('@bike4mind/common', async importOriginal => ({
 vi.mock('@server/entitlements/invalidate', () => ({ pushEntitlementInvalidation: vi.fn() }));
 
 // Distinct identity so a test can prove the repository itself reaches the grant adapters.
-const grantPackageRepositoryStub = vi.hoisted(() => ({ marker: 'grant-package-repository' }));
+const grantPackageRepositoryStub = vi.hoisted(() => ({ marker: 'grant-package-repository', findById: vi.fn() }));
 const mockFindByEmail = vi.fn();
 const mockFindSetting = vi.fn();
 const mockClaimOnce = vi.fn();
@@ -1032,6 +1032,44 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
       expect.objectContaining({ credits: 150_000, transactionId: 'domain-grant-credits:user-1' })
     );
     expect(mockAddTagsToUser).toHaveBeenCalledWith('user-1', ['Partner']);
+  });
+
+  it('adds no credits on an expired package and tells the user in a domain signup notice', async () => {
+    mockPartnerGrant.mockResolvedValue({
+      matched: true,
+      entitlements: new Set(),
+      signupCredits: 0,
+      tags: [],
+      organizationId: null,
+      subscription: null,
+      grantPackageId: 'pkg-expired',
+    });
+    grantPackageRepositoryStub.findById.mockResolvedValue({
+      id: 'pkg-expired',
+      active: true,
+      credits: 500,
+      expiresAt: new Date(Date.now() - 60_000),
+    });
+    const { req, res } = makeReqRes('person@newpartner.com');
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(grantPackageRepositoryStub.findById).toHaveBeenCalledWith('pkg-expired');
+    expect(domainGrantCall()).toBeUndefined();
+    expect(res._getJSONData().signupGrantNotice).toBe(
+      'Signup credits for your email domain have expired, so none were added'
+    );
+  });
+
+  it('sends no signup notice when the domain grant pays', async () => {
+    mockPartnerGrant.mockResolvedValue({ matched: true, entitlements: new Set(), signupCredits: 150_000, tags: [] });
+    const { req, res } = makeReqRes('person@newpartner.com');
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).not.toHaveProperty('signupGrantNotice');
   });
 
   it('honors a DB rule that grants access with 0 bonus credits (no env fallback)', async () => {

@@ -13,6 +13,8 @@ import {
   mongoose,
   RegistrationInvite,
   registrationInviteRepository,
+  SignupGrantBudgetDayModel,
+  signupGrantBudgetRepository,
   User,
   userRepository,
 } from '@bike4mind/database';
@@ -33,6 +35,7 @@ const models = [
   GrantPackage,
   GrantPackageRedemption,
   GrantPackageDayCount,
+  SignupGrantBudgetDayModel,
 ];
 
 beforeAll(async () => {
@@ -55,6 +58,11 @@ afterAll(async () => {
 });
 beforeEach(async () => {
   for (const model of models) await model.collection.deleteMany({});
+  // Pools are funded so a metered grant would record a draw rather than be held.
+  await AdminSettings.insertMany([
+    { settingName: 'signupGrantSignupPoolDaily', settingValue: '1000000000' },
+    { settingName: 'signupGrantTricklePoolDaily', settingValue: '1000000000' },
+  ]);
 });
 
 const adapters = {
@@ -64,6 +72,17 @@ const adapters = {
     registrationInvites: registrationInviteRepository,
     creditTransactions: creditTransactionRepository,
     grantPackages: grantPackageRepository,
+    // What production passes on the verify path: domain protection plus the pool budget.
+    signupProtection: {
+      repository: {
+        findReview: async () => null,
+        observe: async () => {},
+        recent: async () => [],
+        createHold: async () => false,
+        isOrganizationDomain: async () => false,
+      },
+      grantBudget: { repository: signupGrantBudgetRepository },
+    },
   },
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 } as unknown as Parameters<typeof userService.registerViaOTC>[1];
@@ -85,13 +104,21 @@ const signUp = (username: string, email: string) =>
     )
   );
 
-async function seedPackage(totalCap: number, { expiresAt = null }: { expiresAt?: Date | null } = {}) {
+async function seedPackage(
+  totalCap: number,
+  {
+    expiresAt = null,
+    credits = 100,
+    legacy = false,
+  }: { expiresAt?: Date | null; credits?: number; legacy?: boolean } = {}
+) {
   const pkg = await GrantPackage.create({
     name: 'Synthetic package',
-    credits: 100,
+    credits,
     totalCap,
     dailyCap: null,
     expiresAt,
+    legacy,
     createdBy: 'synthetic-admin',
   });
   await RegistrationInvite.create({
@@ -138,5 +165,43 @@ describe('grant package redemption through OTC registration', () => {
       'This inbox has already received a signup grant'
     );
     expect(await User.countDocuments({ email: 'owner+1@gmail.com' })).toBe(0);
+  });
+});
+
+// A package grant is an explicit amount: it never draws the daily signup or trickle pools, never enrolls
+// the staged drip, and never confers the paid standing only a purchase stamps.
+describe('grant package payout invariants', () => {
+  async function expectUnmeteredUnpaid(userId: string) {
+    expect(await SignupGrantBudgetDayModel.countDocuments()).toBe(0);
+    const user = await User.collection.findOne({ _id: new mongoose.Types.ObjectId(userId) });
+    expect(user?.signupGrant ?? null).toBeNull();
+    expect(user?.signupGrantHeldReason ?? null).toBeNull();
+    expect(user?.lastCreditsPurchasedAt ?? null).toBeNull();
+    expect(await CreditTransaction.countDocuments({ ownerId: userId, type: 'purchase' })).toBe(0);
+  }
+
+  it('pays the package amount with no pool draw, no drip enrollment and no paid standing', async () => {
+    await seedPackage(5);
+    const user = await signUp('pkginvariant', 'invariant@example.test');
+
+    expect((await User.findById(user.id).lean())?.currentCredits).toBe(100);
+    expect(await CreditTransaction.countDocuments({ ownerId: user.id, type: 'generic_add', credits: 100 })).toBe(1);
+    await expectUnmeteredUnpaid(user.id);
+  });
+
+  it('pays nothing for a zero-credit package and still draws no pool', async () => {
+    await seedPackage(5, { credits: 0 });
+    const user = await signUp('pkgzero', 'zero@example.test');
+
+    expect((await User.findById(user.id).lean())?.currentCredits ?? 0).toBe(0);
+    await expectUnmeteredUnpaid(user.id);
+  });
+
+  it('pays a legacy package through the invite amount, still outside the pools and drip', async () => {
+    await seedPackage(5, { legacy: true });
+    const user = await signUp('pkglegacy', 'legacy@example.test');
+
+    expect((await User.findById(user.id).lean())?.currentCredits).toBe(100);
+    await expectUnmeteredUnpaid(user.id);
   });
 });
