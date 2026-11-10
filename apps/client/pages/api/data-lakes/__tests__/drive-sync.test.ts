@@ -29,6 +29,8 @@ const h = vi.hoisted(() => ({
   gatedFlags: [] as string[],
 }));
 
+// The plan gate has its own tests (server/entitlements/lakePlanGate.test.ts).
+vi.mock('@server/entitlements/lakePlanGate', () => ({ assertLakePlanAllowed: vi.fn(async () => undefined) }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const routes: Record<string, (req: unknown, res: unknown) => unknown> = {};

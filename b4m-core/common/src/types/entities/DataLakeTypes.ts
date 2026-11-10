@@ -244,8 +244,17 @@ export const LAKE_UNCOUNTED_STATUSES = ['deleting', 'deleted', 'purging'] as con
  */
 export const DATA_LAKE_LIMIT_REACHED_CODE = 'DATA_LAKE_LIMIT_REACHED';
 
+/**
+ * `code` on the 403 a lake create or connector connect gets when the plan gate is on and the caller
+ * holds no paid standing (apps/client/server/entitlements/lakePlanGate.ts).
+ */
+export const DATA_LAKE_PLAN_REQUIRED_CODE = 'DATA_LAKE_PLAN_REQUIRED';
+
 /** Refusal codes that a retry cannot clear: the user has to change something first. */
-export const DATA_LAKE_ENTITLEMENT_REFUSAL_CODES: readonly string[] = [DATA_LAKE_LIMIT_REACHED_CODE];
+export const DATA_LAKE_ENTITLEMENT_REFUSAL_CODES: readonly string[] = [
+  DATA_LAKE_LIMIT_REACHED_CODE,
+  DATA_LAKE_PLAN_REQUIRED_CODE,
+];
 
 type LakeIngestableStatus = (typeof LAKE_INGESTABLE_STATUSES)[number];
 

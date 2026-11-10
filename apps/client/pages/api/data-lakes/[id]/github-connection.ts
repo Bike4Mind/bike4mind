@@ -1,3 +1,4 @@
+import { assertLakePlanAllowed } from '@server/entitlements/lakePlanGate';
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
@@ -132,7 +133,8 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     // `|| {}`: a bodyless POST (the plain start) arrives as an empty string, not an object.
     const { ensureConnectorFed = false } = StartGitHubConnectBody.parse(req.body || {});
     const config = requireGitHubLakeAppConfig(getGitHubLakeAppConfig());
-    const { lakeId, curated } = await resolveConnectableLake(req.user, id, { allowCurated: ensureConnectorFed });
+    const { lakeId, owner, curated } = await resolveConnectableLake(req.user, id, { allowCurated: ensureConnectorFed });
+    await assertLakePlanAllowed(req, owner.kind === 'organization' ? owner.organizationId : undefined);
     // Mint before the switch: buildGitHubLakeAuthorizeUrl can still throw (a deployment missing APP_URL
     // or JWT_SECRET), and a start that hands out no URL must leave the lake curated. A refused switch
     // still replaces this browser's pending-flow nonce, same as any later start.

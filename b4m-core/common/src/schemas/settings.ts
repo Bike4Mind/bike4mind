@@ -604,6 +604,7 @@ export const SettingKeySchema = z.enum([
   'dataLakeEmbeddingTierMultiplierOrganization',
   'dataLakeEmbeddingBudgetPerOwnerPeriodUsd',
   'dataLakeMaxLakesPerUser',
+  'dataLakeRequirePaidPlan',
 
   // LAKE ACCESS AUDIT SETTINGS
   'LakeAccessAuditRetentionDays',
@@ -2855,7 +2856,10 @@ export const API_SERVICE_GROUPS = {
     name: 'Data Lake Limits',
     description: 'Who may create data lakes and connect lake sources, and how many lakes one user may keep',
     icon: 'Security',
-    settings: [{ key: 'dataLakeMaxLakesPerUser', order: 1 }],
+    settings: [
+      { key: 'dataLakeMaxLakesPerUser', order: 1 },
+      { key: 'dataLakeRequirePaidPlan', order: 2 },
+    ],
   },
   USAGE_PATTERN_SIGNALS: {
     id: 'usagePatternSignalsService',
@@ -7187,6 +7191,18 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.DATA_LAKE_LIMITS.id,
     order: 1,
+  }),
+  dataLakeRequirePaidPlan: makeBooleanSetting({
+    key: 'dataLakeRequirePaidPlan',
+    name: 'Require a Paid Plan for Data Lakes',
+    defaultValue: false,
+    description:
+      'When on, creating a data lake and connecting Google Drive or GitHub to one need paid standing: an active ' +
+      'paid subscription (an org seat included) or a credit purchase, or an organization on a paid plan for an ' +
+      'org lake. Admins and developers are exempt. Off by default.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DATA_LAKE_LIMITS.id,
+    order: 2,
   }),
   // Analytics Bot (existing production bot - DO NOT CHANGE)
   slackSigningSecret: makeStringSetting({
