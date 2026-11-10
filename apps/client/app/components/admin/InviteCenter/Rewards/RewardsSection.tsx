@@ -1,15 +1,15 @@
-import { useMemo } from 'react';
 import { Button, Stack, Typography } from '@mui/joy';
 import { settingsMap, type SettingKey } from '@bike4mind/common';
 import { useSettingsFromServer } from '@client/app/hooks/data/settings';
 import { SettingsDraftProvider } from '../../SettingsDraftProvider';
-import { ErrorState, LoadingState, SettingsSection } from '../../shared';
+import { ErrorState, LoadingState } from '../../shared';
 import { describeDerivedValue } from '../../AdminGrowthPricingTab';
 import { REWARD_KEYS } from '../../settingHomes';
 import { useOpenSettingHome } from '../../useOpenSettingHome';
-import { SettingKeyRow } from '../shared/SettingKeyRow';
+import { SettingBlocks, type SettingBlock } from '../shared/SettingBlocks';
+import { useStoredByKey } from '../shared/useStoredByKey';
 
-const BLOCKS: ReadonlyArray<{ id: string; title: string; description: string; keys: readonly SettingKey[] }> = [
+const BLOCKS: readonly SettingBlock[] = [
   {
     id: 'referral',
     title: 'Referral rewards for inviters',
@@ -25,15 +25,14 @@ const BLOCKS: ReadonlyArray<{ id: string; title: string; description: string; ke
   },
 ];
 
+const derivedValue = (key: SettingKey, stored: unknown) =>
+  describeDerivedValue(key, stored ?? settingsMap[key].defaultValue);
+
 export function RewardsSection() {
   const { data, isLoading, isError, isFetching, refetch } = useSettingsFromServer();
   const openSettingHome = useOpenSettingHome();
 
-  const storedByKey = useMemo(() => {
-    const map = new Map<string, unknown>();
-    for (const row of data ?? []) map.set(row.settingName, row.settingValue);
-    return map;
-  }, [data]);
+  const storedByKey = useStoredByKey(data);
 
   if (isLoading) return <LoadingState label="Loading rewards" testId="invite-center-rewards-loading" />;
   if (isError && !data) {
@@ -57,40 +56,12 @@ export function RewardsSection() {
         </Button>
       </Stack>
       <SettingsDraftProvider>
-        <Stack gap={2}>
-          {BLOCKS.map(block => (
-            <SettingsSection
-              key={block.id}
-              component="section"
-              sx={{ mb: 0 }}
-              data-testid={`invite-center-rewards-block-${block.id}`}
-            >
-              <Stack sx={{ gap: 0.5, mb: 2 }}>
-                <Typography level="title-md" component="h2" sx={{ color: 'admin.ink' }}>
-                  {block.title}
-                </Typography>
-                <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
-                  {block.description}
-                </Typography>
-              </Stack>
-              <Stack sx={{ gap: 1 }}>
-                {block.keys.map((key, index) => {
-                  const stored = storedByKey.get(key);
-                  return (
-                    <SettingKeyRow
-                      key={key}
-                      settingKey={key}
-                      stored={stored}
-                      index={index}
-                      testIdPrefix="invite-center-rewards"
-                      derived={describeDerivedValue(key, stored ?? settingsMap[key].defaultValue)}
-                    />
-                  );
-                })}
-              </Stack>
-            </SettingsSection>
-          ))}
-        </Stack>
+        <SettingBlocks
+          blocks={BLOCKS}
+          storedByKey={storedByKey}
+          testIdPrefix="invite-center-rewards"
+          derived={derivedValue}
+        />
       </SettingsDraftProvider>
     </Stack>
   );

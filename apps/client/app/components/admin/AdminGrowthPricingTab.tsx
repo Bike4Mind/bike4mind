@@ -17,6 +17,8 @@ import {
 } from '@bike4mind/common';
 import { useSettingsFromServer } from '@client/app/hooks/data/settings';
 import { SettingKeyRow } from './InviteCenter/shared/SettingKeyRow';
+import { SectionHeading } from './InviteCenter/shared/SettingBlocks';
+import { useStoredByKey } from './InviteCenter/shared/useStoredByKey';
 import { CheckoutCatalogPanel } from './CheckoutCatalogPanel';
 import { AdminTab } from './adminSidebarConfig';
 import {
@@ -153,17 +155,6 @@ export const describeDerivedValue = (key: SettingKey, value: unknown): string | 
   }
 };
 
-const SectionHeading = ({ title, description }: { title: string; description: string }) => (
-  <Stack sx={{ gap: 0.5, mb: 2 }}>
-    <Typography level="title-md" component="h2" sx={{ color: 'admin.ink' }}>
-      {title}
-    </Typography>
-    <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
-      {description}
-    </Typography>
-  </Stack>
-);
-
 const AdminGrowthPricingTab = () => {
   const { data, isLoading, isError, isFetching, refetch } = useSettingsFromServer();
   const navigate = useNavigate();
@@ -192,11 +183,7 @@ const AdminGrowthPricingTab = () => {
     'invite-center-rewards': () => openSettingHome({ inviteSection: 'rewards' }),
   };
 
-  const storedByKey = useMemo(() => {
-    const map = new Map<string, unknown>();
-    for (const row of data ?? []) map.set(row.settingName, row.settingValue);
-    return map;
-  }, [data]);
+  const storedByKey = useStoredByKey(data);
 
   // A failed read renders ErrorState below. No data and no error means the query is paused (offline) or
   // disabled (no token yet); the catalog then shows the Team grant as unknown rather than defaults.

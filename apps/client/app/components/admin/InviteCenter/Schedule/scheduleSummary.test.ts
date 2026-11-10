@@ -17,17 +17,25 @@ const live: Record<string, unknown> = {
 };
 
 describe('readScheduleValues', () => {
-  it('reads unset keys as their default, numeric strings as numbers and invalid rows as null', () => {
-    const values = read({ signupGrantInitialCredits: '250', signupGrantDailyCredits: 'abc', signupGrantDripCap: -1 });
+  it('resolves rows as the server does: numeric strings as numbers, unset and invalid rows as the fallback', () => {
+    const values = read({
+      signupGrantInitialCredits: '250',
+      signupGrantDailyCredits: 'abc',
+      signupGrantDripCap: -1,
+      signupGrantInviteBonusCredits: true,
+      signupGrantSignupPoolDaily: 'abc',
+    });
     expect(values.signupGrantInitialCredits).toBe(250);
-    expect(values.signupGrantDailyCredits).toBeNull();
-    expect(values.signupGrantDripCap).toBeNull();
+    expect(values.signupGrantDailyCredits).toBe(0);
+    expect(values.signupGrantDripCap).toBe(0);
     expect(values.signupGrantInviteBonusCredits).toBe(0);
     expect(values.signupGrantSignupPoolDaily).toBe(0);
+    expect(values.signupGrantTricklePoolDaily).toBe(0);
   });
 
   it('reads a cleared field as the default rather than an invalid row', () => {
     expect(read({ signupGrantDripCap: '' }).signupGrantDripCap).toBe(0);
+    expect(read({ signupGrantTricklePoolDaily: ' ' }).signupGrantTricklePoolDaily).toBe(0);
   });
 });
 
@@ -62,6 +70,12 @@ describe('describeNewAccountGrant', () => {
   ])('says grants are paused when %s is %j', (key, value, pool) => {
     const summary = describeNewAccountGrant(read({ ...live, [key]: value }));
     expect(summary).toContain(`Paused: the ${pool} has no daily budget`);
+  });
+
+  it('says activity grants are skipped, not held, when the trickle pool is paused', () => {
+    expect(describeNewAccountGrant(read({ ...live, signupGrantTricklePoolDaily: 0 }))).toContain(
+      'so daily activity grants are skipped and rewards are held.'
+    );
   });
 });
 

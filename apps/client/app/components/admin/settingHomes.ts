@@ -8,7 +8,7 @@ import type { InviteCenterSectionId } from './inviteCenterSearch';
  * docs/pricing-settings-inventory.md records where each key is edited; update it when a key moves.
  */
 
-export const SCHEDULE_KEYS = [
+export const SIGNUP_SCHEDULE_KEYS = [
   'signupGrantInitialCredits',
   'signupGrantDailyCredits',
   'signupGrantDripCap',
@@ -51,14 +51,15 @@ export const SETTING_HOMES: readonly SettingHome[] = [
   {
     id: 'growth-pricing',
     label: 'Growth and Pricing',
-    summary: 'Signup, starter credits, credit pricing, team-plan limits and the preference arena are edited on',
+    summary:
+      'Signup, starter credits, usage metering, credit pricing, team-plan limits and the preference arena are edited on',
     keys: GROWTH_PRICING_SECTIONS.flatMap(section => section.keys),
   },
   {
     id: 'invite-center-schedule',
     label: 'Invite Center > Schedule',
     summary: 'The signup credit schedule, the signup and trickle pools and the free-tier spend caps are edited in',
-    keys: [...SCHEDULE_KEYS, ...FREE_TIER_LIMIT_KEYS],
+    keys: [...SIGNUP_SCHEDULE_KEYS, ...FREE_TIER_LIMIT_KEYS],
     inviteSection: 'schedule',
   },
   {

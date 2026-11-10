@@ -17,6 +17,7 @@ The source of truth stays in code:
 ## Scope
 
 - Every key on the Growth and Pricing tab.
+- Every key on the Invite Center Schedule and Rewards sections (`SETTING_HOMES` in `settingHomes.ts`).
 - Every key in the `Credits System` group (`API_SERVICE_GROUPS.CREDITS`).
 - Every key in the `API Rate Limiting` group (`API_SERVICE_GROUPS.RATE_LIMITING`).
 - The settings that price compute in credits (`HardwareComputeCreditsPerUsd`, `SimulatorComputeCreditsPerRound`).
@@ -51,7 +52,11 @@ compute per-run and per-day USD caps) and settings that only toggle a feature.
 | `signupGrantInitialCredits` | Invite Center > Schedule | The post-verification tranche snapshotted at enrollment (`resolveSignupGrantSchedule` in `b4m-core/common/src/signupGrant.ts`) and the signup copy (`useSignupGrantSchedule.ts`, `useSignupGrantCredits.ts`). Unset reads as 0. | no. A free grant. | Signup and starter credits |
 | `signupGrantDailyCredits` | Invite Center > Schedule | The per-day drip amount (`resolveSignupGrantSchedule`, read by `resolveDripLimits` in `stagedSignupGrant.ts`). Unset reads as 0. | no. A free grant. | Signup and starter credits |
 | `signupGrantDripCap` | Invite Center > Schedule | The per-account drip total and the unlock pool snapshotted at enrollment (`resolveSignupGrantSchedule`). Unset reads as the registry default, 0: nothing drips and an invite pays its initial share at signup, the rest on unlock. A stored cap of 0 also drips nothing but pays an invite in full at signup. | no. Caps free credits. | Signup and starter credits |
-| `signupGrantInviteBonusCredits` | Invite Center > Schedule | Registered only; no reader yet. Default 0. | no. | Signup and starter credits |
+| `signupGrantInviteBonusCredits` | Invite Center > Schedule | The extra grant for an invited account (`payInviteBonus` in `b4m-core/services/src/userService/inviteBonus.ts`, read through `resolveSignupGrantSchedule`), paid from the staged signup grant (`stagedSignupGrant.ts`) and for organization invites (`apps/client/server/credits/orgInviteBonus.ts`). Default 0 (off). | no. A free grant. | Signup and starter credits |
+| `freeTierDailySpendCapCredits` | Invite Center > Schedule | The free-tier daily spend gate (`checkFreeTierDailySpendCap` in `apps/client/server/billing/freeTierDailyCapGate.ts`) for accounts older than 7 days. Default 200; 0 disables the cap. | no. A limit. | Usage limits |
+| `freeTierDay1SpendCapCredits` | Invite Center > Schedule | The same gate during an account's first 24 hours. Default 500; 0 falls back to the steady-state cap. | no. A limit. | Usage limits |
+| `freeTierDays2To7SpendCapCredits` | Invite Center > Schedule | The same gate for accounts aged 24 hours to 7 days. Default 300; 0 falls back to the steady-state cap. | no. A limit. | Usage limits |
+| `gearRewardMinAccountAgeDays` | Invite Center > Rewards | The account age a verified account needs before Gears credit rewards pay (`apps/client/server/services/gears/catalog.ts`), quoted by the Gears page through `apps/client/pages/api/gears/status.ts`. Default 7. | no. A wait before a free grant. | Signup and starter credits |
 | `ReferralCreditsAmount` | Growth and Pricing > Signup and starter credits | The referred-user grant at registration (`register.ts`), the referral send route (`apps/client/pages/api/reg-invites/refer.ts`) and the "invited person gets N credits" line (`ReferralModal.tsx`). | no. A free grant. | Signup and starter credits |
 | `ReferralFirstAnswerCredits` | Invite Center > Rewards | The inviter payout when the invited friend has a first answer and a verified email (`packages/server-utils/src/referrals/firstAnswerReward.ts`). Only friends who signed up on or after the first-value launch date (`FIRST_VALUE_LAUNCH_AT` in `apps/client/server/analytics/funnel.ts`) qualify. Default 0 (off). | no. A free grant. | Signup and starter credits |
 | `preferenceArenaCreditsPerVote` | Growth and Pricing > Preference arena | The arena vote reward (`apps/client/server/preferenceArena/`), judged by `judgeArenaVote` in `b4m-core/common/src/preferenceArena.ts`. Default 0 (off). | no. A free grant. | Signup and starter credits |

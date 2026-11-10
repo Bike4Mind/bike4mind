@@ -1,10 +1,16 @@
-import { settingsMap } from '@bike4mind/common';
-import { SCHEDULE_KEYS } from '../../settingHomes';
+import {
+  isBlankSettingValue,
+  runtimeSignupGrantSchedule,
+  settingsMap,
+  storedGrantCredits,
+  type SignupGrantCreditKey,
+} from '@bike4mind/common';
+import { SIGNUP_SCHEDULE_KEYS } from '../../settingHomes';
 
-type ScheduleKey = (typeof SCHEDULE_KEYS)[number];
+type ScheduleKey = (typeof SIGNUP_SCHEDULE_KEYS)[number];
 
-/** Each schedule key's saved value as its schema reads it (unset becomes the default), or null when the row is invalid. */
-export type ScheduleValues = Record<ScheduleKey, number | null>;
+/** Each schedule key's saved value as the server resolves it. */
+export type ScheduleValues = Record<ScheduleKey, number>;
 
 /**
  * Whether invite sending is capped per sender. The send-limits work replaces this constant with a
@@ -12,21 +18,36 @@ export type ScheduleValues = Record<ScheduleKey, number | null>;
  */
 export const INVITE_SEND_LIMITS_LIVE = false;
 
+/** Mirrors resolvePoolBudget in b4m-core/services/src/userService/signupGrantBudget.ts: blank or invalid pauses. */
+function poolBudget(key: 'signupGrantSignupPoolDaily' | 'signupGrantTricklePoolDaily', raw: unknown): number {
+  if (isBlankSettingValue(raw)) return 0;
+  const parsed = settingsMap[key].schema.safeParse(raw);
+  return parsed.success ? parsed.data : 0;
+}
+
 export function readScheduleValues(storedByKey: ReadonlyMap<string, unknown>): ScheduleValues {
-  return Object.fromEntries(
-    SCHEDULE_KEYS.map(key => {
-      const parsed = settingsMap[key].schema.safeParse(storedByKey.get(key));
-      return [key, parsed.success && Number.isFinite(parsed.data) ? (parsed.data as number) : null];
-    })
-  ) as ScheduleValues;
+  const schedule = runtimeSignupGrantSchedule((key: SignupGrantCreditKey) =>
+    storedGrantCredits(key, storedByKey.get(key))
+  );
+  return {
+    signupGrantInitialCredits: schedule.initialCredits,
+    signupGrantDailyCredits: schedule.dailyCredits,
+    signupGrantDripCap: schedule.dripCap,
+    signupGrantInviteBonusCredits: schedule.inviteBonusCredits,
+    signupGrantSignupPoolDaily: poolBudget('signupGrantSignupPoolDaily', storedByKey.get('signupGrantSignupPoolDaily')),
+    signupGrantTricklePoolDaily: poolBudget(
+      'signupGrantTricklePoolDaily',
+      storedByKey.get('signupGrantTricklePoolDaily')
+    ),
+  };
 }
 
 const credits = (amount: number) => `${amount.toLocaleString('en-US')} credits`;
-const positive = (value: number | null): value is number => value !== null && value > 0;
+const positive = (value: number) => value > 0;
 
 /** One-line description of what a new account receives under the saved schedule. */
 export function describeNewAccountGrant(v: ScheduleValues): string {
-  const initial = v.signupGrantInitialCredits ?? 0;
+  const initial = v.signupGrantInitialCredits;
   const daily = v.signupGrantDailyCredits;
   const dripCap = v.signupGrantDripCap;
   const bonus = v.signupGrantInviteBonusCredits;
@@ -40,7 +61,8 @@ export function describeNewAccountGrant(v: ScheduleValues): string {
     summary += ' Paused: the signup pool has no daily budget, so initial grants and invite bonuses are held.';
   }
   if (!positive(v.signupGrantTricklePoolDaily)) {
-    summary += ' Paused: the trickle pool has no daily budget, so the drip and rewards are held.';
+    summary +=
+      ' Paused: the trickle pool has no daily budget, so daily activity grants are skipped and rewards are held.';
   }
   return summary;
 }

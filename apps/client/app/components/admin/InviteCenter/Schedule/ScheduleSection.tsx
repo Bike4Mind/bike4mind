@@ -1,12 +1,12 @@
 import { useMemo } from 'react';
 import { Alert, Stack, Typography } from '@mui/joy';
 import WarningIcon from '@mui/icons-material/Warning';
-import type { SettingKey } from '@bike4mind/common';
 import { useSettingsFromServer } from '@client/app/hooks/data/settings';
 import { SettingsDraftProvider } from '../../SettingsDraftProvider';
-import { ErrorState, LoadingState, SettingsSection } from '../../shared';
-import { FREE_TIER_LIMIT_KEYS, SCHEDULE_KEYS } from '../../settingHomes';
-import { SettingKeyRow } from '../shared/SettingKeyRow';
+import { ErrorState, LoadingState } from '../../shared';
+import { FREE_TIER_LIMIT_KEYS, SIGNUP_SCHEDULE_KEYS } from '../../settingHomes';
+import { SettingBlocks, type SettingBlock } from '../shared/SettingBlocks';
+import { useStoredByKey } from '../shared/useStoredByKey';
 import {
   INVITE_SEND_LIMITS_LIVE,
   describeNewAccountGrant,
@@ -15,13 +15,13 @@ import {
   readScheduleValues,
 } from './scheduleSummary';
 
-const BLOCKS: ReadonlyArray<{ id: string; title: string; description: string; keys: readonly SettingKey[] }> = [
+const BLOCKS: readonly SettingBlock[] = [
   {
     id: 'signup',
     title: 'Signup schedule',
     description:
       'What a verified new account receives up front and per active day, the extra for invited accounts, and the daily pools those grants draw from.',
-    keys: SCHEDULE_KEYS,
+    keys: SIGNUP_SCHEDULE_KEYS,
   },
   {
     id: 'free-tier',
@@ -34,11 +34,7 @@ const BLOCKS: ReadonlyArray<{ id: string; title: string; description: string; ke
 export function ScheduleSection() {
   const { data, isLoading, isError, isFetching, refetch } = useSettingsFromServer();
 
-  const storedByKey = useMemo(() => {
-    const map = new Map<string, unknown>();
-    for (const row of data ?? []) map.set(row.settingName, row.settingValue);
-    return map;
-  }, [data]);
+  const storedByKey = useStoredByKey(data);
 
   // Saved values, not drafts: the summary and warnings describe what is live.
   const values = useMemo(() => readScheduleValues(storedByKey), [storedByKey]);
@@ -66,7 +62,7 @@ export function ScheduleSection() {
           startDecorator={<WarningIcon />}
           data-testid="invite-center-schedule-drip-warning"
         >
-          {`The drip cap (${values.signupGrantDripCap?.toLocaleString('en-US')}) is below the daily credits (${values.signupGrantDailyCredits?.toLocaleString('en-US')}), so the drip stops before paying one full day's amount.`}
+          {`The drip cap (${values.signupGrantDripCap.toLocaleString('en-US')}) is below the daily credits (${values.signupGrantDailyCredits.toLocaleString('en-US')}), so the drip stops before paying one full day's amount.`}
         </Alert>
       )}
       {inviteBonusWarning(values, INVITE_SEND_LIMITS_LIVE) && (
@@ -81,36 +77,7 @@ export function ScheduleSection() {
         </Alert>
       )}
       <SettingsDraftProvider>
-        <Stack gap={2}>
-          {BLOCKS.map(block => (
-            <SettingsSection
-              key={block.id}
-              component="section"
-              sx={{ mb: 0 }}
-              data-testid={`invite-center-schedule-block-${block.id}`}
-            >
-              <Stack sx={{ gap: 0.5, mb: 2 }}>
-                <Typography level="title-md" component="h2" sx={{ color: 'admin.ink' }}>
-                  {block.title}
-                </Typography>
-                <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
-                  {block.description}
-                </Typography>
-              </Stack>
-              <Stack sx={{ gap: 1 }}>
-                {block.keys.map((key, index) => (
-                  <SettingKeyRow
-                    key={key}
-                    settingKey={key}
-                    stored={storedByKey.get(key)}
-                    index={index}
-                    testIdPrefix="invite-center-schedule"
-                  />
-                ))}
-              </Stack>
-            </SettingsSection>
-          ))}
-        </Stack>
+        <SettingBlocks blocks={BLOCKS} storedByKey={storedByKey} testIdPrefix="invite-center-schedule" />
       </SettingsDraftProvider>
     </Stack>
   );

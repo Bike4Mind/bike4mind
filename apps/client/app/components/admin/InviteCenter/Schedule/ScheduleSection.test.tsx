@@ -23,7 +23,7 @@ vi.mock('@tanstack/react-router', async () => ({
   useBlocker: () => ({ status: 'idle' }),
 }));
 
-import { FREE_TIER_LIMIT_KEYS, SCHEDULE_KEYS } from '../../settingHomes';
+import { FREE_TIER_LIMIT_KEYS, SIGNUP_SCHEDULE_KEYS } from '../../settingHomes';
 import { ScheduleSection } from './ScheduleSection';
 import { describeNewAccountGrant, readScheduleValues } from './scheduleSummary';
 
@@ -42,7 +42,7 @@ beforeEach(() => {
 describe('ScheduleSection', () => {
   it('renders an editor for every schedule and free-tier limit key', () => {
     renderSection();
-    for (const key of [...SCHEDULE_KEYS, ...FREE_TIER_LIMIT_KEYS]) {
+    for (const key of [...SIGNUP_SCHEDULE_KEYS, ...FREE_TIER_LIMIT_KEYS]) {
       expect(screen.getByTestId(`admin-setting-${key}-input`), key).toBeTruthy();
       expect(screen.getByTestId(`invite-center-schedule-current-${key}`), key).toBeTruthy();
     }
