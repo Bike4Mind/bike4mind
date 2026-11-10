@@ -59,8 +59,15 @@ const ROW: TutorialModuleOverrideRow = {
   report: { states: [], rejected: [], structuralDigest: 'd' },
 };
 
-const renderEditor = (row: TutorialModuleOverrideRow = ROW) =>
+const renderEditor = (row: TutorialModuleOverrideRow = ROW, onDirtyChange?: (dirty: boolean) => void) =>
   render(
+    <CssVarsProvider theme={appTheme}>
+      <TutorialOverrideEditor apiBase={BASE} row={row} choices={CHOICES} onDirtyChange={onDirtyChange} />
+    </CssVarsProvider>
+  );
+
+const rerenderRow = (view: ReturnType<typeof renderEditor>, row: TutorialModuleOverrideRow) =>
+  view.rerender(
     <CssVarsProvider theme={appTheme}>
       <TutorialOverrideEditor apiBase={BASE} row={row} choices={CHOICES} />
     </CssVarsProvider>
@@ -207,13 +214,57 @@ describe('TutorialOverrideEditor', () => {
     expect(sentSeq(0)).toBe(4);
   });
 
+  it('follows another admin save while untouched, staying clean and checking against the new sequence', () => {
+    const onDirtyChange = vi.fn();
+    const view = renderEditor(ROW, onDirtyChange);
+    const others = [{ kind: 'reply' as const, turn: 1, value: 'Theirs.', repoValue: 'Second reply.' }];
+    view.rerender(
+      <CssVarsProvider theme={appTheme}>
+        <TutorialOverrideEditor
+          apiBase={BASE}
+          row={{ ...ROW, contentSeq: 5, fields: others }}
+          choices={CHOICES}
+          onDirtyChange={onDirtyChange}
+        />
+      </CssVarsProvider>
+    );
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+    editOpening('Mine.');
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true);
+    fireEvent.click(save());
+    expect(sentSeq(0)).toBe(5);
+  });
+
+  it('keeps a touched draft and its original sequence when the row moves under it', () => {
+    const onDirtyChange = vi.fn();
+    const view = renderEditor(ROW, onDirtyChange);
+    editOpening('Mine.');
+    const others = [{ kind: 'reply' as const, turn: 1, value: 'Theirs.', repoValue: 'Second reply.' }];
+    view.rerender(
+      <CssVarsProvider theme={appTheme}>
+        <TutorialOverrideEditor
+          apiBase={BASE}
+          row={{ ...ROW, contentSeq: 5, fields: others }}
+          choices={CHOICES}
+          onDirtyChange={onDirtyChange}
+        />
+      </CssVarsProvider>
+    );
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true);
+    expect(field('opening', 'body').value).toBe('Mine.');
+    fireEvent.click(save());
+    expect(sentSeq(0)).toBe(4);
+  });
+
   it('moves its sequence on after its own save, so the next save is not a conflict', () => {
     mockMutate.mockImplementationOnce((_input, options) =>
       options.onSuccess({ modules: [{ ...ROW, contentSeq: 5, fields: [] }], choices: CHOICES })
     );
-    renderEditor();
+    const view = renderEditor();
     editOpening('First.');
     fireEvent.click(save());
+    // The saved row reaches the editor through the query cache, as it does in the app.
+    rerenderRow(view, { ...ROW, contentSeq: 5, fields: [] });
     editOpening('Second.');
     fireEvent.click(save());
     expect(sentSeq(1)).toBe(5);
@@ -225,10 +276,11 @@ describe('TutorialOverrideEditor', () => {
     mockMutate.mockImplementationOnce((_input, options) =>
       options.onError(new TutorialEditRefused('The module changed', [], true))
     );
-    renderEditor();
+    const view = renderEditor();
     editOpening('Mine.');
     fireEvent.click(save());
     await act(async () => fireEvent.click(screen.getByTestId('tutorial-override-reload')));
+    rerenderRow(view, { ...ROW, contentSeq: 6, fields: theirs });
     expect(screen.queryByTestId('tutorial-override-errors')).not.toBeInTheDocument();
     fireEvent.click(screen.getByTestId('tutorial-override-edit-ask'));
     expect(field('ask', 'reply').value).toBe('Theirs.');

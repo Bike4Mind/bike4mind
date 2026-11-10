@@ -38,6 +38,7 @@ function useAfterSave(apiBase: string) {
 }
 
 export function useSetTutorialModule(apiBase: string) {
+  const queryClient = useQueryClient();
   const afterSave = useAfterSave(apiBase);
   return useMutation({
     mutationFn: async (input: { moduleId: string; enabled: boolean; reason: string }) =>
@@ -46,7 +47,11 @@ export function useSetTutorialModule(apiBase: string) {
       afterSave(data);
       toast.success(`${input.moduleId} tutorial ${input.enabled ? 'on' : 'off'}`);
     },
-    onError: () => toast.error('Could not save the tutorial module switch'),
+    onError: () => {
+      toast.error('Could not save the tutorial module switch');
+      // A 409 means another admin's switch won, so show the stored value rather than this one.
+      void queryClient.invalidateQueries({ queryKey: tutorialAdminModulesKey(apiBase) });
+    },
   });
 }
 

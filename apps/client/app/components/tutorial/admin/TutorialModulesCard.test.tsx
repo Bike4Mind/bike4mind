@@ -115,6 +115,19 @@ describe('TutorialModulesCard', () => {
     expect(screen.getByTestId('mock-editor-beta')).toBeInTheDocument();
   });
 
+  it('keeps an open editor mounted when the module revision moves', () => {
+    const view = renderCard();
+    fireEvent.click(screen.getByTestId('tutorial-module-edit-alpha'));
+    const before = screen.getByTestId('mock-editor-alpha');
+    current.value = { data: [{ ...ROWS[0], revision: 1 }, ROWS[1]], isLoading: false, isError: false };
+    view.rerender(
+      <CssVarsProvider theme={appTheme}>
+        <TutorialModulesCard apiBase={BASE} />
+      </CssVarsProvider>
+    );
+    expect(screen.getByTestId('mock-editor-alpha')).toBe(before);
+  });
+
   it('asks before switching or closing over an unsaved draft, and keeps it on cancel', () => {
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
     renderCard();

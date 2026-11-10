@@ -100,6 +100,30 @@ describe('useOpeningReveal', () => {
     expect(onTyped).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps typing when the host passes a new setter on every render', () => {
+    let text = '';
+    const onTyped = vi.fn();
+    const hook = renderHook(
+      props =>
+        useOpeningReveal({
+          request: props,
+          setText: (next: string) => {
+            text = next;
+          },
+          onTyped,
+        }),
+      { initialProps: { prompt: PROMPT } as { prompt: string } | null }
+    );
+    for (let i = 0; i < 3; i++) {
+      act(() => vi.advanceTimersByTime(200));
+      hook.rerender({ prompt: PROMPT });
+    }
+    act(() => vi.advanceTimersByTime(typingTime(PROMPT)));
+    expect(text).toBe(PROMPT);
+    act(() => vi.advanceTimersByTime(REVEAL_SEND_DELAY_MS));
+    expect(onTyped).toHaveBeenCalledTimes(1);
+  });
+
   it('tells the coach card it sends itself until it has gone, or the user has taken over', () => {
     const sendsItself = () => useOpeningSendsItself.getState().value;
     const first = mount();

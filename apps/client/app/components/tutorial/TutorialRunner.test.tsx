@@ -544,6 +544,42 @@ describe('jumping from the journey panel', () => {
     expect(useTutorialStore.getState().active?.stepId).toBe('intro');
   });
 
+  it('lets a newer jump supersede one still seeding, so only the newer lands', async () => {
+    const t = transport();
+    const release: Array<() => void> = [];
+    t.advance.mockImplementation(
+      () =>
+        new Promise(resolve => {
+          release.push(() => resolve({ quest: marked('q1') }));
+        })
+    );
+    renderRunner(t, undefined, { using: twoTurns });
+    begin('intro');
+    jumpTo('wrap');
+    await waitFor(() => expect(release).toHaveLength(1));
+    jumpTo('ask');
+    await waitFor(() => expect(release).toHaveLength(2));
+    await act(async () => release[0]());
+    await act(async () => release[1]());
+    await waitFor(() => expect(useTutorialStore.getState().active?.stepId).toBe('ask'));
+    expect(t.advance.mock.calls.map(([input]) => input.turn)).toEqual([0, 0]);
+    expect(t.position).not.toHaveBeenCalledWith(expect.objectContaining({ stepId: 'wrap' }));
+  });
+
+  it('stays quiet when a superseded jump fails', async () => {
+    const t = transport();
+    let fail: (e: Error) => void = () => undefined;
+    t.advance.mockImplementationOnce(() => new Promise((_resolve, reject) => (fail = reject)));
+    renderRunner(t, undefined, { using: twoTurns });
+    begin('intro');
+    jumpTo('wrap');
+    await waitFor(() => expect(t.advance).toHaveBeenCalledTimes(1));
+    jumpTo('ask');
+    await act(async () => fail(new Error('409')));
+    await waitFor(() => expect(useTutorialStore.getState().active?.stepId).toBe('ask'));
+    expect(mockToast).not.toHaveBeenCalledWith(JUMP_FAILED_NOTICE);
+  });
+
   it('leaves a jump into another module for that module', () => {
     const t = transport();
     renderRunner(t, undefined, { using: twoTurns });

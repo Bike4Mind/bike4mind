@@ -517,7 +517,8 @@ export function CoachMark({
         anchorElement && anchorElement.tabIndex < 0
           ? anchorElement.querySelector<HTMLElement>('[tabindex="0"], button, a[href]')
           : anchorElement;
-      focusable?.focus?.();
+      // Focus inside the card falls to the body when it detaches; focus the user put elsewhere stays.
+      if (document.activeElement === document.body || !document.activeElement) focusable?.focus?.();
     },
     []
   );

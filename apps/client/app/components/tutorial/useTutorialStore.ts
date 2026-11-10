@@ -47,7 +47,7 @@ export const createTutorialStore = (): TutorialStore =>
     begin: active => set({ active, pending: null }),
     setPending: pending => set(pending ? { pending, active: null } : { pending }),
     goTo: stepId => set(state => (state.active ? { active: { ...state.active, stepId } } : state)),
-    end: () => set({ active: null }),
+    end: () => set({ active: null, pendingJump: null }),
     requestJump: pendingJump => set({ pendingJump, journeyOpen: false }),
     clearJump: () => set({ pendingJump: null }),
     setJourneyOpen: journeyOpen => set({ journeyOpen }),

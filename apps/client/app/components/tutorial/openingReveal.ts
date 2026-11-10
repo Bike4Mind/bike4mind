@@ -69,9 +69,12 @@ export function useOpeningReveal({
   const phase = useRef<Phase>('idle');
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const onTypedRef = useRef(onTyped);
+  // Held in a ref so a host's inline setter does not restart the reveal on every render.
+  const setTextRef = useRef(setText);
   useEffect(() => {
     onTypedRef.current = onTyped;
-  }, [onTyped]);
+    setTextRef.current = setText;
+  }, [onTyped, setText]);
 
   const settle = useCallback(() => {
     clearTimeout(timer.current);
@@ -83,14 +86,15 @@ export function useOpeningReveal({
 
   useEffect(() => {
     if (!request?.prompt) return;
+    const write = (text: string) => setTextRef.current(text);
     const { prompt } = request;
     if (prefersReducedMotion()) {
-      setText(prompt);
+      write(prompt);
       return;
     }
     const frames = revealFrames(prompt);
     // The first frame lands now: an empty box for even one render would show the example door in its place.
-    setText(prompt.slice(0, frames[0]?.length ?? 0));
+    write(prompt.slice(0, frames[0]?.length ?? 0));
     phase.current = 'typing';
     setTyping(true);
     setSendsItself(true);
@@ -107,23 +111,23 @@ export function useOpeningReveal({
         return;
       }
       timer.current = setTimeout(() => {
-        setText(prompt.slice(0, frames[index].length));
+        write(prompt.slice(0, frames[index].length));
         show(index + 1);
       }, frames[index].delay);
     };
     show(1);
     return () => {
-      if (phase.current === 'typing') setText('');
+      if (phase.current === 'typing') write('');
       settle();
     };
-  }, [request, setText, settle]);
+  }, [request, settle]);
 
   /** The user takes over: the whole message shows at once, and nothing sends itself. */
   const stop = useCallback(() => {
     if (phase.current === 'idle') return;
-    if (phase.current === 'typing' && request) setText(request.prompt);
+    if (phase.current === 'typing' && request) setTextRef.current(request.prompt);
     settle();
-  }, [request, setText, settle]);
+  }, [request, settle]);
 
   return { typing, stop };
 }

@@ -404,6 +404,40 @@ describe('CoachMark', () => {
     expect(screen.getByTestId('tutorial-coach-steps')).toHaveTextContent('All 14 steps done');
   });
 
+  it('leaves focus where the user put it when the card goes, and hands it to the anchor otherwise', () => {
+    const view = render(
+      <>
+        <button data-testid="send">Send</button>
+        <input data-testid="elsewhere" />
+        <CoachMark stepKey="s" body="Press Send." anchor="send" onLeave={() => undefined}>
+          <button data-testid="in-card">Inside</button>
+        </CoachMark>
+      </>
+    );
+    screen.getByTestId('elsewhere').focus();
+    view.rerender(
+      <>
+        <button data-testid="send">Send</button>
+        <input data-testid="elsewhere" />
+      </>
+    );
+    expect(document.activeElement).toBe(screen.getByTestId('elsewhere'));
+  });
+
+  it('hands focus to the anchor when the card unmounts with focus inside it', () => {
+    const view = render(
+      <>
+        <button data-testid="send">Send</button>
+        <CoachMark stepKey="s" body="Press Send." anchor="send" onLeave={() => undefined}>
+          <button data-testid="in-card">Inside</button>
+        </CoachMark>
+      </>
+    );
+    screen.getByTestId('in-card').focus();
+    view.rerender(<button data-testid="send">Send</button>);
+    expect(document.activeElement).toBe(screen.getByTestId('send'));
+  });
+
   it('keeps Tab inside a panel card, wrapping at either end', () => {
     render(
       <CoachMark stepKey="s" body="b" title="Done" panel onLeave={() => undefined}>

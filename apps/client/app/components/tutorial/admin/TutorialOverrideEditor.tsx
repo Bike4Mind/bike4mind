@@ -128,9 +128,10 @@ const TutorialOverrideEditor: FC<Props> = ({ apiBase, row, choices, steps, onDir
   const renderers = useMemo(() => resolveTutorialSteps(apiBase, steps), [apiBase, steps]);
   const saved = useMemo(() => draftFrom(row.fields), [row.fields]);
   const [draft, setDraft] = useState<OverrideDraft>(saved);
-  // The row refetches under an open draft, so the sequence a save is checked against is the one the draft
-  // started from, not the row's current one.
+  // The row refetches under an open draft, so a save is checked against the sequence and fields the draft
+  // started from, not the row's current ones.
   const [basis, setBasis] = useState<number | null>(row.contentSeq);
+  const [base, setBase] = useState<OverrideDraft>(saved);
   const [reason, setReason] = useState('');
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
   const [refused, setRefused] = useState<TutorialEditRefused | null>(null);
@@ -139,7 +140,14 @@ const TutorialOverrideEditor: FC<Props> = ({ apiBase, row, choices, steps, onDir
   const repoIds = useMemo(() => row.repo.steps.map(step => step.id), [row.repo.steps]);
   const stateOf = useMemo(() => new Map(row.report.states.map(s => [s.key, s.state])), [row.report.states]);
   const order = orderOf(draft, repoIds);
-  const dirty = !sameDraft(draft, saved);
+  const dirty = !sameDraft(draft, base);
+  // An untouched draft follows another admin's save; a touched one keeps its basis and meets the 409.
+  useEffect(() => {
+    if (row.contentSeq === basis || dirty) return;
+    setDraft(saved);
+    setBase(saved);
+    setBasis(row.contentSeq);
+  }, [row.contentSeq, basis, dirty, saved]);
   useEffect(() => {
     onDirtyChange?.(dirty);
     return () => onDirtyChange?.(false);
@@ -152,7 +160,9 @@ const TutorialOverrideEditor: FC<Props> = ({ apiBase, row, choices, steps, onDir
       {
         onSuccess: data => {
           const fresh = data.modules.find(m => m.moduleId === row.moduleId);
-          setDraft(draftFrom(fresh?.fields ?? []));
+          const next = draftFrom(fresh?.fields ?? []);
+          setDraft(next);
+          setBase(next);
           setBasis(fresh?.contentSeq ?? null);
           setReason('');
           setRefused(null);
@@ -164,7 +174,9 @@ const TutorialOverrideEditor: FC<Props> = ({ apiBase, row, choices, steps, onDir
   const reload = async () => {
     const fresh = (await modules.refetch()).data?.find(m => m.moduleId === row.moduleId);
     if (!fresh) return;
-    setDraft(draftFrom(fresh.fields));
+    const next = draftFrom(fresh.fields);
+    setDraft(next);
+    setBase(next);
     setBasis(fresh.contentSeq);
     setRefused(null);
   };

@@ -213,24 +213,30 @@ export function TutorialRunner({
   const jump = useTutorialStore(state =>
     active && state.pendingJump?.moduleId === script.id ? state.pendingJump : null
   );
+  const jumpSeq = useRef(0);
   useEffect(() => {
     if (!jump) return;
     store.getState().clearJump();
     const target = script.steps.findIndex(s => s.id === jump.stepId);
     if (target < 0) return;
+    const seq = ++jumpSeq.current;
     void (async () => {
       try {
         // Every turn before the target, in order: the server seeds a turn only after the one before it.
         // Any step that sends one counts, not only `prompt`: a host's own type can carry a turn too.
-        for (const s of script.steps.slice(0, target)) if (s.turn !== undefined) await advance(s.turn);
+        for (const s of script.steps.slice(0, target)) {
+          if (seq !== jumpSeq.current) return;
+          if (s.turn !== undefined) await advance(s.turn);
+        }
       } catch (error) {
+        if (seq !== jumpSeq.current) return;
         const change = moduleChangeOf(error);
         if (change) endChanged(change);
         else toast(JUMP_FAILED_NOTICE);
         return;
       }
       const current = store.getState().active;
-      if (current?.moduleId !== script.id) return;
+      if (seq !== jumpSeq.current || current?.moduleId !== script.id) return;
       const landing = landOn ? landOn(jump.stepId, current.sessionId) : jump.stepId;
       if (landing !== current.stepId) clearStalePrompt(script, current.sessionId);
       store.getState().goTo(landing);

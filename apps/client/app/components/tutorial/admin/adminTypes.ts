@@ -6,7 +6,7 @@ export interface TutorialModuleOverrideRow {
   title: string;
   version: number;
   revision: number;
-  /** Moves on every write; the editor sends back the value its draft started from. Null before any write. */
+  /** Moves on every edit save and deploy bump, not on a switch-only write; the editor sends back the value its draft started from. Null before any write. */
   contentSeq: number | null;
   repoEnabled: boolean;
   enabled: boolean;

@@ -136,7 +136,7 @@ const TutorialModulesCard: FC<Props> = ({ apiBase, steps }) => {
               </Box>
               {editing === row.moduleId && choices.data && (
                 <TutorialOverrideEditor
-                  key={`${row.moduleId}:${row.revision}`}
+                  key={row.moduleId}
                   apiBase={apiBase}
                   row={row}
                   choices={choices.data}
