@@ -84,7 +84,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'c8f7a1da54367bdfacb6ccdf02843f4bca8200dfd493942452a3a402dab910c4',
     'Hosted business analytics and Stripe receipts; not applicable to a portable deployment.'
   ),
-  gap('event:infra/eventBus.ts:email-send', '3e4a74324ec602608487f3d9f877681aebdf77d584cf02c00a89e2e759aa7d96'),
+  gap('event:infra/eventBus.ts:email-send', 'b9fe86f208d85eecb5708368e16f3540f6a4a38a0107811d847ee33959bec8ca'),
   gap(
     'event:infra/eventBus.ts:notebook-curation-complete-analytics',
     'cb7bc46a17716134f82299540bcff81030e1d4ef64e17f7a924d154f5d28c44a'
