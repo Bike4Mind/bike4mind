@@ -34,6 +34,7 @@ export const ADMIN_REASON_PRESETS = {
   accountTags: ['Account review', 'Support request', 'Internal testing'],
   productAccess: ['Pilot or partner access', 'Plan change', 'Support request'],
   systemMessage: ['Account notice', 'Support follow-up', 'Policy warning'],
+  permissionsChange: ['Joined the support rotation', 'Role change on the team', 'Access no longer needed'],
   roleChange: ['Joined the admin team', 'Left the admin team', 'Temporary on-call access'],
   subscriptionGrant: ['Pilot or partner access', 'Billing correction', 'Goodwill grant', 'Internal testing'],
   userDeletion: ['User requested deletion', 'Spam or bot account', 'Terms of service violation', 'Duplicate account'],

@@ -2,11 +2,14 @@ import React, { useState } from 'react';
 import { Box, Chip, Stack, Typography } from '@mui/joy';
 import {
   USER_TIMELINE_CATEGORIES,
+  isFullAdmin,
+  sortAdminPermissions,
   resolveUserStorageLimit,
   storageLimitToBytes,
   type AuditEntry,
   type UserTimelineCategory,
 } from '@bike4mind/common';
+import { useUser } from '@client/app/contexts/UserContext';
 import { useGetUserProductAccess } from '@client/app/hooks/data/entitlements';
 import { useUserTimeline } from '@client/app/hooks/data/adminUserTimeline';
 import { AuditEntryDrawer } from '@client/app/components/admin/AuditLog/shared';
@@ -22,7 +25,13 @@ import { ClientsCard } from './ClientsCard';
 import { HeaderAction, RowAction } from './cardActions';
 import { TimelineList, TimelineSkeleton } from './TimelineList';
 import { timelineItems } from './timelineItems';
-import { USER_ROLE_LABELS, isManagedTag, userRole, type AdminUserProfile } from '../userProfileModel';
+import {
+  ADMIN_PERMISSION_LABELS,
+  USER_ROLE_LABELS,
+  isManagedTag,
+  userRole,
+  type AdminUserProfile,
+} from '../userProfileModel';
 
 const RECENT_ACTIVITY_COUNT = 6;
 
@@ -118,6 +127,10 @@ const AccessCard: React.FC<{ user: AdminUserProfile; onAction: (action: ProfileA
   const access = useGetUserProductAccess(user.id);
   const held = access.data?.entitlements.filter(row => row.held) ?? [];
   const customTags = (user.tags ?? []).filter(tag => !isManagedTag(tag));
+  const { currentUser } = useUser();
+  const adminPermissions = sortAdminPermissions(user.adminPermissions ?? []);
+  // The endpoint is full-admin only and never edits a Super Admin or the viewer's own account.
+  const canEditPermissions = isFullAdmin(currentUser) && !user.isAdmin && currentUser?.id !== user.id;
 
   return (
     <SectionCard
@@ -131,6 +144,22 @@ const AccessCard: React.FC<{ user: AdminUserProfile; onAction: (action: ProfileA
     >
       <Fact label="Role" data-testid="user-profile-fact-role">
         {USER_ROLE_LABELS[userRole(user)]}
+      </Fact>
+      <Fact label="Admin permissions" data-testid="user-profile-fact-admin-permissions">
+        <Stack direction="row" alignItems="center" gap={0.75} flexWrap="wrap">
+          {user.isAdmin
+            ? 'All (Super Admin)'
+            : adminPermissions.length === 0
+              ? 'None'
+              : adminPermissions.map(id => (
+                  <StatusChip key={id} tone="neutral" label={ADMIN_PERMISSION_LABELS[id].label} />
+                ))}
+          {canEditPermissions && (
+            <RowAction onClick={() => onAction('permissions')} data-testid="user-profile-admin-permissions-btn">
+              Edit
+            </RowAction>
+          )}
+        </Stack>
       </Fact>
       <Fact label="Product access" data-testid="user-profile-fact-products">
         <Stack direction="row" alignItems="center" gap={0.75} flexWrap="wrap">
