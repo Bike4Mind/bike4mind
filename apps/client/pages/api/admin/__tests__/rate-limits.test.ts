@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-const { mockFind } = vi.hoisted(() => ({ mockFind: vi.fn() }))
+const { mockFind } = vi.hoisted(() => ({ mockFind: vi.fn() }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
