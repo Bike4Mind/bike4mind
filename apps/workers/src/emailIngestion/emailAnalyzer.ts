@@ -115,8 +115,7 @@ export const dispatch: SQSHandler = dispatchWithLogger(async (event: SQSEvent, c
     }
 
     logger.info('Email fetched for analysis', {
-      from: email.from,
-      subject: email.subject,
+      emailId: payload.emailId,
       userId: email.userId,
     });
 
