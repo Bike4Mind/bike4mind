@@ -161,6 +161,30 @@ describe('ModelListSection views', () => {
     await waitFor(() => expect(listCalls().at(-1)).toMatchObject({ sort: 'rank', dir: 'desc', page: '1' }));
   });
 
+  it('holds selection while the table still shows the previous page', async () => {
+    let resolvePage2: (value: { data: ReturnType<typeof listResponse> }) => void = () => {};
+    get.mockImplementation((url: string, config?: { params?: Params }) => {
+      if (url !== '/api/admin/models') throw new Error(`unexpected GET ${url}`);
+      if (config?.params?.page === '2') return new Promise(resolve => (resolvePage2 = resolve));
+      return Promise.resolve({ data: listResponse([listedRow, reviewRow], { total: 240 }) });
+    });
+    const { router } = await renderModelsRoute('/admin?tab=models&modelsView=all', ModelListSection);
+
+    await screen.findByTestId('models-row-example-text-1');
+    fireEvent.click(within(screen.getByTestId('admin-table-select-example-text-1')).getByRole('checkbox'));
+    expect(screen.getByTestId('admin-select-all-matching-btn')).not.toBeDisabled();
+
+    await act(() => router.navigate({ to: '/admin', search: { tab: 'models', modelsView: 'all', modelsPage: '2' } }));
+    await waitFor(() => expect(listCalls().some(params => params.page === '2')).toBe(true));
+    expect(within(screen.getByTestId('admin-table-select-page')).getByRole('checkbox')).toBeDisabled();
+    expect(within(screen.getByTestId('admin-table-select-example-text-2')).getByRole('checkbox')).toBeDisabled();
+    expect(screen.getByTestId('admin-select-all-matching-btn')).toBeDisabled();
+
+    resolvePage2({ data: listResponse([listedRow, reviewRow], { total: 240 }) });
+    await waitFor(() => expect(screen.getByTestId('admin-select-all-matching-btn')).not.toBeDisabled());
+    expect(within(screen.getByTestId('admin-table-select-page')).getByRole('checkbox')).not.toBeDisabled();
+  });
+
   it('shows why the models could not be loaded', async () => {
     get.mockRejectedValue(apiFailure(503, { error: 'Model catalog is unavailable' }));
     await renderModelsRoute('/admin?tab=models&modelsView=all', ModelListSection);
@@ -357,7 +381,7 @@ describe('ModelListSection bulk access', () => {
     await waitFor(() => expect(bulkBodies().at(-1)).toEqual({ undoToken: 'undo-1', reason: 'Undo: Ready for users' }));
   });
 
-  it('reports an undo that could not revert every model', async () => {
+  it('lists the models an undo could not revert, each linked to its page, and offers no reverse change', async () => {
     serveList(twoRows);
     const applied: ModelAccessBulkResult = {
       batchId: 'b1',
@@ -384,7 +408,7 @@ describe('ModelListSection bulk access', () => {
     post.mockImplementation(async (_url: string, body: { dryRunToken?: string; undoToken?: string }) => ({
       data: body.undoToken ? undone : body.dryRunToken ? applied : dryRun(),
     }));
-    await renderModelsRoute('/admin?tab=models&modelsView=all', ModelListSection);
+    const { router } = await renderModelsRoute('/admin?tab=models&modelsView=all', ModelListSection);
 
     await selectPage();
     fireEvent.click(screen.getByTestId('models-bulk-turn-off-btn'));
@@ -394,74 +418,77 @@ describe('ModelListSection bulk access', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Undo' }));
 
     const failed = await screen.findByTestId('models-bulk-failed');
-    expect(failed).toHaveTextContent('Undo: Updated 1 of 2. 1 failed. 1 model not reverted.');
-    expect(failed).toHaveTextContent('example-text-2: changed by someone else since the preview');
-    expect(screen.getByTestId('undo-toast-message')).toHaveTextContent('1 model not reverted.');
+    expect(failed).toHaveTextContent('Undo: 1 model reverted, 1 not reverted.');
+    expect(screen.getByTestId('models-bulk-not-reverted-item')).toHaveTextContent(
+      'example-text-2: changed since the batch'
+    );
+    expect(failed).toHaveTextContent("Change these back from each model's page.");
+    expect(screen.queryByTestId('models-bulk-retry-btn')).not.toBeInTheDocument();
+    expect(screen.getByTestId('undo-toast-message')).toHaveTextContent('Undo: 1 model reverted, 1 not reverted.');
     // The spent token is not offered again: a second undo would report the reverted models as moved.
     expect(screen.queryByTestId('undo-toast-undo-btn')).not.toBeInTheDocument();
 
-    const retry = screen.getByTestId('models-bulk-retry-btn');
-    expect(retry).toHaveTextContent('Revert the rest');
-    fireEvent.click(retry);
-    await waitFor(() =>
-      expect(bulkBodies().at(-1)).toEqual({ selection: { ids: ['example-text-2'] }, change: { enabled: true } })
-    );
-    expect(screen.getByTestId('models-bulk-dialog')).toBeInTheDocument();
-    expect(screen.queryByTestId('models-bulk-failed')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('models-bulk-not-reverted-link'));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/admin/models/example-text-2'));
   });
 
-  it('reverts the rest of an add-tag that removed base by removing the tag and giving base back', async () => {
+  it('undoes the original apply and its retry together, reporting both in one toast', async () => {
     serveList(twoRows);
     const applied: ModelAccessBulkResult = {
       batchId: 'b1',
       results: [
         { id: 'example-text-1', outcome: 'updated' },
-        { id: 'example-text-2', outcome: 'updated' },
-      ],
-      counts: { selected: 2, updated: 2, unchanged: 0, failed: 0 },
-      summary: 'Updated 2 of 2',
-      undoToken: 'undo-1',
-      revision: 'r2',
-    };
-    const undone: ModelAccessBulkResult = {
-      batchId: 'b2',
-      results: [
-        { id: 'example-text-1', outcome: 'failed', reason: 'write-error' },
-        { id: 'example-text-2', outcome: 'updated' },
+        { id: 'example-text-2', outcome: 'failed', reason: 'write-error' },
       ],
       counts: { selected: 2, updated: 1, unchanged: 0, failed: 1 },
       summary: 'Updated 1 of 2. 1 failed',
-      undoToken: null,
+      undoToken: 'undo-1',
+      revision: 'r2',
+    };
+    const retried: ModelAccessBulkResult = {
+      batchId: 'b2',
+      results: [{ id: 'example-text-2', outcome: 'updated' }],
+      counts: { selected: 1, updated: 1, unchanged: 0, failed: 0 },
+      summary: 'Updated 1 of 1',
+      undoToken: 'undo-2',
       revision: 'r3',
     };
-    post.mockImplementation(async (_url: string, body: { dryRunToken?: string; undoToken?: string }) => ({
-      data: body.undoToken ? undone : body.dryRunToken ? applied : dryRun(),
-    }));
+    const undoOf = (id: string): ModelAccessBulkResult => ({
+      batchId: `undo-${id}`,
+      results: [{ id, outcome: 'updated' }],
+      counts: { selected: 1, updated: 1, unchanged: 0, failed: 0 },
+      summary: 'Updated 1 of 1',
+      undoToken: null,
+      revision: 'r4',
+    });
+    let applies = 0;
+    post.mockImplementation(async (_url: string, body: { dryRunToken?: string; undoToken?: string }) => {
+      if (body.undoToken) return { data: undoOf(body.undoToken === 'undo-1' ? 'example-text-1' : 'example-text-2') };
+      if (body.dryRunToken) return { data: (applies += 1) === 1 ? applied : retried };
+      return { data: dryRun() };
+    });
     await renderModelsRoute('/admin?tab=models&modelsView=all', ModelListSection);
 
     await selectPage();
-    fireEvent.click(screen.getByTestId('models-bulk-add-tag-btn'));
-    const input = screen.getByTestId('models-bulk-values-input');
-    fireEvent.change(input, { target: { value: 'beta' } });
-    fireEvent.keyDown(input, { key: 'Enter' });
-    fireEvent.click(await screen.findByTestId('models-bulk-also-remove-base-checkbox'));
+    fireEvent.click(screen.getByTestId('models-bulk-turn-off-btn'));
+    await screen.findByTestId('models-bulk-summary');
+    pickReason('models-bulk-dialog');
+    fireEvent.click(screen.getByTestId('models-bulk-dialog-confirm-btn'));
+
+    fireEvent.click(await screen.findByTestId('models-bulk-retry-btn'));
+    await screen.findByTestId('models-bulk-summary');
     pickReason('models-bulk-dialog');
     await waitFor(() => expect(screen.getByTestId('models-bulk-dialog-confirm-btn')).not.toBeDisabled());
     fireEvent.click(screen.getByTestId('models-bulk-dialog-confirm-btn'));
-    fireEvent.click(await screen.findByRole('button', { name: 'Undo' }));
+    await waitFor(() => expect(screen.getByTestId('undo-toast-message')).toHaveTextContent('Updated 1 of 1'));
 
-    fireEvent.click(await screen.findByTestId('models-bulk-retry-btn'));
-    await waitFor(() =>
-      expect(bulkBodies().at(-1)).toEqual({
-        selection: { ids: ['example-text-1'] },
-        change: { removeTags: ['beta'], alsoRestoreBase: true },
-      })
-    );
-    const restore = screen.getByTestId('models-bulk-also-restore-base-checkbox');
-    expect(restore).toBeChecked();
-    fireEvent.click(restore);
-    await waitFor(() => expect(bulkBodies().at(-1)).toMatchObject({ change: { removeTags: ['beta'] } }));
-    expect(bulkBodies().at(-1)).not.toHaveProperty('change.alsoRestoreBase');
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+    await waitFor(() => expect(screen.getByTestId('undo-toast-message')).toHaveTextContent('Undo: 2 models reverted.'));
+    const undoTokens = bulkBodies()
+      .map(body => (body as { undoToken?: string }).undoToken)
+      .filter(Boolean);
+    expect(undoTokens).toEqual(['undo-1', 'undo-2']);
+    expect(screen.queryByTestId('models-bulk-failed')).not.toBeInTheDocument();
   });
 
   it('reports failed models and retries only those through a fresh dry run', async () => {

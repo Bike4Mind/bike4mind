@@ -4,7 +4,7 @@ import {
   bulkChangeOf,
   bulkDiffSummary,
   describeBulkEntry,
-  reverseBulkChange,
+  MODEL_BULK_KINDS,
 } from './modelBulkAccess';
 
 const counts = { selected: 40, change: 37, unchanged: 3, noAudienceChange: 0, adminOnly: 0 };
@@ -13,15 +13,8 @@ describe('bulk access helpers', () => {
   it('builds the request change for each kind', () => {
     expect(bulkChangeOf('turn-off', [])).toEqual({ enabled: false });
     expect(bulkChangeOf('add-tag', [])).toBeNull();
-    expect(bulkChangeOf('add-tag', ['beta'], { alsoRemoveBase: true })).toEqual({
-      addTags: ['beta'],
-      alsoRemoveBase: true,
-    });
-    expect(bulkChangeOf('remove-tag', ['beta'], { alsoRestoreBase: true })).toEqual({
-      removeTags: ['beta'],
-      alsoRestoreBase: true,
-    });
-    expect(bulkChangeOf('remove-tag', ['beta'], { alsoRemoveBase: true })).toEqual({ removeTags: ['beta'] });
+    expect(bulkChangeOf('add-tag', ['beta'], true)).toEqual({ addTags: ['beta'], alsoRemoveBase: true });
+    expect(bulkChangeOf('remove-tag', ['beta'], true)).toEqual({ removeTags: ['beta'] });
     expect(bulkChangeOf('remove-entitlement', ['pro'])).toEqual({ removeEntitlements: ['pro'] });
   });
 
@@ -44,28 +37,9 @@ describe('bulk access helpers', () => {
     ).toBe('On \u2192 Off');
   });
 
-  it('reverses each kind, carrying base across a tag change', () => {
-    expect(reverseBulkChange('turn-off', {})).toEqual({
-      kind: 'turn-on',
-      alsoRemoveBase: false,
-      alsoRestoreBase: false,
-    });
-    expect(reverseBulkChange('add-entitlement', {})).toMatchObject({ kind: 'remove-entitlement' });
-    expect(reverseBulkChange('add-tag', { alsoRemoveBase: true })).toEqual({
-      kind: 'remove-tag',
-      alsoRemoveBase: false,
-      alsoRestoreBase: true,
-    });
-    expect(reverseBulkChange('remove-tag', { alsoRestoreBase: true })).toEqual({
-      kind: 'add-tag',
-      alsoRemoveBase: true,
-      alsoRestoreBase: false,
-    });
-    expect(reverseBulkChange('remove-tag', {})).toEqual({
-      kind: 'add-tag',
-      alsoRemoveBase: false,
-      alsoRestoreBase: false,
-    });
+  it('puts Turn off last in the bulk bar', () => {
+    expect(MODEL_BULK_KINDS.at(-1)).toBe('turn-off');
+    expect(MODEL_BULK_KINDS[0]).toBe('turn-on');
   });
 
   it('counts who can pick the changed models afterwards, narrowest first', () => {

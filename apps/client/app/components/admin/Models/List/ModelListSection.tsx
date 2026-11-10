@@ -5,6 +5,7 @@ import {
   Button,
   Dropdown,
   IconButton,
+  Link,
   Menu,
   MenuButton,
   MenuItem,
@@ -71,9 +72,9 @@ import {
   BULK_FAILURE_LABEL,
   MODEL_BULK_KINDS,
   MODEL_BULK_LABEL,
+  UNDO_FAILURE_LABEL,
   countOf,
   failedResults,
-  reverseBulkChange,
 } from './modelBulkAccess';
 
 const DEFAULT_PAGE_SIZE = 50;
@@ -101,13 +102,17 @@ const positiveInt = (value: string, fallback: number) => {
 };
 
 type AccessEdit = { target: ModelAccessTarget; change: ModelAccessChange; title: string; confirmLabel: string };
-/** Models a bulk apply or its undo could not write, and the bulk change that retries just those. */
-type BulkOutcome = {
-  summary: string;
-  failed: ReturnType<typeof failedResults>;
-  retry: ModelBulkRequest;
-  retryLabel: string;
-};
+type FailedEntry = ReturnType<typeof failedResults>[number];
+/** One bulk write and its retries: each undo token with the reason its write was made under. */
+type BulkBatch = { undo: { token: string; reason: string }[] };
+/**
+ * A bulk apply that left models unwritten, with the request that retries them inside the same batch; or an undo
+ * that left models as they are. An undo is not retried: those models changed since the batch, so reversing the
+ * batch's change on them could reach past what it did.
+ */
+type BulkOutcome =
+  | { kind: 'failed'; summary: string; failed: FailedEntry[]; retry: ModelBulkRequest; batch: BulkBatch }
+  | { kind: 'not-reverted'; summary: string; failed: FailedEntry[] };
 
 const toggleEdit = (row: AdminModelRow): AccessEdit => {
   const on = effectiveAccess(row.access.entry).enabled;
@@ -170,6 +175,8 @@ export function ModelListSection() {
   const [accessEdit, setAccessEdit] = useState<AccessEdit | null>(null);
   const [bulk, setBulk] = useState<ModelBulkRequest | null>(null);
   const [outcome, setOutcome] = useState<BulkOutcome | null>(null);
+  // The batch a retry in the bulk dialog belongs to, so its undo token joins the original apply's.
+  const retryBatch = useRef<BulkBatch | null>(null);
 
   // DataTable follows a sort change with onPageChange(1) in the same tick, before the URL comes back round; each
   // write builds on the last one so the second does not put the old sort back.
@@ -187,62 +194,73 @@ export function ModelListSection() {
   const total = data?.total ?? 0;
   // An empty placeholder is the previous view's result (Needs review before the switch to All), not this one's.
   const loading = list.isPending || (list.isPlaceholderData && (data?.models.length ?? 0) === 0);
+  // A placeholder is the previous query's page: an all-matching selection would send this query's filter for it.
+  const stale = list.isPlaceholderData;
   const selectedCount = selection.mode === 'allMatching' ? total : selection.ids.length;
   const bulkSelection = (): ModelAccessSelection =>
     selection.mode === 'allMatching' ? { filter: { ...baseFilter, view } } : { ids: [...selection.ids] };
 
+  /** Reverts every write in the batch, oldest first; a retried undo resumes after the tokens that already went. */
+  const undoBatch = (batch: BulkBatch) => {
+    const pending = [...batch.undo];
+    const results: ModelAccessBulkResult[] = [];
+    return async () => {
+      while (pending.length > 0) {
+        const { token, reason } = pending[0];
+        results.push(
+          await postModelAccessBulk<ModelAccessBulkResult>({ undoToken: token, reason: undoAdminReason(reason) })
+        );
+        pending.shift();
+      }
+      await invalidate();
+      const reverted = results.reduce((sum, result) => sum + result.counts.updated, 0);
+      const notReverted = results.flatMap(failedResults);
+      const summary = `Undo: ${countOf(reverted, 'model')} reverted${
+        notReverted.length > 0 ? `, ${notReverted.length.toLocaleString()} not reverted` : ''
+      }.`;
+      setOutcome(notReverted.length > 0 ? { kind: 'not-reverted', summary, failed: notReverted } : null);
+      // Replaces this toast, so its Undo cannot resend tokens that already went.
+      showUndo({ message: summary });
+    };
+  };
+
   const onBulkApplied = (applied: ModelBulkApplied) => {
-    const { request, result, reason, values, alsoRemoveBase, alsoRestoreBase } = applied;
+    const { request, result, reason, values, alsoRemoveBase } = applied;
     setBulk(null);
     setSelection(NO_SELECTION);
     void invalidate();
+    const prior = retryBatch.current;
+    retryBatch.current = null;
+    const batch: BulkBatch = {
+      undo: [...(prior?.undo ?? []), ...(result.undoToken ? [{ token: result.undoToken, reason }] : [])],
+    };
     const failed = failedResults(result);
-    const retryOn = (entries: typeof failed) => ({
-      selection: { ids: entries.map(entry => entry.id) },
-      count: entries.length,
-      values,
-    });
     setOutcome(
       failed.length > 0
         ? {
+            kind: 'failed',
             summary: result.summary,
             failed,
-            retry: { kind: request.kind, ...retryOn(failed), alsoRemoveBase, alsoRestoreBase },
-            retryLabel: 'Retry failed',
+            retry: {
+              kind: request.kind,
+              selection: { ids: failed.map(entry => entry.id) },
+              count: failed.length,
+              values,
+              alsoRemoveBase,
+            },
+            batch,
           }
         : null
     );
-    const { undoToken } = result;
     showUndo({
       message: `${result.summary} ${MODEL_PICKER_FRESHNESS}`,
-      onUndo: undoToken
-        ? async () => {
-            const undone = await postModelAccessBulk<ModelAccessBulkResult>({
-              undoToken,
-              reason: undoAdminReason(reason),
-            });
-            await invalidate();
-            const notReverted = failedResults(undone);
-            if (notReverted.length === 0) return;
-            const summary = `Undo: ${undone.summary}. ${countOf(notReverted.length, 'model')} not reverted.`;
-            setOutcome({
-              summary,
-              failed: notReverted,
-              retry: {
-                ...reverseBulkChange(request.kind, { alsoRemoveBase, alsoRestoreBase }),
-                ...retryOn(notReverted),
-              },
-              retryLabel: 'Revert the rest',
-            });
-            // Replaces this toast, so its Undo cannot resend a token whose reverted entries have since moved.
-            showUndo({ message: summary });
-          }
-        : undefined,
+      onUndo: batch.undo.length > 0 ? undoBatch(batch) : undefined,
     });
   };
 
   const retryFailed = () => {
-    if (!outcome) return;
+    if (outcome?.kind !== 'failed') return;
+    retryBatch.current = outcome.batch;
     setOutcome(null);
     setBulk(outcome.retry);
   };
@@ -438,15 +456,17 @@ export function ModelListSection() {
           data-testid="models-bulk-failed"
           endDecorator={
             <Stack direction="row" gap={0.5}>
-              <Button
-                size="sm"
-                variant="outlined"
-                color="neutral"
-                onClick={retryFailed}
-                data-testid="models-bulk-retry-btn"
-              >
-                {outcome.retryLabel}
-              </Button>
+              {outcome.kind === 'failed' && (
+                <Button
+                  size="sm"
+                  variant="outlined"
+                  color="neutral"
+                  onClick={retryFailed}
+                  data-testid="models-bulk-retry-btn"
+                >
+                  Retry failed
+                </Button>
+              )}
               <IconButton
                 size="sm"
                 variant="plain"
@@ -464,11 +484,34 @@ export function ModelListSection() {
             <Typography level="body-sm" sx={{ fontWeight: 600 }}>
               {outcome.summary}
             </Typography>
-            {outcome.failed.map(entry => (
-              <Typography key={entry.id} level="body-xs" sx={{ overflowWrap: 'anywhere' }}>
-                {entry.id}: {entry.reason ? BULK_FAILURE_LABEL[entry.reason] : 'failed'}
-              </Typography>
-            ))}
+            {outcome.kind === 'failed'
+              ? outcome.failed.map(entry => (
+                  <Typography key={entry.id} level="body-xs" sx={{ overflowWrap: 'anywhere' }}>
+                    {entry.id}: {entry.reason ? BULK_FAILURE_LABEL[entry.reason] : 'failed'}
+                  </Typography>
+                ))
+              : outcome.failed.map(entry => (
+                  <Typography
+                    key={entry.id}
+                    level="body-xs"
+                    sx={{ overflowWrap: 'anywhere' }}
+                    data-testid="models-bulk-not-reverted-item"
+                  >
+                    <Link
+                      component="button"
+                      type="button"
+                      level="body-xs"
+                      onClick={() => void openModel(entry.id)}
+                      data-testid="models-bulk-not-reverted-link"
+                    >
+                      {entry.id}
+                    </Link>
+                    : {entry.reason ? UNDO_FAILURE_LABEL[entry.reason] : 'not reverted'}
+                  </Typography>
+                ))}
+            {outcome.kind === 'not-reverted' && (
+              <Typography level="body-xs">Change these back from each model&apos;s page.</Typography>
+            )}
           </Stack>
         </Alert>
       )}
@@ -488,6 +531,7 @@ export function ModelListSection() {
         minWidth="76rem"
         selection={selection}
         onSelectionChange={setSelection}
+        selectionDisabled={stale}
         sort={tableSort}
         onSortChange={next => {
           const nextSort = SORT_BY_COLUMN[next.columnId];
@@ -574,6 +618,7 @@ export function ModelListSection() {
         selection={selection}
         totalMatching={total}
         onSelectAllMatching={() => setSelection({ mode: 'allMatching' })}
+        selectAllMatchingDisabled={stale}
         onClear={() => setSelection(NO_SELECTION)}
       >
         {MODEL_BULK_KINDS.map(kind => (
@@ -600,7 +645,14 @@ export function ModelListSection() {
         confirmLabel={accessEdit?.confirmLabel ?? ''}
         onClose={() => setAccessEdit(null)}
       />
-      <ModelBulkAccessDialog request={bulk} onClose={() => setBulk(null)} onApplied={onBulkApplied} />
+      <ModelBulkAccessDialog
+        request={bulk}
+        onClose={() => {
+          retryBatch.current = null;
+          setBulk(null);
+        }}
+        onApplied={onBulkApplied}
+      />
     </Stack>
   );
 }

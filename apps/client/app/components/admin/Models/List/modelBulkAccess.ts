@@ -11,11 +11,11 @@ import { changedFields, describeAccess, diffAccess, effectiveAccess } from '../A
 
 export const MODEL_BULK_KINDS = [
   'turn-on',
-  'turn-off',
   'add-tag',
   'remove-tag',
   'add-entitlement',
   'remove-entitlement',
+  'turn-off',
 ] as const;
 export type ModelBulkKind = (typeof MODEL_BULK_KINDS)[number];
 
@@ -31,14 +31,11 @@ export const MODEL_BULK_LABEL: Record<ModelBulkKind, string> = {
 export const bulkKindTakesValues = (kind: ModelBulkKind): boolean => kind !== 'turn-on' && kind !== 'turn-off';
 export const bulkKindIsTags = (kind: ModelBulkKind): boolean => kind === 'add-tag' || kind === 'remove-tag';
 
-/** Base goes with the tags: an add-tag can also remove it, and a remove-tag can also give it back. */
-export type BulkBaseFlags = { alsoRemoveBase?: boolean; alsoRestoreBase?: boolean };
-
 /** The request's `change`; null until a tag or entitlement kind has at least one value. */
 export const bulkChangeOf = (
   kind: ModelBulkKind,
   values: readonly string[],
-  { alsoRemoveBase = false, alsoRestoreBase = false }: BulkBaseFlags = {}
+  alsoRemoveBase = false
 ): ModelAccessBulkChange | null => {
   if (kind === 'turn-on') return { enabled: true };
   if (kind === 'turn-off') return { enabled: false };
@@ -48,35 +45,13 @@ export const bulkChangeOf = (
     case 'add-tag':
       return alsoRemoveBase ? { addTags: list, alsoRemoveBase: true } : { addTags: list };
     case 'remove-tag':
-      return alsoRestoreBase ? { removeTags: list, alsoRestoreBase: true } : { removeTags: list };
+      return { removeTags: list };
     case 'add-entitlement':
       return { addEntitlements: list };
     case 'remove-entitlement':
       return { removeEntitlements: list };
   }
 };
-
-const REVERSE_KIND: Record<ModelBulkKind, ModelBulkKind> = {
-  'turn-on': 'turn-off',
-  'turn-off': 'turn-on',
-  'add-tag': 'remove-tag',
-  'remove-tag': 'add-tag',
-  'add-entitlement': 'remove-entitlement',
-  'remove-entitlement': 'add-entitlement',
-};
-
-/**
- * The bulk change that reverses one, for models its undo could not revert. A multi-value change can reach past what
- * it did on a model (removing a tag the model already had), so it goes through a fresh dry run like any other.
- */
-export const reverseBulkChange = (
-  kind: ModelBulkKind,
-  { alsoRemoveBase = false, alsoRestoreBase = false }: BulkBaseFlags
-): { kind: ModelBulkKind } & Required<BulkBaseFlags> => ({
-  kind: REVERSE_KIND[kind],
-  alsoRemoveBase: kind === 'remove-tag' && alsoRestoreBase,
-  alsoRestoreBase: kind === 'add-tag' && alsoRemoveBase,
-});
 
 export const countOf = (count: number, noun: string) => `${count.toLocaleString()} ${noun}${count === 1 ? '' : 's'}`;
 
@@ -120,6 +95,12 @@ export const canAlsoRemoveBase = (kind: ModelBulkKind, dryRun: ModelAccessBulkDr
 
 export const BULK_FAILURE_LABEL: Record<NonNullable<ModelAccessBulkResult['results'][number]['reason']>, string> = {
   'stamp-moved': 'changed by someone else since the preview',
+  'write-error': 'the write failed',
+};
+
+/** Why an undo left a model alone: it reverts only entries still as the batch left them. */
+export const UNDO_FAILURE_LABEL: Record<NonNullable<ModelAccessBulkResult['results'][number]['reason']>, string> = {
+  'stamp-moved': 'changed since the batch',
   'write-error': 'the write failed',
 };
 

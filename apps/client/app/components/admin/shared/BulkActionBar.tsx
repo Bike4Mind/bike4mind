@@ -8,12 +8,15 @@ export function BulkActionBar({
   onSelectAllMatching,
   selectAllLabel,
   onClear,
+  selectAllMatchingDisabled = false,
   children,
 }: {
   selection: AdminSelection;
   totalMatching: number;
   onSelectAllMatching: () => void;
   selectAllLabel?: string;
+  /** While the count may still be the previous filters' total. */
+  selectAllMatchingDisabled?: boolean;
   onClear: () => void;
   children: ReactNode;
 }) {
@@ -28,7 +31,13 @@ export function BulkActionBar({
       <Stack direction="row" flexWrap="wrap" alignItems="center" gap={1}>
         <Typography sx={{ color: 'admin.ink' }}>{count.toLocaleString()} selected</Typography>
         {selection.mode === 'explicit' && count < totalMatching && (
-          <Button variant="plain" size="sm" onClick={onSelectAllMatching} data-testid="admin-select-all-matching-btn">
+          <Button
+            variant="plain"
+            size="sm"
+            disabled={selectAllMatchingDisabled}
+            onClick={onSelectAllMatching}
+            data-testid="admin-select-all-matching-btn"
+          >
             {selectAllLabel ?? `Select all ${totalMatching.toLocaleString()} matching`}
           </Button>
         )}

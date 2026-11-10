@@ -36,15 +36,12 @@ export type ModelBulkRequest = {
   /** Prefilled tags or entitlements, for a retry. */
   values?: string[];
   alsoRemoveBase?: boolean;
-  /** A remove-tag that also gives base back; offered only when the request asks for it (reversing an add-tag). */
-  alsoRestoreBase?: boolean;
 };
 
 export type ModelBulkApplied = {
   request: ModelBulkRequest;
   values: string[];
   alsoRemoveBase: boolean;
-  alsoRestoreBase: boolean;
   reason: string;
   result: ModelAccessBulkResult;
 };
@@ -106,13 +103,12 @@ function BulkDialogBody({
   const isTags = bulkKindIsTags(kind);
   const [values, setValues] = useState<string[]>(request.values ?? []);
   const [alsoRemoveBase, setAlsoRemoveBase] = useState(request.alsoRemoveBase ?? false);
-  const [alsoRestoreBase, setAlsoRestoreBase] = useState(kind === 'remove-tag' && !!request.alsoRestoreBase);
   const [showChanged, setShowChanged] = useState(false);
   /** A fresh dry run from a 409, for the change it was computed for. */
   const [replaced, setReplaced] = useState<{ changeKey: string; dryRun: ModelAccessBulkDryRun } | null>(null);
 
   const tags = useAccessTagOptions(isTags);
-  const change = bulkChangeOf(kind, values, { alsoRemoveBase, alsoRestoreBase });
+  const change = bulkChangeOf(kind, values, alsoRemoveBase);
   const changeKey = JSON.stringify(change);
   const tooMany = 'ids' in selection && selection.ids.length > MODEL_ACCESS_BULK_MAX_IDS;
 
@@ -173,7 +169,7 @@ function BulkDialogBody({
     if (!change || !dryRun) return;
     try {
       const result = await apply.mutateAsync({ reason, previewKey });
-      onApplied({ request, values, alsoRemoveBase, alsoRestoreBase, reason, result });
+      onApplied({ request, values, alsoRemoveBase, reason, result });
     } catch (error) {
       const { status, data } = apiErrorOf(error);
       if (status === 409 && data.dryRun) {
@@ -341,18 +337,6 @@ function BulkDialogBody({
                 slotProps={{ input: { 'data-testid': 'models-bulk-also-remove-base-checkbox' } }}
               />
             </Stack>
-          </Alert>
-        )}
-
-        {kind === 'remove-tag' && request.alsoRestoreBase && (
-          <Alert color="neutral" variant="soft" data-testid="models-bulk-restoring-base">
-            <Checkbox
-              size="sm"
-              label="Also give base back, so every signed-in user can pick them again"
-              checked={alsoRestoreBase}
-              onChange={event => setAlsoRestoreBase(event.target.checked)}
-              slotProps={{ input: { 'data-testid': 'models-bulk-also-restore-base-checkbox' } }}
-            />
           </Alert>
         )}
 
