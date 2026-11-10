@@ -489,21 +489,6 @@
       "count": 1
     }
   },
-  "apps/client/app/components/admin/DocumentationTab/components/DocSection.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
-  "apps/client/app/components/admin/DocumentationTab/index.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
-  "apps/client/app/components/admin/DocumentationTab/utils/docData.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
   "apps/client/app/components/admin/EmbedKeysTab.test.tsx": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
@@ -572,16 +557,6 @@
   "apps/client/app/components/admin/OrganizationProfileUpdated.tsx": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
-    }
-  },
-  "apps/client/app/components/admin/RapidReplyMetrics.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 2
-    }
-  },
-  "apps/client/app/components/admin/RapidReplyTab.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 11
     }
   },
   "apps/client/app/components/admin/SlackWorkspacesTab.tsx": {

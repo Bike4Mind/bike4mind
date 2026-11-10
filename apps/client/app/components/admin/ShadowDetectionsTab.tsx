@@ -47,6 +47,8 @@ import {
   type ShadowDetectionRow,
 } from '@client/app/hooks/data/shadowDetections';
 import { ShadowDetectionAssessmentPanel } from './ShadowDetectionAssessmentPanel';
+import { WatchAccountsButton } from './CampaignWatches/WatchAccountsButton';
+import { CampaignWatchesPanel } from './CampaignWatches/CampaignWatchesPanel';
 import { VerdictEvalPanel } from './VerdictEvalPanel';
 import { DETECTOR_LABELS } from './shadowDetectorLabels';
 import { getErrorMessage } from '@client/app/utils/error';
@@ -444,12 +446,14 @@ type VerdictDialogProps = {
   onRowChange: (row: ShadowDetectionRow) => void;
 };
 
+const CAPPED_GROUP_HINT = 'This group was cut to its stored cap, so it cannot be saved as a watch.';
+
 const VerdictDialog: React.FC<VerdictDialogProps> = ({ row, now, onClose, onRowChange }) => {
   const mutation = useShadowDetectionVerdict();
   const [verdict, setVerdict] = useState<ShadowDetectionVerdict | null>(null);
   // The server's explanation of a stale verdict, or null when there is no conflict to show.
   const [conflict, setConflict] = useState<string | null>(null);
-  const title = row.verdict ? 'Change verdict' : 'Record verdict';
+  const title = row.verdict ? 'View review' : 'Review evidence';
 
   const submit = async (reason: string) => {
     if (!verdict) return;
@@ -490,6 +494,16 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({ row, now, onClose, onRowC
         </Stack>
       </Stack>
       <DialogActors row={row} now={now} />
+      {row.detector === 'accountCampaign' && (
+        <WatchAccountsButton
+          userIds={row.userIds}
+          sourceDetectionId={row.id}
+          label="Watch campaign"
+          incomplete={row.group?.truncated}
+          incompleteHint={CAPPED_GROUP_HINT}
+          onCreated={onClose}
+        />
+      )}
       {conflict && (
         <Alert color="warning" data-testid="shadow-detection-verdict-conflict">
           {conflict} Its current verdict and history are shown below.
@@ -577,7 +591,7 @@ export const ShadowDetectionsTab: React.FC = () => {
     },
     {
       id: 'wouldAction',
-      label: 'Would',
+      label: 'Suggested response',
       render: row => (
         <StatusChip
           tone={ACTION_DISPLAY[row.wouldAction].tone}
@@ -586,7 +600,7 @@ export const ShadowDetectionsTab: React.FC = () => {
         />
       ),
       sortValue: row => ACTION_DISPLAY[row.wouldAction].label,
-      width: '7rem',
+      width: '11.5rem',
     },
     { id: 'actor', label: 'Actor', render: row => <Actor row={row} />, width: '16rem' },
     {
@@ -599,20 +613,31 @@ export const ShadowDetectionsTab: React.FC = () => {
   ];
 
   const rowActions = (row: ShadowDetectionRow) => (
-    <AdminPermissionAction requirement="users:moderate">
-      {disabled => (
-        <Button
-          size="sm"
-          variant="plain"
-          color="neutral"
-          disabled={disabled}
-          data-testid={`shadow-detection-grade-btn-${row.id}`}
-          onClick={() => setGrading(row)}
-        >
-          {row.verdict ? 'Change verdict' : 'Record verdict'}
-        </Button>
+    <Stack gap={0.5} alignItems="flex-start">
+      <AdminPermissionAction requirement="users:moderate">
+        {disabled => (
+          <Button
+            size="sm"
+            variant="plain"
+            color="neutral"
+            disabled={disabled}
+            data-testid={`shadow-detection-grade-btn-${row.id}`}
+            onClick={() => setGrading(row)}
+          >
+            {row.verdict ? 'View review' : 'Review evidence'}
+          </Button>
+        )}
+      </AdminPermissionAction>
+      {row.detector === 'accountCampaign' && (
+        <WatchAccountsButton
+          userIds={row.userIds}
+          sourceDetectionId={row.id}
+          label="Watch"
+          incomplete={row.group?.truncated}
+          incompleteHint={CAPPED_GROUP_HINT}
+        />
       )}
-    </AdminPermissionAction>
+    </Stack>
   );
 
   const filtered = detector !== undefined || verdict !== 'unreviewed';
@@ -633,8 +658,24 @@ export const ShadowDetectionsTab: React.FC = () => {
         title="Detections"
         // A truncated list is not the total: the summary tiles carry the real counts.
         count={detections.data && !detections.data.truncated ? rows.length : undefined}
-        description="Detectors record what they would have done to an account or network. Nothing here changes an account: grade each detection so its precision can be measured."
+        description="Review flagged activity, inspect the evidence, and keep account groups under watch while you investigate. Detector suggestions and recorded judgments do not change account access."
       />
+      <Alert color="neutral" data-testid="detections-start-here">
+        <Stack gap={0.5}>
+          <Typography level="title-sm">Start here</Typography>
+          <Typography level="body-sm">
+            1. Open Review evidence, then inspect the linked accounts and their activity.
+          </Typography>
+          <Typography level="body-sm">
+            2. If you need more time, watch the campaign. Its fixed account list stays available after the advisory
+            expires.
+          </Typography>
+          <Typography level="body-sm">
+            3. Record a judgment when the evidence supports one. Recording a judgment does not change account access;
+            suggested responses are not actions applied by this table.
+          </Typography>
+        </Stack>
+      </Alert>
       {summary.length > 0 && (
         <Stack gap={2} data-testid="shadow-detection-summary">
           {summary.map(row => (
@@ -695,8 +736,9 @@ export const ShadowDetectionsTab: React.FC = () => {
         error={detections.error ? "Couldn't load detections." : undefined}
         onRetry={() => void detections.refetch()}
         rowActions={rowActions}
-        // The fixed-width columns plus room for the summary; narrower screens scroll sideways.
-        minWidth="64rem"
+        // Fixed-width columns (incl. row actions) total 61rem, leaving Summary a 12rem floor; keep in
+        // sync with the column widths above. Narrower screens scroll sideways.
+        minWidth="73rem"
         empty={
           <EmptyState
             title={emptyTitle}
@@ -720,6 +762,7 @@ export const ShadowDetectionsTab: React.FC = () => {
           />
         }
       />
+      <CampaignWatchesPanel />
       {grading && <VerdictDialog row={grading} now={now} onClose={() => setGrading(null)} onRowChange={setGrading} />}
     </Stack>
   );

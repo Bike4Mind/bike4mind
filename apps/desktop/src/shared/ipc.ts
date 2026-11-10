@@ -4,6 +4,7 @@ import type { LoopResult, LoopState } from './loop';
 import type { PromptCacheTtl } from '@bike4mind/common';
 import type { AttentionNotice, AttentionOpenEvent } from './attention';
 import type { AccountCredits, AccountProfile } from './account';
+import type { FeedbackSubmitResult } from './feedback';
 import type { AccountPage, AuthState, EnvironmentSelection, SetEnvironmentResult } from './auth';
 import type {
   ChromeHostsResult,
@@ -159,6 +160,7 @@ export const IPC_CHANNELS = {
   authStateChanged: 'auth:state-changed',
   accountGetCredits: 'account:get-credits',
   accountGetProfile: 'account:get-profile',
+  accountSendFeedback: 'account:send-feedback',
   usageGetHistory: 'usage:get-history',
   fleetGetState: 'fleet:get-state',
   fleetRefresh: 'fleet:refresh',
@@ -753,6 +755,7 @@ export interface DesktopApi {
      * round-trips taken at two different instants.
      */
     getProfile(): Promise<AccountProfile>;
+    sendFeedback(content: string): Promise<FeedbackSubmitResult>;
   };
   usage: {
     /**

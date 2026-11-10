@@ -312,8 +312,7 @@ IMPORTANT: Return ONLY valid JSON with no additional text, no markdown formattin
     }
   } catch (error: any) {
     logger.error('Failed to parse generated agent data:', error);
-    logger.error('Raw generated data (first 500 chars):', generatedData.substring(0, 500));
-    logger.error('Raw generated data (last 500 chars):', generatedData.substring(generatedData.length - 500));
+    logger.error('Generated agent data could not be parsed', { generatedDataLength: generatedData.length });
 
     // Fallback: Create a basic agent profile
     logger.info('Using fallback agent profile due to parse error');

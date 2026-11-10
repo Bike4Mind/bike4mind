@@ -49,14 +49,22 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:a
       let policy: ReturnType<typeof loadCreditGrantPolicy> | undefined;
       for (const row of result.results) {
         if (row.outcome !== 'reversed') continue;
+        const heldRestored = !!row.heldRestored;
         try {
           await recordAdminActionFromRequest(
             req,
             {
               action: 'user.credits.adjusted',
               target: { kind: 'user', id: row.userId, displayName: row.userId },
-              summary: 'revoked released signup grant',
-              details: { credits: -row.credits, source: 'held_grant_revoke', batchId: result.batchId },
+              summary: heldRestored
+                ? 'revoked released signup grant and returned it to the held queue'
+                : 'revoked released signup grant',
+              details: {
+                credits: -row.credits,
+                source: 'held_grant_revoke',
+                batchId: result.batchId,
+                ...(heldRestored ? { heldRestored: true } : {}),
+              },
             },
             { creditGrantPolicy: () => (policy ??= loadCreditGrantPolicy()) }
           );

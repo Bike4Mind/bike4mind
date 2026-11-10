@@ -6,7 +6,7 @@ export function SettingsSection({ children, sx, ...props }: SheetProps) {
     <Sheet
       variant="outlined"
       {...props}
-      sx={[{ ...adminSurface, p: 2, mb: 2 }, ...(Array.isArray(sx) ? sx : sx ? [sx] : [])]}
+      sx={[{ ...adminSurface, borderRadius: 'lg', p: 2, mb: 2 }, ...(Array.isArray(sx) ? sx : sx ? [sx] : [])]}
     >
       {children}
     </Sheet>

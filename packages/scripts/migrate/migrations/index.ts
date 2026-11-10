@@ -313,6 +313,7 @@ import DropRetiredGrantSettings from './20260921239996_drop-retired-grant-settin
 import EnsureUserLimitEventIndexes from './20260921240010_ensure-user-limit-event-indexes';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import EncryptOAuthProviderTokens from './20260921240020_encrypt-oauth-provider-tokens';
+import ResealOAuthProviderTokens from './20260921241020_reseal-oauth-provider-tokens';
 import EnsureBillingEventIndexes from './20260921240030_ensure-billing-event-indexes';
 import EnsureApiKeyUsageLogUserPagingIndexes from './20260921240040_ensure-apikeyusagelog-user-paging-indexes';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
@@ -553,6 +554,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureAdminActionCountIndexes,
   EnsureGeneratedMediaPurgeIndexes,
   EnsureSessionGroupReadIndex,
+  ResealOAuthProviderTokens,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
 ];

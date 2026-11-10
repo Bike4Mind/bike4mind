@@ -88,6 +88,12 @@ function useLakeGitHubConnectionOptions(dataLakeId: string | undefined, enabled:
       if (dataLakeId && cached !== undefined && (syncFinished || next?.fileCount !== previous?.fileCount)) {
         void invalidateLakeFileQueries(queryClient, dataLakeId);
       }
+      // The lake list caches for minutes and carries the lake's name, which the bind may have changed
+      // after this tab read it (a connect from another tab). Once per finished sync, not on every
+      // mid-sync count change, which would refetch it each poll.
+      if (dataLakeId && syncFinished) {
+        void queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+      }
       return response.data;
     },
     refetchInterval: (query: { state: { data?: LakeGitHubConnectionResponse } }) =>
@@ -181,6 +187,8 @@ export function useCompleteLakeGitHubConnect() {
       // The picker's list is now stale (the bound repository must show as taken); a closed picker
       // just refetches fresh next time it opens rather than carrying this invalidation forward.
       queryClient.removeQueries({ queryKey: dataLakeKeys.gitHubRepositoryChoices(dataLakeId) });
+      // The bind renames a lake still on the placeholder name to the repository (nameLakeAfterRepository).
+      void queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
     },
   });
 }

@@ -617,6 +617,25 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return result.modifiedCount === 1;
   }
 
+  async restoreReleasedGrantState(
+    userId: string,
+    input: { creditsReleased: number | null; set: Partial<IUserDocument>; unset: (keyof IUserDocument)[] }
+  ): Promise<boolean> {
+    const result = await this.model.updateOne(
+      {
+        _id: userId,
+        ...(input.creditsReleased === null
+          ? { signupGrant: { $exists: false } }
+          : { 'signupGrant.creditsReleased': input.creditsReleased }),
+      },
+      {
+        $set: input.set,
+        ...(input.unset.length ? { $unset: Object.fromEntries(input.unset.map(key => [key, ''])) } : {}),
+      }
+    );
+    return result.matchedCount === 1;
+  }
+
   async markInviteBonusPaid(userId: string, credits: number): Promise<boolean> {
     const result = await this.model.updateOne(
       { _id: userId, signupGrant: { $type: 'object' }, 'signupGrant.inviteBonusPaid': { $exists: false } },
