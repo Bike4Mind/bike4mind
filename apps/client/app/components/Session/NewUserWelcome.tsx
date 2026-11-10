@@ -6,7 +6,6 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { useGetOwnSessions } from '@client/app/hooks/data/sessions';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { useSignupGrantCredits } from '@client/app/hooks/useSignupGrantCredits';
-import { useSignupGrantSchedule } from '@client/app/hooks/useSignupGrantSchedule';
 import { useEffectiveCredits } from '@client/app/hooks/useEffectiveCredits';
 import { useSelectedModelAnswerCost } from '@client/app/hooks/useSelectedModelAnswerCost';
 import { formatAnswersEstimate } from '@client/app/utils/creditEstimate';
@@ -15,13 +14,7 @@ import { useChatInput } from '@client/app/hooks/useChatInput';
 import { APP_NAME, getBrandName } from '@client/config/general';
 import { ExternalLinks } from '@client/app/utils/externalLinks';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
-import {
-  STARTER_PROMPTS,
-  advertisedDripCredits,
-  shouldShowNewUserWelcome,
-  welcomeCanStart,
-  welcomeCreditsLine,
-} from './newUserWelcomeModel';
+import { STARTER_PROMPTS, shouldShowNewUserWelcome, welcomeCanStart, welcomeCreditsLine } from './newUserWelcomeModel';
 import { isAwaitingEmailVerification } from '@client/app/utils/onboarding';
 import { claimFirstRunImpression } from '@client/app/utils/firstRunImpression';
 import SignupGrantStatus from '../subscription/SignupGrantStatus';
@@ -48,14 +41,6 @@ const NewUserWelcome = () => {
   const { data: sessions, isSuccess, isFetching } = useGetOwnSessions('');
   const enforceCredits = !!useGetSettingsValue('enforceCredits');
   const initialGrantCredits = useSignupGrantCredits();
-  const schedule = useSignupGrantSchedule();
-  const minActiveSeconds = useGetSettingsValue('signupGrantActivityMinActiveSeconds');
-  const paymentHoldHours = useGetSettingsValue('signupUnlockPaymentHoldHours');
-  const dailyDripCredits = advertisedDripCredits({
-    dailyCredits: schedule.dailyCredits,
-    dripCap: schedule.dripCap,
-    grant: currentUser?.signupGrant,
-  });
   const balance = useEffectiveCredits();
   const liveBalance = useEffectiveCredits({ live: true });
   const answerCost = useSelectedModelAnswerCost();
@@ -122,9 +107,6 @@ const NewUserWelcome = () => {
     awaitingVerification,
     pendingGrant: currentUser?.signupGrant?.signupCredits ?? currentUser?.pendingCreditGrant ?? initialGrantCredits,
     pendingGrantIsMaximum: !!currentUser?.signupGrant,
-    dailyDripCredits,
-    minActiveSeconds,
-    paymentHoldHours,
   });
   // Same credits the line above quotes: the pending grant before verification, else the displayed balance.
   const estimateCredits = awaitingVerification

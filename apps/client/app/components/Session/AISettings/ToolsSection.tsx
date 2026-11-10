@@ -376,6 +376,7 @@ const ToolsSection = ({
   const modelSupportsThinking = useMemo(() => {
     return modelInfo?.can_think === true;
   }, [modelInfo?.can_think]);
+  const thinkingAlwaysOn = modelSupportsThinking && modelInfo?.thinkingAlwaysOn === true;
 
   const availableMcpServers = useMemo(
     () => mcpServersData.filter((server: IMcpServerResponse) => server.enabled !== false),
@@ -1251,14 +1252,16 @@ const ToolsSection = ({
                 <ToolLabel
                   name="Thinking"
                   description={
-                    modelSupportsThinking
-                      ? 'Reasons step-by-step before responding; tune the token budget for longer chains'
-                      : 'Not supported by the selected model'
+                    thinkingAlwaysOn
+                      ? 'This model always thinks before responding'
+                      : modelSupportsThinking
+                        ? 'Reasons step-by-step before responding; tune the token budget for longer chains'
+                        : 'Not supported by the selected model'
                   }
                   dim={!modelSupportsThinking}
                 />
               </Box>
-              {(thinking?.enabled ?? true) && modelSupportsThinking && (
+              {(thinking?.enabled ?? true) && modelSupportsThinking && !thinkingAlwaysOn && (
                 <Box
                   sx={{
                     display: 'flex',
@@ -1302,18 +1305,25 @@ const ToolsSection = ({
                 </Box>
               )}
               <Box sx={{ display: 'flex', alignItems: 'center', flexShrink: 0, order: { xs: 1, sm: 2 } }}>
-                <SquareSlideToggle
-                  onChange={e =>
-                    setLLM({
-                      thinking: {
-                        enabled: e.target.checked,
-                        budget_tokens: thinking?.budget_tokens ?? 16000,
-                      },
-                    })
-                  }
-                  checked={thinking?.enabled ?? false}
-                  disabled={!modelSupportsThinking}
-                />
+                {thinkingAlwaysOn ? (
+                  <Typography level="body-sm" data-testid="tools-thinking-always-on">
+                    Always on
+                  </Typography>
+                ) : (
+                  <SquareSlideToggle
+                    onChange={e =>
+                      setLLM({
+                        thinking: {
+                          enabled: e.target.checked,
+                          budget_tokens: thinking?.budget_tokens ?? 16000,
+                        },
+                      })
+                    }
+                    checked={thinking?.enabled ?? false}
+                    disabled={!modelSupportsThinking}
+                    data-testid="tools-thinking-toggle-btn"
+                  />
+                )}
               </Box>
             </ToolContainer>
           </Grid>

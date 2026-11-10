@@ -336,8 +336,16 @@ export const FIELD_GROUP_OF: Record<keyof ModelRecord, FieldGroup> = {
  * are the provenance of that overlay, stamped by the same call. `image` is derived from the
  * model id by getImageModelCapabilities when GET /api/models lists the model. `access` is per caller,
  * stamped by getCallerModelList (apps/client/server/utils/callerModelList.ts) on a free account's locked models.
+ * `thinkingAlwaysOn` is derived from the merged record by getAvailableModels (@bike4mind/llm-adapters).
  */
-export const MODEL_INFO_FIELDS_NOT_IN_CATALOG = ['pricing', 'priceSource', 'priceRowId', 'image', 'access'] as const;
+export const MODEL_INFO_FIELDS_NOT_IN_CATALOG = [
+  'pricing',
+  'priceSource',
+  'priceRowId',
+  'image',
+  'access',
+  'thinkingAlwaysOn',
+] as const;
 
 /**
  * Which record group each ModelInfo field is derived from. Exhaustive by

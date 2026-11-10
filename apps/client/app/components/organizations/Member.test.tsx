@@ -44,11 +44,16 @@ vi.mock('@client/app/hooks/data/organizations', () => ({
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('./UserCard', () => ({
-  default: (p: { user: { id: string }; canInviteMembers: boolean; canRevokeMembers: boolean }) => (
+  default: (p: {
+    user: { id: string; creditUsage: { used: number } | null };
+    canInviteMembers: boolean;
+    canRevokeMembers: boolean;
+  }) => (
     <div
       data-testid={`member-card-${p.user.id}`}
       data-invite={String(p.canInviteMembers)}
       data-revoke={String(p.canRevokeMembers)}
+      data-credit-usage={p.user.creditUsage?.used ?? 'hidden'}
     />
   ),
 }));
@@ -140,15 +145,41 @@ describe('OrganizationMembers credit budget control', () => {
   });
 
   it('is hidden from a plain member', () => {
+    mocks.members = [{ id: 'm1', name: 'Member One' }];
     renderMembers(
-      buildOrg({ users: [{ userId: 'viewer', permissions: [Permission.read] }] as IOrganizationDocument['users'] })
+      buildOrg({
+        users: [{ userId: 'viewer', permissions: [Permission.read] }] as IOrganizationDocument['users'],
+        userDetails: [
+          { id: 'm1', name: 'Member One', usedCredits: 20, maxCredits: 50 },
+        ] as IOrganizationDocument['userDetails'],
+      })
     );
     expect(screen.queryByTestId('member-credit-budget-edit-btn')).toBeNull();
+    expect(screen.getByTestId('member-card-m1').getAttribute('data-credit-usage')).toBe('hidden');
   });
 
   it('is hidden from a listed admin who no longer has a users[] row', () => {
     renderMembers(buildOrg({ adminUserIds: ['viewer'] }));
     expect(screen.queryByTestId('member-credit-budget-edit-btn')).toBeNull();
+  });
+
+  it.each([
+    ['owner', 'owner1', false, [], []],
+    ['manager', 'viewer', false, ['viewer'], [{ userId: 'viewer', permissions: [Permission.read] }]],
+    ['platform admin', 'viewer', true, [], []],
+  ])('keeps the %s member credits display', (_role, id, isAdmin, adminUserIds, users) => {
+    mocks.viewer = { id, isAdmin };
+    mocks.members = [{ id: 'm1', name: 'Member One' }];
+    renderMembers(
+      buildOrg({
+        adminUserIds,
+        users: users as IOrganizationDocument['users'],
+        userDetails: [
+          { id: 'm1', name: 'Member One', usedCredits: 20, maxCredits: 50, periodStart: new Date() },
+        ] as IOrganizationDocument['userDetails'],
+      })
+    );
+    expect(screen.getByTestId('member-card-m1').getAttribute('data-credit-usage')).toBe('20');
   });
 });
 

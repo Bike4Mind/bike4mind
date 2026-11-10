@@ -19,6 +19,7 @@ import type { ApiKeyTable, BackendGateContext } from './backendGate';
 import { catalogLifecycles } from './deprecationHorizon';
 import { toProviderEndUserId } from './endUserId';
 import { mergeCatalog } from './mergeCatalog';
+import { thinkingCannotBeDisabled } from './thinkingParams';
 import { federatedSharedKeyProviders, resolveProviderCredential } from './providerAuth';
 import { alignRouteTwinNames } from './routeTwinNames';
 import { buildSupersededIndex, catalogSuccessors, updateReplacedByOverlay } from './resolveDeprecatedModel';
@@ -544,7 +545,9 @@ export const getAvailableModels = async (
   // has to run after the merge for catalog lifecycle to drive it; the filter is
   // a subset operation over an independent field, so moving it past the price
   // overlay leaves the output set identical.
-  const filtered = priced.filter(m => !isModelDeprecated(m));
+  const filtered = priced
+    .filter(m => !isModelDeprecated(m))
+    .map(m => (thinkingCannotBeDisabled(m.id, m) ? { ...m, thinkingAlwaysOn: true as const } : m));
 
   // Store in module-level cache (short-lived when a listing or catalog fetch
   // failed). The cached list is always private-inclusive; see getModelCacheKey.

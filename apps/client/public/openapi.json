@@ -8776,6 +8776,7 @@
             "chunkRebuildRequestedAt": {},
             "chunkStallReason": {},
             "noExtractableTextAt": {},
+            "extractionRefusalReason": {},
             "chunkPolicyConflict": {},
             "isVectorizing": {},
             "vectorized": {},

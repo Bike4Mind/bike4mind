@@ -175,7 +175,35 @@ describe('resolveFieldLimits', () => {
       signupGrantUnlockCount: false,
       signupInviteBonusCount: false,
       billingContact: false,
+      'userDetails.usedCredits': false,
+      'userDetails.maxCredits': false,
+      'userDetails.lastCreditUsedAt': false,
+      'userDetails.periodStart': false,
     });
+  });
+
+  it('keeps credit details for a verified owner or manager on a single-org subscription', () => {
+    expect(resolveFieldLimits('organizations', opts({ isPrivilegedOrgSubscriber: true }))).toEqual({
+      stripeCustomerId: false,
+      signupGrantUnlockCount: false,
+      signupInviteBonusCount: false,
+      billingContact: false,
+    });
+  });
+
+  it('rejects filters probing withheld member credit paths', () => {
+    const limits = resolveFieldLimits('organizations', opts());
+    expect(findWithheldFilterPaths({ userDetails: { $elemMatch: { usedCredits: { $gt: 0 } } } }, limits)).toEqual([
+      'userDetails',
+    ]);
+    expect(findWithheldFilterPaths({ 'userDetails.maxCredits': { $gt: 0 } }, limits)).toEqual([
+      'userDetails.maxCredits',
+    ]);
+    expect(findWithheldFilterPaths({ 'userDetails.email': 'a@b.test' }, limits)).toEqual([]);
+    expect(findWithheldFilterPaths({ 'userDetails.0.usedCredits': { $gt: 0 } }, limits)).toEqual([
+      'userDetails.0.usedCredits',
+    ]);
+    expect(findWithheldFilterPaths({ 'userDetails.0.email': 'a@b.test' }, limits)).toEqual([]);
   });
 
   it('still excludes stripeCustomerId for a platform admin, who keeps billingContact', () => {
@@ -194,6 +222,10 @@ describe('resolveFieldLimits', () => {
       signupGrantUnlockCount: false,
       signupInviteBonusCount: false,
       billingContact: false,
+      'userDetails.usedCredits': false,
+      'userDetails.maxCredits': false,
+      'userDetails.lastCreditUsedAt': false,
+      'userDetails.periodStart': false,
     });
   });
 
