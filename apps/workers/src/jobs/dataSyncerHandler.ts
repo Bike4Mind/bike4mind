@@ -17,19 +17,17 @@ import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
 import { allSettingDefinitions } from '@bike4mind/common';
 
 /**
- * Name, message, code, stack and cause of an error. Logging the error object itself would serialize its
- * enumerable fields, and a Mongo bulk-write error carries the whole documents being written.
+ * A bare copy of an error: name, message, code, stack and cause only. Logging the error itself would
+ * serialize its enumerable fields (a Mongo bulk-write error carries the whole documents being written),
+ * and it stays an Error so the Logger's redactor keeps its message.
  */
-function describeError(error: unknown): Record<string, unknown> {
-  if (!(error instanceof Error)) return { message: String(error) };
+function describeError(error: unknown): Error {
+  if (!(error instanceof Error)) return new Error(String(error));
+  const copy = new Error(error.message, error.cause !== undefined ? { cause: describeError(error.cause) } : undefined);
+  copy.name = error.name;
+  copy.stack = error.stack;
   const { code } = error as { code?: unknown };
-  return {
-    name: error.name,
-    message: error.message,
-    ...(code !== undefined && { code }),
-    stack: error.stack,
-    ...(error.cause !== undefined && { cause: describeError(error.cause) }),
-  };
+  return code === undefined ? copy : Object.assign(copy, { code });
 }
 
 interface DataSyncerEvent {

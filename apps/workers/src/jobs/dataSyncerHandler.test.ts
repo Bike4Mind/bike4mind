@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Logger } from '@bike4mind/observability';
+import { Logger, redactLogValue } from '@bike4mind/observability';
 import type { Context } from 'aws-lambda';
 
 // The Resource links only MONGODB_URI: the handler must not need a prod API key.
@@ -286,12 +286,14 @@ describe('dataSyncerHandler', () => {
     try {
       await invoke();
 
-      expect(errorSpy).toHaveBeenCalled();
-      expect(JSON.stringify(errorSpy.mock.calls)).not.toContain(marker);
-      expect(errorSpy).toHaveBeenCalledWith(
+      // Assert on what is emitted: the redactor runs after the call, so raw call arguments prove nothing.
+      const emitted = errorSpy.mock.calls.map(([message, metadata]) => [message, redactLogValue(metadata)]);
+      expect(emitted.length).toBeGreaterThan(0);
+      expect(JSON.stringify(emitted)).not.toContain(marker);
+      expect(emitted).toContainEqual([
         'Error syncing collection',
-        expect.objectContaining({ error: expect.objectContaining({ message: 'bulk write failed', code: 11000 }) })
-      );
+        expect.objectContaining({ error: expect.objectContaining({ message: 'bulk write failed', code: 11000 }) }),
+      ]);
     } finally {
       errorSpy.mockRestore();
     }
