@@ -8,7 +8,13 @@ import {
 import { getSettingsMap, getSettingsValue, postMessageToSlack } from '@bike4mind/utils';
 import { Resource } from 'sst';
 import { z } from 'zod';
-import { appUrlFromEnv, stageLabel } from '../events/alarmSlackMessage';
+import {
+  appUrlFromEnv,
+  isProductionStage,
+  resolveAlarmWebhookUrl,
+  SECRET_PLACEHOLDER,
+  stageLabel,
+} from '../events/alarmSlackMessage';
 import { collectBusinessMetrics } from './businessMetrics/collect';
 import { deliverAnomalies, subscriberMetric } from './businessMetrics/deliver';
 
@@ -23,18 +29,14 @@ export async function handler(event: unknown) {
     autoIndex: false,
     autoCreate: false,
   });
-  const settings = await getSettingsMap(
-    { adminSettings: adminSettingsRepository },
-    { skipCache: true, names: ['SlackUserActivityWebhookUrl'] }
-  );
-  const webhook = getSettingsValue('SlackUserActivityWebhookUrl', settings, '').trim();
+  const webhook = await reportWebhook(Resource.App.stage);
   if (!webhook) {
     console.info(
       JSON.stringify({
         report: 'business-metric-alerts',
         status: 'skipped',
         reason: 'missing-webhook',
-        setting: 'SlackUserActivityWebhookUrl',
+        setting: isProductionStage(Resource.App.stage) ? 'SlackUserActivityWebhookUrl' : 'SLACK_ALARMS_WEBHOOK_URL',
       })
     );
     return { status: 'skipped', reason: 'missing-webhook' };
@@ -62,4 +64,21 @@ export async function handler(event: unknown) {
     })
   );
   return { status: 'success', anomalies: anomalies.length, delivered };
+}
+
+/**
+ * Production posts to the user-activity channel its admins configured. Staging's numbers are
+ * test traffic, so it posts to the stage's alarms channel instead of whatever its own copy of
+ * that admin setting points at, which has been a team-wide channel.
+ */
+async function reportWebhook(stage: string): Promise<string> {
+  if (!isProductionStage(stage)) {
+    const url = resolveAlarmWebhookUrl(Resource).trim();
+    return url === SECRET_PLACEHOLDER ? '' : url;
+  }
+  const settings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    { skipCache: true, names: ['SlackUserActivityWebhookUrl'] }
+  );
+  return getSettingsValue('SlackUserActivityWebhookUrl', settings, '').trim();
 }
