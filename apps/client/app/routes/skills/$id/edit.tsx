@@ -74,6 +74,7 @@ const EditSkillPage: FC = () => {
             files: skill.files,
           }}
           submitLabel="Save changes"
+          updateFromSkillMd
           submitting={updateSkill.isPending}
           onCancel={() => navigate({ to: '/skills/$id', params: { id } })}
           onSubmit={async input => {
