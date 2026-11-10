@@ -1,7 +1,5 @@
 import type { TutorialProgressEntry, TutorialStatus, TutorialStep } from './tutorial';
 
-export type TutorialRunAction = 'progress' | 'modules' | 'start' | 'resume' | 'sheet' | 'advance' | 'position';
-
 export type TutorialRunRequest =
   | { action: 'progress' }
   | { action: 'modules' }
@@ -17,6 +15,8 @@ export type TutorialRunRequest =
       version?: number;
       revision?: number;
     };
+
+export type TutorialRunAction = TutorialRunRequest['action'];
 
 /** A module as the page runs it: client fields only, overrides applied. */
 export interface TutorialRunModule {

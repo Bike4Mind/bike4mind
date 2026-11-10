@@ -26,6 +26,7 @@
  *   premiumSystemPrompts.generated.ts - system prompt contributions
  *   premiumAgentExtensions.generated.ts - agent surface profiles + tool-map guards
  *   premiumAdminSettings.generated.ts - contributed admin setting definitions
+ *   premiumTutorialOwners.generated.ts - tutorial owner contributions
  *   premiumWorkspaceSessionSettings.generated.ts - session fields owned per workspace
  *   premiumWorkspaceDeniedTools.generated.ts - tools denied per workspace
  *   premiumEntitlementGrants.generated.ts - entitlement registry rows
