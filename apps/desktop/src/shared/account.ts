@@ -70,6 +70,7 @@ export interface AccountBillingSubscription {
 
 export interface AccountBilling {
   billingEnabled: boolean;
+  balance?: number | null;
   plans: AccountBillingPlan[];
   creditPackages?: { id: string; price: number; credits: number; description: string }[];
   /** Non-terminal subscriptions, active first. Any row blocks a new checkout. */

@@ -29,6 +29,7 @@ const auth: AuthState = {
 };
 const billing: AccountBilling = {
   billingEnabled: true,
+  balance: 25000,
   creditPackages: [
     { id: 'package_25k', price: 20, credits: 33333, description: 'Starter package for occasional use' },
     { id: 'package_usd50', price: 50, credits: 83333, description: 'Standard package for steady use' },
@@ -103,7 +104,8 @@ describe('personal Billing settings', () => {
     await click('billing-top-up-btn');
     expect(purchaseCredits).toHaveBeenCalledExactlyOnceWith('package_usd50');
     expect(element('billing-purchase-notice')?.textContent).toContain('may take a moment');
-    expect(getCredits).toHaveBeenCalledTimes(2);
+    expect(getBilling).toHaveBeenCalledTimes(2);
+    expect(getCredits).not.toHaveBeenCalled();
     expect(element('billing-balance')?.textContent).toContain('25,000');
   });
 
@@ -164,10 +166,35 @@ describe('personal Billing settings', () => {
   });
 
   it('keeps a failed balance unavailable without hiding the plan catalog', async () => {
-    getCredits.mockRejectedValue(new Error('offline'));
+    getBilling.mockResolvedValue({ ...billing, balance: null });
     await render();
     expect(element('billing-balance')?.textContent).toContain('Unavailable');
     expect(element('billing-plan-card')).not.toBeNull();
+  });
+
+  it('queues a trailing balance refresh when payment closes during a focus read', async () => {
+    let close!: (result: { ok: true }) => void;
+    purchaseCredits.mockReturnValue(
+      new Promise(resolve => {
+        close = resolve;
+      })
+    );
+    await render();
+    await click('billing-top-up-btn');
+    let finishRead!: (result: AccountBilling) => void;
+    getBilling.mockReturnValueOnce(
+      new Promise(resolve => {
+        finishRead = resolve;
+      })
+    );
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await act(async () => close({ ok: true }));
+    getBilling.mockResolvedValue({ ...billing, balance: 58333 });
+    await act(async () => finishRead(billing));
+    expect(getBilling).toHaveBeenCalledTimes(3);
+    expect(element('billing-balance')?.textContent).toContain('58,333');
   });
 
   it.each(['active', 'trialing', 'past_due', 'unpaid', 'paused', 'incomplete'])(

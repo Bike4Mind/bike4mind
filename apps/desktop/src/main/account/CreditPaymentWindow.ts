@@ -92,8 +92,21 @@ export async function openCreditPayment(payment: CreditPayment, isCurrent: () =>
     });
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     const allowNavigation = (event: Electron.Event, target: string) => {
-      const url = new URL(target);
-      if (url.origin !== origin && url.protocol !== 'https:') event.preventDefault();
+      try {
+        const url = new URL(target);
+        if (
+          !url.username &&
+          !url.password &&
+          (url.origin === origin ||
+            (url.protocol === 'https:' &&
+              !url.port &&
+              ['js.stripe.com', 'hooks.stripe.com', 'checkout.stripe.com'].includes(url.hostname)))
+        )
+          return;
+      } catch {
+        // Malformed navigation targets must be denied too.
+      }
+      event.preventDefault();
     };
     window.webContents.on('will-navigate', allowNavigation);
     window.webContents.on('will-redirect', allowNavigation);

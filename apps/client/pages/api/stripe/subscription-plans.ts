@@ -11,8 +11,8 @@ function configured(value: string | undefined): boolean {
   return !!value?.trim() && !['null', 'not-configured'].includes(value.trim().toLowerCase());
 }
 
-const personalCatalog = baseApi({ auth: 'jwtOnly' }).get(async (req, res) => {
-  const creditPackages = req.query.catalog === 'desktop' ? { creditPackages: Object.values(CREDIT_PACKAGES) } : {};
+const desktopCatalog = baseApi({ auth: 'jwtOnly' }).get(async (_req, res) => {
+  const creditPackages = { creditPackages: Object.values(CREDIT_PACKAGES) };
   const billingEnabled =
     (isEnforceCreditsLocked() || (await adminSettingsRepository.getSettingsValue('enforceCredits')) === true) &&
     configured(Config.STRIPE_SECRET_KEY) &&
@@ -52,7 +52,7 @@ const personalCatalog = baseApi({ auth: 'jwtOnly' }).get(async (req, res) => {
   return res.json({ billingEnabled, plans, ...creditPackages });
 });
 
-const handler = baseApi().get(async (req, res) => {
+const handler = baseApi({ auth: 'jwtOnly' }).get(async (req, res) => {
   const prices = await stripe.prices.list({
     active: true,
     limit: 100,
@@ -69,7 +69,5 @@ export const config = {
 
 export default function subscriptionPlans(req: Request, res: Response) {
   // The desktop catalog is first-party-only; the legacy price-list response is unchanged.
-  return req.query.catalog === 'personal' || req.query.catalog === 'desktop'
-    ? personalCatalog(req, res)
-    : handler(req, res);
+  return req.query.catalog === 'desktop' ? desktopCatalog(req, res) : handler(req, res);
 }

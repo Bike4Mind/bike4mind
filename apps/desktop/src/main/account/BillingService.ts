@@ -2,6 +2,7 @@ import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type { AccountBilling, SubscribePlanResult } from '@shared/account';
 import { z } from 'zod';
 import type { CreditPayment } from './CreditPaymentWindow';
+import { readBalance } from './AccountService';
 
 const planSchema = z.object({
   priceId: z.string().min(1),
@@ -45,6 +46,7 @@ export interface BillingContext {
 }
 
 interface BillingServiceDeps {
+  logger: { warn(message: string): void };
   getContext(): BillingContext | null;
   openExternal(url: string): Promise<void>;
   openCreditPayment(payment: CreditPayment, isCurrent: () => boolean): Promise<void>;
@@ -62,7 +64,8 @@ export class BillingService {
       const billing = await this.read(context);
       this.assertCurrent(context);
       return billing;
-    } catch {
+    } catch (error) {
+      this.logFailure('read', error);
       return unavailable('Could not load billing from this server. Try again.');
     }
   }
@@ -95,8 +98,12 @@ export class BillingService {
       if (!isStripeCheckoutUrl(sessionUrl)) throw new Error('Invalid checkout URL');
       await this.deps.openExternal(sessionUrl);
       return { ok: true };
-    } catch {
-      return { ok: false, error: 'Could not open checkout. Check your connection and try again.' };
+    } catch (error) {
+      this.logFailure('subscribe', error);
+      return {
+        ok: false,
+        error: refusalMessage(error) ?? 'Could not open checkout. Check your connection and try again.',
+      };
     } finally {
       this.checkoutInFlight = false;
     }
@@ -131,17 +138,28 @@ export class BillingService {
       });
       this.assertCurrent(context);
       return { ok: true };
-    } catch {
-      return { ok: false, error: 'Could not complete credit checkout. Refresh your balance before trying again.' };
+    } catch (error) {
+      this.logFailure('purchase', error);
+      return {
+        ok: false,
+        error: refusalMessage(error) ?? 'Could not complete credit checkout. Refresh your balance before trying again.',
+      };
     } finally {
       this.checkoutInFlight = false;
     }
   }
 
   private async read(context: BillingContext): Promise<AccountBilling> {
-    const [catalog, rows] = await Promise.all([
+    const [catalog, rows, balance] = await Promise.all([
       context.api.get<unknown>('/api/stripe/subscription-plans?catalog=desktop'),
       context.api.get<unknown>('/api/subscriptions/own'),
+      context.api
+        .get<unknown>('/api/v1/me')
+        .then(readBalance)
+        .catch(error => {
+          this.logFailure('balance', error);
+          return null;
+        }),
     ]);
     const { billingEnabled, plans, creditPackages } = catalogSchema.parse(catalog);
     const subscriptions = subscriptionsSchema
@@ -155,7 +173,15 @@ export class BillingService {
         periodEndsAt: row.periodEndsAt ?? null,
         canceledAt: row.canceledAt ?? null,
       }));
-    return { billingEnabled, plans, subscriptions, ...(creditPackages && { creditPackages }) };
+    this.assertCurrent(context);
+    return { billingEnabled, balance, plans, subscriptions, ...(creditPackages && { creditPackages }) };
+  }
+
+  private logFailure(operation: string, error: unknown): void {
+    const response = errorResponse.safeParse(error);
+    const status = response.success ? response.data.response.status : 'unknown';
+    const kind = error instanceof z.ZodError ? 'schema' : error instanceof Error ? error.name : 'unknown';
+    this.deps.logger.warn(`BILLING: ${operation} failed (${kind}, status ${status})`);
   }
 
   private assertCurrent(context: BillingContext): void {
@@ -166,6 +192,27 @@ export class BillingService {
 
 function sameContext(a: BillingContext, b: BillingContext): boolean {
   return a.api === b.api && a.userId === b.userId && a.environmentUrl === b.environmentUrl;
+}
+
+const errorResponse = z.object({ response: z.object({ status: z.number(), data: z.unknown().optional() }) });
+
+function refusalMessage(error: unknown): string | null {
+  const parsed = errorResponse.safeParse(error);
+  if (!parsed.success || parsed.data.response.status < 400 || parsed.data.response.status >= 500) return null;
+  const body = z
+    .object({
+      error: z.union([z.string(), z.object({ message: z.string() })]).optional(),
+      message: z.string().optional(),
+    })
+    .safeParse(parsed.data.response.data);
+  if (!body.success) return null;
+  const message =
+    typeof body.data.error === 'string' ? body.data.error : (body.data.error?.message ?? body.data.message);
+  return message &&
+    message.length <= 500 &&
+    !Array.from(message).some(char => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)
+    ? message
+    : null;
 }
 
 function unavailable(error: string): AccountBilling {

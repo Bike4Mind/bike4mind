@@ -23,13 +23,15 @@ function build() {
   let context: BillingContext | null = { api, userId: 'user_1', environmentUrl: 'https://selected.example' };
   const openExternal = vi.fn().mockResolvedValue(undefined);
   const openCreditPayment = vi.fn().mockResolvedValue(undefined);
-  const billing = new BillingService({ getContext: () => context, openExternal, openCreditPayment });
+  const logger = { warn: vi.fn() };
+  const billing = new BillingService({ getContext: () => context, openExternal, openCreditPayment, logger });
   return {
     billing,
     get,
     post,
     openExternal,
     openCreditPayment,
+    logger,
     setContext: (value: BillingContext | null) => {
       context = value;
     },
@@ -37,6 +39,63 @@ function build() {
 }
 
 describe('BillingService', () => {
+  it('returns the account-bound balance and discards it if identity changes during its read', async () => {
+    const { billing, get, setContext } = build();
+    get.mockImplementation(async path =>
+      path.includes('catalog=desktop')
+        ? { billingEnabled: true, plans: [plan] }
+        : path === '/api/v1/me'
+          ? { credits: { balance: 50000 } }
+          : []
+    );
+    expect((await billing.billing()).balance).toBe(50000);
+    get.mockImplementation(async path => {
+      if (path === '/api/v1/me') {
+        setContext(null);
+        return { credits: { balance: 90000 } };
+      }
+      return path.includes('catalog=desktop') ? { billingEnabled: true, plans: [plan] } : [];
+    });
+    const result = await billing.billing();
+    expect(result.error).toBeTruthy();
+    expect(result.balance).toBeUndefined();
+  });
+
+  it('keeps plans available when the balance read fails and logs only safe diagnostics', async () => {
+    const { billing, get, logger } = build();
+    get.mockImplementation(async path => {
+      if (path === '/api/v1/me') throw new Error('secret payment details');
+      return path.includes('catalog=desktop') ? { billingEnabled: true, plans: [plan] } : [];
+    });
+    await expect(billing.billing()).resolves.toMatchObject({ balance: null, plans: [plan] });
+    expect(logger.warn).toHaveBeenCalledWith('BILLING: balance failed (Error, status unknown)');
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('secret payment details');
+  });
+
+  it.each([
+    { error: 'Already subscribed' },
+    { error: { message: 'Account cannot purchase' } },
+    { message: 'Billing unavailable' },
+  ])('returns a server refusal and logs its status without request data', async data => {
+    const { billing, post, logger } = build();
+    post.mockRejectedValue({ response: { status: 403, data }, config: { headers: { Authorization: 'secret' } } });
+    const result = await billing.subscribePlan('price_pro');
+    expect(result.ok).toBe(false);
+    expect(result).toEqual({
+      ok: false,
+      error: typeof data.error === 'string' ? data.error : (data.error?.message ?? data.message),
+    });
+    expect(logger.warn).toHaveBeenCalledWith('BILLING: subscribe failed (unknown, status 403)');
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('secret');
+  });
+
+  it('logs schema drift and keeps server errors private', async () => {
+    const { billing, get, logger } = build();
+    get.mockResolvedValue({ bad: 'private' });
+    await billing.billing();
+    expect(logger.warn).toHaveBeenCalledWith('BILLING: read failed (schema, status unknown)');
+  });
+
   it('reads only public billing fields and non-terminal subscriptions, active first', async () => {
     const { billing, get } = build();
     get.mockImplementation(async path =>
@@ -51,6 +110,7 @@ describe('BillingService', () => {
     );
     await expect(billing.billing()).resolves.toEqual({
       billingEnabled: true,
+      balance: null,
       plans: [plan],
       subscriptions: [
         { priceId: 'active', status: 'active', subscriptionId: 'sub_1', periodEndsAt: null, canceledAt: null },
@@ -211,6 +271,13 @@ describe('credit checkout', () => {
     setContext(null);
     await expect(billing.purchaseCredits(pack.id)).resolves.toMatchObject({ ok: false });
     expect(post).not.toHaveBeenCalled();
+  });
+
+  it('reports a credit-purchase refusal without logging payment credentials', async () => {
+    const { billing, post, logger } = buildCredits();
+    post.mockRejectedValue({ response: { status: 400, data: { error: 'Payments are unavailable' } } });
+    await expect(billing.purchaseCredits(pack.id)).resolves.toEqual({ ok: false, error: 'Payments are unavailable' });
+    expect(logger.warn).toHaveBeenCalledWith('BILLING: purchase failed (unknown, status 400)');
   });
 
   it('discards an intent after account changes and rejects malformed payment credentials', async () => {

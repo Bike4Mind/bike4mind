@@ -65,6 +65,30 @@ describe('isolated credit payment window', () => {
       const preventDefault = vi.fn();
       window.webContents.emit('will-navigate', { preventDefault }, 'file:///etc/passwd');
       expect(preventDefault).toHaveBeenCalledOnce();
+      for (const event of ['will-navigate', 'will-redirect']) {
+        for (const target of [
+          'https://example.com',
+          'https://checkout.stripe.com.evil.example',
+          'not a url',
+          'https://user@hooks.stripe.com',
+          'https://hooks.stripe.com:444',
+        ]) {
+          const deny = vi.fn();
+          window.webContents.emit(event, { preventDefault: deny }, target);
+          expect(deny, target).toHaveBeenCalledOnce();
+        }
+        for (const target of [
+          window.url,
+          `${window.url}/return`,
+          'https://hooks.stripe.com/3d_secure',
+          'https://checkout.stripe.com/pay',
+          'https://js.stripe.com/v3',
+        ]) {
+          const deny = vi.fn();
+          window.webContents.emit(event, { preventDefault: deny }, target);
+          expect(deny, target).not.toHaveBeenCalled();
+        }
+      }
       const popupHandler = window.webContents.setWindowOpenHandler.mock.calls[0][0];
       expect(popupHandler()).toEqual({ action: 'deny' });
     } finally {

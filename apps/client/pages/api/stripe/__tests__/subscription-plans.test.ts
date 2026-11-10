@@ -33,14 +33,13 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({ stripe: { prices: { list: mocks.list } } }));
 vi.mock('@bike4mind/database', () => ({ adminSettingsRepository: { getSettingsValue: mocks.setting } }));
-vi.mock('@bike4mind/common', () => ({ isEnforceCreditsLocked: mocks.locked }));
-vi.mock('@client/lib/credits/constants', () => ({
-  CREDIT_PACKAGES: { starter: { id: 'starter', price: 20, credits: 33333, description: 'Starter' } },
-}));
+vi.mock('@bike4mind/common', () => ({ isEnforceCreditsLocked: mocks.locked, MIN_PRICE_PER_CREDIT_USD: 0.0006 }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: mocks.config, isDevelopment: mocks.development }));
 vi.mock('@bike4mind/server-utils/lib/userSubscriptions/constants', () => ({ SUBSCRIPTION_PLANS: mocks.plans }));
 
 import handler from '../subscription-plans';
+import { CREDIT_PACKAGES } from '@client/lib/credits/constants';
+import { packageSchema } from '@client/lib/credits/schemas';
 
 const invoke = handler as (req: unknown, res: unknown) => Promise<unknown>;
 
@@ -54,8 +53,8 @@ const price = {
   billing_scheme: 'per_unit',
 };
 
-async function request(personal = true) {
-  const { req, res } = createMocks({ method: 'GET', query: personal ? { catalog: 'personal' } : {} });
+async function request(desktop = true) {
+  const { req, res } = createMocks({ method: 'GET', query: desktop ? { catalog: 'desktop' } : {} });
   await invoke(req, res);
   return res._getJSONData();
 }
@@ -74,8 +73,8 @@ describe('subscription plan catalog', () => {
     mocks.plans[0].hidden = false;
   });
 
-  it('keeps legacy prices unchanged and registers catalog as JWT-only', async () => {
-    expect(mocks.authModes).toContainEqual({ auth: 'jwtOnly' });
+  it('keeps legacy prices unchanged and registers both handlers as JWT-only', async () => {
+    expect(mocks.authModes).toEqual([{ auth: 'jwtOnly' }, { auth: 'jwtOnly' }]);
     expect(await request(false)).toEqual([price]);
     expect(mocks.setting).not.toHaveBeenCalled();
   });
@@ -83,14 +82,21 @@ describe('subscription plan catalog', () => {
   it('includes configured credit packages in the desktop catalog', async () => {
     const { req, res } = createMocks({ method: 'GET', query: { catalog: 'desktop' } });
     await invoke(req, res);
-    expect(res._getJSONData().creditPackages).toEqual([
-      { id: 'starter', price: 20, credits: 33333, description: 'Starter' },
+    expect(res._getJSONData().creditPackages).toEqual(Object.values(CREDIT_PACKAGES));
+    expect(Object.values(CREDIT_PACKAGES).map(pack => pack.id)).toEqual([
+      'package_25k',
+      'package_usd50',
+      'package_usd100',
     ]);
+    for (const pack of Object.values(CREDIT_PACKAGES)) {
+      expect(packageSchema.safeParse({ transactionType: 'package', packageId: pack.id }).success).toBe(true);
+    }
   });
 
   it('joins only configured public personal plan metadata to live Stripe prices', async () => {
     expect(await request()).toEqual({
       billingEnabled: true,
+      creditPackages: Object.values(CREDIT_PACKAGES),
       plans: [
         {
           priceId: 'price_stage',
@@ -108,7 +114,7 @@ describe('subscription plan catalog', () => {
 
   it('uses the server-resolved price, independent of any caller-supplied stage', async () => {
     mocks.plans[0].priceId = 'price_other_stage';
-    expect(await request()).toEqual({ billingEnabled: true, plans: [] });
+    expect(await request()).toMatchObject({ billingEnabled: true, plans: [] });
     mocks.list.mockResolvedValue({ data: [{ ...price, id: 'price_other_stage' }] });
     expect((await request()).plans[0].priceId).toBe('price_other_stage');
   });
@@ -138,7 +144,7 @@ describe('subscription plan catalog', () => {
 
   it('does not call Stripe when billing is disabled', async () => {
     mocks.setting.mockResolvedValue(false);
-    expect(await request()).toEqual({ billingEnabled: false, plans: [] });
+    expect(await request()).toMatchObject({ billingEnabled: false, plans: [] });
     expect(mocks.list).not.toHaveBeenCalled();
   });
 
@@ -152,14 +158,14 @@ describe('subscription plan catalog', () => {
     'does not offer billing without %s',
     async key => {
       mocks.config[key] = '';
-      expect(await request()).toEqual({ billingEnabled: false, plans: [] });
+      expect(await request()).toMatchObject({ billingEnabled: false, plans: [] });
       expect(mocks.list).not.toHaveBeenCalled();
     }
   );
 
   it.each(['null', 'not-configured', '   '])('rejects placeholder billing configuration %s', async value => {
     mocks.config.STRIPE_WEBHOOK_SECRET = value;
-    expect(await request()).toEqual({ billingEnabled: false, plans: [] });
+    expect(await request()).toMatchObject({ billingEnabled: false, plans: [] });
     expect(mocks.list).not.toHaveBeenCalled();
   });
 });

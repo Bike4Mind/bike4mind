@@ -285,7 +285,6 @@ export const KNOWN_UNPOSTURED = new Set<string>([
   'slack/workspace/[workspaceId].ts',
   'stripe/portal.ts',
   'stripe/start-payment.ts',
-  'stripe/subscription-plans.ts',
   'subscriptions/[ownerType]/[ownerId]/index.ts',
   'subscriptions/checkout-session.ts',
   'subscriptions/index.ts',

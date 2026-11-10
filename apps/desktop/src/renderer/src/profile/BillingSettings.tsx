@@ -50,20 +50,21 @@ function SignedInBilling() {
   const purchaseLock = useRef(false);
   const checkoutLock = useRef(false);
   const reading = useRef(false);
+  const refreshQueued = useRef(false);
   const mounted = useRef(false);
 
   const refresh = useCallback(async () => {
-    if (reading.current) return;
+    if (reading.current) {
+      refreshQueued.current = true;
+      return;
+    }
     reading.current = true;
     setLoading(true);
     try {
-      const [next, credits] = await Promise.all([
-        window.b4m.account.getBilling(),
-        window.b4m.account.getCredits().catch(() => null),
-      ]);
+      const next = await window.b4m.account.getBilling();
       if (!mounted.current) return;
       setBilling(next);
-      setBalance(credits?.balance ?? null);
+      setBalance(next.balance ?? null);
       setReadError(next.error ?? null);
       if (next.subscriptions.some(subscription => !TERMINAL_STATUSES.has(subscription.status))) {
         setCheckout('idle');
@@ -74,6 +75,10 @@ function SignedInBilling() {
     } finally {
       reading.current = false;
       if (mounted.current) setLoading(false);
+      if (refreshQueued.current && mounted.current) {
+        refreshQueued.current = false;
+        void refresh();
+      }
     }
   }, []);
 

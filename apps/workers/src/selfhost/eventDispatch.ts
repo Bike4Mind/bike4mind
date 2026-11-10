@@ -16,8 +16,7 @@ import { handler as customerSubscriptionUpdatedHandler } from '@workers/events/s
  *
  * eventBus.publishSelfHost enqueues non-email events to SELF_HOST_EVENT_QUEUE as
  * `{ detailType, detail }`. This table maps each detailType to the SAME hosted event
- * handler the cloud EventBridge rules invoke, so enrichment (memento creation, session
- * auto-naming, summaries, tagging) runs identically in self-host. Handlers are
+ * handler the cloud EventBridge rules invoke for enrichment and billing fulfillment. Handlers are
  * withEventContext-wrapped and connect to Mongo themselves.
  *
  * detail-types with no entry here are logged at debug and treated as handled: most

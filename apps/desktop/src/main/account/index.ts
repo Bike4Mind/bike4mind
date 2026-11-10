@@ -23,6 +23,7 @@ export function registerAccount(auth: AuthService): AccountService {
   ipcMain.handle(IPC_CHANNELS.accountGetCredits, () => service.credits());
   ipcMain.handle(IPC_CHANNELS.accountGetProfile, () => service.profile());
   const billing = new BillingService({
+    logger: createMainLogger(VERBOSE),
     getContext: () => {
       const api = auth.getApiClient();
       const state = auth.getState();
