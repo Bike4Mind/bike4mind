@@ -3,7 +3,8 @@ import layoutJson from '../../../assets/orchestrator/tavern/layout.json';
 
 /**
  * Where things stand in backdrop.png, read from the layout.json kept beside the art so a regenerated
- * backdrop ships with its own coordinates. Parsed at load: a bad file fails the app at start, not a seat.
+ * backdrop ships with its own coordinates. The schema is enforced by scene.test.ts against the shipped
+ * file rather than at load, so a bad file fails CI instead of the chat screen.
  */
 const percent = z.number().min(0).max(100);
 const point = z.object({ x: percent, y: percent });
@@ -13,7 +14,6 @@ const zones = <T extends z.ZodType>(value: T) =>
 
 export const tavernLayoutSchema = z.object({
   slots: zones(seats),
-  /** Where a full zone stacks the agents it has no seat for. */
   overflow: zones(point),
   door: point,
   innkeeper: point,
@@ -33,4 +33,4 @@ export const tavernLayoutSchema = z.object({
 
 export type TavernLayout = z.infer<typeof tavernLayoutSchema>;
 
-export const TAVERN_LAYOUT: TavernLayout = tavernLayoutSchema.parse(layoutJson);
+export const TAVERN_LAYOUT = layoutJson as TavernLayout;
