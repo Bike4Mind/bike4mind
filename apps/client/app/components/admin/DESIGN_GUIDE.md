@@ -303,7 +303,7 @@ Definition of done for any admin UI:
 |---|---|---|
 | First load of a table or cards | `DataTable` `loading`, or Joy `Skeleton` shaped like the cards | The header, filters and table frame stay in place; only the body is a placeholder. |
 | First load of an area with no known shape | `LoadingState` | A small spinner with a label ("Loading models"), inside that area. Never a bare `CircularProgress`, a bare "Loading..." line, or a spinner centered on a blank page. |
-| Refetch with data on screen | `UpdatingBar` | The data stays visible; the bar keeps its height so nothing shifts. |
+| Refetch with data on screen | `UpdatingBar` | The data stays visible; the bar keeps its height so nothing shifts. It sits inside the region it refreshes (the top of the table or chart region), never as its own region in the page stack, because the reserved 20 px would add two region gaps. Where the region has no room for it, `placement="overlay"` floats it in the gap above the region without reserving height. |
 | Nothing exists yet | `EmptyState` | A title that says what is missing, an optional one-line description, and an `action` (required): the next step as a button ("Create rule"). It sits where the data would, never as a separate grey strip, dashed card or warning banner. |
 | Filters match nothing | `EmptyState` | "No users match these filters", with a "Clear filters" action. |
 | Request failed | `ErrorState` | The message in plain words and "Try again" (`onRetry`). Never an empty table with a toast as the only signal. |

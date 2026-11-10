@@ -297,8 +297,8 @@ const HelpAnalyticsTab: React.FC = () => {
   else if (isError && !data) body = errorState;
   else
     body = (
-      <>
-        <UpdatingBar active={isFetching} testId="help-analytics-updating" />
+      <Stack gap={ADMIN_REGION_GAP} sx={{ position: 'relative' }}>
+        <UpdatingBar active={isFetching} testId="help-analytics-updating" placement="overlay" />
         {errorState}
         {overview && (
           <StatStrip aria-label="Help usage totals">
@@ -423,7 +423,7 @@ const HelpAnalyticsTab: React.FC = () => {
             </Stack>
           </TabPanel>
         </Tabs>
-      </>
+      </Stack>
     );
 
   return (
