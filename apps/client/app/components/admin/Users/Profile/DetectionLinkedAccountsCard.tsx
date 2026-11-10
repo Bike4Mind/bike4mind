@@ -163,6 +163,8 @@ const SuspendLinkedDialog: React.FC<{
       confirmLabel={`Suspend ${accounts.length} ${accountNoun(accounts.length)}`}
       tone="danger"
       onConfirm={handleConfirm}
+      // handleConfirm checks `closed` between accounts, so Cancel mid-run stops the ones not yet sent.
+      cancelStopsWrite
       data-testid="suspend-linked-dialog"
     >
       <Sheet
