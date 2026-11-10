@@ -11,9 +11,11 @@ const mocks = vi.hoisted(() => ({
   success: vi.fn(),
   warning: vi.fn(),
   error: vi.fn(),
+  currentUser: { isAdmin: true, adminPermissions: [] } as { isAdmin: boolean; adminPermissions?: string[] },
 }));
 
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: mocks.get, post: mocks.post } }));
+vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: mocks.currentUser }) }));
 vi.mock('sonner', () => ({ toast: { success: mocks.success, warning: mocks.warning, error: mocks.error } }));
 
 import AgentExecutionsTab from './AgentExecutionsTab';
@@ -71,7 +73,8 @@ const confirmRelease = async () => {
 
 describe('AgentExecutionsTab', () => {
   beforeEach(() => {
-    Object.values(mocks).forEach(mock => mock.mockReset());
+    [mocks.get, mocks.post, mocks.success, mocks.warning, mocks.error].forEach(mock => mock.mockReset());
+    mocks.currentUser = { isAdmin: true, adminPermissions: [] };
     mocks.get.mockResolvedValue({ data: { items: ITEMS, olderThanMinutes: 20 } });
     mocks.post.mockResolvedValue({ data: { requested: 1, marked: 1, notifiedConnections: 0, questsSettled: 0 } });
   });
@@ -347,5 +350,37 @@ describe('AgentExecutionsTab', () => {
     fireEvent.click(confirm);
     expect(mocks.post).not.toHaveBeenCalled();
     expect(screen.getByTestId('stuck-agent-executions-release-dialog')).toBeInTheDocument();
+  });
+});
+
+describe('AgentExecutionsTab cleanup permission', () => {
+  beforeEach(() => {
+    [mocks.get, mocks.post].forEach(mock => mock.mockReset());
+    mocks.get.mockResolvedValue({ data: { items: ITEMS, olderThanMinutes: 20 } });
+  });
+
+  const renderSelected = async (user: typeof mocks.currentUser) => {
+    mocks.currentUser = user;
+    renderTab();
+    await screen.findByTestId('stuck-execution-row-exec-1');
+    selectRow('exec-1');
+    return screen.getByTestId('stuck-agent-executions-cleanup-btn') as HTMLButtonElement;
+  };
+
+  it('is disabled with the missing-permission hint for a support:read delegate', async () => {
+    const button = await renderSelected({ isAdmin: false, adminPermissions: ['support:read'] });
+
+    expect(button.disabled).toBe(true);
+    expect(screen.getByTestId('admin-missing-permission-action')).toBeTruthy();
+    fireEvent.click(button);
+    expect(screen.queryByTestId('stuck-agent-executions-release-dialog')).toBeNull();
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it('is enabled for a settings:manage delegate', async () => {
+    const button = await renderSelected({ isAdmin: false, adminPermissions: ['settings:manage'] });
+
+    expect(button.disabled).toBe(false);
+    expect(screen.queryByTestId('admin-missing-permission-action')).toBeNull();
   });
 });

@@ -627,6 +627,9 @@ export interface IModelDiscoveryStateRepository extends IBaseRepository<IModelDi
   /** The deprecation queue: every model carrying a suggestion nobody has settled, oldest first. */
   pendingSuggestions(): Promise<IModelDiscoveryState[]>;
 
+  /** How many rows pendingSuggestions returns; `limit` stops counting there. */
+  countPendingSuggestions(options?: { limit?: number }): Promise<number>;
+
   /** Null when the model has no suggestion to settle. */
   resolveSuggestion(
     modelId: string,

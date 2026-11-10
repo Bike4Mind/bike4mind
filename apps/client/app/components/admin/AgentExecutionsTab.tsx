@@ -7,6 +7,7 @@ import {
   useStuckAgentExecutions,
   type StuckExecutionItem,
 } from '@client/app/hooks/data/stuckAgentExecutions';
+import { AdminPermissionAction } from './shared/MissingPermission';
 import { ACTIVE_AGENT_EXECUTION_STATUSES, type AgentExecutionStatus } from '@client/app/stores/useAgentExecutionStore';
 import {
   ActionDialog,
@@ -319,16 +320,20 @@ const AgentExecutionsTab: React.FC = () => {
         onSelectAllMatching={() => setSelection({ mode: 'allMatching' })}
         onClear={() => setSelection(NO_SELECTION)}
       >
-        <Button
-          size="sm"
-          variant="outlined"
-          color="danger"
-          disabled={cleanup.isPending}
-          onClick={() => setReleaseOpen(true)}
-          data-testid="stuck-agent-executions-cleanup-btn"
-        >
-          Mark abandoned
-        </Button>
+        <AdminPermissionAction requirement="settings:manage">
+          {disabled => (
+            <Button
+              size="sm"
+              variant="outlined"
+              color="danger"
+              disabled={disabled || cleanup.isPending}
+              onClick={() => setReleaseOpen(true)}
+              data-testid="stuck-agent-executions-cleanup-btn"
+            >
+              Mark abandoned
+            </Button>
+          )}
+        </AdminPermissionAction>
       </BulkActionBar>
 
       <ActionDialog

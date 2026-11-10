@@ -74,11 +74,24 @@ describe('Approvals queue', () => {
   });
 
   it('disables approve on your own request and offers withdraw instead', () => {
-    rows.push(row('own', { requestedBy: { id: 'me', name: 'Me', email: 'me@example.com' }, canDecide: false }));
+    rows.push(
+      row('own', { requestedBy: { id: 'me', name: 'Me', email: 'me@example.com' }, canDecide: false, own: true })
+    );
     renderQueue();
 
     expect((screen.getByTestId('admin-approve-btn') as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByTestId('admin-withdraw-btn').textContent).toBe('Withdraw');
+  });
+
+  it('keeps withdraw enabled on your own request but disables reject on one you cannot decide', () => {
+    rows.push(
+      row('own', { requestedBy: { id: 'me', name: 'Me', email: 'me@example.com' }, canDecide: false, own: true })
+    );
+    rows.push(row('other', { canDecide: false }));
+    renderQueue();
+
+    expect((screen.getByTestId('admin-withdraw-btn') as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByTestId('admin-reject-btn') as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('asks for a reason before rejecting', () => {

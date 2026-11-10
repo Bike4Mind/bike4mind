@@ -145,6 +145,9 @@ export function defineLambdaRoute<C extends EndpointContract>(
           );
         }
         return json(authFailureStatus(error), {
+          // A 403's classifier (e.g. `errorCode: account_suspended` and its `suspension` detail) is part
+          // of the published body; a 401 carries none.
+          ...(error instanceof ForbiddenError && error.additionalInfo),
           error: error instanceof Error ? error.message : 'Authentication failed',
           request_id: requestId,
         });

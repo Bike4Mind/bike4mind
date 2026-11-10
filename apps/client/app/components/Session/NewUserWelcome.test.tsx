@@ -183,7 +183,7 @@ describe('NewUserWelcome', () => {
     [24, 'all at once when you subscribe or verify a card, once that payment settles (usually within 1 day).'],
     [0, 'all at once when you subscribe, or all at once when you verify a card.'],
   ])(
-    'advertises the configured %s-hour hold without promising the maximum staged credits or answers',
+    'advertises the configured %s-hour hold once, without promising the maximum staged credits or answers',
     (holdHours, unlockCopy) => {
       state.paymentHoldHours = holdHours;
       state.balance = 0;
@@ -197,9 +197,12 @@ describe('NewUserWelcome', () => {
       };
       renderWelcome();
       expect(screen.getByTestId('new-user-welcome-credits')).toHaveTextContent(
-        `Verify your email to unlock up to 10,000 credits now. The rest unlocks ${unlockCopy}`
+        /^Verify your email to unlock up to 10,000 credits now\.$/
       );
       expect(screen.queryByTestId('new-user-welcome-answers-estimate')).not.toBeInTheDocument();
+      // The unlock paths sentence appears once on the card, from the grant status block.
+      expect(screen.getByTestId('signup-grant-unlock-paths')).toHaveTextContent(`The rest unlocks ${unlockCopy}`);
+      expect(screen.getAllByText(/The rest unlocks/)).toHaveLength(1);
     }
   );
 

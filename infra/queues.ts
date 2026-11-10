@@ -1197,7 +1197,11 @@ const generationJobQueueSubscription = generationJobQueue.subscribe(
       eventBus,
       generationCallbackQueue,
       generationJobQueue,
+      // A masked image edit converts the mask to PNG there.
+      imageProcessor,
     ],
+    // Image jobs run our post-generation scan before the image is stored.
+    permissions: [{ actions: ['rekognition:DetectModerationLabels'], resources: ['*'] }],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
       ...TEST_GENERATION_PROVIDER_ENVIRONMENT,

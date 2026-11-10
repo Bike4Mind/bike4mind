@@ -83,6 +83,7 @@ const O1_MODELS: string[] = [
 
 const GPT5_MODELS: string[] = [
   ChatModels.GPT5,
+  ChatModels.GPT5_2025_08_07,
   ChatModels.GPT5_MINI,
   ChatModels.GPT5_NANO,
   ChatModels.GPT5_CHAT_LATEST,

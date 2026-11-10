@@ -30,6 +30,7 @@ import {
   type DataColumn,
 } from './shared';
 import { ADMIN_REGION_GAP, adminFocus } from './shared/adminStyles';
+import { AdminPermissionAction } from './shared/MissingPermission';
 
 /**
  * Manage Gears - the ops override surface for the Gears progression system
@@ -242,21 +243,26 @@ function GearRowMenu({
   return (
     <>
       <Dropdown>
-        <MenuButton
-          slots={{ root: IconButton }}
-          slotProps={{
-            root: {
-              size: 'sm',
-              variant: 'plain',
-              disabled: busy || pending,
-              'aria-label': `Actions for ${gear.key}`,
-              sx: { ...adminFocus, color: 'admin.inkMuted' },
-            },
-          }}
-          data-testid={`manage-gear-actions-${gear.key}`}
-        >
-          <MoreHorizIcon sx={{ fontSize: 18 }} />
-        </MenuButton>
+        {/* Every item in this menu writes (edit, reset), so the trigger carries the gate. */}
+        <AdminPermissionAction requirement="settings:manage">
+          {disabled => (
+            <MenuButton
+              slots={{ root: IconButton }}
+              slotProps={{
+                root: {
+                  size: 'sm',
+                  variant: 'plain',
+                  disabled: disabled || busy || pending,
+                  'aria-label': `Actions for ${gear.key}`,
+                  sx: { ...adminFocus, color: 'admin.inkMuted' },
+                },
+              }}
+              data-testid={`manage-gear-actions-${gear.key}`}
+            >
+              <MoreHorizIcon sx={{ fontSize: 18 }} />
+            </MenuButton>
+          )}
+        </AdminPermissionAction>
         <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
           {editing ? (
             <MenuItem

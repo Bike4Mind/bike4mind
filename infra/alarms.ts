@@ -673,14 +673,19 @@ if (isMonitoredStage) {
   /**
    * Alarm: Integration Health High Latency
    *
-   * Triggers when P95 latency across all integrations exceeds 5 seconds.
+   * Triggers when P95 latency across all integrations exceeds 5 seconds in 2 of 3 periods.
    * Indicates network degradation or slow API responses requiring investigation.
+   * Each period holds one probe cycle (~4 samples), so P95 is effectively the slowest probe; 2-of-3
+   * keeps a single slow call from paging. Probes that time out publish no Latency (see
+   * publishMetrics in packages/server-utils/src/services/integrationHealthService.ts) and are
+   * reported by the per-integration failure alarms instead.
    */
   new aws.cloudwatch.MetricAlarm('integrationHealthHighLatency', {
     name: `${$app.name}-${$app.stage}-integration-health-high-latency`,
-    alarmDescription: 'Integration health probe P95 latency exceeds 5 seconds',
+    alarmDescription: 'Integration health probe P95 latency exceeds 5 seconds in 2 of 3 periods',
     comparisonOperator: 'GreaterThanThreshold',
-    evaluationPeriods: 1,
+    evaluationPeriods: 3,
+    datapointsToAlarm: 2,
     metricName: 'Latency',
     namespace: 'Lumina5/IntegrationHealth',
     period: 300, // 5 minutes

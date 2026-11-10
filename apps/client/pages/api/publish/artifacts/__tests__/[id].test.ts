@@ -148,7 +148,9 @@ describe('GET public artifact - share-token capability', () => {
     const select = vi.fn();
     await getArtifact({ id: 'someone-else', isAdmin: false }, makePublicArtifactRow(), select);
     expect(select).toHaveBeenCalledOnce();
-    expect(select).toHaveBeenCalledWith('-shareTokens.token -thumbnail');
+    expect(select).toHaveBeenCalledWith(
+      '-shareTokens.token -thumbnail -accessGate.passphraseHash -citables -renderedBody'
+    );
   });
 });
 
@@ -254,17 +256,37 @@ describe('GET public artifact - response scoping', () => {
     expect(artifact.title).toBe('My Artifact');
   });
 
-  it('returns the full record to the owner (manage modal needs it)', async () => {
+  it('returns management metadata to the owner', async () => {
     const res = await getArtifact({ id: OWNER, isAdmin: false });
     const { artifact } = res._getJSONData();
     expect(artifact.ownerId).toBe(OWNER);
     expect(artifact.storageKeyPrefix).toBe('artifacts/pub-1/');
   });
 
-  it('returns the full record to an admin', async () => {
+  it('returns management metadata to an admin', async () => {
     const res = await getArtifact({ id: 'admin-1', isAdmin: true });
     const { artifact } = res._getJSONData();
     expect(artifact.ownerId).toBe(OWNER);
+  });
+
+  it.each([
+    ['owner', { id: OWNER, isAdmin: false }],
+    ['admin', { id: 'admin-1', isAdmin: true }],
+  ])('keeps manage fields without content snapshots or a gate hash for %s', async (_label, user) => {
+    const row = {
+      ...makePublicArtifactRow(),
+      accessGate: { kind: 'passphrase', passphraseHash: 'stored-hash' },
+      citables: [{ metadata: { fullContext: 'snapshot-text' } }],
+      renderedBody: 'published-reply-body',
+    };
+    const res = await getArtifact(user, row);
+    expect(res._getStatusCode()).toBe(200);
+    const { artifact } = res._getJSONData();
+    expect(artifact).toMatchObject({ title: 'My Artifact', visibility: 'public', accessGate: { kind: 'passphrase' } });
+    expect(artifact.accessGate).toEqual({ kind: 'passphrase' });
+    expect(artifact).not.toHaveProperty('citables');
+    expect(artifact).not.toHaveProperty('renderedBody');
+    expect(row.accessGate.passphraseHash).toBe('stored-hash');
   });
 
   it('does not leak DTO metadata for a GATED public artifact to a non-manager (404)', async () => {

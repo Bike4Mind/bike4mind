@@ -2,6 +2,7 @@ import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { deleteSubscriber, fetchSubscribers } from '@client/app/utils/subscriberAPICalls';
 import { ISubscriberDocument, SubscriberSource } from '@bike4mind/common';
 import { APP_NAME } from '@client/config/general'; // brand externalized
+import { adminActionCountsQueryKey } from '@client/app/hooks/data/adminActionCounts';
 import { useGetWaitingSubscribersCount } from '@client/app/hooks/data/subscribers';
 import {
   Button,
@@ -83,9 +84,9 @@ const useGenerateSubscriberInvite = () => {
       return response.data;
     },
     onSuccess: () => {
+      // ['subscribers'] also covers the waiting count this tab shows.
       queryClient.invalidateQueries({ queryKey: ['subscribers'] });
-      // Also invalidate the waiting count badge in admin navigation
-      queryClient.invalidateQueries({ queryKey: ['subscribers', 'waiting-count'] });
+      queryClient.invalidateQueries({ queryKey: adminActionCountsQueryKey });
       queryClient.invalidateQueries({ queryKey: [GRANT_PACKAGES_QUERY_KEY] });
     },
   });

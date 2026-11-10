@@ -79,6 +79,26 @@ describe('integrationHealthService probes', () => {
     expect(metrics.filter(metric => metric.dimensions !== undefined)).toHaveLength(12);
   });
 
+  it('publishes no Latency for a probe that got no response, but still counts its failure', async () => {
+    h.fetch.mockImplementation(async (url: string) => {
+      if (url.includes('github')) throw new Error('This operation was aborted');
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+
+    await runAllProbes(logger);
+
+    const [, metrics] = h.emitMetrics.mock.calls[0] as [
+      string,
+      Array<{ name: string; value: number; dimensions?: { Integration: string } }>,
+    ];
+    const latency = metrics.filter(metric => metric.name === 'Latency');
+    expect(latency.filter(metric => metric.dimensions === undefined)).toHaveLength(3);
+    expect(latency.some(metric => metric.dimensions?.Integration === 'github')).toBe(false);
+    expect(metrics).toContainEqual(
+      expect.objectContaining({ name: 'Failure', value: 1, dimensions: { Integration: 'github' } })
+    );
+  });
+
   it.each([401, 403, 404, 429])('treats HTTP %d as reachable, since the provider answered', async status => {
     respondWith(status);
 

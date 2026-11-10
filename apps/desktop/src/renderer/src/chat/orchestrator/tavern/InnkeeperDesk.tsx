@@ -35,10 +35,37 @@ const pixelFrame = (width: number) =>
     `${width * 2}px ${width * 3}px 0 0 rgba(0, 0, 0, 0.3)`,
   ].join(', ');
 
-const onParchment = {
-  color: INK,
+const SEND_TEXT = '#fbe9c8';
+const inkTint = (alpha: number) => `rgba(42, 29, 16, ${alpha})`;
+
+/**
+ * Joy reads every variant colour through a `--variant-*` var before the theme's palette, so setting
+ * them on the slip gives its controls ink-on-parchment rest, hover, press and disabled states in both
+ * colour schemes. The focus ring is the theme's `palette-focusVisible`, retinted to wood the same way.
+ */
+export const PARCHMENT_CONTROLS = {
+  '--joy-palette-focusVisible': WOOD,
+  '--focus-outline-offset': '2px',
   '--Icon-color': INK,
-  '&:hover': { bgcolor: 'rgba(42, 29, 16, 0.08)' },
+  '--variant-plainColor': INK,
+  '--variant-plainHoverColor': INK,
+  '--variant-plainHoverBg': inkTint(0.08),
+  '--variant-plainActiveBg': inkTint(0.16),
+  '--variant-plainDisabledColor': inkTint(0.4),
+  '--variant-outlinedColor': INK,
+  '--variant-outlinedBorder': inkTint(0.4),
+  '--variant-outlinedHoverColor': INK,
+  '--variant-outlinedHoverBorder': inkTint(0.65),
+  '--variant-outlinedHoverBg': inkTint(0.08),
+  '--variant-outlinedActiveBg': inkTint(0.16),
+  '--variant-outlinedDisabledColor': inkTint(0.4),
+  '--variant-outlinedDisabledBorder': inkTint(0.2),
+  '--variant-solidColor': SEND_TEXT,
+  '--variant-solidBg': WOOD,
+  '--variant-solidHoverBg': WOOD_DARK,
+  '--variant-solidActiveBg': '#3a230f',
+  '--variant-solidDisabledColor': inkTint(0.45),
+  '--variant-solidDisabledBg': inkTint(0.12),
 } as const;
 
 /**
@@ -125,6 +152,7 @@ export function OrderSlip({
         pt: 1.75,
         bgcolor: PARCHMENT,
         color: INK,
+        ...PARCHMENT_CONTROLS,
         boxShadow: pixelFrame(2),
         // The ticket is pinned to the bar with a nail.
         '&::before': {
@@ -153,7 +181,7 @@ export function OrderSlip({
           title="Close (Esc)"
           onClick={onClose}
           data-testid="orchestrator-tavern-order-close-btn"
-          sx={onParchment}
+          sx={{ borderRadius: 0 }}
         >
           {'×'}
         </IconButton>
@@ -173,6 +201,7 @@ export function OrderSlip({
           borderRadius: 0,
           boxShadow: `inset 0 0 0 1px rgba(42, 29, 16, 0.35)`,
           '--Textarea-focusedHighlight': WOOD,
+          '--_Textarea-focusedHighlight': WOOD,
           '& textarea::placeholder': { color: 'rgba(42, 29, 16, 0.55)' },
         }}
         slotProps={{ textarea: { ref: input, 'data-testid': 'orchestrator-tavern-order-input' } }}
@@ -185,7 +214,7 @@ export function OrderSlip({
             variant="outlined"
             color="neutral"
             onClick={() => (order.send ? send(order.text) : startDraft(order.text))}
-            sx={{ ...onParchment, borderRadius: 0, borderColor: 'rgba(42, 29, 16, 0.4)', bgcolor: 'transparent' }}
+            sx={{ borderRadius: 0 }}
             data-testid={`orchestrator-tavern-order-chip-${order.label.toLowerCase().replace(/\s+/g, '-')}`}
           >
             {order.label}
@@ -199,7 +228,7 @@ export function OrderSlip({
           color="neutral"
           onClick={onOpenConversation}
           data-testid="orchestrator-tavern-order-open-conversation-btn"
-          sx={{ ...onParchment, mr: 'auto', px: 0.75, whiteSpace: 'nowrap', textDecoration: 'underline' }}
+          sx={{ mr: 'auto', px: 0.75, borderRadius: 0, whiteSpace: 'nowrap', textDecoration: 'underline' }}
         >
           Open conversation
         </Button>
@@ -210,11 +239,10 @@ export function OrderSlip({
           data-testid="orchestrator-tavern-order-send-btn"
           sx={{
             borderRadius: 0,
-            bgcolor: WOOD,
-            color: '#fbe9c8',
             boxShadow: `0 2px 0 ${WOOD_DARK}`,
-            '&:hover': { bgcolor: WOOD_DARK },
-            '&.Mui-disabled': { bgcolor: 'rgba(42, 29, 16, 0.15)', color: 'rgba(42, 29, 16, 0.45)', boxShadow: 'none' },
+            // Pressed in: the ledge goes and the key sinks onto it.
+            '&:active': { boxShadow: 'none', transform: 'translateY(2px)' },
+            '&.Mui-disabled': { boxShadow: 'none' },
           }}
         >
           Send
@@ -244,7 +272,10 @@ export function ReplyBubble({
     color: INK,
     font: 'inherit',
     cursor: 'pointer',
-    '&:focus-visible': { outline: `2px solid ${INK}`, outlineOffset: 2, borderRadius: '2px' },
+    textUnderlineOffset: '2px',
+    '&:hover': { color: WOOD, textDecoration: 'underline' },
+    '&:active': { color: WOOD_DARK },
+    '&:focus-visible': { outline: `2px solid ${WOOD}`, outlineOffset: 2 },
   } as const;
   return (
     <Box

@@ -33,6 +33,12 @@ vi.mock('@bike4mind/database', () => ({
   cacheRepository: { tryIncrementWithinLimitFixedWindow: (...a: unknown[]) => mockRateLimit(...a) },
 }));
 
+const mockWithdrawSkillListings = vi.fn();
+vi.mock('@bike4mind/server-utils/skillMarket/market', async importOriginal => ({
+  ...(await importOriginal<object>()),
+  withdrawSkillListings: (...a: unknown[]) => mockWithdrawSkillListings(...a),
+}));
+
 // The Skill Market scan runs for real (rules, tiering); only the LLM classifier is stubbed.
 const mockClassify = vi.fn();
 const mockLogInfo = vi.fn();
@@ -457,6 +463,7 @@ describe('/api/skills/[id] DELETE — delete permission', () => {
     vi.clearAllMocks();
     mockFindById.mockResolvedValue(skillDoc());
     mockDelete.mockResolvedValue(undefined);
+    mockWithdrawSkillListings.mockResolvedValue(0);
   });
 
   it('allows the owner to delete', async () => {
@@ -464,6 +471,33 @@ describe('/api/skills/[id] DELETE — delete permission', () => {
     await handler(req, res);
     expect(res._getStatusCode()).toBe(204);
     expect(mockDelete).toHaveBeenCalledWith('skill-1');
+  });
+
+  it('withdraws the skill listings after deleting, with or without one', async () => {
+    mockWithdrawSkillListings.mockResolvedValueOnce(1);
+    const { req, res } = makeReqRes('DELETE', OWNER);
+    await handler(req, res);
+    expect(mockWithdrawSkillListings).toHaveBeenCalledWith('skill-1');
+    expect(res._getStatusCode()).toBe(204);
+
+    const none = makeReqRes('DELETE', OWNER);
+    await handler(none.req, none.res);
+    expect(none.res._getStatusCode()).toBe(204);
+  });
+
+  it('still returns 204 and logs when the withdraw throws after the delete committed', async () => {
+    mockWithdrawSkillListings.mockRejectedValueOnce(new Error('db down'));
+    const { req, res } = makeReqRes('DELETE', OWNER);
+    await handler(req, res);
+    expect(mockDelete).toHaveBeenCalledWith('skill-1');
+    expect(res._getStatusCode()).toBe(204);
+    expect((req as unknown as { logger: { error: ReturnType<typeof vi.fn> } }).logger.error).toHaveBeenCalled();
+  });
+
+  it('does not withdraw listings when the delete is refused', async () => {
+    const { req, res } = makeReqRes('DELETE', SHARED_UPDATE);
+    await expect(handler(req, res)).rejects.toBeInstanceOf(ForbiddenError);
+    expect(mockWithdrawSkillListings).not.toHaveBeenCalled();
   });
 
   it('allows a share-recipient with delete permission', async () => {

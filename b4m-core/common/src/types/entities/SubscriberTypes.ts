@@ -87,7 +87,8 @@ export interface ISubscriberRepository extends IBaseRepository<ISubscriberDocume
     credits: number,
     storage: number
   ) => Promise<ISubscriberDocument>;
-  countWaiting: () => Promise<number>;
+  /** `limit` stops counting there, so a capped badge never scans the whole backlog. */
+  countWaiting: (options?: { limit?: number }) => Promise<number>;
   /** Drop signupNetwork from rows captured before `cutoff`; returns how many rows were cleared. */
   clearSignupNetworkBefore: (cutoff: Date) => Promise<number>;
 }

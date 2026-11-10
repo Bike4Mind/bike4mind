@@ -28,6 +28,7 @@ import {
 import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
 import { API_KEY_ACCESS_DENIED_MESSAGE, isApiKeyAccessAllowed } from '@server/utils/apiKeyAccessGate';
 import { resolveRouteTemplate } from '@server/utils/resolveRouteTemplate';
+import { refuseIfSuspendedOwner } from '@server/auth/suspendedApiKeyRefusal';
 import { apiKeyGrantsAdmin, withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { resolveUntrustedKeyLimits } from '@bike4mind/server-utils/utils/apiKeyTrust';
 
@@ -108,6 +109,7 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScopeValue[], alsoRequiredScop
           ip: failIp,
           userAgent: req.headers['user-agent'],
         });
+        if (validation.reason === 'not_found') await refuseIfSuspendedOwner(apiKey, req.logger);
         throw new UnauthorizedError('Invalid API key');
       }
 

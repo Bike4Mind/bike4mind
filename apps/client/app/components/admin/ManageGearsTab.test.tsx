@@ -6,6 +6,10 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
 type BlockerOptions = { enableBeforeUnload: boolean };
+const user = vi.hoisted(() => ({
+  current: { isAdmin: true, adminPermissions: [] } as { isAdmin: boolean; adminPermissions?: string[] },
+}));
+vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: user.current }) }));
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
   put: vi.fn(),
@@ -84,6 +88,7 @@ const startEditing = async (key: string) => {
 describe('ManageGearsTab', () => {
   beforeEach(() => {
     Object.values(mocks).forEach(mock => mock.mockClear());
+    user.current = { isAdmin: true, adminPermissions: [] };
     mocks.get.mockReset().mockResolvedValue({ data: { gears: GEARS } });
     mocks.put.mockReset().mockImplementation(async (_url: string, body: Record<string, unknown>) => saveResponse(body));
     mocks.del.mockReset().mockResolvedValue({ data: { ok: true } });
@@ -384,5 +389,37 @@ describe('ManageGearsTab', () => {
     await waitFor(() => expect(mocks.del).toHaveBeenCalledWith('/api/admin/gears/files'));
     await waitFor(() => expect(screen.queryByTestId('admin-save-bar')).toBeNull());
     expect(mocks.put).not.toHaveBeenCalled();
+  });
+});
+
+describe('ManageGearsTab write controls', () => {
+  beforeEach(() => {
+    Object.values(mocks).forEach(mock => mock.mockClear());
+    mocks.get.mockReset().mockResolvedValue({ data: { gears: GEARS } });
+  });
+
+  it('disables the edit and reset menu for a support:read delegate', async () => {
+    user.current = { isAdmin: false, adminPermissions: ['support:read'] };
+    renderTab();
+    await screen.findByTestId('manage-gear-row-files');
+
+    for (const key of ['websearch', 'files']) {
+      expect(screen.getByTestId(`manage-gear-actions-${key}`)).toBeDisabled();
+    }
+    expect(screen.getAllByTestId('admin-missing-permission-action')).toHaveLength(2);
+    openRowMenu('files');
+    expect(screen.queryByTestId('manage-gear-edit-files')).toBeNull();
+    expect(screen.queryByTestId('manage-gear-reset-files')).toBeNull();
+  });
+
+  it('enables edit and reset for a settings:manage delegate', async () => {
+    user.current = { isAdmin: false, adminPermissions: ['settings:manage'] };
+    renderTab();
+    await screen.findByTestId('manage-gear-row-files');
+
+    expect(screen.queryByTestId('admin-missing-permission-action')).toBeNull();
+    openRowMenu('files');
+    expect(await screen.findByTestId('manage-gear-edit-files')).not.toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByTestId('manage-gear-reset-files')).not.toHaveAttribute('aria-disabled', 'true');
   });
 });
