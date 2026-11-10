@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 /**
  * Live activity updates for first-party native clients. The event that carries them is
- * `notification.liveActivity` (NotificationEvents.LiveActivity in apps/client/server/utils/eventBus.ts),
+ * `notification.liveActivity` (NotificationEvents.LiveActivity in packages/server-utils/src/utils/eventBus.ts),
  * consumed by apps/workers/src/events/sendPush.ts, which routes it to the `liveActivity` push tokens
  * registered for the quest.
  *
