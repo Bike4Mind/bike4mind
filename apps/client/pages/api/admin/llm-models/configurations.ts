@@ -1,17 +1,18 @@
-import { withTransaction } from '@bike4mind/database';
 import { AdminSettings } from '@bike4mind/database/infra';
-import { ApiKeyScope, LLMModelConfig, OAUTH_SOURCE_TAG_PREFIX, isOAuthSourceTag } from '@bike4mind/common';
-import { invalidateSettingsCache } from '@bike4mind/utils';
+import { ApiKeyScope, HTTPError, MODEL_ACCESS_REVISION_HEADER } from '@bike4mind/common';
+import { readModelAccessRevision } from '@bike4mind/server-utils/modelDiscovery/modelAccessRevision';
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { requireAdminPermission } from '@server/middlewares/adminApi';
-import { recordAdminSettingChange } from '@bike4mind/server-utils/utils/adminSettingsAudit';
-import { ForbiddenError, NotFoundError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 // Get LLM Model Configurations (readable by all authenticated users, needed for model selection)
 const getHandler = asyncHandler(async (req, res) => {
   if (!req.user) throw new ForbiddenError('Authentication required');
+
+  // In a header so the array body that pickers and API-key callers read keeps its shape.
+  const revision = await readModelAccessRevision().catch(() => null);
+  if (revision) res.setHeader(MODEL_ACCESS_REVISION_HEADER, revision);
 
   try {
     const setting = await AdminSettings.findOne({ settingName: 'llmModelConfigurations' });
@@ -41,110 +42,9 @@ const getHandler = asyncHandler(async (req, res) => {
   }
 });
 
-// Update LLM Model Configurations
-const putHandler = asyncHandler<unknown, unknown, { configurations: LLMModelConfig[] }>(async (req, res) => {
-  requireAdminPermission(req, 'settings:manage');
-
-  if (!req.ability) throw new NotFoundError('Ability not found');
-
-  // Basic validation - ensure configurations is an array
-  const { configurations } = req.body;
-  if (!Array.isArray(configurations)) {
-    throw new BadRequestError('Configurations must be an array');
-  }
-
-  // Validate each configuration has required fields
-  configurations.forEach((config: any, index: number) => {
-    if (!config.id || typeof config.id !== 'string') {
-      throw new BadRequestError(`Configuration at index ${index} missing required field: id`);
-    }
-    if (typeof config.enabled !== 'boolean') {
-      throw new BadRequestError(`Configuration at index ${index} missing required field: enabled`);
-    }
-    if (!Array.isArray(config.allowedUserTags)) {
-      throw new BadRequestError(`Configuration at index ${index} missing required field: allowedUserTags`);
-    }
-    // Validate allowedUserTags contains only strings
-    config.allowedUserTags.forEach((tag: any, tagIndex: number) => {
-      if (typeof tag !== 'string') {
-        throw new BadRequestError(`Configuration at index ${index}, allowedUserTags[${tagIndex}] must be a string`);
-      }
-      if (isOAuthSourceTag(tag)) {
-        throw new BadRequestError(
-          `Configuration at index ${index}, allowedUserTags[${tagIndex}] cannot use the self-assignable "${OAUTH_SOURCE_TAG_PREFIX}" namespace`
-        );
-      }
-    });
-    // Validate allowedEntitlements if provided (optional - must be a string array)
-    if (config.allowedEntitlements !== undefined) {
-      if (!Array.isArray(config.allowedEntitlements)) {
-        throw new BadRequestError(`Configuration at index ${index}: allowedEntitlements must be an array`);
-      }
-      config.allowedEntitlements.forEach((key: any, keyIndex: number) => {
-        if (typeof key !== 'string') {
-          throw new BadRequestError(
-            `Configuration at index ${index}, allowedEntitlements[${keyIndex}] must be a string`
-          );
-        }
-        if (isOAuthSourceTag(key)) {
-          throw new BadRequestError(
-            `Configuration at index ${index}, allowedEntitlements[${keyIndex}] cannot use the self-assignable "${OAUTH_SOURCE_TAG_PREFIX}" namespace`
-          );
-        }
-      });
-    }
-    // Validate rank if provided
-    if (config.rank !== undefined) {
-      if (typeof config.rank !== 'number' || !Number.isInteger(config.rank) || config.rank < 0 || config.rank > 100) {
-        throw new BadRequestError(`Configuration at index ${index}: rank must be an integer between 0 and 100`);
-      }
-    }
-  });
-
-  // Optimize configurations to only store essential fields. allowedEntitlements
-  // is persisted only when non-empty so existing tag-only models are stored
-  // byte-identical (zero regression / no churn on the settings doc).
-  const optimizedConfigurations = configurations.map((config: any) => ({
-    id: config.id,
-    enabled: config.enabled,
-    allowedUserTags: config.allowedUserTags,
-    ...(Array.isArray(config.allowedEntitlements) &&
-      config.allowedEntitlements.length > 0 && { allowedEntitlements: config.allowedEntitlements }),
-    ...(config.fallbackModel && { fallbackModel: config.fallbackModel }),
-    ...(config.rank !== undefined && { rank: config.rank }),
-  }));
-
-  try {
-    await AdminSettings.syncIndexes();
-    const updatedSetting = await withTransaction(async () => {
-      const existing = await AdminSettings.findOne({ settingName: 'llmModelConfigurations' }).lean();
-      const written = await AdminSettings.findOneAndUpdate(
-        { settingName: 'llmModelConfigurations' },
-        { $set: { settingValue: optimizedConfigurations } },
-        { upsert: true, new: true }
-      );
-      await recordAdminSettingChange(req, {
-        settingName: 'llmModelConfigurations',
-        before: existing?.settingValue ?? null,
-        after: optimizedConfigurations,
-      });
-      return written;
-    });
-
-    if (!updatedSetting) throw new NotFoundError('Failed to save LLM model configurations');
-
-    // Invalidate cache for this specific setting
-    invalidateSettingsCache('llmModelConfigurations');
-    req.logger?.info(`🗑️ Invalidated cache for LLM model configurations`);
-
-    // Return success only -- the client ignores the body and refetches via GET.
-    // Returning the hydrated doc would serialise through AdminSettingsSchema's toJSON
-    // transform, masking llmModelConfigurations (absent from settingsMap) to ''.
-    return res.json({ success: true });
-  } catch (error: any) {
-    req.logger?.error('Failed to save LLM model configurations:', error);
-    throw new NotFoundError(`Failed to save LLM model configurations: ${error.message}`);
-  }
+// Save-all replaced the whole array, so one save from a stale tab would undo other admins' per-model edits.
+const putHandler = asyncHandler(async () => {
+  throw new HTTPError(410, 'Use the per-model access editor');
 });
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })

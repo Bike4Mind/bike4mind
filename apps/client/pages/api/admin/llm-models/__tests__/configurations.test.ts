@@ -1,12 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 type Handler = (req: unknown, res: unknown) => Promise<unknown>;
-const captured = vi.hoisted(() => ({ put: undefined as Handler | undefined }));
+const captured = vi.hoisted(() => ({ get: undefined as Handler | undefined, put: undefined as Handler | undefined }));
 
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: Handler) => fn }));
 vi.mock('@server/middlewares/baseApi', () => {
   const chain = {
-    get: () => chain,
+    get: (fn: Handler) => {
+      captured.get = fn;
+      return chain;
+    },
     put: (fn: Handler) => {
       captured.put = fn;
       return chain;
@@ -14,123 +17,72 @@ vi.mock('@server/middlewares/baseApi', () => {
   };
   return { baseApi: () => chain };
 });
+const mockFindOne = vi.fn();
 const mockFindOneAndUpdate = vi.fn();
-const mockStored = vi.fn();
-const mockAudit = vi.fn();
-vi.mock('@bike4mind/database', () => ({ withTransaction: (fn: () => Promise<unknown>) => fn() }));
-vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
-  recordAdminActionFromRequest: (...a: unknown[]) => mockAudit(...a),
-}));
+const mockReadRevision = vi.fn();
 vi.mock('@bike4mind/database/infra', () => ({
   AdminSettings: {
-    findOne: () => ({ lean: () => mockStored() }),
-    syncIndexes: vi.fn(),
+    findOne: (...a: unknown[]) => mockFindOne(...a),
     findOneAndUpdate: (...a: unknown[]) => mockFindOneAndUpdate(...a),
   },
 }));
-vi.mock('@bike4mind/utils', () => ({ invalidateSettingsCache: vi.fn() }));
+vi.mock('@bike4mind/server-utils/modelDiscovery/modelAccessRevision', () => ({
+  readModelAccessRevision: () => mockReadRevision(),
+}));
 
 import '../configurations';
 
-function put(config: Record<string, unknown>, user: Record<string, unknown> = { isAdmin: true }) {
-  const req = {
-    user,
-    ability: {},
-    body: { configurations: [{ id: 'model-a', enabled: true, allowedUserTags: [], ...config }] },
-  };
-  const res = { json: vi.fn() };
-  return captured.put!(req, res);
-}
+const respond = () => ({ json: vi.fn(), setHeader: vi.fn() });
 
-describe('PUT /api/admin/llm-models/configurations - source: namespace', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockFindOneAndUpdate.mockResolvedValue({});
-    mockStored.mockResolvedValue(null);
-    mockAudit.mockResolvedValue(null);
-  });
+describe('PUT /api/admin/llm-models/configurations', () => {
+  beforeEach(() => vi.clearAllMocks());
 
-  it('refuses a self-assignable source: tag in allowedUserTags', async () => {
-    await expect(put({ allowedUserTags: ['vip', 'Source:Acme'] })).rejects.toThrow(/allowedUserTags\[1\]/);
-    expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
-  });
+  it.each([
+    ['a full admin', { isAdmin: true }],
+    ['a settings:manage delegate', { isAdmin: false, adminPermissions: ['settings:manage'] }],
+  ])('returns 410 to %s and writes nothing', async (_label, user) => {
+    const res = respond();
+    const req = { user, body: { configurations: [{ id: 'model-a', enabled: true, allowedUserTags: [] }] } };
 
-  it('refuses a source: key in allowedEntitlements', async () => {
-    await expect(put({ allowedEntitlements: ['source:acme'] })).rejects.toThrow(/allowedEntitlements\[0\]/);
-    expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
-  });
-
-  it('saves ordinary tags and entitlements', async () => {
-    await put({ allowedUserTags: ['vip'], allowedEntitlements: ['acme:pro'] });
-    expect(mockFindOneAndUpdate).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe('PUT /api/admin/llm-models/configurations - admin audit', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockFindOneAndUpdate.mockResolvedValue({});
-    mockStored.mockResolvedValue(null);
-    mockAudit.mockResolvedValue(null);
-  });
-
-  it('records a strict llmModelConfigurations entry with the stored and saved lists', async () => {
-    const previous = [{ id: 'model-a', enabled: false, allowedUserTags: [] }];
-    mockStored.mockResolvedValue({ settingValue: previous });
-
-    await put({});
-
-    expect(mockAudit).toHaveBeenCalledTimes(1);
-    expect(mockAudit.mock.calls[0][1]).toMatchObject({
-      action: 'settings.admin_settings.updated',
-      target: { kind: 'settings', id: 'llmModelConfigurations' },
-      changes: [
-        {
-          field: 'llmModelConfigurations',
-          before: previous,
-          after: [{ id: 'model-a', enabled: true, allowedUserTags: [] }],
-        },
-      ],
+    await expect(captured.put!(req, res)).rejects.toMatchObject({
+      statusCode: 410,
+      message: 'Use the per-model access editor',
     });
-    expect(mockFindOneAndUpdate.mock.invocationCallOrder[0]).toBeLessThan(mockAudit.mock.invocationCallOrder[0]);
-  });
-
-  it('records before as null when nothing was stored', async () => {
-    await put({});
-    expect(mockAudit.mock.calls[0][1].changes[0].before).toBeNull();
-  });
-
-  it('does not report success when the audit write rejects', async () => {
-    mockAudit.mockRejectedValue(new Error('audit down'));
-    const res = { json: vi.fn() };
-    const req = {
-      user: { isAdmin: true },
-      ability: {},
-      body: { configurations: [{ id: 'model-a', enabled: true, allowedUserTags: [] }] },
-    };
-
-    await expect(captured.put!(req, res)).rejects.toThrow(/audit down/);
+    expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
     expect(res.json).not.toHaveBeenCalled();
   });
 });
 
-describe('PUT /api/admin/llm-models/configurations - permission', () => {
+describe('GET /api/admin/llm-models/configurations', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockFindOneAndUpdate.mockResolvedValue({});
-    mockStored.mockResolvedValue(null);
-    mockAudit.mockResolvedValue(null);
+    mockFindOne.mockResolvedValue({
+      settingValue: [
+        { id: 'model-a', enabled: true, allowedUserTags: [], allowedEntitlements: ['base'], updatedAt: new Date() },
+      ],
+    });
   });
 
-  it('lets a settings:manage delegate save', async () => {
-    await put({}, { isAdmin: false, adminPermissions: ['settings:manage'] });
-    expect(mockFindOneAndUpdate).toHaveBeenCalledOnce();
+  it('sends the access revision in a header and keeps the body shape', async () => {
+    mockReadRevision.mockResolvedValue('rev-1');
+    const res = respond();
+
+    await captured.get!({ user: { id: 'u1' } }, res);
+
+    expect(res.setHeader).toHaveBeenCalledWith('x-model-access-revision', 'rev-1');
+    expect(res.json).toHaveBeenCalledWith({
+      settingValue: [{ id: 'model-a', enabled: true, allowedUserTags: [], allowedEntitlements: ['base'] }],
+    });
   });
 
-  it('refuses a delegate without settings:manage before writing', async () => {
-    await expect(put({}, { isAdmin: false, adminPermissions: ['support:read'] })).rejects.toThrow(
-      'Missing permission: settings:manage'
-    );
-    expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
+  it('sends no header before the first bump or when the revision read fails', async () => {
+    mockReadRevision.mockResolvedValueOnce(null).mockRejectedValueOnce(new Error('db down'));
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const res = respond();
+      await captured.get!({ user: { id: 'u1' } }, res);
+      expect(res.setHeader).not.toHaveBeenCalled();
+      expect(res.json).toHaveBeenCalledOnce();
+    }
   });
 });
