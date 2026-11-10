@@ -1177,6 +1177,26 @@ export function PublishShareModal({
             </Box>
             <ShareActions title={title} url={url} markdown={markdown} />
 
+            {reopened && existing && (
+              <Button
+                size="sm"
+                variant="outlined"
+                color="neutral"
+                disabled={busy || shareBusy}
+                onClick={() => {
+                  setResult(null);
+                  setReopened(false);
+                  // "Publish as new" mints a different page; the seed effect re-reads the link on the next result.
+                  setShareToken(null);
+                  setShareExpiresAt(null);
+                }}
+                sx={{ mt: 2 }}
+                data-testid="publish-share-republish"
+              >
+                Publish new version
+              </Button>
+            )}
+
             {/* The /a link only grants access the main link doesn't when the page isn't
                 public; still shown once minted so it can be rotated or revoked. */}
             {(!isPublic || shareToken) && (

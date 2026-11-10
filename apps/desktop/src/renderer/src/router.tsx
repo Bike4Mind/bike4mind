@@ -1,4 +1,5 @@
 import { createHashHistory, createRootRoute, createRoute, createRouter } from '@tanstack/react-router';
+import { isImportKind, type ClaudeImportKind } from '@shared/claudeImport';
 import { isSettingsSection, type SettingsSection } from './chat/SettingsPanel';
 import { DevLogsWindow } from './devlog/DevLogsWindow';
 import { Home } from './routes/Home';
@@ -29,11 +30,13 @@ const billingRoute = createRoute({
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/settings',
-  validateSearch: (search: Record<string, unknown>): { section?: SettingsSection } =>
-    isSettingsSection(search.section) ? { section: search.section } : {},
+  validateSearch: (search: Record<string, unknown>): { section?: SettingsSection; focus?: ClaudeImportKind } => ({
+    ...(isSettingsSection(search.section) ? { section: search.section } : {}),
+    ...(isImportKind(search.focus) ? { focus: search.focus } : {}),
+  }),
   component: function SettingsRoute() {
-    const { section } = settingsRoute.useSearch();
-    return <Settings section={section ?? 'general'} />;
+    const { section, focus } = settingsRoute.useSearch();
+    return <Settings section={section ?? 'general'} importFocus={focus} />;
   },
 });
 

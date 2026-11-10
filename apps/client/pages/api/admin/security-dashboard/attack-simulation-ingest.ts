@@ -9,7 +9,7 @@ import {
 } from '@bike4mind/database';
 import { Resource } from 'sst';
 import { isPlaceholderValue } from '@bike4mind/common';
-import { safeCompareTokens } from '@bike4mind/auth/crypto';
+import { verifyIngestToken } from '@server/security/ingestToken';
 import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
 import { Logger } from '@bike4mind/observability';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
@@ -98,9 +98,7 @@ const handler = baseApi<Request, Response>({ auth: false }).post(async (req: Req
     return res.status(500).json({ error: 'Attack simulation ingest token is not configured.' });
   }
 
-  const providedTokenHeader = req.headers['x-security-ingest-token'];
-  const providedToken = Array.isArray(providedTokenHeader) ? providedTokenHeader[0] : providedTokenHeader;
-  if (!providedToken || !safeCompareTokens(String(providedToken), ingestToken)) {
+  if (!verifyIngestToken(req, 'x-security-ingest-token', ingestToken)) {
     return res.status(403).json({ error: 'Invalid ingest token.' });
   }
 

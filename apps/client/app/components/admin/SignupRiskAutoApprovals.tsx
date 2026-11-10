@@ -1,7 +1,15 @@
 import React, { useState } from 'react';
 import { Alert, Button, Stack, Tooltip, Typography } from '@mui/joy';
 import { SIGNUP_RISK_AUTO_APPROVAL_LIST_DAYS, type SignupRiskAutoApprovalPolicy } from '@bike4mind/common';
-import { ADMIN_REASON_PRESETS, ActionDialog, DataTable, StatusChip, relativeTime, type DataColumn } from './shared';
+import {
+  ADMIN_REASON_PRESETS,
+  ActionDialog,
+  AdminPermissionAction,
+  DataTable,
+  StatusChip,
+  relativeTime,
+  type DataColumn,
+} from './shared';
 import { useOpenUserProfile } from './Users/Profile/useOpenUserProfile';
 import { useSignupRiskReviewDecision, type SignupRiskAutoApprovalRow } from '@client/app/hooks/data/signupRiskReviews';
 import { getErrorMessage } from '@client/app/utils/error';
@@ -88,18 +96,23 @@ export const SignupRiskAutoApprovals: React.FC<{
         rowTestId={row => `signup-risk-auto-approved-row-${row.userId}`}
         onRowActivate={row => void openProfile(row.userId)}
         rowActions={row => (
-          <Button
-            size="sm"
-            variant="outlined"
-            data-testid={`signup-risk-reopen-${row.userId}`}
-            onClick={() => {
-              decision.reset();
-              setReopenError(null);
-              setReopening(row);
-            }}
-          >
-            Reopen review
-          </Button>
+          <AdminPermissionAction requirement="users:moderate">
+            {missing => (
+              <Button
+                size="sm"
+                variant="outlined"
+                disabled={missing}
+                data-testid={`signup-risk-reopen-${row.userId}`}
+                onClick={() => {
+                  decision.reset();
+                  setReopenError(null);
+                  setReopening(row);
+                }}
+              >
+                Reopen review
+              </Button>
+            )}
+          </AdminPermissionAction>
         )}
       />
       <ActionDialog

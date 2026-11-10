@@ -51,8 +51,6 @@ const ADMIN_ROUTES_ELSEWHERE = [
 ];
 
 const RAW_GATE_ALLOWLIST = new Set<string>([
-  'abuse/bulk-execute.ts',
-  'abuse/bulk-preview.ts',
   'credit-adjustments.ts',
   'moderation-incidents/[id]/verdict.ts',
   'moderation-incidents/index.ts',
@@ -62,10 +60,6 @@ const RAW_GATE_ALLOWLIST = new Set<string>([
   'organizations/[id]/top-up.ts',
   'organizations/grant.ts',
   'organizations/grants.ts',
-  'published-artifacts/[id]/takedown.ts',
-  'rate-limits.ts',
-  'signup-domain-holds.ts',
-  'signup-risk-reviews.ts',
   'subscriptions/[id]/admin-log.ts',
   'subscriptions/[id]/comp.ts',
   'subscriptions/[id]/index.ts',
@@ -74,8 +68,6 @@ const RAW_GATE_ALLOWLIST = new Set<string>([
   'subscriptions/export.ts',
   'subscriptions/index.ts',
   'subscriptions/summary.ts',
-  'user-api-keys/[id]/rate-limit.ts',
-  'user-api-keys/[id]/reset-rate-limit.ts',
   'users/[userId]/activity.ts',
   'users/[userId]/compliance.ts',
   'users/[userId]/credit-history.ts',
@@ -88,10 +80,7 @@ const RAW_GATE_ALLOWLIST = new Set<string>([
   'users/[userId]/linked-accounts.ts',
   'users/[userId]/new-account-spend-cap.ts',
   'users/[userId]/profile.ts',
-  'users/[userId]/resend-email-change.ts',
-  'users/[userId]/resend-verification.ts',
   'users/[userId]/risk-evidence.ts',
-  'users/[userId]/risk-flags.ts',
   'users/[userId]/sessions.ts',
   'users/[userId]/sign-ins.ts',
   'users/[userId]/signup-cluster.ts',
@@ -99,17 +88,10 @@ const RAW_GATE_ALLOWLIST = new Set<string>([
   'users/[userId]/subscriptions/[subscriptionId]/credits.ts',
   'users/[userId]/subscriptions/[subscriptionId]/remove.ts',
   'users/[userId]/timeline.ts',
-  'users/[userId]/unverify-email.ts',
   // Receipts require full admin access, matching the credit ledger and summary routes.
   'users/[userId]/usage-receipt.ts',
-  'users/[userId]/verify-email.ts',
-  'users/bulk/execute.ts',
-  'users/bulk/preview.ts',
-  'users/bulk/undo.ts',
-  'users/email-verification.ts',
   'users/export.ts',
   'users/index.ts',
-  'users/signup-verdicts.ts',
   'users/summary.ts',
 ]);
 

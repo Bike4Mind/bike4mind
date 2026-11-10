@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { AdminActionReasonSchema } from '@bike4mind/common';
+import { AdminActionReasonSchema, type AdminPermissionId } from '@bike4mind/common';
 import { AdminUsersFilterSchema } from './adminUsersFilter';
 
 /**
@@ -45,6 +45,29 @@ export const AdminUsersBulkActionSchema = z.discriminatedUnion('type', [
 ]);
 export type AdminUsersBulkAction = z.infer<typeof AdminUsersBulkActionSchema>;
 export type AdminUsersBulkActionType = AdminUsersBulkAction['type'];
+
+/**
+ * Every permission each action needs; mirrors the single-user routes (tags need settings:manage).
+ * Contain suspends and zeroes the balance; its key revocation is part of the suspension, as for a ban.
+ */
+export const ADMIN_USERS_BULK_ACTION_PERMISSIONS: Readonly<
+  Record<AdminUsersBulkActionType, readonly AdminPermissionId[]>
+> = {
+  suspend: ['users:moderate'],
+  restrict: ['users:moderate'],
+  adjustCredits: ['credits:adjust'],
+  revokeApiKeys: ['keys:revoke'],
+  addTag: ['settings:manage'],
+  contain: ['users:moderate', 'credits:adjust'],
+};
+
+export const adminUsersBulkActionPermissions = (action: AdminUsersBulkAction): readonly AdminPermissionId[] =>
+  ADMIN_USERS_BULK_ACTION_PERMISSIONS[action.type];
+
+/** The bulk routes admit any of the action permissions; each request is then checked against its own action. */
+export const ADMIN_USERS_BULK_ROUTE_PERMISSIONS = [
+  ...new Set(Object.values(ADMIN_USERS_BULK_ACTION_PERMISSIONS).flat()),
+] as AdminPermissionId[];
 
 export const AdminUsersBulkPreviewRequestSchema = z.object({
   target: AdminUsersBulkTargetSchema,

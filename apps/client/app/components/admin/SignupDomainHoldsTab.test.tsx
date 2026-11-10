@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { useUser } from '@client/app/contexts/UserContext';
 import type { SignupDomainReview } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
 import SignupDomainHoldsTab from './SignupDomainHoldsTab';
@@ -89,6 +90,7 @@ const listParams = (overrides: Record<string, unknown> = {}) => ({
 });
 
 beforeEach(() => {
+  useUser.setState({ currentUser: { id: 'admin-1', isAdmin: true } as never });
   router.set({});
   getMock.mockReset();
   postMock.mockReset();

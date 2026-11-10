@@ -354,7 +354,9 @@ describe('containAsSystem', () => {
     h.execute.mockResolvedValue(bulkResult);
 
     expect(await containAsSystem()(request)).toBe(bulkResult);
-    expect(h.resolve).toHaveBeenCalledWith({ kind: 'ids', userIds: request.userIds }, [], {}, expect.any(Date));
+    expect(h.resolve).toHaveBeenCalledWith({ kind: 'ids', userIds: request.userIds }, [], {}, expect.any(Date), {
+      actorIsFullAdmin: true,
+    });
     expect(h.writer).toHaveBeenCalledWith(AUTO_CONTAINMENT_ACTOR, 'security/autoContainment', undefined);
     expect(h.depsFor).toHaveBeenCalledWith('system-writer', 'evidence', undefined);
     expect(h.execute).toHaveBeenCalledWith(
@@ -366,7 +368,7 @@ describe('containAsSystem', () => {
         expectedCount: 1,
         cohortHash: cohortHashOf(eligible as never),
       },
-      { id: AUTO_CONTAINMENT_ACTOR_ID, selfIds: [] },
+      { id: AUTO_CONTAINMENT_ACTOR_ID, selfIds: [], fullAdmin: true },
       { marker: 'execute-deps' }
     );
   });

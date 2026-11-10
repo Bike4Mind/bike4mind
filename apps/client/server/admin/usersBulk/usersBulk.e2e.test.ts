@@ -389,6 +389,40 @@ describe('users bulk actions on a real replica set', () => {
     expect(await auditCount('user.bulk.suspended')).toBe(0);
   });
 
+  it.each([{ isAdmin: true }, { adminPermissions: ['support:read'] }])(
+    'refuses a delegate undo after a target gains admin access: %j',
+    async targetAccess => {
+      const adminId = await seedUser();
+      const targetId = await seedUser();
+      const result = await run(adminId, request([targetId], { type: 'suspend' }, [targetId]));
+      await User.updateOne({ _id: targetId }, { $set: targetAccess });
+      const req = reqFor(adminId);
+      req.user.isAdmin = false;
+      req.user.adminPermissions = ['users:moderate'];
+      const undone = await undoAdminUsersBulk(result.batchId, adminId, usersBulkUndoDeps(req));
+      expect(undone.restored).toBe(0);
+      expect(undone.failed).toEqual([
+        { userId: targetId, error: 'Only full administrators can undo actions on users with admin access' },
+      ]);
+      expect((await userState(targetId))?.isBanned).toBe(true);
+      expect(await auditCount('user.bulk.undone')).toBe(0);
+    }
+  );
+
+  it('checks action authorization before consuming the undo record', async () => {
+    const adminId = await seedUser();
+    const targetId = await seedUser();
+    const result = await run(adminId, request([targetId], { type: 'suspend' }, [targetId]));
+    const base = usersBulkUndoDeps(reqFor(adminId));
+    await expect(
+      undoAdminUsersBulk(result.batchId, adminId, base, () => {
+        throw new Error('Permission revoked');
+      })
+    ).rejects.toThrow('Permission revoked');
+    expect((await userState(targetId))?.isBanned).toBe(true);
+    expect((await undo(adminId, result.batchId)).restored).toBe(1);
+  });
+
   it('lets only the same admin undo, and only inside the window', async () => {
     const adminId = await seedUser({ isAdmin: true });
     const otherAdmin = await seedUser({ isAdmin: true });

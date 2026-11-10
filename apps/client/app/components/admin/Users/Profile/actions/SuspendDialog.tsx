@@ -4,8 +4,10 @@ import {
   SUSPENSION_REASON_CATEGORIES,
   SUSPENSION_REASONS,
   buildSuspensionNotice,
+  isFullAdmin,
   type SuspensionReasonCategory,
 } from '@bike4mind/common';
+import { useUser } from '@client/app/contexts/UserContext';
 import { ActionDialog, ADMIN_REASON_PRESETS, undoAdminReason, useUndoToast } from '../../../shared';
 import { formatCredits } from './creditAdjustment';
 import { useAdminUserUpdate } from './useAdminUserUpdate';
@@ -24,6 +26,8 @@ export const SuspendDialog: React.FC<ProfileDialogProps> = ({ user, onClose, onA
   const { refreshing, failed: refreshFailed } = useRefreshedUser(user.id);
   const balance = user.currentCredits ?? 0;
   const [zeroCredits, setZeroCredits] = useState(false);
+  // The user update route's moderation branch takes no credit fields: only a full admin may zero them here.
+  const canZeroCredits = isFullAdmin(useUser().currentUser);
   const [category, setCategory] = useState<SuspensionReasonCategory | null>(null);
   const update = useAdminUserUpdate(user.id);
   const showUndo = useUndoToast();
@@ -98,13 +102,16 @@ export const SuspendDialog: React.FC<ProfileDialogProps> = ({ user, onClose, onA
         >
           <Checkbox
             checked={zeroCredits}
+            disabled={!canZeroCredits}
             onChange={event => setZeroCredits(event.target.checked)}
             label="Also set credits to 0"
             slotProps={{ input: { 'data-testid': 'suspend-dialog-zero-credits-checkbox' } }}
             sx={{ fontWeight: 500 }}
           />
           <Typography level="body-sm" sx={{ pl: 3.5, color: 'admin.inkMuted' }}>
-            Removes {formatCredits(balance)} credits.
+            {canZeroCredits
+              ? `Removes ${formatCredits(balance)} credits.`
+              : 'Only full administrators can change credits while suspending.'}
           </Typography>
         </Sheet>
       )}

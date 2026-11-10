@@ -1,11 +1,10 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { userRepository, withTransaction } from '@bike4mind/database';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
-import { ApiKeyScope, AuthEvents } from '@bike4mind/common';
+import { ApiKeyScope, AuthEvents, assertCanActOnAdminTarget } from '@bike4mind/common';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { applyEmailVerifiedGrants } from '@server/auth/emailVerifiedGrants';
 import { emitEmailVerifiedFunnelEvents } from '@server/analytics/funnel';
@@ -15,15 +14,14 @@ interface RequestQuery {
 }
 
 // Admin-only endpoint to manually verify a user's email
-const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  auth: true,
+  requiredScopes: [ApiKeyScope.ADMIN],
+  adminPermissions: { POST: 'users:moderate' },
+})
   .use(csrfProtection())
   .post(
     asyncHandler(async (req, res) => {
-      // Check admin authorization
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const { userId } = req.query as RequestQuery;
 
       if (typeof userId !== 'string' || !userId) {
@@ -39,6 +37,7 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
         if (!user) {
           throw new BadRequestError('User not found');
         }
+        assertCanActOnAdminTarget(req.user, user, 'verify the email of');
 
         // Check if already verified
         if (user.emailVerified) return null;

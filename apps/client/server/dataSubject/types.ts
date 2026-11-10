@@ -20,6 +20,17 @@
  *   subdocuments only the matching elements change (`versions.createdBy` anonymizes the versions
  *   this person created, not every version).
  *
+ * Content shared with others:
+ * - What the person owns goes, even when others can see it (their notebook shared with a team, their
+ *   personal lake), and the access entries inside it go with it.
+ * - What the person wrote inside something another user or an organization owns (a message in
+ *   someone else's notebook, an upload to an org's lake, a version of a shared artifact) stays with
+ *   that owner, anonymized: the reference becomes the "Deleted user" placeholder, so the owner's
+ *   record stays whole. The text itself is not rewritten.
+ * - The exception is an annotation thread: it is the author's own comment rather than part of the
+ *   owner's content, so `Annotation` deletes it with its author wherever it sits.
+ * - The person's own access to others' content (`sharedWith`, a membership) is pulled.
+ *
  * What an export includes for a document (`exportScope.ts` implements this):
  * - A `deleteDocument` or `retain` match on a scalar path (`userId`, `metadata.actorId`) marks the
  *   document as the person's own record: the whole document minus `secretPaths`, plus its
@@ -53,11 +64,29 @@ export type ErasureAction =
    */
   | { action: 'pullFromArray' }
   /**
-   * The law or a legitimate interest requires keeping the record; the reason is shown in the dry
-   * run. `alsoRedact` lists fields the reason does not cover (marketing attribution on a billing
-   * record), which erasure clears so only what the reason needs is kept.
+   * The law or a legitimate interest requires keeping the record; the reason and how long it is kept
+   * are shown in the dry run. `alsoRedact` lists fields the reason does not cover (marketing
+   * attribution on a billing record), which erasure clears so only what the reason needs is kept.
    */
-  | { action: 'retain'; reason: string; alsoRedact?: readonly string[] };
+  | { action: 'retain'; reason: string; retention: RetentionPeriod; alsoRedact?: readonly string[] };
+
+/**
+ * How long a retained record outlives the erasure request. `registry/retention.ts` holds the shared
+ * periods, so a policy change is one edit.
+ */
+export type RetentionPeriod =
+  /**
+   * A TTL index on `field` deletes the record `days` after that date. `dataHolderCoverage.test.ts`
+   * checks the model declares exactly this index, and that a retained model with any TTL index says so.
+   */
+  | { expiresBy: 'ttlIndex'; field: string; days: number }
+  /**
+   * A policy period counted from `from`. Nothing deletes these records on a timer yet, so erasure
+   * lists them with the period rather than claiming they expire.
+   */
+  | { expiresBy: 'policy'; years: number; from: string }
+  /** Kept while a condition holds rather than for a fixed time (a suppression entry, while the objection stands). */
+  | { expiresBy: 'condition'; until: string };
 
 export type UserReference = ErasureAction & {
   path: string;

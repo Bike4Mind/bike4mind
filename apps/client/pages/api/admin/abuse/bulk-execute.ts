@@ -1,9 +1,15 @@
-import { ApiKeyScope, BulkAbuseExecuteRequestSchema, type BulkAbuseExecuteResult } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  bulkAbuseActionPermissions,
+  isFullAdmin,
+  BulkAbuseExecuteRequestSchema,
+  type BulkAbuseExecuteResult,
+} from '@bike4mind/common';
 import { AdminSettings } from '@bike4mind/database/infra';
 import { abuseService } from '@bike4mind/services';
 import { BadRequestError, ConflictError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi, requireAdminPermission } from '@server/middlewares/adminApi';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { addBlockedEmailDomain } from '@server/admin/bulkAbuse/addBlockedEmailDomain';
 import {
@@ -19,10 +25,14 @@ import { verifyBulkAbusePreviewToken } from '@server/admin/bulkAbuse/previewToke
  * token exactly, so an admin can only execute what they were shown. Each user is its own
  * transaction: failures are reported per user and the rest continue.
  */
-const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }).post(
+const handler = adminApi({
+  auth: 'jwtOnly',
+  requiredScopes: [ApiKeyScope.ADMIN],
+  adminPermissions: { POST: 'users:moderate' },
+}).post(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) throw new ForbiddenError('Unauthorized. Admin access required.');
     const { target, actions, previewToken, reason: rawReason } = BulkAbuseExecuteRequestSchema.parse(req.body);
+    for (const permission of bulkAbuseActionPermissions(actions)) requireAdminPermission(req, permission);
     await denySelfInBulkAbuseTarget(req, req.user, target);
     const domain = target.kind === 'domain' ? assertOwnedDomain(target.domain) : null;
     // A domain ban writes blockedEmailDomains, so it needs the settings route's permission too.
@@ -37,6 +47,7 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
     }
     const cohort = await abuseService.resolveBulkAbuseCohort(target, req.user.id, bulkAbuseCohortAdapters, {
       upToUserId: preview.upToUserId ?? undefined,
+      actorIsFullAdmin: isFullAdmin(req.user),
     });
     const includedIds = cohort.included.map(user => user.id);
     if (abuseService.bulkAbuseFingerprint(target, actions, includedIds) !== preview.fingerprint) {
