@@ -123,6 +123,44 @@ describe('GET /api/admin/spend', () => {
     expect(mockSpendSummary.mock.calls[0][0]).toMatchObject({ userId: 'u-9', model: 'opus' });
   });
 
+  it('labels a substituted model row with what ran and keeps ids unique', async () => {
+    mockSpendSummary.mockResolvedValue(
+      summary({
+        byModel: [
+          { provider: 'bedrock', model: 'opus', requests: 1, cogsUsd: 1, creditsCharged: 1 },
+          {
+            provider: 'bedrock',
+            model: 'haiku',
+            executedProvider: 'bedrock',
+            executedModel: 'haiku',
+            requests: 1,
+            cogsUsd: 1,
+            creditsCharged: 1,
+          },
+          {
+            provider: 'bedrock',
+            model: 'opus',
+            executedProvider: 'openai',
+            executedModel: 'gpt-4o-mini',
+            requests: 1,
+            cogsUsd: 1,
+            creditsCharged: 1,
+          },
+        ],
+      })
+    );
+    const { res, run } = call({ query: {} });
+    await run();
+    const rows = res._getJSONData().byModel;
+    expect(rows.map((r: { modelName: string }) => r.modelName)).toEqual([
+      'bedrock / opus',
+      'bedrock / haiku',
+      'bedrock / opus (ran: openai / gpt-4o-mini)',
+    ]);
+    expect(rows[2].modelId).toBe('bedrock/opus->openai/gpt-4o-mini');
+    expect(new Set(rows.map((r: { modelId: string }) => r.modelId)).size).toBe(3);
+  });
+
   it('shapes SpendData: derived KPIs, resolved account name, and model share', async () => {
     const { res, run } = call({ query: {} });
     await run();

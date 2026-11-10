@@ -12,6 +12,7 @@ import {
   IOwnerSpendDay,
   IOwnerSpendFeature,
   IOwnerSpendMember,
+  IAdminSpendModel,
   IOwnerSpendModel,
   IOwnerUsageSummary,
   IPlatformConsumerUsage,
@@ -52,6 +53,16 @@ const SPEND_ACCOUNT_LIMIT = 50;
 // Same payload guard for the "by model" list: a catalog with many provider/model
 // variants would otherwise ship every one. Comfortably above a realistic catalog.
 const SPEND_MODEL_LIMIT = 100;
+
+// Old rows lack executed*, so always coalesce to the requested provider/model.
+const EXECUTED_MODEL_GROUP_KEY = {
+  executedProvider: { $ifNull: ['$executedProvider', '$provider'] },
+  executedModel: { $ifNull: ['$executedModel', '$model'] },
+} as const;
+const EXECUTED_MODEL_FIELDS = {
+  executedProvider: '$_id.executedProvider',
+  executedModel: '$_id.executedModel',
+} as const;
 
 /**
  * One row per provider API call: provider-side quantities and
@@ -374,8 +385,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
             day: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'UTC' } },
             provider: '$provider',
             model: '$model',
-            executedProvider: { $ifNull: ['$executedProvider', '$provider'] },
-            executedModel: { $ifNull: ['$executedModel', '$model'] },
+            ...EXECUTED_MODEL_GROUP_KEY,
           },
           requests: { $sum: 1 },
           cogsUsd: { $sum: '$costUsd' },
@@ -388,8 +398,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
           day: '$_id.day',
           provider: '$_id.provider',
           model: '$_id.model',
-          executedProvider: '$_id.executedProvider',
-          executedModel: '$_id.executedModel',
+          ...EXECUTED_MODEL_FIELDS,
           requests: 1,
           cogsUsd: 1,
           creditsCharged: 1,
@@ -488,7 +497,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       match.createdAt = createdAt;
     }
     if (userId) match.userId = userId;
-    if (model) match.model = model;
+    if (model) match.$or = [{ model }, { executedModel: model }];
 
     const spendSums = {
       requests: { $sum: 1 },
@@ -504,7 +513,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       activeAccounts: Array<{ count: number }>;
       latency: Array<{ values: number[] }>;
       status: Array<{ _id: string; count: number }>;
-      byModel: IOwnerSpendModel[];
+      byModel: IAdminSpendModel[];
       byAccount: ISpendAccountBucket[];
       dailyCost: ISpendCostDay[];
     }>([
@@ -531,9 +540,17 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
           // settlements, media), so a credit sort would truncate away real top cost
           // drivers. Secondary keys make the cap deterministic across equal-cost ties.
           byModel: [
-            { $group: { _id: { provider: '$provider', model: '$model' }, ...spendSums } },
-            { $project: { _id: 0, provider: '$_id.provider', model: '$_id.model', ...spendFields } },
-            { $sort: { cogsUsd: -1, provider: 1, model: 1 } },
+            { $group: { _id: { provider: '$provider', model: '$model', ...EXECUTED_MODEL_GROUP_KEY }, ...spendSums } },
+            {
+              $project: {
+                _id: 0,
+                provider: '$_id.provider',
+                model: '$_id.model',
+                ...EXECUTED_MODEL_FIELDS,
+                ...spendFields,
+              },
+            },
+            { $sort: { cogsUsd: -1, provider: 1, model: 1, executedProvider: 1, executedModel: 1 } },
             { $limit: SPEND_MODEL_LIMIT },
           ],
           // failures and p95 feed the Spend tab's per-account threshold flags.
@@ -799,7 +816,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       overTime: IOwnerSpendDay[];
       byFeature: IOwnerSpendFeature[];
       byConsumer: IPlatformConsumerUsage[];
-      byModel: IOwnerSpendModel[];
+      byModel: IAdminSpendModel[];
       totals: IUsageSpendBucket[];
     }>([
       { $match: match },
@@ -836,9 +853,17 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
             { $sort: { creditsCharged: -1 } },
           ],
           byModel: [
-            { $group: { _id: { provider: '$provider', model: '$model' }, ...spendSums } },
-            { $project: { _id: 0, provider: '$_id.provider', model: '$_id.model', ...spendFields } },
-            { $sort: { creditsCharged: -1 } },
+            { $group: { _id: { provider: '$provider', model: '$model', ...EXECUTED_MODEL_GROUP_KEY }, ...spendSums } },
+            {
+              $project: {
+                _id: 0,
+                provider: '$_id.provider',
+                model: '$_id.model',
+                ...EXECUTED_MODEL_FIELDS,
+                ...spendFields,
+              },
+            },
+            { $sort: { creditsCharged: -1, provider: 1, model: 1, executedProvider: 1, executedModel: 1 } },
           ],
           totals: [{ $group: { _id: null, ...spendSums } }, { $project: { _id: 0, ...spendFields } }],
         },
@@ -857,8 +882,11 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
 
   async sessionUsageSummary(
     sessionId: string,
-    owner?: { ownerId: string; ownerType: CreditHolderType }
+    owner?: { ownerId: string; ownerType: CreditHolderType },
+    options: { includeExecuted?: boolean } = {}
   ): Promise<ISessionUsageSummary> {
+    const executedKey = options.includeExecuted ? EXECUTED_MODEL_GROUP_KEY : {};
+    const executedFields = options.includeExecuted ? EXECUTED_MODEL_FIELDS : {};
     // Every cut shares the same sums (spend + token quantities), so define once.
     const sums = {
       requests: { $sum: 1 },
@@ -891,8 +919,8 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
             { $sort: { creditsCharged: -1 } },
           ],
           byModel: [
-            { $group: { _id: { provider: '$provider', model: '$model' }, ...sums } },
-            { $project: { _id: 0, provider: '$_id.provider', model: '$_id.model', ...fields } },
+            { $group: { _id: { provider: '$provider', model: '$model', ...executedKey }, ...sums } },
+            { $project: { _id: 0, provider: '$_id.provider', model: '$_id.model', ...executedFields, ...fields } },
             { $sort: { creditsCharged: -1 } },
           ],
           totals: [{ $group: { _id: null, ...sums } }, { $project: { _id: 0, ...fields } }],
