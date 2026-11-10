@@ -13,13 +13,19 @@ import {
   AdminAuditLogModel,
   AutoContainmentDecisionModel,
   ShadowDetectionModel,
+  UsageEvent,
   User,
 } from '@bike4mind/database';
 import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../packages/database/src/__test__/createMongoServer';
-import { buildVerdictEvalReport, VERDICT_EVAL_ACCOUNT_LIMIT, type VerdictEvalDeps } from './loadVerdictEval';
+import {
+  buildVerdictEvalReport,
+  loadCohortSignals,
+  VERDICT_EVAL_ACCOUNT_LIMIT,
+  type VerdictEvalDeps,
+} from './loadVerdictEval';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -39,9 +45,14 @@ afterAll(async () => {
 });
 beforeEach(async () => {
   await Promise.all(
-    [User, ShadowDetectionModel, AbuseAssessmentModel, AutoContainmentDecisionModel, AdminAuditLogModel].map(model =>
-      model.collection.deleteMany({})
-    )
+    [
+      User,
+      ShadowDetectionModel,
+      AbuseAssessmentModel,
+      AutoContainmentDecisionModel,
+      AdminAuditLogModel,
+      UsageEvent,
+    ].map(model => model.collection.deleteMany({}))
   );
 });
 
@@ -51,13 +62,14 @@ async function seedUser(fields: Record<string, unknown>): Promise<string> {
   return _id.toString();
 }
 
-async function seedDetection(userIds: string[], verdict: string | null): Promise<string> {
+async function seedDetection(userIds: string[], verdict: string | null, detectedAt = ago(20)): Promise<string> {
   const _id = new mongoose.Types.ObjectId();
   await ShadowDetectionModel.collection.insertOne({
     _id,
     detector: 'deviceLinkedToBlocked',
+    policyVersion: 1,
     userIds,
-    detectedAt: ago(20),
+    detectedAt,
     verdict,
   });
   return _id.toString();
@@ -192,5 +204,72 @@ describe('buildVerdictEvalReport', () => {
     const report = await buildVerdictEvalReport(7, { signupVerdicts: async () => new Map() }, NOW);
 
     expect(report.truncated).toBe(true);
+  });
+
+  it('does not label an account whose review was approved by the auto-approval policy', async () => {
+    const auto = await seedUser({
+      createdAt: ago(10),
+      riskScore: { reviewState: 'approved' },
+      riskReviewAutoApproval: { policy: 'seed', decidedAt: ago(9) },
+    });
+    await seedUser({ createdAt: ago(10), riskScore: { reviewState: 'approved' } });
+
+    const report = await buildVerdictEvalReport(7, { signupVerdicts: async () => new Map() }, NOW);
+
+    expect(report.excludedAutoApprovals).toBe(1);
+    // Only the account an admin approved is labelled; `auto` is the one excluded.
+    expect(report.labelledAccounts).toBe(1);
+    expect(auto).toBeTruthy();
+  });
+
+  it('sums the credits an abusive campaign spent before and after detection', async () => {
+    const member = await seedUser({ createdAt: ago(30) });
+    await seedDetection([member], 'confirmed_abuse', ago(20));
+    const usage = (hoursAgo: number, creditsCharged: number) => ({
+      userId: member,
+      creditsCharged,
+      source: 'web',
+      createdAt: ago(hoursAgo),
+    });
+    await UsageEvent.collection.insertMany([usage(25.5, 4), usage(25.2, 1), usage(10.5, 6), usage(2.5, 3)]);
+    await audit('user.suspended', member, 'user', ago(5));
+
+    const report = await buildVerdictEvalReport(7, { signupVerdicts: async () => new Map() }, NOW);
+
+    expect(report.operations).toEqual([
+      expect.objectContaining({
+        detector: 'deviceLinkedToBlocked',
+        reviewYield: 1,
+        timeToDetection: { n: 1, medianHours: 10, p90Hours: 10 },
+        // Hour buckets: 25.x hours ago is before the detection; 10.5 is after, 2.5 is past the suspension.
+        spend: { accounts: 1, creditsBeforeDetection: 5, creditsAfterDetection: 6 },
+      }),
+    ]);
+  });
+
+  it('loads cohort signals from signup metadata, logins and usage', async () => {
+    const phone = await seedUser({
+      signupMeta: { userAgent: 'Mozilla/5.0 (iPhone)', ip: '10.0.0.1' },
+      loginRecords: [{ deviceType: 'Mobile' }],
+    });
+    const officeA = await seedUser({ signupMeta: { ip: '10.0.0.2' } });
+    const officeB = await seedUser({ signupMeta: { ip: '10.0.0.2' } });
+    const agent = await seedUser({ signupMeta: { ip: '10.0.0.3' } });
+    await UsageEvent.collection.insertMany([
+      { userId: agent, creditsCharged: 1, source: 'api', createdAt: ago(1) },
+      { userId: phone, creditsCharged: 1, source: 'web', createdAt: ago(1) },
+    ]);
+
+    const signals = await loadCohortSignals([phone, officeA, officeB, agent]);
+
+    expect(signals.get(phone)).toEqual({
+      userAgent: 'Mozilla/5.0 (iPhone)',
+      deviceTypes: ['Mobile'],
+      sharedSignupIp: false,
+      apiAgentUsage: false,
+    });
+    expect(signals.get(officeA)).toMatchObject({ sharedSignupIp: true, apiAgentUsage: false });
+    expect(signals.get(officeB)).toMatchObject({ sharedSignupIp: true });
+    expect(signals.get(agent)).toMatchObject({ sharedSignupIp: false, apiAgentUsage: true });
   });
 });
