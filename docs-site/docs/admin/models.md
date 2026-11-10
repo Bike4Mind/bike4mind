@@ -79,11 +79,11 @@ Each opens a dialog that previews the change on the server before anything is wr
 - Any model the change would leave visible only to admins, listed separately with a confirmation you must check
 - A required reason, recorded in each model's admin log
 
-If another admin changes the selected models after the preview, the dialog shows a fresh preview instead of applying the old one. After the change is applied, a summary reports what changed. Models that could not be changed are listed with **Retry failed**. A toast offers **Undo**. If some models changed again before you undo, Undo reverts the others and offers **Revert the rest** for the models it skipped.
+If another admin changes the selected models after the preview, the dialog shows a fresh preview instead of applying the old one. After the change is applied, a summary reports what changed. Models that could not be changed are listed with **Retry failed**. A toast offers **Undo**, which reverts the whole batch, including any models changed by **Retry failed**. If some models changed again before you undo, Undo reverts the others and lists the ones it skipped, each linked to its model page with the reason. Change those back from each model's page.
 
 ## Model detail
 
-The detail page shows the model's name, id, status, type, backend, and release date, with a breadcrumb back to the list. The header has **Usage** and **Logs**, which open [Model Metrics](./metrics.md) and [Model Logs](./model-logs.md) filtered to this model, and **Turn on** or **Turn off**. A strip under the header shows the model's rank, price, access, and fallback.
+The detail page shows the model's name, id, status, type, backend, and release date, with a breadcrumb back to the list. The line under the name links to **Usage** and **Logs**, which open [Model Metrics](./metrics.md) and [Model Logs](./model-logs.md) filtered to this model, and the header offers **Turn on** or **Turn off**. A strip under the header shows the model's rank, price, access, and fallback.
 
 The page has three tabs:
 
@@ -99,7 +99,7 @@ Turning a model on or off, and editing its tags, entitlements, rank, or fallback
 
 Changes apply right away and are recorded in the Admin log. A toast offers **Undo**. If another admin changed the model after you opened it, the change is refused and you are asked to reload. Open model pickers drop or add the model within about 15 seconds.
 
-The fallback model is used when a request to this model fails at the provider. **Automatic** means no fallback is set and the platform's built-in fallback order applies.
+The fallback model is used when a request to this model fails at the provider. **Automatic** means no fallback is set and the platform's built-in fallback order applies. The picker offers listed and limited models of the same type. A saved fallback outside those still shows, with its status, so you can see it and replace it.
 
 ## Prices
 
@@ -109,18 +109,18 @@ Each row shows the price in force for one model: input and output rates, audio r
 
 | Source | Meaning |
 | --- | --- |
-| seed | Managed automatically from the built-in model tables |
-| discovery | Set by model discovery from a provider price feed |
-| operator | Set by an admin |
+| Default | Shipped in the built-in model tables and managed automatically |
+| Discovered | Read from a provider price feed by model discovery |
+| Set by admin | Saved by an admin here |
 
 The filter box narrows the table to matching model ids; a full model id shows only that model.
 
 | Action | Description |
 | --- | --- |
-| **Add price** | Adds the first price row for a model that has none. Offered for text models without a price row and for realtime voice models priced by the built-in tables. Enter rates per 1M tokens, with optional extra tiers that start at a token count, and a reason |
+| **Add price** | Adds the first price row for a model that has none. Offered for text models without a price row and for realtime voice models priced by the built-in tables. Enter rates per 1M tokens, with optional extra tiers that start at a token count, and a reason. At least one input or output rate must be above 0 |
 | **Reprice** | Appends a new operator price row that takes effect immediately. Requires a note saying where the price comes from, such as an invoice or a provider pricing page. While an operator row is newest, automatic seed updates skip that model |
 | **History** | Shows every price the model has had as a change log: who made each change, the note, and the old and new rate for every field that changed. Rows are never edited, so the history is complete |
-| **Revert** | Offered on rows not managed by the seed. Appends the built-in table's current rates back under seed management, so future automatic price updates reach the model again. The earlier row stays in history |
+| **Revert** | Offered on rows set by an admin or by discovery, for models the built-in tables price. Appends the built-in table's current rates back under automatic management, so future automatic price updates reach the model again. The earlier row stays in history |
 
 Price rows bill text and realtime voice models only, so other model types offer no price changes here. A realtime voice price needs input, output, audio in, and audio out rates above 0 on its lowest tier; the dialog holds the change until they are entered. Both dialogs show what a user pays at the published markup. A rate far from the current price is refused with the reason, and **Apply anyway** lets you confirm it.
 
@@ -129,14 +129,14 @@ Price rows bill text and realtime voice models only, so other model types offer 
 Model discovery checks the providers for new models, price changes, and retirements. The Discovery section shows:
 
 - **Discovery runs**: recent runs with when each started, what triggered it, its result, and a summary of what it found. Select a run to open its page
-- **Lifecycle suggestions**: deprecations, retirements, and replacements discovery suggests. **Accept change** applies one, with a successor model you choose; **Dismiss suggestion** sets it aside
-- **References to unavailable models**: settings and defaults that still name a model users can no longer pick
+- **Lifecycle suggestions**: deprecations, retirements, and replacements discovery suggests. **Accept change** applies one, with a successor model you choose, and says when the model leaves the pickers. **Dismiss suggestion** dismisses it for good: you type the model id to confirm, and discovery does not raise it again while the provider's signal is unchanged. **Model prices** opens the Prices section
+- **References to unavailable models**: settings and defaults that still name a model users can no longer pick. **Check references** asks every provider and shows the result; nothing is checked until you ask
 
 When discovery is off, the section says so and offers **Open settings**. **Run discovery** in the page header starts a run now; a toast links to the run when it finishes, and the list and prices refresh.
 
 ### Run page
 
-A run's page shows what the run changed, grouped as **Added**, **Listed**, **Repriced**, **Lifecycle changes**, and **Overruled sources**. A run in report-only mode shows the same groups as **Would add**, **Would list**, and **Would reprice**. Models from the run that still need a decision are listed with their reasons and fix actions, including **Turn on**. Runs are kept for 90 days.
+A run's page shows what the run changed, grouped as **Added**, **Listed**, **Repriced**, **Lifecycle changes**, and **Overruled sources**. A run in report-only mode shows the same groups as **Would add**, **Would list**, and **Would reprice**. Models from the run that still need a decision are listed with their reasons, their fix actions, and **Open model**. Runs are kept for 90 days.
 
 ## Settings
 
