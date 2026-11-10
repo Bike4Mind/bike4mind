@@ -177,6 +177,29 @@ describe('GET /api/admin/model-deprecation-status', () => {
     ]);
   });
 
+  it('answers only the queue and its rates for view=queue, asking no provider', async () => {
+    const { res, run } = call({ method: 'GET', query: { view: 'queue' } });
+    await run();
+    const body = res._getJSONData();
+
+    expect(Object.keys(body).sort()).toEqual(['perMTokRates', 'queue']);
+    expect(body.queue).toEqual([
+      { modelId: 'gpt-sunset', suggestion: expect.objectContaining({ replacedBy: 'gpt-live' }) },
+    ]);
+    expect(body.perMTokRates['gpt-live']).toBeDefined();
+    expect(mockGetAvailableModels).not.toHaveBeenCalled();
+    expect(mockRowsInForce).not.toHaveBeenCalled();
+    expect(mockReadModelListRevision).not.toHaveBeenCalled();
+  });
+
+  it('builds the full report for any other view value', async () => {
+    const { res, run } = call({ method: 'GET', query: { view: 'everything' } });
+    await run();
+
+    expect(res._getJSONData()).toHaveProperty('staleReferences');
+    expect(mockGetAvailableModels).toHaveBeenCalled();
+  });
+
   it('still serves the rest of the report when the stale reference report fails', async () => {
     mockGetAvailableModels.mockResolvedValueOnce([LIVE_MODEL]).mockRejectedValueOnce(new Error('provider down'));
     const { res, run } = call({ method: 'GET' });

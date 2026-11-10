@@ -9,7 +9,7 @@ import { MODEL_CATALOG_QUERY_KEY } from '@client/app/hooks/data/useModelInfo';
 import {
   DISCOVERY_STATUS_PATH,
   DISCOVERY_STATUS_QUERY_KEY,
-  LIFECYCLE_STATUS_QUERY_KEY,
+  LIFECYCLE_QUEUE_QUERY_KEY,
   apiCodeOf,
   apiErrorMessage,
   apiServerMessage,
@@ -103,7 +103,7 @@ const dispatchFailure = (error: unknown): { message: string; discoveryOff: boole
 const refreshAfterRun = (queryClient: QueryClient) => {
   useRunNowStore.setState(state => ({ finishedRuns: state.finishedRuns + 1 }));
   void queryClient.invalidateQueries({ queryKey: ADMIN_MODELS_QUERY_KEY });
-  void queryClient.invalidateQueries({ queryKey: LIFECYCLE_STATUS_QUERY_KEY });
+  void queryClient.invalidateQueries({ queryKey: LIFECYCLE_QUEUE_QUERY_KEY });
   // Not before every server process has dropped the list it built under the previous revision.
   setTimeout(
     () => void queryClient.invalidateQueries({ queryKey: MODEL_CATALOG_QUERY_KEY }),

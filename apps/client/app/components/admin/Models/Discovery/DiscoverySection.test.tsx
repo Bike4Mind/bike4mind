@@ -250,7 +250,9 @@ describe('DiscoverySection Run now', () => {
 
     await tick(POLL_INTERVAL_MS);
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'models'] });
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'model-deprecation-status'] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'model-deprecation-status', 'queue'] });
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ['admin', 'model-deprecation-status'] });
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ['admin', 'model-deprecation-status', 'references'] });
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ['llm', 'models'] });
 
     // Held for the server-side revision memo, so a chat sent from the new list is accepted.

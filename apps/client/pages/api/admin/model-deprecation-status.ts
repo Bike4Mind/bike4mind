@@ -27,7 +27,9 @@ import { requireFullAdmin } from '@server/admin/models/requireFullAdmin';
  *
  * GET  -> the horizon (expiring), the catalog's EXPIRED view, the operator
  *         queue of unresolved discovery suggestions, and the stale-reference
- *         report over the hardcoded model-id surfaces.
+ *         report over the hardcoded model-id surfaces. `?view=queue` answers
+ *         only the queue and the rates that price it, read from the database
+ *         alone: no provider is asked.
  * POST -> settle one queue item: 'dismiss' records the verdict, 'accept'
  *         appends an operator lifecycle row and then records it. An accept
  *         whose successor fails the auto-remap constraints answers 409 with the
@@ -75,6 +77,17 @@ const handler = adminApi({
   requiredScopes: [ApiKeyScope.ADMIN],
 })
   .get(async (req, res) => {
+    if (req.query.view === 'queue') {
+      const [pending, priceRows] = await Promise.all([
+        modelDiscoveryStateRepository.pendingSuggestions(),
+        modelPriceRepository.rowsInForce(),
+      ]);
+      return res.json({
+        queue: pending.map(state => ({ modelId: state.modelId, suggestion: state.suggestion })),
+        perMTokRates: perMTokRatesInForce(priceRows),
+      });
+    }
+
     const daysAhead = parseInt(req.query.daysAhead as string) || 90;
     // Read here rather than through the process memo: the tab reloads this the moment a run it watched finishes.
     const catalogRevision = (await readModelListRevision()) ?? undefined;

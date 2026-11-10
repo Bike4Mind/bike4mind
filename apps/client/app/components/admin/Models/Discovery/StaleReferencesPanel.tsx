@@ -7,10 +7,9 @@ import {
   LoadingState,
   SectionCard,
   StatusChip,
-  useMissingAdminPermission,
   type DataColumn,
 } from '../../shared';
-import { apiErrorMessage, useLifecycleStatus, type StaleReference } from './discoveryApi';
+import { apiErrorMessage, useStaleReferences, type StaleReference } from './discoveryApi';
 import { problemCopy } from './discoveryCopy';
 import { modelName, useModelIndex } from './useModelIndex';
 
@@ -18,14 +17,12 @@ const referenceId = (reference: StaleReference) => `${reference.surface}|${refer
 
 /**
  * References to unavailable models (docs/admin-models-spec.md section 5.3): model ids that fallback chains and
- * defaults point at. Its own panel, not on model pages, because an unknown id has no model to sit on. The report
- * comes with the lifecycle status GET that also loads the suggestion queue; "Check references" rebuilds it and
- * shows it.
+ * defaults point at. Its own panel, not on model pages, because an unknown id has no model to sit on. Building the
+ * report asks every provider, so nothing loads it until "Check references".
  */
 export function StaleReferencesPanel() {
   const [requested, setRequested] = useState(false);
-  const missing = useMissingAdminPermission('settings:manage');
-  const report = useLifecycleStatus(!missing);
+  const report = useStaleReferences();
   const index = useModelIndex().data;
 
   const check = () => {

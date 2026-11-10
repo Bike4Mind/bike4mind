@@ -43,11 +43,21 @@ beforeEach(() => {
 });
 
 describe('StaleReferencesPanel', () => {
-  it('shows no report until Check references is clicked', async () => {
+  it('asks no provider and shows no report until Check references is clicked', async () => {
     renderPanel();
 
     expect(await screen.findByTestId('discovery-references-idle')).toBeInTheDocument();
     expect(screen.queryByTestId('discovery-references-table')).not.toBeInTheDocument();
+    await waitFor(() => expect(m.get).toHaveBeenCalledWith('/api/admin/models', expect.anything()));
+    expect(m.get).not.toHaveBeenCalledWith(LIFECYCLE_PATH);
+  });
+
+  it('is not refetched by an invalidation before the first check', async () => {
+    renderPanel();
+    await screen.findByTestId('discovery-references-idle');
+    await queryClient.invalidateQueries({ queryKey: ['admin', 'model-deprecation-status'] });
+
+    expect(m.get).not.toHaveBeenCalledWith(LIFECYCLE_PATH);
   });
 
   it('lists each reference by name with a readable problem, including not callable', async () => {
@@ -64,14 +74,15 @@ describe('StaleReferencesPanel', () => {
   });
 
   it('asks the server again on every check', async () => {
+    const checks = () => m.get.mock.calls.filter(([url]) => url === LIFECYCLE_PATH).length;
     renderPanel();
-    await waitFor(() => expect(m.get).toHaveBeenCalledWith(LIFECYCLE_PATH));
-    const before = m.get.mock.calls.filter(([url]) => url === LIFECYCLE_PATH).length;
 
     fireEvent.click(screen.getByTestId('discovery-check-references-btn'));
     await screen.findByTestId('discovery-references-table');
+    expect(checks()).toBe(1);
 
-    expect(m.get.mock.calls.filter(([url]) => url === LIFECYCLE_PATH).length).toBe(before + 1);
+    fireEvent.click(screen.getByTestId('discovery-check-references-btn'));
+    await waitFor(() => expect(checks()).toBe(2));
   });
 
   it('shows the server error text when the reference report failed', async () => {

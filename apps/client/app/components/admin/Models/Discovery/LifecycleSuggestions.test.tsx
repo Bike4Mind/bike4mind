@@ -37,6 +37,7 @@ let lifecycle: LifecycleStatus = LIFECYCLE;
 let sunsetLifecycle: AdminModelRow['lifecycle'] = {};
 
 const lifecycleGets = () => m.get.mock.calls.filter(([url]) => url === LIFECYCLE_PATH).length;
+const QUEUE_VIEW = { params: { view: 'queue' } };
 
 const renderQueue = () => render(<LifecycleSuggestions />, { wrapper: makeWrapper(queryClient) });
 
@@ -52,6 +53,9 @@ const writeReason = (dialog: 'accept' | 'dismiss', value: string) =>
   fireEvent.change(screen.getByTestId(`discovery-${dialog}-dialog-reason-input`), { target: { value } });
 
 const confirm = (dialog: 'accept' | 'dismiss') => screen.getByTestId(`discovery-${dialog}-dialog-confirm-btn`);
+
+const typeDismissId = (value = 'gpt-sunset') =>
+  fireEvent.change(screen.getByTestId('discovery-dismiss-dialog-typed-input'), { target: { value } });
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -72,7 +76,11 @@ beforeEach(() => {
     }
     throw new Error(`unexpected GET ${url}`);
   });
-  m.post.mockResolvedValue({ data: { ok: true } });
+  // The server drops a settled suggestion from the queue it answers next.
+  m.post.mockImplementation(async (_url: string, body: { modelId: string }) => {
+    lifecycle = { ...lifecycle, queue: lifecycle.queue.filter(item => item.modelId !== body.modelId) };
+    return { data: { ok: true } };
+  });
 });
 
 describe('LifecycleSuggestions queue', () => {
@@ -126,6 +134,31 @@ describe('LifecycleSuggestions queue', () => {
     expect(lifecycleGets()).toBe(0);
   });
 
+  it('loads the queue through view=queue, so opening it asks no provider', async () => {
+    renderQueue();
+    await screen.findByTestId('discovery-suggestion-row-gpt-sunset');
+
+    expect(m.get.mock.calls.filter(([url]) => url === LIFECYCLE_PATH)).toEqual([[LIFECYCLE_PATH, QUEUE_VIEW]]);
+  });
+
+  it('resyncs the queue from the server after a decision, still through view=queue', async () => {
+    renderQueue();
+    await openMenuItem('dismiss');
+    writeReason('dismiss', 'operator pick');
+    typeDismissId();
+    fireEvent.click(confirm('dismiss'));
+
+    await waitFor(() => expect(lifecycleGets()).toBe(2));
+    expect(m.get.mock.calls.filter(([url]) => url === LIFECYCLE_PATH)[1]).toEqual([LIFECYCLE_PATH, QUEUE_VIEW]);
+  });
+
+  it('links to the price catalog from the header', async () => {
+    renderQueue();
+    fireEvent.click(await screen.findByTestId('discovery-suggestions-prices-link'));
+
+    expect(m.nav.openPrices).toHaveBeenCalledWith();
+  });
+
   it('shows the queue to a delegate but blocks the decision menu', async () => {
     m.currentUser = DELEGATE;
     renderQueue();
@@ -137,6 +170,36 @@ describe('LifecycleSuggestions queue', () => {
 });
 
 describe('LifecycleSuggestions accept', () => {
+  const acceptWith = async (suggestion: Partial<NonNullable<LifecycleStatus['queue'][number]['suggestion']>>) => {
+    lifecycle = {
+      ...LIFECYCLE,
+      queue: [{ modelId: 'gpt-sunset', suggestion: { ...LIFECYCLE.queue[0].suggestion!, ...suggestion } }],
+    };
+    renderQueue();
+    await screen.findByText('GPT Sunset');
+    await openMenuItem('accept');
+    return screen.getByTestId('discovery-accept-dialog');
+  };
+
+  it('says a retired model leaves every picker now', async () => {
+    const dialog = await acceptWith({ status: 'retired', deprecationDate: undefined });
+
+    expect(dialog).toHaveTextContent('Records GPT Sunset as retired, effective now. It leaves every picker now.');
+  });
+
+  it('says a deprecated model with a date drops out of pickers after it', async () => {
+    const dialog = await acceptWith({ status: 'deprecated', deprecationDate: '2026-08-01' });
+
+    expect(dialog).toHaveTextContent('It drops out of pickers after 2026-08-01.');
+  });
+
+  it('says a deprecated model with no date stays in pickers', async () => {
+    const dialog = await acceptWith({ status: 'deprecated', deprecationDate: undefined });
+
+    expect(dialog).toHaveTextContent('It stays in pickers until a date is set.');
+    expect(dialog).not.toHaveTextContent('drops out');
+  });
+
   it('requires a reason, then posts it as the note with the suggested successor', async () => {
     renderQueue();
     await openMenuItem('accept');
@@ -156,8 +219,6 @@ describe('LifecycleSuggestions accept', () => {
     await waitFor(() => expect(screen.queryByTestId('discovery-accept-dialog')).not.toBeInTheDocument());
     expect(m.toast.success).toHaveBeenCalledWith('Recorded GPT Sunset as deprecated.');
     expect(screen.queryByTestId('discovery-suggestion-row-gpt-sunset')).not.toBeInTheDocument();
-    // Settled locally: a refetch would fan out to every provider again.
-    expect(lifecycleGets()).toBe(1);
   });
 
   it('previews the change and names the successor', async () => {
@@ -348,6 +409,10 @@ describe('LifecycleSuggestions dismiss', () => {
     expect(screen.getByTestId('discovery-dismiss-dialog')).toHaveTextContent('There is no undo.');
     expect(m.post).not.toHaveBeenCalled();
     fireEvent.click(screen.getByTestId('discovery-dismiss-dialog-reason-input-preset-1'));
+    expect(confirm('dismiss')).toBeDisabled();
+    typeDismissId('gpt-sunse');
+    expect(confirm('dismiss')).toBeDisabled();
+    typeDismissId();
     fireEvent.click(confirm('dismiss'));
 
     await waitFor(() => expect(m.post).toHaveBeenCalledTimes(1));
@@ -375,6 +440,7 @@ describe('LifecycleSuggestions dismiss', () => {
     renderQueue();
     await openMenuItem('dismiss');
     writeReason('dismiss', 'operator pick');
+    typeDismissId();
 
     fireEvent.click(confirm('dismiss'));
     fireEvent.click(confirm('dismiss'));
@@ -389,6 +455,7 @@ describe('LifecycleSuggestions dismiss', () => {
     renderQueue();
     await openMenuItem('dismiss');
     writeReason('dismiss', 'operator pick');
+    typeDismissId();
     fireEvent.click(confirm('dismiss'));
 
     expect(await screen.findByTestId('discovery-dismiss-error')).toHaveTextContent('No pending suggestion');

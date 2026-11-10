@@ -8,6 +8,7 @@ import {
   FormLabel,
   IconButton,
   Input,
+  Link,
   Menu,
   MenuButton,
   MenuItem,
@@ -35,14 +36,14 @@ import { SuccessorCostChip, SuccessorCostPanel } from '../../SuccessorCostDelta'
 import { ModelWriteAction } from '../ModelWriteAction';
 import { useModelsNavigation } from '../modelsNavigation';
 import {
+  LIFECYCLE_QUEUE_QUERY_KEY,
   LIFECYCLE_STATUS_PATH,
-  LIFECYCLE_STATUS_QUERY_KEY,
   apiCodeOf,
   apiErrorMessage,
   apiStatusOf,
-  useLifecycleStatus,
+  useLifecycleQueue,
+  type LifecycleQueue,
   type LifecycleQueueItem,
-  type LifecycleStatus,
 } from './discoveryApi';
 import { lifecycleWord } from './discoveryCopy';
 import { modelName, useModelIndex } from './useModelIndex';
@@ -55,6 +56,20 @@ const ACCEPT_REASONS = [
 const DISMISS_REASONS = ['Provider signal is wrong', 'Model is still supported', 'Duplicate of another suggestion'];
 
 type ModelIndex = ReadonlyMap<string, AdminModelRow> | undefined;
+
+/**
+ * What accepting does to the pickers: the catalog's retired fold disables a retired model at once, and
+ * getAvailableModels drops a deprecated one from its deprecation date (see adminModelList in services).
+ */
+export const acceptEffect = (status: string, deprecationDate: string | undefined): string => {
+  if (status === 'retired') return 'It leaves every picker now.';
+  if (status === 'deprecated') {
+    return deprecationDate
+      ? `It drops out of pickers after ${deprecationDate}.`
+      : 'It stays in pickers until a date is set.';
+  }
+  return 'Its place in pickers does not change.';
+};
 
 /**
  * The accept route's 409: the auto-remap clauses this successor missed. The one refusal an admin may overrule, so it
@@ -251,7 +266,7 @@ function AcceptSuggestionDialog({
       title="Accept lifecycle change"
       description={
         suggestion?.status
-          ? `Records ${name} as ${statusWord}, effective now. It drops out of pickers once its deprecation date passes.`
+          ? `Records ${name} as ${statusWord}, effective now. ${acceptEffect(status, deprecationDate)}`
           : `Records the successor for ${name}. Its lifecycle stays ${statusWord}.`
       }
       reasonPresets={ACCEPT_REASONS}
@@ -364,6 +379,7 @@ function DismissSuggestionDialog({
       reasonAudited={false}
       confirmLabel="Dismiss suggestion"
       tone="danger"
+      typedConfirm={{ expected: item.modelId, noun: 'model id' }}
       onConfirm={dismiss}
       data-testid="discovery-dismiss-dialog"
     >
@@ -383,33 +399,44 @@ function DismissSuggestionDialog({
 export function LifecycleSuggestions() {
   const queryClient = useQueryClient();
   const missing = useMissingAdminPermission('settings:manage');
-  const lifecycle = useLifecycleStatus(!missing);
+  const lifecycle = useLifecycleQueue(!missing);
   const index = useModelIndex().data;
-  const { openModel } = useModelsNavigation();
+  const { openModel, openPrices } = useModelsNavigation();
   const [accepting, setAccepting] = useState<LifecycleQueueItem | null>(null);
   const [dismissing, setDismissing] = useState<LifecycleQueueItem | null>(null);
   const queue = lifecycle.data?.queue ?? [];
   const rates = lifecycle.data?.perMTokRates ?? {};
 
-  // Settled locally rather than refetched: the same GET rebuilds the reference report, asking every provider again.
   const settle = (modelId: string, message: string) => {
-    queryClient.setQueryData<LifecycleStatus>(LIFECYCLE_STATUS_QUERY_KEY, current =>
+    queryClient.setQueryData<LifecycleQueue>(LIFECYCLE_QUEUE_QUERY_KEY, current =>
       current ? { ...current, queue: current.queue.filter(item => item.modelId !== modelId) } : current
     );
+    void queryClient.invalidateQueries({ queryKey: LIFECYCLE_QUEUE_QUERY_KEY });
     void queryClient.invalidateQueries({ queryKey: ADMIN_MODELS_QUERY_KEY });
     toast.success(message);
   };
 
   return (
     <Stack component="section" gap={1} data-testid="discovery-suggestions">
-      <Box>
-        <Typography level="title-md" component="h2" sx={{ color: 'admin.ink' }}>
-          Lifecycle suggestions
-        </Typography>
-        <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
-          Models a provider marked deprecated or retired. Accept to record it, or dismiss it.
-        </Typography>
-      </Box>
+      <Stack direction="row" alignItems="flex-start" justifyContent="space-between" gap={1} flexWrap="wrap">
+        <Box>
+          <Typography level="title-md" component="h2" sx={{ color: 'admin.ink' }}>
+            Lifecycle suggestions
+          </Typography>
+          <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
+            Models a provider marked deprecated or retired. Accept to record it, or dismiss it.
+          </Typography>
+        </Box>
+        <Link
+          component="button"
+          type="button"
+          level="body-sm"
+          onClick={() => void openPrices()}
+          data-testid="discovery-suggestions-prices-link"
+        >
+          Model prices
+        </Link>
+      </Stack>
       {missing ? (
         <MissingPermissionState requirement="settings:manage" />
       ) : (

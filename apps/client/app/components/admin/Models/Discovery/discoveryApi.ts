@@ -191,13 +191,17 @@ export interface StaleReference {
   problem: StaleReferenceProblem;
 }
 
-export interface LifecycleStatus {
+/** The GET's `view=queue` answer: read from the database alone, so loading it asks no provider. */
+export interface LifecycleQueue {
   queue: LifecycleQueueItem[];
+  /** Per-MTok rates in force by model id, for pricing a proposed successor. */
+  perMTokRates?: Record<string, PerMTokRate>;
+}
+
+export interface LifecycleStatus extends LifecycleQueue {
   /** Null when the server could not build the report; staleReferencesError says why. */
   staleReferences: StaleReference[] | null;
   staleReferencesError?: string;
-  /** Per-MTok rates in force by model id, for pricing a proposed successor. */
-  perMTokRates?: Record<string, PerMTokRate>;
 }
 
 export const DISCOVERY_STATUS_PATH = '/api/admin/model-discovery';
@@ -206,8 +210,10 @@ export const LIFECYCLE_STATUS_PATH = '/api/admin/model-deprecation-status';
 export const DISCOVERY_QUERY_KEY = ['admin', 'model-discovery'] as const;
 export const DISCOVERY_STATUS_QUERY_KEY = [...DISCOVERY_QUERY_KEY, 'status'] as const;
 export const discoveryRunQueryKey = (runId: string) => [...DISCOVERY_QUERY_KEY, 'run', runId] as const;
-/** Its GET fans out to every provider on platform credentials, so nothing refetches it on focus. */
 export const LIFECYCLE_STATUS_QUERY_KEY = ['admin', 'model-deprecation-status'] as const;
+export const LIFECYCLE_QUEUE_QUERY_KEY = [...LIFECYCLE_STATUS_QUERY_KEY, 'queue'] as const;
+/** The full GET fans out to every provider on platform credentials, so only "Check references" fetches it. */
+export const STALE_REFERENCES_QUERY_KEY = [...LIFECYCLE_STATUS_QUERY_KEY, 'references'] as const;
 
 export const fetchDiscoveryStatus = async (): Promise<DiscoveryStatus> =>
   (await api.get<DiscoveryStatus>(DISCOVERY_STATUS_PATH)).data;
@@ -226,11 +232,19 @@ export const useDiscoveryRun = (runId: string) =>
 
 const RUNNING_REFETCH_MS = 5_000;
 
-export const useLifecycleStatus = (enabled: boolean) =>
+export const useLifecycleQueue = (enabled: boolean) =>
   useQuery({
-    queryKey: LIFECYCLE_STATUS_QUERY_KEY,
-    queryFn: async () => (await api.get<LifecycleStatus>(LIFECYCLE_STATUS_PATH)).data,
+    queryKey: LIFECYCLE_QUEUE_QUERY_KEY,
+    queryFn: async () => (await api.get<LifecycleQueue>(LIFECYCLE_STATUS_PATH, { params: { view: 'queue' } })).data,
     enabled,
+  });
+
+/** Never fetched on mount or by an invalidation: `refetch()` from "Check references" is the only way in. */
+export const useStaleReferences = () =>
+  useQuery({
+    queryKey: STALE_REFERENCES_QUERY_KEY,
+    queryFn: async () => (await api.get<LifecycleStatus>(LIFECYCLE_STATUS_PATH)).data,
+    enabled: false,
     refetchOnWindowFocus: false,
     staleTime: Infinity,
   });
