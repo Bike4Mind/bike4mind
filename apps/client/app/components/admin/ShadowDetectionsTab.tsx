@@ -445,6 +445,8 @@ type VerdictDialogProps = {
   onRowChange: (row: ShadowDetectionRow) => void;
 };
 
+const CAPPED_GROUP_HINT = 'This group was cut to its stored cap, so it cannot be saved as a watch.';
+
 const VerdictDialog: React.FC<VerdictDialogProps> = ({ row, now, onClose, onRowChange }) => {
   const mutation = useShadowDetectionVerdict();
   const [verdict, setVerdict] = useState<ShadowDetectionVerdict | null>(null);
@@ -497,6 +499,7 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({ row, now, onClose, onRowC
           sourceDetectionId={row.id}
           label="Watch campaign"
           incomplete={row.group?.truncated}
+          incompleteHint={CAPPED_GROUP_HINT}
           onCreated={onClose}
         />
       )}
@@ -596,7 +599,7 @@ export const ShadowDetectionsTab: React.FC = () => {
         />
       ),
       sortValue: row => ACTION_DISPLAY[row.wouldAction].label,
-      width: '7rem',
+      width: '11.5rem',
     },
     { id: 'actor', label: 'Actor', render: row => <Actor row={row} />, width: '16rem' },
     {
@@ -630,6 +633,7 @@ export const ShadowDetectionsTab: React.FC = () => {
           sourceDetectionId={row.id}
           label="Watch"
           incomplete={row.group?.truncated}
+          incompleteHint={CAPPED_GROUP_HINT}
         />
       )}
     </Stack>

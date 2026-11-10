@@ -49,8 +49,21 @@ vi.mock('@tanstack/react-router', () => ({
 import ShadowDetectionsTab, { formatPaymentAmount } from './ShadowDetectionsTab';
 vi.mock('./CampaignWatches/CampaignWatchesPanel', () => ({ CampaignWatchesPanel: () => null }));
 vi.mock('./CampaignWatches/WatchAccountsButton', () => ({
-  WatchAccountsButton: ({ label, incomplete }: { label?: string; incomplete?: boolean }) => (
-    <span data-testid="watch-accounts-stub" data-label={label} data-incomplete={String(incomplete)} />
+  WatchAccountsButton: ({
+    label,
+    incomplete,
+    incompleteHint,
+  }: {
+    label?: string;
+    incomplete?: boolean;
+    incompleteHint?: string;
+  }) => (
+    <span
+      data-testid="watch-accounts-stub"
+      data-label={label}
+      data-incomplete={String(incomplete)}
+      data-hint={incompleteHint}
+    />
   ),
 }));
 
@@ -469,6 +482,10 @@ describe('ShadowDetectionsTab', () => {
     );
     renderTab();
     expect(screen.getByTestId('watch-accounts-stub')).toHaveAttribute('data-incomplete', 'true');
+    expect(screen.getByTestId('watch-accounts-stub')).toHaveAttribute(
+      'data-hint',
+      'This group was cut to its stored cap, so it cannot be saved as a watch.'
+    );
   });
 
   it('notes a truncated campaign group and hides empty ignored and unknown lists', async () => {

@@ -107,6 +107,23 @@ it('shows exact profile/activity links, refreshes details, and records a reasone
   );
 });
 
+it.each([
+  ['close', 'Monitoring complete'],
+  ['claim', 'Take responsibility for this watch'],
+])('offers only the %s reason preset', (action, preset) => {
+  mocks.search = { campaignWatch: watch.id };
+  render(<CampaignWatchesPanel />, { wrapper: Wrapper });
+  fireEvent.click(screen.getByTestId(`campaign-watch-${action}-btn`));
+  const dialog = screen.getByTestId('campaign-watch-action-dialog-reason-input-preset-0').closest('[role="dialog"]');
+  expect(dialog).not.toBeNull();
+  const presets = ['Monitoring complete', 'Take responsibility for this watch', 'Continue monitoring'];
+  presets.forEach(text => {
+    if (text === preset) expect(screen.getByText(text)).toBeInTheDocument();
+    else expect(screen.queryByText(text)).not.toBeInTheDocument();
+  });
+  expect(screen.queryByTestId('campaign-watch-action-dialog-reason-input-preset-1')).not.toBeInTheDocument();
+});
+
 it('shows a full administrator the activity links and mutation controls', () => {
   mocks.search = { campaignWatch: watch.id };
   render(<CampaignWatchesPanel />, { wrapper: Wrapper });

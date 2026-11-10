@@ -16,12 +16,15 @@ export function WatchAccountsButton({
   sourceDetectionId,
   label = 'Watch these accounts',
   incomplete = false,
+  incompleteHint = 'This list is incomplete. Open an individual detection to watch a complete group.',
   onCreated,
 }: {
   userIds: readonly string[];
   sourceDetectionId?: string;
   label?: string;
   incomplete?: boolean;
+  /** Tooltip on the disabled button explaining why an incomplete list cannot be watched. */
+  incompleteHint?: string;
   onCreated?: () => void;
 }) {
   const { currentUser: user } = useUser();
@@ -40,9 +43,7 @@ export function WatchAccountsButton({
         variant="outlined"
         color="neutral"
         disabled={incomplete || ids.length > CAMPAIGN_WATCH_MAX_MEMBERS}
-        title={
-          incomplete ? 'This list is incomplete. Open an individual detection to watch a complete group.' : undefined
-        }
+        title={incomplete ? incompleteHint : undefined}
         onClick={() => {
           setSnapshot(ids);
           setOpen(true);

@@ -88,6 +88,16 @@ describe('WatchAccountsButton', () => {
     expect(screen.queryByTestId('watch-accounts-open-btn')).not.toBeInTheDocument();
   });
 
+  it('explains a disabled incomplete list with the default hint, or a custom one when passed', () => {
+    const { rerender } = render(<WatchAccountsButton userIds={[first]} incomplete />, { wrapper: Wrapper });
+    expect(screen.getByTestId('watch-accounts-open-btn')).toHaveAttribute(
+      'title',
+      'This list is incomplete. Open an individual detection to watch a complete group.'
+    );
+    rerender(<WatchAccountsButton userIds={[first]} incomplete incompleteHint="Custom reason" />);
+    expect(screen.getByTestId('watch-accounts-open-btn')).toHaveAttribute('title', 'Custom reason');
+  });
+
   it('gives a users:moderate delegate who is not a full administrator no button', () => {
     mocks.admin = false;
     mocks.permissions = ['users:moderate'];
