@@ -9,6 +9,7 @@ import { loadAdminModelRows, parseAdminModelListQuery } from '@server/admin/mode
  */
 const handler = adminApi({
   adminPermissions: { GET: 'support:read' },
+  auth: 'jwtOnly',
   requiredScopes: [ApiKeyScope.ADMIN],
 }).get(async (req, res) => {
   const query = parseAdminModelListQuery(req.query as Record<string, string | string[] | undefined>);
