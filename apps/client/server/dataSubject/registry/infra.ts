@@ -2,6 +2,17 @@ import type { DataHolderRegistry } from '../types';
 import { AUDIT_LOG, EMAIL_SUPPRESSION, expiresAfterTtl } from './retention';
 
 export const infraHolders = {
+  // A frozen evaluation set of accounts for measuring abuse detection. Account deletion removes the person's
+  // example; admin attribution is anonymized.
+  AbuseEvalSet: {
+    kind: 'holder',
+    references: [
+      { path: 'examples.userId', matchBy: 'userId', action: 'pullFromArray' },
+      { path: 'createdBy', matchBy: 'userId', action: 'anonymize' },
+      { path: 'examples.verdicts.reviewerId', matchBy: 'userId', action: 'anonymize' },
+      { path: 'runs.ranBy', matchBy: 'userId', action: 'anonymize' },
+    ],
+  },
   // Advisory model judgment of a shadow detection, kept for as long as the detection.
   AbuseAssessment: {
     kind: 'viaParent',
