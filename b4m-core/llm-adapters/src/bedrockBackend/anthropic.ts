@@ -10,6 +10,7 @@ import {
   ModelBackend,
   NO_TEMPERATURE_MODELS,
   refusalFallsBack,
+  THINK_OPEN_TAG,
   TOOL_SEARCH_BLOCK_TYPES,
   type ModelInfo,
   type ProviderBlock,
@@ -33,6 +34,7 @@ import { capCacheControlMarkers, getCachingAdapter, withRequestTtlMarkers } from
 import { systemContentToText } from '../systemContent';
 import { sortToolsForStableCacheKey } from '../caching/stableToolOrder';
 import { DispatchModel } from '../dispatchModel';
+import { closeThinkMarker } from '../thinkMarkers';
 import {
   applyAnthropicOutputCeiling,
   buildThinkingParams,
@@ -295,6 +297,8 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
 
   // Track thinking block state
   private isInThinkingBlock = false;
+  // Waits for the first reasoning text; see closeThinkMarker.
+  private thinkMarkerOpened = false;
   private reasoningEscaper = createThinkMarkerEscaper();
   /**
    * Blocks of the assistant turn currently being translated, indexed by the stream's
@@ -1473,9 +1477,9 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
           this.assistantContent[chunk.index] = { type: 'tool_use', id: contentBlock.id, name: contentBlock.name };
         } else if (isThinkingContentBlock(contentBlock)) {
           this.isInThinkingBlock = true;
+          this.thinkMarkerOpened = false;
           // thinking_delta / signature_delta accumulate into this block for the replay.
           this.assistantContent[chunk.index] = { ...contentBlock, thinking: contentBlock.thinking ?? '' };
-          choice.chunkText = '<think>';
           choice.channel = 'reasoning';
         } else if (isRedactedThinkingContentBlock(contentBlock)) {
           // Arrives whole and carries no readable text, so it opens no <think> markers -
@@ -1518,7 +1522,10 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         } else if (isThinkingDelta(delta)) {
           // Escaped for the transcript; the replay copy in assistantContent stays
           // raw since it is resent to the API verbatim in tool-use loops.
-          choice.chunkText = this.reasoningEscaper.push(delta.thinking);
+          const escaped = this.reasoningEscaper.push(delta.thinking);
+          const opensMarker = !!escaped && this.isInThinkingBlock && !this.thinkMarkerOpened;
+          choice.chunkText = opensMarker ? THINK_OPEN_TAG + escaped : escaped;
+          if (opensMarker) this.thinkMarkerOpened = true;
           choice.channel = 'reasoning';
           const block = this.assistantContent[chunk.index];
           if (block?.type === 'thinking') block.thinking = `${block.thinking}${delta.thinking}`;
@@ -1533,7 +1540,9 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         choice = {
           status: ChoiceStatus.STREAM,
           index: chunk.index,
-          chunkText: this.isInThinkingBlock ? this.reasoningEscaper.flush() + '</think>' : '',
+          chunkText: this.isInThinkingBlock
+            ? closeThinkMarker(this.reasoningEscaper.flush(), this.thinkMarkerOpened)
+            : '',
           ...(this.isInThinkingBlock ? { channel: 'reasoning' as const } : {}),
         } as IChoice;
 

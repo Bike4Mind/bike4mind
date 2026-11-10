@@ -19,6 +19,7 @@ import {
   PermissionDeniedError,
   estimateStreamedOutputTokens,
   resolveApiSurface,
+  THINK_OPEN_TAG,
   TOOL_SEARCH_BLOCK_TYPES,
   type ApiSurface,
   type ModelInfo,
@@ -26,6 +27,7 @@ import {
   type TurnUsage,
 } from '@bike4mind/common';
 import { federatedAnthropicCredentials } from './anthropicFederation';
+import { closeThinkMarker } from './thinkMarkers';
 import { selectedWifTokenSource } from './wifTokenSource';
 import { executeToolsBatch, shouldEndTurnAfterTools, toolFailureLogLevel } from './executeToolsBatch';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
@@ -1739,6 +1741,10 @@ export class AnthropicBackend implements ICompletionBackend {
               if (requestTimeout) clearTimeout(requestTimeout);
 
               let isInThinkingBlock = false;
+              // The open marker waits for the first reasoning text: a model whose thinking display
+              // is omitted streams a block with only a signature, which would otherwise persist
+              // as a bare `<think></think>` reply slot.
+              let thinkMarkerOpened = false;
               let thinkingBlockIndex = 0;
               // The SDK iterator returns normally, without throwing, both on abort and when
               // the HTTP body ends early, so message_stop is the only proof of a finished turn.
@@ -1884,11 +1890,7 @@ export class AnthropicBackend implements ICompletionBackend {
                       // content_block carries type/thinking (empty at start) plus signature -
                       // spread it directly; thinking_delta events accumulate into it below.
                       collectedContent[event.index] = { ...event.content_block };
-                      streamedText[event.index] = '<think>';
-                      // Tagged, not suppressed: an adaptive model opens a thinking block on
-                      // every turn whether or not the caller enabled thinking (see the
-                      // max_tokens note above), so this marker reaches consumers regardless.
-                      await cb(streamedText, { toolsUsed, channel: 'reasoning' });
+                      thinkMarkerOpened = false;
                     } else if ('content_block' in event && event.content_block.type === 'tool_use') {
                       // Handle tool use start
                       const toolBlock = event.content_block;
@@ -1946,8 +1948,18 @@ export class AnthropicBackend implements ICompletionBackend {
                       // provider-authored and can contain marker-shaped substrings that would
                       // otherwise be indistinguishable from the real <think>/</think> we wrap
                       // around it.
-                      streamedText[event.index] = reasoningEscaper.push(thinkingText);
-                      await cb(streamedText, { toolsUsed: toolsUsed, channel: 'reasoning' });
+                      const escaped = reasoningEscaper.push(thinkingText);
+                      if (escaped) {
+                        if (!thinkMarkerOpened) {
+                          thinkMarkerOpened = true;
+                          // Tagged, not suppressed: an adaptive model opens a thinking block on
+                          // every turn whether or not the caller enabled thinking (see the
+                          // max_tokens note above), so this marker reaches consumers regardless.
+                          await cb(markerAt(event.index, THINK_OPEN_TAG), { toolsUsed, channel: 'reasoning' });
+                        }
+                        streamedText[event.index] = escaped;
+                        await cb(streamedText, { toolsUsed: toolsUsed, channel: 'reasoning' });
+                      }
                     } else if ('delta' in event && event.delta.type === 'text_delta') {
                       const textBlock = collectedContent[event.index];
                       if (textBlock?.type === 'text') textBlock.text = `${textBlock.text}${event.delta.text}`;
@@ -2007,8 +2019,11 @@ export class AnthropicBackend implements ICompletionBackend {
                   } else if (event.type === 'content_block_stop') {
                     if (isInThinkingBlock) {
                       isInThinkingBlock = false;
-                      streamedText[event.index] = reasoningEscaper.flush() + '</think>';
-                      await cb(streamedText, { toolsUsed: toolsUsed, channel: 'reasoning' });
+                      const closing = closeThinkMarker(reasoningEscaper.flush(), thinkMarkerOpened);
+                      if (closing) {
+                        streamedText[event.index] = closing;
+                        await cb(streamedText, { toolsUsed: toolsUsed, channel: 'reasoning' });
+                      }
                     } else if (collectedContent[event.index] && collectedContent[event.index].type === 'tool_use') {
                       // Parse the complete tool input when the block ends
                       if (func[event.index] && func[event.index].parameters) {
@@ -2154,9 +2169,9 @@ export class AnthropicBackend implements ICompletionBackend {
                 streamEndedEarlyThisTurn = true;
                 if (isInThinkingBlock) {
                   isInThinkingBlock = false;
-                  const closing: string[] = [];
-                  closing[thinkingBlockIndex] = reasoningEscaper.flush() + '</think>';
-                  await cb(closing, { toolsUsed, channel: 'reasoning' });
+                  const closingText = closeThinkMarker(reasoningEscaper.flush(), thinkMarkerOpened);
+                  if (closingText)
+                    await cb(markerAt(thinkingBlockIndex, closingText), { toolsUsed, channel: 'reasoning' });
                 }
                 if (options.abortSignal?.aborted) {
                   this.logger.info('[AnthropicBackend] Stream ended before message_stop after abort', { model });
@@ -3629,6 +3644,12 @@ export class AnthropicBackend implements ICompletionBackend {
       'id' in event
     );
   }
+}
+
+function markerAt(index: number, text: string): string[] {
+  const frame: string[] = [];
+  frame[index] = text;
+  return frame;
 }
 
 // Replayed verbatim and surfaced to the caller, never executed.
