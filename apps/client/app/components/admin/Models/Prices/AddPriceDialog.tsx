@@ -8,10 +8,12 @@ import {
   RATE_FIELDS,
   RATE_LABELS,
   UNIT_FIELD_SUFFIX,
+  VOICE_REQUIRED_FIELDS,
   apiErrorMessage,
   bandConfirmToken,
   markedUpRate,
   toStoredRate,
+  voiceRateProblem,
   type RateField,
 } from '../../CreditAnalysis/components/ModelPricingCatalog';
 import { ActionDialog } from '../../shared';
@@ -25,8 +27,22 @@ type TierDraft = { threshold: string; rates: Partial<Record<RateField, string>> 
 const isRate = (raw: string | undefined) =>
   raw !== undefined && raw.trim() !== '' && Number(raw) >= 0 && Number.isFinite(Number(raw));
 
+/** The drafts as the stored pricing map the API takes; blank optional rates are left out. */
+const toPricing = (tiers: TierDraft[]) => {
+  const pricing: Record<string, Record<string, number>> = {};
+  for (const tier of tiers) {
+    const entry: Record<string, number> = {};
+    for (const field of RATE_FIELDS) {
+      const raw = tier.rates[field]?.trim();
+      if (raw) entry[field] = toStoredRate(UNIT, Number(raw));
+    }
+    pricing[String(Number(tier.threshold))] = entry;
+  }
+  return pricing;
+};
+
 /** Why the tier drafts cannot be sent yet, or null. */
-const draftProblem = (tiers: TierDraft[]): string | null => {
+const draftProblem = (tiers: TierDraft[], voice: boolean): string | null => {
   const thresholds = new Set<string>();
   for (const tier of tiers) {
     if (!/^\d+$/.test(tier.threshold.trim())) return 'Tier thresholds are whole token counts.';
@@ -39,12 +55,12 @@ const draftProblem = (tiers: TierDraft[]): string | null => {
     });
     if (optionalBad) return 'Rates must be numbers of 0 or more.';
   }
-  return null;
+  return voice ? voiceRateProblem(toPricing(tiers)) : null;
 };
 
 type AddPriceDialogProps = {
   onClose: () => void;
-  /** A model id from the page's filter; preselected when it is a text or voice model with no price row. */
+  /** A model id from the page's filter; preselected when this dialog can price it. */
   presetModelId?: string;
   onAdded: () => void;
 };
@@ -54,13 +70,15 @@ export function AddPriceDialog({ onClose, presetModelId, onAdded }: AddPriceDial
   const text = useAdminModelsOfType('text');
   const voice = useAdminModelsOfType('realtime-voice');
   const models = { isLoading: text.isLoading || voice.isLoading, isError: text.isError || voice.isError };
-  // A model with a price row in force (`price.source === 'row'`) is repriced from the table, not here.
+  // A model with a price row in force (`price.source === 'row'`) is repriced from the table, not here. The API
+  // takes a first voice price only for a model the build prices (a seed entry), so voice needs `source === 'build'`.
+  const voiceIds = useMemo(
+    () => new Set((voice.data ?? []).filter(model => model.price?.source === 'build').map(model => model.id)),
+    [voice.data]
+  );
   const ids = useMemo(
-    () =>
-      [...(text.data ?? []), ...(voice.data ?? [])]
-        .filter(model => model.price?.source !== 'row')
-        .map(model => model.id),
-    [text.data, voice.data]
+    () => [...(text.data ?? []).filter(model => model.price?.source !== 'row').map(model => model.id), ...voiceIds],
+    [text.data, voiceIds]
   );
   const [picked, setPicked] = useState<string | null>(null);
   const modelId = picked ?? (presetModelId && ids.includes(presetModelId) ? presetModelId : null);
@@ -77,19 +95,12 @@ export function AddPriceDialog({ onClose, presetModelId, onAdded }: AddPriceDial
       current.map((tier, i) => (i === index ? { ...tier, rates: { ...tier.rates, [field]: value } } : tier))
     );
 
-  const blockedReason = !modelId ? 'Choose a model.' : draftProblem(tiers);
+  const isVoice = modelId !== null && voiceIds.has(modelId);
+  const blockedReason = !modelId ? 'Choose a model.' : draftProblem(tiers, isVoice);
 
   const submit = async (reason: string) => {
     if (!modelId) return;
-    const pricing: Record<string, Record<string, number>> = {};
-    for (const tier of tiers) {
-      const entry: Record<string, number> = {};
-      for (const field of RATE_FIELDS) {
-        const raw = tier.rates[field]?.trim();
-        if (raw) entry[field] = toStoredRate(UNIT, Number(raw));
-      }
-      pricing[String(Number(tier.threshold))] = entry;
-    }
+    const pricing = toPricing(tiers);
     setError(null);
     try {
       await api.post('/api/admin/model-prices', {
@@ -114,7 +125,7 @@ export function AddPriceDialog({ onClose, presetModelId, onAdded }: AddPriceDial
       open
       onClose={onClose}
       title="Add price"
-      description="A first price for a model that has none. Provider cost in USD per 1M tokens, as the provider publishes it; it takes effect immediately."
+      description="A first price row for a model that has none. Provider cost in USD per 1M tokens, as the provider publishes it; it takes effect immediately."
       reasonPresets={REASON_PRESETS}
       confirmLabel={confirmToken ? 'Apply anyway' : 'Add price'}
       tone={confirmToken ? 'danger' : 'neutral'}
@@ -171,7 +182,13 @@ export function AddPriceDialog({ onClose, presetModelId, onAdded }: AddPriceDial
             </Stack>
             <Stack direction="row" gap={1} flexWrap="wrap" useFlexGap>
               {RATE_FIELDS.map(field => (
-                <FormControl key={field} required={REQUIRED_FIELDS.includes(field)} sx={{ width: 130 }}>
+                <FormControl
+                  key={field}
+                  required={
+                    REQUIRED_FIELDS.includes(field) || (isVoice && index === 0 && VOICE_REQUIRED_FIELDS.includes(field))
+                  }
+                  sx={{ width: 130 }}
+                >
                   <FormLabel>
                     {RATE_LABELS[field]} {UNIT_FIELD_SUFFIX[UNIT]}
                   </FormLabel>

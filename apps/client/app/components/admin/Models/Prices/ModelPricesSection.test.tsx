@@ -16,7 +16,11 @@ const mocks = vi.hoisted(() => ({
     { id: 'local/anime v2:0', price: { source: 'build', pricing: {} } },
     { id: 'gpt-priced', price: { source: 'row', unit: 'per_token', pricing: {}, effectiveFrom: '2026-07-01' } },
   ],
-  voiceModels: [{ id: 'voice-1' }],
+  voiceModels: [
+    { id: 'voice-1', price: { source: 'build', pricing: {} } },
+    { id: 'voice-unpriced', price: null },
+    { id: 'voice-priced', price: { source: 'row', unit: 'per_token', pricing: {}, effectiveFrom: '2026-07-01' } },
+  ],
 }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: mocks.get, post: mocks.post } }));
 vi.mock('sonner', () => ({ toast: { success: mocks.toastSuccess } }));
@@ -154,7 +158,7 @@ describe('ModelPricesSection', () => {
     await waitFor(() => expect(screen.queryByTestId('add-price-dialog')).not.toBeInTheDocument());
   });
 
-  it('offers only text and realtime-voice models with no price row in force', async () => {
+  it('offers text models with no price row in force and voice models only where the build prices them', async () => {
     renderSection();
     await screen.findByTestId('model-pricing-row-gpt-x-per_token');
     fireEvent.click(screen.getByTestId('model-prices-add-btn'));
@@ -162,6 +166,37 @@ describe('ModelPricesSection', () => {
     await userEvent.click(within(dialog).getByTestId('add-price-model-input'));
     const options = await screen.findAllByRole('option');
     expect(options.map(option => option.textContent)).toEqual(['gpt-x', 'gpt-new', 'local/anime v2:0', 'voice-1']);
+  });
+
+  it('holds a realtime voice price until its lowest tier has audio rates above 0, then posts them', async () => {
+    renderSection();
+    await screen.findByTestId('model-pricing-row-gpt-x-per_token');
+    const dialog = await fillDialog('voice-1');
+    const confirm = within(dialog).getByTestId('add-price-dialog-confirm-btn');
+    expect(confirm).toBeDisabled();
+    expect(within(dialog).getByTestId('add-price-dialog-hint')).toHaveTextContent(
+      'A realtime voice price needs input, output, audio in and audio out rates above 0 on its lowest tier.'
+    );
+
+    fireEvent.change(within(dialog).getByTestId('add-price-rate-0-audio_input'), { target: { value: '32' } });
+    fireEvent.change(within(dialog).getByTestId('add-price-rate-0-audio_output'), { target: { value: '0' } });
+    expect(confirm).toBeDisabled();
+    fireEvent.change(within(dialog).getByTestId('add-price-rate-0-audio_output'), { target: { value: '64' } });
+    expect(confirm).toBeEnabled();
+    fireEvent.click(confirm);
+
+    await waitFor(() => expect(mocks.post).toHaveBeenCalledTimes(1));
+    expect(mocks.post.mock.calls[0][1]).toMatchObject({
+      modelId: 'voice-1',
+      pricing: { '0': { input: 2.5e-6, output: 10e-6, audio_input: 32e-6, audio_output: 64e-6 } },
+    });
+  });
+
+  it('does not ask a text price for audio rates', async () => {
+    renderSection();
+    await screen.findByTestId('model-pricing-row-gpt-x-per_token');
+    const dialog = await fillDialog('gpt-new');
+    expect(within(dialog).getByTestId('add-price-dialog-confirm-btn')).toBeEnabled();
   });
 
   it('does not preselect a filtered model that already has a price row', async () => {

@@ -594,7 +594,7 @@ describe('ModelPricingCatalog', () => {
     expect(screen.getByTestId('model-pricing-history-gpt-y-per_token')).toBeEnabled();
   });
 
-  it('offers reprice only for text, realtime-voice and unknown models', async () => {
+  it('offers reprice and revert only for text, realtime-voice and unknown models', async () => {
     gate.modelTypes = new Map([
       ['gpt-x', 'text'],
       ['gpt-y', 'image'],
@@ -607,9 +607,33 @@ describe('ModelPricingCatalog', () => {
     await screen.findByTestId('model-pricing-row-gpt-y-per_token');
     expect(screen.getByTestId('model-pricing-reprice-gpt-x-per_token')).toBeInTheDocument();
     expect(screen.queryByTestId('model-pricing-reprice-gpt-y-per_token')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('model-pricing-revert-gpt-y-per_token')).not.toBeInTheDocument();
     expect(screen.getByTestId('model-pricing-history-gpt-y-per_token')).toBeInTheDocument();
     expect(screen.getByTestId('model-pricing-reprice-voice-1-per_token')).toBeInTheDocument();
     expect(screen.getByTestId('model-pricing-reprice-unlisted-per_token')).toBeInTheDocument();
+  });
+
+  it('asks a realtime voice reprice for audio rates above 0 on its lowest tier before saving', async () => {
+    gate.modelTypes = new Map([['voice-1', 'realtime-voice']]);
+    mockGet.mockResolvedValue({ data: { rows: [{ ...ROWS[1], modelId: 'voice-1' }] } });
+    renderCatalog();
+    fireEvent.click(await screen.findByTestId('model-pricing-reprice-voice-1-per_token'));
+    fireEvent.change(screen.getByTestId('reprice-note-input'), { target: { value: 'provider price page' } });
+
+    expect(screen.getByTestId('reprice-rate-0-audio_input')).toHaveValue('');
+    expect(screen.getByTestId('reprice-save-btn')).toBeDisabled();
+    expect(screen.getByTestId('reprice-voice-problem')).toHaveTextContent('audio in and audio out rates above 0');
+
+    fireEvent.change(screen.getByTestId('reprice-rate-0-audio_input'), { target: { value: '32' } });
+    fireEvent.change(screen.getByTestId('reprice-rate-0-audio_output'), { target: { value: '64' } });
+    expect(screen.queryByTestId('reprice-voice-problem')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('reprice-save-btn'));
+
+    await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
+    expect(mockPost.mock.calls[0][1]).toMatchObject({
+      modelId: 'voice-1',
+      pricing: { '0': { input: 9e-6, output: 27e-6, audio_input: 32e-6, audio_output: 64e-6 } },
+    });
   });
 
   it('lets the table scroll sideways on a phone instead of squeezing its columns', async () => {

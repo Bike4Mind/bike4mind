@@ -25,7 +25,12 @@ import HistoryIcon from '@mui/icons-material/History';
 import ReplayIcon from '@mui/icons-material/Replay';
 // getPriceMargin is read-only here: markup is applied when calls settle, so it
 // informs the editor's derived line and never reaches a stored rate.
-import { getPriceMargin, type IModelPriceTier } from '@bike4mind/common';
+import {
+  PRICE_ROW_BILLED_MODEL_TYPES,
+  billableRealtimeVoiceTier,
+  getPriceMargin,
+  type IModelPriceTier,
+} from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { useModelIndex } from '../../Models/Discovery/useModelIndex';
 import { ModelWriteAction } from '../../Models/ModelWriteAction';
@@ -45,9 +50,6 @@ interface PriceRow {
 // it here would pull mongoose into the client bundle). Pinned by a test there.
 const SEED_NOTE = 'adapter-seed';
 const isSeedRow = (row: PriceRow) => row.note === SEED_NOTE;
-
-// Price rows bill only these types; others price from their build table (b4m-core/common/src/modelPriceCatalog.ts).
-const PRICE_ROW_TYPES = new Set(['text', 'realtime-voice']);
 
 // Mirrors DISCOVERY_PRICE_NOTE_PREFIX in @bike4mind/common; discovery stamps
 // notes as 'discovery:<source>@<iso-date>'. Kept as a literal so the whole note
@@ -97,6 +99,21 @@ export const RATE_LABELS: Record<RateField, string> = {
   audio_cache_read: 'Audio cache',
   audio_output: 'Audio out',
 };
+
+/** Rates a realtime voice price needs above 0 on its lowest tier; without them voice settlement skips the row. */
+export const VOICE_REQUIRED_FIELDS: readonly RateField[] = ['input', 'output', 'audio_input', 'audio_output'];
+
+/** Why the API would refuse this realtime voice pricing (mirrors its billableRealtimeVoiceTier check), or null. */
+export const voiceRateProblem = (pricing: Record<string, Partial<IModelPriceTier>>): string | null => {
+  const tiers = Object.fromEntries(
+    Object.entries(pricing).map(([threshold, tier]) => [threshold, { input: 0, output: 0, ...tier }])
+  );
+  return billableRealtimeVoiceTier(tiers)
+    ? null
+    : 'A realtime voice price needs input, output, audio in and audio out rates above 0 on its lowest tier.';
+};
+
+const lowestThreshold = (thresholds: string[]) => [...thresholds].sort((a, b) => Number(a) - Number(b))[0];
 
 const UNIT_SUFFIX: Record<string, string> = {
   per_token: 'per 1M tokens',
@@ -252,6 +269,13 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
     void fetchRows();
   }, [fetchRows, refreshKey]);
 
+  // An id the model list does not know keeps its writes: the server refuses only known types it does not bill by row.
+  const canWritePrice = (modelId: string) => {
+    const type = modelIndex.data?.get(modelId)?.type;
+    return type === undefined || PRICE_ROW_BILLED_MODEL_TYPES.has(type);
+  };
+  const isVoice = (modelId: string) => modelIndex.data?.get(modelId)?.type === 'realtime-voice';
+
   // Drafts are held in the DISPLAYED unit (per 1M for token rows), so what the
   // editor shows always matches the table it was opened from.
   const openReprice = (row: PriceRow) => {
@@ -262,6 +286,10 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
         const value = tier[field];
         if (value !== undefined) drafts[threshold][field] = String(toDisplayedRate(row.unit, value));
       }
+    }
+    if (isVoice(row.modelId)) {
+      const lowest = drafts[lowestThreshold(Object.keys(drafts))];
+      for (const field of VOICE_REQUIRED_FIELDS) if (lowest && lowest[field] === undefined) lowest[field] = '';
     }
     setDraftRates(drafts);
     setNote('');
@@ -275,33 +303,40 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
     setRevertTarget(row);
   };
 
-  // An id the model list does not know keeps Reprice: the server refuses only known types it does not bill by row.
-  const canReprice = (modelId: string) => {
-    const type = modelIndex.data?.get(modelId)?.type;
-    return type === undefined || PRICE_ROW_TYPES.has(type);
-  };
-
   const editRate = (threshold: string, field: string, value: string) => {
     setConfirmToken(null);
     setDraftRates(prev => ({ ...prev, [threshold]: { ...prev[threshold], [field]: value } }));
   };
+
+  const repriceUnit = repriceTarget?.unit ?? '';
+  const repriceUnitLabel = UNIT_SUFFIX[repriceUnit] ?? repriceUnit;
+
+  const draftPricing = useMemo(() => {
+    const pricing: Record<string, Record<string, number>> = {};
+    for (const [threshold, fields] of Object.entries(draftRates)) {
+      pricing[threshold] = {};
+      for (const [field, raw] of Object.entries(fields))
+        pricing[threshold][field] = toStoredRate(repriceUnit, Number(raw));
+    }
+    return pricing;
+  }, [draftRates, repriceUnit]);
+  const repriceVoice = repriceTarget !== null && isVoice(repriceTarget.modelId);
+  const voiceProblem = repriceVoice ? voiceRateProblem(draftPricing) : null;
+  const draftInvalid =
+    voiceProblem !== null ||
+    Object.values(draftRates).some(fields =>
+      Object.values(fields).some(raw => raw.trim() === '' || !Number.isFinite(Number(raw)) || Number(raw) < 0)
+    );
 
   const submitReprice = async (waiver?: string) => {
     if (!repriceTarget) return;
     setIsSaving(true);
     setWriteError(null);
     try {
-      const pricing: Record<string, Record<string, number>> = {};
-      for (const [threshold, fields] of Object.entries(draftRates)) {
-        pricing[threshold] = {};
-        for (const [field, raw] of Object.entries(fields)) {
-          pricing[threshold][field] = toStoredRate(repriceTarget.unit, Number(raw));
-        }
-      }
       await api.post('/api/admin/model-prices', {
         modelId: repriceTarget.modelId,
         unit: repriceTarget.unit,
-        pricing,
+        pricing: draftPricing,
         note: note.trim(),
         ...(waiver ? { confirm: waiver } : {}),
       });
@@ -354,9 +389,6 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
     }
   };
 
-  const repriceUnit = repriceTarget?.unit ?? '';
-  const repriceUnitLabel = UNIT_SUFFIX[repriceUnit] ?? repriceUnit;
-
   const visibleRows = useMemo(() => {
     const needle = filter.trim().toLowerCase();
     if (!needle) return rows;
@@ -364,14 +396,6 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
     const exact = rows.filter(row => row.modelId.toLowerCase() === needle);
     return exact.length > 0 ? exact : rows.filter(row => row.modelId.toLowerCase().includes(needle));
   }, [rows, filter]);
-
-  const draftInvalid = useMemo(
-    () =>
-      Object.values(draftRates).some(fields =>
-        Object.values(fields).some(raw => raw.trim() === '' || !Number.isFinite(Number(raw)) || Number(raw) < 0)
-      ),
-    [draftRates]
-  );
 
   return (
     <Box data-testid="model-pricing-catalog">
@@ -493,7 +517,7 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
                     </td>
                     <td>
                       <Stack direction="row" spacing={0.5}>
-                        {canReprice(row.modelId) && (
+                        {canWritePrice(row.modelId) && (
                           <ModelWriteAction>
                             {disabled => (
                               <IconButton
@@ -518,7 +542,7 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
                         >
                           <HistoryIcon fontSize="small" />
                         </IconButton>
-                        {!isSeedRow(row) && (
+                        {!isSeedRow(row) && canWritePrice(row.modelId) && (
                           <ModelWriteAction>
                             {disabled => (
                               <IconButton
@@ -568,7 +592,15 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
                 )}
                 <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
                   {Object.entries(fields).map(([field, raw]) => (
-                    <FormControl key={field} sx={{ width: 130 }}>
+                    <FormControl
+                      key={field}
+                      required={
+                        repriceVoice &&
+                        threshold === lowestThreshold(Object.keys(draftRates)) &&
+                        VOICE_REQUIRED_FIELDS.includes(field as RateField)
+                      }
+                      sx={{ width: 130 }}
+                    >
                       <FormLabel>
                         {RATE_LABELS[field as RateField]} {UNIT_FIELD_SUFFIX[repriceUnit] ?? repriceUnit}
                       </FormLabel>
@@ -587,6 +619,11 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
                 </Typography>
               </Box>
             ))}
+            {voiceProblem && (
+              <Typography level="body-xs" color="danger" data-testid="reprice-voice-problem">
+                {voiceProblem}
+              </Typography>
+            )}
             <FormControl required>
               <FormLabel>Note (audit trail: where does this price come from?)</FormLabel>
               <Textarea
