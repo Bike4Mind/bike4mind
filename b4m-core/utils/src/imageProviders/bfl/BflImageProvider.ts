@@ -93,9 +93,6 @@ export class BflImageProvider implements AsyncImageProvider {
       if (classified?.status === 'failed') {
         throw new ProviderSubmitError(classified.message, true, classified.raw, classified.retryable);
       }
-      if (classified?.status === 'blocked') {
-        throw new ProviderSubmitError(classified.reason ?? 'blocked by BFL moderation', true, classified.raw, false);
-      }
       throw error;
     }
     // The task exists (and may bill), so a polling URL we will not follow is an unknown outcome, not a rejection.
