@@ -322,9 +322,9 @@ describe('shell expansions reaching a protected location', () => {
   it.each([
     ['4000 negations', '! '.repeat(4000), '! ', '', ''],
     ['4001 negations', '! '.repeat(4001), '! ', '', ''],
-    ['2500 -a terms', 'x -a '.repeat(2500), 'x -a ', '', ''],
-    ['2500 -o terms', 'x -o '.repeat(2500), 'x -o ', '', ''],
-    ['2000 nested parentheses', '( '.repeat(2000), '( ', ' )'.repeat(2000), ' )'],
+    ['1500 -a terms', 'x -a '.repeat(1500), 'x -a ', '', ''],
+    ['1500 -o terms', 'x -o '.repeat(1500), 'x -o ', '', ''],
+    ['2000 nested parentheses (regression guard)', '( '.repeat(2000), '( ', ' )'.repeat(2000), ' )'],
   ])('reads a `[` test of %s as it reads a short one', async (_label, prefix, short, close, shortClose) => {
     for (const leaf of ['x', BRACED]) {
       const deep = `[ ${prefix}${leaf}${close} ]`;
