@@ -542,7 +542,7 @@ describe('PUT /api/users/:id/update - admin unknown-field discard', () => {
   });
 
   it('returns a null body, not a bare { ignoredFields } object, when the user row is gone by the refetch', async () => {
-    mockUserFindById.mockReturnValue(null);
+    mockUserFindById.mockReturnValueOnce({ id: 'other-user', name: 'Existing Name' }).mockReturnValue(null);
     const { res, promise } = run({ user: ADMIN, userId: 'other-user', body: { name: 'New Name', adminNote: 'x' } });
     await promise;
 
@@ -1521,7 +1521,6 @@ describe('PUT /api/users/:id/update - users:moderate delegate', () => {
       { isBanned: true, statusChangeReason: 'Abuse', currentCredits: 0, creditReason: 'Abuse' },
       'currentCredits',
     ],
-    ['the admin role', { isAdmin: true, roleChangeReason: 'Promote' }, 'isAdmin'],
     ['the email', { email: 'new@example.com' }, 'email'],
     ['tags', { tags: ['vip'] }, 'tags'],
   ])('refuses %s, which stay full-admin', async (_label, body, field) => {
@@ -1556,6 +1555,39 @@ describe('PUT /api/users/:id/update - users:moderate delegate', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(mockAdminUpdateUser).toHaveBeenCalled();
+  });
+
+  it('rejects a role change through the dedicated-role-route guard', async () => {
+    await expect(run({ user: MODERATOR, userId: 'other-user', body: { isAdmin: true } }).promise).rejects.toMatchObject(
+      { statusCode: 400 }
+    );
+    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+  });
+
+  it('refuses a moderator using a narrow API key before reading or writing the target', async () => {
+    await expect(
+      run({
+        user: MODERATOR,
+        userId: 'other-user',
+        body: { isBanned: true, statusChangeReason: 'Abuse' },
+        apiKeyInfo: { scopes: [ApiKeyScope.AI_CHAT] },
+      }).promise
+    ).rejects.toMatchObject({ statusCode: 403 });
+    expect(mockUserFindById).not.toHaveBeenCalled();
+    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 for a missing moderation target before any write', async () => {
+    mockUserFindById.mockReturnValue(null);
+    const { res, promise } = run({
+      user: MODERATOR,
+      userId: 'missing',
+      body: { isBanned: true, statusChangeReason: 'Abuse' },
+    });
+    await promise;
+    expect(res._getStatusCode()).toBe(404);
+    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+    expect(mockRecord).not.toHaveBeenCalled();
   });
 
   it('refuses a delegate without users:moderate as it does any non-admin', async () => {

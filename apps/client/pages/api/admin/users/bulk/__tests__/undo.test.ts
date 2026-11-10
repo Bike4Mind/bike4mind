@@ -94,6 +94,13 @@ describe('POST /api/admin/users/bulk/undo', () => {
       expect(() => authorize({ action: 'suspend' })).not.toThrow();
     });
 
+    it('requires settings ability when undo would unblock a domain', async () => {
+      const authorize = await authorizeAs(delegate('users:moderate', 'keys:revoke', 'credits:adjust'));
+      expect(() => authorize({ action: 'contain', blockedDomains: ['abuse.example'] })).toThrow(
+        'Unblocking email domains needs permission to edit admin settings.'
+      );
+    });
+
     it('refuses an unknown recorded action', async () => {
       const authorize = await authorizeAs(ADMIN);
       expect(() => authorize({ action: 'bogus' })).toThrow('This bulk action cannot be undone here.');

@@ -832,6 +832,18 @@ describe('adminUpdateUser - users:moderate delegate', () => {
     expect(update).toHaveBeenCalledWith(expect.objectContaining({ id: TARGET_ID, isBanned: true }));
   });
 
+  it.each([{ isAdmin: true }, { adminPermissions: ['support:read'] }])(
+    'refuses an admin-access target at the service boundary: %j',
+    async targetAccess => {
+      const { adapters, target, update } = withActor({ isAdmin: false, adminPermissions: ['users:moderate'] });
+      Object.assign(target, targetAccess);
+      await expect(adminUpdateUser(MODERATOR_ID, { id: TARGET_ID, isBanned: true }, adapters)).rejects.toThrow(
+        'Only full administrators can suspend or restrict users with admin access'
+      );
+      expect(update).not.toHaveBeenCalled();
+    }
+  );
+
   it('refuses a delegate any field outside moderation', async () => {
     const { adapters, update, incrementCredits } = withActor({ isAdmin: false, adminPermissions: ['users:moderate'] });
     await expect(

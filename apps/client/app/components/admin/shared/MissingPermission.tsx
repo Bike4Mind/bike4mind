@@ -76,17 +76,19 @@ export function AdminPermissionGate({
  */
 export function AdminPermissionAction({
   requirement,
+  blockedReason,
   children,
 }: {
   requirement: ActionRequirement;
+  blockedReason?: string | null;
   children: (disabled: boolean) => ReactElement;
 }) {
-  const missing = useMissingAdminPermission(requirement);
+  const missing = useMissingAdminPermission(requirement) ?? blockedReason;
   if (!missing) return children(false);
   return (
     <Tooltip title={missing}>
       {/* A disabled button fires no pointer events, so the tooltip needs a focusable wrapper. */}
-      <span tabIndex={0} data-testid="admin-missing-permission-action">
+      <span tabIndex={0} data-testid="admin-missing-permission-action" aria-label={missing}>
         {children(true)}
       </span>
     </Tooltip>

@@ -1,23 +1,10 @@
 import React from 'react';
-import {
-  hasAdminPermission,
-  isThrottleExempt,
-} from '@bike4mind/common';
-import {
-  Avatar,
-  Button,
-  Dropdown,
-  ListDivider,
-  Menu,
-  MenuButton,
-  MenuItem,
-  Stack,
-  Tooltip,
-  Typography,
-} from '@mui/joy';
+import { hasAdminPermission, isThrottleExempt } from '@bike4mind/common';
+import { Avatar, Button, Dropdown, ListDivider, Menu, MenuButton, MenuItem, Stack, Typography } from '@mui/joy';
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import { useUser } from '@client/app/contexts/UserContext';
 import { EntityHeader, StatusChip } from '../../shared';
+import { AdminPermissionAction } from '../../shared/MissingPermission';
 import type { ProfileAction } from './actions/profileActions';
 import {
   LEVEL_LABELS,
@@ -161,26 +148,21 @@ export const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({ user, onAc
           >
             Adjust credits
           </Button>
-          {!user.isBanned &&
-            (moderationBlocked ? (
-              <Tooltip title={moderationBlocked}>
-                {/* A disabled button fires no pointer events, so the tooltip needs a focusable wrapper. */}
-                <span tabIndex={0} data-testid="user-profile-suspend-blocked">
-                  <Button variant="outlined" color="danger" disabled data-testid="user-profile-suspend-btn">
-                    Suspend
-                  </Button>
-                </span>
-              </Tooltip>
-            ) : (
-              <Button
-                variant="outlined"
-                color="danger"
-                onClick={() => onAction('suspend')}
-                data-testid="user-profile-suspend-btn"
-              >
-                Suspend
-              </Button>
-            ))}
+          {!user.isBanned && (
+            <AdminPermissionAction requirement="users:moderate" blockedReason={moderationBlocked}>
+              {disabled => (
+                <Button
+                  variant="outlined"
+                  color="danger"
+                  disabled={disabled}
+                  onClick={() => onAction('suspend')}
+                  data-testid="user-profile-suspend-btn"
+                >
+                  Suspend
+                </Button>
+              )}
+            </AdminPermissionAction>
+          )}
           <Dropdown>
             <MenuButton
               slots={{ root: Button }}

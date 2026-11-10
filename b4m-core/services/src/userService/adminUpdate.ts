@@ -23,6 +23,8 @@ import {
   type SignupRiskReviewState,
   SuspensionReasonCategorySchema,
   hasAdminPermission,
+  assertCanActOnAdminTarget,
+  NotFoundError,
 } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, secureParameters } from '@bike4mind/utils';
 import { sendFriendRequest } from '../friendshipService/sendFriendRequest';
@@ -182,8 +184,9 @@ export async function adminUpdateUser(
 
   const user = await db.users.findByIdWithPassword(params.id);
   if (!user) {
-    throw new Error('User not found');
+    throw new NotFoundError('User not found');
   }
+  assertCanActOnAdminTarget(admin, user, 'suspend or restrict');
   await validateUsernameChange(user, params, db.users, { allowReservedUsername: true });
   if (params.email !== undefined && params.email !== user.email) {
     if (await db.users.existsOtherUserWithEmail(params.email, user.id)) {

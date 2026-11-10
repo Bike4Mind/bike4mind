@@ -81,14 +81,20 @@ describe('computeAdminActionCounts access gating', () => {
     expect(Object.keys(counts).sort()).toEqual([...ADMIN_ACTION_COUNT_KEYS].sort());
   });
 
-  it('gives a support:read delegate only the queues support:read acts on', async () => {
+  it('gives a support:read delegate the queues they may read', async () => {
     const counts = await computeAdminActionCounts(
       { id: 'd', isAdmin: false, adminPermissions: ['support:read'] },
       'd',
       NOW
     );
 
-    expect(Object.keys(counts).sort()).toEqual(['approvals', 'unreviewedAudit']);
+    expect(Object.keys(counts).sort()).toEqual([
+      'approvals',
+      'publishedPages',
+      'signupDomainHolds',
+      'signupRiskReview',
+      'unreviewedAudit',
+    ]);
   });
 
   it('gives a settings:manage and users:moderate delegate exactly those queues', async () => {

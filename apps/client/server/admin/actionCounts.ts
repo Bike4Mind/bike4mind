@@ -1,4 +1,11 @@
-import { ADMIN_PERMISSIONS, hasAdminPermission, isFullAdmin, type AdminPermissionId } from '@bike4mind/common';
+import {
+  ADMIN_PERMISSIONS,
+  hasAdminPermission,
+  isFullAdmin,
+  meetsAdminPermissionRequirement,
+  MODERATION_PAGE_READ,
+  type AdminPermissionId,
+} from '@bike4mind/common';
 import {
   adminApprovalRepository,
   adminAuditLogRepository,
@@ -42,7 +49,7 @@ export type AdminActionCountContext = {
 };
 
 export type AdminActionCounter = {
-  /** The access needed to act on the queue, not merely to view it. */
+  /** The access needed to read the queue. */
   access: AdminActionCountAccess;
   count: (context: AdminActionCountContext) => Promise<number>;
 };
@@ -100,11 +107,11 @@ export const ADMIN_ACTION_COUNTERS: Record<AdminActionCountKey, AdminActionCount
     count: ({ cap }) => signupGrantReleaseRepository.countHeld(undefined, { limit: cap }),
   },
   signupDomainHolds: {
-    access: 'users:moderate',
+    access: MODERATION_PAGE_READ,
     count: ({ cap }) => signupDomainHoldListRepository.countPending({ limit: cap }),
   },
   signupRiskReview: {
-    access: 'users:moderate',
+    access: MODERATION_PAGE_READ,
     count: ({ cap }) => userRepository.countPendingRiskReviews({ limit: cap }),
   },
   approvals: {
@@ -119,7 +126,7 @@ export const ADMIN_ACTION_COUNTERS: Record<AdminActionCountKey, AdminActionCount
       }),
   },
   publishedPages: {
-    access: 'users:moderate',
+    access: MODERATION_PAGE_READ,
     count: ({ cap }) => publishedArtifactRepository.countReported({ limit: cap }),
   },
   stripeDisputes: {
@@ -151,9 +158,9 @@ export const ADMIN_ACTION_COUNTERS: Record<AdminActionCountKey, AdminActionCount
 };
 
 const canSee = (viewer: AdminActionCountViewer, access: AdminActionCountAccess): boolean =>
-  access === 'fullAdmin' ? isFullAdmin(viewer) : hasAdminPermission(viewer, access);
+  access === 'fullAdmin' ? isFullAdmin(viewer) : meetsAdminPermissionRequirement(viewer, access);
 
-/** Counts every queue the viewer may act on, in parallel; a counter that throws is logged and reported as null. */
+/** Counts every queue the viewer may read, in parallel; a counter that throws is logged and reported as null. */
 export async function computeAdminActionCounts(
   viewer: AdminActionCountViewer,
   viewerUserId: string,

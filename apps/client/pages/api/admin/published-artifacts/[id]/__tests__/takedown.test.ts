@@ -2,11 +2,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope, missingAdminPermissionMessage } from '@bike4mind/common';
 
-const { mockFindOneAndUpdate, mockReportUpdateMany, mockUserFindById } = vi.hoisted(() => ({
-  mockUserFindById: vi.fn(),
-  mockFindOneAndUpdate: vi.fn(),
-  mockReportUpdateMany: vi.fn(),
-}));
+const { mockFindOneAndUpdate, mockReportUpdateMany, mockUserFindById, mockFindArtifact, mockFindOwner } = vi.hoisted(
+  () => ({
+    mockUserFindById: vi.fn(),
+    mockFindArtifact: vi.fn(),
+    mockFindOwner: vi.fn(),
+    mockFindOneAndUpdate: vi.fn(),
+    mockReportUpdateMany: vi.fn(),
+  })
+);
 const audit = vi.hoisted(() => ({ record: vi.fn(), inTransaction: [] as boolean[], txActive: false }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: audit.record,
@@ -27,7 +31,9 @@ vi.mock('@bike4mind/server-utils/utils/errors', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  User: { findById: () => ({ select: () => ({ lean: mockFindOwner }) }) },
   PublishedArtifact: {
+    findOne: () => ({ select: () => ({ lean: mockFindArtifact }) }),
     findOneAndUpdate: (...a: unknown[]) => mockFindOneAndUpdate(...a),
   },
   PublishedArtifactReport: {
@@ -85,6 +91,8 @@ function updatedDoc(over: Record<string, unknown> = {}) {
 const ADMIN = { id: 'admin1', isAdmin: true };
 
 beforeEach(() => {
+  mockFindArtifact.mockReset().mockResolvedValue({ ownerId: 'u1' });
+  mockFindOwner.mockReset().mockResolvedValue({ isAdmin: false, adminPermissions: [] });
   mockFindOneAndUpdate.mockReset();
   mockReportUpdateMany.mockReset().mockResolvedValue({});
   mockUserFindById.mockReset().mockResolvedValue({ id: 'u1', email: 'owner@example.com', username: 'owner' });
@@ -352,5 +360,32 @@ describe('takedown admin audit', () => {
     await expect(promise).rejects.toThrow('audit down');
     expect(res._isEndCalled()).toBe(false);
     expect(invalidateMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('delegate artifact owner protection', () => {
+  const moderator = { id: 'mod1', isAdmin: false, adminPermissions: ['users:moderate'] };
+  it.each(['POST', 'DELETE'] as const)('%s refuses both kinds of admin-access owner before any write', async method => {
+    for (const owner of [{ isAdmin: true }, { adminPermissions: ['support:read'] }]) {
+      mockFindOwner.mockResolvedValue(owner);
+      await expect(run({ method, user: moderator }).promise).rejects.toThrow(
+        'Only full administrators can moderate published pages owned by users with admin access'
+      );
+    }
+    expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
+    expect(mockReportUpdateMany).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it.each(['POST', 'DELETE'] as const)('%s fails closed if the owner is missing', async method => {
+    mockFindOwner.mockResolvedValue(null);
+    await expect(run({ method, user: moderator }).promise).rejects.toMatchObject({ statusCode: 404 });
+    expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it.each(['POST', 'DELETE'] as const)('%s binds the lifecycle write to the checked owner', async method => {
+    mockFindOneAndUpdate.mockResolvedValue(updatedDoc());
+    await run({ method, user: moderator }).promise;
+    expect(mockFindOneAndUpdate.mock.calls[0][0]).toMatchObject({ publicId: 'pub1', ownerId: 'u1' });
   });
 });

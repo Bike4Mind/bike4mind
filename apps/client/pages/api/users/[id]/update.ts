@@ -291,6 +291,7 @@ const handler = baseApi().put(
       const targetBefore = (await User.findById(userId)
         .select('isAdmin adminPermissions isBanned isModerated currentCredits name username email')
         .lean()) as AuditTargetSnapshot | null;
+      if (!targetBefore) return res.status(404).json({ error: 'User not found' });
       if (moderator) assertCanActOnAdminTarget(currentUser, targetBefore, 'suspend or restrict');
       const auditTarget = userAuditTarget(userId, targetBefore);
       const statusChanges = statusFlagChanges(body, targetBefore);

@@ -1,4 +1,4 @@
-import { CreditHolderType, type UserModerationStatus } from '@bike4mind/common';
+import { CreditHolderType, assertCanActOnAdminTarget, type UserModerationStatus } from '@bike4mind/common';
 import {
   User,
   UserApiKey,
@@ -304,6 +304,7 @@ export function usersBulkUndoDeps(
   const write = requestAuditWriter(req);
   return {
     db: usersBulkDb,
+    authorizeTarget: user => assertCanActOnAdminTarget(req.user, user, 'undo actions on'),
     store: cacheRepository,
     withTransaction: runInTransaction(logger),
     audit: auditFor(write, reason),

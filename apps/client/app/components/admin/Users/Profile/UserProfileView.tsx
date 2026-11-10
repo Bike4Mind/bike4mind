@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Box, Button, Link, Stack, Tooltip, Typography } from '@mui/joy';
+import { Box, Button, Link, Stack, Typography } from '@mui/joy';
 import { useQueryClient } from '@tanstack/react-query';
 import BlockIcon from '@mui/icons-material/Block';
 import { useComplianceModal } from '../ComplianceModal';
@@ -9,6 +9,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { openHelpPanel } from '@client/app/hooks/useHelpPanel';
 import { AdminCommandPalette, type AdminCommand } from '../../shared/AdminCommandPalette';
 import { Kbd } from '../../shared';
+import { AdminPermissionAction } from '../../shared/MissingPermission';
 import { AdjustCreditsDialog } from './actions/AdjustCreditsDialog';
 import { ReinstateDialog, SuspendDialog } from './actions/SuspendDialog';
 import { EditProfileDialog } from './actions/EditProfileDialog';
@@ -234,14 +235,9 @@ const StatusBanner: React.FC<{ user: AdminUserProfile; onReinstate: () => void; 
           </>
         )}
       </Typography>
-      {blocked ? (
-        <Tooltip title={blocked}>
-          {/* A disabled button fires no pointer events, so the tooltip needs a focusable wrapper. */}
-          <span tabIndex={0}>{liftButton}</span>
-        </Tooltip>
-      ) : (
-        liftButton
-      )}
+      <AdminPermissionAction requirement="users:moderate" blockedReason={blocked}>
+        {() => liftButton}
+      </AdminPermissionAction>
     </Stack>
   );
 };
