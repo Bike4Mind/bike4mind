@@ -1267,6 +1267,21 @@ describe('a module that moved under a running walk', () => {
     expect(Boolean(options.action)).toBe(offersStart);
   });
 
+  it('keeps sending later positions when the host callback throws on a module change', async () => {
+    const t = transport();
+    t.position.mockRejectedValueOnce(refused(409, 'VERSION_CHANGED'));
+    const onChanged = vi.fn(() => {
+      throw new Error('host failed');
+    });
+    renderRunner(t, undefined, { onChanged });
+    beginAt('intro');
+    fireEvent.click(screen.getByTestId('tutorial-step-next'));
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+    beginAt('intro');
+    fireEvent.click(screen.getByTestId('tutorial-coach-leave'));
+    await waitFor(() => expect(t.position).toHaveBeenCalledWith(expect.objectContaining({ status: 'left' })));
+  });
+
   it('keeps walking on a refusal that is not about the module', async () => {
     const t = transport();
     t.position.mockRejectedValueOnce(refused(409));

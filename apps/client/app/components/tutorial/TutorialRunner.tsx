@@ -145,7 +145,12 @@ export function TutorialRunner({
         transport.position({ moduleId: script.id, stepId, status, ...identity }).catch(error => {
           // Leaving or finishing is never refused for this, so only a running walk hears it.
           const change = status === 'in_progress' ? moduleChangeOf(error) : undefined;
-          if (change) endChanged(change);
+          if (!change) return;
+          try {
+            endChanged(change);
+          } catch {
+            // A throwing host callback must not reject the chain, or later writes never send.
+          }
         });
       // One write at a time per run, so a slow earlier position cannot land after a later one.
       const next = inFlight.current ? inFlight.current.then(send) : send();
