@@ -20,7 +20,7 @@ export function assertTutorialOwners(owners: readonly TutorialOwner[]): Tutorial
     if (typeof adminBase !== 'string' || !adminBase.startsWith('/api/')) {
       throw new Error(`tutorialOwners: owner "${owner}" adminBase must start with /api/`);
     }
-    if (typeof adminHref !== 'string' || !adminHref.startsWith('/') || adminHref.startsWith('//')) {
+    if (typeof adminHref !== 'string' || !/^\/(?![\/\\])/.test(adminHref) || /[\t\r\n]/.test(adminHref)) {
       throw new Error(`tutorialOwners: owner "${owner}" adminHref must be a path starting with /`);
     }
   }

@@ -6,7 +6,7 @@ describe('resolveCoreTutorial', () => {
     expect(resolveCoreTutorial('no-such-module')).toBeNull();
   });
 
-  it.each(['caseys', 'deere'])('returns null for the overlay id %s', id => {
+  it.each(['example-overlay', 'another-overlay'])('returns null for the overlay id %s', id => {
     expect(resolveCoreTutorial(id)).toBeNull();
   });
 

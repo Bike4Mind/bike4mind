@@ -17,6 +17,9 @@ describe('assertTutorialOwners', () => {
   it('throws on an adminHref that is not a local path', () => {
     expect(() => assertTutorialOwners([{ ...ok, adminHref: 'alpha' }])).toThrow(/adminHref/);
     expect(() => assertTutorialOwners([{ ...ok, adminHref: '//evil.example' }])).toThrow(/adminHref/);
+    expect(() => assertTutorialOwners([{ ...ok, adminHref: '/\\evil.example' }])).toThrow(/adminHref/);
+    expect(() => assertTutorialOwners([{ ...ok, adminHref: '/\t/evil.example' }])).toThrow(/adminHref/);
+    expect(() => assertTutorialOwners([{ ...ok, adminHref: '/\n/evil.example' }])).toThrow(/adminHref/);
   });
 
   it('throws on a duplicate owner or a missing label', () => {
