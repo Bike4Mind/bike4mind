@@ -132,6 +132,15 @@ jobs:
 
           # The deployer adds `preview-deployed` on a successful preview deploy.
           preview_labels=$(gh api "repos/$REPO/issues/$PR/labels" -q '.[].name')
+
+          # A maintainer adds `skip-preview` to an infra change with nothing a preview would
+          # exercise (an alarm threshold, a dashboard). Labels need triage access, so a PR
+          # author outside the org cannot set it; the labeled trigger re-runs this gate.
+          if grep -qx 'skip-preview' <<< "$preview_labels"; then
+            echo "::notice title=Preview skipped::'skip-preview' label set by a maintainer. Gate satisfied without a preview deploy."
+            exit 0
+          fi
+
           if grep -qx 'preview-deployed' <<< "$preview_labels"; then
             echo "Found 'preview-deployed' label -> a preview has been deployed. Gate satisfied."
             exit 0
