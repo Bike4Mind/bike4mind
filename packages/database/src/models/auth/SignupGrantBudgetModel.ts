@@ -8,6 +8,7 @@ type SignupGrantBudgetDay = {
   alerted50: boolean;
   alerted100: boolean;
   alertedMissing: boolean;
+  alertedDripCapDefault: boolean;
   createdAt?: Date;
 };
 
@@ -19,6 +20,7 @@ const budgetDaySchema = new Schema<SignupGrantBudgetDay>(
     alerted50: { type: Boolean, default: false },
     alerted100: { type: Boolean, default: false },
     alertedMissing: { type: Boolean, default: false },
+    alertedDripCapDefault: { type: Boolean, default: false },
   },
   { versionKey: false, timestamps: { createdAt: true, updatedAt: false } }
 );
@@ -98,7 +100,14 @@ export const signupGrantBudgetRepository: SignupGrantBudgetRepository = {
     return row?.spent ?? 0;
   },
   async markAlerted(day, threshold) {
-    const flag = threshold === 50 ? 'alerted50' : threshold === 100 ? 'alerted100' : 'alertedMissing';
+    const flag =
+      threshold === 50
+        ? 'alerted50'
+        : threshold === 100
+          ? 'alerted100'
+          : threshold === 'drip_cap_default'
+            ? 'alertedDripCapDefault'
+            : 'alertedMissing';
     const result = await SignupGrantBudgetDayModel.updateOne(
       { _id: day, [flag]: { $ne: true } },
       { $set: { [flag]: true } },

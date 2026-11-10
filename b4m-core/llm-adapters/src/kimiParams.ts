@@ -39,6 +39,10 @@ const THINKING_ALWAYS_ON: ReadonlySet<string> = new Set<string>([
   ChatModels.KIMI_K2_7_CODE_HIGHSPEED,
 ]);
 
+export function isKimiThinkingAlwaysOn(model: string): boolean {
+  return THINKING_ALWAYS_ON.has(model);
+}
+
 /**
  * Rejects `tool_choice: 'required'` (auto and none are fine, as is the explicit
  * function form). Downgraded to 'auto' rather than dropped: a caller that asked

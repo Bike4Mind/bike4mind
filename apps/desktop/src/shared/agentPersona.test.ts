@@ -58,6 +58,13 @@ describe('epithetFor', () => {
     expect(epithetFor('Task', 'REVIEW the diff')).toBe('Warden');
   });
 
+  it('lets the title decide before the seed prompt, whose "report back" boilerplate would make every agent a Scribe', () => {
+    const brief = 'Look through the repo, then report back with a short summary.';
+    expect(epithetFor('Map top-level folders', brief)).toBe('Cartographer');
+    expect(epithetFor('Find Node/pnpm versions', brief)).toBe('Seeker');
+    expect(epithetFor('Say hello', brief)).toBe('Scribe');
+  });
+
   it('applies precedence in the stated order', () => {
     expect(epithetFor('Review and document the tests', '')).toBe('Warden');
     expect(epithetFor('Document and fix', '')).toBe('Scribe');

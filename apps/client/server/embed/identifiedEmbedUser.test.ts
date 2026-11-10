@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { buildSuspensionNotice } from '@bike4mind/common';
+import { ACCOUNT_BANNED_MESSAGE } from '@bike4mind/services/userService/accountState';
 
 const mockVerifyClientSecret = vi.hoisted(() => vi.fn());
 const mockFindByClientId = vi.hoisted(() => vi.fn());
@@ -123,6 +125,18 @@ describe('resolveIdentifiedEmbedUser', () => {
 });
 
 describe('loadIdentifiedEmbedUser', () => {
+  it('uses the generic suspension description for a banned account', async () => {
+    mockUserFindById.mockResolvedValue({ ...USER, isBanned: true, suspensionReasonCategory: 'payment_fraud' });
+    const { message } = buildSuspensionNotice('payment_fraud');
+    mockAssertAccountStateUsable.mockImplementationOnce(() => {
+      throw new Error(message);
+    });
+
+    expect(await loadIdentifiedEmbedUser(USER.id)).toEqual({
+      rejection: { status: 403, error: 'access_denied', error_description: ACCOUNT_BANNED_MESSAGE },
+    });
+  });
+
   it('returns the user when the account is usable and consented', async () => {
     expect(await loadIdentifiedEmbedUser(USER.id)).toEqual({ user: USER });
   });

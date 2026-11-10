@@ -14,7 +14,6 @@ import {
   useAuditReviewQueue,
   useMarkAuditReviewed,
   useUnmarkAuditReviewed,
-  useUnreviewedAuditCount,
 } from './adminAuditLog';
 
 vi.mock('@client/app/contexts/ApiContext', () => ({
@@ -163,21 +162,6 @@ describe('review queue hooks', () => {
     expect(result.current.data?.pages[1].entries[0].review).toBeNull();
   });
 
-  it('counts unreviewed entries from the total of a one-row page, and stays idle when disabled', async () => {
-    get.mockResolvedValue({ data: { entries: [], nextCursor: null, total: 7 } });
-    const { wrapper } = makeWrapper();
-
-    const idle = renderHook(() => useUnreviewedAuditCount({ enabled: false }), { wrapper });
-    expect(idle.result.current.fetchStatus).toBe('idle');
-    expect(get).not.toHaveBeenCalled();
-
-    const { result } = renderHook(() => useUnreviewedAuditCount({ enabled: true }), { wrapper });
-    await waitFor(() => expect(result.current.data).toBe(7));
-    expect(get).toHaveBeenCalledWith('/api/admin/audit-log/review-queue', {
-      params: { status: 'unreviewed', limit: '1' },
-    });
-  });
-
   it('looks up one review by entry id and revives reviewedAt; null id does not fetch', async () => {
     get.mockResolvedValue({
       data: {
@@ -233,12 +217,12 @@ describe('review queue hooks', () => {
       () => del.mockResolvedValue({ data: { unreviewed: ['e1'], skipped: [] } }),
     ],
   ])('%s a review', (_label, useMutationHook, mockSuccess) => {
-    it('invalidates the queue pages, the unreviewed count and the per-entry review', async () => {
+    it('invalidates the queue pages, the sidebar counts and the per-entry review', async () => {
       mockSuccess();
       const { wrapper, queryClient } = makeWrapper();
       const keys = {
         queue: ['admin', 'audit-log', 'review-queue', 'unreviewed', undefined, 50],
-        count: ['admin', 'audit-log', 'review-queue', 'count'],
+        count: ['admin', 'action-counts'],
         review: ['admin', 'audit-log', 'review', 'e1'],
       };
       Object.values(keys).forEach(queryKey => queryClient.setQueryData(queryKey, { seeded: true }));
@@ -258,13 +242,12 @@ describe('review queue hooks', () => {
     });
   });
 
-  it('keeps the real queue and count hooks under the invalidated review-queue prefix', async () => {
+  it('keeps the real queue hook under the invalidated review-queue prefix', async () => {
     get.mockResolvedValue({ data: { entries: [], nextCursor: null, total: 1 } });
     const { wrapper, queryClient } = makeWrapper();
     renderHook(() => useAuditReviewQueue('unreviewed'), { wrapper });
-    renderHook(() => useUnreviewedAuditCount({ enabled: true }), { wrapper });
     await waitFor(() =>
-      expect(queryClient.getQueryCache().findAll({ queryKey: ['admin', 'audit-log', 'review-queue'] })).toHaveLength(2)
+      expect(queryClient.getQueryCache().findAll({ queryKey: ['admin', 'audit-log', 'review-queue'] })).toHaveLength(1)
     );
     expect(
       queryClient

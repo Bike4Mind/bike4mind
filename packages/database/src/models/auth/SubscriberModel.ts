@@ -83,11 +83,14 @@ export class SubscriberRepository extends BaseRepository<ISubscriberDocument> im
     return result.modifiedCount;
   }
 
-  async countWaiting() {
-    return this.model.countDocuments({
-      deletedAt: null,
-      $or: [{ inviteGenerated: { $ne: true } }, { inviteGenerated: { $exists: false } }],
-    });
+  async countWaiting(options: { limit?: number } = {}) {
+    return this.model.countDocuments(
+      {
+        deletedAt: null,
+        $or: [{ inviteGenerated: { $ne: true } }, { inviteGenerated: { $exists: false } }],
+      },
+      { limit: options.limit }
+    );
   }
 }
 

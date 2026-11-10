@@ -130,6 +130,7 @@ import {
   importSkillMarketListingContract,
   rescanSkillMarketVersionContract,
 } from './skillMarketWrite.contract';
+import { createSkillContract, updateSkillContract, listMySkillsContract, getSkillContract } from './skills.contract';
 import { listSkillMarketReviewQueueContract, reviewSkillMarketVersionContract } from './skillMarketReview.contract';
 
 /**
@@ -254,6 +255,10 @@ export const CONTRACTS: readonly EndpointContract[] = [
   submitSkillMarketListingVersionContract,
   importSkillMarketListingContract,
   rescanSkillMarketVersionContract,
+  createSkillContract,
+  updateSkillContract,
+  listMySkillsContract,
+  getSkillContract,
   listSkillMarketReviewQueueContract,
   reviewSkillMarketVersionContract,
   postSlackMessageContract,

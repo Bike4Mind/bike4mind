@@ -182,6 +182,7 @@ export const toSnapshot = (skill: ISkill): ISkillSnapshot => ({
   ...(skill.argumentHint ? { argumentHint: skill.argumentHint } : {}),
   ...(skill.allowedTools?.length ? { allowedTools: [...skill.allowedTools] } : {}),
   ...(skill.claudeCodeAllowedTools?.length ? { claudeCodeAllowedTools: [...skill.claudeCodeAllowedTools] } : {}),
+  ...(skill.claudeCodeModel ? { claudeCodeModel: skill.claudeCodeModel } : {}),
   disableModelInvocation: Boolean(skill.disableModelInvocation),
   ...(skill.files?.length
     ? {
@@ -287,6 +288,19 @@ export async function withdrawListing(listingId: string): Promise<boolean> {
 export async function withdrawAuthorListings(authorUserId: string): Promise<number> {
   const listings = await SkillListing.find(
     { authorUserId, deletedAt: null, status: { $nin: ['withdrawn', 'delisted'] } },
+    { _id: 1 }
+  ).lean();
+  let withdrawn = 0;
+  for (const { _id } of listings) {
+    if (await withdrawListing(String(_id))) withdrawn += 1;
+  }
+  return withdrawn;
+}
+
+/** Skill deletion: withdraw every live listing of the skill, whoever authored it. Returns how many. */
+export async function withdrawSkillListings(sourceSkillId: string): Promise<number> {
+  const listings = await SkillListing.find(
+    { sourceSkillId, deletedAt: null, status: { $nin: ['withdrawn', 'delisted'] } },
     { _id: 1 }
   ).lean();
   let withdrawn = 0;

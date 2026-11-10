@@ -589,6 +589,24 @@ describe('adminUpdateUser - email changes', () => {
 describe('adminUpdateUser - API key deactivation on entering a blocked state', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it('clears the suspension category when reinstating an account', async () => {
+    const { adapters, target, update } = makeAdapters(100);
+    Object.assign(target, { isBanned: true, suspensionReasonCategory: 'payment_fraud' });
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, isBanned: false }, adapters);
+
+    expect(update.mock.calls[0][0]).toHaveProperty('suspensionReasonCategory', null);
+  });
+
+  it('omits the suspension category when the patch does not change the ban state', async () => {
+    const { adapters, target, update } = makeAdapters(100);
+    Object.assign(target, { isBanned: true, suspensionReasonCategory: 'payment_fraud' });
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, tags: ['reviewed'] }, adapters);
+
+    expect(update.mock.calls[0][0]).not.toHaveProperty('suspensionReasonCategory');
+  });
+
   it.each([
     ['ban', {}, { isBanned: true }],
     ['dispute', {}, { disputePending: true }],

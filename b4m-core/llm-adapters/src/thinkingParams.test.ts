@@ -9,6 +9,7 @@ import {
   DEFAULT_ANTHROPIC_EFFORT,
   DEFAULT_QUEST_MASTER_ANTHROPIC_EFFORT,
   isAdaptiveThinkingByDefault,
+  thinkingCannotBeDisabled,
   planReasoningEffort,
   reasonsWithinOutputBudget,
   resolveAnthropicEffort,
@@ -813,13 +814,15 @@ describe('planReasoningEffort', () => {
       }
     );
 
-    it('uses `between_tools` for Sonnet 5.5, which rejects `disabled`', () => {
-      const id = ChatModels.CLAUDE_5_5_SONNET_BEDROCK;
-      expect(planReasoningEffort(id, adaptive(id), 'none', 800)).toEqual({
-        kind: 'off',
-        thinking: { type: 'between_tools' },
-      });
-    });
+    it.each([ChatModels.CLAUDE_5_5_SONNET, ChatModels.CLAUDE_5_5_SONNET_BEDROCK])(
+      'uses `between_tools` for Sonnet 5.5 (%s), which rejects `disabled`',
+      id => {
+        expect(planReasoningEffort(id, adaptive(id), 'none', 800)).toEqual({
+          kind: 'off',
+          thinking: { type: 'between_tools' },
+        });
+      }
+    );
 
     it('falls back to the lowest effort on a model with no off switch', () => {
       const id = ChatModels.CLAUDE_5_5_OPUS;
@@ -882,6 +885,7 @@ describe('isAdaptiveThinkingByDefault', () => {
     expect(byDefault).toEqual(
       expect.arrayContaining([
         ChatModels.CLAUDE_5_SONNET,
+        ChatModels.CLAUDE_5_5_SONNET,
         ChatModels.CLAUDE_5_5_SONNET_BEDROCK,
         ChatModels.CLAUDE_FABLE_5,
         ChatModels.CLAUDE_FABLE_5_1_BEDROCK,
@@ -931,5 +935,50 @@ describe('continuesToolTurnWithoutThinking', () => {
 
   it('is false when the history does not end in tool results', () => {
     expect(continuesToolTurnWithoutThinking([{ role: 'user', content: 'hi' }] as unknown as IMessage[])).toBe(false);
+  });
+});
+
+describe('thinkingCannotBeDisabled', () => {
+  const adaptive = (id: string): ModelInfo => ({ ...baseModelInfo, id, thinkingStyle: 'adaptive' });
+  const kimi = (id: string): ModelInfo => ({
+    ...baseModelInfo,
+    id,
+    backend: ModelBackend.Kimi,
+    thinkingStyle: undefined,
+  });
+
+  it.each([
+    ChatModels.CLAUDE_5_5_OPUS,
+    ChatModels.CLAUDE_5_5_OPUS_BEDROCK,
+    ChatModels.CLAUDE_FABLE_5,
+    ChatModels.CLAUDE_FABLE_5_BEDROCK,
+    ChatModels.CLAUDE_FABLE_5_1_BEDROCK,
+  ])('is true for adaptive %s, which has no off switch', id => {
+    expect(thinkingCannotBeDisabled(id, adaptive(id))).toBe(true);
+  });
+
+  it.each([ChatModels.KIMI_K2_7_CODE, ChatModels.KIMI_K2_7_CODE_HIGHSPEED])('is true for %s', id => {
+    expect(thinkingCannotBeDisabled(id, kimi(id))).toBe(true);
+  });
+
+  it.each([
+    ChatModels.CLAUDE_5_OPUS,
+    ChatModels.CLAUDE_5_SONNET,
+    ChatModels.CLAUDE_5_5_HAIKU,
+    ChatModels.CLAUDE_5_5_SONNET,
+    ChatModels.CLAUDE_5_5_SONNET_BEDROCK,
+    ChatModels.CLAUDE_4_8_OPUS,
+  ])('is false for adaptive %s, which can be switched off', id => {
+    expect(thinkingCannotBeDisabled(id, adaptive(id))).toBe(false);
+  });
+
+  it('is false for a legacy model and a switchable Kimi model', () => {
+    expect(thinkingCannotBeDisabled(ChatModels.CLAUDE_4_6_OPUS, legacyModel)).toBe(false);
+    expect(thinkingCannotBeDisabled(ChatModels.KIMI_K2_6, kimi(ChatModels.KIMI_K2_6))).toBe(false);
+  });
+
+  it('is false for an adaptive id that cannot think', () => {
+    const id = ChatModels.CLAUDE_5_5_OPUS;
+    expect(thinkingCannotBeDisabled(id, { ...adaptive(id), can_think: false })).toBe(false);
   });
 });
