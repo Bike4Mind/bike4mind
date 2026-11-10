@@ -43,6 +43,12 @@ const ROWS = [
   },
 ];
 
+/** The (modelId, unit) pairs the server can revert to a seed. */
+const SEEDED = [
+  { modelId: 'gpt-x', unit: 'per_token' },
+  { modelId: 'gpt-y', unit: 'per_token' },
+];
+
 const DISCOVERY_ROW = {
   modelId: 'gpt-z',
   unit: 'per_token',
@@ -65,28 +71,33 @@ describe('ModelPricingCatalog', () => {
     vi.clearAllMocks();
     gate.blocked = false;
     gate.modelTypes = new Map();
-    mockGet.mockResolvedValue({ data: { rows: ROWS } });
+    mockGet.mockResolvedValue({ data: { seeded: SEEDED, rows: ROWS } });
     mockPost.mockResolvedValue({ data: { row: {} } });
   });
 
-  it('renders in-force rows with seed/operator source chips', async () => {
+  it('names each source in plain words on a neutral chip, with what it means on hover', async () => {
     renderCatalog();
     expect(await screen.findByTestId('model-pricing-row-gpt-x-per_token')).toBeInTheDocument();
-    expect(screen.getByTestId('model-pricing-source-gpt-x-per_token')).toHaveTextContent('seed');
-    expect(screen.getByTestId('model-pricing-source-gpt-y-per_token')).toHaveTextContent('operator');
+    const seed = screen.getByTestId('model-pricing-source-gpt-x-per_token');
+    const admin = screen.getByTestId('model-pricing-source-gpt-y-per_token');
+    expect(seed).toHaveTextContent('Default');
+    expect(seed).toHaveAttribute('title', 'Value shipped in code or a seed row');
+    expect(admin).toHaveTextContent('Set by admin');
+    expect(admin).toHaveAttribute('title', 'Value an admin saved here');
+    for (const chip of [seed, admin]) expect(chip).toHaveClass('MuiChip-colorNeutral');
   });
 
   it('renders discovery rows as their own provenance, named by the feed that priced them', async () => {
-    mockGet.mockResolvedValue({ data: { rows: [...ROWS, DISCOVERY_ROW] } });
+    mockGet.mockResolvedValue({ data: { seeded: SEEDED, rows: [...ROWS, DISCOVERY_ROW] } });
     renderCatalog();
     const chip = await screen.findByTestId('model-pricing-source-gpt-z-per_token');
-    expect(chip).toHaveTextContent('discovery');
+    expect(chip).toHaveTextContent('Discovered');
     expect(chip).toHaveAttribute('data-provenance', 'discovery');
+    expect(chip).toHaveClass('MuiChip-colorNeutral');
     // Which feed priced it, without making an admin open history.
-    expect(chip.getAttribute('title')).toContain('openrouter');
-    // Seed and operator rows keep their existing chips.
-    expect(screen.getByTestId('model-pricing-source-gpt-x-per_token')).toHaveTextContent('seed');
-    expect(screen.getByTestId('model-pricing-source-gpt-y-per_token')).toHaveTextContent('operator');
+    expect(chip).toHaveAttribute('title', 'Value read from a provider feed (openrouter)');
+    expect(screen.getByTestId('model-pricing-source-gpt-x-per_token')).toHaveTextContent('Default');
+    expect(screen.getByTestId('model-pricing-source-gpt-y-per_token')).toHaveTextContent('Set by admin');
   });
 
   it('marks a discovery row in history so an audit can tell automation from an operator', async () => {
@@ -344,6 +355,15 @@ describe('ModelPricingCatalog', () => {
     expect(mockPost.mock.calls[0][1]).toMatchObject({ modelId: 'gpt-y', action: 'revert-to-seed' });
   });
 
+  it('offers no revert on an admin-set row the server has no seed for', async () => {
+    mockGet.mockResolvedValue({ data: { seeded: [SEEDED[0]], rows: ROWS } });
+    renderCatalog();
+    await screen.findByTestId('model-pricing-row-gpt-y-per_token');
+
+    expect(screen.queryByTestId('model-pricing-revert-gpt-y-per_token')).not.toBeInTheDocument();
+    expect(screen.getByTestId('model-pricing-reprice-gpt-y-per_token')).toBeInTheDocument();
+  });
+
   it('formats non-token units at face value with a unit label (a per-minute rate must not be inflated x1M)', async () => {
     mockGet.mockResolvedValue({
       data: {
@@ -418,7 +438,7 @@ describe('ModelPricingCatalog', () => {
     expect(newest.getByTestId('history-diff-0-output')).toHaveTextContent('$27');
 
     const oldest = within(rows[1]);
-    expect(oldest.getByTestId('history-who')).toHaveTextContent('seed');
+    expect(oldest.getByTestId('history-who')).toHaveTextContent('Default');
     expect(oldest.queryByTestId('history-diff-0-input')).not.toBeInTheDocument();
     expect(oldest.getByText(/\$4/)).toBeInTheDocument();
   });
@@ -543,7 +563,7 @@ describe('ModelPricingCatalog', () => {
     mockGet.mockReturnValueOnce(new Promise(r => (resolve = r)));
     renderCatalog();
     expect(screen.getByTestId('model-pricing-loading')).toHaveTextContent('Loading prices');
-    resolve({ data: { rows: ROWS } });
+    resolve({ data: { seeded: SEEDED, rows: ROWS } });
     expect(await screen.findByTestId('model-pricing-row-gpt-x-per_token')).toBeInTheDocument();
     expect(screen.queryByTestId('model-pricing-loading')).not.toBeInTheDocument();
   });
@@ -601,7 +621,10 @@ describe('ModelPricingCatalog', () => {
       ['voice-1', 'realtime-voice'],
     ]);
     mockGet.mockResolvedValue({
-      data: { rows: [...ROWS, { ...ROWS[0], modelId: 'voice-1' }, { ...ROWS[0], modelId: 'unlisted' }] },
+      data: {
+        seeded: SEEDED,
+        rows: [...ROWS, { ...ROWS[0], modelId: 'voice-1' }, { ...ROWS[0], modelId: 'unlisted' }],
+      },
     });
     renderCatalog();
     await screen.findByTestId('model-pricing-row-gpt-y-per_token');
@@ -615,7 +638,7 @@ describe('ModelPricingCatalog', () => {
 
   it('asks a realtime voice reprice for audio rates above 0 on its lowest tier before saving', async () => {
     gate.modelTypes = new Map([['voice-1', 'realtime-voice']]);
-    mockGet.mockResolvedValue({ data: { rows: [{ ...ROWS[1], modelId: 'voice-1' }] } });
+    mockGet.mockResolvedValue({ data: { seeded: SEEDED, rows: [{ ...ROWS[1], modelId: 'voice-1' }] } });
     renderCatalog();
     fireEvent.click(await screen.findByTestId('model-pricing-reprice-voice-1-per_token'));
     fireEvent.change(screen.getByTestId('reprice-note-input'), { target: { value: 'provider price page' } });
@@ -659,7 +682,7 @@ describe('ModelPricingCatalog', () => {
 
   it('narrows a full id to that model alone', async () => {
     mockGet.mockResolvedValue({
-      data: { rows: [...ROWS, { ...ROWS[0], modelId: 'gpt-x-mini' }] },
+      data: { seeded: SEEDED, rows: [...ROWS, { ...ROWS[0], modelId: 'gpt-x-mini' }] },
     });
     render(
       <TestWrapper>

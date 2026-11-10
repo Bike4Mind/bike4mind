@@ -18,7 +18,6 @@ import {
   Textarea,
   Typography,
 } from '@mui/joy';
-import type { ColorPaletteProp } from '@mui/joy/styles';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import EditIcon from '@mui/icons-material/Edit';
 import HistoryIcon from '@mui/icons-material/History';
@@ -66,18 +65,14 @@ type Provenance = 'seed' | 'discovery' | 'operator';
 const provenanceOf = (row: PriceRow): Provenance =>
   isSeedRow(row) ? 'seed' : isDiscoveryRow(row) ? 'discovery' : 'operator';
 
-// Seed reads muted in the catalog but highlighted in the audit trail, so the
-// two chips keep separate color maps.
-const SOURCE_CHIP_COLOR: Record<Provenance, ColorPaletteProp> = {
-  seed: 'neutral',
-  discovery: 'warning',
-  operator: 'primary',
+// Where a price came from is not a status, so its chip stays neutral (docs/admin-models-spec.md section 5.8 copy).
+export const PROVENANCE_COPY: Record<Provenance, { label: string; meaning: string }> = {
+  seed: { label: 'Default', meaning: 'Value shipped in code or a seed row' },
+  discovery: { label: 'Discovered', meaning: 'Value read from a provider feed' },
+  operator: { label: 'Set by admin', meaning: 'Value an admin saved here' },
 };
-const HISTORY_CHIP_COLOR: Record<Provenance, ColorPaletteProp> = {
-  seed: 'primary',
-  discovery: 'warning',
-  operator: 'neutral',
-};
+
+const seedKey = (modelId: string, unit: string) => `${modelId}|${unit}`;
 
 /** Every rate field a tier can carry, in display order. */
 export const RATE_FIELDS = [
@@ -227,6 +222,8 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
   onPricesChanged,
 }) => {
   const [rows, setRows] = useState<PriceRow[]>([]);
+  // Revert to seed is refused for a pair with no seed entry, so it is only offered for these.
+  const [seeded, setSeeded] = useState<ReadonlySet<string>>(new Set());
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // Held apart from `error` so a failed write shows in its dialog and never replaces the table.
@@ -256,8 +253,11 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
     setIsLoading(true);
     setError(null);
     try {
-      const res = await api.get<{ rows: PriceRow[] }>('/api/admin/model-prices');
+      const res = await api.get<{ rows: PriceRow[]; seeded?: { modelId: string; unit: string }[] }>(
+        '/api/admin/model-prices'
+      );
       setRows([...res.data.rows].sort((a, b) => a.modelId.localeCompare(b.modelId)));
+      setSeeded(new Set((res.data.seeded ?? []).map(entry => seedKey(entry.modelId, entry.unit))));
     } catch (err) {
       setError(apiErrorMessage(err, 'Failed to load the price catalog'));
     } finally {
@@ -505,14 +505,13 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
                     <td>
                       <Chip
                         size="sm"
-                        color={SOURCE_CHIP_COLOR[provenance]}
+                        color="neutral"
                         variant="soft"
-                        title={source ? `priced by ${source}` : undefined}
-                        // The color is the visual cue; this is the assertable one.
+                        title={`${PROVENANCE_COPY[provenance].meaning}${source ? ` (${source})` : ''}`}
                         data-provenance={provenance}
                         data-testid={`model-pricing-source-${row.modelId}-${row.unit}`}
                       >
-                        {provenance}
+                        {PROVENANCE_COPY[provenance].label}
                       </Chip>
                     </td>
                     <td>
@@ -542,22 +541,24 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
                         >
                           <HistoryIcon fontSize="small" />
                         </IconButton>
-                        {!isSeedRow(row) && canWritePrice(row.modelId) && (
-                          <ModelWriteAction>
-                            {disabled => (
-                              <IconButton
-                                size="sm"
-                                title="Revert to seed pricing"
-                                aria-label={`Revert ${row.modelId} to seed pricing`}
-                                disabled={disabled}
-                                onClick={() => openRevert(row)}
-                                data-testid={`model-pricing-revert-${row.modelId}-${row.unit}`}
-                              >
-                                <ReplayIcon fontSize="small" />
-                              </IconButton>
-                            )}
-                          </ModelWriteAction>
-                        )}
+                        {!isSeedRow(row) &&
+                          seeded.has(seedKey(row.modelId, row.unit)) &&
+                          canWritePrice(row.modelId) && (
+                            <ModelWriteAction>
+                              {disabled => (
+                                <IconButton
+                                  size="sm"
+                                  title="Revert to seed pricing"
+                                  aria-label={`Revert ${row.modelId} to seed pricing`}
+                                  disabled={disabled}
+                                  onClick={() => openRevert(row)}
+                                  data-testid={`model-pricing-revert-${row.modelId}-${row.unit}`}
+                                >
+                                  <ReplayIcon fontSize="small" />
+                                </IconButton>
+                              )}
+                            </ModelWriteAction>
+                          )}
                       </Stack>
                     </td>
                   </tr>
@@ -569,7 +570,7 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
       )}
 
       <Modal open={repriceTarget !== null} onClose={() => setRepriceTarget(null)}>
-        <ModalDialog sx={{ minWidth: 420 }} data-testid="reprice-modal">
+        <ModalDialog sx={{ minWidth: { xs: 'auto', sm: 420 } }} data-testid="reprice-modal">
           <Typography level="title-md">Reprice {repriceTarget?.modelId}</Typography>
           {writeError && (
             // pre-line: a guardrail rejection enumerates one violation per
@@ -718,12 +719,13 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
                       <Typography level="body-sm">{new Date(row.effectiveFrom).toLocaleString()}</Typography>
                       <Chip
                         size="sm"
-                        color={HISTORY_CHIP_COLOR[provenanceOf(row)]}
+                        color="neutral"
                         variant="soft"
+                        title={PROVENANCE_COPY[provenanceOf(row)].meaning}
                         data-provenance={provenanceOf(row)}
                         data-testid="history-who"
                       >
-                        {row.repricedBy ?? (isSeedRow(row) ? 'seed' : isDiscoveryRow(row) ? 'discovery' : '-')}
+                        {row.repricedBy ?? PROVENANCE_COPY[provenanceOf(row)].label}
                       </Chip>
                     </Stack>
                     <Typography level="body-sm" sx={{ fontStyle: 'italic' }}>

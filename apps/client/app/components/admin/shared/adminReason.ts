@@ -122,7 +122,10 @@ export const EMPTY_ADMIN_REASON: AdminReasonDraft = { preset: null, note: '' };
 /** The reason an Accept on an AiSuggestion prefills; the admin can still edit it before applying. */
 export const ACCEPTED_AI_REASON: AdminReasonDraft = { preset: null, note: 'Accepted AI suggestion' };
 
-export const ADMIN_REASON_HINT = `Pick a reason or write at least ${ADMIN_ACTION_REASON_MIN_LENGTH} characters.`;
+export const adminReasonHint = (minLength = ADMIN_ACTION_REASON_MIN_LENGTH): string =>
+  minLength <= 1 ? 'Pick a reason or write one.' : `Pick a reason or write at least ${minLength} characters.`;
+
+export const ADMIN_REASON_HINT = adminReasonHint();
 
 const PRESET_SEPARATOR = ': ';
 
@@ -136,8 +139,13 @@ export const composeAdminReason = ({ preset, note }: AdminReasonDraft): string =
 /** The reason an undo carries: the original one, marked, and still within the shared maximum. */
 export const undoAdminReason = (reason: string): string => `Undo: ${reason}`.slice(0, ADMIN_ACTION_REASON_MAX_LENGTH);
 
-export const isAdminReasonComplete = (draft: AdminReasonDraft): boolean =>
-  isValidAdminActionReason(composeAdminReason(draft));
+/** `minLength` is for an endpoint whose own reason rule is looser than the shared one; omit it otherwise. */
+export const isAdminReasonComplete = (draft: AdminReasonDraft, minLength?: number): boolean => {
+  const reason = composeAdminReason(draft);
+  if (minLength === undefined) return isValidAdminActionReason(reason);
+  const length = reason.trim().length;
+  return length >= minLength && length <= ADMIN_ACTION_REASON_MAX_LENGTH;
+};
 
 /** Longest note that still keeps the composed reason within the shared maximum. */
 export const maxAdminReasonNoteLength = (preset: string | null): number =>

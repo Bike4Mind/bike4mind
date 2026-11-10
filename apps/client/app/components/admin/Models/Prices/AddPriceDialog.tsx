@@ -19,6 +19,8 @@ import {
 import { ActionDialog } from '../../shared';
 
 const REASON_PRESETS = ['Provider published price list', 'Matches the provider invoice', 'New model, price confirmed'];
+/** POST /api/admin/model-prices takes any non-blank note, the same rule as the table's Reprice. */
+const NOTE_MIN_LENGTH = 1;
 const REQUIRED_FIELDS: readonly RateField[] = ['input', 'output'];
 const UNIT = 'per_token';
 
@@ -54,6 +56,10 @@ const draftProblem = (tiers: TierDraft[], voice: boolean): string | null => {
       return !REQUIRED_FIELDS.includes(field) && raw !== undefined && raw !== '' && !isRate(raw);
     });
     if (optionalBad) return 'Rates must be numbers of 0 or more.';
+  }
+  // Mirrors the API's refusal: no tier with an input or output rate above 0 would settle every call free.
+  if (!tiers.some(tier => Number(tier.rates.input) > 0 || Number(tier.rates.output) > 0)) {
+    return 'Enter an input or output rate above 0: a price of 0 everywhere makes every call free.';
   }
   return voice ? voiceRateProblem(toPricing(tiers)) : null;
 };
@@ -127,6 +133,7 @@ export function AddPriceDialog({ onClose, presetModelId, onAdded }: AddPriceDial
       title="Add price"
       description="A first price row for a model that has none. Provider cost in USD per 1M tokens, as the provider publishes it; it takes effect immediately."
       reasonPresets={REASON_PRESETS}
+      reasonMinLength={NOTE_MIN_LENGTH}
       confirmLabel={confirmToken ? 'Apply anyway' : 'Add price'}
       tone={confirmToken ? 'danger' : 'neutral'}
       blockedReason={blockedReason}

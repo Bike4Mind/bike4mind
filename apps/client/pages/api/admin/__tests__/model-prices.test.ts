@@ -123,7 +123,10 @@ async function expectGuardrail(body: object): Promise<GuardrailError> {
 }
 
 describe('GET /api/admin/model-prices', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGenerateSeed.mockResolvedValue([]);
+  });
 
   it('rejects non-admin users', async () => {
     const { run } = call({ method: 'GET', isAdmin: false });
@@ -136,6 +139,15 @@ describe('GET /api/admin/model-prices', () => {
     const { res, run } = call({ method: 'GET' });
     await run();
     expect(res._getJSONData().rows).toHaveLength(1);
+  });
+
+  it('names the model and unit pairs a revert to seed has rates for, without their rates', async () => {
+    mockRowsInForce.mockResolvedValue([]);
+    mockGenerateSeed.mockResolvedValue([{ modelId: 'gpt-x', unit: 'per_token', pricing: { '0': TIER } }]);
+    const { res, run } = call({ method: 'GET' });
+    await run();
+
+    expect(res._getJSONData().seeded).toEqual([{ modelId: 'gpt-x', unit: 'per_token' }]);
   });
 
   it('returns per-model history when requested', async () => {

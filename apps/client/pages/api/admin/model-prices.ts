@@ -29,7 +29,8 @@ import { requireFullAdmin } from '@server/admin/models/requireFullAdmin';
  * the published uniform markup, so this endpoint manages COGS data, never
  * markup. Append-only throughout: a reprice or revert is a NEW row.
  *
- * GET                       -> { rows } in force
+ * GET                       -> { rows } in force, and { seeded }: the
+ *   (modelId, unit) pairs revert-to-seed has rates for
  * GET ?history=<modelId>    -> { history } (audit trail, newest first)
  * POST { modelId, unit, pricing, note, confirm? } -> operator reprice, or a
  *   first price for a known text model (per_token only; 422 for other types)
@@ -243,7 +244,8 @@ const handler = adminApi({
     if (typeof history === 'string' && history.length > 0) {
       return res.json({ history: await modelPriceRepository.historyForModel(history) });
     }
-    return res.json({ rows: await modelPriceRepository.rowsInForce() });
+    const [rows, seed] = await Promise.all([modelPriceRepository.rowsInForce(), generateModelPriceSeed()]);
+    return res.json({ rows, seeded: seed.map(({ modelId, unit }) => ({ modelId, unit })) });
   })
   .post(async (req, res) => {
     requireFullAdmin(req);

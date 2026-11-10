@@ -249,6 +249,36 @@ describe('ModelPricesSection', () => {
     expect(mocks.post.mock.calls[1][1]).toMatchObject({ modelId: 'gpt-new', confirm: 'tok-1' });
   });
 
+  it('refuses rates of 0 on every tier, as the API does', async () => {
+    renderSection();
+    await screen.findByTestId('model-pricing-row-gpt-x-per_token');
+    const dialog = await fillDialog('gpt-new');
+    fireEvent.change(within(dialog).getByTestId('add-price-rate-0-input'), { target: { value: '0' } });
+    fireEvent.change(within(dialog).getByTestId('add-price-rate-0-output'), { target: { value: '0' } });
+
+    expect(within(dialog).getByTestId('add-price-dialog-confirm-btn')).toBeDisabled();
+    expect(within(dialog).getByTestId('add-price-dialog-hint')).toHaveTextContent('makes every call free');
+    fireEvent.change(within(dialog).getByTestId('add-price-rate-0-output'), { target: { value: '1' } });
+    expect(within(dialog).getByTestId('add-price-dialog-confirm-btn')).toBeEnabled();
+  });
+
+  it('takes any non-blank note, the same rule as the API and the table reprice', async () => {
+    renderSection();
+    await screen.findByTestId('model-pricing-row-gpt-x-per_token');
+    const dialog = await fillDialog('gpt-new');
+    const note = within(dialog).getByTestId('add-price-dialog-reason-input');
+
+    fireEvent.change(note, { target: { value: '   ' } });
+    expect(within(dialog).getByTestId('add-price-dialog-confirm-btn')).toBeDisabled();
+    expect(within(dialog).getByTestId('add-price-dialog-hint')).toHaveTextContent('Pick a reason or write one.');
+    fireEvent.change(note, { target: { value: 'ok' } });
+    fireEvent.click(within(dialog).getByTestId('add-price-dialog-confirm-btn'));
+
+    await waitFor(() =>
+      expect(mocks.post).toHaveBeenCalledWith('/api/admin/model-prices', expect.objectContaining({ note: 'ok' }))
+    );
+  });
+
   it('shows the markup preview and holds the commit until the draft is complete', async () => {
     renderSection();
     await screen.findByTestId('model-pricing-row-gpt-x-per_token');

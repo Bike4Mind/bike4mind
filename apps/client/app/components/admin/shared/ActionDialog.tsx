@@ -2,7 +2,7 @@ import React, { useId, useState } from 'react';
 import { Button, DialogContent, FormControl, FormLabel, Input, Stack, Typography } from '@mui/joy';
 import { AdminDialog, AdminDialogFooter } from './AdminDialog';
 import {
-  ADMIN_REASON_HINT,
+  adminReasonHint,
   type AdminReasonDraft,
   EMPTY_ADMIN_REASON,
   composeAdminReason,
@@ -30,6 +30,8 @@ export type ActionDialogProps = {
   reasonPresets: readonly string[];
   /** False while the endpoint has no reason field; see ReasonPicker's `audited`. */
   reasonAudited?: boolean;
+  /** For an endpoint whose own note rule is looser than the shared admin reason; see isAdminReasonComplete. */
+  reasonMinLength?: number;
   /** Repeats the consequence where it helps: "Set balance to 0". */
   confirmLabel: string;
   /**
@@ -85,6 +87,7 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
   children,
   reasonPresets,
   reasonAudited = true,
+  reasonMinLength,
   confirmLabel,
   onConfirm,
   tone = 'neutral',
@@ -105,7 +108,7 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
   const typedMatches = !typedConfirm || typedValue.trim() === typedConfirm.expected;
   const hint =
     blockedReason ??
-    (!isAdminReasonComplete(reason) ? ADMIN_REASON_HINT : null) ??
+    (!isAdminReasonComplete(reason, reasonMinLength) ? adminReasonHint(reasonMinLength) : null) ??
     (!typedMatches && typedConfirm ? `Type the ${typedConfirm.noun} exactly to confirm.` : null);
   const busy = pending || submitting;
 
@@ -140,6 +143,7 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
           value={reason}
           onChange={setReason}
           audited={reasonAudited}
+          minLength={reasonMinLength}
           data-testid={testIds.reason ?? `${testId}-reason-input`}
         />
         {typedConfirm && (
