@@ -121,11 +121,35 @@ import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
 import { wafLabelForwarding, wafQueryWebAclArn, wafReadPermissions, wafWebAclArn } from './waf';
 
+// Every queue this stage creates, by SST's physical-name prefix. SST keeps `${app}-${stage}-`
+// in front of a queue name only while app + stage + logical name + 2 fit in 71 characters (SQS's
+// 80 minus its 9-character random suffix); past that it truncates the app name or drops it, and
+// the queue would fall outside the grant below. stageScopedQueueUrls fails the deploy in that case
+// instead of letting the longest-named queues lose access while the rest keep working.
+const stageQueuePrefix = `${$app.name}-${$app.stage}-`;
+const stageQueueArns = $interpolate`arn:${aws.getPartitionOutput().partition}:sqs:${aws.getRegionOutput().name}:${aws.getCallerIdentityOutput().accountId}:${stageQueuePrefix}*`;
+const stageScopedQueueUrls = (urls: Record<string, $util.Output<string>>): Record<string, $util.Output<string>> =>
+  Object.fromEntries(
+    Object.entries(urls).map(([key, url]) => [
+      key,
+      url.apply(value => {
+        const name = value.slice(value.lastIndexOf('/') + 1);
+        if (!name.startsWith(stageQueuePrefix)) {
+          throw new Error(
+            `Queue ${name} (${key}) does not start with ${stageQueuePrefix}, so the web function's SQS grant ` +
+              'would not cover it. Shorten the app name or stage name so app + stage + queue name fit in 71 characters.'
+          );
+        }
+        return value;
+      }),
+    ])
+  );
+
 // SQS queue URLs bundled as Linkable resources. Stored in resource.enc at deploy
 // time: no IAM statements generated, no env var size concerns. The stage-scoped SQS
-// statement on the server function (stageQueueArns below) grants runtime access.
+// statement on the server function (stageQueueArns above) grants runtime access.
 const dlqUrls = new sst.Linkable('dlqUrls', {
-  properties: {
+  properties: stageScopedQueueUrls({
     // Contributed entries go first so a core key always wins.
     ...Object.fromEntries(Object.values(contributedQueues).map(({ spec, dlq }) => [spec.label, dlq.url])),
     'fab-file-vectorize': fabFileVectorizeQueueDLQ.url,
@@ -170,7 +194,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     'github-lake-ingest': githubLakeIngestQueueDLQ.url,
     'github-lake-revoke': githubLakeRevokeQueueDLQ.url,
     'publish-thumbnail': publishThumbnailQueueDLQ.url,
-  },
+  }),
 });
 
 // Lambda function names exposed via sst.Linkable to avoid generating per-resource IAM
@@ -193,7 +217,7 @@ const lambdaFunctionNames = new sst.Linkable('lambdaFunctionNames', {
 });
 
 const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
-  properties: {
+  properties: stageScopedQueueUrls({
     ...Object.fromEntries(Object.values(contributedQueues).map(({ spec, queue }) => [spec.name, queue.url])),
     emailJobQueue: emailJobQueue.url,
     fabFileChunkQueue: fabFileChunkQueue.url,
@@ -237,13 +261,8 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     githubLakeIngestQueue: githubLakeIngestQueue.url,
     githubLakeRevokeQueue: githubLakeRevokeQueue.url,
     publishThumbnailQueue: publishThumbnailQueue.url,
-  },
+  }),
 });
-
-// Every queue this stage creates, by SST's physical-name prefix (`${app}-${stage}-...`). One
-// pattern instead of one ARN per queue keeps the server function's inline policy well under
-// Lambda's size cap, which is why the queue URLs travel as Linkables in the first place.
-const stageQueueArns = $interpolate`arn:${aws.getPartitionOutput().partition}:sqs:${aws.getRegionOutput().name}:${aws.getCallerIdentityOutput().accountId}:${$app.name}-${$app.stage}-*`;
 
 export const web = new sst.aws.Nextjs(
   'frontend',
@@ -406,7 +425,9 @@ export const web = new sst.aws.Nextjs(
       },
       {
         // Admin DLQ replay (receive and delete from DLQs, send to source queues, read depth) and the
-        // API routes that enqueue work through sourceQueueUrls, limited to this stage's queues.
+        // API routes that enqueue work through sourceQueueUrls, limited to this stage's queues. One
+        // prefix pattern instead of one ARN per queue keeps the inline policy well under Lambda's
+        // size cap, which is why the queue URLs travel as Linkables in the first place.
         actions: ['sqs:ReceiveMessage', 'sqs:DeleteMessage', 'sqs:GetQueueAttributes', 'sqs:SendMessage'],
         resources: [stageQueueArns],
       },
