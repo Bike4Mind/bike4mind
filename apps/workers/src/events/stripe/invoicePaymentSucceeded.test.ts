@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import {
@@ -233,7 +234,7 @@ describe('invoicePaymentSucceeded - purchase credited to the source product', ()
     );
 
     it('still reports the purchase when the lookup fails', async () => {
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
       invoice();
       vi.mocked(stripe.checkout.sessions.list).mockRejectedValue(new Error('stripe down'));
 

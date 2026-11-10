@@ -8,7 +8,8 @@ import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../packages/database/src/__test__/createMongoServer';
-import { Quest } from '@bike4mind/database';
+import { Quest, AdminSupportAccessAuditLog, adminSupportAccessAuditLogRepository } from '@bike4mind/database';
+import { AdminSupportAccessAction } from '@bike4mind/common';
 
 // This route's fix is a MongoDB query-semantics question (does $elemMatch actually match an
 // array-of-objects field, does a dropped $or arm actually stop matching), which the directory's
@@ -44,8 +45,16 @@ import handler, { MODEL_LOGS_MAX_LIMIT } from '../model-logs';
 // hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
-const run = (query: Record<string, string> = {}, isAdmin = true) => {
-  const { req, res } = createMocks({ method: 'GET', query });
+const SUPPORT_CASE = 'ZD-4821';
+
+// A search is a support read, so it carries a case unless a test passes its own (or null for none).
+const run = (query: Record<string, string | null> = {}, isAdmin = true) => {
+  const withCase = query.search && query.supportCase === undefined ? { ...query, supportCase: SUPPORT_CASE } : query;
+  const sent = Object.fromEntries(Object.entries(withCase).filter(([, value]) => value !== null)) as Record<
+    string,
+    string
+  >;
+  const { req, res } = createMocks({ method: 'GET', query: sent });
   (req as Record<string, unknown>).user = { id: 'admin1', isAdmin };
   return { req, res };
 };
@@ -385,5 +394,60 @@ describe('GET /api/admin/model-logs', () => {
     const { req, res } = run({ startDate: '2000-01-01T00:00:00.000Z' });
     await handler(req, res);
     expect(res._getStatusCode()).toBe(200);
+  });
+
+  describe('support-case audit of searches', () => {
+    it('refuses a search without a case and records nothing', async () => {
+      const { req, res } = run({ search: 'claude-opus-5', supportCase: null });
+      await expect(handler(req, res)).rejects.toMatchObject({ name: 'ZodError' });
+      expect(res._isEndCalled()).toBe(false);
+      expect(await AdminSupportAccessAuditLog.countDocuments()).toBe(0);
+    });
+
+    it('refuses a search with a too-short case and records nothing', async () => {
+      const { req, res } = run({ search: 'claude-opus-5', supportCase: 'ab' });
+      await expect(handler(req, res)).rejects.toMatchObject({ name: 'ZodError' });
+      expect(await AdminSupportAccessAuditLog.countDocuments()).toBe(0);
+    });
+
+    it('refuses a search from a caller without support:read before parsing the case', async () => {
+      const { req, res } = run({ search: 'claude-opus-5', supportCase: null }, false);
+      await expect(handler(req, res)).rejects.toThrow(/missing permission/i);
+      expect(await AdminSupportAccessAuditLog.countDocuments()).toBe(0);
+    });
+
+    it('records one ModelLogsSearch with the term and the returned quest ids, and no owner or session', async () => {
+      const { req, res } = run({ search: 'claude-opus-5' });
+      await handler(req, res);
+
+      const body = res._getJSONData();
+      expect(body.total).toBe(1);
+      const records = await AdminSupportAccessAuditLog.find({}).lean();
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({
+        action: AdminSupportAccessAction.ModelLogsSearch,
+        actorUserId: 'admin1',
+        supportCase: SUPPORT_CASE,
+        details: { search: 'claude-opus-5', total: 1, questIds: [body.logs[0].id] },
+      });
+      expect(records[0].targetUserId).toBeUndefined();
+      expect(records[0].sessionId).toBeUndefined();
+    });
+
+    it('fails the request and serves no results when the audit write fails', async () => {
+      const recordSpy = vi.spyOn(adminSupportAccessAuditLogRepository, 'record').mockRejectedValue(new Error('down'));
+      const { req, res } = run({ search: 'claude-opus-5' });
+      await expect(handler(req, res)).rejects.toThrow('down');
+      expect(res._isEndCalled()).toBe(false);
+      recordSpy.mockRestore();
+    });
+
+    it('needs no case and records nothing without a search', async () => {
+      const { req, res } = run({ model: 'claude-opus-5' });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData().total).toBe(1);
+      expect(await AdminSupportAccessAuditLog.countDocuments()).toBe(0);
+    });
   });
 });

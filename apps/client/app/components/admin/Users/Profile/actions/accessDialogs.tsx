@@ -14,6 +14,7 @@ import {
   useUndoToast,
 } from '../../../shared';
 import { useAdminUserUpdate } from './useAdminUserUpdate';
+import { useAdminUserRoleUpdate } from './useAdminUserRoleUpdate';
 import type { ProfileDialogProps } from './profileActions';
 import { USER_ROLE_LABELS, displayName, isManagedTag, tagsForRole, userRole, type UserRole } from '../userProfileModel';
 
@@ -36,39 +37,41 @@ const describeTagDiff = ({ added, removed }: ReturnType<typeof diffTags>): strin
     .filter(Boolean)
     .join('  ') || 'No change';
 
+type RoleState = { isAdmin: boolean; tags: readonly string[] };
+
+const sameTags = (left: readonly string[], right: readonly string[]) =>
+  left.length === right.length && left.every((tag, index) => tag === right[index]);
+
 /**
- * Role is derived from `isAdmin` plus the developer tag, so one change can write both. Only the
- * Super Admin axis carries a stored reason (`roleChangeReason`); the server refuses self-changes and
- * demoting the last Super Admin.
+ * Role is derived from `isAdmin` plus the developer tag, so one change can write both: the Super Admin
+ * axis through the dedicated role route (step-up, stored reason, refuses self-changes and demoting the
+ * last Super Admin), then the developer tag through the user update. The role goes first so a cancelled
+ * step-up writes nothing.
  */
 export const ChangeRoleDialog: React.FC<ProfileDialogProps> = ({ user, onClose, onAudit }) => {
   const { currentUser } = useUser();
   const update = useAdminUserUpdate(user.id);
+  const updateRole = useAdminUserRoleUpdate(user.id);
   const showUndo = useUndoToast();
   const current = userRole(user);
   const [next, setNext] = useState<UserRole>(current);
   const isSelf = currentUser?.id === user.id;
   const tags = user.tags ?? [];
-  const adminChanges = (next === 'super-admin') !== user.isAdmin;
+  const adminChanges = (next === 'super-admin') !== !!user.isAdmin;
 
-  const write = (role: UserRole, reason: string) =>
-    update({
-      isAdmin: role === 'super-admin',
-      tags: tagsForRole(tags, role),
-      ...((role === 'super-admin') !== user.isAdmin && { roleChangeReason: reason }),
-    });
+  const write = async (from: RoleState, to: RoleState, reason: string) => {
+    if (to.isAdmin !== from.isAdmin) await updateRole({ isAdmin: to.isAdmin, reason });
+    if (!sameTags(from.tags, to.tags)) await update({ tags: [...to.tags] });
+  };
 
   const handleConfirm = async (reason: string) => {
-    await write(next, reason);
+    const before: RoleState = { isAdmin: !!user.isAdmin, tags };
+    const after: RoleState = { isAdmin: next === 'super-admin', tags: tagsForRole(tags, next) };
+    await write(before, after, reason);
     onClose();
     showUndo({
       message: `Role changed to ${USER_ROLE_LABELS[next]}`,
-      onUndo: () =>
-        update({
-          isAdmin: user.isAdmin,
-          tags,
-          ...(adminChanges && { roleChangeReason: undoAdminReason(reason) }),
-        }),
+      onUndo: () => write(after, before, undoAdminReason(reason)),
       onViewAudit: onAudit,
     });
   };

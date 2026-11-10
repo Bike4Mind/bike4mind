@@ -1,10 +1,10 @@
-import { hasAdminPermission } from '@bike4mind/common';
 import {
   adminSettingsRepository,
   creditLotRepository,
   creditTransactionRepository,
   userRepository,
 } from '@bike4mind/database';
+import { hasAdminPermission } from '@bike4mind/common';
 import { userService } from '@bike4mind/services';
 import { adminApi } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
@@ -15,9 +15,11 @@ import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/admi
 const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:adjust' } })
   .use(csrfProtection())
   .post(async (req, res) => {
-    const { userId, reason, target } = await readSignupGrantAdminAction(req, 'user.credits.adjusted', {
-      guardTargetVerb: 'unlock signup credit grants for',
-    });
+    const { userId, reason, target } = await readSignupGrantAdminAction(
+      req,
+      'user.credits.adjusted',
+      'release signup credits for'
+    );
     const actorId = req.user.id;
     const result = await userService.releaseRemainingSignupGrant(userId, {
       db: {

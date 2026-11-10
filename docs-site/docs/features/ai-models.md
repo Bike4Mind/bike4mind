@@ -131,6 +131,13 @@ GPT-Image-1 and Grok Imagine (Quality) are retiring on 2026-10-23 and 2026-11-02
 ### Video
 - **Gemini Omni Flash** (Google)
 - **Grok Imagine Video 1.5** (xAI)
+- **FLUX 3 Video** (Black Forest Labs)
+
+FLUX 3 Video generates text-to-video clips from 5 to 20 whole seconds at 16:9, 9:16, or 1:1. Select 720p (BFL HD, $0.15 per second) or 1080p (BFL FHD, $0.24 per second). A five-second clip has a provider cost of $0.75 or $1.20 respectively, before conversion to credits. These are full renders; draft mode is not offered. Audio is on by default; set `audio: false` for a silent clip.
+
+Resolution names represent BFL output classes. At 16:9, HD delivers 1280 x 704 and FHD delivers 1920 x 1088; dimensions vary by aspect ratio and are rounded to multiples of 32. See [BFL video specifications](https://docs.bfl.ai/flux_3/flux3_video) and [provider pricing](https://bfl.ai/pricing).
+
+If FLUX 3 Video is missing from your available models, check that your BFL API key is configured and that the model is enabled by your administrator. A rejected request needs a valid key and supported duration, resolution, and aspect ratio; do not repeatedly resubmit a job whose outcome is unknown.
 
 Veo 3.1 Fast was retired by Google on 2026-10-22 and no longer accepts new jobs; use Gemini Omni Flash instead. Clips already made with it stay in your history.
 

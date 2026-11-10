@@ -1,9 +1,10 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { AdminCommandPalette, type AdminCommand } from './AdminCommandPalette';
+import { openAdminCommandPalette } from './adminKeyboard';
 
 const navigate = vi.fn();
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate }));
@@ -235,5 +236,21 @@ describe('AdminCommandPalette', () => {
     fireEvent.change(input, { target: { value: userId } });
     fireEvent.keyDown(input, { key: 'Enter' });
     await waitFor(() => expect(navigate).toHaveBeenCalledWith({ to: '/admin/users/$userId', params: { userId } }));
+  });
+
+  it('keeps its button strip out of the page flow until the strip takes focus', () => {
+    setup();
+    const strip = screen.getByTestId('admin-command-strip');
+    expect(getComputedStyle(strip).position).toBe('absolute');
+    expect(getComputedStyle(strip).overflow).toBe('hidden');
+  });
+
+  it('opens from chrome outside it and lists the keyboard shortcuts', async () => {
+    setup();
+    act(() => openAdminCommandPalette());
+    const input = await screen.findByTestId('admin-search-input');
+    fireEvent.change(input, { target: { value: 'shortcuts' } });
+    fireEvent.click(screen.getByRole('option', { name: 'Show keyboard shortcuts' }));
+    expect(await screen.findByTestId('admin-shortcuts-close-btn')).toBeInTheDocument();
   });
 });

@@ -10,6 +10,9 @@ const { config } = vi.hoisted(() => ({
   },
 }));
 vi.mock('../utils/config', () => ({ Config: config }));
+// The module is re-imported per test (resetModules), so mock the Logger instead of spying on a class that gets re-created.
+const errorSpy = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/observability', () => ({ Logger: { error: errorSpy } }));
 
 const pkcs8Pem = (key: { export: (options: { format: 'pem'; type: 'pkcs8' }) => string | Buffer }): string =>
   key.export({ format: 'pem', type: 'pkcs8' }).toString();
@@ -23,14 +26,12 @@ const loadModule = async () => {
 };
 
 describe('getAppleConfig', () => {
-  const errorSpy = vi.spyOn(console, 'error');
-
   beforeEach(() => {
     config.APPLE_CLIENT_ID = 'com.example.services';
     config.APPLE_TEAM_ID = 'TEAM';
     config.APPLE_KEY_ID = 'KEY';
     config.APPLE_PRIVATE_KEY = p256Pem;
-    errorSpy.mockReset().mockImplementation(() => undefined);
+    errorSpy.mockReset();
   });
   afterEach(() => errorSpy.mockReset());
 

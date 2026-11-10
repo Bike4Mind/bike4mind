@@ -294,7 +294,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       {
         $group: {
           _id: null,
-          credits: { $sum: { $add: ['$creditsCharged', { $ifNull: ['$writtenOffCredits', 0] }] } },
+          credits: { $sum: '$creditsCharged' },
         },
       },
     ]);
@@ -311,7 +311,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
           _id: null,
           events: { $sum: 1 },
           completed: { $sum: { $cond: [{ $eq: ['$status', 'ok'] }, 1, 0] } },
-          credits: { $sum: { $add: ['$creditsCharged', { $ifNull: ['$writtenOffCredits', 0] }] } },
+          credits: { $sum: '$creditsCharged' },
           latestAt: { $max: '$createdAt' },
         },
       },
@@ -337,7 +337,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       {
         $group: {
           _id: '$userId',
-          credits: { $sum: { $add: ['$creditsCharged', { $ifNull: ['$writtenOffCredits', 0] }] } },
+          credits: { $sum: '$creditsCharged' },
         },
       },
     ]);
@@ -353,7 +353,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
         $project: {
           userId: 1,
           reservedCredits: 1,
-          settledCredits: { $add: ['$creditsCharged', { $ifNull: ['$writtenOffCredits', 0] }] },
+          settledCredits: '$creditsCharged',
         },
       },
       { $addFields: { ratio: { $divide: ['$settledCredits', '$reservedCredits'] } } },

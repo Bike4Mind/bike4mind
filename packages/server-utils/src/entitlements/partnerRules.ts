@@ -15,6 +15,7 @@
  * Lambda instances the TTL bounds staleness. `normalizeTag` is the ONE
  * comparison rule shared with the registry so domain/key matching is identical.
  */
+import { Logger } from '@bike4mind/observability';
 import { partnerSignupRuleRepository } from '@bike4mind/database';
 import { normalizeTag, KNOWN_ENTITLEMENT_KEYS, unknownEntitlementKeys } from '../lib/entitlements/registry';
 import { SUBSCRIPTION_PLANS } from '../lib/userSubscriptions/constants';
@@ -85,9 +86,9 @@ async function getRulesMap(): Promise<Map<string, ResolvedRule>> {
   inflight ??= loadRules()
     .catch(error => {
       // Fail closed, but never silently: a DB outage degrades every partner to zero grants,
-      // so surface it for alerting. No req-scoped logger here (module-level cache) - console
-      // is picked up by the Lambda log pipeline.
-      console.error('[partnerRules] failed to load signup rules; failing closed to no grants', error);
+      // so surface it for alerting. No req-scoped logger here (module-level cache), so this
+      // goes through the global Logger.
+      Logger.error('[partnerRules] failed to load signup rules; failing closed to no grants', { error });
       return new Map<string, ResolvedRule>();
     })
     .finally(() => {

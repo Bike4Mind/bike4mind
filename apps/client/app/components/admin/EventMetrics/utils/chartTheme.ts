@@ -16,7 +16,8 @@ export const CHART_MUTED = `color-mix(in srgb, ${INK_MUTED} 40%, transparent)`;
 
 /**
  * Colors for `count` categories that are not statuses (DESIGN_GUIDE "Data visualization"): `accent`
- * first, then `accent` stepped down in opacity to 30% for the last.
+ * first, then `accent` stepped down in opacity to 30% for the last. Past about six categories use the
+ * `chartSeries` palette token (utils/themes/admin.ts) instead.
  */
 export function adminChartSeries(count: number): string[] {
   return Array.from({ length: Math.max(0, count) }, (_, index) => {

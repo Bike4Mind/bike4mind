@@ -1,37 +1,32 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, type ReactNode } from 'react';
 import {
-  Sheet,
-  Stack,
-  Typography,
-  Button,
   Alert,
+  Box,
+  Button,
+  CircularProgress,
+  DialogContent,
+  Divider,
+  Dropdown,
   FormControl,
   FormLabel,
-  Select,
-  Option,
-  Input,
   IconButton,
-  Tooltip,
-  Modal,
-  ModalDialog,
-  ModalClose,
-  Table,
-  Chip,
+  Input,
+  ListDivider,
+  Menu,
+  MenuButton,
+  MenuItem,
+  Option,
+  Select,
+  Sheet,
+  Stack,
   Textarea,
-  CircularProgress,
-  Box,
-  Divider,
+  Tooltip,
+  Typography,
 } from '@mui/joy';
-import EditIcon from '@mui/icons-material/Edit';
-import RefreshIcon from '@mui/icons-material/Refresh';
-import SaveIcon from '@mui/icons-material/Save';
-import SearchIcon from '@mui/icons-material/Search';
-import PromptIcon from '@mui/icons-material/ChatBubble';
-import VisibilityIcon from '@mui/icons-material/Visibility';
 import AddIcon from '@mui/icons-material/Add';
 import HistoryIcon from '@mui/icons-material/History';
-import WarningIcon from '@mui/icons-material/Warning';
-import DeleteIcon from '@mui/icons-material/DeleteOutline';
+import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
+import SaveIcon from '@mui/icons-material/Save';
 import {
   useSystemPrompts,
   useUpdateSystemPrompt,
@@ -41,6 +36,19 @@ import {
 import { IAdminSystemPrompt, IAdminSystemPromptHistory } from '@bike4mind/common';
 import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
+import {
+  AdminDialog,
+  DataTable,
+  EmptyState,
+  FilterBar,
+  StatusChip,
+  UpdatingBar,
+  type AdminFilter,
+  type AdminListState,
+  type DataColumn,
+} from './shared';
+import { adminFocus } from './shared/adminStyles';
+import { Dash, DialogFooter, Field, TruncatedText } from './promptAndToolParts';
 
 /** Extended type for prompts returned by the API (includes computed fields) */
 interface ISystemPromptWithMeta extends Omit<IAdminSystemPrompt, 'activeVersion'> {
@@ -77,7 +85,82 @@ const formatVersion = (version: number): string => {
   return `v${version}`;
 };
 
-const SystemPromptEditor: React.FC = () => {
+/** What the page header needs from the editor; SystemPromptsTab renders the header itself. */
+export type SystemPromptsHeaderState = {
+  count: number | undefined;
+  refreshing: boolean;
+  onRefresh: () => void;
+  onCreate: () => void;
+};
+
+type SystemPromptEditorProps = {
+  renderHeader: (header: SystemPromptsHeaderState) => ReactNode;
+};
+
+type SourceFilter = 'all' | 'code' | 'db';
+type EnabledFilter = 'all' | 'true' | 'false';
+
+// FilterBar keys; an empty value means the filter is off ('all').
+const CATEGORY_FILTER = 'prompt-category';
+const SOURCE_FILTER = 'prompt-source';
+const STATUS_FILTER = 'prompt-status';
+
+const toSourceFilter = (value: string | undefined): SourceFilter =>
+  value === 'code' || value === 'db' ? value : 'all';
+const toEnabledFilter = (value: string | undefined): EnabledFilter =>
+  value === 'true' || value === 'false' ? value : 'all';
+
+const HIDDEN_TAGS = ['system-message', 'user-message', 'main-prompt', 'behavior-config'];
+
+function PromptRowMenu({
+  prompt,
+  onView,
+  onEdit,
+  onDelete,
+}: {
+  prompt: ISystemPromptWithMeta;
+  onView: (prompt: ISystemPromptWithMeta) => void;
+  onEdit: (prompt: ISystemPromptWithMeta) => void;
+  onDelete: (prompt: ISystemPromptWithMeta) => void;
+}) {
+  return (
+    <Dropdown>
+      <MenuButton
+        slots={{ root: IconButton }}
+        slotProps={{
+          root: {
+            size: 'sm',
+            variant: 'plain',
+            'aria-label': `Actions for ${prompt.name}`,
+            sx: { ...adminFocus, color: 'admin.inkMuted' },
+          },
+        }}
+        data-testid={`system-prompt-row-actions-${prompt.promptId}`}
+      >
+        <MoreHorizIcon sx={{ fontSize: 18 }} />
+      </MenuButton>
+      <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
+        <MenuItem onClick={() => onView(prompt)} data-testid={`system-prompt-row-view-${prompt.promptId}`}>
+          View details
+        </MenuItem>
+        <MenuItem onClick={() => onEdit(prompt)} data-testid={`system-prompt-row-edit-${prompt.promptId}`}>
+          {prompt.hasOverride ? 'Edit override' : 'Create override'}
+        </MenuItem>
+        {/* Only DB-only prompts can be deleted; ones with a code default are reset instead */}
+        {prompt.hasCodeDefault === false && (
+          <>
+            <ListDivider />
+            <MenuItem onClick={() => onDelete(prompt)} data-testid={`system-prompt-delete-btn-${prompt.promptId}`}>
+              Delete prompt
+            </MenuItem>
+          </>
+        )}
+      </Menu>
+    </Dropdown>
+  );
+}
+
+const SystemPromptEditor: React.FC<SystemPromptEditorProps> = ({ renderHeader }) => {
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [enabledFilter, setEnabledFilter] = useState<'all' | 'true' | 'false'>('all');
   const [sourceFilter, setSourceFilter] = useState<'all' | 'code' | 'db'>('all');
@@ -111,7 +194,7 @@ const SystemPromptEditor: React.FC = () => {
   const prompts = (data?.data || []) as ISystemPromptWithMeta[];
   const total = data?.count || 0;
 
-  const categories = ['all', ...Array.from(new Set(prompts.map(p => p.category)))];
+  const categories = Array.from(new Set(prompts.map(p => p.category)));
 
   // Form state for editing/creating
   const [promptId, setPromptId] = useState('');
@@ -633,830 +716,768 @@ const SystemPromptEditor: React.FC = () => {
 
   const getRoleBadge = (role: 'system-message' | 'user-message' | null) => {
     if (role === 'system-message') {
-      return {
-        label: 'System',
-        color: 'warning' as const,
-        tooltip: 'System Message: Sets AI behavior and constraints',
-      };
+      return { label: 'System', tooltip: 'System message: sets AI behavior and constraints' };
     }
     if (role === 'user-message') {
-      return { label: 'Main', color: 'primary' as const, tooltip: 'Main Prompt: Contains data and instructions' };
+      return { label: 'Main', tooltip: 'Main prompt: contains data and instructions' };
     }
     return null;
   };
 
-  return (
-    <Sheet sx={{ p: 2, width: '100%', overflow: 'auto' }}>
-      {error && (
-        <Alert variant="soft" color="danger" sx={{ mb: 2 }}>
-          <Typography level="body-sm">
-            <strong>Error loading prompts:</strong> {error instanceof Error ? error.message : JSON.stringify(error)}
-          </Typography>
-        </Alert>
-      )}
+  const hasFilters =
+    categoryFilter !== 'all' || enabledFilter !== 'all' || sourceFilter !== 'all' || searchQuery !== '';
 
-      {/* Header */}
-      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 3 }}>
-        <Stack direction="row" spacing={2} alignItems="center">
-          <PromptIcon sx={{ fontSize: 28, color: 'primary.500' }} />
-          <Typography level="h2">System Prompts</Typography>
-          <Chip size="sm" variant="soft">
-            {total} {total === 1 ? 'prompt' : 'prompts'}
-          </Chip>
-        </Stack>
-        <Stack direction="row" spacing={1}>
-          <Button startDecorator={<AddIcon />} onClick={handleCreateNew}>
-            Create New
-          </Button>
-          <Button startDecorator={<RefreshIcon />} variant="outlined" onClick={() => refetch()} loading={isFetching}>
-            Refresh
-          </Button>
-        </Stack>
-      </Stack>
+  const clearFilters = () => {
+    setCategoryFilter('all');
+    setEnabledFilter('all');
+    setSourceFilter('all');
+    setSearchQuery('');
+  };
 
-      {/* Info Alert */}
-      <Alert variant="soft" color="primary" sx={{ mb: 3 }}>
-        <Typography level="body-sm">
-          <strong>Hybrid Prompt System:</strong> System prompts load from code defaults. Create a database override to
-          edit prompts live without deployments. Overrides are versioned and take effect immediately across all features
-          using them.
-        </Typography>
-        <Typography level="body-sm" sx={{ mt: 1 }}>
-          <strong>Two-Prompt Pattern:</strong> Many features use two prompts together: a{' '}
-          <Chip size="sm" variant="soft" color="warning" sx={{ mx: 0.5 }}>
-            System
-          </Chip>{' '}
-          message (sets AI behavior) and a{' '}
-          <Chip size="sm" variant="soft" color="primary" sx={{ mx: 0.5 }}>
-            Main
-          </Chip>{' '}
-          prompt (provides data and instructions). Look for these badges to identify prompt roles.
-        </Typography>
-      </Alert>
+  const filterState: AdminListState = {
+    query: searchQuery,
+    view: '',
+    filters: {
+      [CATEGORY_FILTER]: categoryFilter === 'all' ? '' : categoryFilter,
+      [SOURCE_FILTER]: sourceFilter === 'all' ? '' : sourceFilter,
+      [STATUS_FILTER]: enabledFilter === 'all' ? '' : enabledFilter,
+    },
+  };
 
-      {/* Filters */}
-      <Stack direction="row" spacing={2} sx={{ mb: 3 }}>
-        <FormControl sx={{ minWidth: 200 }}>
-          <FormLabel>Category</FormLabel>
-          <Select value={categoryFilter} onChange={(_, value) => setCategoryFilter(value as string)}>
-            {categories.map(cat => (
-              <Option key={cat} value={cat}>
-                {cat === 'all' ? 'All Categories' : cat}
-              </Option>
-            ))}
-          </Select>
-        </FormControl>
+  const filters: AdminFilter[] = [
+    { id: CATEGORY_FILTER, label: 'Category', options: categories.map(cat => ({ value: cat, label: cat })) },
+    {
+      id: SOURCE_FILTER,
+      label: 'Source',
+      options: [
+        { value: 'code', label: 'Code' },
+        { value: 'db', label: 'DB' },
+      ],
+    },
+    {
+      id: STATUS_FILTER,
+      label: 'Status',
+      options: [
+        { value: 'true', label: 'Enabled' },
+        { value: 'false', label: 'Disabled' },
+      ],
+    },
+  ];
 
-        <FormControl sx={{ minWidth: 120 }}>
-          <FormLabel>Status</FormLabel>
-          <Select value={enabledFilter} onChange={(_, value) => setEnabledFilter(value as 'all' | 'true' | 'false')}>
-            <Option value="all">All</Option>
-            <Option value="true">Enabled</Option>
-            <Option value="false">Disabled</Option>
-          </Select>
-        </FormControl>
+  const handleFilterChange = (patch: Partial<AdminListState>) => {
+    if (patch.query !== undefined) setSearchQuery(patch.query);
+    if (patch.filters) {
+      setCategoryFilter(patch.filters[CATEGORY_FILTER] || 'all');
+      setSourceFilter(toSourceFilter(patch.filters[SOURCE_FILTER]));
+      setEnabledFilter(toEnabledFilter(patch.filters[STATUS_FILTER]));
+    }
+  };
 
-        <FormControl sx={{ minWidth: 120 }}>
-          <FormLabel>Source</FormLabel>
-          <Select value={sourceFilter} onChange={(_, value) => setSourceFilter(value as 'all' | 'code' | 'db')}>
-            <Option value="all">All</Option>
-            <Option value="code">Code</Option>
-            <Option value="db">DB</Option>
-          </Select>
-        </FormControl>
+  const closeEditor = () => {
+    setEditingPrompt(null);
+    setIsCreating(false);
+  };
 
-        <FormControl sx={{ flexGrow: 1 }}>
-          <FormLabel>Search</FormLabel>
-          <Input
-            placeholder="Search by name, description, or tags..."
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            startDecorator={<SearchIcon />}
-          />
-        </FormControl>
-      </Stack>
+  const statusChip = (prompt: ISystemPromptWithMeta, testId?: string) => (
+    <StatusChip
+      tone={prompt.enabled ? 'good' : 'neutral'}
+      label={prompt.enabled ? 'Enabled' : 'Disabled'}
+      data-testid={testId}
+    />
+  );
 
-      {/* Prompts Table */}
-      <Sheet variant="outlined" sx={{ borderRadius: 'sm', overflow: 'auto', maxHeight: '65vh' }}>
-        <Table stickyHeader hoverRow>
-          <thead>
-            <tr>
-              <th style={{ width: '20%' }}>Name</th>
-              <th style={{ width: '25%' }}>Description</th>
-              <th style={{ width: '9%' }}>Category</th>
-              <th style={{ width: '6%' }}>Source</th>
-              <th style={{ width: '6%' }}>Latest</th>
-              <th style={{ width: '8%' }}>Active</th>
-              <th style={{ width: '6%' }}>Usage</th>
-              <th style={{ width: '6%' }}>Success</th>
-              <th style={{ width: '7%' }}>Status</th>
-              <th style={{ width: '7%' }}>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {isLoading || isFetching ? (
-              <tr>
-                <td colSpan={10}>
-                  <Stack direction="column" alignItems="center" spacing={2} sx={{ py: 4 }}>
-                    <CircularProgress />
-                    <Typography level="body-lg" color="neutral">
-                      {isLoading ? 'Loading system prompts...' : 'Refreshing...'}
-                    </Typography>
-                  </Stack>
-                </td>
-              </tr>
-            ) : prompts.length === 0 ? (
-              <tr>
-                <td colSpan={10}>
-                  <Stack direction="column" alignItems="center" spacing={2} sx={{ py: 4 }}>
-                    <Typography level="body-lg" color="neutral">
-                      {searchQuery
-                        ? 'No prompts found matching your search.'
-                        : 'No prompts loaded. Check that default prompts are defined.'}
-                    </Typography>
-                  </Stack>
-                </td>
-              </tr>
-            ) : (
-              prompts.map(prompt => {
-                const role = getPromptRole(prompt);
-                const roleBadge = getRoleBadge(role);
-
-                return (
-                  <tr key={prompt.promptId}>
-                    <td>
-                      <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'nowrap' }}>
-                        <Tooltip title={prompt.name} placement="top">
-                          <Typography level="body-sm" fontWeight="lg" noWrap>
-                            {prompt.name}
-                          </Typography>
-                        </Tooltip>
-                        {prompt.hasOverride && (
-                          <Chip size="sm" variant="solid" color="primary">
-                            Override
-                          </Chip>
-                        )}
-                        {prompt.divergesFromCodeDefault && (
-                          <Tooltip
-                            title="The code default for this prompt has changed since this override was authored. The override is now behind the code default."
-                            placement="top"
-                            arrow
-                          >
-                            <Chip size="sm" variant="soft" color="warning" startDecorator={<WarningIcon />}>
-                              Default updated
-                            </Chip>
-                          </Tooltip>
-                        )}
-                      </Stack>
-                      <Stack direction="row" spacing={0.5} sx={{ mt: 0.5 }}>
-                        {/* Role badge with tooltip */}
-                        {roleBadge && (
-                          <Tooltip title={roleBadge.tooltip} placement="top" arrow>
-                            <Chip size="sm" variant="soft" color={roleBadge.color}>
-                              {roleBadge.label}
-                            </Chip>
-                          </Tooltip>
-                        )}
-                        {/* Show other tags (skip role tags) */}
-                        {prompt.tags
-                          .filter(
-                            tag => !['system-message', 'user-message', 'main-prompt', 'behavior-config'].includes(tag)
-                          )
-                          .slice(0, 2)
-                          .map(tag => (
-                            <Chip key={tag} size="sm" variant="outlined">
-                              {tag}
-                            </Chip>
-                          ))}
-                      </Stack>
-                    </td>
-                    <td>
-                      <Tooltip title={prompt.description} placement="top" arrow>
-                        <Typography level="body-sm" noWrap>
-                          {prompt.description}
-                        </Typography>
-                      </Tooltip>
-                    </td>
-                    <td>
-                      <Chip size="sm" variant="soft">
-                        {prompt.category}
-                      </Chip>
-                    </td>
-                    <td>
-                      <Chip size="sm" variant="outlined" color={prompt.source === 'db' ? 'success' : 'neutral'}>
-                        {prompt.source === 'db' ? 'DB' : 'Code'}
-                      </Chip>
-                    </td>
-                    <td>
-                      <Typography level="body-sm">{prompt.source === 'db' ? `v${prompt.version}` : '-'}</Typography>
-                    </td>
-                    <td>
-                      {prompt.source === 'db' ? (
-                        <Chip size="sm" variant="soft" color={getActiveVersion(prompt) === 0 ? 'neutral' : 'primary'}>
-                          {formatVersion(getActiveVersion(prompt))}
-                        </Chip>
-                      ) : (
-                        <Typography level="body-sm">-</Typography>
-                      )}
-                    </td>
-                    <td>
-                      <Typography level="body-sm">{prompt.source === 'db' ? (prompt.usageCount ?? 0) : '-'}</Typography>
-                    </td>
-                    <td>
-                      <Typography
-                        level="body-sm"
-                        color={
-                          prompt.source === 'code' || getSuccessRate(prompt) === 'N/A'
-                            ? 'neutral'
-                            : parseFloat(getSuccessRate(prompt)) >= 90
-                              ? 'success'
-                              : 'danger'
-                        }
-                      >
-                        {prompt.source === 'db' ? getSuccessRate(prompt) : '-'}
-                      </Typography>
-                    </td>
-                    <td>
-                      <Chip color={prompt.enabled ? 'success' : 'neutral'} variant="soft" size="sm">
-                        {prompt.enabled ? 'Enabled' : 'Disabled'}
-                      </Chip>
-                    </td>
-                    <td>
-                      <Stack direction="row" spacing={0.5}>
-                        <Tooltip title="View details">
-                          <IconButton size="sm" variant="plain" onClick={() => handleView(prompt)}>
-                            <VisibilityIcon />
-                          </IconButton>
-                        </Tooltip>
-                        <Tooltip title={prompt.hasOverride ? 'Edit override' : 'Create override'}>
-                          <IconButton size="sm" variant="plain" onClick={() => handleEdit(prompt)}>
-                            <EditIcon />
-                          </IconButton>
-                        </Tooltip>
-                        {/* Only DB-only prompts can be deleted; ones with a code default are reset instead */}
-                        {prompt.hasCodeDefault === false && (
-                          <Tooltip title="Delete prompt">
-                            <IconButton
-                              size="sm"
-                              variant="plain"
-                              color="danger"
-                              data-testid={`system-prompt-delete-btn-${prompt.promptId}`}
-                              onClick={() => setDeletingPrompt(prompt)}
-                            >
-                              <DeleteIcon />
-                            </IconButton>
-                          </Tooltip>
-                        )}
-                      </Stack>
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </Table>
-      </Sheet>
-
-      {/* Delete confirmation (DB-only prompts) */}
-      <Modal open={!!deletingPrompt} onClose={() => setDeletingPrompt(null)}>
-        <ModalDialog sx={{ maxWidth: 480 }}>
-          <ModalClose />
-          <Typography level="h4">Delete system prompt</Typography>
-          <Stack spacing={2} sx={{ mt: 1 }}>
-            <Typography level="body-md">
-              Delete <strong>{deletingPrompt?.name}</strong> (
-              <Typography component="span" fontFamily="monospace">
-                {deletingPrompt?.promptId}
-              </Typography>
-              )? This prompt has no code default, so it will be removed entirely. Its version history is preserved.
-            </Typography>
-            <Stack direction="row" spacing={1} justifyContent="flex-end">
-              <Button variant="plain" color="neutral" onClick={() => setDeletingPrompt(null)}>
-                Cancel
-              </Button>
-              <Button
-                color="danger"
-                loading={deletePrompt.isPending}
-                data-testid="system-prompt-delete-confirm-btn"
-                onClick={handleConfirmDelete}
-              >
-                Delete
-              </Button>
-            </Stack>
-          </Stack>
-        </ModalDialog>
-      </Modal>
-
-      {/* View Modal */}
-      <Modal open={!!viewingPrompt} onClose={() => setViewingPrompt(null)}>
-        <ModalDialog
-          sx={{
-            minWidth: 900,
-            maxWidth: '90vw',
-            width: 1100,
-            maxHeight: '90vh',
-            overflow: 'auto',
-            resize: 'horizontal',
-          }}
-        >
-          <ModalClose />
-          <Typography level="h4">{viewingPrompt?.name}</Typography>
-
-          {viewingPrompt && (
-            <Stack spacing={2} sx={{ mt: 2 }}>
-              <Box>
-                <Typography level="title-sm" color="neutral">
-                  Prompt ID
-                </Typography>
-                <Typography level="body-md" fontFamily="monospace">
-                  {viewingPrompt.promptId}
-                </Typography>
-              </Box>
-
-              <Box>
-                <Typography level="title-sm" color="neutral">
-                  Description
-                </Typography>
-                <Typography level="body-sm">{viewingPrompt.description}</Typography>
-              </Box>
-
-              <Box>
-                <Typography level="title-sm" color="neutral">
-                  Category
-                </Typography>
-                <Chip size="sm" variant="soft">
-                  {viewingPrompt.category}
-                </Chip>
-              </Box>
-
-              <Box>
-                <Typography level="title-sm" color="neutral">
-                  Tags
-                </Typography>
-                <Stack direction="row" spacing={0.5} sx={{ mt: 0.5 }}>
-                  {viewingPrompt.tags.map(tag => (
-                    <Chip key={tag} size="sm" variant="outlined">
-                      {tag}
-                    </Chip>
-                  ))}
-                </Stack>
-              </Box>
-
-              <Box>
-                <Typography level="title-sm" color="neutral">
-                  Supported Variables
-                </Typography>
-                <Stack direction="row" spacing={0.5} sx={{ mt: 0.5 }}>
-                  {viewingPrompt.variables.length > 0 ? (
-                    viewingPrompt.variables.map(variable => (
-                      <Chip key={variable} size="sm" variant="soft" color="primary">
-                        {`{{${variable}}}`}
-                      </Chip>
-                    ))
-                  ) : (
-                    <Typography level="body-xs" color="neutral">
-                      No variables
-                    </Typography>
-                  )}
-                </Stack>
-              </Box>
-
-              <Box>
-                <Typography level="title-sm" color="neutral" sx={{ mb: 0.5 }}>
-                  Prompt Content{' '}
-                  {viewingPrompt.hasOverride && getActiveVersion(viewingPrompt) === 0 ? '(Code Default)' : ''}
-                </Typography>
-                <Sheet variant="outlined" sx={{ p: 2, borderRadius: 'sm', maxHeight: 400, overflow: 'auto' }}>
-                  <Typography level="body-sm" component="pre" sx={{ whiteSpace: 'pre-wrap' }}>
-                    {viewingPrompt.content}
-                  </Typography>
-                </Sheet>
-              </Box>
-
-              <Divider />
-
-              {/* Show different info based on whether this is code-only or has override */}
-              {viewingPrompt.hasOverride ? (
-                <>
-                  <Stack direction="row" spacing={3} flexWrap="wrap">
-                    <Box>
-                      <Typography level="title-sm" color="neutral">
-                        Active Version
-                      </Typography>
-                      <Chip
-                        size="sm"
-                        variant="soft"
-                        color={getActiveVersion(viewingPrompt) === 0 ? 'neutral' : 'primary'}
-                      >
-                        {formatVersion(getActiveVersion(viewingPrompt))}
-                      </Chip>
-                    </Box>
-                    <Box>
-                      <Typography level="title-sm" color="neutral">
-                        Latest Stored
-                      </Typography>
-                      <Typography level="body-sm">
-                        v{viewingPrompt.version} - {new Date(viewingPrompt.updatedAt).toLocaleDateString()} (
-                        {viewingPrompt.lastUpdatedByName})
-                      </Typography>
-                    </Box>
-                    <Box>
-                      <Typography level="title-sm" color="neutral">
-                        Status
-                      </Typography>
-                      <Chip color={viewingPrompt.enabled ? 'success' : 'neutral'} variant="soft" size="sm">
-                        {viewingPrompt.enabled ? 'Enabled' : 'Disabled'}
-                      </Chip>
-                    </Box>
-                    {getActiveVersion(viewingPrompt) !== 0 && (
-                      <>
-                        <Box>
-                          <Typography level="title-sm" color="neutral">
-                            Usage Count
-                          </Typography>
-                          <Typography level="body-md">{viewingPrompt.usageCount ?? 0}</Typography>
-                        </Box>
-                        <Box>
-                          <Typography level="title-sm" color="neutral">
-                            Success Rate
-                          </Typography>
-                          <Typography level="body-md">{getSuccessRate(viewingPrompt)}</Typography>
-                        </Box>
-                      </>
-                    )}
-                  </Stack>
-
-                  <Divider />
-
-                  <Stack direction="row" spacing={3}>
-                    <Box>
-                      <Typography level="title-sm" color="neutral">
-                        Last Updated By
-                      </Typography>
-                      <Typography level="body-sm">{viewingPrompt.lastUpdatedByName}</Typography>
-                    </Box>
-                    <Box>
-                      <Typography level="title-sm" color="neutral">
-                        Last Updated
-                      </Typography>
-                      <Typography level="body-sm">{new Date(viewingPrompt.updatedAt).toLocaleString()}</Typography>
-                    </Box>
-                  </Stack>
-
-                  {getActiveVersion(viewingPrompt) === 0 && (
-                    <Alert variant="soft" color="neutral" size="sm">
-                      App is using the code default. A stored override (v{viewingPrompt.version}) exists but is not
-                      active.
-                    </Alert>
-                  )}
-                </>
-              ) : (
-                <Stack direction="row" spacing={3}>
-                  <Box>
-                    <Typography level="title-sm" color="neutral">
-                      Source
-                    </Typography>
-                    <Chip size="sm" variant="soft" color="neutral">
-                      Code Default
-                    </Chip>
+  const columns: DataColumn<ISystemPromptWithMeta>[] = [
+    {
+      id: 'name',
+      label: 'Name',
+      width: '16rem',
+      sortValue: prompt => prompt.name,
+      render: prompt => {
+        const roleBadge = getRoleBadge(getPromptRole(prompt));
+        const tags = prompt.tags.filter(tag => !HIDDEN_TAGS.includes(tag)).slice(0, 2);
+        return (
+          <Stack gap={0.5} sx={{ minWidth: 0 }}>
+            <Stack direction="row" alignItems="center" gap={1} sx={{ minWidth: 0 }}>
+              <TruncatedText text={prompt.name} testId={`system-prompt-name-${prompt.promptId}`} />
+              {prompt.divergesFromCodeDefault && (
+                <Tooltip
+                  title="The code default for this prompt has changed since this override was authored. The override is now behind the code default."
+                  placement="top"
+                  arrow
+                >
+                  <Box component="span" sx={{ flexShrink: 0 }}>
+                    <StatusChip
+                      tone="warn"
+                      label="Default updated"
+                      data-testid={`system-prompt-diverged-${prompt.promptId}`}
+                    />
                   </Box>
-                  <Box>
-                    <Typography level="title-sm" color="neutral">
-                      Status
-                    </Typography>
-                    <Chip color={viewingPrompt.enabled ? 'success' : 'neutral'} variant="soft" size="sm">
-                      {viewingPrompt.enabled ? 'Enabled' : 'Disabled'}
-                    </Chip>
-                  </Box>
-                </Stack>
+                </Tooltip>
               )}
             </Stack>
-          )}
-        </ModalDialog>
-      </Modal>
+            {(roleBadge || tags.length > 0) && (
+              <Stack direction="row" flexWrap="wrap" gap={0.5}>
+                {roleBadge && (
+                  <Tooltip title={roleBadge.tooltip} placement="top" arrow>
+                    <Box component="span">
+                      <StatusChip
+                        tone="neutral"
+                        label={roleBadge.label}
+                        data-testid={`system-prompt-role-${prompt.promptId}`}
+                      />
+                    </Box>
+                  </Tooltip>
+                )}
+                {tags.map(tag => (
+                  <StatusChip key={tag} tone="neutral" label={tag} />
+                ))}
+              </Stack>
+            )}
+          </Stack>
+        );
+      },
+    },
+    {
+      id: 'description',
+      label: 'Description',
+      render: prompt => (prompt.description ? <TruncatedText text={prompt.description} /> : <Dash />),
+    },
+    {
+      id: 'category',
+      label: 'Category',
+      width: '9rem',
+      sortValue: prompt => prompt.category,
+      render: prompt => <StatusChip tone="neutral" label={prompt.category} />,
+    },
+    {
+      id: 'source',
+      label: 'Source',
+      width: '5.5rem',
+      sortValue: prompt => prompt.source,
+      render: prompt => (
+        <StatusChip
+          tone="neutral"
+          label={prompt.source === 'db' ? 'DB' : 'Code'}
+          data-testid={`system-prompt-source-${prompt.promptId}`}
+        />
+      ),
+    },
+    {
+      id: 'latest',
+      label: 'Latest',
+      width: '4.5rem',
+      render: prompt => (prompt.source === 'db' ? `v${prompt.version}` : <Dash />),
+    },
+    {
+      id: 'active',
+      label: 'Active',
+      width: '5rem',
+      render: prompt => (prompt.source === 'db' ? formatVersion(getActiveVersion(prompt)) : <Dash />),
+    },
+    {
+      id: 'usage',
+      label: 'Usage',
+      width: '5rem',
+      numeric: true,
+      sortValue: prompt => (prompt.source === 'db' ? (prompt.usageCount ?? 0) : -1),
+      render: prompt => (prompt.source === 'db' ? (prompt.usageCount ?? 0).toLocaleString() : <Dash />),
+    },
+    {
+      id: 'success',
+      label: 'Success',
+      width: '5rem',
+      numeric: true,
+      render: prompt => (prompt.source === 'db' ? getSuccessRate(prompt) : <Dash />),
+    },
+    {
+      id: 'status',
+      label: 'Status',
+      width: '6rem',
+      sortValue: prompt => (prompt.enabled ? 'Enabled' : 'Disabled'),
+      render: prompt => statusChip(prompt, `system-prompt-status-${prompt.promptId}`),
+    },
+  ];
 
-      {/* Edit/Create Modal */}
-      <Modal
-        open={!!editingPrompt || isCreating}
+  return (
+    <>
+      {renderHeader({
+        count: data ? total : undefined,
+        refreshing: isFetching,
+        onRefresh: () => void refetch(),
+        onCreate: handleCreateNew,
+      })}
+
+      <Alert color="neutral" variant="soft" data-testid="system-prompts-info-banner">
+        <Stack gap={0.5}>
+          <Typography level="body-sm">
+            Prompts load from code defaults. An override changes a prompt live, without a deploy: overrides are
+            versioned and apply at once wherever the prompt is used.
+          </Typography>
+          <Typography level="body-sm">
+            Many features pair two prompts: a System prompt that sets how the AI behaves and a Main prompt that carries
+            the data and instructions. The chip under each name shows which role a prompt has.
+          </Typography>
+        </Stack>
+      </Alert>
+
+      <FilterBar
+        state={filterState}
+        filters={filters}
+        searchLabel="Search name, description or tags"
+        onChange={handleFilterChange}
+      />
+
+      <Stack gap={1} sx={{ minWidth: 0 }}>
+        <UpdatingBar active={isFetching && !isLoading} testId="system-prompts-updating-bar" />
+        <DataTable
+          label="System prompts"
+          testId="system-prompts-table"
+          rows={prompts}
+          columns={columns}
+          getRowId={prompt => prompt.promptId}
+          rowTestId={prompt => `system-prompt-row-${prompt.promptId}`}
+          loading={isLoading}
+          error={error ? 'Could not load system prompts.' : undefined}
+          onRetry={() => void refetch()}
+          pageResetKey={JSON.stringify(filterState)}
+          empty={
+            hasFilters ? (
+              <EmptyState
+                title="No prompts match these filters"
+                action={
+                  <Button variant="outlined" onClick={clearFilters} data-testid="system-prompts-empty-clear-btn">
+                    Clear filters
+                  </Button>
+                }
+              />
+            ) : (
+              <EmptyState
+                title="No system prompts yet"
+                description="Check that the code defaults are defined, or create a prompt."
+                action={
+                  <Button variant="outlined" onClick={handleCreateNew} data-testid="system-prompts-empty-new-btn">
+                    New prompt
+                  </Button>
+                }
+              />
+            )
+          }
+          rowActions={prompt => (
+            <PromptRowMenu prompt={prompt} onView={handleView} onEdit={handleEdit} onDelete={setDeletingPrompt} />
+          )}
+          // Wide enough that every column keeps one line; below it the table scrolls inside its frame.
+          minWidth="70rem"
+          maxHeight="none"
+        />
+      </Stack>
+
+      <AdminDialog
+        open={deletingPrompt !== null}
+        // Esc, the X and the backdrop wait for an in-flight delete, like the disabled Cancel.
         onClose={() => {
-          setEditingPrompt(null);
-          setIsCreating(false);
+          if (!deletePrompt.isPending) setDeletingPrompt(null);
         }}
+        title="Delete prompt"
+        role="alertdialog"
+        data-testid="system-prompt-delete-dialog"
       >
-        <ModalDialog
-          sx={{
-            minWidth: 900,
-            maxWidth: '95vw',
-            width: 1100,
-            maxHeight: '90vh',
-            overflow: 'hidden',
-            resize: 'both',
-          }}
-        >
-          <ModalClose />
-          <Typography level="h4">{isCreating ? 'Create New Prompt' : `Edit Prompt: ${editingPrompt?.name}`}</Typography>
+        <DialogContent>
+          <Typography level="body-sm" component="div">
+            Deletes <strong>{deletingPrompt?.name}</strong> (
+            <Typography component="span" fontFamily="code">
+              {deletingPrompt?.promptId}
+            </Typography>
+            ). It has no code default, so it is removed entirely. Its version history is kept.
+          </Typography>
+        </DialogContent>
+        <DialogFooter>
+          <Button
+            variant="plain"
+            color="neutral"
+            onClick={() => setDeletingPrompt(null)}
+            disabled={deletePrompt.isPending}
+            data-testid="system-prompt-delete-cancel-btn"
+          >
+            Cancel
+          </Button>
+          <Button
+            color="danger"
+            loading={deletePrompt.isPending}
+            data-testid="system-prompt-delete-confirm-btn"
+            onClick={handleConfirmDelete}
+          >
+            Delete prompt
+          </Button>
+        </DialogFooter>
+      </AdminDialog>
+
+      <AdminDialog
+        open={viewingPrompt !== null}
+        onClose={() => setViewingPrompt(null)}
+        title={viewingPrompt?.name ?? 'Prompt details'}
+        width={900}
+        data-testid="system-prompt-view-dialog"
+      >
+        {viewingPrompt && (
+          <DialogContent sx={{ gap: 2 }}>
+            <Field label="Prompt ID">
+              <Typography level="body-sm" fontFamily="code" data-testid="system-prompt-view-id">
+                {viewingPrompt.promptId}
+              </Typography>
+            </Field>
+
+            <Field label="Description">
+              <Typography level="body-sm">{viewingPrompt.description}</Typography>
+            </Field>
+
+            <Field label="Category">
+              <StatusChip tone="neutral" label={viewingPrompt.category} />
+            </Field>
+
+            <Field label="Tags">
+              <Stack direction="row" flexWrap="wrap" gap={0.5}>
+                {viewingPrompt.tags.map(tag => (
+                  <StatusChip key={tag} tone="neutral" label={tag} />
+                ))}
+              </Stack>
+            </Field>
+
+            <Field label="Supported variables">
+              {viewingPrompt.variables.length > 0 ? (
+                <Stack direction="row" flexWrap="wrap" gap={0.5}>
+                  {viewingPrompt.variables.map(variable => (
+                    <StatusChip key={variable} tone="neutral" label={`{{${variable}}}`} />
+                  ))}
+                </Stack>
+              ) : (
+                <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
+                  No variables
+                </Typography>
+              )}
+            </Field>
+
+            <Field
+              label={
+                viewingPrompt.hasOverride && getActiveVersion(viewingPrompt) === 0
+                  ? 'Prompt content (code default)'
+                  : 'Prompt content'
+              }
+            >
+              <Sheet
+                variant="outlined"
+                sx={{ p: 2, borderRadius: 'sm', maxHeight: 400, overflow: 'auto', borderColor: 'admin.border' }}
+              >
+                <Typography level="body-sm" component="pre" sx={{ whiteSpace: 'pre-wrap', m: 0 }}>
+                  {viewingPrompt.content}
+                </Typography>
+              </Sheet>
+            </Field>
+
+            <Divider />
+
+            {/* Show different info based on whether this is code-only or has override */}
+            {viewingPrompt.hasOverride ? (
+              <>
+                <Stack direction="row" gap={3} flexWrap="wrap">
+                  <Field label="Active version">
+                    <Typography level="body-sm">{formatVersion(getActiveVersion(viewingPrompt))}</Typography>
+                  </Field>
+                  <Field label="Latest stored">
+                    <Typography level="body-sm">
+                      v{viewingPrompt.version} - {new Date(viewingPrompt.updatedAt).toLocaleDateString()} (
+                      {viewingPrompt.lastUpdatedByName})
+                    </Typography>
+                  </Field>
+                  <Field label="Status">{statusChip(viewingPrompt, 'system-prompt-view-status')}</Field>
+                  {getActiveVersion(viewingPrompt) !== 0 && (
+                    <>
+                      <Field label="Usage count">
+                        <Typography level="body-sm">{(viewingPrompt.usageCount ?? 0).toLocaleString()}</Typography>
+                      </Field>
+                      <Field label="Success rate">
+                        <Typography level="body-sm">{getSuccessRate(viewingPrompt)}</Typography>
+                      </Field>
+                    </>
+                  )}
+                </Stack>
+
+                <Divider />
+
+                <Stack direction="row" gap={3} flexWrap="wrap">
+                  <Field label="Last updated by">
+                    <Typography level="body-sm">{viewingPrompt.lastUpdatedByName}</Typography>
+                  </Field>
+                  <Field label="Last updated">
+                    <Typography level="body-sm">{new Date(viewingPrompt.updatedAt).toLocaleString()}</Typography>
+                  </Field>
+                </Stack>
+
+                {getActiveVersion(viewingPrompt) === 0 && (
+                  <Alert variant="soft" color="neutral" size="sm">
+                    App is using the code default. A stored override (v{viewingPrompt.version}) exists but is not
+                    active.
+                  </Alert>
+                )}
+              </>
+            ) : (
+              <Stack direction="row" gap={3} flexWrap="wrap">
+                <Field label="Source">
+                  <StatusChip tone="neutral" label="Code default" />
+                </Field>
+                <Field label="Status">{statusChip(viewingPrompt, 'system-prompt-view-status')}</Field>
+              </Stack>
+            )}
+          </DialogContent>
+        )}
+      </AdminDialog>
+
+      <AdminDialog
+        open={!!editingPrompt || isCreating}
+        onClose={closeEditor}
+        title={isCreating ? 'New prompt' : 'Edit prompt'}
+        width={1100}
+        data-testid="system-prompt-edit-dialog"
+      >
+        <DialogContent sx={{ gap: 2 }}>
+          {!isCreating && editingPrompt && (
+            <Typography level="body-sm" component="div" sx={{ color: 'admin.inkMuted' }}>
+              <Box component="strong" sx={{ color: 'admin.ink' }} data-testid="system-prompt-edit-name">
+                {editingPrompt.name}
+              </Box>{' '}
+              (
+              <Typography component="span" fontFamily="code">
+                {editingPrompt.promptId}
+              </Typography>
+              )
+            </Typography>
+          )}
 
           {!isCreating && editingPrompt?.divergesFromCodeDefault && (
             <Alert
               variant="soft"
               color="warning"
-              startDecorator={<WarningIcon />}
-              sx={{ mt: 1.5 }}
               endDecorator={
                 <Button
                   size="sm"
                   variant="outlined"
-                  color="warning"
+                  color="neutral"
                   disabled={!defaultPromptData}
                   onClick={() => handleSelectVersion('0')}
+                  data-testid="system-prompt-view-default-btn"
                 >
                   View code default
                 </Button>
               }
             >
               <Typography level="body-sm">
-                The <strong>code default</strong> for this prompt has changed since this override was authored — the
-                active override is now behind it. Compare against <strong>Default (Code)</strong> in the version
-                selector, then use <strong>Use Default</strong> to adopt it, or edit and{' '}
-                <strong>Save as New Version</strong> to keep your customizations.
+                The <strong>code default</strong> for this prompt has changed since this override was authored, so the
+                active override is now behind it. Compare against <strong>Default (code)</strong> in the version
+                selector, then use <strong>Use default</strong> to adopt it, or edit and{' '}
+                <strong>Save as new version</strong> to keep your customizations.
               </Typography>
             </Alert>
           )}
 
-          <Stack direction="row" spacing={0} sx={{ mt: 2, height: 'calc(90vh - 120px)', minHeight: 400 }}>
-            {/* Edit Form */}
-            <Stack spacing={2} sx={{ flex: 1, minWidth: 0, overflow: 'auto', pr: 2 }}>
-              {isCreating && (
-                <FormControl>
-                  <FormLabel>Prompt ID</FormLabel>
-                  <Input
-                    value={promptId}
-                    onChange={e => setPromptId(e.target.value)}
-                    placeholder="sales_briefing_mode"
-                  />
-                  <Typography level="body-xs" sx={{ mt: 0.5 }}>
-                    Unique identifier (lowercase, underscores). Example: sales_briefing_mode
-                  </Typography>
-                </FormControl>
-              )}
+          {isCreating && (
+            <FormControl>
+              <FormLabel>Prompt ID</FormLabel>
+              <Input
+                value={promptId}
+                onChange={e => setPromptId(e.target.value)}
+                placeholder="sales_briefing_mode"
+                slotProps={{ input: { 'data-testid': 'system-prompt-id-input' } }}
+              />
+              <Typography level="body-xs" sx={{ mt: 0.5 }}>
+                Unique identifier (lowercase, underscores). Example: sales_briefing_mode
+              </Typography>
+            </FormControl>
+          )}
 
-              <FormControl>
-                <FormLabel>Name</FormLabel>
-                <Input value={name} onChange={e => setName(e.target.value)} placeholder="Display name for admin UI" />
-                <Typography level="body-xs" sx={{ mt: 0.5 }}>
-                  Clear, descriptive name for this prompt (e.g., &quot;Optimizer System Prompt&quot;)
-                </Typography>
-              </FormControl>
+          <FormControl>
+            <FormLabel>Name</FormLabel>
+            <Input
+              value={name}
+              onChange={e => setName(e.target.value)}
+              placeholder="Display name for admin UI"
+              slotProps={{ input: { 'data-testid': 'system-prompt-name-input' } }}
+            />
+            <Typography level="body-xs" sx={{ mt: 0.5 }}>
+              Clear, descriptive name for this prompt (e.g., &quot;Optimizer System Prompt&quot;)
+            </Typography>
+          </FormControl>
 
-              <FormControl>
-                <FormLabel>Description</FormLabel>
-                <Input
-                  value={description}
-                  onChange={e => setDescription(e.target.value)}
-                  placeholder="What does this prompt do and where is it used?"
-                />
-                <Typography level="body-xs" sx={{ mt: 0.5 }}>
-                  Brief description of the prompt&apos;s purpose and context
-                </Typography>
-              </FormControl>
+          <FormControl>
+            <FormLabel>Description</FormLabel>
+            <Input
+              value={description}
+              onChange={e => setDescription(e.target.value)}
+              placeholder="What does this prompt do and where is it used?"
+              slotProps={{ input: { 'data-testid': 'system-prompt-description-input' } }}
+            />
+            <Typography level="body-xs" sx={{ mt: 0.5 }}>
+              Brief description of the prompt&apos;s purpose and context
+            </Typography>
+          </FormControl>
 
-              <Box>
-                <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 0.5 }}>
-                  <Typography level="title-sm">Prompt Content</Typography>
-                  <Stack direction="row" spacing={1} alignItems="center">
-                    {/* Version selector - only show for DB overrides */}
-                    {!isCreating && editingPrompt && editingPrompt.hasOverride && (
-                      <>
-                        <HistoryIcon sx={{ fontSize: 18, color: 'neutral.500' }} />
-                        <Select
-                          size="sm"
-                          value={selectedVersion}
-                          onChange={(_, value) => value && handleSelectVersion(value)}
-                          sx={{ minWidth: 340 }}
-                          endDecorator={isLoadingHistory ? <CircularProgress size="sm" /> : null}
-                        >
-                          {/* Latest version option */}
-                          <Option value="current">
-                            v{editingPrompt.version} - {new Date(editingPrompt.updatedAt).toLocaleDateString()} (
-                            {editingPrompt.lastUpdatedByName}) (Latest)
-                            {getActiveVersion(editingPrompt!) === editingPrompt.version ? ' \u2713' : ''}
-                            {hasActualEdits && selectedVersion === 'current' ? ' *' : ''}
-                          </Option>
-                          {/* Active version option (if historical and history not loaded yet) */}
-                          {(() => {
-                            const activeVer = getActiveVersion(editingPrompt!);
-                            const isHistoricalActive =
-                              typeof activeVer === 'number' && activeVer !== editingPrompt.version;
-                            const historyHasActive = versionHistory.some(h => h.version === activeVer);
-                            // Show placeholder for active version if it's historical and not yet in loaded history
-                            if (isHistoricalActive && !historyHasActive) {
-                              return (
-                                <Option value={String(activeVer)}>
-                                  v{activeVer} (active, loading...) {'\u2713'}
-                                </Option>
-                              );
-                            }
-                            return null;
-                          })()}
-                          {/* Historical versions */}
-                          {versionHistory
-                            .filter(h => Number(h.version) !== Number(editingPrompt.version))
-                            // Deduplicate by version number (keep first/latest entry)
-                            .filter((h, i, arr) => arr.findIndex(x => x.version === h.version) === i)
-                            .map(h => (
-                              <Option key={h.version} value={String(h.version)}>
-                                v{h.version} - {new Date(h.createdAt).toLocaleDateString()} ({h.createdByName})
-                                {getActiveVersion(editingPrompt!) === h.version ? ' \u2713' : ''}
-                              </Option>
-                            ))}
-                          {/* Default code option - always show if activeVersion is 0, otherwise wait for data */}
-                          {(getActiveVersion(editingPrompt!) === 0 || defaultPromptData) && (
-                            <Option value="0">
-                              Default (Code){getActiveVersion(editingPrompt!) === 0 ? ' \u2713' : ''}
-                            </Option>
-                          )}
-                        </Select>
-                      </>
-                    )}
-                  </Stack>
-                </Stack>
-                <Textarea
-                  value={content}
-                  onChange={e => setContent(e.target.value)}
-                  minRows={20}
-                  maxRows={30}
-                  placeholder="The actual prompt text. Use {{variableName}} for variable substitution..."
-                />
-                <Typography level="body-xs" sx={{ mt: 0.5 }}>
-                  Use <strong>{`{{variableName}}`}</strong> for variable substitution. Variables will be replaced at
-                  runtime.
-                </Typography>
-              </Box>
-
-              <FormControl>
-                <FormLabel>Category</FormLabel>
-                <Select value={category} onChange={(_, value) => setCategory(value as string)}>
-                  <Option value="system">System</Option>
-                  <Option value="admin">Admin</Option>
-                  <Option value="automation">Automation</Option>
-                  <Option value="optihashi">OptiHashi</Option>
-                  <Option value="sales_intelligence">Sales Intelligence</Option>
-                </Select>
-                <Typography level="body-xs" sx={{ mt: 0.5 }}>
-                  Category for organization and filtering.
-                </Typography>
-              </FormControl>
-
-              <FormControl>
-                <FormLabel>Tags (comma-separated)</FormLabel>
-                <Input
-                  value={tagsInput}
-                  onChange={e => setTagsInput(e.target.value)}
-                  onBlur={() => {
-                    const parsed = tagsInput
-                      .split(',')
-                      .map(t => t.trim())
-                      .filter(Boolean);
-                    setTagsInput(parsed.join(', '));
-                  }}
-                  placeholder="optimizer, scheduling, system"
-                />
-                <Typography level="body-xs" sx={{ mt: 0.5 }}>
-                  Searchable tags to help find this prompt
-                </Typography>
-              </FormControl>
-
-              <FormControl>
-                <FormLabel>Variables (comma-separated)</FormLabel>
-                <Input
-                  value={variablesInput}
-                  onChange={e => setVariablesInput(e.target.value)}
-                  onBlur={() => {
-                    const parsed = variablesInput
-                      .split(',')
-                      .map(v => v.trim())
-                      .filter(Boolean);
-                    setVariablesInput(parsed.join(', '));
-                  }}
-                  placeholder="searchQuery, userName, companyName"
-                />
-                <Typography level="body-xs" sx={{ mt: 0.5 }}>
-                  List variable names used in {`{{variable}}`} placeholders
-                </Typography>
-              </FormControl>
-
-              <FormControl>
-                <FormLabel>Status</FormLabel>
-                <Select
-                  value={enabled ? 'enabled' : 'disabled'}
-                  onChange={(_, value) => setEnabled(value === 'enabled')}
-                >
-                  <Option value="enabled">Enabled</Option>
-                  <Option value="disabled">Disabled</Option>
-                </Select>
-                <Typography level="body-xs" sx={{ mt: 0.5 }}>
-                  Disabled prompts won&apos;t be used by the system
-                </Typography>
-              </FormControl>
-
-              <Alert
-                variant="soft"
-                color={selectedVersion === '0' ? 'primary' : hasActualEdits ? 'warning' : 'neutral'}
-              >
-                <Typography level="body-sm">
-                  {isCreating
-                    ? 'Creating a new prompt will make it immediately available in production.'
-                    : selectedVersion === '0'
-                      ? 'Viewing code default. Switch to use it or create a new version from it.'
-                      : !editingPrompt
-                        ? 'Loading...'
-                        : getActiveVersion(editingPrompt!) === 0 && selectedVersion === 'current'
-                          ? 'App is using code default. You are viewing the stored override. Create a new version to activate it.'
-                          : !hasActualEdits
-                            ? `Viewing ${formatVersion(selectedVersion === 'current' ? getActiveVersion(editingPrompt!) : Number(selectedVersion))}. Make changes to save or switch to use this version.`
-                            : isViewingActiveVersion
-                              ? 'You have unsaved changes. Save to update this version or create a new version.'
-                              : `You have changes. Save to update ${formatVersion(Number(selectedVersion))} or create a new version.`}
-                </Typography>
-              </Alert>
-
-              <Stack direction="row" spacing={2} justifyContent="flex-end" flexWrap="wrap">
-                <Button
-                  variant="outlined"
-                  onClick={() => {
-                    setEditingPrompt(null);
-                    setIsCreating(false);
-                  }}
-                >
-                  Cancel
-                </Button>
-
-                {isCreating ? (
-                  <Button startDecorator={<SaveIcon />} onClick={handleSubmit} loading={createPrompt.isPending}>
-                    Create Prompt
-                  </Button>
-                ) : editingPrompt && editingPrompt.hasOverride ? (
+          <Box>
+            <Stack
+              direction="row"
+              flexWrap="wrap"
+              justifyContent="space-between"
+              alignItems="center"
+              gap={1}
+              sx={{ mb: 0.5 }}
+            >
+              <Typography level="title-sm">Prompt content</Typography>
+              <Stack direction="row" spacing={1} alignItems="center">
+                {/* Version selector - only show for DB overrides */}
+                {!isCreating && editingPrompt && editingPrompt.hasOverride && (
                   <>
-                    {/* Switch to this version (if not already active, and no unsaved edits) */}
-                    {!isViewingActiveVersion && selectedVersion !== '0' && !hasActualEdits && (
-                      <Button
-                        variant="outlined"
-                        color="primary"
-                        onClick={() =>
-                          handleSwitchToVersion(
-                            selectedVersion === 'current' ? editingPrompt.version : Number(selectedVersion)
-                          )
+                    <HistoryIcon sx={{ fontSize: 18, color: 'admin.inkMuted' }} />
+                    <Select
+                      size="sm"
+                      value={selectedVersion}
+                      onChange={(_, value) => value && handleSelectVersion(value)}
+                      sx={{ minWidth: { sm: 340 } }}
+                      endDecorator={isLoadingHistory ? <CircularProgress size="sm" /> : null}
+                      data-testid="system-prompt-version-select"
+                    >
+                      {/* Latest version option */}
+                      <Option value="current">
+                        v{editingPrompt.version} - {new Date(editingPrompt.updatedAt).toLocaleDateString()} (
+                        {editingPrompt.lastUpdatedByName}) (Latest)
+                        {getActiveVersion(editingPrompt!) === editingPrompt.version ? ' \u2713' : ''}
+                        {hasActualEdits && selectedVersion === 'current' ? ' *' : ''}
+                      </Option>
+                      {/* Active version option (if historical and history not loaded yet) */}
+                      {(() => {
+                        const activeVer = getActiveVersion(editingPrompt!);
+                        const isHistoricalActive = typeof activeVer === 'number' && activeVer !== editingPrompt.version;
+                        const historyHasActive = versionHistory.some(h => h.version === activeVer);
+                        // Show placeholder for active version if it's historical and not yet in loaded history
+                        if (isHistoricalActive && !historyHasActive) {
+                          return (
+                            <Option value={String(activeVer)}>
+                              v{activeVer} (active, loading...) {'\u2713'}
+                            </Option>
+                          );
                         }
-                      >
-                        Use v{selectedVersion === 'current' ? editingPrompt.version : selectedVersion}
-                      </Button>
-                    )}
-
-                    {/* Save + Use combined button (for non-active version with edits) */}
-                    {!isViewingActiveVersion && selectedVersion !== '0' && hasActualEdits && (
-                      <Button startDecorator={<SaveIcon />} onClick={handleSaveAndUseVersion}>
-                        Save + Use v{selectedVersion === 'current' ? editingPrompt.version : selectedVersion}
-                      </Button>
-                    )}
-
-                    {/* Switch to default (version 0) */}
-                    {selectedVersion === '0' && (
-                      <Button variant="outlined" color="primary" onClick={() => handleSwitchToVersion(0)}>
-                        Use Default
-                      </Button>
-                    )}
-
-                    {/* Save to current version (only when viewing the ACTIVE version with edits) */}
-                    {hasActualEdits && selectedVersion !== '0' && isViewingActiveVersion && (
-                      <Button variant="soft" startDecorator={<SaveIcon />} onClick={handleSaveToVersion}>
-                        Save to{' '}
-                        {formatVersion(selectedVersion === 'current' ? editingPrompt.version : Number(selectedVersion))}
-                      </Button>
-                    )}
-
-                    {/* Create new version (only if edited) */}
-                    {hasActualEdits && (
-                      <Button
-                        variant="outlined"
-                        startDecorator={<AddIcon />}
-                        onClick={() => handleCreateNewVersion(true)}
-                      >
-                        Save as New Version
-                      </Button>
-                    )}
+                        return null;
+                      })()}
+                      {/* Historical versions */}
+                      {versionHistory
+                        .filter(h => Number(h.version) !== Number(editingPrompt.version))
+                        // Deduplicate by version number (keep first/latest entry)
+                        .filter((h, i, arr) => arr.findIndex(x => x.version === h.version) === i)
+                        .map(h => (
+                          <Option key={h.version} value={String(h.version)}>
+                            v{h.version} - {new Date(h.createdAt).toLocaleDateString()} ({h.createdByName})
+                            {getActiveVersion(editingPrompt!) === h.version ? ' \u2713' : ''}
+                          </Option>
+                        ))}
+                      {/* Default code option - always show if activeVersion is 0, otherwise wait for data */}
+                      {(getActiveVersion(editingPrompt!) === 0 || defaultPromptData) && (
+                        <Option value="0">
+                          Default (code){getActiveVersion(editingPrompt!) === 0 ? ' \u2713' : ''}
+                        </Option>
+                      )}
+                    </Select>
                   </>
-                ) : (
-                  /* No override yet - create first version */
-                  <Button startDecorator={<SaveIcon />} onClick={handleSubmit} loading={updatePrompt.isPending}>
-                    Create Override (v1)
-                  </Button>
                 )}
               </Stack>
             </Stack>
-          </Stack>
-        </ModalDialog>
-      </Modal>
-    </Sheet>
+            <Textarea
+              value={content}
+              onChange={e => setContent(e.target.value)}
+              minRows={20}
+              maxRows={30}
+              placeholder="The actual prompt text. Use {{variableName}} for variable substitution..."
+              slotProps={{ textarea: { 'data-testid': 'system-prompt-content-input' } }}
+            />
+            <Typography level="body-xs" sx={{ mt: 0.5 }}>
+              Use <strong>{`{{variableName}}`}</strong> for variable substitution. Variables will be replaced at
+              runtime.
+            </Typography>
+          </Box>
+
+          <FormControl>
+            <FormLabel>Category</FormLabel>
+            <Select value={category} onChange={(_, value) => setCategory(value as string)}>
+              <Option value="system">System</Option>
+              <Option value="admin">Admin</Option>
+              <Option value="automation">Automation</Option>
+              <Option value="optihashi">OptiHashi</Option>
+              <Option value="sales_intelligence">Sales Intelligence</Option>
+            </Select>
+            <Typography level="body-xs" sx={{ mt: 0.5 }}>
+              Category for organization and filtering.
+            </Typography>
+          </FormControl>
+
+          <FormControl>
+            <FormLabel>Tags (comma-separated)</FormLabel>
+            <Input
+              value={tagsInput}
+              onChange={e => setTagsInput(e.target.value)}
+              onBlur={() => {
+                const parsed = tagsInput
+                  .split(',')
+                  .map(t => t.trim())
+                  .filter(Boolean);
+                setTagsInput(parsed.join(', '));
+              }}
+              placeholder="optimizer, scheduling, system"
+              slotProps={{ input: { 'data-testid': 'system-prompt-tags-input' } }}
+            />
+            <Typography level="body-xs" sx={{ mt: 0.5 }}>
+              Searchable tags to help find this prompt
+            </Typography>
+          </FormControl>
+
+          <FormControl>
+            <FormLabel>Variables (comma-separated)</FormLabel>
+            <Input
+              value={variablesInput}
+              onChange={e => setVariablesInput(e.target.value)}
+              onBlur={() => {
+                const parsed = variablesInput
+                  .split(',')
+                  .map(v => v.trim())
+                  .filter(Boolean);
+                setVariablesInput(parsed.join(', '));
+              }}
+              placeholder="searchQuery, userName, companyName"
+              slotProps={{ input: { 'data-testid': 'system-prompt-variables-input' } }}
+            />
+            <Typography level="body-xs" sx={{ mt: 0.5 }}>
+              List variable names used in {`{{variable}}`} placeholders
+            </Typography>
+          </FormControl>
+
+          <FormControl>
+            <FormLabel>Status</FormLabel>
+            <Select value={enabled ? 'enabled' : 'disabled'} onChange={(_, value) => setEnabled(value === 'enabled')}>
+              <Option value="enabled">Enabled</Option>
+              <Option value="disabled">Disabled</Option>
+            </Select>
+            <Typography level="body-xs" sx={{ mt: 0.5 }}>
+              Disabled prompts won&apos;t be used by the system
+            </Typography>
+          </FormControl>
+
+          <Alert variant="soft" color="neutral" data-testid="system-prompt-edit-status">
+            <Typography level="body-sm">
+              {isCreating
+                ? 'Creating a new prompt will make it immediately available in production.'
+                : selectedVersion === '0'
+                  ? 'Viewing code default. Switch to use it or create a new version from it.'
+                  : !editingPrompt
+                    ? 'Loading...'
+                    : getActiveVersion(editingPrompt!) === 0 && selectedVersion === 'current'
+                      ? 'App is using code default. You are viewing the stored override. Create a new version to activate it.'
+                      : !hasActualEdits
+                        ? `Viewing ${formatVersion(selectedVersion === 'current' ? getActiveVersion(editingPrompt!) : Number(selectedVersion))}. Make changes to save or switch to use this version.`
+                        : isViewingActiveVersion
+                          ? 'You have unsaved changes. Save to update this version or create a new version.'
+                          : `You have changes. Save to update ${formatVersion(Number(selectedVersion))} or create a new version.`}
+            </Typography>
+          </Alert>
+        </DialogContent>
+
+        <DialogFooter>
+          <Button variant="outlined" onClick={closeEditor} data-testid="system-prompt-edit-cancel-btn">
+            Cancel
+          </Button>
+
+          {isCreating ? (
+            <Button
+              startDecorator={<SaveIcon />}
+              onClick={handleSubmit}
+              loading={createPrompt.isPending}
+              data-testid="system-prompt-create-btn"
+            >
+              Create prompt
+            </Button>
+          ) : editingPrompt && editingPrompt.hasOverride ? (
+            <>
+              {/* Switch to this version (if not already active, and no unsaved edits) */}
+              {!isViewingActiveVersion && selectedVersion !== '0' && !hasActualEdits && (
+                <Button
+                  variant="outlined"
+                  color="primary"
+                  onClick={() =>
+                    handleSwitchToVersion(
+                      selectedVersion === 'current' ? editingPrompt.version : Number(selectedVersion)
+                    )
+                  }
+                  data-testid="system-prompt-use-version-btn"
+                >
+                  Use v{selectedVersion === 'current' ? editingPrompt.version : selectedVersion}
+                </Button>
+              )}
+
+              {/* Save + Use combined button (for non-active version with edits) */}
+              {!isViewingActiveVersion && selectedVersion !== '0' && hasActualEdits && (
+                <Button
+                  startDecorator={<SaveIcon />}
+                  onClick={handleSaveAndUseVersion}
+                  data-testid="system-prompt-save-use-btn"
+                >
+                  Save + Use v{selectedVersion === 'current' ? editingPrompt.version : selectedVersion}
+                </Button>
+              )}
+
+              {/* Switch to default (version 0) */}
+              {selectedVersion === '0' && (
+                <Button
+                  variant="outlined"
+                  color="primary"
+                  onClick={() => handleSwitchToVersion(0)}
+                  data-testid="system-prompt-use-default-btn"
+                >
+                  Use default
+                </Button>
+              )}
+
+              {/* Save to current version (only when viewing the ACTIVE version with edits) */}
+              {hasActualEdits && selectedVersion !== '0' && isViewingActiveVersion && (
+                <Button
+                  variant="soft"
+                  startDecorator={<SaveIcon />}
+                  onClick={handleSaveToVersion}
+                  data-testid="system-prompt-save-version-btn"
+                >
+                  Save to{' '}
+                  {formatVersion(selectedVersion === 'current' ? editingPrompt.version : Number(selectedVersion))}
+                </Button>
+              )}
+
+              {/* Create new version (only if edited) */}
+              {hasActualEdits && (
+                <Button
+                  variant="outlined"
+                  startDecorator={<AddIcon />}
+                  onClick={() => handleCreateNewVersion(true)}
+                  data-testid="system-prompt-new-version-btn"
+                >
+                  Save as new version
+                </Button>
+              )}
+            </>
+          ) : (
+            /* No override yet - create first version */
+            <Button
+              startDecorator={<SaveIcon />}
+              onClick={handleSubmit}
+              loading={updatePrompt.isPending}
+              data-testid="system-prompt-create-override-btn"
+            >
+              Create override (v1)
+            </Button>
+          )}
+        </DialogFooter>
+      </AdminDialog>
+    </>
   );
 };
 

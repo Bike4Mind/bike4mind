@@ -377,6 +377,13 @@ export const ChatCompletionInvokeParamsSchema = z.object({
   tools: z.array(z.union([b4mLLMTools, z.string()])).optional(),
   /** Enabled MCP servers */
   mcpServers: z.array(z.string()).optional(),
+  /**
+   * Slugs of custom MCP connectors switched off in the composer; every other enabled connector is
+   * offered. An opt-out list, not part of `mcpServers`: the client fills that list with built-in
+   * server names before any custom connector exists, so reading it as an allowlist for connectors
+   * would switch them all off.
+   */
+  disabledMcpConnections: z.array(z.string()).optional(),
   /** Project ID */
   projectId: z.string().optional(),
   /** Organization ID */

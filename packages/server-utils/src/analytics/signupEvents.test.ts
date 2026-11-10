@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 
 const { mockEmit, mockKeyFor } = vi.hoisted(() => ({ mockEmit: vi.fn(), mockKeyFor: vi.fn() }));
 vi.mock('./emitActiveEvent', () => ({
@@ -392,7 +393,7 @@ describe('emitPurchaseEvents', () => {
   });
 
   it('never throws when the emitter rejects or the key lookup throws', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
     mockEmit.mockRejectedValue(new Error('down'));
     await expect(emitPurchaseEvents(invoice())).resolves.toEqual(['widgets']);
     expect(warnSpy).toHaveBeenCalledWith('[b4m-analytics] billing event emit failed', {

@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ApiKeyScope, CREDITS_PAGE_READ } from '@bike4mind/common';
 
 const { handlers, baseOptions, listHeld } = vi.hoisted(() => ({
   handlers: {} as Record<string, (req: unknown, res: unknown) => Promise<void>>,
@@ -9,11 +8,15 @@ const { handlers, baseOptions, listHeld } = vi.hoisted(() => ({
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: () => 'csrf' }));
-vi.mock('@server/middlewares/adminApi', () => ({
-  adminApi: (options: unknown) => {
+const uses = vi.hoisted(() => [] as Array<(req: unknown, res: unknown, next: () => void) => void>);
+vi.mock('@server/middlewares/baseApi', () => ({
+  baseApi: (options: unknown) => {
     baseOptions(options);
     const chain = {
-      use: () => chain,
+      use: (fn: unknown) => {
+        if (typeof fn === 'function') uses.push(fn as (typeof uses)[number]);
+        return chain;
+      },
       get: (fn: typeof handlers.get) => {
         handlers.get = fn;
         return chain;
@@ -29,11 +32,14 @@ vi.mock('@server/middlewares/adminApi', () => ({
 vi.mock('@bike4mind/database', () => ({ signupGrantReleaseRepository: { listHeld } }));
 import '@pages/api/admin/held-signup-grants';
 
-const run = async (query: Record<string, string>, isAdmin = true) => {
+const run = async (query: Record<string, string>, isAdmin = true, user: Record<string, unknown> = {}) => {
   const { req, res } = createMocks({ method: 'GET', query });
-  Object.assign(req, { user: { id: 'admin-1', isAdmin }, logger: {} });
-  await handlers
-    .get(req, res)
+  Object.assign(req, { user: { id: 'admin-1', isAdmin, ...user }, logger: {} });
+  await Promise.resolve()
+    .then(() => {
+      for (const middleware of uses) middleware(req, res, () => undefined);
+      return handlers.get(req, res);
+    })
     .catch((error: unknown) => (res.statusCode = (error as { statusCode?: number }).statusCode ?? 500));
   return res;
 };
@@ -43,11 +49,17 @@ beforeEach(() => listHeld.mockReset().mockResolvedValue([]));
 
 describe('GET /api/admin/held-signup-grants', () => {
   it('requires the admin scope on a JWT-only route', () => {
-    expect(baseOptions).toHaveBeenCalledWith({
-      auth: 'jwtOnly',
-      requiredScopes: [ApiKeyScope.ADMIN],
-      adminPermissions: { GET: CREDITS_PAGE_READ },
-    });
+    expect(baseOptions).toHaveBeenCalledWith({ auth: 'jwtOnly', allowedMethods: ['GET'] });
+  });
+  it('rejects non-admins before querying', async () => {
+    expect((await run({}, false)).statusCode).toBe(403);
+    expect(listHeld).not.toHaveBeenCalled();
+  });
+  it('serves a delegate holding credits:adjust and refuses one without it', async () => {
+    expect((await run({}, false, { adminPermissions: ['support:read'] })).statusCode).toBe(403);
+    expect(listHeld).not.toHaveBeenCalled();
+    expect((await run({}, false, { adminPermissions: ['credits:adjust'] })).statusCode).toBe(200);
+    expect(listHeld).toHaveBeenCalledOnce();
   });
   it('rejects an unknown reason and a malformed cursor', async () => {
     expect((await run({ reason: 'bogus' })).statusCode).toBe(400);

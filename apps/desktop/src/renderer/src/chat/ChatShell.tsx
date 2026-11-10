@@ -1,4 +1,3 @@
-import { OrchestrationSummary } from './OrchestrationSummary';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
@@ -2028,16 +2027,6 @@ export function ChatShell({
               </Box>
             )}
 
-            {delegating && conversation.session?.orchestrationPolicy && (
-              <Box sx={{ ...contentColumnSx, pb: 1 }}>
-                <OrchestrationSummary
-                  root={conversation.session.orchestrationPolicy}
-                  planner={conversation.session.model}
-                  models={catalog.models}
-                />
-              </Box>
-            )}
-
             <Composer
               sessionId={activeId}
               disabled={!activeId || creatingCode}
@@ -2104,7 +2093,14 @@ export function ChatShell({
                     onSelect={mode => void conversation.setApprovalMode(mode)}
                   />
                   {orchestrateCapable && (
-                    <OrchestratePill on={delegating} disabled={!activeId} onChange={on => void setOrchestrate(on)} />
+                    <OrchestratePill
+                      on={delegating}
+                      disabled={!activeId}
+                      policy={conversation.session?.orchestrationPolicy}
+                      planner={conversation.session?.model}
+                      models={catalog.models}
+                      onChange={on => void setOrchestrate(on)}
+                    />
                   )}
                 </>
               }

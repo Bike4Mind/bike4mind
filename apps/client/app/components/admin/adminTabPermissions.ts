@@ -39,9 +39,10 @@ export const DELEGATED_ADMIN_TAB_PERMISSIONS: Readonly<Partial<Record<AdminTab, 
   [AdminTab.ManageGears]: SETTINGS_PAGE_READ,
   [AdminTab.AgentExecutions]: SETTINGS_PAGE_READ,
 
-  // Pages whose writes need credits:adjust; their GET routes declare the same CREDITS_PAGE_READ.
+  // Subscriptions: writes need credits:adjust and its GET routes declare the same CREDITS_PAGE_READ.
   [AdminTab.Subscriptions]: CREDITS_PAGE_READ,
-  [AdminTab.HeldSignupGrants]: CREDITS_PAGE_READ,
+  // Its list, release and revoke routes all declare credits:adjust.
+  [AdminTab.HeldSignupGrants]: 'credits:adjust',
 };
 
 export function canOpenAdminTab(user: AdminIdentity, tab: AdminTab): boolean {

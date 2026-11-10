@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Button, Stack, Tabs, TabList, Tab, TabPanel } from '@mui/joy';
+import { Box, Button, Stack, Tabs, TabList, Tab, TabPanel } from '@mui/joy';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import DownloadIcon from '@mui/icons-material/Download';
 import dayjs from 'dayjs';
@@ -183,50 +183,51 @@ const ModelMetricsTab: React.FC = () => {
         onSimplifiedNamesChange={setSimplifiedNames}
       />
 
-      <UpdatingBar active={isFetching && !isLoading} />
+      <Box sx={{ position: 'relative' }}>
+        <UpdatingBar active={isFetching && !isLoading} placement="overlay" />
+        {isLoading ? (
+          <LoadingState label="Loading model metrics" />
+        ) : (
+          <Tabs value={activeTab} onChange={(_, value) => setActiveTab(value as ModelMetricsTabValue)}>
+            <TabList sx={adminTabStrip}>
+              <Tab value="overview">Overview</Tab>
+              <Tab value="analytics">Analytics</Tab>
+              <Tab value="data">Raw data</Tab>
+              <Tab value="spend">Spend</Tab>
+            </TabList>
 
-      {isLoading ? (
-        <LoadingState label="Loading model metrics" />
-      ) : (
-        <Tabs value={activeTab} onChange={(_, value) => setActiveTab(value as ModelMetricsTabValue)}>
-          <TabList sx={adminTabStrip}>
-            <Tab value="overview">Overview</Tab>
-            <Tab value="analytics">Analytics</Tab>
-            <Tab value="data">Raw data</Tab>
-            <Tab value="spend">Spend</Tab>
-          </TabList>
+            {/* Overview Tab */}
+            <TabPanel value="overview" sx={{ p: 1 }}>
+              {rowsState ?? <OverviewTab metrics={filteredAndSortedMetrics} chartData={chartData} />}
+            </TabPanel>
 
-          {/* Overview Tab */}
-          <TabPanel value="overview" sx={{ p: 1 }}>
-            {rowsState ?? <OverviewTab metrics={filteredAndSortedMetrics} chartData={chartData} />}
-          </TabPanel>
+            {/* Analytics Tab */}
+            <TabPanel value="analytics" sx={{ p: 1 }}>
+              <AnalyticsTab filters={filters} />
+            </TabPanel>
 
-          {/* Analytics Tab */}
-          <TabPanel value="analytics" sx={{ p: 1 }}>
-            <AnalyticsTab filters={filters} />
-          </TabPanel>
+            {/* Raw Data Tab */}
+            <TabPanel value="data" sx={{ p: 1 }}>
+              {rowsState ?? (
+                <RawDataTab
+                  metrics={filteredAndSortedMetrics}
+                  modelInfos={modelInfos}
+                  simplifiedNames={simplifiedNames}
+                  sortField={sortField}
+                  sortDirection={sortDirection}
+                  onSort={handleSort}
+                  onShowInfoModal={() => setShowInfoModal(true)}
+                />
+              )}
+            </TabPanel>
 
-          {/* Raw Data Tab */}
-          <TabPanel value="data" sx={{ p: 1 }}>
-            {rowsState ?? (
-              <RawDataTab
-                metrics={filteredAndSortedMetrics}
-                modelInfos={modelInfos}
-                simplifiedNames={simplifiedNames}
-                sortField={sortField}
-                sortDirection={sortDirection}
-                onSort={handleSort}
-                onShowInfoModal={() => setShowInfoModal(true)}
-              />
-            )}
-          </TabPanel>
-
-          {/* Spend Tab */}
-          <TabPanel value="spend" sx={{ p: 1 }}>
-            <SpendTab data={spendData} isLoading={isSpendLoading} isError={isSpendError} />
-          </TabPanel>
-        </Tabs>
-      )}
+            {/* Spend Tab */}
+            <TabPanel value="spend" sx={{ p: 1 }}>
+              <SpendTab data={spendData} isLoading={isSpendLoading} isError={isSpendError} />
+            </TabPanel>
+          </Tabs>
+        )}
+      </Box>
 
       {/* Performance Metrics Info Modal */}
       <MetricsInfoModal

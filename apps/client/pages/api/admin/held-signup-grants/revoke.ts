@@ -1,9 +1,8 @@
 import { z } from 'zod';
-import { ApiKeyScope } from '@bike4mind/common';
+import { assertCanActOnAdminTarget } from '@bike4mind/common';
 import { creditTransactionRepository, userRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
-import { assertDelegateCanCreditUsers } from '@server/admin/creditGrants/delegateTargets';
 import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
@@ -17,11 +16,7 @@ import {
 
 const bodySchema = z.object({ batchId: z.string().regex(/^[a-f0-9]{24}$/i) });
 
-const handler = adminApi({
-  auth: 'jwtOnly',
-  requiredScopes: [ApiKeyScope.ADMIN],
-  adminPermissions: { POST: 'credits:adjust' },
-})
+const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:adjust' } })
   .use(csrfProtection())
   .post(
     asyncHandler(async (req, res) => {
@@ -30,19 +25,17 @@ const handler = adminApi({
       const batch = await heldGrantBatches.findBatch(parsed.data.batchId);
       if (!batch) throw new NotFoundError('Release batch not found');
       // The whole batch is refused, like the single-account credit route, rather than partly revoked.
-      for (const entry of batch.entries) {
-        if (entry.outcome !== 'released' || entry.credits <= 0 || !isSelfOrImpersonator(req.user, entry.userId))
-          continue;
+      const revocable = batch.entries.filter(entry => entry.outcome === 'released' && entry.credits > 0);
+      for (const entry of revocable) {
+        if (!isSelfOrImpersonator(req.user, entry.userId)) continue;
         await denySelfAdminAction(req, {
           action: 'user.credits.denied',
           attempted: 'user.credits.adjusted',
           target: { kind: 'user', id: entry.userId, displayName: entry.userId },
         });
       }
-      const userIds = batch.entries
-        .filter(entry => entry.outcome === 'released' && entry.credits > 0)
-        .map(entry => entry.userId);
-      await assertDelegateCanCreditUsers(req.user, userIds, 'revoke held signup grants for');
+      for (const account of await userRepository.findAdminTargetsByIds(revocable.map(entry => entry.userId)))
+        assertCanActOnAdminTarget(req.user, account, 'revoke signup credits from');
       const result = await userService.revokeHeldGrantRelease(
         { batchId: parsed.data.batchId, actorId: req.user.id },
         {
@@ -56,14 +49,22 @@ const handler = adminApi({
       let policy: ReturnType<typeof loadCreditGrantPolicy> | undefined;
       for (const row of result.results) {
         if (row.outcome !== 'reversed') continue;
+        const heldRestored = !!row.heldRestored;
         try {
           await recordAdminActionFromRequest(
             req,
             {
               action: 'user.credits.adjusted',
               target: { kind: 'user', id: row.userId, displayName: row.userId },
-              summary: 'revoked released signup grant',
-              details: { credits: -row.credits, source: 'held_grant_revoke', batchId: result.batchId },
+              summary: heldRestored
+                ? 'revoked released signup grant and returned it to the held queue'
+                : 'revoked released signup grant',
+              details: {
+                credits: -row.credits,
+                source: 'held_grant_revoke',
+                batchId: result.batchId,
+                ...(heldRestored ? { heldRestored: true } : {}),
+              },
             },
             { creditGrantPolicy: () => (policy ??= loadCreditGrantPolicy()) }
           );

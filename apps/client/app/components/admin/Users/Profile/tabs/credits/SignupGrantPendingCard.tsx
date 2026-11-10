@@ -89,7 +89,7 @@ export const SignupGrantPendingCard: React.FC<{ user: AdminUserProfile }> = ({ u
   };
 
   const data = pending.data;
-  // Release remaining is a full-admin action; a delegated admin never sees the button.
+  // Release remaining needs credits:adjust; the server reports it as not permitted otherwise.
   const visible = data ? ACTION_ORDER.filter(action => data.actions[action].permitted) : [];
   const live = data ? visible.filter(action => data.actions[action].available) : [];
   // An action that does not apply says why, except where the state itself already says it.

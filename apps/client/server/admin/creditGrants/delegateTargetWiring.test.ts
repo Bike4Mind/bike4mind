@@ -32,11 +32,11 @@ const cases = [
   },
   {
     path: 'pages/api/admin/held-signup-grants/release.ts',
-    guard: 'assertDelegateCanCreditUsers',
+    guard: 'assertCanActOnAdminTarget',
   },
   {
     path: 'pages/api/admin/held-signup-grants/revoke.ts',
-    guard: 'assertDelegateCanCreditUsers',
+    guard: 'assertCanActOnAdminTarget',
   },
   {
     path: 'pages/api/admin/subscriptions/[id]/comp.ts',
@@ -108,18 +108,8 @@ describe('credit delegate target guard wiring', () => {
     if (guard !== 'readSignupGrantAdminAction') return;
     expect(
       calls.some(call => {
-        const options = call.arguments[2];
-        return (
-          options &&
-          ts.isObjectLiteralExpression(options) &&
-          options.properties.some(
-            property =>
-              ts.isPropertyAssignment(property) &&
-              property.name.getText(source) === 'guardTargetVerb' &&
-              ts.isStringLiteral(property.initializer) &&
-              property.initializer.text.length > 0
-          )
-        );
+        const verb = call.arguments[2];
+        return verb && ts.isStringLiteral(verb) && verb.text.length > 0;
       }),
       `${path} must enable the admin-target guard`
     ).toBe(true);

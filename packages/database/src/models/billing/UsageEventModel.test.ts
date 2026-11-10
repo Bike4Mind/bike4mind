@@ -1093,14 +1093,14 @@ describe('UsageEventRepository.creditsSpentByUser', () => {
     await UsageEvent.collection.updateOne({ _id: event!._id }, { $set: { createdAt } });
   };
 
-  it('sums charged and written-off credits inside [from, to) for that user only', async () => {
+  it('sums creditsCharged inside [from, to) for that user only, not adding the write-off it already includes', async () => {
     await at(from, { creditsCharged: 30 });
     await at(new Date('2026-10-21T09:59:59Z'), { creditsCharged: 20, writtenOffCredits: 5 });
     await at(to, { creditsCharged: 1000 });
     await at(new Date('2026-10-20T09:59:59Z'), { creditsCharged: 1000 });
     await at(new Date('2026-10-20T12:00:00Z'), { userId: 'someone-else', creditsCharged: 1000 });
 
-    await expect(usageEventRepository.creditsSpentByUser('user-1', from, to)).resolves.toBe(55);
+    await expect(usageEventRepository.creditsSpentByUser('user-1', from, to)).resolves.toBe(50);
   });
 
   it('returns 0 when the user spent nothing in the window', async () => {
@@ -1120,7 +1120,7 @@ describe('UsageEventRepository.activitySummaryByUser', () => {
   it('counts events by outcome and sums credits inside [from, to) for that user only', async () => {
     const latest = new Date('2026-10-21T09:00:00Z');
     await at(from, { creditsCharged: 30 });
-    await at(latest, { creditsCharged: 0, writtenOffCredits: 5, status: 'error' });
+    await at(latest, { creditsCharged: 5, writtenOffCredits: 5, status: 'error' });
     await at(new Date('2026-10-20T12:00:00Z'), { creditsCharged: 0, status: 'refusal' });
     await at(to, { creditsCharged: 1000 });
     await at(new Date('2026-10-20T12:00:00Z'), { userId: 'someone-else', creditsCharged: 1000 });
@@ -1161,20 +1161,39 @@ describe('UsageEventRepository.activitySummaryByUser', () => {
 });
 
 describe('UsageEventRepository.creditsSpentByUsers', () => {
-  it('sums charged and written-off credits per user, leaving out users who spent nothing', async () => {
+  it('sums creditsCharged per user without re-adding write-offs, leaving out users who spent nothing', async () => {
     await record({ userId: 'user-1', creditsCharged: 30 });
     await record({ userId: 'user-1', creditsCharged: 20, writtenOffCredits: 5 });
     await record({ userId: 'user-2', creditsCharged: 7 });
     await record({ userId: 'someone-else', creditsCharged: 1000 });
 
     await expect(usageEventRepository.creditsSpentByUsers(['user-1', 'user-2', 'user-3'])).resolves.toEqual({
-      'user-1': 55,
+      'user-1': 50,
       'user-2': 7,
     });
   });
 
   it('returns nothing for no users', async () => {
     await expect(usageEventRepository.creditsSpentByUsers([])).resolves.toEqual({});
+  });
+});
+
+describe('UsageEventRepository.largestSettlementOverHold', () => {
+  const since = new Date(Date.now() - 60 * 60 * 1000);
+
+  it('ratios creditsCharged over the hold, not adding the write-off it already includes', async () => {
+    await record({ userId: 'user-1', reservedCredits: 10, creditsCharged: 40, writtenOffCredits: 30 });
+    await record({ userId: 'user-1', reservedCredits: 10, creditsCharged: 20 });
+    await record({ userId: 'user-1', creditsCharged: 1000 });
+    await record({ userId: 'someone-else', reservedCredits: 1, creditsCharged: 1000 });
+
+    await expect(usageEventRepository.largestSettlementOverHold(['user-1', 'user-2'], since)).resolves.toEqual({
+      'user-1': { reservedCredits: 10, settledCredits: 40, ratio: 4 },
+    });
+  });
+
+  it('returns nothing for no users', async () => {
+    await expect(usageEventRepository.largestSettlementOverHold([], since)).resolves.toEqual({});
   });
 });
 

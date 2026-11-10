@@ -1,9 +1,8 @@
 import { z } from 'zod';
-import { ApiKeyScope } from '@bike4mind/common';
+import { assertCanActOnAdminTarget } from '@bike4mind/common';
 import { userRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
-import { assertDelegateCanCreditUsers } from '@server/admin/creditGrants/delegateTargets';
 import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
@@ -23,11 +22,7 @@ const bodySchema = z.object({
   dryRun: z.boolean().optional(),
 });
 
-const handler = adminApi({
-  auth: 'jwtOnly',
-  requiredScopes: [ApiKeyScope.ADMIN],
-  adminPermissions: { POST: 'credits:adjust' },
-})
+const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:adjust' } })
   .use(csrfProtection())
   .post(
     asyncHandler(async (req, res) => {
@@ -44,7 +39,8 @@ const handler = adminApi({
           target: { kind: 'user', id: userId, displayName: userId },
         });
       }
-      await assertDelegateCanCreditUsers(req.user, userIds, 'release held signup grants for');
+      for (const account of await userRepository.findAdminTargetsByIds(userIds))
+        assertCanActOnAdminTarget(req.user, account, 'release signup credits for');
       if (parsed.data.dryRun) {
         const preview = await userService.previewSignupGrantAction(
           { action: 'release_held', userIds },

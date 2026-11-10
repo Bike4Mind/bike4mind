@@ -27,6 +27,9 @@ export type AuthMode = 'jwt+key' | 'jwt' | 'optional' | 'handler' | 'unknown';
 /** Verbs that share one scope list, used when a route's verbs require different scopes. */
 export type MethodScopes = { methods: HttpMethod[]; scopes: string[] };
 
+/** An `adminApi` verb and the permission it requires; `?` when the declaration is not a literal. */
+export type MethodPermission = { method: string; requirement: string };
+
 export type RouteAnalysis = {
   methods: HttpMethod[];
   /** True when no verb filter was found: a `.use()`-only router or a raw handler that never checks req.method. */
@@ -35,6 +38,8 @@ export type RouteAnalysis = {
   /** Union over all verbs; `methodScopes` breaks it down when the verbs disagree. */
   scopes: string[];
   methodScopes?: MethodScopes[];
+  /** The `adminPermissions` an `adminApi` router declares; absent on other routers. */
+  permissions?: MethodPermission[];
   contracted: boolean;
 };
 
@@ -222,7 +227,7 @@ function routerBindings(sourceFile: ts.SourceFile): Set<string> {
   return bound;
 }
 
-type BaseApiOptions = { auth: AuthMode; scopes: string[] };
+type BaseApiOptions = { auth: AuthMode; scopes: string[]; permissions: MethodPermission[] };
 
 type OptionsContext = {
   table: ScopeTable;
@@ -232,25 +237,53 @@ type OptionsContext = {
 
 function readBaseApiOptions(call: ts.CallExpression, { table, objects, optionalAuth }: OptionsContext): BaseApiOptions {
   const [argument] = call.arguments;
-  if (!argument) return { auth: 'jwt+key', scopes: [] };
+  if (!argument) return { auth: 'jwt+key', scopes: [], permissions: [] };
   const unwrapped = unwrap(argument);
   const options = ts.isIdentifier(unwrapped) ? objects.get(unwrapped.text) : unwrapped;
-  if (!options || !ts.isObjectLiteralExpression(options)) return { auth: 'unknown', scopes: [] };
+  if (!options || !ts.isObjectLiteralExpression(options)) {
+    return { auth: 'unknown', scopes: [], permissions: [{ method: '*', requirement: '?' }] };
+  }
 
   let auth: AuthMode = 'jwt+key';
   let scopes: string[] = [];
+  let permissions: MethodPermission[] = [];
   for (const property of options.properties) {
     if (ts.isSpreadAssignment(property)) {
       auth = 'unknown';
     } else if (ts.isShorthandPropertyAssignment(property)) {
       if (property.name.text === 'auth') auth = 'unknown';
       if (property.name.text === 'requiredScopes') scopes = resolveScopes(property.name, table);
+      if (property.name.text === 'adminPermissions') permissions = [{ method: '*', requirement: '?' }];
     } else if (ts.isPropertyAssignment(property) && ts.isIdentifier(property.name)) {
       if (property.name.text === 'auth') auth = readAuthOption(unwrap(property.initializer), optionalAuth);
       if (property.name.text === 'requiredScopes') scopes = resolveScopes(property.initializer, table);
+      if (property.name.text === 'adminPermissions') permissions = readAdminPermissions(property.initializer, objects);
     }
   }
-  return { auth, scopes };
+  return { auth, scopes, permissions };
+}
+
+function readAdminPermissions(
+  value: ts.Expression,
+  objects: ReadonlyMap<string, ts.ObjectLiteralExpression>
+): MethodPermission[] {
+  const unwrapped = unwrap(value);
+  const declared = ts.isIdentifier(unwrapped) ? objects.get(unwrapped.text) : unwrapped;
+  if (!declared || !ts.isObjectLiteralExpression(declared)) return [{ method: '*', requirement: '?' }];
+  return declared.properties.map(property => {
+    if (!ts.isPropertyAssignment(property)) return { method: '?', requirement: '?' };
+    if (!ts.isIdentifier(property.name) && !ts.isStringLiteral(property.name)) return { method: '?', requirement: '?' };
+    return { method: property.name.text, requirement: readRequirement(property.initializer) };
+  });
+}
+
+/** A literal permission, or a literal list any one of which admits; anything else is `?`. */
+function readRequirement(value: ts.Expression): string {
+  const unwrapped = unwrap(value);
+  if (ts.isStringLiteralLike(unwrapped)) return unwrapped.text;
+  if (!ts.isArrayLiteralExpression(unwrapped) || unwrapped.elements.length === 0) return '?';
+  const names = unwrapped.elements.map(element => (ts.isStringLiteralLike(element) ? element.text : '?'));
+  return names.join(' | ');
 }
 
 function readAuthOption(value: ts.Expression, optionalAuth: boolean): AuthMode {
@@ -388,6 +421,7 @@ export function analyzeRouteSource(
   const methods = new Set<HttpMethod>();
   const auth = new Set<AuthMode>();
   const scopes = new Set<string>();
+  const permissions: MethodPermission[] = [];
   let usesRouter = false;
   let contracted = false;
   let methodsKnown = true;
@@ -401,6 +435,7 @@ export function analyzeRouteSource(
         const options = readBaseApiOptions(node, context);
         auth.add(options.auth);
         options.scopes.forEach(scope => scopes.add(scope));
+        if (callee.text === 'adminApi') permissions.push(...options.permissions);
         if (callee.text === 'adminApi' && options.auth !== 'jwt') {
           scopes.add(
             context.table.enumValues.get(ADMIN_API_IMPLICIT_SCOPE) ?? `?ApiKeyScope.${ADMIN_API_IMPLICIT_SCOPE}`
@@ -435,6 +470,7 @@ export function analyzeRouteSource(
     auth: [...auth].sort(),
     scopes: [...scopes].sort(),
     ...(methodScopes && { methodScopes }),
+    ...(permissions.length > 0 && { permissions }),
     contracted,
   };
 }
@@ -727,12 +763,23 @@ function scopesCell(record: RouteRecord): string {
   return record.scopes.length ? codeList(record.scopes) : '-';
 }
 
+function permissionsCell(record: RouteRecord): string {
+  if (!record.permissions) return '-';
+  return record.permissions
+    .map(({ method, requirement }) => {
+      const required = requirement === '?' ? '?' : codeList(requirement.split(' | ')).replace(/, /g, ' or ');
+      return `${method}: ${required}`;
+    })
+    .join('; ');
+}
+
 function routeRow(record: RouteRecord): string {
   const cells = [
     `\`${record.route}\``,
     methodsCell(record),
     record.auth.join(', '),
     scopesCell(record),
+    permissionsCell(record),
     record.contracted ? 'yes' : 'no',
     record.aliasOf ? `\`${record.aliasOf}\`` : '-',
     callersCell(record.callers),
@@ -782,6 +829,8 @@ export function renderInventoryMarkdown(
     '- **Scopes**: API-key scopes the route gate accepts (any one of them), listed per verb (`GET: ...; DELETE: ...`)',
     '  when a contract gives verbs different scopes. Empty on a `jwt+key` route means any unconfined API key',
     '  passes the gate. Per-method `assertApiKeyScope` checks inside non-contract handlers are not listed.',
+    '- **Permissions**: the admin permission each `adminApi` verb requires (`or` admits any one); `?` when the',
+    '  declaration is not a literal the generator can read. A dash means the route declares none.',
     '- **Contract**: served by `nextRouteForContract`, so the operation is in the public OpenAPI spec. On an alias',
     "  the contract is documented under the alias target's path, not this one.",
     "- **Alias of**: the file only re-exports another route's handler (`export { default } from ...`), so both",
@@ -820,8 +869,8 @@ export function renderInventoryMarkdown(
       '',
       `### ${area}`,
       '',
-      '| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |',
-      '| --- | --- | --- | --- | --- | --- | --- |',
+      '| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- |',
       ...group.map(routeRow)
     );
   }

@@ -49,6 +49,7 @@ import {
   type ModelHubServiceDeps,
   type ModelRuntimePort,
 } from './ModelHubService';
+import type { OllamaBuild } from './ollamaWslPatch';
 
 const REPO = 'Qwen/Qwen2.5-0.5B-Instruct-GGUF';
 const SHA = 'a'.repeat(64);
@@ -214,6 +215,9 @@ function harness(
       | 'modelSettings'
       | 'wslHost'
       | 'integratedGpu'
+      | 'ollamaWslPatch'
+      | 'onRatingsChanged'
+      | 'flashAttention'
       | 'specs'
       | 'importDir'
       | 'sameDisk'
@@ -1231,8 +1235,7 @@ describe.each([24, 64, 72, 96])('ModelHubService WSL GPU memory warning, %i GiB 
     let answer: (value: boolean) => void = () => {};
     integratedGpu.mockImplementation(() => new Promise<boolean>(resolve => (answer = resolve)));
     runtime.loaded.mockResolvedValue([capped]);
-    const waited = new Promise(resolve => setTimeout(() => resolve('waited'), 1_000));
-    expect(await Promise.race([capOf(service), waited])).toBeNull();
+    expect(await capOf(service)).toBeNull();
     runtime.loaded.mockResolvedValue([]);
     expect(await capOf(service)).toBeNull();
     answer(true);
@@ -1269,8 +1272,498 @@ describe.each([24, 64, 72, 96])('ModelHubService WSL GPU memory warning, %i GiB 
     runtimes.a.list.mockResolvedValue([installedModel('big:q8_0')]);
     runtimes.a.loaded.mockResolvedValue([capped]);
     expect(await capOf(service, 'a')).toBeNull();
-    expect(await capOf(service)).toBeNull();
     expect(integratedGpu).not.toHaveBeenCalled();
+    expect(await capOf(service)).toBeNull();
+  });
+});
+
+describe('ModelHubService WSL GPU memory flag on fit badges', () => {
+  const LINUX_STORE = '/home/me/.ollama/models';
+  const WINDOWS_STORE = 'C:\\Users\\me\\.ollama\\models';
+  // nvidia-smi reports an RTX Spark N1X's dedicated memory, so the probe sees a discrete GPU; a GB10 reports none.
+  const N1X = { ...machine('discrete', 46, 80), platform: 'win32', arch: 'arm64', gpuVendor: 'nvidia' as const };
+  const GB10 = { ...machine('unified', 128), gpuName: 'NVIDIA GB10', gpuCount: 1, gpuVendor: 'nvidia' as const };
+  const installedModel = (name: string, sizeGib: number): InstalledModel => ({
+    name,
+    sizeBytes: sizeGib * GIB,
+    quantization: 'Q8_0',
+    family: 'qwen',
+    parameterSize: '27B',
+    modifiedAt: '2026-11-01T00:00:00Z',
+    capabilities: { tools: true, vision: false, thinking: false, embeddings: false, completion: true },
+  });
+  const MODELS = [installedModel('small:q4', 2), installedModel('mid:q8_0', 40), installedModel('huge:bf16', 400)];
+
+  function flagHarness(
+    options: {
+      wslHost?: boolean;
+      integrated?: boolean | null;
+      version?: string | null;
+      healthy?: boolean;
+      /** null: Ollama reports no folder, as with no model installed. */
+      storeDir?: string | null;
+      /** Desktop on Windows: no Linux path exists for it and, as in production, it has no probe. */
+      windowsDesktop?: boolean;
+      hardware?: HardwareProfile;
+      defaultStoreDir?: () => string | null;
+      /** What reading the running Ollama binary found: false lacks the fix, null could not be read. */
+      patched?: boolean | null;
+      /** The whole probe answer; null when the server process could not be told. */
+      build?: OllamaBuild | null;
+      deps?: Partial<Pick<ModelHubServiceDeps, 'onRatingsChanged' | 'flashAttention' | 'ollamaWslPatch'>>;
+    } = {}
+  ) {
+    const windows = options.windowsDesktop === true;
+    const integratedGpu = vi.fn(async () => (options.integrated === undefined ? true : options.integrated));
+    const ollamaWslPatch = vi.fn(async (_url: string): Promise<OllamaBuild | null> =>
+      options.build !== undefined
+        ? options.build
+        : { server: 'pid-1', patched: options.patched === undefined ? false : options.patched }
+    );
+    const made = harness({
+      hardware: options.hardware ?? (windows ? N1X : { ...N1X, platform: 'linux' }),
+      version: options.version === undefined ? '0.40.15' : options.version,
+      healthy: options.healthy,
+      deps: {
+        wslHost: options.wslHost ?? true,
+        integratedGpu,
+        ollamaWslPatch: windows ? undefined : ollamaWslPatch,
+        pathExists: async path => (windows ? !path.startsWith('/') : path.startsWith('/')),
+        defaultStoreDir: options.defaultStoreDir ?? (() => (windows ? WINDOWS_STORE : LINUX_STORE)),
+        ...options.deps,
+      },
+    });
+    made.runtime.list.mockResolvedValue(MODELS);
+    const inspect = made.runtime.inspect.getMockImplementation()!;
+    const storeDir = options.storeDir === undefined ? LINUX_STORE : options.storeDir;
+    made.runtime.inspect.mockImplementation(async (name, inspectOptions) => ({
+      ...(await inspect(name, inspectOptions)),
+      contents: { template: null, license: null, modelBlob: SHA, storeDir },
+    }));
+    return { ...made, integratedGpu, ollamaWslPatch };
+  }
+
+  const installedFits = async (service: ModelHubService, serverId?: string) => {
+    const result = await service.installed(serverId);
+    if (!result.ok) throw new Error(result.error.message);
+    return new Map(result.models.map(model => [model.name, model.fit]));
+  };
+  /** nvidia-smi answers in the background, so the flag follows a later read. */
+  const settledFits = async (service: ModelHubService) => {
+    await installedFits(service);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    return installedFits(service);
+  };
+  const RELEASE_FLAG = /^Ollama 0\.40\.15 in WSL limits GPU memory to the WSL virtual machine's memory/;
+
+  it('flags fits and tight badges before any load, keeping the verdict and the dedicated GPU memory', async () => {
+    const { service, runtime } = flagHarness();
+    const fits = await settledFits(service);
+    const plain = await settledFits(flagHarness({ wslHost: false }).service);
+    expect(runtime.loaded).toHaveBeenCalled();
+    for (const name of ['small:q4', 'mid:q8_0']) {
+      const fit = fits.get(name);
+      expect(fit?.level).not.toBe('too-large');
+      expect(fit?.warning).toMatch(RELEASE_FLAG);
+      expect({ ...fit, warning: undefined }).toEqual({ ...plain.get(name), warning: undefined });
+      // 80 GiB less the 2 GiB a discrete GPU keeps free; the WSL VM's memory never enters it.
+      expect(fit?.detail).toContain('78 GiB of GPU memory');
+    }
+    expect(fits.get('huge:bf16')).toMatchObject({ level: 'too-large' });
+    expect(fits.get('huge:bf16')).not.toHaveProperty('warning');
+    const result = await service.installed();
+    expect(result.ok && result.gpuMemoryCap).toBeFalsy();
+  });
+
+  it('flags badges on unified memory reported with no dedicated figure', async () => {
+    const { service } = flagHarness({ hardware: GB10 });
+    expect((await settledFits(service)).get('small:q4')?.warning).toMatch(RELEASE_FLAG);
+  });
+
+  it('never flags before a load when Desktop runs on Windows, and leaves nvidia-smi until one', async () => {
+    const { service, integratedGpu, runtime } = flagHarness({ windowsDesktop: true, version: '0.40.13' });
+    for (const fit of (await settledFits(service)).values()) expect(fit).not.toHaveProperty('warning');
+    expect(integratedGpu).not.toHaveBeenCalled();
+    runtime.loaded.mockResolvedValue([
+      { name: 'mid:q8_0', sizeBytes: 40 * GIB, vramBytes: 20 * GIB, contextLength: 131072, expiresAt: null },
+    ]);
+    await vi.waitFor(async () =>
+      expect((await installedFits(service)).get('small:q4')?.warning).toMatch(/^It looks like Ollama in WSL limits/)
+    );
+  });
+
+  it.each([
+    ['Desktop runs on native Linux or macOS', { wslHost: false }],
+    ['the GPU is discrete', { integrated: false }],
+    ['nvidia-smi cannot say whether the GPU is integrated', { integrated: null }],
+    ['Ollama runs on Windows itself', { storeDir: WINDOWS_STORE, build: null }],
+    [
+      'Ollama reports no model folder and no server is found, so where it runs is unknown',
+      { storeDir: null, build: null },
+    ],
+    ['the release is newer than the ones known to limit the GPU', { version: '0.40.16' }],
+    ['Ollama is a source build, which may carry the fix', { version: '0.0.0' }],
+    ['Ollama is a git describe build, which may carry the fix', { version: '0.40.13-11-g3f9c2d1' }],
+    ['Ollama reports no version', { version: null }],
+    ['Ollama does not answer its version', { healthy: false }],
+    ['the machine has no GPU memory to rate against', { hardware: CPU_16 }],
+  ])('does not flag badges when %s', async (_case, options) => {
+    const { service } = flagHarness(options);
+    for (const fit of (await settledFits(service)).values()) expect(fit).not.toHaveProperty('warning');
+  });
+
+  it('flags a release known to limit the GPU once its running binary is read without the fix', async () => {
+    const { service, runtime, ollamaWslPatch } = flagHarness({ version: '0.40.13', patched: false });
+    expect((await settledFits(service)).get('small:q4')?.warning).toMatch(/^Ollama 0\.40\.13 in WSL limits/);
+    expect(ollamaWslPatch).toHaveBeenCalledWith(runtime.baseUrl);
+  });
+
+  it.each([
+    ['carries the WSL GPU memory fix', { patched: true }],
+    ['cannot be read, or its read timed out', { patched: null }],
+    ['cannot be told from the other processes', { build: null }],
+    [
+      'check fails',
+      {
+        deps: {
+          ollamaWslPatch: async () => {
+            throw new Error('permission denied');
+          },
+        },
+      },
+    ],
+  ])('does not flag a release known to limit the GPU when its running binary %s', async (_case, options) => {
+    const { service } = flagHarness({ version: '0.40.13', ...options });
+    for (const fit of (await settledFits(service)).values()) expect(fit).not.toHaveProperty('warning');
+  });
+
+  it('logs once that the running binary could not be read', async () => {
+    const { service, warn } = flagHarness({ patched: null });
+    await settledFits(service);
+    await installedFits(service);
+    const logged = warn.mock.calls.filter(([message]) => message.includes('carries the WSL GPU memory fix'));
+    expect(logged).toHaveLength(1);
+  });
+
+  it.each([
+    ['the release is not known to limit the GPU', { version: '0.40.16' }],
+    ['Desktop runs on native Linux or macOS', { wslHost: false }],
+    ['the GPU is discrete', { integrated: false }],
+  ])('does not read the running binary when %s', async (_case, options) => {
+    const { service, ollamaWslPatch } = flagHarness(options);
+    await settledFits(service);
+    expect(ollamaWslPatch).not.toHaveBeenCalled();
+  });
+
+  it('does not run nvidia-smi for a release newer than the ones known to limit the GPU', async () => {
+    const { service, integratedGpu } = flagHarness({ version: '0.41.0' });
+    await settledFits(service);
+    expect(integratedGpu).not.toHaveBeenCalled();
+  });
+
+  it('flags the curated builds on a fresh Ollama with nothing installed once the probe found its server', async () => {
+    const { service, runtime } = flagHarness({ storeDir: null });
+    runtime.list.mockResolvedValue([]);
+    await settledFits(service);
+    const builds = (await service.curated()).entries.flatMap(entry => entry.builds);
+    const flagged = builds.filter(build => build.fit.level !== 'too-large');
+    expect(flagged.length).toBeGreaterThan(0);
+    for (const build of flagged) expect(build.fit.warning).toMatch(RELEASE_FLAG);
+  });
+
+  it('needs the model folder on a fresh Ollama only when the probe found no server', async () => {
+    const { service, runtime } = flagHarness({ storeDir: null, build: null });
+    runtime.list.mockResolvedValue([]);
+    await settledFits(service);
+    for (const entry of (await service.curated()).entries)
+      for (const build of entry.builds) expect(build.fit).not.toHaveProperty('warning');
+  });
+
+  it.each([false, null])(
+    'publishes a rating change when a later binary read changes the warning: %s',
+    async patched => {
+      const onRatingsChanged = vi.fn();
+      const { service, ollamaWslPatch } = flagHarness({ patched, deps: { onRatingsChanged } });
+      await settledFits(service);
+      onRatingsChanged.mockClear();
+      ollamaWslPatch.mockResolvedValue({ server: 'pid-2', patched: patched === false });
+      const fit = (await installedFits(service)).get('small:q4');
+      if (patched === false) expect(fit).not.toHaveProperty('warning');
+      else expect(fit?.warning).toMatch(RELEASE_FLAG);
+      expect(onRatingsChanged).toHaveBeenCalledExactlyOnceWith('local');
+      onRatingsChanged.mockClear();
+      await installedFits(service);
+      expect(onRatingsChanged).not.toHaveBeenCalled();
+    }
+  );
+
+  it('follows the running binary from one read to the next', async () => {
+    const { service, ollamaWslPatch } = flagHarness({ version: '0.40.13' });
+    expect((await settledFits(service)).get('small:q4')?.warning).toMatch(/^Ollama 0\.40\.13 in WSL limits/);
+    ollamaWslPatch.mockResolvedValue({ server: 'pid-2', patched: true });
+    expect((await installedFits(service)).get('small:q4')).not.toHaveProperty('warning');
+  });
+
+  const HELD_BACK = [
+    { name: 'mid:q8_0', sizeBytes: 40 * GIB, vramBytes: 20 * GIB, contextLength: 131072, expiresAt: null },
+  ];
+  const capOf = async (service: ModelHubService) => {
+    const result = await service.installed();
+    return result.ok ? (result.gpuMemoryCap ?? null) : null;
+  };
+
+  it('drops a limit seen on one server once a build with the fix answers, with nothing loaded', async () => {
+    const { service, runtime, ollamaWslPatch } = flagHarness({ version: '0.40.13' });
+    runtime.loaded.mockResolvedValue(HELD_BACK);
+    await settledFits(service);
+    await vi.waitFor(async () => expect(await capOf(service)).not.toBeNull());
+    ollamaWslPatch.mockResolvedValue({ server: 'pid-2', patched: true });
+    runtime.loaded.mockResolvedValue([]);
+    expect(await capOf(service)).toBeNull();
+    for (const fit of (await installedFits(service)).values()) expect(fit).not.toHaveProperty('warning');
+  });
+
+  it('drops a limit seen with Desktop on Windows once Ollama reports another version', async () => {
+    const { service, runtime } = flagHarness({ windowsDesktop: true, version: '0.40.13' });
+    runtime.loaded.mockResolvedValue(HELD_BACK);
+    await settledFits(service);
+    await vi.waitFor(async () => expect(await capOf(service)).not.toBeNull());
+    runtime.health.mockResolvedValue({ ok: true, version: '0.40.14', error: null });
+    runtime.loaded.mockResolvedValue([]);
+    expect(await capOf(service)).toBeNull();
+    for (const fit of (await installedFits(service)).values()) expect(fit).not.toHaveProperty('warning');
+  });
+
+  it('learns the server of a limit confirmed while both reads failed, then drops it for another', async () => {
+    const { service, runtime, ollamaWslPatch } = flagHarness({ version: '0.0.0', build: null });
+    runtime.health.mockResolvedValue({ ok: false, version: null, error: 'timed out' });
+    runtime.loaded.mockResolvedValue(HELD_BACK);
+    await settledFits(service);
+    await vi.waitFor(async () => expect(await capOf(service)).not.toBeNull());
+    runtime.loaded.mockResolvedValue([]);
+    runtime.health.mockResolvedValue({ ok: true, version: '0.40.13', error: null });
+    ollamaWslPatch.mockResolvedValue({ server: 'pid-1', patched: false });
+    expect(await capOf(service)).not.toBeNull();
+    runtime.health.mockResolvedValue({ ok: true, version: '0.0.1', error: null });
+    ollamaWslPatch.mockResolvedValue({ server: 'pid-2', patched: false });
+    expect(await capOf(service)).toBeNull();
+  });
+
+  it('learns the version of a limit confirmed with the version unread, then drops it for another release', async () => {
+    const { service, runtime } = flagHarness({ version: '0.0.0' });
+    runtime.health.mockResolvedValue({ ok: false, version: null, error: 'timed out' });
+    runtime.loaded.mockResolvedValue(HELD_BACK);
+    await settledFits(service);
+    await vi.waitFor(async () => expect(await capOf(service)).not.toBeNull());
+    runtime.loaded.mockResolvedValue([]);
+    runtime.health.mockResolvedValue({ ok: true, version: '0.40.13', error: null });
+    expect(await capOf(service)).not.toBeNull();
+    runtime.health.mockResolvedValue({ ok: true, version: '0.0.1', error: null });
+    expect(await capOf(service)).toBeNull();
+  });
+
+  it('learns the server of a limit confirmed with the server unread, then drops it for another', async () => {
+    const { service, runtime, ollamaWslPatch } = flagHarness({ version: '0.40.13', build: null });
+    runtime.loaded.mockResolvedValue(HELD_BACK);
+    await settledFits(service);
+    await vi.waitFor(async () => expect(await capOf(service)).not.toBeNull());
+    runtime.loaded.mockResolvedValue([]);
+    ollamaWslPatch.mockResolvedValue({ server: 'pid-1', patched: false });
+    expect(await capOf(service)).not.toBeNull();
+    ollamaWslPatch.mockResolvedValue({ server: 'pid-2', patched: false });
+    expect(await capOf(service)).toBeNull();
+  });
+
+  it('keeps a limit seen when one health read fails, then recovers', async () => {
+    const { service, runtime } = flagHarness({ version: '0.40.13' });
+    runtime.loaded.mockResolvedValue(HELD_BACK);
+    await settledFits(service);
+    await vi.waitFor(async () => expect(await capOf(service)).not.toBeNull());
+    runtime.loaded.mockResolvedValue([]);
+    runtime.health.mockResolvedValue({ ok: false, version: null, error: 'timed out' });
+    await installedFits(service);
+    runtime.health.mockResolvedValue({ ok: true, version: '0.40.13', error: null });
+    expect(await capOf(service)).not.toBeNull();
+  });
+
+  it('keeps a limit seen when one probe read gives no answer, then recovers', async () => {
+    const { service, runtime, ollamaWslPatch } = flagHarness({ version: '0.40.13' });
+    runtime.loaded.mockResolvedValue(HELD_BACK);
+    await settledFits(service);
+    await vi.waitFor(async () => expect(await capOf(service)).not.toBeNull());
+    runtime.loaded.mockResolvedValue([]);
+    ollamaWslPatch.mockResolvedValue(null);
+    await installedFits(service);
+    ollamaWslPatch.mockResolvedValue({ server: 'pid-1', patched: false });
+    expect(await capOf(service)).not.toBeNull();
+  });
+
+  it('keeps a limit seen with Desktop on Windows when one health read fails', async () => {
+    const { service, runtime } = flagHarness({ windowsDesktop: true, version: '0.40.13' });
+    runtime.loaded.mockResolvedValue(HELD_BACK);
+    await settledFits(service);
+    await vi.waitFor(async () => expect(await capOf(service)).not.toBeNull());
+    runtime.loaded.mockResolvedValue([]);
+    runtime.health.mockResolvedValue({ ok: false, version: null, error: 'timed out' });
+    await installedFits(service);
+    runtime.health.mockResolvedValue({ ok: true, version: '0.40.13', error: null });
+    expect(await capOf(service)).not.toBeNull();
+  });
+
+  it('keeps a limit seen after a load when the probe fails, logging the failure once', async () => {
+    const { service, runtime, warn } = flagHarness({
+      version: '0.0.0',
+      deps: {
+        ollamaWslPatch: async () => {
+          throw new Error('permission denied');
+        },
+      },
+    });
+    runtime.loaded.mockResolvedValue(HELD_BACK);
+    await settledFits(service);
+    await vi.waitFor(async () =>
+      expect((await installedFits(service)).get('small:q4')?.warning).toMatch(/^It looks like Ollama in WSL limits/)
+    );
+    await installedFits(service);
+    const logged = warn.mock.calls.filter(([message]) => message.includes('carries the WSL GPU memory fix'));
+    expect(logged).toHaveLength(1);
+    expect(logged[0][0]).toMatch(/: permission denied$/);
+  });
+
+  it('names no release for a build with the fix once a load was seen held to the VM', async () => {
+    const { service, runtime } = flagHarness({ version: '0.40.13', patched: true });
+    expect((await settledFits(service)).get('small:q4')).not.toHaveProperty('warning');
+    runtime.loaded.mockResolvedValue([
+      { name: 'mid:q8_0', sizeBytes: 40 * GIB, vramBytes: 20 * GIB, contextLength: 131072, expiresAt: null },
+    ]);
+    await vi.waitFor(async () =>
+      expect((await installedFits(service)).get('small:q4')?.warning).toMatch(/^It looks like Ollama in WSL limits/)
+    );
+  });
+
+  it('does not run nvidia-smi on a computer that cannot host WSL', async () => {
+    const { service, integratedGpu } = flagHarness({ wslHost: false });
+    await settledFits(service);
+    expect(integratedGpu).not.toHaveBeenCalled();
+  });
+
+  it('lists without waiting on nvidia-smi, then rates the open lists again once it answers', async () => {
+    const onRatingsChanged = vi.fn();
+    const { service, integratedGpu, installedChanged } = flagHarness({ deps: { onRatingsChanged } });
+    let answer: (value: boolean) => void = () => {};
+    integratedGpu.mockImplementation(() => new Promise<boolean>(resolve => (answer = resolve)));
+    const first = await installedFits(service);
+    expect(first.get('small:q4')).not.toHaveProperty('warning');
+    answer(true);
+    await vi.waitFor(() => expect(onRatingsChanged).toHaveBeenCalledWith('local'));
+    expect(installedChanged).not.toHaveBeenCalled();
+    expect((await installedFits(service)).get('small:q4')?.warning).toMatch(RELEASE_FLAG);
+    expect(integratedGpu).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not rate the lists again when nvidia-smi answers but nothing is flagged', async () => {
+    const onRatingsChanged = vi.fn();
+    const { service } = flagHarness({ version: '0.40.16', deps: { onRatingsChanged } });
+    await settledFits(service);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(onRatingsChanged).not.toHaveBeenCalled();
+  });
+
+  it('follows the Ollama release from one read to the next', async () => {
+    const { service, runtime } = flagHarness();
+    expect((await settledFits(service)).get('small:q4')?.warning).toMatch(RELEASE_FLAG);
+    runtime.health.mockResolvedValue({ ok: true, version: '0.40.16', error: null });
+    expect((await installedFits(service)).get('small:q4')).not.toHaveProperty('warning');
+  });
+
+  it('flags badges for a build of unknown version once a load was seen held to the VM', async () => {
+    const { service, runtime } = flagHarness({ version: '0.0.0' });
+    expect((await settledFits(service)).get('small:q4')).not.toHaveProperty('warning');
+    runtime.loaded.mockResolvedValue([
+      { name: 'mid:q8_0', sizeBytes: 40 * GIB, vramBytes: 20 * GIB, contextLength: 131072, expiresAt: null },
+    ]);
+    await vi.waitFor(async () =>
+      expect((await installedFits(service)).get('small:q4')?.warning).toMatch(/^It looks like Ollama in WSL limits/)
+    );
+  });
+
+  it('flags the curated list and the builds Explore shows, but not one too large anyway', async () => {
+    const { service } = flagHarness({ hardware: { ...N1X, totalMemoryBytes: 16 * GIB, gpuMemoryBytes: 8 * GIB } });
+    await settledFits(service);
+    const builds = (await service.curated()).entries.flatMap(entry => entry.builds);
+    expect(builds.some(build => build.fit.level === 'too-large')).toBe(true);
+    expect(builds.some(build => build.fit.level !== 'too-large')).toBe(true);
+    for (const build of builds)
+      if (build.fit.level === 'too-large') expect(build.fit).not.toHaveProperty('warning');
+      else expect(build.fit.warning).toMatch(RELEASE_FLAG);
+    const shown = await service.detail(REPO);
+    if (!shown.ok) throw new Error(shown.error.message);
+    expect(shown.model.builds.length).toBeGreaterThan(0);
+    for (const build of shown.model.builds) expect(build.fit?.warning).toMatch(RELEASE_FLAG);
+  });
+
+  it('reads only this computer for the flag: no Hugging Face or registry call', async () => {
+    const { service, hub, libraryLayers } = flagHarness();
+    await settledFits(service);
+    await service.curated();
+    for (const call of [hub.search, hub.getModel, hub.verifyOllamaRef, hub.ollamaLayers, hub.checkToken, libraryLayers])
+      expect(call).not.toHaveBeenCalled();
+  });
+
+  it("sizes flagged badges with the server's flash attention", async () => {
+    const { service } = flagHarness({ deps: { flashAttention: () => 'off' } });
+    vi.mocked(estimateFit).mockClear();
+    expect((await settledFits(service)).get('small:q4')?.warning).toMatch(RELEASE_FLAG);
+    expect(vi.mocked(estimateFit).mock.calls.length).toBeGreaterThan(0);
+    for (const [input] of vi.mocked(estimateFit).mock.calls) expect(input.runtime).toMatchObject({ flashAttn: 'off' });
+  });
+
+  it('logs a failed model folder lookup and lists without the flag', async () => {
+    const { service, warn } = flagHarness({
+      storeDir: null,
+      build: null,
+      defaultStoreDir: () => {
+        throw new Error('no home directory');
+      },
+    });
+    const fits = await settledFits(service);
+    await installedFits(service);
+    expect(fits.size).toBe(MODELS.length);
+    for (const fit of fits.values()) expect(fit).not.toHaveProperty('warning');
+    const logged = warn.mock.calls.filter(([message]) => message.includes('badges are not flagged: no home'));
+    expect(logged).toHaveLength(1);
+    expect(logged[0][0]).toMatch(/badges are not flagged: no home directory$/);
+  });
+
+  it('does not flag a saved model server, Ollama or llama-server, whose GPU is not this computer', async () => {
+    const integratedGpu = vi.fn(async () => true);
+    const ollamaWslPatch = vi.fn(async (_url: string) => ({ server: 'pid-1', patched: false }));
+    const { service, runtimes, local } = servers({
+      hardware: N1X,
+      version: '0.40.15',
+      deps: {
+        wslHost: true,
+        integratedGpu,
+        ollamaWslPatch,
+        specs: id => (id === 'a' ? { ramGiB: 46, gpuMemoryGiB: 80, bandwidthGBps: null, unified: false } : null),
+      },
+    });
+    for (const runtime of [runtimes.a, local.runtime]) {
+      runtime.list.mockResolvedValue(MODELS);
+      const inspect = runtime.inspect.getMockImplementation()!;
+      runtime.inspect.mockImplementation(async (name, inspectOptions) => ({
+        ...(await inspect(name, inspectOptions)),
+        contents: { template: null, license: null, modelBlob: SHA, storeDir: LINUX_STORE },
+      }));
+    }
+    const saved = await installedFits(service, 'a');
+    expect(saved.get('small:q4')?.level).toBe('fits');
+    expect(saved.get('small:q4')).not.toHaveProperty('warning');
+    expect(integratedGpu).not.toHaveBeenCalled();
+    expect(ollamaWslPatch).not.toHaveBeenCalled();
+    expect((await settledFits(service)).get('small:q4')?.warning).toMatch(RELEASE_FLAG);
+    expect((await installedFits(service, 'a')).get('small:q4')).not.toHaveProperty('warning');
+    expect(ollamaWslPatch.mock.calls.every(([url]) => url === local.runtime.baseUrl)).toBe(true);
   });
 });
 

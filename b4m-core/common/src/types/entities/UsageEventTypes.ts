@@ -183,7 +183,10 @@ export const UsageEvent = z.object({
 
   /** True provider COGS in USD, computed and frozen at write time. */
   costUsd: z.number(),
-  /** Credits actually debited from the owner for this call. */
+  /**
+   * Full credit cost of this call, including any part written off below; what the owner was
+   * actually debited is creditsCharged - writtenOffCredits.
+   */
   creditsCharged: z.number(),
   /**
    * Credits written off by the zero-balance shortfall clamp (quest-level,
@@ -790,22 +793,22 @@ export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocume
   /** Margin buckets per model per day since the given date (default 30 days back). */
   marginByModelDay(since?: Date): Promise<IModelDayMargin[]>;
 
-  /** Credits the user spent in [from, to): charged plus written off. */
+  /** Credits the user spent in [from, to); creditsCharged already includes any write-off. */
   creditsSpentByUser(userId: string, from: Date, to: Date): Promise<number>;
 
   /**
    * The user's usage in [from, to): event count, `ok` events, the rest (error/timeout/refusal/
-   * degenerate), credits charged plus written off, and the newest event's time (null when none).
+   * degenerate), credits charged (write-offs included), and the newest event's time (null when none).
    * Reads at most `limit` of the newest events, so `events === limit` means the counts are a floor.
    */
   activitySummaryByUser(userId: string, from: Date, to: Date, limit: number): Promise<IUserUsageActivity>;
 
-  /** Credits each user has spent in total, charged plus written off; users with none are absent. */
+  /** Credits each user has spent in total (write-offs included); users with none are absent. */
   creditsSpentByUsers(userIds: string[]): Promise<Record<string, number>>;
 
   /**
    * Per user, the chat settlement since `since` that settled furthest above its hold: settled credits
-   * (charged plus written off) over reservedCredits. Only events that recorded a hold count; users
+   * (creditsCharged, write-offs included) over reservedCredits. Only events that recorded a hold count; users
    * with none are absent.
    */
   largestSettlementOverHold(userIds: string[], since: Date): Promise<Record<string, ISettlementOverHold>>;

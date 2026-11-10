@@ -157,6 +157,15 @@ beforeEach(() => {
 });
 
 describe('AdminRevenue', () => {
+  it('leaves the outer padding to the admin page frame', async () => {
+    renderTab();
+    const root = await screen.findByTestId('admin-revenue-tab');
+    const style = getComputedStyle(root);
+    for (const side of [style.paddingTop, style.paddingRight, style.paddingBottom, style.paddingLeft]) {
+      expect(parseFloat(side || '0')).toBe(0);
+    }
+  });
+
   it('says when the trend starts before the first snapshot, with the current numbers in the strip', async () => {
     renderTab();
     expect(await screen.findByText('Trend starts collecting on October 30, 2026')).toBeTruthy();

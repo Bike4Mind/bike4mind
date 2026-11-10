@@ -3692,6 +3692,7 @@ export class ChatCompletionProcess {
       const { mcpToolsByServer, serverAgentConfig, customMcpToolNames } = await toolBuilder.buildMcpTools({
         enableMCPServer,
         requestedMcpServers: parsedBody.mcpServers,
+        disabledMcpConnections: parsedBody.disabledMcpConnections,
         defaultAdminSettings,
         userMessage: initContext.message,
         logger,

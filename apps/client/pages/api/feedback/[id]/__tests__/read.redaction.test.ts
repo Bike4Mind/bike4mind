@@ -41,6 +41,9 @@ const { feedbackDoc } = vi.hoisted(() => ({
   },
 }));
 
+// The audit write pulls the admin audit chain; read.audit.test.ts covers it.
+vi.mock('@server/utils/feedbackReadAudit', () => ({ recordFeedbackRead: vi.fn().mockResolvedValue(undefined) }));
+
 vi.mock('@bike4mind/database', () => ({
   FeedbackModel: { findById: vi.fn().mockResolvedValue(feedbackDoc) },
   FeedbackTextModel: { find: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue([]) }) },

@@ -84,6 +84,8 @@ export const QuestStartBodySchema = z
     promptMeta: PromptMetaZodSchema,
     tools: z.array(z.union([b4mLLMTools, z.string()])).optional(),
     mcpServers: z.array(z.string()).optional(),
+    /** See ChatCompletionInvokeParamsSchema.disabledMcpConnections - must stay in sync with it. */
+    disabledMcpConnections: z.array(z.string()).optional(),
     projectId: z.string().optional(),
     organizationId: z.string().nullable().optional(),
     questMaster: QuestMasterParamsSchema.optional(),

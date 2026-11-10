@@ -14,7 +14,6 @@ export const handler = withEventContext(async (event, logger) => {
   const emailData: {
     subject: string;
     html: string;
-    headers?: Record<string, string>;
     attachments?: {
       filename: string;
       content: Buffer;
@@ -23,9 +22,6 @@ export const handler = withEventContext(async (event, logger) => {
   } = {
     subject,
     html: body,
-    ...(category === 'otc' && process.env.OTC_SES_CONFIGURATION_SET
-      ? { headers: { 'X-SES-CONFIGURATION-SET': process.env.OTC_SES_CONFIGURATION_SET } }
-      : {}),
   };
 
   // If attachments are provided, convert base64 strings back to buffers
@@ -37,7 +33,8 @@ export const handler = withEventContext(async (event, logger) => {
     }));
   }
 
-  const result = await mailer.sendEmail(to, emailData);
+  // The transport picks the SES configuration set for the category (packages/server-utils/src/utils/mailer).
+  const result = await mailer.sendEmail(to, emailData, { category });
 
   if (result === false) {
     logger.error('Email delivery failed - check MailService logs for details', { to, subject });

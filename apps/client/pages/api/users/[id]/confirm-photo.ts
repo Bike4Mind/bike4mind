@@ -6,6 +6,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { S3Storage } from '@bike4mind/fab-pipeline';
+import { appFileCdnPath, invalidateRouterPaths } from '@server/services/cdn/invalidateRouterCdn';
 import { Resource } from 'sst';
 import { z } from 'zod';
 
@@ -95,6 +96,8 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
       } catch (error) {
         console.warn('Failed to delete retired profile photo', error);
       }
+      const retiredCdnPath = appFileCdnPath(retiredPath);
+      if (retiredCdnPath) await invalidateRouterPaths([retiredCdnPath], { label: 'profile-photo', logger: req.logger });
     }
 
     return res.json({ fileId, fileKey: file.path });

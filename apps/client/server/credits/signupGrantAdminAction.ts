@@ -18,13 +18,14 @@ export const signupGrantAuditTarget = (userId: string, displayName: string = use
 
 /**
  * The checks every per-user signup grant action runs before touching the account: a valid target, no
- * self-service (denied and audited), a required reason, and - for actions that change an account's restriction
- * state or release credits - the actor outranking the target. The caller has already passed adminApi's permission gate.
+ * self-service (denied and audited), a required reason, an existing account, and the actor outranking the target
+ * (assertCanActOnAdminTarget, as bulkSignupGrantAdminAction.ts does). The caller has already passed adminApi's
+ * permission gate.
  */
 export async function readSignupGrantAdminAction(
   req: Request,
   attempted: AdminAuditAction,
-  options: { guardTargetVerb?: string } = {}
+  guardTargetVerb: string
 ): Promise<{ userId: string; reason: string; target: SignupGrantAuditTarget }> {
   const queryUserId = req.query.userId;
   if (typeof queryUserId !== 'string' || !queryUserId) throw new BadRequestError('Invalid user ID');
@@ -39,9 +40,7 @@ export async function readSignupGrantAdminAction(
   }
   const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
   const account = await userRepository.findById(userId);
-  if (options.guardTargetVerb) {
-    if (!account) throw new NotFoundError('User not found');
-    assertCanActOnAdminTarget(req.user, account, options.guardTargetVerb);
-  }
-  return { userId, reason, target: signupGrantAuditTarget(userId, account?.email ?? account?.username) };
+  if (!account) throw new NotFoundError('User not found');
+  assertCanActOnAdminTarget(req.user, account, guardTargetVerb);
+  return { userId, reason, target: signupGrantAuditTarget(userId, account.email ?? account.username) };
 }

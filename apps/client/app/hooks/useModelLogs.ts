@@ -1,5 +1,6 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
+import { isValidSupportCase } from '@client/shared/supportCase';
 
 export interface ModelLog {
   id: string;
@@ -88,6 +89,8 @@ interface UseModelLogsOptions {
   endDate?: string;
   model?: string;
   search?: string;
+  /** Sent with `search` only: a prompt-text search is a support read and needs a case. */
+  supportCase?: string;
   page: number;
   limit: number;
 }
@@ -107,7 +110,10 @@ export function useModelLogs(options: UseModelLogsOptions) {
       if (options.startDate) params.append('startDate', options.startDate);
       if (options.endDate) params.append('endDate', options.endDate);
       if (options.model) params.append('model', options.model);
-      if (options.search) params.append('search', options.search);
+      if (options.search) {
+        params.append('search', options.search);
+        if (options.supportCase) params.append('supportCase', options.supportCase);
+      }
 
       const response = await api.get(`/api/admin/model-logs?${params.toString()}`);
       return response.data;
@@ -116,13 +122,15 @@ export function useModelLogs(options: UseModelLogsOptions) {
   });
 }
 
-export function useModelLogDetail(id: string, enabled: boolean) {
+/** The full promptMeta is a support read: the server records it against `supportCase`. */
+export function useModelLogDetail(id: string, supportCase: string, enabled: boolean) {
   return useQuery<ModelLog>({
-    queryKey: ['modelLogDetail', id],
+    queryKey: ['modelLogDetail', id, supportCase],
     queryFn: async () => {
-      const response = await api.get(`/api/admin/model-logs/${encodeURIComponent(id)}`);
+      const params = new URLSearchParams({ supportCase });
+      const response = await api.get(`/api/admin/model-logs/${encodeURIComponent(id)}?${params.toString()}`);
       return response.data;
     },
-    enabled,
+    enabled: enabled && isValidSupportCase(supportCase),
   });
 }
