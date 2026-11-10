@@ -45,12 +45,17 @@ const RESIDUAL_TOLERANCE_CREDITS = 1;
  *
  * `days` lets a parent that already owns a range toggle (the profile ledger) drive the window; the
  * panel then hides its own toggle.
+ *
+ * `reconcileLedger` makes the totals follow the credit ledger, adding an "Other charges" row for spend
+ * with no usage event. Only the profile page sets it: it shows that ledger beside this panel, whereas
+ * on org dashboards the ledger also holds non-spend debits (expiry, admin adjustments).
  */
-export const UsageDashboard: React.FC<{ ownerType: UsageOwnerType; ownerId?: string; days?: number }> = ({
-  ownerType,
-  ownerId,
-  days: controlledDays,
-}) => {
+export const UsageDashboard: React.FC<{
+  ownerType: UsageOwnerType;
+  ownerId?: string;
+  days?: number;
+  reconcileLedger?: boolean;
+}> = ({ ownerType, ownerId, days: controlledDays, reconcileLedger = false }) => {
   const isOrg = ownerType === CreditHolderType.Organization;
   const showOrgPicker = isOrg && !ownerId;
 
@@ -85,11 +90,13 @@ export const UsageDashboard: React.FC<{ ownerType: UsageOwnerType; ownerId?: str
 
   const eventCredits = data?.totals.creditsCharged ?? 0;
   // The ledger is what the owner was charged; events miss charges written without a per-call record.
-  const ledgerCredits = data?.ledger?.creditsCharged ?? eventCredits;
+  const ledgerCredits = reconcileLedger ? (data?.ledger?.creditsCharged ?? eventCredits) : eventCredits;
   const residualCredits = ledgerCredits - eventCredits;
   const hasResidual = residualCredits > RESIDUAL_TOLERANCE_CREDITS;
   const hasEvents = (data?.totals.requests ?? 0) > 0;
-  const hasUsage = hasEvents || ledgerCredits > 0;
+  const hasUsage = hasEvents || hasResidual;
+  // Below the tolerance (or under the events) the ledger figure would disagree with the rows shown.
+  const totalCredits = hasResidual ? ledgerCredits : eventCredits;
   const chartData = useMemo(() => zeroFillDailySeries(data?.overTime ?? [], days, d => d.creditsCharged), [data, days]);
 
   return (
@@ -170,7 +177,7 @@ export const UsageDashboard: React.FC<{ ownerType: UsageOwnerType; ownerId?: str
         <Stack spacing={3}>
           <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
             <Chip color="primary" variant="soft" data-testid="usage-total-credits">
-              {formatCredits(ledgerCredits)} credits
+              {formatCredits(totalCredits)} credits
             </Chip>
             <Chip color="neutral" variant="soft" data-testid="usage-total-cogs">
               {formatUsd(data?.totals.cogsUsd ?? 0)} COGS

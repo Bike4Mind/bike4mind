@@ -10,6 +10,10 @@ describe('usageFeatureLabel', () => {
     expect(label).not.toMatch(/_/);
   });
 
+  it('returns the exact label for a known feature', () => {
+    expect(usageFeatureLabel('agent_execution')).toBe('Agent runs');
+  });
+
   it('humanizes an id outside the enum', () => {
     expect(usageFeatureLabel('legacy_batch_job')).toBe('Batch Job');
   });

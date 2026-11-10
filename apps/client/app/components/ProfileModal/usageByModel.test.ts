@@ -115,12 +115,34 @@ describe('aggregateUsageByModel', () => {
       const usage = aggregateUsageByModel(
         [
           { type: 'generic_deduct', model: 'acme-custom-thing', credits: -2 },
-          { type: 'tool_usage', metadata: { modelName: 'acme_custom_thing' }, credits: -3 },
+          { type: 'generic_deduct', metadata: { modelName: 'acme_custom_thing' }, credits: -3 },
         ],
         models,
         overlayLabels
       );
       expect(usage).toEqual({ 'Custom Thing': 5 });
+    });
+
+    it('keeps a tool_usage model id raw when no label is registered for it', () => {
+      const usage = aggregateUsageByModel(
+        [{ type: 'tool_usage', model: 'gpt-4o-mini-tts', credits: -4 }],
+        models,
+        overlayLabels
+      );
+      expect(usage).toEqual({ 'gpt-4o-mini-tts': 4 });
+    });
+
+    it('does not let an older tool_usage or generic_deduct row relabel the model key for later rows', () => {
+      const usage = aggregateUsageByModel(
+        [
+          { type: 'tool_usage', model: 'gpt-4o', credits: -5 },
+          { type: 'generic_deduct', model: 'acme-gpt-4o', credits: -1 },
+          { type: 'text_generation_usage', model: 'gpt-4o', credits: -100 },
+        ],
+        models,
+        overlayLabels
+      );
+      expect(usage).toEqual({ 'gpt-4o': 105, 'Gpt 4o': 1 });
     });
 
     it('keeps an unknown id on a model-usage row as the model id', () => {

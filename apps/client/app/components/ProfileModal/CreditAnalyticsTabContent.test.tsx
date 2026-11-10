@@ -243,7 +243,12 @@ describe('CreditAnalyticsTabContent spend breakdown', () => {
     render(<CreditAnalyticsTabContent />, { wrapper: TestWrapper });
 
     expect(await screen.findByTestId('usage-dashboard')).toBeTruthy();
-    expect(dashboard.props).toEqual({ ownerType: CreditHolderType.User, ownerId: 'user_1', days: 30 });
+    expect(dashboard.props).toEqual({
+      ownerType: CreditHolderType.User,
+      ownerId: 'user_1',
+      days: 30,
+      reconcileLedger: true,
+    });
   });
 
   it('follows the ledger period toggle', async () => {

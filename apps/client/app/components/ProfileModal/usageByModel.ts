@@ -13,8 +13,9 @@ const BEDROCK_VENDOR_PREFIX =
  */
 export const usageModelKey = (id: string): string => normalizeModelsDevKey(id).replace(BEDROCK_VENDOR_PREFIX, '');
 
-// Rows of these types carry a feature id, not a model id, in the model field.
-const APP_CHARGE_TYPES: ReadonlySet<string> = new Set(['tool_usage', 'generic_deduct']);
+// Only these rows carry a feature id in the model field; `tool_usage` rows carry real model ids
+// (image, TTS, subagent LLM), so they keep the raw id unless a label is registered for it.
+const APP_CHARGE_TYPES: ReadonlySet<string> = new Set(['generic_deduct']);
 
 /** Label for a row with no model id at all. */
 export const OTHER_CHARGES_LABEL = 'Other charges';
@@ -63,7 +64,8 @@ export function aggregateUsageByModel(
       label = nameById.get(rawId) ?? rawId;
     } else {
       label = labelByKey.get(key) ?? names?.[0] ?? featureLabel(transaction.type, rawId, overlayLabels);
-      labelByKey.set(key, label);
+      // A feature label belongs to the row, not the model key: never let it label model-usage rows.
+      if (!(transaction.type && APP_CHARGE_TYPES.has(transaction.type))) labelByKey.set(key, label);
     }
     usage[label] = (usage[label] ?? 0) + Math.abs(transaction.credits);
   }

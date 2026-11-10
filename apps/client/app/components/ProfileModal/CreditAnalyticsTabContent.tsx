@@ -1066,7 +1066,12 @@ const CreditAnalyticsTabContent: React.FC = () => {
           <Divider sx={{ my: 4 }}>
             <Typography level="title-md">Spend by key, model, feature and source</Typography>
           </Divider>
-          <UsageDashboard ownerType={CreditHolderType.User} ownerId={currentUser.id} days={parseInt(timePeriod, 10)} />
+          <UsageDashboard
+            ownerType={CreditHolderType.User}
+            ownerId={currentUser.id}
+            days={parseInt(timePeriod, 10)}
+            reconcileLedger
+          />
         </Box>
       )}
 

@@ -139,7 +139,7 @@ describe('UsageDashboard ledger reconciliation', () => {
   const renderUser = (days?: number) =>
     render(
       <TestWrapper>
-        <UsageDashboard ownerType={CreditHolderType.User} ownerId="user-1" days={days} />
+        <UsageDashboard ownerType={CreditHolderType.User} ownerId="user-1" days={days} reconcileLedger />
       </TestWrapper>
     );
 
@@ -188,5 +188,46 @@ describe('UsageDashboard ledger reconciliation', () => {
     setData({ ownerType: CreditHolderType.User, ownerId: 'user-1' });
     renderUser();
     expect(screen.getByTestId('usage-range-toggle')).toBeInTheDocument();
+  });
+
+  it('shows the events when they exceed the ledger, so the chip matches the rows', () => {
+    setData({
+      ownerType: CreditHolderType.User,
+      ownerId: 'user-1',
+      byFeature: [{ feature: 'agent_execution', requests: 4, cogsUsd: 0.2, creditsCharged: 1050 }],
+      totals: { requests: 4, cogsUsd: 0.2, creditsCharged: 1050 },
+      ledger: { creditsCharged: 1000, transactions: 4 },
+    });
+    renderUser();
+
+    expect(screen.getByTestId('usage-total-credits')).toHaveTextContent('1,050 credits');
+    expect(screen.queryByTestId('usage-residual-note')).not.toBeInTheDocument();
+  });
+
+  it('reads as no usage when the ledger is under the tolerance and there are no events', () => {
+    setData({
+      ownerType: CreditHolderType.User,
+      ownerId: 'user-1',
+      ledger: { creditsCharged: 0.6, transactions: 1 },
+    });
+    renderUser();
+
+    expect(screen.getAllByText('No usage in this window.').length).toBeGreaterThan(0);
+    expect(screen.queryByTestId('usage-no-events-note')).not.toBeInTheDocument();
+    expect(screen.getByTestId('usage-total-credits')).toHaveTextContent('0 credits');
+  });
+
+  it('leaves an organization dashboard on usage events only, even with ledger spend', () => {
+    setData({ ledger: { creditsCharged: 2000, transactions: 1 } });
+    render(
+      <TestWrapper>
+        <UsageDashboard ownerType={CreditHolderType.Organization} ownerId="org-1" />
+      </TestWrapper>
+    );
+
+    expect(screen.getByTestId('usage-total-credits')).toHaveTextContent('0 credits');
+    expect(screen.getAllByText('No usage in this window.').length).toBeGreaterThan(0);
+    expect(screen.queryByTestId('usage-residual-note')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Other charges \(no per-call/)).not.toBeInTheDocument();
   });
 });
