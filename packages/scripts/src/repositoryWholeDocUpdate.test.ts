@@ -61,9 +61,9 @@ const ALLOWED = new Map<string, string>([
   ['b4m-core/services/src/tagService/update.ts::buildData', 'id plus validated params'],
   ['packages/scripts/generateAgentSystemPrompts.ts::updateData', PARTIAL],
 ]);
-const ALLOWED_ENTRIES = 22;
+const ALLOWED_ENTRIES = 21;
 // Sum of the per-entry SITE_COUNTs; pinned so a new site under an existing key is not absorbed silently.
-const TOTAL_SITES = 24;
+const TOTAL_SITES = 23;
 const SITE_COUNT = new Map<string, number>([
   ['b4m-core/services/src/latticeService/latticeModelService.ts::updatedModel', 3],
 ]);

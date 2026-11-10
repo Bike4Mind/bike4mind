@@ -489,7 +489,7 @@ describe('SidenavNav More overflow', () => {
       .getAllByRole('menuitem')
       .map(item => item.getAttribute('data-testid'));
 
-  // 14 rows: every flag, Opti, Bob, two overlay rows and Studio.
+  // 12 rows: every flag, Opti, Bob, two overlay rows and Studio.
   const seeEverything = () => {
     useFeatureEnabledMock.mockReturnValue(true);
     userState.isAdmin = true;
@@ -509,6 +509,8 @@ describe('SidenavNav More overflow', () => {
 
   it('draws no More row at exactly the limit', () => {
     useFeatureEnabledMock.mockReturnValue(true);
+    userState.isAdmin = true;
+    userState.currentUser = { preferences: { hiddenSurfaces: [] } };
     const { container } = renderNav();
     expect(navRowIds(container)).toHaveLength(8);
     expect(screen.queryByTestId('sidenav-nav-more')).not.toBeInTheDocument();
@@ -524,6 +526,7 @@ describe('SidenavNav More overflow', () => {
       'sidenav-nav-bob',
       'sidenav-nav-files',
       'sidenav-nav-agents',
+      'sidenav-nav-studio',
       'sidenav-nav-gears',
       'sidenav-nav-more',
     ]);
@@ -531,7 +534,6 @@ describe('SidenavNav More overflow', () => {
       'sidenav-more-premium-launch',
       'sidenav-more-premium-forge',
       'sidenav-more-projects',
-      'sidenav-more-studio',
       'sidenav-more-published',
       'sidenav-more-skill-market',
     ]);
@@ -541,6 +543,7 @@ describe('SidenavNav More overflow', () => {
     useFeatureEnabledMock.mockReturnValue(true);
     userState.isAdmin = true;
     userState.currentUser = { preferences: { hiddenSurfaces: [] } };
+    useVideoModelsMock.mockReturnValue({ data: [{ id: 'v' }] });
     const { container } = renderNav();
 
     expect(navRowIds(container)).toHaveLength(8);
