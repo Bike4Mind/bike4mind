@@ -70,6 +70,7 @@ vi.mock('./CampaignWatches/WatchAccountsButton', async importOriginal => {
   };
 });
 vi.mock('@client/app/hooks/data/campaignWatches', () => ({
+  canUseCampaignWatches: (user: { isAdmin?: boolean } | null | undefined) => user?.isAdmin === true,
   useCreateCampaignWatch: () => ({ mutateAsync: vi.fn(), isPending: false }),
   watchErrorMessage: () => 'Could not create watch',
 }));
