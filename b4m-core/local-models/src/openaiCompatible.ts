@@ -132,10 +132,11 @@ function listedModels(entries: OpenAIModelEntry[]): InstalledModel[] {
     }
     const base = parent ? byName.get(parent) : undefined;
     const contextLength = positiveInt(entry.max_model_len) ?? base?.contextLength;
+    const loadState = loadStateOf(entry.status);
     const model: InstalledModel = {
       ...bareModel(entry.id, entry.meta?.size ?? null),
       ...(contextLength ? { contextLength } : {}),
-      ...(loadStateOf(entry.status) ? { loadState: loadStateOf(entry.status) } : {}),
+      ...(loadState ? { loadState } : {}),
       ...(parent ? { baseModel: base?.name ?? parent } : {}),
     };
     if (root && !parent) byRoot.set(root, model);
