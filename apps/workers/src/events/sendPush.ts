@@ -147,7 +147,7 @@ export async function deliverPush(
   };
   const payload = JSON.stringify(buildPayload(event, recipient.redactContent, deps.appUrl));
 
-  const outcome = await sendToTokens(tokens, headers, payload, deps, logger);
+  const outcome = await sendToTokens(tokens, headers, payload, deps, logger, event.category);
   const { delivered, failed, retryable } = outcome;
   const pruned = orphansPruned + outcome.pruned;
 
@@ -271,7 +271,8 @@ async function sendToTokens(
   headers: Record<string, string>,
   payload: string,
   deps: { transport: ApnsTransport; tokens: Pick<SendPushDeps['tokens'], 'removeByToken'> },
-  logger: Pick<Logger, 'warn' | 'error'>
+  logger: Pick<Logger, 'warn' | 'error'>,
+  category?: string
 ): Promise<DeliveryTally> {
   let delivered = 0;
   let pruned = 0;
@@ -337,6 +338,7 @@ async function sendToTokens(
       status,
       reason,
       likelyCause: hint,
+      category,
       pushType: headers['apns-push-type'],
     });
   }
