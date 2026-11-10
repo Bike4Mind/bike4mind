@@ -870,8 +870,12 @@ export class ModelHubService {
   }
 
   async #checkGpuCap(target: Target, loaded: readonly LoadedModel[]): Promise<void> {
-    if (this.#gpuCap && this.#gpuCapServer && otherServer(this.#gpuCapServer, await this.#serverIdentity(target))) {
-      this.#gpuCap = null;
+    if (this.#gpuCap && this.#gpuCapServer) {
+      const seen = this.#gpuCapServer;
+      const now = await this.#serverIdentity(target);
+      if (otherServer(seen, now)) this.#gpuCap = null;
+      // A part unread when the limit was confirmed is learned from the first read that has it.
+      else this.#gpuCapServer = { version: seen.version ?? now.version, server: seen.server ?? now.server };
     }
     const { hardware } = await this.#localSizing();
     const budgets = memoryBudgets(hardware);

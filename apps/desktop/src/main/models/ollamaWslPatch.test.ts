@@ -230,10 +230,10 @@ describe('servingOllamaPid', () => {
     expect(await servingOllamaPid(LOCALHOST_URL, root)).toBeNull();
   });
 
-  it('finds none when two servers hold the socket, whichever holds every one the address reaches', async () => {
+  it('finds none when two servers each hold every socket the address reaches', async () => {
     await writeSockets([LISTENING, ON_V6_LOOPBACK]);
     await writeServer({ pid: 100, image: stockImage(), sockets: [5001, 5002] });
-    await writeServer({ pid: 300, image: imageWith(SHARED), sockets: [5002] });
+    await writeServer({ pid: 300, image: imageWith(SHARED), sockets: [5001, 5002] });
     expect(await servingOllamaPid(LOCALHOST_URL, root)).toBeNull();
   });
 

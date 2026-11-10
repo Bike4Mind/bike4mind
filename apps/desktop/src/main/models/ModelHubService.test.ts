@@ -1516,6 +1516,21 @@ describe('ModelHubService WSL GPU memory flag on fit badges', () => {
     for (const fit of (await installedFits(service)).values()) expect(fit).not.toHaveProperty('warning');
   });
 
+  it('learns the server of a limit confirmed while both reads failed, then drops it for another', async () => {
+    const { service, runtime, ollamaWslPatch } = flagHarness({ version: '0.0.0', build: null });
+    runtime.health.mockResolvedValue({ ok: false, version: null, error: 'timed out' });
+    runtime.loaded.mockResolvedValue(HELD_BACK);
+    await settledFits(service);
+    await vi.waitFor(async () => expect(await capOf(service)).not.toBeNull());
+    runtime.loaded.mockResolvedValue([]);
+    runtime.health.mockResolvedValue({ ok: true, version: '0.40.13', error: null });
+    ollamaWslPatch.mockResolvedValue({ server: 'pid-1', patched: false });
+    expect(await capOf(service)).not.toBeNull();
+    runtime.health.mockResolvedValue({ ok: true, version: '0.0.1', error: null });
+    ollamaWslPatch.mockResolvedValue({ server: 'pid-2', patched: false });
+    expect(await capOf(service)).toBeNull();
+  });
+
   it('keeps a limit seen when one health read fails, then recovers', async () => {
     const { service, runtime } = flagHarness({ version: '0.40.13' });
     runtime.loaded.mockResolvedValue(HELD_BACK);

@@ -270,9 +270,12 @@ function ModelDetail({
   }, [canPull]);
 
   const serverId = target.local ? undefined : target.id;
+  const detailRequest = useRef(0);
   const load = useCallback(async () => {
+    const mine = ++detailRequest.current;
     setDetail({ state: 'loading' });
     const result = await window.b4m.models.getDetail(repo, serverId);
+    if (mine !== detailRequest.current) return;
     setDetail(result.ok ? { state: 'ready', model: result.model } : { state: 'error', error: result.error });
   }, [repo, serverId]);
 
@@ -285,8 +288,9 @@ function ModelDetail({
   useEffect(() => {
     let live = true;
     const off = window.b4m.models.onCuratedChanged(() => {
+      const mine = ++detailRequest.current;
       void window.b4m.models.getDetail(repo, serverId).then(result => {
-        if (live && result.ok) setDetail({ state: 'ready', model: result.model });
+        if (live && mine === detailRequest.current && result.ok) setDetail({ state: 'ready', model: result.model });
       });
     });
     return () => {

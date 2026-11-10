@@ -311,6 +311,8 @@ interface Bridge {
   servers: ModelServerView[];
   search: HubSearchResult;
   detail: HubDetailResult;
+  /** Each holds the next detail read, answered as asked, until it settles. */
+  detailGates: Promise<void>[];
   pulls: ModelPull[];
   /** Holds the next installed list, as read when asked, until it settles. */
   installedGate?: Promise<void>;
@@ -358,6 +360,7 @@ beforeEach(() => {
     servers: [THIS_COMPUTER],
     search: { ok: true, models: [card(REPO)], nextCursor: null },
     detail: { ok: true, model: view() },
+    detailGates: [],
     pulls: [],
     curated: curatedList(),
     curatedFailures: 0,
@@ -412,7 +415,10 @@ beforeEach(() => {
       },
       getDetail: async () => {
         calls.getDetail();
-        return bridge.detail;
+        const answer = bridge.detail;
+        const gate = bridge.detailGates.shift();
+        if (gate) await gate;
+        return answer;
       },
       listPulls: async () => bridge.pulls,
       listCurated: async (serverId?: string) => {
@@ -2035,6 +2041,29 @@ describe('ModelsScreen explore', () => {
     await flush();
     expect(calls.getDetail.mock.calls.length).toBe(loads + 1);
     expect(q('models-pull-dialog-fit-warning')?.textContent).toBe(warning);
+  });
+
+  it('keeps the newest detail when an older re-rating read answers last', async () => {
+    await mount();
+    await openExplore();
+    await click(q('models-explore-result-row'));
+    let release: () => void = () => {};
+    bridge.detailGates.push(new Promise<void>(resolve => (release = resolve)));
+    bridge.detail = { ok: true, model: view({ id: 'old/read' }) };
+    act(() => pushCuratedChanged());
+    bridge.detail = { ok: true, model: view({ id: 'new/read' }) };
+    calls.pull.mockResolvedValue({
+      ok: false,
+      error: { kind: 'changed', message: 'This repo changed since you reviewed it. Review it again, then download.' },
+      listed: false,
+    });
+    await click(q('models-build-pull-btn'));
+    await click(q('models-pull-dialog-confirm-btn'));
+    await flush();
+    expect(q('models-detail')?.dataset.repo).toBe('new/read');
+    release();
+    await flush();
+    expect(q('models-detail')?.dataset.repo).toBe('new/read');
   });
 
   it.each([
