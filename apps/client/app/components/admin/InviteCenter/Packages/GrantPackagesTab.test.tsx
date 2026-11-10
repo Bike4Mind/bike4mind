@@ -155,6 +155,7 @@ describe('GrantPackagesTab', () => {
         totalCap: 1,
         dailyCap: null,
         active: true,
+        expiresAt: null,
       })
     );
   });

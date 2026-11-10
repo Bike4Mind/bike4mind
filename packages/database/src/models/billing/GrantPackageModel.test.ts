@@ -34,7 +34,7 @@ afterAll(async () => {
 });
 
 const createPackage = async (
-  overrides: Partial<{ totalCap: number | null; dailyCap: number | null; active: boolean }>
+  overrides: Partial<{ totalCap: number | null; dailyCap: number | null; active: boolean; expiresAt: Date | null }>
 ) =>
   String(
     (
@@ -103,6 +103,22 @@ describe('GrantPackageRepository.reserveRedemption', () => {
       outcome: 'refused',
       reason: 'inactive',
     });
+  });
+
+  it('refuses an expired package without counting it or recording a cap hit', async () => {
+    const now = new Date('2026-06-01T12:00:00Z');
+    const id = await createPackage({ totalCap: 5, dailyCap: 5, expiresAt: now });
+    expect(await grantPackageRepository.reserveRedemption(id, 'a', now)).toEqual({
+      outcome: 'refused',
+      reason: 'expired',
+    });
+    const pkg = await reload(id);
+    expect(pkg.redeemedTotal).toBe(0);
+    expect(pkg.capHits).toBe(0);
+    expect(await GrantPackageDayCount.countDocuments({ packageId: id })).toBe(0);
+
+    const later = await createPackage({ expiresAt: new Date('2026-06-02T00:00:00Z') });
+    expect((await grantPackageRepository.reserveRedemption(later, 'a', now)).outcome).toBe('reserved');
   });
 
   it('returns already for a repeat redemption by the same account without counting it twice', async () => {

@@ -85,12 +85,13 @@ const signUp = (username: string, email: string) =>
     )
   );
 
-async function seedPackage(totalCap: number) {
+async function seedPackage(totalCap: number, { expiresAt = null }: { expiresAt?: Date | null } = {}) {
   const pkg = await GrantPackage.create({
     name: 'Synthetic package',
     credits: 100,
     totalCap,
     dailyCap: null,
+    expiresAt,
     createdBy: 'synthetic-admin',
   });
   await RegistrationInvite.create({
@@ -117,6 +118,16 @@ describe('grant package redemption through OTC registration', () => {
     const pkg = await GrantPackage.findById(packageId).lean();
     expect(pkg?.redeemedTotal).toBe(1);
     expect(pkg?.capHits).toBe(1);
+  });
+
+  it('refuses a signup after the package expired and rolls the account back', async () => {
+    const packageId = await seedPackage(5, { expiresAt: new Date(Date.now() - 60_000) });
+
+    await expect(signUp('pkgexpired', 'expired@example.test')).rejects.toThrow('This invite code has expired');
+    expect(await User.countDocuments({ email: 'expired@example.test' })).toBe(0);
+    const pkg = await GrantPackage.findById(packageId).lean();
+    expect(pkg?.redeemedTotal).toBe(0);
+    expect(pkg?.capHits).toBe(0);
   });
 
   it('refuses an alias of an inbox that already redeemed a package grant', async () => {

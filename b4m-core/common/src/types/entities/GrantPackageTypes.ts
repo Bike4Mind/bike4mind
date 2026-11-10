@@ -14,6 +14,8 @@ export interface IGrantPackage {
   capHits: number;
   lastCapHitAt?: Date | null;
   active: boolean;
+  /** Redemptions are refused from this instant on; null means the package never expires. */
+  expiresAt?: Date | null;
   createdBy: string;
   reason?: string | null;
   /**
@@ -29,7 +31,7 @@ export interface IGrantPackageDocument extends IGrantPackage {
   updatedAt?: Date;
 }
 
-export type GrantPackageRefusalReason = 'total_cap' | 'daily_cap' | 'inactive';
+export type GrantPackageRefusalReason = 'total_cap' | 'daily_cap' | 'inactive' | 'expired';
 
 /**
  * `already` means this account redeemed the package earlier (a retried signup), so it is not

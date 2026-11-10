@@ -53,6 +53,7 @@ type OTCVerifyResponse =
 interface OTCRegisterResponse {
   user: IUserDocument;
   accessToken: string;
+  signupGrantNotice?: string;
 }
 
 interface SendOTCData {
@@ -263,6 +264,9 @@ export function useVerifyOTC() {
         );
         const body = sourceClientId ? { ...data, sourceClientId } : data;
         const response = await api.post<OTCVerifyResponse | OTCRegisterResponse>('/api/otc/verify', body);
+        if ('signupGrantNotice' in response.data && response.data.signupGrantNotice) {
+          toast.info(response.data.signupGrantNotice);
+        }
         return response.data;
       } catch (error) {
         if (error instanceof AxiosError && error.response) {

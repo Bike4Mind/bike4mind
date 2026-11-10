@@ -1,6 +1,7 @@
 import mongoose, { Schema, model, Types } from 'mongoose';
 import {
   grantPackageDay,
+  isGrantPackageExpired,
   type CreateGrantPackageInput,
   type GrantPackageReservation,
   type PaginatedResponse,
@@ -23,6 +24,7 @@ const GrantPackageSchema = new Schema<IGrantPackage>(
     capHits: { type: Number, default: 0 },
     lastCapHitAt: { type: Date, default: null },
     active: { type: Boolean, default: true },
+    expiresAt: { type: Date, default: null },
     createdBy: { type: String, required: true },
     reason: { type: String, default: null },
     legacy: { type: Boolean, default: false },
@@ -139,6 +141,7 @@ export class GrantPackageRepository implements IGrantPackageRepository {
     }
     const pkg = await GrantPackage.findById(packageId).lean();
     if (!pkg || !pkg.active) return { outcome: 'refused', reason: 'inactive' };
+    if (isGrantPackageExpired(pkg, now)) return { outcome: 'refused', reason: 'expired' };
 
     const day = grantPackageDay(now);
     const dayCounted = pkg.dailyCap !== null && pkg.dailyCap !== undefined;

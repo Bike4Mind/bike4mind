@@ -14,6 +14,7 @@ import {
 import { useMutation } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
+  isGrantPackageExpired,
   requiresGrantReason,
   updateRequiresGrantReason,
   type GrantPackageReasonPolicy,
@@ -41,7 +42,15 @@ type Props = {
   reasonPolicy: GrantPackageReasonPolicy;
 };
 
-type Draft = { name: string; credits: string; totalCap: string; dailyCap: string; active: boolean };
+type Draft = {
+  name: string;
+  credits: string;
+  totalCap: string;
+  dailyCap: string;
+  active: boolean;
+  /** YYYY-MM-DD from the date input; empty means the package never expires. */
+  expiresOn: string;
+};
 
 const toDraft = (pkg: IGrantPackageDocument | null): Draft => ({
   name: pkg?.name ?? '',
@@ -49,7 +58,11 @@ const toDraft = (pkg: IGrantPackageDocument | null): Draft => ({
   totalCap: pkg?.totalCap != null ? String(pkg.totalCap) : '',
   dailyCap: pkg?.dailyCap != null ? String(pkg.dailyCap) : '',
   active: pkg?.active ?? true,
+  expiresOn: pkg?.expiresAt ? new Date(pkg.expiresAt).toISOString().slice(0, 10) : '',
 });
+
+/** The chosen day stays redeemable through its end in UTC, the same day boundary as the daily cap. */
+const expiresAtFromDay = (day: string): Date | null => (day === '' ? null : new Date(`${day}T23:59:59.999Z`));
 
 const WHOLE = /^\d+$/;
 
@@ -69,12 +82,16 @@ export function GrantPackageFormModal({ open, onClose, onSaved, editing, reasonP
   const credits = WHOLE.test(creditsText) ? Number(creditsText) : null;
   const totalCap = parseCap(draft.totalCap);
   const dailyCap = parseCap(draft.dailyCap);
-  const valid = draft.name.trim() !== '' && credits !== null && totalCap !== 'invalid' && dailyCap !== 'invalid';
+  const expiresAt = expiresAtFromDay(draft.expiresOn);
+  const expiryInvalid =
+    expiresAt !== null && (Number.isNaN(expiresAt.getTime()) || (!editing && isGrantPackageExpired({ expiresAt })));
+  const valid =
+    draft.name.trim() !== '' && credits !== null && totalCap !== 'invalid' && dailyCap !== 'invalid' && !expiryInvalid;
 
   const reasonRequired =
     valid &&
     (editing
-      ? updateRequiresGrantReason(editing, { credits, totalCap, active: draft.active }, reasonPolicy)
+      ? updateRequiresGrantReason(editing, { credits, totalCap, active: draft.active, expiresAt }, reasonPolicy)
       : requiresGrantReason({ credits, totalCap }, reasonPolicy));
 
   const save = useMutation({
@@ -86,6 +103,7 @@ export function GrantPackageFormModal({ open, onClose, onSaved, editing, reasonP
         totalCap,
         dailyCap,
         active: draft.active,
+        expiresAt,
         ...(reasonRequired ? { reason: composeAdminReason(reason) } : {}),
       };
       return editing ? updateGrantPackage(editing.id, body) : createGrantPackage(body);
@@ -99,7 +117,7 @@ export function GrantPackageFormModal({ open, onClose, onSaved, editing, reasonP
   });
 
   const blocked = !valid
-    ? 'Fill in a name, credits and valid caps.'
+    ? 'Fill in a name, credits, valid caps and a future expiry date.'
     : reasonRequired && !isAdminReasonComplete(reason)
       ? ADMIN_REASON_HINT
       : null;
@@ -160,6 +178,18 @@ export function GrantPackageFormModal({ open, onClose, onSaved, editing, reasonP
             </FormControl>
           </Stack>
           <FormHelperText>Leave a cap empty for no limit. Daily caps reset at midnight UTC.</FormHelperText>
+          <FormControl error={expiryInvalid}>
+            <FormLabel>Expires on</FormLabel>
+            <Input
+              type="date"
+              value={draft.expiresOn}
+              onChange={e => set({ expiresOn: e.target.value })}
+              slotProps={{ input: { 'data-testid': 'grant-package-expires-input' } }}
+            />
+            <FormHelperText>
+              Redeemable through the end of this day (UTC). Leave empty and the package never expires.
+            </FormHelperText>
+          </FormControl>
           {editing && (
             <FormControl orientation="horizontal" sx={{ gap: 1 }}>
               <Switch

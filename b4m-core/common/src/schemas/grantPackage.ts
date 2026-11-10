@@ -11,6 +11,7 @@ export const grantPackageInputSchema = z.object({
   totalCap: capSchema,
   dailyCap: capSchema,
   active: z.boolean().optional(),
+  expiresAt: z.coerce.date().nullable().optional(),
   reason: z.string().trim().min(1).nullable().optional(),
 });
 
@@ -49,18 +50,29 @@ export const grantPackageExposure = ({ credits, totalCap }: GrantPackageExposure
 export const requiresGrantReason = (pkg: GrantPackageExposureShape, policy: GrantPackageReasonPolicy): boolean =>
   pkg.credits > policy.singleGrantCredits || grantPackageExposure(pkg) > policy.dailyTotalCredits;
 
+type GrantPackageExpiryShape = { expiresAt?: Date | string | null };
+
+export const isGrantPackageExpired = (pkg: GrantPackageExpiryShape, now: Date = new Date()): boolean =>
+  pkg.expiresAt != null && new Date(pkg.expiresAt).getTime() <= now.getTime();
+
 /**
  * An edit needs a reason when it leaves a large package live and widens what it can hand out
- * (more credits per signup, a raised or removed cap, or reactivation). Shrinking one does not.
+ * (more credits per signup, a raised or removed cap, or reactivation, which includes extending an
+ * expired package). Shrinking one does not.
  */
 export const updateRequiresGrantReason = (
-  before: GrantPackageExposureShape & { active: boolean },
-  after: GrantPackageExposureShape & { active: boolean },
-  policy: GrantPackageReasonPolicy
+  before: GrantPackageExposureShape & GrantPackageExpiryShape & { active: boolean },
+  after: GrantPackageExposureShape & GrantPackageExpiryShape & { active: boolean },
+  policy: GrantPackageReasonPolicy,
+  now: Date = new Date()
 ): boolean =>
   after.active &&
+  !isGrantPackageExpired(after, now) &&
   requiresGrantReason(after, policy) &&
-  (!before.active || after.credits > before.credits || grantPackageExposure(after) > grantPackageExposure(before));
+  (!before.active ||
+    isGrantPackageExpired(before, now) ||
+    after.credits > before.credits ||
+    grantPackageExposure(after) > grantPackageExposure(before));
 
 /** UTC calendar day a daily cap counts against. */
 export const grantPackageDay = (now: Date = new Date()): string => now.toISOString().slice(0, 10);
@@ -75,5 +87,20 @@ export function grantPackageRefusalMessage(reason: GrantPackageRefusalReason): s
       return 'This invite code has reached its signup limit for today, please try again tomorrow';
     case 'inactive':
       return 'This invite code is no longer active';
+    case 'expired':
+      return 'This invite code has expired';
+  }
+}
+
+/** Signup notice when an email domain's package withheld its credits; the account itself was still created. */
+export function signupDomainGrantRefusalNotice(reason: GrantPackageRefusalReason): string {
+  switch (reason) {
+    case 'total_cap':
+    case 'daily_cap':
+      return 'Signup credits for your email domain have reached their limit, so none were added';
+    case 'inactive':
+      return 'Signup credits for your email domain are no longer available, so none were added';
+    case 'expired':
+      return 'Signup credits for your email domain have expired, so none were added';
   }
 }

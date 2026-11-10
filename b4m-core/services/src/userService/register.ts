@@ -2,6 +2,7 @@ import {
   canonicalizeEmail,
   GRANT_PACKAGE_INBOX_CLAIMED_MESSAGE,
   grantPackageRefusalMessage,
+  isGrantPackageExpired,
   IAdminSettingsRepository,
   ICreditLotRepository,
   type IGrantPackageDocument,
@@ -250,6 +251,7 @@ export const registerUser = async (
       grantPackage = db.grantPackages ? await db.grantPackages.findById(invite.grantPackageId) : null;
       if (!grantPackage) throw new BadRequestError('Invalid invite code');
       if (!grantPackage.active) throw new BadRequestError(grantPackageRefusalMessage('inactive'));
+      if (isGrantPackageExpired(grantPackage)) throw new BadRequestError(grantPackageRefusalMessage('expired'));
       packageGrantsCredits = !grantPackage.legacy;
       // Early, readable refusal for an alias of an inbox that already took a signup grant. The
       // authoritative claim is made when the grant is released (freeCredits.ts).
