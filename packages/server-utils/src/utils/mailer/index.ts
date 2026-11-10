@@ -221,7 +221,7 @@ export class MailService {
         `Email delivery failed to ${loggedRecipient} (subject: ${subject}). ` +
           `Transport: ${this.transport.describe()}. ` +
           `Error: ${e.message}`,
-        e.code ? `SMTP code: ${e.code}` : e.name ? `Error: ${e.name}` : '',
+        e.code ? `SMTP code: ${e.code}` : e.name && e.name !== 'Error' ? `Error: ${e.name}` : '',
         e.command ? `SMTP command: ${e.command}` : '',
         e.stack ? `\nStack: ${e.stack}` : ''
       );
