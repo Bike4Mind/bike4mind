@@ -14,7 +14,12 @@ const PRESIGNED_MODAL_IMAGE = /^https?:\/\/[^?#]*\/(modal-images\/[^/?#]+)\?.*X-
 
 export function toModalImageKey(imageUrl: string): string | null {
   const match = PRESIGNED_MODAL_IMAGE.exec(imageUrl);
-  return match ? decodeURIComponent(match[1]) : null;
+  if (!match) return null;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return null;
+  }
 }
 
 const migration: MigrationFile = {
@@ -44,7 +49,7 @@ const migration: MigrationFile = {
       for (const doc of batch) {
         const key = typeof doc.imageUrl === 'string' ? toModalImageKey(doc.imageUrl) : null;
         if (!key) continue;
-        const result = await modals.updateOne({ _id: doc._id }, { $set: { imageUrl: key } });
+        const result = await modals.updateOne({ _id: doc._id, imageUrl: doc.imageUrl }, { $set: { imageUrl: key } });
         rewritten += result.modifiedCount;
       }
 

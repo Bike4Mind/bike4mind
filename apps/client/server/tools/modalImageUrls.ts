@@ -1,12 +1,8 @@
-import { GetObjectCommand } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { createS3Client } from '@bike4mind/fab-pipeline';
-import { Resource } from 'sst';
+import { requireEnv } from '@bike4mind/common';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 
 export const MODAL_IMAGE_PREFIX = 'modal-images/';
 export const MODAL_IMAGE_URL_EXPIRY_SECONDS = 60 * 60;
-
-const s3Client = createS3Client();
 
 const isBareKey = (value: string) => value.startsWith(MODAL_IMAGE_PREFIX) && !value.includes('://');
 
@@ -18,7 +14,9 @@ export function extractModalImageKey(value: string | null | undefined): string |
   if (!value) return null;
   if (isBareKey(value)) return value;
   try {
-    const key = decodeURIComponent(new URL(value).pathname.replace(/^\//, ''));
+    const url = new URL(value);
+    if (!url.searchParams.has('X-Amz-Algorithm') || !url.searchParams.has('X-Amz-Signature')) return null;
+    const key = decodeURIComponent(url.pathname.replace(/^\//, ''));
     return isBareKey(key) ? key : null;
   } catch {
     return null;
@@ -29,7 +27,8 @@ export function extractModalImageKey(value: string | null | undefined): string |
 export async function resolveModalImageUrl<T extends string | null | undefined>(imageUrl: T): Promise<T | string> {
   const key = extractModalImageKey(imageUrl);
   if (!key) return imageUrl;
-  return getSignedUrl(s3Client, new GetObjectCommand({ Bucket: Resource.fabFileBucket.name, Key: key }), {
+  return getFilesStorage().getSignedUrl(key, 'get', {
+    audience: 'browser',
     expiresIn: MODAL_IMAGE_URL_EXPIRY_SECONDS,
   });
 }
@@ -42,5 +41,6 @@ export async function withSignedModalImage<T extends { imageUrl?: string | null 
 /** Stable app URL for a stored modal image key (for content that outlives a signature, e.g. email); other URLs pass through. */
 export function modalImageAppUrl<T extends string | null | undefined>(imageUrl: T): T | string {
   if (!imageUrl || !isBareKey(imageUrl)) return imageUrl;
-  return `${process.env.APP_URL}/api/modal-images/${imageUrl.slice(MODAL_IMAGE_PREFIX.length)}`;
+  const appUrl = requireEnv('APP_URL', process.env.APP_URL).replace(/\/+$/, '');
+  return `${appUrl}/api/modal-images/${imageUrl.slice(MODAL_IMAGE_PREFIX.length)}`;
 }

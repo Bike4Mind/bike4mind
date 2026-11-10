@@ -40,6 +40,7 @@ describe('toModalImageKey', () => {
     expect(toModalImageKey('https://cdn.example.com/modal-images/a.png')).toBeNull();
     expect(toModalImageKey('https://b.s3.amazonaws.com/uploads/a.png?X-Amz-Algorithm=AWS4')).toBeNull();
     expect(toModalImageKey('modal-images/abc.png')).toBeNull();
+    expect(toModalImageKey(SIGNED.replace('abc.png', '%ZZ.png'))).toBeNull();
   });
 });
 
@@ -49,7 +50,10 @@ describe('modal-image-url-to-key', () => {
 
     await migration.up();
 
-    expect(updateOne).toHaveBeenCalledWith({ _id: 1 }, { $set: { imageUrl: 'modal-images/abc.png' } });
+    expect(updateOne).toHaveBeenCalledWith(
+      { _id: 1, imageUrl: SIGNED },
+      { $set: { imageUrl: 'modal-images/abc.png' } }
+    );
   });
 
   it('skips matched documents that are not rewritable', async () => {

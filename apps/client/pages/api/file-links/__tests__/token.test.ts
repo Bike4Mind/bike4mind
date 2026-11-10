@@ -85,12 +85,20 @@ describe('GET /api/file-links/[token]', () => {
     expect(key).toBe(cleanFile.filePath);
     expect(op).toBe('get');
     expect(opts.expiresIn).toBeLessThanOrEqual(900);
+    expect(opts.audience).toBe('browser');
     expect(opts.ResponseContentDisposition).toContain('attachment; filename="report.pdf"');
   });
 
   it('refuses when the issuing user can no longer read the file', async () => {
     h.findAccessibleFile.mockResolvedValue(null);
     expectRefused(await run(token(undefined, { userId: 'user-2' })));
+  });
+
+  it('does not sign when the access lookup fails', async () => {
+    h.findAccessibleFile.mockRejectedValueOnce(new Error('database unavailable'));
+    await expect(run(token())).rejects.toThrow('database unavailable');
+    expect(h.signFiles).not.toHaveBeenCalled();
+    expect(h.signGenerated).not.toHaveBeenCalled();
   });
 
   it('refuses an expired token', async () => {

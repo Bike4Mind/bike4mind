@@ -65,6 +65,7 @@ const handler = baseApi({ auth: false, allowedMethods: ['GET'] })
     const storage = resolved.storage === 'files' ? getFilesStorage() : getGeneratedImageStorage();
     const url = await storage.getSignedUrl(resolved.key, 'get', {
       expiresIn: FILE_LINK_REDIRECT_TTL_SECONDS,
+      audience: 'browser',
       ResponseContentDisposition: contentDisposition(resolved.filename),
     });
     return res.redirect(302, url);
