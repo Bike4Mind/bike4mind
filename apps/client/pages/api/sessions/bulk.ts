@@ -140,9 +140,12 @@ const handler = baseApi()
         const userId = req.user?.id;
         const { sessionIds } = req.body;
 
-        // The cap keeps the serial deletes plus the media purge inside the request's time budget.
-        if (!Array.isArray(sessionIds) || sessionIds.length === 0 || sessionIds.length > MAX_BULK_ITEMS) {
+        if (!Array.isArray(sessionIds) || sessionIds.length === 0) {
           return res.status(400).json({ deletedCount: 0, newLastNotebookId: null });
+        }
+        // The cap keeps the serial deletes plus the media purge inside the request's time budget.
+        if (sessionIds.length > MAX_BULK_ITEMS) {
+          throw new BadRequestError(`At most ${MAX_BULK_ITEMS} sessions can be deleted per request`);
         }
 
         let newLastNotebook: { id: string } | null = null;

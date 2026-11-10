@@ -25,7 +25,7 @@ vi.mock('@bike4mind/server-utils/security/wafSharedHelpers', () => ({
   resolveRouterDistributionId: () => 'E1A2B3C4D5E6F',
 }));
 
-import { purgeDeletedNotebookMedia } from './purgeDeletedNotebookMedia';
+import { PURGE_BUDGET_MS, purgeDeletedNotebookMedia } from './purgeDeletedNotebookMedia';
 
 let database: MongoMemoryReplSet;
 const collection = (name: string) => mongoose.connection.collection(mongoose.model(name).collection.name);
@@ -90,6 +90,24 @@ describe('purgeDeletedNotebookMedia', () => {
     await purgeDeletedNotebookMedia([first, second], { logger });
     expect(deletedKeys()).toEqual(['both.png']);
     expect(invalidatedPaths()).toEqual([['/generated/both.png']]);
+  });
+
+  it('stops starting deletes once the time budget is spent and still invalidates what it deleted', async () => {
+    const id = await notebook({ images: Array.from({ length: 40 }, (_, i) => `k${i}.png`) });
+    const start = Date.now();
+    const now = vi.spyOn(Date, 'now').mockReturnValue(start);
+    effects.deleteGenerated.mockImplementationOnce(async () => {
+      now.mockReturnValue(start + PURGE_BUDGET_MS + 1);
+    });
+    try {
+      await purgeDeletedNotebookMedia([id], { logger });
+    } finally {
+      now.mockRestore();
+    }
+    const deleted = deletedKeys();
+    expect(deleted.length).toBeLessThan(40);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Time budget spent'));
+    expect(invalidatedPaths()).toEqual([deleted.map(key => `/generated/${key}`).sort()]);
   });
 
   it('does nothing for notebooks without generated media', async () => {

@@ -8,6 +8,10 @@ const errorMessage = (err: unknown) => (err instanceof Error ? err.message : Str
 // Storage deletes in flight at once; this runs inside the delete request, so it stays bounded.
 const DELETE_CONCURRENCY = 16;
 
+// Stop starting deletes after this (ms) so the CDN flush still runs before the request times out
+// (60s); undeleted keys keep their bytes, which is consistent with what the CDN still serves.
+export const PURGE_BUDGET_MS = 20_000;
+
 // Keys some LIVE notebook other than the deleted ones, or some LIVE file, still references.
 async function findRetainedKeys(keys: string[], deleted: Set<string>): Promise<Set<string>> {
   const sessionsByKey = await questRepository.findSessionIdsByMediaKeys(keys);
@@ -45,6 +49,7 @@ export async function purgeDeletedNotebookMedia(
   { logger }: { logger: MinimalLogger }
 ): Promise<void> {
   if (sessionIds.length === 0) return;
+  const deadline = Date.now() + PURGE_BUDGET_MS;
   const deleted = new Set(sessionIds);
   let keys: string[];
   let retained: Set<string>;
@@ -72,7 +77,7 @@ export async function purgeDeletedNotebookMedia(
   const batch = createCdnInvalidationBatch('notebook-media', logger);
   let next = 0;
   const worker = async () => {
-    while (next < doomed.length) {
+    while (next < doomed.length && Date.now() < deadline) {
       const key = doomed[next++];
       try {
         // A plain delete, not deletePermanently: the bucket is versioned, so ops keep a recovery window.
@@ -84,5 +89,8 @@ export async function purgeDeletedNotebookMedia(
     }
   };
   await Promise.all(Array.from({ length: Math.min(DELETE_CONCURRENCY, doomed.length) }, worker));
+  if (next < doomed.length) {
+    logger.warn(`[NOTEBOOK_MEDIA] Time budget spent; left ${doomed.length - next} generated media keys in place`);
+  }
   await batch.flush();
 }

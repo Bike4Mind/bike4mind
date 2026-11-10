@@ -262,6 +262,7 @@ describe('DELETE /api/sessions/bulk', () => {
     await handler(req, res);
 
     expect(res._getStatusCode()).toBe(400);
+    expect(JSON.stringify(res._getJSONData())).toContain('At most 100 sessions');
     expect(mockDeleteSession).not.toHaveBeenCalled();
     expect(mockPurgeMedia).not.toHaveBeenCalled();
   });
