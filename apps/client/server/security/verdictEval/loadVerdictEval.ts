@@ -14,6 +14,11 @@ import {
 } from '@bike4mind/database';
 import type { SignupTimeseriesRange } from '@bike4mind/server-utils/app/utils/signupSignals';
 import type { VerdictEvalReport, VerdictEvalWindowDays } from '@client/app/utils/verdictEval';
+import {
+  ACCOUNT_STATUS_ACTIONS_FILTER,
+  REINSTATED_ENTRIES,
+  SUSPEND_ACTIONS,
+} from '@server/security/accountStatusAuditActions';
 import { signupVerdictOf } from '@server/users/signupClassifier';
 import { getSignupVerdicts } from '@server/users/signupTimeseries';
 import {
@@ -36,14 +41,7 @@ export const VERDICT_EVAL_DETECTION_LIMIT = 2_000;
 export const VERDICT_EVAL_ACCOUNT_LIMIT = 5_000;
 const IN_CHUNK = 500;
 
-const SUSPEND_ACTIONS = ['user.suspended', 'user.bulk.suspended', 'user.bulk.contained', 'abuse.bulk.ban'];
-const REINSTATE_ACTIONS = ['user.reinstated'];
-const REINSTATED_ENTRIES = [...REINSTATE_ACTIONS, 'user.bulk.undone'];
-// A bulk undo only reinstates when it reverted a suspend or contain; undoing a tag or credit change says nothing.
-const BULK_UNDONE_BAN = { action: 'user.bulk.undone', 'details.undoneAction': { $in: ['suspend', 'contain'] } };
-const LABEL_ACTIONS_FILTER = {
-  $or: [{ action: { $in: [...SUSPEND_ACTIONS, ...REINSTATE_ACTIONS] } }, BULK_UNDONE_BAN],
-};
+const LABEL_ACTIONS_FILTER = ACCOUNT_STATUS_ACTIONS_FILTER;
 const LABEL_REVIEW_STATES: SignupRiskReviewState[] = ['approved', 'banned'];
 const OBJECT_ID = /^[0-9a-f]{24}$/;
 

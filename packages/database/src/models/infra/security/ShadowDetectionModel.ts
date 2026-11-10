@@ -20,6 +20,7 @@ import {
   type ShadowDetectionVerdictEntry,
   type ShadowDetectionVerdictSource,
   type ShadowDetector,
+  SHADOW_DETECTION_AUTOMATION_REVIEWER_ID,
   SHADOW_DETECTION_VERDICT_SOURCES,
 } from '@bike4mind/common';
 import { User } from '../../auth/UserModel';
@@ -202,6 +203,20 @@ type LeanShadowDetection = Omit<IShadowDetectionDocument, keyof Document> & { _i
  */
 const HAS_REVIEW_VERDICT = {
   verdicts: { $elemMatch: { $or: [{ source: 'review' }, { source: { $exists: false } }] } },
+};
+
+/** True on a record whose latest verdict entry is the automation grader's (aggregation expression). */
+const LATEST_VERDICT_IS_AUTOMATION = {
+  $let: {
+    vars: { last: { $arrayElemAt: [{ $ifNull: ['$verdicts', []] }, -1] } },
+    in: { $eq: ['$$last.source', 'automation'] },
+  },
+};
+
+export type BulkShadowDetectionVerdictResult = {
+  graded: ShadowDetectionItem[];
+  conflicts: ShadowDetectionItem[];
+  missing: string[];
 };
 
 export type AccountStatusVerdictInput = {
@@ -450,12 +465,17 @@ class ShadowDetectionRepository {
   /** Newest first; `truncated` is true when more than `limit` records match. */
   async list(query: {
     detector?: ShadowDetector;
-    verdict?: ShadowDetectionVerdict | 'unreviewed';
+    verdict?: ShadowDetectionVerdict | 'unreviewed' | 'automated';
     limit: number;
   }): Promise<{ data: ShadowDetectionItem[]; truncated: boolean }> {
     const filter: Record<string, unknown> = {};
     if (query.detector) filter.detector = query.detector;
-    if (query.verdict) filter.verdict = query.verdict === 'unreviewed' ? null : query.verdict;
+    if (query.verdict === 'automated') {
+      filter.verdict = { $ne: null };
+      filter.$expr = LATEST_VERDICT_IS_AUTOMATION;
+    } else if (query.verdict) {
+      filter.verdict = query.verdict === 'unreviewed' ? null : query.verdict;
+    }
     const docs = await ShadowDetectionModel.find(filter)
       .sort({ detectedAt: -1, _id: -1 })
       .limit(query.limit + 1)
@@ -516,6 +536,82 @@ class ShadowDetectionRepository {
 
     const current = await ShadowDetectionModel.findById(input.id).lean<LeanShadowDetection>();
     return current ? { status: 'conflict', item: toItem(current) } : { status: 'not_found' };
+  }
+
+  /**
+   * One reviewer's verdict on many records, each appended exactly as addVerdict would (own history
+   * entry, own revision check), so a record graded by someone else since it was selected comes back
+   * in `conflicts` instead of being overwritten.
+   */
+  async addVerdicts(input: {
+    items: { id: string; expectedRevision: number }[];
+    verdict: ShadowDetectionVerdict;
+    reason: string;
+    reviewerId: string;
+  }): Promise<BulkShadowDetectionVerdictResult> {
+    const result: BulkShadowDetectionVerdictResult = { graded: [], conflicts: [], missing: [] };
+    for (const { id, expectedRevision } of input.items) {
+      const outcome = await this.addVerdict({ ...input, id, expectedRevision });
+      if (outcome.status === 'updated') result.graded.push(outcome.item);
+      else if (outcome.status === 'conflict') result.conflicts.push(outcome.item);
+      else result.missing.push(id);
+    }
+    return result;
+  }
+
+  /** Ungraded records of one detector detected before `before`, oldest first, at most `limit`. */
+  async listUngradedBefore(query: {
+    detector: ShadowDetector;
+    before: Date;
+    limit: number;
+  }): Promise<ShadowDetectionItem[]> {
+    const docs = await ShadowDetectionModel.find({
+      detector: query.detector,
+      verdict: null,
+      detectedAt: { $lt: query.before },
+    })
+      .sort({ detectedAt: 1, _id: 1 })
+      .limit(query.limit)
+      .lean<LeanShadowDetection[]>();
+    return docs.map(toItem);
+  }
+
+  /** Which of these users any detection by a detector other than `detector` names. */
+  async findUsersFlaggedByOtherDetectors(userIds: string[], detector: ShadowDetector): Promise<Set<string>> {
+    if (userIds.length === 0) return new Set();
+    const wanted = new Set(userIds);
+    const docs = await ShadowDetectionModel.find(
+      { userIds: { $in: userIds }, detector: { $ne: detector } },
+      { userIds: 1 }
+    ).lean<Pick<LeanShadowDetection, '_id' | 'userIds'>[]>();
+    return new Set(docs.flatMap(doc => (doc.userIds ?? []).filter(id => wanted.has(id))));
+  }
+
+  /**
+   * Records the automation grader's verdict, only while the record is still ungraded and at
+   * `expectedRevision`, so it never replaces a verdict a person gave in between. Null when it lost
+   * that race or the record is gone.
+   */
+  async addAutomationVerdict(input: {
+    id: string;
+    expectedRevision: number;
+    verdict: ShadowDetectionVerdict;
+    reason: string;
+  }): Promise<ShadowDetectionItem | null> {
+    if (!Types.ObjectId.isValid(input.id)) return null;
+    const entry: ShadowDetectionVerdictEntry = {
+      verdict: input.verdict,
+      reason: input.reason,
+      reviewerId: SHADOW_DETECTION_AUTOMATION_REVIEWER_ID,
+      reviewedAt: new Date(),
+      source: 'automation',
+    };
+    const updated = await ShadowDetectionModel.findOneAndUpdate(
+      { _id: input.id, revision: input.expectedRevision, verdict: null },
+      { $push: { verdicts: entry }, $set: { verdict: input.verdict }, $inc: { revision: 1 } },
+      { new: true }
+    ).lean<LeanShadowDetection>();
+    return updated ? toItem(updated) : null;
   }
 
   /**
@@ -588,7 +684,8 @@ class ShadowDetectionRepository {
   /**
    * Counts per detector and policy version; verdict counts are on each record's latest verdict and
    * only for records that would have acted. A `wouldAction: 'none'` record counts in `recorded` and
-   * `noAction` only, so agreeing with it never moves precision.
+   * `noAction` only, so agreeing with it never moves precision. A record whose latest verdict is the
+   * automation grader's counts in `automated` only, so the verdict counts stay human.
    */
   async summarize(): Promise<ShadowDetectionSummaryRow[]> {
     const rows = await ShadowDetectionModel.aggregate<{
@@ -597,6 +694,7 @@ class ShadowDetectionRepository {
         policyVersion: number;
         verdict: ShadowDetectionVerdict | null;
         noAction: boolean;
+        automated: boolean;
       };
       count: number;
     }>([
@@ -607,6 +705,7 @@ class ShadowDetectionRepository {
             policyVersion: '$policyVersion',
             verdict: { $ifNull: ['$verdict', null] },
             noAction: { $eq: ['$wouldAction', 'none'] },
+            automated: { $and: [{ $ne: [{ $ifNull: ['$verdict', null] }, null] }, LATEST_VERDICT_IS_AUTOMATION] },
           },
           count: { $sum: 1 },
         },
@@ -625,9 +724,11 @@ class ShadowDetectionRepository {
         legitimateHuman: 0,
         legitimateAutomation: 0,
         insufficientEvidence: 0,
+        automated: 0,
       };
       row.recorded += count;
       if (_id.noAction) row.noAction += count;
+      else if (_id.automated) row.automated += count;
       else if (_id.verdict) row[VERDICT_COUNT_FIELDS[_id.verdict]] += count;
       byPolicy.set(key, row);
     }
