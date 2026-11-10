@@ -277,7 +277,6 @@ export class BFLImageService extends AIImageService {
       output_format = 'jpeg',
       safety_tolerance = BFL_SAFETY_TOLERANCE.DEFAULT,
       referenceImages = [],
-      edit_regions,
     }: ImageEditOptions
   ): Promise<ImageEditResponse> {
     try {
@@ -317,7 +316,6 @@ export class BFLImageService extends AIImageService {
         image,
         mask,
         guidance: guidance ?? undefined,
-        ...(edit_regions?.length ? { edit_regions: edit_regions.map(r => ({ prompt: r.prompt, bbox: r.bbox })) } : {}),
         // BFL rejects webp; ImageEditOptions.output_format is typed as ImageOutputFormat
         // (shared with providers that do accept it), so this call site must degrade it
         // itself rather than relying on the type to reject it at compile time.

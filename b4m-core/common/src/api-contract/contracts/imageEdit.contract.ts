@@ -43,9 +43,10 @@ export const editImageContract = defineEndpoint({
     '`seed` makes an edit reproducible on BFL (FLUX) models only; gpt-image and Gemini models ignore it. ' +
     '`edit_regions` carries BFL region-edit bounding boxes: each entry has a `prompt` and a ' +
     '`bbox` of `[y_min, x_min, y_max, x_max]` in normalised [0, 1] coordinates (BFL convention, ' +
-    'vertical axis first). At most 8 regions per request. Only honoured on BFL Fill models; ' +
-    'other providers ignore them. A box with out-of-range coordinates, degenerate ordering, or ' +
-    'exceeding the region cap is a 422. ' +
+    'vertical axis first). At most 8 regions per request. Accepted on BFL models only ' +
+    '(non-BFL → 400); schema-validated on ingress but not yet forwarded to the BFL API ' +
+    '(pending a verified FLUX 3 provider contract). A box with out-of-range coordinates, ' +
+    'degenerate ordering, or exceeding the region cap is a 422. ' +
     'Credits are checked when ' +
     'the render runs, so insufficient credits arrive on the polled quest rather than as a 422. ' +
     '`organization_id` is accepted as an alias of `organizationId`, for callers used to the snake_case ' +

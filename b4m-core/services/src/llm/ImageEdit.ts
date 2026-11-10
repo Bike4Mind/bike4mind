@@ -9,7 +9,6 @@ import {
   LLMEvents,
   BFL_SAFETY_TOLERANCE,
   BflEditRegionSchema,
-  validateBflEditRegions,
   IChatHistoryItemRepository,
   IUserRepository,
   PromptMeta,
@@ -487,15 +486,9 @@ export class ImageEditService {
       image: sourceImageUrl,
       organizationId,
       generationId,
-      edit_regions,
+      // edit_regions: parsed and validated on the route (422), but not yet forwarded to any
+      // provider — pending a verified FLUX 3 contract that accepts the field.
     } = ImageEditBodySchema.parse(body);
-
-    if (edit_regions?.length) {
-      const regionIssues = validateBflEditRegions(edit_regions);
-      if (regionIssues.length) {
-        throw new BadRequestError(regionIssues.join('; '));
-      }
-    }
     // Step a gpt-image-2 selection down to gpt-image-1.5 when transparency is requested:
     // gpt-image-2 rejects background: 'transparent' outright, so sending it there would
     // silently turn a valid request into an opaque image. Resolved before billing so

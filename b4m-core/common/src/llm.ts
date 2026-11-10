@@ -246,9 +246,9 @@ export const EditImageRequestBodySchema = OpenAIImageGenerationInput.extend({
   /**
    * BFL region-edit bounding boxes. Each entry carries a per-region prompt and a
    * \`[y_min, x_min, y_max, x_max]\` box in normalised [0, 1] coordinates (BFL convention).
-   * Only honoured on BFL Fill models; other providers ignore them. Validated with a 422 when
-   * any coordinate is out of range, the box is degenerate, or there are more than
-   * \`MAX_BFL_EDIT_REGIONS\` entries.
+   * Accepted on BFL models only (others → 400). Schema-validated on ingress (422 on bad
+   * coordinates / degenerate boxes / over-cap count) but **not yet forwarded** to the BFL API —
+   * pending a verified FLUX 3 provider contract that accepts the field.
    */
   edit_regions: z.array(BflEditRegionSchema).optional(),
   callbackUrl: GenerationCallbackUrlSchema.optional(),
