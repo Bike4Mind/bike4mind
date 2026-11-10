@@ -11,11 +11,21 @@
  */
 
 import { z } from 'zod';
-import { LOW_CONFIDENCE_COMPLETION_MODES, type LowConfidenceCompletionMode } from '@bike4mind/common';
+import {
+  CONFIDENCE_GATE_MODES,
+  LOW_CONFIDENCE_COMPLETION_MODES,
+  type ConfidenceGateMode,
+  type LowConfidenceCompletionMode,
+} from '@bike4mind/common';
 
 import type { ToolbeltProfile } from './toolbelts';
 
-export { LOW_CONFIDENCE_COMPLETION_MODES, type LowConfidenceCompletionMode };
+export {
+  CONFIDENCE_GATE_MODES,
+  LOW_CONFIDENCE_COMPLETION_MODES,
+  type ConfidenceGateMode,
+  type LowConfidenceCompletionMode,
+};
 
 /**
  * Subset of the orchestration fields the executor consumes when deciding the top-level tool
@@ -77,7 +87,7 @@ export interface ResolvedOrchestrationProfile {
    * pauses on low-confidence final answers, `both` enables both, `off` disables the gate.
    * Omitted => the executor's global default (`both`).
    */
-  confidenceGateMode?: 'iteration' | 'answer' | 'both' | 'off';
+  confidenceGateMode?: ConfidenceGateMode;
   /**
    * Whether the agent self-reports confidence scores. When false the executor skips the
    * confidence callback and the gate never fires. Omitted => true.
@@ -204,7 +214,7 @@ const orchestrationProfileSchema = z.object({
   systemPrompt: z.string().optional(),
   confidenceGateThreshold: z.number().min(0).max(1).optional(),
   lowConfidenceCompletion: z.enum(LOW_CONFIDENCE_COMPLETION_MODES).optional(),
-  confidenceGateMode: z.enum(['iteration', 'answer', 'both', 'off'] as const).optional(),
+  confidenceGateMode: z.enum(CONFIDENCE_GATE_MODES).optional(),
   confidenceGateSelfReport: z.boolean().optional(),
 });
 

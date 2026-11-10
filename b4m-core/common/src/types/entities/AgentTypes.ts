@@ -1,4 +1,5 @@
 // b4m-core/common/src/types/entities/AgentTypes.ts
+import type { ConfidenceGateMode } from '../../schemas/settings';
 import { IBaseRepository } from './BaseTypes';
 import { ICreditHolder, ICreditHolderMethods } from './CreditHolderTypes';
 import { IModelConfig } from './ModelConfigTypes';
@@ -256,7 +257,7 @@ export interface IAgent extends ICreditHolder, IModelConfig {
   maxIterations?: { quick: number; medium: number; very_thorough: number };
   defaultThoroughness?: 'quick' | 'medium' | 'very_thorough';
   confidenceGateThreshold?: number;
-  confidenceGateMode?: 'iteration' | 'answer' | 'both' | 'off';
+  confidenceGateMode?: ConfidenceGateMode;
   confidenceGateSelfReport?: boolean;
   defaultVariables?: Record<string, string>;
   exclusiveMcpServers?: string[];

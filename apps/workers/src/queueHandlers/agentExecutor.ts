@@ -106,6 +106,7 @@ import {
   CreditHolderType,
   PAID_PLAN_ENTITLEMENT_KEY,
   type AttachmentLakeAccess,
+  type ConfidenceGateMode,
   type IAgent,
   type IUserDocument,
 } from '@bike4mind/common';
@@ -336,7 +337,7 @@ const AGENT_HISTORY_QUEST_COUNT = 20;
 // The canonical defaults live in OrchestrationDefaultsSchema; new runs
 // always resolve them through the profile.
 const DEFAULT_CONFIDENCE_GATE_THRESHOLD = 0.6;
-const DEFAULT_CONFIDENCE_GATE_MODE: 'iteration' | 'answer' | 'both' | 'off' = 'both';
+const DEFAULT_CONFIDENCE_GATE_MODE: ConfidenceGateMode = 'both';
 const DEFAULT_CONFIDENCE_GATE_SELF_REPORT = true;
 
 // `persistRunAsQuest` moved to `@server/utils/persistRunAsQuest` so the

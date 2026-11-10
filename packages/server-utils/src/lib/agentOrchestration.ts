@@ -8,7 +8,12 @@
  * existing `@mention -> chat_completion` behavior.
  */
 
-import { OrchestrationDefaultsSchema, type IAgent, type OrchestrationDefaults } from '@bike4mind/common';
+import {
+  OrchestrationDefaultsSchema,
+  type ConfidenceGateMode,
+  type IAgent,
+  type OrchestrationDefaults,
+} from '@bike4mind/common';
 
 export function hasOrchestrationFields(agent: IAgent): boolean {
   if (agent.maxIterations) {
@@ -65,7 +70,7 @@ export interface SyntheticOrchestrationProfile {
   /** Per-profile confidence-gate threshold. */
   confidenceGateThreshold: number;
   /** Which gate sites are active. */
-  confidenceGateMode: 'iteration' | 'answer' | 'both' | 'off';
+  confidenceGateMode: ConfidenceGateMode;
   /** Whether the agent self-reports confidence scores. */
   confidenceGateSelfReport: boolean;
   /** Discriminator vs `IAgent`. */
