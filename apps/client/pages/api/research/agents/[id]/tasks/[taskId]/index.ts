@@ -4,6 +4,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { researchTaskService } from '@bike4mind/services';
 import { researchDataRepository, researchTaskRepository } from '@bike4mind/database';
 import { ResearchTaskType } from '@bike4mind/common';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 
 const taskIdParamSchema = z.object({ taskId: z.string() });
 
@@ -26,6 +27,14 @@ const handler = baseApi({ auth: true })
           db: {
             researchTasks: researchTaskRepository,
             researchData: researchDataRepository,
+          },
+          storage: {
+            generateSignedUrl: async (path: string, expireInSeconds: number, options?: { signingDate?: Date }) =>
+              getFilesStorage().getSignedUrl(path, 'get', {
+                expiresIn: expireInSeconds,
+                audience: 'browser',
+                signingDate: options?.signingDate,
+              }),
           },
         }
       );

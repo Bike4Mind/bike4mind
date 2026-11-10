@@ -131,6 +131,21 @@ describe('generateSignedUrl - sign on read, never persisted', () => {
     });
   });
 
+  it('stamps expiry from the window start, not the read time', async () => {
+    vi.useFakeTimers({ now: new Date('2026-01-02T03:10:00Z') });
+    try {
+      const adapter = adapters();
+      vi.mocked(adapter.storage.generateSignedUrl).mockImplementation(
+        async (_path, expires, options) =>
+          `https://bucket.example.invalid/f?X-Amz-Date=${options!.signingDate!.toISOString().replace(/[-:]|\.\d{3}/g, '')}&X-Amz-Expires=${expires}`
+      );
+      const result = await generateSignedUrl(fabFile({ filePath: 'owned/file.txt' }), adapter);
+      expect(result.fileUrlExpireAt).toEqual(new Date('2026-01-02T04:00:00Z'));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('derives the response expiry from the signed URL', async () => {
     const signedAt = new Date('2026-01-02T03:04:05Z');
     vi.useFakeTimers({ now: signedAt });

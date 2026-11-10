@@ -170,3 +170,22 @@ it('signs repeated reads inside one window to the identical URL', async () => {
   const second = await signBrowserFileResponse(input);
   expect(second.fileUrl).toBe(first.fileUrl);
 });
+
+it('signs a read 10 minutes into the window to the same URL, expiring at window start + TTL', async () => {
+  const input = {
+    id: 'a',
+    mimeType: 'text/plain',
+    moderationStatus: 'clean',
+    filePath: 'owned/report.txt',
+  } as IFabFileDocument;
+  vi.useFakeTimers({ now: new Date('2026-01-02T03:00:05Z') });
+  try {
+    const first = await signBrowserFileResponse(input);
+    vi.setSystemTime(new Date('2026-01-02T03:10:05Z'));
+    const second = await signBrowserFileResponse(input);
+    expect(second.fileUrl).toBe(first.fileUrl);
+    expect(second.fileUrlExpireAt).toEqual(new Date('2026-01-02T04:00:00Z'));
+  } finally {
+    vi.useRealTimers();
+  }
+});

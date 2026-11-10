@@ -12,12 +12,16 @@ import { createMocks } from 'node-mocks-http';
 
 const mockRefs = vi.hoisted(() => ({
   putHandler: null as null | ((req: any, res: any) => unknown),
+  getHandler: null as null | ((req: unknown, res: unknown) => unknown),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
   const chain: any = {
     use: () => chain,
-    get: () => chain,
+    get: (fn: (req: unknown, res: unknown) => unknown) => {
+      mockRefs.getHandler = fn;
+      return chain;
+    },
     put: (fn: any) => {
       mockRefs.putHandler = fn;
       return chain;
@@ -31,9 +35,19 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (fn: any) => fn,
 }));
 
+const mockGet = vi.hoisted(() => vi.fn().mockResolvedValue({ id: 'task1', researchData: [] }));
+const mockGetSignedUrl = vi.hoisted(() => vi.fn().mockResolvedValue('https://files.test/signed'));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
+  getFilesStorage: () => ({ getSignedUrl: mockGetSignedUrl }),
+}));
+
 const mockUpdate = vi.hoisted(() => vi.fn().mockResolvedValue({ id: 'task1', title: 'updated' }));
 vi.mock('@bike4mind/services', () => ({
-  researchTaskService: { update: (...a: unknown[]) => mockUpdate(...a), get: vi.fn(), remove: vi.fn() },
+  researchTaskService: {
+    update: (...a: unknown[]) => mockUpdate(...a),
+    get: (...a: unknown[]) => mockGet(...a),
+    remove: vi.fn(),
+  },
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -76,5 +90,25 @@ describe('PUT /api/research/agents/[id]/tasks/[taskId] - URL id wins', () => {
     const [, params] = mockUpdate.mock.calls[0];
     expect(params.id).toBe('task-42');
     expect(params.title).toBe('research task');
+  });
+});
+
+describe('GET /api/research/agents/[id]/tasks/[taskId] - signs file URLs on read', () => {
+  it('passes a storage adapter that signs browser GET urls with the given signing date', async () => {
+    const { req, res } = createMocks({ method: 'GET', query: { id: 'agent-1', taskId: 'task-1' } });
+    await mockRefs.getHandler!(Object.assign(req, { user: { id: 'u1' } }), res);
+
+    const [, params, adapters] = mockGet.mock.calls[0];
+    expect(params).toEqual({ id: 'task-1' });
+
+    const signingDate = new Date('2026-01-01T00:00:00Z');
+    await expect(adapters.storage.generateSignedUrl('files/a.pdf', 3600, { signingDate })).resolves.toBe(
+      'https://files.test/signed'
+    );
+    expect(mockGetSignedUrl).toHaveBeenCalledWith('files/a.pdf', 'get', {
+      expiresIn: 3600,
+      audience: 'browser',
+      signingDate,
+    });
   });
 });
