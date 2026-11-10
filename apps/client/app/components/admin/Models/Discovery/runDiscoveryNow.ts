@@ -33,10 +33,17 @@ type Phase = 'idle' | 'dispatching' | 'waiting';
  * One Run now per tab, shared by the header's Run discovery and the Discovery section's Run now, so a click on
  * either disables both and a second poll loop can never race the first.
  */
-export const useRunNowStore = create<{ phase: Phase; notice: string | null; error: string | null }>(() => ({
+export const useRunNowStore = create<{
+  phase: Phase;
+  notice: string | null;
+  error: string | null;
+  /** Bumped when a run this tab awaited finishes; views outside react-query (the price catalog) refetch on it. */
+  finishedRuns: number;
+}>(() => ({
   phase: 'idle',
   notice: null,
   error: null,
+  finishedRuns: 0,
 }));
 
 export type RunNowOutcome =
@@ -94,6 +101,7 @@ const dispatchFailure = (error: unknown): { message: string; discoveryOff: boole
 
 /** Refreshes what a finished run can change: this console's lists and, past the server memo, open pickers. */
 const refreshAfterRun = (queryClient: QueryClient) => {
+  useRunNowStore.setState(state => ({ finishedRuns: state.finishedRuns + 1 }));
   void queryClient.invalidateQueries({ queryKey: ADMIN_MODELS_QUERY_KEY });
   void queryClient.invalidateQueries({ queryKey: LIFECYCLE_STATUS_QUERY_KEY });
   // Not before every server process has dropped the list it built under the previous revision.

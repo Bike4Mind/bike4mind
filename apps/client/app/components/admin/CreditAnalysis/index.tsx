@@ -17,10 +17,7 @@ import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { useCreditAnalysisStore, type CreditAnalysisTab } from './store';
 
 export const CreditAnalyticsTab: React.FC = () => {
-  // Held in the store rather than locally so another admin tab can land the operator on a specific inner tab.
-  // The store's 'pricing' value outlives the removed tab until its last writers go, so it reads as the first tab.
-  const storedTab = useCreditAnalysisStore(state => state.activeTab);
-  const activeTab = storedTab === 'pricing' ? 'users' : storedTab;
+  const activeTab = useCreditAnalysisStore(state => state.activeTab);
   const setActiveTab = useCreditAnalysisStore(state => state.setActiveTab);
 
   return (

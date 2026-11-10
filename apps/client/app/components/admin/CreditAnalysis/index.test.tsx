@@ -35,8 +35,8 @@ describe('CreditAnalyticsTab', () => {
     expect(screen.getByTestId('stub-ledger')).toBeInTheDocument();
   });
 
-  it('has no Model pricing tab and shows the first tab for a stale pricing value', () => {
-    useCreditAnalysisStore.getState().setActiveTab('pricing');
+  it('has no Model pricing tab', () => {
+    useCreditAnalysisStore.getState().setActiveTab('users');
     render(
       <CssVarsProvider theme={appTheme}>
         <CreditAnalyticsTab />
@@ -45,6 +45,5 @@ describe('CreditAnalyticsTab', () => {
 
     expect(screen.queryByTestId('credit-analysis-pricing-tab')).toBeNull();
     expect(screen.queryByText('Model Pricing')).toBeNull();
-    expect(screen.getByTestId('stub-user-credits')).toBeInTheDocument();
   });
 });

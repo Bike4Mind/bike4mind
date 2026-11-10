@@ -7,6 +7,7 @@ import { ModelPricingCatalog } from '../../CreditAnalysis/components/ModelPricin
 import type { AdminSearch } from '../../adminTabParams';
 import { MODELS_PRICE_MODEL_PARAM } from '../modelsSearch';
 import { ModelWriteAction } from '../ModelWriteAction';
+import { useRunNowStore } from '../Discovery/runDiscoveryNow';
 import { AddPriceDialog } from './AddPriceDialog';
 
 /** Prices: the price catalog for every model, narrowed by the `model` param, plus a first price for a text model. */
@@ -17,6 +18,7 @@ export function ModelPricesSection() {
   const model = search[MODELS_PRICE_MODEL_PARAM] ?? '';
   const [adding, setAdding] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const finishedRuns = useRunNowStore(state => state.finishedRuns);
 
   const setModel = (value: string) =>
     navigate({
@@ -36,7 +38,7 @@ export function ModelPricesSection() {
         hideHeading
         modelFilter={model}
         onModelFilterChange={setModel}
-        refreshKey={refreshKey}
+        refreshKey={refreshKey + finishedRuns}
         onPricesChanged={refreshModels}
         toolbarActions={
           <ModelWriteAction>
