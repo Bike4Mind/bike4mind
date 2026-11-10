@@ -14,9 +14,6 @@ const AUDIO_ENDPOINT: Record<AudioMode, RegExp> = {
   'sound-effects': /\/api\/ai\/sound-effects(?:\?|$)/,
 };
 
-/** Audio generation is a synchronous provider call plus a save to Files; allow for a cold provider. */
-export const AUDIO_GENERATION_TIMEOUT = 90_000;
-
 /** Ledger type each endpoint settles with: deductTtsCredits.ts and pages/api/ai/sound-effects.ts. */
 export const AUDIO_USAGE_TRANSACTION_TYPE: Record<AudioMode, string> = {
   speech: 'text_to_speech_usage',
@@ -101,7 +98,7 @@ export class StudioPage extends BasePage {
     await expect(this.audioSubmit(mode)).toBeEnabled();
     const responsePromise = this.page.waitForResponse(
       r => r.request().method() === 'POST' && AUDIO_ENDPOINT[mode].test(new URL(r.url()).pathname),
-      { timeout: AUDIO_GENERATION_TIMEOUT }
+      { timeout: TIMEOUTS.AUDIO_GENERATION }
     );
     await this.audioSubmit(mode).click();
     return responsePromise;
@@ -133,13 +130,13 @@ export class StudioPage extends BasePage {
    */
   async expectPlayableAudio(card: Locator) {
     const audio = card.getByTestId('media-player-audio');
-    await expect(card.getByTestId('media-player-error')).toHaveCount(0);
     await expect(audio).toBeVisible({ timeout: TIMEOUTS.ACTION });
-    await expect(audio).toHaveAttribute('src', /^https?:\/\//, { timeout: 45_000 });
+    await expect(audio).toHaveAttribute('src', /^https?:\/\//, { timeout: TIMEOUTS.AUDIO_SRC });
+    await expect(card.getByTestId('media-player-error')).toHaveCount(0);
     await expect
       .poll(
         () =>
-          audio.evaluate(async (el: HTMLAudioElement) => {
+          audio.evaluate(async (el: HTMLAudioElement, metadataTimeout: number) => {
             if (el.readyState < 1) {
               el.preload = 'metadata';
               el.load();
@@ -147,11 +144,11 @@ export class StudioPage extends BasePage {
                 const done = () => resolve();
                 el.addEventListener('loadedmetadata', done, { once: true });
                 el.addEventListener('error', done, { once: true });
-                setTimeout(done, 5_000);
+                setTimeout(done, metadataTimeout);
               });
             }
             return Number.isFinite(el.duration) ? el.duration : 0;
-          }),
+          }, TIMEOUTS.AUDIO_METADATA),
         { timeout: TIMEOUTS.ACTION, message: 'generated audio never reported a duration' }
       )
       .toBeGreaterThan(0);

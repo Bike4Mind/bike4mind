@@ -3,7 +3,6 @@ import { test, expect } from './fixtures';
 import { TIMEOUTS } from './constants';
 import { getTestUsers } from './helpers/test-users';
 import {
-  AUDIO_GENERATION_TIMEOUT,
   AUDIO_USAGE_TRANSACTION_TYPE,
   STUDIO_MODALITIES,
   parseAudioEstimate,
@@ -36,8 +35,8 @@ test.describe('Studio - navigation', () => {
       'Sound effects',
     ]);
 
-    // The galleries are empty for a fresh user, except speech/sound effects once the generation
-    // tests below have run on a retry - so accept either the empty state or a populated gallery.
+    // Speech/sound effects may already be populated by the generation tests (fullyParallel), so
+    // accept either the empty state or a populated gallery.
     const galleries = {
       video: 'video-gallery',
       music: 'music-gallery',
@@ -173,7 +172,9 @@ async function expectChargeMatchesEstimate(
       message: `no new ${type} ledger row after generating`,
     })
     .toBe(1);
-  const [row] = await newRows();
+  const rows = await newRows();
+  expect(rows, `more than one new ${type} ledger row`).toHaveLength(1);
+  const [row] = rows;
 
   const charged = await studioPage.creditBalance(token).then(after => balanceBefore - after);
   const context = `${mode}: charged ${charged} for an estimate of ${estimate}`;
@@ -204,7 +205,7 @@ test.describe('Studio - generated media', () => {
     page,
     studioPage,
   }) => {
-    test.setTimeout(AUDIO_GENERATION_TIMEOUT + 3 * TIMEOUTS.TEST);
+    test.setTimeout(TIMEOUTS.AUDIO_GENERATION + 3 * TIMEOUTS.TEST);
     // Long enough (about 300 characters) that the estimate is several credits, so the parity check is
     // not just the 1-credit minimum; still a fraction of a cent at provider prices.
     const prompt =
@@ -278,7 +279,7 @@ test.describe('Studio - generated media', () => {
     page,
     studioPage,
   }) => {
-    test.setTimeout(AUDIO_GENERATION_TIMEOUT + 2 * TIMEOUTS.TEST);
+    test.setTimeout(TIMEOUTS.AUDIO_GENERATION + 2 * TIMEOUTS.TEST);
     const prompt = `A single soft door knock ${Date.now()}`;
 
     await studioPage.goto('sound-effects');
