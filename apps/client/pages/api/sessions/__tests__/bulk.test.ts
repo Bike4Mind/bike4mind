@@ -22,6 +22,11 @@ const { mockFindById, mockDeleteSession, mockLogEvent, mockWithTransaction, mock
   })
 );
 
+const mockPurgeMedia = vi.hoisted(() => vi.fn());
+vi.mock('@server/sessions/purgeDeletedNotebookMedia', () => ({
+  purgeDeletedNotebookMedia: (...a: unknown[]) => mockPurgeMedia(...a),
+}));
+
 const mockFav = vi.hoisted(() => ({ add: vi.fn(), remove: vi.fn() }));
 const mockTag = vi.hoisted(() => ({
   update: vi.fn(),
@@ -226,6 +231,21 @@ describe('DELETE /api/sessions/bulk', () => {
       ([event]: [{ type?: string }]) => event?.type === SessionEvents.DELETE_SESSION
     );
     expect(deleteEvents).toHaveLength(1);
+  });
+
+  it('purges generated media once, for the committed deletes only', async () => {
+    mockDeleteSession
+      .mockResolvedValueOnce({ id: 'other-session' })
+      .mockRejectedValueOnce(new Error('ConcurrencyConflictError'))
+      .mockResolvedValueOnce({ id: 'other-session' });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const { req, res } = fire(['s1', 's2', 's3']);
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockPurgeMedia).toHaveBeenCalledTimes(1);
+    expect(mockPurgeMedia).toHaveBeenCalledWith(['s1', 's3'], expect.anything());
   });
 
   it('rejects an empty request without touching the service', async () => {

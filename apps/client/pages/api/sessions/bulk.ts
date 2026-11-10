@@ -10,6 +10,7 @@ import {
 import { assertApiKeyScope } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 import { buildSessionUpdateAdapters } from '@server/sessions/sessionUpdateAdapters';
 import { queueSessionTags } from '@server/sessions/queueSessionTags';
+import { purgeDeletedNotebookMedia } from '@server/sessions/purgeDeletedNotebookMedia';
 import type { Request } from 'express';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -145,6 +146,7 @@ const handler = baseApi()
 
         let newLastNotebook: { id: string } | null = null;
         let deletedCount = 0;
+        const deletedIds: string[] = [];
 
         // Delete sessions one by one to get proper newLastNotebook result
         for (const sessionId of sessionIds) {
@@ -178,6 +180,7 @@ const handler = baseApi()
               newLastNotebook = result;
             }
             deletedCount++;
+            deletedIds.push(sessionId);
 
             await logEvent(
               { userId, type: SessionEvents.DELETE_SESSION, metadata: { sessionId } },
@@ -190,6 +193,8 @@ const handler = baseApi()
             console.error(`Failed to delete session ${sessionId}:`, error);
           }
         }
+
+        await purgeDeletedNotebookMedia(deletedIds, { logger: req.logger });
 
         return res.json({
           deletedCount,

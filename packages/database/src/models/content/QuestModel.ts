@@ -1433,6 +1433,17 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     return [...new Set(docs.map(d => d.sessionId))];
   }
 
+  // Session ids of every quest whose `images` or `videos` references this generated key, soft-deleted
+  // quests included. The video-aware sibling of findSessionIdsByImage, for deciding whether the
+  // bytes still have an owner before they are deleted.
+  async findSessionIdsByMedia(key: string): Promise<string[]> {
+    if (!key) return [];
+    const docs = await this.model
+      .find({ $or: [{ images: key }, { videos: key }] }, { sessionId: 1 })
+      .setOptions({ includeDeleted: true });
+    return [...new Set(docs.map(d => d.sessionId))];
+  }
+
   // Every organization a user's quests were recorded under, soft-deleted ones included: a DSAR
   // export or deletion has to reach rows the user can no longer see, and telemetry hashes are keyed
   // by that organization. One full scan of the user's quests, which is why it is not on a read path.
