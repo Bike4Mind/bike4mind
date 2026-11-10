@@ -74,6 +74,9 @@ const answer = (choice: string, p: number) => {
   };
 };
 
+// `answer` takes the chosen option's probability; B4M's choice confidence over three options is (3p - 1) / 2.
+const answerAtConfidence = (choice: string, confidence: number) => answer(choice, (2 * confidence + 1) / 3);
+
 type Store = Map<string, SignupDomainReview>;
 
 /**
@@ -150,7 +153,11 @@ const makeDeps = (store: Store, overrides: Partial<SignupDomainHoldAssessmentDep
     })),
     // The real probe reads the body only to derive these flags; a stand-in body is checked below.
     probeSite: vi.fn(async () => ({ resolves: true, hasContent: false, offersDisposableMail: false })),
-    reserveAutoRelease: vi.fn(async (maxPerDay: number) => (await countCalls('autoReleases', maxPerDay)).success),
+    reserveAutoRelease: vi.fn(async (maxPerDay: number) =>
+      (await countCalls('autoReleases', maxPerDay)).success
+        ? { refund: async () => void counters.set('autoReleases', (counters.get('autoReleases') ?? 1) - 1) }
+        : null
+    ),
     countHeldSignups: vi.fn(async () => 1),
     releaseCredits: vi.fn(async () => ({ creditsReleased: 1000, remaining: 0, nextCursor: null })),
     inTransaction: async fn => {
@@ -600,6 +607,36 @@ describe('runSignupDomainHoldAssessments', () => {
       expect(deps.recordShadowDetection).toHaveBeenCalledWith(expect.objectContaining({ wouldAction: 'releaseHold' }));
     });
 
+    it('releases at exactly the release confidence and leaves a hair below it pending', async () => {
+      enableAutoRelease();
+      mocks.providerDecide.mockResolvedValue(answerAtConfidence('legitimate', 0.95));
+      const atThreshold = storeWith(hold({ signupCount: 1 }));
+      expect(await runSignupDomainHoldAssessments(legitimateDeps(atThreshold))).toMatchObject({ released: 1 });
+      expect(atThreshold.get('fresh.example')).toMatchObject({ status: 'released', assessment: { confidence: 0.95 } });
+
+      counters.clear();
+      mocks.providerDecide.mockResolvedValue(answerAtConfidence('legitimate', 0.949));
+      const below = storeWith(hold({ signupCount: 1 }));
+      expect(await runSignupDomainHoldAssessments(legitimateDeps(below))).toMatchObject({ released: 0, recorded: 1 });
+      const pending = below.get('fresh.example');
+      expect(pending?.status).toBe('held_pending_review');
+      expect(pending?.assessment).toMatchObject({ confidence: expect.closeTo(0.949, 6) });
+    });
+
+    it.each<[string, Partial<SignupDomainReview>, number]>([
+      ['a hold of exactly the most accounts', { signupCount: 2 }, 1],
+      ['a live count of exactly the most accounts', { signupCount: 1 }, 2],
+      ['a live count of exactly 1', { signupCount: 1 }, 1],
+    ])('releases %s', async (_case, holdOverrides, live) => {
+      enableAutoRelease({ maxAutoReleaseSignups: 2 });
+      mocks.providerDecide.mockResolvedValue(answer('legitimate', 0.99));
+      const store = storeWith(hold(holdOverrides));
+      const deps = legitimateDeps(store, { countHeldSignups: vi.fn(async () => live) });
+
+      expect(await runSignupDomainHoldAssessments(deps)).toMatchObject({ released: 1 });
+      expect(deps.releaseCredits).toHaveBeenCalledWith('fresh.example', 2);
+    });
+
     it('never releases while auto-release is off, whatever the verdict', async () => {
       mocks.providerDecide.mockResolvedValue(answer('legitimate', 0.99));
       const store = storeWith(hold({ signupCount: 1 }));
@@ -700,6 +737,32 @@ describe('runSignupDomainHoldAssessments', () => {
       expect(await runSignupDomainHoldAssessments(deps)).toMatchObject({ released: 1, recorded: 1 });
       expect([...store.values()].filter(review => review.status === 'released')).toHaveLength(1);
       expect(deps.releaseCredits).toHaveBeenCalledTimes(1);
+    });
+
+    it('hands the cap slot back when an admin decided the hold before the release landed', async () => {
+      enableAutoRelease({ maxAutoReleasesPerDay: 1 });
+      mocks.providerDecide.mockResolvedValue(answer('legitimate', 0.99));
+      const store = storeWith(hold({ signupCount: 1 }), hold({ domain: 'second.example', signupCount: 1 }));
+      const deps = legitimateDeps(store);
+      // The first conditional transition loses to an admin; the slot it reserved must still serve the second.
+      vi.mocked(deps.holds.autoRelease).mockResolvedValueOnce(false);
+
+      expect(await runSignupDomainHoldAssessments(deps)).toMatchObject({ released: 1, recorded: 1 });
+      expect(deps.releaseCredits).toHaveBeenCalledTimes(1);
+      expect(counters.get('autoReleases')).toBe(1);
+    });
+
+    it('hands the cap slot back when the release transaction fails', async () => {
+      enableAutoRelease({ maxAutoReleasesPerDay: 1 });
+      mocks.providerDecide.mockResolvedValue(answer('legitimate', 0.99));
+      const store = storeWith(hold({ signupCount: 1 }));
+      const deps = legitimateDeps(store, {
+        recordAudit: vi.fn(async () => Promise.reject(new Error('audit down'))),
+      });
+
+      expect(await runSignupDomainHoldAssessments(deps)).toMatchObject({ released: 0 });
+      expect(store.get('fresh.example')?.status).toBe('held_pending_review');
+      expect(counters.get('autoReleases')).toBe(0);
     });
 
     it('keeps the release when the payout fails, so an admin can retry the grants', async () => {

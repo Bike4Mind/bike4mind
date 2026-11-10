@@ -104,10 +104,13 @@ confidence is at or above `minReleaseConfidence` (default 0.95), and every code 
 content and no disposable-mail wording, mail runs on Google Workspace or Microsoft, every summarized signup has known
 network data and none came from a datacenter, and the domain has between 1 and `maxAutoReleaseSignups` (default 2)
 verified accounts still waiting, counted live (a hold's own signup count is fixed when it is created). The payout is
-capped at that same number. At most `maxAutoReleasesPerDay` holds (default 5) are released a day; the rest wait for an
+capped at that same number. At most `maxAutoReleasesPerDay` holds (default 5) are released per 24 hours, a window
+opened by the first release, and a release an admin decided first does not use up a slot; the rest wait for an
 admin. Unlike an admin release, an automated release does not exempt the domain for good: it stays under burst
-detection whatever **Auto-hold Signup Bursts** says, and a burst re-holds it (reason `Verified signup burst`) for an
-admin. A release writes a strict `signup_domain_hold.auto_released` system audit entry in the same
+detection whatever **Auto-hold Signup Bursts** says, and a burst re-holds it for an admin with the detector's reason
+(which starts `Verified signup burst with generated local parts`), dropping the old verdict. An admin can overrule an
+automated release: Confirm blocks the domain (credits already paid stay paid), and Release takes the release over,
+making the exemption permanent like any admin release. A release writes a strict `signup_domain_hold.auto_released` system audit entry in the same
 transaction as the status change, then pays out the held credits within the daily free-grant budget (an admin
 Release bypasses that budget); grants the budget or a payout error leaves pending can be retried from the tab.
 

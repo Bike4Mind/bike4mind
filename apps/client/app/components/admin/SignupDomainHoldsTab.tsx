@@ -52,7 +52,20 @@ const EMPTY_LABELS: Record<SignupDomainHoldStatusFilter, string> = {
 };
 
 // signupCount stays client-side: it only words the release result.
-type DecisionInput = { domain: string; action: 'confirm' | 'release'; afterUserId?: string; signupCount?: number };
+type DecisionInput = {
+  domain: string;
+  action: 'confirm' | 'release';
+  afterUserId?: string;
+  signupCount?: number;
+  // Only the explicit Release dialog sends this, so a payout retry never takes over an automated release.
+  overrideAutoDecision?: boolean;
+};
+
+// An automated release stays open to an admin's Confirm or Release; an admin's own release is final and only
+// offers to retry its pending grants.
+const isAdminReleased = (review: SignupDomainReview) => review.status === 'released' && !review.autoDecision;
+const canConfirm = (review: SignupDomainReview) =>
+  review.status === 'held_pending_review' || (review.status === 'released' && Boolean(review.autoDecision));
 type DecisionResult = {
   status: 'blocked' | 'released';
   creditsReleased: number;
@@ -357,7 +370,7 @@ export default function SignupDomainHoldsTab() {
                       size="sm"
                       color="danger"
                       data-testid={`signup-domain-confirm-${review.domain}`}
-                      disabled={missing || decision.isPending || review.status !== 'held_pending_review'}
+                      disabled={missing || decision.isPending || !canConfirm(review)}
                       onClick={() => decide({ domain: review.domain, action: 'confirm' })}
                     >
                       Confirm
@@ -372,12 +385,12 @@ export default function SignupDomainHoldsTab() {
                       data-testid={`signup-domain-release-${review.domain}`}
                       disabled={missing || decision.isPending}
                       onClick={() =>
-                        review.status === 'released'
+                        isAdminReleased(review)
                           ? decide({ domain: review.domain, action: 'release', afterUserId: cursors[review.domain] })
                           : setReleaseTarget(review)
                       }
                     >
-                      {review.status === 'released' ? 'Retry pending grants' : 'Release'}
+                      {isAdminReleased(review) ? 'Retry pending grants' : 'Release'}
                     </Button>
                   )}
                 </AdminPermissionAction>
@@ -416,6 +429,7 @@ export default function SignupDomainHoldsTab() {
                     action: 'release',
                     afterUserId: cursors[releaseTarget.domain],
                     signupCount: releaseTarget.signupCount,
+                    overrideAutoDecision: true,
                   });
                   setReleaseTarget(null);
                 }}

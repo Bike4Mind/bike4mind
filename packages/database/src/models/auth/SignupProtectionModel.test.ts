@@ -20,6 +20,43 @@ const hold: SignupDomainReview = {
   signupCount: 5,
 };
 
+// The status and autoDecision filters below keep an admin decision from being overwritten by an automated one.
+const YOUNG_REASON = 'young-domain (<30 days)';
+const autoDecidedAt = new Date('2026-01-02T00:00:00Z');
+const legitimateAssessment = {
+  outcome: 'judged' as const,
+  policyVersion: 1,
+  judgment: 'legitimate' as const,
+  confidence: 0.99,
+  model: 'test-model',
+  assessedAt: autoDecidedAt,
+};
+
+const seed = (domain: string, overrides: Partial<SignupDomainReview> = {}) =>
+  SignupDomainReviewModel.create({
+    domain,
+    status: 'held_pending_review',
+    reason: YOUNG_REASON,
+    triggeredAt: new Date('2026-01-01T00:00:00Z'),
+    cohortUserIds: ['user-1'],
+    sampleEmails: [`a@${domain}`],
+    signupCount: 1,
+    ...overrides,
+  });
+
+const BURST_REASON = 'Verified signup burst with generated local parts';
+const burstHold = (domain: string) => ({
+  domain,
+  status: 'held_pending_review' as const,
+  reason: BURST_REASON,
+  triggeredAt: new Date('2026-01-05T00:00:00Z'),
+  cohortUserIds: ['user-2', 'user-3'],
+  sampleEmails: [`b@${domain}`],
+  signupCount: 5,
+});
+
+const stored = (domain: string) => SignupDomainReviewModel.findOne({ domain }).lean();
+
 describe('signup protection persistence', () => {
   setupMongoTest();
   beforeEach(async () => {
@@ -330,6 +367,109 @@ describe('signup protection persistence', () => {
       for (const domain of ['still-young.test', 'unknown.test', 'blocked.test', 'other.test'])
         expect(byDomain[domain].domainAgedAt).toBeUndefined();
       expect(byDomain['blocked.test'].status).toBe('blocked');
+    });
+  });
+  describe('signupProtectionRepository.reholdWatched', () => {
+    it('re-holds an advisory-released domain and clears its decision and stale assessment', async () => {
+      await seed('advisory.test', {
+        status: 'released',
+        reviewedAt: autoDecidedAt,
+        autoDecision: { policy: 'advisory-decision', decidedAt: autoDecidedAt },
+        assessment: legitimateAssessment,
+      });
+      expect(await signupProtectionRepository.reholdWatched!(burstHold('advisory.test'))).toBe(true);
+      const row = await stored('advisory.test');
+      expect(row).toMatchObject({
+        status: 'held_pending_review',
+        reason: BURST_REASON,
+        cohortUserIds: ['user-2', 'user-3'],
+        signupCount: 5,
+      });
+      expect(row).not.toHaveProperty('autoDecision');
+      expect(row).not.toHaveProperty('reviewedAt');
+      expect(row).not.toHaveProperty('reviewedBy');
+      expect(row).not.toHaveProperty('assessment');
+    });
+
+    it('leaves an admin-released domain released', async () => {
+      await seed('admin.test', {
+        status: 'released',
+        reviewedAt: autoDecidedAt,
+        reviewedBy: 'admin-1',
+        assessment: legitimateAssessment,
+      });
+      expect(await signupProtectionRepository.reholdWatched!(burstHold('admin.test'))).toBe(false);
+      expect(await stored('admin.test')).toMatchObject({
+        status: 'released',
+        reason: YOUNG_REASON,
+        reviewedBy: 'admin-1',
+        assessment: { judgment: 'legitimate' },
+      });
+    });
+
+    it('leaves a domain another automated policy released alone', async () => {
+      await seed('rule.test', {
+        status: 'released',
+        reviewedAt: autoDecidedAt,
+        autoDecision: { policy: 'disposable-aggregate-rule', decidedAt: autoDecidedAt },
+      });
+      expect(await signupProtectionRepository.reholdWatched!(burstHold('rule.test'))).toBe(false);
+      expect(await stored('rule.test')).toMatchObject({ status: 'released', reason: YOUNG_REASON });
+    });
+
+    it('leaves a pending hold as it was', async () => {
+      await seed('pending.test', { assessment: legitimateAssessment });
+      expect(await signupProtectionRepository.reholdWatched!(burstHold('pending.test'))).toBe(false);
+      expect(await stored('pending.test')).toMatchObject({
+        status: 'held_pending_review',
+        reason: YOUNG_REASON,
+        cohortUserIds: ['user-1'],
+        assessment: { judgment: 'legitimate' },
+      });
+    });
+  });
+
+  describe('signupDomainReviewRepository.autoRelease', () => {
+    it('releases a pending hold and marks the policy that did it', async () => {
+      await seed('pending.test', { reviewedBy: 'stale-admin' });
+      expect(
+        await signupDomainReviewRepository.autoRelease('pending.test', YOUNG_REASON, 'advisory-decision', autoDecidedAt)
+      ).toBe(true);
+      const row = await stored('pending.test');
+      expect(row).toMatchObject({
+        status: 'released',
+        reviewedAt: autoDecidedAt,
+        autoDecision: { policy: 'advisory-decision', decidedAt: autoDecidedAt },
+      });
+      expect(row).not.toHaveProperty('reviewedBy');
+    });
+
+    it.each([
+      ['admin-confirmed', { status: 'blocked' as const, reviewedBy: 'admin-1', reviewedAt: autoDecidedAt }],
+      ['admin-released', { status: 'released' as const, reviewedBy: 'admin-1', reviewedAt: autoDecidedAt }],
+      [
+        'auto-confirmed',
+        {
+          status: 'blocked' as const,
+          reviewedAt: autoDecidedAt,
+          autoDecision: { policy: 'disposable-aggregate-rule' as const, decidedAt: autoDecidedAt },
+        },
+      ],
+    ])('does not touch an %s hold', async (_label, decision) => {
+      await seed('decided.test', decision);
+      const before = await stored('decided.test');
+      expect(
+        await signupDomainReviewRepository.autoRelease('decided.test', YOUNG_REASON, 'advisory-decision', new Date())
+      ).toBe(false);
+      expect(await stored('decided.test')).toEqual(before);
+    });
+
+    it('does not release a pending hold whose reason changed since it was judged', async () => {
+      await seed('rehold.test', { reason: BURST_REASON });
+      expect(
+        await signupDomainReviewRepository.autoRelease('rehold.test', YOUNG_REASON, 'advisory-decision', autoDecidedAt)
+      ).toBe(false);
+      expect(await stored('rehold.test')).toMatchObject({ status: 'held_pending_review' });
     });
   });
 });

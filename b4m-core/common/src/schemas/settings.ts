@@ -1637,7 +1637,7 @@ export const SignupDomainHoldAssessmentConfigSchema = z.object({
     description: 'Least confidence in a legitimate verdict that releases the hold; anything lower leaves it pending.',
   }),
   maxAutoReleasesPerDay: z.number().int().min(0).max(50).prefault(5).meta({
-    title: 'Auto-releases per day',
+    title: 'Auto-releases per 24 hours',
     description:
       'Holds released automatically per 24h window (opened by the first release); further ones wait for an admin.',
   }),

@@ -208,6 +208,33 @@ describe('SignupDomainHoldsTab', () => {
       'Auto-released by the advisory assessment'
     );
   });
+  it('lets an admin confirm or take over an auto-released hold through the explicit Release dialog', async () => {
+    getMock.mockResolvedValue({
+      data: {
+        data: [
+          {
+            ...reviews[0],
+            status: 'released',
+            autoDecision: { policy: 'advisory-decision', decidedAt: '2026-01-02T00:00:00.000Z' },
+          },
+        ],
+        total: 1,
+      },
+    });
+    postMock.mockResolvedValue({ data: { status: 'released', creditsReleased: 0, remaining: 0, nextCursor: null } });
+    renderTab();
+    expect(await screen.findByTestId('signup-domain-confirm-alpha.test')).toBeEnabled();
+    expect(screen.getByTestId('signup-domain-release-alpha.test')).toHaveTextContent('Release');
+    expect(screen.getByTestId('signup-domain-release-alpha.test')).not.toHaveTextContent('Retry');
+    await releaseThroughDialog('alpha.test');
+    await waitFor(() =>
+      expect(postMock).toHaveBeenCalledWith(endpoint, {
+        domain: 'alpha.test',
+        action: 'release',
+        overrideAutoDecision: true,
+      })
+    );
+  });
   it('uses server pagination without a second local pager', async () => {
     renderTab();
     expect(await screen.findByTestId('signup-domain-confirm-alpha.test')).toBeEnabled();
@@ -280,6 +307,7 @@ describe('SignupDomainHoldsTab', () => {
         domain: 'alpha.test',
         action: 'release',
         afterUserId: 'alpha-cursor',
+        overrideAutoDecision: true,
       })
     );
   });
@@ -433,7 +461,13 @@ describe('SignupDomainHoldsTab', () => {
     await waitFor(() => expect(screen.queryByTestId('signup-domain-release-dialog-body')).not.toBeInTheDocument());
     expect(postMock).not.toHaveBeenCalled();
     await releaseThroughDialog('alpha.test');
-    await waitFor(() => expect(postMock).toHaveBeenCalledWith(endpoint, { domain: 'alpha.test', action: 'release' }));
+    await waitFor(() =>
+      expect(postMock).toHaveBeenCalledWith(endpoint, {
+        domain: 'alpha.test',
+        action: 'release',
+        overrideAutoDecision: true,
+      })
+    );
     expect(postMock.mock.calls[0][1]).not.toHaveProperty('signupCount');
   });
 

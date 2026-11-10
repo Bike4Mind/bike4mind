@@ -23,10 +23,14 @@ export default function SignupGrantStatus() {
     );
   }
   if (isSignupGrantHeldForReview(currentUser)) {
+    // A risk review judges this account alone, so blaming its email domain would be untrue. Domain holds carry
+    // no held reason of their own.
+    const subject =
+      currentUser?.signupGrantHeldReason === 'risk_review' ? 'your signup' : 'new signups from your email domain';
     return (
       <Typography level="body-sm" data-testid="signup-grant-under-review">
-        Your free credits are on hold while we review new signups from your email domain, which we do to keep free
-        credits fair. You can keep using Bike4Mind in the meantime.
+        Your free credits are on hold while we review {subject}, which we do to keep free credits fair. You can keep
+        using Bike4Mind in the meantime.
       </Typography>
     );
   }

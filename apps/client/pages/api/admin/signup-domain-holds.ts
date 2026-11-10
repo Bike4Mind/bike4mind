@@ -31,6 +31,9 @@ const decisionSchema = z.object({
     .string()
     .regex(/^[a-f0-9]{24}$/i)
     .optional(),
+  // Set only by an explicit admin Release, never by a payout retry or a continuation page: it lets the admin
+  // take over a hold the advisory assessment released, so the release becomes theirs and stays permanent.
+  overrideAutoDecision: z.boolean().optional(),
 });
 
 const PAGE_SIZE = 25;
@@ -99,20 +102,28 @@ const handler = adminApi({
     asyncHandler(async (req, res) => {
       const parsed = decisionSchema.safeParse(req.body);
       if (!parsed.success) throw new BadRequestError('Expected a domain and confirm/release action');
-      const { domain, action, afterUserId } = parsed.data;
+      const { domain, action, afterUserId, overrideAutoDecision } = parsed.data;
       // Releasing pays out the pending free credits of every account on the domain.
       if (action === 'release') requireAdminPermission(req, 'credits:adjust');
       const status = action === 'release' ? 'released' : 'blocked';
       // A strict audit entry rides in the same transaction, so an unrecorded decision rolls back.
       const review = await withTransaction(async () => {
         // Release continuation pages and grant retries re-post an already released hold; that is not a new
-        // decision, so it must not rewrite who (or which policy) released it.
+        // decision, so it must not rewrite who (or which policy) released it. Only an explicit admin Release
+        // of an automated release goes on to take it over.
         if (action === 'release') {
           const released = await SignupDomainReviewModel.findOne({ domain, status: 'released' });
-          if (released) return released;
+          if (released && !(overrideAutoDecision && released.autoDecision)) return released;
         }
         const previous = await SignupDomainReviewModel.findOneAndUpdate(
-          { domain, status: { $in: ['held_pending_review', 'blocked'] } },
+          {
+            domain,
+            $or: [
+              { status: { $in: ['held_pending_review', 'blocked'] } },
+              // An automated release is open to an admin's Confirm or explicit Release; an admin's is final.
+              { status: 'released', autoDecision: { $exists: true } },
+            ],
+          },
           // An admin decision supersedes an automated one (signupDomainHoldTriage), so its marker goes.
           { $set: { status, reviewedBy: req.user.id, reviewedAt: new Date() }, $unset: { autoDecision: 1 } },
           { new: false }

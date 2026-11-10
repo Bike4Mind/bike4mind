@@ -141,6 +141,9 @@ type HoldWrites = Pick<
   'listPendingForAssessment' | 'recordAssessment' | 'autoConfirm' | 'autoRelease'
 >;
 
+/** One slot of the auto-release cap; `refund` hands it back when the release it was taken for did not happen. */
+export type AutoReleaseSlot = { refund: () => Promise<void> };
+
 export type SignupDomainHoldAssessmentDeps = {
   loadSettings: () => Promise<SignupDomainHoldAssessmentSettings>;
   holds: HoldWrites;
@@ -148,8 +151,8 @@ export type SignupDomainHoldAssessmentDeps = {
   /** Cached RDAP/MX facts; null when unavailable. */
   domainIntel: (domain: string) => Promise<Pick<DomainIntel, 'registeredAt' | 'mxHosts' | 'mxFlags' | 'failed'> | null>;
   probeSite: (domain: string) => Promise<SiteProbe>;
-  /** Takes one slot of the daily auto-release cap; false when the cap is spent. */
-  reserveAutoRelease: (maxPerDay: number) => Promise<boolean>;
+  /** Takes one slot of the auto-release cap (per 24h window); null when the cap is spent. */
+  reserveAutoRelease: (maxPerDay: number) => Promise<AutoReleaseSlot | null>;
   /** Verified accounts on the domain whose credits are held right now (not the hold's fixed signupCount). */
   countHeldSignups: (domain: string) => Promise<number>;
   /** Pays out up to `limit` held accounts on a released hold's domain, within the daily free-grant budget. */
@@ -181,9 +184,19 @@ export const defaultSignupDomainHoldAssessmentDeps = (
     return userService.getDomainIntel(domain, { findDomainIntel, saveDomainIntel }, { timeoutMs: INTEL_TIMEOUT_MS });
   },
   probeSite: domain => probeSite(domain),
-  reserveAutoRelease: async maxPerDay =>
-    maxPerDay > 0 &&
-    (await cacheRepository.tryIncrementWithinLimitFixedWindow(`${KEY_PREFIX}:autoReleases`, maxPerDay, DAY_MS)).success,
+  reserveAutoRelease: async maxPerDay => {
+    if (maxPerDay <= 0) return null;
+    const key = `${KEY_PREFIX}:autoReleases`;
+    const { success, expiresAt } = await cacheRepository.tryIncrementWithinLimitFixedWindow(key, maxPerDay, DAY_MS);
+    if (!success) return null;
+    return {
+      // A slot taken in a window that has since rolled over is already gone; decrementing the new window
+      // would hand back a slot another release took.
+      refund: async () => {
+        if (expiresAt.getTime() > Date.now()) await cacheRepository.decrementCounter(key);
+      },
+    };
+  },
   countHeldSignups,
   releaseCredits: (domain, limit) =>
     releaseHeldSignupCredits(domain, {
@@ -405,9 +418,26 @@ async function applyRelease(
   // The summary's count is the hold's, fixed at creation; later signups join the hold without raising it.
   const held = await deps.countHeldSignups(hold.domain);
   if (held < 1 || held > config.maxAutoReleaseSignups) return recordOnly();
-  if (!(await deps.reserveAutoRelease(config.maxAutoReleasesPerDay))) return recordOnly();
-  const applied = await releaseWithAudit(hold, assessment, deps);
-  if (applied !== 'released') return applied;
+  const slot = await deps.reserveAutoRelease(config.maxAutoReleasesPerDay);
+  if (!slot) return recordOnly();
+  // The slot is taken before the conditional transition so two runs cannot both pass the cap; a release that
+  // does not happen (an admin decided first, or the transaction failed) hands it back.
+  const refund = async () => {
+    try {
+      await slot.refund();
+    } catch (error) {
+      // Fails safe: the slot stays spent until the window closes, which only delays later releases.
+      deps.logger.warn('Signup domain hold auto-release slot was not refunded', { domain: hold.domain, error });
+    }
+  };
+  const applied = await releaseWithAudit(hold, assessment, deps).catch(async (error: unknown) => {
+    await refund();
+    throw error;
+  });
+  if (applied !== 'released') {
+    await refund();
+    return applied;
+  }
   try {
     // Capped again at payout time, so accounts that joined since the count stay pending for an admin.
     const payout = await deps.releaseCredits(hold.domain, config.maxAutoReleaseSignups);

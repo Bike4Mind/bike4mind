@@ -297,7 +297,13 @@ describe('signup domain hold decisions', () => {
     const { req, res } = makeRequest({ domain: 'example.net', action: 'release' });
     await handlers.post(req, res);
     expect(reviewUpdate).toHaveBeenCalledWith(
-      { domain: 'example.net', status: { $in: ['held_pending_review', 'blocked'] } },
+      {
+        domain: 'example.net',
+        $or: [
+          { status: { $in: ['held_pending_review', 'blocked'] } },
+          { status: 'released', autoDecision: { $exists: true } },
+        ],
+      },
       {
         $set: { status: 'released', reviewedBy: 'admin-1', reviewedAt: expect.any(Date) },
         $unset: { autoDecision: 1 },
@@ -385,7 +391,7 @@ describe('signup domain hold decisions', () => {
     await handlers.post(req, res);
     expect(res._getStatusCode()).toBe(200);
     const [filter, update] = reviewUpdate.mock.calls[0];
-    expect(filter.status.$in).toContain('blocked');
+    expect(filter.$or[0].status.$in).toContain('blocked');
     expect(update).toMatchObject({
       $set: { status: 'released', reviewedBy: 'admin-1' },
       $unset: { autoDecision: 1 },
@@ -445,6 +451,66 @@ describe('signup domain hold decisions', () => {
     expect(recordAudit).not.toHaveBeenCalled();
     // The retry leaves the stored decision (and its auto-release marker) as it was.
     expect(reviewUpdate).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalled();
+  });
+  it('lets an admin confirm a hold the advisory assessment auto-released', async () => {
+    reviewUpdate.mockResolvedValue({
+      domain: 'example.net',
+      status: 'released',
+      reason: 'young-domain (<30 days)',
+      autoDecision: { policy: 'advisory-decision', decidedAt: new Date() },
+    });
+    const { req, res } = makeRequest({ domain: 'example.net', action: 'confirm' });
+    await handlers.post(req, res);
+    expect(res._getJSONData()).toMatchObject({ status: 'blocked' });
+    const [filter, update] = reviewUpdate.mock.calls[0];
+    // Only an automated release is open to an admin's Confirm; an admin's own release is not matched.
+    expect(filter.$or).toContainEqual({ status: 'released', autoDecision: { $exists: true } });
+    expect(update).toMatchObject({ $set: { status: 'blocked', reviewedBy: 'admin-1' }, $unset: { autoDecision: 1 } });
+    expect(recordAudit).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'signup_domain_hold.confirmed',
+        changes: [{ field: 'status', before: 'released', after: 'blocked' }],
+        details: { reason: 'young-domain (<30 days)', overrodeAutoDecision: 'advisory-decision' },
+      })
+    );
+    expect(release).not.toHaveBeenCalled();
+  });
+  it('makes an auto-release permanent when an admin explicitly releases it', async () => {
+    const autoReleased = {
+      domain: 'example.net',
+      status: 'released',
+      reason: 'young-domain (<30 days)',
+      autoDecision: { policy: 'advisory-decision', decidedAt: new Date() },
+    };
+    reviewFind.mockResolvedValue(autoReleased);
+    reviewUpdate.mockResolvedValue(autoReleased);
+    const { req, res } = makeRequest({ domain: 'example.net', action: 'release', overrideAutoDecision: true });
+    await handlers.post(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(reviewUpdate.mock.calls[0][1]).toMatchObject({
+      $set: { status: 'released', reviewedBy: 'admin-1' },
+      $unset: { autoDecision: 1 },
+    });
+    expect(recordAudit).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'signup_domain_hold.released',
+        details: { reason: 'young-domain (<30 days)', overrodeAutoDecision: 'advisory-decision' },
+      })
+    );
+    expect(release).toHaveBeenCalled();
+  });
+  it.each([
+    ['a payout retry of an auto-release', { autoDecision: { policy: 'advisory-decision', decidedAt: new Date() } }, {}],
+    ['an explicit release of an admin release', {}, { overrideAutoDecision: true }],
+  ])('leaves the stored decision alone on %s', async (_label, stored, body) => {
+    reviewFind.mockResolvedValue({ domain: 'example.net', status: 'released', reason: 'pattern', ...stored });
+    const { req, res } = makeRequest({ domain: 'example.net', action: 'release', ...body });
+    await handlers.post(req, res);
+    expect(reviewUpdate).not.toHaveBeenCalled();
+    expect(recordAudit).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalled();
   });
   it('records the overridden policy when an admin confirms an auto-confirmed hold', async () => {

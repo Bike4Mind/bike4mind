@@ -6,7 +6,7 @@ import { PENDING_FREE_CREDITS_TAG, type SignupGrant } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   grant: undefined as SignupGrant | undefined,
-  held: undefined as 'budget_exhausted' | undefined,
+  held: undefined as 'budget_exhausted' | 'risk_review' | undefined,
   daily: 1000 as number | string | undefined,
   minSeconds: undefined as number | undefined,
   holdHours: undefined as number | undefined,
@@ -188,8 +188,19 @@ describe('signup grant status', () => {
       h.grant = undefined;
       show();
       expect(screen.getByTestId('signup-grant-under-review')).toHaveTextContent(
-        'Your free credits are on hold while we review'
+        'Your free credits are on hold while we review new signups from your email domain'
       );
+    });
+
+    it('does not blame the email domain for a per-account risk review', () => {
+      h.emailVerified = true;
+      h.tags = [PENDING_FREE_CREDITS_TAG];
+      h.held = 'risk_review';
+      h.grant = undefined;
+      show();
+      const notice = screen.getByTestId('signup-grant-under-review');
+      expect(notice).toHaveTextContent('Your free credits are on hold while we review your signup');
+      expect(notice).not.toHaveTextContent('email domain');
     });
 
     it('keeps the budget copy when the daily budget is what holds the credits', () => {
