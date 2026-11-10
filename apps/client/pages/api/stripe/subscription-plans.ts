@@ -5,18 +5,20 @@ import { isEnforceCreditsLocked } from '@bike4mind/common';
 import { SUBSCRIPTION_PLANS } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
 import { Config, isDevelopment } from '@bike4mind/server-utils/utils/config';
 import type { Request, Response } from 'express';
+import { CREDIT_PACKAGES } from '@client/lib/credits/constants';
 
 function configured(value: string | undefined): boolean {
   return !!value?.trim() && !['null', 'not-configured'].includes(value.trim().toLowerCase());
 }
 
-const personalCatalog = baseApi({ auth: 'jwtOnly' }).get(async (_req, res) => {
+const personalCatalog = baseApi({ auth: 'jwtOnly' }).get(async (req, res) => {
+  const creditPackages = req.query.catalog === 'desktop' ? { creditPackages: Object.values(CREDIT_PACKAGES) } : {};
   const billingEnabled =
     (isEnforceCreditsLocked() || (await adminSettingsRepository.getSettingsValue('enforceCredits')) === true) &&
     configured(Config.STRIPE_SECRET_KEY) &&
     configured(Config.STRIPE_PUBLISHABLE_KEY) &&
     (isDevelopment() || configured(Config.STRIPE_WEBHOOK_SECRET));
-  if (!billingEnabled) return res.json({ billingEnabled: false, plans: [] });
+  if (!billingEnabled) return res.json({ billingEnabled: false, plans: [], ...creditPackages });
   const prices = await stripe.prices.list({ active: true, limit: 100 });
   const plans = SUBSCRIPTION_PLANS.filter(plan => !plan.hidden && plan.name === 'Professional').flatMap(plan => {
     const price = prices.data.find(candidate => candidate.id === plan.priceId);
@@ -47,7 +49,7 @@ const personalCatalog = baseApi({ auth: 'jwtOnly' }).get(async (_req, res) => {
       },
     ];
   });
-  return res.json({ billingEnabled, plans });
+  return res.json({ billingEnabled, plans, ...creditPackages });
 });
 
 const handler = baseApi().get(async (req, res) => {
@@ -67,5 +69,7 @@ export const config = {
 
 export default function subscriptionPlans(req: Request, res: Response) {
   // The desktop catalog is first-party-only; the legacy price-list response is unchanged.
-  return req.query.catalog === 'personal' ? personalCatalog(req, res) : handler(req, res);
+  return req.query.catalog === 'personal' || req.query.catalog === 'desktop'
+    ? personalCatalog(req, res)
+    : handler(req, res);
 }

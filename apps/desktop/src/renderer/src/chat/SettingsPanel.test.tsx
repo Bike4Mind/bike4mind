@@ -13,6 +13,7 @@ const signedIn: AuthState = {
   hostedAvailable: true,
   storage: 'available',
   busy: 'idle',
+  user: { id: 'u1' },
 };
 
 describe('the Settings screen', () => {
@@ -64,7 +65,7 @@ describe('the Settings screen', () => {
   it('only takes known page names from the route', () => {
     expect(isSettingsSection('worktrees')).toBe(true);
     expect(isSettingsSection('import')).toBe(true);
-    expect(isSettingsSection('billing')).toBe(true);
+    expect(isSettingsSection('billing')).toBe(false);
     expect(isSettingsSection(undefined)).toBe(false);
   });
 
@@ -74,12 +75,21 @@ describe('the Settings screen', () => {
     }
   });
 
-  it('gives Billing a page with signed-out gating', () => {
-    const billing = markup(<SettingsScreen auth={null} section="billing" onClose={() => {}} />);
-    expect(billing).toContain('data-testid="settings-page-billing"');
-    expect(billing).not.toContain('data-entry="appearance"');
-    expect(page('billing')).toContain('billing-loading');
+  it('keeps Billing outside Settings', () => {
+    expect(html).not.toContain('data-testid="settings-nav-billing-btn"');
+    expect(html).not.toContain('billing-loading');
   });
+
+  it.each([null, { ...signedIn, status: 'signed-out' as const }, { ...signedIn, user: undefined }])(
+    'keeps Settings independent of account billing',
+    auth => {
+      const html = markup(<SettingsScreen auth={auth} onClose={() => {}} />);
+      expect(html).not.toContain('data-testid="settings-nav-billing-btn"');
+      expect(html).not.toContain('data-testid="settings-page-billing"');
+      expect(html).not.toContain('billing-loading');
+      expect(html).toContain('data-testid="settings-page-general"');
+    }
+  );
 
   it('offers the suggested next prompt preference', () => {
     expect(html).toContain('data-testid="settings-suggestions-switch"');

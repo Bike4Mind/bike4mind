@@ -16,18 +16,20 @@ const checkoutUrl = 'https://checkout.stripe.com/c/pay/cs_test_123#details';
 
 function build() {
   const get = vi.fn(async (path: string): Promise<unknown> =>
-    path.includes('catalog=personal') ? { billingEnabled: true, plans: [plan] } : []
+    path.includes('catalog=desktop') ? { billingEnabled: true, plans: [plan] } : []
   );
   const post = vi.fn().mockResolvedValue({ sessionUrl: checkoutUrl });
   const api = { get, post } as unknown as AuthenticatedApiClient;
   let context: BillingContext | null = { api, userId: 'user_1', environmentUrl: 'https://selected.example' };
   const openExternal = vi.fn().mockResolvedValue(undefined);
-  const billing = new BillingService({ getContext: () => context, openExternal });
+  const openCreditPayment = vi.fn().mockResolvedValue(undefined);
+  const billing = new BillingService({ getContext: () => context, openExternal, openCreditPayment });
   return {
     billing,
     get,
     post,
     openExternal,
+    openCreditPayment,
     setContext: (value: BillingContext | null) => {
       context = value;
     },
@@ -38,7 +40,7 @@ describe('BillingService', () => {
   it('reads only public billing fields and non-terminal subscriptions, active first', async () => {
     const { billing, get } = build();
     get.mockImplementation(async path =>
-      path.includes('catalog=personal')
+      path.includes('catalog=desktop')
         ? { billingEnabled: true, plans: [plan], secret: 'discard' }
         : [
             { priceId: 'old', status: 'canceled' },
@@ -79,7 +81,7 @@ describe('BillingService', () => {
     async status => {
       const { billing, get, post } = build();
       get.mockImplementation(async path =>
-        path.includes('catalog=personal') ? { billingEnabled: true, plans: [plan] } : [{ priceId: 'other', status }]
+        path.includes('catalog=desktop') ? { billingEnabled: true, plans: [plan] } : [{ priceId: 'other', status }]
       );
       await expect(billing.subscribePlan('price_pro')).resolves.toMatchObject({ ok: false });
       expect(post).not.toHaveBeenCalled();
@@ -89,7 +91,7 @@ describe('BillingService', () => {
   it('permits checkout after a terminal subscription', async () => {
     const { billing, get } = build();
     get.mockImplementation(async path =>
-      path.includes('catalog=personal')
+      path.includes('catalog=desktop')
         ? { billingEnabled: true, plans: [plan] }
         : [{ priceId: 'old', status: 'canceled' }]
     );
@@ -102,7 +104,7 @@ describe('BillingService', () => {
     { billingEnabled: true, plans: [{ ...plan, priceCents: null }] },
   ])('rejects unavailable catalog %j before checkout', async catalog => {
     const { billing, get, post } = build();
-    get.mockImplementation(async path => (path.includes('catalog=personal') ? catalog : []));
+    get.mockImplementation(async path => (path.includes('catalog=desktop') ? catalog : []));
     await expect(billing.subscribePlan('price_pro')).resolves.toMatchObject({ ok: false });
     expect(post).not.toHaveBeenCalled();
   });
@@ -174,6 +176,70 @@ describe('BillingService', () => {
     const { billing, openExternal } = build();
     openExternal.mockRejectedValue(new Error('no browser'));
     await expect(billing.subscribePlan('price_pro')).resolves.toMatchObject({ ok: false });
+  });
+});
+
+describe('credit checkout', () => {
+  const pack = { id: 'package_25k', credits: 33333, price: 20, description: 'Starter' };
+  function buildCredits() {
+    const result = build();
+    result.get.mockImplementation(async path =>
+      path.includes('catalog=desktop') ? { billingEnabled: true, plans: [plan], creditPackages: [pack] } : []
+    );
+    result.post.mockResolvedValue({ clientSecret: 'pi_123_secret_abc', publishableKey: 'pk_test_123' });
+    return result;
+  }
+
+  it('starts an account-bound pack intent and keeps payment credentials out of IPC', async () => {
+    const { billing, post, openCreditPayment, openExternal } = buildCredits();
+    await expect(billing.purchaseCredits(pack.id)).resolves.toEqual({ ok: true });
+    expect(post).toHaveBeenCalledExactlyOnceWith('/api/stripe/start-payment', {
+      transactionType: 'package',
+      packageId: pack.id,
+    });
+    expect(openCreditPayment).toHaveBeenCalledWith(
+      { clientSecret: 'pi_123_secret_abc', publishableKey: 'pk_test_123', credits: 33333, price: 20 },
+      expect.any(Function)
+    );
+    expect(openExternal).not.toHaveBeenCalled();
+  });
+
+  it('rejects unknown packs and signed-out purchases before creating an intent', async () => {
+    const { billing, post, setContext } = buildCredits();
+    for (const id of ['unknown', '', null, {}])
+      await expect(billing.purchaseCredits(id)).resolves.toMatchObject({ ok: false });
+    setContext(null);
+    await expect(billing.purchaseCredits(pack.id)).resolves.toMatchObject({ ok: false });
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it('discards an intent after account changes and rejects malformed payment credentials', async () => {
+    const { billing, post, openCreditPayment, setContext } = buildCredits();
+    post.mockResolvedValueOnce({ clientSecret: 'invalid', publishableKey: 'sk_test_private' });
+    await expect(billing.purchaseCredits(pack.id)).resolves.toMatchObject({ ok: false });
+    post.mockImplementation(async () => {
+      setContext(null);
+      return { clientSecret: 'pi_123_secret_abc', publishableKey: 'pk_test_123' };
+    });
+    await expect(billing.purchaseCredits(pack.id)).resolves.toMatchObject({ ok: false });
+    expect(openCreditPayment).not.toHaveBeenCalled();
+  });
+
+  it('holds the checkout lock until the payment window closes', async () => {
+    const { billing, openCreditPayment } = buildCredits();
+    let close!: () => void;
+    openCreditPayment.mockImplementation(
+      () =>
+        new Promise<void>(resolve => {
+          close = resolve;
+        })
+    );
+    const purchase = billing.purchaseCredits(pack.id);
+    await vi.waitFor(() => expect(openCreditPayment).toHaveBeenCalledTimes(1));
+    await expect(billing.purchaseCredits(pack.id)).resolves.toMatchObject({ ok: false });
+    await expect(billing.subscribePlan('price_pro')).resolves.toMatchObject({ ok: false });
+    close();
+    await expect(purchase).resolves.toEqual({ ok: true });
   });
 });
 

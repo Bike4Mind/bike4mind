@@ -1,6 +1,7 @@
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type { AccountBilling, SubscribePlanResult } from '@shared/account';
 import { z } from 'zod';
+import type { CreditPayment } from './CreditPaymentWindow';
 
 const planSchema = z.object({
   priceId: z.string().min(1),
@@ -12,7 +13,20 @@ const planSchema = z.object({
   currency: z.literal('usd'),
   features: z.array(z.string()),
 });
-const catalogSchema = z.object({ billingEnabled: z.boolean(), plans: z.array(planSchema) });
+const catalogSchema = z.object({
+  billingEnabled: z.boolean(),
+  plans: z.array(planSchema),
+  creditPackages: z
+    .array(
+      z.object({
+        id: z.string().min(1),
+        price: z.number().finite().positive(),
+        credits: z.number().int().positive(),
+        description: z.string(),
+      })
+    )
+    .optional(),
+});
 const dateSchema = z.string().datetime({ offset: true }).nullable().optional();
 const subscriptionsSchema = z.array(
   z.object({
@@ -33,6 +47,7 @@ export interface BillingContext {
 interface BillingServiceDeps {
   getContext(): BillingContext | null;
   openExternal(url: string): Promise<void>;
+  openCreditPayment(payment: CreditPayment, isCurrent: () => boolean): Promise<void>;
 }
 
 export class BillingService {
@@ -87,12 +102,48 @@ export class BillingService {
     }
   }
 
+  async purchaseCredits(packageId: unknown): Promise<SubscribePlanResult> {
+    if (typeof packageId !== 'string' || !packageId || packageId.length > 255)
+      return { ok: false, error: 'Choose an available credit pack.' };
+    if (this.checkoutInFlight) return { ok: false, error: 'Checkout is already open.' };
+    const context = this.deps.getContext();
+    if (!context) return { ok: false, error: 'Sign in to buy credits.' };
+    this.checkoutInFlight = true;
+    try {
+      const billing = await this.read(context);
+      this.assertCurrent(context);
+      const pack = billing.creditPackages?.find(pack => pack.id === packageId);
+      if (!billing.billingEnabled || !pack) return { ok: false, error: 'This credit pack is not available.' };
+      const response = await context.api.post<unknown>('/api/stripe/start-payment', {
+        transactionType: 'package',
+        packageId,
+      });
+      this.assertCurrent(context);
+      const payment = z
+        .object({
+          clientSecret: z.string().regex(/^pi_[A-Za-z0-9]+_secret_[A-Za-z0-9]+$/),
+          publishableKey: z.string().regex(/^pk_(test|live)_[A-Za-z0-9]+$/),
+        })
+        .parse(response);
+      await this.deps.openCreditPayment({ ...payment, credits: pack.credits, price: pack.price }, () => {
+        const current = this.deps.getContext();
+        return !!current && sameContext(current, context);
+      });
+      this.assertCurrent(context);
+      return { ok: true };
+    } catch {
+      return { ok: false, error: 'Could not complete credit checkout. Refresh your balance before trying again.' };
+    } finally {
+      this.checkoutInFlight = false;
+    }
+  }
+
   private async read(context: BillingContext): Promise<AccountBilling> {
     const [catalog, rows] = await Promise.all([
-      context.api.get<unknown>('/api/stripe/subscription-plans?catalog=personal'),
+      context.api.get<unknown>('/api/stripe/subscription-plans?catalog=desktop'),
       context.api.get<unknown>('/api/subscriptions/own'),
     ]);
-    const { billingEnabled, plans } = catalogSchema.parse(catalog);
+    const { billingEnabled, plans, creditPackages } = catalogSchema.parse(catalog);
     const subscriptions = subscriptionsSchema
       .parse(rows)
       .filter(row => row.status !== 'canceled' && row.status !== 'incomplete_expired')
@@ -104,7 +155,7 @@ export class BillingService {
         periodEndsAt: row.periodEndsAt ?? null,
         canceledAt: row.canceledAt ?? null,
       }));
-    return { billingEnabled, plans, subscriptions };
+    return { billingEnabled, plans, subscriptions, ...(creditPackages && { creditPackages }) };
   }
 
   private assertCurrent(context: BillingContext): void {

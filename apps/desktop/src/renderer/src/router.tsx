@@ -3,6 +3,7 @@ import { isSettingsSection, type SettingsSection } from './chat/SettingsPanel';
 import { DevLogsWindow } from './devlog/DevLogsWindow';
 import { Home } from './routes/Home';
 import { Profile } from './routes/Profile';
+import { Billing } from './routes/Billing';
 import { Settings } from './routes/Settings';
 
 const rootRoute = createRootRoute();
@@ -17,6 +18,12 @@ const profileRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/profile',
   component: Profile,
+});
+
+const billingRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/billing',
+  component: Billing,
 });
 
 const settingsRoute = createRoute({
@@ -43,7 +50,7 @@ const devLogsRoute = createRoute({
 // API to push against. Hash history is the one mode that behaves the same there as it
 // does against the dev server.
 export const router = createRouter({
-  routeTree: rootRoute.addChildren([indexRoute, profileRoute, settingsRoute, devLogsRoute]),
+  routeTree: rootRoute.addChildren([indexRoute, profileRoute, billingRoute, settingsRoute, devLogsRoute]),
   history: createHashHistory(),
 });
 

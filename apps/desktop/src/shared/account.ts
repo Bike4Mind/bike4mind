@@ -71,6 +71,7 @@ export interface AccountBillingSubscription {
 export interface AccountBilling {
   billingEnabled: boolean;
   plans: AccountBillingPlan[];
+  creditPackages?: { id: string; price: number; credits: number; description: string }[];
   /** Non-terminal subscriptions, active first. Any row blocks a new checkout. */
   subscriptions: AccountBillingSubscription[];
   error?: string;

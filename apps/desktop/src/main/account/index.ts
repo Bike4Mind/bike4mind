@@ -4,6 +4,7 @@ import type { AuthService } from '../auth';
 import { createMainLogger } from '../logger';
 import { AccountService } from './AccountService';
 import { BillingService } from './BillingService';
+import { openCreditPayment } from './CreditPaymentWindow';
 
 const VERBOSE = process.env.B4M_DESKTOP_VERBOSE === '1';
 
@@ -28,9 +29,13 @@ export function registerAccount(auth: AuthService): AccountService {
       return api && state.user ? { api, environmentUrl: state.environment.url, userId: state.user.id } : null;
     },
     openExternal: url => shell.openExternal(url),
+    openCreditPayment,
   });
   ipcMain.handle(IPC_CHANNELS.accountGetBilling, () => billing.billing());
   ipcMain.handle(IPC_CHANNELS.accountSubscribePlan, (_event, priceId: unknown) => billing.subscribePlan(priceId));
+  ipcMain.handle(IPC_CHANNELS.accountPurchaseCredits, (_event, packageId: unknown) =>
+    billing.purchaseCredits(packageId)
+  );
 
   return service;
 }

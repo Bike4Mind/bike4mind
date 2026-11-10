@@ -161,6 +161,7 @@ export const IPC_CHANNELS = {
   accountGetProfile: 'account:get-profile',
   accountGetBilling: 'account:get-billing',
   accountSubscribePlan: 'account:subscribe-plan',
+  accountPurchaseCredits: 'account:purchase-credits',
   usageGetHistory: 'usage:get-history',
   fleetGetState: 'fleet:get-state',
   fleetRefresh: 'fleet:refresh',
@@ -757,6 +758,8 @@ export interface DesktopApi {
     getProfile(): Promise<AccountProfile>;
     getBilling(): Promise<AccountBilling>;
     subscribePlan(priceId: string): Promise<SubscribePlanResult>;
+    /** Resolves when the payment window closes, not as proof of payment. */
+    purchaseCredits(packageId: string): Promise<SubscribePlanResult>;
   };
   usage: {
     /**

@@ -10,7 +10,7 @@ import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import { useNavigate } from '@tanstack/react-router';
 import type { AuthState } from '@shared/auth';
-import { ChevronIcon, GearIcon, SignOutIcon, UserIcon } from '../chat/icons';
+import { BillingIcon, ChevronIcon, GearIcon, SignOutIcon, UserIcon } from '../chat/icons';
 import { NavItem } from '../chat/SessionList';
 import { useSettingsAttention } from '../chat/settingsAttention';
 import { RuntimeInfo } from '../components/RuntimeInfo';
@@ -122,6 +122,7 @@ export function SignedInPanel({ state, status }: { state: AuthState; status?: Re
           state={state}
           attention={settingsAttention}
           onOpenSettings={() => void navigate({ to: '/settings' })}
+          onBilling={() => void navigate({ to: '/billing' })}
           onProfile={() => void navigate({ to: '/profile' })}
         />
       )}
@@ -140,11 +141,13 @@ export function AccountMenu({
   state,
   attention,
   onOpenSettings,
+  onBilling,
   onProfile,
 }: {
   state: AuthState;
   attention?: string;
   onOpenSettings?: () => void;
+  onBilling?: () => void;
   onProfile: () => void;
 }) {
   const user = state.user;
@@ -170,6 +173,9 @@ export function AccountMenu({
           blocks reads as a stack of commands. Same component the nav above the list uses,
           so the sidebar has one row shape from top to bottom. */}
       <NavItem icon={<UserIcon />} label="Profile" onClick={onProfile} testId="account-profile-btn" />
+      {state.status === 'signed-in' && user && onBilling && (
+        <NavItem icon={<BillingIcon />} label="Billing" onClick={onBilling} testId="account-billing-btn" />
+      )}
 
       {/* The only way into Settings. It is not in the nav list above: a second config row
           under Customize read as the same thing twice, and the server used to live in this

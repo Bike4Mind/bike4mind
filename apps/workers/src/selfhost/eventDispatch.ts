@@ -8,6 +8,8 @@ import { handler as sessionTaggingHandler } from '@workers/events/sessionTagging
 import { handler as notebookCurationHandler } from '@workers/events/notebookCuration';
 import { requestRiskEvidenceRefresh } from '@bike4mind/server-utils/auth/riskEvidence';
 import { handler as sendPushHandler } from '@workers/events/sendPush';
+import { handler as invoicePaymentSucceededHandler } from '@workers/events/stripe/invoicePaymentSucceeded';
+import { handler as customerSubscriptionUpdatedHandler } from '@workers/events/stripe/customerSubscriptionUpdated';
 
 /**
  * Self-host event routing.
@@ -45,6 +47,8 @@ const HANDLERS: Record<string, EventHandler> = {
   'notebook.curation.start': notebookCurationHandler,
   // No-ops unless all four APNS_* values are set (see readApnsCredentials in server-utils pushDelivery).
   'notification.push': sendPushHandler,
+  'stripe.invoice.payment_succeeded': invoicePaymentSucceededHandler,
+  'stripe.cus.sub.updated': customerSubscriptionUpdatedHandler,
 };
 
 export async function dispatchSelfHostEvent(

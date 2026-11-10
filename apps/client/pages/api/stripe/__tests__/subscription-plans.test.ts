@@ -34,6 +34,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({ stripe: { prices: { list: mocks.list } } }));
 vi.mock('@bike4mind/database', () => ({ adminSettingsRepository: { getSettingsValue: mocks.setting } }));
 vi.mock('@bike4mind/common', () => ({ isEnforceCreditsLocked: mocks.locked }));
+vi.mock('@client/lib/credits/constants', () => ({
+  CREDIT_PACKAGES: { starter: { id: 'starter', price: 20, credits: 33333, description: 'Starter' } },
+}));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: mocks.config, isDevelopment: mocks.development }));
 vi.mock('@bike4mind/server-utils/lib/userSubscriptions/constants', () => ({ SUBSCRIPTION_PLANS: mocks.plans }));
 
@@ -75,6 +78,14 @@ describe('subscription plan catalog', () => {
     expect(mocks.authModes).toContainEqual({ auth: 'jwtOnly' });
     expect(await request(false)).toEqual([price]);
     expect(mocks.setting).not.toHaveBeenCalled();
+  });
+
+  it('includes configured credit packages in the desktop catalog', async () => {
+    const { req, res } = createMocks({ method: 'GET', query: { catalog: 'desktop' } });
+    await invoke(req, res);
+    expect(res._getJSONData().creditPackages).toEqual([
+      { id: 'starter', price: 20, credits: 33333, description: 'Starter' },
+    ]);
   });
 
   it('joins only configured public personal plan metadata to live Stripe prices', async () => {
