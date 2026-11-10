@@ -60,7 +60,10 @@ const config: Config = {
     [
       '@docusaurus/plugin-client-redirects',
       {
-        redirects: [{ from: '/admin/subscribers', to: '/admin/waitlist' }],
+        redirects: [
+          { from: '/admin/subscribers', to: '/admin/waitlist' },
+          { from: '/admin/llm-dashboard', to: '/admin/models' },
+        ],
       },
     ],
   ],

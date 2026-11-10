@@ -96,6 +96,6 @@ When no tools match the current filters, the table shows "No tools match these f
 
 ## Related Articles
 
-- [LLM Dashboard](./llm-dashboard.md)
+- [Models](./models.md)
 - [Agent Operations](./agent-operations.md)
 - [System Prompts](./system-prompts.md)

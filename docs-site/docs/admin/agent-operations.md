@@ -114,5 +114,5 @@ After repair, the page reloads its data to display the corrections. The repair r
 ## Related Articles
 
 - [System Prompts](./system-prompts.md)
-- [LLM Dashboard](./llm-dashboard.md)
+- [Models](./models.md)
 - [Admin Settings](./admin-settings.md)
