@@ -1,6 +1,7 @@
 import {
   CATALOG_SCHEMA_VERSION,
   ModelBackend,
+  ModelCatalogRowInput,
   resolveApiSurface,
   type FieldGroup,
   type IModelCatalogRow,
@@ -2633,6 +2634,31 @@ describe('apiSurface inheritance', () => {
     expect(result.rows[0].patch).not.toHaveProperty('toolSearch');
   });
 
+  it.each([true, false])('skips refusal-only siblings with usable older sibling=%s', hasOlderSibling => {
+    const refusalOnly = heldRow(claude('claude-fable-5-2'));
+    const result = anthropicRun(
+      [
+        ...(hasOlderSibling ? [heldRow(claude('claude-fable-5-1'))] : []),
+        refusalOnly,
+        operatorRow({ id: refusalOnly.modelId, refusalFallback: true }, ['apiSurface']),
+      ],
+      [{ modelId: 'claude-fable-5-3', patch: claude('claude-fable-5-3', adaptive) }]
+    );
+
+    const [row] = result.rows;
+    expect(ModelCatalogRowInput.safeParse(row).success).toBe(true);
+    if (hasOlderSibling) {
+      expect(row.contributors).toContainEqual({
+        group: 'apiSurface',
+        source: `${SIBLING_CONTRIBUTOR_PREFIX}claude-fable-5-1`,
+      });
+      expect(row.patch).toMatchObject({ toolSearch: true });
+    } else {
+      expect(row.ownedGroups).not.toContain('apiSurface');
+    }
+    expect(row.patch).not.toHaveProperty('refusalFallback');
+  });
+
   it('writes the copy once: a later run carries it and its contributor unchanged', () => {
     const first = anthropicRun(siblings);
     const held = [
@@ -2772,5 +2798,58 @@ describe('apiSurface inheritance', () => {
     });
 
     expect(result.rows).toEqual([]);
+  });
+
+  it.each([true, false])('keeps a source toolSearch=%s while releasing an inherited copy', toolSearch => {
+    const id = 'claude-mythos-5-1';
+    const held = heldRow(claude(id, { forcedToolChoice: true, toolSearch: !toolSearch }));
+    const result = anthropicRun([held], [{ modelId: id, patch: claude(id, { toolSearch }) }], {
+      priorDiscoveryGroups: new Map([[id, held.ownedGroups as FieldGroup[]]]),
+      priorContributors: new Map([[id, [{ group: 'apiSurface', source: `${SIBLING_CONTRIBUTOR_PREFIX}claude-x` }]]]),
+    });
+
+    const [row] = result.rows;
+    expect(row.ownedGroups).toContain('apiSurface');
+    expect(row.patch).toMatchObject({ toolSearch });
+    expect(row.patch).not.toHaveProperty('forcedToolChoice');
+    expect(row.contributors).toContainEqual({ group: 'apiSurface', source: 'anthropic' });
+    expect(servedSurface(persisted(result.rows), id).toolSearch).toBe(toolSearch);
+  });
+
+  it('records a source claim equal to the inherited value so a later build does not release it', () => {
+    const id = 'claude-fable-5-2';
+    const held = heldRow(claude(id, { toolSearch: false }));
+    const result = anthropicRun([held], [{ modelId: id, patch: claude(id, { toolSearch: false }) }], {
+      priorDiscoveryGroups: new Map([[id, held.ownedGroups as FieldGroup[]]]),
+      priorContributors: new Map([[id, [{ group: 'apiSurface', source: `${SIBLING_CONTRIBUTOR_PREFIX}claude-x` }]]]),
+    });
+
+    const [row] = result.rows;
+    expect(row).toBeDefined();
+    expect(row.contributors).toContainEqual({ group: 'apiSurface', source: 'anthropic' });
+    expect(result.diff[0].changedKeys).toEqual(['contributors']);
+
+    const later = anthropicRun(persisted(result.rows), [{ modelId: id, patch: claude(id) }], {
+      staticModelIds: new Set([id]),
+      priorDiscoveryGroups: new Map([[id, row.ownedGroups as FieldGroup[]]]),
+      priorContributors: new Map([[id, row.contributors ?? []]]),
+    });
+    expect(later.rows).toEqual([]);
+  });
+
+  it('releases other inherited flags when a source starts stating its own partial surface', () => {
+    const id = 'claude-fable-5-2';
+    const held = heldRow(claude(id, { toolSearch: false, toolChanges: true }));
+    const result = anthropicRun([held], [{ modelId: id, patch: claude(id, { toolSearch: false }) }], {
+      priorDiscoveryGroups: new Map([[id, held.ownedGroups as FieldGroup[]]]),
+      priorContributors: new Map([[id, [{ group: 'apiSurface', source: `${SIBLING_CONTRIBUTOR_PREFIX}claude-x` }]]]),
+    });
+
+    const [row] = result.rows;
+    expect(row.patch).toMatchObject({ toolSearch: false });
+    expect(row.patch).not.toHaveProperty('toolChanges');
+    expect(row.contributors).toContainEqual({ group: 'apiSurface', source: 'anthropic' });
+    expect(result.diff[0].changedKeys).toEqual(['contributors', 'toolChanges']);
+    expect(servedSurface(persisted(result.rows), id)).toMatchObject({ toolSearch: false, toolChanges: false });
   });
 });

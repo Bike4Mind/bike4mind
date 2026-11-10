@@ -747,11 +747,12 @@ function planOne(
 
   const priorContributors = input.priorContributors?.get(candidate.modelId);
   const credited = new Map<FieldGroup, string>();
-  // A copy whose model the build now describes is released: the row stops claiming the group, and the seed
-  // tables or the default answer instead.
+  const sourceStatesApiSurface = API_SURFACE_KEYS.some(key => contributed.has(key));
+  // Group provenance cannot distinguish carried sibling flags from fresh source claims, so release the
+  // carried flags when a source starts speaking for the model. Build-described models release them too.
   const releasedKeys =
-    inheritedFromSibling(priorContributors) && describedByBuild(record.id, input)
-      ? API_SURFACE_KEYS.filter(key => record[key] !== undefined)
+    inheritedFromSibling(priorContributors) && (describedByBuild(record.id, input) || sourceStatesApiSurface)
+      ? API_SURFACE_KEYS.filter(key => record[key] !== undefined && !contributed.has(key))
       : [];
   if (releasedKeys.length > 0) {
     record = omit(record, releasedKeys) as ModelRecord;
@@ -772,16 +773,15 @@ function planOne(
   );
   if (owned.length === 0) return { unchanged: true };
   const contributors = contributorsFor(candidate, contributed, owned, priorContributors, derivedGroups, credited);
-  const changedKeys = [...changedWithinGroups(base, record, owned), ...releasedKeys].sort();
-  // Availability provenance changes what the read path serves: a provider's disable stands,
-  // while discovery's own verdict yields to curation. A clearance followed by the same promotion
-  // refusal can leave every record field unchanged, so persist the changed credit as well.
+  const changedKeys = [...new Set([...changedWithinGroups(base, record, owned), ...releasedKeys])].sort();
+  // Provenance affects curation of disables and release of sibling copies, even if values stay equal.
   const availabilitySource = (credits: readonly ICatalogContributor[] | undefined) =>
     credits?.find(entry => entry.group === 'availability')?.source;
+  const sourceReplacedSibling = inheritedFromSibling(priorContributors) && sourceStatesApiSurface;
   if (
     existing &&
-    record.autoDisabled === true &&
-    availabilitySource(contributors) !== availabilitySource(priorContributors)
+    (sourceReplacedSibling ||
+      (record.autoDisabled === true && availabilitySource(contributors) !== availabilitySource(priorContributors)))
   ) {
     changedKeys.push('contributors');
     changedKeys.sort();
@@ -1022,6 +1022,7 @@ function inheritedApiSurface(
         ? seedApiSurface({ id, backend: sibling.backend as ModelRecord['backend'], adapterFamily: family })
         : undefined;
     const values = { ...seeded, ...statedApiSurface(sibling) };
+    delete values.refusalFallback;
     if (Object.keys(values).length === 0) continue;
     const releaseDate = typeof sibling.releaseDate === 'string' ? sibling.releaseDate : undefined;
     const contender = { id, releaseDate, values };
