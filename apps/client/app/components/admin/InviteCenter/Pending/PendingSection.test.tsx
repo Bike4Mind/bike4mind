@@ -270,7 +270,7 @@ describe('PendingSection', () => {
     expect(screen.queryByTestId('pending-bulk-release-btn')).not.toBeInTheDocument();
   });
 
-  it('shows Release to a full admin', () => {
+  it('shows Release to a viewer who can release', () => {
     render(<PendingSection />, { wrapper: Wrapper });
     selectFirstRow();
     expect(screen.getByTestId('pending-bulk-release-btn')).toBeInTheDocument();

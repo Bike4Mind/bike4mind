@@ -1,9 +1,8 @@
 import { z } from 'zod';
-import { ApiKeyScope } from '@bike4mind/common';
 import { creditTransactionRepository, userRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
-import { BadRequestError, NotFoundError, ensureAdmin } from '@bike4mind/server-utils/utils/errors';
-import { baseApi } from '@server/middlewares/baseApi';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { heldGrantBatches } from '@bike4mind/server-utils/credits/heldSignupGrantAdapters';
@@ -16,11 +15,10 @@ import {
 
 const bodySchema = z.object({ batchId: z.string().regex(/^[a-f0-9]{24}$/i) });
 
-const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:adjust' } })
   .use(csrfProtection())
   .post(
     asyncHandler(async (req, res) => {
-      ensureAdmin(req.user?.isAdmin);
       const parsed = bodySchema.safeParse(req.body);
       if (!parsed.success) throw new BadRequestError('Expected a batchId');
       const batch = await heldGrantBatches.findBatch(parsed.data.batchId);

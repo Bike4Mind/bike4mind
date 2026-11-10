@@ -17,8 +17,8 @@ export type SignupGrantPendingInput = {
     Partial<Pick<IUserDocument, 'grantPackageId' | 'pendingCreditGrant' | 'signupGrantHeldAt'>>;
   schedule: { dripCap: number; dailyCredits: number };
   rewards: RewardTotals;
-  /** Release-remaining is the one budget-exempt payout, so it stays with full admins. */
-  viewerIsAdmin: boolean;
+  /** Release-remaining is the one budget-exempt payout, so it needs `credits:adjust`, not just the read. */
+  viewerCanRelease: boolean;
 };
 
 const iso = (value: Date | string | null | undefined): string | null => {
@@ -41,7 +41,7 @@ export function buildSignupGrantPending({
   user,
   schedule,
   rewards,
-  viewerIsAdmin,
+  viewerCanRelease,
 }: SignupGrantPendingInput): AdminSignupGrantPending {
   const grant = user.signupGrant ?? null;
   const classify = (action: userService.SignupGrantAdminAction) =>
@@ -87,7 +87,7 @@ export function buildSignupGrantPending({
     lastActivityCreditDay: grant?.lastDripDay ?? null,
     actions: {
       releaseHeld: actionState(classify('release_held'), true),
-      releaseRemaining: actionState(classify('release_remaining'), viewerIsAdmin),
+      releaseRemaining: actionState(classify('release_remaining'), viewerCanRelease),
       block: actionState(classify('block'), true),
       unblock: actionState(classify('unblock'), true),
     },

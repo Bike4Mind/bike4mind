@@ -210,9 +210,9 @@ describe('GET /api/admin/signup-grants/pending', () => {
     });
   });
 
-  it('serves a delegated credits admin but does not offer bulk release', async () => {
+  it('serves a delegated credits admin and offers bulk release', async () => {
     const result = await call({}, { id: 'user-1', adminPermissions: ['credits:adjust'] });
     expect(result.data.length).toBeGreaterThan(0);
-    expect(result.viewer).toEqual({ canRelease: false });
+    expect(result.viewer).toEqual({ canRelease: true });
   });
 });

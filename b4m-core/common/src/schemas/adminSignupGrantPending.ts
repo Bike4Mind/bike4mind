@@ -100,7 +100,7 @@ export type AdminSignupGrantPendingRow = z.infer<typeof adminSignupGrantPendingR
 export const adminSignupGrantPendingListSchema = z.object({
   data: z.array(adminSignupGrantPendingRowSchema),
   nextCursor: z.string().nullable(),
-  /** Bulk release is full-admin only; delegated credit admins can list and block. */
+  /** Whether the viewer holds `credits:adjust`, which bulk release needs on top of listing. */
   viewer: z.object({ canRelease: z.boolean() }),
 });
 export type AdminSignupGrantPendingList = z.infer<typeof adminSignupGrantPendingListSchema>;

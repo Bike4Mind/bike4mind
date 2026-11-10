@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   adminSignupGrantPendingListSchema,
   BadRequestError,
+  hasAdminPermission,
   resolveSignupGrantSchedule,
   type AdminSignupGrantPendingRow,
 } from '@bike4mind/common';
@@ -99,7 +100,7 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { GET: 'credits:ad
     return respond(res, adminSignupGrantPendingListSchema, {
       data,
       nextCursor: page.next ? encodeCursor(sort, page.next) : null,
-      viewer: { canRelease: req.user?.isAdmin === true },
+      viewer: { canRelease: hasAdminPermission(req.user, 'credits:adjust') },
     });
   })
 );

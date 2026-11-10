@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ApiKeyScope } from '@bike4mind/common';
 
 const { handlers, baseOptions, release, preview } = vi.hoisted(() => ({
   handlers: {} as Record<string, (req: unknown, res: unknown) => Promise<void>>,
@@ -10,11 +9,15 @@ const { handlers, baseOptions, release, preview } = vi.hoisted(() => ({
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: () => 'csrf' }));
+const uses = vi.hoisted(() => [] as Array<(req: unknown, res: unknown, next: () => void) => void>);
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (options: unknown) => {
     baseOptions(options);
     const chain = {
-      use: () => chain,
+      use: (fn: unknown) => {
+        if (typeof fn === 'function') uses.push(fn as (typeof uses)[number]);
+        return chain;
+      },
       get: (fn: typeof handlers.get) => {
         handlers.get = fn;
         return chain;
@@ -52,8 +55,11 @@ const id = (n: number) => String(n).padStart(24, '0');
 const run = async (body: unknown, isAdmin = true, user: Record<string, unknown> = {}) => {
   const { req, res } = createMocks({ method: 'POST', body });
   Object.assign(req, { user: { id: 'admin-1', isAdmin, ...user }, logger: { error: vi.fn() } });
-  await handlers
-    .post(req, res)
+  await Promise.resolve()
+    .then(() => {
+      for (const middleware of uses) middleware(req, res, () => undefined);
+      return handlers.post(req, res);
+    })
     .catch((error: unknown) => (res.statusCode = (error as { statusCode?: number }).statusCode ?? 500));
   return res;
 };
@@ -66,11 +72,17 @@ beforeEach(() => {
 
 describe('POST /api/admin/held-signup-grants/release', () => {
   it('guards with the admin scope', () => {
-    expect(baseOptions).toHaveBeenCalledWith({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] });
+    expect(baseOptions).toHaveBeenCalledWith({ auth: 'jwtOnly', allowedMethods: ['POST'] });
   });
   it('rejects non-admins', async () => {
     expect((await run({ userIds: [id(1)] }, false)).statusCode).toBe(403);
     expect(release).not.toHaveBeenCalled();
+  });
+  it('admits a delegate holding credits:adjust and refuses one without it', async () => {
+    expect((await run({ userIds: [id(1)] }, false, { adminPermissions: ['support:read'] })).statusCode).toBe(403);
+    expect(release).not.toHaveBeenCalled();
+    expect((await run({ userIds: [id(1)] }, false, { adminPermissions: ['credits:adjust'] })).statusCode).toBe(200);
+    expect(release).toHaveBeenCalledOnce();
   });
   it.each([
     ['empty ids', { userIds: [] }],

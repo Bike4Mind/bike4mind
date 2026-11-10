@@ -17,7 +17,7 @@ const grant = (overrides: Partial<SignupGrant> = {}): SignupGrant => ({
 });
 
 const build = (user: SignupGrantPendingInput['user'], extra: Partial<SignupGrantPendingInput> = {}) =>
-  buildSignupGrantPending({ user, schedule: SCHEDULE, rewards: NO_REWARDS, viewerIsAdmin: true, ...extra });
+  buildSignupGrantPending({ user, schedule: SCHEDULE, rewards: NO_REWARDS, viewerCanRelease: true, ...extra });
 
 describe('buildSignupGrantPending', () => {
   it('reports the schedule and remaining-to-drip of a granted account', () => {
@@ -111,7 +111,7 @@ describe('buildSignupGrantPending', () => {
   });
 
   it('withholds release-remaining from a delegated admin but leaves the other actions permitted', () => {
-    const pending = build({ signupGrant: grant(), tags: [] }, { viewerIsAdmin: false });
+    const pending = build({ signupGrant: grant(), tags: [] }, { viewerCanRelease: false });
     expect(pending.actions.releaseRemaining.permitted).toBe(false);
     expect(pending.actions.block.permitted).toBe(true);
     expect(pending.actions.releaseHeld.permitted).toBe(true);
