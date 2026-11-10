@@ -9,7 +9,13 @@ import {
 } from '@bike4mind/common';
 import { validateSkillName } from '@server/utils/skillValidation';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
-import { canSeeListing, findListing, memberOrgIdsFor, skillContentHash, type MarketActor } from '@bike4mind/server-utils/skillMarket/market';
+import {
+  canSeeListing,
+  findListing,
+  memberOrgIdsFor,
+  skillContentHash,
+  type MarketActor,
+} from '@bike4mind/server-utils/skillMarket/market';
 
 export type ImportListingInput = {
   token?: string;
@@ -76,6 +82,7 @@ export async function importListing(user: MarketActor, listingId: string, body: 
     argumentHint: snap.argumentHint ?? '',
     allowedTools: snap.allowedTools ?? [],
     claudeCodeAllowedTools: snap.claudeCodeAllowedTools ?? [],
+    claudeCodeModel: snap.claudeCodeModel ?? '',
     disableModelInvocation: Boolean(snap.disableModelInvocation),
     files: snap.files ?? [],
     importedFrom,

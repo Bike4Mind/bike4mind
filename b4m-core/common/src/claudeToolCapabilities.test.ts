@@ -52,6 +52,7 @@ const EXPECTED: Record<string, [boolean, boolean, boolean]> = {
   [ChatModels.CLAUDE_5_OPUS]: [true, true, false],
   [ChatModels.CLAUDE_5_5_OPUS]: [true, true, false],
   [ChatModels.CLAUDE_5_5_HAIKU]: [true, true, false],
+  [ChatModels.CLAUDE_5_5_SONNET]: [true, true, false],
 };
 
 const nativeBackend = (id: string) => (id.includes('anthropic.') ? ModelBackend.Bedrock : ModelBackend.Anthropic);

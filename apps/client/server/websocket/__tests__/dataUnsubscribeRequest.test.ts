@@ -46,11 +46,11 @@ vi.mock('@bike4mind/database', () => ({
   QuerySubscription: { updateOne: (...args: unknown[]) => mockUpdateOne(...args) },
 }));
 
-vi.mock('@bike4mind/server-utils/utils/errors', () => ({
-  ForbiddenError: class ForbiddenError extends Error {},
-  NotFoundError: class NotFoundError extends Error {},
-  UnauthorizedError: class UnauthorizedError extends Error {},
-}));
+// The real classes: the account-state gate throws @bike4mind/common's errors, so a stand-in class would never match.
+vi.mock('@bike4mind/server-utils/utils/errors', async () => {
+  const { ForbiddenError, NotFoundError, UnauthorizedError } = await import('@bike4mind/common');
+  return { ForbiddenError, NotFoundError, UnauthorizedError };
+});
 
 vi.mock('sst', () => ({
   Resource: new Proxy({} as Record<string, unknown>, {
@@ -61,7 +61,7 @@ vi.mock('sst', () => ({
 }));
 
 import { func } from '../dataUnsubscribeRequest';
-import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 const baseEvent = (accessToken = 'token-123') => ({
   requestContext: { connectionId: 'conn-1' },
@@ -141,7 +141,7 @@ describe('dataUnsubscribeRequest WS handler - account state', () => {
   });
 
   it.each([
-    ['a banned account', { isBanned: true }, UnauthorizedError],
+    ['a banned account', { isBanned: true }, ForbiddenError],
     ['a dispute-pending account', { disputePending: true }, ForbiddenError],
     ['a moderation-suspended account', { moderation: { status: 'suspended' } }, ForbiddenError],
   ])('refuses an unsubscribe from %s without touching the subscription', async (_label, state, errorClass) => {

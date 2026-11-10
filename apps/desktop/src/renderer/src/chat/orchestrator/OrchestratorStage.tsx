@@ -125,6 +125,7 @@ export function OrchestratorStage({
   const personas = useMemo(() => assignPersonas(agents), [personaKey]);
   const selected = agents.find(agent => agent.id === selectedId) ?? null;
   const hasSelection = selected !== null;
+  const settled = ambient?.settled === true;
 
   useEffect(() => {
     if (!focusAgent) return;
@@ -133,7 +134,7 @@ export function OrchestratorStage({
   }, [focusAgent]);
 
   useEffect(() => {
-    if (!hasSelection) return;
+    if (!hasSelection || settled) return;
     // On document, which hears a key before window does, and claimed: the drawer is the topmost
     // thing Escape can close, so the docked conversation beside it (ThreadDock) stays open.
     const onKeyDown = (event: KeyboardEvent) => {
@@ -143,7 +144,7 @@ export function OrchestratorStage({
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [hasSelection]);
+  }, [hasSelection, settled]);
 
   const rosterSummary = summarizeRoster(agents);
   const { total, counts } = rosterSummary;
@@ -202,7 +203,6 @@ export function OrchestratorStage({
     settled: ambient?.settled === true,
   };
 
-  const settled = ambient?.settled === true;
   // The parent first: it is the one whose answer everything else is waiting behind.
   const askingAgent = parentNeedsYou ? undefined : firstNeedsYou;
   const needsYouCard = settled && (parentNeedsYou || askingAgent) && (
@@ -307,13 +307,17 @@ export function OrchestratorStage({
           {needsYouCard}
         </Box>
         {selected && (
-          <AgentPeekDrawer
-            key={selected.id}
-            agent={selected}
-            persona={personas.get(selected.id)}
-            onClose={() => setSelectedId(null)}
-            actions={actions}
-          />
+          // Settles out with the rest of the chrome but stays mounted, selection and all, so waking
+          // brings it back where it was (ambient.ts gives focus back to it too).
+          <Box data-testid="orchestrator-peek-drawer-region" sx={{ display: settled ? 'none' : 'contents' }}>
+            <AgentPeekDrawer
+              key={selected.id}
+              agent={selected}
+              persona={personas.get(selected.id)}
+              onClose={() => setSelectedId(null)}
+              actions={actions}
+            />
+          </Box>
         )}
       </Box>
     </Box>

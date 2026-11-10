@@ -126,6 +126,16 @@ describe('/api/skills POST — scope creation', () => {
     expect(mockCreate.mock.calls[0][0].claudeCodeAllowedTools).toEqual(['Bash(git:*)', 'Read', 'Grep']);
   });
 
+  it('persists a trimmed Claude Code model and rejects an unusable one', async () => {
+    const ok = makeReqRes({ ...baseBody, claudeCodeModel: ' haiku ' });
+    await handler(ok.req, ok.res);
+    expect(mockCreate.mock.calls[0][0].claudeCodeModel).toBe('haiku');
+    mockCreate.mockClear();
+    const bad = makeReqRes({ ...baseBody, claudeCodeModel: 'two words' });
+    await expect(handler(bad.req, bad.res)).rejects.toBeTruthy();
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
   it('rejects Claude Code allowed-tools that are not a string list', async () => {
     const { req, res } = makeReqRes({ ...baseBody, claudeCodeAllowedTools: 'Bash' });
     await expect(handler(req, res)).rejects.toBeTruthy();

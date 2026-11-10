@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useNavigate, useSearch, Link } from '@tanstack/react-router';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
   Avatar,
@@ -22,6 +23,7 @@ import HighlightOffRounded from '@mui/icons-material/HighlightOffRounded';
 import MailOutlineRounded from '@mui/icons-material/MailOutlineRounded';
 import WarningAmberRounded from '@mui/icons-material/WarningAmberRounded';
 import { api } from '@client/app/contexts/ApiContext';
+import { syncCreditBalance } from '@client/app/components/CreditBalanceSyncListener';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { useUserLogout } from '@client/app/hooks/data/user';
@@ -466,6 +468,7 @@ const BedrockNewsClaimPage = () => {
   const logoUrl = useGetLogo();
   const logout = useUserLogout();
   const appUrl = useGetSettingsValue('BedrockNewsAppUrl');
+  const queryClient = useQueryClient();
 
   const [view, setView] = useState<View>(
     ticket ? { kind: 'loading' } : { kind: 'claim', claim: { state: 'not-found' } }
@@ -501,6 +504,8 @@ const BedrockNewsClaimPage = () => {
     setConfirming(true);
     const claim = await postClaim(REDEEM_URL, ticket);
     setView({ kind: 'claim', claim });
+    // "Open Bike4Mind" is an in-app link, so the app would keep the balance cached from before the credits landed.
+    if (claim.state === 'done') void syncCreditBalance(queryClient);
     confirmingRef.current = false;
     setConfirming(false);
   };

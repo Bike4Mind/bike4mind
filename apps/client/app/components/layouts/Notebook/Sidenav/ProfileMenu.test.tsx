@@ -259,7 +259,7 @@ describe('ProfileMenu - Admin entry', () => {
   it.each([
     ['an admin', { isAdmin: true }, true],
     ['a delegate with a tab to open', { isAdmin: false, adminPermissions: ['settings:manage'] }, true],
-    ['a delegate whose permissions open no tab', { isAdmin: false, adminPermissions: ['support:read'] }, false],
+    ['a delegate whose permissions open no tab', { isAdmin: false, adminPermissions: ['users:impersonate'] }, false],
     ['a user with no admin role', { isAdmin: false }, false],
   ])('is shown to %s', (_case, role, shown) => {
     user.current = { id: 'u1', name: 'Jane', ...role };
