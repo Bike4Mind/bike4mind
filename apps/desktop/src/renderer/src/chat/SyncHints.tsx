@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import Button from '@mui/joy/Button';
 import IconButton from '@mui/joy/IconButton';
 import Link from '@mui/joy/Link';
@@ -86,17 +86,24 @@ function HintCard({
 function SourceHint({
   testId,
   text,
+  error,
   onEnable,
   onDismiss,
 }: {
   testId: string;
   text: string;
+  error?: boolean;
   onEnable: () => void;
   onDismiss: () => void;
 }) {
   return (
     <HintCard testId={testId} onClose={onDismiss} closeLabel="Hide this hint">
       <Typography level="body-xs">{text}</Typography>
+      {error && (
+        <Typography level="body-xs" color="danger" data-testid={`${testId}-error`}>
+          Could not turn on sync. Try again.
+        </Typography>
+      )}
       <Stack direction="row" spacing={0.5}>
         <Button size="sm" variant="solid" onClick={onEnable} data-testid={`${testId}-enable-btn`}>
           Turn on sync
@@ -111,19 +118,28 @@ function SourceHint({
 
 export interface SyncHintsViewProps {
   choice: SyncHintChoice;
+  enableFailed?: boolean;
   onDismiss: (id: SyncHintId) => void;
   onEnable: (source: 'claude-code' | 'web') => void;
   onOpenSettings: (focus: ClaudeImportKind) => void;
   onOpenExportHelp: () => void;
 }
 
-export function SyncHintsView({ choice, onDismiss, onEnable, onOpenSettings, onOpenExportHelp }: SyncHintsViewProps) {
+export function SyncHintsView({
+  choice,
+  enableFailed,
+  onDismiss,
+  onEnable,
+  onOpenSettings,
+  onOpenExportHelp,
+}: SyncHintsViewProps) {
   if (!choice) return null;
   if (choice.kind === 'claude-code') {
     return (
       <SourceHint
         testId="sync-hint-claude-code"
         text={`Found ${plural(choice.count, 'Claude Code session', 'Claude Code sessions')}. Sync them here?`}
+        error={enableFailed}
         onEnable={() => onEnable('claude-code')}
         onDismiss={() => onDismiss('claude-code')}
       />
@@ -134,6 +150,7 @@ export function SyncHintsView({ choice, onDismiss, onEnable, onOpenSettings, onO
       <SourceHint
         testId="sync-hint-web"
         text={`You have ${plural(choice.count, 'chat', 'chats')} on Bike4Mind web. Show them here?`}
+        error={enableFailed}
         onEnable={() => onEnable('web')}
         onDismiss={() => onDismiss('web')}
       />
@@ -193,17 +210,20 @@ export function SidebarSyncHints({
 }) {
   const [state, setState] = useClaudeImport();
   const api = typeof window === 'undefined' ? undefined : window.b4m?.claudeImport;
+  const [enableFailed, setEnableFailed] = useState(false);
   const choice = pickSyncHint(state, empty);
   if (!api || !choice) return <>{fallback}</>;
 
   const update = (work: () => Promise<ClaudeImportState>) => {
-    void work().then(setState, () => undefined);
+    setEnableFailed(false);
+    void work().then(setState, () => setEnableFailed(true));
   };
   return (
     <>
       {choice.kind !== 'sidebar-empty' && fallback}
       <SyncHintsView
         choice={choice}
+        enableFailed={enableFailed}
         onDismiss={id => update(() => api.dismissHint(id))}
         onEnable={source =>
           update(async () => {
