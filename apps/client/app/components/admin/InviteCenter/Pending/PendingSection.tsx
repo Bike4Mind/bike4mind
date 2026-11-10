@@ -212,6 +212,8 @@ export function PendingSection() {
       id: 'source',
       label: 'Source',
       sortable: false,
+      // Fits the longest chip label on one line; two chips wrap instead of truncating.
+      width: '11rem',
       render: row => (
         <Stack direction="row" flexWrap="wrap" gap={0.75}>
           {row.source ? (

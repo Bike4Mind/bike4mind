@@ -254,6 +254,12 @@ describe('PendingSection', () => {
     expect(search({ pendingInvite: 'invited' })).toMatchObject({ pendingInvite: 'uninvited' });
   });
 
+  it('sizes the Source column for its chips rather than an equal share of the table', () => {
+    mocks.list = listOf([row({ inviteSource: 'organization' })]);
+    render(<PendingSection />, { wrapper: Wrapper });
+    expect(screen.getByRole('columnheader', { name: 'Source' })).toHaveStyle({ width: '11rem' });
+  });
+
   it('ignores an unknown invite value in the URL', () => {
     mocks.search = { pendingInvite: 'maybe' };
     render(<PendingSection />, { wrapper: Wrapper });
