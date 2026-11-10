@@ -509,10 +509,11 @@ const AdminSettingsTab: React.FC = () => {
 
           {groupId === API_SERVICE_GROUPS.CREDITS.id &&
             SETTING_HOMES.map(home => (
-              <Typography key={home.id} level="body-sm" sx={{ color: 'text.secondary', mt: 1 }}>
+              <Typography key={home.id} level="body-sm" sx={{ color: 'admin.inkMuted', mt: 1 }}>
                 {home.summary}{' '}
                 <Link
                   component="button"
+                  type="button"
                   onClick={() => openSettingHome(home)}
                   data-testid={`admin-settings-credits-${home.id}-link`}
                 >
@@ -542,10 +543,11 @@ const AdminSettingsTab: React.FC = () => {
         </Stack>
 
         {MODEL_SETTINGS_MOVED_CATEGORIES.has(category) && (
-          <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
+          <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
             {MODEL_SETTINGS_CATEGORY_POINTERS[category] ?? MODEL_SETTINGS_FALLBACK_POINTER}{' '}
             <Link
               component="button"
+              type="button"
               onClick={() => void openSection('settings')}
               data-testid={`admin-settings-models-link-${category}`}
             >
@@ -651,6 +653,7 @@ const AdminSettingsTab: React.FC = () => {
               {MODEL_SETTINGS_LINK_TEXT}{' '}
               <Link
                 component="button"
+                type="button"
                 onClick={() => void openSection('settings')}
                 data-testid="admin-settings-search-models-link"
               >
@@ -670,6 +673,7 @@ const AdminSettingsTab: React.FC = () => {
               {home.summary}{' '}
               <Link
                 component="button"
+                type="button"
                 onClick={() => openSettingHome(home)}
                 data-testid={`admin-settings-search-${home.id}-link`}
               >
