@@ -7,10 +7,11 @@ import { getThemeConfig } from '@client/app/utils/themes';
 const mocks = vi.hoisted(() => ({
   apiGet: vi.fn(),
   apiDelete: vi.fn(),
+  apiPatch: vi.fn(),
 }));
 
 vi.mock('@client/app/contexts/ApiContext', () => ({
-  api: { get: mocks.apiGet, delete: mocks.apiDelete, patch: vi.fn(), post: vi.fn() },
+  api: { get: mocks.apiGet, delete: mocks.apiDelete, patch: mocks.apiPatch, post: vi.fn() },
 }));
 vi.mock('@client/app/hooks/data/elevenLabsVoices', () => ({
   useElevenLabsVoices: () => ({ data: [], isLoading: false }),
@@ -48,6 +49,7 @@ beforeEach(() => {
     return { data: { agents: agentsResponse } };
   });
   mocks.apiDelete.mockReset().mockResolvedValue({});
+  mocks.apiPatch.mockReset().mockResolvedValue({});
 });
 
 describe('VoiceSettingsTab', () => {
@@ -142,5 +144,17 @@ describe('VoiceSettingsTab', () => {
     expect(
       (within(editor).getByTestId('voice-settings-form-name').querySelector('input') as HTMLInputElement).value
     ).toBe('Concierge');
+  });
+
+  it('toggles the default switch without opening the editor', async () => {
+    renderTab();
+
+    await screen.findByTestId('voice-settings-row-agent-1');
+    fireEvent.click(within(screen.getByTestId('voice-settings-default-agent-1')).getByRole('switch'));
+
+    await waitFor(() =>
+      expect(mocks.apiPatch).toHaveBeenCalledWith('/api/admin/voice-agents/agent-1', { isDefault: false })
+    );
+    expect(screen.queryByTestId('voice-settings-editor-modal')).toBeNull();
   });
 });

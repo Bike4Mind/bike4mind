@@ -21,19 +21,22 @@ const mocks = vi.hoisted(() => ({
   updateSettings: vi.fn(),
   deleteMapping: vi.fn(),
   useBlocker: vi.fn(() => ({ status: 'idle' })),
+  pageSettings: {} as Record<string, unknown>,
 }));
+
+const defaultPageSettings = {
+  transitionMode: 'replace',
+  fallbackBehavior: 'continue',
+  maxAcceptableLatency: 2000,
+  minSuccessRate: 90,
+};
 
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: mocks.apiGet } }));
 vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
   useAdminSettingsCache: () => ({
     isLoading: false,
     settings: {
-      RapidReplySettings: {
-        transitionMode: 'replace',
-        fallbackBehavior: 'continue',
-        maxAcceptableLatency: 2000,
-        minSuccessRate: 90,
-      },
+      RapidReplySettings: mocks.pageSettings,
     },
   }),
 }));
@@ -96,6 +99,7 @@ beforeEach(() => {
     }
     return { data: null };
   });
+  mocks.pageSettings = { ...defaultPageSettings };
   mocks.updateSettings.mockReset().mockResolvedValue({});
   mocks.deleteMapping.mockReset();
   fakeAdminRouter.reset({ tab: 'rapid-reply' });
@@ -220,17 +224,70 @@ describe('RapidReplyTab', () => {
     });
   });
 
-  it('blocks the save while a threshold is out of range', () => {
+  it.each([
+    [
+      'latency 499',
+      'rapid-reply-max-latency-input',
+      '499',
+      'Max acceptable latency: Enter a whole number from 500 to 5000 ms',
+    ],
+    [
+      'latency 5001',
+      'rapid-reply-max-latency-input',
+      '5001',
+      'Max acceptable latency: Enter a whole number from 500 to 5000 ms',
+    ],
+    [
+      'latency empty',
+      'rapid-reply-max-latency-input',
+      '',
+      'Max acceptable latency: Enter a whole number from 500 to 5000 ms',
+    ],
+    [
+      'latency 1500.5',
+      'rapid-reply-max-latency-input',
+      '1500.5',
+      'Max acceptable latency: Enter a whole number from 500 to 5000 ms',
+    ],
+    [
+      'min success rate 150',
+      'rapid-reply-min-success-rate-input',
+      '150',
+      'Min success rate: Enter a whole number from 0 to 100%',
+    ],
+  ])('blocks the save for %s', (_label, testId, value, reason) => {
     renderTab();
 
     fireEvent.click(screen.getByRole('tab', { name: 'Metrics' }));
-    fireEvent.change(screen.getByTestId('rapid-reply-min-success-rate-input').querySelector('input')!, {
-      target: { value: '150' },
-    });
+    fireEvent.change(screen.getByTestId(testId).querySelector('input')!, { target: { value } });
 
     const bar = screen.getByTestId('admin-save-bar');
-    expect(bar.textContent).toContain('Min success rate: Enter 0 to 100%');
+    expect(bar.textContent).toContain(reason);
     expect(within(bar).getByTestId('admin-save-confirm-btn')).toBeDisabled();
+    fireEvent.keyDown(window, { key: 's', metaKey: true });
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it('shows a stored min success rate of 0 instead of the default', () => {
+    mocks.pageSettings = { ...defaultPageSettings, minSuccessRate: 0 };
+    renderTab();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Metrics' }));
+    expect(
+      (screen.getByTestId('rapid-reply-min-success-rate-input').querySelector('input') as HTMLInputElement).value
+    ).toBe('0');
+  });
+
+  it('says the switch was saved when rewriting the settings fails', async () => {
+    mocks.updateSettings.mockResolvedValueOnce({}).mockRejectedValueOnce(new Error('boom'));
+    renderTab();
+
+    fireEvent.click(within(screen.getByTestId('rapid-reply-enabled-switch')).getByRole('switch'));
+    fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+
+    await waitFor(() => expect(screen.getByTestId('admin-save-bar').textContent).toContain('the switch was saved'));
+    expect(screen.getByTestId('admin-save-bar').textContent).toContain('boom');
+    expect(mocks.updateSettings).toHaveBeenCalledTimes(2);
   });
 
   it('confirms a delete in a dialog instead of the browser prompt', async () => {

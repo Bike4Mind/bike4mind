@@ -125,15 +125,15 @@ const readPageSettings = (stored: unknown): RapidReplyPageSettings => {
   return {
     transitionMode: value.transitionMode || 'replace',
     fallbackBehavior: value.fallbackBehavior || 'continue',
-    maxAcceptableLatency: value.maxAcceptableLatency || 2000,
-    minSuccessRate: value.minSuccessRate || 90,
+    maxAcceptableLatency: value.maxAcceptableLatency ?? 2000,
+    minSuccessRate: value.minSuccessRate ?? 90,
   };
 };
 
 const outOfRange = (value: number, range: { min: number; max: number }, unit: string) =>
-  Number.isFinite(value) && value >= range.min && value <= range.max
+  Number.isInteger(value) && value >= range.min && value <= range.max
     ? undefined
-    : `Enter ${range.min} to ${range.max}${unit}`;
+    : `Enter a whole number from ${range.min} to ${range.max}${unit}`;
 
 const parseNumberInput = (raw: string) => (raw === '' ? Number.NaN : Number(raw));
 
@@ -424,7 +424,11 @@ const RapidReplyPage: React.FC = () => {
     save: async value => {
       await updateAdminSettings.mutateAsync({ key: 'EnableRapidReply', value });
       // Turning the feature on or off has always rewritten RapidReplySettings with just this page's fields.
-      await writeSettings({});
+      try {
+        await writeSettings({});
+      } catch (error) {
+        throw new Error(`the switch was saved, but rewriting the settings failed: ${getErrorMessage(error)}`);
+      }
     },
   });
   const transitionMode = useSettingsDraft('RapidReplySettings.transitionMode', baseline.transitionMode, {
