@@ -239,18 +239,34 @@ describe('Composer chat settings across a chat switch', () => {
     for (const testId of CONTROLS) expect(disabled(testId), testId).toBe(false);
   });
 
-  it('unlock when the chat being opened fails to read', async () => {
+  it('stay disabled, and the composer cannot send, when the chat being opened fails to read', async () => {
+    const sendMessage = vi.fn(async () => ({ ok: true }));
     const chat = window.b4m.chat as unknown as Record<string, unknown>;
+    chat.sendMessage = sendMessage;
     chat.listModels = async () => ({ models: [MODEL, OPUS] });
     chat.getSession = async (id: string) => {
       if (id === 'second') throw new Error('database locked');
       return { ...SESSIONS.find(entry => entry.id === id), model: OPUS.id, messages: [] } as unknown as ChatSession;
     };
     await renderShell();
+    await act(async () => el('composer-tune-btn').click());
     await act(async () => document.querySelectorAll<HTMLElement>('[data-testid="chat-session-item"]')[1].click());
     await act(async () => undefined);
     expect(find('chat-thread-opening')).toBeNull();
-    for (const testId of ['approval-mode-btn', 'model-picker-btn']) expect(disabled(testId), testId).toBe(false);
+    if (!find('generation-settings-btn')) await act(async () => el('composer-tune-btn').click());
+    for (const testId of ['approval-mode-btn', 'model-picker-btn']) expect(disabled(testId), testId).toBe(true);
+    for (const testId of CONTROLS.filter(find)) expect(disabled(testId), testId).toBe(true);
+    const input = el('chat-composer-input') as HTMLTextAreaElement;
+    expect(input.disabled).toBe(true);
+    expect(input.placeholder).toBe('This conversation could not be opened');
+    await act(async () => el('chat-send-btn').click());
+    expect(sendMessage).not.toHaveBeenCalled();
+
+    await act(async () => document.querySelectorAll<HTMLElement>('[data-testid="chat-session-item"]')[0].click());
+    await act(async () => undefined);
+    if (!find('generation-settings-btn')) await act(async () => el('composer-tune-btn').click());
+    for (const testId of CONTROLS) expect(disabled(testId), testId).toBe(false);
+    expect((el('chat-composer-input') as HTMLTextAreaElement).disabled).toBe(false);
   });
 
   const SETTERS = [

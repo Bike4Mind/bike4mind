@@ -334,8 +334,9 @@ export function ChatShell({
   // transcript under this one's id until the read lands.
   const opening =
     settling || (!!activeId && conversation.session?.id !== activeId && conversation.openFailedFor !== activeId);
-  // The composer's per-chat settings show conversation.session, still the previous chat's while opening.
-  const chatSettingsLocked = !activeId || opening;
+  // The composer's per-chat settings show conversation.session: the previous chat's while opening, none after a failed open.
+  const chatSettingsLocked = !activeId || settling || conversation.session?.id !== activeId;
+  const openFailed = !!activeId && conversation.openFailedFor === activeId && conversation.session?.id !== activeId;
   const spawnSuggestions = useSpawnSuggestions(conversation.session);
   const heldRelays = useHeldRelays(activeId);
   const markSessionStart = useSessionStartTiming(sessions);
@@ -994,11 +995,13 @@ export function ChatShell({
    */
   const disabledPlaceholder = settling
     ? ''
-    : creatingCode
-      ? 'Starting a session...'
-      : mode === 'code'
-        ? 'Start a Code session to type here'
-        : 'Start a conversation to type here';
+    : openFailed
+      ? 'This conversation could not be opened'
+      : creatingCode
+        ? 'Starting a session...'
+        : mode === 'code'
+          ? 'Start a Code session to type here'
+          : 'Start a conversation to type here';
 
   const setQuote = useCallback((sessionId: string, quote: string | null) => {
     setQuotes(current => {
@@ -2032,7 +2035,7 @@ export function ChatShell({
 
             <Composer
               sessionId={activeId}
-              disabled={!activeId || creatingCode}
+              disabled={!activeId || creatingCode || openFailed}
               disabledPlaceholder={disabledPlaceholder}
               streaming={turnOpen}
               attachments={draft}

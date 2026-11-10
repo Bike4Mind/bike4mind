@@ -105,7 +105,47 @@ describe.each([
   });
 });
 
+describe.each([
+  { command: 'compact', mock: compactContext },
+  { command: 'clear', mock: clearContext },
+])('/$command that lands during a reopen', ({ command, mock }) => {
+  it('reads the chat again rather than putting back a transcript read before it', async () => {
+    const message = { id: 'm', role: 'user', content: 'old' } as never;
+    const after = sessionFor('s1', { title: 'Done' });
+    let settle: (value: unknown) => void = () => {};
+    mock.mockReturnValue(new Promise(done => (settle = done)));
+    await act(async () => root.render(<Harness id="s1" />));
+    let pending: Promise<void> = Promise.resolve();
+    await act(async () => {
+      pending = conversation.runCommand(command, '');
+    });
+    await act(async () => root.render(<Harness id="s2" />));
+    let answerFirstRead: (session: ChatSession) => void = () => {};
+    let reads = 0;
+    getSession.mockImplementation(async id => {
+      if (id !== 's1') return sessionFor(id);
+      reads++;
+      return reads === 1 ? new Promise<ChatSession>(done => (answerFirstRead = done)) : after;
+    });
+    await act(async () => root.render(<Harness id="s1" />));
+    await act(async () => {
+      settle({ ok: true, session: after });
+      await pending;
+    });
+    await act(async () => answerFirstRead(sessionFor('s1', { messages: [message] })));
+    expect(reads).toBe(2);
+    expect(conversation.session?.title).toBe('Done');
+    expect(conversation.messages).toEqual([]);
+  });
+});
+
 describe('a failed chat read', () => {
+  it("drops Electron's remote method prefix from the reason", async () => {
+    getSession.mockRejectedValue(new Error("Error invoking remote method 'chat:get-session': Error: database locked"));
+    await act(async () => root.render(<Harness id="s1" />));
+    expect(conversation.sendError).toBe('Could not open this conversation. database locked');
+  });
+
   it('shows the reason and ends the opening state when the first read fails', async () => {
     getSession.mockRejectedValue(new Error('database locked'));
     await act(async () => root.render(<Harness id="s1" />));

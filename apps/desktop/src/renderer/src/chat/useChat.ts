@@ -683,7 +683,9 @@ export function useConversation(
       const failed = (error: unknown): void => {
         if (!current) return;
         if (openRead.current === read) openRead.current = null;
-        setSendError(`Could not open this conversation. ${error instanceof Error ? error.message : String(error)}`);
+        const reason = error instanceof Error ? error.message : String(error);
+        const detail = reason.replace(/^Error invoking remote method '[^']*': (?:Error(?:: |$))?/, '');
+        setSendError(`Could not open this conversation. ${detail}`);
         setSession(null);
         setMessages([]);
         setOpenFailedFor(sessionId);
@@ -1237,13 +1239,14 @@ export function useConversation(
           setSendError(result.error);
           return;
         }
+        outdateOpenRead(sessionId);
         setSession(result.session);
         setMessages(result.session.messages);
       } finally {
         if (activeSessionId.current === sessionId) setCommandProgress(null);
       }
     },
-    [sessionId, shareDirectory]
+    [sessionId, shareDirectory, outdateOpenRead]
   );
 
   const cancelQueued = useCallback(
