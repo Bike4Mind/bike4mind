@@ -235,7 +235,7 @@ describe('held signup grant release', () => {
       { batchId: out.batchId, actorId: 'admin-1' },
       revokeAdapters
     );
-    expect(revoked?.results).toEqual([{ userId: held.id, outcome: 'reversed', credits: 12 }]);
+    expect(revoked?.results).toEqual([{ userId: held.id, outcome: 'reversed', credits: 12, heldRestored: true }]);
     expect(await creditsOf(held.id)).toBe(0);
     const again = await userService.revokeHeldGrantRelease(
       { batchId: out.batchId, actorId: 'admin-1' },
@@ -263,7 +263,7 @@ describe('held signup grant release', () => {
       revokeAdapters
     );
 
-    expect(revoked?.results).toEqual([{ userId: held.id, outcome: 'reversed', credits: 12 }]);
+    expect(revoked?.results).toEqual([{ userId: held.id, outcome: 'reversed', credits: 12, heldRestored: true }]);
     const heldAfter = (await User.findById(held.id))?.toJSON();
     expect(heldAfter?.currentCredits).toBe(0);
     expect(heldAfter?.tags).toContain(PENDING_FREE_CREDITS_TAG);
