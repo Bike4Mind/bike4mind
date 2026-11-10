@@ -6,11 +6,15 @@ import { toast } from 'sonner';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { WatchAccountsButton } from './WatchAccountsButton';
 
-const mocks = vi.hoisted(() => ({ navigate: vi.fn(), create: vi.fn(), admin: true }));
+const mocks = vi.hoisted(() => ({ navigate: vi.fn(), create: vi.fn(), admin: true, permissions: [] as string[] }));
 vi.mock('sonner', () => ({ toast: { info: vi.fn() } }));
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => mocks.navigate }));
-vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: { isAdmin: mocks.admin } }) }));
-vi.mock('@client/app/hooks/data/campaignWatches', () => ({
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: () => ({ currentUser: { isAdmin: mocks.admin, adminPermissions: mocks.permissions } }),
+}));
+vi.mock('@client/app/hooks/data/campaignWatches', async importOriginal => ({
+  canUseCampaignWatches: (await importOriginal<typeof import('@client/app/hooks/data/campaignWatches')>())
+    .canUseCampaignWatches,
   useCreateCampaignWatch: () => ({ mutateAsync: mocks.create, isPending: false }),
   watchErrorMessage: (failure: Error) => failure.message,
 }));
@@ -22,6 +26,7 @@ const watchId = 'c'.repeat(24);
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.admin = true;
+  mocks.permissions = [];
   mocks.create.mockResolvedValue({ watch: { id: watchId }, created: true });
 });
 
@@ -80,6 +85,13 @@ describe('WatchAccountsButton', () => {
     expect(screen.getByTestId('watch-accounts-open-btn')).toBeDisabled();
     mocks.admin = false;
     rerender(<WatchAccountsButton userIds={[first]} />);
+    expect(screen.queryByTestId('watch-accounts-open-btn')).not.toBeInTheDocument();
+  });
+
+  it('gives a users:moderate delegate who is not a full administrator no button', () => {
+    mocks.admin = false;
+    mocks.permissions = ['users:moderate'];
+    render(<WatchAccountsButton userIds={[first]} />, { wrapper: Wrapper });
     expect(screen.queryByTestId('watch-accounts-open-btn')).not.toBeInTheDocument();
   });
 });

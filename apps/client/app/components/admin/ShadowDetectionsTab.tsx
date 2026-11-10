@@ -450,7 +450,7 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({ row, now, onClose, onRowC
   const [verdict, setVerdict] = useState<ShadowDetectionVerdict | null>(null);
   // The server's explanation of a stale verdict, or null when there is no conflict to show.
   const [conflict, setConflict] = useState<string | null>(null);
-  const title = row.verdict ? 'Change verdict' : 'Record verdict';
+  const title = row.verdict ? 'View review' : 'Review evidence';
 
   const submit = async (reason: string) => {
     if (!verdict) return;

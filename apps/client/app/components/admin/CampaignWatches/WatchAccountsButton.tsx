@@ -2,9 +2,13 @@ import { useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { Alert, Button, FormControl, FormLabel, Input, Typography } from '@mui/joy';
 import { toast } from 'sonner';
-import { CAMPAIGN_WATCH_MAX_MEMBERS, hasAdminPermission } from '@bike4mind/common';
+import { CAMPAIGN_WATCH_MAX_MEMBERS } from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
-import { useCreateCampaignWatch, watchErrorMessage } from '@client/app/hooks/data/campaignWatches';
+import {
+  canUseCampaignWatches,
+  useCreateCampaignWatch,
+  watchErrorMessage,
+} from '@client/app/hooks/data/campaignWatches';
 import { ActionDialog } from '../shared';
 
 export function WatchAccountsButton({
@@ -28,7 +32,7 @@ export function WatchAccountsButton({
   const [error, setError] = useState<string | null>(null);
   const [snapshot, setSnapshot] = useState<string[]>([]);
   const ids = [...new Set(userIds)];
-  if (!hasAdminPermission(user, 'users:moderate') || ids.length === 0) return null;
+  if (!canUseCampaignWatches(user) || ids.length === 0) return null;
   return (
     <>
       <Button

@@ -11,13 +11,13 @@ tags: [admin, users, management]
 
 In Admin > Detections, start with **Review evidence**. Inspect the linked accounts and their Activity before recording a judgment. A suggested response describes the detector's recommendation; recording a review does not apply that response to account access.
 
-If you need more time, choose **Watch these accounts** and give the watch a name and reason. The watch saves the exact group you selected. You can find open watches on the admin dashboard and in Detections even after the AI advisory expires, changes verdict, or is reviewed. Incomplete groups cannot be saved as a watch; open an individual detection with a complete group instead.
+If you need more time, choose **Watch** or **Watch campaign** on a campaign detection (or **Watch these accounts** on the dashboard's AI advisory) and give the watch a name and reason. The watch saves the exact group you selected. You can find open watches on the admin dashboard and in Detections even after the AI advisory expires, changes verdict, or is reviewed. Incomplete groups cannot be saved as a watch; open an individual detection with a complete group instead.
 
 Open a watch to see its owner, current account status and credits, profile and Activity links, and the last manual check. Choose **Refresh account data** to reload the details, **Mark checked** after reviewing activity, or **Assign to me** to take ownership. Close the watch when monitoring is complete; the Closed list lets you reopen it later.
 
 Watches are manual: they do not send automatic alerts, run an AI assessment, change a verdict, or suspend an account. Membership does not expand when new detections arrive. Deleted accounts are removed, and a deleted owner's assignment is cleared. Watches remain until explicitly closed and their records do not expire automatically.
 
-Watches are available to full administrators from the Detections tab. Creating, assigning, checking, closing and reopening a watch also requires `users:moderate`. Every change requires an audit reason.
+Watches are available only to full administrators, because a watch shows each member's credits and suspension state. Delegated permissions such as `support:read` or `users:moderate` do not open, create or change a watch. Every change requires an audit reason.
 
 The Users tab is the primary interface for administering user accounts on the Bike4Mind platform. It is a single server-driven table with search, filters, built-in views, column sorting, grouping by email domain, and CSV export. The header shows the total number of accounts and how many were active this week.
 

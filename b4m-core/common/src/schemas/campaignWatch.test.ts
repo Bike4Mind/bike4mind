@@ -13,11 +13,16 @@ describe('campaign watch requests', () => {
     expect(result.userIds).toEqual([id]);
   });
   it.each([
-    [],
-    [id, id.toUpperCase()],
-    ['invalid'],
-    Array.from({ length: CAMPAIGN_WATCH_MAX_MEMBERS + 1 }, (_, index) => index.toString(16).padStart(24, '0')),
-  ])('rejects invalid membership (case %#)', userIds => {
+    { label: 'empty', userIds: [] },
+    { label: 'duplicate after normalization', userIds: [id, id.toUpperCase()] },
+    { label: 'malformed id', userIds: ['invalid'] },
+    {
+      label: 'over the member cap',
+      userIds: Array.from({ length: CAMPAIGN_WATCH_MAX_MEMBERS + 1 }, (_, index) =>
+        index.toString(16).padStart(24, '0')
+      ),
+    },
+  ])('rejects invalid membership: $label', ({ userIds }) => {
     expect(CampaignWatchCreateSchema.safeParse({ name: 'Watch', userIds, reason: 'Monitor activity' }).success).toBe(
       false
     );

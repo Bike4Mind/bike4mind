@@ -11,8 +11,10 @@ const mocks = vi.hoisted(() => ({
   refresh: vi.fn(),
   more: vi.fn(),
   list: vi.fn(),
+  detail: vi.fn(),
   search: {} as { campaignWatch?: string },
   admin: true,
+  permissions: ['support:read'] as string[],
 }));
 const watch = {
   id: 'a'.repeat(24),
@@ -29,11 +31,13 @@ const watch = {
 };
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => mocks.navigate, useSearch: () => mocks.search }));
 vi.mock('@client/app/contexts/UserContext', () => ({
-  useUser: () => ({ currentUser: { id: 'c'.repeat(24), isAdmin: mocks.admin, adminPermissions: ['support:read'] } }),
+  useUser: () => ({ currentUser: { id: 'c'.repeat(24), isAdmin: mocks.admin, adminPermissions: mocks.permissions } }),
 }));
-vi.mock('@client/app/hooks/data/campaignWatches', () => ({
-  useCampaignWatches: (status: string) => {
-    mocks.list(status);
+vi.mock('@client/app/hooks/data/campaignWatches', async importOriginal => ({
+  canUseCampaignWatches: (await importOriginal<typeof import('@client/app/hooks/data/campaignWatches')>())
+    .canUseCampaignWatches,
+  useCampaignWatches: (status: string, enabled: boolean) => {
+    mocks.list(status, enabled);
     return {
       data: { pages: [{ items: [watch] }] },
       hasNextPage: true,
@@ -41,14 +45,17 @@ vi.mock('@client/app/hooks/data/campaignWatches', () => ({
       refetch: mocks.refresh,
     };
   },
-  useCampaignWatch: () => ({
-    data: {
-      watch,
-      ownerName: 'Example operator',
-      members: [{ id: 'b'.repeat(24), name: 'Example account', available: true, suspended: false, credits: 100 }],
-    },
-    refetch: mocks.refresh,
-  }),
+  useCampaignWatch: (_id: string | undefined, enabled: boolean) => {
+    mocks.detail(enabled);
+    return {
+      data: {
+        watch,
+        ownerName: 'Example operator',
+        members: [{ id: 'b'.repeat(24), name: 'Example account', available: true, suspended: false, credits: 100 }],
+      },
+      refetch: mocks.refresh,
+    };
+  },
   useChangeCampaignWatch: () => ({ mutateAsync: mocks.change, isPending: false }),
   watchErrorMessage: (error: Error) => error.message,
 }));
@@ -58,6 +65,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.search = {};
   mocks.admin = true;
+  mocks.permissions = ['support:read'];
   mocks.change.mockResolvedValue(watch);
 });
 
@@ -69,7 +77,7 @@ it('opens a durable link and exposes closed history and server pagination', () =
     search: { tab: 'shadow-detections', campaignWatch: watch.id },
   });
   fireEvent.click(screen.getByTestId('campaign-watches-closed-btn'));
-  expect(mocks.list).toHaveBeenLastCalledWith('closed');
+  expect(mocks.list).toHaveBeenLastCalledWith('closed', true);
   fireEvent.click(screen.getByTestId('campaign-watches-more-btn'));
   expect(mocks.more).toHaveBeenCalledOnce();
 });
@@ -99,11 +107,26 @@ it('shows exact profile/activity links, refreshes details, and records a reasone
   );
 });
 
-it('lets support readers view accounts without watch mutation controls', () => {
+it('shows a full administrator the activity links and mutation controls', () => {
   mocks.search = { campaignWatch: watch.id };
-  mocks.admin = false;
   render(<CampaignWatchesPanel />, { wrapper: Wrapper });
   expect(screen.getByRole('link', { name: 'View activity' })).toBeInTheDocument();
-  expect(screen.queryByTestId('campaign-watch-close-btn')).not.toBeInTheDocument();
-  expect(screen.queryByTestId('campaign-watch-check-btn')).not.toBeInTheDocument();
+  expect(screen.getByTestId('campaign-watch-close-btn')).toBeInTheDocument();
+  expect(screen.getByTestId('campaign-watch-check-btn')).toBeInTheDocument();
 });
+
+it.each([['support:read'], ['users:moderate']])(
+  'renders nothing and fires no request for a %s delegate who is not a full administrator',
+  permission => {
+    mocks.search = { campaignWatch: watch.id };
+    mocks.admin = false;
+    mocks.permissions = [permission];
+    const { container } = render(<CampaignWatchesPanel />, { wrapper: Wrapper });
+    expect(container).toBeEmptyDOMElement();
+    expect(mocks.list).toHaveBeenCalledWith('open', false);
+    expect(mocks.detail).toHaveBeenCalledWith(false);
+    expect(mocks.list).not.toHaveBeenCalledWith(expect.anything(), true);
+    expect(mocks.detail).not.toHaveBeenCalledWith(true);
+    expect(screen.queryByRole('link', { name: 'View activity' })).not.toBeInTheDocument();
+  }
+);

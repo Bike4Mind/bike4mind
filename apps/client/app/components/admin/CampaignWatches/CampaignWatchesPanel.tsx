@@ -1,14 +1,10 @@
 import { useState } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { Alert, Button, Link, Stack, Typography } from '@mui/joy';
-import {
-  CampaignWatchIdSchema,
-  hasAdminPermission,
-  type CampaignWatch,
-  type CampaignWatchChange,
-} from '@bike4mind/common';
+import { CampaignWatchIdSchema, type CampaignWatch, type CampaignWatchChange } from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
 import {
+  canUseCampaignWatches,
   useCampaignWatch,
   useCampaignWatches,
   useChangeCampaignWatch,
@@ -30,7 +26,7 @@ function WatchCommands({ watch }: { watch: CampaignWatch }) {
   const change = useChangeCampaignWatch(watch.id);
   const [action, setAction] = useState<CampaignWatchChange['action'] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  if (!hasAdminPermission(user, 'users:moderate')) return null;
+  if (!canUseCampaignWatches(user)) return null;
   const labels = { close: 'Close watch', reopen: 'Reopen watch', claim: 'Assign to me', check: 'Mark checked' };
   const actions: CampaignWatchChange['action'][] = watch.status === 'closed' ? ['reopen'] : ['check', 'claim', 'close'];
   return (
@@ -90,7 +86,7 @@ function WatchCommands({ watch }: { watch: CampaignWatch }) {
 
 export function CampaignWatchesPanel({ compact = false }: { compact?: boolean }) {
   const { currentUser: user } = useUser();
-  const canRead = hasAdminPermission(user, 'support:read');
+  const canRead = canUseCampaignWatches(user);
   const [status, setStatus] = useState<'open' | 'closed'>('open');
   const list = useCampaignWatches(status, canRead);
   const search = useSearch({ strict: false });
@@ -287,7 +283,12 @@ export function CampaignWatchesPanel({ compact = false }: { compact?: boolean })
               />
               <Typography level="body-xs">
                 Last manually checked:{' '}
-                {details.data.watch.lastCheckedAt ? details.data.watch.lastCheckedAt.toISOString() : 'Not checked yet'}.
+                {details.data.watch.lastCheckedAt ? (
+                  <RelativeTime at={details.data.watch.lastCheckedAt} />
+                ) : (
+                  'Not checked yet'
+                )}
+                .
               </Typography>
               <WatchCommands key={details.data.watch.id} watch={details.data.watch} />
             </Stack>

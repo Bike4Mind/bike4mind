@@ -169,4 +169,44 @@ describe('persistent campaign watches', () => {
     expect(details.watch.ownerId).toBeNull();
     expect(details.watch.status).toBe('open');
   });
+
+  describe('open-cohort uniqueness', () => {
+    const close = (id: string, revision: number) =>
+      changeCampaignWatch(request(), id, {
+        action: 'close',
+        expectedRevision: revision,
+        reason: 'Monitoring complete',
+      });
+    const reopen = (id: string, revision: number) =>
+      changeCampaignWatch(request(), id, {
+        action: 'reopen',
+        expectedRevision: revision,
+        reason: 'Continue monitoring',
+      });
+
+    it('refuses to reopen a closed watch while another open watch holds the same accounts', async () => {
+      const { watch: a } = await createCampaignWatch(request(), input);
+      const closedA = await close(a.id, a.revision);
+      const { watch: b, created } = await createCampaignWatch(request(), input);
+      expect(created).toBe(true);
+      expect(b.id).not.toBe(a.id);
+      await expect(reopen(a.id, closedA.revision)).rejects.toMatchObject({
+        message: 'An open watch already contains this account snapshot.',
+      });
+      expect((await campaignWatchDetail(a.id)).watch.status).toBe('closed');
+      const closedB = await close(b.id, b.revision);
+      const reopenedA = await reopen(a.id, closedA.revision);
+      expect(reopenedA.status).toBe('open');
+      expect(closedB.status).toBe('closed');
+    });
+
+    it('allows a new watch for the same cohort once the previous one is closed', async () => {
+      const { watch: a } = await createCampaignWatch(request(), input);
+      await close(a.id, a.revision);
+      const next = await createCampaignWatch(request(), input);
+      expect(next.created).toBe(true);
+      expect(next.watch.id).not.toBe(a.id);
+      expect(await CampaignWatchModel.countDocuments()).toBe(2);
+    });
+  });
 });

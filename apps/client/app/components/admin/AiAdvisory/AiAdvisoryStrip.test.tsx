@@ -14,7 +14,11 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => mocks.navigate }));
 vi.mock('@client/app/hooks/data/aiAdvisory', () => ({ useAiAdvisory: () => ({ data: mocks.data }) }));
-vi.mock('../CampaignWatches/WatchAccountsButton', () => ({ WatchAccountsButton: () => null }));
+vi.mock('../CampaignWatches/WatchAccountsButton', () => ({
+  WatchAccountsButton: ({ incomplete }: { incomplete?: boolean }) => (
+    <span data-testid="watch-accounts-stub" data-incomplete={String(incomplete)} />
+  ),
+}));
 vi.mock('../BlockedIPs/IpBlockDialogs', () => ({
   BlockIpDialog: ({ initialIp }: { initialIp: string }) => <div data-testid="block-ip-dialog">{initialIp}</div>,
 }));
@@ -70,6 +74,12 @@ describe('AiAdvisoryStrip', () => {
       to: '/admin',
       search: expect.objectContaining({ [ADMIN_TAB_PARAM]: ADMIN_USERS_TAB_SLUG, aiVerdict: 'abuse' }),
     });
+  });
+
+  it.each([true, false])('passes truncated=%s to the watch button as incomplete', truncated => {
+    mocks.data = summary({ advisories: [advisory('1'.repeat(24), 'accountCampaign')], truncated });
+    render(<AiAdvisoryStrip />, { wrapper: Wrapper });
+    expect(screen.getByTestId('watch-accounts-stub')).toHaveAttribute('data-incomplete', String(truncated));
   });
 
   it('offers to block a shared IP and to open a shared domain, acting on neither by itself', () => {

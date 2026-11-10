@@ -16,15 +16,16 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { GET: 'support:re
     })
   )
   .patch(
-    asyncHandler<Request['params'], unknown, unknown, Request['query']>(async (req, res) =>
-      res.json(
+    asyncHandler<Request['params'], unknown, unknown, Request['query']>(async (req, res) => {
+      if (!req.user?.isAdmin) throw new ForbiddenError('Admin access required');
+      return res.json(
         await changeCampaignWatch(
           req,
           parseOrBadRequest(CampaignWatchIdSchema, req.query.id),
           parseOrBadRequest(CampaignWatchChangeSchema, req.body)
         )
-      )
-    )
+      );
+    })
   );
 export const config = { api: { externalResolver: true, bodyParser: { sizeLimit: '8kb' } } };
 export default handler;
