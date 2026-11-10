@@ -427,6 +427,7 @@ describe('orchestrate mode in the chat shell', () => {
       },
     } as ChatSessionSummary;
     listed = [...SESSIONS, orchestrating];
+    catalogModels = [{ id: 'test-model', name: 'Test Model', supportsTools: true }];
     await openParent(CODE.title, 'code');
     expect(el('composer-orchestrate-toggle').getAttribute('aria-pressed')).toBe('true');
     expect(query('orchestration-policy-summary')).toBeNull();

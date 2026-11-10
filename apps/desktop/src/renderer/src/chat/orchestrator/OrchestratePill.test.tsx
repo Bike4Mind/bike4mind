@@ -88,6 +88,19 @@ describe('OrchestratePill', () => {
     );
   });
 
+  it('leaves the icon unmarked before the model catalog has loaded', async () => {
+    await themed.render(
+      <OrchestratePill
+        on
+        policy={policyWith({ implementation: 'current-sonnet', exploration: 'inherit', review: 'inherit' })}
+        planner="planner"
+        models={[]}
+        onChange={onChange}
+      />
+    );
+    expect(query('composer-orchestrate-unavailable')).toBeNull();
+  });
+
   it('keeps the plain label and no policy while off', async () => {
     await themed.render(
       <OrchestratePill

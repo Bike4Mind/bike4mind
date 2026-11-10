@@ -19,7 +19,9 @@ function describeModel(id: string, models: readonly ChatModelOption[]): { name: 
   };
 }
 
+/** False while the catalog is empty: it has not loaded yet, so nothing is known to be unavailable. */
 export function hasUnavailableModel({ root, planner, models }: PolicyProps): boolean {
+  if (models.length === 0) return false;
   return [planner, ...WORKER_ROLES.map(role => root.policy.roles[role])].some(
     id => describeModel(id, models).unavailable
   );
