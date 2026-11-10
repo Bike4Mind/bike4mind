@@ -99,6 +99,30 @@ describe('selectUsableModels', () => {
     expect(hosted).not.toHaveProperty('thinkingToggle');
   });
 
+  it('marks a model the server says always thinks, and offers no effort that claims to switch it off', () => {
+    const opus = wireModel({
+      id: 'claude-opus-5-5',
+      can_think: true,
+      thinkingStyle: 'adaptive',
+      thinkingAlwaysOn: true,
+    });
+    const [always] = selectUsableModels(
+      [opus],
+      new Map([['claude-opus-5-5', { efforts: ['none', 'low', 'high'] as const }]])
+    );
+    expect(always).toMatchObject({ thinkingAlwaysOn: true, controls: { effort: { levels: ['low', 'high'] } } });
+    expect(always).not.toHaveProperty('thinkingToggle');
+
+    const [unflagged, notThinking, malformed] = selectUsableModels([
+      wireModel({ id: 'claude-opus-5', can_think: true }),
+      wireModel({ id: 'plain', can_think: false, thinkingAlwaysOn: true }),
+      wireModel({ id: 'odd', can_think: true, thinkingAlwaysOn: 'yes' }),
+    ]);
+    expect(unflagged).not.toHaveProperty('thinkingAlwaysOn');
+    expect(notThinking).not.toHaveProperty('thinkingAlwaysOn');
+    expect(malformed).not.toHaveProperty('thinkingAlwaysOn');
+  });
+
   it('treats a non-array payload as no models rather than throwing', () => {
     expect(selectUsableModels(undefined)).toEqual([]);
     expect(selectUsableModels({ models: [] })).toEqual([]);
