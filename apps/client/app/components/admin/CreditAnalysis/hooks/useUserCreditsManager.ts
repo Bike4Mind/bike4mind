@@ -20,6 +20,7 @@ export function useUserCreditsManager(onRefresh?: () => void) {
     sortField: 'currentCredits',
     sortOrder: sortDirection,
   } as const;
+  // Overrides the hook's default fetcher so the request carries exactly `params` (including the server-side sort).
   const allUsers = useGetUsers(params, {
     queryFn: async () => (await api.get<IGetUsersResponse>('/api/users', { params })).data,
   });
