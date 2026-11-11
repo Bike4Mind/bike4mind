@@ -97,6 +97,19 @@ describe('listAdminUsers', () => {
     expect(users.find(user => user.username === 'loner')?.organizationId).toBeFalsy();
   });
 
+  it('trims the populated organization to id and name for a non-admin viewer only', async () => {
+    const org = await Organization.create({ name: 'Acme Corp', userId: 'b'.repeat(24), systemPrompt: 'secret prompt' });
+    await seedUser('member', { organizationId: org._id });
+    const find = async (v: { userId: string; isAdmin: boolean }) =>
+      (await listAdminUsers(params, v, { logError }, NOW)).users.find(user => user.username === 'member');
+
+    const delegate = await find({ userId: viewer.userId, isAdmin: false });
+    expect(delegate?.organizationId).toEqual({ id: String(org._id), name: 'Acme Corp' });
+
+    const admin = await find(viewer);
+    expect(admin?.organizationId).toMatchObject({ name: 'Acme Corp', systemPrompt: 'secret prompt' });
+  });
+
   it('sums 30 day AI spend per user and falls back to 0 with no ledger rows', async () => {
     const spender = await seedUser('spender');
     await seedUser('idle');

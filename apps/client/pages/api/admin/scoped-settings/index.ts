@@ -14,7 +14,7 @@ import { scopedSettingsService } from '@bike4mind/services';
 import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError, parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 import { refuseFloorAboveMeasured } from '@server/utils/refuseFloorAboveMeasured';
-import { recordAdminSettingChange } from '@server/utils/adminSettingsAudit';
+import { recordAdminSettingChange } from '@bike4mind/server-utils/utils/adminSettingsAudit';
 
 /**
  * Admin write surface for the scoped-settings overlay - the org/owner/lake OVERRIDES read by

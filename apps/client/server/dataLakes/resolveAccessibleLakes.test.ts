@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { EntitlementRequest } from '@server/entitlements';
+import type { EntitlementRequest } from '@bike4mind/server-utils/entitlements/index';
 
 // Hoisted so the vi.mock factories (hoisted above imports) can reference them.
 const { mockListDataLakes, mockListAllDataLakes, mockGetRequestEntitlements, mockFindMembershipOrgIds } = vi.hoisted(
@@ -30,7 +30,7 @@ vi.mock('@bike4mind/database', () => ({
     findIdsWithAdminRights: vi.fn().mockResolvedValue([]),
   },
 }));
-vi.mock('@server/entitlements', () => ({ getRequestEntitlements: mockGetRequestEntitlements }));
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getRequestEntitlements: mockGetRequestEntitlements }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({ getSignedUrl: vi.fn() }) }));
 
 import { resolveAccessibleLakes } from './index';

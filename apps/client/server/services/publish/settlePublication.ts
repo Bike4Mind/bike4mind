@@ -2,8 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { PublishedArtifact } from '@bike4mind/database';
 import type { CitableSource, PublishScopeTier, PublishVisibility } from '@bike4mind/common';
 import { checkPublishQuota } from './checkPublishQuota';
-import { invalidatePublishCdn, toCacheTarget } from './invalidatePublishCdn';
-import type { MinimalLogger } from './minimalLogger';
+import { invalidatePublishCdn, toCacheTarget } from '@bike4mind/server-utils/services/publish/invalidatePublishCdn';
+import type { MinimalLogger } from '@bike4mind/server-utils/services/publish/minimalLogger';
 import { consumePublishAction } from './publishRateLimit';
 import { restrictDuplicatePublications } from './restrictDuplicatePublications';
 

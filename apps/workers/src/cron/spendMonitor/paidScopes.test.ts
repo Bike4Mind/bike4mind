@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CreditHolderType } from '@bike4mind/common';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
-import { SUBSCRIPTION_PLANS, TEAM_PLAN } from '@client/lib/userSubscriptions/constants';
+import { SUBSCRIPTION_PLANS, TEAM_PLAN } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
 import type { ResolveScopeDeps, ScopeKey } from './resolveScope';
 import { defaultPaidScopeDeps, resolvePaidScopes, type PaidScopeDeps } from './paidScopes';
 

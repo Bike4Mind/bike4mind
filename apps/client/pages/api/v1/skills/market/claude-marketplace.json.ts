@@ -6,8 +6,8 @@
 import { getClaudeMarketplaceContract } from '@bike4mind/common';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { ForbiddenError } from '@server/utils/errors';
-import { publicAppUrl } from '@server/utils/validators';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { publicAppUrl } from '@bike4mind/server-utils/utils/validators';
 import { memberOrgIdsFor } from '@bike4mind/server-utils/skillMarket/market';
 import { buildClaudeMarketplace } from '@server/skillMarket/claudeMarketplace';
 

@@ -5,7 +5,7 @@ import { Organization } from '@bike4mind/database/infra';
 import { S3Storage } from '@bike4mind/fab-pipeline';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { appFileCdnPath, invalidateRouterPaths } from '@server/services/cdn/invalidateRouterCdn';
+import { appFileCdnPath, invalidateRouterPaths } from '@bike4mind/server-utils/services/cdn/invalidateRouterCdn';
 import { resolveBrowserAppFileUploadUrl } from '@server/utils/browserUploadUrl';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';

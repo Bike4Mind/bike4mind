@@ -52,7 +52,7 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 const checkDailyCap = vi.hoisted(() => vi.fn());
-vi.mock('./freeTierDailyCapGate', () => ({ checkFreeTierDailySpendCap: checkDailyCap }));
+vi.mock('@bike4mind/server-utils/billing/freeTierDailyCapGate', () => ({ checkFreeTierDailySpendCap: checkDailyCap }));
 vi.mock('@bike4mind/services', async () => {
   const creditService = await vi.importActual<typeof import('@bike4mind/services/creditService')>(
     '@bike4mind/services/creditService'

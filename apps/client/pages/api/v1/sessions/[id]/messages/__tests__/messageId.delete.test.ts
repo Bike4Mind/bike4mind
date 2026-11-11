@@ -61,7 +61,7 @@ vi.mock('@bike4mind/services', () => ({
 }));
 
 const mockUnpublish = vi.fn();
-vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
+vi.mock('@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts', () => ({
   unpublishUserArtifactsBySource: (...a: unknown[]) => mockUnpublish(...a),
 }));
 

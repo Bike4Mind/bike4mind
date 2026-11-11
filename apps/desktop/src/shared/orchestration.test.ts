@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   acceptTask,
+  assertReportCoversCriteria,
   automaticUpgradeAllowed,
   inheritancePolicy,
   renderTaskBrief,
@@ -149,6 +150,77 @@ describe('orchestration contracts and role routing', () => {
       )
     ).toThrow();
     expect(workerTaskSchema.parse(JSON.parse(JSON.stringify(completed)))).toEqual(completed);
+  });
+  describe('criterion matching', () => {
+    const criteria = ['Discarded messages leave list/count', 'Retry keeps the message order'];
+    const multi: TaskContract = { ...contract, acceptanceCriteria: criteria };
+    const check = (criterion: string, outcome: 'passed' | 'failed' | 'not-run' = 'passed') => ({
+      criterion,
+      command: 'pnpm test dlq',
+      outcome,
+      evidence: 'Observed in the focused run',
+    });
+    const report = (
+      verification: ReturnType<typeof check>[],
+      unmetCriteria: string[] = []
+    ): Extract<WorkerTask['state'], { status: 'completed' }> => ({
+      status: 'completed',
+      accepted: false,
+      changedPaths: [],
+      verification,
+      unmetCriteria,
+      handoff: 'Done',
+    });
+    const withState = (state: WorkerTask['state']): WorkerTask => ({ ...task(), contract: multi, state });
+
+    it('names the uncovered criteria when every check passed under other labels', () => {
+      const labelled = withState(report([check('Targeted DLQ tests'), check('Relevant typecheck')]));
+      expect(() => acceptTask(labelled, 'Looks fine')).toThrow(
+        /No passed verification entry quotes these acceptance criteria:\n- "Discarded messages leave list\/count"\n- "Retry keeps the message order"/
+      );
+    });
+    it('accepts exact and whitespace, case or trailing-punctuation variants, alongside extra checks', () => {
+      expect(acceptTask(withState(report(criteria.map(c => check(c)))), 'Exact').state).toMatchObject({
+        accepted: true,
+      });
+      const variants = report([
+        check('  discarded   MESSAGES leave list/count.'),
+        check('Retry keeps the message order!\n'),
+        check('Relevant typecheck'),
+      ]);
+      expect(acceptTask(withState(variants), 'Variants').state).toMatchObject({ accepted: true });
+    });
+    it('does not match anything fuzzier than whitespace, case and trailing punctuation', () => {
+      const near = withState(report([check('Discarded messages leave the list/count'), check(criteria[1])]));
+      expect(() => acceptTask(near, 'Close enough')).toThrow(/- "Discarded messages leave list\/count"/);
+    });
+    it('still rejects a failed check or an unmet criterion and lists each', () => {
+      const failed = withState(
+        report([...criteria.map(c => check(c)), check('Lint', 'failed'), check('E2E', 'not-run')])
+      );
+      expect(() => acceptTask(failed, 'Ignore')).toThrow(
+        /Checks that did not pass:\n- "Lint" \(failed\)\n- "E2E" \(not-run\)/
+      );
+      const failedCriterion = withState(report([check(criteria[0]), check(criteria[1], 'failed')]));
+      expect(() => acceptTask(failedCriterion, 'Ignore')).toThrow(/quotes these acceptance criteria:\n- "Retry keeps/);
+      const unmet = withState(
+        report(
+          criteria.map(c => check(c)),
+          ['Edge case still open']
+        )
+      );
+      expect(() => acceptTask(unmet, 'Ignore')).toThrow(/Unmet criteria reported:\n- "Edge case still open"/);
+    });
+    it('rejects a completed report that leaves a criterion unaccounted for', () => {
+      const { accepted: _accepted, ...uncovered } = report([check('Targeted DLQ tests'), check(criteria[1])]);
+      expect(() => assertReportCoversCriteria(multi, uncovered)).toThrow(
+        /exact text.*Not covered:\n- "Discarded messages leave list\/count"$/s
+      );
+      const { accepted: _a, ...honest } = report([check(criteria[0], 'failed')], [`${criteria[1]}.`]);
+      expect(() => assertReportCoversCriteria(multi, honest)).not.toThrow();
+      const { accepted: _b, ...variant } = report([check(' DISCARDED messages leave list/count '), check(criteria[1])]);
+      expect(() => assertReportCoversCriteria(multi, variant)).not.toThrow();
+    });
   });
   it('requires budget admission, role/model allowlists and a single automatic upgrade maximum', () => {
     const policy = {

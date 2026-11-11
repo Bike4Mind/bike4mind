@@ -159,7 +159,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   // written in that user's transaction. reopened is the undo of approved.
   'user.signup_risk.approved': { category: 'access', severity: 'notice', write: 'strict' },
   'user.signup_risk.reopened': { category: 'access', severity: 'notice', write: 'strict' },
-  // A system actor approving on payment or quiet-account evidence (apps/client/server/security/riskReviewAutoApproval.ts).
+  // A system actor approving on payment or quiet-account evidence (packages/server-utils/src/security/riskReviewAutoApproval.ts).
   'user.signup_risk.auto_approved': { category: 'access', severity: 'notice', write: 'strict' },
   'user.signup_risk.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
   // Signup domain holds: one strict entry per decision, written in the same transaction as the status

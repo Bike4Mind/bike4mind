@@ -15,7 +15,7 @@ import {
 } from '@bike4mind/common';
 export { isManagedTag } from '@client/lib/entitlements/managedUserTags';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
-import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
+import type { AdminUserListItem } from '@bike4mind/server-utils/app/utils/adminUserProjection';
 
 type AdminIdentity = Parameters<typeof hasAdminPermission>[0];
 

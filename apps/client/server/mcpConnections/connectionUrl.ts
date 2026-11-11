@@ -1,7 +1,7 @@
 import { BadRequestError, toMcpDisplayUrl } from '@bike4mind/common';
 import { RemoteMcpInvalidUrlError, validateRemoteMcpUrl } from '@bike4mind/mcp/remote';
 import { encryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
-import type { RemoteMcpNetworkOptions } from './customMcpAccess';
+import type { RemoteMcpNetworkOptions } from '@bike4mind/server-utils/mcpConnections/customMcpAccess';
 
 export interface PreparedConnectionUrl {
   /** Normalized URL; stored only as `urlEnc`, never returned to the client. */

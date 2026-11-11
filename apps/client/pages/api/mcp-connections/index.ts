@@ -2,7 +2,10 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { createUserConnection, listUserConnections } from '@server/mcpConnections/connectionService';
-import { assertCustomMcpEnabled, resolveCustomMcpContext } from '@server/mcpConnections/customMcpAccess';
+import {
+  assertCustomMcpEnabled,
+  resolveCustomMcpContext,
+} from '@bike4mind/server-utils/mcpConnections/customMcpAccess';
 import { mcpConnectionCreateBodySchema, parseMcpConnectionBody } from '@server/validators/mcpConnectionValidators';
 
 // Session-only (`jwtOnly`): these are not public API routes and have no contract. Exposing them to

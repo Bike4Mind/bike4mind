@@ -23,8 +23,8 @@ import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessCo
 
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({}) }));
 // The session.created push needs a socket endpoint; nothing here listens.
-vi.mock('@server/managers/sessionSideEffects', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/managers/sessionSideEffects')>()),
+vi.mock('@bike4mind/server-utils/managers/sessionSideEffects', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/managers/sessionSideEffects')>()),
   notifySessionCreated: vi.fn().mockResolvedValue(undefined),
 }));
 // The agent path runs for real up to the executor hand-off, which has no deployment here.

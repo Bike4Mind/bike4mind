@@ -17,7 +17,7 @@ import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { Request } from 'express';
 import { createHmac } from 'crypto';
 import { Resource } from 'sst';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { adjustOwnerStorageInSession } from '@bike4mind/server-utils/s3/storageCharge';

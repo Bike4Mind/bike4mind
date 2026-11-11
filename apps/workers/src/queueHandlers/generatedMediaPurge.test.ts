@@ -26,8 +26,8 @@ vi.mock('@bike4mind/database', async importOriginal => ({
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getGeneratedImageStorage: () => ({ delete: h.deleteGenerated }),
 }));
-vi.mock('@server/services/cdn/invalidateRouterCdn', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/services/cdn/invalidateRouterCdn')>()),
+vi.mock('@bike4mind/server-utils/services/cdn/invalidateRouterCdn', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/services/cdn/invalidateRouterCdn')>()),
   createCdnInvalidationBatch: () => {
     const paths: string[] = [];
     return { add: (path: string) => paths.push(path), flush: async () => h.cdnSend(paths) };

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ToolContext } from '@bike4mind/services/llm/tools';
 
 const listAiAbuseAdvisories = vi.fn();
-vi.mock('@server/admin/aiAdvisory/aiAbuseAdvisories', () => ({
+vi.mock('@bike4mind/server-utils/admin/aiAdvisory/aiAbuseAdvisories', () => ({
   listAiAbuseAdvisories: (...args: unknown[]) => listAiAbuseAdvisories(...args),
 }));
 const loadAbuseAssessmentSettings = vi.fn();

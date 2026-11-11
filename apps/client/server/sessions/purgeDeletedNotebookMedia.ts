@@ -4,9 +4,9 @@ import {
   MAX_PATHS_PER_BATCH,
   createCdnInvalidationBatch,
   generatedCdnPath,
-} from '@server/services/cdn/invalidateRouterCdn';
+} from '@bike4mind/server-utils/services/cdn/invalidateRouterCdn';
 import { enqueueGeneratedMediaPurge } from '@server/sessions/generatedMediaPurgeQueue';
-import type { MinimalLogger } from '@server/services/publish/minimalLogger';
+import type { MinimalLogger } from '@bike4mind/server-utils/services/publish/minimalLogger';
 
 export type PurgeRequestLogger = MinimalLogger & { error: (msg: string) => void };
 

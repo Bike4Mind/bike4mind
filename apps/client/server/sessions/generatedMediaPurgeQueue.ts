@@ -1,7 +1,7 @@
 import { Resource } from 'sst';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
-import type { MinimalLogger } from '@server/services/publish/minimalLogger';
+import type { MinimalLogger } from '@bike4mind/server-utils/services/publish/minimalLogger';
 
 // Message contract read by apps/workers/src/queueHandlers/generatedMediaPurge.ts.
 // `ownerIds` on a keys message are the users the worker re-checks the keys' ownership against.

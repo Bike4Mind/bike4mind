@@ -8,7 +8,7 @@ import {
 import { adminRevenue, adminRevenueTrend } from '@server/admin/revenue/adminRevenue';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 
 const handler = adminApi({
   adminPermissions: { GET: 'support:read' },

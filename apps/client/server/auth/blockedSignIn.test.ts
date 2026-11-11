@@ -8,7 +8,7 @@ import {
   getLoginErrorMessage,
   isBlockedAccountLoginError,
   withSupportContact,
-} from '@client/app/utils/loginErrorMessages';
+} from '@bike4mind/server-utils/app/utils/loginErrorMessages';
 
 describe('blockedSignIn', () => {
   beforeEach(() => {

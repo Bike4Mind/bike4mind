@@ -222,6 +222,8 @@ describe('GET /api/feedback', () => {
     expect(mockSelect).toHaveBeenCalledWith(FEEDBACK_LIST_FIELDS);
     const selected = mockSelect.mock.calls[0][0] as string;
     expect(selected).not.toContain('promptMeta');
+    // Named here rather than compared to the constant: dropping the field would blank the chips and CSV columns.
+    expect(selected.split(' ')).toContain('clientContext');
   });
 
   it('returns exactly items/total/page/limit, sourced from countDocuments', async () => {

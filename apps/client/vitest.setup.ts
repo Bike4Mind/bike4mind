@@ -190,7 +190,7 @@ vi.mock('@server/middlewares/checkBlockedIP', async importOriginal => {
 // seeded subscription. Allow by default; suites that exercise the gate mock or unmock it per file.
 // The real module is not spread in: it imports the Subscription model, which suites that stub
 // @bike4mind/database cannot load.
-vi.mock('@server/utils/apiKeyAccessGate', () => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyAccessGate', () => ({
   API_KEY_ACCESS_DENIED_MESSAGE: 'API keys require an active paid subscription',
   CLI_ACCESS_DENIED_MESSAGE: 'The CLI and desktop app require an active paid subscription',
   SUBSCRIPTION_REQUIRED_ERROR: 'subscription_required',

@@ -21,7 +21,7 @@ import {
   type IDataLakeDocument,
 } from '@bike4mind/common';
 import { Request, Response } from 'express';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { isDevelopment } from '@bike4mind/server-utils/utils/config';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';

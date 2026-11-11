@@ -84,8 +84,10 @@ vi.mock('@server/utils/dispatchAgentExecution', () => ({
   },
 }));
 
-vi.mock('@server/utils/persistRunAsQuest', () => ({ persistRunAsQuest: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('@server/utils/publishMementoCompletion', () => ({
+vi.mock('@bike4mind/server-utils/utils/persistRunAsQuest', () => ({
+  persistRunAsQuest: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock('@bike4mind/server-utils/utils/publishMementoCompletion', () => ({
   resolveAndPublishMementoCompletion: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
@@ -339,7 +341,7 @@ describe('confidence gate, end to end', () => {
 
     it('block pauses the run with the finished result held back, and Stop finalizes it in full', async () => {
       h.lowConfidenceMode = 'block';
-      const { persistRunAsQuest } = await import('@server/utils/persistRunAsQuest');
+      const { persistRunAsQuest } = await import('@bike4mind/server-utils/utils/persistRunAsQuest');
       vi.mocked(persistRunAsQuest).mockClear();
       const { executionId, userId, execution } = await runToAnswer(0.1);
 
@@ -383,7 +385,7 @@ describe('confidence gate, end to end', () => {
 
     it('Stop and Continue racing on a held completion produce exactly one outcome', async () => {
       h.lowConfidenceMode = 'block';
-      const { persistRunAsQuest } = await import('@server/utils/persistRunAsQuest');
+      const { persistRunAsQuest } = await import('@bike4mind/server-utils/utils/persistRunAsQuest');
       vi.mocked(persistRunAsQuest).mockClear();
       const { executionId, userId } = await runToAnswer(0.1);
 
@@ -415,7 +417,7 @@ describe('confidence gate, end to end', () => {
 
     it('Stop still writes the Quest and completes when the completed event cannot be delivered', async () => {
       h.lowConfidenceMode = 'block';
-      const { persistRunAsQuest } = await import('@server/utils/persistRunAsQuest');
+      const { persistRunAsQuest } = await import('@bike4mind/server-utils/utils/persistRunAsQuest');
       vi.mocked(persistRunAsQuest).mockClear();
       const { executionId, userId } = await runToAnswer(0.1);
 
@@ -504,7 +506,7 @@ describe('confidence gate, end to end', () => {
 
     it('a repeated Stop finalizes the held answer once', async () => {
       h.lowConfidenceMode = 'block';
-      const { persistRunAsQuest } = await import('@server/utils/persistRunAsQuest');
+      const { persistRunAsQuest } = await import('@bike4mind/server-utils/utils/persistRunAsQuest');
       vi.mocked(persistRunAsQuest).mockClear();
       const { executionId, userId } = await runToAnswer(0.1);
 

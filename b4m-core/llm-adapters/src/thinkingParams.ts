@@ -622,6 +622,19 @@ export function isAdaptiveThinkingByDefault(model: string, modelInfo: ModelInfo)
   );
 }
 
+/** Whether the caller's `thinking: { enabled: false }` must go out as the model's off switch: it would otherwise think unasked. */
+export function thinkingTurnedOff(
+  model: string,
+  modelInfo: ModelInfo,
+  thinking: { enabled?: boolean } | undefined
+): boolean {
+  return (
+    thinking?.enabled === false &&
+    isAdaptiveThinkingByDefault(model, modelInfo) &&
+    ADAPTIVE_THINKING_OFF_SWITCH.has(model)
+  );
+}
+
 /**
  * The effort an adaptive model runs at when the caller named none, from the auto-classified
  * query complexity. An adaptive model that thinks unasked does so on every request (and every

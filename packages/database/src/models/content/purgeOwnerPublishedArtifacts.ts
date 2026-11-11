@@ -101,7 +101,7 @@ export async function findTransferableOrgArtifacts(ownerId: string): Promise<Tra
  * covers ALL of the owner's artifacts, and a clean re-run changes nothing.
  * Stored bundle objects in S3 are left in place; nothing serves them once the row is deleted.
  * The owner-only thumbnail record is cleared with the row; deleting the thumbnail objects and the
- * CDN invalidation are the caller's job (see apps/client/server/services/publish/purgeUserPublishedArtifacts.ts).
+ * CDN invalidation are the caller's job (see packages/server-utils/src/services/publish/purgeUserPublishedArtifacts.ts).
  */
 export async function purgeOwnerPublishedArtifacts(
   ownerId: string,
