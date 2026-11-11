@@ -152,7 +152,7 @@ export const ADMIN_ACTION_COUNTERS: Record<AdminActionCountKey, AdminActionCount
     count: ({ cap }) => countNewFeedback({ limit: cap }),
   },
   deadLetters: {
-    access: 'settings:manage',
+    access: 'support:read',
     count: countDeadLetters,
   },
 };

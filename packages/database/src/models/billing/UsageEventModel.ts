@@ -734,7 +734,9 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
     ownerType: CreditHolderType,
     days: number = 30
   ): Promise<IOwnerUsageSummary> {
-    const from = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    // setDate, like the ledger queries, so both cuts of GET /api/usage share one cutoff.
+    const from = new Date();
+    from.setDate(from.getDate() - days);
 
     // Every breakdown shares the same three sums, so $group + $project them once.
     const spendSums = {

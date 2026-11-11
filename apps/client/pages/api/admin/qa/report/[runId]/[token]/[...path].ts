@@ -5,6 +5,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { NotFoundError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { getQaArtifactsStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { verifyQaReportToken } from '@server/qa/reportToken';
+import { withStorageShim } from '@server/qa/reportStorageShim';
 
 const RUN_ID = /^[a-f0-9]{24}$/;
 
@@ -31,7 +32,8 @@ const CONTENT_TYPES: Record<string, string> = {
  * relative asset URLs carry it with no cookie. CSP sandbox gives the report an
  * opaque origin, so its scripts cannot reach the app's storage or cookies. Never
  * relax the sandbox: the run page's trace download is the fallback if the
- * embedded viewer fails.
+ * embedded viewer fails. HTML gets an in-memory Storage stand-in, since the
+ * report crashes on startup when localStorage throws (server/qa/reportStorageShim.ts).
  */
 const handler = baseApi({ auth: false }).get(async (req, res) => {
   const runId = typeof req.query.runId === 'string' ? req.query.runId : '';
@@ -54,12 +56,14 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     throw new NotFoundError('Report file not found');
   }
 
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === '.html') body = withStorageShim(body);
   res.setHeader('Content-Security-Policy', 'sandbox allow-scripts allow-popups allow-downloads');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   // The URL carries the token; keep it out of Referer on outbound links.
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('Cache-Control', 'private, max-age=300');
-  res.setHeader('Content-Type', CONTENT_TYPES[path.extname(filePath).toLowerCase()] ?? 'application/octet-stream');
+  res.setHeader('Content-Type', CONTENT_TYPES[ext] ?? 'application/octet-stream');
   return res.status(200).send(body);
 });
 

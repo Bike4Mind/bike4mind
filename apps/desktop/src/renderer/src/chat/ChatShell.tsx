@@ -337,7 +337,11 @@ export function ChatShell({
   // A conversation picked before its transcript has been read would otherwise show the empty
   // thread's "send a message" line for a frame - or, on a switch, the PREVIOUS conversation's
   // transcript under this one's id until the read lands.
-  const opening = settling || (!!activeId && conversation.session?.id !== activeId);
+  const opening =
+    settling || (!!activeId && conversation.session?.id !== activeId && conversation.openFailedFor !== activeId);
+  // The composer's per-chat settings show conversation.session: the previous chat's while opening, none after a failed open.
+  const chatSettingsLocked = !activeId || settling || conversation.session?.id !== activeId;
+  const openFailed = !!activeId && conversation.openFailedFor === activeId && conversation.session?.id !== activeId;
   const spawnSuggestions = useSpawnSuggestions(conversation.session);
   const heldRelays = useHeldRelays(activeId);
   const markSessionStart = useSessionStartTiming(sessions);
@@ -998,11 +1002,13 @@ export function ChatShell({
    */
   const disabledPlaceholder = settling
     ? ''
-    : creatingCode
-      ? 'Starting a session...'
-      : mode === 'code'
-        ? 'Start a Code session to type here'
-        : 'Start a conversation to type here';
+    : openFailed
+      ? 'This conversation could not be opened'
+      : creatingCode
+        ? 'Starting a session...'
+        : mode === 'code'
+          ? 'Start a Code session to type here'
+          : 'Start a conversation to type here';
 
   const setQuote = useCallback((sessionId: string, quote: string | null) => {
     setQuotes(current => {
@@ -2042,7 +2048,7 @@ export function ChatShell({
 
             <Composer
               sessionId={activeId}
-              disabled={!activeId || creatingCode}
+              disabled={!activeId || creatingCode || openFailed}
               disabledPlaceholder={disabledPlaceholder}
               streaming={turnOpen}
               attachments={draft}
@@ -2080,7 +2086,7 @@ export function ChatShell({
               // Chat: for a frame after a mode switch, the open session is still the old mode's.
               addFolder={
                 mode === 'chat' && (conversation.session?.mode ?? 'chat') === 'chat'
-                  ? { onClick: () => void addFolder(), disabled: opening }
+                  ? { onClick: () => void addFolder(), disabled: opening || openFailed }
                   : null
               }
               sessionMode={conversation.session?.mode ?? 'chat'}
@@ -2101,8 +2107,9 @@ export function ChatShell({
               leading={
                 <>
                   <ApprovalModePill
+                    key={`approval:${activeId ?? ''}`}
                     mode={conversation.session?.approvalMode ?? 'ask'}
-                    disabled={!activeId}
+                    disabled={chatSettingsLocked}
                     onSelect={mode => void conversation.setApprovalMode(mode)}
                   />
                   {orchestrateCapable && (
@@ -2123,9 +2130,10 @@ export function ChatShell({
                   trailing={
                     <>
                       <ModelPicker
+                        key={`model:${activeId ?? ''}`}
                         catalog={catalog}
                         modelId={conversation.session?.model ?? null}
-                        disabled={!activeId}
+                        disabled={chatSettingsLocked}
                         onSelect={model => void conversation.setModel(model)}
                         noLocal={noLocal}
                         local={localMode}
@@ -2144,11 +2152,12 @@ export function ChatShell({
                   {compact => (
                     <>
                       <ReasoningEffortPicker
+                        key={`effort:${activeId ?? ''}`}
                         models={catalog.models}
                         modelId={conversation.session?.model ?? null}
                         effort={conversation.session?.reasoningEffort ?? 'default'}
                         defaultEffort={defaultEffort}
-                        disabled={!activeId}
+                        disabled={chatSettingsLocked}
                         compact={compact}
                         onSelect={effort => void conversation.setReasoningEffort(effort)}
                       />
@@ -2159,15 +2168,16 @@ export function ChatShell({
                         generation={conversation.session?.generation}
                         modelDefaults={modelDefaults ?? undefined}
                         effort={conversation.session?.reasoningEffort ?? 'default'}
-                        disabled={!activeId}
+                        disabled={chatSettingsLocked}
                         compact={compact}
                         onChange={conversation.setGeneration}
                       />
                       <PromptCacheTtlPicker
+                        key={`cache:${activeId ?? ''}`}
                         model={modelOption}
                         ttl={sessionCacheTtl}
                         contextTokens={composerUsage.contextTokens ?? 0}
-                        disabled={!activeId}
+                        disabled={chatSettingsLocked}
                         compact={compact}
                         onSelect={ttl => void conversation.setPromptCacheTtl(ttl)}
                       />

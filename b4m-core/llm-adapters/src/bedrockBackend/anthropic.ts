@@ -47,6 +47,7 @@ import {
 import { toAnthropicContent } from '../anthropicContent';
 import { ensureToolPairingIntegrity } from '../toolPairingUtils';
 import { TOOL_CHANGES_BETA } from '../toolChanges';
+import { SafetyRefusalError } from '../llmRefusalErrors';
 import { appendIdentityReminder, buildIdentityReminder, shouldOmitIdentityReminder } from '../identityReminder';
 
 /**
@@ -60,7 +61,7 @@ function safetyRefusalError(model: string): Error {
       model,
     }
   );
-  return new Error(`Anthropic safety classifier refusal for ${model} - falling back to an alternative model`);
+  return new SafetyRefusalError(model);
 }
 
 enum ClaudeChunkTypes {
@@ -361,7 +362,8 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
   }
 
   /** Catalog record first: an operator row's refusalFallback must win over the table (see resolveApiSurface). */
-  private fallsBackOnRefusal(model: string): boolean {
+  private fallsBackOnRefusal(model: string, options?: Partial<ICompletionOptions>): boolean {
+    if (options?.settleRefusal) return false;
     return refusalFallsBack(
       this._dispatch.for(model) ??
         this.getModelInfoList().find(m => m.id === model) ?? { id: model, backend: ModelBackend.Bedrock }
@@ -1338,7 +1340,8 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
 
   translateChunk(
     model: string,
-    chunk: Record<string, unknown>
+    chunk: Record<string, unknown>,
+    options?: Partial<ICompletionOptions>
   ): { done: boolean; chunk?: ICompletionResponseChunk | undefined } {
     try {
       // Parse the response from Anthropic API
@@ -1374,7 +1377,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       }
 
       const stopReason = (response as { stop_reason?: string }).stop_reason;
-      if (stopReason === 'refusal' && this.fallsBackOnRefusal(model)) {
+      if (stopReason === 'refusal' && this.fallsBackOnRefusal(model, options)) {
         throw safetyRefusalError(model);
       }
 
@@ -1435,7 +1438,11 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     }
   }
 
-  translateStreamChunk(model: string, chunk: unknown): { done: boolean; chunk?: ICompletionResponseChunk } {
+  translateStreamChunk(
+    model: string,
+    chunk: unknown,
+    options?: Partial<ICompletionOptions>
+  ): { done: boolean; chunk?: ICompletionResponseChunk } {
     let done = false;
     let refused = false;
     let choice: IChoice;
@@ -1577,7 +1584,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
           providerBlocks.push({ providerBlock: anthropicBlock(serverBlock), textOffset: 0 });
         }
       } else if (isMessageDelta(chunk)) {
-        refused = chunk.delta?.stop_reason === 'refusal' && this.fallsBackOnRefusal(model);
+        refused = chunk.delta?.stop_reason === 'refusal' && this.fallsBackOnRefusal(model, options);
         // Anthropic's native vocabulary is the canonical one, so it passes through unchanged. base.ts
         // forwards it to CompletionInfo.stopReason; without it a max_tokens cut-off is silent. pause_turn
         // additionally tells the caller to re-send and resume a paused server tool loop.

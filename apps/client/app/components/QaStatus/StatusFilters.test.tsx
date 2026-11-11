@@ -38,4 +38,27 @@ describe('StatusFilters', () => {
     fireEvent.blur(input);
     expect(onChange).toHaveBeenCalledWith({ branch: 'feat-x' });
   });
+
+  it('keeps an env and tenant from the URL while the facets load', () => {
+    const onChange = vi.fn();
+    const search = { product: 'product-a', env: 'staging', tenant: 'tenant-a' };
+    const { rerender } = render(<StatusFilters search={search} onChange={onChange} />, { wrapper: QaTestWrapper });
+    rerender(<StatusFilters search={search} facets={facets} onChange={onChange} />);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.getByTestId('qa-filter-env')).toHaveTextContent('staging');
+    expect(screen.getByTestId('qa-filter-tenant')).toHaveTextContent('tenant-a');
+  });
+
+  it('keeps an env from the URL that is not in the facets', () => {
+    const onChange = vi.fn();
+    const search = { product: 'product-a', env: 'preview-1' };
+    const { rerender } = render(<StatusFilters search={search} facets={facets} onChange={onChange} />, {
+      wrapper: QaTestWrapper,
+    });
+    rerender(
+      <StatusFilters search={search} facets={{ ...facets, envs: ['staging', 'preview-2'] }} onChange={onChange} />
+    );
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.getByTestId('qa-filter-env')).toHaveTextContent('preview-1');
+  });
 });

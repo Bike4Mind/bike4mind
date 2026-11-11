@@ -4,6 +4,8 @@ import { dirname } from 'node:path';
 import {
   emptyStoredModelSettings,
   parseModelSettingsFile,
+  parseModelSettingsJson,
+  modelSettingsJsonProblem,
   changedJsonPath,
   quotedForMessage,
   storedModelEntry,
@@ -85,9 +87,9 @@ export class ModelSettingsStore {
         ({ stamp, text }) => {
           let raw: unknown;
           try {
-            raw = JSON.parse(text);
-          } catch {
-            throw new ModelSettingsFileError(this.filePath, 'is not valid JSON');
+            raw = parseModelSettingsJson(text);
+          } catch (error) {
+            throw new ModelSettingsFileError(this.filePath, modelSettingsJsonProblem(error));
           }
           const parsed = parseModelSettingsFile(raw);
           if (!parsed) throw new ModelSettingsFileError(this.filePath, 'does not hold model settings');

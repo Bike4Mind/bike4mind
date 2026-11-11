@@ -6,6 +6,8 @@
  * API keys. Off with the shadowDetectionRecordingEnabled setting, like every shadow detector.
  * It then runs the ban-evasion device rule over the same window; that rule hands its detections to
  * the abuse assessment and automated containment, which act only as autoContainmentConfig allows.
+ *
+ * The same run also auto-grades stale signup bursts: see server/security/shadowDetectionAutoGrade.ts.
  */
 
 import { Context } from 'aws-lambda';
@@ -32,6 +34,11 @@ import {
   liveDeviceLinkDeps,
   sweepDeviceLinks,
 } from '@server/security/autoContainment/deviceLink';
+import { gradeStaleSignupBursts, liveStaleDetectionGradeDeps } from '@server/security/shadowDetectionAutoGrade';
+import { systemAuditWriter } from '@server/utils/systemAuditWriter';
+
+const AUTO_GRADE_ACTOR = 'shadow-detection-auto-grade';
+const AUTO_GRADE_DEFAULT_DAYS = 7;
 
 export const ACCOUNT_CAMPAIGN_WINDOW_HOURS = 72;
 /** Newest signups scanned per run; a busier window is cut and reported as truncated. */
@@ -130,8 +137,25 @@ export async function handler(_event: unknown, context: Context) {
 
   const settings = await getSettingsMap(
     { adminSettings: adminSettingsRepository },
-    { skipCache: true, names: ['shadowDetectionRecordingEnabled'] }
+    { skipCache: true, names: ['shadowDetectionRecordingEnabled', 'shadowDetectionAutoGradeAfterDays'] }
   );
+
+  // Before the recording gate: detections already recorded still go stale with recording switched off.
+  // A failure is logged and never stops the campaign sweep.
+  try {
+    const autoGrade = await gradeStaleSignupBursts({
+      afterDays: getSettingsValue('shadowDetectionAutoGradeAfterDays', settings, AUTO_GRADE_DEFAULT_DAYS),
+      now: new Date(),
+      deps: liveStaleDetectionGradeDeps({
+        writeAudit: systemAuditWriter(AUTO_GRADE_ACTOR, 'cron/accountCampaignSweep', logger),
+        logger,
+      }),
+    });
+    logger.log('Stale shadow detection auto-grade finished', autoGrade);
+  } catch (error) {
+    logger.error('Stale shadow detection auto-grade failed', { error: String(error) });
+  }
+
   if (!getSettingsValue('shadowDetectionRecordingEnabled', settings, true)) {
     logger.log('Account campaign sweep skipped: shadow detection recording is off');
     return;

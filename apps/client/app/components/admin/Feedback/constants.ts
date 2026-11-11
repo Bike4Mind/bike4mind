@@ -1,4 +1,5 @@
-import { FEEDBACK_SUBJECTS, FeedbackStatus, FeedbackSubject } from '@bike4mind/common';
+import { FEEDBACK_SUBJECTS, FeedbackStatus, FeedbackSubject, FeedbackType } from '@bike4mind/common';
+import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import { ADMIN_PAGE_SIZES } from '../shared/adminStyles';
 
 /**
@@ -22,6 +23,35 @@ export const FEEDBACK_STATUS_LABELS: Record<FeedbackStatus, string> = {
   [FeedbackStatus.InProgress]: 'In progress',
   [FeedbackStatus.Closed]: 'Closed',
 };
+
+/** Severity order: the type filter and its URL param list types in it. */
+export const FEEDBACK_TYPE_ORDER = [
+  FeedbackType.BUG,
+  FeedbackType.THUMBS_DOWN,
+  FeedbackType.FEEDBACK,
+  FeedbackType.THUMBS_UP,
+] as const;
+
+export const FEEDBACK_TYPE_LABELS: Record<FeedbackType, string> = {
+  [FeedbackType.BUG]: 'Bug',
+  [FeedbackType.THUMBS_DOWN]: 'Thumbs down',
+  [FeedbackType.FEEDBACK]: 'Feedback',
+  [FeedbackType.THUMBS_UP]: 'Thumbs up',
+};
+
+export const FEEDBACK_TYPE_TONES: Record<FeedbackType, AdminStatusTone> = {
+  [FeedbackType.BUG]: 'bad',
+  [FeedbackType.THUMBS_DOWN]: 'warn',
+  [FeedbackType.FEEDBACK]: 'neutral',
+  [FeedbackType.THUMBS_UP]: 'good',
+};
+
+/**
+ * The type a report is shown as. Reports from the help modal (and older ones) carry no type, and
+ * GET /api/feedback's `type=Feedback` filter matches them, so they read as Feedback here too.
+ */
+export const feedbackTypeOf = (type: string | undefined): FeedbackType =>
+  FEEDBACK_TYPE_ORDER.find(known => known === type) ?? FeedbackType.FEEDBACK;
 
 /**
  * Translates the subject filter chip's value back into the filter. Clearing the chip hands back

@@ -2,7 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import React from 'react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { MODEL_LIST_REVISION_MEMO_MS } from '@bike4mind/common';
 
 const mockGet = vi.fn();
 const mockPost = vi.fn();
@@ -13,8 +15,11 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
 import { DiscoveryStatusCard } from './DiscoveryStatusCard';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
+let queryClient = new QueryClient();
 const TestWrapper = ({ children }: { children: React.ReactNode }) => (
-  <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
+  <QueryClientProvider client={queryClient}>
+    <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
+  </QueryClientProvider>
 );
 
 const CRON_RUN = {
@@ -365,6 +370,7 @@ const runNowButton = () => screen.getByTestId('model-lifecycle-run-now-btn');
 describe('DiscoveryStatusCard run now', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
+    queryClient = new QueryClient();
     vi.useFakeTimers();
     mockGet.mockResolvedValue({ data: STATUS });
     mockPost.mockResolvedValue({ data: { dispatched: 'lambda' } });
@@ -405,6 +411,55 @@ describe('DiscoveryStatusCard run now', () => {
     expect(screen.getByTestId('discovery-status-notice')).toHaveTextContent('Run finished: ok.');
     expect(screen.queryByTestId('discovery-status-waiting')).not.toBeInTheDocument();
     expect(runNowButton()).not.toHaveAttribute('disabled');
+  });
+
+  it('refetches the model list once the manual run reports, after the server memo, and not before', async () => {
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const manualRunning = runLike({ startedAt: '2026-07-26T12:10:00.000Z', finishedAt: null, trigger: 'manual' });
+    mockGet
+      .mockResolvedValueOnce({ data: STATUS })
+      .mockResolvedValueOnce({ data: STATUS })
+      .mockResolvedValueOnce({ data: statusWith(manualRunning) })
+      .mockResolvedValue({
+        data: statusWith(runLike({ ...manualRunning, finishedAt: '2026-07-26T12:12:00.000Z', status: 'ok' })),
+      });
+
+    await mountAndDispatch();
+    await tick(POLL_INTERVAL_MS);
+    expect(invalidate).not.toHaveBeenCalled();
+
+    await tick(POLL_INTERVAL_MS);
+    // Held for the server-side revision memo, so a chat sent from the new list is accepted.
+    await tick(MODEL_LIST_REVISION_MEMO_MS - 1);
+    expect(invalidate).not.toHaveBeenCalled();
+    await tick(1);
+    expect(invalidate).toHaveBeenCalledTimes(1);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['llm', 'models'] });
+  });
+
+  it('tells its parent once the manual run reports', async () => {
+    const onRunFinished = vi.fn();
+    const manualRunning = runLike({ startedAt: '2026-07-26T12:10:00.000Z', finishedAt: null, trigger: 'manual' });
+    mockGet
+      .mockResolvedValueOnce({ data: STATUS })
+      .mockResolvedValueOnce({ data: STATUS })
+      .mockResolvedValueOnce({ data: statusWith(manualRunning) })
+      .mockResolvedValue({
+        data: statusWith(runLike({ ...manualRunning, finishedAt: '2026-07-26T12:12:00.000Z', status: 'ok' })),
+      });
+    render(
+      <TestWrapper>
+        <DiscoveryStatusCard onRunFinished={onRunFinished} />
+      </TestWrapper>
+    );
+    await tick();
+    fireEvent.click(runNowButton());
+    await tick();
+
+    await tick(POLL_INTERVAL_MS);
+    expect(onRunFinished).not.toHaveBeenCalled();
+    await tick(POLL_INTERVAL_MS);
+    expect(onRunFinished).toHaveBeenCalledTimes(1);
   });
 
   it('stays disabled for the whole dispatch-and-wait window, not just the POST', async () => {

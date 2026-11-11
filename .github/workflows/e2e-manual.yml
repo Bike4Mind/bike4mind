@@ -23,6 +23,7 @@ on:
           - Auth
           - Existing User Login
           - Signup
+          - Referrals
           - Admin
           - Notebook
           - Prompts
@@ -83,6 +84,7 @@ jobs:
             "Auth")             ARGS="--project=unauthenticated e2e/auth.spec.ts" ;;
             "Existing User Login") ARGS="--project=unauthenticated e2e/existing-user-login.spec.ts" ;;
             "Signup")           ARGS="--project=unauthenticated e2e/signup.spec.ts" ;;
+            "Referrals")        ARGS="--project=referrals" ;;
             "Admin")            ARGS="--project=admin" ;;
             "Notebook")         ARGS="--project=notebook" ;;
             "Prompts")          ARGS="--project=prompts" ;;

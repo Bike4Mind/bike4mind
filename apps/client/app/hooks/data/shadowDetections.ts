@@ -86,12 +86,15 @@ export function useShadowDetectionVerdict() {
   });
 }
 
+/**
+ * The merged server responses. Records changed since they were selected come back in `conflicts`,
+ * ungraded; `failureMessage` is set when a batch request itself failed and its ids are in `failed`.
+ */
 export type ShadowDetectionBulkVerdictResult = {
-  updated: ShadowDetectionRow[];
-  /** Moved since the reviewer read them; left alone and returned as they are now. */
+  graded: ShadowDetectionRow[];
   conflicts: ShadowDetectionRow[];
-  notFound: string[];
-  failed?: string[];
+  missing: string[];
+  failed: string[];
   failureMessage?: string;
 };
 
@@ -105,22 +108,22 @@ export function useShadowDetectionBulkVerdict() {
     mutationFn: async (
       request: Omit<ShadowDetectionBulkVerdictRequest, 'reason'> & { reason: string }
     ): Promise<ShadowDetectionBulkVerdictResult> => {
-      const merged: ShadowDetectionBulkVerdictResult = { updated: [], conflicts: [], notFound: [] };
+      const merged: ShadowDetectionBulkVerdictResult = { graded: [], conflicts: [], missing: [], failed: [] };
       for (let start = 0; start < request.items.length; start += SHADOW_DETECTION_BULK_VERDICT_LIMIT) {
         const items = request.items.slice(start, start + SHADOW_DETECTION_BULK_VERDICT_LIMIT);
         try {
-          const { data } = await api.post<ShadowDetectionBulkVerdictResult>(`${ENDPOINT}/verdicts`, {
+          const { data } = await api.post<ShadowDetectionBulkVerdictResult>(`${ENDPOINT}/bulk-verdict`, {
             ...request,
             items,
           });
-          merged.updated.push(...data.updated);
+          merged.graded.push(...data.graded);
           merged.conflicts.push(...data.conflicts);
-          merged.notFound.push(...data.notFound);
-          if (data.failed?.length) merged.failed = [...(merged.failed ?? []), ...data.failed];
+          merged.missing.push(...data.missing);
+          merged.failed.push(...data.failed);
         } catch (error) {
           return {
             ...merged,
-            failed: [...(merged.failed ?? []), ...request.items.slice(start).map(item => item.id)],
+            failed: [...merged.failed, ...request.items.slice(start).map(item => item.id)],
             failureMessage: getErrorMessage(error),
           };
         }

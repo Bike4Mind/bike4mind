@@ -64,6 +64,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.role.admin_revoked': { category: 'access', severity: 'critical', write: 'strict' },
   'user.throttle_tier.changed': { category: 'access', severity: 'critical', write: 'strict' },
   'user.role.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
+  'user.permissions.updated': { category: 'access', severity: 'critical', write: 'strict' },
+  'user.permissions.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
   'user.impersonation.started': { category: 'access', severity: 'critical', write: 'strict' },
   'user.impersonation.escalated': { category: 'access', severity: 'critical', write: 'strict' },
   'user.impersonation.ended': { category: 'access', severity: 'info', write: 'bestEffort' },
@@ -133,6 +135,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.api_key_trust.revoked': { category: 'identity', severity: 'notice', write: 'bestEffort' },
   'user.new_account_spend_cap.lifted': { category: 'identity', severity: 'notice', write: 'strict' },
   'user.new_account_spend_cap.restored': { category: 'identity', severity: 'notice', write: 'bestEffort' },
+  'user.file_embedding_window.reset': { category: 'credits', severity: 'notice', write: 'strict' },
   // Analytics classification (User.isInternal): grants nothing, but decides whether an account
   // counts as a customer, so both directions keep a record.
   'user.internal.marked': { category: 'account', severity: 'notice', write: 'strict' },

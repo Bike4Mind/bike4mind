@@ -83,6 +83,19 @@ describe('OverviewTab internal account row', () => {
   });
 });
 
+describe('OverviewTab file indexing window row', () => {
+  it('opens the reset action', () => {
+    mocks.currentUser = { id: 'admin1', isAdmin: true };
+    const onAction = vi.fn();
+    render(<OverviewTab user={buildProfile()} onAction={onAction} onViewActivity={vi.fn()} onViewCredits={vi.fn()} />, {
+      wrapper: ProfileTestWrapper,
+    });
+
+    fireEvent.click(screen.getByTestId('user-actions-reset-file-embedding-window'));
+    expect(onAction).toHaveBeenCalledWith('fileEmbeddingWindowReset');
+  });
+});
+
 describe('OverviewTab recent activity', () => {
   it('lists the recent timeline entries from every source', async () => {
     mocks.get.mockResolvedValue({ data: { entries: [adminRow, creditRow], nextCursor: null } });
@@ -168,5 +181,27 @@ describe('OverviewTab API key trust row', () => {
     mocks.currentUser = { id: 'd1', isAdmin: false, adminPermissions: ['keys:revoke'] };
     renderTab();
     expect(screen.getByTestId('user-profile-key-trust-btn')).toBeEnabled();
+  });
+});
+
+describe('OverviewTab file indexing window reset row', () => {
+  beforeEach(() => {
+    mocks.get.mockResolvedValue({ data: { entries: [], nextCursor: null, notes: [], items: [] } });
+  });
+
+  it('is disabled with the missing permission for a delegate without settings:manage', () => {
+    mocks.currentUser = { id: 'd1', isAdmin: false, adminPermissions: ['support:read'] };
+    renderTab();
+    expect(screen.getByTestId('user-actions-reset-file-embedding-window')).toBeDisabled();
+    expect(screen.getByTestId('user-actions-reset-file-embedding-window-reason')).toHaveAttribute(
+      'aria-label',
+      'Missing permission: settings:manage'
+    );
+  });
+
+  it('is enabled for a delegate with settings:manage', () => {
+    mocks.currentUser = { id: 'd1', isAdmin: false, adminPermissions: ['settings:manage'] };
+    renderTab();
+    expect(screen.getByTestId('user-actions-reset-file-embedding-window')).toBeEnabled();
   });
 });
