@@ -6088,16 +6088,18 @@ export const settingsMap = {
     order: 39,
     dependsOn: 'requireThreeDSecureOnFirstPurchase',
   }),
-  // Read by apps/client/server/integrations/stripe/termsConsent.ts at subscription checkout.
+  // Read by apps/client/server/integrations/stripe/termsConsent.ts at checkout and credit purchase.
   requireCheckoutTermsConsent: makeBooleanSetting({
     key: 'requireCheckoutTermsConsent',
     name: 'Require Terms of Service Acceptance at Checkout',
     defaultValue: false,
     description:
-      'Adds a required Terms of Service checkbox to Stripe Checkout for subscriptions, and records the acceptance on the account. Stripe rejects the checkout unless a Terms of Service URL is set in the Stripe dashboard (Settings > Public details), so set that first in every Stripe account this stage uses.',
+      'Adds a required Terms of Service checkbox to Stripe Checkout for subscriptions and before one-time credit purchases (web and desktop), and records the acceptance on the account. Stripe rejects subscription checkout unless a Terms of Service URL is set in the Stripe dashboard (Settings > Public details), so set that first in every Stripe account this stage uses.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.CREDITS.id,
     order: 39.5,
+    // The web credit purchase button reads it to show the checkbox.
+    userReadable: true,
   }),
   signupNetworkAlertsEnabled: makeBooleanSetting({
     key: 'signupNetworkAlertsEnabled',

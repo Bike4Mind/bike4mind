@@ -195,6 +195,15 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         break;
       }
 
+      // The version the buyer was shown at start-payment, not the one current now.
+      if (intent.metadata.termsAcceptedVersion) {
+        await userRepository.update({
+          id: user.id,
+          checkoutTermsAcceptedVersion: intent.metadata.termsAcceptedVersion,
+          checkoutTermsAcceptedAt: new Date(event.created * 1000),
+        });
+      }
+
       const credits = Number(intent.metadata.credits);
       // Ledger row and balance commit together (grantCreditPurchase), so 'already_granted' means
       // the credits really landed and a redelivery can be acknowledged. Any other failure rolled

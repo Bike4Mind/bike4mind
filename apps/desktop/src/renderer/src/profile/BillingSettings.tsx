@@ -2,13 +2,16 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
+import Checkbox from '@mui/joy/Checkbox';
 import Chip from '@mui/joy/Chip';
 import CircularProgress from '@mui/joy/CircularProgress';
+import Link from '@mui/joy/Link';
 import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import type { AuthState } from '@shared/auth';
 import type { AccountBilling } from '@shared/account';
+import { isExternallyOpenable } from '@shared/externalLinks';
 import { CheckIcon } from '../chat/icons';
 
 type CheckoutState = 'idle' | 'opening' | 'pending';
@@ -47,6 +50,7 @@ function SignedInBilling() {
   const [selectedPackId, setSelectedPackId] = useState<string | null>(null);
   const [purchasing, setPurchasing] = useState(false);
   const [purchaseNotice, setPurchaseNotice] = useState<string | null>(null);
+  const [termsAccepted, setTermsAccepted] = useState(false);
   const purchaseLock = useRef(false);
   const checkoutLock = useRef(false);
   const reading = useRef(false);
@@ -120,14 +124,18 @@ function SignedInBilling() {
   const hasSubscription = subscriptions.length > 0;
   const selectedPack =
     billing?.creditPackages?.find(pack => pack.id === selectedPackId) ?? billing?.creditPackages?.[0];
+  const termsRequired = billing?.termsConsentRequired === true;
+  const termsUrl = billing?.termsUrl && isExternallyOpenable(billing.termsUrl) ? billing.termsUrl : null;
   const purchase = async () => {
-    if (purchaseLock.current || !selectedPack) return;
+    if (purchaseLock.current || !selectedPack || (termsRequired && !termsAccepted)) return;
     purchaseLock.current = true;
     setPurchasing(true);
     setCheckoutError(null);
     setPurchaseNotice(null);
     try {
-      const result = await window.b4m.account.purchaseCredits(selectedPack.id);
+      const result = termsRequired
+        ? await window.b4m.account.purchaseCredits(selectedPack.id, true)
+        : await window.b4m.account.purchaseCredits(selectedPack.id);
       if (!mounted.current) return;
       if (!result.ok) setCheckoutError(result.error);
       else
@@ -481,10 +489,44 @@ function SignedInBilling() {
             <Typography level="body-xs" textColor="text.tertiary">
               Secure payment opens inside the desktop app. Purchases are added to your personal balance.
             </Typography>
+            {termsRequired && (
+              <Checkbox
+                data-testid="billing-terms-checkbox"
+                checked={termsAccepted}
+                disabled={purchasing}
+                onChange={event => setTermsAccepted(event.target.checked)}
+                label={
+                  <>
+                    I agree to the{' '}
+                    {termsUrl ? (
+                      <Link
+                        component="button"
+                        data-testid="billing-terms-link"
+                        onClick={event => {
+                          event.preventDefault();
+                          void window.b4m.shell.openExternal(termsUrl);
+                        }}
+                        sx={{ position: 'relative', zIndex: 2 }}
+                      >
+                        Terms of Service
+                      </Link>
+                    ) : (
+                      'Terms of Service'
+                    )}
+                  </>
+                }
+              />
+            )}
             <Button
               data-testid="billing-top-up-btn"
               loading={purchasing}
-              disabled={!billing.billingEnabled || !selectedPack || loading || checkout !== 'idle'}
+              disabled={
+                !billing.billingEnabled ||
+                !selectedPack ||
+                loading ||
+                checkout !== 'idle' ||
+                (termsRequired && !termsAccepted)
+              }
               onClick={() => void purchase()}
               sx={{ alignSelf: { sm: 'flex-end' } }}
             >
