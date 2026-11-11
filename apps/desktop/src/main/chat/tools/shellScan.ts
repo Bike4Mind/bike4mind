@@ -2653,7 +2653,9 @@ function dropsGitConfig(tokens: readonly string[]): boolean {
 /** Whether an `env` leading `tokens` clears the environment, or the variables, the shell's safe.bareRepository rides in. */
 function dropsBareRepository(tokens: readonly string[]): boolean {
   for (let at = 0; at < tokens.length && isWrapper(tokens[at]); at = pastWrapper(tokens, at)) {
-    if (programName(unquote(tokens[at])) !== 'env') continue;
+    const name = programName(unquote(tokens[at]));
+    if (name === 'exec' && givenOptions(tokens, at).some(given => given.short && given.option === 'c')) return true;
+    if (name !== 'env') continue;
     if (wrapperWords('env', tokens, at + 1).options.some(index => unquote(tokens[index]) === '-')) return true;
     for (const given of givenOptions(tokens, at)) {
       if (given.option === 'i' || given.option === 'ignore-environment') return true;
@@ -2678,6 +2680,42 @@ function dropsBareRepositoryBehind(tokens: readonly string[]): boolean {
     const command = tokens.slice(at);
     return programName(unquote(withoutWrappers(command)[0] ?? '')) === 'git' && dropsBareRepository(command);
   });
+}
+
+/** The words of each git command `tokens` launch behind a tool launcher (`pnpm exec git`, `npx git`) or `find -exec`. */
+function launchedGitCommands(tokens: readonly string[]): string[][] {
+  const [wrapped, ...rest] = withoutWrappers(tokens);
+  if (wrapped === undefined) return [];
+  const name = programName(unquote(wrapped)).replace(/[\d.]+$/, '');
+  const runsGit = (words: readonly string[]): boolean => {
+    const [program] = withoutWrappers(words);
+    return program !== undefined && programName(unquote(program)) === 'git';
+  };
+  if (name === 'find') {
+    return findActions(rest).runs.flatMap(run => (runsGit(run) ? [run] : launchedGitCommands(run)));
+  }
+  const launcher = TOOL_LAUNCHERS.get(name);
+  if (launcher === undefined) return [];
+  const first = unquote(rest[0] ?? '');
+  const builtins = BUILTIN_COMMANDS.get(name);
+  const bare = builtins !== undefined && first !== '' && !first.startsWith('-') && !builtins.has(first);
+  if (!(launcher.length === 0 || launcher.includes(first) || bare)) return [];
+  const from = launcher.length === 0 || (bare && !launcher.includes(first)) ? 0 : 1;
+  for (let at = from; at < rest.length; at++) {
+    if (runsGit(rest.slice(at))) return [rest.slice(at)];
+  }
+  return [];
+}
+
+/**
+ * Whether the git words in `raw` (after `git`) leave the subcommand to words fed in (`inputSub`), or name `placeholder`
+ * (`{}`, an xargs replace string) in a global option or the subcommand.
+ */
+function namesInput(raw: readonly string[], placeholder: string | null, inputSub: boolean): boolean {
+  const at = gitSubcommandAt(raw);
+  if (at === null) return inputSub;
+  const upto = at === 'open' ? raw : raw.slice(0, at + 1);
+  return placeholder !== null && upto.some(word => wordValue(word).includes(placeholder));
 }
 
 /** Whether git's global options in `raw` (the words after `git`) set safe.bareRepository, by `-c` or `--config-env`. */
@@ -5129,7 +5167,7 @@ const GIT_TREE_WRITERS: ReadonlySet<string> = new Set([
   'switch',
 ]);
 
-/** Whether rsync's `args` leave out every `.git` (`--exclude .git`, `-C`) and have no filter that may put one back. */
+/** Whether rsync's `args` leave out every `.git` (`--exclude .git`) and have no filter that may put one back. */
 function rsyncSkipsGit(args: readonly string[]): boolean {
   const words = args.map(wordValue);
   const filters = /^(--(include|filter|exclude-from|include-from|relative|files-from)([=]|$)|-[^-]*[fFR])/;
@@ -5138,13 +5176,11 @@ function rsyncSkipsGit(args: readonly string[]): boolean {
   const namesGit = (word: string, index: number): boolean =>
     !word.startsWith('-') && words[index - 1] !== '--exclude' && /(^|\/)\.git(\/|$)/.test(word);
   if (words.some(namesGit)) return false;
-  const gitName = (name: string | undefined): boolean => name === '.git' || name === '.git/';
+  // A pattern ending in a slash (and `-C`) matches folders only, so a `.git` file still copies.
   return words.some(
     (word, index) =>
-      (word === '--exclude' && gitName(words[index + 1])) ||
-      (word.startsWith('--exclude=') && gitName(word.slice('--exclude='.length))) ||
-      word === '--cvs-exclude' ||
-      /^-[^-e]*C/.test(word)
+      (word === '--exclude' && words[index + 1] === '.git') ||
+      (word.startsWith('--exclude=') && word.slice('--exclude='.length) === '.git')
   );
 }
 
@@ -5160,10 +5196,26 @@ function linksFiles(program: string, args: readonly string[]): boolean {
 const TRUNCATE_VALUED = /^(-s|-r|--size|--reference)$/;
 const TOUCH_VALUED = /^(-r|-d|-t|--reference|--date|--time)$/;
 
-/** Whether a program only removes files and folders, none of them in a git dir. */
-function addsNoConfig(program: string, raw: readonly string[]): boolean {
-  if (!/^(rm|rmdir|unlink)$/.test(program)) return false;
-  return raw.every(word => !isDynamic(word) && !/[*?[{]/.test(word) && !/(^|\/)\.git(\/|$)/.test(wordValue(word)));
+/**
+ * The operand words `program` takes away: all of rm, rmdir and unlink's, the sources of mv's. Null for another program,
+ * or one that names a `.git` or removes parent folders too.
+ */
+function removedOperands(program: string, raw: readonly string[]): string[] | null {
+  let words: string[];
+  if (/^(rm|rmdir|unlink)$/.test(program)) {
+    if (program === 'rmdir' && raw.some(word => /^(-[^-]*p|--parents)/.test(wordValue(word)))) return null;
+    const end = raw.findIndex(word => wordValue(word) === '--');
+    words = raw.filter(
+      (word, index) => (end !== -1 && index > end) || (index !== end && !wordValue(word).startsWith('-'))
+    );
+  } else if (program === 'mv') {
+    const operands = copyOperands(program, raw);
+    const target = copyTarget(program, raw)?.value ?? operands.at(-1);
+    words = operands.filter(operand => operand !== target);
+  } else {
+    return null;
+  }
+  return words.some(word => /(^|\/)\.git(\/|$)/.test(wordValue(word))) ? null : words;
 }
 
 const SHELL_STRING_NODES = new Set([
@@ -5329,6 +5381,19 @@ function freshFolder(sub: string, rest: readonly string[]): { folder: string; us
 
 /** Subcommands taking `--strategy NAME`. */
 const STRATEGY_COMMANDS: ReadonlySet<string> = new Set(['merge', 'pull', 'rebase', 'cherry-pick', 'revert']);
+
+/** Short flags taking no value that may precede `-s` in one cluster, for the subcommands where `-s` is the strategy. */
+const MERGE_NO_VALUE_FLAGS: ReadonlyMap<string, string> = new Map([
+  ['merge', 'nqvef'],
+  ['pull', 'nqvefakptu46'],
+  ['rebase', 'nqvefikmp'],
+]);
+
+/** Subcommands whose operands may name a remote by `<name>::<address>`. */
+const REMOTE_HELPER_COMMANDS: ReadonlySet<string> = new Set(['fetch', 'pull', 'push', 'clone', 'ls-remote']);
+
+/** Remote helpers git runs from its own exec path before PATH. */
+const BUILT_IN_REMOTE_HELPERS: ReadonlySet<string> = new Set(['http', 'https', 'ftp', 'ftps', 'ext']);
 
 /** Merge strategies git builds in; any other name runs a git-merge-<name> program from PATH. */
 const MERGE_STRATEGIES: ReadonlySet<string> = new Set(['ort', 'recursive', 'resolve', 'octopus', 'ours', 'subtree']);
@@ -6048,7 +6113,8 @@ export async function scanShell(
       tree.rootNode.descendantsOfType('command_name').some(name => name?.text === 'coproc');
     // Writes an alias read is checked against (aliasConfigTouched), by the command making them: a path, none for any
     // config, or `unlisted` for a command naming no file it writes, which counts only when a config place lies in the roots.
-    const configWrites: { id: number; path?: string; tree?: boolean; unlisted?: boolean }[] = [];
+    // A `removal` takes a tree away (rm, or the source of a mv) and so makes no config of its own.
+    const configWrites: { id: number; path?: string; tree?: boolean; unlisted?: boolean; removal?: boolean }[] = [];
     const gitCommands = new Set<number>();
     let writer: number | null = null;
     const aliasChecks: {
@@ -6239,6 +6305,8 @@ export async function scanShell(
       if (parent !== null && [guardForm(cwd), real].some(place => guardFormWithin(parent, place))) return true;
       const name = posix.basename(form);
       if (name === '.gitconfig' || name === 'gitconfig') return true;
+      // A folder taken away at or above where git runs may be put back holding a `.git`.
+      if (write.removal && [guardForm(cwd), real].some(place => guardFormWithin(form, place))) return true;
       // The git dir and common dir may sit outside any `.git` folder (a `.bare` layout, a linked work tree).
       if (dirs.some(dir => guardFormWithin(dir, form) || (write.tree === true && guardFormWithin(form, dir))))
         return true;
@@ -6769,7 +6837,7 @@ export async function scanShell(
 
     /** Whether the file `write` names may be a config git reads anywhere: a tree, a `.git` or a `gitconfig`. */
     const mayChangeConfig = (write: (typeof configWrites)[number]): boolean => {
-      if (write.path === undefined) return false;
+      if (write.path === undefined || write.removal) return false;
       const form = guardForm(write.path);
       const name = posix.basename(form);
       return write.tree === true || /(^|\/)\.git(\/|$)/.test(form) || name === '.gitconfig' || name === 'gitconfig';
@@ -6946,14 +7014,16 @@ export async function scanShell(
       node: Node,
       rest: readonly string[],
       cwd: string,
-      shortStrategy: boolean
+      sub: string
     ): Promise<void> => {
       const names: string[] = [];
+      const flags = MERGE_NO_VALUE_FLAGS.get(sub);
+      const shortStrategy = flags === undefined ? null : new RegExp(`^-[${flags}]*s(.*)$`);
       for (let index = 0; index < rest.length; index++) {
         const arg = rest[index] as string;
         if (arg === '--') break;
         const long = /^--strategy(=(.*))?$/.exec(arg);
-        const short = shortStrategy ? /^-[nqvfe]*s(.*)$/.exec(arg) : null;
+        const short = shortStrategy?.exec(arg);
         if (long) names.push(long[1] === undefined ? (rest[++index] ?? '') : (long[2] ?? ''));
         else if (short) names.push(short[1] || (rest[++index] ?? ''));
       }
@@ -6963,11 +7033,41 @@ export async function scanShell(
         unreadOperands++;
         return;
       }
+      await checkPathPrograms(
+        node,
+        cwd,
+        custom.map(name => `git-merge-${name}`)
+      );
+    };
+
+    /** `<name>::<address>` operands make git run a git-remote-<name> program from PATH, which the scan checks like git-merge-<name>. */
+    const checkRemoteHelpers = async (node: Node, sub: string, rest: readonly string[], cwd: string): Promise<void> => {
+      const verb = wordValue(rest[0] ?? '');
+      const reads =
+        REMOTE_HELPER_COMMANDS.has(sub) ||
+        (sub === 'remote' && (verb === 'add' || verb === 'set-url')) ||
+        (sub === 'submodule' && verb === 'add');
+      if (!reads) return;
+      const names = rest.flatMap(word => {
+        const name = /^([A-Za-z0-9][\w.+-]*)::/.exec(wordValue(word))?.[1];
+        return name === undefined || BUILT_IN_REMOTE_HELPERS.has(name.toLowerCase()) ? [] : [name];
+      });
+      if (names.length > 0) {
+        await checkPathPrograms(
+          node,
+          cwd,
+          names.map(name => `git-remote-${name}`)
+        );
+      }
+    };
+
+    /** Counts a program git looks up on PATH as unread when one is there or could be written there before `node` runs. */
+    const checkPathPrograms = async (node: Node, cwd: string, programs: readonly string[]): Promise<void> => {
       const path = scriptPathEntries();
       if (path.unplaced) pathUnplaced = true;
       const folders = [...path.entries, ...(await projectPathFolders(cwd))];
-      for (const name of custom) {
-        if (await pathHolds(folders, `git-merge-${name}`)) unreadOperands++;
+      for (const program of programs) {
+        if (await pathHolds(folders, program)) unreadOperands++;
       }
       const check = {
         own: node.id,
@@ -6985,6 +7085,57 @@ export async function scanShell(
       aliasChecks.push(check);
     };
 
+    /**
+     * Records the trees `words` take away (see removedOperands) as removals; false, recording none, when one cannot be
+     * placed. A glob no name with a leading dot can match removes none of a folder's own `.git`, so it counts as the
+     * folder it opens from when that lies away from where bash is, and as the paths it matches where it does not.
+     */
+    const noteRemovals = async (node: Node, words: readonly string[]): Promise<boolean> => {
+      if (sep !== '/' || wslLocation(state.cwd) !== null) return false;
+      const removed: string[] = [];
+      for (const raw of words) {
+        if (isDynamic(raw)) return false;
+        const forms = operandWords(raw, scope());
+        if (forms === null) return false;
+        for (const word of forms) {
+          if (word.expandAt !== null || /(^|\/)\.git(\/|$)/.test(word.text)) return false;
+          if (!word.glob.includes(true)) {
+            removed.push(...operandTargets(state.cwd, word.text));
+            continue;
+          }
+          if (dotGlob) return false;
+          let offset = 0;
+          let open: string | null = null;
+          const parts = word.text.split('/');
+          for (const [index, part] of parts.entries()) {
+            const globbed = word.glob.slice(offset, offset + part.length).includes(true);
+            if (globbed && part.startsWith('.') && !word.glob[offset]) return false;
+            if (globbed && open === null) open = parts.slice(0, index).join('/');
+            offset += part.length + 1;
+          }
+          const [folder] = open ? operandTargets(state.cwd, open) : [];
+          if (folder !== undefined && !guardFormWithin(guardForm(folder), guardForm(state.cwd))) {
+            removed.push(folder);
+            continue;
+          }
+          const found = await globExpansion(word, state.cwd, dotGlob, stopped);
+          if (found === null || (globOptions && found.length === 0)) return false;
+          removed.push(...found.map(match => match.path));
+        }
+      }
+      for (const path of removed) configWrites.push({ id: node.id, path, tree: true, removal: true });
+      return true;
+    };
+
+    /** The programs a git subcommand looks up on PATH: merge strategies and remote helpers. */
+    const checkGitPrograms = async (
+      node: Node,
+      git: { sub: string; rest: readonly string[]; cwd: string }
+    ): Promise<void> => {
+      if (STRATEGY_COMMANDS.has(git.sub)) await checkMergeStrategies(node, git.rest, git.cwd, git.sub);
+      await checkRemoteHelpers(node, git.sub, git.rest, git.cwd);
+    };
+
     const runCommand = async (
       node: Node,
       written: string[],
@@ -6993,6 +7144,12 @@ export async function scanShell(
     ): Promise<ShellCommand | null> => {
       const expanded = await gitAliasExpansion(node, written);
       if (expanded === null) unreadOperands++;
+      for (const launched of launchedGitCommands(written)) {
+        const words = withoutWrappers(launched).slice(1);
+        if ((await gitAliasExpansion(node, launched)) === null || namesInput(words, '{}', false)) unreadOperands++;
+        const git = gitSubcommand(words.map(unquote), state.cwd);
+        if (git !== null && !git.unread) await checkGitPrograms(node, git);
+      }
       const tokens = expanded ?? written;
       const [program, ...rest] = tokens;
       const [wrapped, ...wrappedRest] = withoutWrappers(tokens);
@@ -7086,9 +7243,8 @@ export async function scanShell(
           unreadOperands++;
         }
         const git = gitSubcommand(wrappedRest.map(unquote), state.cwd);
-        if (git !== null && !git.unread && STRATEGY_COMMANDS.has(git.sub)) {
-          await checkMergeStrategies(node, git.rest, git.cwd, !/^(cherry-pick|revert)$/.test(git.sub));
-        }
+        if (git !== null && !git.unread) await checkGitPrograms(node, git);
+        if (feeds && namesInput(wrappedRest, replace, true)) unreadOperands++;
         const fresh = git === null || git.unread ? null : await noteFreshFolder(node, wrappedRest, git);
         if (fresh !== null && fresh !== 'reinit') configWrites.push(fresh);
         else if (fresh === null && git !== null && (git.unread || writesGitConfig(git.sub, git.rest))) {
@@ -7134,15 +7290,23 @@ export async function scanShell(
       } else if (
         !CHANGES_DIRECTORY.has(program) &&
         !onlyReads(tokens) &&
-        !configWrites.some(write => write.id === node.id) &&
-        !addsNoConfig(inner, wrappedRest)
+        !configWrites.some(write => write.id === node.id)
       ) {
+        const removed = inner === 'mv' ? null : removedOperands(inner, wrappedRest);
+        const placed = removed !== null && (await noteRemovals(node, removed));
         // A writer whose files the scan does not list may write any config: code it is handed, or a removal, anywhere.
         const anywhere =
-          (runsString && !(await readsOnlyShellString(run, runArgs))) ||
-          runsInlineCode(run, runArgs.map(unquote), node) ||
-          /^(rm|rmdir|unlink)$/.test(inner);
-        configWrites.push(anywhere ? { id: node.id } : { id: node.id, unlisted: true });
+          !placed &&
+          ((runsString && !(await readsOnlyShellString(run, runArgs))) ||
+            runsInlineCode(run, runArgs.map(unquote), node) ||
+            /^(rm|rmdir|unlink)$/.test(inner));
+        if (anywhere) configWrites.push({ id: node.id });
+        else if (!placed) configWrites.push({ id: node.id, unlisted: true });
+      }
+      // A move writes its destination (noted above) and takes its sources away.
+      if (inner === 'mv' && !CHANGES_DIRECTORY.has(program)) {
+        const sources = removedOperands(inner, wrappedRest);
+        if (sources !== null) await noteRemovals(node, sources);
       }
       const cloned = inPlace.remote === undefined ? [] : await noteRemoteTree(inPlace.remote);
 
@@ -7794,6 +7958,7 @@ export async function scanShell(
         write =>
           write.id !== id &&
           !plainCopies.has(write.id) &&
+          !write.removal &&
           write.path !== undefined &&
           guardFormWithin(folder, guardForm(write.path)) &&
           (write.tree === true || /(^|\/)\.git(\/|$)/.test(guardForm(write.path)))
