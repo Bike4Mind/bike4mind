@@ -1,12 +1,18 @@
 import React from 'react';
 import { Button, CircularProgress, Stack, Typography } from '@mui/joy';
 import { toast } from 'sonner';
-import type { AdminDataExportStatus, AdminDataExportSummary } from '@bike4mind/common';
+import type { AdminDataExportSkipReason, AdminDataExportStatus, AdminDataExportSummary } from '@bike4mind/common';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import { ActionDialog, ADMIN_REASON_PRESETS, StatusChip, formatUtc } from '../../../shared';
 import { displayName } from '../userProfileModel';
 import type { ProfileDialogProps } from './profileActions';
 import { useAdminDataExports, useDownloadAdminDataExport, useRequestAdminDataExport } from './useAdminDataExports';
+
+const SKIP_REASON_TEXT: Readonly<Record<AdminDataExportSkipReason, string>> = {
+  account_gone: 'Not exported: the account no longer exists.',
+  deletion_due: 'Not exported: the account is being permanently deleted.',
+  deletion_won_admission: 'Not exported: the account is being permanently deleted.',
+};
 
 const STATUS_CHIP: Readonly<Record<AdminDataExportStatus['state'], { tone: AdminStatusTone; label: string }>> = {
   building: { tone: 'info', label: 'Building' },
@@ -31,7 +37,11 @@ const ExportRow: React.FC<{
           <Typography level="body-xs">Available until {formatUtc(new Date(entry.status.expiresAt))}</Typography>
         )}
         {entry.status.state === 'failed' && (
-          <Typography level="body-xs">The export did not finish. Request a new one.</Typography>
+          <Typography level="body-xs" data-testid="data-export-failed-text">
+            {entry.status.reason
+              ? SKIP_REASON_TEXT[entry.status.reason]
+              : 'The export did not finish. Request a new one.'}
+          </Typography>
         )}
       </Stack>
       <StatusChip tone={chip.tone} label={chip.label} data-testid="data-export-status-chip" />

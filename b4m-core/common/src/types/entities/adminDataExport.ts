@@ -5,8 +5,12 @@ export type AdminDataExportStatus =
   | { state: 'building' }
   | { state: 'ready'; builtAt: string; expiresAt: string }
   | { state: 'expired'; builtAt: string }
-  /** Never queued, or not built long after the request: the request should be made again. */
-  | { state: 'failed' };
+  /** Never queued, skipped by the worker (`reason`), or not built long after the request. */
+  | { state: 'failed'; reason?: AdminDataExportSkipReason };
+
+/** Why the export worker skipped an admin export, recorded on its `user.data_export.failed` entry. */
+export const ADMIN_DATA_EXPORT_SKIP_REASONS = ['account_gone', 'deletion_due', 'deletion_won_admission'] as const;
+export type AdminDataExportSkipReason = (typeof ADMIN_DATA_EXPORT_SKIP_REASONS)[number];
 
 export type AdminDataExportSummary = {
   exportJobId: string;

@@ -9,6 +9,7 @@ import { Resource } from 'sst';
 import { z } from 'zod';
 import {
   User,
+  adminAuditLogRepository,
   agentRepository,
   artifactContentRepository,
   artifactRepository,
@@ -24,12 +25,18 @@ import {
   toolRepository,
   userRepository,
 } from '@bike4mind/database';
-import { isImageServeable, toSafeUser } from '@bike4mind/common';
+import {
+  ADMIN_DATA_EXPORT_FAILED_ACTION,
+  type AdminDataExportSkipReason,
+  isImageServeable,
+  toSafeUser,
+} from '@bike4mind/common';
 import { secureParameters } from '@bike4mind/utils';
-import { notebookExportService } from '@bike4mind/services';
+import { adminAuditService, notebookExportService } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
 import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
+import { systemAuditActor } from '@bike4mind/server-utils/utils/adminAudit';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import {
   ACCOUNT_DATA_EXPORT_TTL_MS,
@@ -757,7 +764,30 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   logger.updateMetadata({ exportJobId, userId, requestedBy, leaseWaits });
   const forAdmin = requestedBy !== undefined;
   const key = forAdmin ? adminDataExportKey(userId, exportJobId) : accountDataExportKey(userId, exportJobId);
-  const removeSkippedExport = () => getFilesStorage().deletePermanently(key);
+  // The admin profile lists an export skipped here as failed, with the reason, instead of building
+  // until it gives up (apps/client/server/dataSubject/adminDataExports.ts).
+  const skipExport = async (skipReason: AdminDataExportSkipReason, displayName = userId) => {
+    await getFilesStorage().deletePermanently(key);
+    if (!forAdmin) return;
+    try {
+      await adminAuditService.recordAdminAction(
+        {
+          action: ADMIN_DATA_EXPORT_FAILED_ACTION,
+          actor: systemAuditActor('account-data-export'),
+          target: { kind: 'user', id: userId, displayName },
+          summary: 'skipped a data subject export',
+          context: { source: 'worker', route: 'queueHandlers/accountDataExport' },
+          details: { exportJobId, requestedBy, skipReason },
+        },
+        { db: { adminAuditLog: adminAuditLogRepository }, logger }
+      );
+    } catch (error) {
+      // A throw would retry a skip that can only end the same way.
+      logger.error('Account data export: could not record the skipped admin export', { skipReason, error });
+    }
+  };
+  const nameOf = (account: { email?: string | null; username?: string | null }) =>
+    account.email ?? account.username ?? userId;
 
   const user = await userRepository.findById(userId);
   // An admin export is fetched from the admin profile, so it does not need an address to deliver to.
@@ -767,7 +797,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         ? 'Account data export skipped: the account is gone'
         : 'Account data export skipped: the account is gone or has no email to deliver to'
     );
-    await removeSkippedExport();
+    await skipExport('account_gone');
     return;
   }
 
@@ -777,7 +807,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     (!!account?.deletion?.scheduledFor && new Date(account.deletion.scheduledFor).getTime() <= Date.now());
   if (deletionDue(user)) {
     logger.info('Account data export skipped: permanent deletion is due or has started');
-    await removeSkippedExport();
+    await skipExport('deletion_due', nameOf(user));
     return;
   }
   const appUrl = process.env.APP_URL?.trim();
@@ -806,7 +836,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     const current = await userRepository.findById(userId);
     if (!current || deletionDue(current)) {
       logger.info('Account data export skipped: permanent deletion won admission');
-      await removeSkippedExport();
+      await skipExport('deletion_won_admission', nameOf(current ?? user));
       return;
     }
     // Admin and self-serve exports share this one lease. The overlapping job is re-sent with a delay and

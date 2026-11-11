@@ -53,6 +53,19 @@ describe('DataExportDialog', () => {
     expect(screen.getAllByTestId('data-export-download-btn')).toHaveLength(1);
   });
 
+  it('says why the worker skipped a failed export, and gives the generic text otherwise', async () => {
+    const skipped = { ...READY, exportJobId: 'job-skipped', status: { state: 'failed', reason: 'account_gone' } };
+    const timedOut = { ...READY, exportJobId: 'job-timed-out', status: { state: 'failed' } };
+    mocks.get.mockResolvedValue({ data: { exports: [skipped, timedOut] } });
+    setup();
+
+    await waitFor(() => expect(screen.getAllByTestId('data-export-failed-text')).toHaveLength(2));
+    expect(screen.getAllByTestId('data-export-failed-text').map(text => text.textContent)).toEqual([
+      'Not exported: the account no longer exists.',
+      'The export did not finish. Request a new one.',
+    ]);
+  });
+
   it('downloads through a freshly signed link', async () => {
     const { user } = setup();
     fireEvent.click(await screen.findByTestId('data-export-download-btn'));

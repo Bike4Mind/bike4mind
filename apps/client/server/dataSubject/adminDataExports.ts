@@ -2,10 +2,12 @@ import {
   ADMIN_DATA_EXPORT_DENIED_ACTION,
   ADMIN_DATA_EXPORT_FAILED_ACTION,
   ADMIN_DATA_EXPORT_REQUESTED_ACTION,
+  ADMIN_DATA_EXPORT_SKIP_REASONS,
   NotFoundError,
   type AdminAuditAction,
   assertCanActOnAdminTarget,
   type AdminDataExportStatus,
+  type AdminDataExportSkipReason,
   type AdminDataExportSummary,
 } from '@bike4mind/common';
 import { adminAuditLogRepository, userRepository } from '@bike4mind/database';
@@ -104,7 +106,13 @@ export async function listAdminDataExports(
     recent(ADMIN_DATA_EXPORT_REQUESTED_ACTION),
     recent(ADMIN_DATA_EXPORT_FAILED_ACTION),
   ]);
-  const neverQueued = new Set(failed.entries.flatMap(entry => exportJobIdOf(entry) ?? []));
+  // Written by the route when the job could not be queued, or by the worker with a skipReason.
+  const failedJobs = new Map(
+    failed.entries.flatMap(entry => {
+      const exportJobId = exportJobIdOf(entry);
+      return exportJobId ? [[exportJobId, skipReasonOf(entry)] as const] : [];
+    })
+  );
   return Promise.all(
     requested.entries.flatMap(entry => {
       const exportJobId = exportJobIdOf(entry);
@@ -115,8 +123,8 @@ export async function listAdminDataExports(
           requestedAt: entry.occurredAt.toISOString(),
           requestedBy: entry.actor.name,
           reason: entry.reason ?? null,
-          status: neverQueued.has(exportJobId)
-            ? { state: 'failed' }
+          status: failedJobs.has(exportJobId)
+            ? failedStatus(failedJobs.get(exportJobId))
             : adminDataExportStatus(
                 await readAdminDataExportBuiltAt(storage, userId, exportJobId),
                 entry.occurredAt,
@@ -132,3 +140,9 @@ const exportJobIdOf = (entry: { details?: Record<string, unknown> | null }): str
   const exportJobId = entry.details?.exportJobId;
   return typeof exportJobId === 'string' ? exportJobId : undefined;
 };
+
+const skipReasonOf = (entry: { details?: Record<string, unknown> | null }): AdminDataExportSkipReason | undefined =>
+  ADMIN_DATA_EXPORT_SKIP_REASONS.find(reason => reason === entry.details?.skipReason);
+
+const failedStatus = (reason: AdminDataExportSkipReason | undefined): AdminDataExportStatus =>
+  reason ? { state: 'failed', reason } : { state: 'failed' };
