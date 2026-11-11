@@ -11,7 +11,7 @@ import { type MigrationFile } from './index';
  * Idempotent: createIndexes is a no-op for indexes that already exist.
  */
 const migration: MigrationFile = {
-  id: 20260921240070,
+  id: 20260921240110,
   name: 'ensure completion run indexes',
 
   up: async () => {
