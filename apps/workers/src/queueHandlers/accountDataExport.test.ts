@@ -430,8 +430,27 @@ describe('account data export worker', () => {
       { id: 'artifact_1', title: 'Plan', type: 'markdown', omitted: 'time_limit' },
     ]);
     expect(entries.has('artifacts/artifact_1-Plan.json')).toBe(false);
+    expect(entries.has('collections/ToolModel.jsonl')).toBe(false);
+    expect(JSON.parse(entries.get('manifest.json')!).collections).toContainEqual({
+      name: 'ToolModel',
+      count: 0,
+      representation: 'metadata',
+      omitted: 'time_limit',
+    });
     expect(h.uploadFile).toHaveBeenCalledOnce();
     expect(h.publish).toHaveBeenCalledOnce();
+  });
+
+  it('still completes and emails once when the websocket notification fails', async () => {
+    h.sendToClient.mockRejectedValueOnce(new Error('gone'));
+
+    await run();
+
+    expect(h.publish).toHaveBeenCalledOnce();
+    expect(logger.warn).toHaveBeenCalledWith(
+      'Account data export: websocket notification failed',
+      expect.objectContaining({ error: expect.any(Error) })
+    );
   });
 
   it('only re-sends the email when the export already exists', async () => {

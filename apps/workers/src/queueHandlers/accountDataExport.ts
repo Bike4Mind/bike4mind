@@ -520,7 +520,9 @@ artifacts/         One JSON file per artifact you own, with its latest content. 
 agents.json        Agents you created.
 projects.json      Projects you own.
 collections/       Metadata-only rows for additional account-owned records. Each row contains
-                   only its id and timestamps; manifest.json lists its count and representation.
+                   only its id and timestamps; manifest.json lists its count and representation,
+                   and an "omitted" value of time_limit means the export ran out of time before
+                   that collection was written.
 manifest.json      Collection counts and paths, written after all archive entries.
 
 Deleted items, other data shared with you by others, and credential values (passwords, API keys, tokens,
@@ -566,6 +568,10 @@ async function buildArchive(
     const personalOrganizationIds = personalOrganizations.map(org => String(org._id));
     const collections: AccountArchiveCollection[] = [];
     for (const adapter of accountArchiveAdapters) {
+      if (remainingMs() < UPLOAD_RESERVE_MS) {
+        collections.push({ name: adapter.name, count: 0, representation: 'metadata', omitted: 'time_limit' });
+        continue;
+      }
       const { records, count } = await adapter.collect(userId, personalOrganizationIds);
       const entryPath = `collections/${adapter.name}.jsonl`;
       await appendEntry(archive, records, entryPath);

@@ -3,9 +3,10 @@ import { mongoose } from '@bike4mind/database';
 
 export interface AccountArchiveCollection {
   name: string;
-  path: string;
+  path?: string;
   count: number;
   representation: 'metadata';
+  omitted?: 'time_limit';
 }
 
 export interface AccountArchiveAdapter {
