@@ -131,7 +131,8 @@ function newestLive(links: ShareLinkView[]): ShareLinkView | undefined {
 }
 
 /** Matches an entry that is live (has a token, not revoked, not expired), tolerating absent
- *  fields. Must stay in sync with `liveShareTokens` / `liveShareTokenMatch` in `@bike4mind/database`. */
+ *  fields. Must stay in sync with `liveShareTokens` in `@bike4mind/database`; `liveShareTokenMatch`
+ *  there has no token check and relies on the schema making `token` required. */
 function isLive(now: Date): Record<string, unknown> {
   return {
     $and: [
@@ -365,8 +366,8 @@ const handler = baseApi()
     const current = await PublishedArtifact.findOne({ publicId: artifact.publicId, deletedAt: null })
       .select('shareTokens')
       .lean<ShareTokenArtifactLean>();
+    if (!current) return res.status(404).json({ error: 'Not found' });
     if (additional) {
-      if (!current) return res.status(404).json({ error: 'Not found' });
       if (liveLinkViews(current).length >= MAX_LIVE_SHARE_LINKS) {
         return res.status(400).json({
           error: `An artifact may have at most ${MAX_LIVE_SHARE_LINKS} live share links - revoke one before minting another`,
@@ -377,7 +378,7 @@ const handler = baseApi()
         .status(409)
         .json({ error: 'The share links changed while adding one - try again', code: 'SHARE_LINK_RACED' });
     }
-    const persisted = current ? liveLinkViews(current) : [];
+    const persisted = liveLinkViews(current);
     const newest = newestLive(persisted);
     // Compared by token: it is what a holder possesses.
     const before = new Set(live.map(l => l.shareToken));

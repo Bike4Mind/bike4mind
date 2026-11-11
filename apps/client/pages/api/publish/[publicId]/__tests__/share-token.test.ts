@@ -326,6 +326,17 @@ describe('POST /api/publish/[publicId]/share-token', () => {
     expect(res._getJSONData().code).toBe('SHARE_LINK_RACED');
   });
 
+  it.each([
+    ['regenerate', { regenerate: true }],
+    ['mint', undefined],
+  ])('on a %s lost race where the artifact is gone, returns 404', async (_name, body) => {
+    mockFindOneAndUpdate.mockResolvedValue(null);
+    mockCurrent.mockResolvedValue(null);
+    const { res, promise } = run(body ? { body } : undefined);
+    await promise;
+    expect(res._getStatusCode()).toBe(404);
+  });
+
   it('on a mint lost race with nothing live, returns 409 instead of an unwritten candidate', async () => {
     mockFindOneAndUpdate.mockResolvedValue(null);
     mockCurrent.mockResolvedValue({ shareTokens: [] });
