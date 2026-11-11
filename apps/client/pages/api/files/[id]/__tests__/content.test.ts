@@ -7,6 +7,7 @@ const h = vi.hoisted(() => ({
   getSignedUrl: vi.fn(),
   key: Buffer.alloc(32, 3),
   baseApiOptions: undefined as unknown,
+  rateLimitOptions: undefined as { subject?: (req: unknown) => string | undefined } | undefined,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -20,7 +21,15 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => vi.fn() }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
+  rateLimit: (options: typeof h.rateLimitOptions) => {
+    h.rateLimitOptions = options;
+    return vi.fn();
+  },
+}));
+vi.mock('@bike4mind/server-utils/utils/ip', () => ({
+  getClientIp: (req: { clientIp?: string }) => req.clientIp,
+}));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ getSignedUrl: h.getSignedUrl }),
 }));
@@ -83,11 +92,18 @@ describe('GET /api/files/[id]/content', () => {
     expect(h.baseApiOptions).toEqual({ auth: false, allowedMethods: ['GET'] });
   });
 
+  it('counts the rate limit per client IP and file id', () => {
+    const subject = h.rateLimitOptions?.subject;
+    expect(subject?.({ clientIp: '203.0.113.7', query: { id: fileId } })).toBe(`203.0.113.7:${fileId}`);
+    expect(subject?.({ clientIp: '203.0.113.7', query: { id: 'other' } })).not.toBe(`203.0.113.7:${fileId}`);
+  });
+
   it('redirects to a freshly signed S3 link with a bounded private cache', async () => {
     const { res, error } = await call(validQuery());
     expect(error).toBeUndefined();
-    expect(h.getSignedUrl).toHaveBeenCalledWith(filePath, 'get', { expiresIn: 3600, audience: 'browser' });
+    expect(h.getSignedUrl).toHaveBeenCalledWith(filePath, 'get', { expiresIn: 3000, audience: 'browser' });
     expect(res.redirect).toHaveBeenCalledWith(302, s3Url(3600));
+    // Signed for the 3000s left until token exp 04:00 (now 03:10), not the full hour.
     // min(token exp 04:00, S3 04:10) - now 03:10 - 60s margin = 2940s, capped at 1800.
     expect(res.headers['Cache-Control']).toBe('private, max-age=1800');
     expect(res.headers['Referrer-Policy']).toBe('no-referrer');
@@ -98,6 +114,13 @@ describe('GET /api/files/[id]/content', () => {
     h.getSignedUrl.mockResolvedValue(s3Url(900));
     const { res } = await call(validQuery());
     expect(res.headers['Cache-Control']).toBe('private, max-age=840');
+  });
+
+  it('caches no longer than the link token lives', async () => {
+    vi.setSystemTime((exp - 600) * 1000);
+    const { res } = await call(validQuery());
+    expect(h.getSignedUrl).toHaveBeenCalledWith(filePath, 'get', { expiresIn: 600, audience: 'browser' });
+    expect(res.headers['Cache-Control']).toBe('private, max-age=540');
   });
 
   it('sends no-store when either expiry is within the margin', async () => {
@@ -118,6 +141,11 @@ describe('GET /api/files/[id]/content', () => {
     ['a deleted file', () => (h.findById.mockResolvedValue(file({ deletedAt: new Date() })), validQuery())],
     ['a pending image', () => (h.findById.mockResolvedValue(file({ moderationStatus: 'pending' })), validQuery())],
     ['a blocked image', () => (h.findById.mockResolvedValue(file({ moderationStatus: 'blocked' })), validQuery())],
+    [
+      'a legacy row with no moderation status',
+      () => (h.findById.mockResolvedValue(file({ moderationStatus: undefined })), validQuery()),
+    ],
+    ['a row with no file path', () => (h.findById.mockResolvedValue(file({ filePath: undefined })), validQuery())],
     ['an unknown id', () => (h.findById.mockResolvedValue(null), validQuery())],
     ['a malformed id', () => validQuery({ id: 'nope' })],
   ])('answers %s with an uncacheable 404', async (_label, query) => {

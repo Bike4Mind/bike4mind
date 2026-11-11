@@ -2,6 +2,7 @@ import { isImageServeable, NotFoundError } from '@bike4mind/common';
 import { fabFileRepository } from '@bike4mind/database';
 import { FILE_URL_TTL_SECONDS, signedUrlExpiresAt, verifyFileContentSig } from '@bike4mind/utils';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -17,8 +18,15 @@ const MAX_REDIRECT_CACHE_SECONDS = 1800;
  * redirect is cacheable so repeat loads of the same URL never reach this route.
  */
 const handler = baseApi({ auth: false, allowedMethods: ['GET'] })
-  // Sized for a file grid: about a hundred thumbnails per page load from one IP.
-  .use(rateLimit({ limit: 1000, windowMs: 60_000, bucket: 'GET /api/files/[id]/content' }))
+  // Counted per IP per file, so a grid behind one NAT does not share a single bucket.
+  .use(
+    rateLimit({
+      limit: 1000,
+      windowMs: 60_000,
+      bucket: 'GET /api/files/[id]/content',
+      subject: req => `${getClientIp(req)}:${String(req.query.id)}`,
+    })
+  )
   .get(async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     const notFound = new NotFoundError('File not found');
@@ -33,11 +41,11 @@ const handler = baseApi({ auth: false, allowedMethods: ['GET'] })
     );
     if (!check.ok || !isImageServeable(fabFile)) throw notFound;
 
+    const nowSeconds = Math.floor(Date.now() / 1000);
     const signed = await getFilesStorage().getSignedUrl(fabFile.filePath, 'get', {
-      expiresIn: FILE_URL_TTL_SECONDS,
+      expiresIn: Math.max(60, Math.min(FILE_URL_TTL_SECONDS, check.exp - nowSeconds)),
       audience: 'browser',
     });
-    const nowSeconds = Date.now() / 1000;
     const s3ExpirySeconds = signedUrlExpiresAt(signed, FILE_URL_TTL_SECONDS).getTime() / 1000;
     const maxAge = Math.max(
       0,

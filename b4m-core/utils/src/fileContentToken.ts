@@ -5,6 +5,8 @@ import { FILE_URL_TTL_SECONDS, fileUrlSigningDate } from './signedUrlWindow';
  * Capability token for the stable file content URL (`/api/files/{id}/content?exp=&sig=`).
  * HMAC-SHA256 over the file id, its storage path and the expiry, so a link stops working once the
  * file moves. The key is passed in (apps/client/server/files/browserFileSigner.ts derives it).
+ * User-less, cacheable browser link: no access re-check, the sig is the capability. For the per-user
+ * email/Slack link that re-checks access on redemption, see packages/server-utils/src/files/fileLinkToken.ts.
  */
 
 const FILE_ID_SHAPE = /^[0-9a-f]{24}$/;
