@@ -117,7 +117,18 @@ const ListFeedbackQuerySchema = z.object({
   // the result away (the paged list, the CSV export loop, the per-session "Reported" read).
   // An explicit enum rather than z.coerce.boolean(), which reads the string "false" as true.
   includeOrganizations: z.enum(['true', 'false']).optional(),
+  // Serves the facet alone: no rows are read or audited, so the org filter menu does not page a
+  // report through the audit trail just to learn the organization names.
+  facetsOnly: z.enum(['true', 'false']).optional(),
 });
+
+/** Distinct, non-empty organization names, sorted for the filter menu. */
+async function readOrganizationFacet(readable: FilterQuery<unknown>): Promise<string[]> {
+  const names = await FeedbackModel.distinct('organization', readable);
+  return names
+    .filter((name): name is string => typeof name === 'string' && name.length > 0)
+    .sort((a, b) => a.localeCompare(b));
+}
 
 /** `qs.parse` hands back a lone value or an array depending on how many times a key repeats. */
 function toArray<T>(value: T | T[] | undefined): T[] {
@@ -243,6 +254,16 @@ const handler = baseApi()
     // pass for every logged-in user).
     const readable = accessibleBy(req.ability, Permission.read).ofType(FeedbackModel);
 
+    if (query.facetsOnly === 'true') {
+      return res.json({
+        items: [],
+        total: 0,
+        page: query.page,
+        limit: query.limit,
+        organizations: await readOrganizationFacet(readable),
+      });
+    }
+
     const clauses: FilterQuery<unknown>[] = [readable];
 
     if (query.userId) clauses.push({ userId: query.userId });
@@ -296,7 +317,7 @@ const handler = baseApi()
       // selecting an organization would prune every other option out of the dropdown that
       // selected it. Which is also why it is opt-in: `readable` is `{}` for an admin, so this is a
       // full-collection scan on an unindexed field and must not ride along on unrelated reads.
-      query.includeOrganizations === 'true' ? FeedbackModel.distinct('organization', readable) : undefined,
+      query.includeOrganizations === 'true' ? readOrganizationFacet(readable) : undefined,
     ]);
 
     // An admin's read grant spans every reporter, so the page they are about to read is audited.
@@ -322,11 +343,7 @@ const handler = baseApi()
       limit: query.limit,
       // Omitted rather than [] when not requested: an empty array is indistinguishable from "no
       // organizations have any feedback", which would empty the filter menu.
-      ...(organizationFacet && {
-        organizations: organizationFacet
-          .filter((name): name is string => typeof name === 'string' && name.length > 0)
-          .sort((a, b) => a.localeCompare(b)),
-      }),
+      ...(organizationFacet && { organizations: organizationFacet }),
     });
   })
   .post(async (req, res) => {

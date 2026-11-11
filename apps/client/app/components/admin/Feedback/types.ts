@@ -64,9 +64,11 @@ export type FeedbackListParams = FeedbackListFilterParams & {
   /**
    * Ask the server to compute the `organizations` facet. Opt-in because it is a `distinct` over
    * the caller's entire accessible set - for an admin, the whole collection on an unindexed field
-   * - and only the org filter menu's dedicated query consumes it.
+   * - and is returned alongside the requested rows. The org filter menu uses `facetsOnly` instead.
    */
   includeOrganizations?: boolean;
+  /** Return only the `organizations` facet; the server reads and audits no rows. */
+  facetsOnly?: boolean;
 };
 
 /** Response envelope of GET /api/feedback. */
@@ -77,7 +79,7 @@ export interface FeedbackListResponse {
   limit: number;
   /**
    * Distinct organization labels across the caller's whole accessible set, for the filter menu.
-   * Present only when the request asked for it (`includeOrganizations`).
+   * Present only when the request asked for it (`includeOrganizations` or `facetsOnly`).
    */
   organizations?: string[];
 }

@@ -68,8 +68,8 @@ describe('FeedbackTab page clamp after the last page empties', () => {
   it('waits out the same-key refetch, then clamps once to the new last page', async () => {
     let resolveRefetch: (value: unknown) => void = () => undefined;
     let listCalls = 0;
-    mocks.getFeedbackFromServer.mockImplementation((params: { includeOrganizations?: boolean }) => {
-      if (params.includeOrganizations) return Promise.resolve({ items: [], total: 0, organizations: [] });
+    mocks.getFeedbackFromServer.mockImplementation((params: { facetsOnly?: boolean }) => {
+      if (params.facetsOnly) return Promise.resolve({ items: [], total: 0, organizations: [] });
       listCalls += 1;
       if (listCalls === 1) return Promise.resolve({ items: [makeFeedbackItem()], total: 51 });
       return new Promise(resolve => (resolveRefetch = resolve));

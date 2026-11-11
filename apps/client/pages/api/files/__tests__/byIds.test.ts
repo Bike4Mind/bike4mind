@@ -39,7 +39,9 @@ vi.mock('@bike4mind/database', () => ({ lakeAccessEventRepository: {} }));
 
 const resolveAccessibleLakes = vi.fn();
 const grantingLakes = vi.fn();
+const adminBypassLakeIds = vi.fn();
 vi.mock('@server/dataLakes', () => ({
+  adminBypassLakeIds: (...args: unknown[]) => adminBypassLakeIds(...args),
   resolveAccessibleLakes: (...args: unknown[]) => resolveAccessibleLakes(...args),
   grantingLakes: (...args: unknown[]) => grantingLakes(...args),
 }));
@@ -110,6 +112,7 @@ describe('GET /api/files/byIds', () => {
     findAllInIds.mockResolvedValue([]);
     generateSignedUrl.mockImplementation(async (file: { id: string }) => ({ ...file, fileUrl: 'signed-url' }));
     recordLakeAccessEvent.mockResolvedValue(undefined);
+    adminBypassLakeIds.mockResolvedValue([]);
   });
 
   it('re-admits ACL-dropped lake files via one lake resolution and one batched lookup', async () => {
@@ -188,6 +191,44 @@ describe('GET /api/files/byIds', () => {
         expect.anything(),
         expect.anything()
       );
+    });
+
+    const arrangeLakeFile = () => {
+      resolveAccessibleLakes.mockResolvedValue([{ id: 'lake-1' }]);
+      findAllInIds.mockResolvedValue([{ id: LAKE_ID, tags: [{ name: 'datalake:lake-1' }] }]);
+      grantingLakes.mockReturnValue([{ id: 'lake-1' }]);
+    };
+
+    it('leaves the marker off a member read', async () => {
+      arrangeLakeFile();
+      await handler(makeReq([OWNED_ID, LAKE_ID]), makeRes().res);
+      expect(recordLakeAccessEvent.mock.calls[0][1]).not.toHaveProperty('adminBypassLakeIds');
+    });
+
+    it('marks bypass-only lakes on the audit write', async () => {
+      arrangeLakeFile();
+      adminBypassLakeIds.mockResolvedValue(['lake-1']);
+      await handler(makeReq([OWNED_ID, LAKE_ID]), makeRes().res);
+      expect(adminBypassLakeIds).toHaveBeenCalledWith(expect.anything(), ['lake-1']);
+      expect(recordLakeAccessEvent.mock.calls[0][1]).toMatchObject({ adminBypassLakeIds: ['lake-1'] });
+    });
+
+    it('returns no partial owned-file result when lake classification is incomplete', async () => {
+      arrangeLakeFile();
+      adminBypassLakeIds.mockRejectedValue(new Error('classification unavailable'));
+      const { res, getJson } = makeRes();
+      await expect(handler(makeReq([OWNED_ID, LAKE_ID]), res)).rejects.toThrow('classification unavailable');
+      expect(recordLakeAccessEvent).not.toHaveBeenCalled();
+      expect(getJson()).toBeUndefined();
+    });
+
+    it('fails the request when the audit write rejects', async () => {
+      arrangeLakeFile();
+      adminBypassLakeIds.mockResolvedValue(['lake-1']);
+      recordLakeAccessEvent.mockRejectedValueOnce(new Error('mongo blip'));
+      const { res, getJson } = makeRes();
+      await expect(handler(makeReq([OWNED_ID, LAKE_ID]), res)).rejects.toThrow('mongo blip');
+      expect(getJson()).toBeUndefined();
     });
 
     it('does not record when no candidate is actually granted by any lake', async () => {
