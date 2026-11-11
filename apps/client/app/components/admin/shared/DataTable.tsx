@@ -68,6 +68,11 @@ export type DataTableProps<Row> = {
   maxHeight?: string;
   /** Show the scrollbar thumb all the time instead of only on hover. */
   alwaysShowScrollbar?: boolean;
+  /**
+   * `false` drops the table's own border and radius, for a table that is the body of a `SectionCard`
+   * (`body="custom"`): the card is then the one surface (DESIGN_GUIDE.md, Tables).
+   */
+  framed?: boolean;
 };
 const CELL_CONTROLS = 'button, input, a, [role="checkbox"], [role="menu"], [role="menuitem"]';
 
@@ -99,6 +104,7 @@ export function DataTable<Row>({
   minWidth = '40rem',
   maxHeight = '65vh',
   alwaysShowScrollbar = false,
+  framed = true,
 }: DataTableProps<Row>) {
   const [localSort, setLocalSort] = useState<DataTableSort>();
   const [localPage, setLocalPage] = useState(0);
@@ -254,12 +260,11 @@ export function DataTable<Row>({
       sx={{
         ...adminSurface,
         ...adminFocusScope,
-        borderWidth: 1,
-        borderStyle: 'solid',
-        borderRadius: 'lg',
+        ...(framed ? { borderWidth: 1, borderStyle: 'solid', borderRadius: 'lg' } : { border: 0, borderRadius: 0 }),
         overflow: 'hidden',
       }}
       data-testid={`${testId}-frame`}
+      data-framed={framed}
     >
       <Box
         role="region"
@@ -289,7 +294,8 @@ export function DataTable<Row>({
             '--TableCell-headBackground': 'var(--joy-palette-admin-surfaceSubtle)',
             '--TableCell-paddingX': '12px',
             '& th, & td': { borderColor: 'admin.border', color: 'admin.ink', verticalAlign: 'middle' },
-            '& thead th': { height: 38, color: 'admin.inkMuted', fontSize: 12, fontWeight: 500 },
+            // No block padding: a sortable header's 32 px skinned `sm` button would otherwise push the row to 42.
+            '& thead th': { height: 38, py: 0, color: 'admin.inkMuted', fontSize: 12, fontWeight: 500 },
             '& tbody tr[data-row-id] td': { height: 56 },
             '& tbody tr[data-row-id]:focus-visible': {
               outline: '2px solid var(--joy-palette-admin-accent)',
