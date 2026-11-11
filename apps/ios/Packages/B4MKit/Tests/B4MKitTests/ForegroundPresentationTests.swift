@@ -24,7 +24,7 @@ final class ForegroundPresentationTests: XCTestCase {
   func testBannerWhenAnotherTabIsSelected() {
     let navigator = AppNavigator()
     navigator.apply(.session(id: "s1"))
-    navigator.selectedTab = .media
+    navigator.apply(.media)
     let handler = IncomingEventHandler(navigator: navigator, isShellReady: { true })
     XCTAssertEqual(handler.presentation(for: payload), .banner)
   }

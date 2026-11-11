@@ -92,7 +92,7 @@ struct RootView: View {
   private var signedInShell: some View {
     switch services.accountStatus.state {
     case .active:
-      MainTabView()
+      AppShellView()
         .task { await services.realtime.start() }
     case .deletionPending(let scheduledFor):
       AccountRestoreView(scheduledFor: scheduledFor)

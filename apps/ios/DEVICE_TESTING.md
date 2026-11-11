@@ -67,14 +67,14 @@ CI. Work through it before the first TestFlight build and again before each rele
 - [ ] Camera, microphone and photo-library permission prompts show the usage strings and denial is handled with a clear message.
 - [ ] Voice note records, transcribes and drops text into the composer.
 
-## Media, AirPlay and Siri
+## Studio gallery, AirPlay and Siri
 
-- [ ] Video and audio play from the gallery; AirPlay routes; Picture in Picture works; presigned URL expiry recovers on its own.
+- [ ] Video and audio play from the Studio gallery; AirPlay routes; Picture in Picture works; presigned URL expiry recovers on its own.
 - [ ] Siri phrases for Ask, Start quest and Capture note are recognized; the actions appear in Shortcuts and Spotlight and only
       open the composer with a draft (never send): Ask and Capture note on the Chat home, Start quest in the chosen notebook.
 - [ ] Widgets: Credits (small), Latest generation (small, medium) and Running agents (small, medium) in the gallery,
-      placeholder and signed-out appearance, dark mode, and a tap landing on the right screen (Credits opens Settings on the
-      Chat tab, with Back to the Chat home).
+      placeholder and signed-out appearance, dark mode, and a tap landing on the right screen (Credits opens Settings,
+      with Back to the home screen).
 - [ ] Lock-screen accessory widgets render and refresh: Credits (circular, rectangular, inline) and Running agents (rectangular, inline).
 
 ## Account deletion (App Store 5.1.1(v))
@@ -109,12 +109,13 @@ Run on the first TestFlight build and every release candidate:
 
 - [ ] Install, launch, welcome screens, sign in (PKCE; Sign in with Apple once the server side is deployed).
 - [ ] Chat: send, stream, reply settles, credits update.
-- [ ] Navigation: the Chat tab opens on the start-of-chat home with the tab bar showing; the top-left Notebooks button pushes
-      the notebook list, and its New Conversation button pops back home. Sending from home pushes the new notebook; Back lands
-      on home with the draft cleared and the greeting back. The tab bar shows only Chat and Media; the top-right avatar (the
-      first initial, or a person symbol when the token carries no name) pushes Settings, whose header shows the name and email.
-      A conversation hides the tab bar so its composer sits at the bottom edge; Back (also with the keyboard up) brings the
-      bar back without a jump.
+- [ ] Navigation: the app opens on the start-of-chat home with no tab bar. The top-left menu button opens the drawer, and so
+      does a drag from the left edge (it follows the finger); a scrim tap or a leftward swipe closes it, and the keyboard
+      drops when it opens. New chat closes the drawer and focuses the composer. Studio pushes the gallery, and opening a
+      Studio item shows no bar; Back returns step by step to home. Recent notebooks (up to five) push that notebook, All
+      notebooks pushes the full list, and the account footer (name and email) pushes Settings, as does the top-right
+      avatar. Sending from home pushes the new notebook; Back lands on home with the draft cleared and the greeting back,
+      also with the keyboard up. Check light and dark, and a large text size.
 - [ ] Push: register, receive, tap through.
 - [ ] Share: share a link and an image from another app.
 - [ ] Live Activity: start, update, end.

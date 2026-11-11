@@ -4,11 +4,10 @@ import XCTest
 
 @MainActor
 final class AppNavigatorTests: XCTestCase {
-  func testSessionRouteSelectsTabAndPushesDetail() {
+  func testSessionRoutePushesDetailOverWhateverWasOpen() {
     let navigator = AppNavigator()
-    navigator.selectedTab = .media
+    navigator.apply(.media)
     navigator.apply(.session(id: "s1"))
-    XCTAssertEqual(navigator.selectedTab, .sessions)
     XCTAssertEqual(navigator.sessionPath.map(\.sessionID), ["s1"])
   }
 
@@ -26,40 +25,39 @@ final class AppNavigatorTests: XCTestCase {
     XCTAssertEqual(navigator.sessionPath.map(\.sessionID), ["s2"])
   }
 
-  func testMediaRouteSelectsItsTab() {
+  func testMediaRoutePushesStudio() {
     let navigator = AppNavigator()
     navigator.apply(.media)
-    XCTAssertEqual(navigator.selectedTab, .media)
+    XCTAssertEqual(navigator.sessionPath, [.studio])
     XCTAssertTrue(navigator.isShowing(.media))
+    XCTAssertFalse(navigator.isShowing(.home))
   }
 
-  func testSettingsRoutePushesSettingsOnHomeFromAnyTab() {
+  func testSettingsRoutePushesSettingsOnHome() {
     let navigator = AppNavigator()
-    navigator.selectedTab = .media
     navigator.sessionPath = [.sessionList, .session(.placeholder(id: "s1"))]
     navigator.apply(.settings)
-    XCTAssertEqual(navigator.selectedTab, .sessions)
     XCTAssertEqual(navigator.sessionPath, [.settings])
     XCTAssertTrue(navigator.isShowing(.settings))
     // Home's composer drops focus whenever home is covered, Settings included.
     XCTAssertFalse(navigator.isShowing(.home))
-    navigator.selectedTab = .media
+    navigator.apply(.media)
     XCTAssertFalse(navigator.isShowing(.settings))
   }
 
-  func testLakesRouteOpensTheWebInsteadOfAMissingTab() {
+  func testLakesRouteOpensTheWebAndLeavesTheStackAlone() {
     let navigator = AppNavigator()
     navigator.apply(.media)
     navigator.apply(.lakes)
-    XCTAssertEqual(navigator.selectedTab, .media)
+    XCTAssertEqual(navigator.sessionPath, [.studio])
     XCTAssertEqual(navigator.externalURL, URL(string: "https://app.bike4mind.com/lakes"))
     XCTAssertFalse(navigator.isShowing(.lakes))
   }
 
-  func testLakeRouteOpensTheLakeOnTheWebWithoutSwitchingTabs() {
+  func testLakeRouteOpensTheLakeOnTheWebWithoutTouchingTheStack() {
     let navigator = AppNavigator()
     navigator.apply(.lake(id: "l1"))
-    XCTAssertEqual(navigator.selectedTab, .sessions)
+    XCTAssertTrue(navigator.sessionPath.isEmpty)
     XCTAssertEqual(navigator.externalURL, URL(string: "https://app.bike4mind.com/lakes/l1"))
   }
 
@@ -71,22 +69,49 @@ final class AppNavigatorTests: XCTestCase {
 
   func testHomeRoutePopsToTheStartOfChat() {
     let navigator = AppNavigator()
-    navigator.selectedTab = .media
     navigator.sessionPath = [.sessionList, .session(.placeholder(id: "s1"))]
     navigator.apply(.home)
-    XCTAssertEqual(navigator.selectedTab, .sessions)
     XCTAssertTrue(navigator.sessionPath.isEmpty)
     XCTAssertTrue(navigator.isShowing(.home))
   }
 
-  func testHomeIsNotShowingUnderAPushOrOnAnotherTab() {
+  func testHomeIsNotShowingUnderAPush() {
     let navigator = AppNavigator()
     XCTAssertTrue(navigator.isShowing(.home))
     navigator.apply(.session(id: "s1"))
     XCTAssertFalse(navigator.isShowing(.home))
     navigator.apply(.home)
-    navigator.selectedTab = .media
+    XCTAssertTrue(navigator.isShowing(.home))
+    navigator.apply(.media)
     XCTAssertFalse(navigator.isShowing(.home))
+  }
+
+  func testDrawerStateNeverChangesWhetherHomeIsShowing() {
+    let navigator = AppNavigator()
+    navigator.isDrawerOpen = true
+    XCTAssertTrue(navigator.isShowing(.home))
+  }
+
+  func testEveryRouteClosesTheDrawer() {
+    let routes: [Route] = [
+      .home, .sessions, .settings, .media, .session(id: "s1"), .lakes,
+      .compose(ComposeRequest(target: .newConversation)),
+    ]
+    for route in routes {
+      let navigator = AppNavigator()
+      navigator.isDrawerOpen = true
+      navigator.apply(route)
+      XCTAssertFalse(navigator.isDrawerOpen, "\(route)")
+    }
+  }
+
+  func testOpeningARecentNotebookKeepsItsNameAndClosesTheDrawer() {
+    let navigator = AppNavigator()
+    navigator.isDrawerOpen = true
+    let summary = SessionSummary.placeholder(id: "s1", name: "Trip plan")
+    navigator.openSession(summary)
+    XCTAssertEqual(navigator.sessionPath, [.session(summary)])
+    XCTAssertFalse(navigator.isDrawerOpen)
   }
 
   func testSessionsRouteShowsTheHistoryOnTopOfHome() {

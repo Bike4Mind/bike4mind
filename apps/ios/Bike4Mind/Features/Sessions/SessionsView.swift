@@ -1,7 +1,7 @@
 import B4MKit
 import SwiftUI
 
-/// The notebook history, pushed on the Chat tab's home (`MainTabView` registers the destinations). Owns the
+/// The notebook history, pushed on the home screen (`AppShellView` registers the destinations). Owns the
 /// view model so it survives pushes onto the stack.
 struct SessionsView: View {
   @Environment(AppServices.self) private var services

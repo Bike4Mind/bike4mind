@@ -99,9 +99,17 @@ Sessions upload chip can be watched; the first send to the Receipts lake fails o
 ## Widgets, App Intents and the media gallery
 
 - **Widgets** (`Widgets/`): the app writes a `WidgetSnapshot` JSON into the `group.com.bike4mind.app` container and the extension only reads it, with no network or auth in the widget process. The app calls `WidgetCenter.reloadTimelines` when a chat turn settles, credits load, or the latest image changes. A missing container degrades to placeholders. `Widgets/Bike4MindWidgets.swift` is the bundle entry point and registers the widgets plus `QuestLiveActivity`, which reuses `Widgets/Shared/`.
-- **App Intents** (`Bike4Mind/Features/Intents/`): Ask, Start quest and Capture note only open the composer with a draft (`AssistantRequest.route`); they never send. Ask and Capture note land on the Chat home, the root of the Chat tab's stack.
-- **Settings** (`Bike4Mind/Features/Settings/`): there is no Settings tab. The avatar on the Chat home pushes Settings onto the Chat stack, and `Route.settings` (deep links, the Credits widget) lands there too. The profile header reads the access token's claims (`AccountProfile`); there is no profile endpoint.
-- **Media tab** (`Bike4Mind/Features/Media/`): a grid over the Files API via the hand-written `MediaClient`. Presigned URLs are re-fetched near expiry and at most twice after a playback failure. Under `B4M_UI_FIXTURES=1` the tab and the widgets show canned data.
+- **App Intents** (`Bike4Mind/Features/Intents/`): Ask, Start quest and Capture note only open the composer with a draft (`AssistantRequest.route`); they never send. Ask and Capture note land on the home screen, the root of the stack.
+- **Settings** (`Bike4Mind/Features/Settings/`): the avatar on the home screen and the drawer's account row push Settings onto the stack, and `Route.settings` (deep links, the Credits widget) lands there too. The profile header reads the access token's claims (`AccountProfile`); there is no profile endpoint.
+- **Studio** (code name `media`, `Bike4Mind/Features/Media/`): a grid over the Files API via the hand-written `MediaClient`. Presigned URLs are re-fetched near expiry and at most twice after a playback failure. Under `B4M_UI_FIXTURES=1` the tab and the widgets show canned data.
+## Navigation
+
+- One navigation stack rooted at the start-of-chat home (`NewConversationView`); there is no tab bar, so chat owns the full screen. The stack's path and the drawer's open state live in `AppNavigator`, which every route goes through.
+- A leading sidebar drawer (`Features/Shell/HomeDrawer.swift`) opens from the home menu button or a drag from the left edge. Rows: New chat, Studio, the most recent notebooks plus All notebooks, and an account footer that opens Settings. The home avatar is a second path to Settings.
+- The drawer grows additively: a new top-level surface is a new drawer row (optionally gated by client config), and existing rows never move.
+- Studio hosts creation surfaces as they land, with the media gallery as its root today.
+- As with Notebooks (`session` in code), user-facing names differ from code names: `Route.media`, `SessionsDestination.studio` and the `media-*` accessibility identifiers keep their names.
+
 ## Share and capture
 
 - **Share extension** (`ShareExtension/`): a `com.apple.share-services` target that takes links, text, images, PDFs and

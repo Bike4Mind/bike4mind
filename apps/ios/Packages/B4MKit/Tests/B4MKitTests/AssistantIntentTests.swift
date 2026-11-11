@@ -38,8 +38,9 @@ final class AssistantIntentRoutingTests: XCTestCase {
       AssistantRequest.captureNote(text: "").route, .compose(ComposeRequest(target: .newConversation, draft: "")))
   }
 
-  func testComposeRoutesLiveInTheSessionsTab() {
-    XCTAssertEqual(AssistantRequest.ask(prompt: "x").route.tab, .sessions)
+  func testComposeRoutesTargetTheHomeStack() {
+    XCTAssertEqual(
+      AssistantRequest.ask(prompt: "x").route, .compose(ComposeRequest(target: .newConversation, draft: "x")))
   }
 }
 
@@ -47,9 +48,8 @@ final class AssistantIntentRoutingTests: XCTestCase {
 final class ComposeNavigationTests: XCTestCase {
   func testNewConversationRequestLandsOnHomeAndIsTakenOnce() {
     let navigator = AppNavigator()
-    navigator.selectedTab = .media
+    navigator.apply(.media)
     navigator.apply(AssistantRequest.ask(prompt: "hi").route)
-    XCTAssertEqual(navigator.selectedTab, .sessions)
     XCTAssertTrue(navigator.isShowing(.home))
     XCTAssertEqual(navigator.takeNewConversationRequest()?.draft, "hi")
     XCTAssertNil(navigator.newConversationRequest)

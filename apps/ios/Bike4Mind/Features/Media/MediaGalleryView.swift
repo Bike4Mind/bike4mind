@@ -1,7 +1,7 @@
 import B4MKit
 import SwiftUI
 
-/// The Media tab: a grid of the user's generated images, video and audio.
+/// The Studio gallery (code name: media): a grid of the user's generated images, video and audio.
 struct MediaGalleryView: View {
   @Environment(AppServices.self) private var services
 
@@ -23,7 +23,8 @@ private struct GalleryContent: View {
   var body: some View {
     content
       .background(Tokens.Palette.background)
-      .navigationTitle("Media")
+      .navigationTitle("Studio")
+      .navigationBarTitleDisplayMode(.large)
       .toolbar { ToolbarItem(placement: .principal) { filter } }
       .navigationDestination(for: MediaItem.self) { item in
         MediaDetailView(item: item, api: services.media)
@@ -62,7 +63,7 @@ private struct GalleryContent: View {
       }
     case (.loaded, true):
       ContentUnavailableView(
-        "No media yet", systemImage: "photo.on.rectangle",
+        "Nothing created yet", systemImage: "photo.on.rectangle",
         description: Text(emptyMessage))
     default:
       grid

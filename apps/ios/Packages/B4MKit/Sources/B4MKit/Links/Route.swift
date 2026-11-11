@@ -4,39 +4,25 @@ import Foundation
 /// payloads, consumed by `AppNavigator`. Later milestones extend this enum (chat turns, agent
 /// approvals, media items); `AppNavigator.apply` is the one exhaustive switch to update.
 public enum Route: Hashable, Sendable {
-  /// The Chat tab root: the start-of-chat screen.
+  /// The start-of-chat screen, the root of the single navigation stack.
   case home
-  /// The conversation history, pushed on the Chat tab's home.
+  /// The notebook list, pushed on the home screen.
   case sessions
   case session(id: String)
-  /// The Lakes root. There is no Lakes tab, so `AppNavigator` opens it on the web and stays on the current tab.
+  /// The Lakes root. There is no native lakes screen, so `AppNavigator` opens it on the web and leaves the stack alone.
   case lakes
-  /// No native lake screen exists yet, so `AppNavigator` opens the lake on the web and stays on the current tab.
+  /// No native lake screen exists yet, so `AppNavigator` opens the lake on the web and leaves the stack alone.
   /// `DeepLinkRouter` already sends lake links as `.web` with the original URL; this case is for other producers.
   case lake(id: String)
-  /// The Media tab root.
+  /// The Studio gallery, pushed on the home screen (code name stays `media`).
   case media
-  /// Settings, pushed on the Chat tab's home (opened from the profile avatar); there is no Settings tab.
+  /// Settings, pushed on the home screen (opened from the avatar or the drawer's account row).
   case settings
   /// Open the composer with text already in it. Raised by App Intents (Siri, Shortcuts, Spotlight); the
   /// text is only prefilled, never sent, so a misheard phrase cannot spend credits.
   case compose(ComposeRequest)
   /// A bike4mind.com page with no native screen: handed to Safari rather than dropped.
   case web(URL)
-
-  /// The tab a route lives in; `nil` for what opens on the web.
-  public var tab: AppTab? {
-    switch self {
-    case .home, .sessions, .session, .compose, .settings: .sessions
-    case .media: .media
-    case .lakes, .lake, .web: nil
-    }
-  }
-}
-
-public enum AppTab: Hashable, Sendable {
-  /// Labelled "Chat": its stack roots at the start-of-chat screen.
-  case sessions, lakes, media
 }
 
 /// A request to open a composer with a draft: in an existing session, or in a new conversation.

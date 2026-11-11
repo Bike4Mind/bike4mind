@@ -75,16 +75,6 @@ final class DeepLinkRouterTests: XCTestCase {
     XCTAssertEqual(DeepLinkRouter.route(url: url), .web(url))
   }
 
-  func testRoutesKnowTheirTab() {
-    XCTAssertEqual(Route.session(id: "a").tab, .sessions)
-    XCTAssertEqual(Route.home.tab, .sessions)
-    XCTAssertNil(Route.lake(id: "a").tab)
-    XCTAssertNil(Route.lakes.tab)
-    XCTAssertEqual(Route.media.tab, .media)
-    XCTAssertEqual(Route.settings.tab, .sessions)
-    XCTAssertNil(Route.web(URL(string: "https://app.bike4mind.com/x")!).tab)
-  }
-
   // MARK: - Notification payloads
 
   func testPayloadDeepLinkRoutes() {

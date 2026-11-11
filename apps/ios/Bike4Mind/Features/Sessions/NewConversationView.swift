@@ -1,9 +1,9 @@
 import B4MKit
 import SwiftUI
 
-/// The Chat tab's home: the start of a conversation that does not exist yet, with a greeting, starter chips
-/// and a docked composer. It is the root of the Chat tab's stack, so history is one push away and a sent
-/// conversation is pushed on top of it. App Intents land here with a prefilled draft; nothing is sent until
+/// The app's home: the start of a conversation that does not exist yet, with a greeting, starter chips
+/// and a docked composer. It is the root of the navigation stack, so the drawer's destinations and a sent
+/// conversation are pushed on top of it. App Intents land here with a prefilled draft; nothing is sent until
 /// the user taps Send.
 struct NewConversationView: View {
   @Environment(AppServices.self) private var services
@@ -39,7 +39,7 @@ struct NewConversationView: View {
     }
     .navigationBarTitleDisplayMode(.inline)
     .toolbar {
-      ToolbarItem(placement: .topBarLeading) { notebooksButton }
+      ToolbarItem(placement: .topBarLeading) { menuButton }
       ToolbarItem(placement: .topBarTrailing) { profileButton }
     }
     .sheet(isPresented: $isRecordingVoice) {
@@ -53,21 +53,24 @@ struct NewConversationView: View {
     }
     .task { profile = await services.accountProfile() }
     .onChange(of: services.navigator.composeRequest, initial: true) { _, _ in takeComposeRequest() }
-    // A field left focused under a pushed screen (or another tab) is refocused on return, and that refocus
-    // does not lift the safeAreaInset composer above the keyboard: drop focus whenever home is covered.
+    // A field left focused under a pushed screen is refocused on return, and that refocus does not lift the
+    // safeAreaInset composer above the keyboard: drop focus whenever home is covered.
     .onChange(of: services.navigator.isShowing(.home)) { _, isShowing in
       if !isShowing { focused = false }
     }
+    .onChange(of: services.navigator.isDrawerOpen) { _, isOpen in
+      if isOpen { focused = false }
+    }
   }
 
-  private var notebooksButton: some View {
+  private var menuButton: some View {
     Button {
-      services.navigator.apply(.sessions)
+      services.navigator.isDrawerOpen = true
     } label: {
-      Label("Notebooks", systemImage: "clock.arrow.circlepath")
+      Label("Menu", systemImage: "line.3.horizontal")
     }
-    .accessibilityLabel("Notebooks")
-    .accessibilityIdentifier("home-conversations-btn")
+    .accessibilityLabel("Menu")
+    .accessibilityIdentifier("home-menu-btn")
   }
 
   private var profileButton: some View {
@@ -144,7 +147,7 @@ struct NewConversationView: View {
     focused = true
   }
 
-  /// A new-conversation request (an App Intent, or New Conversation in the notebook list) focuses the
+  /// A new-conversation request (an App Intent, or New chat in the drawer or notebook list) focuses the
   /// composer. A non-empty draft replaces whatever was typed, so a second Siri request is not dropped.
   private func takeComposeRequest() {
     guard let request = services.navigator.takeNewConversationRequest() else { return }

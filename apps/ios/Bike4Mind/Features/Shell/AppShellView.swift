@@ -1,14 +1,15 @@
 import B4MKit
 import SwiftUI
 
-/// Signed-in navigation skeleton. Each tab owns its own stack so later milestones can push detail screens.
-/// Tab selection and the Chat stack live in `AppNavigator`, which deep links and notification taps drive.
-struct MainTabView: View {
+/// Signed-in navigation skeleton: one stack rooted at the start-of-chat home, with a leading drawer for
+/// everything else. The stack's path and the drawer's open state live in `AppNavigator`, which deep links and
+/// notification taps drive.
+struct AppShellView: View {
   @Environment(AppServices.self) private var services
 
   var body: some View {
     @Bindable var navigator = services.navigator
-    TabView(selection: $navigator.selectedTab) {
+    ZStack(alignment: .leading) {
       NavigationStack(path: $navigator.sessionPath) {
         NewConversationView(api: services.api, activities: services.questActivities)
           .navigationDestination(for: SessionsDestination.self) { destination in
@@ -17,24 +18,17 @@ struct MainTabView: View {
               SessionsView()
             case .session(let session):
               SessionDetailView(session: session)
-                // Conversations are full-bleed so the composer sits at the bottom edge; Back brings the bar back.
-                .toolbar(.hidden, for: .tabBar)
                 // Opening a conversation is the first moment the app has shown the user value, so this is
                 // when the one-time system notification prompt appears.
                 .task { await services.push.userDidReachValueMoment() }
             case .settings:
               SettingsView()
+            case .studio:
+              MediaGalleryView()
             }
           }
       }
-      .tabItem { Label("Chat", systemImage: "bubble.left") }
-      .tag(AppTab.sessions)
-
-      NavigationStack {
-        MediaGalleryView()
-      }
-      .tabItem { Label("Media", systemImage: "photo.on.rectangle") }
-      .tag(AppTab.media)
+      HomeDrawer()
     }
     .inAppSafari(
       url: Binding(

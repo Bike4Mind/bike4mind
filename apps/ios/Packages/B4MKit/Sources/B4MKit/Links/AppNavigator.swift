@@ -1,14 +1,16 @@
 import Foundation
 import Observation
 
-/// App-wide navigation state that routes mutate: which tab is selected and what is pushed on the
-/// Chat tab's stack. Lives in B4MKit so route handling is testable without SwiftUI.
+/// App-wide navigation state that routes mutate: what is pushed on the single stack above the home screen,
+/// and whether the leading drawer is open. Lives in B4MKit so route handling is testable without SwiftUI.
 @MainActor
 @Observable
 public final class AppNavigator {
-  public var selectedTab: AppTab = .sessions
-  /// The Chat tab's stack above its root, the start-of-chat screen. Empty means the user is on that screen.
+  /// The stack above its root, the start-of-chat screen. Empty means the user is on that screen.
   public var sessionPath: [SessionsDestination] = []
+  /// Whether the leading drawer is open over the home screen. Every route closes it; it never affects
+  /// `isShowing(.home)`, which means "home visible, nothing pushed".
+  public var isDrawerOpen = false
   /// The composer an App Intent asked for. A new-conversation request is taken by the start-of-chat screen via
   /// `takeNewConversationRequest()`; a session request by that session's screen via `takeComposeRequest`.
   public private(set) var composeRequest: ComposeRequest?
@@ -41,7 +43,7 @@ public final class AppNavigator {
   }
 
   public func apply(_ route: Route) {
-    if let tab = route.tab { selectedTab = tab }
+    isDrawerOpen = false
     switch route {
     case .home:
       sessionPath = []
@@ -59,7 +61,7 @@ public final class AppNavigator {
       case .session(let id): showSession(.placeholder(id: id, name: request.sessionName))
       }
     case .media:
-      break
+      sessionPath = [.studio]
     case .lakes:
       externalURL = Self.webURLForLakes
     case .lake(let id):
@@ -67,6 +69,12 @@ public final class AppNavigator {
     case .web(let url):
       externalURL = url
     }
+  }
+
+  /// Pushes a session whose summary is already known (a drawer row), so it is titled at once.
+  public func openSession(_ session: SessionSummary) {
+    isDrawerOpen = false
+    showSession(session)
   }
 
   /// Pushes the session straight onto the home screen, so back always lands on the start of a new chat.
@@ -110,24 +118,25 @@ public final class AppNavigator {
   /// Whether the screen for `route` is what the user is looking at right now. Drives the foreground
   /// notification policy.
   public func isShowing(_ route: Route) -> Bool {
-    guard let tab = route.tab, tab == selectedTab else { return false }
     switch route {
     case .home: return sessionPath.isEmpty
     case .sessions: return sessionPath.last == .sessionList
     case .settings: return sessionPath.last == .settings
     case .session(let id): return sessionPath.last?.sessionID == id
-    case .media: return true
+    case .media: return sessionPath.last == .studio
     case .lakes, .lake, .web, .compose: return false
     }
   }
 }
 
-/// A screen pushed onto the Chat tab's stack.
+/// A screen pushed onto the stack above the home screen.
 public enum SessionsDestination: Hashable, Sendable {
   /// The conversation history list.
   case sessionList
   case session(SessionSummary)
   case settings
+  /// The Studio gallery (`Route.media`).
+  case studio
 
   public var sessionID: String? {
     guard case .session(let session) = self else { return nil }
