@@ -78,6 +78,7 @@ const ACTION_DISPLAY: Record<ShadowDetectionAction, { label: string; tone: Admin
   suspend: { label: 'Suspend', tone: 'warn' },
   blockIp: { label: 'Block IP', tone: 'warn' },
   confirmHold: { label: 'Confirm hold', tone: 'neutral' },
+  releaseHold: { label: 'Release hold', tone: 'neutral' },
   none: { label: 'None', tone: 'neutral' },
 };
 
