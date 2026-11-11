@@ -58,7 +58,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
 const recordAdminActionFromRequest = vi.hoisted(() => vi.fn().mockResolvedValue(null));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
 // The paid-only switch has its own suite; here it always admits.
-vi.mock('@server/utils/apiKeyAccessGate', () => ({ assertApiKeyAccessAllowed: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/apiKeyAccessGate', () => ({
+  assertApiKeyAccessAllowed: vi.fn().mockResolvedValue(undefined),
+}));
 
 const { default: listHandler } = await import('@pages/api/organizations/[id]/api-keys/index');
 const { default: rotateHandler } = await import('@pages/api/organizations/[id]/api-keys/[keyId]/rotate');

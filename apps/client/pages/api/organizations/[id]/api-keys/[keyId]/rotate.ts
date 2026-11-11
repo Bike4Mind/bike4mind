@@ -13,7 +13,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { loadOrgOwnedKey, resolveCreatorNames, toOrgApiKeyView } from '@server/organizations/orgApiKeys';
 import { endKeyRealtimeConnections } from '@server/utils/adminApiKeyActions';
-import { assertApiKeyAccessAllowed } from '@server/utils/apiKeyAccessGate';
+import { assertApiKeyAccessAllowed } from '@bike4mind/server-utils/utils/apiKeyAccessGate';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
 
 const stringParam = (value: unknown): string => (typeof value === 'string' ? value : '');
