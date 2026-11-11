@@ -47,9 +47,12 @@ vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: (select: (s: unknown) => unknown) =>
     select({ currentUser: user.current, isAdmin: false, avatarVersion: user.avatarVersion }),
 }));
-const userSettings = vi.hoisted(() => ({ updatePreferences: vi.fn() }));
+const userSettings = vi.hoisted(() => ({ updatePreferences: vi.fn(), showHelp: false }));
 vi.mock('@client/app/contexts/UserSettingsContext', () => ({
-  useUserSettings: () => ({ updatePreferences: userSettings.updatePreferences }),
+  useUserSettings: () => ({
+    updatePreferences: userSettings.updatePreferences,
+    settings: { showHelp: userSettings.showHelp },
+  }),
 }));
 vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: analytics.mutate }) }));
 vi.mock('@client/app/hooks/data/settings', () => ({
@@ -404,6 +407,7 @@ describe('ProfileMenu - billing rows open URL-addressable views', () => {
 describe('ProfileMenu - Send feedback', () => {
   beforeEach(() => {
     userSettings.updatePreferences.mockClear();
+    userSettings.showHelp = false;
     billing.creditsEnabled = false;
   });
 
@@ -439,6 +443,14 @@ describe('ProfileMenu - Send feedback', () => {
     expect(userSettings.updatePreferences).toHaveBeenCalledWith({ showHelp: true });
     expect(screen.queryByTestId('profile-menu-panel')).not.toBeInTheDocument();
     expect(document.activeElement).toBe(trigger);
+  });
+
+  it('still sets showHelp true when the feedback form is already open', () => {
+    userSettings.showHelp = true;
+    openMenu();
+    fireEvent.click(screen.getByTestId('profile-menu-send-feedback'));
+    expect(userSettings.updatePreferences).toHaveBeenCalledTimes(1);
+    expect(userSettings.updatePreferences).toHaveBeenCalledWith({ showHelp: true });
   });
 });
 
