@@ -33,7 +33,9 @@ const mockOpen = vi.fn();
 vi.mock('node:fs/promises', async importOriginal => ({
   ...(await importOriginal<typeof import('node:fs/promises')>()),
   open: (...a: unknown[]) => mockOpen(...a),
+  realpath: (p: string) => mockRealpath(p),
 }));
+const mockRealpath = vi.fn(async (p: string) => p);
 
 const mockClient = (overrides: Partial<Record<keyof B4mApiClient, unknown>>): B4mApiClient =>
   ({ baseURL: 'http://localhost:3000', ...overrides }) as unknown as B4mApiClient;
@@ -210,6 +212,16 @@ describe('tool handlers', () => {
         fileSize: 3,
         mimeType: 'text/plain',
       });
+    });
+
+    it('refuses hidden files, hidden directories and links into them without opening them', async () => {
+      mockOpen.mockClear();
+      const client = uploadClient();
+      await expect(uploadFile(client, { path: '/home/u/.env' })).rejects.toThrow('hidden');
+      await expect(uploadFile(client, { path: '/home/u/.ssh/id_rsa' })).rejects.toThrow('hidden');
+      mockRealpath.mockResolvedValueOnce('/home/u/.ssh/id_rsa');
+      await expect(uploadFile(client, { path: '/home/u/key.txt' })).rejects.toThrow('hidden');
+      expect(mockOpen).not.toHaveBeenCalled();
     });
 
     it('rejects a path that is not a regular file without reading it', async () => {

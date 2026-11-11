@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { open } from 'node:fs/promises';
-import { basename } from 'node:path';
+import { open, realpath } from 'node:fs/promises';
+import { basename, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult, ServerNotification } from '@modelcontextprotocol/sdk/types.js';
@@ -143,7 +143,7 @@ export const TOOL_META: ToolMeta[] = [
     name: 'upload_file',
     title: 'Upload file',
     description:
-      'Upload a local file or base64 bytes to the file browser. path reads any file the MCP server process can access; files over 100 MB are refused. Returns its id and pending ingestion state; indexing runs asynchronously. Optional projectId adds it to a project (also requires projects:write).',
+      'Upload a local file or base64 bytes to the file browser. path reads a file the MCP server process can access, except hidden files and anything under a hidden directory; files over 100 MB are refused. Returns its id and pending ingestion state; indexing runs asynchronously. Optional projectId adds it to a project (also requires projects:write).',
     scope: 'files:write',
   },
   {
@@ -637,7 +637,13 @@ export async function uploadFile(
   }
   let bytes: Buffer;
   if (args.path) {
-    const file = await open(args.path, 'r');
+    const target = await realpath(args.path);
+    const isHidden = (p: string) => p.split(sep).some(seg => seg.startsWith('.') && seg !== '.' && seg !== '..');
+    // Checked before and after symlinks so neither a dot-path nor a link into one is read.
+    if (isHidden(resolve(args.path)) || isHidden(target)) {
+      throw new Error(`${args.path} is a hidden file or inside a hidden directory; upload_file does not read those`);
+    }
+    const file = await open(target, 'r');
     try {
       const info = await file.stat();
       if (!info.isFile()) throw new Error(`${args.path} is not a regular file`);
