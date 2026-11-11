@@ -513,7 +513,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gapBecause(
     'queue:infra/queues.ts:generatedMediaPurgeQueue',
-    '6666f633a28bafb93fa0f9beec0e2af90912e0a90afea814906fe3509a8d38f6',
+    'f0877af2f06e1496e13554dd084fd1b5dc2ecc5622828f03f1a373cdaa6e02d0',
     'Optional. Notebook and message deletes hand it the generated media their request budget did not reach; with no URL set the leftovers are logged and dropped. The self-host templates declare it with a URL, as queue parity requires, but no self-host consumer is wired yet, so leftovers wait in the broker until one is.'
   ),
   broker(
