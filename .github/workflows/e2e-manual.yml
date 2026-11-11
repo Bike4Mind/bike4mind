@@ -24,6 +24,7 @@ on:
           - Existing User Login
           - Signup
           - Referrals
+          - Launch Readiness
           - Admin
           - Notebook
           - Prompts
@@ -85,6 +86,7 @@ jobs:
             "Existing User Login") ARGS="--project=unauthenticated e2e/existing-user-login.spec.ts" ;;
             "Signup")           ARGS="--project=unauthenticated e2e/signup.spec.ts" ;;
             "Referrals")        ARGS="--project=referrals" ;;
+            "Launch Readiness") ARGS="--project=launch-readiness" ;;
             "Admin")            ARGS="--project=admin" ;;
             "Notebook")         ARGS="--project=notebook" ;;
             "Prompts")          ARGS="--project=prompts" ;;
