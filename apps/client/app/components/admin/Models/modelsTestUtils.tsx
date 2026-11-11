@@ -46,6 +46,8 @@ export const modelRow = (overrides: Partial<AdminModelRow> = {}): AdminModelRow 
   },
   price: { source: 'row', unit: 'per_token', pricing: { '0': { input: 2.5e-6, output: 1e-5 } }, effectiveFrom: '' },
   lifecycle: {},
+  sunsetDate: null,
+  sunsetDays: null,
   lifecycleSuggestion: null,
   firstSeenAt: null,
   profileOnlyFoundation: false,

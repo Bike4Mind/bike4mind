@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { accessSummary, modelTypeLabel, priceSummary } from './modelPresentation';
+import { accessSummary, modelTypeLabel, priceSummary, sunsetDistance } from './modelPresentation';
 
 const access = (overrides: Partial<Parameters<typeof accessSummary>[0]> = {}) => ({
   entry: null,
@@ -63,5 +63,15 @@ describe('modelTypeLabel', () => {
     expect(modelTypeLabel('text')).toBe('Text');
     expect(modelTypeLabel('speech-to-text')).toBe('Speech to text');
     expect(modelTypeLabel('realtime-voice')).toBe('Realtime voice');
+  });
+});
+
+describe('sunsetDistance', () => {
+  it('reads days left, today, and days past', () => {
+    expect(sunsetDistance(20)).toBe('in 20 days');
+    expect(sunsetDistance(1)).toBe('in 1 day');
+    expect(sunsetDistance(0)).toBe('today');
+    expect(sunsetDistance(-1)).toBe('1 day ago');
+    expect(sunsetDistance(-17)).toBe('17 days ago');
   });
 });

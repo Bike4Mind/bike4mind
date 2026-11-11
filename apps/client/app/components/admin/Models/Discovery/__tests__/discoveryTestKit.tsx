@@ -172,6 +172,8 @@ export const adminRow = (id: string, over: Partial<AdminModelRow> = {}): AdminMo
   access: { entry: null, everyone: true, adminsOnly: false, freeTierLocked: false },
   price: null,
   lifecycle: {},
+  sunsetDate: null,
+  sunsetDays: null,
   lifecycleSuggestion: null,
   firstSeenAt: null,
   profileOnlyFoundation: false,

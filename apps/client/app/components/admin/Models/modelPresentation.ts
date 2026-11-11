@@ -119,3 +119,9 @@ export const priceSummary = (price: AdminModelPrice | null, type: string): strin
   if (unit === 'per_minute') return `${usd(tier.input)} / min`;
   return 'Build table';
 };
+
+const dayCount = (days: number) => `${days.toLocaleString()} day${days === 1 ? '' : 's'}`;
+
+/** A row's sunsetDays as the Retires column reads it: days left, today, or how long ago it passed. */
+export const sunsetDistance = (days: number): string =>
+  days === 0 ? 'today' : days > 0 ? `in ${dayCount(days)}` : `${dayCount(-days)} ago`;

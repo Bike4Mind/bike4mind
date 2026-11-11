@@ -71,6 +71,7 @@ import {
   accessSummary,
   modelTypeLabel,
   priceSummary,
+  sunsetDistance,
 } from '../modelPresentation';
 import { MODELS_LIST_SEARCH_KEYS, parseModelSort, parseModelView } from '../modelsSearch';
 import { useModelsNavigation } from '../modelsNavigation';
@@ -88,13 +89,20 @@ const DEFAULT_PAGE_SIZE = 50;
 const SEARCH_MAX = 200;
 const NO_SELECTION: AdminSelection = { mode: 'explicit', ids: [] };
 
-const SORT_BY_COLUMN: Record<string, AdminModelSort> = { model: 'name', type: 'type', status: 'status', rank: 'rank' };
+const SORT_BY_COLUMN: Record<string, AdminModelSort> = {
+  model: 'name',
+  type: 'type',
+  status: 'status',
+  sunset: 'sunset',
+  rank: 'rank',
+};
 const COLUMN_BY_SORT: Record<AdminModelSort, string> = {
   name: 'model',
   type: 'type',
   status: 'status',
   rank: 'rank',
   provider: 'provider',
+  sunset: 'sunset',
 };
 
 const splitList = (value: string) =>
@@ -164,7 +172,6 @@ export function ModelListSection() {
     (ADMIN_MODEL_SOURCES as readonly string[]).includes(value)
   );
   const showFoundationIds = filters.foundation === '1';
-  const sort = parseModelSort(filters.sort);
   const dir = filters.dir === 'desc' ? 'desc' : filters.dir === 'asc' ? 'asc' : undefined;
   const page = positiveInt(filters.page, 1);
   const pageSize = (ADMIN_PAGE_SIZES as readonly number[]).includes(Number(filters.pageSize))
@@ -175,6 +182,7 @@ export function ModelListSection() {
   // Needs review is the default view while it holds anything; its count does not depend on the view shown.
   const [needsReviewCount, setNeedsReviewCount] = useState<number | undefined>(undefined);
   const view: AdminModelView = urlView ?? (needsReviewCount === 0 ? 'all' : 'needs-review');
+  const sort = parseModelSort(filters.sort) ?? (view === 'retiring' ? 'sunset' : undefined);
 
   const baseFilter: Omit<AdminModelFilter, 'view' | 'showFoundationIds'> & { showFoundationIds: boolean } = {
     ...(urlQuery ? { search: urlQuery } : {}),
@@ -388,6 +396,23 @@ export function ModelListSection() {
       },
     },
     {
+      id: 'sunset',
+      label: 'Retires',
+      sortable: true,
+      width: '9rem',
+      render: row =>
+        row.sunsetDate === null || row.sunsetDays === null ? (
+          '-'
+        ) : (
+          <Stack sx={{ minWidth: 0 }} data-testid="models-row-sunset">
+            <Typography level="body-sm">{row.sunsetDate}</Typography>
+            <Typography level="body-xs" sx={{ color: 'admin.inkSecondary' }}>
+              {sunsetDistance(row.sunsetDays)}
+            </Typography>
+          </Stack>
+        ),
+    },
+    {
       id: 'rank',
       label: 'Rank',
       sortable: true,
@@ -452,7 +477,8 @@ export function ModelListSection() {
           testId: `models-view-${id}`,
         }))}
         activeId={view}
-        onSelect={id => writeList({ page: '' }, { view: id })}
+        // Retiring opens on the sunset sort, most overdue first, whatever the last view was sorted by.
+        onSelect={id => writeList({ page: '', ...(id === 'retiring' ? { sort: '', dir: '' } : {}) }, { view: id })}
         aria-label="Model views"
         data-testid="models-views"
       />
@@ -603,7 +629,7 @@ export function ModelListSection() {
         onRowActivate={row => void openModel(row.id)}
         testId="models-table"
         rowTestId={row => `models-row-${row.id}`}
-        minWidth="76rem"
+        minWidth="85rem"
         selection={selection}
         onSelectionChange={setSelection}
         selectionDisabled={stale}

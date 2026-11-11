@@ -222,6 +222,72 @@ describe('ModelListSection views', () => {
     });
   });
 
+  it('shows each sunset date with the days left, overdue included', async () => {
+    serveList(() =>
+      listResponse([
+        modelRow({ id: 'soon', name: 'Soon', sunsetDate: '2026-12-01', sunsetDays: 20 }),
+        modelRow({ id: 'today', name: 'Today', sunsetDate: '2026-11-11', sunsetDays: 0 }),
+        modelRow({ id: 'past', name: 'Past', sunsetDate: '2026-10-25', sunsetDays: -17 }),
+        modelRow({ id: 'undated', name: 'Undated' }),
+      ])
+    );
+    await renderModelsRoute('/admin?tab=models&modelsView=all', ModelListSection);
+
+    const sunsetOf = (id: string) => within(screen.getByTestId(`models-row-${id}`)).queryByTestId('models-row-sunset');
+    await screen.findByTestId('models-row-soon');
+    expect(sunsetOf('soon')).toHaveTextContent('2026-12-01in 20 days');
+    expect(sunsetOf('today')).toHaveTextContent('2026-11-11today');
+    expect(sunsetOf('past')).toHaveTextContent('2026-10-2517 days ago');
+    expect(sunsetOf('undated')).not.toBeInTheDocument();
+  });
+
+  it('opens the Retiring view sorted by sunset, most overdue first', async () => {
+    serveList(() => listResponse([listedRow]));
+    await renderModelsRoute('/admin?tab=models&modelsView=retiring', ModelListSection);
+
+    await screen.findByTestId('models-row-example-text-1');
+    expect(listCalls().at(-1)).toMatchObject({ view: 'retiring', sort: 'sunset' });
+    expect(screen.getByTestId('admin-table-sort-sunset-btn').closest('th')).toHaveAttribute('aria-sort', 'ascending');
+  });
+
+  it('drops the last view sort when the Retiring view is opened', async () => {
+    serveList(() => listResponse([listedRow]));
+    const { router } = await renderModelsRoute(
+      '/admin?tab=models&modelsView=all&modelsSort=rank&modelsDir=desc',
+      ModelListSection
+    );
+
+    await screen.findByTestId('models-row-example-text-1');
+    fireEvent.click(screen.getByTestId('models-view-retiring'));
+
+    await waitFor(() => expect(listCalls().at(-1)).toMatchObject({ view: 'retiring', sort: 'sunset' }));
+    expect(listCalls().at(-1)?.dir).toBeUndefined();
+    expect(router.state.location.search).not.toHaveProperty('modelsSort');
+    expect(router.state.location.search).not.toHaveProperty('modelsDir');
+  });
+
+  it('shows a sunset sort from the URL on the Retires header in any view', async () => {
+    serveList(() => listResponse([listedRow]));
+    await renderModelsRoute('/admin?tab=models&modelsView=all&modelsSort=sunset&modelsDir=desc', ModelListSection);
+
+    await screen.findByTestId('models-row-example-text-1');
+    expect(listCalls().at(-1)).toMatchObject({ view: 'all', sort: 'sunset', dir: 'desc' });
+    const header = screen.getByTestId('admin-table-sort-sunset-btn');
+    expect(header.closest('th')).toHaveAttribute('aria-sort', 'descending');
+    expect(header).toHaveTextContent('Retires');
+  });
+
+  it('sorts by sunset from the Retires header, ascending first', async () => {
+    serveList(() => listResponse([listedRow]));
+    const { router } = await renderModelsRoute('/admin?tab=models&modelsView=all', ModelListSection);
+
+    await screen.findByTestId('models-row-example-text-1');
+    fireEvent.click(screen.getByTestId('admin-table-sort-sunset-btn'));
+
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ modelsSort: 'sunset', modelsDir: 'asc' }));
+    await waitFor(() => expect(listCalls().at(-1)).toMatchObject({ sort: 'sunset', dir: 'asc' }));
+  });
+
   it('marks an enabled model nobody can pick as Admins only', async () => {
     serveList(() => listResponse([adminOnlyRow]));
     await renderModelsRoute('/admin?tab=models&modelsView=all', ModelListSection);
