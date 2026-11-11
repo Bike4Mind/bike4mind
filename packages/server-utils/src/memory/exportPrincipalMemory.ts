@@ -3,7 +3,10 @@ import { activationConfigForKind, foldEvents, type Belief, type MemoryEvent, typ
 import type { KeyProvider } from './factCipher';
 import { listPrincipalLedger, type LedgerRepo } from './ledgerMemoryStore';
 
-export interface ExportedMemento extends IMemento {
+const MEMENTO_PAGE_SIZE = 200;
+const MAX_MEMENTO_PAGES = 2_000;
+
+export interface ExportedMemento extends Omit<IMemento, 'metadata'> {
   id: string;
   createdAt?: Date;
   updatedAt?: Date;
@@ -42,8 +45,8 @@ export async function exportPrincipalMemory(deps: {
   if (deps.principal.kind === 'user' && deps.mementos) {
     let afterId: string | undefined;
     for (let page = 0; ; page++) {
-      if (page > 2_000) throw new Error('Memento export exceeded page limit');
-      const rows = await deps.mementos.findByUserId(deps.ownerUserId, { limit: 200, afterId });
+      if (page >= MAX_MEMENTO_PAGES) throw new Error('Memento export exceeded page limit');
+      const rows = await deps.mementos.findByUserId(deps.ownerUserId, { limit: MEMENTO_PAGE_SIZE, afterId });
       for (const row of rows) {
         const id = String(row.id);
         if (!id || (afterId !== undefined && id <= afterId) || row.userId !== deps.ownerUserId) {
@@ -60,7 +63,6 @@ export async function exportPrincipalMemory(deps: {
           fullContent,
           embedding,
           embeddingModel,
-          metadata,
           lastAccessedAt,
           isArchived,
           tags,
@@ -79,7 +81,6 @@ export async function exportPrincipalMemory(deps: {
           fullContent,
           embedding: embedding ? Array.from(embedding) : undefined,
           embeddingModel,
-          metadata,
           lastAccessedAt,
           isArchived,
           tags: tags ? Array.from(tags) : undefined,
@@ -88,7 +89,7 @@ export async function exportPrincipalMemory(deps: {
         });
         afterId = id;
       }
-      if (rows.length < 200) break;
+      if (rows.length < MEMENTO_PAGE_SIZE) break;
     }
   }
   return {
