@@ -65,6 +65,31 @@ describe('unset-fabfile-signed-urls migration (real DB)', () => {
     expect(await fabfiles().findOne({ _id: partial._id })).toEqual({ _id: partial._id, fileName: 'partial.txt' });
   });
 
+  it('reports rows that have a fileUrl but no usable filePath, and still unsets their URL fields', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const ids = [new Types.ObjectId(), new Types.ObjectId(), new Types.ObjectId(), new Types.ObjectId()];
+    await fabfiles().insertMany([
+      { _id: ids[0], fileName: 'a.txt', fileUrl: 'https://signed.example.invalid/a' },
+      { _id: ids[1], fileName: 'b.txt', filePath: null, fileUrl: 'https://signed.example.invalid/b' },
+      {
+        _id: ids[2],
+        fileName: 'c.txt',
+        filePath: '',
+        fileUrl: 'https://signed.example.invalid/c',
+        deletedAt: new Date(),
+      },
+      { _id: ids[3], fileName: 'd.txt', filePath: 'd', fileUrl: 'https://signed.example.invalid/d' },
+    ]);
+
+    await migration.up();
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain('3 file(s) have a fileUrl but no filePath');
+    expect(await fabfiles().countDocuments({ fileUrl: { $exists: true } })).toBe(0);
+    vi.restoreAllMocks();
+  });
+
   it('is a no-op on rerun', async () => {
     const id = new Types.ObjectId();
     await fabfiles().insertOne({ _id: id, fileName: 'a.txt', fileUrl: 'https://signed.example.invalid/x' });

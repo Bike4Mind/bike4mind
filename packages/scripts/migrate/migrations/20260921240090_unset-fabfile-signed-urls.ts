@@ -14,6 +14,13 @@ const migration: MigrationFile = {
   name: 'unset-fabfile-signed-urls',
 
   up: async () => {
+    // Such rows have no stored object to serve; the count makes that observable per stage.
+    const noObject = await FabFile.collection.countDocuments({
+      fileUrl: { $exists: true },
+      $or: [{ filePath: { $exists: false } }, { filePath: null }, { filePath: '' }],
+    });
+    (noObject > 0 ? console.warn : console.log)(`${LOG} ${noObject} file(s) have a fileUrl but no filePath`);
+
     let last: Types.ObjectId | undefined;
     let total = 0;
     for (;;) {
