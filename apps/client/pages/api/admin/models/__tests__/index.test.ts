@@ -87,7 +87,13 @@ const foundationRow = discoveredRow('anthropic.claude-admin-list-v1:0', {
 });
 
 interface ListBody {
-  models: Array<{ id: string; status: string; reasons: Array<{ code: string; fixAction?: string }> }>;
+  models: Array<{
+    id: string;
+    status: string;
+    reasons: Array<{ code: string; fixAction?: string }>;
+    sunsetDate: string | null;
+    sunsetDays: number | null;
+  }>;
   total: number;
   counts: Record<string, number>;
   foundationIds: number;
@@ -223,6 +229,23 @@ describe('GET /api/admin/models', () => {
       expect(model.reasons.map(reason => reason.code)).toContain('no-credential-for-backend');
     }
     expect(xai.some(model => model.status === 'hidden')).toBe(true);
+  });
+
+  it('sorts by the sooner lifecycle date, undated models last', async () => {
+    h.catalogRows.mockResolvedValue([
+      discoveredRow('gpt-admin-list'),
+      discoveredRow('gpt-admin-dated', {
+        lifecycle: { status: 'active', retirementDate: '2099-01-01' },
+        autoDisabled: false,
+        autoDisabledReason: undefined,
+      }),
+    ]);
+    const models = (await list({ sort: 'sunset', pageSize: '500' })).models;
+    const days = models.map(model => model.sunsetDays);
+    const dated = days.filter((value): value is number => value !== null);
+
+    expect(models.find(model => model.id === 'gpt-admin-dated')?.sunsetDate).toBe('2099-01-01');
+    expect(days).toEqual([...dated].sort((a, b) => a - b).concat(days.filter(value => value === null)));
   });
 
   it.each([
