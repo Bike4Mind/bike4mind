@@ -111,6 +111,9 @@ export type AdminReasonDraft = { preset: string | null; note: string };
 
 export const EMPTY_ADMIN_REASON: AdminReasonDraft = { preset: null, note: '' };
 
+/** The reason an Accept on an AiSuggestion prefills; the admin can still edit it before applying. */
+export const ACCEPTED_AI_REASON: AdminReasonDraft = { preset: null, note: 'Accepted AI suggestion' };
+
 export const ADMIN_REASON_HINT = `Pick a reason or write at least ${ADMIN_ACTION_REASON_MIN_LENGTH} characters.`;
 
 const PRESET_SEPARATOR = ': ';

@@ -1,6 +1,10 @@
-import { Box, Link, Stack, Tooltip, Typography } from '@mui/joy';
+import { useState, type ReactNode } from 'react';
+import { Box, Button, Link, Stack, Tooltip, Typography } from '@mui/joy';
+import { ActionDialog } from './ActionDialog';
+import { ACCEPTED_AI_REASON } from './adminReason';
 import { adminFocus } from './adminStyles';
 import { RelativeTime } from './EntityHeader';
+import { Kbd } from './Kbd';
 import { StatusChip } from './StatusChip';
 
 /** Marks every AI-originated value in the admin UI (DESIGN_GUIDE.md section 10). */
@@ -31,15 +35,50 @@ export type AiSuggestionData = {
   reasons?: AiSuggestionReason[];
   model?: string;
   createdAt?: string;
+  status?: AiSuggestionStatus;
 };
 
 const MAX_REASONS = 3;
+
+/** Mirrors the status enum of the shared AI suggestion store; keep the two in sync. */
+export const AI_SUGGESTION_STATUSES = [
+  'pending',
+  'accepted',
+  'overridden',
+  'dismissed',
+  'auto_applied',
+  'undone',
+  'expired',
+] as const;
+export type AiSuggestionStatus = (typeof AI_SUGGESTION_STATUSES)[number];
+
+export const AI_OVERRIDE_REASONS = ['Evidence misread', 'Missing context', 'Outdated policy', 'Other'] as const;
+export type AiOverrideReason = (typeof AI_OVERRIDE_REASONS)[number];
+
+/** The write-back an admin's decision produces for the suggestion record. */
+export type AiSuggestionDecision = {
+  suggestionId: string;
+  status: Extract<AiSuggestionStatus, 'accepted' | 'overridden' | 'dismissed' | 'undone'>;
+  overrideReason?: AiOverrideReason;
+};
 
 export type AiSuggestionProps = {
   variant: 'row' | 'detail';
   /** `null` when AI is off, over budget or failed: the slot renders nothing, never an error. */
   suggestion: AiSuggestionData | null;
-  /** Derived ids: `<id>-chip`, `<id>-proposal`, `<id>-confidence`, `<id>-reason-<i>`, `<id>-meta`. */
+  /** Opens the host's own ActionDialog, prefilled (ACCEPTED_AI_REASON); the host reports `accepted` once its write lands. */
+  onAccept?: () => void;
+  /** Opens the host's manual control; the host reports `overridden` once its write lands. */
+  onOverride?: (reason?: AiOverrideReason) => void;
+  /** Fires here for Dismiss and Undo, which complete inside the component. */
+  onDecision?: (decision: AiSuggestionDecision) => void;
+  /** Reverts an `auto_applied` suggestion. */
+  onUndo?: () => void;
+  /**
+   * Derived ids: `<id>-chip`, `<id>-proposal`, `<id>-confidence`, `<id>-reason-<i>`, `<id>-meta`,
+   * `<id>-accept-btn`, `<id>-override-btn`, `<id>-dismiss-btn`, `<id>-why-<i>`, `<id>-override-continue-btn`,
+   * `<id>-done-chip`, `<id>-undo-btn`.
+   */
   'data-testid'?: string;
 };
 
@@ -47,17 +86,52 @@ export type AiSuggestionProps = {
 export function AiSuggestion({
   variant,
   suggestion,
+  onAccept,
+  onOverride,
+  onDecision,
+  onUndo,
   'data-testid': testId = 'admin-ai-suggestion',
 }: AiSuggestionProps) {
-  if (!suggestion) return null;
+  const [dismissed, setDismissed] = useState(false);
+  const [overriding, setOverriding] = useState(false);
+  const [whyWrong, setWhyWrong] = useState<AiOverrideReason | null>(null);
+  if (!suggestion || dismissed) return null;
   const word = confidenceWord(suggestion.probability);
   const label = word ? AI_CONFIDENCE_LABELS[word] : null;
   const percent = word && suggestion.probability !== null ? formatAiProbability(suggestion.probability) : null;
+  const autoApplied = suggestion.status === 'auto_applied';
 
   if (variant === 'row') {
-    const title = `AI suggestion: ${suggestion.proposal}${percent ? ` (${percent} confidence)` : ''}. Advisory only.`;
+    const title = autoApplied
+      ? `Done by AI: ${suggestion.proposal}. Open the record to undo.`
+      : `AI suggestion: ${suggestion.proposal}${percent ? ` (${percent} confidence)` : ''}. Advisory only.`;
+    const keys = !autoApplied && (onAccept || onOverride);
     return (
-      <Tooltip title={title} placement="top" enterTouchDelay={0}>
+      <Tooltip
+        title={
+          <span>
+            {title}
+            {keys && (
+              <>
+                {onAccept && (
+                  <>
+                    {' '}
+                    <Kbd>A</Kbd> accept
+                  </>
+                )}
+                {onOverride && (
+                  <>
+                    {' '}
+                    <Kbd>O</Kbd> override
+                  </>
+                )}
+              </>
+            )}
+          </span>
+        }
+        placement="top"
+        enterTouchDelay={0}
+      >
         <Box
           component="span"
           tabIndex={0}
@@ -68,13 +142,32 @@ export function AiSuggestion({
         >
           <StatusChip
             tone="neutral"
-            label={`${AI_ADVISORY_MARK} ${suggestion.proposal}${label ? `, ${label}` : ''}`}
+            label={
+              autoApplied
+                ? `${AI_ADVISORY_MARK} Done by AI`
+                : `${AI_ADVISORY_MARK} ${suggestion.proposal}${label ? `, ${label}` : ''}`
+            }
             data-testid={`${testId}-chip`}
           />
         </Box>
       </Tooltip>
     );
   }
+
+  const decide = (status: AiSuggestionDecision['status']) => onDecision?.({ suggestionId: suggestion.id, status });
+  const dismiss = () => {
+    setDismissed(true);
+    decide('dismissed');
+  };
+  const undo = () => {
+    onUndo?.();
+    decide('undone');
+  };
+  const continueOverride = () => {
+    setOverriding(false);
+    onOverride?.(whyWrong ?? undefined);
+    setWhyWrong(null);
+  };
 
   const reasons = (suggestion.reasons ?? []).slice(0, MAX_REASONS);
   return (
@@ -85,7 +178,7 @@ export function AiSuggestion({
     >
       <Stack direction="row" alignItems="center" flexWrap="wrap" gap={1}>
         <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
-          <span aria-hidden>{AI_ADVISORY_MARK}</span> AI suggests
+          <span aria-hidden>{AI_ADVISORY_MARK}</span> {autoApplied ? 'AI applied' : 'AI suggests'}
         </Typography>
         <Typography level="title-sm" data-testid={`${testId}-proposal`}>
           {suggestion.proposal}
@@ -103,6 +196,7 @@ export function AiSuggestion({
             </Typography>
           </Tooltip>
         )}
+        {autoApplied && <StatusChip tone="neutral" label="Done by AI" data-testid={`${testId}-done-chip`} />}
       </Stack>
       {reasons.length > 0 && (
         <Box component="ul" sx={{ m: 0, pl: 2.5 }} data-testid={`${testId}-reasons`}>
@@ -123,6 +217,126 @@ export function AiSuggestion({
           <RelativeTime at={suggestion.createdAt} />
         </Stack>
       )}
+      {overriding ? (
+        <Stack gap={1} role="group" aria-label="Why was the AI wrong?">
+          <Typography level="body-sm">Why was the AI wrong? (optional)</Typography>
+          <Stack direction="row" flexWrap="wrap" gap={0.75}>
+            {AI_OVERRIDE_REASONS.map((reason, index) => (
+              <Button
+                key={reason}
+                size="sm"
+                variant={whyWrong === reason ? 'soft' : 'outlined'}
+                color="neutral"
+                aria-pressed={whyWrong === reason}
+                onClick={() => setWhyWrong(current => (current === reason ? null : reason))}
+                data-testid={`${testId}-why-${index}`}
+              >
+                {reason}
+              </Button>
+            ))}
+          </Stack>
+          <Stack direction="row" gap={1}>
+            <Button size="sm" onClick={continueOverride} data-testid={`${testId}-override-continue-btn`}>
+              Continue
+            </Button>
+            <Button size="sm" variant="plain" color="neutral" onClick={() => setOverriding(false)}>
+              Cancel
+            </Button>
+          </Stack>
+        </Stack>
+      ) : autoApplied ? (
+        onUndo && (
+          <Stack direction="row" gap={1}>
+            <Button size="sm" variant="outlined" color="neutral" onClick={undo} data-testid={`${testId}-undo-btn`}>
+              Undo
+            </Button>
+          </Stack>
+        )
+      ) : (
+        (onAccept || onOverride || onDecision) && (
+          <Stack direction="row" gap={1}>
+            {onAccept && (
+              <Button size="sm" variant="outlined" onClick={onAccept} data-testid={`${testId}-accept-btn`}>
+                Accept
+              </Button>
+            )}
+            {onOverride && (
+              <Button
+                size="sm"
+                variant="outlined"
+                color="neutral"
+                onClick={() => setOverriding(true)}
+                data-testid={`${testId}-override-btn`}
+              >
+                Override
+              </Button>
+            )}
+            {onDecision && (
+              <Button size="sm" variant="plain" color="neutral" onClick={dismiss} data-testid={`${testId}-dismiss-btn`}>
+                Dismiss
+              </Button>
+            )}
+          </Stack>
+        )
+      )}
     </Stack>
+  );
+}
+
+const isOpenHigh = (suggestion: AiSuggestionData | null): boolean =>
+  !!suggestion &&
+  (suggestion.status === undefined || suggestion.status === 'pending') &&
+  confidenceWord(suggestion.probability) === 'high';
+
+export type AiSuggestionBulkAcceptProps<T> = {
+  items: readonly T[];
+  getSuggestion: (item: T) => AiSuggestionData | null;
+  /** Only a command the admin can undo may be bulk-accepted; an irreversible one is a type error here. */
+  reversible: true;
+  /** The before -> after of applying every High suggestion, normally a ChangePreview. */
+  renderPreview: (high: readonly T[]) => ReactNode;
+  /** Receives the High items and the composed audit reason; rejecting keeps the dialog open. */
+  onApply: (high: readonly T[], reason: string) => void | Promise<void>;
+  'data-testid'?: string;
+};
+
+/** "Accept all High (n)": applies only pending High-confidence suggestions, through an ActionDialog with a preview. */
+export function AiSuggestionBulkAccept<T>({
+  items,
+  getSuggestion,
+  renderPreview,
+  onApply,
+  'data-testid': testId = 'admin-ai-bulk-accept',
+}: AiSuggestionBulkAcceptProps<T>) {
+  const [open, setOpen] = useState(false);
+  const high = items.filter(item => isOpenHigh(getSuggestion(item)));
+  return (
+    <>
+      <Button
+        size="sm"
+        variant="outlined"
+        disabled={high.length === 0}
+        onClick={() => setOpen(true)}
+        data-testid={`${testId}-btn`}
+      >
+        {`Accept all High (${high.length})`}
+      </Button>
+      <ActionDialog
+        open={open}
+        onClose={() => setOpen(false)}
+        title="Accept all High suggestions"
+        description={`${AI_ADVISORY_MARK} Applies the AI suggestion on ${high.length} record${high.length === 1 ? '' : 's'}.`}
+        reasonPresets={[]}
+        initialReason={ACCEPTED_AI_REASON}
+        confirmLabel={`Accept ${high.length}`}
+        onConfirm={async reason => {
+          await onApply(high, reason);
+          setOpen(false);
+        }}
+        data-testid={`${testId}-dialog`}
+      >
+        {renderPreview(high)}
+      </ActionDialog>
+    </>
   );
 }

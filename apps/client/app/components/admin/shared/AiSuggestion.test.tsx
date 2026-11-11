@@ -1,9 +1,18 @@
 import type { ReactNode } from 'react';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { AI_ADVISORY_MARK, AiSuggestion, type AiSuggestionData, confidenceWord } from './AiSuggestion';
+import {
+  AI_ADVISORY_MARK,
+  AI_OVERRIDE_REASONS,
+  AiSuggestion,
+  AiSuggestionBulkAccept,
+  type AiSuggestionData,
+  type AiSuggestionProps,
+  confidenceWord,
+} from './AiSuggestion';
+import { ChangePreview } from './ChangePreview';
 
 const theme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: ReactNode }) => (
@@ -82,5 +91,107 @@ describe('AiSuggestion display', () => {
     );
     expect(screen.queryByTestId('sug-reasons')).toBeNull();
     expect(screen.queryByTestId('sug-confidence')).toBeNull();
+  });
+});
+
+describe('AiSuggestion actions', () => {
+  const renderDetail = (props: Partial<AiSuggestionProps> = {}) =>
+    renderThemed(<AiSuggestion variant="detail" suggestion={suggestion()} data-testid="sug" {...props} />);
+
+  it('renders no actions when no callbacks are given', () => {
+    renderDetail();
+    expect(screen.queryByTestId('sug-accept-btn')).toBeNull();
+    expect(screen.queryByTestId('sug-override-btn')).toBeNull();
+    expect(screen.queryByTestId('sug-dismiss-btn')).toBeNull();
+  });
+
+  it('accept hands off to the host without reporting a decision itself', () => {
+    const onAccept = vi.fn();
+    const onDecision = vi.fn();
+    renderDetail({ onAccept, onDecision });
+    fireEvent.click(screen.getByTestId('sug-accept-btn'));
+    expect(onAccept).toHaveBeenCalledTimes(1);
+    expect(onDecision).not.toHaveBeenCalled();
+  });
+
+  it('override asks why the AI was wrong, and the answer is optional', () => {
+    const onOverride = vi.fn();
+    renderDetail({ onOverride });
+    fireEvent.click(screen.getByTestId('sug-override-btn'));
+    expect(onOverride).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('sug-override-continue-btn'));
+    expect(onOverride).toHaveBeenLastCalledWith(undefined);
+
+    fireEvent.click(screen.getByTestId('sug-override-btn'));
+    fireEvent.click(screen.getByTestId('sug-why-1'));
+    expect(screen.getByTestId('sug-why-1')).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByTestId('sug-override-continue-btn'));
+    expect(onOverride).toHaveBeenLastCalledWith(AI_OVERRIDE_REASONS[1]);
+  });
+
+  it('dismiss hides the suggestion and reports it', () => {
+    const onDecision = vi.fn();
+    renderDetail({ onDecision });
+    fireEvent.click(screen.getByTestId('sug-dismiss-btn'));
+    expect(screen.queryByTestId('sug')).toBeNull();
+    expect(onDecision).toHaveBeenCalledWith({ suggestionId: 's1', status: 'dismissed' });
+  });
+
+  it('shows Done by AI with Undo for an auto-applied suggestion', () => {
+    const onUndo = vi.fn();
+    const onDecision = vi.fn();
+    renderDetail({ suggestion: suggestion({ status: 'auto_applied' }), onUndo, onDecision, onAccept: vi.fn() });
+    expect(screen.getByTestId('sug-done-chip')).toHaveTextContent('Done by AI');
+    expect(screen.queryByTestId('sug-accept-btn')).toBeNull();
+    fireEvent.click(screen.getByTestId('sug-undo-btn'));
+    expect(onUndo).toHaveBeenCalledTimes(1);
+    expect(onDecision).toHaveBeenCalledWith({ suggestionId: 's1', status: 'undone' });
+  });
+});
+
+describe('AiSuggestionBulkAccept', () => {
+  type Item = { id: string; probability: number | null; status?: AiSuggestionData['status'] };
+  const toSuggestion = (item: Item): AiSuggestionData => ({
+    id: item.id,
+    proposal: 'Confirmed abuse',
+    probability: item.probability,
+    status: item.status,
+  });
+  const renderBulk = (items: Item[], onApply = vi.fn()) =>
+    renderThemed(
+      <AiSuggestionBulkAccept
+        items={items}
+        getSuggestion={toSuggestion}
+        reversible
+        renderPreview={high => (
+          <ChangePreview before="Unreviewed" after={`${high.length} confirmed`} data-testid="bulk-preview" />
+        )}
+        onApply={onApply}
+        data-testid="bulk"
+      />
+    );
+
+  it('counts and applies only pending High suggestions, after a preview', async () => {
+    const onApply = vi.fn();
+    const items: Item[] = [
+      { id: 'h1', probability: 0.95 },
+      { id: 'h2', probability: 0.8, status: 'pending' },
+      { id: 'm', probability: 0.6 },
+      { id: 'n', probability: null },
+      { id: 'done', probability: 0.9, status: 'auto_applied' },
+    ];
+    renderBulk(items, onApply);
+    expect(screen.getByTestId('bulk-btn')).toHaveTextContent('Accept all High (2)');
+    fireEvent.click(screen.getByTestId('bulk-btn'));
+    expect(screen.getByTestId('bulk-preview-after')).toHaveTextContent('2 confirmed');
+    expect(screen.getByTestId('bulk-dialog-reason-input')).toHaveValue('Accepted AI suggestion');
+    fireEvent.click(screen.getByTestId('bulk-dialog-confirm-btn'));
+    await waitFor(() => expect(onApply).toHaveBeenCalledWith([items[0], items[1]], 'Accepted AI suggestion'));
+  });
+
+  it('is disabled with no High suggestions', () => {
+    renderBulk([{ id: 'm', probability: 0.6 }]);
+    expect(screen.getByTestId('bulk-btn')).toHaveTextContent('Accept all High (0)');
+    expect(screen.getByTestId('bulk-btn')).toBeDisabled();
   });
 });
