@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { IUserDocument } from '@bike4mind/common';
 import {
   assessSignupGrant,
+  capUnassessedSignupGrant,
   evaluateSignupRisk,
   isSignupGrantHeldForReview,
   signupRiskPolicySchema,
@@ -125,6 +126,35 @@ describe('evaluateSignupRisk', () => {
       expect(decision.credits).toBeGreaterThanOrEqual(0);
       expect(decision.credits).toBeLessThanOrEqual(amount);
     }
+  });
+});
+
+describe('capUnassessedSignupGrant', () => {
+  it('caps a tranche paid with the policy off at the unprotected limit', () => {
+    const decision = evaluateSignupRisk({ enabled: false }, {}, 10_000);
+    expect(capUnassessedSignupGrant(decision, 1_000)).toMatchObject({
+      band: 'full',
+      status: 'disabled',
+      credits: 1_000,
+    });
+  });
+
+  it('leaves a tranche within the limit unchanged', () => {
+    const decision = evaluateSignupRisk({ enabled: false }, {}, 500);
+    expect(capUnassessedSignupGrant(decision, 1_000)).toBe(decision);
+  });
+
+  it('leaves an evaluated or held tranche to the policy', () => {
+    const evaluated = evaluateSignupRisk(policy, { ipSignups: 0, datacenter: false }, 10_000);
+    const held = evaluateSignupRisk('not a policy', {}, 10_000);
+    expect(capUnassessedSignupGrant(evaluated, 1_000)).toBe(evaluated);
+    expect(capUnassessedSignupGrant(held, 1_000)).toBe(held);
+  });
+
+  it('rejects an invalid limit', () => {
+    const decision = evaluateSignupRisk({ enabled: false }, {}, 500);
+    expect(() => capUnassessedSignupGrant(decision, -1)).toThrow('Invalid unprotected limit');
+    expect(() => capUnassessedSignupGrant(decision, 1.5)).toThrow('Invalid unprotected limit');
   });
 });
 
