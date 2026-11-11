@@ -8,6 +8,7 @@ import {
   type ArtifactResource,
   generatedAudioResponseSchema,
   type GeneratedAudioResponse,
+  type BatchPresignedUrlRequestInputType,
   type IBriefcasePrompt,
   ttsBase64ResponseSchema,
   type CitableSourceSchema,
@@ -461,6 +462,35 @@ export class B4mApiClient {
 
   async getFile(fileId: string): Promise<RawFile> {
     return this.client.get<RawFile>(`/api/files/${encodeURIComponent(fileId)}`);
+  }
+
+  async requestFileUpload(file: BatchPresignedUrlRequestInputType['files'][number]): Promise<{
+    files: { fileId: string; url: string }[];
+  }> {
+    return this.client.post('/api/files/generate-presigned-urls-batch', { files: [file] });
+  }
+
+  async uploadFileBytes(uploadUrl: string, bytes: Buffer, mimeType: string): Promise<void> {
+    if (uploadUrl.startsWith('//')) throw new Error('Unexpected file upload URL');
+    const url = new URL(uploadUrl, this.baseURL);
+    if (uploadUrl.startsWith('/')) {
+      if (url.origin !== new URL(this.baseURL).origin || !/^\/api\/files\/[^/]+\/upload$/.test(url.pathname)) {
+        throw new Error('Unexpected file upload proxy URL');
+      }
+      await this.client.put(url.pathname, bytes, { headers: { 'Content-Type': mimeType } });
+      return;
+    }
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Error('Unexpected file upload URL');
+    const res = await fetch(url, { method: 'PUT', headers: { 'Content-Type': mimeType }, body: bytes });
+    if (!res.ok) throw new Error(`file upload failed (${res.status})`);
+  }
+
+  async attachFileToNotebook(fileId: string, notebookId: string): Promise<void> {
+    await this.client.put(`/api/files/${encodeURIComponent(fileId)}`, { sessionId: writableNotebookId(notebookId) });
+  }
+
+  async attachFileToProject(fileId: string, projectId: string): Promise<void> {
+    await this.client.post(`/api/projects/${encodeURIComponent(projectId)}/files`, { fileIds: [fileId] });
   }
 
   /** Generate a sound effect. The SDK requests base64 and rebuilds an old server's raw-bytes answer. */

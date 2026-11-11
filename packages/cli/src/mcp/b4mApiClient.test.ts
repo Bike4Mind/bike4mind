@@ -1012,6 +1012,40 @@ describe('B4mApiClient publish', () => {
     expect(init).toEqual({ method: 'PUT', headers: { 'Content-Type': 'text/html' }, body: '<p/>' });
   });
 
+  it('presigns a single file through the batch endpoint and PUTs hosted bytes without credentials', async () => {
+    mockPost.mockResolvedValue({ files: [{ fileId: 'f1', url: 'https://s3.example/put' }] });
+    globalFetch.mockResolvedValue(new Response(null, { status: 200 }));
+    const file = { fileName: 'note.txt', fileSize: 3, mimeType: 'text/plain' };
+    await client.requestFileUpload(file);
+    await client.uploadFileBytes('https://s3.example/put', Buffer.from('abc'), 'text/plain');
+    expect(mockPost).toHaveBeenCalledWith('/api/files/generate-presigned-urls-batch', { files: [file] });
+    expect(mockPut).not.toHaveBeenCalled();
+    expect(globalFetch.mock.calls[0][1]).toEqual({
+      method: 'PUT',
+      headers: { 'Content-Type': 'text/plain' },
+      body: Buffer.from('abc'),
+    });
+  });
+
+  it('uses authenticated client for same-origin self-host proxy and refuses unexpected proxy paths', async () => {
+    mockPut.mockResolvedValue({ ok: true });
+    await client.uploadFileBytes('/api/files/f1/upload', Buffer.from('abc'), 'text/plain');
+    expect(mockPut).toHaveBeenCalledWith('/api/files/f1/upload', Buffer.from('abc'), {
+      headers: { 'Content-Type': 'text/plain' },
+    });
+    await expect(client.uploadFileBytes('//evil.example/steal', Buffer.from('abc'), 'text/plain')).rejects.toThrow(
+      'Unexpected'
+    );
+    await expect(client.uploadFileBytes('/api/other', Buffer.from('abc'), 'text/plain')).rejects.toThrow('Unexpected');
+  });
+
+  it('attaches an uploaded file through the notebook and project write routes', async () => {
+    await client.attachFileToNotebook('f1', '64b7f0c2a1e4d5f6a7b8c9d0');
+    await client.attachFileToProject('f1', 'p1');
+    expect(mockPut).toHaveBeenCalledWith('/api/files/f1', { sessionId: '64b7f0c2a1e4d5f6a7b8c9d0' });
+    expect(mockPost).toHaveBeenCalledWith('/api/projects/p1/files', { fileIds: ['f1'] });
+  });
+
   it('resolves a self-host relative proxy URL against the base URL', async () => {
     globalFetch.mockResolvedValue(new Response(null, { status: 200 }));
 

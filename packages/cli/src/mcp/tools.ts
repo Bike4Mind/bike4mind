@@ -1,4 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { basename } from 'node:path';
+import mime from 'mime-types';
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult, ServerNotification } from '@modelcontextprotocol/sdk/types.js';
@@ -134,6 +137,13 @@ export const TOOL_META: ToolMeta[] = [
     title: 'Get file',
     description: "Fetch a file's metadata and a signed download URL.",
     scope: 'files:read',
+  },
+  {
+    name: 'upload_file',
+    title: 'Upload file',
+    description:
+      'Upload a local file or base64 bytes to the file browser. Returns its id and pending ingestion state; indexing runs asynchronously. Optional notebookId or projectId attaches it after upload (projectId also requires projects:write).',
+    scope: 'files:write',
   },
   {
     name: 'generate_sound_effect',
@@ -312,6 +322,15 @@ const listFilesShape = {
 
 const getFileShape = {
   fileId: z.string().describe('The file id'),
+};
+
+const uploadFileShape = {
+  path: z.string().min(1).optional().describe('Local path on the machine running the MCP server'),
+  base64: z.string().min(1).optional().describe('Base64-encoded file bytes; use instead of path'),
+  name: z.string().min(1).optional().describe('File name; defaults to the basename of path'),
+  contentType: z.string().min(1).optional().describe('MIME type; otherwise inferred from the file name'),
+  notebookId: notebookId('Notebook to associate with the uploaded file').optional(),
+  projectId: z.string().min(1).optional().describe('Project to add the uploaded file to; requires projects:write'),
 };
 
 // Bounds mirror `soundEffectsRequestSchema` (@bike4mind/common) and the ElevenLabs
@@ -600,6 +619,41 @@ export async function listFiles(client: B4mApiClient, args: { search?: string; l
 
 export async function getFile(client: B4mApiClient, args: { fileId: string }) {
   return client.getFile(args.fileId);
+}
+
+export async function uploadFile(
+  client: B4mApiClient,
+  args: { path?: string; base64?: string; name?: string; contentType?: string; notebookId?: string; projectId?: string }
+) {
+  if (Boolean(args.path) === Boolean(args.base64)) throw new Error('Provide exactly one of path or base64');
+  const fileName = args.name ?? (args.path ? basename(args.path) : undefined);
+  if (!fileName || fileName === '.' || fileName === '..') throw new Error('A file name is required');
+  const bytes = args.path ? await readFile(args.path) : Buffer.from(args.base64!, 'base64');
+  if (
+    !bytes.length ||
+    (args.base64 && !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(args.base64))
+  ) {
+    throw new Error('File bytes must be nonempty and valid base64');
+  }
+  const mimeType = args.contentType ?? (mime.lookup(fileName) || 'application/octet-stream');
+  const response = await client.requestFileUpload({ fileName, fileSize: bytes.length, mimeType });
+  const upload = response.files[0];
+  if (!upload?.fileId || !upload.url) throw new Error('File upload request returned no upload URL');
+  const fileId = upload.fileId;
+  try {
+    await client.uploadFileBytes(upload.url, bytes, mimeType);
+  } catch (err) {
+    throw new Error(`Upload for file ${fileId} failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  try {
+    if (args.notebookId) await client.attachFileToNotebook(fileId, args.notebookId);
+    if (args.projectId) await client.attachFileToProject(fileId, args.projectId);
+  } catch (err) {
+    throw new Error(
+      `File ${fileId} was uploaded but association failed: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+  return { fileId, ingestionState: 'pending' as const };
 }
 
 export async function generateSoundEffect(
@@ -1375,6 +1429,12 @@ export function registerTools(server: McpServer, client: B4mApiClient): void {
     'get_file',
     { title: meta('get_file').title, description: meta('get_file').description, inputSchema: getFileShape },
     args => run('files:read', () => getFile(client, args))
+  );
+
+  server.registerTool(
+    'upload_file',
+    { title: meta('upload_file').title, description: meta('upload_file').description, inputSchema: uploadFileShape },
+    args => run('files:write', () => uploadFile(client, args))
   );
 
   server.registerTool(

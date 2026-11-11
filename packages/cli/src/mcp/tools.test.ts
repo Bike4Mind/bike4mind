@@ -26,6 +26,7 @@ import {
   generateImage,
   textToSpeech,
   publishArtifact,
+  uploadFile,
 } from './tools';
 
 const mockClient = (overrides: Partial<Record<keyof B4mApiClient, unknown>>): B4mApiClient =>
@@ -48,6 +49,7 @@ describe('TOOL_NAMES', () => {
       'list_lakes',
       'list_files',
       'get_file',
+      'upload_file',
       'generate_sound_effect',
       'text_to_speech',
       'generate_image',
@@ -129,6 +131,41 @@ describe('tool handlers', () => {
     await listFiles(client, { limit: 25, page: 3 });
 
     expect(list).toHaveBeenCalledWith({ limit: 25, page: 3 });
+  });
+
+  it('upload_file sends bytes to the presign and returns pending ingestion', async () => {
+    const requestFileUpload = vi.fn().mockResolvedValue({ files: [{ fileId: 'f1', url: 'https://s3.example/put' }] });
+    const uploadFileBytes = vi.fn().mockResolvedValue(undefined);
+    const attachFileToNotebook = vi.fn().mockResolvedValue(undefined);
+    const attachFileToProject = vi.fn().mockResolvedValue(undefined);
+    const result = await uploadFile(
+      mockClient({ requestFileUpload, uploadFileBytes, attachFileToNotebook, attachFileToProject }),
+      { base64: 'YWJj', name: 'note.txt', notebookId: '64b7f0c2a1e4d5f6a7b8c9d0', projectId: 'p1' }
+    );
+    expect(requestFileUpload).toHaveBeenCalledWith({ fileName: 'note.txt', fileSize: 3, mimeType: 'text/plain' });
+    expect(uploadFileBytes).toHaveBeenCalledWith('https://s3.example/put', Buffer.from('abc'), 'text/plain');
+    expect(attachFileToNotebook).toHaveBeenCalledWith('f1', '64b7f0c2a1e4d5f6a7b8c9d0');
+    expect(attachFileToProject).toHaveBeenCalledWith('f1', 'p1');
+    expect(result).toEqual({ fileId: 'f1', ingestionState: 'pending' });
+  });
+
+  it('upload_file rejects ambiguous or empty bytes before presigning', async () => {
+    const requestFileUpload = vi.fn();
+    const client = mockClient({ requestFileUpload });
+    await expect(uploadFile(client, { path: 'a.txt', base64: 'YWJj' })).rejects.toThrow('exactly one');
+    await expect(uploadFile(client, { base64: '!!!', name: 'a.txt' })).rejects.toThrow('valid base64');
+    expect(requestFileUpload).not.toHaveBeenCalled();
+  });
+
+  it('upload_file reports the file id when an association fails after upload', async () => {
+    const client = mockClient({
+      requestFileUpload: vi.fn().mockResolvedValue({ files: [{ fileId: 'f1', url: 'https://s3.example/put' }] }),
+      uploadFileBytes: vi.fn().mockResolvedValue(undefined),
+      attachFileToProject: vi.fn().mockRejectedValue(new Error('not permitted')),
+    });
+    await expect(uploadFile(client, { base64: 'YWJj', name: 'a.txt', projectId: 'p1' })).rejects.toThrow(
+      'File f1 was uploaded but association failed: not permitted'
+    );
   });
 
   it('create_notebook defaults the name to "New Notebook" when omitted', async () => {
@@ -1102,6 +1139,28 @@ describe('registerTools', () => {
     const schema = z.object(collectTools(mockClient({})).schemas.get('generate_sound_effect')!);
     expect(schema.safeParse({ text: 'x'.repeat(450) }).success).toBe(true);
     expect(schema.safeParse({ text: 'x'.repeat(451) }).success).toBe(false);
+  });
+
+  it('upload_file registers inputs and maps scope errors', async () => {
+    const requestFileUpload = vi.fn().mockRejectedValue(
+      new AxiosError('forbidden', undefined, {} as InternalAxiosRequestConfig, {}, {
+        status: 403,
+        statusText: '',
+        data: {},
+        headers: {},
+        config: {} as InternalAxiosRequestConfig,
+      } as AxiosResponse)
+    );
+    const tools = collectTools(mockClient({ requestFileUpload }));
+    const schema = z.object(tools.schemas.get('upload_file')!);
+    expect(schema.parse({ base64: 'YWJj', name: 'a.txt', projectId: 'p1' })).toEqual({
+      base64: 'YWJj',
+      name: 'a.txt',
+      projectId: 'p1',
+    });
+    const result = await tools.get('upload_file')!({ base64: 'YWJj', name: 'a.txt' });
+    expect(result.isError).toBe(true);
+    expect((result.content[0] as { text: string }).text).toContain('recommended scope: files:write');
   });
 
   // An empty or dot-segment id collapses the URL onto /api/sessions, whose DELETE wipes every notebook.
