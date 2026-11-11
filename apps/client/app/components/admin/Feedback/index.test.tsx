@@ -295,6 +295,34 @@ describe('FeedbackTab', () => {
     });
   });
 
+  describe('received filter', () => {
+    beforeEach(() => {
+      mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([makeFeedbackItem()]));
+    });
+
+    it('sends the picked window to the filter hook', async () => {
+      renderFeedbackTab();
+
+      await userEvent.click(screen.getByTestId('admin-filter-feedback-received'));
+      await userEvent.click(screen.getByTestId('admin-filter-feedback-received-7d'));
+
+      expect(defaultFiltersReturn.setReceived).toHaveBeenCalledWith('7d');
+    });
+
+    it('clears the window back to any time', async () => {
+      mocks.useFeedbackFilters.mockReturnValue({
+        ...defaultFiltersReturn,
+        filters: { ...defaultFiltersReturn.filters, received: '7d' },
+      });
+
+      renderFeedbackTab();
+
+      await userEvent.click(screen.getByTestId('admin-filter-clear-feedback-received-btn'));
+
+      expect(defaultFiltersReturn.setReceived).toHaveBeenCalledWith(undefined);
+    });
+  });
+
   describe('row content', () => {
     it('labels each report with its type and subject', () => {
       mocks.useFeedbackOperations.mockReturnValue(
