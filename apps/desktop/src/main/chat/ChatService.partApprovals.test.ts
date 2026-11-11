@@ -288,4 +288,39 @@ describe('ChatService approvals decided per part', () => {
     await runCommand(stranger, 'printf stranger');
     await awaitCall('bash_execute', 'awaiting-approval');
   });
+
+  it('closes a narrowed card when a rule saved meanwhile covers its remaining parts', async () => {
+    const id = await session('ask');
+    const first = await runCommand(id, 'git status && printf ok');
+    const card = await awaitCall('bash_execute', 'awaiting-approval');
+    expect(card.approvalParts?.map(part => part.text)).toEqual(['git status', 'printf ok']);
+
+    await permissions.setRules({ kind: 'user' }, { allow: ['Bash(git status:*)', 'Bash(printf:*)'], ask: [], deny: [] });
+    await approvals.settleCovered();
+    expect((await settled()).approval?.decidedBy).toMatchObject({ kind: 'rule' });
+    await finishReply(first);
+  });
+
+  it('keeps this chat covered and says so when "Allow in this project" cannot be saved', async () => {
+    vi.spyOn(permissions, 'rememberProjectAllows').mockRejectedValueOnce(new Error('disk full'));
+    const asker = await session('ask', main);
+    const first = await runCommand(asker, 'printf ok', main);
+    const card = await awaitCall('bash_execute', 'awaiting-approval');
+    approvals.resolve(card.approvalId!, { decision: 'always', project: true });
+
+    const ran = await settled();
+    expect(ran.notice).toMatchObject({ kind: 'permissions-save-failed' });
+    expect(ran.notice?.text).toContain('disk full');
+    expect(ran.approval?.decidedBy).toMatchObject({ kind: 'user', answer: 'always' });
+    expect(ran.approval?.decidedBy).not.toHaveProperty('project');
+    await finishReply(first);
+
+    const again = await runCommand(asker, 'printf again', main);
+    expect((await settled()).approval?.decidedBy).toEqual({ kind: 'chat-allowance' });
+    await finishReply(again);
+
+    const stranger = await session('ask', main);
+    await runCommand(stranger, 'printf stranger', main);
+    await awaitCall('bash_execute', 'awaiting-approval');
+  });
 });
