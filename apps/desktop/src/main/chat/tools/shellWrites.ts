@@ -741,8 +741,12 @@ interface GitGrammar {
 
 interface GitArgs {
   positionals: string[];
-  /** Options given, by long name or letter, with their values. */
+  /** Options given, by long name or letter, with their values; the last value of a repeated one. */
   given: Map<string, string | true>;
+  /** Every value of a valued option, in order, by long name or letter. */
+  values: [string, string][];
+  /** Every flag, in order, by long name or letter, so `-ff` holds `f` twice. */
+  flags: string[];
   /** Words after `--`. */
   paths: string[];
   /** An option outside the grammar, which the scan cannot read. */
@@ -751,7 +755,7 @@ interface GitArgs {
 
 /** Reads `args` as git's parse-options does, taking a long option's unique abbreviation for it. */
 function gitArgs(args: readonly string[], grammar: GitGrammar): GitArgs {
-  const read: GitArgs = { positionals: [], given: new Map(), paths: [], unknown: false };
+  const read: GitArgs = { positionals: [], given: new Map(), values: [], flags: [], paths: [], unknown: false };
   const names = [...(grammar.flags ?? []), ...(grammar.long ?? [])];
   for (let index = 0; index < args.length; index++) {
     const arg = args[index] as string;
@@ -767,16 +771,22 @@ function gitArgs(args: readonly string[], grammar: GitGrammar): GitArgs {
         read.unknown = true;
         continue;
       }
-      read.given.set(name, value ?? ((grammar.long ?? []).includes(name) ? (args[++index] ?? '') : true));
+      const taken = value ?? ((grammar.long ?? []).includes(name) ? (args[++index] ?? '') : true);
+      read.given.set(name, taken);
+      if (typeof taken === 'string') read.values.push([name, taken]);
+      else read.flags.push(name);
     } else if (arg.length > 1 && arg.startsWith('-')) {
       for (let at = 1; at < arg.length; at++) {
         const letter = arg[at] as string;
         if ((grammar.valued ?? '').includes(letter)) {
-          read.given.set(letter, arg.slice(at + 1) || (args[++index] ?? ''));
+          const taken = arg.slice(at + 1) || (args[++index] ?? '');
+          read.given.set(letter, taken);
+          read.values.push([letter, taken]);
           break;
         }
         if (!(grammar.letters ?? '').includes(letter)) read.unknown = true;
         read.given.set(letter, true);
+        read.flags.push(letter);
       }
     } else {
       read.positionals.push(arg);
@@ -1079,6 +1089,8 @@ function movesRefs(sub: string, args: readonly string[], restores: boolean): boo
 /** What a git call that writes the work tree writes: `.claude` files and symlinks; unread when the scan cannot tell. */
 interface TreeWrite {
   files: string[];
+  /** Folders removed whole, with whatever is in them. */
+  trees?: string[];
   links: boolean;
   unread: boolean;
 }
@@ -1549,12 +1561,16 @@ async function settingsListed(top: string, args: readonly string[]): Promise<str
 /** What `git clean` would remove, from its own dry run with the same choice of files. */
 async function cleanWrites(read: GitArgs, cwd: string): Promise<TreeWrite> {
   const options = ['d', 'x', 'X'].filter(letter => read.given.has(letter)).map(letter => `-${letter}`);
-  const excludes = [read.given.get('e'), read.given.get('exclude')].filter(
-    (value): value is string => typeof value === 'string'
-  );
+  // Each `-e` adds a pattern, which under `-X` is one more to remove.
+  const excludes = read.values.filter(([name]) => name === 'e' || name === 'exclude').map(([, value]) => value);
+  // The dry run gets each word as written here, which a quote or backslash left inside it would change.
+  if ([...excludes, ...read.positionals, ...read.paths].some(word => /['"\\]/.test(word))) return UNREAD_TREE;
+  // A second `-f` removes nested repositories too, which the dry run lists only when given it as well.
+  const forces = read.flags.filter(flag => flag === 'f' || flag === 'force').length;
   const listed = await gitQuery(cwd, [
     'clean',
     '-n',
+    ...(forces > 1 ? ['-f', '-f'] : []),
     ...options,
     ...excludes.map(pattern => `--exclude=${pattern}`),
     '--',
@@ -1563,12 +1579,17 @@ async function cleanWrites(read: GitArgs, cwd: string): Promise<TreeWrite> {
   ]);
   if (listed === null) return UNREAD_TREE;
   const files: string[] = [];
+  const trees: string[] = [];
   for (const line of listed.split('\n')) {
     const removed = /^Would remove (.+)$/.exec(line)?.[1];
-    if (removed) files.push(resolveOperand(cwd, removed.replace(/\/$/, '')));
+    // Git C-quotes names with non-ASCII bytes, quotes, backslashes or controls, including the trailing `/`.
+    // Without decoding that format neither the path nor whether it is a whole folder is known.
+    if (removed?.startsWith('"')) return UNREAD_TREE;
+    if (removed?.endsWith('/')) trees.push(resolveOperand(cwd, removed.slice(0, -1)));
+    else if (removed) files.push(resolveOperand(cwd, removed));
     else if (line.trim() !== '' && !line.startsWith('Would skip')) return UNREAD_TREE;
   }
-  return { files, links: false, unread: false };
+  return { files, trees, links: false, unread: false };
 }
 
 /**
@@ -1777,22 +1798,76 @@ function gitRestored(sub: string, args: readonly string[]): { paths: string[]; s
 const PLAIN_GIT_OPTIONS = new Set(['--no-pager', '-P', '-p', '--paginate', '--no-optional-locks']);
 
 /**
+ * git's global options that take their value as the next word (`--attr-source HEAD`); the long ones except
+ * `--shallow-file` also take `--name=value`. Shared with the shell scan so both read where the subcommand starts alike.
+ */
+export const GIT_VALUED_OPTIONS: ReadonlySet<string> = new Set([
+  '-C',
+  '-c',
+  '--git-dir',
+  '--work-tree',
+  '--namespace',
+  '--config-env',
+  '--attr-source',
+  '--super-prefix',
+  '--shallow-file',
+]);
+
+/** git's global options that take no value; `--exec-path` and `--list-cmds` take one only as `--name=value`. */
+const GIT_VALUELESS_OPTIONS: ReadonlySet<string> = new Set([
+  ...PLAIN_GIT_OPTIONS,
+  '--bare',
+  '--no-replace-objects',
+  '--no-lazy-fetch',
+  '--no-advice',
+  '--literal-pathspecs',
+  '--glob-pathspecs',
+  '--noglob-pathspecs',
+  '--no-literal-pathspecs',
+  '--icase-pathspecs',
+  '--exec-path',
+  '--html-path',
+  '--man-path',
+  '--info-path',
+]);
+
+/** Options after which git runs `version` or `help` and reads nothing else. */
+const GIT_HELP_OPTIONS: ReadonlySet<string> = new Set(['--version', '-v', '--help', '-h']);
+
+/** Whether `arg` is a global option git knows, in its separate or `--name=value` form. */
+const knownGitOption = (arg: string): boolean => {
+  const name = arg.split('=')[0] as string;
+  return (
+    GIT_VALUELESS_OPTIONS.has(arg) ||
+    GIT_VALUED_OPTIONS.has(arg) ||
+    (arg.startsWith('--') && (GIT_VALUED_OPTIONS.has(name) || ['--exec-path', '--list-cmds'].includes(name)))
+  );
+};
+
+/**
  * `git [-C dir] [-c k=v] <sub> ...`: the subcommand, its arguments, the folder git runs in, and whether a global
- * option other than `-C` and the pager ones may point git at another repository or work tree.
+ * option other than `-C` and the pager ones may point git at another repository or work tree. `unread` is set when
+ * a global option is one the scan does not know, which leaves where the subcommand starts open.
  */
 function gitSubcommand(
   args: readonly string[],
   cwd: string
-): { sub: string; rest: string[]; cwd: string; moved: boolean } | null {
+): { sub: string; rest: string[]; cwd: string; moved: boolean; unread?: true } | null {
   let directory = cwd;
   let moved = false;
   for (let index = 0; index < args.length; index++) {
     const arg = args[index] as string;
     if (arg === '-C') directory = resolveOperand(directory, args[++index] ?? '.');
-    else if (!arg.startsWith('-')) return { sub: arg, rest: args.slice(index + 1), cwd: directory, moved };
+    else if (!arg.startsWith('-')) {
+      // After a global option, a word that is no command name (`HEAD`, a path) means an option took it as a value.
+      if (index > 0 && !/^[a-z][a-z0-9-]*$/.test(arg))
+        return { sub: '', rest: [], cwd: directory, moved: true, unread: true };
+      return { sub: arg, rest: args.slice(index + 1), cwd: directory, moved };
+    } else if (GIT_HELP_OPTIONS.has(arg)) return null;
+    else if (!knownGitOption(arg)) return { sub: '', rest: [], cwd: directory, moved: true, unread: true };
     else if (!PLAIN_GIT_OPTIONS.has(arg)) {
       moved = true;
-      if (['-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--exec-path'].includes(arg)) index++;
+      if (GIT_VALUED_OPTIONS.has(arg)) index++;
     }
   }
   return null;
@@ -1865,6 +1940,7 @@ async function writesOf(
   if (program === 'git') {
     const git = gitSubcommand(args, cwd);
     if (!git) return none;
+    if (git.unread) return { files: [], trees: [], unread: true };
     const script = context.script;
     const moved = git.moved || context.env || script.refsMoved === true;
     const { writes, restores } = await gitWrites(git, node, moved, script);
@@ -1874,6 +1950,15 @@ async function writesOf(
   return { files: inPlaceEdit(program, args), trees: [] };
 }
 
+/**
+ * A quote, escape, expansion, glob or brace in a program word, which leaves what runs to bash. Shared with the
+ * shell scan, so both treat the same subcommand spellings as unread.
+ */
+export const SPELLED_PROGRAM = /['"\\$`*?[{}]/;
+
+/** git subcommands that remove, move or overwrite the work-tree paths their words name. */
+const REMOVES_PATHS = new Set(['clean', 'rm', 'mv']);
+
 /** What one git call writes, and whether it only rewrote paths (`git checkout -- <path>`), leaving HEAD where it was. */
 async function gitWrites(
   git: { sub: string; rest: string[]; cwd: string },
@@ -1882,6 +1967,11 @@ async function gitWrites(
   script: GitScript
 ): Promise<{ writes: InPlaceWrites; restores: boolean }> {
   const relocate = (path: string): string => resolveOperand(git.cwd, path);
+  // A subcommand bash rewrites (`cle''an`, `cl$x`) may be any of them, and an expansion in a word of `git clean`,
+  // `rm` or `mv` may name any path to remove, move or overwrite.
+  if (SPELLED_PROGRAM.test(git.sub) || (REMOVES_PATHS.has(git.sub) && git.rest.some(arg => /[$`]/.test(arg)))) {
+    return { writes: { files: [], trees: [], unread: true }, restores: false };
+  }
   if (git.sub === 'apply') {
     return { writes: { ...(await gitApplyWrites(git.rest, node, git.cwd)), links: true }, restores: true };
   }
@@ -1912,7 +2002,7 @@ async function gitWrites(
   if (tree === null) return { writes: { files: [], trees: [] }, restores: false };
   const writes: InPlaceWrites = {
     files: tree.files,
-    trees: [],
+    trees: tree.trees ?? [],
     ...(tree.links ? { links: true } : {}),
     ...(tree.unread ? { unread: true } : {}),
   };
