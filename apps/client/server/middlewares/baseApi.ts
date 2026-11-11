@@ -13,6 +13,7 @@ import { apiKeyRateLimit } from '@server/middlewares/apiKeyRateLimit';
 import { defaultWriteRateLimit } from '@server/middlewares/defaultWriteRateLimit';
 import { analyticsMiddleware } from '@server/analytics/analyticsMiddleware';
 import { clientUsageMiddleware } from '@server/middlewares/clientUsage';
+import { userActivityMiddleware } from '@server/middlewares/userActivity';
 import { connectDB } from '@bike4mind/database';
 import { ApiKeyScopeValue, MethodNotAllowedError } from '@bike4mind/common';
 import { Request, Response } from 'express';
@@ -95,6 +96,12 @@ interface BaseAPIOptions {
    * true; a route's own `rateLimit` still applies either way.
    */
   defaultWriteRateLimit?: boolean;
+  /**
+   * `false` marks this route's writes as ones the app sends on its own (telemetry, socket tickets),
+   * not actions the user took: they never stamp the user's `lastActiveAt` (userActivity.ts) or an
+   * API key's `lastUsedAt`, and are not counted as API-key use. Defaults to true.
+   */
+  recordsActivity?: boolean;
 }
 
 /** 405s any method outside `allowedMethods` (GET implies HEAD), setting `Allow`; passes the rest. */
@@ -239,7 +246,11 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
       // Check API key authentication FIRST, before JWT
       // This allows API keys to work independently without requiring JWT/SST setup.
       // requiredScopes (when set) makes an under-scoped key 403 here instead of authorizing.
-      router.use(apiKeyAuth(resolvedOptions.requiredScopes, resolvedOptions.alsoRequiredScopes));
+      router.use(
+        apiKeyAuth(resolvedOptions.requiredScopes, resolvedOptions.alsoRequiredScopes, {
+          recordUse: resolvedOptions.recordsActivity !== false,
+        })
+      );
 
       // Detect anomalies in API key usage (runs after apiKeyAuth, before handler)
       // This runs asynchronously and doesn't block requests
@@ -277,6 +288,10 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
     // After baseApi's auth and IP-block gates, so a request they refuse never spends the user's write budget.
     // Requests refused later (a route's own rateLimit, validation, handler errors) still count.
     if (resolvedOptions.defaultWriteRateLimit !== false) router.use(defaultWriteRateLimit);
+
+    // "Last active" means an action, so only writes stamp it, throttled per user. Last in the chain,
+    // so a write the gates above refuse is not counted.
+    if (resolvedOptions.recordsActivity !== false) router.use(userActivityMiddleware());
   }
 
   // TODO: idempotency middleware disabled - it was creating a lot of idempotency keys in local

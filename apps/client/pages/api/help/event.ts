@@ -13,7 +13,7 @@ const HelpEventSchema = z.object({
   chatQuestion: z.string().max(2000).optional(),
 });
 
-const handler = baseApi()
+const handler = baseApi({ recordsActivity: false })
   .use(
     rateLimit({
       limit: process.env.NODE_ENV === 'development' ? 500 : 200,

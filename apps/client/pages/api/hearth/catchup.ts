@@ -39,6 +39,8 @@ const hearthLog = new HearthLog(hearthRepository.store);
 // asserts write scope in-handler, since advancing a cursor consumes events.
 const handler = baseApi({
   requiredScopes: [ApiKeyScope.HEARTH_READ, ApiKeyScope.HEARTH_WRITE, ApiKeyScope.ADMIN],
+  // A cursor read the CLI sends on its own; POST only to carry the cursor.
+  recordsActivity: false,
 })
   .use(requireFeatureEnabled('EnableHearth'))
   .use(requireUser)

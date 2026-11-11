@@ -188,6 +188,9 @@ export interface VerifyApiKeyOptions {
   /** At least one of these scopes must be present on the key. Defaults to
    *  AI_GENERATE / AI_CHAT to preserve the legacy completions behavior. */
   requiredScopes?: ApiKeyScopeValue[];
+  /** Whether this check is a use of the key (stamps `lastUsedAt`). Defaults to true; false for
+   *  connecting and for first-party telemetry. */
+  recordUse?: boolean;
 }
 
 /**
@@ -295,9 +298,11 @@ export async function verifyApiKey(
   }
 
   try {
-    const validation = await userApiKeyService.validateUserApiKey(apiKey, {
-      db: { userApiKeys: userApiKeyRepository },
-    });
+    const validation = await userApiKeyService.validateUserApiKey(
+      apiKey,
+      { db: { userApiKeys: userApiKeyRepository } },
+      { recordUse: options?.recordUse }
+    );
 
     if (!validation.isValid || !validation.userId || !validation.keyId || !validation.scopes || !validation.rateLimit) {
       // Same suspended-owner answer apiKeyAuth gives: suspension disables the owner's keys.
@@ -333,7 +338,8 @@ export async function verifyApiKey(
  * to bill completions or touch other endpoints.
  */
 export async function verifyBridgeApiKey(headers: Record<string, string | undefined>): Promise<ApiKeyInfo> {
-  return verifyApiKey(headers, { requiredScopes: [ApiKeyScope.CC_BRIDGE] });
+  // Bridge messages are the desktop daemon reporting agent presence and events, not use of the key.
+  return verifyApiKey(headers, { requiredScopes: [ApiKeyScope.CC_BRIDGE], recordUse: false });
 }
 
 /**
