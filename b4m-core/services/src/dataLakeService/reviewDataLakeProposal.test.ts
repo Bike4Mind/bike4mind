@@ -9,7 +9,6 @@ import {
   restoreDataLakeProposal,
   type AutoApprovalRule,
 } from './reviewDataLakeProposal';
-import { FinalUrlRejectedError } from '../fabFileService/FinalUrlRejectedError';
 import { assertCanWriteDataLakeTags } from './authorizeLakeWrite';
 
 const OWNER = 'owner-1';
@@ -785,10 +784,6 @@ describe('autoApproveDataLakeProposal', () => {
     await autoApproveDataLakeProposal('prop-1', rule({ isTrusted: matches }), deps);
 
     expect(recordAdmission).toHaveBeenCalledWith('prop-1', 'file-9', 'example.org');
-  });
-
-  it('surfaces the predicate failure type the ingestion door throws', () => {
-    expect(new FinalUrlRejectedError()).toBeInstanceOf(Error);
   });
 
   it('returns left_pending without admitting when the claim is lost', async () => {

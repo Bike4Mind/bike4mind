@@ -376,7 +376,7 @@ export interface ResearchRunTotals {
   proposed: number;
   /** Of `proposed`, the trusted results the run added to the lake without a reviewer. */
   autoAdmitted: number;
-  /** Of `proposed`, the trusted results the rule could not admit, left waiting for review. */
+  /** Of `proposed`, the trusted results the rule attempted but did not admit. */
   autoAdmitSkipped: number;
   /** Already awaiting a human for this source. */
   duplicatePending: number;
