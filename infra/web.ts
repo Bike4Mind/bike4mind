@@ -157,6 +157,7 @@ import {
   optihashiRunCompletionQueueSubscription,
   bobRunQueueSubscription,
   libreoncologyAudioRenderQueueSubscription,
+  generatedMediaPurgeQueueSubscription,
 } from './queues';
 import { imageProcessor } from './functions';
 import { chatCompletion } from './chatCompletion';
@@ -706,6 +707,7 @@ const dlqConsumerFunctionArns = [
   optihashiRunCompletionQueueSubscription,
   bobRunQueueSubscription,
   libreoncologyAudioRenderQueueSubscription,
+  generatedMediaPurgeQueueSubscription,
   emailBatchQueueSubscription,
   emailJobQueueSubscription,
   emailParserQueueSubscription,
