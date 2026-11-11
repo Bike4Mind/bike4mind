@@ -1,15 +1,28 @@
-import { activationConfigForKind } from './activation';
+import type { ActivationConfig } from './activation';
 import { commitFact, foldEvents, verifyChain, type MemoryEvent } from './ledger';
 import type { Belief, Principal } from './types';
 
+export const MEMORY_EXPORT_FORMAT_VERSION = 1;
+
 export function verifyMemoryExport(value: {
+  formatVersion: number;
+  activation: ActivationConfig;
   principal: Principal;
   exportedAt: string;
   events: MemoryEvent[];
   beliefs: Belief[];
 }): { ok: boolean; error?: string } {
+  if (value?.formatVersion !== undefined && value.formatVersion !== MEMORY_EXPORT_FORMAT_VERSION) {
+    return { ok: false, error: `Unsupported export format version ${value.formatVersion}` };
+  }
+  const activation = value?.activation;
   if (
     !value?.principal?.id ||
+    value.formatVersion !== MEMORY_EXPORT_FORMAT_VERSION ||
+    !activation ||
+    ![activation.decay, activation.floorDays, activation.hotAbove, activation.warmAbove].every(
+      n => typeof n === 'number' && Number.isFinite(n)
+    ) ||
     !Number.isFinite(Date.parse(value.exportedAt)) ||
     !Array.isArray(value.events) ||
     !Array.isArray(value.beliefs)
@@ -33,12 +46,9 @@ export function verifyMemoryExport(value: {
   }
   const chain = verifyChain(value.events);
   if (!chain.ok) return { ok: false, error: `Broken chain at event ${chain.brokenAt}` };
-  const expected = foldEvents(value.events, {
-    now: value.exportedAt,
-    activation: activationConfigForKind(value.principal.kind),
-  });
+  const expected = foldEvents(value.events, { now: value.exportedAt, activation });
   if (JSON.stringify(expected) !== JSON.stringify(value.beliefs)) {
-    return { ok: false, error: 'Exported beliefs do not match the ledger fold' };
+    return { ok: false, error: 'Chain verified, but exported beliefs do not match the ledger fold' };
   }
   return { ok: true };
 }

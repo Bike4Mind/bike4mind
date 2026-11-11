@@ -63,6 +63,7 @@ describe('exportPrincipalMemory', () => {
     expect(exported.mementos[0]).not.toHaveProperty('embedding');
     expect(exported.mementos[0]).not.toHaveProperty('embeddingModel');
     expect(JSON.stringify(exported)).not.toContain('old-model');
+    expect(exported.formatVersion).toBe(1);
     expect(verifyMemoryExport(exported)).toEqual({ ok: true });
     expect(verifyMemoryExport(JSON.parse(JSON.stringify(exported)))).toEqual({ ok: true });
     for (const memento of exported.mementos) expect(memento).not.toHaveProperty('metadata');

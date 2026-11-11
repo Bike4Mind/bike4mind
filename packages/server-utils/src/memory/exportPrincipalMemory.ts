@@ -1,5 +1,13 @@
 import { HTTPError, type IMemento } from '@bike4mind/common';
-import { activationConfigForKind, foldEvents, type Belief, type MemoryEvent, type Principal } from '@bike4mind/memory';
+import {
+  activationConfigForKind,
+  foldEvents,
+  MEMORY_EXPORT_FORMAT_VERSION,
+  type ActivationConfig,
+  type Belief,
+  type MemoryEvent,
+  type Principal,
+} from '@bike4mind/memory';
 import type { KeyProvider } from './factCipher';
 import { listPrincipalLedger, type LedgerRepo } from './ledgerMemoryStore';
 
@@ -17,6 +25,8 @@ export interface ExportedMemento extends Omit<IMemento, 'metadata' | 'embedding'
 }
 
 export interface PrincipalMemoryExport {
+  formatVersion: number;
+  activation: ActivationConfig;
   principal: Principal;
   exportedAt: string;
   events: MemoryEvent[];
@@ -97,11 +107,14 @@ export async function exportPrincipalMemory(deps: {
       if (rows.length < MEMENTO_PAGE_SIZE) break;
     }
   }
+  const activation = activationConfigForKind(deps.principal.kind);
   return {
+    formatVersion: MEMORY_EXPORT_FORMAT_VERSION,
+    activation,
     principal: deps.principal,
     exportedAt,
     events,
-    beliefs: foldEvents(events, { now: exportedAt, activation: activationConfigForKind(deps.principal.kind) }),
+    beliefs: foldEvents(events, { now: exportedAt, activation }),
     mementos,
   };
 }
