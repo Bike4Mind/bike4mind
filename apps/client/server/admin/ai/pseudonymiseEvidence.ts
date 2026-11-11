@@ -160,12 +160,21 @@ function walk(value: unknown, salt: string | undefined, depth: number, keyKind: 
   if (!isPlainObject(value)) return DROP;
 
   const out: Record<string, unknown> = {};
+  // Next free `#n` per scrubbed key: without a salt every email key collapses to one placeholder, so
+  // probing from #2 each time would be quadratic in the key count.
+  const nextSuffix = new Map<string, number>();
   for (const [key, child] of Object.entries(value)) {
     const walked = walk(child, salt, depth + 1, keyKind ?? sensitiveKeyKind(key));
     if (walked === DROP) continue;
     // Evidence keyed by identifier (per-IP or per-email counts) carries the identifier in the key.
-    let outKey = scrubString(key, salt);
-    for (let n = 2; Object.hasOwn(out, outKey); n++) outKey = `${scrubString(key, salt)}#${n}`;
+    const base = scrubString(key, salt);
+    let outKey = base;
+    if (Object.hasOwn(out, base)) {
+      let n = nextSuffix.get(base) ?? 2;
+      while (Object.hasOwn(out, `${base}#${n}`)) n++;
+      outKey = `${base}#${n}`;
+      nextSuffix.set(base, n + 1);
+    }
     out[outKey] = walked;
   }
   return out;

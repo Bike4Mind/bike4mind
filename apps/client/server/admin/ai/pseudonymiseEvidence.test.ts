@@ -130,6 +130,22 @@ describe('pseudonymiseEvidence', () => {
     expect(out).toEqual({ '[redacted-email]': 1, '[redacted-email]#2': 2 });
   });
 
+  it('skips a suffix a raw key already holds and stays linear across many colliding keys', () => {
+    expect(pseudonymiseEvidence({ 'a@example.com': 1, '[redacted-email]#2': 'x', 'b@example.com': 2 }, '')).toEqual({
+      '[redacted-email]': 1,
+      '[redacted-email]#2': 'x',
+      '[redacted-email]#3': 2,
+    });
+
+    const many = Object.fromEntries(Array.from({ length: 20_000 }, (_, i) => [`u${i}@example.com`, i]));
+    const started = performance.now();
+    const out = pseudonymiseEvidence(many, '') as Record<string, number>;
+    // Probing from #2 per key took ~15s at 8k keys; linear is well under a second at 20k.
+    expect(performance.now() - started).toBeLessThan(5_000);
+    expect(Object.keys(out)).toHaveLength(20_000);
+    expect(out['[redacted-email]#20000']).toBe(19_999);
+  });
+
   it('tokenises names, usernames and phone numbers', () => {
     const user = { name: 'Jane Doe', username: 'jdoe', displayName: 'JD', phone: '+15555550100', fileName: 'a.csv' };
     const out = pseudonymiseEvidence(user, SALT) as Record<string, string>;
