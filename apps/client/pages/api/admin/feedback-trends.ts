@@ -13,7 +13,8 @@ const handler = adminApi({
   // Read by the admin page only; API keys have no page.
   auth: 'jwtOnly',
 })
-  .use(rateLimit({ limit: 30, windowMs: 60_000, bucket: 'admin-feedback-trends' }))
+  // Each figure click, refresh, status change and delete refetches, so a quick triage pass runs well past 30/min.
+  .use(rateLimit({ limit: 120, windowMs: 60_000, bucket: 'admin-feedback-trends' }))
   .get(async (req, res) => {
     // support:read alone is not enough: the Feedback tab is full-admin only.
     if (!isFullAdmin(req.user)) throw new ForbiddenError('Admin access required');
