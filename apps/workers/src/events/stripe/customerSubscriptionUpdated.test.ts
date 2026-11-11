@@ -45,6 +45,10 @@ vi.mock('@bike4mind/server-utils/analytics/billingEventDetails', () => ({
   subscriptionEventUser: mockSubscriptionEventUser,
 }));
 
+// Metadata parsing and the write are covered in applyPlanStorageLimit.test.ts; here only when it runs.
+const { mockApplyPlanStorageLimit } = vi.hoisted(() => ({ mockApplyPlanStorageLimit: vi.fn() }));
+vi.mock('./applyPlanStorageLimit', () => ({ applyPlanStorageLimit: mockApplyPlanStorageLimit }));
+
 vi.mock('@bike4mind/server-utils/services/organizationService', () => ({
   setSeats: vi.fn(),
 }));
@@ -669,5 +673,53 @@ describe('customerSubscriptionUpdated - lifecycle events', () => {
     await run();
 
     expect(mockPostSubscriptionChangesToSlack).not.toHaveBeenCalled();
+  });
+});
+
+describe('customerSubscriptionUpdated - plan storage limit', () => {
+  const run = () => handler({ properties: { subscriptionId: 'sub_stripe_u' } } as never, logger as never);
+  const stripeReturns = (subscription: ReturnType<typeof buildUserSub>) =>
+    vi.mocked(stripe.subscriptions.retrieve).mockResolvedValue(subscription as never);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Earlier describes leave their own row on this mock; clearAllMocks keeps implementations.
+    vi.mocked(subscriptionRepository.updateByStripeSubscriptionIdReturningBefore).mockResolvedValue({} as never);
+  });
+
+  it('applies the price storage limit to the owner of a user subscription this stage owns', async () => {
+    const subscription = buildUserSub();
+    stripeReturns(subscription);
+
+    await run();
+
+    expect(mockApplyPlanStorageLimit).toHaveBeenCalledWith(subscription, 'u1', logger);
+  });
+
+  it('skips a subscription this stage has no row for', async () => {
+    stripeReturns(buildUserSub());
+    vi.mocked(subscriptionRepository.updateByStripeSubscriptionIdReturningBefore).mockResolvedValueOnce(null);
+
+    await run();
+
+    expect(mockApplyPlanStorageLimit).not.toHaveBeenCalled();
+  });
+
+  it('skips an organization-owned subscription', async () => {
+    stripeReturns(
+      buildUserSub({ metadata: { userId: 'u1', stage: 'test', ownerType: 'Organization', organizationId: 'org-a' } })
+    );
+
+    await run();
+
+    expect(mockApplyPlanStorageLimit).not.toHaveBeenCalled();
+  });
+
+  it('skips legacy metadata without a user id', async () => {
+    stripeReturns(buildUserSub({ metadata: { stage: 'test', ownerType: 'User' } }));
+
+    await run();
+
+    expect(mockApplyPlanStorageLimit).not.toHaveBeenCalled();
   });
 });

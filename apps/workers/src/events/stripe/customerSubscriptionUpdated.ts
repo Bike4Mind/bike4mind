@@ -26,6 +26,7 @@ import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { Resource } from 'sst';
 import { withEventContext } from '@workers/utils/eventContext';
 import { Logger } from '@bike4mind/observability';
+import { applyPlanStorageLimit } from './applyPlanStorageLimit';
 
 export const handler = withEventContext(async (event, logger) => {
   const { subscriptionId } = StripeEvents.CustomerSubscriptionUpdated.schema.parse(event.properties);
@@ -137,6 +138,11 @@ export const handler = withEventContext(async (event, logger) => {
   // failures, so once the write commits nothing can skip these. Never throws.
   if (owned && before) {
     await emitSubscriptionChangeEvents(before, subscription);
+  }
+
+  // Org-owned subscriptions have no plan storage mapping yet; the org pool keeps its own limit.
+  if (owned && metadata.ownerType !== SubscriptionOwnerType.Organization && metadata.userId) {
+    await applyPlanStorageLimit(subscription, metadata.userId, logger);
   }
 
   // sendToClient calls must be outside the transaction to avoid

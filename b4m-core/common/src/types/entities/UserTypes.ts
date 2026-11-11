@@ -1110,6 +1110,12 @@ export interface IUserRepository
    * it, so a recalculated absolute value never overwrites an adjustment it did not see.
    */
   setCurrentStorageIfUnchanged: (userId: string, expected: number, next: number) => Promise<boolean>;
+  /**
+   * Sets `planStorageLimit` and re-derives the enforced `storageLimit` in one write, so a manual
+   * `storageLimitOverride` keeps winning (same precedence as resolveUserStorageLimit). Matches only a
+   * user whose override field exists: an unmigrated legacy row keeps its limit. False when nothing matched.
+   */
+  setPlanStorageLimit: (userId: string, planStorageLimitMb: number) => Promise<boolean>;
   /** The user's `currentStorageSize` (missing counts as 0), or null when the user does not exist. */
   findCurrentStorageSize: (userId: string) => Promise<number | null>;
   /** One keyset page of user ids in `_id` order, starting after `afterId` (null = first page). */

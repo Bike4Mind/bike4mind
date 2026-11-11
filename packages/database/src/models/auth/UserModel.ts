@@ -1017,6 +1017,19 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return res.matchedCount === 1;
   }
 
+  async setPlanStorageLimit(userId: string, planStorageLimitMb: number): Promise<boolean> {
+    if (!mongoose.isValidObjectId(userId)) return false;
+    const res = await this.model.updateOne({ _id: userId, storageLimitOverride: { $exists: true } }, [
+      {
+        $set: {
+          planStorageLimit: planStorageLimitMb,
+          storageLimit: { $ifNull: ['$storageLimitOverride', planStorageLimitMb] },
+        },
+      },
+    ]);
+    return res.matchedCount === 1;
+  }
+
   async findCurrentStorageSize(userId: string): Promise<number | null> {
     if (!mongoose.isValidObjectId(userId)) return null;
     const row = await this.model
