@@ -5,7 +5,7 @@ import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { organizationRepository, userRepository, withTransaction } from '@bike4mind/database';
 import { groupRepository } from '@bike4mind/database/social';
 import { organizationService } from '@bike4mind/services';
-import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { z } from 'zod';
 
 /**
@@ -16,7 +16,7 @@ import { z } from 'zod';
  *
  * Wrapped in withTransaction: provisioning, soft-deletes, the member purge, and the org write
  * all commit together (or roll back together) - the repositories join the session automatically
- * via transactionAsyncLocalStorage. Grant/revoke is audit-logged after the transaction commits.
+ * via transactionAsyncLocalStorage. The audit entry commits with the change.
  */
 const bodySchema = z.object({
   allowedGroupTypes: z.array(z.string()).max(20),
@@ -29,25 +29,25 @@ const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions
 
     // ZodError propagates to the central errorHandler (422 via fromZodError). No hand-rolled 400.
     const body = bodySchema.parse(req.body);
+    const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
 
-    const result = await withTransaction(() =>
-      organizationService.setOrganizationGroupTypes(
+    const result = await withTransaction(async () => {
+      const updated = await organizationService.setOrganizationGroupTypes(
         { organizationId, allowedGroupTypes: body.allowedGroupTypes },
         {
           db: { organizations: organizationRepository, groups: groupRepository, users: userRepository },
           logger: req.logger,
         }
-      )
-    );
+      );
 
-    // Audit AFTER commit: "who changed which org's group types" is a question legal will ask
-    // once a type reaches confidential data. Best-effort - a logging failure must not fail the
-    // already-committed change.
-    await recordAdminActionFromRequest(req, {
-      action: 'org.group_types.updated',
-      target: { kind: 'organization', id: organizationId, displayName: organizationId },
-      summary: 'updated allowed group types',
-      details: { ...result },
+      await recordAdminActionFromRequest(req, {
+        action: 'org.group_types.updated',
+        target: { kind: 'organization', id: organizationId, displayName: organizationId },
+        summary: 'updated allowed group types',
+        reason,
+        details: { ...updated },
+      });
+      return updated;
     });
 
     res.status(200).json(result);
