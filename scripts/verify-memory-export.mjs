@@ -3,13 +3,22 @@
 // salt, so their commitments cannot be recomputed; an external trusted tip/count is needed
 // to prove the export was not truncated or replaced with another internally valid chain.
 import { readFile } from 'node:fs/promises';
-import { verifyMemoryExport } from '../b4m-core/memory/dist/index.mjs';
 
+const BUILD_HINT = 'build first: pnpm --filter @bike4mind/memory build';
 const path = process.argv[2];
 if (!path) {
-  console.error('Usage: node scripts/verify-memory-export.mjs <export.json>');
+  console.error(`Usage: node scripts/verify-memory-export.mjs <export.json>  (${BUILD_HINT})`);
   process.exitCode = 2;
 } else {
+  let verifyMemoryExport;
+  try {
+    ({ verifyMemoryExport } = await import('../b4m-core/memory/dist/index.mjs'));
+  } catch (error) {
+    console.error(
+      `Could not load the memory package (${BUILD_HINT}): ${error instanceof Error ? error.message : String(error)}`
+    );
+    process.exit(2);
+  }
   try {
     const data = JSON.parse(await readFile(path, 'utf8'));
     const result = verifyMemoryExport(data);
