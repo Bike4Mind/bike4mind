@@ -103,7 +103,10 @@ export type DraftUploadTarget = { url: string; headers?: Record<string, string> 
 export async function mintDraftUploadUrl(input: MintDraftUploadUrlInput): Promise<DraftUploadTarget> {
   if (process.env.B4M_SELF_HOST === 'true') {
     const token = signDraftUploadToken({ draftId: input.draftId, path: input.path, size: input.size }, input.expiresIn);
-    const params = new URLSearchParams({ draftId: input.draftId, path: input.path });
+    // `token` stays in the URL only for CLI and desktop builds that replay `url` without headers;
+    // drop it together with draft-upload.ts's deprecated `?token=` fallback. The route prefers the
+    // header, and request logs redact the query value (requestLogUrl.ts).
+    const params = new URLSearchParams({ draftId: input.draftId, path: input.path, token });
     return {
       url: `/api/publish/artifact/draft-upload?${params.toString()}`,
       headers: { [DRAFT_UPLOAD_TOKEN_HEADER]: token },

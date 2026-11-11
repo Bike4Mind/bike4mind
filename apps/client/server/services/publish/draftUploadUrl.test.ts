@@ -95,6 +95,7 @@ describe('mintDraftUploadUrl', () => {
   });
 
   it('self-host: returns a same-origin proxy URL and the token as a header, without touching storage', async () => {
+    // The deprecated `?token=` copy keeps URL-only clients working until the route's fallback goes.
     vi.stubEnv('B4M_SELF_HOST', 'true');
     const storage = makeStorage('https://should-not-be-used');
     const { url, headers } = await mintDraftUploadUrl({
@@ -113,7 +114,7 @@ describe('mintDraftUploadUrl', () => {
     const params = new URLSearchParams(url.split('?')[1]);
     expect(params.get('draftId')).toBe('d1');
     expect(params.get('path')).toBe('assets/app.js');
-    expect(params.has('token')).toBe(false);
+    expect(params.get('token')).toBe(headers?.[DRAFT_UPLOAD_TOKEN_HEADER]);
     // The declared size rides in the signed claims, so the proxy can hold the body to it.
     expect(verifyDraftUploadToken(headers?.[DRAFT_UPLOAD_TOKEN_HEADER] ?? '')).toEqual({
       draftId: 'd1',
