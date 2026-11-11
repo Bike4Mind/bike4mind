@@ -304,6 +304,8 @@ import EnsureAdminSearchIndexes from './20260921239987_ensure-admin-search-index
 import EnsureAdminActionCountIndexes from './20260921240050_ensure-admin-action-count-indexes';
 import EnsureGeneratedMediaPurgeIndexes from './20260921240060_ensure-generated-media-purge-indexes';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import EnsureGenerationJobOutputKeyIndex from './20260921240070_ensure-generation-job-output-key-index';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import ResearchConfigSourceTiers from './20260921240100_research-config-source-tiers';
 import ConvertLegacyQuestPlansToFiles from './20260921239990_convert-legacy-quest-plans-to-files';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
@@ -555,6 +557,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureAdminSearchIndexes,
   EnsureAdminActionCountIndexes,
   EnsureGeneratedMediaPurgeIndexes,
+  EnsureGenerationJobOutputKeyIndex,
   ResealOAuthProviderTokens,
   ResearchConfigSourceTiers,
   ModalImageUrlToKey,
