@@ -22,5 +22,6 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(
       statusCode: 200,
     };
   },
+  // Must stay database-free: infra/websocket.ts runs this route outside the VPC.
   { skipDatabase: true }
 );
