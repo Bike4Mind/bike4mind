@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Alert, Button, IconButton, Stack, Tooltip, Typography } from '@mui/joy';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { adminActionCountsQueryKey } from '@client/app/hooks/data/adminActionCounts';
 import { PENDING_GRANTS_QUERY_KEY } from '@client/app/hooks/data/adminSignupGrant';
 import { api } from '@client/app/contexts/ApiContext';
 import { getErrorMessage } from '@client/app/utils/error';
@@ -64,6 +65,7 @@ export default function HeldSignupGrantsTab() {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: QUERY_KEY }),
         queryClient.invalidateQueries({ queryKey: PENDING_GRANTS_QUERY_KEY }),
+        queryClient.invalidateQueries({ queryKey: adminActionCountsQueryKey }),
       ]);
     },
   });
@@ -73,6 +75,7 @@ export default function HeldSignupGrantsTab() {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: QUERY_KEY }),
         queryClient.invalidateQueries({ queryKey: PENDING_GRANTS_QUERY_KEY }),
+        queryClient.invalidateQueries({ queryKey: adminActionCountsQueryKey }),
       ]);
     },
   });

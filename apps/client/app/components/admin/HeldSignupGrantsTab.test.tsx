@@ -155,6 +155,7 @@ describe('HeldSignupGrantsTab', () => {
       expect(postMock).toHaveBeenCalledWith('/api/admin/held-signup-grants/release', { userIds: [rows[1].id] })
     );
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'signup-grants'] }));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'action-counts'] });
     invalidate.mockClear();
     fireEvent.click(await screen.findByTestId('held-signup-grants-revoke-btn'));
     expect(await screen.findByTestId('held-signup-grants-revoke-dialog')).toHaveTextContent(
@@ -169,6 +170,7 @@ describe('HeldSignupGrantsTab', () => {
     expect(screen.getByTestId('held-signup-grants-revoke-btn')).toBeDisabled();
     expect(getMock).toHaveBeenCalledTimes(3);
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'signup-grants'] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'action-counts'] });
   });
 
   it('says when an account was left alone because it was granted more since the release', async () => {
@@ -231,6 +233,7 @@ describe('HeldSignupGrantsTab', () => {
     await confirmRelease();
     expect(await screen.findByText('Request interrupted')).toBeInTheDocument();
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'signup-grants'] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'action-counts'] });
   });
 
   it('refreshes pending exposure when a revoke request fails after possible debits', async () => {
@@ -247,6 +250,7 @@ describe('HeldSignupGrantsTab', () => {
     await confirmRevoke();
     expect(await screen.findByText('Request interrupted')).toBeInTheDocument();
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'signup-grants'] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'action-counts'] });
   });
 
   it('disables Next without a cursor', async () => {
