@@ -24,6 +24,10 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   agentExecutionRepository: {
     findById: (...args: unknown[]) => mockFindById(...args),
+    setAbortFlag: vi.fn().mockResolvedValue(undefined),
+    markAborted: vi.fn().mockResolvedValue(undefined),
+    markComplete: vi.fn().mockResolvedValue(undefined),
+    findBackgroundChildrenOf: vi.fn().mockResolvedValue([]),
     updatePermissionState: (...args: unknown[]) => mockUpdatePermissionState(...args),
     markFailed: (...args: unknown[]) => mockMarkFailed(...args),
     updateStatus: (...args: unknown[]) => mockUpdateStatus(...args),
@@ -48,6 +52,7 @@ vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
 vi.mock('@server/utils/childExecutionSnapshot', () => ({
   buildChildExecutionSnapshots: vi.fn().mockResolvedValue([]),
 }));
+vi.mock('@server/utils/liveActivityPush', () => ({ endAgentRunLiveActivity: vi.fn() }));
 vi.mock('@server/utils/persistRunAsQuest', () => ({
   persistRunAsQuest: vi.fn(),
 }));
@@ -101,6 +106,7 @@ vi.mock('@aws-sdk/client-apigatewaymanagementapi', () => ({
 import { ApiKeyScope, PROMPT_TEXT_MAX, TooManyRequestsError } from '@bike4mind/common';
 import { verifyApiKey, verifyJwtToken, checkApiKeyRateLimitOrThrow, checkRateLimit } from '@server/cli/auth';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
+import { endAgentRunLiveActivity } from '@server/utils/liveActivityPush';
 import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
 import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
@@ -205,6 +211,11 @@ describe('handlePermissionResponse', () => {
       errorMessage: 'Execution stopped: you denied "web_search".',
     });
     expect(persistRunAsQuest).toHaveBeenCalledWith('exec-1', 'Execution stopped: you denied "web_search".', noopLogger);
+    expect(endAgentRunLiveActivity).toHaveBeenCalledWith(
+      baseExecution,
+      { status: 'failed', errored: true },
+      noopLogger
+    );
     expect(mockMarkFailed).not.toHaveBeenCalled();
     expect(mockApiGwSend).toHaveBeenCalled();
     const [sentCommand] = mockApiGwSend.mock.calls[0];
@@ -954,5 +965,113 @@ describe('agent_execute API-key check outcome', () => {
 
     expect(sentFrames()).toEqual([{ action: 'agent_error', message: 'Authentication failed' }]);
     expect(verifyJwtToken).toHaveBeenCalled();
+  });
+});
+
+describe('WebSocket live activity settlement', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApiGwSend.mockResolvedValue(undefined);
+  });
+
+  it('ends the activity when a paused run is aborted', async () => {
+    const execution = { ...baseExecution, status: 'paused' };
+    mockFindById.mockResolvedValue(execution);
+    vi.mocked(verifyApiKey).mockRejectedValueOnce(new UnauthorizedError('JWT required'));
+    vi.mocked(verifyJwtToken).mockResolvedValueOnce({ id: 'user-1' } as never);
+    const handle = func as unknown as (event: unknown, context: unknown, logger: typeof noopLogger) => Promise<unknown>;
+    await handle(
+      {
+        body: JSON.stringify({
+          accessToken: 'token',
+          action: 'agent_execute',
+          command: 'abort',
+          executionId: 'exec-1',
+        }),
+        requestContext: { connectionId: 'conn-1', domainName: 'example.test', stage: 'test' },
+      } as never,
+      {} as never,
+      noopLogger as never
+    );
+    expect(endAgentRunLiveActivity).toHaveBeenCalledWith(execution, { status: 'stopped' }, noopLogger);
+  });
+
+  it('ends the activity when a confidence gate is stopped', async () => {
+    const execution = { ...baseExecution, status: 'paused' };
+    mockFindById.mockResolvedValue(execution);
+    mockClearPendingGate.mockResolvedValue(true);
+    await handleGateResponse(
+      {
+        accessToken: 'token',
+        action: 'agent_execute',
+        command: 'gate_response',
+        executionId: 'exec-1',
+        decision: 'stop',
+      },
+      'user-1',
+      'conn-1',
+      'https://endpoint',
+      noopLogger as never
+    );
+    expect(endAgentRunLiveActivity).toHaveBeenCalledWith(execution, { status: 'completed' }, noopLogger);
+  });
+
+  describe('held low-confidence completion', () => {
+    const pendingCompletion = {
+      answer: 'held answer',
+      replyText: 'held reply',
+      totalTokens: 10,
+      totalIterations: 2,
+      reachedMaxIterations: false,
+      lowConfidence: true,
+      canReconsider: false,
+    };
+    const heldExecution = { ...baseExecution, status: 'paused', pendingCompletion };
+
+    it('ends the activity when the held completion is accepted via Stop', async () => {
+      mockFindById.mockResolvedValue(heldExecution);
+      mockClearPendingGate.mockResolvedValue(true);
+      await handleGateResponse(
+        {
+          accessToken: 'token',
+          action: 'agent_execute',
+          command: 'gate_response',
+          executionId: 'exec-1',
+          decision: 'stop',
+        },
+        'user-1',
+        'conn-1',
+        'https://endpoint',
+        noopLogger as never
+      );
+      expect(endAgentRunLiveActivity).toHaveBeenCalledTimes(1);
+      expect(endAgentRunLiveActivity).toHaveBeenCalledWith(heldExecution, { status: 'completed' }, noopLogger);
+    });
+
+    it('ends the activity when Continue has nothing to reopen and accepts the held completion', async () => {
+      mockFindById.mockResolvedValue(heldExecution);
+      mockClearPendingGate.mockResolvedValue(true);
+      vi.stubEnv('AGENT_EXECUTOR_SERVICE', 'http://agentexecutor:8080');
+      vi.stubEnv('AGENT_EXECUTOR_INTERNAL_SECRET', 'test-secret');
+      try {
+        await handleGateResponse(
+          {
+            accessToken: 'token',
+            action: 'agent_execute',
+            command: 'gate_response',
+            executionId: 'exec-1',
+            decision: 'continue',
+          },
+          'user-1',
+          'conn-1',
+          'https://endpoint',
+          noopLogger as never
+        );
+      } finally {
+        vi.unstubAllEnvs();
+      }
+      expect(endAgentRunLiveActivity).toHaveBeenCalledTimes(1);
+      expect(endAgentRunLiveActivity).toHaveBeenCalledWith(heldExecution, { status: 'completed' }, noopLogger);
+    });
   });
 });

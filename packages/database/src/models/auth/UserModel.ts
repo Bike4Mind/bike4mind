@@ -1682,6 +1682,9 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     aupAcceptedVersion: { type: String },
     aupAcceptedAt: { type: Date },
     ageAttestedAdult: { type: Boolean },
+    // Stamped by the Stripe webhook when the payer ticks Checkout's terms checkbox.
+    checkoutTermsAcceptedVersion: { type: String },
+    checkoutTermsAcceptedAt: { type: Date },
 
     // email verification
     emailVerified: { type: Boolean, default: false, index: true },

@@ -4,7 +4,7 @@ import { Logger } from '@bike4mind/observability';
 
 // Imported for its side effect by each entrypoint that reads settings outside baseApi (the admin
 // settings context, generated server handler stubs, the queue and job handlers that import it, and
-// every server module that loads generated extension-code glue - pinned by baseApi.registration.test.ts).
+// every server module that loads generated extension-code glue - pinned by baseApi.registration.repo.test.ts).
 // A process entered anywhere else sees only the core catalog.
 const { coreCollisions, duplicates, rejected } = registerContributedSettings(premiumAdminSettings);
 if (coreCollisions.length > 0) {

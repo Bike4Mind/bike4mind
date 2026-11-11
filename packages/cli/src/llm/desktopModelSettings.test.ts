@@ -14,6 +14,7 @@ import {
 } from './desktopModelSettings.js';
 
 const QWEN = 'local:ollama:qwen3:8b';
+const BOM = String.fromCharCode(0xfeff);
 const silent = { debug() {}, info() {}, warn() {}, error() {} } as never;
 
 const facts = (over: Partial<OllamaModelFacts> = {}): OllamaModelFacts => ({
@@ -114,6 +115,11 @@ describe('readDesktopModelSettings', () => {
     });
   });
 
+  it('reads a file saved as UTF-8 with a byte order mark, as Notepad can save a hand edit', async () => {
+    await writeFile(file, `${BOM}${JSON.stringify({ models: { [QWEN]: { keepAlive: 3600 } } })}`);
+    expect(await readDesktopModelSettings(at(file), QWEN)).toEqual({ keepAlive: 3600 });
+  });
+
   it('fails only the model whose entry is broken, naming the file, the model and the field', async () => {
     await writeSettings({ [QWEN]: { generation: { temperature: 'hot' } }, 'local:ollama:other': { keepAlive: -1 } });
     const failure = readDesktopModelSettings(at(file), QWEN);
@@ -133,12 +139,28 @@ describe('readDesktopModelSettings', () => {
 
   it.each([
     ['{"models": ', 'is not valid JSON'],
+    ['', 'is not valid JSON'],
+    [BOM, 'is not valid JSON'],
+    [` ${BOM}{"models": {}}`, 'is not valid JSON'],
     ['[]', 'does not hold model settings'],
     ['{"models": []}', 'does not hold model settings'],
   ])('rejects a file holding %s for every model', async (text, problem) => {
     await writeFile(file, text);
     await expect(readDesktopModelSettings(at(file), QWEN)).rejects.toThrow(`${file} ${problem}`);
     await expect(readDesktopModelSettings(at(file), 'local:ollama:other')).rejects.toThrow(problem);
+  });
+
+  it.each([
+    ['FF FE', Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('{"models": {}}', 'utf16le')])],
+    ['FE FF', Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from('{"models": {}}', 'utf16le').swap16()])],
+    ['no (LE)', Buffer.from('{"models": {}}', 'utf16le')],
+    ['no (BE)', Buffer.from('{"models": {}}', 'utf16le').swap16()],
+  ])('names the encoding of a file saved as UTF-16 with a %s mark', async (_mark, bytes) => {
+    await writeFile(file, bytes);
+    const failure = readDesktopModelSettings(at(file), QWEN);
+    await expect(failure).rejects.toThrow(`${file} is saved as UTF-16, which cannot be read. Save it as UTF-8.`);
+    await expect(failure).rejects.not.toThrow('is not valid JSON');
+    await expect(readDesktopModelSettings(at(file), 'local:ollama:other')).rejects.toThrow('UTF-16');
   });
 
   it('rejects a path it cannot read rather than reading no settings', async () => {

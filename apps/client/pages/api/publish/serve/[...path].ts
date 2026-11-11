@@ -1593,7 +1593,7 @@ interface PublishedArtifactLean {
   source: { kind: 'bundle' | 'reply' | 'fabfile' };
   /** Legacy single share link; still the source of truth during the rollout. */
   shareToken?: string | null;
-  /** Every share link ever minted. Only the entry that served THIS request is counted. */
+  /** The stored share links (live plus retained revoked ones). Only the entry that served THIS request is counted. */
   shareTokens?: PublishedArtifactShareToken[];
   sha256Index?: string;
   versions?: Array<{ sha256Index: string }>;

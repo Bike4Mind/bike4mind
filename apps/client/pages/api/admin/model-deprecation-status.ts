@@ -1,7 +1,12 @@
 import { z } from 'zod';
 import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
-import { modelCatalogRepository, modelDiscoveryStateRepository, modelPriceRepository } from '@bike4mind/database';
+import {
+  modelCatalogRepository,
+  modelDiscoveryStateRepository,
+  modelPriceRepository,
+  readModelListRevision,
+} from '@bike4mind/database';
 import {
   catalogLifecycles,
   classifyModelReference,
@@ -12,6 +17,7 @@ import {
 } from '@bike4mind/llm-adapters';
 import { modelDiscoveryService } from '@bike4mind/services';
 import { modelReferenceReport } from '@bike4mind/server-utils/modelDiscovery/modelReferenceReport';
+import { bumpModelListRevision } from '@bike4mind/server-utils/modelDiscovery/modelListRevision';
 import { ApiKeyScope, LIFECYCLE_STATUSES, toPerMTokRate, type IModelPrice, type PerMTokRate } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
@@ -69,10 +75,12 @@ const handler = adminApi({
 })
   .get(async (req, res) => {
     const daysAhead = parseInt(req.query.daysAhead as string) || 90;
+    // Read here rather than through the process memo: the tab reloads this the moment a run it watched finishes.
+    const catalogRevision = (await readModelListRevision()) ?? undefined;
 
     const [liveModels, rows, pending, priceRows, staleReport] = await Promise.all([
       // Private included: this is an operator view, not the picker.
-      getAvailableModels(null, { includePrivate: true }),
+      getAvailableModels(null, { includePrivate: true, catalogRevision }),
       modelCatalogRepository.rowsInForce(),
       modelDiscoveryStateRepository.pendingSuggestions(),
       modelPriceRepository.rowsInForce(),
@@ -231,6 +239,12 @@ const handler = adminApi({
       contributors: [{ group: 'lifecycle', source: req.user.id }],
       note: auditNote,
     });
+    // The row is already in force; a failed bump leaves model lists on their TTLs and must not fail the accept.
+    await bumpModelListRevision().catch((error: unknown) =>
+      req.logger.warn('[model-deprecation-status] model-list refresh failed', {
+        error: error instanceof Error ? error.message : String(error),
+      })
+    );
 
     const resolved = await modelDiscoveryStateRepository.resolveSuggestion(modelId, 'accepted');
     await recordResolution({

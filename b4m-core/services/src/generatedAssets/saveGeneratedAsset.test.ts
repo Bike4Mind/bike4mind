@@ -288,6 +288,28 @@ describe('saveGeneratedAsset', () => {
     expect(createFabFile).not.toHaveBeenCalled();
   });
 
+  it('signs a fresh URL on a job dedupe hit even when the row has no stored fileUrl', async () => {
+    findOne.mockResolvedValue({
+      id: 'f0',
+      fileName: 'video.mp4',
+      filePath: 'generated-video/old.mp4',
+      moderationStatus: 'clean',
+    });
+    vi.mocked(deps.storage.generateSignedUrl).mockResolvedValue('https://fresh.example.invalid/old.mp4');
+    const generation: GeneratedAssetMetadata = { generator: 'video', provider: 'veo', jobId: 'j1', prompt: 'waves' };
+
+    const result = await saveGeneratedAsset(params({ contentType: 'video/mp4', generation }), deps);
+
+    expect(result).toEqual({
+      saved: true,
+      fileId: 'f0',
+      s3Key: 'generated-video/old.mp4',
+      fileName: 'video.mp4',
+      fileUrl: 'https://fresh.example.invalid/old.mp4',
+    });
+    expect(deps.storage.generateSignedUrl).toHaveBeenCalledWith('generated-video/old.mp4', 3600, 'get');
+  });
+
   it('rejects when the job dedup lookup fails, so the store step retries instead of falling back', async () => {
     const lookupError = new Error('mongo unavailable');
     findOne.mockRejectedValue(lookupError);

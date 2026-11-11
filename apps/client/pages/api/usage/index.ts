@@ -34,9 +34,10 @@ const QuerySchema = z.object({
  * Owner-scoped to (ownerId, ownerType), i.e. spend billed to that owner's credit
  * pool. Personal keys billed to an org land under the org (ownerType=Organization)
  * and surface in the org's own dashboard, not here - the User view intentionally
- * shows only user-billed spend. Reads UsageEventModel (not the ledger) for the
- * member/model/feature cuts because it is the only source carrying frozen COGS +
- * per-member attribution.
+ * shows only user-billed spend. Reads UsageEventModel for the member/model/feature
+ * cuts because it is the only source carrying frozen COGS + per-member attribution;
+ * `ledger` adds the ledger's spend for the same window, since charges written without
+ * a usage event appear only there.
  *
  * Access: platform admins see any owner. A delegate holding support:read (API keys
  * need ApiKeyScope.ADMIN) gets the same read-only view minus key names/prefixes.
@@ -74,10 +75,11 @@ const handler = baseApi().get(async (req, res) => {
   // keys, which findByOrganizationId guarantees through its own billingOwnerType
   // conjunct - not through the create-time invariant alone, which a script or direct
   // DB write can bypass (see UserApiKeyModel.ts and its embed test).
-  const [summary, apiKeyUsage, sourceUsage, ownerKeys] = await Promise.all([
+  const [summary, apiKeyUsage, sourceUsage, ledger, ownerKeys] = await Promise.all([
     usageEventRepository.ownerUsageSummary(ownerId, ownerType, days),
     creditTransactionRepository.apiKeyUsageForOwner(ownerId, ownerType, days),
     creditTransactionRepository.sourceUsageForOwner(ownerId, ownerType, days),
+    creditTransactionRepository.usageTotalForOwner(ownerId, ownerType, days),
     ownerType === CreditHolderType.Organization
       ? userApiKeyRepository.findByOrganizationId(ownerId)
       : userApiKeyRepository.findByUserId(ownerId),
@@ -105,6 +107,7 @@ const handler = baseApi().get(async (req, res) => {
     byMember: summary.byMember.map(m => ({ ...m, userName: nameById.get(m.userId) })),
     byApiKey,
     bySource: sourceUsage,
+    ledger,
   };
 
   return res.json(response);

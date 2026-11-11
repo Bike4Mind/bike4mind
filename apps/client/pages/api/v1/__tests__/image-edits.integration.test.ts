@@ -253,6 +253,43 @@ describe('POST /api/v1/image-edits (integration - contract auth + validation)', 
     });
   });
 
+  describe('FLUX 3 region edits', () => {
+    const region = { prompt: 'blue sky', bbox: [0.1, 0.2, 0.5, 0.8] };
+    it('queues a valid no-mask region edit without stripping the regions', async () => {
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      const { req, res } = fire({ body: { model: 'flux-3-image-klein', fabFileIds: [], edit_regions: [region] } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockInvoke).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.objectContaining({ model: 'flux-3-image-klein', fabFileIds: [], edit_regions: [region] }),
+        })
+      );
+    });
+    it.each([
+      [{ ...region, bbox: [-0.1, 0, 1, 1] }],
+      [{ ...region, bbox: [0.1001, 0.2, 0.1002, 0.9] }],
+      Array.from({ length: 9 }, () => region),
+    ])('rejects invalid regions before creating a session or queueing', async (...edit_regions) => {
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      const { req, res } = fire({ body: { model: 'flux-3-image-klein', fabFileIds: [], edit_regions } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(422);
+      expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+    it('refuses a painted mask before creating a session or queueing', async () => {
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      const { req, res } = fire({
+        body: { model: 'flux-3-image-klein', fabFileIds: ['mask'], edit_regions: [region] },
+      });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(400);
+      expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+  });
+
   it('rejects a body that fails the contract schema (422) before enqueuing the edit', async () => {
     validateWithScopes([ApiKeyScope.AI_GENERATE]);
     const { req, res } = fire({ body: { image: undefined } });

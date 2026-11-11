@@ -491,6 +491,77 @@ describe('BFLImageService - edit()', () => {
     vi.restoreAllMocks();
   });
 
+  it('refuses regions on Fill before the provider request', async () => {
+    await expect(
+      service.edit('source', 'edit', {
+        model: ImageModels.FLUX_PRO_FILL,
+        edit_regions: [{ prompt: 'blue', bbox: [0, 0, 1, 1] }],
+      })
+    ).rejects.toThrow('only supported on FLUX 3');
+    expect(postSpy).not.toHaveBeenCalled();
+  });
+
+  it('refuses a mask on FLUX 3 before the provider request', async () => {
+    await expect(service.edit('source', 'edit', { model: ImageModels.FLUX_3_IMAGE, mask: 'mask' })).rejects.toThrow(
+      'take no mask'
+    );
+    expect(postSpy).not.toHaveBeenCalled();
+  });
+
+  it.each([ImageModels.FLUX_3_IMAGE, ImageModels.FLUX_3_IMAGE_KLEIN])(
+    'submits the documented edit-with-boxes layout on %s',
+    async model => {
+      await service.edit('source', 'paint the selected area blue', {
+        model,
+        referenceImages: ['reference'],
+        seed: 17,
+        output_format: 'png',
+        edit_regions: [{ prompt: 'blue sky', bbox: [0.1, 0.2, 0.5, 0.8] }],
+      });
+      expect(postSpy.mock.calls[0][0]).toBe(`https://api.bfl.ai/v1/${model}`);
+      const body = submittedBody();
+      expect(body.images).toEqual(['source', 'reference']);
+      expect(typeof body.prompt).toBe('string');
+      const prompt = String(body.prompt);
+      expect(prompt).toContain('<ref_image_0>');
+      const layout: unknown = JSON.parse(prompt.slice(prompt.indexOf('\n\n') + 2));
+      expect(layout).toEqual([
+        { id: 'region_0', from: null, src_bbox: null, tgt_bbox: [100, 200, 500, 800], desc: 'blue sky' },
+      ]);
+      const klein = model === ImageModels.FLUX_3_IMAGE_KLEIN;
+      expect(Object.keys(body).sort()).toEqual(
+        (klein
+          ? ['prompt', 'images', 'safety_tolerance', 'seed', 'output_format']
+          : ['prompt', 'images', 'safety_tolerance']
+        ).sort()
+      );
+      if (klein) expect(body).toMatchObject({ seed: 17, output_format: 'png' });
+    }
+  );
+
+  it.each([ImageModels.FLUX_3_IMAGE, ImageModels.FLUX_3_IMAGE_KLEIN])(
+    'uses native images for a plain edit without regions on %s',
+    async model => {
+      await service.edit('source', 'change the lighting', { model });
+      expect(submittedBody()).toMatchObject({ prompt: 'change the lighting', images: ['source'] });
+      expect(submittedBody()).not.toHaveProperty('mask');
+      expect(submittedBody()).not.toHaveProperty('image');
+    }
+  );
+
+  it.each([ImageModels.FLUX_3_IMAGE, ImageModels.FLUX_3_IMAGE_KLEIN])(
+    'refuses more than ten total images on %s before submitting',
+    async model => {
+      await expect(
+        service.edit('source', 'edit', {
+          model,
+          referenceImages: Array.from({ length: 10 }, (_, index) => `ref-${index}`),
+        })
+      ).rejects.toThrow('at most 10');
+      expect(postSpy).not.toHaveBeenCalled();
+    }
+  );
+
   it.each([ImageModels.FLUX_2_PRO, ImageModels.FLUX_2_KLEIN_4B] as const)(
     'maps the source and references to input_image_N on %s, with no mask',
     async model => {

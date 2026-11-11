@@ -68,7 +68,7 @@ describe('useModerationScanFallback', () => {
     await advance(MODERATION_POLL_INTERVAL_MS);
 
     expect(getFabFilesFromServerByIds).toHaveBeenCalledWith(['img-1']);
-    expect(applyResult).toHaveBeenCalledWith('img-1', 'clean', 'https://example.test/img-1');
+    expect(applyResult).toHaveBeenCalledWith('img-1', 'clean', 'https://example.test/img-1', undefined);
   });
 
   it('keeps polling while the server still reports the scan pending', async () => {

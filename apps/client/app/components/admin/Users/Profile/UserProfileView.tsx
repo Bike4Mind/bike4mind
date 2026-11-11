@@ -14,9 +14,11 @@ import { AdjustCreditsDialog } from './actions/AdjustCreditsDialog';
 import { ReinstateDialog, SuspendDialog } from './actions/SuspendDialog';
 import { EditProfileDialog } from './actions/EditProfileDialog';
 import { ChangeRoleDialog, ManageTagsDialog, ProductAccessDialog } from './actions/accessDialogs';
+import { AdminPermissionsDialog } from './actions/AdminPermissionsDialog';
 import {
   ApiKeyTrustDialog,
   CancelDeletionDialog,
+  FileEmbeddingWindowResetDialog,
   NewAccountSpendCapDialog,
   InternalAccountDialog,
   DeleteUserDialog,
@@ -70,6 +72,8 @@ const ActionHost: React.FC<ProfileDialogProps & { action: ProfileAction; onDelet
       return <ShadowTierDialog {...props} />;
     case 'role':
       return <ChangeRoleDialog {...props} />;
+    case 'permissions':
+      return <AdminPermissionsDialog {...props} />;
     case 'productAccess':
       return <ProductAccessDialog {...props} />;
     case 'tags':
@@ -82,6 +86,8 @@ const ActionHost: React.FC<ProfileDialogProps & { action: ProfileAction; onDelet
       return <ApiKeyTrustDialog {...props} />;
     case 'newAccountSpendCap':
       return <NewAccountSpendCapDialog {...props} />;
+    case 'fileEmbeddingWindowReset':
+      return <FileEmbeddingWindowResetDialog {...props} />;
     case 'internalAccount':
       return <InternalAccountDialog {...props} />;
     case 'subscription':
