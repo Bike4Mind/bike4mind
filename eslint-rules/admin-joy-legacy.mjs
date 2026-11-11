@@ -52,7 +52,6 @@ const componentsByFile = {
   'Users/BulkAbuseResponseModal.tsx': ['Modal'],
   'Users/ComplianceModal.tsx': ['Modal', 'Table'],
   'Users/CreateUserModal.tsx': ['Modal'],
-  'Users/Details/AdminApiKeysModal.tsx': ['Modal', 'Table'],
   'Users/Details/AdminGenerateApiKeyModal.tsx': ['Modal'],
   'Users/Details/CountersDetails.tsx': ['Modal'],
   'Users/MigrationDetails.tsx': ['Card', 'Modal'],
