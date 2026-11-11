@@ -103,6 +103,8 @@ export const shadowDetectionVerdictEntrySchema = z.object({
   reviewerId: z.string(),
   reviewedAt: z.date(),
   source: z.enum(SHADOW_DETECTION_VERDICT_SOURCES).optional(),
+  /** The account whose suspension or reinstatement recorded this entry; absent on reviews and older entries. */
+  accountId: z.string().optional(),
 });
 export type ShadowDetectionVerdictEntry = z.infer<typeof shadowDetectionVerdictEntrySchema>;
 

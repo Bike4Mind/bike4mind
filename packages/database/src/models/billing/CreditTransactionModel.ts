@@ -507,6 +507,27 @@ export class CreditTransactionRepository
     return rows.map(row => ({ at: new Date(row._id), credits: row.credits }));
   }
 
+  /** AI spend in credits per owner since `since`; owners with none are absent. */
+  async aiSpendByOwnersSince(
+    ownerIds: string[],
+    ownerType: CreditHolderType,
+    since: Date
+  ): Promise<Record<string, number>> {
+    if (ownerIds.length === 0) return {};
+    const rows = await this.model.aggregate<{ _id: string; credits: number }>([
+      {
+        $match: {
+          ownerId: { $in: ownerIds },
+          ownerType,
+          type: { $in: [...AI_USAGE_TRANSACTION_TYPES] },
+          createdAt: { $gte: since },
+        },
+      },
+      { $group: { _id: '$ownerId', credits: { $sum: { $abs: '$credits' } } } },
+    ]);
+    return Object.fromEntries(rows.map(row => [String(row._id), row.credits]));
+  }
+
   /** AI spend (magnitudes) over rolling 24h/7d/30d windows, the 30-day top model and per-UTC-day sums. */
   async summarizeAiSpend(ownerId: string, ownerType: CreditHolderType, now: Date): Promise<AiSpendSummary> {
     const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));

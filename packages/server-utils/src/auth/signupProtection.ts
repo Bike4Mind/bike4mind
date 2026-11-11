@@ -2,6 +2,7 @@ import { Resource } from 'sst';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import {
   heldCreditRewardRepository,
+  shadowDetectionRepository,
   signupGrantBudgetRepository,
   signupProtectionRepository,
 } from '@bike4mind/database';
@@ -71,6 +72,9 @@ export const signupProtection: SignupProtection = {
     } catch (error) {
       Logger.globalInstance.error('Signup domain hold alert failed', error);
     }
+  },
+  async hasOpenAccountCampaign(userId) {
+    return (await shadowDetectionRepository.countOpenForUser(userId, 'accountCampaign')) > 0;
   },
   // One datum per matching source, so a list that starts refusing real users shows as its own series.
   async recordDisposableRefusal({ sources }) {
