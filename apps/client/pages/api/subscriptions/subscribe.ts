@@ -14,6 +14,7 @@ import { checkoutAcquisitionMetadata } from '@bike4mind/server-utils/analytics/a
 import { recordCheckoutVisit } from '@server/analytics/billingEventDetails';
 import { readVisitId } from '@server/analytics/visitSession';
 import { firstPurchaseCardOptions } from '@server/integrations/stripe/threeDSecure';
+import { termsConsentSessionParams } from '@server/integrations/stripe/termsConsent';
 import { backfillCustomerSignupMetadata, signupNetworkMetadata } from '@server/integrations/stripe/riskMetadata';
 import { readNetworkMeta } from '@server/auth/networkMeta';
 import { assertCheckoutAllowed } from '@server/billing/checkoutGate';
@@ -118,11 +119,14 @@ const handler = baseApi()
       req.logger
     );
 
+    const termsConsentParams = await termsConsentSessionParams(req.user.id);
+
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
       ...USD_CHECKOUT_SESSION_PARAMS,
       payment_method_types: ['card'],
       ...threeDSecureOptions,
+      ...termsConsentParams,
       line_items: [
         {
           price: priceId,

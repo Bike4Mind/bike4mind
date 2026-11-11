@@ -8,8 +8,9 @@
 //     artifact). But --only also drops those dependency tasks from the hash, so an edit to
 //     b4m-core/common would replay a cached pass for every package that imports it. This
 //     writes, per package, `.turbo/test-context` (an explicit input of every test task in
-//     turbo.json, pinned by turboTestCache.test.ts) holding what --only cannot see: the
-//     full-graph hash of each task the test depends on, the Node version and platform, and
+//     turbo.json, pinned by scripts/__tests__/turbo-test-cache.test.mjs) holding what --only
+//     cannot see: the full-graph hash of each task the test depends on, the Node version and
+//     platform, and
 //     the env that changes how a suite runs; for WHOLE_REPO_TEST_PACKAGES, the git tree too.
 //
 //   node scripts/turbo-test-cache.mjs report <runs dir>
@@ -38,9 +39,10 @@ export const CONTEXT_ENV = ['TZ', 'TMPDIR', 'NODE_OPTIONS', 'VITEST_MAX_WORKERS'
 // root config. No input glob list stays honest for those, so their context carries the whole
 // tracked tree: they re-run on every new commit and hit only on a re-run of the same commit (a
 // flaky queue entry). A package lands here when the guard in
-// scripts/__tests__/turbo-test-cache.test.mjs finds such a read in its tests.
+// scripts/__tests__/turbo-test-cache.test.mjs finds such a read in its tests. The cheaper way out
+// is to name those tests `*.repo.test.*` and run them from a `test:repo` script, which CI runs
+// uncached ("Run repo-scan tests" in ci.yml); apps/client does that.
 export const WHOLE_REPO_TEST_PACKAGES = [
-  '@bike4mind/client',
   '@bike4mind/database',
   '@bike4mind/infra',
   '@bike4mind/resource',

@@ -213,7 +213,7 @@ describe('POST /api/subscriptions/subscribe — launch/availability gate', () =>
 
     await (handler as HandlerFn)(req, res);
 
-    expect(mockGetSettingsValue).not.toHaveBeenCalled();
+    expect(mockGetSettingsValue).not.toHaveBeenCalledWith('EnableGatedProduct');
     expect(mockSessionsCreate).toHaveBeenCalledTimes(1);
     expect(res.statusCode).toBe(200);
   });
@@ -607,5 +607,44 @@ describe('POST /api/subscriptions/subscribe - the visit checkout was opened in',
     expect(res.statusCode).toBe(200);
     expect(res._getData()).toEqual({ sessionUrl: 'https://checkout.stripe/session' });
     warnSpy.mockRestore();
+  });
+});
+
+describe('POST /api/subscriptions/subscribe - checkout terms consent', () => {
+  const settings = (termsConsent: boolean) =>
+    mockGetSettingsValue.mockImplementation(async (key: string) =>
+      key === 'requireCheckoutTermsConsent' ? termsConsent : true
+    );
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsAllowedCallbackOrigin.mockReturnValue(true);
+    mockFindUserSubByPrice.mockResolvedValue(null);
+    mockCustomersRetrieve.mockResolvedValue({ id: 'cus_existing' });
+    mockPricesRetrieve.mockResolvedValue({ id: 'price_open', active: true });
+    mockSessionsCreate.mockResolvedValue({ url: 'https://checkout.stripe/session' });
+  });
+
+  it('requires terms on the session and names the buyer while the setting is on', async () => {
+    settings(true);
+    const { req, res } = makeReq('price_open');
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(mockSessionsCreate.mock.calls[0][0]).toMatchObject({
+      consent_collection: { terms_of_service: 'required' },
+      client_reference_id: 'user_1',
+    });
+  });
+
+  it('leaves consent collection off while the setting is off', async () => {
+    settings(false);
+    const { req, res } = makeReq('price_open');
+
+    await (handler as HandlerFn)(req, res);
+
+    const args = mockSessionsCreate.mock.calls[0][0] as Record<string, unknown>;
+    expect(args).not.toHaveProperty('consent_collection');
+    expect(args).not.toHaveProperty('client_reference_id');
   });
 });

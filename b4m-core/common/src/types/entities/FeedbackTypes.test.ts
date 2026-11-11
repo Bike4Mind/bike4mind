@@ -5,6 +5,10 @@ import {
   FEEDBACK_ROLLUP_MAX_WINDOW_DAYS,
   FeedbackRollupQuerySchema,
   FEEDBACK_CLIENT_CONTEXT_LIMITS,
+  FeedbackType,
+  hasFeedbackComment,
+  isFeedbackTriageNoise,
+  NO_FEEDBACK_DETAILS_PLACEHOLDER,
   parseFeedbackClientContext,
   parseFeedbackRollupBound,
   sanitizeFeedbackPagePath,
@@ -240,5 +244,36 @@ describe('parseFeedbackClientContext', () => {
   it('returns undefined when there is nothing to store', () => {
     expect(parseFeedbackClientContext(undefined)).toBeUndefined();
     expect(parseFeedbackClientContext({})).toBeUndefined();
+  });
+});
+
+describe('isFeedbackTriageNoise', () => {
+  it('treats a comment-less thumbs-up as noise but keeps one with a comment', () => {
+    expect(isFeedbackTriageNoise({ type: FeedbackType.THUMBS_UP, hasContent: false })).toBe(true);
+    expect(isFeedbackTriageNoise({ type: FeedbackType.THUMBS_UP, hasContent: true })).toBe(false);
+  });
+
+  it('keeps a comment-less thumbs-down and other report types in the queue', () => {
+    expect(isFeedbackTriageNoise({ type: FeedbackType.THUMBS_DOWN, hasContent: false })).toBe(false);
+    expect(isFeedbackTriageNoise({ type: FeedbackType.BUG, hasContent: false })).toBe(false);
+    expect(isFeedbackTriageNoise({ hasContent: false, tags: [] })).toBe(false);
+  });
+
+  it('treats an untyped waitlist-tagged signup as noise, but not a typed report carrying the tag', () => {
+    expect(isFeedbackTriageNoise({ hasContent: true, tags: ['comingSoon', 'marketing'] })).toBe(true);
+    expect(isFeedbackTriageNoise({ type: FeedbackType.BUG, hasContent: true, tags: ['comingSoon'] })).toBe(false);
+  });
+
+  it('treats an empty-string type like a missing one for the waitlist tag', () => {
+    expect(isFeedbackTriageNoise({ type: '', hasContent: true, tags: ['comingSoon'] })).toBe(true);
+  });
+});
+
+describe('hasFeedbackComment', () => {
+  it('rejects blank text and the legacy placeholder, accepts real text', () => {
+    expect(hasFeedbackComment('')).toBe(false);
+    expect(hasFeedbackComment('   ')).toBe(false);
+    expect(hasFeedbackComment(` ${NO_FEEDBACK_DETAILS_PLACEHOLDER} `)).toBe(false);
+    expect(hasFeedbackComment('nice')).toBe(true);
   });
 });

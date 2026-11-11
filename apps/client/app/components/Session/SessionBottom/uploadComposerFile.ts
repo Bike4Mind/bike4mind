@@ -208,7 +208,8 @@ export async function uploadComposerFile(
         withRealFile,
         fabFile.id,
         buffered.moderationStatus,
-        buffered.fileUrl
+        buffered.fileUrl,
+        buffered.fileUrlExpireAt
       );
     });
 

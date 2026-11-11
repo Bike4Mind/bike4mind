@@ -92,7 +92,7 @@ const BugReportModal: React.FC<BugReportModalProps> = ({
         userEmail: userContext?.currentUser?.email ?? 'Unknown',
         tags: ['bug', 'feedback', 'bugReport'],
         type: feedbackType,
-        content: bugReport || 'No feedback details provided',
+        content: bugReport,
         promptMeta: promptMeta ?? {},
         sessionId,
         questId,
@@ -127,6 +127,7 @@ const BugReportModal: React.FC<BugReportModalProps> = ({
         <Stack direction="row" justifyContent="start" spacing={5}>
           <Tooltip title="Good AI output">
             <ThumbUpIcon
+              data-testid="bug-report-modal-thumbs-up"
               sx={getIconStyle(FeedbackType.THUMBS_UP)}
               onClick={() => handleFeedbackTypeChange(FeedbackType.THUMBS_UP)}
             />
