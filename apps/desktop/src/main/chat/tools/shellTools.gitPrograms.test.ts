@@ -66,10 +66,14 @@ const ROWS: [string, string, string][] = [
   ['cp -r tpl/. src && git -C src st', '', 'aaaa'],
   ['rsync -a --exclude .git lrepo/ dist3/ && git -C dist3 st', '', 'rrar'],
   ['rsync -a --exclude=.git lrepo/ dist3/ && git -C dist3 st', '', 'rrrr'],
-  ['rsync -a --exclude=.git/ lrepo/ dist3/ && git -C dist3 st', '', 'rrrr'],
+  ['rsync -a --exclude=.git/ lrepo/ dist3/ && git -C dist3 st', '', 'aaaa'],
   ["rsync -a --exclude='.git' lrepo/ dist3/ && git -C dist3 st", '', 'rrrr'],
-  ['rsync -aC lrepo/ dist3/ && git -C dist3 st', '', 'rrrr'],
-  ['rsync -a --cvs-exclude lrepo/ dist3/ && git -C dist3 st', '', 'rrrr'],
+  ['rsync -aC lrepo/ dist3/ && git -C dist3 st', '', 'aaaa'],
+  ['rsync -a --cvs-exclude lrepo/ dist3/ && git -C dist3 st', '', 'aaaa'],
+  ['rsync -a --exclude=.git/ gf/ sub/ && git -C sub st', '', 'aaaa'],
+  ['rsync -aC gf/ d10/ && git -C d10 st', '', 'aaaa'],
+  ['rsync -a --cvs-exclude gf/ d10/ && git -C d10 st', '', 'aaaa'],
+  ['rsync -a --exclude=.git gf/ d10/ && git -C d10 st', '', 'rrrr'],
   ['rsync -a --exclude .git --include .git lrepo/ dist3/ && git -C dist3 st', '', 'aaaa'],
   ['rsync -a --exclude node_modules lrepo/ dist3/ && git -C dist3 st', '', 'aaaa'],
   ['git init && git st', '', 'rrrr'],
@@ -234,6 +238,58 @@ const ROWS: [string, string, string][] = [
   ['find . -maxdepth 0 -exec env -i git log \\;', '', 'aaaa'],
   ['pnpm exec env -i node x.js', '', 'rrrr'],
   ['cd nosuchdir; git merge-foo', '', 'aaaa'],
+  ['rm -rf lrepo && mv bad lrepo && git -C lrepo st', '', 'aaaa'],
+  ['mv lrepo x && mv bad lrepo && cd lrepo && git st', '', 'aaaa'],
+  ['mv src src.old && mv bad src && git -C src st', '', 'aaaa'],
+  ['mv a.ts b.ts && git st', '', 'rrrr'],
+  ['rm -rf dist && git st', '', 'rrrr'],
+  ['rm -rf node_modules && pnpm i && git st', '', 'rrrr'],
+  ['rm -rf dist/* && git st', '', 'rrrr'],
+  ['rm -f *.log && git st', '', 'rrrr'],
+  ['rm -rf coverage/* && git st', '', 'rrrr'],
+  ['rm -rf dist/*.map && git lg -3', '', 'rrrr'],
+  ['rm -f src/*.orig && git co a.ts', '', 'rrrr'],
+  ['rm -rf dist/* && pnpm build && git st', '', 'rrrr'],
+  ['rm -rf .g* && git st', '', 'aaaa'],
+  ['shopt -s dotglob; rm -rf * && git st', '', 'aaaa'],
+  ['rm -rf lrepo/* && mv bad/. lrepo && git -C lrepo st', '', 'aaaa'],
+  ['rm -rf * && git st', '', 'aaaa'],
+  ['cp -r vend dist6 && pnpm exec git -C dist6/lib st', '', 'aaaa'],
+  ['cp -r vend dist6 && npx git -C dist6/lib st', '', 'aaaa'],
+  ['cp -r vend dist6 && npm exec -- git -C dist6/lib st', '', 'aaaa'],
+  ['pnpm exec git bang', '', 'aaaa'],
+  ['echo st | xargs git -C bad', '', 'aaaa'],
+  ['find . -maxdepth 0 -exec git bang \\;', '', 'aaaa'],
+  ['pnpm exec git merge -s foo other', '', 'aaaa'],
+  ['npx git pull -s foo origin main', '', 'aaaa'],
+  ['find . -maxdepth 0 -exec git merge -s foo other \\;', '', 'aaaa'],
+  ['pnpm exec git status', '', 'rrrr'],
+  ['npx git log -1', '', 'rrrr'],
+  ["find . -name '*.ts' -exec git add {} +", '', 'arrr'],
+  ['git pull -ts foo origin main', '', 'aaaa'],
+  ['git pull -ps foo origin main', '', 'aaaa'],
+  ['git pull -as foo origin main', '', 'aaaa'],
+  ['git pull -ks foo origin main', '', 'aaaa'],
+  ['git pull -4s foo origin main', '', 'aaaa'],
+  ['git pull -tsfoo origin main', '', 'aaaa'],
+  ['git merge -qs foo other', '', 'aaaa'],
+  ['git rebase -ks foo main', '', 'aaaa'],
+  ['git pull -ts ort origin main', '', 'rrrr'],
+  ['git pull -Xs origin main', '', 'rrrr'],
+  ['git cherry-pick -ns other', '', 'rrrr'],
+  ['git fetch foo::x', '', 'aaaa'],
+  ['git ls-remote foo::x', '', 'aaaa'],
+  ['git pull foo::x main', '', 'aaaa'],
+  ['git remote add r foo::x && git fetch r', '', 'aaaa'],
+  ['git remote set-url origin foo::x', '', 'aaaa'],
+  ['git clone foo::x cl9', '', 'aaaa'],
+  ['git submodule add foo::x sm', '', 'aaaa'],
+  ['git push foo::x main', '', 'aaaa'],
+  ['git fetch bar::x', '', 'rrrr'],
+  ['git fetch https::x', '', 'rrrr'],
+  ['exec -c git -C origin.git log', '', 'aaaa'],
+  ['cp -r evil/.git/. bare/ && exec -c git -C bare log', '', 'aaaa'],
+  ['export PATH="$PWD/nt6//:$PATH" && mkdir nt6 && cp srcx/git-hello nt6/ && git hello', '', 'aaaa'],
 ];
 
 describe('shell approval of git programs, sourced files and fresh folders', () => {
@@ -294,6 +350,9 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
     repository(join(proj, 'srcrepo2'), { 'git-st': '#!/bin/sh\n', 'git-hello': '#!/bin/sh\n' });
     repository(join(proj, 'vend', 'lib'), { 'x.ts': 'x' });
     git(join(proj, 'vend', 'lib'), 'config', 'alias.st', '!touch MARK');
+    repository(join(proj, 'bad'), { 'x.ts': 'x' });
+    git(join(proj, 'bad'), 'config', 'alias.st', '!touch MARK');
+    file(join(proj, 'srcx', 'git-hello'), '#!/bin/sh\n', 0o755);
     mkdirSync(join(proj, 'sub', 'deep'), { recursive: true });
     symlinkSync('sub', join(proj, 'sublink'));
     file(join(proj, 'env1.sh'), 'export FOO=1\n');
@@ -311,10 +370,14 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
       'deactivate () { :; }\nVIRTUAL_ENV=/x\nexport VIRTUAL_ENV\n_OLD_VIRTUAL_PATH="$PATH"\nPATH="$VIRTUAL_ENV/bin:$PATH"\nexport PATH\nhash -r 2> /dev/null\n'
     );
     file(join(proj, 'nbin', 'git-merge-foo'), '#!/bin/sh\nexit 1\n', 0o755);
+    file(join(proj, 'nbin', 'git-remote-foo'), '#!/bin/sh\nexit 1\n', 0o755);
     vi.stubEnv('PATH', `nbin:${process.env.PATH}`);
     execFileSync('git', ['clone', '-q', '--bare', proj, join(proj, 'origin.git')], { env });
     execFileSync('git', ['clone', '-q', '--bare', proj, join(proj, 'blay', '.bare')], { env });
     file(join(proj, 'blay', '.git'), 'gitdir: ./.bare\n');
+    execFileSync('git', ['clone', '-q', '--bare', proj, join(proj, 'gf', '.bare')], { env });
+    git(join(proj, 'gf', '.bare'), 'config', 'alias.st', '!touch MARK');
+    file(join(proj, 'gf', '.git'), 'gitdir: ./.bare\n');
     file(join(proj, 'tpl2', 'f'), 'f');
     roots = permissionProtectedLocations(userData, home, join(base, 'managed'), { warn: () => {} }).paths();
     const compiled: CompiledRule[] = [];
@@ -429,6 +492,21 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
 
     it.each(commands)('asks in every mode for %s', async command => {
       expect(await cells(command, '')).toBe('aaaa');
+    });
+  });
+
+  describe('with a process PATH entry ending in a doubled slash', () => {
+    let before: string | undefined;
+    beforeAll(() => {
+      before = process.env.PATH;
+      vi.stubEnv('PATH', `${proj}/ntools5//:${before}`);
+    });
+    afterAll(() => {
+      vi.stubEnv('PATH', before);
+    });
+
+    it('asks in every mode for a program copied into the folder', async () => {
+      expect(await cells('mkdir ntools5 && cp srcx/git-hello ntools5/ && git hello', '')).toBe('aaaa');
     });
   });
 
