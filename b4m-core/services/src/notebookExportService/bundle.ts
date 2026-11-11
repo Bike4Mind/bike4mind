@@ -23,6 +23,7 @@ export interface ExportBundleManifest {
 }
 
 export type BundleWrite = (path: string, bytes: Uint8Array) => Promise<void>;
+export type BundleAppend = (path: string, bytes: Uint8Array) => Promise<void>;
 export type BundleRead = (path: string) => Promise<Uint8Array>;
 
 export interface BundleFile {
@@ -53,7 +54,11 @@ const rowsOf = async function* (source: Iterable<unknown> | AsyncIterable<unknow
   for await (const row of source) yield row;
 };
 
-export async function createExportBundle(input: BundleInput, write: BundleWrite): Promise<ExportBundleManifest> {
+export async function createExportBundle(
+  input: BundleInput,
+  write: BundleWrite,
+  append?: BundleAppend
+): Promise<ExportBundleManifest> {
   const manifest: ExportBundleManifest = {
     exportVersion: BUNDLE_EXPORT_VERSION,
     exportedAt: input.exportedAt ?? new Date().toISOString(),
@@ -67,14 +72,30 @@ export async function createExportBundle(input: BundleInput, write: BundleWrite)
     if (!/^[a-z][a-z0-9-]*$/.test(name)) throw new Error(`Invalid collection name: ${name}`);
     const path = `collections/${name}.jsonl`;
     const lines: string[] = [];
+    const hash = createHash('sha256');
+    let count = 0;
+    let byteCount = 0;
+    if (append) await write(path, Buffer.alloc(0));
     for await (const row of rowsOf(source)) {
       const encoded = JSON.stringify(row);
       if (encoded === undefined) throw new Error(`Invalid record in ${name}`);
-      lines.push(encoded);
+      if (append) {
+        const bytes = Buffer.from(`${encoded}\n`, 'utf8');
+        await append(path, bytes);
+        hash.update(bytes);
+        byteCount += bytes.length;
+      } else {
+        lines.push(encoded);
+      }
+      count++;
     }
-    const bytes = Buffer.from(lines.map(line => `${line}\n`).join(''), 'utf8');
-    await write(path, bytes);
-    manifest.collections[name] = { path, count: lines.length, bytes: bytes.length, sha256: digest(bytes) };
+    if (!append) {
+      const bytes = Buffer.from(lines.map(line => `${line}\n`).join(''), 'utf8');
+      await write(path, bytes);
+      hash.update(bytes);
+      byteCount = bytes.length;
+    }
+    manifest.collections[name] = { path, count, bytes: byteCount, sha256: hash.digest('hex') };
     seen.add(path);
   }
   if (input.files) {
