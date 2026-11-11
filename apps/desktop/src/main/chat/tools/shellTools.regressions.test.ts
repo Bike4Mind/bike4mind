@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { chmod, link, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -9,8 +9,13 @@ import { compileRule, parseRule, PermissionRuleSet, type CompiledRule } from '..
 import { resolveSubject } from '../permissions/resolveSubject';
 import { permissionSubject } from '../permissions/subject';
 import { shellApproval } from './shellTools';
+import { gitRefusesImplicitBare } from './shellWrites';
 import type { ToolContext } from './types';
 
+vi.mock('./shellWrites', async importOriginal => {
+  const actual = await importOriginal<typeof import('./shellWrites')>();
+  return { ...actual, gitRefusesImplicitBare: vi.fn(actual.gitRefusesImplicitBare) };
+});
 vi.mock('./userPath', async importOriginal => ({
   ...(await importOriginal<typeof import('./userPath')>()),
   resolveUserPath: vi.fn(async () => process.env.PATH ?? ''),
@@ -285,12 +290,17 @@ describe('shell approval in a project with a large node_modules', () => {
       'cfgdir/config': evilConfig,
       'cfgdir/objects/info/packs': '',
       'cfgdir/refs/heads/.keep': '',
+      'cfgbare/HEAD': 'ref: refs/heads/main\n',
+      'cfgbare/config': evilConfig,
+      'cfgbare/objects/info/packs': '',
+      'cfgbare/refs/heads/.keep': '',
       'cfgdir3/HEAD': 'ref: refs/heads/main\n',
       'cfgdir3/config': evilConfig,
       'bin/git-st': '#!/bin/sh\ntouch MARK\n',
     });
     git(xrepo, 'config', 'alias.st', 'status');
     await chmod(join(xrepo, 'bin', 'git-st'), 0o755);
+    await link(join(xrepo, '.git', 'config'), join(xrepo, 'hcfg'));
     await symlink(join(xrepo, '.git', 'config'), join(xrepo, 'cfglink'));
     await symlink(join(xrepo, '.git'), join(xrepo, 'gitlink'));
     await symlink(join(xrepo, 'xloop'), join(xrepo, 'xloop'));
@@ -1372,7 +1382,6 @@ describe('shell approval in a project with a large node_modules', () => {
     ['git -C . "$O" st', 'qrepo'],
     ['git --config-env=alias.st=X st', 'qrepo'],
     ['git --config-env alias.st=X st', 'qrepo'],
-    ['PATH=./bin:$PATH git st', 'qrepo'],
     ['git config --unset alias.st && git st', 'qrepo'],
     ['git config --remove-section alias && git st', 'qrepo'],
     ['git config set include.path ../x && git st', 'qrepo'],
@@ -1408,13 +1417,7 @@ describe('shell approval in a project with a large node_modules', () => {
     ["true && sh -c 'echo $(touch x)' && git st", 'yrepo'],
     ["eval 'echo x' && git st", 'yrepo'],
     ['rm -rf emb/.git && git st', 'yrepo'],
-    ['git checkout evil && git -C emb st', 'yrepo'],
-    ['git checkout evil && cd emb && git st', 'yrepo'],
-    ['git switch evil && cd emb && git st', 'yrepo'],
-    ['git checkout evil && git -C src st', 'yrepo'],
-    ['cd emb && cp -r ../src/. . && git st', 'yrepo'],
     ['cp -r src/. . && git st', 'yrepo'],
-    ['echo x > src/config && cd src && git st', 'irepo'],
     ['git cleen -fdx', 'zrepo'],
     ['git -c help.autocorrect=1 cleen -fdx', 'qrepo'],
     ['git bang', 'qrepo'],
@@ -1514,22 +1517,10 @@ describe('shell approval in a project with a large node_modules', () => {
   });
 
   it.each([
-    [
-      "mkdir -p evil/objects evil/refs && echo 'ref: refs/heads/main' > src/HEAD && echo ../evil > src/commondir && printf '[alias]\\n\\tst = !touch MARK\\n' > evil/config && git -C src st",
-    ],
-    ["echo 'ref: refs/heads/main' > cfgdir/HEAD && git -C cfgdir st"],
-    ['cp head.txt cfgdir/HEAD && git -C cfgdir st'],
-    ['mkdir -p cfgdir3/objects cfgdir3/refs && git -C cfgdir3 st'],
-    ['mkdir cfgdir3/objects cfgdir3/refs && git -C cfgdir3 st'],
-    ['touch cfgdir3/objects && git -C cfgdir3 st'],
-    ['mkdir cfgdir3/refs && git -C cfgdir3 st'],
     ['git config --add alias.st && git st'],
     ['git config --replace-all alias.st && git st'],
     ['git config --edit core.x && git st'],
     ['echo x >> xloop && git st'],
-    ['cd cfgdir3 && mkdir -p objects refs && git st'],
-    ['echo x > src/commondir && git st'],
-    ['echo x > cfgdir3/config.worktree && git -C cfgdir3 st'],
     ['truncate -s 0 "$F" && git st'],
     ["printf '[alias]\\n\\tst = !touch MARK\\n' >> cfglink && git st"],
     ["printf '[alias]\\n\\tst = !touch MARK\\n' >> gitlink/config && git st"],
@@ -1562,16 +1553,134 @@ describe('shell approval in a project with a large node_modules', () => {
     'git pull && git st',
     'mkdir -p build/objects build/refs && git st',
     'touch HEAD2 config2 && git st',
+    'mkdir config && git st',
+    'ln src/b.ts hb.ts && git st',
+    'cp -l src/b.ts hb.ts && git st',
+    'ln -s .git/x hs && git st',
+    'touch -r .git/config b.ts && git st',
     'mkdir -p x && git st',
     'truncate -s 0 out.txt && git st',
     'truncate -r .git/config out.txt && git st',
     'git config --list && git st',
     'git --config-env=color.ui=FOO st',
+    "mkdir -p evil/objects evil/refs && echo 'ref: refs/heads/main' > src/HEAD && echo ../evil > src/commondir && git -C src st",
+    "echo 'ref: refs/heads/main' > cfgdir/HEAD && git -C cfgdir st",
+    'cp head.txt cfgdir/HEAD && git -C cfgdir st',
+    'mkdir -p cfgdir3/objects cfgdir3/refs && git -C cfgdir3 st',
+    'mkdir cfgdir3/objects cfgdir3/refs && git -C cfgdir3 st',
+    'touch cfgdir3/objects && git -C cfgdir3 st',
+    'mkdir cfgdir3/refs && git -C cfgdir3 st',
+    'cd cfgdir3 && mkdir -p objects refs && git st',
+    'echo x > src/commondir && git st',
+    'echo x > cfgdir3/config.worktree && git -C cfgdir3 st',
+    'git -C cfgbare st',
+    'cd cfgbare && git st',
+    'GIT_PAGER=cat git st',
+    'env -u FOO git st',
+    'env -u GIT_PAGER git st',
+    'env FOO=1 git st',
+    'GIT_EDITOR=true git st',
+    'GIT_TERMINAL_PROMPT=0 git st',
+    'GIT_TERMINAL_PROMPT=0 git fetch && git st',
+    'export GIT_PAGER=cat; git st',
+    'git checkout -b feat && cd src && git st',
+    'export PATH="$PWD/node_modules/.bin:$PATH"; git st',
+    'export PATH="$PWD/tools:$PATH"; git st',
+    'PATH=./tools:$PATH git st',
   ])('runs %s (in proj/xrepo) unasked, as nothing it does reaches the config git reads', async command => {
     expect(await judge(command, 'xrepo')).toMatchObject({ auto: true, full: true });
   });
 
-  it.each(['bin', join('.', 'bin')])(
+  // The shell hands git safe.bareRepository=explicit, so a bare repository one of these lays out is refused by git
+  // when it runs; the scan has no reason to ask about writing one.
+  it.each([
+    ['git checkout evil && git -C emb st'],
+    ['git checkout evil && cd emb && git st'],
+    ['git switch evil && cd emb && git st'],
+    ['git checkout evil && git -C src st'],
+    ['cd emb && cp -r ../src/. . && git st'],
+  ])('runs %s (in proj/yrepo) unasked, as the shell refuses a bare repository it finds by itself', async command => {
+    expect(await judge(command, 'yrepo')).toMatchObject({ auto: true, full: true });
+  });
+
+  it('runs a config file named src/config before git st in proj/irepo, as it is no config git reads', async () => {
+    expect(await judge('echo x > src/config && cd src && git st', 'irepo')).toMatchObject({ auto: true, full: true });
+  });
+
+  it('asks for an alias read after any write when the shell git predates safe.bareRepository, and not otherwise', async () => {
+    const mocked = vi.mocked(gitRefusesImplicitBare);
+    const real = (await vi.importActual<typeof import('./shellWrites')>('./shellWrites')).gitRefusesImplicitBare;
+    mocked.mockImplementation(async () => false);
+    try {
+      expect(await judge('git st', 'xrepo')).toMatchObject({ auto: true, full: true });
+      for (const command of ['echo x > out.txt && git st', 'mkdir -p x && git st', 'git checkout -b feat && git st']) {
+        expect(await judge(command, 'xrepo')).toMatchObject(asks);
+      }
+    } finally {
+      mocked.mockImplementation(real);
+    }
+    expect(await judge('echo x > out.txt && git st', 'xrepo')).toMatchObject({ auto: true, full: true });
+  });
+
+  it.each([
+    'PATH=./bin:$PATH git st',
+    'export PATH="$PWD/bin:$PATH"; git st',
+    'export PATH="${PWD}/bin:$PATH"; git st',
+    'export PATH="bin:$PATH"; git st',
+    'export PATH="$(pwd)/bin:$PATH"; git st',
+    'export PATH="$HOME/x:$PATH"; git st',
+    'cd src && export PATH="$PWD/../bin:$PATH" && git st',
+    'GIT_PAGER=./x.sh git lg',
+    'cd src && export PATH="$PWD/x:$PATH"; git st',
+    'bash -s -- a && git st',
+    'GIT_WORK_TREE=. git st',
+    'GIT_COMMON_DIR=.git git st',
+    'GIT_EXEC_PATH=./bin git st',
+    'GIT_CEILING_DIRECTORIES=/ git st',
+    'GIT_DISCOVERY_ACROSS_FILESYSTEM=1 git st',
+    'GIT_CONFIG_GLOBAL=./x git st',
+    'export GIT_DIR=.git; git st',
+    'sh <<< "git config x y" && git st',
+    "echo 'x' | sh && git st",
+    'bash -s <<< "x" && git st',
+    'echo x | bash -s && git st',
+    "npx tsx -e 'x' && git st",
+    "npx --yes tsx -e 'x' && git st",
+    "pnpm exec tsx -e 'x' && git st",
+    "ts-node -e 'x' && git st",
+    "npx ts-node -p 'x' && git st",
+    "lua -e 'x' && git st",
+    "ln .git/config h && printf '[alias]\\n\\tst = !touch MARK\\n' >> h && git st",
+    "cp -l .git/config h && printf '[alias]\\n\\tst = !touch MARK\\n' >> h && git st",
+    "cp --link .git/config h && printf '[alias]\\n\\tst = !touch MARK\\n' >> h && git st",
+    "ln -f .git/config h && printf '[alias]\\n\\tst = !touch MARK\\n' >> h && git st",
+    "printf '[alias]\\n\\tst = !touch MARK\\n' >> hcfg && git st",
+    'ln "$X" h && git st',
+    'GIT_CONFIG_COUNT=0 git st',
+    'export GIT_CONFIG_COUNT=0; git st',
+    'export GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all; git st',
+    'GIT_CONFIG_PARAMETERS="" git st',
+    'unset GIT_CONFIG_COUNT; git st',
+    'export -n GIT_CONFIG_COUNT; git st',
+    'env -u HOME git st',
+    'env -u PATH git st',
+    'unset -v GIT_CONFIG_COUNT GIT_CONFIG_KEY_0; git st',
+    'env -u GIT_CONFIG_COUNT git st',
+    'env --unset=GIT_CONFIG_COUNT git st',
+    'env -uGIT_CONFIG_VALUE_0 git st',
+    'env -i git st',
+    'env - git st',
+    'env --ignore-environment git st',
+    'sudo git st',
+    'sudo -E git st',
+    'doas git st',
+    'git -c safe.bareRepository=all st',
+    'git --config-env=safe.bareRepository=X st',
+  ])('asks in every mode for %s (in proj/xrepo), as git may read another alias than the scan does', async command => {
+    expect(await judge(command, 'xrepo')).toMatchObject(asks);
+  });
+
+  it.each(['bin', './bin'])(
     'asks in every mode for git st with a git-st program in PATH entry "%s", as git runs it before any alias',
     async entry => {
       const before = process.env.PATH;

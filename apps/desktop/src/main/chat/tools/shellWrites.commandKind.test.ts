@@ -3,7 +3,13 @@ import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { gitCommandKind, withGrantedRoots } from './shellWrites';
+import { gitCommandKind, gitRefusesImplicitBare, withGrantedRoots } from './shellWrites';
+import { resolveUserPath } from './userPath';
+
+vi.mock('./userPath', async importOriginal => ({
+  ...(await importOriginal<typeof import('./userPath')>()),
+  resolveUserPath: vi.fn(async () => process.env.PATH ?? ''),
+}));
 
 describe('gitCommandKind answers kept across scans', () => {
   let base: string;
@@ -51,5 +57,42 @@ describe('gitCommandKind answers kept across scans', () => {
     expect(await kind([])).toBe('own');
     // A program in a granted root is not one the scan's git lists, but git itself runs it.
     expect(await kind([withProgram])).toBeNull();
+  });
+
+  it('reads a project folder on the shell PATH, not this process PATH, as one git runs programs from', async () => {
+    await mkdir(join(repo, 'bin'));
+    await writeFile(join(repo, 'bin', 'git-zzz'), '#!/bin/sh\nexit 0\n');
+    await chmod(join(repo, 'bin', 'git-zzz'), 0o755);
+    vi.stubEnv('PATH', plain);
+    try {
+      expect(await kind([])).toBe('none');
+      vi.mocked(resolveUserPath).mockResolvedValue(`bin${delimiter}${plain}`);
+      expect(await kind([])).toBeNull();
+    } finally {
+      vi.mocked(resolveUserPath).mockImplementation(async () => process.env.PATH ?? '');
+    }
+  });
+
+  it('tells a git that honors safe.bareRepository from one that does not', async () => {
+    const old = join(base, 'old');
+    await mkdir(old);
+    await writeFile(join(old, 'git'), '#!/bin/sh\necho "git version 2.30.2"\n');
+    await chmod(join(old, 'git'), 0o755);
+    const fresh = join(base, 'fresh');
+    await mkdir(fresh);
+    await writeFile(join(fresh, 'git'), '#!/bin/sh\necho "git version 2.38.0"\n');
+    await chmod(join(fresh, 'git'), 0o755);
+    const unknown = join(base, 'unknown');
+    await mkdir(unknown);
+    await writeFile(join(unknown, 'git'), '#!/bin/sh\necho nothing\n');
+    await chmod(join(unknown, 'git'), 0o755);
+    for (const [folder, expected] of [
+      [unknown, false],
+      [old, false],
+      [fresh, true],
+    ] as const) {
+      vi.stubEnv('PATH', folder);
+      expect(await withGrantedRoots([], () => gitRefusesImplicitBare(repo))).toBe(expected);
+    }
   });
 });

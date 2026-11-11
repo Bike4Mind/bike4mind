@@ -38,13 +38,14 @@ import {
   GIT_VALUED_OPTIONS,
   gitAliases,
   gitCommandKind,
+  gitRefusesImplicitBare,
   gitSubcommand,
   gitToplevel,
   indexListed,
   inPlaceWrites,
-  SPELLED_PROGRAM,
-  repositoryRoot,
+  pathHolds,
   PLAIN_GIT_OPTIONS,
+  SPELLED_PROGRAM,
   splitGitAlias,
   withGrantedRoots,
   type GitAliases,
@@ -2533,6 +2534,34 @@ function wslRuns(tokens: readonly string[]): WslRun[] {
   return runs;
 }
 
+/** Variables that hand git other config, or another repository, than the scan's git reads (PATH is checked apart). */
+const ALIAS_VARIABLE =
+  /^(GIT_(DIR|WORK_TREE|COMMON_DIR|EXEC_PATH|CEILING_DIRECTORIES|DISCOVERY_ACROSS_FILESYSTEM|CONFIG\w*)|HOME|XDG_CONFIG_HOME)$/;
+
+/** A script text that unsets or unexports the variables carrying the shell's own git config. */
+const UNSETS_GIT_CONFIG = /\b(unset|export\s+-n)\b[^;&|\n]*GIT_CONFIG/;
+
+/** Programs that run their command with a fresh environment (and so without the shell's git config). */
+const RESETS_ENVIRONMENT = new Set(['sudo', 'doas', 'su', 'pkexec', 'runuser']);
+
+/** Whether a leading wrapper of `tokens` hands the command an environment without the shell's git config. */
+function dropsGitConfig(tokens: readonly string[]): boolean {
+  for (let at = 0; at < tokens.length && isWrapper(tokens[at]); at = pastWrapper(tokens, at)) {
+    const name = programName(unquote(tokens[at]));
+    if (RESETS_ENVIRONMENT.has(name)) return true;
+    if (name !== 'env') continue;
+    if (wrapperWords('env', tokens, at + 1).options.some(index => unquote(tokens[index]) === '-')) return true;
+    for (const given of givenOptions(tokens, at)) {
+      if (given.option === 'i' || given.option === 'ignore-environment') return true;
+      if (given.option === 'u' || given.option === 'unset') {
+        const value = given.value === undefined ? undefined : unquote(given.value);
+        if (value === undefined || isDynamic(value) || value === 'PATH' || ALIAS_VARIABLE.test(value)) return true;
+      }
+    }
+  }
+  return false;
+}
+
 /** The `env -S 'bash run.sh'` in a run of leading wrappers, which runs its value as a command line; null when none. */
 export function splitString(tokens: readonly string[]): SplitString | null {
   for (let at = 0; at < tokens.length && isWrapper(tokens[at]); at = pastWrapper(tokens, at)) {
@@ -4890,9 +4919,6 @@ const GIT_OWN_COMMANDS: ReadonlySet<string> = new Set([
 const ALIAS_LOOKUP_KEY =
   /^(alias|include|includeif|safe)(\.|$)|^help(\.autocorrect)?$|^core\.worktree$|^extensions\.worktreeconfig$/i;
 
-/** The files and folders that make a folder a bare repository git reads config from, or point it at another. */
-const BARE_REPOSITORY_FILES = /^(HEAD|commondir|config|config\.worktree|objects|refs)$/;
-
 /**
  * Whether a git subcommand may write config an alias is read from: `config` changing an ALIAS_LOOKUP_KEY or a key it
  * names by expansion, one recording a submodule or worktree, or a new repository. `rest` are its words, unquoted.
@@ -4929,14 +4955,13 @@ function writesGitConfig(sub: string, rest: readonly string[]): boolean {
  */
 function gitAliasMoved(raw: readonly string[]): boolean {
   const at = gitSubcommandAt(raw);
-  if (at === 'open') return true;
-  const options = at === null ? raw : raw.slice(0, at);
+  const options = at === null || at === 'open' ? raw : raw.slice(0, at);
   for (let index = 0; index < options.length; index++) {
     const arg = wordValue(options[index] as string);
     if (arg === '-C') index++;
     else if (arg === '-c' || arg === '--config-env') {
       const next = options[++index];
-      if (next === undefined || isDynamic(next) || ALIAS_LOOKUP_KEY.test(wordValue(next).split('=')[0] as string)) {
+      if (next === undefined || ALIAS_LOOKUP_KEY.test(wordValue(next).split('=')[0] as string)) {
         return true;
       }
     } else if (arg.startsWith('--config-env=')) {
@@ -4969,8 +4994,16 @@ const GIT_TREE_WRITERS: ReadonlySet<string> = new Set([
   'switch',
 ]);
 
-/** The options of `truncate` taking a value as their next word. */
+/** Whether `ln` (without `-s`) or `cp` (with `-l`) given `args` makes hard links. */
+function linksFiles(program: string, args: readonly string[]): boolean {
+  const options = args.filter(arg => arg.startsWith('-') && arg !== '-');
+  if (program === 'ln') return !options.some(arg => arg === '--symbolic' || (!arg.startsWith('--') && /s/.test(arg)));
+  return program === 'cp' && options.some(arg => arg === '--link' || (!arg.startsWith('--') && /l/.test(arg)));
+}
+
+/** The options of `truncate` and `touch` taking a value as their next word. */
 const TRUNCATE_VALUED = /^(-s|-r|--size|--reference)$/;
+const TOUCH_VALUED = /^(-r|-d|-t|--reference|--date|--time)$/;
 
 /** Whether a program only removes files and folders, none of them in a git dir. */
 function addsNoConfig(program: string, raw: readonly string[]): boolean {
@@ -5044,6 +5077,23 @@ const INLINE_CODE_OPTIONS = new Map<string, RegExp>([
   ['perl', /^-[A-Za-z]*[eE]/],
   ['ruby', /^-[A-Za-z]*e/],
   ['php', /^-[A-Za-z]*r/],
+  ['tsx', /^(-[A-Za-z]*[ep]|--eval|--print)(=|$)/],
+  ['ts-node', /^(-[A-Za-z]*[ep]|--eval|--print)(=|$)/],
+  ['lua', /^-[A-Za-z]*e/],
+]);
+
+/** Shells, which run what their standard input holds when given no script, or `-s`. */
+const STDIN_SHELLS = new Set(['sh', 'bash', 'dash', 'zsh', 'ksh']);
+
+/** Launchers that run a tool named in their operands, by the subcommand (if any) that does. */
+const TOOL_LAUNCHERS = new Map<string, readonly string[]>([
+  ['npx', []],
+  ['bunx', []],
+  ['pnpx', []],
+  ['pnpm', ['exec', 'dlx']],
+  ['npm', ['exec']],
+  ['yarn', ['exec', 'dlx']],
+  ['bun', ['x']],
 ]);
 
 /**
@@ -5052,12 +5102,28 @@ const INLINE_CODE_OPTIONS = new Map<string, RegExp>([
  */
 function runsInlineCode(program: string, args: readonly string[], node: Node): boolean {
   const name = program.replace(/[\d.]+$/, '');
+  const launcher = TOOL_LAUNCHERS.get(name);
+  if (launcher !== undefined && (launcher.length === 0 || launcher.includes(args[0] ?? ''))) {
+    const at = args.findIndex(
+      (arg, index) =>
+        index >= (launcher.length === 0 ? 0 : 1) && isInlineProgram(programName(arg).replace(/[\d.]+$/, ''))
+    );
+    return at !== -1 && runsInlineCode(programName(args[at] as string), args.slice(at + 1), node);
+  }
+  if (STDIN_SHELLS.has(name)) {
+    const { operands } = interpreterOptions(name, args);
+    const options = args.slice(0, args.length - operands.length);
+    if (options.some(arg => /^-[A-Za-z]*s/.test(arg) && !arg.startsWith('--'))) return true;
+    return (operands.length === 0 || operands[0] === '-') && readsStdin(node);
+  }
   const option = INLINE_CODE_OPTIONS.get(name);
   if (option === undefined) return false;
   if (args.some(arg => option.test(arg))) return true;
   const { operands } = interpreterOptions(name, args);
   return (operands.length === 0 || operands[0] === '-') && readsStdin(node);
 }
+
+const isInlineProgram = (name: string): boolean => INLINE_CODE_OPTIONS.has(name) || STDIN_SHELLS.has(name);
 
 /** How many aliases in a row the scan follows; git stops at a loop. */
 const GIT_ALIAS_DEPTH = 8;
@@ -5664,22 +5730,39 @@ export async function scanShell(
     const gitScript: GitScript = { staged: [], unknownIndex: false };
     // The aliases git reads, by folder; see gitAliasExpansion.
     const gitAliasLists = new Map<string, Promise<GitAliases | null>>();
-    // Settings that move which config or programs the command's git reads aliases or commands from, away from the scan's.
+    // Settings that move which config git reads aliases from, or drop the shell's safe.bareRepository, away from the scan's.
     const aliasEnvironment =
       anyName ||
-      variables.set.some(({ name }) =>
-        variableNames(/^(GIT_\w+|HOME|XDG_CONFIG_HOME|PATH)$/).test(name.replace(/\[[^]*$/, ''))
-      ) ||
+      variables.set.some(({ name }) => variableNames(ALIAS_VARIABLE).test(name.replace(/\[[^]*$/, ''))) ||
+      UNSETS_GIT_CONFIG.test(gateText) ||
       ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR'].some(name => process.env[name] !== undefined) ||
       Object.keys(process.env).some(name => /^GIT_CONFIG/i.test(name));
+    // The folders the script puts on PATH, as host paths; null when one cannot be placed.
+    const scriptPathEntries = (): string[] | null => {
+      const entries: string[] = [];
+      for (const { name, value } of variables.set) {
+        if (!variableNames(/^PATH$/).test(name.replace(/\[[^]*$/, ''))) continue;
+        if (value === undefined) continue;
+        if (value === null || name.includes('[')) return null;
+        for (const raw of value.split(':')) {
+          if (raw === '$PATH' || raw === '${PATH}') continue;
+          const pwd = /^\$(\{PWD\}|PWD)(?=\/|$)/.exec(raw);
+          const entry = pwd ? (directoryChanges > 0 || state.lost ? null : state.cwd + raw.slice(pwd[0].length)) : raw;
+          if (entry === null || sep !== '/' || wslLocation(state.cwd) !== null || !/^[\w@%+=,./-]*$/.test(entry)) {
+            return null;
+          }
+          entries.push(posix.isAbsolute(entry) ? entry : under(state.cwd, entry));
+        }
+      }
+      return entries;
+    };
     // A command run in the background with `&` or `coproc` may race any other, so an alias read is checked against all.
     const backgrounded =
       tree.rootNode.descendantsOfType('&').length > 0 ||
       tree.rootNode.descendantsOfType('command_name').some(name => name?.text === 'coproc');
-    // Writes an alias read is checked against (aliasConfigTouched), by the command making them: a path (`top` for a
-    // repository's, holding `.git`), none for any config, or `unlisted` for a command naming no file it writes, which
-    // counts only when a config place lies in the roots. `writer` runs now.
-    const configWrites: { id: number; path?: string; tree?: boolean; top?: boolean; unlisted?: boolean }[] = [];
+    // Writes an alias read is checked against (aliasConfigTouched), by the command making them: a path, none for any
+    // config, or `unlisted` for a command naming no file it writes, which counts only when a config place lies in the roots.
+    const configWrites: { id: number; path?: string; tree?: boolean; unlisted?: boolean }[] = [];
     const gitCommands = new Set<number>();
     let writer: number | null = null;
     const aliasChecks: {
@@ -5688,6 +5771,7 @@ export async function scanShell(
       alongside: ReadonlySet<number>;
       cwd: string;
       places: readonly string[] | null;
+      legacy: boolean;
     }[] = [];
     // Functions this script defines anywhere, which a loop body may call before the scan reaches the definition.
     const functions = new Set(
@@ -5835,32 +5919,25 @@ export async function scanShell(
     };
 
     /**
-     * Whether `write` may change the config a git call in `cwd` reads aliases from: a git dir, one of `places` (see
-     * aliasPlaces; null when unknown), or a bare repository git finds first at or above `cwd`. `target` is the path
-     * written, as named or as its links lead.
+     * Whether `write` may change a config a git call reads aliases from: a git dir or one of `places` (see aliasPlaces;
+     * null when unknown). `target` is the path written, as named or as its links lead. Bare repositories need no
+     * check: the shell's git refuses one it finds by itself.
      */
     const configTouchedAt = (
       write: (typeof configWrites)[number],
       target: string,
-      { cwd, places }: { cwd: string; places: readonly string[] }
+      { places }: { places: readonly string[] }
     ): boolean => {
       const form = guardForm(target);
-      const folder = guardForm(cwd);
-      // git writes only work-tree files: a config file read by name there, or a bare repository's below the top.
+      // A git writer rewrites work-tree files, which may include a file a place names.
       if (gitCommands.has(write.id)) {
-        return (
-          (guardFormWithin(form, folder) && !(write.top && form === folder)) ||
-          places.some(place => guardFormWithin(form, place) || guardFormWithin(place, form))
-        );
+        return places.some(place => guardFormWithin(form, place) || guardFormWithin(place, form));
       }
       if (/(^|\/)[^/]*\.git(\/|$)/.test(form)) return true;
       const name = posix.basename(form);
-      if (name === '.gitconfig' || name === 'gitconfig' || name === 'commondir') return true;
-      if (write.tree) return guardFormWithin(form, folder) || places.some(place => guardFormWithin(form, place));
-      return (
-        places.some(place => guardFormWithin(place, form)) ||
-        (BARE_REPOSITORY_FILES.test(name) && guardFormWithin(posix.dirname(form), folder))
-      );
+      if (name === '.gitconfig' || name === 'gitconfig') return true;
+      if (write.tree) return places.some(place => guardFormWithin(form, place));
+      return places.some(place => guardFormWithin(place, form));
     };
 
     const physicalForms = new Map<string, Promise<string | null>>();
@@ -5868,10 +5945,10 @@ export async function scanShell(
     /** Whether `write` may change that config, by the path it names or the one its links lead to. */
     const aliasConfigTouched = async (
       write: (typeof configWrites)[number],
-      check: { cwd: string; places: readonly string[] | null }
+      check: { cwd: string; places: readonly string[] | null; legacy: boolean }
     ): Promise<boolean> => {
       const { cwd, places } = check;
-      if (places === null || wslLocation(cwd) !== null) return true;
+      if (places === null || check.legacy || wslLocation(cwd) !== null) return true;
       if (write.path === undefined) {
         return !write.unlisted || places.some(place => granted.some(root => guardFormWithin(root, place)));
       }
@@ -5880,11 +5957,42 @@ export async function scanShell(
       const path = write.path;
       let physical = physicalForms.get(path);
       if (!physical) {
-        physical = physicalTarget(path).catch(() => null);
+        physical = physicalTarget(path).catch(() => path);
         physicalForms.set(path, physical);
       }
-      const followed = await physical;
-      return followed === null || (followed !== path && configTouchedAt(write, followed, known));
+      const followed = (await physical) ?? path;
+      if (followed !== path && configTouchedAt(write, followed, known)) return true;
+      // git replaces a work-tree file rather than writing through a link.
+      return !gitCommands.has(write.id) && (await sharesConfigFile(path, check));
+    };
+
+    const configFileIds = new Map<string, Promise<Set<string>>>();
+
+    /** Whether the file at `path` is a hard link to a config file git reads in `cwd` (the repository's, or a place's). */
+    const sharesConfigFile = async (
+      path: string,
+      { cwd, places }: { cwd: string; places: readonly string[] | null }
+    ): Promise<boolean> => {
+      const info = await stat(path).catch(() => null);
+      if (!info?.isFile() || info.nlink < 2) return false;
+      let ids = configFileIds.get(cwd);
+      if (ids === undefined) {
+        ids = (async () => {
+          const top = await findRepositoryRoot(cwd);
+          const files = [
+            ...(top === null ? [] : ['config', 'config.worktree'].map(name => join(top, '.git', name))),
+            ...(places ?? []).flatMap(place => [place, join(place, 'config')]),
+          ];
+          const found = new Set<string>();
+          for (const file of files) {
+            const config = await stat(file).catch(() => null);
+            if (config?.isFile()) found.add(`${config.dev}:${config.ino}`);
+          }
+          return found;
+        })();
+        configFileIds.set(cwd, ids);
+      }
+      return (await ids).has(`${info.dev}:${info.ino}`);
     };
 
     /**
@@ -6271,12 +6379,19 @@ export async function scanShell(
         const known = await gitCommandKind(git.cwd, git.sub);
         if (known === null) return null;
         if (known === 'own') return tokens;
+        const pathEntries = scriptPathEntries();
         if (
           !checked &&
-          (gitAliasMoved(tokens.slice(start + 1)) || state.lost || aliasEnvironment || unreadOperands > 0)
+          (gitAliasMoved(tokens.slice(start + 1)) ||
+            state.lost ||
+            aliasEnvironment ||
+            pathEntries === null ||
+            dropsGitConfig(tokens) ||
+            unreadOperands > 0)
         ) {
           return null;
         }
+        if (known === 'none' && pathEntries !== null && (await pathHolds(pathEntries, `git-${git.sub}`))) return null;
         let lists = gitAliasLists.get(git.cwd);
         if (lists === undefined) gitAliasLists.set(git.cwd, (lists = gitAliases(git.cwd)));
         const config = await lists;
@@ -6288,6 +6403,7 @@ export async function scanShell(
             alongside: alongsideOf(node),
             cwd: git.cwd,
             places: await aliasPlaces(config.includes),
+            legacy: !(await gitRefusesImplicitBare(git.cwd)),
           };
           for (const write of configWrites) {
             if (write.id !== node.id && (await aliasConfigTouched(write, check))) return null;
@@ -6403,8 +6519,19 @@ export async function scanShell(
         const git = gitSubcommand(wrappedRest.map(unquote), state.cwd);
         if (git !== null && (git.unread || writesGitConfig(git.sub, git.rest))) configWrites.push({ id: node.id });
         else if (git !== null && GIT_TREE_WRITERS.has(git.sub)) {
-          const top = await findRepositoryRoot(git.cwd);
-          configWrites.push({ id: node.id, path: top ?? git.cwd, tree: true, top: top !== null });
+          configWrites.push({ id: node.id, path: (await findRepositoryRoot(git.cwd)) ?? git.cwd, tree: true });
+        }
+      } else if (!CHANGES_DIRECTORY.has(program) && linksFiles(inner, wrappedRest.map(wordValue))) {
+        // A hard link writes whatever its source is: the same file, under another name.
+        for (const word of wrappedRest) {
+          if (wordValue(word).startsWith('-')) continue;
+          if (isDynamic(word) || (state.lost && !isAbsolutePath(expand(unquote(word))))) {
+            configWrites.push({ id: node.id });
+            continue;
+          }
+          for (const target of operandTargets(state.cwd, expand(unquote(word)))) {
+            configWrites.push({ id: node.id, path: target });
+          }
         }
       } else if (
         !CHANGES_DIRECTORY.has(program) &&
@@ -6412,17 +6539,16 @@ export async function scanShell(
         !configWrites.some(write => write.id === node.id) &&
         /^(mkdir|touch|truncate)$/.test(inner)
       ) {
-        // What they name is all they change: a file or folder of a bare repository, or a config file emptied.
-        const skip = inner === 'truncate' ? TRUNCATE_VALUED : null;
+        // What they name is all they change: a config file emptied, or a file or folder a place lies in.
         for (const [index, word] of wrappedRest.entries()) {
           if (
             wordValue(word).startsWith('-') ||
-            (skip !== null && skip.test(wordValue(wrappedRest[index - 1] ?? '')))
+            (inner === 'truncate' && TRUNCATE_VALUED.test(wordValue(wrappedRest[index - 1] ?? ''))) ||
+            (inner === 'touch' && TOUCH_VALUED.test(wordValue(wrappedRest[index - 1] ?? '')))
           ) {
             continue;
           }
-          const dynamic = isDynamic(word) || (state.lost && !isAbsolutePath(expand(unquote(word))));
-          if (dynamic) {
+          if (isDynamic(word) || (state.lost && !isAbsolutePath(expand(unquote(word))))) {
             if (inner === 'truncate') configWrites.push({ id: node.id });
             continue;
           }

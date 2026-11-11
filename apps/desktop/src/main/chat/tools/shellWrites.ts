@@ -8,7 +8,7 @@ import type { Node } from 'web-tree-sitter';
 import { gitArgumentPath, gitCommand, gitCommandEnv, hostGitArgs, quickGitTimeout } from '../../git/hostGitArgs';
 import { wslLocation, wslUncPath } from '../../wsl/wslPath';
 import { isWithin, resolveOperand } from './paths';
-import { findOnPath, WINDOWS_ROOTED } from './userPath';
+import { findOnPath, resolveUserPath, WINDOWS_ROOTED } from './userPath';
 import { own } from '@shared/ownKeys';
 
 /**
@@ -734,6 +734,8 @@ async function gitLaunch(directory: string, args: readonly string[]): Promise<Gi
         '--no-optional-locks',
         '-c',
         `core.attributesFile=${nullDevice}`,
+        '-c',
+        'safe.bareRepository=explicit',
         '-C',
         gitArgumentPath(directory, directory),
         ...args,
@@ -783,21 +785,33 @@ const commandListings = new Map<string, Promise<GitResult | null>>();
  * listing, and null when it could not tell.
  */
 async function gitCommandListing(directory: string, categories: string): Promise<ReadonlySet<string> | null> {
+  const result = await cachedGit(directory, categories, [`--list-cmds=${categories}`]);
+  if (result === null) return null;
+  // git exits 128 on a category it does not know.
+  return new Set(result.code === 0 ? result.stdout.split(/\r?\n/).filter(Boolean) : []);
+}
+
+/** A git query answered once per PATH, granted roots and WSL distro, under `label`. */
+function cachedGit(directory: string, label: string, args: readonly string[]): Promise<GitResult | null> {
   const roots = scanRoots.getStore()?.roots ?? [];
-  const key = JSON.stringify([process.env.PATH ?? '', roots, wslLocation(directory)?.distro ?? '', categories]);
+  const key = JSON.stringify([process.env.PATH ?? '', roots, wslLocation(directory)?.distro ?? '', label]);
   let listed = commandListings.get(key);
   if (listed === undefined) {
-    listed = gitLaunch(directory, [`--list-cmds=${categories}`]).then(launch => launch && gitExec(launch));
+    listed = gitLaunch(directory, args).then(launch => launch && gitExec(launch));
     commandListings.set(key, listed);
-    // A failed or timed-out listing is asked again next time.
+    // A failed or timed-out query is asked again next time.
     void listed.then(result => {
       if (result?.code !== 0 && commandListings.get(key) === listed) commandListings.delete(key);
     });
   }
-  const result = await listed;
-  if (result === null) return null;
-  // git exits 128 on a category it does not know.
-  return new Set(result.code === 0 ? result.stdout.split(/\r?\n/).filter(Boolean) : []);
+  return listed;
+}
+
+/** Whether the git the shell runs honors `safe.bareRepository` (2.38 and later); false when it could not tell. */
+export async function gitRefusesImplicitBare(directory: string): Promise<boolean> {
+  const result = await cachedGit(directory, 'version', ['--version']);
+  const match = /(\d+)\.(\d+)/.exec(result?.code === 0 ? result.stdout : '');
+  return match !== null && (Number(match[1]) > 2 || (Number(match[1]) === 2 && Number(match[2]) >= 38));
 }
 
 /**
@@ -819,18 +833,25 @@ export async function gitCommandKind(directory: string, name: string): Promise<'
   return (await projectPathProgram(directory, `git-${name}`)) ? null : 'none';
 }
 
-/** Whether `program` is in a PATH entry the scan's git does not search: a relative or empty one, or one in a granted root. */
+/** Whether `program` is in a PATH entry of the shell (see resolveUserPath) the scan's git does not search: a relative or empty one, or one in a granted root. */
 async function projectPathProgram(directory: string, program: string): Promise<boolean> {
   if (wslLocation(directory) !== null) return false;
   const windows = process.platform === 'win32';
   const separator = windows ? ';' : ':';
   const outside = new Set((await outsidePath(scanRoots.getStore()?.roots ?? [])).split(separator));
-  const inside = (process.env.PATH ?? '')
+  const inside = (await resolveUserPath())
     .split(separator)
     .map(raw => raw.trim().replace(/^"(.*)"$/, '$1'))
     .filter(entry => !outside.has(entry))
     .map(entry => ((windows ? WINDOWS_ROOTED.test(entry) : isAbsolute(entry)) ? entry : resolve(directory, entry)));
   return inside.length > 0 && (await findOnPath(program, inside.join(separator))) !== null;
+}
+
+/** Whether `program` is in one of `entries`, folders a script put on PATH, as host paths. */
+export async function pathHolds(entries: readonly string[], program: string): Promise<boolean> {
+  return (
+    entries.length > 0 && (await findOnPath(program, entries.join(process.platform === 'win32' ? ';' : ':'))) !== null
+  );
 }
 
 /** The aliases git reads in a folder, by lowercased name, and whether help.autocorrect may run a command it guesses. */
