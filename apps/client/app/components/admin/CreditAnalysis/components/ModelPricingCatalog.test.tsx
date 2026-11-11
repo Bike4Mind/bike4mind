@@ -515,12 +515,12 @@ describe('ModelPricingCatalog', () => {
     renderCatalog();
     await screen.findByTestId('model-pricing-row-gpt-x-per_token');
 
-    fireEvent.change(screen.getByTestId('model-pricing-filter-input'), { target: { value: 'gpt-y' } });
+    fireEvent.change(screen.getByTestId('admin-filter-search-input'), { target: { value: 'gpt-y' } });
 
     expect(screen.getByTestId('model-pricing-row-gpt-y-per_token')).toBeInTheDocument();
     expect(screen.queryByTestId('model-pricing-row-gpt-x-per_token')).not.toBeInTheDocument();
 
-    fireEvent.change(screen.getByTestId('model-pricing-filter-input'), { target: { value: 'nothing-like-this' } });
+    fireEvent.change(screen.getByTestId('admin-filter-search-input'), { target: { value: 'nothing-like-this' } });
     expect(screen.getByTestId('model-pricing-filter-empty')).toBeInTheDocument();
   });
 
@@ -528,7 +528,7 @@ describe('ModelPricingCatalog', () => {
     useCreditAnalysisStore.setState({ pricingModelId: 'gpt-y' });
     renderCatalog();
 
-    await waitFor(() => expect(screen.getByTestId('model-pricing-filter-input')).toHaveValue('gpt-y'));
+    await waitFor(() => expect(screen.getByTestId('admin-filter-search-input')).toHaveValue('gpt-y'));
     expect(screen.queryByTestId('model-pricing-row-gpt-x-per_token')).not.toBeInTheDocument();
     expect(useCreditAnalysisStore.getState().pricingModelId).toBeNull();
   });
