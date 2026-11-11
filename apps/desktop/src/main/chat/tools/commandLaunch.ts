@@ -59,13 +59,39 @@ export async function launchCommand(
 /** A detached Windows child has no console, and wsl.exe without one exits -1 or drops the output; a WSL command is found by its tag instead. */
 export const spawnsDetached = (launch: Pick<SandboxedCommand, 'wslDistro'>): boolean => !launch.wslDistro;
 
+/**
+ * `env` with git's `safe.bareRepository=explicit` appended to any GIT_CONFIG_COUNT entries, and the names it
+ * set. Command-line scope is protected config: no repository's config can override it, so git refuses a bare
+ * repository it would find by walking up from the working directory.
+ */
+export function withExplicitBareRepositories(env: NodeJS.ProcessEnv): { env: NodeJS.ProcessEnv; names: string[] } {
+  const count = Number.parseInt(env.GIT_CONFIG_COUNT ?? '', 10);
+  const next = Number.isInteger(count) && count > 0 ? count : 0;
+  const names = ['GIT_CONFIG_COUNT', `GIT_CONFIG_KEY_${next}`, `GIT_CONFIG_VALUE_${next}`];
+  return {
+    env: {
+      ...env,
+      [names[0] as string]: String(next + 1),
+      [names[1] as string]: 'safe.bareRepository',
+      [names[2] as string]: 'explicit',
+    },
+    names,
+  };
+}
+
 /** The user's own environment, with the PATH a terminal would have rather than Finder's. */
 export async function commandEnv(launch: SandboxedCommand, extra: NodeJS.ProcessEnv = {}): Promise<NodeJS.ProcessEnv> {
   if (launch.wslDistro) {
-    const crossing = { ...process.env, ...extra, [COMMAND_TAG_ENV]: launch.processTag };
-    return wslCommandEnv(crossing, launch.wslDistro, [...Object.keys(extra), COMMAND_TAG_ENV]);
+    const crossing: NodeJS.ProcessEnv = { ...process.env, ...extra, [COMMAND_TAG_ENV]: launch.processTag };
+    // Only what WSLENV names reaches Linux, so a Windows-side count that does not cross is not counted on.
+    const counted = /(^|:)GIT_CONFIG_COUNT(\/|:|$)/.test(crossing.WSLENV ?? '')
+      ? crossing
+      : { ...crossing, GIT_CONFIG_COUNT: undefined };
+    const bare = withExplicitBareRepositories(counted);
+    return wslCommandEnv(bare.env, launch.wslDistro, [...Object.keys(extra), COMMAND_TAG_ENV, ...bare.names]);
   }
-  const env: NodeJS.ProcessEnv = { ...process.env, PATH: await resolveUserPath(), ...extra, ...launch.env };
+  const base: NodeJS.ProcessEnv = { ...process.env, PATH: await resolveUserPath(), ...extra, ...launch.env };
+  const env = withExplicitBareRepositories(base).env;
   if (SANDBOX_SHELL_COMMANDS) env.B4M_DESKTOP_SANDBOX = '1';
   if (launch.processTag) env[COMMAND_TAG_ENV] = launch.processTag;
   return env;

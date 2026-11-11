@@ -2,7 +2,13 @@ import { spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { COMMAND_ENV, WINDOWS_COMMAND_ARGS, commandEnv, launchCommand } from './commandLaunch';
+import {
+  COMMAND_ENV,
+  WINDOWS_COMMAND_ARGS,
+  commandEnv,
+  launchCommand,
+  withExplicitBareRepositories,
+} from './commandLaunch';
 import { COMMAND_TAG_ENV } from './commandTree';
 
 vi.mock('./gitBash', async importOriginal => ({
@@ -104,6 +110,53 @@ describe('launchCommand in a WSL folder', () => {
     expect(env.B4M_DESKTOP_LINUX_PATH).toBe('/home/me/.nvm/bin:/usr/bin');
     expect(env.WSL_UTF8).toBe('1');
   });
+
+  it('hands the Linux shell safe.bareRepository=explicit, appended after a count that crosses', async () => {
+    onWindows();
+    const launch = await launchCommand('git st', [], [], '\\\\wsl.localhost\\Ubuntu\\home\\me\\repo');
+    const plain = await commandEnv(launch);
+    expect(plain).toMatchObject({
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'safe.bareRepository',
+      GIT_CONFIG_VALUE_0: 'explicit',
+    });
+    expect(plain.WSLENV?.split(':')).toEqual(
+      expect.arrayContaining(['GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0'])
+    );
+
+    vi.stubEnv('GIT_CONFIG_COUNT', '3');
+    vi.stubEnv('WSLENV', 'GIT_CONFIG_COUNT:GIT_CONFIG_KEY_0/u');
+    try {
+      const crossing = await commandEnv(launch);
+      expect(crossing).toMatchObject({ GIT_CONFIG_COUNT: '4', GIT_CONFIG_KEY_3: 'safe.bareRepository' });
+      expect(crossing.WSLENV?.split(':')).toContain('GIT_CONFIG_VALUE_3');
+      vi.stubEnv('WSLENV', '');
+      expect(await commandEnv(launch)).toMatchObject({
+        GIT_CONFIG_COUNT: '1',
+        GIT_CONFIG_KEY_0: 'safe.bareRepository',
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+describe('withExplicitBareRepositories', () => {
+  it.each([
+    [{}, '1', 0],
+    [{ GIT_CONFIG_COUNT: '0' }, '1', 0],
+    [{ GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'a.b', GIT_CONFIG_VALUE_0: 'c' }, '3', 2],
+    [{ GIT_CONFIG_COUNT: 'x' }, '1', 0],
+  ])('appends to %j as entry %#', (env, count, at) => {
+    const { env: out, names } = withExplicitBareRepositories(env);
+    expect(out).toMatchObject({
+      GIT_CONFIG_COUNT: count,
+      [`GIT_CONFIG_KEY_${at}`]: 'safe.bareRepository',
+      [`GIT_CONFIG_VALUE_${at}`]: 'explicit',
+    });
+    expect(names).toEqual(['GIT_CONFIG_COUNT', `GIT_CONFIG_KEY_${at}`, `GIT_CONFIG_VALUE_${at}`]);
+    expect(out).toMatchObject({ ...env, GIT_CONFIG_COUNT: count });
+  });
 });
 
 describe('launchCommand on POSIX', () => {
@@ -113,4 +166,15 @@ describe('launchCommand on POSIX', () => {
     expect(launch.processTag).toBeUndefined();
     expect((await commandEnv(launch))[COMMAND_TAG_ENV]).toBeUndefined();
   });
+
+  it.skipIf(process.platform === 'win32')(
+    'gives the shell safe.bareRepository=explicit through the environment',
+    async () => {
+      const launch = await launchCommand('git st', [], [], '/tmp');
+      expect(await commandEnv(launch)).toMatchObject({
+        GIT_CONFIG_KEY_0: 'safe.bareRepository',
+        GIT_CONFIG_VALUE_0: 'explicit',
+      });
+    }
+  );
 });
