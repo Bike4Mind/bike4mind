@@ -25,6 +25,8 @@ import { NOTEBOOK_DOWNLOAD_KEY_PREFIX } from '../notebooks/downloadCopyKeys';
 import { Resource } from 'sst';
 import { z } from 'zod';
 
+const hasPrefixTag = (file: IFabFileDocument) => (file.tags ?? []).some(tag => tag?.name?.includes(':'));
+
 type PurgeOptions = { logger: Pick<Logger, 'info' | 'warn' | 'error'>; assertLease: () => Promise<void> };
 const BATCH_SIZE = 50;
 
@@ -33,24 +35,79 @@ const BATCH_SIZE = 50;
  * the data subject export treats as a personal file (`server/dataSubject/subjectRecordExport.ts`).
  */
 export async function isOrganizationFile(file: IFabFileDocument, userId: string): Promise<boolean> {
-  const lakes = file.organizationId
-    ? []
-    : await dataLakeService.findMemberLakesForFile(file, {
-        find: async filter =>
-          (await DataLakeModel.find(filter).setOptions({ includeDeleted: true })).map(lake => lake.toObject()),
-        findByDatalakeTag: async datalakeTag => {
-          const lake = await DataLakeModel.findOne({ datalakeTag }).setOptions({ includeDeleted: true });
-          return lake?.toObject() ?? null;
-        },
-      });
-  const organizationId = file.organizationId || fabFilesService.pickOwnerOrganizationId(lakes, file.sourceLakeId);
-  if (!organizationId) return false;
+  return (await findOrganizationFileIds([file], userId)).has(file.id);
+}
+
+type LakeLookup = Parameters<typeof dataLakeService.findMemberLakesForFile>[1];
+type MemberLake = Awaited<ReturnType<typeof dataLakeService.findMemberLakesForFile>>[number];
+
+const findLakes = async (filter: Parameters<LakeLookup['find']>[0]): Promise<MemberLake[]> =>
+  (await DataLakeModel.find(filter).setOptions({ includeDeleted: true })).map(lake => lake.toObject());
+
+/**
+ * The ids of the files an organization keeps (`isOrganizationFile`), with the lakes and personal
+ * workspaces the whole batch needs read up front instead of up to three queries per file.
+ */
+export async function findOrganizationFileIds(
+  files: readonly IFabFileDocument[],
+  userId: string
+): Promise<Set<string>> {
+  const unowned = files.filter(file => !file.organizationId);
+  const rawTags = unowned.flatMap(file => (file.tags ?? []).flatMap(tag => (tag?.name ? [tag.name] : [])));
+  // Meta tags are looked up lowercased (`findMemberLakesForFile`), so both forms are prefetched.
+  const tagNames = [...new Set(rawTags.flatMap(name => [name, name.toLowerCase()]))];
+  const uploaders = [...new Set(unowned.filter(hasPrefixTag).map(file => file.userId))];
+  const [tagged, owned] = await Promise.all([
+    tagNames.length > 0 ? findLakes({ datalakeTag: { $in: tagNames } }) : [],
+    uploaders.length > 0 ? findLakes({ createdByUserId: { $in: uploaders } }) : [],
+  ]);
+  const byTag = new Map<string, MemberLake>();
+  for (const lake of tagged) if (lake.datalakeTag && !byTag.has(lake.datalakeTag)) byTag.set(lake.datalakeTag, lake);
+  const byCreator = new Map<string, MemberLake[]>();
+  for (const lake of owned) {
+    const creator = String(lake.createdByUserId);
+    byCreator.set(creator, [...(byCreator.get(creator) ?? []), lake]);
+  }
+  const prefetchedTags = new Set(tagNames);
+  // Anything the prefetch did not cover is read as before, so a change to the member-lake rule
+  // costs queries rather than misclassifying a file.
+  const prefetched: LakeLookup = {
+    find: async filter => {
+      const { createdByUserId, ...rest } = filter as { createdByUserId?: unknown };
+      if (typeof createdByUserId !== 'string' || Object.keys(rest).length > 0 || !uploaders.includes(createdByUserId)) {
+        return findLakes(filter);
+      }
+      return byCreator.get(createdByUserId) ?? [];
+    },
+    findByDatalakeTag: async datalakeTag => {
+      if (prefetchedTags.has(datalakeTag)) return byTag.get(datalakeTag) ?? null;
+      const lake = await DataLakeModel.findOne({ datalakeTag }).setOptions({ includeDeleted: true });
+      return lake?.toObject() ?? null;
+    },
+  };
+
+  const owners = new Map<string, string>();
+  for (const file of files) {
+    const organizationId =
+      file.organizationId ||
+      fabFilesService.pickOwnerOrganizationId(
+        await dataLakeService.findMemberLakesForFile(file, prefetched),
+        file.sourceLakeId
+      );
+    if (organizationId) owners.set(file.id, organizationId);
+  }
+  // An id that is not an ObjectId names no workspace, so it can only be an organization's.
+  const workspaceIds = [...new Set(owners.values())].filter(id => mongoose.isObjectIdOrHexString(id));
   // A personal workspace is owned by this account and is removed by the purge's final
   // transaction. Its files must go too; genuine organizations retain their own content.
-  const personalWorkspace = await Organization.exists({ _id: organizationId, userId, personal: true }).setOptions({
-    includeDeleted: true,
-  });
-  return !personalWorkspace;
+  const personalWorkspaces =
+    workspaceIds.length === 0
+      ? []
+      : await Organization.find({ _id: { $in: workspaceIds }, userId, personal: true })
+          .setOptions({ includeDeleted: true })
+          .select('_id');
+  const personal = new Set(personalWorkspaces.map(workspace => String(workspace._id)));
+  return new Set([...owners].filter(([, organizationId]) => !personal.has(organizationId)).map(([id]) => id));
 }
 
 async function purgeFile(
