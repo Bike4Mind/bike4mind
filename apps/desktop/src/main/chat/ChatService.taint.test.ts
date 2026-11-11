@@ -672,6 +672,32 @@ describe('ChatService untrusted content in a reply', () => {
       await settled('web_fetch');
     });
   });
+  it('keeps a mixed-coverage card open when a parallel search taints its fresh recheck', async () => {
+    const id = await session('auto');
+    let finishSearch: (() => void) | undefined;
+    waitForWeb = new Promise<void>(resolve => {
+      finishSearch = resolve;
+    });
+    await service.send(id, 'go');
+    await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
+    streams[0].write(
+      parallelTurn([
+        ['shell', 'bash_execute', { command: 'git status && node -e 1', cwd: root }],
+        ['search', 'web_search', { query: 'pricing' }],
+      ])
+    );
+    streams[0].write(frame('[DONE]'));
+    const card = await awaitCall('bash_execute', 'awaiting-approval');
+    expect(card.approvalParts?.map(part => part.text)).toEqual(['node -e 1']);
+    finishSearch!();
+    await awaitCall('web_search', 'done');
+    rules = allowRules(['Bash(node -e 1)']);
+    await approvals.settleCovered(id);
+    expect(calls('bash_execute', 'running')).toHaveLength(0);
+    approvals.resolve(card.approvalId!, { decision: 'deny' });
+    await awaitCall('bash_execute', 'denied');
+  });
+
   it('keeps a waiting outbound sibling gated when a parallel search taints the reply', async () => {
     const id = await session('auto');
     let finishSearch: (() => void) | undefined;

@@ -1,10 +1,11 @@
-import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { compileRule, parseRule, PermissionRuleSet, type CompiledRule } from '../permissions/rules';
 import { permissionSubject } from '../permissions/subject';
 import { shellApproval } from './shellTools';
+import * as sessionScripts from './sessionScripts';
 import type { ApprovalPrompt, ToolContext } from './types';
 
 vi.mock('./userPath', async importOriginal => ({
@@ -42,7 +43,9 @@ describe('shellApproval per part', () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+    vi.restoreAllMocks();
   });
+  afterAll(() => rm(project, { recursive: true, force: true }));
 
   const approve = (command: string, extra: Partial<ToolContext> = {}): Promise<ApprovalPrompt> =>
     shellApproval('bash_execute', { command }, { ...context, ...extra });
@@ -142,6 +145,27 @@ describe('shellApproval per part', () => {
 
     it('a git setting that makes git run a program', async () => {
       whole(await approve('git config core.fsmonitor ./x && git status'));
+    });
+
+    it('a script written during this session', async () => {
+      vi.spyOn(sessionScripts, 'sessionScriptRun').mockResolvedValueOnce({
+        names: ['generated.js'],
+        hooks: [],
+        untracked: false,
+        generation: '1',
+      });
+      whole(await approve('git status && node generated.js', { sessionId: 'written-script' }));
+    });
+
+    it('a failed check for session-written scripts', async () => {
+      vi.spyOn(sessionScripts, 'sessionScriptRun').mockRejectedValueOnce(new Error('cannot inspect scripts'));
+      whole(await approve('git status && printf ok'));
+    });
+
+    it('a WSL command whose distribution is not shared', async () => {
+      const prompt = await approve('git status && wsl.exe -e cat notes.txt');
+      whole(prompt);
+      expect(prompt.always?.ungranted?.length).toBeGreaterThan(0);
     });
 
     it('a clone from another computer', async () => {

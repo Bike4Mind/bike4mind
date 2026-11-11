@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, realpath } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -37,6 +37,10 @@ describe('ChatService approvals decided per part', () => {
   let main: string;
   let worktree: string;
   let other: string;
+  let outside: string;
+  let sessionsDirectory: string;
+  const runningReplies = new Set<string>();
+  const sessionIds: string[] = [];
 
   const calls = (name: string, status: ChatToolCall['status']): ChatToolCall[] =>
     events
@@ -54,12 +58,20 @@ describe('ChatService approvals decided per part', () => {
     });
 
   beforeEach(async () => {
+    sessionIds.length = 0;
+    runningReplies.clear();
     root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-parts-')));
     main = join(root, 'repo');
     worktree = join(root, 'repo-wt');
     other = join(root, 'other');
     await mkdir(main);
     await mkdir(other);
+    outside = await realpath(await mkdtemp(join(tmpdir(), 'b4m-parts-outside-')));
+    const sharedTemporaryDirectory = join(root, 'shared-temp');
+    await mkdir(sharedTemporaryDirectory);
+    vi.stubEnv('TMPDIR', sharedTemporaryDirectory);
+    vi.stubEnv('TMP', sharedTemporaryDirectory);
+    vi.stubEnv('TEMP', sharedTemporaryDirectory);
     git(main, 'init', '-q');
     git(main, 'commit', '-q', '--allow-empty', '-m', 'x');
     git(main, 'worktree', 'add', '-q', worktree);
@@ -91,7 +103,8 @@ describe('ChatService approvals decided per part', () => {
       testStreams.push(stream);
       return Promise.resolve({ data: stream, status: 200 });
     });
-    store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-parts-sessions-')), 'test-model');
+    sessionsDirectory = await mkdtemp(join(tmpdir(), 'b4m-parts-sessions-'));
+    store = new SessionStore(sessionsDirectory, 'test-model');
     service = new ChatService({
       store,
       access: { list: async () => [root] } as unknown as AccessStore,
@@ -105,13 +118,21 @@ describe('ChatService approvals decided per part', () => {
           getAxiosInstance: () => ({ post }),
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
-      emit: event => testEvents.push(event),
+      emit: event => {
+        testEvents.push(event);
+        if (event.type === 'done') runningReplies.delete(event.sessionId);
+      },
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     service.dispose();
     for (const stream of streams) stream.end();
+    await vi.waitUntil(() => runningReplies.size === 0, { timeout: 5000, interval: 10 });
+    for (const id of sessionIds) await store.delete(id);
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
@@ -133,6 +154,7 @@ describe('ChatService approvals decided per part', () => {
       ...(directory ? { project: project(directory) } : {}),
       ...(parentSessionId ? { origin: { parentSessionId, depth: 1, seedPrompt: 'work' } } : {}),
     });
+    sessionIds.push(created.id);
     await service.setApprovalMode(created.id, mode);
     return created.id;
   }
@@ -140,6 +162,7 @@ describe('ChatService approvals decided per part', () => {
   /** Starts a reply whose single round runs `command`; returns its first stream's index. */
   async function runCommand(sessionId: string, command: string, cwd = root): Promise<number> {
     const before = streams.length;
+    runningReplies.add(sessionId);
     await service.send(sessionId, 'go');
     await vi.waitUntil(() => streams.length === before + 1, { timeout: 5000, interval: 5 });
     streams[before].write(
@@ -209,7 +232,7 @@ describe('ChatService approvals decided per part', () => {
   it('still asks about a folder outside the shared ones when every part is covered', async () => {
     const id = await session('auto');
     // Not the temp folder, which the scan counts as shared.
-    await runCommand(id, 'git status && ls /usr/share');
+    await runCommand(id, `git status && ls "${outside}"`);
 
     const card = await awaitCall('bash_execute', 'awaiting-approval');
     expect(card.approvalAlways).toContain('*');
@@ -217,9 +240,9 @@ describe('ChatService approvals decided per part', () => {
   });
 
   it('does not let a Read rule clear a folder outside the shared ones for a part only the mode covers', async () => {
-    await permissions.setRules({ kind: 'user' }, { allow: ['Read(//usr/share/**)'], ask: [], deny: [] });
+    await permissions.setRules({ kind: 'user' }, { allow: [`Read(/${outside}/**)`], ask: [], deny: [] });
     const id = await session('auto');
-    await runCommand(id, 'git status && ls /usr/share');
+    await runCommand(id, `git status && ls "${outside}"`);
     await awaitCall('bash_execute', 'awaiting-approval');
   });
 
@@ -292,15 +315,12 @@ describe('ChatService approvals decided per part', () => {
   });
 
   it('closes a narrowed card when a rule saved meanwhile covers its remaining parts', async () => {
-    const id = await session('ask');
-    const first = await runCommand(id, 'git status && printf ok');
+    const id = await session('auto');
+    const first = await runCommand(id, 'git status && node -e 1');
     const card = await awaitCall('bash_execute', 'awaiting-approval');
-    expect(card.approvalParts?.map(part => part.text)).toEqual(['git status', 'printf ok']);
+    expect(card.approvalParts?.map(part => part.text)).toEqual(['node -e 1']);
 
-    await permissions.setRules(
-      { kind: 'user' },
-      { allow: ['Bash(git status:*)', 'Bash(printf:*)'], ask: [], deny: [] }
-    );
+    await permissions.setRules({ kind: 'user' }, { allow: ['Bash(node -e 1)'], ask: [], deny: [] });
     await approvals.settleCovered();
     expect((await settled()).approval?.decidedBy).toMatchObject({ kind: 'rule' });
     await finishReply(first);

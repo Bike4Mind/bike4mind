@@ -6981,7 +6981,7 @@ export class ChatService {
 
     // Whether "always" actually reached every session; a failed save leaves it this chat's only.
     let savedEverywhere = false;
-    let savedForProject: boolean | undefined = false;
+    let savedForProject = false;
     // The rules saved are the ones main derived and showed; the renderer only says yes to them.
     if (answer.decision === 'always' && answer.everywhere && everywhere.length > 0) {
       const saved = await this.deps.permissions?.rememberAllows(everywhere).then(
@@ -6998,7 +6998,7 @@ export class ChatService {
       savedEverywhere = saved === true;
       await gate.settleCovered(saved ? undefined : sessionId);
     } else if (answer.decision === 'always' && answer.project && projectRoot && forProject.length > 0) {
-      savedForProject = await this.deps.permissions?.rememberProjectAllows?.(projectRoot, forProject).then(
+      const saved = await this.deps.permissions?.rememberProjectAllows?.(projectRoot, forProject).then(
         () => true,
         error => {
           this.deps.logger.warn(`PERMISSIONS: could not save ${forProject.join(', ')}: ${String(error)}`);
@@ -7009,6 +7009,7 @@ export class ChatService {
           return false;
         }
       );
+      savedForProject = saved === true;
       await gate.settleCovered(savedForProject ? undefined : sessionId);
     } else if (answer.decision === 'always') {
       await gate.settleCovered(sessionId);

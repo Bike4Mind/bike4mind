@@ -320,8 +320,9 @@ export class ApprovalGate {
           answer.decision === 'always' &&
           (!options.rememberable || (!!answer.optionId && options.rememberable.includes(answer.optionId)));
         if (keep) {
-          if (!options.partial)
+          if (!options.partial) {
             this.remember(sessionId, standingKey(key, answer.optionId), answer, options.tainted === true);
+          }
           if (options.always) this.rememberShell(sessionId, key, options.always, options.tainted === true);
         }
         if (announced) this.listener?.settled(sessionId);

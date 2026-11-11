@@ -526,17 +526,10 @@ export class PermissionRuleSet {
     if (rules.length === 0) return null;
     if (this.unresolvedProtected().length > 0) return null;
     if (subject.shell) {
-      const { commands, directories } = subject.shell;
-      if (commands.length === 0 || subject.shell.ungranted?.length) return null;
-      if (floorRefuses(subject.shell, this.guardRoots)) return null;
-      if (!directories.every(directory => this.coversFolder(directory))) return null;
-      let first: CompiledRule | null = null;
-      for (const command of commands) {
-        const rule = rules.find(each => this.coversCommand(each, command));
-        if (!rule) return null;
-        first ??= rule;
-      }
-      return first;
+      const parts = this.shellParts(subject);
+      if (!parts?.length || parts.some(rule => rule === null)) return null;
+      if (!subject.shell.directories.every(directory => this.coversFolder(directory))) return null;
+      return parts[0];
     }
     if (subject.paths) {
       const { paths } = subject;

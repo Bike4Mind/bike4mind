@@ -623,8 +623,12 @@ describe('a worktree session reading its main checkout', () => {
   let context: ToolContext;
 
   beforeEach(async () => {
-    // Not under tmpdir(): the scan treats temp folders as granted, which would hide the outside check.
-    base = await realpath(await mkdtemp(join(process.cwd(), '.b4m-worktree-')));
+    base = await realpath(await mkdtemp(join(tmpdir(), 'b4m-worktree-')));
+    const sharedTemporaryDirectory = join(base, 'shared-temp');
+    await mkdir(sharedTemporaryDirectory);
+    vi.stubEnv('TMPDIR', sharedTemporaryDirectory);
+    vi.stubEnv('TMP', sharedTemporaryDirectory);
+    vi.stubEnv('TEMP', sharedTemporaryDirectory);
     main = join(base, 'main');
     worktree = join(base, 'main', '.b4m', 'worktrees', 'feature');
     await mkdir(main);
@@ -641,6 +645,7 @@ describe('a worktree session reading its main checkout', () => {
   });
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     await rm(base, { recursive: true, force: true });
   });
 
@@ -661,7 +666,7 @@ describe('a worktree session reading its main checkout', () => {
     expect(await mainCheckoutOf(worktree)).toBeNull();
   });
 
-  it('does not map a folder whose .git is a link to a worktree onto that worktree\'s repository', async () => {
+  it("does not map a folder whose .git is a link to a worktree onto that worktree's repository", async () => {
     const foreign = join(base, 'foreign');
     await mkdir(foreign);
     await symlink(join(worktree, '.git'), join(foreign, '.git'));
