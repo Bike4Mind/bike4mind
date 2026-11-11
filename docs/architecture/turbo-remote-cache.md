@@ -83,6 +83,10 @@ Keep `remoteCache.preflight` enabled when using this endpoint.
 
 ## CI integration
 
+> **Status:** CI wiring is not yet in place. The workflow changes that set
+> `TURBO_API`, `TURBO_TOKEN` and `TURBO_TEAM` land in a separate PR after the
+> cache infrastructure is deployed and verified.
+
 ### Trust model
 
 The write token is the cache's integrity boundary. Anyone holding it can publish
