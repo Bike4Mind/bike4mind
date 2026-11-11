@@ -715,6 +715,33 @@ describe('buildAdminModelRows', () => {
       expect(filterAdminModels([row], { view: 'retiring' }).map(candidate => candidate.id)).toEqual(['gpt-x']);
     });
 
+    it('carries the sooner lifecycle date and the days left to it', async () => {
+      const served = adapter({ id: 'gpt-x' as ModelInfo['id'] });
+
+      const both = await rowFor('gpt-x', {
+        adapterModels: [served],
+        catalogRows: [
+          catalogRow(
+            'gpt-x',
+            { lifecycle: { status: 'active', deprecationDate: '2026-09-15', retirementDate: '2026-08-21' } },
+            { ownedGroups: ['lifecycle'] }
+          ),
+        ],
+      });
+      expect(both).toMatchObject({
+        lifecycle: { deprecationDate: '2026-09-15', retirementDate: '2026-08-21' },
+        sunsetDate: '2026-08-21',
+        sunsetDays: 20,
+      });
+
+      const passed = await rowFor('gpt-x', {
+        adapterModels: [adapter({ id: 'gpt-x' as ModelInfo['id'], deprecationDate: '2026-07-15' })],
+      });
+      expect(passed).toMatchObject({ status: 'retired', sunsetDate: '2026-07-15', sunsetDays: -17 });
+
+      expect(await rowFor('gpt-x', { adapterModels: [served] })).toMatchObject({ sunsetDate: null, sunsetDays: null });
+    });
+
     it('shows a sunset catalog-only model as Retired with no reasons', async () => {
       const row = await rowFor('gpt-old', {
         catalogRows: [discovered('gpt-old', { lifecycle: { status: 'retired' }, autoDisabled: false })],
@@ -816,6 +843,113 @@ describe('the list page and the filter resolver', () => {
     expect(page.total).toBe(2);
     expect(page.counts['needs-review']).toBe(1);
     expect(page.viewCounts).toEqual({ all: 6, 'needs-review': 2, listed: 3, hidden: 0, retiring: 2 });
+  });
+
+  describe('the Retiring view and the sunset sort', () => {
+    const lifecycleRow = (modelId: string, lifecycle: Record<string, unknown>) =>
+      catalogRow(modelId, { lifecycle }, { ownedGroups: ['lifecycle'] });
+    const model = (id: string, overrides: Partial<ModelInfo> = {}) =>
+      adapter({ id: id as ModelInfo['id'], name: id, ...overrides });
+    // NOW is 2026-08-01: 2026-10-30 is 90 days out, 2026-10-31 is 91.
+    const retiringRows = () =>
+      buildAdminModelRows(
+        input({
+          adapterModels: [
+            model('gpt-x', { rank: 1 }),
+            model('gpt-y', { rank: 2 }),
+            model('gpt-a', { rank: 5 }),
+            model('gpt-off', { rank: 3 }),
+            model('gpt-overdue', { rank: 4 }),
+            model('gpt-edge', { deprecationDate: '2026-10-30' }),
+            model('gpt-far', { deprecationDate: '2026-10-31' }),
+            model('gpt-far-off', { deprecationDate: '2026-10-31' }),
+            model('gpt-marked', { rank: 7 }),
+            model('flux-fill', {
+              backend: ModelBackend.BFL,
+              type: 'image',
+              private: true,
+              deprecationDate: '2026-09-01',
+            }),
+          ],
+          catalogRows: [
+            // Discovery deprecated it with a date and, with auto-remap off, suggested a successor.
+            lifecycleRow('gpt-x', { status: 'deprecated', deprecationDate: '2026-08-21' }),
+            lifecycleRow('gpt-off', { status: 'active', retirementDate: '2026-09-01' }),
+            lifecycleRow('gpt-overdue', { status: 'active', retirementDate: '2026-07-15' }),
+            lifecycleRow('gpt-marked', { status: 'deprecated' }),
+          ],
+          accessEntries: [
+            entry('gpt-off', { enabled: false }),
+            entry('gpt-overdue', { enabled: false }),
+            entry('gpt-far-off', { enabled: false }),
+          ],
+          pendingSuggestions: [
+            { modelId: 'gpt-x', suggestion: { replacedBy: 'gpt-y', source: 'openai', suggestedAt: EARLIER } },
+          ],
+        })
+      );
+    const RETIRING = ['flux-fill', 'gpt-edge', 'gpt-marked', 'gpt-off', 'gpt-overdue', 'gpt-x'];
+
+    it('takes every model its lifecycle dates or status put there, whatever its status', async () => {
+      const all = await retiringRows();
+      const status = new Map(all.map(row => [row.id, row.status]));
+
+      expect(Object.fromEntries(RETIRING.map(id => [id, status.get(id)]))).toEqual({
+        'flux-fill': 'hidden',
+        'gpt-edge': 'retiring',
+        'gpt-marked': 'retiring',
+        'gpt-off': 'hidden',
+        'gpt-overdue': 'hidden',
+        'gpt-x': 'needs-review',
+      });
+      expect(filterAdminModels(all, { view: 'retiring' }).map(row => row.id)).toEqual(RETIRING);
+      expect(filterAdminModels(all, { view: 'needs-review' }).map(row => row.id)).toEqual(['gpt-x']);
+
+      const page = adminModelListPage(all, { filter: { view: 'retiring' }, pageSize: 500 });
+      expect(page.total).toBe(RETIRING.length);
+      expect(page.viewCounts).toEqual({ all: 10, 'needs-review': 1, listed: 3, hidden: 4, retiring: 6 });
+      expect(page.counts).toEqual({ listed: 3, limited: 0, 'needs-review': 1, hidden: 4, retiring: 2, retired: 0 });
+    });
+
+    it('leaves out a model dated 91 days out, whatever its status', async () => {
+      const all = await retiringRows();
+      const far = all.filter(row => row.id === 'gpt-far' || row.id === 'gpt-far-off');
+
+      expect(far.map(row => [row.id, row.status, row.sunsetDays])).toEqual([
+        ['gpt-far', 'listed', 91],
+        ['gpt-far-off', 'hidden', 91],
+      ]);
+      expect(filterAdminModels(far, { view: 'retiring' })).toEqual([]);
+    });
+
+    it('sorts by the sooner lifecycle date, most overdue first and undated models last', async () => {
+      const all = await retiringRows();
+      const sorted = (filter: Parameters<typeof adminModelListPage>[1]['filter'], dir?: 'asc' | 'desc') =>
+        adminModelListPage(all, { filter, sort: 'sunset', dir, pageSize: 500 }).models.map(row => row.id);
+
+      // Equal dates fall back to rank: gpt-off is ranked, flux-fill is not.
+      expect(sorted({})).toEqual([
+        'gpt-overdue',
+        'gpt-x',
+        'gpt-off',
+        'flux-fill',
+        'gpt-edge',
+        'gpt-far',
+        'gpt-far-off',
+        'gpt-y',
+        'gpt-a',
+        'gpt-marked',
+      ]);
+      expect(sorted({}, 'desc')).toEqual([...sorted({})].reverse());
+      expect(sorted({ view: 'retiring' })).toEqual([
+        'gpt-overdue',
+        'gpt-x',
+        'gpt-off',
+        'flux-fill',
+        'gpt-edge',
+        'gpt-marked',
+      ]);
+    });
   });
 
   it('offers every provider and type present as facets', async () => {

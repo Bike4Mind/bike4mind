@@ -254,6 +254,26 @@ function daysUntil(calendarDate: string | undefined, now: Date): number | undefi
   return Math.round((at - Date.parse(`${now.toISOString().slice(0, 10)}T00:00:00Z`)) / DAY_MS);
 }
 
+/** The sooner of a lifecycle's deprecation and retirement dates, and whole days to it. */
+function sunsetOf(lifecycle: AdminModelLifecycle, now: Date): Pick<AdminModelRow, 'sunsetDate' | 'sunsetDays'> {
+  let soonest: { date: string; days: number } | undefined;
+  for (const date of [lifecycle.deprecationDate, lifecycle.retirementDate]) {
+    const days = daysUntil(date, now);
+    if (date && days !== undefined && (!soonest || days < soonest.days)) soonest = { date, days };
+  }
+  return { sunsetDate: soonest?.date ?? null, sunsetDays: soonest?.days ?? null };
+}
+
+/**
+ * In the retiring window by lifecycle facts alone: a deprecated or retired lifecycle status, or a deprecation or
+ * retirement date within ADMIN_MODEL_RETIRING_HORIZON_DAYS or already past. Both the Retiring status and the Retiring
+ * view read it.
+ */
+const inRetiringWindow = (row: Pick<AdminModelRow, 'lifecycle' | 'sunsetDays'>): boolean =>
+  row.lifecycle.status === 'deprecated' ||
+  row.lifecycle.status === 'retired' ||
+  (row.sunsetDays !== null && row.sunsetDays <= ADMIN_MODEL_RETIRING_HORIZON_DAYS);
+
 /** The display fields of a catalog-only record no ModelInfo was rendered for. */
 interface DisplayModel {
   id: string;
@@ -560,7 +580,7 @@ export async function buildAdminModelRows(input: AdminModelListInput): Promise<A
     };
 
     const deprecationDays = daysUntil(lifecycle.deprecationDate, now);
-    const retirementDays = daysUntil(lifecycle.retirementDate, now);
+    const sunset = sunsetOf(lifecycle, now);
     // Retired means no user can pick it for its lifecycle: getAvailableModels drops a model from its deprecationDate
     // (same UTC day boundary as isModelDeprecated), the catalog's retired fold disables it, and the merge never
     // serves a catalog-only model in a sunset status.
@@ -568,12 +588,7 @@ export async function buildAdminModelRows(input: AdminModelListInput): Promise<A
       (deprecationDays !== undefined && deprecationDays <= 0) ||
       retiredByProvider ||
       (!servedModel && LIFECYCLE_SUNSET_STATUSES.has(status ?? ''));
-    const withinHorizon = (days: number | undefined) => days !== undefined && days <= ADMIN_MODEL_RETIRING_HORIZON_DAYS;
-    const retiring =
-      status === 'deprecated' ||
-      status === 'retired' ||
-      withinHorizon(deprecationDays) ||
-      withinHorizon(retirementDays);
+    const retiring = inRetiringWindow({ lifecycle, ...sunset });
     const limited = !access.everyone || access.freeTierLocked;
 
     let modelStatus: AdminModelStatus;
@@ -610,6 +625,7 @@ export async function buildAdminModelRows(input: AdminModelListInput): Promise<A
       access,
       price,
       lifecycle,
+      ...sunset,
       lifecycleSuggestion:
         suggestion && !suggestion.resolution
           ? {
@@ -668,9 +684,12 @@ function matchesFacets(row: AdminModelRow, filter: ResolvedAdminModelFilter): bo
   return true;
 }
 
-// A pending lifecycle suggestion needs a decision whatever the model's status, Retired included.
+// Needs review takes any pending lifecycle suggestion and Retiring any model in the retiring window, whatever reason
+// outranks them in the model's status.
 const matchesView = (row: AdminModelRow, view: AdminModelView): boolean =>
-  (view === 'needs-review' && row.lifecycleSuggestion !== null) || (VIEW_STATUSES[view]?.has(row.status) ?? true);
+  (view === 'needs-review' && row.lifecycleSuggestion !== null) ||
+  (view === 'retiring' && inRetiringWindow(row)) ||
+  (VIEW_STATUSES[view]?.has(row.status) ?? true);
 
 /** The order filterAdminModels returns ids in. */
 export const compareAdminModelIds = (a: string, b: string): number => a.localeCompare(b);
@@ -709,6 +728,14 @@ function compareRows(sort: AdminModelSort): (a: AdminModelRow, b: AdminModelRow)
   const byRank = (a: AdminModelRow, b: AdminModelRow) =>
     a.rank === b.rank ? 0 : a.rank === null ? 1 : b.rank === null ? -1 : a.rank - b.rank;
   const byName = (a: AdminModelRow, b: AdminModelRow) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
+  const bySunset = (a: AdminModelRow, b: AdminModelRow) =>
+    a.sunsetDays === b.sunsetDays
+      ? 0
+      : a.sunsetDays === null
+        ? 1
+        : b.sunsetDays === null
+          ? -1
+          : a.sunsetDays - b.sunsetDays;
   switch (sort) {
     case 'name':
       return byName;
@@ -721,6 +748,8 @@ function compareRows(sort: AdminModelSort): (a: AdminModelRow, b: AdminModelRow)
     case 'status':
       return (a, b) =>
         (STATUS_ORDER.get(a.status) ?? 0) - (STATUS_ORDER.get(b.status) ?? 0) || byRank(a, b) || byName(a, b);
+    case 'sunset':
+      return (a, b) => bySunset(a, b) || byRank(a, b) || byName(a, b);
   }
 }
 
