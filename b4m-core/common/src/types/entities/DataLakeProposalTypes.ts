@@ -14,9 +14,10 @@ import { IMongoDocument } from './common';
 // @bike4mind/database - the same split DataLakeAccessGrantModel and DataLakeSpendNotificationModel use.
 
 /**
- * A proposal is pending until a human rules on it, and then terminal. There is deliberately no
- * `auto_approved` (#1658 decision 10): a confidence score on generated content is a number with no
- * validated meaning, so shipping it as a safety control would be worse than shipping none.
+ * A proposal is pending until it is ruled on, and then terminal. There is deliberately no
+ * `auto_approved` status: an automatic admission is an `approved` row carrying `autoAdmission`.
+ * Admission is automatic only by source tier (a trusted-site entry), never by score: a confidence
+ * score on generated content has no validated meaning, so it is never a safety control.
  *
  * A `declined` row is also the TOMBSTONE for its source - see `IDataLakeProposal.excerpt` for what
  * a decline strips and why the row itself is kept.
@@ -94,7 +95,7 @@ export interface IDataLakeProposal {
   /**
    * The producer's own 0..1 confidence in the candidate. ADVISORY DISPLAY ONLY. Nothing in this
    * system may gate, filter out or auto-approve on it; there is no threshold lever, by design.
-   * Ordering the review list by it is fine - every proposal still needs its own human decision.
+   * Ordering the review list by it is fine. Admission rests on source tier, never on this value.
    */
   confidence?: number | null;
   /**

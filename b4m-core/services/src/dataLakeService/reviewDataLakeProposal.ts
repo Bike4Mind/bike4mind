@@ -31,7 +31,8 @@ import {
 import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLakeConfigChange';
 
 /**
- * The human half of the acquisition queue (#1671): approve or decline one proposal.
+ * The acquisition queue's review half: approve or decline one proposal, by a person or by a
+ * trusted-site rule.
  *
  * Approval is the ONLY way a proposal's content reaches a lake, and it reaches it through the
  * ordinary ingestion door - the caller supplies `admitSource`, bound to the same
@@ -40,8 +41,9 @@ import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLa
  * from the proposal's stored excerpt: admitting content through a side door would recreate the exact
  * defect this epic exists to fix.
  *
- * There is no auto-approval entry point here, and none may be added (#1658 decision 10). Both
- * functions take an ACTOR resolved from auth and stamp it on the row.
+ * The one automatic entry point is `autoApproveDataLakeProposal`. It admits only by source tier
+ * (a trusted-site entry on the research config), never by score. The manual functions take an ACTOR
+ * resolved from auth and stamp it on the row.
  */
 
 /** Bound by the caller to `fabFilesService.createFabFileByUrl` + its storage/db adapters. */

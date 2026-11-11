@@ -26,11 +26,11 @@ const ReviewInput = z.object({
 });
 
 /**
- * POST /api/data-lakes/:id/proposals/:proposalId - rule on one acquisition proposal (#1671), or
+ * POST /api/data-lakes/:id/proposals/:proposalId - rule on one acquisition proposal, or
  * `restore` a declined one to the pending queue.
  *
- * The only way content a producer found reaches a lake, and it is a human action by construction:
- * there is no auto-approval lever here or anywhere else (#1658 decision 10). Authorization,
+ * The manual way content a producer found reaches a lake. The only automatic way is a trusted-site
+ * rule on the research config, applied by the worker, never by a score. Authorization,
  * writability, the once-only claim and the admission itself all live in the service; this route
  * resolves the actor, checks the proposal belongs to the lake in the path, and wires the ordinary
  * URL ingestion door as the admission adapter.

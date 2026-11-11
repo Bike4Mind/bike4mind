@@ -21,7 +21,7 @@ const AutoAdmissionSchema = new Schema(
 );
 
 /**
- * One row per candidate a producer wants admitted to a lake (#1671). The row is the whole safety
+ * One row per candidate a producer wants admitted to a lake. The row is the whole safety
  * mechanism: content reaches a lake only by a human moving one of these to `approved`, and the
  * approval then goes through the ordinary ingestion door. A declined row stays as the source's
  * tombstone. See DataLakeProposalTypes.ts for the field-by-field contract.

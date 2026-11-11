@@ -116,7 +116,7 @@ export const LAKE_CONFIG_CHANGE_ACTIONS = [
    */
   'membership-succession',
   /**
-   * A producer-proposed source cleared the acquisition queue (#1671) into the lake, recorded under
+   * A producer-proposed source cleared the acquisition queue into the lake, recorded under
    * whichever rung reviewed it. Split from `decline-proposal`/`restore-proposal` below for the same
    * reason `grant-access`/`revoke-access` are split from each other: one uniform action per verb the
    * reviewer actually took, rather than a status field the reader would have to re-derive.

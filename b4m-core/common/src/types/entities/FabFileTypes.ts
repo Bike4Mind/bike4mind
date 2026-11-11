@@ -66,7 +66,7 @@ export enum FabFileSourceType {
   SALESFORCE = 'salesforce',
   GOOGLE_DRIVE = 'google_drive',
   SLACK = 'slack',
-  /** Admitted by a human approving an acquisition proposal (#1671), never by the producer itself. */
+  /** Admitted from an acquisition proposal, by a person approving it or by a trusted-site rule. */
   PROPOSAL_APPROVAL = 'proposal_approval',
   GITHUB = 'github',
   /**
