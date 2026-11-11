@@ -84,7 +84,7 @@ export function ModelAccessDialog({ target, change, title, confirmLabel, onClose
       result = await write.mutateAsync({ reason });
     } catch (error) {
       const { status, data } = apiErrorOf(error);
-      if (status === 422 && typeof data.error === 'string' && /admins/i.test(data.error)) setServerAskedAdminOnly(true);
+      if (status === 422 && Array.isArray(data.adminOnlyIds)) setServerAskedAdminOnly(true);
       return;
     }
     await invalidate();

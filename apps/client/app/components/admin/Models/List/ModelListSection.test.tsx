@@ -860,6 +860,21 @@ describe('ModelListSection bulk access', () => {
     expect(undoTokensSent()).toEqual(['undo-1']);
   });
 
+  it('keeps the failed-models report when a retry is cancelled', async () => {
+    serveList(twoRows);
+    serveBulk(async token => undoneOne(token === 'undo-1' ? 'example-text-1' : 'example-text-2'));
+    await renderModelsRoute('/admin?tab=models&modelsView=all', ModelListSection);
+    await selectPage();
+    fireEvent.click(screen.getByTestId('models-bulk-turn-off-btn'));
+    await confirmBulk();
+    fireEvent.click(await screen.findByTestId('models-bulk-retry-btn'));
+    await screen.findByTestId('models-bulk-summary');
+
+    fireEvent.click(screen.getByTestId('models-bulk-dialog-cancel-btn'));
+    await waitFor(() => expect(screen.queryByTestId('models-bulk-dialog')).not.toBeInTheDocument());
+    expect(await screen.findByTestId('models-bulk-retry-btn')).not.toBeDisabled();
+  });
+
   it('disables Retry for a batch while its undo runs', async () => {
     serveList(twoRows);
     const undoGate = deferred();

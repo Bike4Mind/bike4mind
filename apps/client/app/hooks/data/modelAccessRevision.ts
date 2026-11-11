@@ -73,12 +73,18 @@ export function handleModelAccessRevisionSetting(
   reconcile(queryClient, random);
 }
 
-/** Re-checks the pushed revision each time the access entries land. Returns the unsubscribe. */
+/** Re-checks the pushed revision each time the access entries land. Returns the unsubscribe, which also drops a pending refetch. */
 export function watchModelAccessArrivals(queryClient: QueryClient, random: () => number = Math.random): () => void {
   const entriesHash = hashKey(LLM_MODEL_CONFIGURATIONS_QUERY_KEY);
-  return queryClient.getQueryCache().subscribe(event => {
+  const unsubscribe = queryClient.getQueryCache().subscribe(event => {
     if (event.type !== 'updated' || event.action.type !== 'success') return;
     if (event.query.queryHash !== entriesHash) return;
     reconcile(queryClient, random);
   });
+  return () => {
+    unsubscribe();
+    const watch = watchOf(queryClient);
+    clearTimeout(watch.timer);
+    watch.timer = undefined;
+  };
 }

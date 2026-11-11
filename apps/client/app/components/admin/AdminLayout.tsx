@@ -142,7 +142,7 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
             data-testid="admin-layout-content"
             sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
           >
-            {isAdminSubscriptionDetailPath(pathname) && (
+            {(isAdminSubscriptionDetailPath(pathname) || isAdminModelsDetailPath(pathname)) && (
               <AdminCommandPalette enableEntitySearch={isAdmin} canOpenTab={canOpenTab} onNavigate={selectTab} />
             )}
             <Box

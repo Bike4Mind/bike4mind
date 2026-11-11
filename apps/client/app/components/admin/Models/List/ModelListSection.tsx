@@ -133,7 +133,7 @@ type BulkBatch = {
  * A retry open in the bulk dialog, by its request. `batch` is the batch its token joins, or null once an undo of that
  * batch started: a retry already sent then lands in a batch of its own, still labelled as a retry.
  */
-type PendingRetry = { request: ModelBulkRequest; batch: BulkBatch | null; retries: number };
+type PendingRetry = { request: ModelBulkRequest; batch: BulkBatch | null; retries: number; outcome: BulkOutcome };
 /** A write an undo did not revert, because its undo expired or the undo stopped first, and the models it changed. */
 type UndoLeftover = { label: string; ids: string[]; expired: boolean; uncertain: boolean };
 /**
@@ -493,7 +493,7 @@ export function ModelListSection() {
 
   const retryFailed = () => {
     if (outcome?.kind !== 'failed' || outcome.batch === undoingBatch) return;
-    pendingRetry.current = { request: outcome.retry, batch: outcome.batch, retries: outcome.batch.retries };
+    pendingRetry.current = { request: outcome.retry, batch: outcome.batch, retries: outcome.batch.retries, outcome };
     setOutcome(null);
     setBulk(outcome.retry);
   };
@@ -889,6 +889,9 @@ export function ModelListSection() {
       <ModelBulkAccessDialog
         request={bulk}
         onClose={() => {
+          // A cancelled retry puts its failed-models report back, unless something newer took the panel meanwhile.
+          const retry = pendingRetry.current;
+          if (retry?.request === bulk && retry.batch && !outcomeRef.current) setOutcome(retry.outcome);
           pendingRetry.current = null;
           setBulk(null);
         }}

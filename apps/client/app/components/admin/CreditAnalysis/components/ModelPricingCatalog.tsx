@@ -249,19 +249,25 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
   // overwrite the drawer for the model currently displayed.
   const historyRequestRef = useRef<string | null>(null);
 
+  // Loads overlap (refresh, post-write reload, a finished discovery run); only the latest may land.
+  const latestFetchRef = useRef(0);
+
   const fetchRows = useCallback(async () => {
+    const fetchId = ++latestFetchRef.current;
     setIsLoading(true);
     setError(null);
     try {
       const res = await api.get<{ rows: PriceRow[]; seeded?: { modelId: string; unit: string }[] }>(
         '/api/admin/model-prices'
       );
+      if (fetchId !== latestFetchRef.current) return;
       setRows([...res.data.rows].sort((a, b) => a.modelId.localeCompare(b.modelId)));
       setSeeded(new Set((res.data.seeded ?? []).map(entry => seedKey(entry.modelId, entry.unit))));
     } catch (err) {
+      if (fetchId !== latestFetchRef.current) return;
       setError(apiErrorMessage(err, 'Failed to load the price catalog'));
     } finally {
-      setIsLoading(false);
+      if (fetchId === latestFetchRef.current) setIsLoading(false);
     }
   }, []);
 

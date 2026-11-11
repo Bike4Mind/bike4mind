@@ -223,6 +223,7 @@ function AcceptSuggestionDialog({
   // Set only by a 409: the clauses the chosen successor missed, held until it is overruled or changed.
   const [blockers, setBlockers] = useState<string[] | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  const queryClient = useQueryClient();
   const name = modelName(index, item.modelId);
   const suggestion = item.suggestion;
   const current = index?.get(item.modelId)?.lifecycle;
@@ -253,7 +254,11 @@ function AcceptSuggestionDialog({
     } catch (error) {
       const refused = replacementBlockers(error);
       if (refused) setBlockers(refused);
-      else setFailure(apiErrorMessage(error, 'Accept failed'));
+      else {
+        setFailure(apiErrorMessage(error, 'Accept failed'));
+        // Another admin may have settled it already; the queue should stop offering it.
+        void queryClient.invalidateQueries({ queryKey: LIFECYCLE_QUEUE_QUERY_KEY });
+      }
       throw error;
     }
     onAccepted(status);
@@ -355,6 +360,7 @@ function DismissSuggestionDialog({
   onDismissed: () => void;
 }) {
   const [failure, setFailure] = useState<string | null>(null);
+  const queryClient = useQueryClient();
   const name = modelName(index, item.modelId);
 
   const dismiss = async (reason: string) => {
@@ -363,6 +369,7 @@ function DismissSuggestionDialog({
       await api.post(LIFECYCLE_STATUS_PATH, { modelId: item.modelId, action: 'dismiss', note: reason });
     } catch (error) {
       setFailure(apiErrorMessage(error, 'Dismiss failed'));
+      void queryClient.invalidateQueries({ queryKey: LIFECYCLE_QUEUE_QUERY_KEY });
       throw error;
     }
     onDismissed();

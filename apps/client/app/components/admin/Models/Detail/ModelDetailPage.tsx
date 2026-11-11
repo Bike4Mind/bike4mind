@@ -36,7 +36,7 @@ export function ModelDetailPage({
 
   const body = () => {
     if (row.isPending) return <DetailSkeleton />;
-    if (row.error) {
+    if (row.error && !row.data) {
       return (
         <ErrorState
           message={`This model could not be loaded. ${getErrorMessage(row.error)}`}
