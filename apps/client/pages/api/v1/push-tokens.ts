@@ -15,6 +15,8 @@ import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 
 const registerRoute = nextRouteForContract(registerPushTokenContract, {
   rateLimit: perUserRateLimit('POST /api/v1/push-tokens'),
+  // Apps register on launch, so it is not an action.
+  recordsActivity: false,
 }).post(async (req, res) => {
   const { sid } = req.user;
   // A token with no session could never be pruned on logout, so refuse rather than orphan it.
@@ -26,6 +28,7 @@ const registerRoute = nextRouteForContract(registerPushTokenContract, {
 
 const unregisterRoute = nextRouteForContract(unregisterPushTokenContract, {
   rateLimit: perUserRateLimit('DELETE /api/v1/push-tokens'),
+  recordsActivity: false,
 }).delete(async (req, res) => {
   await pushTokenRepository.removeByToken(req.validated.token, { userId: req.user.id });
   return res.status(204).end();

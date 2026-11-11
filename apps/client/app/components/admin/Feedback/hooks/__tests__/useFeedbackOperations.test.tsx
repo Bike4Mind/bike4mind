@@ -74,6 +74,18 @@ describe('useFeedbackOperations totalSettled', () => {
   });
 });
 
+describe('useFeedbackOperations organizations query', () => {
+  it('asks the server for the facet alone', async () => {
+    mocks.getFeedbackFromServer.mockReset();
+    mocks.getFeedbackFromServer.mockResolvedValue({ items: [], total: 0, organizations: ['Acme'] });
+
+    const { result } = renderOperations(listParams(1));
+
+    await waitFor(() => expect(result.current.organizations).toEqual(['Acme']));
+    expect(mocks.getFeedbackFromServer).toHaveBeenCalledWith(expect.objectContaining({ facetsOnly: true }));
+  });
+});
+
 describe('useFeedbackOperations isError', () => {
   beforeEach(() => {
     mocks.getFeedbackFromServer.mockReset();
@@ -81,7 +93,7 @@ describe('useFeedbackOperations isError', () => {
 
   it('reports a failed list request', async () => {
     mocks.getFeedbackFromServer.mockImplementation((params: FeedbackListParams) =>
-      params.includeOrganizations
+      params.facetsOnly
         ? Promise.resolve({ items: [], total: 0, organizations: [] })
         : Promise.reject(new Error('list failed'))
     );

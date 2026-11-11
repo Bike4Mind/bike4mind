@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { legacyUserLinkRedirect, parseUserProfileSearch, userProfileTabSearch } from './userProfileSearch';
 
 describe('parseUserProfileSearch', () => {
-  it.each(['activity', 'credits', 'keys', 'signins', 'admin'] as const)('keeps a deep link to the %s tab', tab => {
-    expect(parseUserProfileSearch({ tab })).toEqual({ tab });
-  });
+  it.each(['activity', 'credits', 'billing', 'keys', 'signins', 'admin'] as const)(
+    'keeps a deep link to the %s tab',
+    tab => {
+      expect(parseUserProfileSearch({ tab })).toEqual({ tab });
+    }
+  );
 
   // The router spreads the validated search over the raw parent search, so assert on that merge.
   const routeSearch = (raw: Record<string, unknown>) => ({ ...raw, ...parseUserProfileSearch(raw) });
@@ -34,6 +37,13 @@ describe('parseUserProfileSearch', () => {
     const overview = userProfileTabSearch({ ...signins, from: '2026-11-01' }, 'overview');
     expect(signins).toMatchObject({ ...context, tab: 'signins' });
     expect(overview).toMatchObject({ ...context, tab: undefined, from: undefined });
+  });
+
+  it('keeps a shareable billing window on the Billing tab only, leaving the default out', () => {
+    expect(routeSearch({ tab: 'billing', range: '365d' })).toMatchObject({ tab: 'billing', range: '365d' });
+    expect(routeSearch({ tab: 'billing', range: '90d' }).range).toBeUndefined();
+    expect(routeSearch({ tab: 'billing', range: '7d' }).range).toBeUndefined();
+    expect(routeSearch({ tab: 'credits', range: '365d' }).range).toBeUndefined();
   });
 });
 

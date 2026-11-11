@@ -18,6 +18,15 @@ interface ValidateUserApiKeyAdapters {
   };
 }
 
+export interface ValidateUserApiKeyOptions {
+  /**
+   * Whether this check is a use of the key, stamping its `lastUsedAt`. Defaults to true. Pass false
+   * when the caller is only connecting or sending first-party telemetry, so an idle client never
+   * makes a key look used.
+   */
+  recordUse?: boolean;
+}
+
 export interface ValidationResult {
   isValid: boolean;
   userId?: string;
@@ -76,7 +85,11 @@ async function matchStoredSecret(key: string, apiKey: IUserApiKeyDocument): Prom
  * Centralized so a future gate (revoked flag, org-suspend, ...) can't land on one
  * path and silently skip the other.
  */
-function finalizeApiKeyValidation(apiKey: IUserApiKeyDocument, db: ValidateUserApiKeyAdapters['db']): ValidationResult {
+function finalizeApiKeyValidation(
+  apiKey: IUserApiKeyDocument,
+  db: ValidateUserApiKeyAdapters['db'],
+  { recordUse = true }: ValidateUserApiKeyOptions
+): ValidationResult {
   if (apiKey.expiresAt && apiKey.expiresAt < new Date()) {
     return { isValid: false, reason: 'expired' };
   }
@@ -85,9 +98,11 @@ function finalizeApiKeyValidation(apiKey: IUserApiKeyDocument, db: ValidateUserA
   }
 
   // Update last used timestamp (fire and forget)
-  db.userApiKeys.updateLastUsed(apiKey.id).catch(err => {
-    Logger.globalInstance.warn('Failed to update API key last used timestamp:', err);
-  });
+  if (recordUse) {
+    db.userApiKeys.updateLastUsed(apiKey.id).catch(err => {
+      Logger.globalInstance.warn('Failed to update API key last used timestamp:', err);
+    });
+  }
 
   return {
     isValid: true,
@@ -112,7 +127,8 @@ function finalizeApiKeyValidation(apiKey: IUserApiKeyDocument, db: ValidateUserA
 
 export const validateUserApiKey = async (
   key: string,
-  adapters: ValidateUserApiKeyAdapters
+  adapters: ValidateUserApiKeyAdapters,
+  options: ValidateUserApiKeyOptions = {}
 ): Promise<ValidationResult> => {
   const { db } = adapters;
 
@@ -140,7 +156,7 @@ export const validateUserApiKey = async (
     return { isValid: false, reason: 'invalid_hash' };
   }
 
-  const result = finalizeApiKeyValidation(apiKey, db);
+  const result = finalizeApiKeyValidation(apiKey, db, options);
 
   // Self-heal legacy records: now that the full key is in hand (hash matched),
   // upgrade the stored prefix to the current length so future lookups hit directly
@@ -198,11 +214,12 @@ export const findOwnerOfDisabledUserApiKey = async (
  */
 export const validateUserApiKeyById = async (
   keyId: string,
-  adapters: ValidateUserApiKeyAdapters
+  adapters: ValidateUserApiKeyAdapters,
+  options: ValidateUserApiKeyOptions = {}
 ): Promise<ValidationResult> => {
   const apiKey = await adapters.db.userApiKeys.findById(keyId);
   if (!apiKey) {
     return { isValid: false, reason: 'not_found' };
   }
-  return finalizeApiKeyValidation(apiKey, adapters.db);
+  return finalizeApiKeyValidation(apiKey, adapters.db, options);
 };
