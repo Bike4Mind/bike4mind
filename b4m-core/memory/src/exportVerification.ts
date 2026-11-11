@@ -1,6 +1,5 @@
-import { createHash } from 'node:crypto';
 import { activationConfigForKind } from './activation';
-import { foldEvents, verifyChain, type MemoryEvent } from './ledger';
+import { commitFact, foldEvents, verifyChain, type MemoryEvent } from './ledger';
 import type { Belief, Principal } from './types';
 
 export function verifyMemoryExport(value: {
@@ -27,9 +26,9 @@ export function verifyMemoryExport(value: {
     if (!event.shredded && (event.salt === undefined || (event.kind === 'assert' && event.fact === undefined))) {
       return { ok: false, error: 'Live event is missing its committed payload' };
     }
-    if (!event.shredded && event.fact === undefined) {
-      const commitment = createHash('sha256').update(`${event.salt} null`).digest('hex');
-      if (commitment !== event.commitment) return { ok: false, error: 'Factless event commitment mismatch' };
+    if (!event.shredded && event.salt !== undefined && event.fact === undefined) {
+      if (commitFact(event.salt, undefined) !== event.commitment)
+        return { ok: false, error: 'Factless event commitment mismatch' };
     }
   }
   const chain = verifyChain(value.events);
