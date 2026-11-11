@@ -75,6 +75,16 @@ describe('exportPrincipalMemory', () => {
     expect(mementos.findByUserId).not.toHaveBeenCalled();
   });
 
+  it('refuses to call a user-only ledger export complete without the v1 repository', async () => {
+    const { repo } = makeFakeLedger();
+    const { provider } = makeFakeKeyring();
+    const spy = vi.spyOn(repo, 'listChain');
+    await expect(exportPrincipalMemory({ principal, ownerUserId: 'u1', ledger: repo, keys: provider })).rejects.toThrow(
+      /requires a memento repository/
+    );
+    expect(spy).not.toHaveBeenCalled();
+  });
+
   it('exports v1-only memory and fails closed on corrupted ledger ciphertext', async () => {
     const { repo, store } = makeFakeLedger();
     const { provider } = makeFakeKeyring();
@@ -90,8 +100,8 @@ describe('exportPrincipalMemory', () => {
       { startedAt: new Date() }
     );
     store[0].factTag = 'invalid';
-    await expect(exportPrincipalMemory({ principal, ownerUserId: 'u1', ledger: repo, keys: provider })).rejects.toThrow(
-      /unreadable/
-    );
+    await expect(
+      exportPrincipalMemory({ principal, ownerUserId: 'u1', ledger: repo, keys: provider, mementos })
+    ).rejects.toThrow(/unreadable/);
   });
 });

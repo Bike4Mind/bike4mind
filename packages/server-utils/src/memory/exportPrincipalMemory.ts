@@ -33,6 +33,9 @@ export async function exportPrincipalMemory(deps: {
   if (deps.principal.kind === 'user' && deps.principal.id !== deps.ownerUserId) {
     throw new Error("Cannot export another user's memory");
   }
+  if (deps.principal.kind === 'user' && !deps.mementos) {
+    throw new Error('User memory export requires a memento repository');
+  }
   const exportedAt = deps.now ?? new Date().toISOString();
   const events = await listPrincipalLedger(deps);
   const mementos: ExportedMemento[] = [];
