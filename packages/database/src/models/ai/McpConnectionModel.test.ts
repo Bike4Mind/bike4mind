@@ -1367,6 +1367,24 @@ describe('McpConnectionModel', () => {
         });
       });
 
+      it('refuses a non-user owner even when the owner key matches', async () => {
+        const created = await mcpConnectionRepository.create(baseConnection({ slug: 'non_user_owner' }));
+        await mcpConnectionRepository.setOAuthConfig(created.id, OWNER, config);
+        const changed = { ...config, scopes: ['write'], clientRegistrationId: 'reg-2' };
+
+        expect(
+          await mcpConnectionRepository.setOAuthConfig(
+            created.id,
+            { ownerType: 'org', ownerKey: OWNER.ownerKey },
+            changed
+          )
+        ).toBeNull();
+        expect((await mcpConnectionRepository.findByIdForOwner(created.id, OWNER))?.auth.oauth).toMatchObject({
+          scopes: ['read'],
+          clientRegistrationId: 'reg-1',
+        });
+      });
+
       it('does not leave a connected none connection offered once it has no token', async () => {
         const created = await mcpConnectionRepository.create(
           baseConnection({ auth: { kind: 'none' }, slug: 'was_open' })
