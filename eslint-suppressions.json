@@ -79,11 +79,6 @@
       "count": 4
     }
   },
-  "apps/client/__tests__/quest-plans.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 72
-    }
-  },
   "apps/client/__tests__/sessions.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 7
@@ -2412,11 +2407,6 @@
       "count": 6
     }
   },
-  "apps/client/pages/api/quest-plans/index.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
   "apps/client/pages/api/quests/[id]/__tests__/check-timeout.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 6
@@ -3183,11 +3173,6 @@
   "apps/client/server/utils/chatCompletionDefaults.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 5
-    }
-  },
-  "apps/client/server/utils/logCompletionAnalytics.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 14
     }
   },
   "apps/client/server/websocket/__tests__/dataSubscribeRequest.test.ts": {
