@@ -33,15 +33,8 @@ import {
 import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import dayjs from 'dayjs';
-import { isAdminProvisionedApiKeyScope } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
-import { ReasonPicker } from '@client/app/components/admin/shared/ReasonPicker';
-import {
-  ADMIN_REASON_PRESETS,
-  type AdminReasonDraft,
-  EMPTY_ADMIN_REASON,
-  composeAdminReason,
-  isAdminReasonComplete,
-} from '@client/app/components/admin/shared/adminReason';
+import { ActionDialog } from '@client/app/components/admin/shared/ActionDialog';
+import { ADMIN_REASON_PRESETS } from '@client/app/components/admin/shared/adminReason';
 
 interface AdminGenerateApiKeyModalProps {
   open: boolean;
@@ -76,7 +69,7 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
   });
   const [expirationDays, setExpirationDays] = useState<string>('never');
   const [generatedKey, setGeneratedKey] = useState<string | null>(null);
-  const [reason, setReason] = useState<AdminReasonDraft>(EMPTY_ADMIN_REASON);
+  const [confirming, setConfirming] = useState(false);
   const { handleCopyToClipboard, copied } = useCopyToClipboard({ showToast: true });
   const {
     data: allLakes,
@@ -107,7 +100,7 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
     });
     setExpirationDays('never');
     setGeneratedKey(null);
-    setReason(EMPTY_ADMIN_REASON);
+    setConfirming(false);
   };
 
   const handleClose = () => {
@@ -115,17 +108,15 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
     onClose();
   };
 
-  // The route requires an audit reason for admin-provisioned scopes (generate-api-key.ts).
-  const reasonRequired = formData.scopes.some(isAdminProvisionedApiKeyScope);
-
-  const handleSubmit = () => {
+  const handleSubmit = async (reason: string) => {
     const submitData: AdminCreateUserApiKeyRequest = {
       ...formData,
       expiresAt: expirationDays === 'never' ? undefined : dayjs().add(parseInt(expirationDays), 'days').toDate(),
       preauthorizedLakeIds: preauthorizedLakeIds.length > 0 ? preauthorizedLakeIds : undefined,
-      reason: reasonRequired ? composeAdminReason(reason) : undefined,
+      reason,
     };
-    generateMutation.mutate({ userId: user.id, data: submitData });
+    await generateMutation.mutateAsync({ userId: user.id, data: submitData });
+    setConfirming(false);
   };
 
   const toggleLake = (lakeId: string) => {
@@ -224,196 +215,204 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
   }
 
   return (
-    <Modal open={open} onClose={handleClose}>
-      <ModalDialog size="lg" sx={{ width: '600px', maxHeight: '90vh', overflow: 'auto' }}>
-        <Typography level="h4" mb={2}>
-          Generate API Key for {user.username}
-        </Typography>
+    <>
+      <Modal open={open && !confirming} onClose={handleClose}>
+        <ModalDialog size="lg" sx={{ width: '600px', maxHeight: '90vh', overflow: 'auto' }}>
+          <Typography level="h4" mb={2}>
+            Generate API Key for {user.username}
+          </Typography>
 
-        <Stack spacing={3}>
-          <FormControl required>
-            <FormLabel>Key Name</FormLabel>
-            <Input
-              placeholder="e.g., Data Lake Upload, CI/CD Pipeline"
-              value={formData.name}
-              onChange={e => setFormData({ ...formData, name: e.target.value })}
-            />
-          </FormControl>
+          <Stack spacing={3}>
+            <FormControl required>
+              <FormLabel>Key Name</FormLabel>
+              <Input
+                placeholder="e.g., Data Lake Upload, CI/CD Pipeline"
+                value={formData.name}
+                onChange={e => setFormData({ ...formData, name: e.target.value })}
+              />
+            </FormControl>
 
-          <FormControl required>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
-              <FormLabel sx={{ mb: 0 }} data-testid="admin-generate-key-scopes-count">
-                Generic scopes ({genericSelectedCount}/{scopeOptions.length} selected)
-              </FormLabel>
-              <Button size="sm" variant="plain" onClick={toggleAllScopes}>
-                {allScopesSelected ? 'Clear All' : 'Select All'}
-              </Button>
-            </Box>
-            <Box
-              sx={{
-                maxHeight: '360px',
-                overflow: 'auto',
-                border: '1px solid',
-                borderColor: 'divider',
-                borderRadius: 'sm',
-                p: 1,
-              }}
-            >
-              {scopeOptions.map(scope => renderScope(scope))}
-            </Box>
-          </FormControl>
+            <FormControl required>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
+                <FormLabel sx={{ mb: 0 }} data-testid="admin-generate-key-scopes-count">
+                  Generic scopes ({genericSelectedCount}/{scopeOptions.length} selected)
+                </FormLabel>
+                <Button size="sm" variant="plain" onClick={toggleAllScopes}>
+                  {allScopesSelected ? 'Clear All' : 'Select All'}
+                </Button>
+              </Box>
+              <Box
+                sx={{
+                  maxHeight: '360px',
+                  overflow: 'auto',
+                  border: '1px solid',
+                  borderColor: 'divider',
+                  borderRadius: 'sm',
+                  p: 1,
+                }}
+              >
+                {scopeOptions.map(scope => renderScope(scope))}
+              </Box>
+            </FormControl>
 
-          <FormControl>
-            <FormLabel sx={{ mb: 0.5 }}>Service ingest key</FormLabel>
-            <Typography level="body-xs" color="neutral" sx={{ mb: 1 }}>
-              Admin-only. An ingest scope must be the key&apos;s only scope, so selecting one clears the generic scopes
-              above. A QA ingest key is refused (403) unless its owner carries the {QA_INGEST_USER_TAG} user tag, and a
-              release-notes key can only be minted for a platform admin.
-            </Typography>
-            {!canMintIngest && (
-              <Typography level="body-xs" color="warning" sx={{ mb: 1 }} data-testid="admin-generate-key-ingest-reason">
-                {INGEST_FULL_ADMIN_ONLY}
+            <FormControl>
+              <FormLabel sx={{ mb: 0.5 }}>Service ingest key</FormLabel>
+              <Typography level="body-xs" color="neutral" sx={{ mb: 1 }}>
+                Admin-only. An ingest scope must be the key&apos;s only scope, so selecting one clears the generic
+                scopes above. A QA ingest key is refused (403) unless its owner carries the {QA_INGEST_USER_TAG} user
+                tag, and a release-notes key can only be minted for a platform admin.
               </Typography>
-            )}
-            <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 'sm', p: 1 }}>
-              {ingestScopeOptions.map(scope => renderScope(scope, canMintIngest ? undefined : INGEST_FULL_ADMIN_ONLY))}
-            </Box>
-          </FormControl>
-
-          <FormControl>
-            <FormLabel sx={{ mb: 0.5 }} data-testid="admin-generate-key-lakes-count">
-              Pre-authorized lakes ({preauthorizedLakeIds.length} selected)
-            </FormLabel>
-            <Typography level="body-xs" color="neutral" sx={{ mb: 1 }}>
-              Lets this key admit any of the checked lakes into a session it manages but is not a member of, on top of
-              the caller&apos;s ordinary access. Leave empty for a key with no such widening. Only active lakes{' '}
-              {user.username} manages are listed - a key cannot be bound to a lake its owner has no authority over.
-            </Typography>
-            <Box
-              sx={{
-                maxHeight: '200px',
-                overflow: 'auto',
-                border: '1px solid',
-                borderColor: 'divider',
-                borderRadius: 'sm',
-                p: 1,
-              }}
-              data-testid="admin-generate-key-lakes-box"
-            >
-              {lakesLoading ? (
-                <Stack gap={1} data-testid="admin-generate-key-lakes-loading">
-                  {[0, 1].map(i => (
-                    <Skeleton key={i} variant="text" level="body-sm" />
-                  ))}
-                </Stack>
-              ) : lakesError ? (
-                <Stack gap={1} data-testid="admin-generate-key-lakes-error">
-                  <Typography level="body-sm" sx={{ color: 'danger.400' }}>
-                    Could not load lakes.
-                  </Typography>
-                  <Button size="sm" variant="outlined" color="neutral" onClick={() => refetchLakes()}>
-                    Retry
-                  </Button>
-                </Stack>
-              ) : lakes.length === 0 ? (
+              {!canMintIngest && (
                 <Typography
                   level="body-xs"
-                  sx={{ color: 'text.tertiary' }}
-                  data-testid="admin-generate-key-lakes-empty"
+                  color="warning"
+                  sx={{ mb: 1 }}
+                  data-testid="admin-generate-key-ingest-reason"
                 >
-                  {user.username} manages no active data lakes, so this key cannot be bound to one.
+                  {INGEST_FULL_ADMIN_ONLY}
                 </Typography>
-              ) : (
-                lakes.map(lake => (
-                  <Checkbox
-                    key={lake.id}
-                    size="sm"
-                    label={lake.name}
-                    checked={preauthorizedLakeIds.includes(lake.id)}
-                    onChange={() => toggleLake(lake.id)}
-                    data-testid={`admin-generate-key-lake-checkbox-${lake.id}`}
-                  />
-                ))
               )}
+              <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 'sm', p: 1 }}>
+                {ingestScopeOptions.map(scope =>
+                  renderScope(scope, canMintIngest ? undefined : INGEST_FULL_ADMIN_ONLY)
+                )}
+              </Box>
+            </FormControl>
+
+            <FormControl>
+              <FormLabel sx={{ mb: 0.5 }} data-testid="admin-generate-key-lakes-count">
+                Pre-authorized lakes ({preauthorizedLakeIds.length} selected)
+              </FormLabel>
+              <Typography level="body-xs" color="neutral" sx={{ mb: 1 }}>
+                Lets this key admit any of the checked lakes into a session it manages but is not a member of, on top of
+                the caller&apos;s ordinary access. Leave empty for a key with no such widening. Only active lakes{' '}
+                {user.username} manages are listed - a key cannot be bound to a lake its owner has no authority over.
+              </Typography>
+              <Box
+                sx={{
+                  maxHeight: '200px',
+                  overflow: 'auto',
+                  border: '1px solid',
+                  borderColor: 'divider',
+                  borderRadius: 'sm',
+                  p: 1,
+                }}
+                data-testid="admin-generate-key-lakes-box"
+              >
+                {lakesLoading ? (
+                  <Stack gap={1} data-testid="admin-generate-key-lakes-loading">
+                    {[0, 1].map(i => (
+                      <Skeleton key={i} variant="text" level="body-sm" />
+                    ))}
+                  </Stack>
+                ) : lakesError ? (
+                  <Stack gap={1} data-testid="admin-generate-key-lakes-error">
+                    <Typography level="body-sm" sx={{ color: 'danger.400' }}>
+                      Could not load lakes.
+                    </Typography>
+                    <Button size="sm" variant="outlined" color="neutral" onClick={() => refetchLakes()}>
+                      Retry
+                    </Button>
+                  </Stack>
+                ) : lakes.length === 0 ? (
+                  <Typography
+                    level="body-xs"
+                    sx={{ color: 'text.tertiary' }}
+                    data-testid="admin-generate-key-lakes-empty"
+                  >
+                    {user.username} manages no active data lakes, so this key cannot be bound to one.
+                  </Typography>
+                ) : (
+                  lakes.map(lake => (
+                    <Checkbox
+                      key={lake.id}
+                      size="sm"
+                      label={lake.name}
+                      checked={preauthorizedLakeIds.includes(lake.id)}
+                      onChange={() => toggleLake(lake.id)}
+                      data-testid={`admin-generate-key-lake-checkbox-${lake.id}`}
+                    />
+                  ))
+                )}
+              </Box>
+            </FormControl>
+
+            <FormControl>
+              <FormLabel>Expiration</FormLabel>
+              <Select value={expirationDays} onChange={(_, value) => setExpirationDays(value as string)}>
+                <Option value="30">30 days</Option>
+                <Option value="90">90 days</Option>
+                <Option value="365">1 year</Option>
+                <Option value="never">Never expires</Option>
+              </Select>
+            </FormControl>
+
+            <Box>
+              <Typography level="title-sm" mb={1}>
+                Rate Limits
+              </Typography>
+              <Stack direction="row" spacing={2}>
+                <FormControl sx={{ flex: 1 }}>
+                  <FormLabel>Requests per minute</FormLabel>
+                  <Input
+                    type="number"
+                    value={formData.rateLimit?.requestsPerMinute}
+                    onChange={e => {
+                      const val = parseInt(e.target.value);
+                      if (!isNaN(val) && val >= 0) {
+                        setFormData({
+                          ...formData,
+                          rateLimit: { ...formData.rateLimit!, requestsPerMinute: val },
+                        });
+                      }
+                    }}
+                  />
+                </FormControl>
+                <FormControl sx={{ flex: 1 }}>
+                  <FormLabel>Requests per day</FormLabel>
+                  <Input
+                    type="number"
+                    value={formData.rateLimit?.requestsPerDay}
+                    onChange={e => {
+                      const val = parseInt(e.target.value);
+                      if (!isNaN(val) && val >= 0) {
+                        setFormData({
+                          ...formData,
+                          rateLimit: { ...formData.rateLimit!, requestsPerDay: val },
+                        });
+                      }
+                    }}
+                  />
+                </FormControl>
+              </Stack>
             </Box>
-          </FormControl>
 
-          {reasonRequired && (
-            <ReasonPicker
-              label="Reason for an admin-provisioned scope"
-              presets={ADMIN_REASON_PRESETS.apiKeyAdminScope}
-              value={reason}
-              onChange={setReason}
-              data-testid="admin-generate-key-reason"
-            />
-          )}
-
-          <FormControl>
-            <FormLabel>Expiration</FormLabel>
-            <Select value={expirationDays} onChange={(_, value) => setExpirationDays(value as string)}>
-              <Option value="30">30 days</Option>
-              <Option value="90">90 days</Option>
-              <Option value="365">1 year</Option>
-              <Option value="never">Never expires</Option>
-            </Select>
-          </FormControl>
-
-          <Box>
-            <Typography level="title-sm" mb={1}>
-              Rate Limits
-            </Typography>
-            <Stack direction="row" spacing={2}>
-              <FormControl sx={{ flex: 1 }}>
-                <FormLabel>Requests per minute</FormLabel>
-                <Input
-                  type="number"
-                  value={formData.rateLimit?.requestsPerMinute}
-                  onChange={e => {
-                    const val = parseInt(e.target.value);
-                    if (!isNaN(val) && val >= 0) {
-                      setFormData({
-                        ...formData,
-                        rateLimit: { ...formData.rateLimit!, requestsPerMinute: val },
-                      });
-                    }
-                  }}
-                />
-              </FormControl>
-              <FormControl sx={{ flex: 1 }}>
-                <FormLabel>Requests per day</FormLabel>
-                <Input
-                  type="number"
-                  value={formData.rateLimit?.requestsPerDay}
-                  onChange={e => {
-                    const val = parseInt(e.target.value);
-                    if (!isNaN(val) && val >= 0) {
-                      setFormData({
-                        ...formData,
-                        rateLimit: { ...formData.rateLimit!, requestsPerDay: val },
-                      });
-                    }
-                  }}
-                />
-              </FormControl>
+            <Stack direction="row" spacing={2} justifyContent="flex-end">
+              <Button variant="outlined" onClick={handleClose}>
+                Cancel
+              </Button>
+              <Button
+                onClick={() => setConfirming(true)}
+                loading={generateMutation.isPending}
+                disabled={!formData.name.trim() || formData.scopes.length === 0 || lakesLoading || lakesError}
+              >
+                Generate API Key
+              </Button>
             </Stack>
-          </Box>
-
-          <Stack direction="row" spacing={2} justifyContent="flex-end">
-            <Button variant="outlined" onClick={handleClose}>
-              Cancel
-            </Button>
-            <Button
-              onClick={handleSubmit}
-              loading={generateMutation.isPending}
-              disabled={
-                !formData.name || formData.scopes.length === 0 || (reasonRequired && !isAdminReasonComplete(reason))
-              }
-            >
-              Generate API Key
-            </Button>
           </Stack>
-        </Stack>
-      </ModalDialog>
-    </Modal>
+        </ModalDialog>
+      </Modal>
+      <ActionDialog
+        open={open && confirming}
+        onClose={() => setConfirming(false)}
+        title={`Generate API key for ${user.username}`}
+        description={`Creates "${formData.name}" with ${formData.scopes.length} ${formData.scopes.length === 1 ? 'scope' : 'scopes'}. The secret will be shown once and cannot be recovered later.`}
+        reasonPresets={ADMIN_REASON_PRESETS.apiKeyAdminScope}
+        confirmLabel="Generate API key"
+        onConfirm={handleSubmit}
+        pending={generateMutation.isPending}
+        data-testid="admin-generate-key-action-dialog"
+      />
+    </>
   );
 }
