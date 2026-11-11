@@ -9,7 +9,7 @@ tags: [admin, llm, models, ai]
 
 The Models page is in the AI section of the admin sidebar. It lists every model the platform knows, shows who can pick each one and why a model is hidden, and holds the provider prices billing reads. The page has four sections, chosen from the tabs under the header: **Models**, **Prices**, **Discovery**, and **Settings**. The header also has a **Run discovery** button that starts a discovery run.
 
-Only full administrators can change models. A delegated admin with the `support:read` permission can open the page and sees the same data, and every write button is disabled with a tooltip that says so. The lifecycle suggestions on the Discovery section also need `settings:manage`; without it that part shows the missing permission instead.
+Only full administrators can change models. The `support:read` permission opens the page for a delegated admin. The lifecycle suggestions, the reference check and the Settings section also need `settings:manage`; without it they show the missing permission or stay disabled. Writes are disabled for anyone who is not a full administrator, and the links to the Usage, Logs, and general Settings pages are disabled too, because those pages are for full administrators only.
 
 ## Models
 
