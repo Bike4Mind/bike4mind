@@ -263,9 +263,15 @@ const handler = adminApi({
     const released = await Promise.allSettled(
       others.filter(m => m.ReceiptHandle).map(m => changeMessageVisibility(dlqUrl, m.ReceiptHandle!, 0))
     );
-    const releaseFailures = released.filter(r => r.status === 'rejected').length;
-    if (releaseFailures > 0) {
-      Logger.warn(`[DLQ Replay] Could not release ${releaseFailures} untargeted messages early`, { queueLabel });
+    const releaseErrors = released.flatMap(r =>
+      r.status === 'rejected' ? [r.reason instanceof Error ? r.reason.message : String(r.reason)] : []
+    );
+    if (releaseErrors.length > 0) {
+      Logger.warn(`[DLQ Replay] Could not release ${releaseErrors.length} untargeted messages early`, {
+        queueLabel,
+        // Distinct messages only: a missing permission fails every release the same way.
+        errors: [...new Set(releaseErrors)],
+      });
     }
   } else {
     const iterations = Math.ceil(batchSize / 10);

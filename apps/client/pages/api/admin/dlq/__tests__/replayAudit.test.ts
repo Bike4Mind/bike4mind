@@ -50,6 +50,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
+import { Logger } from '@bike4mind/observability';
 import handler from '../replay';
 
 beforeEach(() => {
@@ -157,5 +158,18 @@ describe('POST /api/admin/dlq/replay by message ID', () => {
     const body = await post(['target']);
 
     expect(body).toMatchObject({ replayed: 1, notFound: 0 });
+  });
+
+  it('logs why the release failed, once per distinct error', async () => {
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => undefined);
+    h.receiveFromQueue.mockResolvedValueOnce([msg('other-1'), msg('other-2'), msg('target')]);
+    h.changeMessageVisibility.mockRejectedValue(new Error('not authorized to perform: sqs:ChangeMessageVisibility'));
+
+    await post(['target']);
+
+    expect(warn).toHaveBeenCalledWith('[DLQ Replay] Could not release 2 untargeted messages early', {
+      queueLabel: 'quest',
+      errors: ['not authorized to perform: sqs:ChangeMessageVisibility'],
+    });
   });
 });
