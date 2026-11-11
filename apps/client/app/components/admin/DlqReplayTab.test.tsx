@@ -6,6 +6,8 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import DlqReplayTab from './DlqReplayTab';
 
 const state = vi.hoisted(() => ({
+  retentionSeconds: undefined as number | undefined,
+  sentTimestamp: '1700000000000',
   history: [] as Array<{
     id: string;
     queueLabel: string;
@@ -32,6 +34,7 @@ vi.mock('@client/app/hooks/data/dlqManagement', () => ({
         application: 'app',
         approximateMessageCount: 1,
         approximateNotVisibleCount: 0,
+        messageRetentionSeconds: state.retentionSeconds,
       },
     ],
     isLoading: false,
@@ -39,7 +42,7 @@ vi.mock('@client/app/hooks/data/dlqManagement', () => ({
     refetch: vi.fn(),
   }),
   useDlqMessages: () => ({
-    data: [{ messageId: 'm1', body: '{}', sentTimestamp: '1700000000000', approximateReceiveCount: '1' }],
+    data: [{ messageId: 'm1', body: '{}', sentTimestamp: state.sentTimestamp, approximateReceiveCount: '1' }],
     isLoading: false,
     isError: false,
     refetch: vi.fn(),
@@ -81,6 +84,8 @@ const renderWithQueueSelected = async () => {
 
 beforeEach(() => {
   state.history = [];
+  state.retentionSeconds = undefined;
+  state.sentTimestamp = '1700000000000';
   h.user = null;
 });
 
@@ -167,5 +172,56 @@ describe('DlqReplayTab replay permission', () => {
 
     expect(screen.getByTestId('dlq-replay-all')).toBeEnabled();
     expect(screen.getByTestId('dlq-replay-single-m1')).toBeEnabled();
+  });
+});
+
+describe('DlqReplayTab age and expiry', () => {
+  const HOUR = 3600 * 1000;
+
+  it('shows age and time until expiry per message', async () => {
+    state.retentionSeconds = 14 * 24 * 3600;
+    state.sentTimestamp = String(Date.now() - 10.5 * HOUR);
+
+    await renderWithQueueSelected();
+
+    expect(screen.getByTestId('dlq-age-m1')).toHaveTextContent('10h 30m');
+    expect(screen.getByTestId('dlq-expires-m1')).toHaveTextContent('13d 13h');
+  });
+
+  it('shows a different expiry for a shorter retention', async () => {
+    state.retentionSeconds = 4 * 24 * 3600;
+    state.sentTimestamp = String(Date.now() - 10.5 * HOUR);
+
+    await renderWithQueueSelected();
+
+    expect(screen.getByTestId('dlq-expires-m1')).toHaveTextContent('3d 13h');
+  });
+
+  it('flags a message within 24 hours of expiry', async () => {
+    state.retentionSeconds = 4 * 24 * 3600;
+    state.sentTimestamp = String(Date.now() - 80.5 * HOUR);
+
+    await renderWithQueueSelected();
+
+    const expires = screen.getByTestId('dlq-expires-m1');
+    expect(expires).toHaveTextContent(/^15h \d+m$/);
+    expect(expires).toHaveAttribute('data-warn', 'true');
+  });
+
+  it('does not flag a message with plenty of time left', async () => {
+    state.retentionSeconds = 14 * 24 * 3600;
+    state.sentTimestamp = String(Date.now() - HOUR);
+
+    await renderWithQueueSelected();
+
+    expect(screen.getByTestId('dlq-expires-m1')).toHaveAttribute('data-warn', 'false');
+  });
+
+  it('shows N/A for expiry when retention is unknown', async () => {
+    state.sentTimestamp = String(Date.now() - HOUR);
+
+    await renderWithQueueSelected();
+
+    expect(screen.getByTestId('dlq-expires-m1')).toHaveTextContent('N/A');
   });
 });
