@@ -19,13 +19,14 @@ import type {
 } from '@client/app/utils/adminUsersFilter';
 import { withSafeOrganization } from '@server/utils/toSafeOrganizationSubdocument';
 import { getDomainGroups, SIGNUP_SCAN_LIMIT } from '@server/users/signupAnomaly';
-import { funnelStepUserIds } from '@server/analytics/activationFunnel';
+import { COHORT_MAX_TIME_MS, funnelStepUserIds } from '@server/analytics/activationFunnel';
 import { signupVerdictUserIds } from '@server/analytics/realSignup';
 import { listAiAbuseAdvisories } from '@server/admin/aiAdvisory/aiAbuseAdvisories';
 import { LIVE_API_KEY_STATUS, adminUsersSort, buildAdminUsersMatch, organizationNamesOf } from './adminUsersQuery';
 
 // ms. A list read that runs past this is a filter the indexes cannot serve; fail it rather than queue.
-const LIST_MAX_TIME_MS = 10_000;
+// Shared with the Analytics funnel so its counts and this drill-down fail on the same terms.
+const LIST_MAX_TIME_MS = COHORT_MAX_TIME_MS;
 const SPEND_WINDOW_MS = 30 * 86_400_000;
 // The active ids feed an `_id: { $in }` match, so the list has to stay small enough for one query document.
 export const ACTIVE_USERS_MAX = 50_000;

@@ -15,8 +15,9 @@ import type { Logger } from '@bike4mind/observability';
 /** Sentinel alias map, so "the seed export reaches the aggregators" is an identity check. */
 const MODEL_ID_ALIASES = { 'grok-3-fast': { litellm: 'xai/grok-3-fast-latest' } };
 
-const { rowsInForce, createBedrockControlPlane, getDiscoveryCredentials } = vi.hoisted(() => ({
+const { rowsInForce, createBedrockControlPlane, getDiscoveryCredentials, bumpModelListRevision } = vi.hoisted(() => ({
   rowsInForce: vi.fn(),
+  bumpModelListRevision: vi.fn(async () => 'rev-1'),
   getDiscoveryCredentials: vi.fn(async (..._args: unknown[]) => ({})),
   createBedrockControlPlane: vi.fn(() => ({
     listFoundationModels: vi.fn(),
@@ -36,6 +37,7 @@ vi.mock('@bike4mind/database', () => ({
   apiKeyRepository: { find: vi.fn() },
 }));
 vi.mock('./bedrockControlPlane', () => ({ createBedrockControlPlane }));
+vi.mock('./modelListRevision', () => ({ bumpModelListRevision }));
 
 // Real factories, wrapped so the options each one was handed are readable.
 const captured = {
@@ -306,5 +308,16 @@ describe('credential wiring', () => {
 
     expect(getDiscoveryCredentials.mock.calls[0][2]).toEqual({ skipCache: true });
     expect(getDiscoveryCredentials.mock.calls[1][2]).toBeUndefined();
+  });
+});
+
+describe('model-list refresh wiring', () => {
+  it('bumps the shared model-list revision when a run reports a list change', async () => {
+    const { onModelListChanged } = buildModelDiscoveryAdapters(logger);
+
+    expect(bumpModelListRevision).not.toHaveBeenCalled();
+    await onModelListChanged!();
+
+    expect(bumpModelListRevision).toHaveBeenCalledTimes(1);
   });
 });

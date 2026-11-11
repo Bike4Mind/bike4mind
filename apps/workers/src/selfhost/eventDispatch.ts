@@ -48,6 +48,7 @@ const HANDLERS: Record<string, EventHandler> = {
   'notification.push': sendPushHandler,
   'stripe.invoice.payment_succeeded': invoicePaymentSucceededHandler,
   'stripe.cus.sub.updated': customerSubscriptionUpdatedHandler,
+  'notification.liveActivity': sendPushHandler,
 };
 
 export async function dispatchSelfHostEvent(

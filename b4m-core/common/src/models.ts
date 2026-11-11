@@ -584,16 +584,17 @@ export const NO_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
 /**
  * Seed for the catalog's `refusalFallback` flag (see resolveApiSurface): models whose safety
  * classifiers can decline a request with `stop_reason: 'refusal'` (HTTP 200, empty or partial
- * content) - Claude Fable 5's GA classifiers target research biology and most cybersecurity
- * content and occasionally false-positive on benign adjacent work. Per Anthropic's GA guidance a
- * refusal from these is opt-in recoverable: rather than surfacing a hard refusal, the backend
- * throws so the completion loop's existing fallback machinery continues the request on Opus 5
- * (whose classifiers intervene far less often). A refusal from a model whose flag resolves false
- * is a genuine decline and surfaces unchanged. Keep in sync with the `claude-fable-5` and Bedrock
- * Fable fallback preference chains in `adminSettings/fallback.ts`.
+ * content), including false positives on benign security or life-sciences work. Anthropic's
+ * guidance opts Fable 5.1+ into a refusal fallback by default, so for these the backend throws and
+ * the completion loop continues on the model's Opus chain in FALLBACK_PREFERENCES
+ * (`adminSettings/fallback.ts`), which each id here needs. A refusal from a model whose flag
+ * resolves false is a decline and surfaces unchanged. First-party Fable 5.1 and 5.2 are
+ * catalog-only, so they have no ChatModels constant.
  */
 export const REFUSAL_FALLBACK_MODELS: ReadonlySet<string> = new Set([
   ChatModels.CLAUDE_FABLE_5,
+  'claude-fable-5-1',
+  'claude-fable-5-2',
   ChatModels.CLAUDE_FABLE_5_BEDROCK,
   ChatModels.CLAUDE_FABLE_5_1_BEDROCK,
 ]);

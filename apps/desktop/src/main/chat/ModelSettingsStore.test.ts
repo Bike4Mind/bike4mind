@@ -97,6 +97,64 @@ describe('ModelSettingsStore', () => {
     expect(await store.get(QWEN)).toEqual({ effort: 'low' });
   });
 
+  describe.each([
+    { name: 'plain UTF-8', prefix: '' },
+    { name: 'UTF-8 with a byte order mark', prefix: String.fromCharCode(0xfeff) },
+  ])('a hand-written file saved as $name', ({ prefix }) => {
+    const written = { models: { [QWEN]: { effort: 'low' }, [GEMMA]: { keepAlive: 300 } } };
+
+    it('reads every model', async () => {
+      const path = await fileIn();
+      await writeFile(path, `${prefix}${JSON.stringify(written, null, 2)}`, 'utf8');
+      const store = new ModelSettingsStore(path);
+      expect(await store.get(QWEN)).toEqual({ effort: 'low' });
+      expect(await store.get(GEMMA)).toEqual({ keepAlive: 300 });
+    });
+
+    it('keeps the other models when set() is the first call', async () => {
+      const path = await fileIn();
+      await writeFile(path, `${prefix}${JSON.stringify(written, null, 2)}`, 'utf8');
+      await new ModelSettingsStore(path).set(GEMMA, { keepAlive: 3600 });
+      expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({
+        models: { [QWEN]: { effort: 'low' }, [GEMMA]: { keepAlive: 3600 } },
+      });
+      expect(await new ModelSettingsStore(path).get(QWEN)).toEqual({ effort: 'low' });
+    });
+  });
+
+  it.each([
+    ['FF FE', Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('{"models": {}}', 'utf16le')])],
+    ['FE FF', Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from('{"models": {}}', 'utf16le').swap16()])],
+    ['no (LE)', Buffer.from('{"models": {}}', 'utf16le')],
+    ['no (BE)', Buffer.from('{"models": {}}', 'utf16le').swap16()],
+  ])('names the encoding of a file saved as UTF-16 with a %s mark, and never writes over it', async (_mark, bytes) => {
+    const path = await fileIn();
+    await writeFile(path, bytes);
+    const store = new ModelSettingsStore(path);
+    for (const call of [() => store.get(QWEN), () => store.set(QWEN, { effort: 'low' })]) {
+      const error = await call().catch((reason: unknown) => reason);
+      expect(error).toBeInstanceOf(ModelSettingsFileError);
+      expect((error as Error).message).toContain(`${path} is saved as UTF-16, which cannot be read. Save it as UTF-8.`);
+      expect((error as Error).message).not.toContain('is not valid JSON');
+    }
+    expect(await readFile(path)).toEqual(bytes);
+  });
+
+  it.each([
+    ['an empty file', ''],
+    ['a file holding only a byte order mark', String.fromCharCode(0xfeff)],
+  ])('reports %s as not valid JSON, and never writes over it', async (_name, content) => {
+    const path = await fileIn();
+    await writeFile(path, content, 'utf8');
+    const store = new ModelSettingsStore(path);
+    for (const call of [() => store.get(QWEN), () => store.set(QWEN, { effort: 'low' })]) {
+      const error = await call().catch((reason: unknown) => reason);
+      expect(error).toBeInstanceOf(ModelSettingsFileError);
+      expect((error as Error).message).toContain(`${path} is not valid JSON`);
+    }
+    expect(await readFile(path, 'utf8')).toBe(content);
+  });
+
   it('lets a retry succeed after a corrupt file is deleted by hand', async () => {
     const path = await fileIn();
     await writeFile(path, '[]', 'utf8');

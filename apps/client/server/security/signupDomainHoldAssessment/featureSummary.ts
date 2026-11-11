@@ -2,7 +2,8 @@
  * Builds the only thing the signup domain hold assessment sends to a provider: a strict summary of
  * counts and flags for one held domain. Every field is derived in code and the result is parsed with
  * a strict schema, so emails, IPs, the domain name and anything the domain's site serves can never
- * ride along. The site body is read here only to derive `hasContent`; it is never returned.
+ * ride along. The site body is read here only to derive `hasContent` and `offersDisposableMail`; it is
+ * never returned.
  */
 
 import { isIPv4, isIPv6 } from 'node:net';
@@ -16,6 +17,9 @@ const SITE_TIMEOUT_MS = 4000;
 const SITE_MAX_BODY_BYTES = 256 * 1024;
 // Visible text below this reads as a parked, placeholder or empty page.
 const MIN_VISIBLE_TEXT_CHARS = 200;
+// Wording a throwaway-mail or credit-farming service uses to describe itself.
+const DISPOSABLE_MAIL_WORDING =
+  /\b(?:temp(?:orary)?[\s-]?(?:e-?)?mail|disposable\s+(?:e-?mail|inbox|address)|burner\s+(?:e-?mail|inbox|address)|throwaway\s+(?:e-?mail|inbox|address)|\d+\s?minute\s?(?:e-?)?mail|fake\s+(?:e-?mail|inbox)|captcha\s+solver)\b/i;
 const HOSTNAME = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$/i;
 
 export const MX_PROVIDER_CLASSES = [
@@ -35,7 +39,12 @@ export const signupDomainHoldFeatureSummarySchema = z.strictObject({
   /** Days since registration (RDAP); null when the registry did not answer. */
   domainAgeDays: count.nullable(),
   mxProvider: z.enum(MX_PROVIDER_CLASSES),
-  site: z.strictObject({ resolves: z.boolean(), hasContent: z.boolean() }),
+  site: z.strictObject({
+    resolves: z.boolean(),
+    hasContent: z.boolean(),
+    /** The page describes a temporary, disposable or burner mail service. */
+    offersDisposableMail: z.boolean(),
+  }),
   signups: z.strictObject({
     count,
     /** Held accounts the timing and network figures are taken from. */
@@ -91,12 +100,23 @@ const visibleText = (html: string) =>
     .replace(/\s+/g, ' ')
     .trim();
 
+const NO_SITE: SiteProbe = { resolves: false, hasContent: false, offersDisposableMail: false };
+
+/** Reads only the flags out of a page body; the text itself never leaves this function. */
+export function siteFlags(html: string): Omit<SiteProbe, 'resolves'> {
+  const text = visibleText(html);
+  return {
+    hasContent: text.length >= MIN_VISIBLE_TEXT_CHARS,
+    offersDisposableMail: DISPOSABLE_MAIL_WORDING.test(text),
+  };
+}
+
 /**
- * Whether `https://<domain>/` answers, and whether it answers 2xx with a page of real text. Never
- * throws: any fetch error (DNS, TLS, timeout, SSRF guard) reads as not resolving.
+ * Whether `https://<domain>/` answers, and whether it answers 2xx with a page of real text and what that
+ * text says it is. Never throws: any fetch error (DNS, TLS, timeout, SSRF guard) reads as not resolving.
  */
 export async function probeSite(domain: string, fetchImpl: typeof safeFetch = safeFetch): Promise<SiteProbe> {
-  if (!HOSTNAME.test(domain)) return { resolves: false, hasContent: false };
+  if (!HOSTNAME.test(domain)) return NO_SITE;
   let response: Response;
   try {
     response = await fetchImpl(
@@ -106,17 +126,17 @@ export async function probeSite(domain: string, fetchImpl: typeof safeFetch = sa
     );
   } catch (error) {
     // A body over the cap is still a site with content.
-    if (isResponseTooLargeError(error)) return { resolves: true, hasContent: true };
-    return { resolves: false, hasContent: false };
+    if (isResponseTooLargeError(error)) return { resolves: true, hasContent: true, offersDisposableMail: false };
+    return NO_SITE;
   }
   if (!response.ok) {
     await response.body?.cancel().catch(() => undefined);
-    return { resolves: true, hasContent: false };
+    return { resolves: true, hasContent: false, offersDisposableMail: false };
   }
   try {
-    return { resolves: true, hasContent: visibleText(await response.text()).length >= MIN_VISIBLE_TEXT_CHARS };
+    return { resolves: true, ...siteFlags(await response.text()) };
   } catch (error) {
-    return { resolves: true, hasContent: isResponseTooLargeError(error) };
+    return { resolves: true, hasContent: isResponseTooLargeError(error), offersDisposableMail: false };
   }
 }
 
@@ -182,7 +202,11 @@ export function buildSignupDomainHoldFeatureSummary(input: {
   return signupDomainHoldFeatureSummarySchema.parse({
     domainAgeDays: domainAgeDays(input.intel, input.now),
     mxProvider: mxProviderClass(input.intel),
-    site: { resolves: input.site.resolves, hasContent: input.site.hasContent },
+    site: {
+      resolves: input.site.resolves,
+      hasContent: input.site.hasContent,
+      offersDisposableMail: input.site.offersDisposableMail,
+    },
     signups: {
       count: Math.max(0, Math.trunc(input.signupCount)),
       accountsSummarized: input.accounts.length,

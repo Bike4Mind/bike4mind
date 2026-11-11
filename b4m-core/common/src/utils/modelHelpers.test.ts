@@ -390,6 +390,8 @@ describe('supportsImageEditEndpoint', () => {
   it.each([
     [ImageModels.FLUX_2_PRO, true],
     [ImageModels.FLUX_2_KLEIN_4B, true],
+    [ImageModels.FLUX_3_IMAGE, true],
+    [ImageModels.FLUX_3_IMAGE_KLEIN, true],
     [ImageModels.FLUX_PRO_FILL, true],
     [ImageModels.GPT_IMAGE_2, true],
     [ImageModels.GEMINI_3_PRO_IMAGE, true],

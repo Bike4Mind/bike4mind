@@ -166,9 +166,10 @@ const PublishedArtifactSchema = new Schema(
     },
     gatedToGroupId: { type: String },
 
-    /** Every share link ever minted for this artifact, revoked ones included (an entry is
-     *  retained after revocation so its token can never be re-minted and its view count
-     *  survives). Live links are the `revokedAt: null` entries whose `expiresAt` is null or in the
+    /** The share links minted for this artifact, revoked ones included (a revoked entry is
+     *  retained so its token stays claimed and its view count survives). The share-token route
+     *  caps the array, pruning the oldest dead entries on each mint; live entries are never
+     *  pruned. Live links are the `revokedAt: null` entries whose `expiresAt` is null or in the
      *  future - see `liveShareTokens()`.
      *  Each entry's `_id` is the opaque handle the owner UI revokes by, so unlike the other
      *  subdocuments here this schema keeps its `_id`.

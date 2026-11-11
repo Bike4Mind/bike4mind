@@ -566,6 +566,11 @@ export interface ModelDiscoveryAdapters {
    * same targets, which is what the multi-run convergence already did.
    */
   refreshCatalogView?: () => void;
+  /**
+   * Called once by a write-mode run whose writes can change what a model picker lists (see
+   * modelListImpact.ts), before the run document is finalized. A throw is logged, never fatal.
+   */
+  onModelListChanged?: () => Promise<void>;
   logger?: DiscoveryLogger;
   env?: DiscoveryEnv;
 }

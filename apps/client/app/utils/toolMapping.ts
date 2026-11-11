@@ -381,6 +381,23 @@ export const humanizeToolId = (toolName: string): string => {
   return shown.map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' ');
 };
 
+/**
+ * The declared label for a tool id (core name, else overlay-contributed), or undefined. Also tries
+ * the id with `-` and `_` swapped: ledger rows write ids with hyphens where tool ids use underscores.
+ */
+export const findToolDisplayLabel = (
+  toolName: PublicTools | string,
+  overlayLabels: PremiumToolDisplayLabels = premiumToolDisplayLabels
+): string | undefined => {
+  for (const id of [toolName, toolName.replace(/-/g, '_'), toolName.replace(/_/g, '-')]) {
+    const label =
+      TOOL_MAPPING[id as PublicTools]?.displayName ||
+      (Object.hasOwn(overlayLabels, id) ? overlayLabels[id] : undefined);
+    if (label) return label;
+  }
+  return undefined;
+};
+
 /** A core tool's own name, else the label an overlay contributed for it, else its humanized id. */
 export const getToolDisplayName = (
   toolName: PublicTools | string,

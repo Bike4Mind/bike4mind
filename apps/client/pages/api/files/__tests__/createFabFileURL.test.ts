@@ -117,9 +117,7 @@ describe('POST /api/files/createFabFileURL', () => {
 
 afterEach(() => vi.unstubAllEnvs());
 
-it('returns a browser URL without modifying the privately cached imported row', async () => {
-  // A browser URL distinct from the cached private one is only minted on split-endpoint deploys.
-  vi.stubEnv('S3_PRESIGN_ENDPOINT', 'https://public.test');
+it('returns the stable content URL without modifying the imported row', async () => {
   const saved = {
     ...PERSISTED,
     moderationStatus: 'clean',
@@ -128,11 +126,10 @@ it('returns a browser URL without modifying the privately cached imported row', 
     fileUrlExpireAt: new Date(Date.now() + 3600000),
   };
   h.createFabFileByUrl.mockResolvedValue(saved);
-  h.signUrl.mockResolvedValue('https://public.test/import');
   const { res, json } = makeRes();
   await run(res);
-  expect(json.mock.calls[0][0].fileUrl).toBe('https://public.test/import');
+  expect(json.mock.calls[0][0].fileUrl).toMatch(/\/api\/files\/[^/]+\/content\?exp=\d+&sig=[A-Za-z0-9_-]{43}$/);
   expect(saved.fileUrl).toBe('http://private.test/import');
-  expect(h.signUrl).toHaveBeenCalledWith('owned/import.txt', 'get', { expiresIn: 3600, audience: 'browser' });
+  expect(h.signUrl).not.toHaveBeenCalled();
   expect(h.logEvent).toHaveBeenCalled();
 });

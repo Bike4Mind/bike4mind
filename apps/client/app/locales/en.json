@@ -259,6 +259,8 @@
     "enterPassword": "Enter password",
     "signInOrCreate": "Enter your email and we'll send a one-time code to sign in or create an account. No password required.",
     "justAMoment": "Just a moment...",
+    "signInToContinueTo": "Sign in to continue to {{product}}",
+    "signUpToContinueTo": "Create an account to continue to {{product}}",
     "fieldErrors": {
       "invalidUsername": "Invalid username",
       "invalidEmail": "Invalid email",

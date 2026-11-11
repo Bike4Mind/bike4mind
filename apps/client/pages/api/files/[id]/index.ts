@@ -38,7 +38,7 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_OR_GENERATE_SCOPES
       return res.json(await loadGenerateUploadFile(req, req.query.id));
     }
     assertFilesReadScope(req);
-    return res.json(await loadAccessibleFabFile(req, req.query.id));
+    return res.json(await loadAccessibleFabFile(req, req.query.id, { browser: true }));
   })
   /**
    * Update FabFile by ID

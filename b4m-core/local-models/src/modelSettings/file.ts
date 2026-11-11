@@ -215,6 +215,46 @@ function parseStoredEntry(
   return { settings, unsupported };
 }
 
+/** Thrown for a file saved as UTF-16 or UTF-32; `problem` completes "The model settings file <path> ...". */
+export class ModelSettingsEncodingError extends SyntaxError {
+  readonly problem: string;
+  constructor(encoding: 'UTF-16' | 'UTF-32' = 'UTF-16') {
+    super(`The model settings file is saved as ${encoding}, which cannot be read. Save it as UTF-8.`);
+    this.name = 'ModelSettingsEncodingError';
+    this.problem = `is saved as ${encoding}, which cannot be read. Save it as UTF-8`;
+  }
+}
+
+const REPLACEMENT = '\ufffd';
+
+function wideEncoding(text: string): 'UTF-16' | 'UTF-32' | null {
+  // FF FE or FE FF read as UTF-8 is two U+FFFD; read as UTF-16 LE, FF FE is U+FEFF and FE FF is U+FFFE.
+  const mark = REPLACEMENT + REPLACEMENT;
+  if (text.startsWith(mark + '\u0000\u0000') || text.startsWith('\u0000\u0000' + mark)) return 'UTF-32';
+  if (text.startsWith(mark) || text.charCodeAt(0) === 0xfffe) return 'UTF-16';
+  // JSON opens with an ASCII character: UTF-16 puts a NUL beside it, UTF-32 three. NULs elsewhere are damage.
+  const [a, b, c, d] = [0, 1, 2, 3].map(index => text.charCodeAt(index) === 0);
+  if ((!a && b && c && d) || (a && b && c && !d)) return 'UTF-32';
+  if (a !== b) return 'UTF-16';
+  return null;
+}
+
+/**
+ * The file's text, read as UTF-8, as JSON; throws as JSON.parse does. A leading UTF-8 byte order mark is
+ * skipped: Notepad and PowerShell 5 can save a hand edit with one, which JSON.parse refuses. Text that is
+ * UTF-16 or UTF-32 read as UTF-8 (marked or not) throws ModelSettingsEncodingError.
+ */
+export function parseModelSettingsJson(text: string): unknown {
+  const encoding = wideEncoding(text);
+  if (encoding) throw new ModelSettingsEncodingError(encoding);
+  return JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
+}
+
+/** The problem to report for a settings file whose text parseModelSettingsJson rejected. */
+export function modelSettingsJsonProblem(error: unknown): string {
+  return error instanceof ModelSettingsEncodingError ? error.problem : 'is not valid JSON';
+}
+
 /**
  * The file's settings by model, with each recognized model holding a known field of the wrong type in
  * `invalid`; null when it is not a settings file at all. Unknown fields and unrecognized keys are kept in `entries`.

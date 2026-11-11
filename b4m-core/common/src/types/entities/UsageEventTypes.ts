@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
 import { CreditHolderType } from './CreditHolderTypes';
-import { NamedApiKeyUsage, ISourceUsage } from './CreditTransactionTypes';
+import { NamedApiKeyUsage, ISourceUsage, ILedgerUsageTotal } from './CreditTransactionTypes';
 import { ApiKeyCompletionSource, COMPLETION_SOURCES, CompletionSource, IPlatformEndpointUsage } from '../analytics';
 
 /**
@@ -473,6 +473,11 @@ export interface IUsageDashboardResponse {
    * spend, which can drift from `totals` - that comes from UsageEvent.
    */
   bySource: ISourceUsage[];
+  /**
+   * The owner's ledger spend for the same window. `totals` counts usage events only, so charges
+   * written to the ledger without one (e.g. app-specific charges) show up here and not there.
+   */
+  ledger: ILedgerUsageTotal;
   totals: IUsageSpendBucket;
 }
 
