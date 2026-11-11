@@ -1,4 +1,7 @@
+import { readFileSync } from 'fs';
 import { readFile } from 'fs/promises';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { Readable } from 'stream';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import yauzl from 'yauzl';
@@ -129,7 +132,9 @@ vi.mock('./accountDataExportCollections', () => ({
 }));
 
 import { ACCOUNT_DATA_EXPORT_TTL_MS } from '@bike4mind/server-utils/utils/accountDataExport';
+import { ADMIN_DATA_EXPORT_GIVE_UP_MS } from '@server/dataSubject/adminDataExports';
 import { dispatch, LEASE_WAIT_DELAY_SECONDS, MAX_FILE_BYTES, MAX_LEASE_WAITS } from './accountDataExport';
+import { MAX_RECEIVE_COUNT, RUN_BUDGET_MS, VISIBILITY_TIMEOUT_SECONDS } from '../selfhost/registerRedrivenQueue';
 
 const logger = { updateMetadata: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 const FULL_BUDGET_MS = 15 * 60 * 1000;
@@ -969,5 +974,44 @@ describe('account data export worker', () => {
       await expect(runForAdmin()).rejects.toThrow(/unclassified models Mystery/);
       expect(h.uploadFile).not.toHaveBeenCalled();
     });
+  });
+});
+
+// The admin dialog shows an export as failed once ADMIN_DATA_EXPORT_GIVE_UP_MS passes, so that window must
+// outlast the slowest job that can still succeed: every lease-wait re-send, then every redelivery of the
+// last copy (which finds the lease still held and throws), then one full run.
+describe('admin export give-up window', () => {
+  const MINUTE = 60 * 1000;
+  const QUEUES = readFileSync(
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../../infra/queues.ts'),
+    'utf8'
+  );
+  const minutesIn = (block: string, field: string) => {
+    const match = block.match(new RegExp(`${field}: '(\\d+) minutes'`));
+    expect(match, field).not.toBeNull();
+    return Number(match![1]) * MINUTE;
+  };
+  const latestSuccessMs = (receives: number, visibilityMs: number, runMs: number) =>
+    MAX_LEASE_WAITS * LEASE_WAIT_DELAY_SECONDS * 1000 + (receives - 1) * visibilityMs + runMs;
+  // Slack for the short runs that do each re-send and for queue delivery latency.
+  const SLACK_MS = 5 * MINUTE;
+
+  it('outlasts the slowest successful job on AWS', () => {
+    const from = QUEUES.indexOf("new sst.aws.Queue('accountDataExportQueue'");
+    const queue = QUEUES.slice(from, QUEUES.indexOf('});', from));
+    const subscription = QUEUES.slice(QUEUES.indexOf('accountDataExportQueue.subscribe('));
+    // SST passes dlq.retry through as the redrive maxReceiveCount.
+    const receives = Number(queue.match(/retry: (\d+)/)?.[1]);
+    expect(receives).toBeGreaterThan(0);
+
+    const latest = latestSuccessMs(receives, minutesIn(queue, 'visibilityTimeout'), minutesIn(subscription, 'timeout'));
+    expect(latest).toBe(61 * MINUTE);
+    expect(ADMIN_DATA_EXPORT_GIVE_UP_MS).toBeGreaterThanOrEqual(latest + SLACK_MS);
+  });
+
+  it('outlasts the slowest successful job on the self-host runner', () => {
+    const latest = latestSuccessMs(MAX_RECEIVE_COUNT, VISIBILITY_TIMEOUT_SECONDS * 1000, RUN_BUDGET_MS);
+    expect(latest).toBe(70 * MINUTE);
+    expect(ADMIN_DATA_EXPORT_GIVE_UP_MS).toBeGreaterThanOrEqual(latest + SLACK_MS);
   });
 });
