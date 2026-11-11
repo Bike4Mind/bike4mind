@@ -343,6 +343,24 @@ describe('ModelDetailPage', () => {
     await waitFor(() => expect(screen.queryByTestId('model-access-fallback-error')).not.toBeInTheDocument());
   });
 
+  it('says the fallback choices are cut short when the model lookup hit its page cap', async () => {
+    serve([offRow]);
+    const served = get.getMockImplementation()!;
+    get.mockImplementation(async (url: string, config?: { params?: Record<string, string> }) => {
+      if (url === '/api/admin/models' && config?.params?.types) {
+        const page = config.params.page;
+        return { data: { ...listResponse([modelRow({ id: `text-${page}`, name: `Text ${page}` })]), total: 6000 } };
+      }
+      return served(url, config);
+    });
+    await renderModelsRoute(`/admin/models/${BEDROCK_ID}?tab=access`, () => null, { Detail: DetailRoute });
+
+    fireEvent.click(await screen.findByTestId('model-access-ranking-btn'));
+    expect(await screen.findByTestId('model-access-fallback-truncated')).toHaveTextContent(
+      'Only the first 5,000 models are listed here.'
+    );
+  });
+
   it('says in place when the user tags fail to load, and asks again on Retry', async () => {
     serve([offRow]);
     const served = get.getMockImplementation()!;

@@ -11,7 +11,7 @@ export const useModelIndex = () =>
   useQuery({
     queryKey: [...ADMIN_MODELS_QUERY_KEY, 'index'],
     queryFn: async (): Promise<Map<string, AdminModelRow>> => {
-      const rows = await fetchAllAdminModels({ filter: { view: 'all', showFoundationIds: true }, sort: 'name' });
+      const { rows } = await fetchAllAdminModels({ filter: { view: 'all', showFoundationIds: true }, sort: 'name' });
       return new Map(rows.map(model => [model.id, model]));
     },
     staleTime: 30_000,

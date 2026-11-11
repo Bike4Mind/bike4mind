@@ -3,7 +3,7 @@ import { Alert, Autocomplete, Box, Button, FormControl, FormLabel, Input, Stack,
 import { getPriceMargin } from '@bike4mind/common';
 import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
-import { useAdminModelsOfType } from '@client/app/hooks/data/adminModels';
+import { LOOKUP_TRUNCATED_NOTICE, useAdminModelsOfType } from '@client/app/hooks/data/adminModels';
 import {
   RATE_FIELDS,
   RATE_LABELS,
@@ -75,15 +75,22 @@ type AddPriceDialogProps = {
 export function AddPriceDialog({ onClose, presetModelId, onAdded }: AddPriceDialogProps) {
   const text = useAdminModelsOfType('text');
   const voice = useAdminModelsOfType('realtime-voice');
-  const models = { isLoading: text.isLoading || voice.isLoading, isError: text.isError || voice.isError };
+  const models = {
+    isLoading: text.isLoading || voice.isLoading,
+    isError: text.isError || voice.isError,
+    truncated: !!text.data?.truncated || !!voice.data?.truncated,
+  };
   // A model with a price row in force (`price.source === 'row'`) is repriced from the table, not here. The API
   // takes a first voice price only for a model the build prices (a seed entry), so voice needs `source === 'build'`.
   const voiceIds = useMemo(
-    () => new Set((voice.data ?? []).filter(model => model.price?.source === 'build').map(model => model.id)),
+    () => new Set((voice.data?.rows ?? []).filter(model => model.price?.source === 'build').map(model => model.id)),
     [voice.data]
   );
   const ids = useMemo(
-    () => [...(text.data ?? []).filter(model => model.price?.source !== 'row').map(model => model.id), ...voiceIds],
+    () => [
+      ...(text.data?.rows ?? []).filter(model => model.price?.source !== 'row').map(model => model.id),
+      ...voiceIds,
+    ],
     [text.data, voiceIds]
   );
   const [picked, setPicked] = useState<string | null>(null);
@@ -156,6 +163,11 @@ export function AddPriceDialog({ onClose, presetModelId, onAdded }: AddPriceDial
         {models.isError && (
           <Typography level="body-xs" color="danger">
             The model list failed to load.
+          </Typography>
+        )}
+        {models.truncated && (
+          <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }} data-testid="add-price-model-truncated">
+            {LOOKUP_TRUNCATED_NOTICE}
           </Typography>
         )}
       </FormControl>

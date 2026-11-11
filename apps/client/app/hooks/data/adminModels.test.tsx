@@ -30,7 +30,8 @@ describe('useAdminModelsOfType', () => {
 
     const { result } = renderHook(() => useAdminModelsOfType('text'), { wrapper });
 
-    await waitFor(() => expect(result.current.data).toHaveLength(502));
+    await waitFor(() => expect(result.current.data?.rows).toHaveLength(502));
+    expect(result.current.data?.truncated).toBe(false);
     expect(mockGet).toHaveBeenCalledTimes(2);
     expect(mockGet.mock.calls.map(([, config]) => config.params)).toEqual([
       expect.objectContaining({ types: 'text', page: '1', pageSize: '500', sort: 'name' }),
@@ -43,7 +44,19 @@ describe('useAdminModelsOfType', () => {
 
     const { result } = renderHook(() => useAdminModelsOfType('text'), { wrapper });
 
-    await waitFor(() => expect(result.current.data).toHaveLength(1));
+    await waitFor(() => expect(result.current.data?.rows).toHaveLength(1));
     expect(mockGet).toHaveBeenCalledTimes(1);
+  });
+
+  it('says the result was cut when the page cap stops it before the server runs out', async () => {
+    mockGet.mockImplementation(async (_url: string, { params }: { params: Record<string, string> }) => ({
+      data: { models: [row(`model-${params.page}`)], total: 6000 },
+    }));
+
+    const { result } = renderHook(() => useAdminModelsOfType('text'), { wrapper });
+
+    await waitFor(() => expect(result.current.data?.truncated).toBe(true));
+    expect(result.current.data?.rows).toHaveLength(10);
+    expect(mockGet).toHaveBeenCalledTimes(10);
   });
 });

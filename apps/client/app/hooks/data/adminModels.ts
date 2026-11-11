@@ -71,18 +71,25 @@ const LOOKUP_PAGE_SIZE = 500;
 /** A runaway guard only: 5,000 rows is far past any catalog. */
 const LOOKUP_MAX_PAGES = 10;
 
-/** Every row a filter matches, paged until the server has none left. */
+/** A paged lookup's rows; `truncated` when the page cap stopped it before the server ran out. */
+export type AdminModelLookup = { rows: AdminModelRow[]; truncated: boolean };
+
+/** Every row a filter matches, paged until the server has none left or the page cap is reached. */
 export const fetchAllAdminModels = async (
   query: Omit<AdminModelListQuery, 'page' | 'pageSize'>
-): Promise<AdminModelRow[]> => {
+): Promise<AdminModelLookup> => {
   const rows: AdminModelRow[] = [];
   for (let page = 1; page <= LOOKUP_MAX_PAGES; page += 1) {
     const response = await fetchAdminModels({ ...query, page, pageSize: LOOKUP_PAGE_SIZE });
     rows.push(...response.models);
-    if (page * LOOKUP_PAGE_SIZE >= response.total || response.models.length === 0) break;
+    if (page * LOOKUP_PAGE_SIZE >= response.total || response.models.length === 0) return { rows, truncated: false };
   }
-  return rows;
+  return { rows, truncated: true };
 };
+
+const LOOKUP_CAP = LOOKUP_PAGE_SIZE * LOOKUP_MAX_PAGES;
+/** The one-line notice a picker shows when its lookup was cut at the page cap. */
+export const LOOKUP_TRUNCATED_NOTICE = `Only the first ${LOOKUP_CAP.toLocaleString('en-US')} models are listed here.`;
 
 /** One model's row, found through the list: there is no per-model read yet. Null when no known model has the id. */
 export const useAdminModelRow = (id: string) =>

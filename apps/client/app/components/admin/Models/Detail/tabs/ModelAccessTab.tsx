@@ -19,7 +19,7 @@ import {
   type ModelAccessChange,
 } from '@bike4mind/common';
 import { KNOWN_ENTITLEMENT_KEYS } from '@bike4mind/server-utils/lib/entitlements/registry';
-import { useAccessTagOptions, useAdminModelsOfType } from '@client/app/hooks/data/adminModels';
+import { LOOKUP_TRUNCATED_NOTICE, useAccessTagOptions, useAdminModelsOfType } from '@client/app/hooks/data/adminModels';
 import { Fact, SectionCard } from '../../../shared';
 import { ModelAccessDialog, ModelToggleDialog } from '../../Access/ModelAccessDialog';
 import { diffAccess, effectiveAccess } from '../../Access/modelAccessChange';
@@ -133,7 +133,7 @@ function RankingEditor({ model, onClose }: { model: AdminModelRow; onClose: () =
   const rankError = 'error' in parsed ? parsed.error : null;
   const change: ModelAccessChange | null =
     'rank' in parsed ? diffAccess(before, { ...before, rank: parsed.rank, fallbackModel: fallback }) : null;
-  const sameTypeRows = (sameType.data ?? []).filter(candidate => candidate.id !== model.id);
+  const sameTypeRows = (sameType.data?.rows ?? []).filter(candidate => candidate.id !== model.id);
   const candidates = sameTypeRows.filter(candidate => FALLBACK_STATUSES.has(candidate.status));
   // The saved fallback stays selectable even when it is no longer one a user could be moved to, so it is seen.
   const saved = before.fallbackModel;
@@ -141,7 +141,7 @@ function RankingEditor({ model, onClose }: { model: AdminModelRow; onClose: () =
   const savedRow = sameTypeRows.find(candidate => candidate.id === saved);
   const savedLabel = savedRow
     ? `${savedRow.name} (${MODEL_STATUS_LABEL[savedRow.status]})`
-    : sameType.data
+    : sameType.data && !sameType.data.truncated
       ? `${saved} (not a ${model.type} model)`
       : saved;
 
@@ -190,6 +190,11 @@ function RankingEditor({ model, onClose }: { model: AdminModelRow; onClose: () =
         <FormHelperText>
           Used when this model fails. Only listed or limited models of the same type are offered.
         </FormHelperText>
+        {sameType.data?.truncated && (
+          <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }} data-testid="model-access-fallback-truncated">
+            {LOOKUP_TRUNCATED_NOTICE}
+          </Typography>
+        )}
         {sameType.isError && (
           <PickerLoadError
             message={`Could not load the ${model.type} models to choose from.`}

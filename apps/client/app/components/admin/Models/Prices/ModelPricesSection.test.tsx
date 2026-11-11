@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   get: vi.fn(),
   post: vi.fn(),
   toastSuccess: vi.fn(),
+  textTruncated: false,
   textModels: [
     { id: 'gpt-x', price: null },
     { id: 'gpt-new' },
@@ -27,8 +28,12 @@ vi.mock('sonner', () => ({ toast: { success: mocks.toastSuccess } }));
 vi.mock('@tanstack/react-router', async () => (await import('../../__tests__/fakeAdminRouter')).fakeRouterModule);
 vi.mock('@client/app/hooks/data/adminModels', () => ({
   ADMIN_MODELS_QUERY_KEY: ['admin', 'models'],
+  LOOKUP_TRUNCATED_NOTICE: 'Only the first 5,000 models are listed here.',
   useAdminModelsOfType: (type: string) => ({
-    data: type === 'text' ? mocks.textModels : type === 'realtime-voice' ? mocks.voiceModels : [],
+    data:
+      type === 'text'
+        ? { rows: mocks.textModels, truncated: mocks.textTruncated }
+        : { rows: type === 'realtime-voice' ? mocks.voiceModels : [], truncated: false },
     isLoading: false,
     isError: false,
   }),
@@ -86,6 +91,7 @@ const fillDialog = async (modelId: string) => {
 describe('ModelPricesSection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.textTruncated = false;
     queryClient = new QueryClient();
     act(() => fakeAdminRouter.reset({ tab: 'models', modelsSection: 'prices' }));
     mocks.get.mockResolvedValue({ data: { rows: ROWS } });
@@ -205,6 +211,23 @@ describe('ModelPricesSection', () => {
     fireEvent.click(await screen.findByTestId('model-prices-add-btn'));
     const dialog = await screen.findByTestId('add-price-dialog');
     expect(within(dialog).getByTestId('add-price-model-input')).toHaveValue('');
+  });
+
+  it('shows no cap notice when the model lookup is whole', async () => {
+    renderSection();
+    fireEvent.click(await screen.findByTestId('model-prices-add-btn'));
+    const dialog = await screen.findByTestId('add-price-dialog');
+    expect(within(dialog).queryByTestId('add-price-model-truncated')).not.toBeInTheDocument();
+  });
+
+  it('names the cap when the model lookup was cut short', async () => {
+    mocks.textTruncated = true;
+    renderSection();
+    fireEvent.click(await screen.findByTestId('model-prices-add-btn'));
+    const dialog = await screen.findByTestId('add-price-dialog');
+    expect(within(dialog).getByTestId('add-price-model-truncated')).toHaveTextContent(
+      'Only the first 5,000 models are listed here.'
+    );
   });
 
   it('preselects the filtered model when it is a text model', async () => {
