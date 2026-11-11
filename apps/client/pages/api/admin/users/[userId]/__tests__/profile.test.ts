@@ -107,7 +107,9 @@ describe('PATCH /api/admin/users/[userId]/profile', () => {
   });
 
   it('declares users:moderate for PATCH', () => {
-    expect(handler._config).toEqual(expect.objectContaining({ adminPermissions: { PATCH: 'users:moderate' } }));
+    expect(handler._config).toEqual(
+      expect.objectContaining({ auth: 'jwtOnly', adminPermissions: { PATCH: 'users:moderate' } })
+    );
   });
 
   it.each([
@@ -223,6 +225,19 @@ describe('PATCH /api/admin/users/[userId]/profile', () => {
     expect(error.message).toBe('Change the name, username or email.');
     expect(h.requireStepUp).not.toHaveBeenCalled();
     expect(h.writeUserUpdate).not.toHaveBeenCalled();
+  });
+
+  it('does not let a users:moderate delegate take a reserved username', async () => {
+    h.writeUserUpdate.mockResolvedValue(storedUser({ username: 'persona-x' }));
+
+    await run({ username: 'persona-x', reason: REASON }, { user: moderator() });
+
+    expect(h.validateUsernameChange).toHaveBeenCalledWith(
+      expect.anything(),
+      { username: 'persona-x' },
+      expect.anything(),
+      { allowReservedUsername: false }
+    );
   });
 
   it('writes a new name and username and audits them with the reason', async () => {

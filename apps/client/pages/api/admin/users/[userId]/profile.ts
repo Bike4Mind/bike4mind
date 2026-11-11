@@ -5,6 +5,7 @@ import {
   HTTPError,
   NotFoundError,
   assertCanActOnAdminTarget,
+  isFullAdmin,
   type AuditChange,
 } from '@bike4mind/common';
 import { userRepository, withTransaction } from '@bike4mind/database';
@@ -69,7 +70,9 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PATCH: 'users:mo
 
         const params = { username: parsed.data.username };
         await onField('username', () =>
-          userService.validateUsernameChange(user, params, userRepository, { allowReservedUsername: true })
+          userService.validateUsernameChange(user, params, userRepository, {
+            allowReservedUsername: isFullAdmin(req.user),
+          })
         );
 
         const changes: AuditChange[] = [];

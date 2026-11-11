@@ -7,12 +7,25 @@ type Handler = (req: unknown, res: unknown) => unknown;
 type Middleware = (req: unknown, res: unknown, next: () => void) => unknown;
 
 export const adminApiMock = async () => {
-  const { ForbiddenError, MethodNotAllowedError, meetsAdminPermissionRequirement, missingAdminPermissionMessage } =
-    await import('@bike4mind/common');
+  const {
+    ApiKeyScope,
+    ForbiddenError,
+    MethodNotAllowedError,
+    meetsAdminPermissionRequirement,
+    missingAdminPermissionMessage,
+  } = await import('@bike4mind/common');
   type Requirement = Parameters<typeof meetsAdminPermissionRequirement>[1];
-  type Req = { method?: string; user?: Parameters<typeof meetsAdminPermissionRequirement>[0] };
+  type Req = {
+    method?: string;
+    user?: Parameters<typeof meetsAdminPermissionRequirement>[0];
+    apiKeyInfo?: { scopes: readonly string[] };
+  };
 
+  // Not the real adminApi export: importing it drags in baseApi and its DB deps, which clash with route test mocks.
   const requireAdminPermission = (req: Req, requirement: Requirement) => {
+    if (req.apiKeyInfo && !req.apiKeyInfo.scopes.includes(ApiKeyScope.ADMIN)) {
+      throw new ForbiddenError('Insufficient API key permissions', { required_scopes: [ApiKeyScope.ADMIN] });
+    }
     if (!meetsAdminPermissionRequirement(req.user, requirement)) {
       throw new ForbiddenError(missingAdminPermissionMessage(requirement));
     }
@@ -31,7 +44,7 @@ export const adminApiMock = async () => {
         };
       const chain = Object.assign(
         async (req: Req, res: unknown) => {
-          const method = req.method ?? 'GET';
+          const method = req.method === 'HEAD' && !config.adminPermissions.HEAD ? 'GET' : (req.method ?? 'GET');
           const requirement = config.adminPermissions[method];
           if (!requirement) throw new MethodNotAllowedError('Admin route has no permission declared for this method');
           requireAdminPermission(req, requirement);
