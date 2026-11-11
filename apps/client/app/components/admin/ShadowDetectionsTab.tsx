@@ -42,6 +42,7 @@ import {
   type AdminSelection,
   type AiSuggestionData,
   type DataColumn,
+  type DataTableRowShortcut,
 } from './shared';
 import { ADMIN_REGION_GAP } from './shared/adminStyles';
 import {
@@ -728,7 +729,7 @@ export const ShadowDetectionsTab: React.FC = () => {
   // A 403 or failed fetch leaves no data: no chips, and A/O stay inert.
   const advisory = useAiAdvisory();
   const advisories = new Map((advisory.data?.advisories ?? []).map(entry => [entry.detectionId, entry]));
-  const decisions = (row: ShadowDetectionRow): Partial<Record<'a' | 'o', () => void>> =>
+  const decisions = (row: ShadowDetectionRow): Partial<Record<DataTableRowShortcut, () => void>> =>
     canGrade && advisorySuggestion(row, advisories)
       ? {
           a: () => setGrading({ row, prefill: 'accept' }),
@@ -806,7 +807,7 @@ export const ShadowDetectionsTab: React.FC = () => {
               variant="row"
               suggestion={advisorySuggestion(row, advisories)}
               onAccept={a}
-              onOverride={o && (() => o())}
+              onOverride={o}
               data-testid={`shadow-detection-ai-${row.id}`}
             />
           </Stack>

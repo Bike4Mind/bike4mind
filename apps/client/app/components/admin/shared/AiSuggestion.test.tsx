@@ -14,6 +14,9 @@ import {
 } from './AiSuggestion';
 import { ChangePreview } from './ChangePreview';
 
+const navigate = vi.fn();
+vi.mock('@tanstack/react-router', () => ({ useRouter: () => ({ navigate }) }));
+
 const theme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: ReactNode }) => (
   <CssVarsProvider theme={theme}>{children}</CssVarsProvider>
@@ -192,7 +195,7 @@ describe('AiSuggestion actions', () => {
     expect(screen.getByTestId('sug-override-btn')).toBeTruthy();
   });
 
-  it('shows Done by AI with Undo for an auto-applied suggestion', () => {
+  it('shows Done by AI with Undo for an auto-applied suggestion', async () => {
     const onUndo = vi.fn();
     const onDecision = vi.fn();
     renderDetail({ suggestion: suggestion({ status: 'auto_applied' }), onUndo, onDecision, onAccept: vi.fn() });
@@ -200,7 +203,44 @@ describe('AiSuggestion actions', () => {
     expect(screen.queryByTestId('sug-accept-btn')).toBeNull();
     fireEvent.click(screen.getByTestId('sug-undo-btn'));
     expect(onUndo).toHaveBeenCalledTimes(1);
-    expect(onDecision).toHaveBeenCalledWith({ suggestionId: 's1', status: 'undone' });
+    await waitFor(() => expect(onDecision).toHaveBeenCalledWith({ suggestionId: 's1', status: 'undone' }));
+  });
+
+  it('reports undone only after the host revert resolves, and not when it rejects', async () => {
+    let finish: () => void = () => {};
+    const onDecision = vi.fn();
+    const { unmount } = renderDetail({
+      suggestion: suggestion({ status: 'auto_applied' }),
+      onUndo: () => new Promise<void>(resolve => (finish = resolve)),
+      onDecision,
+    });
+    fireEvent.click(screen.getByTestId('sug-undo-btn'));
+    await waitFor(() => expect(screen.getByTestId('sug-undo-btn')).toBeDisabled());
+    expect(onDecision).not.toHaveBeenCalled();
+    finish();
+    await waitFor(() => expect(onDecision).toHaveBeenCalledWith({ suggestionId: 's1', status: 'undone' }));
+    unmount();
+
+    const failing = vi.fn();
+    renderDetail({
+      suggestion: suggestion({ status: 'auto_applied' }),
+      onUndo: () => Promise.reject(new Error('revert failed')),
+      onDecision: failing,
+    });
+    fireEvent.click(screen.getByTestId('sug-undo-btn'));
+    await waitFor(() => expect(screen.getByTestId('sug-undo-btn')).not.toBeDisabled());
+    expect(failing).not.toHaveBeenCalled();
+  });
+
+  it('routes a plain click on an in-app evidence link and leaves modified clicks to the browser', () => {
+    navigate.mockClear();
+    renderThemed(<AiSuggestion variant="detail" suggestion={suggestion()} data-testid="sug" />);
+    const link = screen.getByTestId('sug-reason-0').querySelector('a') as HTMLAnchorElement;
+    expect(link.getAttribute('href')).toBe('/admin/evidence/1');
+    fireEvent.click(link, { metaKey: true });
+    expect(navigate).not.toHaveBeenCalled();
+    fireEvent.click(link);
+    expect(navigate).toHaveBeenCalledWith({ href: '/admin/evidence/1' });
   });
 });
 

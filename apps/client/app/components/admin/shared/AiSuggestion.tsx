@@ -1,5 +1,6 @@
-import { useState, type ReactNode } from 'react';
+import { useState, type MouseEvent, type ReactNode } from 'react';
 import { Box, Button, Link, Stack, Tooltip, Typography } from '@mui/joy';
+import { useRouter } from '@tanstack/react-router';
 import { ActionDialog } from './ActionDialog';
 import { ACCEPTED_AI_REASON } from './adminReason';
 import { adminFocus } from './adminStyles';
@@ -76,10 +77,10 @@ export type AiSuggestionProps = {
   onAccept?: () => void;
   /** Opens the host's manual control; the host reports `overridden` once its write lands. */
   onOverride?: (reason?: AiOverrideReason) => void;
-  /** Fires here for Dismiss and Undo, which complete inside the component. */
+  /** Fires here for Dismiss, and for Undo once `onUndo` resolves. */
   onDecision?: (decision: AiSuggestionDecision) => void;
-  /** Reverts an `auto_applied` suggestion. */
-  onUndo?: () => void;
+  /** Reverts an `auto_applied` suggestion; `undone` is reported once it resolves, and not at all if it rejects. */
+  onUndo?: () => void | Promise<void>;
   /**
    * Detail only: open with the why-wrong picker showing, for a host reached through its Override key.
    * Read once at mount, so mount this only once the suggestion is loaded.
@@ -110,6 +111,8 @@ export function AiSuggestion({
     initialOverriding && onOverride && suggestion ? suggestion.id : null
   );
   const [whyWrong, setWhyWrong] = useState<AiOverrideReason | null>(null);
+  const [undoing, setUndoing] = useState(false);
+  const router = useRouter({ warn: false });
   if (!suggestion || dismissedId === suggestion.id) return null;
   const overriding = overridingId === suggestion.id;
   const setOverriding = (open: boolean) => {
@@ -180,9 +183,23 @@ export function AiSuggestion({
     setDismissedId(suggestion.id);
     decide('dismissed');
   };
-  const undo = () => {
-    onUndo?.();
+  const undo = async () => {
+    setUndoing(true);
+    try {
+      await onUndo?.();
+    } catch {
+      // The host surfaces its own revert error; a failed revert is not reported as undone.
+      setUndoing(false);
+      return;
+    }
+    setUndoing(false);
     decide('undone');
+  };
+  // Plain clicks route in-app; modified clicks keep the anchor's open-in-new-tab behavior.
+  const followInApp = (href: string) => (event: MouseEvent<HTMLAnchorElement>) => {
+    if (!router || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    void router.navigate({ href });
   };
   const continueOverride = () => {
     const reason = whyWrong ?? undefined;
@@ -224,7 +241,9 @@ export function AiSuggestion({
           {reasons.map((reason, index) => (
             <Typography key={index} component="li" level="body-sm" data-testid={`${testId}-reason-${index}`}>
               {reason.evidenceHref && isInAppPath(reason.evidenceHref) ? (
-                <Link href={reason.evidenceHref}>{reason.text}</Link>
+                <Link href={reason.evidenceHref} onClick={followInApp(reason.evidenceHref)}>
+                  {reason.text}
+                </Link>
               ) : (
                 reason.text
               )}
@@ -272,7 +291,14 @@ export function AiSuggestion({
       ) : autoApplied ? (
         onUndo && (
           <Stack direction="row" gap={1}>
-            <Button size="sm" variant="outlined" color="neutral" onClick={undo} data-testid={`${testId}-undo-btn`}>
+            <Button
+              size="sm"
+              variant="outlined"
+              color="neutral"
+              onClick={undo}
+              loading={undoing}
+              data-testid={`${testId}-undo-btn`}
+            >
               Undo
             </Button>
           </Stack>

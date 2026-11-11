@@ -33,6 +33,7 @@ vi.mock('@client/app/hooks/data/shadowDetections', () => ({
 }));
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: m.currentUser }) }));
 vi.mock('@tanstack/react-router', () => ({
+  useRouter: () => undefined,
   useSearch: () => m.search,
   useNavigate: () => m.navigate,
   Link: ({
