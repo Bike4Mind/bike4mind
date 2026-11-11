@@ -3,7 +3,7 @@ import { IPC_CHANNELS } from '@shared/ipc';
 import { registerLocalDataExportIpc } from './localDataExportIpc';
 import { writeLocalDataExport } from './localDataExport';
 
-vi.mock('./localDataExport', () => ({ writeLocalDataExport: vi.fn(async () => '/tmp/export') }));
+vi.mock('./localDataExport', () => ({ writeLocalDataExport: vi.fn(async () => ({ path: '/tmp/export', warnings: [] as string[] })) }));
 
 describe('local data export IPC', () => {
   const setup = () => {
@@ -28,7 +28,7 @@ describe('local data export IPC', () => {
   it('uses only the native picker path', async () => {
     const { deps, invoke } = setup();
     deps.pickFolder.mockResolvedValueOnce('/tmp/chosen');
-    await expect(invoke()).resolves.toEqual({ saved: true, path: '/tmp/export' });
+    await expect(invoke()).resolves.toEqual({ saved: true, path: '/tmp/export', warnings: [] });
     expect(writeLocalDataExport).toHaveBeenCalledWith('/tmp/chosen', deps);
   });
 });

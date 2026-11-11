@@ -12,7 +12,7 @@ export function registerLocalDataExportIpc(
     async (event: { sender: WebContents }): Promise<ChatSessionExportResult> => {
       const folder = await deps.pickFolder(event.sender);
       if (!folder) return { saved: false };
-      return { saved: true, path: await writeLocalDataExport(folder, deps) };
+      return { saved: true, ...(await writeLocalDataExport(folder, deps)) };
     }
   );
 }

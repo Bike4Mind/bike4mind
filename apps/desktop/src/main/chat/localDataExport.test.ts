@@ -87,7 +87,7 @@ async function setup() {
 describe('writeLocalDataExport', () => {
   it('writes a manifest last with sessions, attachment, media and project memory, without private files', async () => {
     const deps = await setup();
-    const path = await writeLocalDataExport(deps.destination, deps);
+    const { path } = await writeLocalDataExport(deps.destination, deps);
     const manifest = JSON.parse(await readFile(join(path, 'manifest.json'), 'utf8'));
     expect(manifest).toMatchObject({ exportVersion: '2.0.0', platform: 'bike4mind' });
     expect(manifest.collections.notebooks.count).toBe(1);
@@ -133,7 +133,7 @@ describe('writeLocalDataExport', () => {
     for (const folder of [deps.userData, join(deps.userData, 'exports'), alias]) {
       await expect(writeLocalDataExport(folder, deps)).rejects.toThrow('outside the app data directory');
     }
-    expect(await writeLocalDataExport(deps.base, deps)).toContain('bike4mind-export-');
+    expect((await writeLocalDataExport(deps.base, deps)).path).toContain('bike4mind-export-');
   });
 
   it('requires a scope and removes incomplete bundles on failure', async () => {
@@ -145,7 +145,7 @@ describe('writeLocalDataExport', () => {
     expect(await readdir(deps.destination)).toEqual([]);
   });
 
-  it('rejects a project memory directory linked outside the instructions root', async () => {
+  it('skips a project memory directory linked outside the instructions root', async () => {
     const deps = await setup();
     const outside = join(deps.base, 'outside-memory');
     await mkdir(outside);
@@ -153,7 +153,13 @@ describe('writeLocalDataExport', () => {
     const memory = join(deps.memoryRoot, 'projects', projectSlug(join(deps.base, 'project')), 'memory');
     await rename(memory, `${memory}.old`);
     await symlink(outside, memory);
-    await expect(writeLocalDataExport(deps.destination, deps)).rejects.toThrow('outside its folder');
-    expect(await readdir(deps.destination)).toEqual([]);
+    const { path, warnings } = await writeLocalDataExport(deps.destination, deps);
+    const manifest = JSON.parse(await readFile(join(path, 'manifest.json'), 'utf8'));
+    expect(manifest.collections.memory.count).toBe(0);
+    expect(manifest.warnings).toHaveLength(1);
+    expect(warnings).toEqual(manifest.warnings);
+    const names = [...(await readdir(join(path, 'collections'))).map(n => `collections/${n}`), 'manifest.json'];
+    names.push(...(await readdir(join(path, 'files'))).map(n => `files/${n}`));
+    for (const name of names) expect((await readFile(join(path, name))).toString('latin1')).not.toContain('OUTSIDE_SECRET');
   });
 });

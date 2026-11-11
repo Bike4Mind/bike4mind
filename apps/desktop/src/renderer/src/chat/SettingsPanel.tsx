@@ -282,7 +282,11 @@ function LocalDataExport() {
       const result = await window.b4m.chat.exportLocalData();
       if (result.saved) {
         setFailed(false);
-        setMessage(`Export saved to ${result.path}`);
+        setMessage(
+          result.warnings?.length
+            ? `Export saved to ${result.path}. Skipped: ${result.warnings.join(' ')}`
+            : `Export saved to ${result.path}`
+        );
       }
     } catch (error) {
       setFailed(true);

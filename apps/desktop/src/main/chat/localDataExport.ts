@@ -82,7 +82,7 @@ function safeSession(session: ChatSession): ChatSession {
 async function memoryFiles(
   session: ChatSession,
   root: string
-): Promise<Array<{ project: string; name: string; bytes: Buffer }>> {
+): Promise<Array<{ project: string; name: string; bytes: Buffer }> | null> {
   if (!session.project) return [];
   const store = await memoryStoreFor(session.project.directory, root);
   const [physicalRoot, physicalDirectory] = await Promise.all([realpath(root), realpath(store.directory)]).catch(
@@ -96,7 +96,7 @@ async function memoryFiles(
     !inside(physicalRoot, physicalDirectory) ||
     physicalDirectory !== join(physicalRoot, relative(root, store.directory))
   ) {
-    throw new Error('Project memory resolves outside its folder.');
+    return null;
   }
   let entries;
   try {
@@ -116,13 +116,17 @@ async function memoryFiles(
 }
 
 /** Only explicit, app-owned records enter the bundle; no userData directory traversal. */
-export async function writeLocalDataExport(folder: string, deps: LocalDataExportDeps): Promise<string> {
+export async function writeLocalDataExport(
+  folder: string,
+  deps: LocalDataExportDeps
+): Promise<{ path: string; warnings: string[] }> {
   await assertDestination(folder, deps.userData);
   const scope = deps.sessions.scopeKey();
   if (!scope) throw new Error('Choose an account or device-local environment before exporting.');
   const bundle = join(folder, `bike4mind-export-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID()}`);
   await mkdir(bundle);
   const rows = Object.fromEntries(COLLECTIONS.map(name => [name, [] as Row[]])) as unknown as Record<Collection, Row[]>;
+  const warnings: string[] = [];
   const blobs = new Map<string, Buffer>();
   const addBlob = (bytes: Buffer): string => {
     const hash = sha256(bytes);
@@ -204,7 +208,13 @@ export async function writeLocalDataExport(folder: string, deps: LocalDataExport
         });
       }
       if (session.project) {
-        for (const memory of await memoryFiles(session, deps.memoryRoot ?? defaultUserInstructionsRoot())) {
+        const memoryRoot = deps.memoryRoot ?? defaultUserInstructionsRoot();
+        const found = await memoryFiles(session, memoryRoot);
+        if (found === null) {
+          warnings.push(`Skipped project memory for ${session.project.directory}: it resolves outside its folder.`);
+          continue;
+        }
+        for (const memory of found) {
           const key = `${memory.project}\u0000${memory.name}`;
           if (seenMemory.has(key)) continue;
           seenMemory.add(key);
@@ -233,12 +243,12 @@ export async function writeLocalDataExport(folder: string, deps: LocalDataExport
     await writeFile(
       join(bundle, 'manifest.json'),
       JSON.stringify(
-        { exportVersion: '2.0.0', exportedAt: new Date().toISOString(), platform: 'bike4mind', collections, files },
+        { exportVersion: '2.0.0', exportedAt: new Date().toISOString(), platform: 'bike4mind', collections, files, ...(warnings.length ? { warnings } : {}) },
         null,
         2
       )
     );
-    return bundle;
+    return { path: bundle, warnings };
   } catch (error) {
     await rm(bundle, { recursive: true, force: true });
     throw error;
