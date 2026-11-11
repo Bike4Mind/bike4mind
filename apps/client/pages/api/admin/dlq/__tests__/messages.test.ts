@@ -19,7 +19,7 @@ vi.mock('@server/middlewares/adminApi', () => ({
   }),
 }));
 vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({
-  getDlqByLabel: (label: string) => ({ label, sourceQueue: h.sourceQueue }),
+  getDlqByLabel: (label: string) => ({ label, sourceQueue: h.sourceQueue, replay: 'unsafe' }),
   getDlqUrl: () => 'https://sqs.example/dlq',
   getSourceQueueUrl: () => 'https://sqs.example/physical-source',
 }));
@@ -53,7 +53,8 @@ describe('GET /api/admin/dlq/messages', () => {
     h.sourceQueue = 'source';
   });
 
-  it('holds messages and returns receipt handles for a settings:manage caller', async () => {
+  it('keeps an unsafe queue inspectable for a settings:manage caller', async () => {
+    h.sourceQueue = null;
     const body = await peek(['settings:manage']);
 
     expect(h.receiveFromQueue).toHaveBeenCalledWith('https://sqs.example/dlq', 10, 120);

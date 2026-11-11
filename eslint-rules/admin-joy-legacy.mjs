@@ -26,7 +26,6 @@ const componentsByFile = {
   'EventMetrics/UserActivity/AnalyticsErrorCard.tsx': ['Card'],
   'EventMetrics/UserActivity/filters/MetadataFilterPanel.tsx': ['Card'],
   'EventMetrics/UserActivity/UserActivityTab.tsx': ['Card'],
-  'Feedback/FocusedFeedbackCard.tsx': ['Card'],
   'FilesTab/EditTagModal.tsx': ['Modal'],
   'FilesTab/index.tsx': ['Table'],
   'GitHubConnectionTab.tsx': ['Card', 'Modal'],

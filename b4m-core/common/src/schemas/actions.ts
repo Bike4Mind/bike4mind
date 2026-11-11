@@ -521,6 +521,11 @@ export const InvalidateQueryAction = z.object({
   queryKey: z.array(z.unknown()),
 });
 
+export const AccountDataExportReadyAction = z.object({
+  action: z.literal('account_data_export_ready'),
+  exportJobId: z.uuid(),
+});
+
 /**
  * Temporary ws action until the collection/document subscription feature lands.
  */
@@ -1673,6 +1678,7 @@ export const MessageDataToClient = z.discriminatedUnion('action', [
   StreamedChatCompletionAction,
   StreamedRapidReplyAction,
   InvalidateQueryAction,
+  AccountDataExportReadyAction,
   UpdateResearchTaskStatusAction,
   ImportHistoryJobProgressUpdateAction,
   ResearchModeStreamAction,
