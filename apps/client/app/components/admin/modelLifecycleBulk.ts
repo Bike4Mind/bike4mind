@@ -29,17 +29,26 @@ type ErrorShape = {
 
 const isErrorShape = (error: unknown): error is ErrorShape => typeof error === 'object' && error !== null;
 
+/**
+ * The accept route's 409 is the auto-remap clauses this successor missed - the
+ * one refusal an operator is allowed to overrule, so it renders as a decision
+ * rather than as an error. Anything else is a plain failure.
+ */
+export function replacementBlockers(error: unknown): string[] | null {
+  const response = isErrorShape(error) ? error.response : undefined;
+  if (response?.status !== 409 || response.data?.code !== 'replacement-blocked') return null;
+  return response.data.details?.length ? response.data.details : ['the automation refused this successor'];
+}
+
 function classify(modelId: string, error: unknown): BulkRowResult {
+  const blockers = replacementBlockers(error);
+  if (blockers) return { modelId, outcome: 'blocked', blockers };
   const shaped = isErrorShape(error) ? error : undefined;
-  const response = shaped?.response;
-  if (response?.status === 409 && response.data?.code === 'replacement-blocked') {
-    return {
-      modelId,
-      outcome: 'blocked',
-      blockers: response.data.details?.length ? response.data.details : ['the automation refused this successor'],
-    };
-  }
-  return { modelId, outcome: 'failed', message: response?.data?.message || shaped?.message || 'Request failed' };
+  return {
+    modelId,
+    outcome: 'failed',
+    message: shaped?.response?.data?.message || shaped?.message || 'Request failed',
+  };
 }
 
 /**

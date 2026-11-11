@@ -27,7 +27,7 @@ import { AdminTab } from './adminSidebarConfig';
 import { useAdminModal } from './useAdminModal';
 import { useCreditAnalysisStore } from './CreditAnalysis/store';
 import { NOTE_QUICK_PICKS, appendQuickPick, buildBulkLifecycleNote, buildLifecycleNote } from './modelLifecycleNotes';
-import { runBulkResolution, type BulkAction, type BulkRowResult } from './modelLifecycleBulk';
+import { replacementBlockers, runBulkResolution, type BulkAction, type BulkRowResult } from './modelLifecycleBulk';
 import {
   AdminDialog,
   AdminPageHeader,
@@ -132,17 +132,6 @@ const apiErrorMessage = (err: unknown, fallback: string) => {
 };
 
 /**
- * The accept route's 409 is the auto-remap clauses this successor missed - the
- * one refusal an operator is allowed to overrule, so it renders as a decision
- * rather than as an error. Anything else is a plain failure.
- */
-const replacementBlockers = (err: unknown): string[] | null => {
-  const res = (err as { response?: { status?: number; data?: { code?: string; details?: string[] } } })?.response;
-  if (res?.status !== 409 || res.data?.code !== 'replacement-blocked') return null;
-  return res.data.details?.length ? res.data.details : ['the automation refused this successor'];
-};
-
-/**
  * One-click phrases under a note field. They append, so the prefilled evidence
  * line stays in the audit trail.
  */
@@ -236,6 +225,13 @@ export const ModelLifecycleTab: React.FC = () => {
     try {
       const res = await api.get<LifecycleStatus>('/api/admin/model-deprecation-status');
       setStatus(res.data);
+      // A row settled elsewhere (single-row dialog, another admin) must not linger in the selected count.
+      const pending = new Set(res.data.queue.map(item => item.modelId));
+      setSelection(current =>
+        current.mode === 'explicit' && current.ids.some(id => !pending.has(id))
+          ? { mode: 'explicit', ids: current.ids.filter(id => pending.has(id)) }
+          : current
+      );
     } catch (err) {
       setError(apiErrorMessage(err, 'Failed to load model lifecycle status'));
     } finally {
