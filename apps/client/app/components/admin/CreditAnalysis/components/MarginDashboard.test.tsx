@@ -241,7 +241,7 @@ describe('MarginDashboard search and filter', () => {
     renderDashboard();
     const table = await screen.findByTestId('margin-user-table');
     expect(within(table).getByText('Alice Doe')).toBeInTheDocument();
-    fireEvent.change(screen.getByTestId('margin-user-search').querySelector('input')!, {
+    fireEvent.change(screen.getByTestId('margin-user-search'), {
       target: { value: 'bob' },
     });
     expect(within(table).queryByText('Alice Doe')).not.toBeInTheDocument();
@@ -271,7 +271,7 @@ describe('MarginDashboard search and filter', () => {
     });
     renderDashboard();
     await screen.findByTestId('margin-model-day-table');
-    fireEvent.change(screen.getByTestId('margin-provider-filter').querySelector('input')!, {
+    fireEvent.change(screen.getByTestId('margin-provider-filter'), {
       target: { value: 'openai' },
     });
     const modelTable = screen.getByTestId('margin-model-day-table');
@@ -304,7 +304,7 @@ describe('MarginDashboard search and filter', () => {
     const cells = within(table).getAllByTestId('margin-executed-model-cell');
     expect(cells.map(c => c.textContent)).toEqual(['openai / gpt-mini', '-']);
 
-    fireEvent.change(screen.getByTestId('margin-provider-filter').querySelector('input')!, {
+    fireEvent.change(screen.getByTestId('margin-provider-filter'), {
       target: { value: 'openai' },
     });
     expect(within(table).getByText('claude-x')).toBeInTheDocument();
@@ -382,7 +382,7 @@ describe('MarginDashboard funding cohort section', () => {
         : respond(url)
     );
     renderDashboard();
-    expect(await screen.findByTestId('margin-funding-cohort-error')).toHaveTextContent('aggregation timed out');
+    expect(await screen.findByTestId('admin-error-state')).toHaveTextContent('aggregation timed out');
     expect(screen.getByTestId('margin-invoice-enter-2026-06-openai')).toBeEnabled();
     expect(screen.queryByTestId('margin-error')).not.toBeInTheDocument();
   });
