@@ -331,7 +331,8 @@ test('an uploaded file reads back byte-identical after reload and app pod replac
       expect(first.filePath, 'the file record carried no storage key').toBeTruthy();
       const missingKey = `${first.filePath}.missing-${nonce}`;
 
-      // Asked for a key with no object, the app must not hand out a URL at all.
+      // The app must not hand out a URL at all. It declines because the key has no FabFile record
+      // (filterServeableFilePaths in pages/api/files/presigned-url.ts), not by probing the store.
       const signing = await fetchInBrowser(
         page,
         `/api/files/presigned-url?${new URLSearchParams({ 'filePaths[]': missingKey }).toString()}`,
