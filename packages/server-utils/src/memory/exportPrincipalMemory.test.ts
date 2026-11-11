@@ -107,6 +107,20 @@ describe('exportPrincipalMemory', () => {
       await expect(exportWith(findByUserId)).rejects.toThrow(/Invalid owner or cursor/);
     });
 
+    it('rejects with 413 once the mementos exceed the response size cap', async () => {
+      const big = (id: string) => ({ ...row(id, MementoTier.HOT), fullContent: 'x'.repeat(1_000_000) });
+      const findByUserId = vi.fn().mockResolvedValue(Array.from({ length: 6 }, (_, i) => big(paddedId(i + 1))));
+      await expect(exportWith(findByUserId)).rejects.toMatchObject({ statusCode: 413 });
+    });
+
+    it('rejects with 413 when the page limit is reached', async () => {
+      let n = 0;
+      const findByUserId = vi.fn(async () =>
+        Array.from({ length: 200 }, () => ({ ...row(paddedId(++n), MementoTier.HOT), summary: '', fullContent: '' }))
+      );
+      await expect(exportWith(findByUserId as never)).rejects.toMatchObject({ statusCode: 413 });
+    });
+
     it('rejects a row that belongs to another user', async () => {
       const findByUserId = vi.fn().mockResolvedValue([{ ...row('a', MementoTier.HOT), userId: 'u2' }]);
       await expect(exportWith(findByUserId)).rejects.toThrow(/Invalid owner or cursor/);

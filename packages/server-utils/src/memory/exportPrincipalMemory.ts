@@ -1,10 +1,14 @@
-import type { IMemento } from '@bike4mind/common';
+import { HTTPError, type IMemento } from '@bike4mind/common';
 import { activationConfigForKind, foldEvents, type Belief, type MemoryEvent, type Principal } from '@bike4mind/memory';
 import type { KeyProvider } from './factCipher';
 import { listPrincipalLedger, type LedgerRepo } from './ledgerMemoryStore';
 
 const MEMENTO_PAGE_SIZE = 200;
-const MAX_MEMENTO_PAGES = 2_000;
+const MAX_MEMENTO_PAGES = 100;
+// Under the ~6 MB buffered Lambda response limit.
+const MAX_EXPORT_BYTES = 5_000_000;
+
+const tooLarge = () => new HTTPError(413, 'Memory export is too large to download in one response.');
 
 export interface ExportedMemento extends Omit<IMemento, 'metadata' | 'embedding' | 'embeddingModel'> {
   id: string;
@@ -41,11 +45,13 @@ export async function exportPrincipalMemory(deps: {
   }
   const exportedAt = deps.now ?? new Date().toISOString();
   const events = await listPrincipalLedger(deps);
+  let bytes = JSON.stringify(events).length;
+  if (bytes > MAX_EXPORT_BYTES) throw tooLarge();
   const mementos: ExportedMemento[] = [];
   if (deps.principal.kind === 'user' && deps.mementos) {
     let afterId: string | undefined;
     for (let page = 0; ; page++) {
-      if (page >= MAX_MEMENTO_PAGES) throw new Error('Memento export exceeded page limit');
+      if (page >= MAX_MEMENTO_PAGES) throw tooLarge();
       const rows = await deps.mementos.findByUserId(deps.ownerUserId, { limit: MEMENTO_PAGE_SIZE, afterId });
       for (const row of rows) {
         const id = String(row.id);
@@ -67,7 +73,7 @@ export async function exportPrincipalMemory(deps: {
           createdAt,
           updatedAt,
         } = row;
-        mementos.push({
+        const memento: ExportedMemento = {
           id,
           userId,
           sessionId,
@@ -82,7 +88,10 @@ export async function exportPrincipalMemory(deps: {
           tags: tags ? Array.from(tags) : undefined,
           createdAt,
           updatedAt,
-        });
+        };
+        bytes += JSON.stringify(memento).length;
+        if (bytes > MAX_EXPORT_BYTES) throw tooLarge();
+        mementos.push(memento);
         afterId = id;
       }
       if (rows.length < MEMENTO_PAGE_SIZE) break;
