@@ -1255,11 +1255,6 @@
       "count": 3
     }
   },
-  "apps/client/pages/api/admin/model-deprecation-status.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
   "apps/client/pages/api/admin/model-metrics.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 5
