@@ -15,7 +15,7 @@ import {
   type FeedbackTrends,
   type FeedbackTypeCounts,
 } from './feedbackTrends';
-import { FEEDBACK_TRENDS_QUERY_KEY } from './queryKeys';
+import { FEEDBACK_LIST_QUERY_KEY, FEEDBACK_TRENDS_QUERY_KEY } from './queryKeys';
 import type { UseFeedbackFiltersReturn } from './types';
 
 type ShowOnly = UseFeedbackFiltersReturn['showOnly'];
@@ -156,7 +156,7 @@ const shareComparison = ({ thumbsDownShare }: FeedbackTrends): string => {
   const current = thumbsDownPercent(thumbsDownShare.current);
   if (current === undefined) return `${prior}% the 7 days before`;
   const change = current - prior;
-  const direction = change === 0 ? 'no change' : `${change > 0 ? 'up' : 'down'} ${Math.abs(change)} pts`;
+  const direction = change === 0 ? 'no change' : `${change > 0 ? '+' : '-'}${Math.abs(change)} pts`;
   return `${prior}% the 7 days before, ${direction}`;
 };
 
@@ -182,9 +182,12 @@ export default function FeedbackTrendStrip({ showOnly }: { showOnly: ShowOnly })
 
   const queryClient = useQueryClient();
   // Refetched with the list, so the figure clicked and the rows it opens are counted moments apart.
+  // The list is invalidated too: when the clicked view is already showing its key does not change,
+  // so it would otherwise stay stale while the figure refreshes.
   const apply: ShowOnly = view => {
     showOnly(view);
     void queryClient.invalidateQueries({ queryKey: FEEDBACK_TRENDS_QUERY_KEY });
+    void queryClient.invalidateQueries({ queryKey: FEEDBACK_LIST_QUERY_KEY });
   };
 
   return (
@@ -203,7 +206,7 @@ export default function FeedbackTrendStrip({ showOnly }: { showOnly: ShowOnly })
           onClick={() => apply({ statusFilters: ALL_STATUSES, received: '24h' })}
         >
           <StatTile
-            label="New in the last 24 h"
+            label="Received, last 24 hours"
             value={data ? data.receivedLast24h : unavailable}
             comparison="Any status"
           />

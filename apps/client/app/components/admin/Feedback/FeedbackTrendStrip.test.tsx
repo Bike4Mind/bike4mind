@@ -69,7 +69,7 @@ describe('FeedbackTrendStrip', () => {
     expect(screen.getByTestId('feedback-trends-open')).toHaveTextContent('12');
     expect(screen.getByTestId('feedback-trends-received-24h')).toHaveTextContent('4');
     expect(screen.getByTestId('feedback-trends-thumbs-down')).toHaveTextContent('30%');
-    expect(screen.getByTestId('feedback-trends-thumbs-down')).toHaveTextContent('10% the 7 days before, up 20 pts');
+    expect(screen.getByTestId('feedback-trends-thumbs-down')).toHaveTextContent('10% the 7 days before, +20 pts');
     expect(screen.getByTestId('feedback-trends-received-30d')).toHaveTextContent('6');
     expect(screen.getByTestId(`feedback-trends-type-${FeedbackType.THUMBS_DOWN}`)).toHaveTextContent('Thumbs down 3');
     expect(screen.getByTestId('feedback-trends-sparkline')).toHaveAttribute(
@@ -101,7 +101,7 @@ describe('FeedbackTrendStrip', () => {
     expect(fakeAdminRouter.search).not.toHaveProperty('feedbackPage');
   });
 
-  it('New in the last 24 h shows every status received in the last day', async () => {
+  it('Received, last 24 hours shows every status received in the last day', async () => {
     renderStrip();
     fireEvent.click(await screen.findByTestId('feedback-trends-received-24h-btn'));
 
