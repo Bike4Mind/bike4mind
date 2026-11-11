@@ -18,7 +18,8 @@ const uncovered = (label: string, c: CoverageCounts): string =>
  */
 const migration: MigrationFile = {
   // Backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001), which must sort
-  // last, and above every other id so a coverage failure holds back nothing else.
+  // last. The runner stops at the first throw, so a coverage failure also holds back every pending
+  // id above this one: today only 20260922000000/1, plus any migration later backdated in between.
   id: 20260921241030,
   name: 'refresh legacy quest plan files and verify coverage',
 
