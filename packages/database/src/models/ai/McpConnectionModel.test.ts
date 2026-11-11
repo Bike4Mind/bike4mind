@@ -1348,6 +1348,25 @@ describe('McpConnectionModel', () => {
         expect(updated?.status).toBe('pending_auth');
       });
 
+      it('changes scopes and registration only for the OAuth connection owner', async () => {
+        const created = await mcpConnectionRepository.create(baseConnection({ slug: 'reconfigured' }));
+        await mcpConnectionRepository.setOAuthConfig(created.id, OWNER, config);
+        const changed = { ...config, scopes: ['write'], clientRegistrationId: 'reg-2' };
+
+        expect(await mcpConnectionRepository.setOAuthConfig(created.id, OTHER_USER_OWNER, changed)).toBeNull();
+        expect((await mcpConnectionRepository.findByIdForOwner(created.id, OWNER))?.auth.oauth).toMatchObject({
+          scopes: ['read'],
+          clientRegistrationId: 'reg-1',
+        });
+
+        const updated = await mcpConnectionRepository.setOAuthConfig(created.id, OWNER, changed);
+        expect(updated?.auth.oauth).toMatchObject({ scopes: ['write'], clientRegistrationId: 'reg-2' });
+        expect((await mcpConnectionRepository.findByIdForOwner(created.id, OWNER))?.auth.oauth).toMatchObject({
+          scopes: ['write'],
+          clientRegistrationId: 'reg-2',
+        });
+      });
+
       it('does not leave a connected none connection offered once it has no token', async () => {
         const created = await mcpConnectionRepository.create(
           baseConnection({ auth: { kind: 'none' }, slug: 'was_open' })

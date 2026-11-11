@@ -60,7 +60,9 @@ beforeEach(() => {
   h.registerIfAbsent.mockReset().mockImplementation(async (row: Record<string, unknown>) => ({ ...row, id: 'reg-1' }));
   h.byId.mockReset().mockResolvedValue(null);
   vi.stubEnv('APP_URL', 'https://app.example.com');
-  vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  vi.spyOn(console, 'warn')
+    .mockClear()
+    .mockImplementation(() => undefined);
 });
 
 describe('resolveOAuthClient', () => {
@@ -168,10 +170,16 @@ describe('resolveOAuthClient', () => {
     expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('customMcpPresetClients is unusable'));
   });
 
+  it('does not warn for a valid preset setting', async () => {
+    h.settings = JSON.stringify({ linear: { clientId: 'preset-id' } });
+    await resolve({ connection: { presetId: 'linear' as never } });
+    expect(console.warn).not.toHaveBeenCalled();
+  });
+
   it('never logs part of a client secret from a malformed preset setting', async () => {
     h.settings = '{"linear":{"clientId":"a","clientSecret":ABCDEFGHIJKLMNOPQRSTUV}}';
     await resolve({ connection: { presetId: 'linear' as never } });
-    expect(console.warn).toHaveBeenCalled();
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('customMcpPresetClients is unusable'));
     const logged = vi.mocked(console.warn).mock.calls.flat().join(' ');
     expect(logged).not.toMatch(/ABCDE|clientSecret/);
   });
