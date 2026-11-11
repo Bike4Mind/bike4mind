@@ -64,10 +64,13 @@ export const PlansSectionSkeleton = () => (
 export const PlansSection = ({
   onSubscriptionChanged,
   trigger,
+  onUpsellClick,
 }: {
   onSubscriptionChanged?: () => void;
   /** What opened the Billing modal; reported with plan clicks. */
   trigger?: string;
+  /** Runs when a plan or Create Team click is reported. */
+  onUpsellClick?: () => void;
 }) => {
   const { t } = useTranslation();
   const [audience, setAudience] = useState<PlanAudience>(PlanAudience.Personal);
@@ -256,6 +259,7 @@ export const PlansSection = ({
                       planName={plan.name}
                       surface={BILLING_UPSELL_SURFACES.plans}
                       trigger={trigger}
+                      onUpsellClick={onUpsellClick}
                       onSubscriptionChanged={onSubscriptionChanged}
                       cancellableSubscriptions={cancellableSubscriptions}
                     />
@@ -304,6 +308,7 @@ export const PlansSection = ({
                     trigger,
                     plan: BILLING_UPSELL_PLANS.team,
                   });
+                  onUpsellClick?.();
                   openCreateTeamModal(BILLING_UPSELL_SURFACES.plans);
                 }}
                 data-testid="subscription-modal-create-team-btn"

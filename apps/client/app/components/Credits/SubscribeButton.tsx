@@ -21,6 +21,8 @@ interface SubscribeButtonProps {
   surface?: UpsellSurface;
   /** What raised the prompt, reported with the click. */
   trigger?: string;
+  /** Runs after a Subscribe click is reported, so a host can tell the prompt was acted on. */
+  onUpsellClick?: () => void;
 }
 
 const SubscribeButton = ({
@@ -30,6 +32,7 @@ const SubscribeButton = ({
   onSubscriptionChanged,
   surface,
   trigger,
+  onUpsellClick,
 }: SubscribeButtonProps) => {
   const subscribe = useSubscribePlan();
   const cancelSubscription = useCancelSubscription();
@@ -59,7 +62,10 @@ const SubscribeButton = ({
   const handleClick = () => {
     switch (type) {
       case 'subscribe':
-        if (surface) trackUpsell('click', { surface, trigger, plan: planName });
+        if (surface) {
+          trackUpsell('click', { surface, trigger, plan: planName });
+          onUpsellClick?.();
+        }
         return subscribe.mutate(
           { priceId, callbackUrl: window.location.href, surface },
           {

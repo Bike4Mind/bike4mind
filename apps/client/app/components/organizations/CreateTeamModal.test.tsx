@@ -350,4 +350,20 @@ describe('CreateTeamModal', () => {
       expect(screen.getByTestId('create-team-submit-btn').hasAttribute('disabled')).toBe(true);
     });
   });
+
+  it('hands the surface that opened it to the team checkout, and forgets it on close', async () => {
+    mutateAsync.mockResolvedValue({ sessionUrl: 'https://stripe.example/checkout' });
+    useCreateTeamModal.getState().open('billing_plans');
+    renderModal();
+
+    const user = userEvent.setup({ delay: null });
+    await user.type(screen.getByPlaceholderText('Enter team name'), 'Rocket Squad');
+    await user.click(screen.getByRole('button', { name: /Create Team/i }));
+
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+    expect(mutateAsync.mock.calls[0][0]).toMatchObject({ surface: 'billing_plans' });
+
+    useCreateTeamModal.getState().close();
+    expect(useCreateTeamModal.getState().surface).toBeUndefined();
+  });
 });

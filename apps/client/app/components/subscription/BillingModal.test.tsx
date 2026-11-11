@@ -90,8 +90,15 @@ vi.mock('./CreditsSection', () => ({
   ),
 }));
 vi.mock('./PlansSection', () => ({
-  PlansSection: ({ onSubscriptionChanged }: { onSubscriptionChanged?: () => void }) => (
+  PlansSection: ({
+    onSubscriptionChanged,
+    onUpsellClick,
+  }: {
+    onSubscriptionChanged?: () => void;
+    onUpsellClick?: () => void;
+  }) => (
     <div data-testid="plans-section-body">
+      <button type="button" data-testid="plan-upsell-click" onClick={onUpsellClick} />
       <button type="button" data-testid="subscription-changed" onClick={onSubscriptionChanged} />
       <button type="button" data-testid="subscription-canceled" />
     </div>
@@ -539,6 +546,43 @@ describe('BillingModal', () => {
       state.plansDisabled = true;
       renderModal(undefined, 'credits_chip');
       expect(trackUpsell).not.toHaveBeenCalled();
+    });
+
+    describe('dismissal', () => {
+      const dismiss = ['dismiss', { surface: 'billing_plans', trigger: 'credits_chip' }];
+      const modal = (open: boolean) => (
+        <TestWrapper>
+          <BillingModal open={open} entry="credits_chip" onClose={vi.fn()} />
+        </TestWrapper>
+      );
+
+      it('reports a dismissal once when the modal closes after the paywall was shown', () => {
+        const { rerender } = render(modal(true));
+        rerender(modal(false));
+        rerender(modal(false));
+        expect(trackUpsell.mock.calls.filter(([action]) => action === 'dismiss')).toEqual([dismiss]);
+      });
+
+      it('reports no dismissal after a plan click', () => {
+        const { rerender } = render(modal(true));
+        fireEvent.click(screen.getByTestId('plan-upsell-click'));
+        rerender(modal(false));
+        expect(trackUpsell).not.toHaveBeenCalledWith('dismiss', expect.anything());
+      });
+
+      it('reports no dismissal to a subscriber', () => {
+        state.subscriptions = [subRow()];
+        const { rerender } = render(modal(true));
+        rerender(modal(false));
+        expect(trackUpsell).not.toHaveBeenCalled();
+      });
+
+      it('reports no dismissal for an org account', () => {
+        state.account = { id: 'org_1', personal: false };
+        const { rerender } = render(modal(true));
+        rerender(modal(false));
+        expect(trackUpsell).not.toHaveBeenCalled();
+      });
     });
 
     it('reports nothing while the modal is closed', () => {

@@ -193,6 +193,22 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
     });
   }, [plansUpsellShown, entry]);
 
+  // Closing with the paywall shown and no plan click is a dismissal, reported once per open. A ref holds
+  // the trigger because the deep-link host clears `entry`/`focus` as it closes.
+  const upsellShownRef = useRef<{ trigger: BillingEntry; clicked: boolean } | null>(null);
+  useEffect(() => {
+    if (plansUpsellShown) {
+      upsellShownRef.current ??= { trigger: entry, clicked: false };
+      return;
+    }
+    if (open) return;
+    const shown = upsellShownRef.current;
+    upsellShownRef.current = null;
+    if (shown && !shown.clicked) {
+      trackUpsell('dismiss', { surface: BILLING_UPSELL_SURFACES.plans, trigger: shown.trigger });
+    }
+  }, [plansUpsellShown, open, entry]);
+
   const plansHeadingRef = useRef<HTMLHeadingElement>(null);
   const creditsHeadingRef = useRef<HTMLHeadingElement>(null);
 
@@ -255,6 +271,9 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
     >
       <PlansSection
         trigger={entry}
+        onUpsellClick={() => {
+          if (upsellShownRef.current) upsellShownRef.current.clicked = true;
+        }}
         onSubscriptionChanged={() => {
           purchasedRef.current = true;
         }}
