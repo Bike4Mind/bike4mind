@@ -31,6 +31,7 @@ GENERATION_JOB_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/generatio
 IMAGE_EDIT_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/imageEditQueue
 IMAGE_GENERATION_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/imageGenerationQueue
 LAKE_INCONSISTENCY_MODEL_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/lakeInconsistencyModelQueue
+GENERATED_MEDIA_PURGE_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/generatedMediaPurgeQueue
 DATA_LAKE_CLEANUP_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/dataLakeCleanupQueue
 DATA_LAKE_CLEANUP_QUEUE_DLQ: http://{{ .Release.Name }}-sqs:9324/000000000000/dataLakeCleanupQueueDLQ
 LAKE_MEMORY_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/lakeMemoryQueue

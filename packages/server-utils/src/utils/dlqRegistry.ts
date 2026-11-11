@@ -505,6 +505,17 @@ const DLQ_REGISTRY = [
       'A job superseded by a newer version is dropped; otherwise the thumbnail is rendered and stored again, with nothing sent outside.',
     owner: 'Published artifacts',
   },
+  {
+    label: 'generated-media-purge',
+    displayName: 'Generated Media Purge',
+    application: 'Notebooks',
+    sourceQueue: 'generatedMediaPurgeQueue',
+    description: 'Deletes generated images, audio and video left behind when a message or notebook is deleted.',
+    replay: 'safe',
+    replayNote:
+      'Each key is rechecked against live references and notebook ownership before it is deleted, and deleting a key that is already gone is a no-op.',
+    owner: 'Notebooks',
+  },
 ] as const satisfies readonly CoreDlqDescriptor[];
 
 type CoreDlqLabel = (typeof DLQ_REGISTRY)[number]['label'];
