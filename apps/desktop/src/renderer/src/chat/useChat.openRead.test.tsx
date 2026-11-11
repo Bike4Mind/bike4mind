@@ -333,6 +333,8 @@ describe('a reply settled before the chat is opened', () => {
     await act(async () => root.render(<Harness id="s1" />));
     expect(conversation.session?.id).toBe('s1');
     expect(conversation.messages[0]).toEqual(prompt);
+    expect(conversation.streaming).toBe(true);
+    expect(conversation.turn?.startedAt).toBe(10);
     expect(readsOf('s1')).toBe(4);
   });
 
