@@ -4,6 +4,10 @@ import Foundation
 /// the web-auth session (for example a build without the `webcredentials:` associated domain, such as an
 /// unsigned simulator build), it reports a plain cancel within a few hundred milliseconds, so the sign-in
 /// screen would otherwise stay silent. Nobody can see the sheet and tap Cancel that fast.
+///
+/// Known false positive: the window starts at the call, so it includes the system "wants to use ... to
+/// Sign In" alert. A Cancel on that alert inside the window reads as a start failure and shows the
+/// "could not start" message. There is no hook for when the alert or sheet becomes visible.
 @MainActor
 public struct StartFailureDetectingAuthenticator: WebAuthenticating {
   /// Faster than any cancel a person could make: the sheet alone takes about half a second to appear.

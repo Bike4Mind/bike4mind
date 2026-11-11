@@ -68,10 +68,10 @@ final class AuthorizationRequestTests: XCTestCase {
       state: "state-123")
   }
 
-  func testDevelopmentRequestSendsTheCustomSchemeRedirectToTheSameClient() throws {
+  func testDevelopmentRequestUsesItsOwnClientWithTheCustomSchemeRedirect() throws {
     let components = try XCTUnwrap(URLComponents(url: makeDevelopmentRequest().url, resolvingAgainstBaseURL: false))
     let query = Dictionary(uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value ?? "") })
-    XCTAssertEqual(query["client_id"], "b4m-ios-app")
+    XCTAssertEqual(query["client_id"], "b4m-ios-app-dev")
     XCTAssertEqual(query["redirect_uri"], "com.bike4mind.app://auth-callback")
   }
 
@@ -93,5 +93,12 @@ final class AuthorizationRequestTests: XCTestCase {
         XCTAssertEqual($0 as? AuthError, .invalidCallback)
       }
     }
+  }
+
+  func testDebugBuildKeepsTheFirstPartyClientOnProduction() {
+    XCTAssertEqual(OAuthConfiguration.debugBuild(for: .production), .iosApp)
+    XCTAssertEqual(
+      OAuthConfiguration.debugBuild(for: .custom(URL(string: "https://staging.example.com")!)), .iosAppDevelopment)
+    XCTAssertNotEqual(OAuthConfiguration.iosAppDevelopment.clientID, OAuthConfiguration.iosApp.clientID)
   }
 }

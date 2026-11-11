@@ -86,20 +86,23 @@ Sessions upload chip can be watched; the first send to the Receipts lake fails o
 
 ## Sign-in callback
 
-The web sign-in sheet (`ASWebAuthenticationSession`, PKCE) returns to the app on a redirect URI that is fixed per build
-configuration (`OAuthConfiguration`, chosen in `Bike4MindApp`), never per server:
+The web sign-in sheet (`ASWebAuthenticationSession`, PKCE) returns to the app on a redirect URI. `OAuthConfiguration` holds
+the two clients; `Bike4MindApp` picks one per build and, in DEBUG, per server:
 
-| Build | redirect_uri | Needs |
-|---|---|---|
-| Release | `https://app.bike4mind.com/ios/auth-callback` (claimed universal link) | signed build, `webcredentials:` associated domain, AASA on app.bike4mind.com |
-| DEBUG | `com.bike4mind.app://auth-callback` (private-use scheme, RFC 8252) | nothing; works on unsigned simulator builds |
+| Build and server | client_id | redirect_uri | Needs |
+|---|---|---|---|
+| Release, any server | `b4m-ios-app` | `https://app.bike4mind.com/ios/auth-callback` (claimed universal link) | signed build, `webcredentials:` associated domain, AASA on app.bike4mind.com |
+| DEBUG, production | `b4m-ios-app` | same https link | same as Release |
+| DEBUG, any other server | `b4m-ios-app-dev` | `com.bike4mind.app://auth-callback` (private-use scheme, RFC 8252) | nothing; works on unsigned simulator builds |
 
-The claimed https link stays the production path: only the app holding the associated domain can receive it. DEBUG uses the
-custom scheme because an unsigned build has no entitlements, so the https form fails before the sheet opens. PKCE binds the
-code to the verifier this app generated, so another app that registers the same scheme cannot redeem an intercepted code.
+The production client only ever redirects to the claimed https link, which only the app holding the associated domain can
+receive. Any app can claim a custom scheme, and a first-party client skips the consent screen, so PKCE alone would not stop
+another app from running its own flow against that client and receiving the code. The custom scheme therefore belongs to a
+separate first-party client, `b4m-ios-app-dev`, which the server seeds on non-production stages only (never on production).
+It has to be first-party all the same: the app routes refuse relying-party tokens.
+
 The scheme is deliberately not in `CFBundleURLTypes`: the session intercepts the redirect itself, and registering it would
-let any app or page open Bike4Mind with that URL. Both URIs must be in the server-side `b4m-ios-app` client's
-`redirectUris` (exact match).
+let any app or page open Bike4Mind with that URL. Server URIs are exact-match.
 
 ## Push notifications and universal links
 

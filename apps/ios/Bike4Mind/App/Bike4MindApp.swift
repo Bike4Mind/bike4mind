@@ -20,14 +20,14 @@ struct Bike4MindApp: App {
     #else
       let tokenStore: any TokenStore = KeychainTokenStore(accessGroup: KeychainAccessGroup.resolved())
     #endif
-    // DEBUG signs in through the custom scheme so unsigned simulator builds work; Release keeps the
-    // claimed universal link. See README "Sign-in callback".
+    // Release always signs in as the first-party client on the claimed universal link. DEBUG uses the
+    // development client (custom scheme) on non-production servers. See README "Sign-in callback".
     #if DEBUG
-      let oauth = OAuthConfiguration.iosAppDevelopment
+      let auth = AuthController(
+        environment: environment, tokenStore: tokenStore, oauthConfiguration: OAuthConfiguration.debugBuild(for:))
     #else
-      let oauth = OAuthConfiguration.iosApp
+      let auth = AuthController(environment: environment, tokenStore: tokenStore)
     #endif
-    let auth = AuthController(environment: environment, tokenStore: tokenStore, configuration: oauth)
     _auth = State(initialValue: auth)
     let services = AppServices(auth: auth)
     AppDelegate.services = services

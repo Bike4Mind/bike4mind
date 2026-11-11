@@ -356,6 +356,38 @@ final class AuthControllerTests: XCTestCase {
     XCTAssertEqual(PKCEPair(verifier: verifier).challenge, challenge)
   }
 
+  func testDebugBuildSignsInAsTheDevelopmentClientOnlyOffProduction() async throws {
+    let accessToken = freshAccessToken()
+    await transport.respond { _ in
+      (
+        200,
+        Fixtures.json([
+          "access_token": accessToken, "refresh_token": "sid.0", "token_type": "Bearer", "expires_in": 1800,
+        ])
+      )
+    }
+    let auth = AuthController(
+      environment: .production, tokenStore: store, transport: transport,
+      oauthConfiguration: OAuthConfiguration.debugBuild(for:),
+      biometricGate: FakeBiometricGate(succeeds: true), preferences: Fixtures.isolatedDefaults())
+    auth.restore()
+
+    let onProduction = FakeWebAuthenticator(.approve(code: "prod-code"))
+    try await auth.signIn(using: onProduction)
+    await auth.switchEnvironment(to: .custom(URL(string: "https://staging.example.com")!))
+    let onStaging = FakeWebAuthenticator(.approve(code: "staging-code"))
+    try await auth.signIn(using: onStaging)
+
+    let bodies = await transport.requests(to: tokenPath).map(Fixtures.jsonBody(of:))
+    XCTAssertEqual(bodies.map { $0["client_id"] as? String }, ["b4m-ios-app", "b4m-ios-app-dev"])
+    XCTAssertEqual(
+      bodies.map { $0["redirect_uri"] as? String },
+      ["https://app.bike4mind.com/ios/auth-callback", "com.bike4mind.app://auth-callback"])
+    let stagingQuery = URLComponents(url: try XCTUnwrap(onStaging.openedURL), resolvingAgainstBaseURL: false)?
+      .queryItems
+    XCTAssertEqual(stagingQuery?.first { $0.name == "client_id" }?.value, "b4m-ios-app-dev")
+  }
+
   func testSignInStoresRefreshTokenAndKeepsAccessTokenInMemory() async throws {
     let accessToken = freshAccessToken()
     await transport.respond { _ in (200, Fixtures.json(["access_token": accessToken, "refresh_token": "sid.0"])) }

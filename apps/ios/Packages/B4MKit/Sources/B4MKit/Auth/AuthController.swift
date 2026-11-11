@@ -41,7 +41,8 @@ public final class AuthController: AccessTokenProviding {
 
   @ObservationIgnored private let tokenStore: any TokenStore
   @ObservationIgnored private let transport: any HTTPTransport
-  @ObservationIgnored private let configuration: OAuthConfiguration
+  /// Picked per server at sign-in time, so a server switch also switches the OAuth client.
+  @ObservationIgnored private let oauthConfiguration: @Sendable (ServerEnvironment) -> OAuthConfiguration
   @ObservationIgnored private let biometricGate: any BiometricGate
   @ObservationIgnored private let deviceName: @MainActor () -> String?
   @ObservationIgnored private let now: @Sendable () -> Date
@@ -62,7 +63,7 @@ public final class AuthController: AccessTokenProviding {
     environment: ServerEnvironment,
     tokenStore: any TokenStore,
     transport: any HTTPTransport = URLSessionTransport(),
-    configuration: OAuthConfiguration = .iosApp,
+    oauthConfiguration: @escaping @Sendable (ServerEnvironment) -> OAuthConfiguration = { _ in .iosApp },
     biometricGate: any BiometricGate = LocalAuthenticationGate(),
     preferences: UserDefaults = .standard,
     deviceName: @escaping @MainActor () -> String? = { DeviceName.current },
@@ -71,7 +72,7 @@ public final class AuthController: AccessTokenProviding {
     self.environment = environment
     self.tokenStore = tokenStore
     self.transport = transport
-    self.configuration = configuration
+    self.oauthConfiguration = oauthConfiguration
     self.biometricGate = biometricGate
     self.preferences = preferences
     self.deviceName = deviceName
@@ -131,6 +132,7 @@ public final class AuthController: AccessTokenProviding {
 
   /// Runs the PKCE authorization-code flow through the system web sheet and stores the resulting session.
   public func signIn(using authenticator: any WebAuthenticating) async throws {
+    let configuration = oauthConfiguration(environment)
     let request = AuthorizationRequest(baseURL: environment.baseURL, configuration: configuration)
     let callbackURL = try await authenticator.authenticate(url: request.url, callbackURL: configuration.redirectURI)
     let code = try request.authorizationCode(from: callbackURL)
