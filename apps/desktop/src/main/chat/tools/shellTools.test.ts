@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChatMoveToBackgroundResult } from '@shared/chat';
@@ -623,7 +623,7 @@ describe('a worktree session reading its main checkout', () => {
   let context: ToolContext;
 
   beforeEach(async () => {
-    base = await realpath(await mkdtemp(join(tmpdir(), 'b4m-worktree-')));
+    base = await realpath(await mkdtemp(join(userInfo().homedir, '.b4m-worktree-')));
     const sharedTemporaryDirectory = join(base, 'shared-temp');
     await mkdir(sharedTemporaryDirectory);
     vi.stubEnv('TMPDIR', sharedTemporaryDirectory);
@@ -674,24 +674,24 @@ describe('a worktree session reading its main checkout', () => {
   });
 
   it.each([
-    (dir: string) => `git -C ${dir} status --short | head -20`,
-    (dir: string) => `git -C ${dir} log -1 --format=%h; git -C ${dir} branch --show-current`,
-    (dir: string) => `ls -la ${dir}/apps | head; cat ${dir}/package.json`,
+    (dir: string) => `git -C "${dir}" status --short | head -20`,
+    (dir: string) => `git -C "${dir}" log -1 --format=%h; git -C "${dir}" branch --show-current`,
+    (dir: string) => `ls -la "${dir}"/apps | head; cat "${dir}"/package.json`,
   ])('reads it unasked: %s', async command => {
     expect(await outsideFolders(command(main))).toEqual([]);
   });
 
   it.each([
-    (dir: string) => `git -C ${dir} checkout -b other`,
-    (dir: string) => `git -C ${dir} -c core.pager=less log`,
-    (dir: string) => `echo x > ${dir}/notes.txt`,
-    (dir: string) => `mkdir ${dir}/scratch`,
-    (dir: string) => `rm ${dir}/package.json`,
+    (dir: string) => `git -C "${dir}" checkout -b other`,
+    (dir: string) => `git -C "${dir}" -c core.pager=less log`,
+    (dir: string) => `echo x > "${dir}"/notes.txt`,
+    (dir: string) => `mkdir "${dir}"/scratch`,
+    (dir: string) => `rm "${dir}"/package.json`,
   ])('still asks before changing it: %s', async command => {
     expect(await outsideFolders(command(main))).not.toEqual([]);
   });
 
   it('still asks to read a folder outside the main checkout', async () => {
-    expect(await outsideFolders(`ls ${base}`)).toEqual([base]);
+    expect(await outsideFolders(`ls "${base}"`)).toEqual([base]);
   });
 });

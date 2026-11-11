@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { tmpdir, userInfo } from 'node:os';
 import { basename, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
@@ -60,13 +60,13 @@ describe('ChatService approvals decided per part', () => {
   beforeEach(async () => {
     sessionIds.length = 0;
     runningReplies.clear();
-    root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-parts-')));
+    root = await realpath(await mkdtemp(join(userInfo().homedir, '.b4m-parts-')));
     main = join(root, 'repo');
     worktree = join(root, 'repo-wt');
     other = join(root, 'other');
     await mkdir(main);
     await mkdir(other);
-    outside = await realpath(await mkdtemp(join(tmpdir(), 'b4m-parts-outside-')));
+    outside = await realpath(await mkdtemp(join(userInfo().homedir, '.b4m-parts-outside-')));
     const sharedTemporaryDirectory = join(root, 'shared-temp');
     await mkdir(sharedTemporaryDirectory);
     vi.stubEnv('TMPDIR', sharedTemporaryDirectory);
@@ -128,12 +128,15 @@ describe('ChatService approvals decided per part', () => {
   afterEach(async () => {
     service.dispose();
     for (const stream of streams) stream.end();
-    await vi.waitUntil(() => runningReplies.size === 0, { timeout: 5000, interval: 10 });
-    for (const id of sessionIds) await store.delete(id);
-    await rm(root, { recursive: true, force: true });
-    await rm(outside, { recursive: true, force: true });
-    vi.unstubAllEnvs();
-    vi.restoreAllMocks();
+    try {
+      await vi.waitUntil(() => runningReplies.size === 0, { timeout: 5000, interval: 10 });
+      for (const id of sessionIds) await store.delete(id);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+      vi.unstubAllEnvs();
+      vi.restoreAllMocks();
+    }
   });
 
   const project = (directory: string): ChatProject => ({
