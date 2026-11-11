@@ -1,4 +1,10 @@
-import { InviteType, IUserDocument, Permission, IOrganizationDocument } from '@bike4mind/common';
+import {
+  InviteType,
+  IUserDocument,
+  Permission,
+  IOrganizationDocument,
+  orgAclRowConfersMembership,
+} from '@bike4mind/common';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
 import { useCancelInvite } from '@client/app/hooks/data/invites';
 import { getAppFileUrl } from '@client/app/utils/s3';
@@ -13,6 +19,7 @@ import {
   useRemoveMemberFromOrganization,
   useLeaveOrganization,
   useSetMemberCreditOverride,
+  useSetOrganizationManager,
 } from '@client/app/hooks/data/organizations';
 import { useNavigate } from '@tanstack/react-router';
 import CreditLimitModal from './CreditLimitModal';
@@ -32,6 +39,8 @@ interface OrganizationUserCardProps {
   canRevokeMembers: boolean;
   /** Viewer may set this member's monthly credit limit (`canManageMemberCreditBudgets`). */
   canManageCreditBudgets: boolean;
+  /** Viewer may make or remove managers (`isOrgOwnerOrPlatformAdmin`, the manager route's gate). */
+  canManageManagers: boolean;
 }
 
 const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
@@ -40,6 +49,7 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
   canInviteMembers,
   canRevokeMembers,
   canManageCreditBudgets,
+  canManageManagers,
 }) => {
   const navigate = useNavigate();
   const isMobile = useIsMobile();
@@ -58,6 +68,7 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
     },
   });
   const isOwner = user?.id === organization.userId;
+  const isManager = !isOwner && (organization.adminUserIds ?? []).some(id => String(id) === user.id);
   const { mutateAsync: removeMember } = useRemoveMemberFromOrganization();
   const { mutateAsync: leaveOrganization } = useLeaveOrganization();
 
@@ -74,8 +85,12 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
           Pending
         </Chip>
       ) : isOwner ? (
-        <Chip size="sm" variant="soft" color="primary">
+        <Chip size="sm" variant="soft" color="primary" data-testid="organization-user-card-owner-chip">
           Owner
+        </Chip>
+      ) : isManager ? (
+        <Chip size="sm" variant="soft" color="success" data-testid="organization-user-card-manager-chip">
+          Manager
         </Chip>
       ) : (
         user.permissions.map(permission => (
@@ -115,9 +130,15 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
   const canRevoke = canRevokeMembers && user.status === 'accepted';
   const canLeave = user.status === 'accepted' && currentUser?.id === user.id;
   const canCancelInvite = user.status === 'pending' && canInviteMembers;
+  // Appointing needs an active member row (setOrganizationManager); removal is always allowed.
+  const canToggleManager =
+    canManageManagers &&
+    user.status === 'accepted' &&
+    (isManager || (!user.isBanned && orgAclRowConfersMembership(user)));
   // The owner row is excluded from roster actions but not from budgets: the owner's own spend from
   // the pool is capped like anyone's.
-  const hasRosterAction = !isOwner && (canRevoke || canLeave || canCancelInvite);
+  const hasRosterAction = !isOwner && (canRevoke || canLeave || canCancelInvite || canToggleManager);
+  const setManager = useSetOrganizationManager();
   const canSetCreditLimit = canManageCreditBudgets && user.status === 'accepted';
 
   const [editingLimit, setEditingLimit] = useState(false);
@@ -154,6 +175,15 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
         {canSetCreditLimit && (
           <MenuItem onClick={() => setEditingLimit(true)} data-testid="organization-user-card-set-limit">
             Set monthly limit
+          </MenuItem>
+        )}
+        {!isOwner && canToggleManager && (
+          <MenuItem
+            onClick={() => setManager.mutate({ organizationId, userId: user.id, isManager: !isManager })}
+            disabled={setManager.isPending}
+            data-testid={isManager ? 'organization-user-card-remove-manager' : 'organization-user-card-make-manager'}
+          >
+            {isManager ? 'Remove manager' : 'Make manager'}
           </MenuItem>
         )}
         {!isOwner && canCancelInvite && (
