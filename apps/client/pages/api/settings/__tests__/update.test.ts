@@ -731,6 +731,12 @@ describe('settings/update signup grant guard', () => {
     expect(findOneAndUpdate).not.toHaveBeenCalled();
   });
 
+  it('refuses a full admin lowering the limit below a stored grant while the policy is off', async () => {
+    storedRows = [{ settingName: 'signupGrantInitialCredits', settingValue: '800' }];
+    await expect(runHandler('signupGrantUnprotectedMaxCredits', 500)).rejects.toMatchObject({ statusCode: 422 });
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
   it('honours a stored limit', async () => {
     storedRows = [{ settingName: 'signupGrantUnprotectedMaxCredits', settingValue: 10000 }];
     stageWriteResult('signupGrantInviteBonusCredits', 5000);

@@ -59,7 +59,8 @@ export const FULL_ADMIN_SETTING_KEYS = new Set([
   'signupGrantUnprotectedMaxCredits',
 ]);
 
-/** The stored settings checkSignupGrantSave reads; the PUT is the only writer of these keys. */
+// The stored settings checkSignupGrantSave reads. This route is the admin write path the check guards;
+// migrations also write some of these keys, without the check.
 async function readSignupGrantGuardSettings(): Promise<SignupGrantGuardSettings> {
   const rows = await AdminSettings.find({ settingName: { $in: [...SIGNUP_GRANT_GUARD_SETTING_KEYS] } }).lean();
   return Object.fromEntries(rows.map(row => [row.settingName, row.settingValue]));

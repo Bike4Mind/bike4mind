@@ -34,8 +34,8 @@ describe('isSignupGrantGuardedSaveKey', () => {
     expect(isSignupGrantGuardedSaveKey('signupGrantRiskPolicy')).toBe(true);
     expect(isSignupGrantGuardedSaveKey('signupGrantInitialCredits')).toBe(true);
     expect(isSignupGrantGuardedSaveKey('signupGrantInviteBonusCredits')).toBe(true);
+    expect(isSignupGrantGuardedSaveKey('signupGrantUnprotectedMaxCredits')).toBe(true);
     expect(isSignupGrantGuardedSaveKey('signupGrantDripCap')).toBe(false);
-    expect(isSignupGrantGuardedSaveKey('signupGrantUnprotectedMaxCredits')).toBe(false);
   });
 });
 
@@ -78,6 +78,18 @@ describe('checkSignupGrantSave: grant amounts', () => {
     );
   });
 
+  it('refuses re-saving an unchanged grant that is already above the limit while the policy is off', () => {
+    const current = { signupGrantInitialCredits: '9000', signupGrantRiskPolicy: { enabled: false } };
+    expect(checkSignupGrantSave('signupGrantInitialCredits', 9000, current).ok).toBe(false);
+  });
+
+  it('refuses a large grant while the stored enabled policy has no weighted rule', () => {
+    const unweighted = { ...enabledPolicy, rules: [{ ...enabledPolicy.rules[0], weight: 0 }] };
+    expect(checkSignupGrantSave('signupGrantInitialCredits', 1001, { signupGrantRiskPolicy: unweighted }).ok).toBe(
+      false
+    );
+  });
+
   it('allows lowering one grant while another is still above the limit', () => {
     const current = { signupGrantInitialCredits: '9000', signupGrantRiskPolicy: { enabled: false } };
     expect(checkSignupGrantSave('signupGrantInviteBonusCredits', 0, current).ok).toBe(true);
@@ -86,7 +98,7 @@ describe('checkSignupGrantSave: grant amounts', () => {
 
   it('ignores keys it does not guard', () => {
     expect(checkSignupGrantSave('signupGrantDripCap', 1_000_000, {}).ok).toBe(true);
-    expect(checkSignupGrantSave('signupGrantUnprotectedMaxCredits', 1_000_000, {}).ok).toBe(true);
+    expect(checkSignupGrantSave('signupGrantDailyCredits', 1_000_000, {}).ok).toBe(true);
   });
 });
 
@@ -126,5 +138,38 @@ describe('checkSignupGrantSave: assessment policy', () => {
 
   it('refuses unknown fields on a disabled policy', () => {
     expect(checkSignupGrantSave('signupGrantRiskPolicy', { enabled: false, extra: 1 }, {}).ok).toBe(false);
+  });
+
+  it('refuses an enabled policy with no rule weighted above 0', () => {
+    const unweighted = { ...enabledPolicy, rules: [{ ...enabledPolicy.rules[0], weight: 0, missingWeight: 3 }] };
+    const reason = refused(checkSignupGrantSave('signupGrantRiskPolicy', unweighted, {}));
+    expect(reason).toBe(
+      'Signup Grant Assessment Policy is not valid. an enabled policy needs at least one rule with a weight above 0.'
+    );
+  });
+});
+
+describe('checkSignupGrantSave: unprotected limit', () => {
+  it('refuses lowering the limit below a stored grant while the policy is off', () => {
+    const reason = refused(
+      checkSignupGrantSave('signupGrantUnprotectedMaxCredits', 500, { signupGrantInitialCredits: '800' })
+    );
+    expect(reason).toBe(
+      "Unprotected Signup Grant Limit can't be set to 500 while Signup Grant Initial Credits is 800 and the Signup Grant Assessment Policy is off. Lower the grant or enable the policy first."
+    );
+  });
+
+  it('allows lowering the limit to a stored grant, or below one while a valid policy is enabled', () => {
+    expect(checkSignupGrantSave('signupGrantUnprotectedMaxCredits', 800, { signupGrantInitialCredits: '800' }).ok).toBe(
+      true
+    );
+    const protectedGrant = { signupGrantInitialCredits: '800', signupGrantRiskPolicy: enabledPolicy };
+    expect(checkSignupGrantSave('signupGrantUnprotectedMaxCredits', 0, protectedGrant).ok).toBe(true);
+  });
+
+  it('allows raising the limit', () => {
+    expect(
+      checkSignupGrantSave('signupGrantUnprotectedMaxCredits', 50000, { signupGrantInitialCredits: 9000 }).ok
+    ).toBe(true);
   });
 });

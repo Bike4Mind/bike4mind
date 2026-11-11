@@ -17,7 +17,7 @@ const isGuardedCreditKey = (key: string): key is SignupGrantGuardedCreditKey =>
 
 /** Keys whose save checkSignupGrantSave can refuse. */
 export const isSignupGrantGuardedSaveKey = (key: string): boolean =>
-  key === 'signupGrantRiskPolicy' || isGuardedCreditKey(key);
+  key === 'signupGrantRiskPolicy' || key === 'signupGrantUnprotectedMaxCredits' || isGuardedCreditKey(key);
 
 /** Stored settings the guard reads; raw stored values (strings, JSON strings) are accepted. */
 export const SIGNUP_GRANT_GUARD_SETTING_KEYS = [
@@ -52,12 +52,45 @@ export function unprotectedSignupGrantLimit(stored: unknown): number {
 
 const formatCredits = (credits: number) => credits.toLocaleString('en-US');
 
+type PolicyState = { state: 'on' } | { state: 'off' } | { state: 'invalid'; issues: string[] };
+
 /**
- * Save-time check that keeps a signup grant above signupGrantUnprotectedMaxCredits from being paid while
- * signupGrantRiskPolicy is off. `current` holds the other stored settings; the proposed value replaces the
- * stored one for `key`. Also refuses a signupGrantRiskPolicy the payout could not read, which would hold
- * every new signup grant. Lowering a grant is always allowed, so a configuration that is already out of
- * bounds can be brought back within them one key at a time.
+ * The stored or proposed policy as the guard sees it. Beyond the payout schema, an enabled policy must
+ * score something: at least one rule needs a weight above 0.
+ */
+function readPolicy(raw: unknown): PolicyState {
+  const policy = signupRiskPolicySchema.safeParse(parseStoredJson(raw));
+  if (!policy.success) {
+    return {
+      state: 'invalid',
+      issues: policy.error.issues.map(issue =>
+        issue.path.length > 0 ? `${issue.path.join('.')}: ${issue.message}` : issue.message
+      ),
+    };
+  }
+  if (!policy.data.enabled) return { state: 'off' };
+  if (!policy.data.rules.some(rule => rule.weight > 0)) {
+    return { state: 'invalid', issues: ['an enabled policy needs at least one rule with a weight above 0'] };
+  }
+  return { state: 'on' };
+}
+
+/** Each guarded grant in `settings` above `limit`, described for an admin message. */
+function grantsAbove(settings: SignupGrantGuardSettings, limit: number): string[] {
+  return SIGNUP_GRANT_GUARDED_CREDIT_KEYS.flatMap(creditKey => {
+    const credits = storedGrantCredits(creditKey, settings[creditKey]);
+    return credits !== undefined && credits > limit
+      ? [`${settingsMap[creditKey].name} is ${formatCredits(credits)}`]
+      : [];
+  });
+}
+
+/**
+ * Save-time check that keeps a signup grant above signupGrantUnprotectedMaxCredits from being paid unless
+ * signupGrantRiskPolicy is valid and enabled. `current` holds the other stored settings; the proposed value
+ * replaces the stored one for `key`. Also refuses a signupGrantRiskPolicy the payout could not read, which
+ * would hold every new signup grant. Lowering a grant is always allowed, so a configuration that is already
+ * out of bounds can be brought back within them one key at a time.
  */
 export function checkSignupGrantSave(
   key: string,
@@ -65,21 +98,13 @@ export function checkSignupGrantSave(
   current: SignupGrantGuardSettings
 ): SignupGrantGuardResult {
   if (key === 'signupGrantRiskPolicy') {
-    const policy = signupRiskPolicySchema.safeParse(parseStoredJson(value));
-    if (!policy.success) {
-      const issues = policy.error.issues.map(issue =>
-        issue.path.length > 0 ? `${issue.path.join('.')}: ${issue.message}` : issue.message
-      );
-      return { ok: false, reason: `Signup Grant Assessment Policy is not valid. ${issues.join('; ')}.` };
+    const policy = readPolicy(value);
+    if (policy.state === 'invalid') {
+      return { ok: false, reason: `Signup Grant Assessment Policy is not valid. ${policy.issues.join('; ')}.` };
     }
-    if (policy.data.enabled) return OK;
+    if (policy.state === 'on') return OK;
     const limit = unprotectedSignupGrantLimit(current.signupGrantUnprotectedMaxCredits);
-    const above = SIGNUP_GRANT_GUARDED_CREDIT_KEYS.flatMap(creditKey => {
-      const credits = storedGrantCredits(creditKey, current[creditKey]);
-      return credits !== undefined && credits > limit
-        ? [`${settingsMap[creditKey].name} is ${formatCredits(credits)}`]
-        : [];
-    });
+    const above = grantsAbove(current, limit);
     if (above.length === 0) return OK;
     return {
       ok: false,
@@ -87,12 +112,22 @@ export function checkSignupGrantSave(
     };
   }
 
+  if (key === 'signupGrantUnprotectedMaxCredits') {
+    if (readPolicy(current.signupGrantRiskPolicy).state === 'on') return OK;
+    const limit = unprotectedSignupGrantLimit(value);
+    const above = grantsAbove(current, limit);
+    if (above.length === 0) return OK;
+    return {
+      ok: false,
+      reason: `Unprotected Signup Grant Limit can't be set to ${formatCredits(limit)} while ${above.join(' and ')} and the Signup Grant Assessment Policy is off. Lower the grant or enable the policy first.`,
+    };
+  }
+
   if (!isGuardedCreditKey(key)) return OK;
   const credits = storedGrantCredits(key, value);
   const limit = unprotectedSignupGrantLimit(current.signupGrantUnprotectedMaxCredits);
   if (credits === undefined || credits <= limit) return OK;
-  const policy = signupRiskPolicySchema.safeParse(parseStoredJson(current.signupGrantRiskPolicy));
-  if (policy.success && policy.data.enabled) return OK;
+  if (readPolicy(current.signupGrantRiskPolicy).state === 'on') return OK;
   return {
     ok: false,
     reason: `${settingsMap[key].name} above ${formatCredits(limit)} credits needs a valid, enabled Signup Grant Assessment Policy. Enable the policy first, or keep the grant at ${formatCredits(limit)} or less.`,
