@@ -55,9 +55,15 @@ beforeEach(() => {
 
 describe('GET /api/memory/:kind/:id/events', () => {
   it('denies anonymous, foreign, and non-user reads without querying the ledger', async () => {
-    await invoke({ method: 'GET', user: undefined }).done;
-    await invoke({ method: 'GET', query: { kind: 'user', id: 'other' } }).done;
-    await invoke({ method: 'GET', query: { kind: 'lake', id: 'user-1' } }).done;
+    const anonymous = invoke({ method: 'GET', user: undefined });
+    await anonymous.done;
+    const foreign = invoke({ method: 'GET', query: { kind: 'user', id: 'other' } });
+    await foreign.done;
+    const wrongKind = invoke({ method: 'GET', query: { kind: 'lake', id: 'user-1' } });
+    await wrongKind.done;
+    expect(anonymous.status).toHaveBeenCalledWith(401);
+    expect(foreign.status).toHaveBeenCalledWith(403);
+    expect(wrongKind.status).toHaveBeenCalledWith(400);
     expect(h.listPrincipalLedger).not.toHaveBeenCalled();
   });
 

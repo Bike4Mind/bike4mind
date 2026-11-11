@@ -61,6 +61,53 @@ describe('exportPrincipalMemory', () => {
     expect(JSON.stringify(exported)).not.toContain('factCipher');
     expect(exported.mementos.map(m => m.tier)).toEqual(['hot', 'warm', 'cold']);
     expect(verifyMemoryExport(exported)).toEqual({ ok: true });
+    expect(verifyMemoryExport(JSON.parse(JSON.stringify(exported)))).toEqual({ ok: true });
+    for (const memento of exported.mementos) expect(memento).not.toHaveProperty('metadata');
+  });
+
+  describe('memento paging', () => {
+    const paddedId = (n: number) => String(n).padStart(6, '0');
+    const exportWith = async (
+      findByUserId: (userId: string, o: { limit: number; afterId?: string }) => Promise<never>
+    ) => {
+      const { repo } = makeFakeLedger();
+      const { provider } = makeFakeKeyring();
+      return exportPrincipalMemory({
+        principal,
+        ownerUserId: 'u1',
+        ledger: repo,
+        keys: provider,
+        mementos: { findByUserId },
+      });
+    };
+
+    it('exports every page in order using the previous id as the cursor', async () => {
+      const all = Array.from({ length: 450 }, (_, i) => row(paddedId(i + 1), MementoTier.HOT));
+      const findByUserId = vi.fn(async (_userId: string, o: { limit: number; afterId?: string }) =>
+        all.filter(r => o.afterId === undefined || r.id > o.afterId).slice(0, o.limit)
+      );
+      const exported = await exportWith(findByUserId as never);
+      expect(exported.mementos.map(m => m.id)).toEqual(all.map(r => r.id));
+      expect(findByUserId.mock.calls.map(c => c[1])).toEqual([
+        { limit: 200, afterId: undefined },
+        { limit: 200, afterId: paddedId(200) },
+        { limit: 200, afterId: paddedId(400) },
+      ]);
+    });
+
+    it('rejects a page whose ids do not advance past the cursor', async () => {
+      const full = Array.from({ length: 200 }, (_, i) => row(paddedId(i + 1), MementoTier.HOT));
+      const findByUserId = vi
+        .fn()
+        .mockResolvedValueOnce(full)
+        .mockResolvedValueOnce([row(paddedId(200), MementoTier.HOT)]);
+      await expect(exportWith(findByUserId)).rejects.toThrow(/Invalid owner or cursor/);
+    });
+
+    it('rejects a row that belongs to another user', async () => {
+      const findByUserId = vi.fn().mockResolvedValue([{ ...row('a', MementoTier.HOT), userId: 'u2' }]);
+      await expect(exportWith(findByUserId)).rejects.toThrow(/Invalid owner or cursor/);
+    });
   });
 
   it('does not query keys or mementos for a foreign user', async () => {

@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { mergeStores, type MemoryEventInput, type Principal } from '@bike4mind/memory';
 import { createUserMementoMemoryStore } from './userMementoMemoryStore';
-import { appendMemoryEvent, createLedgerMemoryStore, purgeUserMemory, shredPrincipalMemory } from './ledgerMemoryStore';
+import {
+  appendMemoryEvent,
+  createLedgerMemoryStore,
+  listPrincipalLedger,
+  purgeUserMemory,
+  shredPrincipalMemory,
+} from './ledgerMemoryStore';
 import { makeFakeLedger as makeFake, makeFakeKeyring as makeKeys } from './__tests__/utils/ledgerDoubles';
 
 /**
@@ -398,5 +404,40 @@ describe('shredPrincipalMemory', () => {
     const live = (profile?.beliefs ?? []).filter(b => !b.shredded);
 
     expect(live).toEqual([]); // nothing survives - nothing to re-inject into a prompt
+  });
+});
+
+describe('listPrincipalLedger', () => {
+  const seedTwo = async () => {
+    const fake = makeFake();
+    const { provider } = makeKeys();
+    await appendEvent(fake.repo, provider, 'u1', input({ subject: 'role', fact: 'A' }));
+    await appendEvent(fake.repo, provider, 'u1', input({ subject: 'city', fact: 'B', at: '2026-07-02T00:00:00.000Z' }));
+    return { ...fake, provider };
+  };
+  const list = (
+    repo: Parameters<typeof listPrincipalLedger>[0]['ledger'],
+    keys: ReturnType<typeof makeKeys>['provider']
+  ) => listPrincipalLedger({ ledger: repo, keys, principal: { kind: 'user', id: 'u1' }, ownerUserId: 'u1' });
+
+  it('returns the whole verified chain', async () => {
+    const { repo, provider } = await seedTwo();
+    expect((await list(repo, provider)).map(e => e.fact)).toEqual(['A', 'B']);
+  });
+
+  it('rejects a chain with a seq gap', async () => {
+    const { repo, store, provider } = await seedTwo();
+    store[1].seq = 5;
+    await expect(list(repo, provider)).rejects.toThrow(/incomplete or mismatched chain/);
+  });
+
+  it('rejects a returned row owned by a different principal', async () => {
+    const { repo, provider } = await seedTwo();
+    const mismatched = {
+      ...repo,
+      listChain: async (...args: Parameters<typeof repo.listChain>) =>
+        (await repo.listChain(...args)).map((d, i) => (i === 1 ? { ...d, principalId: 'u2' } : d)),
+    };
+    await expect(list(mismatched, provider)).rejects.toThrow(/incomplete or mismatched chain/);
   });
 });

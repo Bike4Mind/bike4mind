@@ -55,4 +55,11 @@ describe('owner-scoped export and event read', () => {
     const { json } = await invoke(eventHandler, 'u1');
     expect(json).toHaveBeenCalledWith({ event: { hash: 'hash-1' } });
   });
+
+  it('answers 404 when no event in the authorized chain matches the hash', async () => {
+    h.listPrincipalLedger.mockResolvedValue([{ hash: 'other' }]);
+    const { status, json } = await invoke(eventHandler, 'u1');
+    expect(status).toHaveBeenCalledWith(404);
+    expect(json).toHaveBeenCalledWith({ error: 'Memory event not found.' });
+  });
 });
