@@ -317,7 +317,7 @@ describe('GitHubRepositoryPickerModal', () => {
     expect(hint).toHaveTextContent('Refresh list cannot restore an uninstalled App');
   });
 
-  it('hints that an org repo needs an owner when there is no organization installation', () => {
+  it('shows the install hint when no installation exists at all', () => {
     h.data = choices({ installations: [] });
     wrap(<GitHubRepositoryPickerModal />);
 
