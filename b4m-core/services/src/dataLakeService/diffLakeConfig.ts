@@ -242,6 +242,24 @@ export function researchConfigChange(
   return literalChange('researchConfig', undefined, `${decision}: ${configName}`);
 }
 
+/** Auto-admit being switched on or off on a research config, as an event entry on the same field. */
+export function researchAutoAdmitChange(configName: string, enabled: boolean): ILakeConfigLiteralChange {
+  return literalChange('researchConfig', undefined, `auto-admit ${enabled ? 'on' : 'off'}: ${configName}`);
+}
+
+/** The trusted-site list of a research config changing, naming the entries added and removed. */
+export function researchTrustedSitesChange(
+  configName: string,
+  added: readonly string[],
+  removed: readonly string[]
+): ILakeConfigLiteralChange {
+  const parts = [
+    ...(added.length > 0 ? [`added ${added.join(', ')}`] : []),
+    ...(removed.length > 0 ? [`removed ${removed.join(', ')}`] : []),
+  ];
+  return literalChange('researchConfig', undefined, `trusted sites ${parts.join('; ')}: ${configName}`);
+}
+
 /**
  * A research run reaching a lifecycle point (started, then completed or failed), as a change entry
  * - same pattern again. Encodes the run's own QUERY, not the config's name: the background
