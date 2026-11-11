@@ -1,3 +1,4 @@
+import { BLOCK_ALL_PUBLIC_ACCESS, encryptBucketAtRest } from './bucketSecurity';
 import { PRODUCTION_STAGES } from './constants';
 
 const isHostedStage = !$dev && PRODUCTION_STAGES.includes($app.stage);
@@ -9,11 +10,16 @@ const isHostedStage = !$dev && PRODUCTION_STAGES.includes($app.stage);
 const turboCacheWriteToken = isHostedStage ? new sst.Secret('TURBO_CACHE_TOKEN', 'not-configured') : undefined;
 const turboCacheReadToken = isHostedStage ? new sst.Secret('TURBO_CACHE_READ_TOKEN', 'not-configured') : undefined;
 
-export const turboCacheBucket = isHostedStage
-  ? new sst.aws.Bucket('turboCacheBucket', {
-      versioning: false,
-    })
-  : undefined;
+function createTurboCacheBucket() {
+  const turboCacheBucket = new sst.aws.Bucket('turboCacheBucket', {
+    versioning: false,
+    transform: { publicAccessBlock: BLOCK_ALL_PUBLIC_ACCESS },
+  });
+  encryptBucketAtRest('turboCacheBucket', turboCacheBucket);
+  return turboCacheBucket;
+}
+
+export const turboCacheBucket = isHostedStage ? createTurboCacheBucket() : undefined;
 
 export const turboCacheBucketLifecycle = turboCacheBucket
   ? new aws.s3.BucketLifecycleConfigurationV2('turboCacheBucketLifecycle', {
