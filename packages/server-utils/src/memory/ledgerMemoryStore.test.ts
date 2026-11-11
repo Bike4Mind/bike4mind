@@ -428,7 +428,10 @@ describe('listPrincipalLedger', () => {
   it('rejects a chain with a seq gap', async () => {
     const { repo, store, provider } = await seedTwo();
     store[1].seq = 5;
-    await expect(list(repo, provider)).rejects.toThrow(/incomplete or mismatched chain/);
+    await expect(list(repo, provider)).rejects.toMatchObject({
+      message: 'Memory ledger failed integrity checks.',
+      cause: { message: 'Memory ledger contains an incomplete or mismatched chain' },
+    });
   });
 
   it('rejects a returned row owned by a different principal', async () => {
@@ -438,6 +441,9 @@ describe('listPrincipalLedger', () => {
       listChain: async (...args: Parameters<typeof repo.listChain>) =>
         (await repo.listChain(...args)).map((d, i) => (i === 1 ? { ...d, principalId: 'u2' } : d)),
     };
-    await expect(list(mismatched, provider)).rejects.toThrow(/incomplete or mismatched chain/);
+    await expect(list(mismatched, provider)).rejects.toMatchObject({
+      message: 'Memory ledger failed integrity checks.',
+      cause: { message: 'Memory ledger contains an incomplete or mismatched chain' },
+    });
   });
 });

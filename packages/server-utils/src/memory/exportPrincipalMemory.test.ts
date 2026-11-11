@@ -105,7 +105,11 @@ describe('exportPrincipalMemory', () => {
         .fn()
         .mockResolvedValueOnce(full)
         .mockResolvedValueOnce([row(paddedId(200), MementoTier.HOT)]);
-      await expect(exportWith(findByUserId)).rejects.toThrow(/Invalid owner or cursor/);
+      await expect(exportWith(findByUserId)).rejects.toMatchObject({
+        statusCode: 500,
+        message: 'Memory export failed integrity checks.',
+        cause: { message: 'Invalid owner or cursor in memento export' },
+      });
     });
 
     it('rejects with 413 once the mementos exceed the response size cap', async () => {
@@ -124,7 +128,11 @@ describe('exportPrincipalMemory', () => {
 
     it('rejects a row that belongs to another user', async () => {
       const findByUserId = vi.fn().mockResolvedValue([{ ...row('a', MementoTier.HOT), userId: 'u2' }]);
-      await expect(exportWith(findByUserId)).rejects.toThrow(/Invalid owner or cursor/);
+      await expect(exportWith(findByUserId)).rejects.toMatchObject({
+        statusCode: 500,
+        message: 'Memory export failed integrity checks.',
+        cause: { message: 'Invalid owner or cursor in memento export' },
+      });
     });
   });
 
@@ -167,6 +175,9 @@ describe('exportPrincipalMemory', () => {
     store[0].factTag = 'invalid';
     await expect(
       exportPrincipalMemory({ principal, ownerUserId: 'u1', ledger: repo, keys: provider, mementos })
-    ).rejects.toThrow(/unreadable/);
+    ).rejects.toMatchObject({
+      message: 'Memory ledger failed integrity checks.',
+      cause: { message: 'Memory ledger contains unreadable live ciphertext' },
+    });
   });
 });

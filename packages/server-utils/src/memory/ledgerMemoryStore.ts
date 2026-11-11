@@ -1,5 +1,5 @@
 import type { IMemoryLedgerEvent, MemoryPrincipalKind } from '@bike4mind/database';
-import { MEMENTO_EMBEDDING_ID } from '@bike4mind/common';
+import { InternalServerError, MEMENTO_EMBEDDING_ID } from '@bike4mind/common';
 import {
   foldEvents,
   activationConfigForKind,
@@ -212,6 +212,15 @@ function toMemoryEvent(d: IMemoryLedgerEvent, dek: Buffer | null): MemoryEvent {
   };
 }
 
+/** A public, stable message to the client; the specific detail rides on `cause`, which the logger serializes. */
+export function integrityError(message: string, detail: string): InternalServerError {
+  const error = new InternalServerError(message);
+  Object.defineProperty(error, 'cause', { value: new Error(detail), enumerable: false, configurable: true });
+  return error;
+}
+
+const LEDGER_INTEGRITY_MESSAGE = 'Memory ledger failed integrity checks.';
+
 export async function listPrincipalLedger(deps: {
   ledger: Pick<LedgerRepo, 'listChain'>;
   keys: Pick<KeyProvider, 'getDek'>;
@@ -225,11 +234,11 @@ export async function listPrincipalLedger(deps: {
   if (docs.length === 0) return [];
   const dek = await deps.keys.getDek(deps.principal);
   if (docs.some(d => !d.shredded && d.factCipher && !dek)) {
-    throw new Error('Memory ledger contains live ciphertext without its decryption key');
+    throw integrityError(LEDGER_INTEGRITY_MESSAGE, 'Memory ledger contains live ciphertext without its decryption key');
   }
   const events = docs.map(d => toMemoryEvent(d, dek));
   if (docs.some((d, i) => !d.shredded && events[i].shredded)) {
-    throw new Error('Memory ledger contains unreadable live ciphertext');
+    throw integrityError(LEDGER_INTEGRITY_MESSAGE, 'Memory ledger contains unreadable live ciphertext');
   }
   if (
     docs.some(
@@ -240,10 +249,11 @@ export async function listPrincipalLedger(deps: {
         d.ownerUserId !== deps.ownerUserId
     )
   ) {
-    throw new Error('Memory ledger contains an incomplete or mismatched chain');
+    throw integrityError(LEDGER_INTEGRITY_MESSAGE, 'Memory ledger contains an incomplete or mismatched chain');
   }
   const verification = verifyChain(events);
-  if (!verification.ok) throw new Error(`Memory ledger is invalid at event ${verification.brokenAt}`);
+  if (!verification.ok)
+    throw integrityError(LEDGER_INTEGRITY_MESSAGE, `Memory ledger is invalid at event ${verification.brokenAt}`);
   return events;
 }
 

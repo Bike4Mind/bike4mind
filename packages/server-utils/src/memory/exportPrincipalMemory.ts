@@ -9,7 +9,7 @@ import {
   type Principal,
 } from '@bike4mind/memory';
 import type { KeyProvider } from './factCipher';
-import { listPrincipalLedger, type LedgerRepo } from './ledgerMemoryStore';
+import { integrityError, listPrincipalLedger, type LedgerRepo } from './ledgerMemoryStore';
 
 const MEMENTO_PAGE_SIZE = 200;
 const MAX_MEMENTO_PAGES = 100;
@@ -66,7 +66,7 @@ export async function exportPrincipalMemory(deps: {
       for (const row of rows) {
         const id = String(row.id);
         if (!id || (afterId !== undefined && id <= afterId) || row.userId !== deps.ownerUserId) {
-          throw new Error('Invalid owner or cursor in memento export');
+          throw integrityError('Memory export failed integrity checks.', 'Invalid owner or cursor in memento export');
         }
         const {
           userId,
