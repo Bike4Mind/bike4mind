@@ -43,7 +43,7 @@ import {
   isSafeSignedOrigin,
   isStreamedFile,
   signedResponseFor,
-} from '@server/services/publish/signedFiles';
+} from '@bike4mind/server-utils/services/publish/signedFiles';
 import { gateProofSecondsLeft, requestHasGateProof } from '@bike4mind/server-utils/services/publish/publishGateToken';
 import { renderPassphraseShell } from '@server/services/publish/renderPassphraseShell';
 import { injectSignupGateBridge } from '@server/services/publish/signupGateBridge';

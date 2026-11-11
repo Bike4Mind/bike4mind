@@ -204,6 +204,12 @@ describe('organizationService - transferOwnership', () => {
     expect(adapters.db.organizations.update).not.toHaveBeenCalled();
   });
 
+  it('refuses a target whose account is deactivated', async () => {
+    usersById.admin1 = { ...admin, isBanned: true } as unknown as IUserDocument;
+    await expect(run(owner)).rejects.toThrow(/deactivated/);
+    expect(adapters.db.organizations.update).not.toHaveBeenCalled();
+  });
+
   it('404s on a missing organization or a missing target user', async () => {
     adapters.db.organizations.findById.mockResolvedValueOnce(null);
     await expect(run(owner)).rejects.toThrow(NotFoundError);

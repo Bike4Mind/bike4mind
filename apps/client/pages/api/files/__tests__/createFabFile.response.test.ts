@@ -30,7 +30,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: vi.fn(async (id: string) => ({ id, isAdmin: false })) },
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({
   toAccessContext: vi.fn(async (req: { user: { id: string; isAdmin?: boolean } }) => ({
     userId: req.user.id,
     isAdmin: !!req.user.isAdmin,

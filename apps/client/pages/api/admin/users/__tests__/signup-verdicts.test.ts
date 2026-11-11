@@ -27,8 +27,8 @@ vi.mock('@server/middlewares/adminApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
-vi.mock('@server/users/signupTimeseries', () => ({ getSignupVerdicts: mocks.getSignupVerdicts }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
+vi.mock('@bike4mind/server-utils/users/signupTimeseries', () => ({ getSignupVerdicts: mocks.getSignupVerdicts }));
 import handler from '../signup-verdicts';
 
 const ID_A = 'aaaaaaaaaaaaaaaaaaaaaaaa';

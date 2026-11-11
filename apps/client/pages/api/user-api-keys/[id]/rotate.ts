@@ -7,7 +7,7 @@ import { UserApiKeyEvents } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { notifyApiKeyRotationReown } from '@server/utils/apiKeyRotationNotifier';
-import { assertApiKeyAccessAllowed } from '@server/utils/apiKeyAccessGate';
+import { assertApiKeyAccessAllowed } from '@bike4mind/server-utils/utils/apiKeyAccessGate';
 
 const handler = baseApi().post(
   asyncHandler<{}, unknown, unknown, { id: string }>(async (req, res) => {

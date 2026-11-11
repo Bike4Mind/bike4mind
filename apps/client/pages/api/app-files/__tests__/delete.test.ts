@@ -30,8 +30,8 @@ vi.mock('sst', () => ({ Resource: { appFilesBucket: { name: 'test-app-files-buck
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn(async () => undefined) }));
 
 const invalidate = vi.hoisted(() => vi.fn());
-vi.mock('@server/services/cdn/invalidateRouterCdn', async importActual => ({
-  ...(await importActual<typeof import('@server/services/cdn/invalidateRouterCdn')>()),
+vi.mock('@bike4mind/server-utils/services/cdn/invalidateRouterCdn', async importActual => ({
+  ...(await importActual<typeof import('@bike4mind/server-utils/services/cdn/invalidateRouterCdn')>()),
   invalidateRouterPaths: invalidate,
 }));
 

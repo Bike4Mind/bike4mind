@@ -544,6 +544,19 @@ A failed refresh stores a short error message (200 characters at most) and a tim
 | Evidence summary    | `riskEvidence.summary` | Account lifetime, replaced | Give admins context when reviewing an account |
 | Refresh diagnostics | `riskEvidence.refresh` | Account lifetime, replaced | Show when and why a refresh failed            |
 
+## Feedback report context
+
+Each feedback report stores where it was written as `clientContext` on the report document, so a bug can be reproduced without asking the reporter. The browser sends the page, app version, platform, window size and selected model. The server validates each field on its own, drops any it cannot accept, and reads the user agent from the request itself rather than from the browser's payload. The page keeps the route only: the query string and hash are dropped, and any long opaque path segment (a reset link or signed URL token) is replaced with `:redacted`. The context is diagnostic only and never used for authorization. Reporters can read it on their own reports, admins on all reports, and it appears in the admin CSV export. Reports from before this was captured have no context.
+
+| Data        | Storage                                                           | Lifetime                      | Purpose                               |
+| ----------- | ----------------------------------------------------------------- | ----------------------------- | ------------------------------------- |
+| Page        | `clientContext.path`, route only, first 200 characters            | Lives with the report; no TTL | Reproduce the report on the same page |
+| App version | `clientContext.appVersion`                                        | Lives with the report; no TTL | Tie the report to a release           |
+| Platform    | `clientContext.platform`: `web` (also accepts `desktop`, `ios`)   | Lives with the report; no TTL | Triage by app surface                 |
+| Window size | `clientContext.viewport`: width and height in pixels              | Lives with the report; no TTL | Reproduce layout issues               |
+| Model       | `clientContext.model`: the model selected in the client           | Lives with the report; no TTL | Reproduce model-specific issues       |
+| User agent  | `clientContext.userAgent`, read server-side, first 300 characters | Lives with the report; no TTL | Identify the browser and OS           |
+
 ## Chat turn timing
 
 Each chat reply records where its wall-clock time went, so a slow or retried reply can be diagnosed from the reply itself. The record holds durations, counts and provider metadata only: no prompt or reply text. It is shown in the reply's Answer diagnosis panel, and a short summary with a copyable turn ID appears under replies that retried, switched model or took a minute or more.

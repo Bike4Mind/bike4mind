@@ -47,8 +47,29 @@ describe('PROBE_QUERY', () => {
     expect(PROBE_QUERY).toContain('by ip, uid');
   });
 
+  const PARSE_PREFIX = 'parse message /';
+  const parseRegexBodies = () =>
+    PROBE_QUERY.split('\n| ')
+      .filter(line => line.startsWith(PARSE_PREFIX) && line.endsWith('/'))
+      .map(line => line.slice(PARSE_PREFIX.length, -1));
+
+  // Logs Insights ends a `/regex/` literal at the first unescaped `/` and rejects the rest of the line.
+  it('escapes every slash inside a parse regex literal', () => {
+    const bodies = parseRegexBodies();
+    expect(bodies).toHaveLength(PROBE_QUERY.split('\n| ').filter(line => line.startsWith('parse ')).length);
+    expect(bodies).toHaveLength(2);
+    for (const body of bodies) expect(body).not.toMatch(/(^|[^\\])(\\\\)*\//);
+  });
+
+  it('keeps the named capture groups and their matches in the escaped parse literals', () => {
+    const [requestPath, adminDenied] = parseRegexBodies().map(body => new RegExp(body));
+    const line = 'GET /api/admin/users/64f0c2a9 \u2192 403: Forbidden';
+    expect(requestPath.exec(line)?.groups?.reqPath).toBe('/api/admin/users/64f0c2a9');
+    expect(adminDenied.exec(line)?.groups?.adminDeniedPath).toBe('/api/admin/users');
+  });
+
   it('counts breadth over the parsed request path, not the normalized path field', () => {
-    expect(PROBE_QUERY).toContain(`parse message /${REQUEST_PATH_PATTERN}/`);
+    expect(parseRegexBodies()[0]).toContain('(?<reqPath>');
     expect(PROBE_QUERY).toContain('count_distinct(reqPath) as paths');
     expect(PROBE_QUERY).not.toMatch(/\((path)\)/);
   });

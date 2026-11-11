@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request } from 'express';
-import type { AdminUsersBulkAction, AdminUsersBulkExecuteRequest } from '@client/app/utils/adminUsersBulk';
+import type {
+  AdminUsersBulkAction,
+  AdminUsersBulkExecuteRequest,
+} from '@bike4mind/server-utils/app/utils/adminUsersBulk';
 import { cohortHashOf, type BulkUser, type ResolveDeps } from './resolve';
 
 const mocks = vi.hoisted(() => ({

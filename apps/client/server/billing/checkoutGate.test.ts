@@ -19,10 +19,10 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 vi.mock('@bike4mind/server-utils/auth/signupNetworkSignals', () => ({
   hashSignupNetwork: (ip: string | null) => ({ ipHash: ip ? `hash:${ip}` : null, prefixHash: null }),
 }));
-vi.mock('@server/billing/linkedAccounts', () => ({
+vi.mock('@bike4mind/server-utils/billing/linkedAccounts', () => ({
   findLinkedAccounts: mocks.findLinkedAccounts,
 }));
-vi.mock('@server/billing/fraudBlockAlert', () => ({ alertFraudBlock: mocks.alertFraudBlock }));
+vi.mock('@bike4mind/server-utils/billing/fraudBlockAlert', () => ({ alertFraudBlock: mocks.alertFraudBlock }));
 
 import { CHECKOUT_REFUSED_MESSAGE, assertCheckoutAllowed, checkoutRefusal } from './checkoutGate';
 

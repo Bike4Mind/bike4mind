@@ -1,7 +1,7 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
-import { aiAdvisorySummarySchema } from '@client/app/utils/aiAdvisory';
-import { listAiAbuseAdvisories } from '@server/admin/aiAdvisory/aiAbuseAdvisories';
+import { aiAdvisorySummarySchema } from '@bike4mind/server-utils/app/utils/aiAdvisory';
+import { listAiAbuseAdvisories } from '@bike4mind/server-utils/admin/aiAdvisory/aiAbuseAdvisories';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
 import { respond } from '@server/utils/respond';

@@ -16,7 +16,7 @@ const dbMocks = vi.hoisted(() => ({
   loadLiveOwner: vi.fn(),
 }));
 const limitMock = vi.hoisted(() => vi.fn());
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (options: unknown) => {
     limitMock(options);
     return (req: unknown, res: unknown, next: () => void) => limitMock(req, res, next);

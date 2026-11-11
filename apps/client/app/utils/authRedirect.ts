@@ -6,7 +6,7 @@
  * URL - to prevent open-redirect vulnerabilities.
  */
 
-import type { LoginErrorCode } from './loginErrorMessages';
+import type { LoginErrorCode } from '@bike4mind/server-utils/app/utils/loginErrorMessages';
 
 // Matches ASCII control characters (NUL..US, DEL) plus Unicode line
 // terminators (NEL, Line Separator, Paragraph Separator). Reject these

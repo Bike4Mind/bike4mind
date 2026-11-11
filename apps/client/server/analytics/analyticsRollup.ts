@@ -12,7 +12,12 @@ import {
 import { ACTIVE_SOURCES, UNCLASSIFIED_SOURCE } from '@bike4mind/common';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import { classifyRealSignups } from './realSignup';
-import { classifySignupWindow, isCountedUser, loadCountingContext, loadUserFlags } from './signupCohort';
+import {
+  classifySignupWindow,
+  isCountedUser,
+  loadCountingContext,
+  loadUserFlags,
+} from '@bike4mind/server-utils/analytics/signupCohort';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const QUERY_DEADLINE_MS = 120_000;

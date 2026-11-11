@@ -9,7 +9,7 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
-vi.mock('@server/utils/validators', () => ({
+vi.mock('@bike4mind/server-utils/utils/validators', () => ({
   validateAppUrl: () => 'https://app.example.com',
   isLocalAppUrl: () => false,
 }));

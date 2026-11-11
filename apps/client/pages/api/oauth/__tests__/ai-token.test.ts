@@ -42,7 +42,7 @@ vi.mock('@bike4mind/services', () => ({
   API_KEY_USER_CAP_ERROR_CODE: 'API_KEY_USER_CAP',
   userApiKeyService: { MAX_EXCHANGE_KEY_TTL_MS: 3_600_000 },
 }));
-vi.mock('@server/utils/apiKeyAccessGate', () => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyAccessGate', () => ({
   API_KEY_ACCESS_DENIED_MESSAGE: 'API keys require an active paid subscription',
   SUBSCRIPTION_REQUIRED_ERROR: 'subscription_required',
   isApiKeyAccessAllowed: h.isApiKeyAccessAllowed,

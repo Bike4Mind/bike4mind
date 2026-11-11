@@ -1,5 +1,5 @@
 import { api } from '@client/app/contexts/ApiContext';
-import type { AdminUsersFilter } from '@client/app/utils/adminUsersFilter';
+import type { AdminUsersFilter } from '@bike4mind/server-utils/app/utils/adminUsersFilter';
 import { toCsv } from '@client/app/utils/csv';
 import { downloadData } from '@client/app/utils/download';
 

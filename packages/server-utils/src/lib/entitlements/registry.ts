@@ -190,7 +190,7 @@ const TAG_GRANT_ROWS: TagGrantRow[] = [
   { tag: 'meetings', entitlements: ['meetings:pro'] },
   // [DELETION-FOOTPRINT] Questmaster comp grant: the `questmaster-pro` tag bridges to
   // `questmaster:pro`. No Stripe price. Every active paid subscription also grants it
-  // (SUBSCRIBER_ENTITLEMENT_KEYS in apps/client/server/entitlements/paidStanding.ts).
+  // (SUBSCRIBER_ENTITLEMENT_KEYS in packages/server-utils/src/entitlements/paidStanding.ts).
   // Listing it here puts the key in KNOWN_ENTITLEMENT_KEYS (admin Product Access + the
   // partner-rules write boundary).
   // Holders of `optihashi:pro` also get it via IMPLIED_ENTITLEMENT_ROWS below.

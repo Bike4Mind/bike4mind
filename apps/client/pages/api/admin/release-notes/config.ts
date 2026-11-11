@@ -5,7 +5,7 @@ import { invalidateSettingsCache } from '@bike4mind/utils';
 import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError, ConflictError } from '@bike4mind/server-utils/utils/errors';
 import { loadReleaseNotesConfig, RELEASE_NOTES_SETTING } from '@bike4mind/server-utils/releaseNotes/adminReleaseNotes';
-import { recordAdminSettingChange } from '@server/utils/adminSettingsAudit';
+import { recordAdminSettingChange } from '@bike4mind/server-utils/utils/adminSettingsAudit';
 
 // Validates only the keys sent; omitted keys keep their stored value (see the merge in PUT).
 const ConfigPatchSchema = ReleaseNotesConfigSchema.partial().strict();

@@ -38,14 +38,13 @@ const CONFIRM_ENV = 'OAUTH_BACKFILL_CONFIRMED';
  * whose `up()` returns as applied, so a log-only return would mark this done and the confirmed run
  * could never happen. Throwing keeps it in the pending set until the operator confirms.
  *
- * Because `MigrationManager.up()` runs migrations in ascending-id order and ABORTS the whole run on
- * the first throw, a fail-closed migration must sort AFTER every other pending one - otherwise its
- * throw blocks them all until the operator confirms. Its id is therefore kept above the current max
- * core id; do not renumber it below a migration that must still run. (Guarded in the sibling test.)
+ * `failClosed` lets the runner hold only this migration: the others still run, and the run fails at
+ * the end so the deploy stays red until the operator confirms.
  */
 const migration: MigrationFile = {
   id: 20260922000001,
   name: 'backfill-oauthclient-token-endpoint-auth-method',
+  failClosed: true,
 
   up: async () => {
     const pending = await OAuthClientModel.countDocuments({ tokenEndpointAuthMethod: { $exists: false } });

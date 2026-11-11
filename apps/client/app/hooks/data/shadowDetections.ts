@@ -11,6 +11,7 @@ import {
   type ShadowDetectionVerdictRequest,
 } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
+import { AI_ADVISORY_QUERY_KEY } from './aiAdvisory';
 import { verdictEvalReportSchema, type VerdictEvalWindowDays } from '@client/app/utils/verdictEval';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
@@ -71,8 +72,12 @@ export function useShadowDetectionVerdict() {
         return { status: 'conflict', item: body.data.item, message: body.data.error?.trim() || null };
       }
     },
-    // A conflict also means the list is stale.
-    onSettled: () => queryClient.invalidateQueries({ queryKey: SHADOW_DETECTIONS_QUERY_KEY }),
+    // A conflict also means the list is stale. A graded detection also drops out of the AI advisory.
+    onSettled: () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: SHADOW_DETECTIONS_QUERY_KEY }),
+        queryClient.invalidateQueries({ queryKey: AI_ADVISORY_QUERY_KEY }),
+      ]),
   });
 }
 
@@ -91,7 +96,11 @@ export function useShadowDetectionBulkVerdict() {
       request: Omit<ShadowDetectionBulkVerdictRequest, 'reason'> & { reason: string }
     ): Promise<ShadowDetectionBulkVerdictResult> =>
       (await api.post<ShadowDetectionBulkVerdictResult>(`${ENDPOINT}/bulk-verdict`, request)).data,
-    onSettled: () => queryClient.invalidateQueries({ queryKey: SHADOW_DETECTIONS_QUERY_KEY }),
+    onSettled: () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: SHADOW_DETECTIONS_QUERY_KEY }),
+        queryClient.invalidateQueries({ queryKey: AI_ADVISORY_QUERY_KEY }),
+      ]),
   });
 }
 

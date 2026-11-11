@@ -20,8 +20,8 @@ import {
   REINSTATED_ENTRIES,
   SUSPEND_ACTIONS,
 } from '@server/security/accountStatusAuditActions';
-import { signupVerdictOf } from '@server/users/signupClassifier';
-import { getSignupVerdicts } from '@server/users/signupTimeseries';
+import { signupVerdictOf } from '@bike4mind/server-utils/users/signupClassifier';
+import { getSignupVerdicts } from '@bike4mind/server-utils/users/signupTimeseries';
 import {
   gradeVerdicts,
   type EvalAccountOutcome,
