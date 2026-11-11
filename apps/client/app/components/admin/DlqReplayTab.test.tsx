@@ -205,6 +205,7 @@ describe('DlqReplayTab queue hint', () => {
     expect(hint).toHaveTextContent('A replay posts the webhook again.');
     expect(hint).toHaveTextContent('Owner: Integrations');
     expect(screen.getByTestId('dlq-queue-hint-replay')).toHaveTextContent('Unsafe to replay');
+    expect(screen.getByTestId('dlq-queue-hint-replay')).toHaveAttribute('data-tone', 'bad');
   });
 
   it('updates the hint when another queue is selected', async () => {
@@ -214,6 +215,7 @@ describe('DlqReplayTab queue hint', () => {
 
     expect(screen.getByTestId('dlq-queue-hint')).toHaveTextContent('Builds search vectors for a file.');
     expect(screen.getByTestId('dlq-queue-hint-replay')).toHaveTextContent('Safe to replay');
+    expect(screen.getByTestId('dlq-queue-hint-replay')).toHaveAttribute('data-tone', 'good');
   });
 
   it('shows no hint when no queue is selected', () => {

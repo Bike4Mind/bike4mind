@@ -117,9 +117,9 @@ const DLQ_REGISTRY = [
     application: 'DataLakeManagement',
     sourceQueue: 'dataLakeResearchQueue',
     description: 'Runs a queued data lake research run.',
-    replay: 'safe',
+    replay: 'side-effects',
     replayNote:
-      'The run is claimed before it starts; a run already claimed or settled is skipped, so a replay does nothing unless the run is still queued.',
+      'The run is claimed before it starts, so a run already claimed or settled is skipped; a run still queued runs now and makes its LLM calls.',
     owner: 'Data lake',
   },
   {
@@ -245,9 +245,9 @@ const DLQ_REGISTRY = [
     application: 'LiveOpsTriage',
     sourceQueue: 'liveOpsTriageQueue',
     description: 'Triages recent Slack alerts into issue tracker tickets for a LiveOps config.',
-    replay: 'side-effects',
+    replay: 'unsafe',
     replayNote:
-      'A run within 5 minutes of the last one is skipped and duplicate issues are deduplicated; a later replay runs a fresh triage.',
+      'A run within 5 minutes of the last one is skipped and duplicate issues are deduplicated, but a later replay runs a fresh triage and posts the Slack summary again.',
     owner: 'Platform ops',
   },
   {
