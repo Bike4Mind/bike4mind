@@ -25,8 +25,6 @@ export type AdminAiReservation = {
   settle(actualUsd: number): Promise<void>;
   /** Nothing reached the provider: releases the whole hold and the call. */
   refund(): Promise<void>;
-  /** The call may have reached the provider but reported no usage: releases the spend hold, keeps the call counted. */
-  releaseSpend(): Promise<void>;
   /** The provider was called but its cost is unknown: keeps the whole hold, so it can only under-spend. */
   fail(): Promise<void>;
 };
@@ -128,10 +126,6 @@ export async function reserveAdminAiSpend({
       if (!close()) return;
       await release([callGrant, ...spendGrants]);
     },
-    releaseSpend: async () => {
-      if (!close()) return;
-      await release(spendGrants);
-    },
     fail: async () => {
       close();
     },
@@ -189,9 +183,8 @@ export const adminAiCompletionMeter =
     const ceilingUsd = completionCeilingUsd(modelInfo, messages, maxTokens, false, tools);
     const reservation = await reserveAdminAiSpend({ feature, maxCostUsd: ceilingUsd * turns, limits });
     return {
-      // meterCompletionBackend refunds on any throw before usage, including a provider error after the
-      // request went out, so the call stays counted against maxCallsPerDay.
-      refund: () => reservation.releaseSpend(),
+      // A throw before usage can follow a billed request; retain the hold while its cost is unknown.
+      refund: () => reservation.fail(),
       settle: async usage => {
         // No reported usage: charge one turn's ceiling, as createRequestCompletionMeter does.
         const usd = hasReportedUsage(usage) ? completionUsd(modelInfo, usage) : ceilingUsd;

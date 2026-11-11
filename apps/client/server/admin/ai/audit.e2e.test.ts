@@ -8,8 +8,6 @@ import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../packages/database/src/__test__/createMongoServer';
-
-vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 import {
   ADMIN_AI_SYSTEM_ACTORS,
   adminAiSystemActor,
@@ -17,6 +15,8 @@ import {
   recordAiDecision,
   withAiSuggestionId,
 } from './audit';
+
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 const HEX = '64b7f0c2a1b2c3d4e5f60718';
 

@@ -62,21 +62,21 @@ export function confidenceBand(probability: number): AdminAiConfidenceBand {
 }
 
 export const adminAiReasonSchema = z.object({
-  text: z.string().max(ADMIN_AI_MAX_REASON_CHARS),
+  text: z.string().min(1).max(ADMIN_AI_MAX_REASON_CHARS),
   evidenceLinks: z.array(z.string()).max(ADMIN_AI_MAX_EVIDENCE_LINKS),
 });
 export type AdminAiReason = z.infer<typeof adminAiReasonSchema>;
 
 export const adminAiSuggestionItemSchema = z.object({
-  id: z.string(),
+  id: z.string().min(1),
   feature: z.enum(ADMIN_AI_FEATURES),
-  entityType: z.string(),
-  entityId: z.string(),
-  inputHash: z.string(),
-  policyVersion: z.string(),
-  model: z.string(),
+  entityType: z.string().min(1),
+  entityId: z.string().min(1),
+  inputHash: z.string().min(1),
+  policyVersion: z.string().min(1),
+  model: z.string().min(1),
   escalated: z.boolean(),
-  verdict: z.string(),
+  verdict: z.string().min(1),
   confidence: z.object({
     band: z.enum(ADMIN_AI_CONFIDENCE_BANDS),
     probability: z.number().min(0).max(1),
@@ -84,7 +84,7 @@ export const adminAiSuggestionItemSchema = z.object({
   reasons: z.array(adminAiReasonSchema).max(ADMIN_AI_MAX_REASONS),
   proposedAction: z.unknown(),
   status: z.enum(ADMIN_AI_SUGGESTION_STATUSES),
-  decidedBy: z.object({ userId: z.string(), name: z.string() }).nullable(),
+  decidedBy: z.object({ userId: z.string().min(1), name: z.string().min(1) }).nullable(),
   decidedAt: z.date().nullable(),
   overrideAction: z.unknown(),
   overrideReason: z.string().max(ADMIN_AI_MAX_OVERRIDE_REASON_CHARS).nullable(),

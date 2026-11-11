@@ -6,8 +6,6 @@ import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../packages/database/src/__test__/createMongoServer';
-
-vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 import { AdminAiSkip } from './adminAiSkip';
 import {
   adminAiDecisionAccounting,
@@ -17,6 +15,8 @@ import {
   reserveAdminAiSpend,
   type AdminAiSpendLimits,
 } from './budget';
+
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 let mongoServer: MongoMemoryServer;
 
@@ -125,13 +125,6 @@ describe('reserveAdminAiSpend', () => {
     await failed.fail();
     await failed.refund();
     expect(await readAdminAiSpend('feedbackTriage')).toMatchObject({ callsToday: 1, spentTodayUsd: 0.5 });
-  });
-
-  it('releaseSpend frees the hold but keeps the call counted, once', async () => {
-    const reservation = await reserve(0.5);
-    await reservation.releaseSpend();
-    await reservation.refund();
-    expect(await readAdminAiSpend('feedbackTriage')).toMatchObject({ callsToday: 1, spentTodayUsd: 0 });
   });
 
   it('decision accounting settles to the provider cost, reports it, and charges no credits', async () => {

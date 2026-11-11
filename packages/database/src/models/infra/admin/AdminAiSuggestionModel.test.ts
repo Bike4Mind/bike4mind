@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Types } from 'mongoose';
+import { adminAiSuggestionItemSchema } from '@bike4mind/common';
 import { setupMongoTest } from '../../../__test__/utils';
 import {
   AdminAiSuggestionModel,
@@ -79,6 +80,7 @@ describe('AdminAiSuggestionRepository', () => {
     const created = await adminAiSuggestionRepository.createPending(pending());
     const found = await adminAiSuggestionRepository.findByKey(pending());
 
+    expect(adminAiSuggestionItemSchema.safeParse(found).success).toBe(true);
     expect(found).toMatchObject({
       id: created.id,
       model: 'test-model',
@@ -128,6 +130,31 @@ describe('AdminAiSuggestionRepository', () => {
     await expect(
       adminAiSuggestionRepository.transition(new Types.ObjectId().toString(), ['pending'], 'accepted')
     ).resolves.toBeNull();
+  });
+
+  it('chooses the highest id when suggestions have identical creation times', async () => {
+    const createdAt = new Date('2026-01-01T00:00:00Z');
+    const older = await adminAiSuggestionRepository.createPending(pending({ inputHash: 'same-time-1' }));
+    const newer = await adminAiSuggestionRepository.createPending(pending({ inputHash: 'same-time-2' }));
+    await AdminAiSuggestionModel.updateMany({}, { $set: { createdAt } }, { timestamps: false });
+    const latest = await adminAiSuggestionRepository.findLatestForEntity('abuseAssessment', 'det-1');
+    expect(latest?.id).toBe([older.id, newer.id].sort().at(-1));
+  });
+
+  it.each(['entityType', 'entityId', 'inputHash', 'policyVersion', 'model', 'verdict'] as const)(
+    'rejects an empty %s in both the stored model and shared DTO',
+    async field => {
+      const item = await adminAiSuggestionRepository.createPending(pending());
+      expect(adminAiSuggestionItemSchema.safeParse({ ...item, [field]: '' }).success).toBe(false);
+      await expect(adminAiSuggestionRepository.createPending(pending({ [field]: '' }))).rejects.toThrow();
+    }
+  );
+
+  it('rejects an empty reason in both the stored model and shared DTO', async () => {
+    const item = await adminAiSuggestionRepository.createPending(pending());
+    const reasons = [{ text: '', evidenceLinks: [] }];
+    expect(adminAiSuggestionItemSchema.safeParse({ ...item, reasons }).success).toBe(false);
+    await expect(adminAiSuggestionRepository.createPending(pending({ reasons }))).rejects.toThrow();
   });
 
   it('finds the latest suggestion for an entity', async () => {

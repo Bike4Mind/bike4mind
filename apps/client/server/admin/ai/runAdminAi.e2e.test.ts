@@ -19,9 +19,12 @@ import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../packages/database/src/__test__/createMongoServer';
+import { completionCeilingUsd, completionUsd } from '@server/billing/meterPlatformCompletion';
+import { toMicroUsd } from '@server/decisions/platformDecision';
+import { readAdminAiSpend } from './budget';
+import { adminAiTextOutputSchema, runAdminAi, type AdminAiRunInput, type RunAdminAiDeps } from './runAdminAi';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
-import { adminAiTextOutputSchema, runAdminAi, type AdminAiRunInput, type RunAdminAiDeps } from './runAdminAi';
 
 let mongoServer: MongoMemoryServer;
 
@@ -378,7 +381,12 @@ describe('runAdminAi text path', () => {
     expect(complete).toHaveBeenCalledTimes(1);
     expect(complete.mock.calls[0][2]).toMatchObject({ maxTokens: 800 });
     expect(result.ok && result.suggestion).toMatchObject({ verdict: 'bug', model: 'text-model' });
-    expect(result.ok && result.suggestion.costUsd).toBeGreaterThan(0);
+    expect(result.ok && result.suggestion.costUsd).toBeCloseTo(0.00105);
+    expect(await readAdminAiSpend('feedbackTriage')).toEqual({
+      callsToday: 1,
+      spentTodayUsd: toMicroUsd(completionUsd(TEXT_MODEL, { inputTokens: 100, outputTokens: 50 })) / 1_000_000,
+      spentThisMonthUsd: toMicroUsd(completionUsd(TEXT_MODEL, { inputTokens: 100, outputTokens: 50 })) / 1_000_000,
+    });
   });
 
   it('repairs a bad reply once, carrying the validation error', async () => {
@@ -409,6 +417,45 @@ describe('runAdminAi text path', () => {
     expect(await runAdminAi('feedbackTriage', textInput(), deps)).toEqual({ ok: false, skip: 'provider_down' });
     expect(await runAdminAi('feedbackTriage', textInput(), deps)).toEqual({ ok: false, skip: 'call_cap' });
     expect(complete).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['daily', 'monthly'] as const)('keeps unknown provider spend against the %s cap', async window => {
+    const input = textInput();
+    const messages = [
+      { role: 'system' as const, content: `${input.prompt!.system}\n\nReply with one JSON object only, no prose.` },
+      { role: 'user' as const, content: JSON.stringify(input.evidence) },
+    ];
+    const ceilingUsd = toMicroUsd(completionCeilingUsd(TEXT_MODEL, messages, 800, false)) / 1_000_000;
+    const cfg = config({
+      feature: { dailyBudgetUsd: window === 'daily' ? ceilingUsd : 10, maxCallsPerDay: 2 },
+      root: { monthlyCapUsd: window === 'monthly' ? ceilingUsd : 10 },
+    });
+    const { complete, deps } = textDeps([new Error('provider failed after accepting the request'), GOOD], cfg);
+    expect(await runAdminAi('feedbackTriage', input, deps)).toEqual({ ok: false, skip: 'provider_down' });
+    expect(await readAdminAiSpend('feedbackTriage')).toEqual({
+      callsToday: 1,
+      spentTodayUsd: ceilingUsd,
+      spentThisMonthUsd: ceilingUsd,
+    });
+    expect(await runAdminAi('feedbackTriage', { ...input, entityId: 'fb-2' }, deps)).toEqual({
+      ok: false,
+      skip: 'budget',
+    });
+    expect(complete).toHaveBeenCalledTimes(1);
+  });
+
+  it('settles reported usage even when the provider then throws', async () => {
+    const { complete, deps } = textDeps([]);
+    complete.mockImplementationOnce(async (_model, _messages, _options, callback) => {
+      await callback([], { inputTokens: 100, outputTokens: 50 });
+      throw new Error('response interrupted');
+    });
+    expect(await runAdminAi('feedbackTriage', textInput(), deps)).toEqual({ ok: false, skip: 'provider_down' });
+    expect(await readAdminAiSpend('feedbackTriage')).toEqual({
+      callsToday: 1,
+      spentTodayUsd: toMicroUsd(completionUsd(TEXT_MODEL, { inputTokens: 100, outputTokens: 50 })) / 1_000_000,
+      spentThisMonthUsd: toMicroUsd(completionUsd(TEXT_MODEL, { inputTokens: 100, outputTokens: 50 })) / 1_000_000,
+    });
   });
 
   it('refuses before the provider on a zero budget', async () => {
