@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import type { Dirent } from 'node:fs';
+import { createWriteStream, type Dirent, type WriteStream } from 'node:fs';
 import { lstat, mkdir, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, relative, sep } from 'node:path';
 import type { ChatSession } from '@shared/chat';
@@ -32,6 +32,13 @@ type Collection =
   | 'memory'
   | 'media';
 type Row = Record<string, unknown>;
+
+interface RowWriter {
+  stream: WriteStream;
+  hash: ReturnType<typeof createHash>;
+  bytes: number;
+  count: number;
+}
 const COLLECTIONS: readonly Collection[] = [
   'notebooks',
   'chat-messages',
@@ -125,14 +132,56 @@ export async function writeLocalDataExport(
   if (!scope) throw new Error('Choose an account or device-local environment before exporting.');
   const bundle = join(folder, `bike4mind-export-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID()}`);
   await mkdir(bundle);
-  const rows = Object.fromEntries(COLLECTIONS.map(name => [name, [] as Row[]])) as unknown as Record<Collection, Row[]>;
+  await mkdir(join(bundle, 'collections'));
+  await mkdir(join(bundle, 'files'));
   const warnings: string[] = [];
-  const blobs = new Map<string, Buffer>();
-  const addBlob = (bytes: Buffer): string => {
+  const written = new Set<string>();
+  const files: Array<{ path: string; sha256: string; bytes: number }> = [];
+  const writers = new Map<Collection, RowWriter>(
+    COLLECTIONS.map(name => [
+      name,
+      {
+        stream: createWriteStream(join(bundle, 'collections', `${name}.jsonl`)),
+        hash: createHash('sha256'),
+        bytes: 0,
+        count: 0,
+      },
+    ])
+  );
+  for (const { stream } of writers.values()) stream.on('error', () => {});
+  const addBlob = async (bytes: Buffer): Promise<string> => {
     const hash = sha256(bytes);
-    blobs.set(hash, bytes);
-    return `files/${hash}`;
+    const path = `files/${hash}`;
+    if (!written.has(hash)) {
+      await writeFile(join(bundle, path), bytes);
+      written.add(hash);
+      files.push({ path, sha256: hash, bytes: bytes.length });
+    }
+    return path;
   };
+  const emit = async (name: Collection, row: Row): Promise<void> => {
+    const writer = writers.get(name)!;
+    const line = Buffer.from(`${JSON.stringify(row)}\n`);
+    writer.hash.update(line);
+    writer.bytes += line.length;
+    writer.count += 1;
+    if (!writer.stream.write(line)) {
+      await new Promise<void>((resolve, reject) => {
+        writer.stream.once('drain', resolve);
+        writer.stream.once('error', reject);
+      });
+    }
+  };
+  const closeWriters = () =>
+    Promise.all(
+      [...writers.values()].map(
+        ({ stream }) =>
+          new Promise<void>((resolve, reject) => {
+            stream.once('error', reject);
+            stream.end(resolve);
+          })
+      )
+    );
 
   try {
     const seenMemory = new Set<string>();
@@ -142,7 +191,7 @@ export async function writeLocalDataExport(
       const original = await deps.sessions.get(summary.id);
       if (!original) continue;
       const session = safeSession(original);
-      rows.notebooks.push({
+      await emit('notebooks', {
         id: session.id,
         name: session.title,
         firstCreated: session.createdAt,
@@ -151,9 +200,9 @@ export async function writeLocalDataExport(
         isAutoNamed: !session.titleLocked,
         lastUsedModel: session.model,
       });
-      rows['desktop-sessions'].push({ id: session.id, session });
+      await emit('desktop-sessions', { id: session.id, session });
       for (const message of session.messages) {
-        rows['chat-messages'].push({
+        await emit('chat-messages', {
           notebookId: session.id,
           id: message.id,
           timestamp: message.createdAt,
@@ -168,18 +217,18 @@ export async function writeLocalDataExport(
           if (!source) throw new Error(`Missing attachment in ${session.id}.`);
           if (!(await lstat(source)).isFile()) throw new Error(`Invalid attachment in ${session.id}.`);
           const bytes = await readFile(source);
-          rows.knowledge.push({
+          await emit('knowledge', {
             notebookId: session.id,
             id: attachment.id,
             name: attachment.name,
             mimeType: attachment.mediaType,
             size: bytes.length,
             uploadedAt: message.createdAt,
-            contentPath: addBlob(bytes),
+            contentPath: await addBlob(bytes),
           });
         }
         for (const artifact of message.artifacts ?? [])
-          rows.artifacts.push({
+          await emit('artifacts', {
             notebookId: session.id,
             id: artifact.id,
             name: artifact.title,
@@ -200,11 +249,11 @@ export async function writeLocalDataExport(
         if (!entry.isFile()) continue;
         const source = await deps.media.locate(session.id, entry.name);
         if (!source || !(await lstat(source.path)).isFile()) continue;
-        rows.media.push({
+        await emit('media', {
           notebookId: session.id,
           name: entry.name,
           mimeType: source.mimeType,
-          path: addBlob(await readFile(source.path)),
+          path: await addBlob(await readFile(source.path)),
         });
       }
       if (session.project) {
@@ -218,38 +267,40 @@ export async function writeLocalDataExport(
           const key = `${memory.project}\u0000${memory.name}`;
           if (seenMemory.has(key)) continue;
           seenMemory.add(key);
-          rows.memory.push({ project: memory.project, name: memory.name, path: addBlob(memory.bytes) });
+          await emit('memory', { project: memory.project, name: memory.name, path: await addBlob(memory.bytes) });
         }
       }
     }
     if (deps.sessions.scopeKey() !== scope) throw new Error('Account changed during export.');
+    await closeWriters();
+    if (deps.sessions.scopeKey() !== scope) throw new Error('Account changed during export.');
     const collections: Record<string, { path: string; count: number; bytes: number; sha256: string }> = {};
-    await mkdir(join(bundle, 'collections'));
-    await mkdir(join(bundle, 'files'));
-    for (const name of COLLECTIONS) {
-      const path = `collections/${name}.jsonl`;
-      const bytes = Buffer.from(
-        rows[name].map(row => JSON.stringify(row)).join('\n') + (rows[name].length ? '\n' : '')
-      );
-      await writeFile(join(bundle, path), bytes);
-      collections[name] = { path, count: rows[name].length, bytes: bytes.length, sha256: sha256(bytes) };
-    }
-    const files = [];
-    for (const [hash, bytes] of blobs) {
-      const path = `files/${hash}`;
-      await writeFile(join(bundle, path), bytes);
-      files.push({ path, sha256: hash, bytes: bytes.length });
+    for (const [name, writer] of writers) {
+      collections[name] = {
+        path: `collections/${name}.jsonl`,
+        count: writer.count,
+        bytes: writer.bytes,
+        sha256: writer.hash.digest('hex'),
+      };
     }
     await writeFile(
       join(bundle, 'manifest.json'),
       JSON.stringify(
-        { exportVersion: '2.0.0', exportedAt: new Date().toISOString(), platform: 'bike4mind', collections, files, ...(warnings.length ? { warnings } : {}) },
+        {
+          exportVersion: '2.0.0',
+          exportedAt: new Date().toISOString(),
+          platform: 'bike4mind',
+          collections,
+          files,
+          ...(warnings.length ? { warnings } : {}),
+        },
         null,
         2
       )
     );
     return { path: bundle, warnings };
   } catch (error) {
+    for (const { stream } of writers.values()) stream.destroy();
     await rm(bundle, { recursive: true, force: true });
     throw error;
   }
