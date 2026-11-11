@@ -84,7 +84,7 @@ const call = () =>
       query: { id: 'ff1' },
       user,
       body: { instruction: 'edit it', applyImmediately: true, model: 'm' },
-      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     } as unknown as Request,
     { json: vi.fn() } as unknown as Response
   );

@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   claimDedup: vi.fn(),
   deleteByKey: vi.fn(),
   findLinkStatesByIds: vi.fn(),
+  recordDetection: vi.fn(),
   post: vi.fn(),
   runQuery: vi.fn(),
   log: vi.fn(),
@@ -22,6 +23,7 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   cacheRepository: { claimDedup: mocks.claimDedup, deleteByKey: mocks.deleteByKey },
   userRepository: { findLinkStatesByIds: mocks.findLinkStatesByIds },
+  shadowDetectionRepository: { record: mocks.recordDetection },
 }));
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: vi.fn(async () => mocks.settings),
@@ -73,6 +75,7 @@ beforeEach(() => {
     { id: 'user-a', createdAt: new Date('2026-10-30T09:00:00Z'), isBanned: false },
   ]);
   mocks.post.mockResolvedValue('sent');
+  mocks.recordDetection.mockResolvedValue(undefined);
   mocks.runQuery.mockResolvedValue(probingRows());
 });
 
@@ -89,6 +92,51 @@ describe('apiProbeDetector handler', () => {
     );
     expect(mocks.post).toHaveBeenCalledTimes(1);
     expect(mocks.post.mock.calls[0][1]).toBe('SlackSecurityAlertsWebhookUrl');
+  });
+
+  it('records a shadow detection for each alerted actor', async () => {
+    const result = await handler(event);
+
+    expect(result).toMatchObject({ alerted: 1, recorded: 1 });
+    expect(mocks.recordDetection).toHaveBeenCalledTimes(1);
+    expect(mocks.recordDetection.mock.calls[0][0]).toMatchObject({
+      detector: 'apiProbe',
+      wouldAction: 'contain',
+      userIds: ['user-a'],
+      detectedAt: new Date('2026-10-30T12:00:00Z'),
+    });
+  });
+
+  it('records no detection for an actor whose alert was suppressed or not delivered', async () => {
+    await handler(event);
+    await handler({ time: '2026-10-30T12:05:00Z' });
+    expect(mocks.recordDetection).toHaveBeenCalledTimes(1);
+
+    mocks.claimed.clear();
+    mocks.recordDetection.mockClear();
+    mocks.post.mockResolvedValue('failed');
+    await handler(event);
+    expect(mocks.recordDetection).not.toHaveBeenCalled();
+  });
+
+  it('re-pages a known account seen from a new IP without recording it again', async () => {
+    await handler(event);
+    mocks.runQuery.mockResolvedValue(probingRows('198.51.100.7'));
+    const second = await handler({ time: '2026-10-30T12:05:00Z' });
+
+    expect(second).toMatchObject({ alerted: 1, recorded: 0 });
+    expect(mocks.post).toHaveBeenCalledTimes(2);
+    expect(mocks.recordDetection).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the alert when the detection write fails', async () => {
+    mocks.recordDetection.mockRejectedValue(new Error('db down'));
+
+    const result = await handler(event);
+
+    expect(result).toMatchObject({ alerted: 1, recorded: 0 });
+    expect(mocks.claimed.size).toBeGreaterThan(0);
+    expect(mocks.error).toHaveBeenCalledWith('api-probe-shadow-detection-not-recorded', expect.anything());
   });
 
   it('pages an actor at most once inside the dedupe window', async () => {
@@ -214,7 +262,16 @@ describe('formatProbeAlert', () => {
     ips: ['203.0.113.10'],
     userIds: ['user-a', 'user-gone'],
     score: 42,
-    counts: { refusedFetch: 3, webhookSignature: 0, invalidId: 6, denied: 0, notFound: 0 },
+    counts: {
+      refusedFetch: 3,
+      webhookSignature: 0,
+      invalidId: 6,
+      ingestTokenRefused: 0,
+      adminDenied: 0,
+      denied: 0,
+      notFound: 0,
+    },
+    userScores: { 'user-a': 42, 'user-gone': 0 },
     distinctPaths: 14,
     samplePaths: ['/api/tools/web-fetch', '/api/<x>'],
   };

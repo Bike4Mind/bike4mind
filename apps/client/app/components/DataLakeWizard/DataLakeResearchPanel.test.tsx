@@ -32,6 +32,9 @@ const config = (overrides: Partial<IDataLakeResearchConfigDocument> = {}) =>
     maxResults: 10,
     maxProposals: 5,
     recencyDays: 30,
+    trustedDomains: [],
+    reviewDomains: ['example.com'],
+    unlistedSources: 'drop',
     allowedDomains: ['example.com'],
     blockedDomains: ['spam.net'],
     minRelevance: 0.6,
@@ -55,6 +58,9 @@ const run = (overrides: Partial<IDataLakeResearchRunDocument> = {}) =>
       maxProposals: 5,
       minRelevance: 0.6,
       costCeilingMicroUsd: 50_000,
+      trustedDomains: [],
+      reviewDomains: [],
+      unlistedSources: 'review',
       allowedDomains: [],
       blockedDomains: [],
       proposedTags: [],
@@ -193,9 +199,11 @@ describe('DataLakeResearchPanel', () => {
       fireEvent.change(screen.getByTestId('datalake-research-max-results-input'), { target: { value: '12' } });
       fireEvent.change(screen.getByTestId('datalake-research-recency-input'), { target: { value: '45' } });
       fireEvent.change(screen.getByTestId('datalake-research-cost-ceiling-input'), { target: { value: '0.25' } });
-      fireEvent.change(screen.getByTestId('datalake-research-allowed-input'), {
+      fireEvent.change(screen.getByTestId('datalake-research-review-input'), {
         target: { value: 'example.com\ndocs.example.com' },
       });
+      fireEvent.click(screen.getByTestId('datalake-research-unlisted-select'));
+      fireEvent.click(screen.getByRole('option', { name: 'Ignore' }));
       fireEvent.change(screen.getByTestId('datalake-research-tags-input'), { target: { value: 'research, weekly' } });
       fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
 
@@ -207,10 +215,50 @@ describe('DataLakeResearchPanel', () => {
           recencyDays: 45,
           // Entered in dollars, sent in micro-USD - the unit the server stores.
           costCeilingMicroUsd: 250_000,
-          allowedDomains: ['example.com', 'docs.example.com'],
+          reviewDomains: ['example.com', 'docs.example.com'],
+          unlistedSources: 'drop',
           proposedTags: ['research', 'weekly'],
         })
       );
+      const sent = spies.onCreate.mock.calls[0][0];
+      expect(sent).not.toHaveProperty('allowedDomains');
+      expect(sent).not.toHaveProperty('trustedDomains');
+    });
+
+    it('sends other sites to review by default', () => {
+      const spies = renderPanel();
+      fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
+      fireEvent.change(screen.getByTestId('datalake-research-name-input'), { target: { value: 'Weekly' } });
+      fireEvent.change(screen.getByTestId('datalake-research-query-input'), { target: { value: 'erosion' } });
+      fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+
+      expect(spies.onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ reviewDomains: [], unlistedSources: 'review' })
+      );
+    });
+
+    it('blocks saving when other sites are ignored and no site is listed', () => {
+      const spies = renderPanel();
+      fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
+      fireEvent.change(screen.getByTestId('datalake-research-name-input'), { target: { value: 'Weekly' } });
+      fireEvent.change(screen.getByTestId('datalake-research-query-input'), { target: { value: 'erosion' } });
+      fireEvent.click(screen.getByTestId('datalake-research-unlisted-select'));
+      fireEvent.click(screen.getByRole('option', { name: 'Ignore' }));
+
+      expect(screen.getByTestId('datalake-research-unlisted-error')).toBeInTheDocument();
+      expect(screen.getByTestId('datalake-research-save-btn')).toBeDisabled();
+
+      fireEvent.change(screen.getByTestId('datalake-research-review-input'), { target: { value: 'example.com' } });
+      expect(screen.queryByTestId('datalake-research-unlisted-error')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+      expect(spies.onCreate).toHaveBeenCalled();
+    });
+
+    it('renders no trusted-sites input', () => {
+      renderPanel();
+      fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
+      expect(screen.queryByTestId('datalake-research-trusted-input')).not.toBeInTheDocument();
+      expect(screen.queryByText(/trusted/i)).not.toBeInTheDocument();
     });
 
     // The default state of a new configuration, and the one the wire schema used to reject: the
@@ -257,6 +305,41 @@ describe('DataLakeResearchPanel', () => {
 
       fireEvent.change(screen.getByTestId('datalake-research-query-input'), { target: { value: 'q' } });
       expect((screen.getByTestId('datalake-research-save-btn') as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    it('prefills a migrated config with the same restriction as before', () => {
+      renderPanel({ configs: [config()] });
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+
+      expect((screen.getByTestId('datalake-research-review-input') as HTMLTextAreaElement).value).toBe('example.com');
+      expect(screen.getByTestId('datalake-research-unlisted-select').textContent).toBe('Ignore');
+    });
+
+    it('prefills from a response that carries only allowedDomains (an older server)', () => {
+      const legacy = config({
+        allowedDomains: ['example.com', 'docs.example.com'],
+      }) as Partial<IDataLakeResearchConfigDocument>;
+      delete legacy.trustedDomains;
+      delete legacy.reviewDomains;
+      delete legacy.unlistedSources;
+      renderPanel({ configs: [legacy as IDataLakeResearchConfigDocument] });
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+
+      expect((screen.getByTestId('datalake-research-review-input') as HTMLTextAreaElement).value).toBe(
+        'example.com\ndocs.example.com'
+      );
+      expect(screen.getByTestId('datalake-research-unlisted-select').textContent).toBe('Ignore');
+    });
+
+    it('prefills an older server response with no allow list as other sites to review', () => {
+      const legacy = config({ allowedDomains: [] }) as Partial<IDataLakeResearchConfigDocument>;
+      delete legacy.trustedDomains;
+      delete legacy.reviewDomains;
+      delete legacy.unlistedSources;
+      renderPanel({ configs: [legacy as IDataLakeResearchConfigDocument] });
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+
+      expect(screen.getByTestId('datalake-research-unlisted-select').textContent).toBe('Send to review');
     });
 
     it('loads the stored levers when editing, and routes the save to that configuration', () => {
@@ -877,6 +960,9 @@ describe('DataLakeResearchPanel', () => {
         costCeilingMicroUsd: 1_000_000,
         minRelevance: RESEARCH_MIN_RELEVANCE_DEFAULT,
         recencyDays: undefined,
+        trustedDomains: [],
+        reviewDomains: [],
+        unlistedSources: 'review',
         allowedDomains: [],
         blockedDomains: [],
         proposedTags: [],
@@ -979,6 +1065,9 @@ describe('DataLakeResearchPanel', () => {
             maxProposals: 10,
             costCeilingMicroUsd: 250_000,
             recencyDays: undefined,
+            trustedDomains: [],
+            reviewDomains: [],
+            unlistedSources: 'review',
             allowedDomains: [],
             blockedDomains: [],
             proposedTags: [],
@@ -1080,6 +1169,9 @@ describe('DataLakeResearchPanel', () => {
             maxProposals: 5,
             costCeilingMicroUsd: 50_000,
             recencyDays: undefined,
+            trustedDomains: [],
+            reviewDomains: [],
+            unlistedSources: 'review',
             allowedDomains: [],
             blockedDomains: [],
             proposedTags: [],

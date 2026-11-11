@@ -22,6 +22,9 @@ import {
   IRealtimeConnectionRepository,
   type SignupRiskReviewState,
   SuspensionReasonCategorySchema,
+  hasAdminPermission,
+  assertCanActOnAdminTarget,
+  NotFoundError,
 } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, secureParameters } from '@bike4mind/utils';
 import { sendFriendRequest } from '../friendshipService/sendFriendRequest';
@@ -85,6 +88,25 @@ export const adminUpdateUserSchema = updateUserSchema.extend({
 });
 
 export type AdminUpdateUserParameters = z.infer<typeof adminUpdateUserSchema>;
+
+/**
+ * The fields a `users:moderate` delegate may write: suspend, restrict, moderation status and the
+ * limited tier. Every other field stays full-admin. The user update route checks the same set first,
+ * so a delegate gets a 403 naming the field rather than this function's generic refusal.
+ */
+export const MODERATION_UPDATE_FIELDS: ReadonlySet<string> = new Set([
+  'id',
+  'isBanned',
+  'suspensionReasonCategory',
+  'isModerated',
+  'moderationStatus',
+  'statusChangeReason',
+  'throttleTier',
+  'throttleReason',
+]);
+
+const writesOnlyModerationFields = (params: Record<string, unknown>): boolean =>
+  Object.entries(params).every(([field, value]) => value === undefined || MODERATION_UPDATE_FIELDS.has(field));
 
 export interface AdminUpdateUserAdapters {
   db: {
@@ -155,14 +177,16 @@ export async function adminUpdateUser(
 ): Promise<AdminUpdateUserResult> {
   const params = secureParameters(parameters, adminUpdateUserSchema);
   const admin = await db.users.findById(userId);
-  if (!admin || !admin.isAdmin) {
+  const moderates = !!admin && hasAdminPermission(admin, 'users:moderate') && writesOnlyModerationFields(params);
+  if (!admin || !(admin.isAdmin || moderates)) {
     throw new ForbiddenError('Unauthorized');
   }
 
   const user = await db.users.findByIdWithPassword(params.id);
   if (!user) {
-    throw new Error('User not found');
+    throw new NotFoundError('User not found');
   }
+  assertCanActOnAdminTarget(admin, user, 'suspend or restrict');
   await validateUsernameChange(user, params, db.users, { allowReservedUsername: true });
   if (params.email !== undefined && params.email !== user.email) {
     if (await db.users.existsOtherUserWithEmail(params.email, user.id)) {

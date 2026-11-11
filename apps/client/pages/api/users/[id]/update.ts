@@ -16,7 +16,11 @@ import { userService } from '@bike4mind/services';
 import { commitWithSessionEnd, type SessionEndReason } from '@server/auth/endUserSessions';
 import {
   ApiKeyScope,
+  BadRequestError,
   ForbiddenError,
+  assertCanActOnAdminTarget,
+  hasAdminPermission,
+  isFullAdmin,
   redactUserSecretsForSelf,
   selfUserProfileResponseSchema,
 } from '@bike4mind/common';
@@ -40,7 +44,6 @@ import {
   recordProfileUpdate,
 } from '@server/users/profileUpdateAudit';
 import {
-  denySelfAdminAction,
   isSameUserId,
   isSelfOrImpersonator,
   parseAdminActionReason,
@@ -146,7 +149,6 @@ async function handleTelemetryConsentChange(
 }
 
 type AccountStateSnapshot = Parameters<typeof userService.entersBlockedState>[0] & {
-  isAdmin?: boolean;
   suspensionReasonCategory?: string | null;
   isModerated?: boolean;
   email?: string | null;
@@ -154,6 +156,7 @@ type AccountStateSnapshot = Parameters<typeof userService.entersBlockedState>[0]
 
 type AuditTargetSnapshot = {
   isAdmin?: boolean;
+  adminPermissions?: string[];
   isBanned?: boolean;
   isModerated?: boolean;
   currentCredits?: number;
@@ -220,20 +223,24 @@ const handler = baseApi().put(
     // An admin editing someone else, or any edit made while impersonating, is mirrored as user.profile.updated.
     const mirrorsProfileUpdate = !isSelf || !!currentUser.impersonatedBy;
 
+    const fullAdmin = isFullAdmin(currentUser);
+    // A delegate editing their own profile takes the self-service branch like any user.
+    const moderator = !fullAdmin && !isSelf && hasAdminPermission(currentUser, 'users:moderate');
+
     // Non-admin users can only update their own profile
-    if (!currentUser.isAdmin && !isSelf) {
+    if (!fullAdmin && !moderator && !isSelf) {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
     // Changing your OWN sign-in credentials needs a browser session that recently re-verified, so
     // an API key can never do it. Only the admin schema accepts `email`. An admin writing ANOTHER
-    // user's credentials or granting the admin role is held to the same bar in the admin branch.
+    // user's credentials is held to the same bar in the admin branch.
     if (isSelf && writesCredentialFields(req.body)) {
       if (req.apiKeyInfo) throw new ForbiddenError('Password and email cannot be changed with an API key.');
       await requireStepUp(req);
     }
 
-    if (currentUser.isAdmin) {
+    if (fullAdmin || moderator) {
       // The admin branch writes credits, roles and email, so it needs the ADMIN
       // scope - but this route cannot declare `requiredScopes`, because it is also
       // every ordinary user's own profile update. The gate therefore lives on the
@@ -246,66 +253,58 @@ const handler = baseApi().put(
         throw new ForbiddenError('Insufficient API key permissions', { required_scopes: [ApiKeyScope.ADMIN] });
       }
 
-      // Another user's credentials and the admin role are session-only changes: an API key is
-      // refused, a browser session must have recently re-verified. Both run before any write.
-      // Revoking the role, bans and every other field stay ungated.
-      if (!isSelf) {
-        const grantsAdminRole =
-          (req.body as Record<string, unknown> | undefined)?.isAdmin === true &&
-          !((await User.findById(userId).select('isAdmin').lean()) as { isAdmin?: boolean } | null)?.isAdmin;
-        if (writesCredentialFields(req.body) || grantsAdminRole) {
-          if (req.apiKeyInfo) {
-            throw new ForbiddenError('Credential and admin-role changes require a signed-in session.');
-          }
-          await requireStepUp(req);
-        }
+      const rawBody = (req.body ?? {}) as Record<string, unknown>;
+      // The Super Admin role has its own route (PUT /api/admin/users/[userId]/role) with step-up, a
+      // reason and the last-admin guard. Refuse it here, even unchanged, so this route never writes it.
+      if ('isAdmin' in rawBody || 'roleChangeReason' in rawBody) {
+        throw new BadRequestError('Change the Super Admin role with PUT /api/admin/users/:userId/role.');
       }
 
-      // Parse with the admin schema -- includes email, isAdmin, tags, credits, etc.
-      const rawBody = (req.body ?? {}) as Record<string, unknown>;
+      // Another user's credentials are a session-only change: an API key is refused, a browser
+      // session must have recently re-verified, before any write. Bans and every other field stay ungated.
+      if (!isSelf && writesCredentialFields(req.body)) {
+        if (req.apiKeyInfo) throw new ForbiddenError('Credential changes require a signed-in session.');
+        await requireStepUp(req);
+      }
+
+      // Parse with the admin schema -- includes email, tags, credits, etc.
       // Zod strips unknown keys, so a misnamed admin field (the `adminNote` vs
       // `creditReason` mix-up in useUpdateUserCredits was exactly this) parses away
       // and the 200 reads as "fully applied" when a credit grant, tag, or role
       // change never happened. Report them instead. Mirrors the self-service branch.
       const adminKeys = new Set(Object.keys(userService.adminUpdateUserSchema.shape));
       const ignoredFields = Object.keys(rawBody).filter(key => !adminKeys.has(key));
+      if (moderator) {
+        const fullAdminFields = Object.keys(rawBody).filter(
+          key => adminKeys.has(key) && !userService.MODERATION_UPDATE_FIELDS.has(key)
+        );
+        if (fullAdminFields.length > 0) {
+          throw new ForbiddenError(`Only full administrators can change: ${fullAdminFields.join(', ')}`, {
+            full_admin_fields: fullAdminFields,
+          });
+        }
+      }
 
       // id comes from the route param; the spread ensures it wins over any id in the body.
       const body = userService.adminUpdateUserSchema.parse({ ...rawBody, id: userId });
 
       const targetBefore = (await User.findById(userId)
-        .select('isAdmin isBanned isModerated currentCredits name username email')
+        .select('isAdmin adminPermissions isBanned isModerated currentCredits name username email')
         .lean()) as AuditTargetSnapshot | null;
+      if (!targetBefore) return res.status(404).json({ error: 'User not found' });
+      if (moderator) assertCanActOnAdminTarget(currentUser, targetBefore, 'suspend or restrict');
       const auditTarget = userAuditTarget(userId, targetBefore);
-      const changesRole = body.isAdmin !== undefined && body.isAdmin !== !!targetBefore?.isAdmin;
       const statusChanges = statusFlagChanges(body, targetBefore);
       const changesCredits = requestsCreditChange(body, targetBefore?.currentCredits);
 
-      // No self-service privilege: an admin cannot change their own admin flag. The attempt is
-      // recorded as a critical denied entry and answered with a 403. Self credit adjustments are
-      // allowed for now, pending scoped admin permissions, and flagged in their audit entry.
+      // Self credit adjustments are allowed for now, pending scoped admin permissions, and flagged in
+      // their audit entry.
       const targetsSelf = isSelfOrImpersonator(currentUser, userId);
-      if (targetsSelf && changesRole) {
-        await denySelfAdminAction(req, {
-          action: 'user.role.denied',
-          attempted: body.isAdmin ? 'user.role.admin_granted' : 'user.role.admin_revoked',
-          target: auditTarget,
-        });
-      }
 
       // Validated before any write so a missing reason never leaves a half-applied update.
-      const roleChangeReason = changesRole ? parseAdminActionReason(body.roleChangeReason) : undefined;
       const creditReason = changesCredits ? parseAdminActionReason(body.creditReason) : undefined;
       const throttleReason = body.throttleTier ? parseAdminActionReason(body.throttleReason) : undefined;
       const statusChangeReason = statusChanges.length > 0 ? parseAdminActionReason(body.statusChangeReason) : undefined;
-
-      // Lockout guard: an explicit demote must not remove the ONLY remaining Super Admin.
-      if (changesRole && body.isAdmin === false) {
-        const adminCount = await userRepository.count({ isAdmin: true });
-        if (adminCount <= 1) {
-          return res.status(400).json({ error: 'Cannot remove the last remaining Super Admin.' });
-        }
-      }
 
       const incomingTelemetryLevel = body.preferences?.contextTelemetryLevel;
       const previousTelemetryLevel = incomingTelemetryLevel
@@ -322,7 +321,7 @@ const handler = baseApi().put(
           // Read inside the transaction so the reason sees the state the write saw; an
           // outside read can be stale by the time the write commits.
           const snapshot = (await User.findById(userId)
-            .select('isAdmin email isBanned suspensionReasonCategory isModerated disputePending moderation')
+            .select('email isBanned suspensionReasonCategory isModerated disputePending moderation')
             .lean()) as AccountStateSnapshot | null;
           const {
             user: updated,
@@ -343,20 +342,11 @@ const handler = baseApi().put(
             }
           );
 
-          // These entries are strict: a failed audit write aborts this transaction, so no role,
-          // balance, suspension or restriction change can commit without its record. Role and status
-          // entries follow what this write flipped, not the pre-read: a concurrent edit can make the
-          // pre-read stale, and a flip it missed still needs its reason, or the 400 rolls it back. No
-          // written user (the row vanished) means nothing flipped.
-          if (updated && !!snapshot?.isAdmin !== !!updated.isAdmin) {
-            await recordAdminActionFromRequest(req, {
-              action: updated?.isAdmin ? 'user.role.admin_granted' : 'user.role.admin_revoked',
-              target: auditTarget,
-              summary: updated?.isAdmin ? 'granted the admin role' : 'revoked the admin role',
-              reason: roleChangeReason ?? parseAdminActionReason(body.roleChangeReason),
-              changes: [{ field: 'isAdmin', before: !!snapshot?.isAdmin, after: !!updated?.isAdmin }],
-            });
-          }
+          // These entries are strict: a failed audit write aborts this transaction, so no balance,
+          // suspension or restriction change can commit without its record. Status entries follow
+          // what this write flipped, not the pre-read: a concurrent edit can make the pre-read stale,
+          // and a flip it missed still needs its reason, or the 400 rolls it back. No written user
+          // (the row vanished) means nothing flipped.
           for (const { field, on, off } of updated ? STATUS_FLAGS : []) {
             const before = !!snapshot?.[field];
             const after = !!updated?.[field];

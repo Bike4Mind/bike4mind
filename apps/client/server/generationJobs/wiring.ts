@@ -49,7 +49,12 @@ import {
   getSettingsValue,
 } from '@bike4mind/utils';
 import { ImageModerationBlockedError, RekognitionImageModerationService } from '@bike4mind/utils/imageModeration';
-import { createImageProviderRegistry, OpenAIImageProvider, type ImageProvider } from '@bike4mind/utils/imageProviders';
+import {
+  createImageProviderRegistry,
+  GeminiImageProvider,
+  OpenAIImageProvider,
+  type ImageProvider,
+} from '@bike4mind/utils/imageProviders';
 import {
   createMusicProviderRegistry,
   ElevenLabsMusicProvider,
@@ -58,6 +63,7 @@ import {
   type MusicProvider,
 } from '@bike4mind/utils/musicProviders';
 import {
+  BflVideoProvider,
   createVideoProviderRegistry,
   GeminiOmniVideoProvider,
   TestVideoProvider,
@@ -106,6 +112,8 @@ export const selectProviderKey = (
     // The same key as xAI chat (user key, admin setting, then XAI_API_KEY).
     case 'xai':
       return keys.xai;
+    case 'bfl':
+      return keys.bfl;
     default: {
       const unhandled: never = providerId;
       throw new Error(`no API key mapping for video provider '${String(unhandled)}'`);
@@ -178,10 +186,15 @@ export const toJobUpdate = (job: IGenerationJobDocument): IGenerationJobUpdatedA
   };
 };
 
-// Gemini, xAI and Veo are registered everywhere; whether a caller can use one depends on a resolvable key
+// Gemini, xAI, Veo and BFL are registered everywhere; whether a caller can use one depends on a resolvable key
 // (hasUsableKey in packages/server-utils/src/videoGenerations/listUsableVideoModels.ts).
 export const buildProviders = (): VideoProvider[] => {
-  const providers: VideoProvider[] = [new GeminiOmniVideoProvider(), new XaiVideoProvider(), new VeoVideoProvider()];
+  const providers: VideoProvider[] = [
+    new GeminiOmniVideoProvider(),
+    new XaiVideoProvider(),
+    new VeoVideoProvider(),
+    new BflVideoProvider(),
+  ];
   // Set only on non-production stages by infra (TEST_GENERATION_PROVIDER_ENVIRONMENT); never registered in production.
   if (process.env.ENABLE_TEST_VIDEO_PROVIDER === 'true') providers.push(new TestVideoProvider());
   return providers;
@@ -205,7 +218,10 @@ const imageProcessorLambdaName = (): string | undefined => {
 };
 
 // Only the adapters that exist; a model whose provider is not registered is refused at create.
-export const buildImageProviders = (): ImageProvider[] => [new OpenAIImageProvider({ imageProcessorLambdaName })];
+export const buildImageProviders = (): ImageProvider[] => [
+  new OpenAIImageProvider({ imageProcessorLambdaName }),
+  new GeminiImageProvider(),
+];
 
 // Direct links (worker, sweep cron) win; API Lambdas only carry the sourceQueueUrls Linkable. sst's Resource
 // proxy throws on an unlinked key, hence the try.

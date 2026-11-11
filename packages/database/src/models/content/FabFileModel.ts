@@ -4343,6 +4343,10 @@ FabFileSchema.index({ userId: 1, deletedAt: 1, archivedAt: 1, _id: 1 });
 // floor, the two $ors) ride along as residual filters. Pinned by fabFileModerationSweep.test.ts.
 FabFileSchema.index({ moderationStatus: 1, deletedAt: 1, moderationAttempts: 1, createdAt: 1 });
 
+// Generated-media purges (purgeDeletedNotebookMedia) ask whether a library file still holds a
+// generated key. Sparse: only files copied from generated media carry it.
+FabFileSchema.index({ 'sourceMetadata.generatedCopyKey': 1 }, { sparse: true });
+
 // No index currently serves the `fileName` sort's `_id` tiebreaker (buildFabFileSearchQuery).
 // Two things to know before adding one: (a) any future `fileName` sort index would need
 // `collation: {locale: 'en'}` to be usable at all - buildFabFileSearchQuery sets that collation

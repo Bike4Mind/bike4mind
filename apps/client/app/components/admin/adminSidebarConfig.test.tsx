@@ -120,9 +120,8 @@ describe('findSectionKeyForTab', () => {
   });
 
   it('returns undefined for a tab with no sidebar entry', () => {
-    // Files/Accounts/ModelLogs exist in the enum but have no sidebar button.
+    // Files/ModelLogs exist in the enum but have no sidebar button.
     expect(findSectionKeyForTab(AdminTab.Files)).toBeUndefined();
-    expect(findSectionKeyForTab(AdminTab.Accounts)).toBeUndefined();
     expect(findSectionKeyForTab(AdminTab.ModelLogs)).toBeUndefined();
   });
 

@@ -226,6 +226,8 @@ export async function runExternalActivityReport(options: ExternalActivityOptions
     staffDomainsEnv = process.env.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS,
     now = new Date(),
     batchSize = 1000,
+    // The report is the CLI's stdout output, not a diagnostic log.
+    // eslint-disable-next-line no-console -- prints the report for scripts/external-active-users
     log = console.log,
   } = options;
 

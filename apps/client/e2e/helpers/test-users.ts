@@ -63,6 +63,7 @@ const SPEC_KEYS = [
   TEAMS_MEMBER_KEY,
   TEAMS_MANAGER_KEY,
   TEAMS_INVITEE_KEY,
+  'studio',
   // AI-latency suites (only seeded when AI_LATENCY_RUN=true; getTestUsers skips absent files).
   // Listed here so getTestUsers loads their spec users, which lets specAuthForProject resolve
   // real auth and route their navigations through /auth/success like every other authed suite -

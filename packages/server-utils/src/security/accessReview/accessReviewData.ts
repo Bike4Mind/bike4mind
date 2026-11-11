@@ -20,6 +20,7 @@ import {
   type AccessReviewDelegation,
   type AccessReviewSnapshot,
 } from './accessReview';
+import { Logger } from '@bike4mind/observability';
 
 /** Reads for the quarterly access review. Read-only: every query is a find, count or $match/$group. */
 
@@ -353,13 +354,13 @@ export async function collectAccessReview(options: CollectAccessReviewOptions = 
 }
 
 /**
- * Counts access, logs the counts as one JSON line (the CloudWatch record of the quarter's starting
+ * Counts access, logs the counts as structured metadata (the CloudWatch record of the quarter's starting
  * point) and posts the reminder. The caller decides whether today is a reminder day.
  */
 export async function sendAccessReviewReminder(now: Date, post: (text: string) => Promise<unknown>): Promise<string> {
   const quarter = reviewQuarter(now);
   const counts = await collectAccessReviewCounts(now);
-  console.log(JSON.stringify({ report: 'access-review', quarter, generatedAt: now.toISOString(), counts }));
+  Logger.info('access-review report', { report: 'access-review', quarter, generatedAt: now.toISOString(), counts });
   await post(formatAccessReviewSlackMessage({ quarter, counts }));
   return quarter;
 }

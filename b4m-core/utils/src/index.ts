@@ -80,6 +80,7 @@ export * from './user';
 export * from './pricing';
 export * from './functionQueueRunner';
 export * from './fabfile';
+export * from './emailToken';
 export * from './signedUrlExpiry';
 export * from './signedUrlWindow';
 export * from './fileContentToken';

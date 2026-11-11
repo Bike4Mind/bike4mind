@@ -10,6 +10,7 @@ import {
   coreEnvNames,
   coreResourceNames,
 } from '../premium-generated/infraResources.generated';
+import { Logger } from '@bike4mind/observability';
 
 const registeredSecrets = new Set<string>();
 let loaded = false;
@@ -23,7 +24,7 @@ export function registerContributedSecrets(
   specs: readonly ContributedSecretSpec[]
 ): PartitionedContributions<ContributedSecretSpec> {
   if (coreResourceNames === null || coreEnvNames === null) {
-    console.warn('[config] core resource names unknown (codegen ran without infra/); no contributed secret registered');
+    Logger.warn('[config] core resource names unknown (codegen ran without infra/); no contributed secret registered');
     return { registered: [], coreCollisions: [], duplicates: [], rejected: specs.map(spec => String(spec.name)) };
   }
   const result = partitionContributed(specs, spec => spec.name, new Set([...coreResourceNames, ...coreEnvNames]));
@@ -31,7 +32,7 @@ export function registerContributedSecrets(
   result.duplicates.push(...result.registered.filter(spec => registeredSecrets.has(spec.name)).map(spec => spec.name));
   result.registered = fresh;
   for (const spec of fresh) registeredSecrets.add(spec.name);
-  for (const line of describeDroppedContributions('contributed secret', result)) console.warn(`[config] ${line}`);
+  for (const line of describeDroppedContributions('contributed secret', result)) Logger.warn(`[config] ${line}`);
   return result;
 }
 

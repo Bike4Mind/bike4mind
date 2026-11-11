@@ -9,9 +9,11 @@ import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/admi
 const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:adjust' } })
   .use(csrfProtection())
   .post(async (req, res) => {
-    const { userId, reason, target } = await readSignupGrantAdminAction(req, 'user.credits.grant_unblocked', {
-      guardTargetVerb: 'unblock signup credit grants for',
-    });
+    const { userId, reason, target } = await readSignupGrantAdminAction(
+      req,
+      'user.credits.grant_unblocked',
+      'unblock signup credit grants for'
+    );
     const result = await userService.unblockSignupGrant(userId, {
       users: userRepository,
       heldRewards: heldCreditRewardRepository,

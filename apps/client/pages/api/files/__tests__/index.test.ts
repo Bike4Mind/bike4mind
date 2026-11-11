@@ -141,7 +141,7 @@ vi.mock('@bike4mind/services', async () => {
 
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ bucket: 'files', getSignedUrl: browserSigner, delete: vi.fn() }),
-  getGeneratedImageStorage: () => ({ bucket: 'generated', delete: vi.fn() }),
+  getGeneratedImageStorage: () => ({ bucket: 'generated', delete: generatedDelete }),
 }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
@@ -150,6 +150,7 @@ vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
     return Promise.resolve({ artifacts: [], annotations: 0, reports: 0, viewAudits: 0 });
   },
 }));
+const generatedDelete = vi.hoisted(() => vi.fn(async () => undefined));
 const accessibleFilter = vi.hoisted(() => ({ __accessibleFilter: true }));
 vi.mock('@casl/mongoose', () => ({ accessibleBy: () => ({ ofType: () => accessibleFilter }) }));
 
@@ -327,10 +328,14 @@ describe('DELETE /api/files', () => {
 
     await mockRefs.deleteHandler!(req, res);
 
-    const [files, buckets] = mockRefs.storedObjectArgs as [unknown, { files: unknown; generated: unknown }];
+    const [files, buckets] = mockRefs.storedObjectArgs as [
+      unknown,
+      { files: unknown; generated: { storage: { delete: (key: string) => Promise<unknown> } } },
+    ];
     expect(files).toBe(fabFileDocs);
     expect(buckets.files).toMatchObject({ bucket: 'files' });
-    expect(buckets.generated).toMatchObject({ storage: { bucket: 'generated' } });
+    await buckets.generated.storage.delete('copy.png');
+    expect(generatedDelete).toHaveBeenCalledWith('copy.png');
   });
 
   // The fork guard compares a reply's notebook with the file's own; a projection without sessionId makes the

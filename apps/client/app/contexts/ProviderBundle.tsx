@@ -19,7 +19,6 @@ import FileBrowser from '../components/Files/Browser';
 import SendToDataLakeModal from '@client/app/components/DataLakeWizard/SendToDataLakeModal';
 import MFAEnforcementWrapper from '../components/auth/MFAEnforcementWrapper';
 import EmailVerificationBanner from '@client/app/components/EmailVerificationBanner';
-import { LegacyQuestmasterNotice } from '@client/app/components/questmaster/LegacyQuestmasterRetirement';
 import CommandPalette from '../components/CommandPalette';
 import { useDataLakeBatchCompletionSync } from '@client/app/hooks/data/dataLakeWizard';
 
@@ -30,8 +29,8 @@ interface ProviderBundleProps {
 // Core data providers - grouped to reduce cascading re-renders.
 // MFAEnforcementWrapper sits directly under AdminSettingsProvider (it reads enforceMFA there) and
 // encloses everything else: while a session owes MFA enrollment the server 403s every route outside
-// its allowlist (mfaEnrollmentGate in server/auth/auth.ts), so nothing that fetches app data may
-// mount until the wrapper has ruled enrollment out.
+// its allowlist (mfaEnrollmentGate in server/auth/auth.ts), so the wrapper withholds the app until
+// enrollment is ruled out, except for a user remembered as enrolled, whose app a refusal withdraws.
 const CoreDataProviders: React.FC<{ children: ReactNode }> = ({ children }) => (
   <InboxProvider>
     <UserSettingsProvider>
@@ -83,7 +82,6 @@ export const ProviderBundle: React.FC<ProviderBundleProps> = ({ children }) => {
           <SendToDataLakeModal />
           <CommandPalette />
           <EmailVerificationBanner />
-          <LegacyQuestmasterNotice />
           {children}
         </UIProviders>
       </SessionProviders>

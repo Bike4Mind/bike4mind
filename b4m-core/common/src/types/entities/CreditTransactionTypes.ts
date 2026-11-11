@@ -583,6 +583,11 @@ export interface ICreditTransactionRepository extends IBaseRepository<ICreditTra
     paymentIntentId: string,
     reason: PurchaseReversalReason
   ): Promise<ICreditTransactionDocument | null>;
+  /**
+   * Moves the row keyed `fromTransactionId` to `toTransactionId`, freeing the original key for a later payout.
+   * Returns null when no row carries `fromTransactionId`.
+   */
+  rekeyTransaction(fromTransactionId: string, toTransactionId: string): Promise<ICreditTransactionDocument | null>;
   /** Any completed purchase of this owner's that was never refunded or lost to a dispute, or null. */
   findUnreversedPurchase(ownerId: string, ownerType: CreditHolderType): Promise<ICreditTransactionDocument | null>;
   findByOwnerWithFilters(

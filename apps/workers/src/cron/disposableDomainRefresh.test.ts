@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 
 const { repo, emitMetrics } = vi.hoisted(() => ({
   repo: {
@@ -130,7 +131,7 @@ describe('handler', () => {
   });
 
   it('still refreshes later sources when recording a failure throws', async () => {
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(Logger, 'warn').mockImplementation(() => {});
     repo.getDisposableSourceStatus.mockResolvedValue([]);
     repo.replaceDisposableSource.mockClear();
     repo.recordDisposableSource.mockImplementation(async (_source: string, update: { error?: string }) => {

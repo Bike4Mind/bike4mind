@@ -213,7 +213,7 @@ describe.each(routes)('$name with an admin-owned caller', ({ handler, method }) 
 describe('auth/mfa/force-reset with an admin-owned caller', () => {
   it('refuses an API key without the admin scope', async () => {
     keyWith([ApiKeyScope.AI_CHAT]);
-    expect((await call(forceMfaReset, 'POST', 'key'))._getStatusCode()).toBe(403);
+    await expect(call(forceMfaReset, 'POST', 'key')).rejects.toBeInstanceOf(ForbiddenError);
   });
 });
 

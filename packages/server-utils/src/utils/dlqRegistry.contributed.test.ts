@@ -42,7 +42,7 @@ describe('contributed DLQ registry', () => {
 
   beforeEach(async () => {
     vi.resetModules();
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.doMock('@bike4mind/observability', () => ({ Logger: { warn: vi.fn() } }));
     baseline = (await load([])).getDlqRegistry().map(d => d.label);
     vi.resetModules();
   });

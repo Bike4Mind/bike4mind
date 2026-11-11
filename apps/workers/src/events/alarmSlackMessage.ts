@@ -1028,7 +1028,7 @@ export interface AlarmWebhookResources {
   SLACK_ERROR_REPORTING_WEBHOOK_URL: { value: string };
 }
 
-const SECRET_PLACEHOLDER = 'not-configured';
+export const SECRET_PLACEHOLDER = 'not-configured';
 
 /**
  * Reads an optional linked secret. sst's Resource proxy throws for a name the function never

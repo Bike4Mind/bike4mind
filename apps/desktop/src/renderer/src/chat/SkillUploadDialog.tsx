@@ -291,6 +291,12 @@ type Step =
   | { kind: 'version'; listingId: string; message: string }
   | { kind: 'result'; result: Submitted };
 
+/** An open Select listbox keeps focus on its button and bubbles Escape to the Modal, which must not treat it as a close. */
+const isEscapeFromOpenListbox = (event: unknown): boolean => {
+  const target = (event as { target?: unknown } | null)?.target;
+  return target instanceof Element && !!target.closest('[aria-expanded="true"], [role="listbox"]');
+};
+
 /**
  * Upload a local SKILL.md: preview and edit what main parsed, save it to the account, and
  * optionally publish it or submit it as a new version of an existing listing (`listing`).
@@ -710,7 +716,13 @@ export function SkillUploadDialog({
 
   return (
     <>
-      <Modal open onClose={onClose}>
+      <Modal
+        open
+        onClose={(event, reason) => {
+          if (reason === 'escapeKeyDown' && isEscapeFromOpenListbox(event)) return;
+          onClose();
+        }}
+      >
         <ModalDialog
           sx={{ width: 620, maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto' }}
           data-testid="skill-upload-dialog"

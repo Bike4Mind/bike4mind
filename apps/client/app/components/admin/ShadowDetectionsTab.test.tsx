@@ -47,6 +47,25 @@ vi.mock('@tanstack/react-router', () => ({
 }));
 
 import ShadowDetectionsTab, { formatPaymentAmount } from './ShadowDetectionsTab';
+vi.mock('./CampaignWatches/CampaignWatchesPanel', () => ({ CampaignWatchesPanel: () => null }));
+vi.mock('./CampaignWatches/WatchAccountsButton', () => ({
+  WatchAccountsButton: ({
+    label,
+    incomplete,
+    incompleteHint,
+  }: {
+    label?: string;
+    incomplete?: boolean;
+    incompleteHint?: string;
+  }) => (
+    <span
+      data-testid="watch-accounts-stub"
+      data-label={label}
+      data-incomplete={String(incomplete)}
+      data-hint={incompleteHint}
+    />
+  ),
+}));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
@@ -124,6 +143,10 @@ describe('ShadowDetectionsTab', () => {
 
   it('defaults to unreviewed detections and renders rows and stats', () => {
     renderTab();
+
+    expect(screen.getByTestId('detections-start-here')).toHaveTextContent('Open Review evidence');
+    expect(screen.getByTestId('detections-start-here')).toHaveTextContent('does not change account access');
+    expect(screen.getByText('Suggested response')).toBeInTheDocument();
 
     expect(m.useShadowDetections).toHaveBeenCalledWith({ detector: undefined, verdict: 'unreviewed' });
     const row = screen.getByTestId(`shadow-detection-row-${DETECTION_ID}`);
@@ -432,6 +455,39 @@ describe('ShadowDetectionsTab', () => {
     expect(screen.queryByTestId('shadow-detection-campaign-truncated')).toBeNull();
   });
 
+  it('offers a Watch button only on account-campaign rows, flagged incomplete when the group is truncated', () => {
+    renderTab();
+    expect(screen.queryByTestId('watch-accounts-stub')).toBeNull();
+
+    m.useShadowDetections.mockReturnValue(
+      queryResult(list({ data: [detection({ detector: 'accountCampaign', network: null, group: campaignGroup() })] }))
+    );
+    const { unmount } = renderTab();
+    expect(screen.getByTestId('watch-accounts-stub')).toHaveAttribute('data-label', 'Watch');
+    expect(screen.getByTestId('watch-accounts-stub')).toHaveAttribute('data-incomplete', 'false');
+    unmount();
+
+    m.useShadowDetections.mockReturnValue(
+      queryResult(
+        list({
+          data: [
+            detection({
+              detector: 'accountCampaign',
+              network: null,
+              group: { ...campaignGroup(), truncated: true },
+            }),
+          ],
+        })
+      )
+    );
+    renderTab();
+    expect(screen.getByTestId('watch-accounts-stub')).toHaveAttribute('data-incomplete', 'true');
+    expect(screen.getByTestId('watch-accounts-stub')).toHaveAttribute(
+      'data-hint',
+      'This group was cut to its stored cap, so it cannot be saved as a watch.'
+    );
+  });
+
   it('notes a truncated campaign group and hides empty ignored and unknown lists', async () => {
     await openCampaignDialog({
       ...campaignGroup(),
@@ -498,7 +554,7 @@ describe('ShadowDetectionsTab', () => {
       'Graded by someone else.'
     );
     const dialog = screen.getByTestId('shadow-detection-verdict-dialog');
-    expect(within(dialog).getByText('Change verdict')).toBeTruthy();
+    expect(within(dialog).getByText('View review')).toBeTruthy();
     expect(
       within(screen.getByTestId('shadow-detection-history')).getByText('Known customer or integration')
     ).toBeTruthy();

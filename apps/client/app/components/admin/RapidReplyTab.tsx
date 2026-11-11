@@ -1,64 +1,61 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
-  Alert,
   Box,
   Button,
-  Card,
-  CardContent,
-  Chip,
-  DialogActions,
   DialogContent,
-  DialogTitle,
+  Dropdown,
   FormControl,
+  FormHelperText,
   FormLabel,
-  Grid,
   IconButton,
   Input,
-  Modal,
-  ModalDialog,
+  Menu,
+  MenuButton,
+  MenuItem,
   Option,
   Select,
-  Sheet,
   Stack,
   Switch,
   Tab,
   TabList,
   TabPanel,
-  Table,
   Tabs,
   Textarea,
   Typography,
-  Badge,
-  LinearProgress,
-  Divider,
 } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
-import DeleteIcon from '@mui/icons-material/Delete';
-import EditIcon from '@mui/icons-material/Edit';
-import SaveIcon from '@mui/icons-material/Save';
-import SpeedIcon from '@mui/icons-material/Speed';
-import PsychologyIcon from '@mui/icons-material/Psychology';
-import PlayArrowIcon from '@mui/icons-material/PlayArrow';
-import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import WarningIcon from '@mui/icons-material/Warning';
-import RefreshIcon from '@mui/icons-material/Refresh';
-import BoltIcon from '@mui/icons-material/Bolt';
+import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import { useQuery } from '@tanstack/react-query';
-import { useUpdateSettings } from '@client/app/hooks/data/settings';
+import { useExperimentalFeatureSettings, useUpdateSettings } from '@client/app/hooks/data/settings';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import {
   ModelInfo,
   RapidReplyFallbackBehaviors,
   RapidReplyResponseStylesCommon,
   RapidReplyTransitionModes,
+  type RapidReplySettings,
 } from '@bike4mind/common';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { IRapidReplyMapping } from '@bike4mind/common/types/entities/RapidReplyTypes';
 import { api } from '@client/app/contexts/ApiContext';
-import { RapidReplyMetrics } from './RapidReplyMetrics';
-import { useSaveMapping, useDeleteMapping, useTestConfiguration } from '@client/app/hooks/data/rapidReplyMutations';
-import { useExperimentalFeatureSettings } from '@client/app/hooks/data/settings';
+import { getErrorMessage } from '@client/app/utils/error';
+import { RapidReplyMetrics, type RapidReplyMetricsData } from './RapidReplyMetrics';
+import { RapidReplyTestPanel } from './RapidReplyTestPanel';
+import { useSaveMapping, useDeleteMapping } from '@client/app/hooks/data/rapidReplyMutations';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
+import { SettingsDraftProvider, useSettingsDraft } from './SettingsDraftProvider';
+import {
+  AdminDialog,
+  AdminPageHeader,
+  DataTable,
+  EmptyState,
+  ErrorState,
+  LoadingState,
+  SettingsSection,
+  StatusChip,
+  type DataColumn,
+} from './shared';
+import { ADMIN_DETAIL_MAX_WIDTH, ADMIN_REGION_GAP, adminFocus, adminTabStrip } from './shared/adminStyles';
 
 const defaultPrompt = `IMPORTANT: DO NOT ANSWER THE QUESTION. You are providing a quick, friendly acknowledgment that shows you understand the topic while the full response is being prepared. Keep it to ONE sentence only and reference the subject matter.
 
@@ -70,1341 +67,668 @@ const defaultPrompt = `IMPORTANT: DO NOT ANSWER THE QUESTION. You are providing 
 
         Single sentence only. Always acknowledge the specific topic while indicating work is in progress.`;
 
-// API Hook definitions
-const useRapidReplyMappings = () => {
-  return useQuery({
+const EMPTY_MAPPING: Partial<IRapidReplyMapping> = {
+  mainModelId: '',
+  rapidModelId: '',
+  enabled: true,
+  priority: 1,
+  systemPrompt: defaultPrompt,
+  maxTokens: 100,
+  responseStyle: 'auto',
+  maxLatency: 1500,
+};
+
+const RAPID_MODEL_NAME_HINTS = ['mini', 'nano', 'haiku', 'flash', 'small', 'fast'];
+
+const LATENCY_RANGE = { min: 500, max: 5000 };
+const SUCCESS_RATE_RANGE = { min: 0, max: 100 };
+
+type RapidReplyTabKey = 'models' | 'metrics' | 'test';
+
+interface MappingsResponse {
+  mappings: IRapidReplyMapping[];
+  /**
+   * Computed server-side against the same getAvailableModels call the rapid-reply endpoint makes, rather
+   * than re-derived from useModelInfo here: that list comes from the picker route, which excludes private
+   * models and would report false rot for one.
+   */
+  unavailableRapidModelIds?: string[];
+}
+
+/** The four RapidReplySettings fields this page owns; a save writes exactly these, as it always has. */
+type RapidReplyPageSettings = Pick<
+  RapidReplySettings,
+  'transitionMode' | 'fallbackBehavior' | 'maxAcceptableLatency' | 'minSuccessRate'
+>;
+
+const useRapidReplyMappings = () =>
+  useQuery({
     queryKey: ['rapid-reply-mappings'],
-    queryFn: async () => {
+    queryFn: async (): Promise<MappingsResponse> => {
       const response = await api.get('/api/admin/rapid-reply/mappings');
       return response.data;
     },
   });
-};
 
-const useRapidReplyMetrics = () => {
-  return useQuery({
+const useRapidReplyMetrics = () =>
+  useQuery({
     queryKey: ['rapid-reply-metrics'],
-    queryFn: async () => {
+    queryFn: async (): Promise<RapidReplyMetricsData | null> => {
       const response = await api.get('/api/admin/rapid-reply/metrics');
       return response.data;
     },
-    refetchInterval: 30000, // Refresh every 30 seconds
+    refetchInterval: 30_000,
   });
+
+const readPageSettings = (stored: unknown): RapidReplyPageSettings => {
+  const value = (stored ?? {}) as Partial<RapidReplyPageSettings>;
+  return {
+    transitionMode: value.transitionMode || 'replace',
+    fallbackBehavior: value.fallbackBehavior || 'continue',
+    maxAcceptableLatency: value.maxAcceptableLatency ?? 2000,
+    minSuccessRate: value.minSuccessRate ?? 90,
+  };
 };
 
-// Will be used for prompt management feature
-// const useRapidReplyPrompts = (mappingId?: string) => {
-//   return useQuery({
-//     queryKey: ['rapid-reply-prompts', mappingId],
-//     queryFn: async () => {
-//       const url = mappingId
-//         ? `/api/admin/rapid-reply/prompts?mappingId=${mappingId}`
-//         : '/api/admin/rapid-reply/prompts';
-//       const response = await fetch(url);
-//       if (!response.ok) throw new Error('Failed to fetch prompts');
-//       return response.json();
-//     },
-//     enabled: !!mappingId || mappingId === undefined,
-//   });
-// };
+const outOfRange = (value: number, range: { min: number; max: number }, unit: string) =>
+  Number.isInteger(value) && value >= range.min && value <= range.max
+    ? undefined
+    : `Enter a whole number from ${range.min} to ${range.max}${unit}`;
 
-// Component for editing a mapping
-const MappingEditModal: React.FC<{
-  open: boolean;
+const parseNumberInput = (raw: string) => (raw === '' ? Number.NaN : Number(raw));
+
+const MappingDialog: React.FC<{
   onClose: () => void;
   mapping?: IRapidReplyMapping;
   availableModels: ModelInfo[];
-  metrics?: any;
-  maxLatencyThreshold?: number;
-}> = ({ open, onClose, mapping, availableModels, metrics, maxLatencyThreshold = 2000 }) => {
+  metrics?: RapidReplyMetricsData | null;
+  maxLatencyThreshold: number;
+}> = ({ onClose, mapping, availableModels, metrics, maxLatencyThreshold }) => {
   const saveMapping = useSaveMapping();
-  const [formData, setFormData] = useState<Partial<IRapidReplyMapping>>({
-    mainModelId: '',
-    rapidModelId: '',
-    enabled: true,
-    priority: 1,
-    systemPrompt: defaultPrompt,
-    maxTokens: 100,
-    responseStyle: 'auto',
-    maxLatency: 1500,
-  });
+  const [formData, setFormData] = useState<Partial<IRapidReplyMapping>>(mapping ?? EMPTY_MAPPING);
 
-  useEffect(() => {
-    if (mapping) {
-      setFormData(mapping);
-    } else {
-      setFormData({
-        mainModelId: '',
-        rapidModelId: '',
-        enabled: true,
-        priority: 1,
-        systemPrompt: defaultPrompt,
-        maxTokens: 100,
-        responseStyle: 'auto',
-        maxLatency: 1500,
-      });
-    }
-  }, [mapping]);
+  const rapidModels = availableModels.filter(model =>
+    RAPID_MODEL_NAME_HINTS.some(hint => model.name.toLowerCase().includes(hint))
+  );
+
+  const modelLatency = (modelId: string) =>
+    metrics?.modelBreakdown?.find(entry => entry.rapidModel === modelId)?.avgLatency || null;
+
+  const blockedReason = !formData.mainModelId
+    ? 'Pick a main model.'
+    : !formData.rapidModelId
+      ? 'Pick a rapid model.'
+      : undefined;
 
   const handleSave = async () => {
     try {
       await saveMapping.mutateAsync(formData);
       onClose();
-    } catch (error) {
-      console.error('Failed to save mapping:', error);
+    } catch {
+      // Rendered from saveMapping.error below.
     }
-  };
-
-  // Filter models to get fast/mini models
-  const rapidModels = availableModels.filter(
-    model =>
-      model.name.toLowerCase().includes('mini') ||
-      model.name.toLowerCase().includes('nano') ||
-      model.name.toLowerCase().includes('haiku') ||
-      model.name.toLowerCase().includes('flash') ||
-      model.name.toLowerCase().includes('small') ||
-      model.name.toLowerCase().includes('fast')
-  );
-
-  // Get model latency from metrics
-  const getModelLatency = (modelId: string): number | null => {
-    if (!metrics?.modelBreakdown) return null;
-    const modelMetric = metrics.modelBreakdown.find((m: any) => m.rapidModel === modelId);
-    return modelMetric?.avgLatency || null;
-  };
-
-  // Get latency-based performance indicator
-  const getPerformanceChip = (modelId: string) => {
-    const latency = getModelLatency(modelId);
-
-    if (latency === null) {
-      // Fallback when no metrics available
-      return { color: 'neutral', label: 'No data' };
-    }
-
-    // Use actual latency data with threshold
-    const isFast = latency <= maxLatencyThreshold;
-    return {
-      color: isFast ? 'success' : 'danger',
-      label: `${latency}ms - ${isFast ? 'Fast' : 'Slow'}`,
-    };
   };
 
   return (
-    <Modal open={open} onClose={onClose}>
-      <ModalDialog size="lg" sx={{ maxWidth: '1200px', width: '1000px', minWidth: '800px' }}>
-        <DialogTitle>
-          <Stack direction="row" spacing={1} alignItems="center">
-            <BoltIcon />
-            <Typography>{mapping ? 'Edit Mapping' : 'Create New Mapping'}</Typography>
-          </Stack>
-        </DialogTitle>
-        <DialogContent>
-          <Stack spacing={3}>
-            <Grid container spacing={2}>
-              <Grid xs={12} md={6}>
-                <FormControl required>
-                  <FormLabel>Main Model</FormLabel>
-                  <Select
-                    value={formData.mainModelId}
-                    onChange={(_, value) => setFormData({ ...formData, mainModelId: value as string })}
-                    placeholder="Select main model"
-                  >
-                    {availableModels.map(model => (
-                      <Option key={model.id} value={model.id}>
-                        {model.name}
-                      </Option>
-                    ))}
-                  </Select>
-                </FormControl>
-              </Grid>
-              <Grid xs={12} md={6}>
-                <FormControl required>
-                  <FormLabel>Rapid Model</FormLabel>
-                  <Select
-                    value={formData.rapidModelId}
-                    onChange={(_, value) => setFormData({ ...formData, rapidModelId: value as string })}
-                    placeholder="Select rapid model"
-                  >
-                    {rapidModels.map(model => {
-                      const perfChip = getPerformanceChip(model.id);
+    <AdminDialog
+      title={mapping ? 'Edit mapping' : 'Create mapping'}
+      onClose={onClose}
+      width={720}
+      data-testid="rapid-reply-mapping-dialog"
+    >
+      <DialogContent>
+        <Stack sx={{ gap: 2 }}>
+          <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' } }}>
+            <FormControl required>
+              <FormLabel>Main model</FormLabel>
+              <Select
+                value={formData.mainModelId || null}
+                onChange={(_, value) => setFormData({ ...formData, mainModelId: value ?? '' })}
+                placeholder="Pick a main model"
+                data-testid="rapid-reply-mapping-main-model"
+              >
+                {availableModels.map(model => (
+                  <Option key={model.id} value={model.id}>
+                    {model.name}
+                  </Option>
+                ))}
+              </Select>
+            </FormControl>
+            <FormControl required>
+              <FormLabel>Rapid model</FormLabel>
+              <Select
+                value={formData.rapidModelId || null}
+                onChange={(_, value) => setFormData({ ...formData, rapidModelId: value ?? '' })}
+                placeholder="Pick a rapid model"
+                data-testid="rapid-reply-mapping-rapid-model"
+              >
+                {rapidModels.map(model => {
+                  const latency = modelLatency(model.id);
+                  return (
+                    <Option key={model.id} value={model.id}>
+                      <Stack direction="row" sx={{ gap: 1, alignItems: 'center' }}>
+                        <span>{model.name}</span>
+                        {latency === null ? (
+                          <StatusChip tone="neutral" label="No data" />
+                        ) : (
+                          <StatusChip
+                            tone={latency <= maxLatencyThreshold ? 'good' : 'bad'}
+                            label={`${Math.round(latency).toLocaleString()} ms`}
+                          />
+                        )}
+                      </Stack>
+                    </Option>
+                  );
+                })}
+              </Select>
+            </FormControl>
+          </Box>
 
-                      return (
-                        <Option key={model.id} value={model.id}>
-                          <Stack direction="row" spacing={1} alignItems="center">
-                            <Typography>{model.name}</Typography>
+          <FormControl>
+            <FormLabel>System prompt</FormLabel>
+            <Textarea
+              value={formData.systemPrompt}
+              onChange={event => setFormData({ ...formData, systemPrompt: event.target.value })}
+              minRows={3}
+              maxRows={6}
+              placeholder="Enter the system prompt for rapid replies"
+            />
+          </FormControl>
 
-                            <Chip size="sm" color={perfChip.color as any} variant="soft">
-                              {perfChip.label}
-                            </Chip>
-                          </Stack>
-                        </Option>
-                      );
-                    })}
-                  </Select>
-                </FormControl>
-              </Grid>
-            </Grid>
-
+          <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, minmax(0, 1fr))' } }}>
             <FormControl>
-              <FormLabel>System Prompt</FormLabel>
-              <Textarea
-                value={formData.systemPrompt}
-                onChange={e => setFormData({ ...formData, systemPrompt: e.target.value })}
-                minRows={3}
-                maxRows={6}
-                placeholder="Enter the system prompt for rapid replies..."
+              <FormLabel>Max tokens</FormLabel>
+              <Input
+                type="number"
+                value={formData.maxTokens}
+                onChange={event => setFormData({ ...formData, maxTokens: parseInt(event.target.value) })}
+                slotProps={{ input: { min: 10, max: 150 } }}
+              />
+              <FormHelperText>10 to 150.</FormHelperText>
+            </FormControl>
+            <FormControl>
+              <FormLabel>Response style</FormLabel>
+              <Select
+                value={formData.responseStyle}
+                onChange={(_, value) =>
+                  setFormData({ ...formData, responseStyle: (value ?? 'auto') as IRapidReplyMapping['responseStyle'] })
+                }
+              >
+                {Object.values(RapidReplyResponseStylesCommon).map(style => (
+                  <Option key={style} value={style}>
+                    {style}
+                  </Option>
+                ))}
+              </Select>
+            </FormControl>
+            <FormControl>
+              <FormLabel>Timeout (ms)</FormLabel>
+              <Input
+                type="number"
+                value={formData.maxLatency}
+                onChange={event => setFormData({ ...formData, maxLatency: parseInt(event.target.value) })}
+                slotProps={{ input: { min: 500, max: 5000 } }}
+              />
+              <FormHelperText>500 to 5000. The rapid reply stops after this.</FormHelperText>
+            </FormControl>
+          </Box>
+
+          <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, minmax(0, 1fr))' } }}>
+            <FormControl>
+              <FormLabel>Fallback priority</FormLabel>
+              <Input
+                type="number"
+                value={formData.priority}
+                onChange={event => setFormData({ ...formData, priority: parseInt(event.target.value) })}
+                slotProps={{ input: { min: 1, max: 100 } }}
               />
             </FormControl>
+            <FormControl>
+              <FormLabel>Status</FormLabel>
+              <Switch
+                checked={Boolean(formData.enabled)}
+                onChange={event => setFormData({ ...formData, enabled: event.target.checked })}
+                endDecorator={formData.enabled ? 'Enabled' : 'Disabled'}
+                sx={{ alignSelf: 'flex-start' }}
+                data-testid="rapid-reply-mapping-enabled-switch"
+              />
+            </FormControl>
+          </Box>
 
-            <Grid container spacing={2}>
-              <Grid xs={12} md={4}>
-                <FormControl>
-                  <FormLabel>Max Tokens</FormLabel>
-                  <Input
-                    type="number"
-                    value={formData.maxTokens}
-                    onChange={e => setFormData({ ...formData, maxTokens: parseInt(e.target.value) })}
-                    slotProps={{
-                      input: {
-                        min: 10,
-                        max: 150,
-                      },
-                    }}
-                  />
-                  {/* Help text */}
-                  <Typography level="body-xs" sx={{ pt: 0.5 }}>
-                    Number of tokens for rapid reply. Minimum 10 and maximum 150.
-                  </Typography>
-                </FormControl>
-              </Grid>
-              <Grid xs={12} md={4}>
-                <FormControl>
-                  <FormLabel>Response Style</FormLabel>
-                  <Select
-                    value={formData.responseStyle}
-                    onChange={(_, value) => setFormData({ ...formData, responseStyle: value as any })}
-                  >
-                    {Object.values(RapidReplyResponseStylesCommon).map(style => (
-                      <Option key={style} value={style}>
-                        {style}
-                      </Option>
-                    ))}
-                  </Select>
-                </FormControl>
-              </Grid>
-              <Grid xs={12} md={4}>
-                <FormControl>
-                  <FormLabel>Max Latency Before Timeout (ms)</FormLabel>
-                  <Input
-                    type="number"
-                    value={formData.maxLatency}
-                    onChange={e => setFormData({ ...formData, maxLatency: parseInt(e.target.value) })}
-                    slotProps={{
-                      input: {
-                        min: 500,
-                        max: 5000,
-                      },
-                    }}
-                  />
-                </FormControl>
-                {/* Help text */}
-                <Typography level="body-xs" sx={{ pt: 0.5 }}>
-                  Maximum latency before stopping the rapid reply attempt. Minimum 500 and maximum 5000.
-                </Typography>
-              </Grid>
-            </Grid>
-
-            <Grid container spacing={2}>
-              <Grid xs={12} md={4}>
-                <FormControl>
-                  <FormLabel>Fallback Priority</FormLabel>
-                  <Input
-                    type="number"
-                    value={formData.priority}
-                    onChange={e => setFormData({ ...formData, priority: parseInt(e.target.value) })}
-                    slotProps={{
-                      input: {
-                        min: 1,
-                        max: 100,
-                      },
-                    }}
-                  />
-                </FormControl>
-              </Grid>
-              <Grid xs={12} md={8}>
-                <FormControl style={{ justifyContent: 'flex-start' }}>
-                  <FormLabel>Status</FormLabel>
-                  <Switch
-                    checked={formData.enabled}
-                    onChange={e => setFormData({ ...formData, enabled: e.target.checked })}
-                    endDecorator={formData.enabled ? 'Enabled' : 'Disabled'}
-                    color={formData.enabled ? 'success' : 'neutral'}
-                    style={{ justifyContent: 'flex-start', width: '100%' }}
-                  />
-                </FormControl>
-              </Grid>
-            </Grid>
-          </Stack>
-        </DialogContent>
-        <DialogActions>
-          <Button variant="plain" color="neutral" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button startDecorator={<SaveIcon />} onClick={handleSave} loading={saveMapping.isPending}>
-            Save Mapping
-          </Button>
-        </DialogActions>
-      </ModalDialog>
-    </Modal>
+          {saveMapping.error && (
+            <Typography role="alert" level="body-sm" sx={{ color: 'admin.danger' }}>
+              The mapping was not saved: {getErrorMessage(saveMapping.error)}
+            </Typography>
+          )}
+        </Stack>
+      </DialogContent>
+      <Stack direction="row" sx={{ gap: 1, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end' }}>
+        {blockedReason && (
+          <Typography level="body-sm" sx={{ color: 'admin.inkMuted', mr: 'auto' }}>
+            {blockedReason}
+          </Typography>
+        )}
+        <Button variant="plain" color="neutral" onClick={onClose} data-testid="rapid-reply-mapping-cancel-btn">
+          Cancel
+        </Button>
+        <Button
+          onClick={() => void handleSave()}
+          loading={saveMapping.isPending}
+          disabled={Boolean(blockedReason)}
+          data-testid="rapid-reply-mapping-save-btn"
+        >
+          {mapping ? 'Save mapping' : 'Create mapping'}
+        </Button>
+      </Stack>
+    </AdminDialog>
   );
 };
 
-// Main component
-const RapidReplyTab: React.FC = () => {
-  const [activeTab, setActiveTab] = useState(0);
-  const [editingMapping, setEditingMapping] = useState<IRapidReplyMapping | undefined>();
-  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
-  const [testModelId, setTestModelId] = useState<string>('');
-  const [testInput, setTestInput] = useState<string>('Test message for rapid reply');
-  const [testHistory, setTestHistory] = useState<any[]>([]);
+/** One "..." menu per row, so the actions fit the table's actions column and Delete is not a button on every row. */
+const MappingRowActions: React.FC<{ mapping: IRapidReplyMapping; onEdit: () => void; onDelete: () => void }> = ({
+  mapping,
+  onEdit,
+  onDelete,
+}) => (
+  <Dropdown>
+    <MenuButton
+      slots={{ root: IconButton }}
+      slotProps={{
+        root: {
+          size: 'sm',
+          variant: 'plain',
+          'aria-label': `Actions for the ${mapping.mainModelId} mapping`,
+          sx: { ...adminFocus, color: 'admin.inkMuted' },
+        },
+      }}
+      data-testid={`rapid-reply-mapping-actions-${mapping.id}`}
+    >
+      <MoreHorizIcon sx={{ fontSize: 18 }} />
+    </MenuButton>
+    <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }}>
+      <MenuItem onClick={onEdit} data-testid={`rapid-reply-edit-mapping-${mapping.id}`}>
+        Edit mapping
+      </MenuItem>
+      <MenuItem color="danger" onClick={onDelete} data-testid={`rapid-reply-delete-mapping-${mapping.id}`}>
+        Delete mapping
+      </MenuItem>
+    </Menu>
+  </Dropdown>
+);
 
-  // Fetch data
+const DeleteMappingDialog: React.FC<{ mapping: IRapidReplyMapping; onClose: () => void }> = ({ mapping, onClose }) => {
+  const deleteMapping = useDeleteMapping();
+  return (
+    <AdminDialog title="Delete mapping" role="alertdialog" onClose={onClose} data-testid="rapid-reply-delete-dialog">
+      <DialogContent>
+        <Typography>
+          {mapping.mainModelId} stops getting rapid replies from {mapping.rapidModelId}, unless another mapping covers
+          it. This cannot be undone.
+        </Typography>
+        {deleteMapping.error && (
+          <Typography role="alert" level="body-sm" sx={{ color: 'admin.danger' }}>
+            The mapping was not deleted: {getErrorMessage(deleteMapping.error)}
+          </Typography>
+        )}
+      </DialogContent>
+      <Stack direction="row" sx={{ gap: 1, justifyContent: 'flex-end' }}>
+        <Button variant="plain" color="neutral" onClick={onClose} data-testid="rapid-reply-delete-cancel-btn">
+          Cancel
+        </Button>
+        <Button
+          color="danger"
+          loading={deleteMapping.isPending}
+          onClick={() => deleteMapping.mutate(mapping.id, { onSuccess: onClose })}
+          data-testid="rapid-reply-delete-confirm-btn"
+        >
+          Delete mapping
+        </Button>
+      </Stack>
+    </AdminDialog>
+  );
+};
+
+const RapidReplyPage: React.FC = () => {
+  const [activeTab, setActiveTab] = useState<RapidReplyTabKey>('models');
+  const [dialog, setDialog] = useState<
+    { kind: 'edit'; mapping?: IRapidReplyMapping } | { kind: 'delete'; mapping: IRapidReplyMapping } | null
+  >(null);
+
   const { settings: adminSettings } = useAdminSettingsCache();
   const { data: experimentalSettings } = useExperimentalFeatureSettings();
-  // use feature enabled with defaults
-  const isFeatureEnabled =
-    experimentalSettings?.find(s => s.settingName === 'EnableRapidReply')?.settingValue === 'true';
   const { data: modelInfos } = useModelInfo();
-  const { data: mappings, isLoading: mappingsLoading } = useRapidReplyMappings();
-  // Computed server-side against the same getAvailableModels call the rapid-reply endpoint
-  // makes, rather than re-derived from `modelInfos` here: that list comes from the picker
-  // route, which excludes private models and would report false rot for one.
-  const unavailableRapidModelIds: string[] = mappings?.unavailableRapidModelIds ?? [];
-  const { data: metrics } = useRapidReplyMetrics();
-  // const { data: prompts } = useRapidReplyPrompts(); // Will be used for prompt management feature
-
-  // Mutations
-  const deleteMapping = useDeleteMapping();
-  const testConfiguration = useTestConfiguration();
+  const mappingsQuery = useRapidReplyMappings();
+  const metricsQuery = useRapidReplyMetrics();
   const updateAdminSettings = useUpdateSettings();
 
-  // Local state for rapid reply specific settings
-  const [localSettings, setLocalSettings] = useState({
-    transitionMode: 'replace' as const,
-    fallbackBehavior: 'continue' as const,
-    maxAcceptableLatency: 2000,
-    minSuccessRate: 90,
-  });
-  const [originalSettings, setOriginalSettings] = useState(localSettings);
+  const baselineEnabled =
+    experimentalSettings?.find(setting => setting.settingName === 'EnableRapidReply')?.settingValue === 'true';
+  const baseline = readPageSettings(adminSettings.RapidReplySettings);
 
-  // Local state for rapid reply enabled status (for immediate UI updates)
-  const [localRapidReplyEnabled, setLocalRapidReplyEnabled] = useState(false);
-
+  // The last RapidReplySettings value written, so field drafts saved one after another by the SaveBar
+  // each build on the previous write instead of on the baseline from before the save started.
+  const written = useRef(baseline);
+  const baselineKey = JSON.stringify(baseline);
   useEffect(() => {
-    // Initialize settings from admin settings
-    const rapidReplySettings = adminSettings.RapidReplySettings as any;
-    const newSettings = {
-      transitionMode: rapidReplySettings?.transitionMode || 'replace',
-      fallbackBehavior: rapidReplySettings?.fallbackBehavior || 'continue',
-      maxAcceptableLatency: rapidReplySettings?.maxAcceptableLatency || 2000,
-      minSuccessRate: rapidReplySettings?.minSuccessRate || 90,
-    };
-    setLocalSettings(newSettings);
-    setOriginalSettings(newSettings);
-
-    // Initialize rapid reply enabled status
-    setLocalRapidReplyEnabled(isFeatureEnabled);
-  }, [adminSettings, isFeatureEnabled]);
-
-  const handleCreateMapping = () => {
-    setEditingMapping(undefined);
-    setIsEditModalOpen(true);
+    written.current = JSON.parse(baselineKey);
+  }, [baselineKey]);
+  const writeSettings = async (patch: Partial<RapidReplyPageSettings>) => {
+    const next = { ...written.current, ...patch };
+    // The setting's type is the full schema; this page has always written only the fields it owns.
+    await updateAdminSettings.mutateAsync({ key: 'RapidReplySettings', value: next as RapidReplySettings });
+    written.current = next;
   };
 
-  const handleEditMapping = (mapping: IRapidReplyMapping) => {
-    setEditingMapping(mapping);
-    setIsEditModalOpen(true);
-  };
-
-  const handleDeleteMapping = async (id: string) => {
-    if (confirm('Are you sure you want to delete this mapping?')) {
+  const enabled = useSettingsDraft('EnableRapidReply', baselineEnabled, {
+    name: 'Rapid reply',
+    save: async value => {
+      await updateAdminSettings.mutateAsync({ key: 'EnableRapidReply', value });
+      // Turning the feature on or off has always rewritten RapidReplySettings with just this page's fields.
       try {
-        await deleteMapping.mutateAsync(id);
+        await writeSettings({});
       } catch (error) {
-        console.error('Failed to delete mapping:', error);
+        throw new Error(`the switch was saved, but rewriting the settings failed: ${getErrorMessage(error)}`);
       }
-    }
+    },
+  });
+  const transitionMode = useSettingsDraft('RapidReplySettings.transitionMode', baseline.transitionMode, {
+    name: 'Transition mode',
+    save: value => writeSettings({ transitionMode: value }),
+  });
+  const maxLatency = useSettingsDraft('RapidReplySettings.maxAcceptableLatency', baseline.maxAcceptableLatency, {
+    name: 'Max acceptable latency',
+    save: value => writeSettings({ maxAcceptableLatency: value }),
+    blocked: value => outOfRange(value, LATENCY_RANGE, ' ms'),
+  });
+  const minSuccessRate = useSettingsDraft('RapidReplySettings.minSuccessRate', baseline.minSuccessRate, {
+    name: 'Min success rate',
+    save: value => writeSettings({ minSuccessRate: value }),
+    blocked: value => outOfRange(value, SUCCESS_RATE_RANGE, '%'),
+  });
+
+  // Metrics and the mapping dialog read the thresholds as typed, so an admin sees the effect before saving.
+  const thresholds = {
+    maxLatency: Number.isFinite(maxLatency.value) ? maxLatency.value : baseline.maxAcceptableLatency,
+    minSuccessRate: Number.isFinite(minSuccessRate.value) ? minSuccessRate.value : baseline.minSuccessRate,
   };
 
-  // Check if settings have changed
-  const hasSettingsChanged = () => {
-    return JSON.stringify(originalSettings) !== JSON.stringify(localSettings);
-  };
+  const mappings = mappingsQuery.data?.mappings ?? [];
+  const unavailableRapidModelIds = mappingsQuery.data?.unavailableRapidModelIds ?? [];
 
-  const handleSaveSettings = async () => {
-    try {
-      // Create a clean RapidReplySettings object with only the fields we need
-      const cleanRapidReplySettings = {
-        transitionMode: localSettings.transitionMode,
-        fallbackBehavior: localSettings.fallbackBehavior,
-        maxAcceptableLatency: localSettings.maxAcceptableLatency,
-        minSuccessRate: localSettings.minSuccessRate,
-      };
+  const mappingColumns: DataColumn<IRapidReplyMapping>[] = [
+    { id: 'main', label: 'Main model', render: row => row.mainModelId, sortValue: row => row.mainModelId },
+    {
+      id: 'rapid',
+      label: 'Rapid model',
+      sortValue: row => row.rapidModelId,
+      render: row => (
+        <Stack sx={{ gap: 0.5, alignItems: 'flex-start' }}>
+          <span>{row.rapidModelId}</span>
+          {/* A rotted row still "works" - the endpoint degrades to a fallback model - so without this
+              the only trace is a request-log warn nobody reads. */}
+          {unavailableRapidModelIds.includes(row.rapidModelId) && (
+            <span title="This model is no longer available (sunset or disabled). Rapid replies for it fall back to another fast model - point the mapping at a current model to control which one.">
+              <StatusChip tone="warn" label="Model unavailable" data-testid="rapid-reply-mapping-unavailable-chip" />
+            </span>
+          )}
+        </Stack>
+      ),
+    },
+    {
+      id: 'priority',
+      label: 'Priority',
+      numeric: true,
+      width: '6rem',
+      render: row => row.priority || undefined,
+      sortValue: row => row.priority ?? 0,
+    },
+    { id: 'maxTokens', label: 'Max tokens', numeric: true, width: '7rem', render: row => row.maxTokens },
+    { id: 'style', label: 'Style', width: '8rem', render: row => row.responseStyle },
+    {
+      id: 'timeout',
+      label: 'Timeout (ms)',
+      numeric: true,
+      width: '8rem',
+      render: row => row.maxLatency?.toLocaleString(),
+    },
+    {
+      id: 'status',
+      label: 'Status',
+      width: '7rem',
+      render: row => (
+        <StatusChip tone={row.enabled ? 'good' : 'neutral'} label={row.enabled ? 'Enabled' : 'Disabled'} />
+      ),
+    },
+  ];
 
-      // Omit 'enabled' here - it's controlled by the EnableRapidReply setting
-      await updateAdminSettings.mutateAsync({
-        key: 'RapidReplySettings',
-        value: cleanRapidReplySettings as any,
-      });
-      setOriginalSettings(localSettings); // Update original settings after successful save
-    } catch (error) {
-      console.error('Failed to save settings:', error);
-    }
-  };
-
-  const handleToggleRapidReply = async (enabled: boolean) => {
-    // Update local state immediately for responsive UI
-    setLocalRapidReplyEnabled(enabled);
-
-    try {
-      // Update the main EnableRapidReply setting
-      await updateAdminSettings.mutateAsync({
-        key: 'EnableRapidReply',
-        value: enabled,
-      });
-
-      // Create a clean RapidReplySettings object with only the fields we need
-      const cleanRapidReplySettings = {
-        transitionMode: localSettings.transitionMode,
-        fallbackBehavior: localSettings.fallbackBehavior,
-        maxAcceptableLatency: localSettings.maxAcceptableLatency,
-        minSuccessRate: localSettings.minSuccessRate,
-      };
-
-      // Update RapidReplySettings with clean data
-      await updateAdminSettings.mutateAsync({
-        key: 'RapidReplySettings',
-        value: cleanRapidReplySettings as any,
-      });
-
-      console.log(`✅ Successfully updated Rapid Reply to ${enabled}`);
-    } catch (error) {
-      console.error('Failed to update Rapid Reply setting:', error);
-      // Revert local state on error
-      setLocalRapidReplyEnabled(!enabled);
-    }
-  };
-
-  const handleTestConfiguration = async () => {
-    if (!testModelId) {
-      alert('Please select a model to test');
-      return;
-    }
-
-    try {
-      const result = await testConfiguration.mutateAsync({
-        mainModelId: testModelId,
-        testInput,
-      });
-      console.log('Test result:', result);
-
-      // Add to test history
-      const historyEntry = {
-        id: Date.now(),
-        timestamp: new Date().toISOString(),
-        modelId: testModelId,
-        testInput,
-        result: result,
-        success: result.success,
-      };
-      setTestHistory(prev => [historyEntry, ...prev.slice(0, 9)]); // Keep last 10 tests
-    } catch (error) {
-      console.error('Test failed:', error);
-    }
-  };
-
-  // Use local state for immediate UI updates, fallback to server state
-  const isRapidReplyEnabled = localRapidReplyEnabled;
+  const openCreate = () => setDialog({ kind: 'edit' });
 
   return (
-    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      {/* Header */}
-      <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
-        <Stack
-          direction={{ xs: 'column', sm: 'row' }}
-          spacing={2}
-          alignItems={{ xs: 'flex-start', sm: 'center' }}
-          justifyContent="space-between"
-        >
-          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ xs: 'flex-start', sm: 'center' }}>
-            <Stack direction="row" spacing={2} alignItems="center">
-              <BoltIcon sx={{ fontSize: 28, color: 'primary.500' }} />
-              <Typography level="h2">Rapid Reply Configuration</Typography>
-              <ContextHelpButton helpId="admin/rapid-reply" tooltipText="Rapid Reply Help" />
-            </Stack>
-            {isRapidReplyEnabled && (
-              <Chip color="success" variant="soft" size="sm">
-                Active
-              </Chip>
-            )}
-          </Stack>
-          <Button
-            variant="outlined"
-            startDecorator={<RefreshIcon />}
-            onClick={() => window.location.reload()}
-            sx={{ width: { xs: '100%', sm: 'auto' } }}
-          >
-            Refresh
-          </Button>
-        </Stack>
-      </Box>
+    <>
+      <Tabs
+        value={activeTab}
+        onChange={(_, value) => setActiveTab(value as RapidReplyTabKey)}
+        sx={{ bgcolor: 'transparent', gap: ADMIN_REGION_GAP }}
+      >
+        <TabList sx={adminTabStrip}>
+          <Tab value="models" data-testid="rapid-reply-models-tab">
+            Models
+          </Tab>
+          <Tab value="metrics" data-testid="rapid-reply-metrics-tab">
+            Metrics
+          </Tab>
+          <Tab value="test" data-testid="rapid-reply-test-tab">
+            Test
+          </Tab>
+        </TabList>
 
-      {/* Content */}
-      <Box sx={{ flex: 1, overflow: 'auto', p: 2 }}>
-        <Tabs value={activeTab} onChange={(_, value) => setActiveTab(value as number)}>
-          <TabList sx={{ overflowX: 'auto' }}>
-            <Tab>
-              <Stack direction="row" spacing={2} alignItems="center">
-                <PsychologyIcon />
-                <Typography sx={{ display: { xs: 'none', sm: 'block' } }}>Models</Typography>
-                {mappings?.mappings?.length > 0 && (
-                  <Badge badgeContent={mappings.mappings.length} color="primary" size="sm" />
-                )}
-              </Stack>
-            </Tab>
-            <Tab>
-              <Stack direction="row" spacing={1} alignItems="center">
-                <SpeedIcon />
-                <Typography sx={{ display: { xs: 'none', sm: 'block' } }}>Metrics</Typography>
-              </Stack>
-            </Tab>
-            <Tab>
-              <Stack direction="row" spacing={1} alignItems="center">
-                <PlayArrowIcon />
-                <Typography sx={{ display: { xs: 'none', sm: 'block' } }}>Test</Typography>
-              </Stack>
-            </Tab>
-          </TabList>
-
-          {/* Models Tab */}
-          <TabPanel value={0} sx={{ p: 2 }}>
-            <Grid container spacing={3}>
-              {/* General Settings Section */}
-              <Grid xs={12}>
-                <Card>
-                  <CardContent>
-                    <Typography level="title-lg">General Settings</Typography>
-
-                    <Stack
-                      spacing={3}
-                      direction={{ xs: 'column', md: 'row' }}
-                      sx={{ alignItems: { xs: 'stretch', md: 'flex-end' } }}
-                    >
-                      <FormControl sx={{ flex: { xs: '1', md: '0 1 auto' } }}>
-                        <FormLabel>Feature Status</FormLabel>
-                        <Switch
-                          checked={isRapidReplyEnabled}
-                          onChange={e => handleToggleRapidReply(e.target.checked)}
-                          endDecorator={isRapidReplyEnabled ? 'Enabled' : 'Disabled'}
-                          color={isRapidReplyEnabled ? 'success' : 'neutral'}
-                          disabled={updateAdminSettings.isPending}
-                          sx={{ alignSelf: 'flex-start' }}
-                        />
-                      </FormControl>
-
-                      <FormControl sx={{ flex: { xs: '1', md: '1' } }}>
-                        <FormLabel>Transition Mode</FormLabel>
-                        <Select
-                          value={localSettings.transitionMode || 'replace'}
-                          onChange={(_, value) => setLocalSettings({ ...localSettings, transitionMode: value as any })}
-                        >
-                          {RapidReplyTransitionModes.map(mode => (
-                            <Option key={mode} value={mode} disabled={mode === 'enhance'}>
-                              {mode}
-                            </Option>
-                          ))}
-                        </Select>
-                      </FormControl>
-
-                      <FormControl sx={{ flex: { xs: '1', md: '1' } }}>
-                        <FormLabel>Fallback Behavior</FormLabel>
-                        <Select
-                          value={localSettings.fallbackBehavior || 'continue'}
-                          onChange={(_, value) =>
-                            setLocalSettings({ ...localSettings, fallbackBehavior: value as any })
-                          }
-                          disabled
-                        >
-                          {RapidReplyFallbackBehaviors.map(behavior => (
-                            <Option key={behavior} value={behavior}>
-                              {behavior}
-                            </Option>
-                          ))}
-                        </Select>
-                      </FormControl>
-
-                      <Button
-                        variant="solid"
-                        startDecorator={<SaveIcon />}
-                        onClick={handleSaveSettings}
-                        loading={updateAdminSettings.isPending}
-                        disabled={!hasSettingsChanged() || updateAdminSettings.isPending}
-                        sx={{ width: { xs: '100%', md: 'auto' } }}
-                      >
-                        Save Settings
-                      </Button>
-                    </Stack>
-                  </CardContent>
-                </Card>
-              </Grid>
-
-              {/* Model Mappings Section */}
-              <Grid xs={12}>
-                <Card>
-                  <CardContent>
-                    <Stack spacing={2}>
-                      <Stack
-                        direction={{ xs: 'column', sm: 'row' }}
-                        justifyContent="space-between"
-                        alignItems={{ xs: 'stretch', sm: 'center' }}
-                        spacing={2}
-                      >
-                        <Typography level="title-lg">Model Mappings</Typography>
-                        <Button
-                          variant="solid"
-                          startDecorator={<AddIcon />}
-                          onClick={handleCreateMapping}
-                          size="sm"
-                          sx={{ width: { xs: '100%', sm: 'auto' } }}
-                        >
-                          New Mapping
-                        </Button>
-                      </Stack>
-
-                      {mappingsLoading ? (
-                        <LinearProgress />
-                      ) : mappings?.mappings?.length === 0 ? (
-                        <Alert color="neutral">
-                          <Stack spacing={2} alignItems="center" sx={{ py: 2 }}>
-                            <Typography level="body-md" color="neutral">
-                              No model mappings configured yet
-                            </Typography>
-                            <Button
-                              variant="solid"
-                              startDecorator={<AddIcon />}
-                              onClick={handleCreateMapping}
-                              size="sm"
-                            >
-                              Create First Mapping
-                            </Button>
-                          </Stack>
-                        </Alert>
-                      ) : (
-                        <Sheet
-                          variant="outlined"
-                          sx={{
-                            borderRadius: 'sm',
-                            overflow: 'auto',
-                            maxHeight: '400px',
-                            overflowX: { xs: 'auto', sm: 'visible' },
-                          }}
-                        >
-                          <Table hoverRow size="sm" sx={{ minWidth: { xs: '800px', sm: 'auto' } }}>
-                            <thead>
-                              <tr>
-                                <th>Main Model</th>
-                                <th>Rapid Model</th>
-                                <th style={{ width: '7.5%' }}>Fallback Priority</th>
-                                <th style={{ width: '7.5%' }}>Max Tokens</th>
-                                <th style={{ width: '10%' }}>Response Style</th>
-                                <th>Max Latency Before Timeout (ms)</th>
-                                <th style={{ width: '7.5%' }}>Status</th>
-                                <th style={{ width: '7.5%' }}>Actions</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {mappings?.mappings?.map((mapping: IRapidReplyMapping) => (
-                                <tr key={mapping.id}>
-                                  <td>
-                                    <Stack spacing={0.5}>
-                                      <Typography level="body-sm" fontWeight="md">
-                                        {mapping.mainModelId}
-                                      </Typography>
-                                    </Stack>
-                                  </td>
-                                  <td>
-                                    <Stack spacing={0.5} alignItems="flex-start">
-                                      <Typography level="body-sm" fontWeight="md">
-                                        {mapping.rapidModelId}
-                                      </Typography>
-                                      {/* A rotted row still "works" - the endpoint degrades to a
-                                          fallback model - so without this the only trace is a
-                                          request-log warn nobody reads. */}
-                                      {unavailableRapidModelIds.includes(mapping.rapidModelId) && (
-                                        <Chip
-                                          size="sm"
-                                          color="warning"
-                                          variant="soft"
-                                          startDecorator={<WarningIcon fontSize="small" />}
-                                          data-testid="rapid-reply-mapping-unavailable-chip"
-                                          title="This model is no longer available (sunset or disabled). Rapid replies for it fall back to another fast model - point the mapping at a current model to control which one."
-                                        >
-                                          Model unavailable
-                                        </Chip>
-                                      )}
-                                    </Stack>
-                                  </td>
-                                  <td>
-                                    <Typography level="body-sm" fontWeight="md">
-                                      {mapping.priority || ''}
-                                    </Typography>
-                                  </td>
-                                  <td>
-                                    <Typography level="body-sm" fontWeight="md">
-                                      {mapping.maxTokens}
-                                    </Typography>
-                                  </td>
-                                  <td>
-                                    <Typography level="body-sm" fontWeight="md">
-                                      {mapping.responseStyle}
-                                    </Typography>
-                                  </td>
-                                  <td>
-                                    <Typography level="body-sm" fontWeight="md">
-                                      {mapping.maxLatency}
-                                    </Typography>
-                                  </td>
-                                  <td>
-                                    <Chip size="sm" color={mapping.enabled ? 'success' : 'neutral'} variant="soft">
-                                      {mapping.enabled ? 'Active' : 'Disabled'}
-                                    </Chip>
-                                  </td>
-                                  <td>
-                                    <Stack direction="row" spacing={0.5}>
-                                      <IconButton size="sm" variant="plain" onClick={() => handleEditMapping(mapping)}>
-                                        <EditIcon />
-                                      </IconButton>
-                                      <IconButton
-                                        size="sm"
-                                        variant="plain"
-                                        color="danger"
-                                        onClick={() => handleDeleteMapping(mapping.id)}
-                                      >
-                                        <DeleteIcon />
-                                      </IconButton>
-                                    </Stack>
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </Table>
-                        </Sheet>
-                      )}
-                    </Stack>
-                  </CardContent>
-                </Card>
-              </Grid>
-            </Grid>
-          </TabPanel>
-
-          {/* Metrics Tab */}
-          <TabPanel value={1} sx={{ p: 2 }} data-testid="metrics-tab-panel">
-            <Stack spacing={3}>
-              {/* Performance Settings Section */}
-              <Card>
-                <CardContent>
-                  <Grid container spacing={3}>
-                    <Grid xs={12} md={8}>
-                      <Stack spacing={2}>
-                        <Typography level="title-lg">Performance Thresholds</Typography>
-                        <Grid container spacing={2}>
-                          <Grid xs={12} sm={6}>
-                            <FormControl>
-                              <FormLabel>Max Acceptable Latency (ms)</FormLabel>
-                              <Input
-                                type="number"
-                                value={localSettings.maxAcceptableLatency ?? ''}
-                                onChange={e => {
-                                  const value = e.target.value === '' ? 2000 : parseInt(e.target.value);
-                                  setLocalSettings({ ...localSettings, maxAcceptableLatency: value });
-                                }}
-                                slotProps={{
-                                  input: {
-                                    min: 500,
-                                    max: 5000,
-                                  },
-                                }}
-                              />
-                            </FormControl>
-                          </Grid>
-                          <Grid xs={12} sm={6}>
-                            <FormControl>
-                              <FormLabel>Min Success Rate (%)</FormLabel>
-                              <Input
-                                type="number"
-                                value={localSettings.minSuccessRate ?? ''}
-                                onChange={e => {
-                                  const value = e.target.value === '' ? 90 : parseInt(e.target.value);
-                                  setLocalSettings({ ...localSettings, minSuccessRate: value });
-                                }}
-                                slotProps={{
-                                  input: {
-                                    min: 0,
-                                    max: 100,
-                                  },
-                                }}
-                              />
-                            </FormControl>
-                          </Grid>
-                        </Grid>
-                      </Stack>
-                    </Grid>
-                    <Grid xs={12} md={4}>
-                      <Stack spacing={2} sx={{ height: '100%', justifyContent: 'center' }}>
-                        <Button
-                          variant="solid"
-                          startDecorator={<SaveIcon />}
-                          onClick={handleSaveSettings}
-                          loading={updateAdminSettings.isPending}
-                          disabled={!hasSettingsChanged() || updateAdminSettings.isPending}
-                          size="lg"
-                        >
-                          Save Thresholds
-                        </Button>
-                      </Stack>
-                    </Grid>
-                  </Grid>
-                </CardContent>
-              </Card>
-
-              {/* Metrics Component */}
-              <RapidReplyMetrics
-                metrics={metrics}
-                thresholds={{
-                  maxLatency: localSettings.maxAcceptableLatency ?? 2000,
-                  minSuccessRate: localSettings.minSuccessRate ?? 90,
+        <TabPanel value="models" sx={{ p: 0 }}>
+          <Stack sx={{ gap: ADMIN_REGION_GAP }}>
+            <SettingsSection component="section" sx={{ mb: 0 }} data-testid="rapid-reply-general-section">
+              <Typography level="title-md" component="h2" sx={{ color: 'admin.ink', mb: 2 }}>
+                General
+              </Typography>
+              <Box
+                sx={{
+                  display: 'grid',
+                  gap: 2,
+                  gridTemplateColumns: { xs: '1fr', sm: 'repeat(auto-fill, minmax(220px, 1fr))' },
                 }}
+              >
+                <FormControl>
+                  <FormLabel>Rapid reply</FormLabel>
+                  <Switch
+                    checked={enabled.value}
+                    onChange={event => enabled.setValue(event.target.checked)}
+                    endDecorator={enabled.value ? 'On' : 'Off'}
+                    disabled={enabled.pending}
+                    sx={{ alignSelf: 'flex-start' }}
+                    data-testid="rapid-reply-enabled-switch"
+                  />
+                </FormControl>
+                <FormControl>
+                  <FormLabel>Transition mode</FormLabel>
+                  <Select
+                    value={transitionMode.value}
+                    onChange={(_, value) => value && transitionMode.setValue(value)}
+                    data-testid="rapid-reply-transition-mode-select"
+                  >
+                    {RapidReplyTransitionModes.map(mode => (
+                      <Option key={mode} value={mode} disabled={mode === 'enhance'}>
+                        {mode}
+                      </Option>
+                    ))}
+                  </Select>
+                </FormControl>
+                <FormControl disabled>
+                  <FormLabel>Fallback behavior</FormLabel>
+                  <Select value={baseline.fallbackBehavior}>
+                    {RapidReplyFallbackBehaviors.map(behavior => (
+                      <Option key={behavior} value={behavior}>
+                        {behavior}
+                      </Option>
+                    ))}
+                  </Select>
+                  <FormHelperText>Fixed for now.</FormHelperText>
+                </FormControl>
+              </Box>
+            </SettingsSection>
+
+            <Stack sx={{ gap: 2 }}>
+              <AdminPageHeader
+                level="section"
+                title="Model mappings"
+                count={mappingsQuery.data ? mappings.length : undefined}
+                description="Which fast model acknowledges a message while each main model writes its answer."
+                actions={
+                  mappings.length > 0 && (
+                    <Button startDecorator={<AddIcon />} onClick={openCreate} data-testid="rapid-reply-new-mapping-btn">
+                      New mapping
+                    </Button>
+                  )
+                }
+              />
+              <DataTable
+                rows={mappings}
+                columns={mappingColumns}
+                getRowId={row => row.id}
+                label="Rapid reply model mappings"
+                loading={mappingsQuery.isLoading}
+                error={mappingsQuery.isError ? 'Model mappings could not be loaded.' : undefined}
+                onRetry={() => void mappingsQuery.refetch()}
+                empty={
+                  <EmptyState
+                    title="No model mappings yet"
+                    description="Map a main model to a fast model to start sending rapid replies."
+                    action={
+                      <Button
+                        startDecorator={<AddIcon />}
+                        onClick={openCreate}
+                        data-testid="rapid-reply-create-first-mapping-btn"
+                      >
+                        Create mapping
+                      </Button>
+                    }
+                  />
+                }
+                onRowActivate={row => setDialog({ kind: 'edit', mapping: row })}
+                rowActions={row => (
+                  <MappingRowActions
+                    mapping={row}
+                    onEdit={() => setDialog({ kind: 'edit', mapping: row })}
+                    onDelete={() => setDialog({ kind: 'delete', mapping: row })}
+                  />
+                )}
+                pagination={false}
+                minWidth="52rem"
+                maxHeight="none"
+                testId="rapid-reply-mappings-table"
               />
             </Stack>
-          </TabPanel>
+          </Stack>
+        </TabPanel>
 
-          {/* Test Tab */}
-          <TabPanel value={2} sx={{ p: 2 }}>
-            <Grid container spacing={3}>
-              <Grid xs={12} md={6}>
-                <Card>
-                  <CardContent>
-                    <Stack spacing={3}>
-                      <Typography level="title-lg">Test Configuration</Typography>
+        <TabPanel value="metrics" sx={{ p: 0 }} data-testid="metrics-tab-panel">
+          <Stack sx={{ gap: ADMIN_REGION_GAP }}>
+            <SettingsSection component="section" sx={{ mb: 0 }} data-testid="rapid-reply-thresholds-section">
+              <Typography level="title-md" component="h2" sx={{ color: 'admin.ink' }}>
+                Performance thresholds
+              </Typography>
+              <Typography level="body-sm" sx={{ color: 'admin.inkMuted', mb: 2 }}>
+                Metrics below flag a model that is slower or less reliable than these.
+              </Typography>
+              <Box
+                sx={{
+                  display: 'grid',
+                  gap: 2,
+                  gridTemplateColumns: { xs: '1fr', sm: 'repeat(auto-fill, minmax(220px, 1fr))' },
+                }}
+              >
+                <FormControl error={Boolean(outOfRange(maxLatency.value, LATENCY_RANGE, ' ms'))}>
+                  <FormLabel>Max acceptable latency (ms)</FormLabel>
+                  <Input
+                    type="number"
+                    value={Number.isFinite(maxLatency.value) ? maxLatency.value : ''}
+                    onChange={event => maxLatency.setValue(parseNumberInput(event.target.value))}
+                    slotProps={{ input: { min: LATENCY_RANGE.min, max: LATENCY_RANGE.max } }}
+                    data-testid="rapid-reply-max-latency-input"
+                  />
+                  <FormHelperText>
+                    {LATENCY_RANGE.min} to {LATENCY_RANGE.max}.
+                  </FormHelperText>
+                </FormControl>
+                <FormControl error={Boolean(outOfRange(minSuccessRate.value, SUCCESS_RATE_RANGE, '%'))}>
+                  <FormLabel>Min success rate (%)</FormLabel>
+                  <Input
+                    type="number"
+                    value={Number.isFinite(minSuccessRate.value) ? minSuccessRate.value : ''}
+                    onChange={event => minSuccessRate.setValue(parseNumberInput(event.target.value))}
+                    slotProps={{ input: { min: SUCCESS_RATE_RANGE.min, max: SUCCESS_RATE_RANGE.max } }}
+                    data-testid="rapid-reply-min-success-rate-input"
+                  />
+                  <FormHelperText>
+                    {SUCCESS_RATE_RANGE.min} to {SUCCESS_RATE_RANGE.max}.
+                  </FormHelperText>
+                </FormControl>
+              </Box>
+            </SettingsSection>
 
-                      <FormControl>
-                        <FormLabel>Select Model to Test</FormLabel>
-                        <Select
-                          value={testModelId}
-                          onChange={(_, value) => setTestModelId(value as string)}
-                          placeholder="Choose a main model"
-                        >
-                          {modelInfos?.map((model: ModelInfo) => (
-                            <Option key={model.id} value={model.id}>
-                              {model.name}
-                            </Option>
-                          ))}
-                        </Select>
-                      </FormControl>
+            {metricsQuery.isLoading ? (
+              <LoadingState label="Loading rapid reply metrics" />
+            ) : metricsQuery.isError && !metricsQuery.data ? (
+              <ErrorState
+                message="Rapid reply metrics could not be loaded."
+                onRetry={() => void metricsQuery.refetch()}
+                retrying={metricsQuery.isFetching}
+              />
+            ) : (
+              <RapidReplyMetrics
+                metrics={metricsQuery.data}
+                thresholds={thresholds}
+                onOpenModels={() => setActiveTab('models')}
+              />
+            )}
+          </Stack>
+        </TabPanel>
 
-                      <FormControl>
-                        <FormLabel>Test Input</FormLabel>
-                        <Textarea
-                          value={testInput}
-                          onChange={e => setTestInput(e.target.value)}
-                          minRows={3}
-                          placeholder="Enter a test message..."
-                        />
-                        <Typography level="body-xs" sx={{ pt: 0.5 }}>
-                          This message will be sent to the rapid reply system to test the configuration.
-                        </Typography>
-                      </FormControl>
+        <TabPanel value="test" sx={{ p: 0 }}>
+          <RapidReplyTestPanel models={modelInfos ?? []} />
+        </TabPanel>
+      </Tabs>
 
-                      <FormControl>
-                        <FormLabel>Quick Test Messages</FormLabel>
-                        <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
-                          {[
-                            'Hello, how are you?',
-                            'Explain photosynthesis in simple terms',
-                            'Write a short poem about technology',
-                            'What is the capital of France?',
-                            'Help me debug this code: function test() { return "hello"; }',
-                          ].map((message, index) => (
-                            <Button
-                              key={index}
-                              size="sm"
-                              variant="outlined"
-                              onClick={() => setTestInput(message)}
-                              sx={{ mb: 1 }}
-                            >
-                              {message.substring(0, 30)}...
-                            </Button>
-                          ))}
-                        </Stack>
-                      </FormControl>
-
-                      <Stack direction="row" spacing={2}>
-                        <Button
-                          variant="solid"
-                          startDecorator={<PlayArrowIcon />}
-                          onClick={handleTestConfiguration}
-                          loading={testConfiguration.isPending}
-                          disabled={!testModelId}
-                          sx={{ flex: 1 }}
-                        >
-                          Run Test
-                        </Button>
-                        {testHistory.length > 0 && (
-                          <Button variant="outlined" color="neutral" onClick={() => setTestHistory([])} size="sm">
-                            Clear History
-                          </Button>
-                        )}
-                      </Stack>
-                    </Stack>
-                  </CardContent>
-                </Card>
-              </Grid>
-
-              <Grid xs={12} md={6}>
-                {/* Test History */}
-                {testHistory.length > 0 && (
-                  <Card sx={{ mb: 3 }}>
-                    <CardContent>
-                      <Stack spacing={2}>
-                        <Typography level="title-lg">Recent Tests</Typography>
-                        <Stack spacing={1}>
-                          {testHistory.slice(0, 3).map(entry => (
-                            <Sheet
-                              key={entry.id}
-                              variant="outlined"
-                              sx={{
-                                p: 2,
-                                borderRadius: 'sm',
-                                cursor: 'pointer',
-                                '&:hover': { backgroundColor: 'background.level1' },
-                              }}
-                              onClick={() => {
-                                setTestModelId(entry.modelId);
-                                setTestInput(entry.testInput);
-                              }}
-                            >
-                              <Stack direction="row" justifyContent="space-between" alignItems="center">
-                                <Stack spacing={0.5}>
-                                  <Typography level="body-sm">
-                                    <strong>{entry.modelId}</strong>
-                                  </Typography>
-                                  <Typography level="body-xs" sx={{ opacity: 0.7 }}>
-                                    {new Date(entry.timestamp).toLocaleString()}
-                                  </Typography>
-                                  <Typography level="body-xs" sx={{ opacity: 0.8 }}>
-                                    {entry.testInput.substring(0, 50)}...
-                                  </Typography>
-                                </Stack>
-                                <Chip size="sm" color={entry.success ? 'success' : 'danger'}>
-                                  {entry.success ? 'SUCCESS' : 'FAILED'}
-                                </Chip>
-                              </Stack>
-                            </Sheet>
-                          ))}
-                        </Stack>
-                      </Stack>
-                    </CardContent>
-                  </Card>
-                )}
-
-                {testConfiguration.data && (
-                  <Card>
-                    <CardContent>
-                      <Stack spacing={2}>
-                        <Typography level="title-lg">Test Results</Typography>
-
-                        {testConfiguration.data.success ? (
-                          <Alert color="success" startDecorator={<CheckCircleIcon />}>
-                            <Typography>{testConfiguration.data.message}</Typography>
-                          </Alert>
-                        ) : (
-                          <Alert color="warning" startDecorator={<WarningIcon />}>
-                            <Typography>{testConfiguration.data.message || testConfiguration.data.error}</Typography>
-                          </Alert>
-                        )}
-
-                        {/* Quick Summary */}
-                        {testConfiguration.data.testResults && (
-                          <Sheet variant="soft" sx={{ p: 2, borderRadius: 'sm' }}>
-                            <Stack direction="row" spacing={2} justifyContent="space-around" sx={{ flexWrap: 'wrap' }}>
-                              <Stack alignItems="center">
-                                <Typography level="title-sm">Rapid Reply</Typography>
-                                <Typography
-                                  level="h4"
-                                  color={
-                                    testConfiguration.data.testResults.performance?.latencyCheck?.passed
-                                      ? 'success'
-                                      : 'danger'
-                                  }
-                                >
-                                  {testConfiguration.data.testResults.performance?.latency}ms
-                                </Typography>
-                              </Stack>
-                              <Stack alignItems="center">
-                                <Typography level="title-sm">TTFVT</Typography>
-                                <Typography
-                                  level="h4"
-                                  color={
-                                    (testConfiguration.data.testResults.performance?.ttfvt || 0) <= 1000
-                                      ? 'success'
-                                      : 'warning'
-                                  }
-                                >
-                                  {testConfiguration.data.testResults.performance?.ttfvt || 0}ms
-                                </Typography>
-                              </Stack>
-
-                              <Stack alignItems="center">
-                                <Typography level="title-sm">Response</Typography>
-                                <Typography
-                                  level="h4"
-                                  color={
-                                    testConfiguration.data.testResults.rapidReplyTest?.success ? 'success' : 'danger'
-                                  }
-                                >
-                                  {testConfiguration.data.testResults.rapidReplyTest?.responseLength || 0}
-                                </Typography>
-                                <Typography level="body-xs">chars</Typography>
-                              </Stack>
-                            </Stack>
-                          </Sheet>
-                        )}
-
-                        {testConfiguration.data.testResults && (
-                          <Stack spacing={3}>
-                            <Divider />
-
-                            {/* Configuration Section */}
-                            <Stack spacing={2}>
-                              <Typography level="title-md">Configuration</Typography>
-                              <Sheet variant="soft" sx={{ p: 2, borderRadius: 'sm' }}>
-                                <Stack spacing={1}>
-                                  <Typography level="body-sm">
-                                    <strong>Main Model:</strong>{' '}
-                                    {testConfiguration.data.testResults.configuration?.mainModel}
-                                  </Typography>
-                                  <Typography level="body-sm">
-                                    <strong>Rapid Model:</strong>{' '}
-                                    {testConfiguration.data.testResults.configuration?.rapidModel}
-                                  </Typography>
-                                  <Typography level="body-sm">
-                                    <strong>Max Tokens:</strong>{' '}
-                                    {testConfiguration.data.testResults.configuration?.maxTokens}
-                                  </Typography>
-                                  <Typography level="body-sm">
-                                    <strong>Response Style:</strong>{' '}
-                                    {testConfiguration.data.testResults.configuration?.responseStyle}
-                                  </Typography>
-                                  <Typography level="body-sm">
-                                    <strong>Max Latency:</strong>{' '}
-                                    {testConfiguration.data.testResults.configuration?.maxLatency}ms
-                                  </Typography>
-                                  <Typography level="body-sm">
-                                    <strong>System Prompt:</strong>{' '}
-                                    {testConfiguration.data.testResults.configuration?.systemPrompt}
-                                  </Typography>
-                                </Stack>
-                              </Sheet>
-                            </Stack>
-
-                            {/* Performance Section */}
-                            {testConfiguration.data.testResults.performance && (
-                              <Stack spacing={2}>
-                                <Typography level="title-md">Performance</Typography>
-                                <Sheet variant="soft" sx={{ p: 2, borderRadius: 'sm' }}>
-                                  <Stack spacing={1}>
-                                    <Typography level="body-sm">
-                                      <strong>Total Latency:</strong>{' '}
-                                      {testConfiguration.data.testResults.performance.actualLatency}ms
-                                    </Typography>
-                                    <Typography level="body-sm">
-                                      <strong>Rapid Reply Latency:</strong>{' '}
-                                      {testConfiguration.data.testResults.performance.rapidReplyLatency}ms
-                                    </Typography>
-                                    <Typography level="body-sm">
-                                      <strong>TTFVT (Time to First Visible Token):</strong>{' '}
-                                      {testConfiguration.data.testResults.performance.rapidReplyTtfvt}ms
-                                    </Typography>
-                                    <Typography level="body-sm">
-                                      <strong>Max Configured Latency:</strong>{' '}
-                                      {testConfiguration.data.testResults.performance.maxConfiguredLatency}ms
-                                    </Typography>
-                                    <Typography level="body-sm">
-                                      <strong>Total Latency Check:</strong>
-                                      <Chip
-                                        size="sm"
-                                        color={
-                                          testConfiguration.data.testResults.performance.latencyCheck.passed
-                                            ? 'success'
-                                            : 'danger'
-                                        }
-                                        sx={{ ml: 1 }}
-                                      >
-                                        {testConfiguration.data.testResults.performance.latencyCheck.passed
-                                          ? 'PASSED'
-                                          : 'FAILED'}
-                                      </Chip>
-                                    </Typography>
-                                    <Typography level="body-sm">
-                                      {testConfiguration.data.testResults.performance.latencyCheck.message}
-                                    </Typography>
-                                    <Typography level="body-sm">
-                                      <strong>Rapid Reply Latency Check:</strong>
-                                      <Chip
-                                        size="sm"
-                                        color={
-                                          testConfiguration.data.testResults.performance.latencyCheck.passed
-                                            ? 'success'
-                                            : 'danger'
-                                        }
-                                        sx={{ ml: 1 }}
-                                      >
-                                        {testConfiguration.data.testResults.performance.latencyCheck.passed
-                                          ? 'PASSED'
-                                          : 'FAILED'}
-                                      </Chip>
-                                    </Typography>
-                                    <Typography level="body-sm">
-                                      {testConfiguration.data.testResults.performance.latencyCheck.message}
-                                    </Typography>
-                                    <Typography level="body-sm">
-                                      <strong>Tokens Used:</strong>{' '}
-                                      {testConfiguration.data.testResults.performance.tokensUsed}
-                                    </Typography>
-                                    <Typography level="body-sm">
-                                      <strong>Estimated Cost:</strong> $
-                                      {testConfiguration.data.testResults.performance.estimatedCost?.toFixed(4) ||
-                                        '0.0000'}
-                                    </Typography>
-                                    {testConfiguration.data.testResults.performance.timing && (
-                                      <>
-                                        <Divider />
-                                        <Typography level="body-sm">
-                                          <strong>Timing Breakdown:</strong>
-                                        </Typography>
-                                        <Typography level="body-xs">
-                                          Test Start:{' '}
-                                          {new Date(
-                                            testConfiguration.data.testResults.performance.timing.testStartTime
-                                          ).toLocaleTimeString()}
-                                        </Typography>
-                                        <Typography level="body-xs">
-                                          Rapid Reply Start:{' '}
-                                          {new Date(
-                                            testConfiguration.data.testResults.performance.timing.rapidReplyStartTime
-                                          ).toLocaleTimeString()}
-                                        </Typography>
-                                        <Typography level="body-xs">
-                                          Rapid Reply End:{' '}
-                                          {new Date(
-                                            testConfiguration.data.testResults.performance.timing.rapidReplyEndTime
-                                          ).toLocaleTimeString()}
-                                        </Typography>
-                                        <Typography level="body-xs">
-                                          Test End:{' '}
-                                          {new Date(
-                                            testConfiguration.data.testResults.performance.timing.testEndTime
-                                          ).toLocaleTimeString()}
-                                        </Typography>
-                                      </>
-                                    )}
-                                  </Stack>
-                                </Sheet>
-                              </Stack>
-                            )}
-
-                            {/* Rapid Reply Test Results */}
-                            {testConfiguration.data.testResults.rapidReplyTest && (
-                              <Stack spacing={2}>
-                                <Typography level="title-md">Rapid Reply Response</Typography>
-                                <Sheet variant="soft" sx={{ p: 2, borderRadius: 'sm' }}>
-                                  <Stack spacing={1}>
-                                    <Typography level="body-sm">
-                                      <strong>Test Input:</strong>{' '}
-                                      {testConfiguration.data.testResults.rapidReplyTest.testInput}
-                                    </Typography>
-                                    <Typography level="body-sm">
-                                      <strong>Response Length:</strong>{' '}
-                                      {testConfiguration.data.testResults.rapidReplyTest.responseLength} characters
-                                    </Typography>
-                                    <Typography level="body-sm">
-                                      <strong>Word Count:</strong>{' '}
-                                      {testConfiguration.data.testResults.rapidReplyTest.responseWordCount} words
-                                    </Typography>
-                                    {testConfiguration.data.testResults.rapidReplyTest.response && (
-                                      <>
-                                        <Typography level="body-sm">
-                                          <strong>Response:</strong>
-                                        </Typography>
-                                        <Sheet
-                                          variant="outlined"
-                                          sx={{
-                                            p: 2,
-                                            borderRadius: 'sm',
-                                            backgroundColor: 'background.level1',
-                                            maxHeight: '200px',
-                                            overflow: 'auto',
-                                          }}
-                                        >
-                                          <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap' }}>
-                                            {testConfiguration.data.testResults.rapidReplyTest.response}
-                                          </Typography>
-                                        </Sheet>
-                                      </>
-                                    )}
-                                    {testConfiguration.data.testResults.rapidReplyTest.error && (
-                                      <Alert color="danger" size="sm">
-                                        <Typography level="body-sm">
-                                          <strong>Error:</strong>{' '}
-                                          {testConfiguration.data.testResults.rapidReplyTest.error}
-                                        </Typography>
-                                      </Alert>
-                                    )}
-                                  </Stack>
-                                </Sheet>
-                              </Stack>
-                            )}
-
-                            {/* Settings Section */}
-                            {testConfiguration.data.testResults.settings && (
-                              <Stack spacing={2}>
-                                <Typography level="title-md">Current Settings</Typography>
-                                <Sheet variant="soft" sx={{ p: 2, borderRadius: 'sm' }}>
-                                  <Stack spacing={1}>
-                                    <Typography level="body-sm">
-                                      <strong>Global Enabled:</strong>
-                                      <Chip
-                                        size="sm"
-                                        color={
-                                          testConfiguration.data.testResults.settings.globalEnabled
-                                            ? 'success'
-                                            : 'neutral'
-                                        }
-                                        sx={{ ml: 1 }}
-                                      >
-                                        {testConfiguration.data.testResults.settings.globalEnabled ? 'YES' : 'NO'}
-                                      </Chip>
-                                    </Typography>
-                                    <Typography level="body-sm">
-                                      <strong>Transition Mode:</strong>{' '}
-                                      {testConfiguration.data.testResults.settings.transitionMode}
-                                    </Typography>
-                                    <Typography level="body-sm">
-                                      <strong>Show Indicator:</strong>
-                                      <Chip
-                                        size="sm"
-                                        color={
-                                          testConfiguration.data.testResults.settings.showIndicator
-                                            ? 'success'
-                                            : 'neutral'
-                                        }
-                                        sx={{ ml: 1 }}
-                                      >
-                                        {testConfiguration.data.testResults.settings.showIndicator ? 'YES' : 'NO'}
-                                      </Chip>
-                                    </Typography>
-                                    <Typography level="body-sm">
-                                      <strong>Fallback Behavior:</strong>{' '}
-                                      {testConfiguration.data.testResults.settings.fallbackBehavior}
-                                    </Typography>
-                                    <Typography level="body-sm">
-                                      <strong>Allowed User Tags:</strong>{' '}
-                                      {testConfiguration.data.testResults.settings.allowedUserTags?.join(', ') ||
-                                        'None'}
-                                    </Typography>
-                                  </Stack>
-                                </Sheet>
-                              </Stack>
-                            )}
-
-                            {/* Prompts Section */}
-                            {testConfiguration.data.testResults.prompts && (
-                              <Stack spacing={2}>
-                                <Typography level="title-md">Applicable Prompts</Typography>
-                                <Sheet variant="soft" sx={{ p: 2, borderRadius: 'sm' }}>
-                                  <Stack spacing={1}>
-                                    <Typography level="body-sm">
-                                      <strong>Total Prompts:</strong> {testConfiguration.data.testResults.prompts.total}
-                                    </Typography>
-                                    <Typography level="body-sm">
-                                      <strong>Active Prompts:</strong>{' '}
-                                      {testConfiguration.data.testResults.prompts.active}
-                                    </Typography>
-                                    {testConfiguration.data.testResults.prompts.applicable?.length > 0 && (
-                                      <>
-                                        <Typography level="body-sm">
-                                          <strong>Applicable Prompts:</strong>
-                                        </Typography>
-                                        <Stack spacing={1}>
-                                          {testConfiguration.data.testResults.prompts.applicable.map(
-                                            (prompt: any, index: number) => (
-                                              <Sheet key={index} variant="outlined" sx={{ p: 1, borderRadius: 'sm' }}>
-                                                <Typography level="body-sm">
-                                                  <strong>{prompt.name}</strong> (ID: {prompt.id})
-                                                </Typography>
-                                                <Typography level="body-sm">
-                                                  Domains: {prompt.domains?.join(', ') || 'None'}
-                                                </Typography>
-                                              </Sheet>
-                                            )
-                                          )}
-                                        </Stack>
-                                      </>
-                                    )}
-                                  </Stack>
-                                </Sheet>
-                              </Stack>
-                            )}
-
-                            {/* Recommendations Section */}
-                            {testConfiguration.data.recommendations &&
-                              testConfiguration.data.recommendations.length > 0 && (
-                                <Stack spacing={2}>
-                                  <Typography level="title-md">Recommendations</Typography>
-                                  <Stack spacing={1}>
-                                    {testConfiguration.data.recommendations.map((rec: string, index: number) => (
-                                      <Alert key={index} color="neutral" size="sm">
-                                        <Typography level="body-sm">{rec}</Typography>
-                                      </Alert>
-                                    ))}
-                                  </Stack>
-                                </Stack>
-                              )}
-                          </Stack>
-                        )}
-                      </Stack>
-                    </CardContent>
-                  </Card>
-                )}
-              </Grid>
-            </Grid>
-          </TabPanel>
-        </Tabs>
-      </Box>
-
-      {/* Edit Modal */}
-      {isEditModalOpen && modelInfos && (
-        <MappingEditModal
-          open={isEditModalOpen}
-          onClose={() => setIsEditModalOpen(false)}
-          mapping={editingMapping}
+      {dialog?.kind === 'edit' && modelInfos && (
+        <MappingDialog
+          onClose={() => setDialog(null)}
+          mapping={dialog.mapping}
           availableModels={modelInfos}
-          metrics={metrics}
-          maxLatencyThreshold={localSettings.maxAcceptableLatency ?? 2000}
+          metrics={metricsQuery.data}
+          maxLatencyThreshold={thresholds.maxLatency}
         />
       )}
-    </Box>
+      {dialog?.kind === 'delete' && <DeleteMappingDialog mapping={dialog.mapping} onClose={() => setDialog(null)} />}
+    </>
+  );
+};
+
+const RapidReplyTab: React.FC = () => {
+  const { isLoading: settingsLoading } = useAdminSettingsCache();
+  const { isLoading: flagsLoading } = useExperimentalFeatureSettings();
+  return (
+    <Stack sx={{ gap: ADMIN_REGION_GAP, maxWidth: ADMIN_DETAIL_MAX_WIDTH }} data-testid="admin-rapid-reply-tab">
+      <AdminPageHeader
+        title="Rapid reply"
+        description="A fast model acknowledges each message while the main model writes its answer."
+        actions={<ContextHelpButton helpId="admin/rapid-reply" tooltipText="Rapid reply help" />}
+      />
+      {settingsLoading || flagsLoading ? (
+        <LoadingState label="Loading rapid reply settings" />
+      ) : (
+        // Every setting on the page, across its three views, stages into the provider's one SaveBar.
+        <SettingsDraftProvider>
+          <RapidReplyPage />
+        </SettingsDraftProvider>
+      )}
+    </Stack>
   );
 };
 

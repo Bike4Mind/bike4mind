@@ -93,8 +93,8 @@ const EventMetricsPanel: React.FC<{ viewSwitch: ReactNode }> = ({ viewSwitch }) 
   else if (isError && metrics.length === 0) body = errorState;
   else
     body = (
-      <>
-        <UpdatingBar active={isFetching} testId="event-metrics-updating" />
+      <Stack gap={ADMIN_REGION_GAP} sx={{ position: 'relative' }}>
+        <UpdatingBar active={isFetching} testId="event-metrics-updating" placement="overlay" />
         {errorState}
         <EventMetricsStats metrics={metrics} filteredMetrics={filteredAndSortedMetrics} />
         <Tabs value={activeTab} onChange={(_, value) => setActiveTab(value as string)}>
@@ -113,7 +113,7 @@ const EventMetricsPanel: React.FC<{ viewSwitch: ReactNode }> = ({ viewSwitch }) 
             <CurationBreakdownTab chartData={chartData} filtered={hasFilters} emptyAction={emptyAction} />
           </TabPanel>
         </Tabs>
-      </>
+      </Stack>
     );
 
   return (

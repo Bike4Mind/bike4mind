@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  CREDITS_PAGE_READ,
   SUBSCRIPTION_TIMELINE_KINDS,
   SubscriptionTimelineKindSchema,
   type SubscriptionTimelinePage,
@@ -24,7 +25,7 @@ const TimelineQuerySchema = z.object({
 });
 
 /** One subscription's merged feed: Stripe billing events, admin actions and plan credit moves, newest first. */
-const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { GET: 'support:read' } }).get(
+const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { GET: CREDITS_PAGE_READ } }).get(
   asyncHandler<{}, unknown, unknown, Record<string, unknown>>(async (req, res) => {
     const parsed = TimelineQuerySchema.safeParse(req.query);
     if (!parsed.success) throw new BadRequestError(parsed.error.issues[0]?.message || 'Invalid query parameters');

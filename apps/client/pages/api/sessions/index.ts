@@ -15,6 +15,7 @@ import { sessionService } from '@bike4mind/services';
 import { Session as SessionModel, sessionRepository } from '@bike4mind/database/auth';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { unpublishUserArtifactsBySource } from '@server/services/publish/purgeUserPublishedArtifacts';
+import { purgeDeletedNotebookMedia } from '@server/sessions/purgeDeletedNotebookMedia';
 
 const handler = baseApi()
   /**
@@ -80,6 +81,7 @@ const handler = baseApi()
       const sessionIds = (await SessionModel.find(ownedFilter).select('_id').lean()).map(s => String(s._id));
       await unpublishUserArtifactsBySource(userId, { kind: 'reply', sessionIds }, { logger: req.logger });
       const deleteResult = await SessionModel.deleteMany(ownedFilter);
+      await purgeDeletedNotebookMedia(sessionIds, { logger: req.logger });
 
       await logEvent({
         userId,

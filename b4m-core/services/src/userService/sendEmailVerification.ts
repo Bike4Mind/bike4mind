@@ -1,5 +1,5 @@
 import { IUserDocument } from '@bike4mind/common';
-import { NotFoundError, secureParameters } from '@bike4mind/utils';
+import { NotFoundError, hashEmailToken, secureParameters } from '@bike4mind/utils';
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
 
@@ -42,7 +42,7 @@ export const sendEmailVerification = async (
 
   const token = randomUUID();
 
-  user.emailVerificationToken = token;
+  user.emailVerificationToken = hashEmailToken(token);
   user.emailVerificationSentAt = new Date();
   user.emailVerificationExpires = new Date(Date.now() + EMAIL_VERIFICATION_TOKEN_EXPIRY);
   // Reset used flag when generating new token

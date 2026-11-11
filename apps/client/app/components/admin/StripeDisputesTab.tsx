@@ -25,6 +25,7 @@ import {
   useAdminListUrlState,
   type DataColumn,
 } from './shared';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
 import { STRIPE_DISPUTE_SEARCH_KEYS, readStripeDisputeFilters } from './stripeDisputeSearch';
 import {
   useResolveStripeDispute,
@@ -374,7 +375,7 @@ export const StripeDisputesTab: React.FC = () => {
 
   return (
     <Stack
-      spacing={2}
+      spacing={ADMIN_REGION_GAP}
       sx={{ bgcolor: 'admin.canvas', color: 'admin.ink', borderRadius: 'md', minWidth: 0 }}
       data-testid="admin-stripe-disputes-tab"
     >

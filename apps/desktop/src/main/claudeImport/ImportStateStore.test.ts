@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -35,5 +35,36 @@ describe('ImportStateStore settings', () => {
 
     expect((await reading).web.enabled).toBe(true);
     expect((await store.readSettings()).web.enabled).toBe(true);
+  });
+});
+
+describe('ImportStateStore hint dismissals', () => {
+  it('keeps them per account across a restart', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'import-hints-'));
+    const settingsPath = join(root, 'claude-import.json');
+    const stateDirectory = join(root, 'state');
+    const store = new ImportStateStore(settingsPath, stateDirectory);
+    await store.dismissHint('account-a', 'claude-code');
+    await store.dismissHint('account-a', 'claude-code');
+    await store.dismissHint('account-a', 'web');
+
+    const restarted = new ImportStateStore(settingsPath, stateDirectory);
+    expect((await restarted.scope('account-a')).dismissedHints).toEqual(['claude-code', 'web']);
+    expect((await restarted.scope('account-b')).dismissedHints).toEqual([]);
+  });
+
+  it('reads a state file from before dismissals, and drops unknown ids', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'import-hints-'));
+    const stateDirectory = join(root, 'state');
+    await mkdir(stateDirectory, { recursive: true });
+    await writeFile(join(stateDirectory, 'old.json'), JSON.stringify({ version: 1, files: {} }), 'utf8');
+    await writeFile(
+      join(stateDirectory, 'odd.json'),
+      JSON.stringify({ version: 1, dismissedHints: ['web', 'tour', 7] }),
+      'utf8'
+    );
+    const store = new ImportStateStore(join(root, 'claude-import.json'), stateDirectory);
+    expect((await store.scope('old')).dismissedHints).toEqual([]);
+    expect((await store.scope('odd')).dismissedHints).toEqual(['web']);
   });
 });

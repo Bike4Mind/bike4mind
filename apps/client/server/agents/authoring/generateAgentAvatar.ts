@@ -219,7 +219,7 @@ export async function generateAgentAvatar(
   }
 
   let cleanPrompt = generatedPrompt.trim();
-  imageLogger.info(`Generated visual prompt: ${cleanPrompt.substring(0, 100)}...`);
+  imageLogger.info(`Generated visual prompt (${cleanPrompt.length} chars)`);
 
   // Handle prompt length limits for different models
   if (imageModelId === ImageModels.GPT_IMAGE_1 && cleanPrompt.length > 1000) {

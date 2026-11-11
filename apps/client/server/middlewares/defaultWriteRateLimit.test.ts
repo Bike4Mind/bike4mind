@@ -159,6 +159,17 @@ describe('defaultWriteRateLimit', () => {
     expect(second.next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 429 }));
   });
 
+  it('redacts a share-link token from the logged path', async () => {
+    mocks.tryIncrement.mockResolvedValue({ success: false, expiresAt: WINDOW_END });
+    const token = 'tok-synthetic-ratelimit-123';
+    const { warn } = await run({ url: `/api/publish/serve/a/${token}/assets/x.js?download=1` } as never);
+    expect(warn).toHaveBeenCalledWith(
+      '[defaultWriteRateLimit] over the default write limit',
+      expect.objectContaining({ path: '/api/publish/serve/a/[redacted]/assets/x.js' })
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(token);
+  });
+
   it('names the admin when the over-limit writes come from a support session', async () => {
     mocks.tryIncrement.mockResolvedValue({ success: false, expiresAt: WINDOW_END });
     const { warn } = await run({ user: { id: 'u1', isAdmin: false, tags: [], impersonatedBy: 'admin-7' } } as never);

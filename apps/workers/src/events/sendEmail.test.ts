@@ -1,4 +1,4 @@
-import { beforeEach, afterEach, expect, it, vi } from 'vitest';
+import { beforeEach, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({ send: vi.fn(), logger: { updateMetadata: vi.fn(), info: vi.fn(), error: vi.fn() } }));
 vi.mock('@workers/utils/eventContext', () => ({ withEventContext: (fn: unknown) => fn }));
@@ -10,31 +10,49 @@ import { handler } from './sendEmail';
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.stubEnv('OTC_SES_CONFIGURATION_SET', 'synthetic-otc');
   mocks.send.mockResolvedValue({ messageId: 'synthetic-id' });
 });
-afterEach(() => vi.unstubAllEnvs());
 
-async function send(category?: 'otc') {
+type Attachment = { filename: string; content: string; contentType: string };
+
+async function send(category?: 'otc', attachments?: Attachment[]) {
   // The wrapper supplies event context; this test exercises only its wrapped callback.
   const callback = handler as unknown as (event: unknown, logger: typeof mocks.logger) => Promise<void>;
-  await callback({ properties: { to: 'test@example.org', subject: 'Test', body: 'Body', category } }, mocks.logger);
+  await callback(
+    { properties: { to: 'test@example.org', subject: 'Test', body: 'Body', category, attachments } },
+    mocks.logger
+  );
 }
 
-it('adds the SES configuration header only to explicitly categorized OTC mail', async () => {
+it('passes the category through so the transport can pick the configuration set', async () => {
   await send('otc');
-  expect(mocks.send).toHaveBeenCalledWith('test@example.org', {
-    subject: 'Test',
-    html: 'Body',
-    headers: { 'X-SES-CONFIGURATION-SET': 'synthetic-otc' },
-  });
+  expect(mocks.send).toHaveBeenCalledWith('test@example.org', { subject: 'Test', html: 'Body' }, { category: 'otc' });
   mocks.send.mockClear();
   await send();
-  expect(mocks.send).toHaveBeenCalledWith('test@example.org', { subject: 'Test', html: 'Body' });
+  expect(mocks.send).toHaveBeenCalledWith(
+    'test@example.org',
+    { subject: 'Test', html: 'Body' },
+    { category: undefined }
+  );
 });
 
-it('leaves mail unchanged when SES monitoring is not configured', async () => {
-  vi.stubEnv('OTC_SES_CONFIGURATION_SET', '');
-  await send('otc');
-  expect(mocks.send).toHaveBeenCalledWith('test@example.org', { subject: 'Test', html: 'Body' });
+it('decodes base64 attachments back into buffers', async () => {
+  await send(undefined, [
+    { filename: 'a.txt', content: Buffer.from('hello').toString('base64'), contentType: 'text/plain' },
+  ]);
+  expect(mocks.send).toHaveBeenCalledWith(
+    'test@example.org',
+    {
+      subject: 'Test',
+      html: 'Body',
+      attachments: [{ filename: 'a.txt', content: Buffer.from('hello'), contentType: 'text/plain' }],
+    },
+    { category: undefined }
+  );
+});
+
+it('logs a delivery failure without throwing', async () => {
+  mocks.send.mockResolvedValue(false);
+  await send();
+  expect(mocks.logger.error).toHaveBeenCalledWith(expect.stringContaining('Email delivery failed'), expect.anything());
 });

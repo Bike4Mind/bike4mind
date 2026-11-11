@@ -52,6 +52,20 @@ describe('SubscriptionDetailPage', () => {
     expect(view).toHaveAttribute('data-id', SUBSCRIPTION_ID);
   });
 
+  it('sits in the admin page frame and scrolls through the admin layout', () => {
+    mocks.useAdminSubscriptionDetail.mockReturnValue(query({ data: buildDetail() }));
+    renderPage();
+    const root = getComputedStyle(screen.getByTestId('subscription-detail-page'));
+    // jsdom resolves the frame's responsive px/pt to 0; paddingBottom is its one fixed value.
+    expect(root.paddingBottom).toBe('64px');
+    expect(['', 'visible']).toContain(root.overflow);
+    expect(['', 'visible']).toContain(root.overflowY);
+    expect(root.minHeight).not.toBe('100vh');
+    const content = getComputedStyle(screen.getByTestId('stub-subscription-detail-view').parentElement as HTMLElement);
+    expect(content.maxWidth).toBe('1280px');
+    expect(content.marginLeft).not.toBe('auto');
+  });
+
   it('shows a skeleton while loading', () => {
     mocks.useAdminSubscriptionDetail.mockReturnValue(query({ isLoading: true, isFetching: true }));
     renderPage();

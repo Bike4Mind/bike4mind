@@ -6,6 +6,7 @@ import {
   type IBlockedIPDocument,
 } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import { Logger } from '@bike4mind/observability';
 
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -166,7 +167,7 @@ export async function runOauthAbuseAutoBlock(
       );
       if (created) result.blocked.push({ ip, attempts, durationMs, escalationLevel });
     } catch (error) {
-      console.warn(`Failed to auto-block IP ${ip}`, error);
+      Logger.warn('Failed to auto-block IP', { ip, error });
       result.failed.push(ip);
     }
   }

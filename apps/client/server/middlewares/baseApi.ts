@@ -19,6 +19,7 @@ import { Request, Response } from 'express';
 import nc from 'next-connect';
 import { Config, isDevelopment } from '@bike4mind/server-utils/utils/config';
 import { createMethodGuard } from '@bike4mind/server-utils/utils/allowedMethods';
+import { requestLogUrl } from './requestLogUrl';
 
 // Gears: hook the shared tool pipeline once per lambda (fire-and-forget observer).
 registerToolGearObserver();
@@ -175,6 +176,10 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
           connectMs: req.__connectMs ?? null,
           containerCold,
           aborted: !res.writableEnded, // true when the response never completed cleanly
+          // statusCode defaults to 200, so an aborted request is only a sent status when headersSent.
+          status: res.statusCode,
+          headersSent: res.headersSent,
+          ...(req.user ? { userId: req.user.id } : {}),
         })
         .info('req-timing');
     };
@@ -280,7 +285,7 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
 
   router.use(async (req, res, next) => {
     if (!isDevelopment()) {
-      const path = (req.url ?? '').split('?')[0];
+      const path = requestLogUrl((req.url ?? '').split('?')[0]);
       req.logger.info(`API Request: ${req.method} ${path}`);
     }
     next();

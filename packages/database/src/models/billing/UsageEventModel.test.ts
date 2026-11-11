@@ -471,6 +471,15 @@ describe('UsageEventRepository', () => {
     const orgEvent = (overrides: Partial<IUsageEventInput> = {}) =>
       record({ ownerId: 'org-1', ownerType: CreditHolderType.Organization, ...overrides });
 
+    it('never exposes executed model fields', async () => {
+      await orgEvent();
+      await orgEvent({ executedProvider: 'openai', executedModel: 'gpt-4o-mini' });
+      const summary = await usageEventRepository.ownerUsageSummary('org-1', CreditHolderType.Organization);
+      expect(summary.byModel).toHaveLength(1);
+      expect(summary.byModel[0].requests).toBe(2);
+      expect(summary.byModel[0]).not.toHaveProperty('executedModel');
+    });
+
     it('rolls up an owner spend by day, member, model, and feature', async () => {
       await orgEvent({ userId: 'user-a', feature: 'chat', costUsd: 0.01, creditsCharged: 50 });
       await orgEvent({ userId: 'user-a', feature: 'agent_execution', costUsd: 0.02, creditsCharged: 100 });
@@ -598,6 +607,17 @@ describe('UsageEventRepository', () => {
   });
 
   describe('platformUsageSummary', () => {
+    it('splits byModel by executed model, coalescing rows without one', async () => {
+      await record();
+      await record({ executedProvider: 'openai', executedModel: 'gpt-4o-mini' });
+      const { byModel } = await usageEventRepository.platformUsageSummary();
+      expect(byModel).toHaveLength(2);
+      expect(byModel.map(r => [r.executedProvider, r.executedModel]).sort()).toEqual([
+        ['bedrock', 'claude-sonnet-4-5'],
+        ['openai', 'gpt-4o-mini'],
+      ]);
+    });
+
     it('rolls up across owners by day, feature, consumer, and model', async () => {
       await record({
         ownerId: 'u1',
@@ -711,6 +731,18 @@ describe('UsageEventRepository', () => {
   });
 
   describe('sessionUsageSummary', () => {
+    it('splits by executed model only when includeExecuted', async () => {
+      await record({ sessionId: 's-x' });
+      await record({ sessionId: 's-x', executedProvider: 'openai', executedModel: 'gpt-4o-mini' });
+      const withExec = await usageEventRepository.sessionUsageSummary('s-x', undefined, { includeExecuted: true });
+      expect(withExec.byModel).toHaveLength(2);
+      expect(withExec.byModel.map(r => r.executedModel).sort()).toEqual(['claude-sonnet-4-5', 'gpt-4o-mini']);
+      const plain = await usageEventRepository.sessionUsageSummary('s-x');
+      expect(plain.byModel).toHaveLength(1);
+      expect(plain.byModel[0].requests).toBe(2);
+      expect(plain.byModel[0]).not.toHaveProperty('executedModel');
+    });
+
     it('rolls up a session by quest and by model with token totals', async () => {
       await record({
         sessionId: 's-1',
@@ -842,6 +874,26 @@ describe('UsageEventRepository', () => {
   });
 
   describe('spendSummary', () => {
+    it('splits byModel by executed model, coalescing rows without one', async () => {
+      await record();
+      await record({ executedProvider: 'openai', executedModel: 'gpt-4o-mini' });
+      const { byModel } = await usageEventRepository.spendSummary();
+      expect(byModel).toHaveLength(2);
+      for (const r of byModel) expect([r.provider, r.model]).toEqual(['bedrock', 'claude-sonnet-4-5']);
+      expect(byModel.map(r => [r.executedProvider, r.executedModel]).sort()).toEqual([
+        ['bedrock', 'claude-sonnet-4-5'],
+        ['openai', 'gpt-4o-mini'],
+      ]);
+    });
+
+    it('model filter matches requested or executed model', async () => {
+      await record({ model: 'opus' });
+      await record({ model: 'sonnet', executedProvider: 'bedrock', executedModel: 'opus' });
+      await record({ model: 'haiku' });
+      const s = await usageEventRepository.spendSummary({ model: 'opus' });
+      expect(s.totals.requests).toBe(2);
+    });
+
     it('rolls up totals, models, accounts, and daily cost in one pass', async () => {
       await record({
         ownerId: 'org-1',
@@ -1041,14 +1093,14 @@ describe('UsageEventRepository.creditsSpentByUser', () => {
     await UsageEvent.collection.updateOne({ _id: event!._id }, { $set: { createdAt } });
   };
 
-  it('sums charged and written-off credits inside [from, to) for that user only', async () => {
+  it('sums creditsCharged inside [from, to) for that user only, not adding the write-off it already includes', async () => {
     await at(from, { creditsCharged: 30 });
     await at(new Date('2026-10-21T09:59:59Z'), { creditsCharged: 20, writtenOffCredits: 5 });
     await at(to, { creditsCharged: 1000 });
     await at(new Date('2026-10-20T09:59:59Z'), { creditsCharged: 1000 });
     await at(new Date('2026-10-20T12:00:00Z'), { userId: 'someone-else', creditsCharged: 1000 });
 
-    await expect(usageEventRepository.creditsSpentByUser('user-1', from, to)).resolves.toBe(55);
+    await expect(usageEventRepository.creditsSpentByUser('user-1', from, to)).resolves.toBe(50);
   });
 
   it('returns 0 when the user spent nothing in the window', async () => {
@@ -1068,7 +1120,7 @@ describe('UsageEventRepository.activitySummaryByUser', () => {
   it('counts events by outcome and sums credits inside [from, to) for that user only', async () => {
     const latest = new Date('2026-10-21T09:00:00Z');
     await at(from, { creditsCharged: 30 });
-    await at(latest, { creditsCharged: 0, writtenOffCredits: 5, status: 'error' });
+    await at(latest, { creditsCharged: 5, writtenOffCredits: 5, status: 'error' });
     await at(new Date('2026-10-20T12:00:00Z'), { creditsCharged: 0, status: 'refusal' });
     await at(to, { creditsCharged: 1000 });
     await at(new Date('2026-10-20T12:00:00Z'), { userId: 'someone-else', creditsCharged: 1000 });
@@ -1109,20 +1161,39 @@ describe('UsageEventRepository.activitySummaryByUser', () => {
 });
 
 describe('UsageEventRepository.creditsSpentByUsers', () => {
-  it('sums charged and written-off credits per user, leaving out users who spent nothing', async () => {
+  it('sums creditsCharged per user without re-adding write-offs, leaving out users who spent nothing', async () => {
     await record({ userId: 'user-1', creditsCharged: 30 });
     await record({ userId: 'user-1', creditsCharged: 20, writtenOffCredits: 5 });
     await record({ userId: 'user-2', creditsCharged: 7 });
     await record({ userId: 'someone-else', creditsCharged: 1000 });
 
     await expect(usageEventRepository.creditsSpentByUsers(['user-1', 'user-2', 'user-3'])).resolves.toEqual({
-      'user-1': 55,
+      'user-1': 50,
       'user-2': 7,
     });
   });
 
   it('returns nothing for no users', async () => {
     await expect(usageEventRepository.creditsSpentByUsers([])).resolves.toEqual({});
+  });
+});
+
+describe('UsageEventRepository.largestSettlementOverHold', () => {
+  const since = new Date(Date.now() - 60 * 60 * 1000);
+
+  it('ratios creditsCharged over the hold, not adding the write-off it already includes', async () => {
+    await record({ userId: 'user-1', reservedCredits: 10, creditsCharged: 40, writtenOffCredits: 30 });
+    await record({ userId: 'user-1', reservedCredits: 10, creditsCharged: 20 });
+    await record({ userId: 'user-1', creditsCharged: 1000 });
+    await record({ userId: 'someone-else', reservedCredits: 1, creditsCharged: 1000 });
+
+    await expect(usageEventRepository.largestSettlementOverHold(['user-1', 'user-2'], since)).resolves.toEqual({
+      'user-1': { reservedCredits: 10, settledCredits: 40, ratio: 4 },
+    });
+  });
+
+  it('returns nothing for no users', async () => {
+    await expect(usageEventRepository.largestSettlementOverHold([], since)).resolves.toEqual({});
   });
 });
 

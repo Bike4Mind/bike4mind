@@ -11,6 +11,7 @@ import { useAdminActivitySummary } from './useAdminActivitySummary';
 import { NewSignupsTile } from './Signups/NewSignupsTile';
 import { AiAdvisoryStrip } from './AiAdvisory/AiAdvisoryStrip';
 import { ADMIN_REGION_GAP } from './shared/adminStyles';
+import { CampaignWatchesPanel } from './CampaignWatches/CampaignWatchesPanel';
 
 const DASHBOARD_SHORTCUTS = [
   {
@@ -57,11 +58,7 @@ export default function AdminDashboardTab({ onNavigate }: AdminDashboardTabProps
 
   return (
     // overflowX clip: the Joy Grid negative gutters stick out of this wrapper
-    <Stack
-      spacing={ADMIN_REGION_GAP}
-      sx={{ maxWidth: 1440, mx: 'auto', overflowX: 'clip' }}
-      data-testid="admin-dashboard"
-    >
+    <Stack spacing={ADMIN_REGION_GAP} sx={{ overflowX: 'clip' }} data-testid="admin-dashboard">
       <Box>
         <Typography level="h1">Admin dashboard</Typography>
         <Typography level="body-md" sx={{ mt: 1 }}>
@@ -70,6 +67,7 @@ export default function AdminDashboardTab({ onNavigate }: AdminDashboardTabProps
       </Box>
 
       <AiAdvisoryStrip />
+      <CampaignWatchesPanel compact />
 
       {additionalDashboards.length > 0 && (
         <Box>

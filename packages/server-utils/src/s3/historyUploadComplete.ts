@@ -116,7 +116,7 @@ export const dispatch = withContext(async (event, context, logger) => {
 
     const missing = [!userId && 'userId', !source && 'source', !file && 'file'].filter(Boolean);
     if (missing.length > 0) {
-      console.error(`Invalid key: ${key}, missing ${missing.join(', ')}`);
+      logger.error('Invalid history import key', { key, missing });
       continue;
     }
 

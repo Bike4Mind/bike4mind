@@ -316,6 +316,7 @@ export const USER_RISK_SIGNAL_TYPES = [
   'signup_token_missing',
   'signup_token_invalid',
   'signup_token_expired',
+  'signup_token_reused',
 ] as const;
 export type UserRiskSignalType = (typeof USER_RISK_SIGNAL_TYPES)[number];
 
@@ -933,6 +934,13 @@ export interface IUserAcquisition {
   lastTouch?: IUserAcquisitionTouch;
   /** Absent for a signup that followed no verified hop. */
   verifiedTouch?: IUserVerifiedTouch;
+  /**
+   * The product of the OAuth client the account was created to sign in to (apps/client
+   * server/analytics/oauthSignupCredit.ts): `source` is the client's Overwatch product, `medium`
+   * is `oauth` and `content` the client_id. Written once, with consent, by the server that issued
+   * the authorization code, so the browser never names it.
+   */
+  oauthTouch?: IUserAcquisitionTouch;
   /** How the account was created (`otc`, `google`, `github`, ...). */
   signupMethod: string;
   capturedAt: Date;
@@ -1040,6 +1048,14 @@ export interface IUserRepository
    * (now or from an earlier attempt), false when another account already does.
    */
   claimFreeCreditGrant: (userId: string) => Promise<boolean>;
+  /**
+   * Reapplies a reversed grant release's saved fields only while signupGrant.creditsReleased still equals
+   * `creditsReleased` (or signupGrant is absent when null). False when nothing matched.
+   */
+  restoreReleasedGrantState: (
+    userId: string,
+    input: { creditsReleased: number | null; set: Partial<IUserDocument>; unset: (keyof IUserDocument)[] }
+  ) => Promise<boolean>;
   /** Sets signupGrant.inviteBonusPaid only where it is unset; false when another write set it first. */
   markInviteBonusPaid: (userId: string, credits: number) => Promise<boolean>;
   /**

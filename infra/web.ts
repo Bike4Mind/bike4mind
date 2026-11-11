@@ -121,11 +121,35 @@ import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
 import { wafLabelForwarding, wafQueryWebAclArn, wafReadPermissions, wafWebAclArn } from './waf';
 
+// Every queue this stage creates, by SST's physical-name prefix. SST keeps `${app}-${stage}-`
+// in front of a queue name only while app + stage + logical name + 2 fit in 71 characters (SQS's
+// 80 minus its 9-character random suffix); past that it truncates the app name or drops it, and
+// the queue would fall outside the grant below. stageScopedQueueUrls fails the deploy in that case
+// instead of letting the longest-named queues lose access while the rest keep working.
+const stageQueuePrefix = `${$app.name}-${$app.stage}-`;
+const stageQueueArns = $interpolate`arn:${aws.getPartitionOutput().partition}:sqs:${aws.getRegionOutput().name}:${aws.getCallerIdentityOutput().accountId}:${stageQueuePrefix}*`;
+const stageScopedQueueUrls = (urls: Record<string, $util.Output<string>>): Record<string, $util.Output<string>> =>
+  Object.fromEntries(
+    Object.entries(urls).map(([key, url]) => [
+      key,
+      url.apply(value => {
+        const name = value.slice(value.lastIndexOf('/') + 1);
+        if (!name.startsWith(stageQueuePrefix)) {
+          throw new Error(
+            `Queue ${name} (${key}) does not start with ${stageQueuePrefix}, so the web function's SQS grant ` +
+              'would not cover it. Shorten the app name or stage name so app + stage + queue name fit in 71 characters.'
+          );
+        }
+        return value;
+      }),
+    ])
+  );
+
 // SQS queue URLs bundled as Linkable resources. Stored in resource.enc at deploy
-// time — no IAM statements generated, no env var size concerns. The wildcard SQS
-// permission already grants runtime access to all queues.
+// time: no IAM statements generated, no env var size concerns. The stage-scoped SQS
+// statement on the server function (stageQueueArns above) grants runtime access.
 const dlqUrls = new sst.Linkable('dlqUrls', {
-  properties: {
+  properties: stageScopedQueueUrls({
     // Contributed entries go first so a core key always wins.
     ...Object.fromEntries(Object.values(contributedQueues).map(({ spec, dlq }) => [spec.label, dlq.url])),
     'fab-file-vectorize': fabFileVectorizeQueueDLQ.url,
@@ -170,29 +194,27 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     'github-lake-ingest': githubLakeIngestQueueDLQ.url,
     'github-lake-revoke': githubLakeRevokeQueueDLQ.url,
     'publish-thumbnail': publishThumbnailQueueDLQ.url,
-  },
+  }),
 });
 
 // Lambda function names exposed via sst.Linkable to avoid generating per-resource IAM
-// statements when the frontend only needs the function *name* for invocation. The wildcard
-// `lambda:InvokeFunction` permission below already grants runtime invocation access.
+// statements when the frontend only needs the function *name* for invocation. The
+// `lambda:InvokeFunction` statement below names exactly these functions; add a target here
+// and there together.
 const lambdaFunctionNames = new sst.Linkable('lambdaFunctionNames', {
   properties: {
     attackSimulation: attackSimulationFunction.name,
     // Admin "Run now" (pages/api/admin/model-discovery) invokes the same
     // function the discovery cron targets, with { trigger: 'manual' }.
     modelDiscovery: modelDiscoveryFunction.name,
-    // QuestMaster v5 dispatches a node run from an API route
-    // (pages/api/quest-nodes/[id]/run -> runQuestNode). The WebSocket
-    // `agent_execute` handler reaches the same function through its own link;
-    // the frontend cannot, so the name is surfaced here rather than linking the
-    // whole function into the web app.
+    // The WebSocket `agent_execute` handler reaches the agent executor function
+    // through its own link; the name is surfaced here for the frontend.
     agentExecutor: agentExecutor.name,
   },
 });
 
 const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
-  properties: {
+  properties: stageScopedQueueUrls({
     ...Object.fromEntries(Object.values(contributedQueues).map(({ spec, queue }) => [spec.name, queue.url])),
     emailJobQueue: emailJobQueue.url,
     fabFileChunkQueue: fabFileChunkQueue.url,
@@ -236,7 +258,7 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     githubLakeIngestQueue: githubLakeIngestQueue.url,
     githubLakeRevokeQueue: githubLakeRevokeQueue.url,
     publishThumbnailQueue: publishThumbnailQueue.url,
-  },
+  }),
 });
 
 export const web = new sst.aws.Nextjs(
@@ -286,7 +308,7 @@ export const web = new sst.aws.Nextjs(
       ...(wafWebAclArn ? [wafWebAclArn] : []),
       // SQS queue URLs passed via sst.Linkable to avoid IAM inline policy bloat.
       // Linkable stores properties in resource.enc without generating IAM statements.
-      // Wildcard SQS permission (below) already grants access to all queues.
+      // The stage-scoped SQS statement (below) grants access to all of them.
       dlqUrls,
       sourceQueueUrls,
       // Directly linked (not folded into sourceQueueUrls) so the cron reconciler's
@@ -348,9 +370,16 @@ export const web = new sst.aws.Nextjs(
           'config:GetComplianceDetailsByConfigRule',
           'config:DescribeConfigurationRecorders',
           'config:DescribeDeliveryChannels',
-          'lambda:InvokeFunction',
         ],
         resources: ['*'],
+      },
+      {
+        // Invoked by name through the lambdaFunctionNames Linkable: admin "Run now" for the attack
+        // simulation and model discovery, and QuestMaster node dispatch. The other functions this
+        // Lambda invokes (mcpHandler, remoteMcpHandler, the two import-complete functions) are
+        // linked above and carry their own invoke grant.
+        actions: ['lambda:InvokeFunction'],
+        resources: [attackSimulationFunction.arn, modelDiscoveryFunction.arn, agentExecutor.arn],
       },
       {
         actions: ['events:PutEvents'],
@@ -387,20 +416,17 @@ export const web = new sst.aws.Nextjs(
         resources: ['*'],
       },
       {
-        // Explicit SQS permissions for GitHub webhook queue
-        // (not relying on SST implicit linking permissions)
-        actions: ['sqs:SendMessage'],
-        resources: [githubWebhookQueue.arn],
-      },
-      {
         // CloudWatch metrics for What's New modal sync and generation
         actions: ['cloudwatch:PutMetricData'],
         resources: ['*'],
       },
       {
-        // SQS permissions for admin DLQ replay: receive from DLQs, send to source queues, get attributes
+        // Admin DLQ replay (receive and delete from DLQs, send to source queues, read depth) and the
+        // API routes that enqueue work through sourceQueueUrls, limited to this stage's queues. One
+        // prefix pattern instead of one ARN per queue keeps the inline policy well under Lambda's
+        // size cap, which is why the queue URLs travel as Linkables in the first place.
         actions: ['sqs:ReceiveMessage', 'sqs:DeleteMessage', 'sqs:GetQueueAttributes', 'sqs:SendMessage'],
-        resources: ['*'],
+        resources: [stageQueueArns],
       },
       {
         // CloudFront cache invalidation for What's New modal edit/delete

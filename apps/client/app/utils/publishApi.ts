@@ -169,6 +169,18 @@ export async function findPublishedByArtifact(artifactId: string): Promise<Manag
   }
 }
 
+function toPublishResult(a: ManagedArtifact, url: string): PublishResult {
+  return {
+    publicId: a.publicId,
+    url,
+    tier: a.tier,
+    scopeId: a.scopeId,
+    slug: a.slug,
+    visibility: a.visibility,
+    publishedAt: a.publishedAt ?? '',
+  };
+}
+
 /**
  * Look up the caller's OWN publication of a chat reply, as the share result the dialog renders,
  * so reopening Publish & Share on an answer lands on the live page. Owner-scoped server-side.
@@ -180,16 +192,7 @@ export async function findPublishedByReply(messageId: string): Promise<PublishRe
       `/api/publish/artifacts?sourceMessageId=${encodeURIComponent(messageId)}&limit=1`
     );
     const a = data.artifacts?.[0];
-    if (!a) return null;
-    return {
-      publicId: a.publicId,
-      url: `/p/r/${a.publicId}`,
-      tier: a.tier,
-      scopeId: a.scopeId,
-      slug: a.slug,
-      visibility: a.visibility,
-      publishedAt: a.publishedAt ?? '',
-    };
+    return a ? toPublishResult(a, `/p/r/${a.publicId}`) : null;
   } catch {
     return null;
   }
@@ -737,11 +740,19 @@ export function buildArtifactPublishWiring(input: {
   reactFiles?: Record<string, string> | null;
 }): {
   resolveExisting: () => Promise<ManagedArtifact | null>;
+  resolvePublished: () => Promise<PublishResult | null>;
   publish: (visibility: PublishVisibility, opts?: ArtifactPublishOpts) => Promise<PublishResult>;
   incompleteWarning?: string;
 } {
+  // The dialog runs both lookups on open; one request serves both.
+  let lookup: Promise<ManagedArtifact | null> | undefined;
+  const findExisting = () => (lookup ??= findPublishedByArtifact(input.artifactId));
   return {
-    resolveExisting: () => findPublishedByArtifact(input.artifactId),
+    resolveExisting: findExisting,
+    resolvePublished: async () => {
+      const a = await findExisting();
+      return a ? toPublishResult(a, toArtifactSharePath(a.tier, a.scopeId, a.slug)) : null;
+    },
     publish: artifactBundlePublisher(input),
     // A /p/ link is the point of no return: it can be handed to a client before anyone
     // notices the artifact's buttons are inert. Computed here rather than in the dialog so
@@ -834,6 +845,8 @@ export interface ShareLink {
   shareToken: string;
   shareUrl: string;
   createdAt: string | null;
+  /** Null when the link never expires. */
+  expiresAt: string | null;
   viewCount: number;
   lastViewedAt: string | null;
 }
@@ -871,16 +884,23 @@ export async function getShareTokenState(publicId: string): Promise<ShareTokenSt
 /**
  * Mint (idempotent) or fetch the no-sign-in share token for a published artifact
  * (owner/admin). Pass `regenerate: true` to rotate it, which immediately revokes
- * every outstanding `/a` link. Returns the token and its relative `/a/<token>` path.
+ * every outstanding `/a` link. `expiresAt` (ISO datetime) applies only when a link is minted;
+ * an already-live link is returned unchanged. Returns the token and its relative `/a/<token>` path.
  */
-export async function createOrGetShareToken(publicId: string, regenerate = false): Promise<MintedShareLink> {
-  const { data } = await api.post<MintedShareLink>(`/api/publish/${publicId}/share-token`, { regenerate });
+export async function createOrGetShareToken(
+  publicId: string,
+  { regenerate = false, expiresAt }: { regenerate?: boolean; expiresAt?: string } = {}
+): Promise<MintedShareLink> {
+  const { data } = await api.post<MintedShareLink>(`/api/publish/${publicId}/share-token`, {
+    regenerate,
+    ...(expiresAt ? { expiresAt } : {}),
+  });
   return data;
 }
 
 /** Rotate the share token (revokes all outstanding `/a` links), returning the new one. */
-export async function regenerateShareToken(publicId: string): Promise<MintedShareLink> {
-  return createOrGetShareToken(publicId, true);
+export async function regenerateShareToken(publicId: string, expiresAt?: string): Promise<MintedShareLink> {
+  return createOrGetShareToken(publicId, { regenerate: true, expiresAt });
 }
 
 /**
@@ -889,8 +909,11 @@ export async function regenerateShareToken(publicId: string): Promise<MintedShar
  * `createOrGetShareToken` this is not idempotent - each call is another link. Rejected with
  * `SHARE_LINK_LIMIT` past 20 live links.
  */
-export async function createAdditionalShareToken(publicId: string): Promise<MintedShareLink> {
-  const { data } = await api.post<MintedShareLink>(`/api/publish/${publicId}/share-token`, { additional: true });
+export async function createAdditionalShareToken(publicId: string, expiresAt?: string): Promise<MintedShareLink> {
+  const { data } = await api.post<MintedShareLink>(`/api/publish/${publicId}/share-token`, {
+    additional: true,
+    ...(expiresAt ? { expiresAt } : {}),
+  });
   return data;
 }
 

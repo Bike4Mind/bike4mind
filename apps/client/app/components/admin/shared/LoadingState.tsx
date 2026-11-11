@@ -23,15 +23,32 @@ export function LoadingState({ label, testId }: { label: string; testId?: string
  * Thin progress row for a background refetch; existing data stays visible beneath it. Always
  * mounted at a fixed height so a poll toggling `active` neither shifts layout nor announces. The
  * test id is present only while active.
+ *
+ * `overlay` reserves no height: the bar floats in the region gap above its parent, which must be
+ * `position: relative`. Use it when the bar would otherwise be its own item in a page stack, where
+ * the reserved 20 px plus two region gaps leave a blank band.
  */
-export function UpdatingBar({ active, testId }: { active: boolean; testId?: string }) {
+export function UpdatingBar({
+  active,
+  testId,
+  placement = 'inline',
+}: {
+  active: boolean;
+  testId?: string;
+  placement?: 'inline' | 'overlay';
+}) {
   return (
     <Stack
       direction="row"
       alignItems="center"
       gap={1}
       aria-hidden={!active}
-      sx={{ ...adminFocusScope, height: 20, visibility: active ? 'visible' : 'hidden' }}
+      sx={{
+        ...adminFocusScope,
+        height: 20,
+        visibility: active ? 'visible' : 'hidden',
+        ...(placement === 'overlay' && { position: 'absolute', left: 0, right: 0, bottom: '100%', mb: '2px' }),
+      }}
       data-testid={active ? (testId ?? 'admin-updating-bar') : undefined}
     >
       <LinearProgress size="sm" aria-hidden sx={{ flex: 1 }} />

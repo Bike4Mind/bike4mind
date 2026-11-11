@@ -2,8 +2,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({ patch: (fn: unknown) => fn }),
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => ({ patch: (fn: unknown) => fn }),
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 
@@ -23,6 +23,10 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => {
   return { ...actual, recordAdminActionFromRequest: vi.fn().mockResolvedValue(null) };
 });
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoint' } } }));
+vi.mock('@bike4mind/database', () => ({
+  organizationRepository: { findById: async (id: string) => ({ id, userId: 'owner-1' }) },
+  userRepository: { findById: async (id: string) => ({ id }) },
+}));
 
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { ADMIN_ACTION_REASON_MISSING_MESSAGE } from '@bike4mind/server-utils/utils/adminAudit';

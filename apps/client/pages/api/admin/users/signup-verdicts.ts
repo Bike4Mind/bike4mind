@@ -1,6 +1,6 @@
 import { z } from 'zod';
-import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { ApiKeyScope, MODERATION_PAGE_READ } from '@bike4mind/common';
+import { adminApi } from '@server/middlewares/adminApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import {
   SIGNUP_TIMESERIES_RANGES,
@@ -49,11 +49,14 @@ const FIELD_MESSAGES: Record<string, string> = {
  * The signup chart's verdict for a page of the Users list: GET /api/admin/users/signup-verdicts.
  * Separate from the list so classifying the range never slows or fails the list itself.
  */
-export default baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] })
+export default adminApi({
+  auth: 'jwtOnly',
+  requiredScopes: [ApiKeyScope.ADMIN],
+  adminPermissions: { GET: MODERATION_PAGE_READ },
+})
   // Lower than the list's limit: each miss classifies the whole range (see classifyCohort).
   .use(rateLimit({ limit: 30, windowMs: 60_000, bucket: 'admin-users-signup-verdicts' }))
   .get(async (req, res) => {
-    if (!req.user?.isAdmin) return res.status(403).json({ message: 'Admin access required' });
     const parsed = querySchema.safeParse(req.query);
     if (!parsed.success) {
       const field = String(parsed.error.issues[0]?.path[0] ?? 'ids');
