@@ -204,6 +204,21 @@ describe('BillingModal', () => {
       expect(trackUpsell).not.toHaveBeenCalled();
     });
 
+    it('reports an impression when plans become the lead section while open', () => {
+      state.subscriptions = [subRow()];
+      const { rerender } = render(content(true));
+      expect(trackUpsell).not.toHaveBeenCalled();
+
+      state.subscriptions = [subRow({ status: 'past_due' })];
+      rerender(content(true));
+      rerender(content(true));
+
+      expect(trackUpsell).toHaveBeenCalledTimes(1);
+      expect(trackUpsell).toHaveBeenCalledWith('impression', { surface: 'billing_plans', trigger: 'credits_chip' });
+      rerender(content(false));
+      expect(trackUpsell).toHaveBeenCalledWith('dismiss', { surface: 'billing_plans', trigger: 'credits_chip' });
+    });
+
     it('does not report a dismiss after a purchase', () => {
       const { rerender } = render(content(true));
       fireEvent.click(screen.getByTestId('subscription-changed'));

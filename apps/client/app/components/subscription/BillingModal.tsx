@@ -23,6 +23,7 @@ import { PlansSection, PlansSectionSkeleton } from './PlansSection';
 import { FirstRunEvents } from '@bike4mind/common';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
 import { trackUpsell } from '@client/app/utils/funnelEvents';
+import { BILLING_PLANS_SURFACE } from './billingUpsell';
 import { consumeBillingCheckoutReturn } from '@client/app/utils/billingCheckoutReturn';
 
 export type BillingEntry = 'credits_chip' | 'credits_cta' | 'deep_link' | 'profile_menu' | 'unknown';
@@ -147,7 +148,8 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
       const opened = openedMetadataRef.current;
       if (opened && !purchasedRef.current && !paymentPendingRef.current && !leftForUsageRef.current) {
         logEvent({ type: FirstRunEvents.BILLING_CLOSED_WITHOUT_PURCHASE, metadata: opened });
-        if (impressionShownRef.current) trackUpsell('dismiss', { surface: 'billing_plans', trigger: opened.entry });
+        if (impressionShownRef.current)
+          trackUpsell('dismiss', { surface: BILLING_PLANS_SURFACE, trigger: opened.entry });
       }
       openedMetadataRef.current = null;
       purchasedRef.current = false;
@@ -187,7 +189,7 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
   useEffect(() => {
     if (!open || !plansLead || impressionShownRef.current) return;
     impressionShownRef.current = true;
-    trackUpsell('impression', { surface: 'billing_plans', trigger: entry });
+    trackUpsell('impression', { surface: BILLING_PLANS_SURFACE, trigger: entry });
   }, [open, plansLead, entry]);
 
   const plansHeadingRef = useRef<HTMLHeadingElement>(null);

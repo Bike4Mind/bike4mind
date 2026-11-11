@@ -402,6 +402,7 @@ describe('PlansSection', () => {
       </TestWrapper>
     );
     await userEvent.click(screen.getByRole('button', { name: 'Change subscription to Professional' }));
+    expect(trackUpsell).toHaveBeenCalledWith('click', { surface: 'billing_plans', plan: 'Professional' });
     expect(onSubscriptionChanged).not.toHaveBeenCalled();
     const options = changeMutate.mock.calls[0][1] as { onSuccess: () => void };
     options.onSuccess();
