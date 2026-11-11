@@ -147,6 +147,33 @@ describe('checkSignupGrantSave: assessment policy', () => {
       'Signup Grant Assessment Policy is not valid. an enabled policy needs at least one rule with a weight above 0.'
     );
   });
+  it('refuses an enabled policy whose reducedAt the rules can never reach', () => {
+    const unreachable = { ...enabledPolicy, reducedAt: 6, reviewAt: 7 };
+    const reason = refused(checkSignupGrantSave('signupGrantRiskPolicy', unreachable, {}));
+    expect(reason).toBe(
+      'Signup Grant Assessment Policy is not valid. reducedAt (6) is above the highest score the rules can reach (5).'
+    );
+  });
+
+  it("counts a 'score' rule's missingWeight toward the reachable score", () => {
+    const viaMissing = { ...enabledPolicy, rules: [{ ...enabledPolicy.rules[0], weight: 1, missingWeight: 4 }] };
+    expect(checkSignupGrantSave('signupGrantRiskPolicy', viaMissing, {}).ok).toBe(true);
+  });
+
+  it("does not count a 'review' rule's missingWeight toward the reachable score", () => {
+    const viaReview = {
+      ...enabledPolicy,
+      rules: [{ ...enabledPolicy.rules[0], weight: 1, missing: 'review', missingWeight: 4 }],
+    };
+    expect(checkSignupGrantSave('signupGrantRiskPolicy', viaReview, {}).ok).toBe(false);
+  });
+
+  it('refuses a large grant while the stored enabled policy cannot reach reducedAt', () => {
+    const unreachable = { ...enabledPolicy, reducedAt: 6, reviewAt: 7 };
+    expect(checkSignupGrantSave('signupGrantInitialCredits', 1001, { signupGrantRiskPolicy: unreachable }).ok).toBe(
+      false
+    );
+  });
 });
 
 describe('checkSignupGrantSave: unprotected limit', () => {

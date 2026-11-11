@@ -56,7 +56,10 @@ type PolicyState = { state: 'on' } | { state: 'off' } | { state: 'invalid'; issu
 
 /**
  * The stored or proposed policy as the guard sees it. Beyond the payout schema, an enabled policy must
- * score something: at least one rule needs a weight above 0.
+ * be able to reduce a grant: at least one rule needs a weight above 0, and the highest score its rules
+ * can add up to must reach reducedAt. A policy that can only ever land in the full band would lift the
+ * limit without screening anything. A missing signal with missing 'review' holds the grant rather than
+ * scoring, so only a 'score' rule's missingWeight counts toward that highest score.
  */
 function readPolicy(raw: unknown): PolicyState {
   const policy = signupRiskPolicySchema.safeParse(parseStoredJson(raw));
@@ -71,6 +74,16 @@ function readPolicy(raw: unknown): PolicyState {
   if (!policy.data.enabled) return { state: 'off' };
   if (!policy.data.rules.some(rule => rule.weight > 0)) {
     return { state: 'invalid', issues: ['an enabled policy needs at least one rule with a weight above 0'] };
+  }
+  const highestScore = policy.data.rules.reduce(
+    (sum, rule) => sum + Math.max(rule.weight, rule.missing === 'score' ? rule.missingWeight : 0),
+    0
+  );
+  if (highestScore < policy.data.reducedAt) {
+    return {
+      state: 'invalid',
+      issues: [`reducedAt (${policy.data.reducedAt}) is above the highest score the rules can reach (${highestScore})`],
+    };
   }
   return { state: 'on' };
 }
@@ -89,8 +102,9 @@ function grantsAbove(settings: SignupGrantGuardSettings, limit: number): string[
  * Save-time check that keeps a signup grant above signupGrantUnprotectedMaxCredits from being paid unless
  * signupGrantRiskPolicy is valid and enabled. `current` holds the other stored settings; the proposed value
  * replaces the stored one for `key`. Also refuses a signupGrantRiskPolicy the payout could not read, which
- * would hold every new signup grant. Lowering a grant is always allowed, so a configuration that is already
- * out of bounds can be brought back within them one key at a time.
+ * would hold every new signup grant. A grant can always be lowered to within the limit, so a configuration
+ * that is already out of bounds can be brought back within it one key at a time; a lowering that still
+ * leaves the grant above the limit is refused while the policy is off.
  */
 export function checkSignupGrantSave(
   key: string,
