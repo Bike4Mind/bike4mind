@@ -119,14 +119,14 @@ describe('pseudonymiseEvidence', () => {
 
   it('scrubs identifiers used as object keys', () => {
     const json = JSON.stringify(
-      pseudonymiseEvidence({ attemptsByEmail: { [EMAIL]: 3 }, attemptsByIp: { [IPV4]: 2, [IPV6]: 1 } }, SALT)
+      pseudonymiseEvidence({ bySender: { [EMAIL]: 3 }, bySource: { [IPV4]: 2, [IPV6]: 1 } }, SALT)
     );
     expect(leaks(json)).toEqual([]);
     expect(json).toContain(':3');
   });
 
   it('keeps colliding keys apart when they redact to the same marker', () => {
-    const out = pseudonymiseEvidence({ 'a@example.com': 1, 'b@example.com': 2 }, undefined);
+    const out = pseudonymiseEvidence({ 'a@example.com': 1, 'b@example.com': 2 }, '');
     expect(out).toEqual({ '[redacted-email]': 1, '[redacted-email]#2': 2 });
   });
 
@@ -135,7 +135,7 @@ describe('pseudonymiseEvidence', () => {
     const out = pseudonymiseEvidence(user, SALT) as Record<string, string>;
     for (const key of ['name', 'username', 'displayName', 'phone']) expect(out[key]).toMatch(/^p_[0-9a-f]{12}$/);
     expect(out.fileName).toBe('a.csv');
-    expect(pseudonymiseEvidence({ phone: '+15555550100' }, undefined)).toEqual({ phone: '[redacted-phone]' });
+    expect(pseudonymiseEvidence({ phone: '+15555550100' }, '')).toEqual({ phone: '[redacted-phone]' });
   });
 
   it.each([
