@@ -86,6 +86,13 @@ Only `name` is required. The API accepts these fields:
 | `capabilities` | Array holding one JSON string with `triggerWords`, `responseStyle` and `specialBehaviors`. See below. |
 | `isPublic` | Boolean. Defaults to `false`. |
 | `systemPrompt`, `preferredModel`, `temperature`, `maxTokens` | Optional model settings. |
+| `confidenceGateThreshold` | Optional number from 0 to 1; falls back to the orchestration default (initially 0.6). Zero disables confidence-triggered pauses. |
+| `confidenceGateMode` | Optional `iteration`, `answer`, `both` or `off`; the default is `both`. |
+| `confidenceGateSelfReport` | Optional boolean; defaults to `true`. `false` makes the executor ignore confidence scores. |
+
+Confidence-gate settings are configurable through `POST /api/agents` and `PUT /api/agents/{agentId}`. The agent form does not yet offer these controls. Values resolve per field from the agent, then admin orchestration defaults, then schema defaults. Setting any gate field, including an explicit zero, `off`, or `false`, opts a mentioned agent into orchestration dispatch.
+
+`iteration` enables pauses on low-confidence iteration streaks. `answer` enables the final-answer confidence policy: `lowConfidenceCompletion` decides whether to annotate (the default) or pause for review (`block`). `both` enables both sites; `off` enables neither. Disabling `confidenceGateSelfReport` ignores reported and scripted confidence scores; it does not stop the model from generating them. Resolved gate settings are retained across execution continuations.
 
 `characterFlaw`, `uniqueQuirk` and a `personality.responseStyle` field are not read; send `flaw` and `quirk`, and set the response style inside `capabilities`.
 

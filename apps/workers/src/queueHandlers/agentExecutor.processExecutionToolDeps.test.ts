@@ -268,6 +268,7 @@ vi.mock('@bike4mind/database', async () => {
   vi.spyOn(repo, 'updateConnectionId').mockResolvedValue(undefined as never);
   vi.spyOn(repo, 'incrementLambdaInvocationCount').mockResolvedValue(1 as never);
   vi.spyOn(repo, 'persistProfileDeniedTools').mockResolvedValue(undefined as never);
+  vi.spyOn(repo, 'persistConfidenceGate').mockResolvedValue(undefined as never);
   vi.spyOn(repo, 'persistResolvedEnabledTools').mockResolvedValue(undefined as never);
   vi.spyOn(repo, 'markFailed').mockResolvedValue(undefined as never);
   vi.spyOn(repo, 'markAborted').mockResolvedValue(undefined as never);

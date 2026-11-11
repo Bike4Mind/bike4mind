@@ -829,6 +829,9 @@ export type IntentClassifierConfig = z.infer<typeof IntentClassifierConfigSchema
 export const LOW_CONFIDENCE_COMPLETION_MODES = ['block', 'annotate', 'off'] as const;
 export type LowConfidenceCompletionMode = (typeof LOW_CONFIDENCE_COMPLETION_MODES)[number];
 
+export const CONFIDENCE_GATE_MODES = ['iteration', 'answer', 'both', 'off'] as const;
+export type ConfidenceGateMode = (typeof CONFIDENCE_GATE_MODES)[number];
+
 export const OrchestrationDefaultsSchema = z.object({
   /**
    * Tool names the synthetic profile is allowed to invoke. A DEFAULT toolbelt, not a gate:
@@ -937,6 +940,23 @@ export const OrchestrationDefaultsSchema = z.object({
    * `off` does neither. Omitted => `annotate`.
    */
   lowConfidenceCompletion: z.enum(LOW_CONFIDENCE_COMPLETION_MODES).optional(),
+  /**
+   * Confidence-gate threshold (0-1). Iterations whose every non-failed tool call scores below
+   * this count toward a pause streak for human review. Default 0.6.
+   */
+  confidenceGateThreshold: z.number().min(0).max(1).default(0.6),
+  /**
+   * Which sites use confidence: `iteration` enables pauses on low-confidence streaks,
+   * `answer` applies the lowConfidenceCompletion policy (annotate or block), `both`
+   * enables both sites, and `off` enables neither. Default `both`.
+   */
+  confidenceGateMode: z.enum(CONFIDENCE_GATE_MODES).default('both'),
+  /**
+   * Whether the executor consumes the agent's confidence scores. The agent still scores its
+   * tool calls; when false the executor drops those scores (and scripted overrides), so no
+   * streak is recorded and neither gate site fires, like `off`. Default true.
+   */
+  confidenceGateSelfReport: z.boolean().default(true),
 });
 
 export type OrchestrationDefaults = z.infer<typeof OrchestrationDefaultsSchema>;
