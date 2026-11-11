@@ -1,6 +1,6 @@
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -140,5 +140,46 @@ describe('FeedbackTrendStrip', () => {
     renderStrip();
 
     expect(await screen.findByTestId('feedback-trends-error')).toBeInTheDocument();
+  });
+  it('retries a failed request without reloading the page', async () => {
+    mocks.getFeedbackTrendsFromServer.mockRejectedValueOnce(new Error('boom')).mockResolvedValue(trends);
+    renderStrip();
+    fireEvent.click(await screen.findByTestId('admin-error-retry-btn'));
+    expect(await screen.findByTestId('feedback-trends-sparkline')).toBeInTheDocument();
+    expect(screen.queryByTestId('feedback-trends-error')).toBeNull();
+    expect(mocks.getFeedbackTrendsFromServer).toHaveBeenCalledTimes(2);
+  });
+
+  it('explains other legacy types when the legend receives keyboard focus', async () => {
+    mocks.getFeedbackTrendsFromServer.mockResolvedValue({ ...trends, receivedLast30d: 8 });
+    renderStrip();
+    const other = await screen.findByTestId('feedback-trends-type-other');
+    expect(other).toHaveAttribute('tabindex', '0');
+    fireEvent.keyDown(document, { key: 'Tab' });
+    act(() => other.focus());
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('Reports with an older type that has no series');
+  });
+
+  it('keeps loading distinct from an empty comparison window', async () => {
+    mocks.getFeedbackTrendsFromServer.mockReturnValue(new Promise(() => {}));
+    renderStrip();
+    expect(screen.queryByTestId('feedback-trends-error')).toBeNull();
+    expect(screen.queryByTestId('feedback-trends-sparkline')).toBeNull();
+    expect(screen.getAllByLabelText('Loading')).toHaveLength(4);
+  });
+
+  it.each([
+    [0, 0, 0, 0, 'No reports in the 7 days before'],
+    [0, 0, 1, 10, '10% the 7 days before'],
+    [1, 10, 1, 10, '10% the 7 days before, no change'],
+    [0, 10, 1, 10, '10% the 7 days before, -10 pts'],
+  ])('handles share denominators and deltas (%s/%s vs %s/%s)', async (down, total, priorDown, priorTotal, label) => {
+    mocks.getFeedbackTrendsFromServer.mockResolvedValue({
+      ...trends,
+      thumbsDownShare: { current: { thumbsDown: down, total }, prior: { thumbsDown: priorDown, total: priorTotal } },
+    });
+    renderStrip();
+    await screen.findByTestId('feedback-trends-sparkline');
+    expect(screen.getByTestId('feedback-trends-thumbs-down')).toHaveTextContent(label);
   });
 });

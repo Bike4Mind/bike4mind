@@ -53,6 +53,18 @@ describe('GET /api/admin/feedback-trends', () => {
     expect(mockCompute).not.toHaveBeenCalled();
   });
 
+  it('rejects a caller without support read access before computing', async () => {
+    await expect(call({ id: 'reader', isAdmin: false, adminPermissions: [] }).promise).rejects.toMatchObject({
+      statusCode: 403,
+    });
+    expect(mockCompute).not.toHaveBeenCalled();
+  });
+
+  it('propagates a failed aggregate rather than returning empty trends', async () => {
+    mockCompute.mockRejectedValue(new Error('aggregate failed'));
+    await expect(call({ id: 'admin', isAdmin: true }).promise).rejects.toThrow('aggregate failed');
+  });
+
   it('returns the trends to a full admin, uncached', async () => {
     const { res, promise } = call({ id: 'admin', isAdmin: true });
     await promise;

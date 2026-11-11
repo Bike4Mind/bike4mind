@@ -1,15 +1,16 @@
 import type { ReactNode } from 'react';
-import { Box, Stack, Typography } from '@mui/joy';
+import { Box, Stack, Tooltip } from '@mui/joy';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { FeedbackStatus, FeedbackType } from '@bike4mind/common';
+import { FeedbackType } from '@bike4mind/common';
 import { getFeedbackTrendsFromServer } from '@client/app/utils/feedbackAPICalls';
 import { adminChartSeries } from '../EventMetrics/utils/chartTheme';
-import { Dash, StatStrip, StatTile } from '../shared';
+import { Dash, ErrorState, StatStrip, StatTile } from '../shared';
 import { FEEDBACK_STATUS_ORDER, FEEDBACK_TYPE_LABELS, FEEDBACK_TYPE_ORDER } from './constants';
 import { toStatusFilters } from './feedbackTabSearch';
 import {
   emptyFeedbackTypeCounts,
   FEEDBACK_TREND_DAYS,
+  FEEDBACK_OPEN_STATUSES,
   sumFeedbackTypeCounts,
   thumbsDownPercent,
   type FeedbackTrends,
@@ -21,7 +22,7 @@ import type { UseFeedbackFiltersReturn } from './types';
 type ShowOnly = UseFeedbackFiltersReturn['showOnly'];
 
 const ALL_STATUSES = toStatusFilters(FEEDBACK_STATUS_ORDER);
-const OPEN_STATUSES = toStatusFilters([FeedbackStatus.New, FeedbackStatus.InProgress]);
+const OPEN_STATUSES = toStatusFilters([...FEEDBACK_OPEN_STATUSES]);
 const SERIES_COLORS = adminChartSeries(FEEDBACK_TYPE_ORDER.length);
 
 const resetButton = {
@@ -139,13 +140,11 @@ const TypeLegend = ({
       );
     })}
     {untyped > 0 && (
-      <Box
-        component="span"
-        title="Reports with an older type that has no series"
-        data-testid="feedback-trends-type-other"
-      >
-        Other type {untyped.toLocaleString()}
-      </Box>
+      <Tooltip title="Reports with an older type that has no series">
+        <Box component="span" tabIndex={0} data-testid="feedback-trends-type-other">
+          Other type {untyped.toLocaleString()}
+        </Box>
+      </Tooltip>
     )}
   </Stack>
 );
@@ -165,7 +164,7 @@ const shareComparison = ({ thumbsDownShare }: FeedbackTrends): string => {
  * button that resets the table's filters to exactly the reports it counts.
  */
 export default function FeedbackTrendStrip({ showOnly }: { showOnly: ShowOnly }) {
-  const { data, isError } = useQuery({
+  const { data, isError, isFetching, refetch } = useQuery({
     queryKey: FEEDBACK_TRENDS_QUERY_KEY,
     queryFn: getFeedbackTrendsFromServer,
     staleTime: 60_000,
@@ -253,9 +252,13 @@ export default function FeedbackTrendStrip({ showOnly }: { showOnly: ShowOnly })
         </Box>
       </StatStrip>
       {isError && (
-        <Typography level="body-xs" sx={{ color: 'admin.inkMuted', mt: 0.5 }} data-testid="feedback-trends-error">
-          Could not load the feedback trends. Refresh to try again.
-        </Typography>
+        <Box data-testid="feedback-trends-error">
+          <ErrorState
+            message="Could not load the feedback trends."
+            onRetry={() => void refetch()}
+            retrying={isFetching}
+          />
+        </Box>
       )}
     </Box>
   );

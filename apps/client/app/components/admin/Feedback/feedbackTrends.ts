@@ -1,4 +1,4 @@
-import { FeedbackType } from '@bike4mind/common';
+import { FeedbackStatus, FeedbackType } from '@bike4mind/common';
 
 /**
  * React-free on purpose: GET /api/feedback (its `received` filter), GET /api/admin/feedback-trends
@@ -32,9 +32,10 @@ export const feedbackReceivedSince = (range: FeedbackReceivedWindow, now: Date):
   new Date(now.getTime() - FEEDBACK_RECEIVED_WINDOW_DAYS[range] * DAY_MS);
 
 /** Days the trend sparkline covers; also the widest received window. */
-export const FEEDBACK_TREND_DAYS = 30;
+export const FEEDBACK_TREND_DAYS = FEEDBACK_RECEIVED_WINDOW_DAYS['30d'];
 /** Days in each half of the thumbs-down comparison. */
-export const FEEDBACK_SHARE_WINDOW_DAYS = 7;
+export const FEEDBACK_SHARE_WINDOW_DAYS = FEEDBACK_RECEIVED_WINDOW_DAYS['7d'];
+export const FEEDBACK_OPEN_STATUSES = [FeedbackStatus.New, FeedbackStatus.InProgress] as const;
 
 export type FeedbackTypeCounts = Record<FeedbackType, number>;
 

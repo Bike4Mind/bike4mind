@@ -4,14 +4,13 @@ import {
   DAY_MS,
   emptyFeedbackTypeCounts,
   FEEDBACK_SHARE_WINDOW_DAYS,
+  FEEDBACK_OPEN_STATUSES,
   FEEDBACK_TREND_DAYS,
   type FeedbackTrends,
 } from '@client/app/components/admin/Feedback/feedbackTrends';
 
 // Same bound as the other admin aggregates over a date range (e.g. pages/api/users/counterLogs.ts).
 const FEEDBACK_TRENDS_MAX_TIME_MS = 45000;
-
-const OPEN_STATUSES = [FeedbackStatus.New, FeedbackStatus.InProgress];
 
 export interface FeedbackTrendBucket {
   /** Whole days between the report and `now`: 0 is the last 24 hours. */
@@ -65,7 +64,7 @@ export async function computeFeedbackTrends(now: Date = new Date()): Promise<Fee
   const since = new Date(now.getTime() - FEEDBACK_TREND_DAYS * DAY_MS);
 
   const [open, buckets] = await Promise.all([
-    FeedbackModel.countDocuments({ status: { $in: OPEN_STATUSES } })
+    FeedbackModel.countDocuments({ status: { $in: FEEDBACK_OPEN_STATUSES } })
       .maxTimeMS(FEEDBACK_TRENDS_MAX_TIME_MS)
       .exec(),
     FeedbackModel.aggregate<FeedbackTrendBucket>([

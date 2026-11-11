@@ -52,6 +52,22 @@ const listCount = (received: FeedbackReceivedWindow, types: FeedbackType[] = [])
   });
 
 describe('computeFeedbackTrends', () => {
+  it.each([1, 7, 14, 30])('matches exclusive window bounds around day %s', async days => {
+    await TestFeedback.model.insertMany(
+      [-1, 0, 1].map(offset => ({
+        status: FeedbackStatus.New,
+        type: FeedbackType.THUMBS_DOWN,
+        createdAt: ago(days, offset),
+      }))
+    );
+    const trends = await computeFeedbackTrends(now);
+    expect(trends.receivedLast24h).toBe(await listCount('24h'));
+    expect(trends.receivedLast30d).toBe(await listCount('30d'));
+    expect(trends.thumbsDownShare.current.total).toBe(await listCount('7d'));
+    const prior = await TestFeedback.model.countDocuments({ createdAt: { $gt: ago(14), $lte: ago(7) } });
+    expect(trends.thumbsDownShare.prior).toEqual({ total: prior, thumbsDown: prior });
+  });
+
   it('matches a direct query for every figure the strip links to', async () => {
     await TestFeedback.model.insertMany([
       { status: FeedbackStatus.New, type: FeedbackType.BUG, createdAt: ago(0, 1000) },
