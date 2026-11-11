@@ -9,6 +9,7 @@ const state = vi.hoisted(() => ({
   quests: [] as { id: string; sessionId: string; prompt: string }[],
   switchReads: 0,
   progressReads: 0,
+  updates: [] as Record<string, unknown>[],
 }));
 
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
@@ -41,6 +42,10 @@ vi.mock('../models', async importOriginal => ({
 vi.mock('../coreDeps', () => ({ coreTutorialDepsFor: () => ({}) }));
 vi.mock('@bike4mind/database', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
+  sessionRepository: {
+    findByIdAndUserId: async (id: string) => ({ id }),
+    update: async (u: Record<string, unknown>) => state.updates.push(u),
+  },
   questRepository: {
     create: async (q: Record<string, unknown>) => state.quests.push({ ...q, id: `q${state.quests.length}` } as never),
     findAllBySessionId: async (s: string) => state.quests.filter(q => q.sessionId === s),
@@ -98,6 +103,7 @@ beforeEach(() => {
   state.quests = [];
   state.switchReads = 0;
   state.progressReads = 0;
+  state.updates = [];
   walk('sess-1');
 });
 
@@ -106,6 +112,11 @@ describe('core scripted turns on a marked session', () => {
     const reply = await respond(USER, MARKED, 'Hello fixture');
     expect(reply?.replies).toEqual(['Hi there.']);
     expect((await respond(USER, MARKED, 'What is this?'))?.replies).toEqual(['A fixture.']);
+  });
+
+  it('clears the session marker when the prompt leaves the script', async () => {
+    expect(await respond(USER, MARKED, 'Something else entirely')).toBeNull();
+    expect(state.updates).toEqual([{ id: 'sess-1', tutorial: null }]);
   });
 
   it('does no tutorial read for a session without the marker', async () => {

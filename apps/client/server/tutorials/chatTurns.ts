@@ -29,9 +29,9 @@ async function turnsFor(ctx: Omit<CoreTutorialTurnContext, 'quest'>) {
     modules: modules.filter(m => m.id === moduleId),
     models: coreModels,
     // Clears the marker when the script ends the walk, so later turns skip this check.
-    setSessionMarker: async (sessionId, userId) => {
+    setSessionMarker: async (sessionId, userId, moduleId) => {
       if (!(await sessionRepository.findByIdAndUserId(sessionId, userId))) return;
-      await sessionRepository.update({ id: sessionId, tutorial: null });
+      await sessionRepository.update({ id: sessionId, tutorial: moduleId ? { owner: 'core', moduleId } : null });
     },
     warn: message => ctx.logger?.warn(message),
   });

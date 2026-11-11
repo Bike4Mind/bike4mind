@@ -804,7 +804,7 @@ describe('the session marker', () => {
   });
 
   it('clears the marker when the walk ends server-side, and only warns if that fails', async () => {
-    const { deps, marks, sessions } = withMarker();
+    const { deps, marks, sessions, warnings } = withMarker();
     await startModule(deps, 'u1', 'demo');
     marks.length = 0;
     deps.modules = [{ ...MODULE, version: 2 }];
@@ -818,6 +818,15 @@ describe('the session marker', () => {
       throw new Error('db down');
     };
     await expect(answerTurn(deps, 'u1', sessions[1].id, { id: 'm0', prompt: 'something else' })).resolves.toBeNull();
+    expect(warnings).toEqual([expect.stringContaining('could not unmark session')]);
+  });
+
+  it('clears the marker when the user goes off script', async () => {
+    const { deps, marks, sessions } = withMarker();
+    await startModule(deps, 'u1', 'demo');
+    marks.length = 0;
+    await expect(answerTurn(deps, 'u1', sessions[0].id, { id: 'm0', prompt: 'something else' })).resolves.toBeNull();
+    expect(marks).toEqual([[sessions[0].id, null]]);
   });
 
   it("clears the prior walk's session marker on a restart", async () => {

@@ -39,7 +39,11 @@ export function coreTutorialDepsFor(req: Request): TutorialServiceDeps {
       Promise.all(asyncPromises).catch(error => req.logger.warn('tutorial: session side effects failed', error));
       return { id: sessionId };
     },
-    ownsSession: async (sessionId, userId) => !!(await sessionRepository.findByIdAndUserId(sessionId, userId)),
+    // A session moved into a workspace has left the main surface, so the walk no longer owns it.
+    ownsSession: async (sessionId, userId) => {
+      const session = await sessionRepository.findByIdAndUserId(sessionId, userId);
+      return !!session && !session.surface;
+    },
     // Only a notebook still carrying the tutorial's name, owned by the user, with nothing attached to it.
     deleteSession: async (sessionId, userId) => {
       const session = await sessionRepository.findByIdAndUserId(sessionId, userId);
