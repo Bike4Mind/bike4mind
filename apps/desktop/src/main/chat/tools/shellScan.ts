@@ -61,6 +61,12 @@ export interface ShellCommand {
    * stdin): the leading words that name that form. A permission rule covers it only by naming them.
    */
   opaque?: string;
+  /** This part has something the scan cannot follow; never set when the whole script is unread (`ShellScan.unreadScript`). */
+  unread?: true;
+  /** Why this part can send data off this computer, and the repository it writes when its words pin one. */
+  outbound?: { reason: string; target: RepositoryWrite | null };
+  /** `.env` files this part names as an argument. */
+  envFiles?: string[];
 }
 
 export interface ShellScan {
@@ -105,6 +111,11 @@ export interface ShellScan {
    * replace string, a word joined across lines, or a folder a directory change may or may not have reached.
    */
   unread?: true;
+  /**
+   * Set when what the scan cannot follow is not one part's alone: a backslash-newline join, a rebound name, a
+   * check across parts, or any part that runs after a directory change the scan lost. No part is then coverable.
+   */
+  unreadScript?: true;
   /** A `git config` key the script sets that makes git run a program, such as `core.fsmonitor`. */
   gitProgram?: string;
   /** Set when a command checks out a tree from another computer, whose files no scan can list beforehand. */
@@ -4956,10 +4967,16 @@ export async function scanShell(
     const createdLinks = new Set<string>();
     // Folders whose `.claude` holds settings this session may load: its own and each shared root's.
     const settingsBases = await Promise.all([startDirectory, ...roots].map(base => realpathNearest(base)));
-    // What the scan cannot follow: any one leaves no command of the script coverable.
+    // What the scan cannot follow. A count `claimUnread` gives to the one part that caused it asks about that part;
+    // any other leaves no command of the script coverable.
     // Bash joins a word across a backslash-newline that the parser splits, so such a script reads nothing for sure.
     let unreadOperands = /\S\\\r?\n\S/.test(command) ? 1 : 0;
     if (anyName) unreadOperands++;
+    let claimedUnread = 0;
+    // Open `run`/`visitRedirected` calls: a nested one's reads belong to the outermost, which claims them whole.
+    let unreadOwners = 0;
+    // A part run after a directory change the scan lost acts somewhere unknown, so its script cannot be split.
+    let ranLost = false;
     // A `cd` that CDPATH may redirect lands somewhere the scan cannot tell.
     const cdPath = anyName || /CDPATH/.test(gateText) || process.env.CDPATH !== undefined;
     // Nesting depth of conditionals, loops and function bodies: a directory change there may not happen.
@@ -5021,10 +5038,18 @@ export async function scanShell(
     let readOnly = true;
     let remoteTree = false;
 
-    const noteEnvFile = (raw: string): void => {
+    const noteEnvFile = (raw: string): string | null => {
       const path = expand(unquote(raw));
-      if (isDynamic(path)) return;
-      if (globPrefix(path) === path ? isEnvFile(path) : globMayMatchEnvFile(path)) envFiles.add(path);
+      if (isDynamic(path)) return null;
+      if (!(globPrefix(path) === path ? isEnvFile(path) : globMayMatchEnvFile(path))) return null;
+      envFiles.add(path);
+      return path;
+    };
+
+    const claimUnread = (before: number, entry: ShellCommand | null): void => {
+      if (unreadOwners > 0 || unreadOperands === before || !entry) return;
+      entry.unread = true;
+      claimedUnread += unreadOperands - before;
     };
 
     const scope = (): WordScope => {
@@ -5425,6 +5450,18 @@ export async function scanShell(
 
     const run = async (node: Node): Promise<void> => {
       const unreadBefore = unreadOperands;
+      if (state.lost) ranLost = true;
+      let entry: ShellCommand | null = null;
+      unreadOwners++;
+      try {
+        entry = await runOwned(node, unreadBefore);
+      } finally {
+        unreadOwners--;
+      }
+      claimUnread(unreadBefore, entry);
+    };
+
+    const runOwned = async (node: Node, unreadBefore: number): Promise<ShellCommand | null> => {
       if (readsToplevel && !state.lost && !toplevels.has(state.cwd) && /rev-parse/.test(node.text)) {
         toplevels.set(state.cwd, wslLocation(state.cwd) ? null : await gitToplevel(state.cwd));
       }
@@ -5433,14 +5470,14 @@ export async function scanShell(
       }
 
       const tokens = node.children.some(child => child?.type === 'command_name') ? words(node) : [];
-      if (tokens.length === 0) return;
+      if (tokens.length === 0) return null;
       const effects = wrapperEffects(tokens);
       if (effects.folders.length === 0) return runCommand(node, tokens, effects, unreadBefore);
       // `env -C DIR`, `sudo -D DIR`: the command runs from DIR, and this shell stays where it was.
       const saved = snapshot();
       try {
         for (const folder of effects.folders) await enterFolder(folder);
-        await runCommand(node, tokens, effects, unreadBefore);
+        return await runCommand(node, tokens, effects, unreadBefore);
       } finally {
         restore(saved);
       }
@@ -5467,7 +5504,7 @@ export async function scanShell(
       tokens: string[],
       effects: WrapperEffects,
       unreadBefore: number
-    ): Promise<void> => {
+    ): Promise<ShellCommand | null> => {
       const [program, ...rest] = tokens;
       const [wrapped, ...wrappedRest] = withoutWrappers(tokens);
       if (effects.unread || untrackableCommand(tokens)) unreadOperands++;
@@ -5543,9 +5580,11 @@ export async function scanShell(
         // Later operands resolve against a folder the scan cannot name, so no prefix rule covers the script.
         const statement = node.parent?.type === 'redirected_statement' ? node.parent : node;
         if (await changeDirectory(program, rest, listMembers.has(statement.id))) {
-          commands.push({ text: node.text, always: node.text, coverable: false, words: node.text });
+          const moved: ShellCommand = { text: node.text, always: node.text, coverable: false, words: node.text };
+          commands.push(moved);
+          return moved;
         }
-        return;
+        return null;
       }
       // `command cd`, `builtin cd`, `eval` and `source` can move bash without the scan following, and `dirs` edits the stack.
       const inner = programName(unquote(wrapped ?? ''));
@@ -5616,10 +5655,12 @@ export async function scanShell(
       if (reason) {
         outbound.add(reason);
         const computed = tokens.some(isDynamic);
-        sends.push({
+        const send = {
           reason,
           target: assigns || computed || state.lost ? null : repositoryWrite(tokens.map(unquote), state.cwd),
-        });
+        };
+        sends.push(send);
+        entry.outbound = send;
       }
       // wslconfig is the legacy tool for WSL itself (`/u` unregisters a distro, `/t` stops one).
       if (programName(unquote(withoutWrappers(tokens)[0] ?? '')) === 'wslconfig') ungranted.add(WSL_MANAGEMENT);
@@ -5650,7 +5691,10 @@ export async function scanShell(
       ) {
         readOnly = false;
       }
-      for (const arg of rest) if (!arg.startsWith('-')) noteEnvFile(arg);
+      for (const arg of rest) {
+        const envFile = arg.startsWith('-') ? null : noteEnvFile(arg);
+        if (envFile) (entry.envFiles ??= []).push(envFile);
+      }
       for (const directory of directoryOptionValues(tokens)) await check(directory, state.cwd);
       const trees = treeOperands(name, wrappedRest);
       if (findRun) {
@@ -5783,7 +5827,9 @@ export async function scanShell(
         }
       }
       for (const place of cloned) createdLinks.add(guardForm(place));
-      if (unreadOperands > unreadBefore) Object.assign(entry, { coverable: false, words: original });
+      // The window includes any substitution in its words: output the scan cannot read decides this part too.
+      if (unreadOperands > unreadBefore) Object.assign(entry, { coverable: false, words: original, unread: true });
+      return entry;
     };
 
     /**
@@ -6259,12 +6305,19 @@ export async function scanShell(
       }
       const before = unreadOperands;
       let uncertain = false;
-      for (const child of node.children) {
-        if (child?.type === 'list') uncertain = (await visitList(child)) || uncertain;
-        else if (child) await visit(child);
+      unreadOwners++;
+      try {
+        for (const child of node.children) {
+          if (child?.type === 'list') uncertain = (await visitList(child)) || uncertain;
+          else if (child) await visit(child);
+        }
+      } finally {
+        unreadOwners--;
       }
       if (unreadOperands > before) {
-        commands.push({ text: node.text, always: node.text, coverable: false, words: node.text });
+        const entry: ShellCommand = { text: node.text, always: node.text, coverable: false, words: node.text };
+        commands.push(entry);
+        claimUnread(before, entry);
       }
       return uncertain;
     };
@@ -6344,7 +6397,14 @@ export async function scanShell(
       if (touchedBy.some(id => !own.has(id) && (anywhere || alongside.has(id)))) unreadOperands++;
     }
     if (homeGuessed) return null;
-    if (unreadOperands > 0) for (const entry of commands) entry.coverable = false;
+    const unreadScript = unreadOperands > claimedUnread || (unreadOperands > 0 && ranLost);
+    if (unreadScript) {
+      for (const entry of commands) {
+        entry.coverable = false;
+        delete entry.unread;
+      }
+    }
+    if (setsEnvironment) for (const entry of commands) if (entry.outbound) entry.outbound.target = null;
     return {
       commands,
       paths: [...paths],
@@ -6360,6 +6420,7 @@ export async function scanShell(
       writes: [...writes],
       writtenTrees: [...writtenTrees],
       ...(unreadOperands > 0 ? { unread: true as const } : {}),
+      ...(unreadScript ? { unreadScript: true as const } : {}),
       ...(gitProgram ? { gitProgram } : {}),
       ...(remoteTree ? { remoteTree: true as const } : {}),
     };

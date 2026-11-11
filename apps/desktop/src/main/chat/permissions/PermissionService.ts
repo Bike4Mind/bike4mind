@@ -36,6 +36,8 @@ export interface PermissionServiceOptions {
   protectedRoots: ProtectedRoots;
   /** Protected folders not resolvable yet; while any remain, no allow rule applies. */
   unresolvedProtected?: () => readonly string[];
+  /** The main checkout of a git worktree, or null for any other folder; project allowances are kept under it. */
+  mainCheckoutOf?: (directory: string) => Promise<string | null>;
   logger: { warn(message: string): void };
 }
 
@@ -155,6 +157,24 @@ export class PermissionService {
     this.invalidate();
   }
 
+  /**
+   * The card's "Allow in this project", with prefix rules main derived from the call. Saved under the
+   * project's main checkout, so every worktree of the repository and every session in it shares them.
+   */
+  async rememberProjectAllows(project: string, rules: readonly string[]): Promise<void> {
+    const valid = rules.filter(rule => parseRule(rule, { native: true }).ok);
+    if (valid.length === 0) return;
+    await this.options.store.addProjectAllows(await this.projectRoot(project), valid);
+    this.invalidate();
+  }
+
+  /** Where a project's allowances are kept: its main checkout when the folder is a git worktree. */
+  async projectRoot(project: string): Promise<string> {
+    const directory = resolve(project);
+    const main = await this.options.mainCheckoutOf?.(directory).catch(() => null);
+    return main ? resolve(main) : directory;
+  }
+
   async revokeAllow(scope: PermissionScope, rule: string): Promise<boolean> {
     const stored = await this.options.store.read();
     const lists =
@@ -207,6 +227,8 @@ export class PermissionService {
       }
     }
     if (project && stored.projects[project]) add(stored.projects[project], desktopProject(project), true, project);
+    const root = project ? await this.projectRoot(project) : null;
+    if (root && root !== project && stored.projects[root]) add(stored.projects[root], desktopProject(root), true, root);
     add(stored.user, DESKTOP_USER, true, home);
     return new PermissionRuleSet(rules, protectedRoots, unresolvedProtected);
   }

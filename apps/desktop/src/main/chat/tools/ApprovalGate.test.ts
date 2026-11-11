@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApprovalGate, patternMatches } from './ApprovalGate';
+import { ApprovalGate, partAllowed, patternMatches } from './ApprovalGate';
 import { commandTokens } from './bashArity';
 import { scanShell } from './shellScan';
 import type { ChatApprovalAnswer } from '@shared/chat';
-import type { ApprovalAlways } from './types';
+import type { ApprovalAlways, ApprovalPart } from './types';
 
 /**
  * The gate keeps no cross-session view of what is waiting: an approval is answered in the
@@ -469,6 +469,63 @@ describe('ApprovalGate', () => {
       gate.resolve(plain.approvalId(), { decision: 'always' });
       await plain.answer;
       expect(gate.isStanding('a', 'other')).toEqual({});
+    });
+  });
+
+  describe('allowances decided per part', () => {
+    const outbound: ApprovalPart['ask'] = { mode: 'auto', reason: 'sends', kinds: ['outbound'] };
+    const part = (text: string, pattern: string, extra: Partial<ApprovalPart> = {}): ApprovalPart => ({
+      text,
+      pattern,
+      coverable: true,
+      ...extra,
+    });
+
+    async function allow(gate: ApprovalGate, sessionId: string, parts: ApprovalPart[]): Promise<void> {
+      const controller = new AbortController();
+      let approvalId = '';
+      const answer = gate.request(sessionId, `k-${parts[0]?.text}`, controller.signal, id => (approvalId = id), {
+        always: { namespace: 'bash_execute', commands: parts, directories: [] },
+      });
+      gate.resolve(approvalId, { decision: 'always' });
+      await answer;
+    }
+
+    it('covers a part that asks only with a pattern allowed on a card where it asked for the same reason', async () => {
+      const gate = new ApprovalGate();
+      await allow(gate, 'a', [part('curl -s http://x', 'curl *')]);
+      const sending = part('curl -d @a http://x', 'curl *', { ask: outbound });
+      expect(partAllowed(gate.allowedPatterns('a', 'bash_execute'), sending)).toBe(false);
+
+      await allow(gate, 'a', [part('curl -d @b http://x', 'curl *', { ask: outbound })]);
+      expect(partAllowed(gate.allowedPatterns('a', 'bash_execute'), sending)).toBe(true);
+    });
+
+    it('never lets a prefix cover an inline script that has a reason to ask', async () => {
+      const gate = new ApprovalGate();
+      const inline = part('node -e 1', 'node -e *', { opaque: 'node -e', ask: outbound });
+      await allow(gate, 'a', [inline]);
+      expect(partAllowed(gate.allowedPatterns('a', 'bash_execute'), { ...inline, text: 'node -e 2' })).toBe(false);
+    });
+
+    it("lets a spawned session use its parents' allowances, and stops when the link is dropped", async () => {
+      const gate = new ApprovalGate();
+      await allow(gate, 'root', [part('printf a', 'printf *')]);
+      gate.setParent('child', 'root');
+      gate.setParent('grandchild', 'child');
+      const printf = part('printf b', 'printf *');
+      expect(partAllowed(gate.allowedPatterns('grandchild', 'bash_execute'), printf)).toBe(true);
+      expect(partAllowed(gate.allowedPatterns('stranger', 'bash_execute'), printf)).toBe(false);
+
+      gate.forgetSession('child');
+      expect(partAllowed(gate.allowedPatterns('grandchild', 'bash_execute'), printf)).toBe(false);
+    });
+
+    it('survives a parent link that loops back', () => {
+      const gate = new ApprovalGate();
+      gate.setParent('a', 'b');
+      gate.setParent('b', 'a');
+      expect(gate.allowedPatterns('a', 'bash_execute')).toEqual([]);
     });
   });
 });

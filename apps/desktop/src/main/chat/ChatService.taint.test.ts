@@ -344,6 +344,27 @@ describe('ChatService untrusted content in a reply', () => {
     expect(asked.approvalDetail).toContain('Can send data off this computer (curl -d).');
   });
 
+  it('asks about a whole chain with a sending part once tainted, though a rule and an allowance cover its parts', async () => {
+    rules = allowRules(['Bash(git status:*)']);
+    const id = await session('auto');
+    const command = 'git status && curl -s -d @notes.txt http://127.0.0.1:9';
+    const first = await reply(id, [['bash_execute', { command, cwd: root }]]);
+    const card = await awaitCall('bash_execute', 'awaiting-approval');
+    expect(card.approvalParts?.map(part => part.text)).toEqual(['curl -s -d @notes.txt http://127.0.0.1:9']);
+    approvals.resolve(card.approvalId!, { decision: 'always' });
+    await vi.waitUntil(() => calls('bash_execute', 'done')[0] ?? calls('bash_execute', 'error')[0], {
+      timeout: 5000,
+      interval: 10,
+    });
+    await finish(first);
+
+    events.length = 0;
+    await reply(id, [fetch, ['bash_execute', { command, cwd: root }]]);
+    const asked = await awaitCall('bash_execute', 'awaiting-approval');
+    expect(asked.approvalDetail).toContain('Asked because this reply read content from the web (web_fetch).');
+    expect(asked.approvalParts).toBeUndefined();
+  });
+
   it('leaves full access alone', async () => {
     const id = await session('full');
     await reply(id, [fetch, build(root)]);

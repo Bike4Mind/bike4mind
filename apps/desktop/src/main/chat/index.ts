@@ -154,6 +154,7 @@ import { parseReasoningEffortSetting, storedReasoningEffortSetting } from './rea
 import { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
 import { permissionProtectedLocations, toolProtectedLocations } from './protectedLocations';
 import { keepSessionWritesIn } from './tools/sessionScripts';
+import { mainCheckoutOf } from './tools/shellTools';
 import type { PreparedImage } from './tools/types';
 import { desktopScreenCapturer } from './screen/desktopScreen';
 import { parsePaneInput, SimulatorLiveView } from './simulator/SimulatorLiveView';
@@ -478,6 +479,7 @@ export function registerChat(
     home,
     protectedRoots: () => permissionProtected.paths(),
     unresolvedProtected: () => permissionProtected.unresolved(),
+    mainCheckoutOf,
     logger,
   });
   void permissions.start().catch(error => logger.warn(`PERMISSIONS: could not load rules: ${String(error)}`));
