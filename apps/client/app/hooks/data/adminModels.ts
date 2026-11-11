@@ -8,6 +8,7 @@ import type {
   AdminModelSort,
   AuditEntry,
   AuditLogPage,
+  LLMModelConfig,
   ModelAccessBulkDryRun,
   ModelAccessBulkRequestInput,
   ModelAccessBulkResult,
@@ -17,7 +18,7 @@ import type {
   ModelUserTagCount,
 } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
-import { LLM_MODEL_CONFIGURATIONS_QUERY_KEY, useLLMModelConfigurations } from './llmModelConfig';
+import { LLM_MODEL_CONFIGURATIONS_QUERY_KEY } from './llmModelConfig';
 import { reviveAuditEntry, type WireAuditEntry } from './adminAuditLog';
 
 /**
@@ -118,27 +119,40 @@ export const useAdminUserTags = (enabled = true) =>
     enabled,
   });
 
+/**
+ * The tags access entries name. Its own read because useLLMModelConfigurations resolves a failed fetch to no entries,
+ * which would pass for "no entry tags" here.
+ */
+const useAccessEntryTags = (enabled: boolean) =>
+  useQuery({
+    queryKey: [...ADMIN_MODELS_QUERY_KEY, 'entry-tags'],
+    queryFn: async () => {
+      const response = await api.get<{ settingValue?: LLMModelConfig[] }>('/api/admin/llm-models/configurations');
+      return [...new Set((response.data?.settingValue ?? []).flatMap(entry => entry.allowedUserTags ?? []))];
+    },
+    staleTime: 60_000,
+    enabled,
+  });
+
 /** Tag choices for the access editors: the tags users hold, with counts, plus tags set only on access entries. */
 export const useAccessTagOptions = (enabled = true) => {
   const userTags = useAdminUserTags(enabled);
-  const entries = useLLMModelConfigurations();
+  const entryTags = useAccessEntryTags(enabled);
   const options = useMemo(
-    () => [
-      ...new Set([
-        ...(userTags.data ?? []).map(entry => entry.tag),
-        ...(entries.data ?? []).flatMap(entry => entry.allowedUserTags ?? []),
-      ]),
-    ],
-    [userTags.data, entries.data]
+    () => [...new Set([...(userTags.data ?? []).map(entry => entry.tag), ...(entryTags.data ?? [])])],
+    [userTags.data, entryTags.data]
   );
   const counts = useMemo(() => new Map((userTags.data ?? []).map(entry => [entry.tag, entry.count])), [userTags.data]);
   return {
     options,
     counts,
-    isLoading: userTags.isLoading,
-    isError: userTags.isError,
-    isRetrying: userTags.isFetching,
-    retry: () => void userTags.refetch(),
+    isLoading: userTags.isLoading || entryTags.isLoading,
+    isError: userTags.isError || entryTags.isError,
+    isRetrying: userTags.isFetching || entryTags.isFetching,
+    retry: () => {
+      if (userTags.isError) void userTags.refetch();
+      if (entryTags.isError) void entryTags.refetch();
+    },
   };
 };
 

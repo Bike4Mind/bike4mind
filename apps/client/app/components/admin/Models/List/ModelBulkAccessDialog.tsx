@@ -221,7 +221,7 @@ function BulkDialogBody({
             />
             {isTags && tags.isError && (
               <PickerLoadError
-                message="Could not load the user tags. You can still type one."
+                message="Could not load the existing tags. You can still type one."
                 onRetry={tags.retry}
                 retrying={tags.isRetrying}
                 data-testid="models-bulk-tags-error"

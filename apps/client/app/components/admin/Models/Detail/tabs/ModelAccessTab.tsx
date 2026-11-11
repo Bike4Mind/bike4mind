@@ -97,7 +97,7 @@ function AudienceEditor({ model, onClose }: { model: AdminModelRow; onClose: () 
         />
         {tagOptions.isError && (
           <PickerLoadError
-            message="Could not load the user tags. You can still type one."
+            message="Could not load the existing tags. You can still type one."
             onRetry={tagOptions.retry}
             retrying={tagOptions.isRetrying}
             data-testid="model-access-tags-error"

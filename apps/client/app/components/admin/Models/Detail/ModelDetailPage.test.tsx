@@ -354,7 +354,7 @@ describe('ModelDetailPage', () => {
     await renderModelsRoute(`/admin/models/${BEDROCK_ID}?tab=access`, () => null, { Detail: DetailRoute });
 
     fireEvent.click(await screen.findByTestId('model-access-audience-btn'));
-    expect(await screen.findByTestId('model-access-tags-error')).toHaveTextContent('Could not load the user tags');
+    expect(await screen.findByTestId('model-access-tags-error')).toHaveTextContent('Could not load the existing tags');
     failTags = false;
     fireEvent.click(screen.getByTestId('model-access-tags-error-retry-btn'));
 

@@ -54,6 +54,7 @@ const serveList = (byView: (view: string) => ReturnType<typeof listResponse>) =>
   get.mockImplementation(async (url: string, config?: { params?: Params }) => {
     if (url === '/api/admin/models') return { data: byView(config?.params?.view ?? '') };
     if (url === '/api/admin/users/tags') return { data: { tags: [{ tag: 'beta', count: 37 }] } };
+    if (url === '/api/admin/llm-models/configurations') return { data: { settingValue: [] }, headers: {} };
     throw new Error(`unexpected GET ${url}`);
   });
 
@@ -804,6 +805,29 @@ describe('ModelListSection bulk access', () => {
     fireEvent.change(input, { target: { value: 'leg' } });
 
     expect(await screen.findByRole('option', { name: 'legacy' })).toBeInTheDocument();
+  });
+
+  it('says in place when the tag choices fail to load, and asks again on Retry', async () => {
+    let failEntries = true;
+    get.mockImplementation(async (url: string) => {
+      if (url === '/api/admin/models') return { data: twoRows() };
+      if (url === '/api/admin/users/tags') return { data: { tags: [{ tag: 'beta', count: 37 }] } };
+      if (url === '/api/admin/llm-models/configurations') {
+        if (failEntries) throw apiFailure(500, { error: 'down' });
+        return { data: { settingValue: [] }, headers: {} };
+      }
+      throw new Error(`unexpected GET ${url}`);
+    });
+    post.mockResolvedValue({ data: dryRun() });
+    await renderModelsRoute('/admin?tab=models&modelsView=all', ModelListSection);
+
+    await selectPage();
+    fireEvent.click(screen.getByTestId('models-bulk-add-tag-btn'));
+    expect(await screen.findByTestId('models-bulk-tags-error')).toHaveTextContent('Could not load the existing tags');
+    failEntries = false;
+    fireEvent.click(screen.getByTestId('models-bulk-tags-error-retry-btn'));
+
+    await waitFor(() => expect(screen.queryByTestId('models-bulk-tags-error')).not.toBeInTheDocument());
   });
 
   it('explains a filter that matches more models than one bulk change covers', async () => {
