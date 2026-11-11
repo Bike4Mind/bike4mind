@@ -68,6 +68,7 @@ import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
 import {
   applyWorkspaceSessionSettings,
   workspaceAnswersTurns,
+  coreTutorialAnswersTurns,
   defaultEmbeddingModelForEnv,
   isSupportedEmbeddingModel,
   libraryFlagForScope,
@@ -92,6 +93,7 @@ import { ownerWithheldUsers, withholdAdminRole } from '@bike4mind/server-utils/a
 import defineAbilitiesFor from '@bike4mind/server-utils/auth/ability';
 import { missionChatTools, MISSION_CHAT_TOOL_NAMES } from '@workers/deepAgent/missionChatTools';
 import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
+import { coreTutorialTurns } from '@server/tutorials/chatTurns';
 import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
 import {
   ReActAgent,
@@ -1117,12 +1119,19 @@ async function runExecution(
     }
     // Such a session's replies are scripted, so an agent model must not improvise one. A resumed run
     // passed this check when it started, so a failed lookup on resume lets it finish.
+    // The core marker check goes first and only widens the refusal: an unmarked session skips it and meets
+    // the workspace check exactly as before.
     if (
-      await workspaceAnswersTurns(
+      (await coreTutorialAnswersTurns(
+        { user, logger, session: { id: execution.sessionId, tutorial: loadedSession.tutorial } },
+        coreTutorialTurns,
+        isNewExecution
+      )) ||
+      (await workspaceAnswersTurns(
         { user, logger, session: loadedSession },
         premiumWorkspaceSessionSettings,
         isNewExecution
-      )
+      ))
     ) {
       await agentExecutionRepository.markFailed(executionId, {
         message: 'This session answers its own turns, so agent runs are not available in it',
