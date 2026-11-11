@@ -137,7 +137,7 @@ jobs:
           # exercise (an alarm threshold, a dashboard). Labels need triage access, so a PR
           # author outside the org cannot set it; the labeled trigger re-runs this gate.
           if grep -qx 'skip-preview' <<< "$preview_labels"; then
-            echo "::notice title=Preview skipped::'skip-preview' label set by a maintainer. Gate satisfied without a preview deploy."
+            echo "::notice title=Preview skipped::'skip-preview' label is set. Gate satisfied without a preview deploy."
             exit 0
           fi
 
@@ -149,5 +149,5 @@ jobs:
           # Previews are dispatched from the private deployer repo, so triggering one
           # needs write access there. Nothing on this repo starts one - see
           # CONTRIBUTING.md "Preview deploys".
-          echo "::error title=Preview required::This PR changes sst pins or infra/ but no preview deploy has run. Previews are maintainer-triggered from an internal pipeline, not from this repo: a maintainer runs '/deploy-preview $PR' in the internal deploys Slack channel, or dispatches the Preview workflow in Bike4Mind/bike4mind-deployer with pr=$PR and action=deploy. Outside contributors should ask a maintainer on the PR. When the deploy finishes, the 'preview-deployed' label the deployer adds satisfies this gate. A preview swept after 72h without a redeploy drops that label and reddens this gate again; the same command brings it back. This catches an sst/overlay mismatch on a throwaway stage instead of on staging."
+          echo "::error title=Preview required::This PR changes SST configuration or deployable infrastructure and needs a successful preview. Ask a repository maintainer to deploy a preview, or apply the skip-preview label when no deployment verification is needed. The preview-deployed label satisfies this gate. If that label is removed, a fresh preview or waiver is required."
           exit 1
