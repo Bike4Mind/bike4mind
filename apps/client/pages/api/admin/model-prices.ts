@@ -223,7 +223,7 @@ async function knownModelType(modelId: string): Promise<string | undefined> {
 
 const NON_TEXT_PRICE_MESSAGE = "Prices for non-text models come from this build's model tables";
 
-/** A first price is per token, for a text model an adapter literal or catalog row knows (spec 7.7). */
+/** A first price is per token, for a text model an adapter literal or catalog row knows. */
 function assertFirstPriceAllowed(modelId: string, unit: ModelPriceUnit, type: string | undefined): void {
   if (type === undefined) {
     throw new BadRequestError(`unknown model ${modelId} (${unit}): reprice targets an existing catalog model`);

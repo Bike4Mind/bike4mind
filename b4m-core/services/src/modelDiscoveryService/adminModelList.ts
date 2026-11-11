@@ -394,9 +394,9 @@ function sortReasons(reasons: AdminModelReason[]): AdminModelReason[] {
 }
 
 /**
- * Every model this server knows, from adapter literals and catalog rows, with its status and the reasons behind it
- * (docs/admin-models-spec.md section 4). Seeded and invocable catalog-only models are merged exactly as
- * getAvailableModels merges them; the rest are rendered from their resolved catalog record.
+ * Every model this server knows, from adapter literals and catalog rows, with its status and the reasons behind it.
+ * Seeded and invocable catalog-only models are merged exactly as getAvailableModels merges them; the rest are rendered
+ * from their resolved catalog record.
  */
 export async function buildAdminModelRows(input: AdminModelListInput): Promise<AdminModelRow[]> {
   const now = input.now ?? new Date();

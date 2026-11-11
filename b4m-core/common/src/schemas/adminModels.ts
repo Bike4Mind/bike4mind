@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { IModelPriceTier, ModelPriceUnit } from '../types/entities/ModelPriceTypes';
 
-/** The admin model list, GET /api/admin/models. Status and reason vocabulary: docs/admin-models-spec.md section 4. */
+/** The admin model list, GET /api/admin/models. */
 export const ADMIN_MODEL_STATUSES = ['listed', 'limited', 'needs-review', 'hidden', 'retiring', 'retired'] as const;
 export type AdminModelStatus = (typeof ADMIN_MODEL_STATUSES)[number];
 
