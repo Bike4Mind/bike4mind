@@ -1,5 +1,10 @@
 import { randomBytes } from 'node:crypto';
-import type { AbuseAssessmentResult, AutoContainmentOutcome, ShadowDetectionVerdict } from '@bike4mind/common';
+import type {
+  AbuseAssessmentResult,
+  AutoContainmentOutcome,
+  ShadowDetectionVerdict,
+  ShadowDetectionVerdictSource,
+} from '@bike4mind/common';
 import {
   AbuseAssessmentModel,
   AutoContainmentDecisionModel,
@@ -76,6 +81,7 @@ type LeanDetection = {
   group?: { members?: { userId: string }[] } | null;
   detectedAt: Date;
   verdict: ShadowDetectionVerdict | null;
+  verdicts?: { source?: ShadowDetectionVerdictSource }[];
 };
 type LeanLinkDetection = Pick<LeanDetection, 'userIds' | 'group'>;
 type LeanIpUser = { _id: { toString(): string }; signupMeta?: { ip?: string | null } | null };
@@ -95,7 +101,15 @@ const linkGroupOf = (row: LeanLinkDetection): string[] =>
 async function loadWindowDetections(since: Date, limit: number) {
   const rows = await ShadowDetectionModel.find(
     { detectedAt: { $gte: since } },
-    { detector: 1, policyVersion: 1, userIds: 1, 'group.members.userId': 1, detectedAt: 1, verdict: 1 }
+    {
+      detector: 1,
+      policyVersion: 1,
+      userIds: 1,
+      'group.members.userId': 1,
+      detectedAt: 1,
+      verdict: 1,
+      verdicts: { $slice: -1 },
+    }
   )
     .sort({ detectedAt: -1 })
     .limit(limit + 1)
@@ -110,6 +124,7 @@ async function loadWindowDetections(since: Date, limit: number) {
     userIds: [...new Set(row.userIds)].filter(id => OBJECT_ID.test(id)),
     detectedAt: row.detectedAt,
     verdict: row.verdict ?? null,
+    verdicts: row.verdicts ?? [],
   }));
   return { detections, linkGroups: kept.map(linkGroupOf), truncated: rows.length > limit };
 }
