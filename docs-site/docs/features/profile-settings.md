@@ -45,6 +45,10 @@ View and edit your basic profile:
 
 Connect with other Bike4Mind users.
 
+### Public Profile Visibility
+
+Other signed-in users can see your name, username, and profile photo. People who share an organization, project, or notebook with you can also see your presence, last activity, level, role, and team. Access to a globally readable notebook alone does not make someone a workspace colleague.
+
 ### Friend Requests
 
 - View pending friend requests

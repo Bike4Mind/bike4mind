@@ -4,6 +4,7 @@ import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featu
 import { dataLakeRepository, orgGoogleDriveConnectionRepository, User } from '@bike4mind/database';
 import { acceptsConnectorContent, isLakeIngestable } from '@bike4mind/common';
 import { authorizeLakeConnectorAccess } from '@bike4mind/server-utils/dataLakes/authorizeLakeConnectorAccess';
+import { assertLakePlanAllowed } from '@server/entitlements/lakePlanGate';
 import { withConnectionId, withLakeConnectorClaim } from '@bike4mind/server-utils/dataLakes/assertLakeConnectorFree';
 import {
   isValidDriveFolderId,
@@ -198,6 +199,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
     // Org lake: owner/manager (or platform admin) only - not the lake creator. Personal lake: its
     // creator only. See the handler note.
     const owner = await authorizeLakeConnectorAccess(req.user, lake);
+    await assertLakePlanAllowed(req, owner.kind === 'organization' ? owner.organizationId : undefined);
 
     // Gated AFTER the authorization so the status is not readable by a non-member, and before the
     // credential capture so a refused connect costs no Drive calls. Without this the connect door

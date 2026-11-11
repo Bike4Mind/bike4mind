@@ -1,3 +1,4 @@
+import { hasDeveloperUserTag } from '@bike4mind/common';
 import type { ToolContext } from '../../base/types';
 
 type ToolDb = ToolContext['db'];
@@ -19,6 +20,24 @@ export const DATA_LAKES_DISABLED_MESSAGE =
  */
 export function isAssistantWriteTarget(lake: { canManage: boolean; isOwn: boolean }, isAdmin: boolean): boolean {
   return lake.canManage && (!isAdmin || lake.isOwn);
+}
+
+export const LAKE_PLAN_REQUIRED_TOOL_MESSAGE =
+  'Data lakes need a paid plan here, so nothing was created. Tell the user to create the lake from the Data ' +
+  'Lakes manager, which checks their plan and says what unlocks it.';
+
+/**
+ * The chat half of the create plan gate (`dataLakeRequirePaidPlan`; the route half is
+ * apps/client/server/entitlements/lakePlanGate.ts). Subscriptions are not readable from a tool, so
+ * with the gate on only admins, developers and credit buyers create here; everyone else is sent to
+ * the manager, where the full paid-standing check runs. Off (the default), nobody is refused.
+ */
+export async function lakePlanBlocksToolCreate(
+  db: ToolDb,
+  user: { isAdmin?: boolean; tags?: readonly string[] | null; lastCreditsPurchasedAt?: Date | null }
+): Promise<boolean> {
+  if (user.isAdmin || hasDeveloperUserTag(user.tags) || user.lastCreditsPurchasedAt) return false;
+  return Boolean(await db.adminSettings.getSettingsValue('dataLakeRequirePaidPlan'));
 }
 
 function hasMethods<T extends object, K extends keyof T>(
@@ -44,7 +63,13 @@ export function listLakesAdapters(db: ToolDb) {
 
 export function createLakeAdapters(db: ToolDb) {
   const { dataLakes, dataLakeAccessGrants, lakeConfigChangeEvents, adminSettings } = db;
-  if (!hasMethods(dataLakes, ['create']) || !hasMethods(dataLakeAccessGrants, ['upsertGrant'])) return null;
+  if (
+    !hasMethods(dataLakes, ['create', 'countCountedCreatedBy']) ||
+    !hasMethods(dataLakeAccessGrants, ['upsertGrant']) ||
+    !hasMethods(adminSettings, ['findBySettingNames', 'findAll'])
+  ) {
+    return null;
+  }
   // The audit sink stays optional here (unlike saveContentAdapters): a missing one costs only the
   // History row for the create, which is no reason to refuse creating the lake. `adminSettings`
   // rides along so the row gets the configured retention, as with lakeConfigAuditDb.

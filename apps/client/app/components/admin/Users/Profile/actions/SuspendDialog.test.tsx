@@ -158,6 +158,7 @@ describe('SuspendDialog', () => {
       expect(mocks.update).toHaveBeenLastCalledWith({
         isBanned: false,
         statusChangeReason: 'Undo: Abuse / automated signups',
+        undoSuspension: true,
       })
     );
   });
@@ -173,6 +174,7 @@ describe('SuspendDialog', () => {
       expect(mocks.update).toHaveBeenLastCalledWith({
         isBanned: false,
         statusChangeReason: 'Undo: Abuse / automated signups',
+        undoSuspension: true,
         creditDelta: 500,
         creditReason: 'Undo: Abuse / automated signups',
       })
@@ -224,6 +226,7 @@ describe('SuspendDialog', () => {
       expect(mocks.update).toHaveBeenLastCalledWith({
         isBanned: false,
         statusChangeReason: 'Undo: Abuse / automated signups',
+        undoSuspension: true,
         creditDelta: 320,
         creditReason: 'Undo: Abuse / automated signups',
       })

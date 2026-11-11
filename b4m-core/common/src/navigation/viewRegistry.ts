@@ -834,6 +834,16 @@ export const VIEW_REGISTRY: NavigableView[] = [
     requiresAdmin: true,
   },
   {
+    id: 'admin.tutorials',
+    section: 'admin',
+    label: 'Tutorials',
+    description: 'Switch guided tutorials on or off, edit their words, and see the tutorials each package contributes',
+    navigationType: 'tab',
+    target: '77', // AdminTab.Tutorials
+    keywords: ['tutorials', 'guided tutorials', 'walkthrough', 'onboarding', 'coach', 'tutorial modules'],
+    requiresAdmin: true,
+  },
+  {
     id: 'admin.oauth_clients',
     section: 'admin',
     label: 'OAuth clients',

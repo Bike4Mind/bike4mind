@@ -87,6 +87,7 @@ const handler = baseApi()
         },
         automatic_payment_methods: {
           enabled: true,
+          ...(parsedBody.allowRedirects === false && { allow_redirects: 'never' as const }),
         },
         ...threeDSecureOptions,
       });

@@ -270,14 +270,25 @@ describe('createAgentExtensionRegistry', () => {
         { id: 'p12', surface: 's12', build: () => ({ ...base, isSynthetic: undefined }) as never },
         { id: 'p13', surface: 's13', build: () => ({ ...base, toolsetIsExclusive: 'yes' }) as never },
         { id: 'p14', surface: 's14', build: () => ({ ...base, allowedToolsFromDefaults: 1 }) as never },
+        { id: 'p15', surface: 's15', build: () => ({ ...base, confidenceGateMode: 'sometimes' }) as never },
+        { id: 'p16', surface: 's16', build: () => ({ ...base, confidenceGateSelfReport: 'yes' }) as never },
+        {
+          id: 'p17',
+          surface: 's17',
+          build: () => ({ ...base, confidenceGateMode: 'answer', confidenceGateSelfReport: false }),
+        },
       ],
     });
-    const rejected = ['s1', 's2', 's3', 's4', 's6', 's7', 's8', 's9', 's10', 's11', 's12', 's13', 's14'];
+    const rejected = ['s1', 's2', 's3', 's4', 's6', 's7', 's8', 's9', 's10', 's11', 's12', 's13', 's14', 's15', 's16'];
     for (const surface of rejected) {
       expect(registry.resolveSurfaceProfile(surface, { ...profileCtx, logger: runLogger })).toBeUndefined();
     }
     expect(runLogger.warn).toHaveBeenCalledTimes(rejected.length);
     expect(registry.resolveSurfaceProfile('s5', { ...profileCtx, logger: runLogger })).toBe(base);
+    expect(registry.resolveSurfaceProfile('s17', { ...profileCtx, logger: runLogger })).toMatchObject({
+      confidenceGateMode: 'answer',
+      confidenceGateSelfReport: false,
+    });
   });
 
   it('hands a contributed guard a copy of the map, so adding or replacing a key cannot reach the original', () => {

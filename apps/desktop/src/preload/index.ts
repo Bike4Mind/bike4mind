@@ -137,6 +137,9 @@ const api: DesktopApi = {
   account: {
     getCredits: () => ipcRenderer.invoke(IPC_CHANNELS.accountGetCredits),
     getProfile: () => ipcRenderer.invoke(IPC_CHANNELS.accountGetProfile),
+    getBilling: () => ipcRenderer.invoke(IPC_CHANNELS.accountGetBilling),
+    subscribePlan: priceId => ipcRenderer.invoke(IPC_CHANNELS.accountSubscribePlan, priceId),
+    purchaseCredits: packageId => ipcRenderer.invoke(IPC_CHANNELS.accountPurchaseCredits, packageId),
     sendFeedback: (content: string) => ipcRenderer.invoke(IPC_CHANNELS.accountSendFeedback, content),
   },
   usage: {

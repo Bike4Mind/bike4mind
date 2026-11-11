@@ -239,6 +239,7 @@ export default defineConfig({
         /(?:^|\/)admin\.spec\.ts$/,
         /(?:^|\/)admin-settings-secrets\.spec\.ts$/,
         /(?:^|\/)admin-approvals\.spec\.ts$/,
+        /(?:^|\/)admin-tutorials\.spec\.ts$/,
       ],
     },
     // Per-spec test projects (each depends only on its own setup)

@@ -18,10 +18,8 @@ import { Logger } from '@bike4mind/observability';
 // Self-host has no EventBridge. email.send goes straight to the mailer (it already throws
 // on failure); everything else is queued to SELF_HOST_EVENT_QUEUE for the background worker
 // (apps/workers/src/selfhost/eventDispatch.ts).
-// Default is warn-and-drop: these events feed async enrichment (naming, summaries, tags,
-// memento embedding), so a delivery failure must degrade the feature, not 500 the caller.
-// A user-facing submission endpoint opts in per call with `requireAcceptance` so the caller
-// learns the broker did not accept the event. Background publishers must not opt in.
+// Enrichment remains best-effort by default. Submission endpoints and billing webhooks
+// requireAcceptance so failed delivery reaches the caller and can be retried.
 async function publishSelfHost(eventName: string, detail: unknown, requiredAcceptance = false): Promise<void> {
   const logger = new Logger({ metadata: { service: 'eventBus' } });
 

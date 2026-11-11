@@ -39,7 +39,12 @@ vi.mock('@bike4mind/server-utils/auth/signupNetworkSignals', () => ({
 vi.mock('@bike4mind/server-utils/models/Subscription', () => ({ subscriptionRepository: {} }));
 vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessageToSlack: mocks.postMessageToSlack }));
 
-import { findLinkedAccounts, lockIfPaidWithBlockedCard, propagateAccountRisk } from './linkedAccounts';
+import {
+  findLinkedAccounts,
+  lockIfPaidWithBlockedCard,
+  propagateAccountRisk,
+  propagateBatchAccountRisk,
+} from './linkedAccounts';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never;
 
@@ -146,6 +151,46 @@ describe('propagateAccountRisk', () => {
   it('never throws', async () => {
     mocks.linkKeysForUser.mockRejectedValue(new Error('db down'));
     await expect(propagateAccountRisk(input, logger)).resolves.toEqual({ locked: [], review: [] });
+  });
+});
+
+describe('propagateBatchAccountRisk', () => {
+  const input = { sourceUserIds: ['u1', 'u2'], trigger: 'suspended together by an admin', key: 'admin-bulk-block:k' };
+
+  beforeEach(() => {
+    mocks.findById.mockImplementation(async (id: string) => ({ id, signupMeta: { ip: '198.51.100.1' } }));
+    mocks.findLinkedUserIds.mockImplementation(async ({ userId }: { userId: string }) =>
+      userId === 'u1' ? { byCard: ['u2'], byNetwork: ['u2', 'u3'] } : { byCard: ['u1', 'u5'], byNetwork: ['u6'] }
+    );
+  });
+
+  it('alerts once for the whole action, naming only linked accounts outside it', async () => {
+    const result = await propagateBatchAccountRisk(input, logger);
+
+    expect(result.locked).toEqual(['u5']);
+    expect([...result.review].sort()).toEqual(['u3', 'u4', 'u6']);
+    expect(mocks.flagDisputePending).toHaveBeenCalledTimes(1);
+    expect(mocks.flagDisputePending).toHaveBeenCalledWith(expect.objectContaining({ id: 'u5' }), expect.anything());
+    expect(mocks.claimStep).toHaveBeenCalledTimes(1);
+    expect(mocks.postMessageToSlack).toHaveBeenCalledTimes(1);
+    const [message] = mocks.postMessageToSlack.mock.calls[0];
+    expect(message).toContain('Sources (2 accounts)');
+    const listed = message.split('*Locked (same card):*')[1];
+    expect(listed).not.toContain('`u1`');
+    expect(listed).not.toContain('`u2`');
+    expect(listed).toContain('`u5`');
+    expect(listed).toContain('`u6`');
+  });
+
+  it('posts nothing when every linked account was part of the action', async () => {
+    mocks.findLinkedUserIds.mockImplementation(async ({ userId }: { userId: string }) =>
+      userId === 'u1' ? { byCard: ['u2'], byNetwork: [] } : { byCard: ['u1'], byNetwork: [] }
+    );
+    mocks.findIdsBySignupIp.mockResolvedValue([]);
+
+    await expect(propagateBatchAccountRisk(input, logger)).resolves.toEqual({ locked: [], review: [] });
+    expect(mocks.flagDisputePending).not.toHaveBeenCalled();
+    expect(mocks.postMessageToSlack).not.toHaveBeenCalled();
   });
 });
 

@@ -1,5 +1,6 @@
 import type {
   DataLakePendingConnector,
+  IAdminSettingsRepository,
   IDataLakeAccessGrantRepository,
   IDataLakeDocument,
   IDataLakeRepository,
@@ -21,6 +22,7 @@ import {
   findCollidingPrefixLakes,
 } from './tagPrefixCollision';
 import { diffLakeConfig } from './diffLakeConfig';
+import { assertLakeCountWithinCap } from './assertLakeCountWithinCap';
 import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLakeConfigChange';
 import type { z } from 'zod';
 
@@ -28,7 +30,8 @@ type CreateDataLakeParams = z.infer<typeof CreateDataLakeRequestInput>;
 
 interface CreateDataLakeAdapters {
   db: LakeConfigAuditAdapters['db'] & {
-    dataLakes: Pick<IDataLakeRepository, 'create' | 'find'>;
+    dataLakes: Pick<IDataLakeRepository, 'create' | 'find' | 'countCountedCreatedBy'>;
+    adminSettings: Pick<IAdminSettingsRepository, 'findBySettingNames' | 'findAll'>;
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'upsertGrant'>;
   };
   logger?: LakeConfigAuditAdapters['logger'] & { warn: (msg: string, ...args: unknown[]) => void };
@@ -206,6 +209,8 @@ export const createDataLake = async (
   options?: { pendingConnector?: DataLakePendingConnector }
 ): Promise<IDataLakeDocument> => {
   const params = secureParameters(parameters, CreateDataLakeRequestInput);
+
+  await assertLakeCountWithinCap(db, userId, logger);
 
   // Before the slug work: a rejected prefix should fail fast rather than after resolving a slug.
   await assertPrefixAvailable(db, userId, params.fileTagPrefix, organizationId);
