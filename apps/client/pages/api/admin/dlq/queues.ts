@@ -11,6 +11,7 @@ function queueMeta(entry: RegisteredDlqDescriptor) {
     label: entry.label,
     displayName: entry.displayName,
     application: entry.application,
+    hasReplayDestination: Boolean(entry.sourceQueue),
     description: entry.description,
     replay: entry.replay,
     replayNote: entry.replayNote,

@@ -76,6 +76,7 @@ describe('GET /api/admin/dlq/queues', () => {
         replay: entry.replay,
         replayNote: entry.replayNote,
         owner: entry.owner,
+        hasReplayDestination: entry.sourceQueue !== null,
       });
       for (const key of ['description', 'replayNote', 'owner'] as const) {
         expect(String(queue?.[key]).trim(), `${entry.label}.${key}`).not.toBe('');
@@ -97,7 +98,11 @@ describe('GET /api/admin/dlq/queues', () => {
     const { queues } = await callRoute();
 
     const contributed = queues.find(q => q.label === 'contributed-dlq');
-    expect(contributed).toMatchObject({ displayName: 'Contributed', approximateMessageCount: 3 });
+    expect(contributed).toMatchObject({
+      displayName: 'Contributed',
+      approximateMessageCount: 3,
+      hasReplayDestination: true,
+    });
     expect(contributed).not.toHaveProperty('description');
     expect(contributed).not.toHaveProperty('replay');
   });
@@ -151,6 +156,7 @@ describe('GET /api/admin/dlq/queues', () => {
       displayName: 'Events',
       application: 'Example',
       replay: 'unsafe',
+      hasReplayDestination: false,
       approximateMessageCount: fail ? -1 : 2,
       approximateNotVisibleCount: fail ? -1 : 0,
     });

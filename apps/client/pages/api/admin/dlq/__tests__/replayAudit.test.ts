@@ -65,7 +65,8 @@ beforeEach(() => {
 
 describe('POST /api/admin/dlq/replay admin audit', () => {
   it.each([
-    { replay: 'unsafe', sourceQueue: 'questQueue' },
+    { replay: 'safe', sourceQueue: null },
+    { replay: 'side-effects', sourceQueue: null },
     { replay: 'unsafe', sourceQueue: null },
     { replay: undefined, sourceQueue: null },
   ])('rejects a blocked destination %j before SQS operations', async entry => {
@@ -79,6 +80,30 @@ describe('POST /api/admin/dlq/replay admin audit', () => {
       expect(operation).not.toHaveBeenCalled();
     }
   });
+
+  it.each(['safe', 'side-effects', 'unsafe', undefined])(
+    'keeps non-null destinations replayable with advisory class %s',
+    async replay => {
+      h.getDlqByLabel.mockReturnValue({
+        label: 'quest',
+        displayName: 'Quest queue',
+        sourceQueue: 'questQueue',
+        replay,
+      });
+      h.receiveFromQueue.mockResolvedValue([{ MessageId: 'm1', ReceiptHandle: 'r1', Body: '{}' }]);
+      for (const replayBody of [
+        { batchSize: 1 },
+        { messages: [{ messageId: 'm1', receiptHandle: 'r1', body: '{}' }] },
+      ]) {
+        const { req, res } = createMocks({ method: 'POST', body: { queueLabel: 'quest', ...replayBody } });
+        (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+        await (handler as unknown as Route)(req, res);
+        expect(res._getStatusCode()).toBe(200);
+      }
+      expect(h.sendToQueue).toHaveBeenCalledTimes(2);
+      expect(h.getSourceQueueUrl).toHaveBeenCalledWith('questQueue');
+    }
+  );
 
   it('records ops.dlq.replayed with the queue and count but no message bodies', async () => {
     const { req, res } = createMocks({

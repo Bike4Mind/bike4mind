@@ -1,15 +1,25 @@
-import type { DlqDescriptor, DlqResolvers, CreateDlqRegistryOptions } from './types.js';
+import type { DlqDescriptor, InspectableDlqDescriptor, DlqResolvers, CreateDlqRegistryOptions } from './types.js';
+
+type DlqRegistry<T extends readonly InspectableDlqDescriptor[]> = {
+  getDlqUrl(label: T[number]['label']): string;
+  getSourceQueueUrl(name: NonNullable<T[number]['sourceQueue']>): string;
+  getDlqByLabel(label: T[number]['label']): T[number] | undefined;
+  getAllDescriptors(): readonly T[number][];
+};
 
 export function createDlqRegistry<const T extends readonly DlqDescriptor[]>(
   descriptors: T,
   resolvers: DlqResolvers,
   options?: CreateDlqRegistryOptions
-): {
-  getDlqUrl(label: T[number]['label']): string;
-  getSourceQueueUrl(name: NonNullable<T[number]['sourceQueue']>): string;
-  getDlqByLabel(label: T[number]['label']): T[number] | undefined;
-  getAllDescriptors(): readonly T[number][];
-} {
+): DlqRegistry<T> {
+  return createInspectableDlqRegistry(descriptors, resolvers, options);
+}
+
+export function createInspectableDlqRegistry<const T extends readonly InspectableDlqDescriptor[]>(
+  descriptors: T,
+  resolvers: DlqResolvers,
+  options?: CreateDlqRegistryOptions
+): DlqRegistry<T> {
   const seen = new Set<string>();
   for (const d of descriptors) {
     if (seen.has(d.label)) throw new Error(`createDlqRegistry: duplicate label "${d.label}"`);

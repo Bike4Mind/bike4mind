@@ -83,7 +83,7 @@ import {
   buildDlqAgeMetricQueries,
   buildDlqAlarmSpecs,
 } from '@bike4mind/infra';
-import type { DlqDescriptor } from '@bike4mind/infra';
+import type { InspectableDlqDescriptor } from '@bike4mind/infra';
 import { youngAccountSpendAlertDeadLetter } from './youngAccountSpendAlertDeadLetter';
 import { apiProbeDetectorDeadLetter } from './apiProbeDetectorDeadLetter';
 import { spendMonitorDeadLetter } from './spendMonitorDeadLetter';
@@ -243,7 +243,7 @@ if (isMonitoredStage && dlqAlarmHandlerDlq) {
   });
 }
 
-type InfraDlqDescriptor = DlqDescriptor & {
+type InfraDlqDescriptor = InspectableDlqDescriptor & {
   /** The sst.aws.Queue resource for this DLQ */
   queue: sst.aws.Queue;
   /** Override message count alarm evaluation periods (default: 3) */

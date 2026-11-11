@@ -65,12 +65,12 @@ const handler = adminApi({
     throw new BadRequestError(`Unknown DLQ: ${queueLabel}`);
   }
 
-  if (dlqEntry.replay === 'unsafe' || !dlqEntry.sourceQueue) {
+  if (!dlqEntry.sourceQueue) {
     throw new BadRequestError(`Replay is not available for DLQ: ${queueLabel}`);
   }
 
   const dlqUrl = getDlqUrl(dlqEntry.label);
-  const sourceQueueUrl = getSourceQueueUrl(dlqEntry.sourceQueue as Parameters<typeof getSourceQueueUrl>[0]);
+  const sourceQueueUrl = getSourceQueueUrl(dlqEntry.sourceQueue);
   const results: ReplayResult[] = [];
 
   const recordReplayAudit = (summary: {

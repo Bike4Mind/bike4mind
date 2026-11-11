@@ -1,11 +1,11 @@
 import { Resource } from 'sst';
 import {
-  createDlqRegistry,
+  createInspectableDlqRegistry,
   describeDroppedContributions,
   partitionContributedQueues,
   reservedQueueNames,
 } from '@bike4mind/infra';
-import type { DlqDescriptor, DlqResolvers } from '@bike4mind/infra';
+import type { DlqDescriptor, InspectableDlqDescriptor, DlqResolvers } from '@bike4mind/infra';
 import * as generatedInfraResources from '../premium-generated/infraResources.generated';
 import { Logger } from '@bike4mind/observability';
 
@@ -28,7 +28,7 @@ export interface DlqQueueHelp {
   owner: string;
 }
 
-export type CoreDlqDescriptor = DlqDescriptor & DlqQueueHelp;
+export type CoreDlqDescriptor = InspectableDlqDescriptor & DlqQueueHelp;
 
 /** Names each DlqQueueHelp field that is missing, blank, or (for replay) outside DLQ_REPLAY_SAFETY. */
 export function missingQueueHelp(entry: Partial<Record<keyof DlqQueueHelp, unknown>>): string[] {
@@ -701,7 +701,7 @@ export type DlqLabel = CoreDlqLabel | ContributedDlqLabel;
 export type SourceQueueName = CoreSourceQueueName | ContributedSourceQueueName;
 
 /** An entry the registry holds; a null source queue has no SQS replay destination. */
-export type RegisteredDlqDescriptor = DlqDescriptor &
+export type RegisteredDlqDescriptor = InspectableDlqDescriptor &
   Partial<DlqQueueHelp> & { label: DlqLabel; sourceQueue: SourceQueueName | null };
 
 type LinkableQueues = {
@@ -749,7 +749,7 @@ function contributedDescriptors(): DlqDescriptor[] {
   }));
 }
 
-let registry: ReturnType<typeof createDlqRegistry<readonly DlqDescriptor[]>> | undefined;
+let registry: ReturnType<typeof createInspectableDlqRegistry<readonly InspectableDlqDescriptor[]>> | undefined;
 const contributedLabels = new Set<string>();
 const contributedSourceQueues = new Set<string>();
 
@@ -760,10 +760,14 @@ function getRegistry() {
       contributedLabels.add(d.label);
       if (d.sourceQueue !== null) contributedSourceQueues.add(d.sourceQueue);
     }
-    registry = createDlqRegistry<readonly DlqDescriptor[]>([...DLQ_REGISTRY, ...contributed], resolvers, {
-      dlqErrorContext: 'Check dlqUrls Linkable in infra/web.ts.',
-      sourceQueueErrorContext: 'Check sourceQueueUrls Linkable in infra/web.ts.',
-    });
+    registry = createInspectableDlqRegistry<readonly InspectableDlqDescriptor[]>(
+      [...DLQ_REGISTRY, ...contributed],
+      resolvers,
+      {
+        dlqErrorContext: 'Check dlqUrls Linkable in infra/web.ts.',
+        sourceQueueErrorContext: 'Check sourceQueueUrls Linkable in infra/web.ts.',
+      }
+    );
   }
   return registry;
 }

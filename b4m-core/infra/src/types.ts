@@ -5,10 +5,13 @@ export interface DlqDescriptor {
   displayName: string;
   /** Value of Application tag for CloudWatch grouping */
   application: string;
-  /** Null when recovery has no SQS replay destination. */
-  sourceQueue: string | null;
+  /** Source queue name used to resolve the source queue URL. */
+  sourceQueue: string;
   replay?: 'safe' | 'side-effects' | 'unsafe';
 }
+
+/** Includes queues whose originating transport has no SQS replay destination. */
+export type InspectableDlqDescriptor = Omit<DlqDescriptor, 'sourceQueue'> & { sourceQueue: string | null };
 
 export interface DlqResolvers {
   /** Returns undefined if URL not bound. Factory normalizes to friendly error. */
