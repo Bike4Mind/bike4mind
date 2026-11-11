@@ -2,7 +2,7 @@
 import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { skillRepository } from '@bike4mind/database';
-import { ISkill } from '@bike4mind/common';
+import { ApiKeyScope, ISkill } from '@bike4mind/common';
 import { NotFoundError, ForbiddenError } from '@bike4mind/utils';
 import { applySkillUpdate } from '@server/skills/skillWrite';
 import {
@@ -17,7 +17,7 @@ import {
 import { withdrawSkillListings } from '@bike4mind/server-utils/skillMarket/market';
 import { attachMarketStatus } from '@server/skillMarket/marketStatus';
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.SKILLS_WRITE] })
   .get<Request<{}, {}, {}, { id: string }>>(async (req, res) => {
     const { id } = req.query;
     const skill = (await skillRepository.findById(id as string)) as ShareableSkill | null;

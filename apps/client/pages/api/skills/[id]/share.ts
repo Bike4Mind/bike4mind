@@ -1,7 +1,7 @@
 // apps/client/pages/api/skills/[id]/share.ts
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { skillRepository } from '@bike4mind/database';
-import { IUserShare, Permission } from '@bike4mind/common';
+import { ApiKeyScope, IUserShare, Permission } from '@bike4mind/common';
 import { NotFoundError, ForbiddenError } from '@bike4mind/utils';
 import { z } from 'zod';
 import { ShareableSkill, canManageSkillSharing } from '@server/utils/skillAccess';
@@ -30,7 +30,7 @@ const shareSchema = z.object({
   isGlobalWrite: z.boolean().optional(),
 });
 
-const handler = baseApi().put(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.SKILLS_WRITE] }).put(async (req, res) => {
   const { id } = req.query as { id: string };
 
   const skill = (await skillRepository.findById(id)) as ShareableSkill | null;
