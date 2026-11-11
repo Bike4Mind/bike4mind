@@ -11,6 +11,17 @@ public enum ServerEnvironment: Hashable, Sendable, Codable {
 
   public static let productionBaseURL = URL(string: "https://app.bike4mind.com")!
 
+  /// Maps the production origin to `.production` so it gets the first-party client; anything else is `.custom`.
+  public init(url: URL) {
+    let production = Self.productionBaseURL
+    let isProduction =
+      url.scheme?.lowercased() == "https"
+      && url.host()?.lowercased() == production.host()?.lowercased()
+      && (url.port == nil || url.port == 443)
+      && (url.path.isEmpty || url.path == "/")
+    self = isProduction ? .production : .custom(url)
+  }
+
   public var baseURL: URL {
     switch self {
     case .production: Self.productionBaseURL

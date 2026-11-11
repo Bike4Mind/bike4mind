@@ -51,7 +51,7 @@
       else {
         return nil
       }
-      return .custom(url)
+      return ServerEnvironment(url: url)
     }
 
     private func loadCurrent() {
