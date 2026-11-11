@@ -193,12 +193,14 @@ test('a chat reply streams over the WebSocket and survives a reload', async ({ p
       }
     })();
     try {
-      streamedText = await chat.sendMessageAndWaitForResponse(PROMPT, TIMEOUTS.AI_RESPONSE);
+      await chat.sendMessageAndWaitForResponse(PROMPT, TIMEOUTS.AI_RESPONSE);
     } finally {
       sampling = false;
       await sampler;
     }
-    expect(collapseWhitespace(streamedText), 'the reply finished with no text').not.toBe('');
+    // Same element the samples and the reloaded history are read from.
+    streamedText = collapseWhitespace(await newestAnswerText(page));
+    expect(streamedText, 'the reply finished with no text').not.toBe('');
   });
 
   await test.step('incremental frames arrived before completion', async () => {
@@ -208,7 +210,8 @@ test('a chat reply streams over the WebSocket and survives a reload', async ({ p
       'no streamed_chat_completion frame reached the browser: the reply did not stream over the WebSocket'
     ).toBeGreaterThan(0);
 
-    const questId = sent[0].questId;
+    // The newest quest: sendMessageAndWaitForResponse resends once after a server timeout.
+    const questId = sent[sent.length - 1].questId;
     // The terminal frame can trail the stop button hiding by a beat.
     await expect
       .poll(() => probe.frames.some(f => f.questId === questId && f.status === 'done'), {
@@ -224,7 +227,7 @@ test('a chat reply streams over the WebSocket and survives a reload', async ({ p
     ).toEqual([]);
 
     const doneIndex = frames.findIndex(f => f.status === 'done');
-    const finalLength = frames[doneIndex].reply.length;
+    const finalLength = Math.max(...frames.map(f => f.reply.length));
     const partialLengths: number[] = [];
     for (const frame of frames.slice(0, doneIndex)) {
       const length = frame.reply.length;
@@ -237,9 +240,8 @@ test('a chat reply streams over the WebSocket and survives a reload', async ({ p
 
     // The page itself showed a partial reply, so what it rendered came from those frames and not
     // from a fetch after completion.
-    const finalRendered = collapseWhitespace(streamedText);
     expect(
-      [...renderedWhileStreaming].some(text => text.length < finalRendered.length && finalRendered.startsWith(text)),
+      [...renderedWhileStreaming].some(text => text.length < streamedText.length && streamedText.startsWith(text)),
       'the page never rendered a partial reply while the stream was in flight'
     ).toBe(true);
   });
@@ -252,6 +254,6 @@ test('a chat reply streams over the WebSocket and survives a reload', async ({ p
         timeout: TIMEOUTS.ACTION,
         message: 'the reloaded chat history does not show the streamed reply',
       })
-      .toBe(collapseWhitespace(streamedText));
+      .toBe(streamedText);
   });
 });
