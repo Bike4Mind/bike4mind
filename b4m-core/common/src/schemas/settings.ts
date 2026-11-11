@@ -4753,7 +4753,8 @@ export const settingsMap = {
     key: 'serverStatus',
     name: 'Server Status',
     defaultValue: ServerStatusEnum.Live,
-    description: 'The current status of the server.',
+    description:
+      'What non-admins see. live: the app. maintenance: the maintenance screen. offline: the coming-soon page with the waitlist form. Admins always get the app.',
     category: 'Admin',
     group: API_SERVICE_GROUPS.ADMIN.id,
     order: 1,
