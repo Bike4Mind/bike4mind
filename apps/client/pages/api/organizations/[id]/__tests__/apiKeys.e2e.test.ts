@@ -36,6 +36,7 @@ import { userApiKeyRepository, userRepository } from '@bike4mind/database/auth';
 import { groupRepository } from '@bike4mind/database/social';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
+import { GATED_API_KEY_SCOPES } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 import { organizationService, userApiKeyService } from '@bike4mind/services';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -334,10 +335,16 @@ describe('org-owned API keys', () => {
     expect((await authenticate(created.data.key, orgId)).ok).toBe(true);
   });
 
+  // Gated on the holder's entitlement at use, and the service account holds none.
+  const [gatedScope] = Object.keys(GATED_API_KEY_SCOPES);
+
+  it('has an entitlement-gated scope to refuse', () => {
+    expect(gatedScope).toBeDefined();
+  });
+
   it.each([
     ['a dedicated-flow scope', ApiKeyScope.EMBED_CHAT],
-    // Gated on the holder's entitlement at use, and the service account holds none.
-    ['a product scope', ApiKeyScope.OPTIHASHI_READ],
+    ['an entitlement-gated scope', gatedScope],
   ])('refuses %s', async (_label, scope) => {
     const { creator, orgId } = await seedOrg();
     const refused = await call(listHandler, 'POST', creator.id, { id: orgId }, { name: 'Svc', scopes: [scope] });
