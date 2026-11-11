@@ -105,9 +105,10 @@ export const FEEDBACK_CLIENT_CONTEXT_LIMITS = {
   viewportMax: 20000,
 } as const;
 
-// A path segment this long and containing a digit is an opaque credential (reset link, signed URL,
-// magic-link token), not a route name or a 24-char object id. The digit requirement keeps a long
-// kebab-case slug readable; a 32-char token with no digit at all is vanishingly unlikely.
+// A path segment this long and containing a digit is treated as an opaque credential (reset link,
+// signed URL, token), not a route name or a 24-char object id. The digit requirement keeps a long
+// kebab-case slug readable, so a base64url token that happens to have no digit slips past it:
+// routes known to carry credentials are masked by position instead (see sanitizeFeedbackPagePath).
 const OPAQUE_PATH_SEGMENT = /^(?=.*\d)[A-Za-z0-9_-]{32,}$/;
 
 /**
@@ -117,11 +118,14 @@ const OPAQUE_PATH_SEGMENT = /^(?=.*\d)[A-Za-z0-9_-]{32,}$/;
  */
 export function sanitizeFeedbackPagePath(path: string): string {
   const pathOnly = path.split(/[?#]/, 1)[0] ?? '';
-  const masked = pathOnly
-    .split('/')
-    .map(segment => (OPAQUE_PATH_SEGMENT.test(segment) ? ':redacted' : segment))
-    .join('/');
-  return masked.slice(0, FEEDBACK_CLIENT_CONTEXT_LIMITS.path);
+  const segments = pathOnly.split('/');
+  const masked = segments.map((segment, index) => {
+    // The /share/ param is an invite credential in several shapes (comma-joined ids, a base64url
+    // token, a legacy 24-hex id), so it is masked whatever its length or characters.
+    if (index === 2 && segments[1] === 'share' && segment !== '') return ':redacted';
+    return OPAQUE_PATH_SEGMENT.test(segment) ? ':redacted' : segment;
+  });
+  return masked.join('/').slice(0, FEEDBACK_CLIENT_CONTEXT_LIMITS.path);
 }
 
 const viewportDimension = z.number().int().min(0).max(FEEDBACK_CLIENT_CONTEXT_LIMITS.viewportMax);
