@@ -101,7 +101,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'event:infra/eventBus.ts:notification-push',
-    '09098d1d0e2b2d936ed6f320b59a9f62491e538c5f54a8d14c70bf54943e99d6',
+    '1d4f0749b60c697060403170a0c9b990b3a8e7bf3fa78b6e478d678fbaf7e81e',
     {
       source: 'apps/workers/src/selfhost/eventDispatch.ts',
       symbol: 'event:notification.push',

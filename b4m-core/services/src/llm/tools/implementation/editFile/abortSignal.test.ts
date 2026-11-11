@@ -21,7 +21,7 @@ describe('editFileTool cancellation handling', () => {
   const FILE = {
     fileName: 'a.txt',
     mimeType: 'text/plain',
-    fileUrl: 'https://files.example/a.txt',
+    filePath: 'a.txt',
     moderationStatus: 'clean',
   };
 
@@ -42,6 +42,7 @@ describe('editFileTool cancellation handling', () => {
       userId: 'u1',
       user: {},
       logger,
+      storage: { getSignedUrl: vi.fn(async () => 'https://files.example/a.txt') },
       db: { fabfiles: { findByIdAndUserId: vi.fn(async () => FILE) } },
       llm: { complete },
       statusUpdate: vi.fn(),

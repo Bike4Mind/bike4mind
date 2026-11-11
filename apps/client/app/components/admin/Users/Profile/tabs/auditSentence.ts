@@ -47,6 +47,7 @@ const FIELD_LABELS: Readonly<Record<string, string>> = {
   isBanned: 'Suspended',
   isModerated: 'Restricted',
   tags: 'Tags',
+  adminPermissions: 'Admin permissions',
   emailVerified: 'Email verified',
   currentCredits: 'Credits',
   isAdmin: 'Super Admin',
@@ -84,7 +85,7 @@ export const formatAuditValue = (value: unknown): string => {
   return JSON.stringify(value);
 };
 
-const tagSentence = (before: unknown, after: unknown): string => {
+const listSentence = (label: string, before: unknown, after: unknown): string => {
   const previous = asStrings(before);
   const next = asStrings(after);
   const added = next.filter(tag => !previous.includes(tag));
@@ -93,7 +94,7 @@ const tagSentence = (before: unknown, after: unknown): string => {
     added.length > 0 && `added ${added.join(', ')}`,
     removed.length > 0 && `removed ${removed.join(', ')}`,
   ].filter(Boolean);
-  return parts.length > 0 ? `Tags: ${parts.join('; ')}` : 'Changed tags';
+  return parts.length > 0 ? `${label}: ${parts.join('; ')}` : `Changed ${label.toLowerCase()}`;
 };
 
 const changeSentence = ({ field, before, after }: AuditChange): string => {
@@ -105,7 +106,8 @@ const changeSentence = ({ field, before, after }: AuditChange): string => {
     case 'emailVerified':
       return after ? 'Marked email verified' : 'Marked email unverified';
     case 'tags':
-      return tagSentence(before, after);
+    case 'adminPermissions':
+      return listSentence(fieldLabel(field), before, after);
     case 'pendingEmail':
       return `Requested an email change to ${formatAuditValue(after)}`;
     case 'currentCredits': {

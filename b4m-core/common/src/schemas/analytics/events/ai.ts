@@ -89,9 +89,11 @@ interface ICompletionApiFailedEvent extends IBaseEvent {
   metadata: {
     /** Model attempted (named `modelName` to match `topModels` aggregation key) */
     modelName: string;
-    /** Error message */
-    error: string;
-    /** Error type/code if available */
+    /** The error's `errorCode`, else `http_<status>`, else `unknown`; never its message, which can quote the prompt */
+    errorCode: string;
+    /** HTTP status of the failure, when it has one */
+    status?: number;
+    /** Error class name */
     errorType?: string;
     /** API key ID if authenticated via API key */
     apiKeyId?: string;

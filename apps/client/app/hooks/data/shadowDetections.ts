@@ -5,6 +5,7 @@ import {
   shadowDetectionItemSchema,
   shadowDetectionVerdictEntrySchema,
   type AbuseAssessmentRunResponse,
+  type ShadowDetectionBulkVerdictRequest,
   type ShadowDetectionList,
   type ShadowDetectionListQuery,
   type ShadowDetectionVerdictRequest,
@@ -72,6 +73,29 @@ export function useShadowDetectionVerdict() {
       }
     },
     // A conflict also means the list is stale. A graded detection also drops out of the AI advisory.
+    onSettled: () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: SHADOW_DETECTIONS_QUERY_KEY }),
+        queryClient.invalidateQueries({ queryKey: AI_ADVISORY_QUERY_KEY }),
+      ]),
+  });
+}
+
+/** Records changed since they were selected come back in `conflicts`, ungraded. */
+export type ShadowDetectionBulkVerdictResult = {
+  graded: ShadowDetectionRow[];
+  conflicts: ShadowDetectionRow[];
+  missing: string[];
+  failed: string[];
+};
+
+export function useShadowDetectionBulkVerdict() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (
+      request: Omit<ShadowDetectionBulkVerdictRequest, 'reason'> & { reason: string }
+    ): Promise<ShadowDetectionBulkVerdictResult> =>
+      (await api.post<ShadowDetectionBulkVerdictResult>(`${ENDPOINT}/bulk-verdict`, request)).data,
     onSettled: () =>
       Promise.all([
         queryClient.invalidateQueries({ queryKey: SHADOW_DETECTIONS_QUERY_KEY }),

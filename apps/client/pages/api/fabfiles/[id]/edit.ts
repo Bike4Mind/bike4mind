@@ -474,9 +474,6 @@ Return only the edited content without any markdown code blocks or explanations.
                     versions,
                     updatedAt: now,
                     ...FAB_FILE_CONTENT_REWRITE_PATCH,
-                    // The cached URL signs the old key, which deleteDroppedVersions may remove; force a re-sign.
-                    fileUrl: null,
-                    fileUrlExpireAt: null,
                   },
                 },
                 rewriteStorageDb

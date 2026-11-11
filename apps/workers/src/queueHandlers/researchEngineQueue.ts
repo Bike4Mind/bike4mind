@@ -247,6 +247,7 @@ const processDiscoveredLinks = async (parameters: { id: string; userId: string }
           researchTasks: researchTaskJobs,
         },
         llm,
+        storage: { download: path => getFilesStorage().download(path) },
       }
     );
   } catch (err) {
