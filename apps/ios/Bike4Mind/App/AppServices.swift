@@ -17,6 +17,7 @@ final class AppServices {
     let realtime: WSClient
     let cache: FileSessionListCache
     let media: MediaClient
+    let studio: StudioClient
     let capture: CaptureStack
     let account: AccountClient
     let stepUp: StepUpClient
@@ -138,6 +139,8 @@ final class AppServices {
   /// finally the tokens. The unregister call needs a live session, so it runs before the session is torn down.
   func signOutEverywhere(reason: AuthController.SignOutReason = .userInitiated) async {
     await questActivities.sessionWillEnd()
+    studioTrackerState?.tracker.reset()
+    studioTrackerState = nil
     await agentRunMonitor.stopAll()
     await push.unregisterBeforeSignOut()
     await auth.signOut(reason: reason)
@@ -150,6 +153,27 @@ final class AppServices {
       if FixtureServices.isEnabled { return FixtureServices.media }
     #endif
     return current.media
+  }
+
+  var studio: any StudioAPI {
+    #if DEBUG
+      if FixtureServices.isEnabled { return FixtureServices.studio }
+    #endif
+    return current.studio
+  }
+
+  @ObservationIgnored private var studioTrackerState: (environment: ServerEnvironment, tracker: GenerationTracker)?
+
+  /// Follows Studio generations app-wide, so leaving Studio does not lose track of them. One per server.
+  var studioTracker: GenerationTracker {
+    let environment = auth.environment
+    if let studioTrackerState, studioTrackerState.environment == environment { return studioTrackerState.tracker }
+    studioTrackerState?.tracker.stop()
+    let tracker = GenerationTracker(
+      api: studio, realtime: realtime, store: UserDefaultsGenerationStore(environment: environment))
+    tracker.resume()
+    studioTrackerState = (environment, tracker)
+    return tracker
   }
 
   /// Called when the gallery learns of a newer generated image; keeps the "Latest generation" widget current.
@@ -232,6 +256,7 @@ final class AppServices {
         tokenRotations: { await auth.accessTokenRotations() }),
       cache: FileSessionListCache(directory: FileSessionListCache.defaultDirectory(), environment: environment),
       media: MediaClient(baseURL: environment.baseURL, tokens: auth),
+      studio: StudioClient(baseURL: environment.baseURL, tokens: auth),
       capture: .live(baseURL: environment.baseURL, tokens: auth, ownIdentifier: BackgroundSessionIdentifier.app),
       account: AccountClient(baseURL: environment.baseURL, tokens: auth),
       stepUp: StepUpClient(baseURL: environment.baseURL, tokens: auth)

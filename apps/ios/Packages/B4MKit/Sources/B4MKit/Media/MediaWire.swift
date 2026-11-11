@@ -59,6 +59,42 @@ enum MediaWire {
     let fileUrl: String?
     let fileUrlExpireAt: String?
     let createdAt: String?
+    let sourceMetadata: SourceMetadata?
+
+    private enum CodingKeys: String, CodingKey {
+      case id, _id, fileName, mimeType, fileSize, fileUrl, fileUrlExpireAt, createdAt, sourceMetadata
+    }
+
+    init(from decoder: any Decoder) throws {
+      let container = try decoder.container(keyedBy: CodingKeys.self)
+      id = try container.decodeIfPresent(String.self, forKey: .id)
+      _id = try container.decodeIfPresent(String.self, forKey: ._id)
+      fileName = try container.decodeIfPresent(String.self, forKey: .fileName)
+      mimeType = try container.decodeIfPresent(String.self, forKey: .mimeType)
+      fileSize = try container.decodeIfPresent(Int.self, forKey: .fileSize)
+      fileUrl = try container.decodeIfPresent(String.self, forKey: .fileUrl)
+      fileUrlExpireAt = try container.decodeIfPresent(String.self, forKey: .fileUrlExpireAt)
+      createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt)
+      sourceMetadata = try? container.decodeIfPresent(SourceMetadata.self, forKey: .sourceMetadata)
+    }
+  }
+
+  /// Provenance the server stamps on generated files (`sourceMetadata` on the file document). Older files
+  /// carry an empty prompt, which reads as unknown.
+  /// Decodes field by field and never throws: a provenance shape this build does not expect must not drop
+  /// the whole page.
+  private struct SourceMetadata: Decodable {
+    let sessionId: String?
+    let prompt: String?
+
+    private enum Keys: String, CodingKey { case sessionId, generation, prompt }
+
+    init(from decoder: any Decoder) throws {
+      let container = try? decoder.container(keyedBy: Keys.self)
+      sessionId = try? container?.decodeIfPresent(String.self, forKey: .sessionId)
+      let generation = try? container?.nestedContainer(keyedBy: Keys.self, forKey: .generation)
+      prompt = try? generation?.decodeIfPresent(String.self, forKey: .prompt)
+    }
   }
 
   static func page(status: Int, body: Data) throws -> MediaPage {
@@ -81,7 +117,9 @@ enum MediaWire {
     return MediaItem(
       id: id, kind: kind, fileName: file.fileName ?? "", mimeType: mimeType,
       createdAt: file.createdAt.flatMap(parseDate) ?? .distantPast, fileSize: file.fileSize,
-      url: file.fileUrl.flatMap(URL.init(string:)), urlExpiresAt: file.fileUrlExpireAt.flatMap(parseDate))
+      url: file.fileUrl.flatMap(URL.init(string:)), urlExpiresAt: file.fileUrlExpireAt.flatMap(parseDate),
+      sessionID: file.sourceMetadata?.sessionId.flatMap { $0.isEmpty ? nil : $0 },
+      prompt: file.sourceMetadata?.prompt.flatMap { $0.isEmpty ? nil : $0 })
   }
 
   private static func parseDate(_ string: String) -> Date? {

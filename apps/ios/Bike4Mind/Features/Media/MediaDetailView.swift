@@ -6,6 +6,8 @@ import SwiftUI
 /// lapses or fails to load.
 struct MediaDetailView: View {
   @State private var model: MediaDetailViewModel
+  @State private var isEditing = false
+  @Environment(\.studioEdit) private var studioEdit
 
   init(item: MediaItem, api: any MediaAPI) {
     _model = State(initialValue: MediaDetailViewModel(item: item, api: api))
@@ -20,6 +22,16 @@ struct MediaDetailView: View {
     .navigationBarTitleDisplayMode(.inline)
     .toolbarBackground(.visible, for: .navigationBar)
     .toolbar {
+      if model.item.kind == .image, model.state == .ready, studioEdit != nil {
+        ToolbarItem(placement: .topBarTrailing) {
+          Button {
+            isEditing = true
+          } label: {
+            Label("Edit regions", systemImage: "rectangle.dashed")
+          }
+          .accessibilityIdentifier("media-edit-btn")
+        }
+      }
       if let url = model.item.url {
         ToolbarItem(placement: .topBarTrailing) {
           // The bytes are not on disk (AsyncImage and AVPlayer stream the signed URL), so the link is what is shared.
@@ -29,6 +41,11 @@ struct MediaDetailView: View {
       }
     }
     .task { await model.prepare() }
+    .fullScreenCover(isPresented: $isEditing) {
+      if let studioEdit {
+        RegionEditView(item: model.item, api: studioEdit.api, media: studioEdit.media, tracker: studioEdit.tracker)
+      }
+    }
   }
 
   @ViewBuilder

@@ -6,28 +6,49 @@ struct MediaGalleryView: View {
   @Environment(AppServices.self) private var services
 
   var body: some View {
-    GalleryContent(api: services.media, onLatestImage: services.latestGeneration)
+    GalleryContent(
+      api: services.media, onLatestImage: services.latestGeneration, studio: services.studio,
+      tracker: services.studioTracker)
   }
 }
 
 private struct GalleryContent: View {
   @State private var model: MediaGalleryViewModel
+  @State private var create: StudioCreateViewModel
+  /// Pushed with `navigationDestination(item:)`: the shell's stack is bound to a typed `SessionsDestination`
+  /// path, so a `NavigationLink(value: MediaItem)` has nowhere to go and silently does nothing.
+  @State private var openItem: MediaItem?
   @Environment(AppServices.self) private var services
+  private let tracker: GenerationTracker
 
   private let columns = [GridItem(.adaptive(minimum: 110), spacing: 2)]
 
-  init(api: any MediaAPI, onLatestImage: @escaping @Sendable (MediaItem) async -> Void) {
+  init(
+    api: any MediaAPI, onLatestImage: @escaping @Sendable (MediaItem) async -> Void, studio: any StudioAPI,
+    tracker: GenerationTracker
+  ) {
     _model = State(initialValue: MediaGalleryViewModel(api: api, onLatestImage: onLatestImage))
+    _create = State(initialValue: StudioCreateViewModel(api: studio, tracker: tracker))
+    self.tracker = tracker
   }
 
   var body: some View {
     content
+      .safeAreaInset(edge: .bottom, spacing: 0) {
+        VStack(spacing: 0) {
+          GenerationTilesView(tracker: tracker)
+          StudioCreateBar(model: create)
+        }
+      }
+      // A finished generation is saved to the gallery server-side; pull it in.
+      .onChange(of: tracker.succeededCount) { Task { await model.refresh() } }
       .background(Tokens.Palette.background)
       .navigationTitle("Studio")
       .navigationBarTitleDisplayMode(.large)
       .toolbar { ToolbarItem(placement: .principal) { filter } }
-      .navigationDestination(for: MediaItem.self) { item in
+      .navigationDestination(item: $openItem) { item in
         MediaDetailView(item: item, api: services.media)
+          .environment(\.studioEdit, StudioEditContext(api: services.studio, media: services.media, tracker: tracker))
       }
       .task { await model.load() }
       .refreshable { await model.refresh() }
@@ -83,10 +104,14 @@ private struct GalleryContent: View {
       }
       LazyVGrid(columns: columns, spacing: 2) {
         ForEach(model.items) { item in
-          NavigationLink(value: item) { MediaCell(item: item) }
-            .buttonStyle(.plain)
-            .task { await model.loadMoreIfNeeded(currentItem: item) }
-            .accessibilityIdentifier("media-cell-\(item.id)")
+          Button {
+            openItem = item
+          } label: {
+            MediaCell(item: item)
+          }
+          .buttonStyle(.plain)
+          .task { await model.loadMoreIfNeeded(currentItem: item) }
+          .accessibilityIdentifier("media-cell-\(item.id)")
         }
       }
       footer

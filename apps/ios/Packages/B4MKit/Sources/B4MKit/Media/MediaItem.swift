@@ -30,10 +30,14 @@ public struct MediaItem: Identifiable, Hashable, Sendable {
   /// A presigned storage URL. Short-lived: see `isURLUsable(at:)`.
   public let url: URL?
   public let urlExpiresAt: Date?
+  /// The notebook a generated file came from; an image edit must run in a session, so it reuses this one.
+  public let sessionID: String?
+  /// The prompt that made it, when the server recorded one.
+  public let prompt: String?
 
   public init(
     id: String, kind: MediaKind, fileName: String, mimeType: String, createdAt: Date, fileSize: Int? = nil,
-    url: URL? = nil, urlExpiresAt: Date? = nil
+    url: URL? = nil, urlExpiresAt: Date? = nil, sessionID: String? = nil, prompt: String? = nil
   ) {
     self.id = id
     self.kind = kind
@@ -43,6 +47,8 @@ public struct MediaItem: Identifiable, Hashable, Sendable {
     self.fileSize = fileSize
     self.url = url
     self.urlExpiresAt = urlExpiresAt
+    self.sessionID = sessionID
+    self.prompt = prompt
   }
 
   /// Presigned URLs are refetched this long before they lapse, so a player never starts on a URL that
