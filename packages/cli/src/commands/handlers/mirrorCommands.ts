@@ -1,4 +1,4 @@
-import { MirrorStore } from '../../features/mirror/MirrorStore.js';
+import { MirrorStore, assertValidDestinationName } from '../../features/mirror/MirrorStore.js';
 import { resolveApiEndpoint } from '../../utils/apiUrl.js';
 import { sanitizeTerminalText } from '../../utils/sanitizeTerminalText.js';
 import type { CommandHandler, CommandContext } from '../types.js';
@@ -33,11 +33,13 @@ export async function runMirrorCommand(
       .join('\n');
   }
   if (name && args.length === 2 && (action === 'pause' || action === 'resume' || action === 'revoke')) {
+    assertValidDestinationName(name);
     if (action === 'revoke') await store.revoke(name);
     else await store.pause(name, action === 'pause');
     return `${action === 'revoke' ? 'Revoked' : action === 'pause' ? 'Paused' : 'Resumed'} ${sanitizeTerminalText(name)}.`;
   }
   if (action === 'pull' && name && args.length === 2) {
+    assertValidDestinationName(name);
     const destination = (await store.list()).find(entry => entry.name === name);
     if (!destination) throw new Error('Destination not found');
     if (destination.paused) throw new Error('Destination is paused');

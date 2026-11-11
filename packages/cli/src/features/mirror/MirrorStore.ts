@@ -5,8 +5,15 @@ import path from 'node:path';
 import { z } from 'zod';
 import { withLockDir } from '../../storage/lockDir.js';
 
+export const DESTINATION_NAME_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
+export const DESTINATION_NAME_ERROR = "Destination name must be 1-64 letters, digits, '_' or '-'";
+
+export function assertValidDestinationName(name: string): void {
+  if (!DESTINATION_NAME_PATTERN.test(name)) throw new Error(DESTINATION_NAME_ERROR);
+}
+
 const DestinationSchema = z.object({
-  name: z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/),
+  name: z.string().regex(DESTINATION_NAME_PATTERN),
   directory: z.string().min(1),
   accountId: z.string().min(1),
   apiUrl: z.string().url(),
@@ -30,7 +37,16 @@ export class MirrorStore {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { version: 1, destinations: [] };
       throw error;
     }
-    return RegistrySchema.parse(JSON.parse(text) as unknown);
+    const malformed = new Error(`${this.file} is malformed; fix or remove it`);
+    let json: unknown;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      throw malformed;
+    }
+    const parsed = RegistrySchema.safeParse(json);
+    if (!parsed.success) throw malformed;
+    return parsed.data;
   }
 
   async list(): Promise<MirrorDestination[]> {
@@ -60,7 +76,12 @@ export class MirrorStore {
   }
 
   async add(destination: Omit<MirrorDestination, 'paused' | 'createdAt'>): Promise<void> {
-    const entry = DestinationSchema.parse({ ...destination, paused: false, createdAt: new Date().toISOString() });
+    const parsed = DestinationSchema.safeParse({ ...destination, paused: false, createdAt: new Date().toISOString() });
+    if (!parsed.success) {
+      const fields = [...new Set(parsed.error.issues.map(issue => String(issue.path[0] ?? 'value')))];
+      throw new Error(fields.includes('name') ? DESTINATION_NAME_ERROR : `Invalid destination: ${fields.join(', ')}`);
+    }
+    const entry = parsed.data;
     if (!path.isAbsolute(entry.directory)) throw new Error('Destination directory must be an absolute path');
     await this.change(destinations => {
       if (destinations.some(existing => existing.name === entry.name)) throw new Error('Destination already exists');
