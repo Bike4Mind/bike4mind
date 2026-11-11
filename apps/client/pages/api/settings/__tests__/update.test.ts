@@ -697,10 +697,6 @@ describe('settings/update signup grant guard', () => {
     storedRows = [];
   });
 
-  afterEach(() => {
-    storedRows = [];
-  });
-
   it('refuses a large initial grant with 422 while the policy is off, before any write', async () => {
     storedRows = [{ settingName: 'signupGrantRiskPolicy', settingValue: JSON.stringify({ enabled: false }) }];
     const refusal = runHandler('signupGrantInitialCredits', 5000);

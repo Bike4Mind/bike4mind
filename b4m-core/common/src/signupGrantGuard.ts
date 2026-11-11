@@ -55,11 +55,8 @@ const formatCredits = (credits: number) => credits.toLocaleString('en-US');
 type PolicyState = { state: 'on' } | { state: 'off' } | { state: 'invalid'; issues: string[] };
 
 /**
- * The stored or proposed policy as the guard sees it. Beyond the payout schema, an enabled policy must
- * be able to reduce a grant: at least one rule needs a weight above 0, and the highest score its rules
- * can add up to must reach reducedAt. A policy that can only ever land in the full band would lift the
- * limit without screening anything. A missing signal with missing 'review' holds the grant rather than
- * scoring, so only a 'score' rule's missingWeight counts toward that highest score.
+ * An enabled policy must be able to reduce a grant: a rule weighted above 0, and reducedAt reachable.
+ * A missing 'review' signal holds rather than scores, so only a 'score' rule's missingWeight counts.
  */
 function readPolicy(raw: unknown): PolicyState {
   const policy = signupRiskPolicySchema.safeParse(parseStoredJson(raw));
@@ -73,7 +70,7 @@ function readPolicy(raw: unknown): PolicyState {
   }
   if (!policy.data.enabled) return { state: 'off' };
   if (!policy.data.rules.some(rule => rule.weight > 0)) {
-    return { state: 'invalid', issues: ['an enabled policy needs at least one rule with a weight above 0'] };
+    return { state: 'invalid', issues: ['An enabled policy needs at least one rule with a weight above 0'] };
   }
   const highestScore = policy.data.rules.reduce(
     (sum, rule) => sum + Math.max(rule.weight, rule.missing === 'score' ? rule.missingWeight : 0),
@@ -99,14 +96,10 @@ function grantsAbove(settings: SignupGrantGuardSettings, limit: number): string[
 }
 
 /**
- * Save-time check that keeps a signup grant above signupGrantUnprotectedMaxCredits from being paid unless
- * signupGrantRiskPolicy is valid and enabled. `current` holds the other stored settings; the proposed value
- * replaces the stored one for `key`. Also refuses a signupGrantRiskPolicy the payout could not read, which
- * would hold every new signup grant. A grant can always be lowered to within the limit, so a configuration
- * that is already out of bounds can be brought back within it one key at a time; a lowering that still
- * leaves the grant above the limit is refused while the policy is off. Payout enforces the same limit on
- * an unassessed tranche whatever sized it (capUnassessedSignupGrant in @bike4mind/services), so this check
- * keeps the settings honest rather than being the only guard.
+ * Refuses saving `key` = `value` (over the stored `current`) if it would leave a signup grant above
+ * signupGrantUnprotectedMaxCredits without a valid, enabled signupGrantRiskPolicy, or store an invalid policy.
+ * Lowering a grant to within the limit is always allowed. Payout applies the same limit
+ * (capUnassessedSignupGrant in @bike4mind/services).
  */
 export function checkSignupGrantSave(
   key: string,

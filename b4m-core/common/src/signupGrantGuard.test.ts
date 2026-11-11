@@ -144,9 +144,10 @@ describe('checkSignupGrantSave: assessment policy', () => {
     const unweighted = { ...enabledPolicy, rules: [{ ...enabledPolicy.rules[0], weight: 0, missingWeight: 3 }] };
     const reason = refused(checkSignupGrantSave('signupGrantRiskPolicy', unweighted, {}));
     expect(reason).toBe(
-      'Signup Grant Assessment Policy is not valid. an enabled policy needs at least one rule with a weight above 0.'
+      'Signup Grant Assessment Policy is not valid. An enabled policy needs at least one rule with a weight above 0.'
     );
   });
+
   it('refuses an enabled policy whose reducedAt the rules can never reach', () => {
     const unreachable = { ...enabledPolicy, reducedAt: 6, reviewAt: 7 };
     const reason = refused(checkSignupGrantSave('signupGrantRiskPolicy', unreachable, {}));
