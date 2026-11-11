@@ -97,11 +97,18 @@ interface BaseAPIOptions {
    */
   defaultWriteRateLimit?: boolean;
   /**
-   * `false` marks this route's writes as ones the app sends on its own (telemetry, socket tickets),
-   * not actions the user took: they never stamp the user's `lastActiveAt` (userActivity.ts) or an
-   * API key's `lastUsedAt`, and are not counted as API-key use. Defaults to true.
+   * `false` marks this route's writes as ones a client or machine sends on its own (telemetry, socket
+   * tickets, polls, ingest), not actions the user took: they never stamp the user's `lastActiveAt`
+   * (userActivity.ts). Defaults to true.
    */
   recordsActivity?: boolean;
+  /**
+   * Whether an API-key call to this route is a use of the key: stamps its `lastUsedAt` and logs a USED
+   * event. Defaults to `recordsActivity`. Set `true` alongside `recordsActivity: false` for machine
+   * routes where the key is genuinely in use (ingest, partner calls, CLI polls), so the key does not
+   * read as unused; leave it to default `false` for first-party telemetry.
+   */
+  recordsKeyUse?: boolean;
 }
 
 /** 405s any method outside `allowedMethods` (GET implies HEAD), setting `Allow`; passes the rest. */
@@ -248,7 +255,7 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
       // requiredScopes (when set) makes an under-scoped key 403 here instead of authorizing.
       router.use(
         apiKeyAuth(resolvedOptions.requiredScopes, resolvedOptions.alsoRequiredScopes, {
-          recordUse: resolvedOptions.recordsActivity !== false,
+          recordUse: resolvedOptions.recordsKeyUse ?? resolvedOptions.recordsActivity !== false,
         })
       );
 

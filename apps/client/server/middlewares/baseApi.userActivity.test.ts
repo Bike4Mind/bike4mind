@@ -88,6 +88,12 @@ describe('baseApi records user activity', () => {
     expect(h.apiKeyAuthCalls).toEqual([[undefined, undefined, { recordUse: false }]]);
   });
 
+  it('keeps counting key use on a machine route that opts out of user activity', () => {
+    baseApi({ auth: true, recordsActivity: false, recordsKeyUse: true });
+    expect(h.useCalls).not.toContain(h.ACTIVITY_SENTINEL);
+    expect(h.apiKeyAuthCalls).toEqual([[undefined, undefined, { recordUse: true }]]);
+  });
+
   it('leaves it off an unauthenticated route', () => {
     baseApi({ auth: false });
     expect(h.useCalls).not.toContain(h.ACTIVITY_SENTINEL);

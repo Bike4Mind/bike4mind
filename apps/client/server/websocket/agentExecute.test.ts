@@ -690,8 +690,8 @@ describe('start command credential threading', () => {
     mockRecordUserActivity.mockClear();
     vi.mocked(verifyApiKey).mockResolvedValueOnce({ keyId: 'key-1', userId: 'user-1', scopes: [] } as never);
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (func as any)(startEvent('b4m_live_x'), {}, noopLogger);
+    const invoke = func as unknown as (...arguments_: unknown[]) => Promise<unknown>;
+    await invoke(startEvent('b4m_live_x'), {}, noopLogger);
 
     expect(verifyApiKey).toHaveBeenCalledWith(expect.anything(), { recordUse: true });
     expect(mockRecordUserActivity).toHaveBeenCalledWith('user-1', noopLogger);
@@ -870,8 +870,8 @@ describe('reconnect command', () => {
   it('neither stamps the user active nor counts the key as used: reattaching is not an action', async () => {
     mockFindActiveBySessionId.mockResolvedValueOnce(null);
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (func as any)(reconnectEvent({ sessionId: 'session-1' }), {}, noopLogger);
+    const invoke = func as unknown as (...arguments_: unknown[]) => Promise<unknown>;
+    await invoke(reconnectEvent({ sessionId: 'session-1' }), {}, noopLogger);
 
     expect(verifyApiKey).toHaveBeenCalledWith(expect.anything(), { recordUse: false });
     expect(mockRecordUserActivity).not.toHaveBeenCalled();

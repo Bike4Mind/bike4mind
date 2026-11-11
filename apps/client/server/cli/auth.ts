@@ -337,9 +337,11 @@ export async function verifyApiKey(
  * `CC_BRIDGE` scope is accepted - a leaked bridge key should have no ability
  * to bill completions or touch other endpoints.
  */
-export async function verifyBridgeApiKey(headers: Record<string, string | undefined>): Promise<ApiKeyInfo> {
-  // Bridge messages are the desktop daemon reporting agent presence and events, not use of the key.
-  return verifyApiKey(headers, { requiredScopes: [ApiKeyScope.CC_BRIDGE], recordUse: false });
+export async function verifyBridgeApiKey(
+  headers: Record<string, string | undefined>,
+  { recordUse }: { recordUse: boolean }
+): Promise<ApiKeyInfo> {
+  return verifyApiKey(headers, { requiredScopes: [ApiKeyScope.CC_BRIDGE], recordUse });
 }
 
 /**

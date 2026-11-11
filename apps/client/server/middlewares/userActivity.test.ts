@@ -11,10 +11,17 @@ import {
   USER_ACTIVITY_STAMP_INTERVAL_MS,
   needsActivityStamp,
   recordUserActivity,
+  resetRecentActivityStamps,
 } from '@server/users/recordUserActivity';
 
 const NOW = new Date('2026-11-11T12:00:00Z');
 const STALE_BEFORE = new Date(NOW.getTime() - USER_ACTIVITY_STAMP_INTERVAL_MS);
+const STAMP_FILTER = {
+  _id: 'user-1',
+  isSystem: { $ne: true },
+  deletion: null,
+  $or: [{ lastActiveAt: null }, { lastActiveAt: { $lte: STALE_BEFORE } }],
+};
 
 function makeReq(method: string, user: Record<string, unknown> | undefined): Request {
   return { method, user, logger: { warn: vi.fn() } } as unknown as Request;
@@ -30,6 +37,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
   mocks.updateOne.mockReset().mockResolvedValue({ acknowledged: true });
+  resetRecentActivityStamps();
 });
 
 describe('userActivityMiddleware', () => {
@@ -37,11 +45,7 @@ describe('userActivityMiddleware', () => {
     const next = run(makeReq(method, { id: 'user-1' }));
 
     expect(next).toHaveBeenCalledOnce();
-    expect(mocks.updateOne).toHaveBeenCalledWith(
-      { _id: 'user-1', $or: [{ lastActiveAt: null }, { lastActiveAt: { $lte: STALE_BEFORE } }] },
-      { $set: { lastActiveAt: NOW } },
-      { timestamps: false }
-    );
+    expect(mocks.updateOne).toHaveBeenCalledWith(STAMP_FILTER, { $set: { lastActiveAt: NOW } }, { timestamps: false });
   });
 
   it.each(['GET', 'HEAD', 'OPTIONS'])('never stamps on a %s: reading is not acting', method => {
@@ -95,11 +99,39 @@ describe('userActivityMiddleware', () => {
 });
 
 describe('recordUserActivity', () => {
-  it('lets the database filter hold the throttle across concurrent callers', () => {
+  it('filters on the window, the system user and pending deletion, so the database holds the guard', () => {
     recordUserActivity('user-1');
 
-    const [filter] = mocks.updateOne.mock.calls[0];
-    expect(filter.$or).toEqual([{ lastActiveAt: null }, { lastActiveAt: { $lte: STALE_BEFORE } }]);
+    expect(mocks.updateOne).toHaveBeenCalledWith(STAMP_FILTER, { $set: { lastActiveAt: NOW } }, { timestamps: false });
+  });
+
+  it('skips the round trip for a user this container stamped inside the window', () => {
+    recordUserActivity('user-1');
+    vi.setSystemTime(NOW.getTime() + 60_000);
+    recordUserActivity('user-1');
+    recordUserActivity('user-2');
+
+    expect(mocks.updateOne).toHaveBeenCalledTimes(2);
+    expect(mocks.updateOne.mock.calls.map(([filter]) => filter._id)).toEqual(['user-1', 'user-2']);
+  });
+
+  it('writes again once the window has passed', () => {
+    recordUserActivity('user-1');
+    vi.setSystemTime(NOW.getTime() + USER_ACTIVITY_STAMP_INTERVAL_MS);
+    recordUserActivity('user-1');
+
+    expect(mocks.updateOne).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries on the next action after a failed write', async () => {
+    mocks.updateOne.mockRejectedValueOnce(new Error('mongo down'));
+    const logger = { warn: vi.fn() };
+
+    recordUserActivity('user-1', logger);
+    await vi.waitFor(() => expect(logger.warn).toHaveBeenCalled());
+    recordUserActivity('user-1', logger);
+
+    expect(mocks.updateOne).toHaveBeenCalledTimes(2);
   });
 });
 

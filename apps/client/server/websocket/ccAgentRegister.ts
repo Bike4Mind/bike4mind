@@ -127,6 +127,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     endpoint: 'ws/cc_agent_register',
     logger,
     handlerName: 'CC_AGENT_REGISTER',
+    recordKeyUse: true,
   });
   if (!auth) return { statusCode: 401 };
   const { userId } = auth;
