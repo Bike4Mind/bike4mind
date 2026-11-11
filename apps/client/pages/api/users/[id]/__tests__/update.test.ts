@@ -1046,6 +1046,7 @@ describe('PUT /api/users/:id/update - admin audit trail', () => {
       await promise;
 
       expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData().appliedCreditDelta).toBe(credits);
       expect(mockAdminUpdateUser.mock.calls[0][1]).toMatchObject({ creditReason: CREDIT_REASON });
       expect(mockRecord).toHaveBeenCalledTimes(1);
       expect(mockRecord).toHaveBeenCalledWith(
@@ -1059,6 +1060,23 @@ describe('PUT /api/users/:id/update - admin audit trail', () => {
           related: { creditTransactionId: 'ctx-1' },
         })
       );
+    });
+
+    it('returns the clamped committed delta, not the requested deduction', async () => {
+      mockUserFindById.mockReturnValue(target({ currentCredits: 40 }));
+      mockAdminUpdateUser.mockResolvedValue({
+        user: target({ currentCredits: 0 }),
+        creditAdjustment: adjustment(-40, 40),
+      });
+      const { res, promise } = run({
+        user: ADMIN,
+        userId: 'other-user',
+        body: { creditDelta: -100, creditReason: CREDIT_REASON },
+      });
+      await promise;
+
+      expect(res._getJSONData().appliedCreditDelta).toBe(-40);
+      expect(mockRecord.mock.calls[0][1].details.credits).toBe(-40);
     });
 
     it('omits related when the adjustment carries no ledger transaction id', async () => {

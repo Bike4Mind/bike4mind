@@ -1,31 +1,13 @@
-import React, { useState } from 'react';
-import {
-  Box,
-  Typography,
-  Table,
-  Sheet,
-  Alert,
-  Stack,
-  FormControl,
-  FormLabel,
-  Input,
-  Chip,
-  Snackbar,
-  Card,
-  Select,
-  Option,
-  Button,
-  LinearProgress,
-} from '@mui/joy';
-import RefreshIcon from '@mui/icons-material/Refresh';
-import SortIcon from '@mui/icons-material/Sort';
-import CreditCardIcon from '@mui/icons-material/CreditCard';
-import SharedPaginationControls from '@client/app/components/admin/Subscriptions/components/PaginationControls';
-import { useIsMobile } from '@client/app/hooks/useIsMobile';
+import React, { useEffect, useState } from 'react';
+import { Button, Stack, Typography } from '@mui/joy';
+import { useNavigate } from '@tanstack/react-router';
+import { adminAuditLogPath } from '@bike4mind/common';
+import { useGetUser } from '@client/app/hooks/data/user';
 import type { AdminUserListItem } from '@bike4mind/server-utils/app/utils/adminUserProjection';
+import { AdminPageHeader, DataTable, EmptyState, FilterBar } from '../../shared';
+import { AdjustCreditsDialog } from '../../Users/Profile/actions/AdjustCreditsDialog';
+import { useOpenUserProfile } from '../../Users/Profile/useOpenUserProfile';
 import { useUserCreditsManager } from '../hooks/useUserCreditsManager';
-import ViewUserProfile from './ViewUserProfile';
-import { CreditAdjustmentModal } from './CreditAdjustmentModal';
 
 interface UserCreditsManagerProps {
   onRefresh?: () => void;
@@ -46,24 +28,18 @@ const getLastLoginDate = (user: AdminUserListItem): Date | null => {
   return source ? new Date(source) : null;
 };
 
-const getActivityStatus = (user: AdminUserListItem): { label: string; color: 'success' | 'neutral' } => {
-  if (user.isOnline) return { label: 'Online', color: 'success' };
-  if (user.lastActiveAt) {
-    const daysSince = (Date.now() - new Date(user.lastActiveAt).getTime()) / 86_400_000;
-    if (daysSince <= ACTIVE_WITHIN_DAYS) return { label: 'Active', color: 'success' };
-  }
-  return { label: 'Inactive', color: 'neutral' };
+const getActivityStatus = (user: AdminUserListItem): string => {
+  if (user.isOnline) return 'Online';
+  if (user.lastActiveAt && (Date.now() - new Date(user.lastActiveAt).getTime()) / 86_400_000 <= ACTIVE_WITHIN_DAYS)
+    return 'Active';
+  return 'Inactive';
 };
 
 export const UserCreditsManager: React.FC<UserCreditsManagerProps> = ({ onRefresh }) => {
-  const [selectedUser, setSelectedUser] = useState<AdminUserListItem | null>(null);
-  const [creditsModalOpen, setCreditsModalOpen] = useState(false);
-  const isMobile = useIsMobile();
-
-  const openCreditsModal = (user: AdminUserListItem) => {
-    setSelectedUser(user);
-    setCreditsModalOpen(true);
-  };
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  const selectedUser = useGetUser(selectedUserId);
+  const openUserProfile = useOpenUserProfile();
+  const navigate = useNavigate();
 
   const {
     searchQuery,
@@ -74,244 +50,151 @@ export const UserCreditsManager: React.FC<UserCreditsManagerProps> = ({ onRefres
     setPageSize,
     currentPage,
     setCurrentPage,
-    totalPages,
     totalUsers,
-    notification,
-    setNotification,
-    filteredAndSortedUsers,
-    paginatedUsers,
+    users,
+    allUsers,
     handleRefresh,
-    handleCreditAdjustment,
-    isLoading,
-    error,
   } = useUserCreditsManager(onRefresh);
 
+  useEffect(() => {
+    if (!allUsers.isFetching && allUsers.data && currentPage > Math.max(1, allUsers.data.totalPages)) {
+      setCurrentPage(Math.max(1, allUsers.data.totalPages));
+    }
+  }, [allUsers.data, allUsers.isFetching, currentPage, setCurrentPage]);
+
+  const openAudit = () => {
+    setSelectedUserId(null);
+    const search = Object.fromEntries(new URL(adminAuditLogPath({ category: 'credits' }), 'http://local').searchParams);
+    void navigate({ to: '/admin', search: search as never });
+  };
+
   return (
-    <Box sx={{ height: '100%', p: 0.5 }}>
-      <Card variant="outlined" sx={{ mb: 1, px: 2, py: 1 }}>
-        <Stack spacing={1}>
-          {/* Search - always full width */}
-          <FormControl>
-            <FormLabel sx={{ fontSize: 'sm', display: { xs: 'none', sm: 'block' } }}>Search users</FormLabel>
-            <Input
-              placeholder="Search by name or email..."
-              value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
-              size="sm"
-            />
-          </FormControl>
-
-          {/* Sort + Refresh - row on all viewports */}
-          <Stack direction="row" spacing={1} alignItems="center">
-            <FormControl sx={{ flex: 1 }}>
-              <FormLabel sx={{ fontSize: 'sm', display: { xs: 'none', sm: 'block' } }}>Sort by Credits</FormLabel>
-              <Select
-                placeholder="Sort by credits"
-                startDecorator={<SortIcon />}
-                value={sortDirection}
-                onChange={(_, value) => value && setSortDirection(value)}
-                size="sm"
-              >
-                <Option value="desc">Highest First</Option>
-                <Option value="asc">Lowest First</Option>
-              </Select>
-            </FormControl>
-            <Button
-              size="sm"
-              startDecorator={<RefreshIcon />}
-              onClick={handleRefresh}
-              sx={{ alignSelf: { xs: 'flex-end', sm: 'center' }, flexShrink: 0 }}
-            >
-              Refresh
-            </Button>
-          </Stack>
-        </Stack>
-      </Card>
-
-      <SharedPaginationControls
-        currentPage={currentPage}
-        totalPages={totalPages}
-        onPageChange={setCurrentPage}
-        itemsPerPage={pageSize}
-        onItemsPerPageChange={size => {
-          setPageSize(size);
-          setCurrentPage(1);
-        }}
-        totalItems={totalUsers}
-        pageLimitOptions={[10, 20, 50, 100]}
+    <Stack gap={3} data-testid="user-credits-manager">
+      <AdminPageHeader
+        level="section"
+        title="User credits"
+        count={allUsers.error ? undefined : totalUsers}
+        description="Find a user, review their balance and adjust credits."
+        actions={
+          <Button
+            variant="outlined"
+            onClick={handleRefresh}
+            disabled={allUsers.isFetching}
+            data-testid="credits-refresh-btn"
+          >
+            Refresh users
+          </Button>
+        }
       />
-
-      {isLoading ? (
-        <LinearProgress />
-      ) : error ? (
-        <Alert color="danger" sx={{ mb: 2 }}>
-          Error loading users. Please try refreshing.
-        </Alert>
-      ) : filteredAndSortedUsers.length === 0 ? (
-        <Alert color="neutral" sx={{ mb: 2 }}>
-          No users found. {searchQuery && 'Try adjusting your search.'}
-        </Alert>
-      ) : isMobile ? (
-        <Stack spacing={1}>
-          {paginatedUsers.map(user => {
-            const lastLogin = getLastLoginDate(user);
-            const status = getActivityStatus(user);
-            return (
-              <Card key={user.id} variant="outlined" sx={{ p: 1, gap: 0 }}>
-                {/* Row 1: name + status chips */}
-                <Stack direction="row" justifyContent="space-between" alignItems="center">
-                  <Typography level="body-sm" fontWeight="lg">
-                    {user.name || 'No Name'}
-                  </Typography>
-                  <Stack direction="row" spacing={0.5}>
-                    <Chip color={status.color} size="sm">
-                      {status.label}
-                    </Chip>
-                    {user.isAdmin && (
-                      <Chip color="warning" size="sm">
-                        Admin
-                      </Chip>
-                    )}
-                  </Stack>
-                </Stack>
-
-                {/* Row 2: email */}
-                <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-                  {user.email || 'No Email'}
+      <FilterBar
+        state={{ query: searchQuery, view: '', filters: { order: sortDirection } }}
+        searchLabel="Search users by name or email"
+        filters={[
+          {
+            id: 'order',
+            label: 'Credits',
+            options: [
+              { value: 'desc', label: 'Highest first' },
+              { value: 'asc', label: 'Lowest first' },
+            ],
+          },
+        ]}
+        onChange={patch => {
+          if (patch.query !== undefined) setSearchQuery(patch.query);
+          if (patch.filters?.order) setSortDirection(patch.filters.order === 'asc' ? 'asc' : 'desc');
+        }}
+      />
+      <DataTable
+        label="User credits"
+        testId="user-credits-table"
+        rows={users}
+        getRowId={user => user.id}
+        loading={allUsers.isLoading || allUsers.isFetching}
+        error={allUsers.error ? 'Could not load user credits.' : undefined}
+        onRetry={handleRefresh}
+        pagination={{
+          page: currentPage,
+          pageSize,
+          total: totalUsers,
+          onPageChange: setCurrentPage,
+          onPageSizeChange: setPageSize,
+        }}
+        empty={
+          <EmptyState
+            title={searchQuery ? 'No users match this search' : 'No users found'}
+            description={searchQuery ? 'Try another name or email.' : undefined}
+            action={
+              <Button variant="outlined" onClick={searchQuery ? () => setSearchQuery('') : handleRefresh}>
+                {searchQuery ? 'Clear search' : 'Refresh users'}
+              </Button>
+            }
+          />
+        }
+        columns={[
+          {
+            id: 'user',
+            label: 'User',
+            render: user => (
+              <Stack gap={0.25}>
+                <Typography level="body-sm">{user.name || 'No name'}</Typography>
+                <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+                  {user.email || 'No email'}
                 </Typography>
-
-                {/* Row 3: credits + last login */}
-                <Stack direction="row" spacing={2} sx={{ mt: 0.5 }}>
-                  <Typography level="body-xs">
-                    Credits: <strong>{(user.currentCredits || 0).toLocaleString()}</strong>
-                  </Typography>
-                  <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-                    Login: {lastLogin ? lastLogin.toLocaleDateString() : 'Never'}
-                  </Typography>
-                </Stack>
-
-                {/* Row 4: actions */}
-                <Stack direction="row" spacing={1} sx={{ mt: 0.75 }}>
-                  <ViewUserProfile userId={user.id} size="sm" />
-                  <Button
-                    size="sm"
-                    variant="outlined"
-                    color="primary"
-                    startDecorator={<CreditCardIcon />}
-                    onClick={() => openCreditsModal(user)}
-                    sx={{ flex: 1 }}
-                  >
-                    Adjust Credits
-                  </Button>
-                </Stack>
-              </Card>
-            );
-          })}
+              </Stack>
+            ),
+          },
+          {
+            id: 'credits',
+            label: 'Credits',
+            numeric: true,
+            render: user => (user.currentCredits ?? 0).toLocaleString(),
+          },
+          { id: 'login', label: 'Last login', render: user => getLastLoginDate(user)?.toLocaleDateString() ?? 'Never' },
+          {
+            id: 'status',
+            label: 'Status',
+            render: user => (
+              <Stack gap={0.25}>
+                <Typography level="body-sm">{getActivityStatus(user)}</Typography>
+                {user.isAdmin && <Typography level="body-xs">Admin</Typography>}
+              </Stack>
+            ),
+          },
+          { id: 'created', label: 'Created', render: user => new Date(user.createdAt).toLocaleDateString() },
+          {
+            id: 'actions',
+            label: 'Actions',
+            render: user => (
+              <Stack direction="row" gap={1} flexWrap="wrap">
+                <Button size="sm" variant="outlined" color="neutral" onClick={() => void openUserProfile(user.id)}>
+                  View
+                </Button>
+                <Button size="sm" variant="outlined" onClick={() => setSelectedUserId(user.id)}>
+                  Adjust credits
+                </Button>
+              </Stack>
+            ),
+          },
+        ]}
+      />
+      {selectedUserId && selectedUser.isLoading && <Typography role="status">Loading current balance...</Typography>}
+      {selectedUserId && selectedUser.error && (
+        <Stack direction="row" gap={1} alignItems="center" role="alert">
+          <Typography>Could not load the current balance.</Typography>
+          <Button onClick={() => void selectedUser.refetch()}>Retry</Button>
+          <Button variant="plain" onClick={() => setSelectedUserId(null)}>
+            Cancel
+          </Button>
         </Stack>
-      ) : (
-        <Sheet sx={{ borderRadius: 'md', overflow: 'auto' }}>
-          <Table stickyHeader hoverRow sx={{ minWidth: 'auto' }}>
-            <thead>
-              <tr>
-                <th style={{ width: '20%' }}>User</th>
-                <th style={{ width: '15%' }}>Credits</th>
-                <th style={{ width: '15%' }}>Last Login</th>
-                <th style={{ width: '15%' }}>Status</th>
-                <th style={{ width: '15%' }}>Created</th>
-                <th style={{ width: '20%' }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {paginatedUsers.map(user => {
-                const lastLogin = getLastLoginDate(user);
-                const status = getActivityStatus(user);
-                return (
-                  <tr key={user.id}>
-                    <td>
-                      <Stack>
-                        <Typography level="body-sm" fontWeight="lg">
-                          {user.name || 'No Name'}
-                        </Typography>
-                        <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-                          {user.email || 'No Email'}
-                        </Typography>
-                      </Stack>
-                    </td>
-                    <td>
-                      <Typography level="body-sm" fontWeight="lg" color="primary">
-                        {(user.currentCredits || 0).toLocaleString()}
-                      </Typography>
-                    </td>
-                    <td>
-                      <Typography level="body-xs">{lastLogin ? lastLogin.toLocaleDateString() : 'Never'}</Typography>
-                    </td>
-                    <td>
-                      <Stack direction="row" spacing={1}>
-                        <Chip color={status.color} size="sm">
-                          {status.label}
-                        </Chip>
-                        {user.isAdmin && (
-                          <Chip color="warning" size="sm">
-                            Admin
-                          </Chip>
-                        )}
-                      </Stack>
-                    </td>
-                    <td>
-                      <Typography level="body-xs">{new Date(user.createdAt).toLocaleDateString()}</Typography>
-                    </td>
-                    <td>
-                      <Stack direction="row" spacing={1}>
-                        <ViewUserProfile userId={user.id} size="sm" />
-                        <Button
-                          size="sm"
-                          variant="outlined"
-                          color="primary"
-                          startDecorator={<CreditCardIcon />}
-                          onClick={() => openCreditsModal(user)}
-                        >
-                          Credits
-                        </Button>
-                      </Stack>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </Table>
-        </Sheet>
       )}
-
-      <SharedPaginationControls
-        currentPage={currentPage}
-        totalPages={totalPages}
-        onPageChange={setCurrentPage}
-        itemsPerPage={pageSize}
-        onItemsPerPageChange={size => {
-          setPageSize(size);
-          setCurrentPage(1);
-        }}
-        totalItems={totalUsers}
-        pageLimitOptions={[10, 20, 50, 100]}
-      />
-
-      <Snackbar
-        open={notification.open}
-        color={notification.color}
-        onClose={() => setNotification(prev => ({ ...prev, open: false }))}
-        autoHideDuration={5000}
-        variant="soft"
-        sx={{ maxWidth: 400 }}
-      >
-        {notification.message}
-      </Snackbar>
-
-      <CreditAdjustmentModal
-        open={creditsModalOpen}
-        onClose={() => setCreditsModalOpen(false)}
-        selectedUser={selectedUser}
-        onCreditAdjustment={handleCreditAdjustment}
-      />
-    </Box>
+      {selectedUserId && !selectedUser.error && selectedUser.data && (
+        <AdjustCreditsDialog
+          key={selectedUserId}
+          user={selectedUser.data}
+          onClose={() => setSelectedUserId(null)}
+          onAudit={openAudit}
+        />
+      )}
+    </Stack>
   );
 };
