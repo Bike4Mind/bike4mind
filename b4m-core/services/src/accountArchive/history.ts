@@ -1,14 +1,14 @@
 type Row = Record<string, unknown>;
 
 export type AccountHistoryReaders = {
-  toolExecutions: (userId: string) => Promise<object[]>;
-  agentExecutions: (userId: string) => Promise<object[]>;
-  codeAgentEvents: (userId: string) => Promise<object[]>;
-  creditTransactions: (userId: string) => Promise<object[]>;
-  creditLots: (userId: string) => Promise<object[]>;
-  usageEvents: (userId: string) => Promise<object[]>;
-  authAudit: (userId: string) => Promise<object[]>;
-  apiKeyAudit: (userId: string) => Promise<object[]>;
+  toolExecutions: (userId: string) => Promise<Row[]>;
+  agentExecutions: (userId: string) => Promise<Row[]>;
+  codeAgentEvents: (userId: string) => Promise<Row[]>;
+  creditTransactions: (userId: string) => Promise<Row[]>;
+  creditLots: (userId: string) => Promise<Row[]>;
+  usageEvents: (userId: string) => Promise<Row[]>;
+  authAudit: (userId: string) => Promise<Row[]>;
+  apiKeyAudit: (userId: string) => Promise<Row[]>;
 };
 
 const fields = <T extends Row>(row: Row, names: readonly string[]): T => {
@@ -53,7 +53,10 @@ const usageFields = [
 const authFields = ['event', 'strategy', 'createdAt'] as const;
 const keyAuditFields = ['action', 'createdAt'] as const;
 
-/** Call only after authorizing the archive requester for this account. */
+/**
+ * Call only after authorizing the archive requester for this account.
+ * The API-key audit covers actions the user took (`actorUserId`), not actions others took on the user's keys.
+ */
 export async function collectAccountHistory(userId: string, readers: AccountHistoryReaders) {
   if (!userId) throw new Error('Account id is required');
   const [tools, agents, events, transactions, lots, usage, auth, keys] = await Promise.all([
@@ -67,9 +70,9 @@ export async function collectAccountHistory(userId: string, readers: AccountHist
     readers.apiKeyAudit(userId),
   ]);
 
-  const owned = (rows: object[], field: string) => rows.filter(row => (row as Row)[field] === userId) as Row[];
-  const billedToUser = (rows: object[]) =>
-    rows.filter(row => (row as Row).ownerId === userId && (row as Row).ownerType === 'User') as Row[];
+  // Readers must return owner ids as strings: strict equality drops ObjectId-typed ids.
+  const owned = (rows: Row[], field: string) => rows.filter(row => row[field] === userId);
+  const billedToUser = (rows: Row[]) => rows.filter(row => row.ownerId === userId && row.ownerType === 'User');
   return {
     toolExecutions: owned(tools, 'userId').map(row => fields(row, toolFields)),
     agentExecutions: owned(agents, 'userId').map(row => fields(row, agentFields)),

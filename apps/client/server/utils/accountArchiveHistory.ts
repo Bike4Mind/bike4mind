@@ -21,18 +21,20 @@ export async function collectAccountHistoryFromDatabase(userId: string) {
         .select(projection('userId', ['toolName', 'timestamp', 'success', 'executionTimeMs']))
         .sort({ timestamp: -1 })
         .lean(),
-    agentExecutions: async id =>
-      agentExecutionRepository.find(
+    agentExecutions: async id => {
+      const rows = await agentExecutionRepository.find(
         { userId: id },
         {
           ...projection('userId', ['status', 'model', 'totalCreditsUsed', 'startedAt', 'completedAt', 'createdAt']),
           sort: { createdAt: -1 },
         }
-      ),
+      );
+      return rows.map(row => Object.fromEntries(Object.entries(row)));
+    },
     codeAgentEvents: async id =>
       CodeAgentEvent.find({ userId: id })
         .select(projection('userId', ['type', 'status', 'role', 'occurredAt', 'isError', 'allow', 'resolvedBy']))
-        .sort({ createdAt: -1 })
+        .sort({ occurredAt: -1 })
         .lean(),
     creditTransactions: async id =>
       CreditTransaction.find({ ownerId: id, ownerType: 'User' })
