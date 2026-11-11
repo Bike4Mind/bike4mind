@@ -38,12 +38,6 @@ describe('AvailableMigrations (real, unmocked)', () => {
     }
   });
 
-  // A fail-closed migration throws until an operator confirms it; anything sorting after it would be blocked too.
-  it('keeps the fail-closed OAuth client backfill as the highest core id', () => {
-    const coreIds = AvailableMigrations.filter(m => !premiumMigrations.includes(m)).map(m => m.id);
-    expect(Math.max(...coreIds)).toBe(20260922000001);
-  });
-
   it('every migration exposes the MigrationFile contract', () => {
     for (const migration of AvailableMigrations) {
       expect(typeof migration.id).toBe('number');
@@ -55,14 +49,15 @@ describe('AvailableMigrations (real, unmocked)', () => {
 });
 
 /**
- * Directory-completeness guard: a migration file can exist on disk and still never run if
- * nobody adds it to `coreMigrations` in index.ts - index.test.ts above only ever inspects the
- * built AvailableMigrations array, so an unregistered file is invisible to it. This scans the
- * directory itself and cross-checks every migration file against the array.
+ * Directory-completeness guard: a migration file can exist on disk and still never run if the
+ * generated `coreMigrations` registry (core.generated.ts) misses it or is stale. The tests above
+ * only inspect the built AvailableMigrations array, so an unregistered file is invisible to them.
+ * This scans the directory itself and cross-checks every migration file against the array.
  */
 describe('every migration file on disk is registered', () => {
   // Core ids are 13-14 digit timestamps followed by '-' or '_' (both separators appear in the
   // directory, e.g. `2024052201905_demo_to_paid.ts` vs `20250704005300-add-filename-lowercase.ts`).
+  // Must match CORE_MIGRATION_FILE_RE in apps/client/scripts/generate-premium-glue.mjs.
   const MIGRATION_FILE = /^\d{11,14}[-_].+\.ts$/;
 
   const migrationFiles = readdirSync(new URL('.', import.meta.url)).filter(

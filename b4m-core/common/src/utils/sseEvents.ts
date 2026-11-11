@@ -275,12 +275,12 @@ function resolveResponseText(text: (string | null | undefined)[]): string {
  * public surfaces until deliberately surfaced here.
  *
  * It does NOT scan the text. Non-reply frames are dropped on the adapter's channel tag, and
- * families that cannot be separated that way are refused before the stream opens - see
- * {@link inlinesReasoningIntoText}. Scanning for `<think>` here would be worse than
+ * models that cannot be separated that way are refused before the stream opens - see
+ * {@link reasoningChannelOf}. Scanning for `<think>` here would be worse than
  * useless: a model is free to write the token in its ANSWER (ask one to explain the tag),
  * and escapeThinkMarkers defangs marker-shaped text inside REASONING only, so treating it
  * as a marker truncates a legitimate paid reply. A new public caller must run the same
- * family gate before it streams.
+ * model gate before it streams.
  */
 export function buildPublicSSEEvent(text: (string | null | undefined)[], info?: CompletionInfo): SSEContentEvent {
   // A tagged frame is reasoning or a raw tool artifact, never the reply. Its usage still

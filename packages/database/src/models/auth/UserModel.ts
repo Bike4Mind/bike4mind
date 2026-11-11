@@ -2042,7 +2042,7 @@ UserSchema.index({ createdAt: 1 });
 // accounts created before signup network capture carry no signupMeta. Explicit name so migration
 // 20260921235973 and autoIndex agree - see the authProviders_strategy_id note above.
 UserSchema.index({ 'signupMeta.capturedAt': 1 }, { name: 'user_signupMeta_capturedAt', sparse: true });
-// Serves the linked-account lookup by signup IP (apps/client/server/billing/linkedAccounts.ts). Partial:
+// Serves the linked-account lookup by signup IP (packages/server-utils/src/billing/linkedAccounts.ts). Partial:
 // the signupIpRetention cron clears the IP, and older accounts never had one. Explicit name so migration
 // 20260921236600 and autoIndex agree.
 UserSchema.index(

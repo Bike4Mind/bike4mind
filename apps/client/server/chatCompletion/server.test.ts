@@ -18,7 +18,7 @@ const mockResource = vi.hoisted(() => ({
   App: { stage: 'test' },
 }));
 // Real entitlements pull in mongoose models at import time, which the @bike4mind/database mock lacks.
-vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
 vi.mock('@bike4mind/server-utils/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn() }));
 vi.mock('sst', () => ({ Resource: mockResource }));
 

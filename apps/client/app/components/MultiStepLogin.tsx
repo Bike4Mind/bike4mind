@@ -5,7 +5,7 @@ import {
   getLoginErrorMessage,
   isBlockedAccountLoginError,
   withSupportContact,
-} from '@client/app/utils/loginErrorMessages';
+} from '@bike4mind/server-utils/app/utils/loginErrorMessages';
 import { markFirstSignupSession } from '@client/app/utils/firstSignupSession';
 import { useTranslation, Trans } from 'react-i18next';
 import { toast } from 'sonner';

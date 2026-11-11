@@ -760,9 +760,9 @@ export const DiscoveryDroppedRecord = z.object({
 });
 
 /**
- * The six blocks below are the per-model detail behind the counts in
+ * The seven blocks below are the per-model detail behind the counts in
  * DiscoveryRunChanges, and MUST STAY IN SYNC with the service shapes the runner
- * persists verbatim: PriceFlag, PlannedPriceRow, PriceOverride, PriceSkip,
+ * persists verbatim: PriceFlag, PlannedPriceRow, PriceOverride, LongContextGap, PriceSkip,
  * LifecycleTransition and CatalogDiffEntry in
  * b4m-core/services/src/modelDiscoveryService/types.ts.
  *
@@ -814,6 +814,23 @@ export const DiscoveryPriceOverride = z.object({
   /** Sources that disagreed with it and were not applied. */
   dissenting: z.array(z.string()),
   applied: PerMTokRates,
+  detail: z.string(),
+});
+
+/**
+ * A flat row that a trusted source's long-context ladder outruns: prompts past a
+ * reachable bracket bill at the base rate. Applied, not refused, so it is kept
+ * apart from the flags (and out of the PriceFlagged alarm); an operator fixes it
+ * by repricing the row as a ladder. Mirrors LongContextGap in the service types.
+ */
+export const DiscoveryLongContextGap = z.object({
+  modelId: z.string().min(1),
+  /** The trusted source whose ladder the row does not carry. */
+  source: z.string(),
+  /** The flat rate the row bills every prompt at. */
+  base: PerMTokRates,
+  /** The published brackets a prompt can reach under the flat row. */
+  brackets: z.array(PerMTokRates.extend({ aboveTokens: z.number() })),
   detail: z.string(),
 });
 
@@ -871,6 +888,7 @@ export const DiscoveryRunDetailTotals = z.object({
   priceFlags: z.number().int().nonnegative().optional(),
   priceRows: z.number().int().nonnegative().optional(),
   priceOverrides: z.number().int().nonnegative().optional(),
+  longContextGaps: z.number().int().nonnegative().optional(),
   priceSkips: z.number().int().nonnegative().optional(),
   lifecycleTransitions: z.number().int().nonnegative().optional(),
   catalogDiff: z.number().int().nonnegative().optional(),
@@ -883,6 +901,7 @@ export type IDiscoveryDroppedRecord = z.infer<typeof DiscoveryDroppedRecord>;
 export type IDiscoveryPriceFlag = z.infer<typeof DiscoveryPriceFlag>;
 export type IDiscoveryPlannedPriceRow = z.infer<typeof DiscoveryPlannedPriceRow>;
 export type IDiscoveryPriceOverride = z.infer<typeof DiscoveryPriceOverride>;
+export type IDiscoveryLongContextGap = z.infer<typeof DiscoveryLongContextGap>;
 export type IDiscoveryPriceSkip = z.infer<typeof DiscoveryPriceSkip>;
 export type IDiscoverySkippedSource = z.infer<typeof DiscoverySkippedSource>;
 export type IDiscoveryLifecycleTransition = z.infer<typeof DiscoveryLifecycleTransition>;
@@ -927,6 +946,7 @@ export const ModelDiscoveryRun = z.object({
   priceFlags: DiscoveryPriceFlag.array().optional(),
   priceRows: DiscoveryPlannedPriceRow.array().optional(),
   priceOverrides: DiscoveryPriceOverride.array().optional(),
+  longContextGaps: DiscoveryLongContextGap.array().optional(),
   priceSkips: DiscoveryPriceSkip.array().optional(),
   lifecycleTransitions: DiscoveryLifecycleTransition.array().optional(),
   catalogDiff: DiscoveryCatalogDiffEntry.array().optional(),

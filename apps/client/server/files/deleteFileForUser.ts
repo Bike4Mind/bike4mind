@@ -17,10 +17,10 @@ import { recomputeStatsForLakeTags } from '@bike4mind/server-utils/dataLakes/rec
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { lakeMembershipAuditDb } from '@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { getGeneratedCopyStore } from '@server/files/generatedCopyStore';
-import { createCdnInvalidationBatch } from '@server/services/cdn/invalidateRouterCdn';
+import { getGeneratedCopyStore } from '@bike4mind/server-utils/files/generatedCopyStore';
+import { createCdnInvalidationBatch } from '@bike4mind/server-utils/services/cdn/invalidateRouterCdn';
 import { adjustOwnerStorageInSession } from '@bike4mind/server-utils/s3/storageCharge';
-import { unpublishUserArtifactsBySource } from '@server/services/publish/purgeUserPublishedArtifacts';
+import { unpublishUserArtifactsBySource } from '@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts';
 import type { Request } from 'express';
 
 /**

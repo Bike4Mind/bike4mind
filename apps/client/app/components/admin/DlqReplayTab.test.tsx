@@ -6,6 +6,8 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import DlqReplayTab from './DlqReplayTab';
 
 const state = vi.hoisted(() => ({
+  retentionSeconds: undefined as number | undefined,
+  sentTimestamp: '1700000000000',
   history: [] as Array<{
     id: string;
     queueLabel: string;
@@ -17,7 +19,16 @@ const state = vi.hoisted(() => ({
     replayedByName: string;
     createdAt: string;
   }>,
+  queues: [] as Array<Record<string, unknown>>,
 }));
+
+const QUEUE_ONE = {
+  label: 'q1',
+  displayName: 'Queue One',
+  application: 'app',
+  approximateMessageCount: 1,
+  approximateNotVisibleCount: 0,
+};
 
 const h = vi.hoisted(() => ({ user: null as null | { isAdmin?: boolean; adminPermissions?: string[] } }));
 
@@ -25,21 +36,13 @@ vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUs
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
 vi.mock('@client/app/hooks/data/dlqManagement', () => ({
   useDlqQueues: () => ({
-    data: [
-      {
-        label: 'q1',
-        displayName: 'Queue One',
-        application: 'app',
-        approximateMessageCount: 1,
-        approximateNotVisibleCount: 0,
-      },
-    ],
+    data: state.queues.map(q => ({ messageRetentionSeconds: state.retentionSeconds, ...q })),
     isLoading: false,
     isError: false,
     refetch: vi.fn(),
   }),
   useDlqMessages: () => ({
-    data: [{ messageId: 'm1', body: '{}', sentTimestamp: '1700000000000', approximateReceiveCount: '1' }],
+    data: [{ messageId: 'm1', body: '{}', sentTimestamp: state.sentTimestamp, approximateReceiveCount: '1' }],
     isLoading: false,
     isError: false,
     refetch: vi.fn(),
@@ -69,18 +72,25 @@ function renderTab() {
   return result;
 }
 
-const renderWithQueueSelected = async () => {
+const selectQueue = async (name: RegExp) => {
+  await userEvent.click(screen.getByRole('combobox'));
+  await userEvent.click(await screen.findByRole('option', { name }));
+};
+
+const renderWithQueueSelected = async (name = /Queue One/) => {
   render(
     <CssVarsProvider theme={theme}>
       <DlqReplayTab />
     </CssVarsProvider>
   );
-  await userEvent.click(screen.getByRole('combobox'));
-  await userEvent.click(await screen.findByRole('option', { name: /Queue One/ }));
+  await selectQueue(name);
 };
 
 beforeEach(() => {
   state.history = [];
+  state.queues = [QUEUE_ONE];
+  state.retentionSeconds = undefined;
+  state.sentTimestamp = '1700000000000';
   h.user = null;
 });
 
@@ -167,5 +177,146 @@ describe('DlqReplayTab replay permission', () => {
 
     expect(screen.getByTestId('dlq-replay-all')).toBeEnabled();
     expect(screen.getByTestId('dlq-replay-single-m1')).toBeEnabled();
+  });
+});
+
+describe('DlqReplayTab queue hint', () => {
+  const webhooks = {
+    ...QUEUE_ONE,
+    label: 'webhook-delivery',
+    displayName: 'Webhook Delivery',
+    description: 'Delivers outbound webhooks.',
+    replay: 'unsafe',
+    replayNote: 'A replay posts the webhook again.',
+    owner: 'Integrations',
+  };
+  const vectorize = {
+    ...QUEUE_ONE,
+    label: 'fab-file-vectorize',
+    displayName: 'File Vectorize',
+    description: 'Builds search vectors for a file.',
+    replay: 'safe',
+    replayNote: 'Vectors are upserted.',
+    owner: 'Knowledge files',
+  };
+
+  it('shows the selected queue description, replay class, note and owner', async () => {
+    state.queues = [webhooks, vectorize];
+    await renderWithQueueSelected(/Webhook Delivery/);
+
+    const hint = screen.getByTestId('dlq-queue-hint');
+    expect(hint).toHaveTextContent('Delivers outbound webhooks.');
+    expect(hint).toHaveTextContent('A replay posts the webhook again.');
+    expect(hint).toHaveTextContent('Owner: Integrations');
+    expect(screen.getByTestId('dlq-queue-hint-replay')).toHaveTextContent('Unsafe to replay');
+    expect(screen.getByTestId('dlq-queue-hint-replay')).toHaveAttribute('data-tone', 'bad');
+  });
+
+  it('updates the hint when another queue is selected', async () => {
+    state.queues = [webhooks, vectorize];
+    await renderWithQueueSelected(/Webhook Delivery/);
+    await selectQueue(/File Vectorize/);
+
+    expect(screen.getByTestId('dlq-queue-hint')).toHaveTextContent('Builds search vectors for a file.');
+    expect(screen.getByTestId('dlq-queue-hint-replay')).toHaveTextContent('Safe to replay');
+    expect(screen.getByTestId('dlq-queue-hint-replay')).toHaveAttribute('data-tone', 'good');
+  });
+
+  it('shows an unsafe chip for a replay class this client does not know', async () => {
+    state.queues = [{ ...webhooks, replay: 'needs-review' }];
+    await renderWithQueueSelected(/Webhook Delivery/);
+
+    expect(screen.getByTestId('dlq-queue-hint-replay')).toHaveTextContent('Replay safety unknown');
+    expect(screen.getByTestId('dlq-queue-hint-replay')).toHaveAttribute('data-tone', 'bad');
+  });
+
+  it('shows no hint when no queue is selected', () => {
+    state.queues = [webhooks];
+    render(
+      <CssVarsProvider theme={theme}>
+        <DlqReplayTab />
+      </CssVarsProvider>
+    );
+
+    expect(screen.queryByTestId('dlq-queue-hint')).not.toBeInTheDocument();
+  });
+
+  it('shows no hint for a queue without a description', async () => {
+    await renderWithQueueSelected();
+
+    expect(screen.getByTestId('dlq-replay-all')).toBeInTheDocument();
+    expect(screen.queryByTestId('dlq-queue-hint')).not.toBeInTheDocument();
+  });
+});
+
+describe('DlqReplayTab age and expiry', () => {
+  const HOUR = 3600 * 1000;
+
+  it('shows age and time until expiry per message', async () => {
+    state.retentionSeconds = 14 * 24 * 3600;
+    state.sentTimestamp = String(Date.now() - 10.5 * HOUR);
+
+    await renderWithQueueSelected();
+
+    expect(screen.getByTestId('dlq-age-m1')).toHaveTextContent('10h 30m');
+    expect(screen.getByTestId('dlq-expires-m1')).toHaveTextContent('13d 13h');
+  });
+
+  it('shows a different expiry for a shorter retention', async () => {
+    state.retentionSeconds = 4 * 24 * 3600;
+    state.sentTimestamp = String(Date.now() - 10.5 * HOUR);
+
+    await renderWithQueueSelected();
+
+    expect(screen.getByTestId('dlq-expires-m1')).toHaveTextContent('3d 13h');
+  });
+
+  it('flags a message within 24 hours of expiry', async () => {
+    state.retentionSeconds = 4 * 24 * 3600;
+    state.sentTimestamp = String(Date.now() - 80.5 * HOUR);
+
+    await renderWithQueueSelected();
+
+    const expires = screen.getByTestId('dlq-expires-m1');
+    expect(expires).toHaveTextContent(/^15h \d+m$/);
+    expect(expires).toHaveAttribute('data-warn', 'true');
+  });
+
+  it('does not flag a message with plenty of time left', async () => {
+    state.retentionSeconds = 14 * 24 * 3600;
+    state.sentTimestamp = String(Date.now() - HOUR);
+
+    await renderWithQueueSelected();
+
+    expect(screen.getByTestId('dlq-expires-m1')).toHaveAttribute('data-warn', 'false');
+  });
+
+  it('shows N/A for expiry when retention is unknown', async () => {
+    state.sentTimestamp = String(Date.now() - HOUR);
+
+    await renderWithQueueSelected();
+
+    expect(screen.getByTestId('dlq-expires-m1')).toHaveTextContent('N/A');
+  });
+
+  it('shows age and expiry in the message drawer', async () => {
+    state.retentionSeconds = 4 * 24 * 3600;
+    state.sentTimestamp = String(Date.now() - 10.5 * HOUR);
+
+    await renderWithQueueSelected();
+    await userEvent.click(screen.getByTestId('dlq-view-m1'));
+
+    expect(await screen.findByTestId('dlq-drawer-expiry')).toHaveTextContent('10h 30m old, expires in 3d 13h');
+  });
+
+  it('omits the expiry from the message drawer when retention is unknown', async () => {
+    state.sentTimestamp = String(Date.now() - HOUR);
+
+    await renderWithQueueSelected();
+    await userEvent.click(screen.getByTestId('dlq-view-m1'));
+
+    const drawerExpiry = await screen.findByTestId('dlq-drawer-expiry');
+    expect(drawerExpiry).toHaveTextContent('1h 0m old');
+    expect(drawerExpiry).not.toHaveTextContent('expires');
   });
 });

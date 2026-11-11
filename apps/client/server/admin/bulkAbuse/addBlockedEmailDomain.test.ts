@@ -28,7 +28,9 @@ vi.mock('@bike4mind/database/infra', () => ({
   },
 }));
 vi.mock('@bike4mind/utils', () => ({ invalidateSettingsCache: mocks.invalidateSettingsCache }));
-vi.mock('@server/utils/adminSettingsAudit', () => ({ recordAdminSettingChangeWith: mocks.recordAdminSettingChange }));
+vi.mock('@bike4mind/server-utils/utils/adminSettingsAudit', () => ({
+  recordAdminSettingChangeWith: mocks.recordAdminSettingChange,
+}));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ requestAuditWriter: mocks.requestAuditWriter }));
 
 import { addBlockedEmailDomain } from './addBlockedEmailDomain';

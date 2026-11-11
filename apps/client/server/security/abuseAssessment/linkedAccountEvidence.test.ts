@@ -3,9 +3,9 @@ import type { UserSignupLinkFacts } from '@bike4mind/database';
 
 vi.mock('@bike4mind/database', () => ({ usageEventRepository: {}, userRepository: {} }));
 vi.mock('@bike4mind/services', () => ({ userService: {} }));
-vi.mock('@server/billing/linkedAccounts', () => ({ findLinkedAccounts: vi.fn() }));
+vi.mock('@bike4mind/server-utils/billing/linkedAccounts', () => ({ findLinkedAccounts: vi.fn() }));
 
-import type { LinkedAccount } from '@server/billing/linkedAccounts';
+import type { LinkedAccount } from '@bike4mind/server-utils/billing/linkedAccounts';
 import { buildLinkedAccountEvidence, type LinkedAccountEvidenceDeps } from './linkedAccountEvidence';
 
 const HOUR_MS = 60 * 60 * 1000;

@@ -12,7 +12,7 @@ const isApiKeyAccessAllowedMock = vi.hoisted(() => vi.fn(async (_user: unknown, 
 const assertCliSessionAllowedMock = vi.hoisted(() =>
   vi.fn(async (_user: unknown, _sid?: string, _options?: { requireApiAccess?: boolean }) => undefined)
 );
-vi.mock('@server/utils/apiKeyAccessGate', async () => {
+vi.mock('@bike4mind/server-utils/utils/apiKeyAccessGate', async () => {
   const { ForbiddenError } = await import('@bike4mind/server-utils/utils/errors');
   const message = 'API keys require an active paid subscription';
   return {

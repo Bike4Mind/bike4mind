@@ -49,6 +49,8 @@ export type DataTableProps<Row> = {
   selection?: AdminSelection;
   onSelectionChange?: (selection: AdminSelection) => void;
   onRowActivate?: (row: Row) => void;
+  /** Single-key commands on a focused row (A accept, O override); same modifier and IME guards as X. */
+  rowShortcuts?: (row: Row) => Partial<Record<DataTableRowShortcut, () => void>>;
   activeRowId?: string;
   testId?: string;
   rowTestId?: (row: Row) => string;
@@ -75,6 +77,8 @@ function nextDirection(current: DataTableSort | undefined, columnId: string): Da
   return { columnId, direction: current?.columnId === columnId && current.direction === 'asc' ? 'desc' : 'asc' };
 }
 
+export type DataTableRowShortcut = 'a' | 'o';
+
 export function DataTable<Row>({
   rows,
   columns,
@@ -87,6 +91,7 @@ export function DataTable<Row>({
   selection,
   onSelectionChange,
   onRowActivate,
+  rowShortcuts,
   activeRowId,
   testId = 'admin-data-table',
   rowTestId,
@@ -181,24 +186,30 @@ export function DataTable<Row>({
   };
   const onRowKeyDown = (event: KeyboardEvent<HTMLTableRowElement>, row: Row, id: string) => {
     if (event.target !== event.currentTarget) return;
+    const plainKey =
+      !event.metaKey && !event.ctrlKey && !event.altKey && !event.repeat && !event.nativeEvent.isComposing;
+    const shortcut =
+      plainKey && !event.shiftKey ? rowShortcuts?.(row)[event.key.toLowerCase() as DataTableRowShortcut] : undefined;
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
       focusSiblingRow(event.currentTarget, event.key === 'ArrowDown' ? 1 : -1);
-    } else if (
-      event.key.toLowerCase() === 'x' &&
-      selectable &&
-      !event.metaKey &&
-      !event.ctrlKey &&
-      !event.altKey &&
-      !event.repeat &&
-      !event.nativeEvent.isComposing
-    ) {
+    } else if (event.key.toLowerCase() === 'x' && selectable && plainKey) {
       event.preventDefault();
       toggleRow(id, !isSelected(id), event.shiftKey);
+    } else if (shortcut) {
+      event.preventDefault();
+      shortcut();
     } else if (onRowActivate && (event.key === 'Enter' || event.key === ' ')) {
       event.preventDefault();
       onRowActivate(row);
     }
+  };
+  const rowKeyShortcuts = (row: Row): string | undefined => {
+    const keys = [
+      ...(selectable ? ['x'] : []),
+      ...Object.entries(rowShortcuts?.(row) ?? {}).flatMap(([key, run]) => (run !== undefined ? [key] : [])),
+    ];
+    return keys.length ? keys.join(' ') : undefined;
   };
   const onRowClick = (event: MouseEvent<HTMLTableRowElement>, row: Row) => {
     const target = event.target as HTMLElement;
@@ -382,8 +393,8 @@ export function DataTable<Row>({
                         <tr
                           key={id}
                           data-row-id={id}
-                          tabIndex={onRowActivate || selectable ? 0 : undefined}
-                          aria-keyshortcuts={selectable ? 'x' : undefined}
+                          tabIndex={onRowActivate || selectable || rowShortcuts ? 0 : undefined}
+                          aria-keyshortcuts={rowKeyShortcuts(row)}
                           aria-selected={selectable ? isSelected(id) : activeRowId === id}
                           data-testid={rowTestId?.(row) ?? `admin-table-row-${id}`}
                           onClick={event => onRowClick(event, row)}

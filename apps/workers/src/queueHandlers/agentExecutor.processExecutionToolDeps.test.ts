@@ -180,7 +180,9 @@ vi.mock('@bike4mind/services/llm/shadowTier', async () => {
   };
 });
 
-vi.mock('@server/utils/persistRunAsQuest', () => ({ persistRunAsQuest: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/persistRunAsQuest', () => ({
+  persistRunAsQuest: vi.fn().mockResolvedValue(undefined),
+}));
 
 const resolveWorkspaceSettings = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated', () => ({

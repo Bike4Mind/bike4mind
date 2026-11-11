@@ -41,7 +41,9 @@ vi.mock('@bike4mind/server-utils/auth/signupNetworkSignals', () => ({
 // Loaded through subscriptionLifecycle (admin links); its model needs a real mongoose.
 vi.mock('@bike4mind/server-utils/models/Subscription', () => ({ subscriptionRepository: {} }));
 vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessageToSlack: mocks.postMessageToSlack }));
-vi.mock('@server/billing/linkedAccounts', () => ({ lockIfPaidWithBlockedCard: mocks.lockIfPaidWithBlockedCard }));
+vi.mock('@bike4mind/server-utils/billing/linkedAccounts', () => ({
+  lockIfPaidWithBlockedCard: mocks.lockIfPaidWithBlockedCard,
+}));
 
 import {
   alertStripeRiskEvent,

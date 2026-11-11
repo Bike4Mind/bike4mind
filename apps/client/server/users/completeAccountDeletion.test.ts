@@ -35,7 +35,7 @@ vi.mock('./ownedOrganizations', () => ({
   classifyOwnedOrganizations: h.classifyOwned,
   deleteSoleOwnedOrganizations: h.deleteSoleOwned,
 }));
-vi.mock('./purgeAccountFiles', () => ({ purgeAccountFiles: h.purgeFiles }));
+vi.mock('@bike4mind/server-utils/users/purgeAccountFiles', () => ({ purgeAccountFiles: h.purgeFiles }));
 vi.mock('./purgeAccountContent', () => ({ purgeAccountContent: h.purgeContent }));
 vi.mock('./accountDeletionEmail', () => ({ sendAccountDeletionCompleteEmail: h.sendComplete }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({

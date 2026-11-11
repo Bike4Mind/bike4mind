@@ -768,7 +768,7 @@ export interface DesktopApi {
     getBilling(): Promise<AccountBilling>;
     subscribePlan(priceId: string): Promise<SubscribePlanResult>;
     /** Resolves when the payment window closes, not as proof of payment. */
-    purchaseCredits(packageId: string): Promise<SubscribePlanResult>;
+    purchaseCredits(packageId: string, acceptedTerms?: boolean): Promise<SubscribePlanResult>;
     sendFeedback(content: string): Promise<FeedbackSubmitResult>;
   };
   usage: {

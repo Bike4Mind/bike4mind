@@ -30,7 +30,7 @@ import {
   composeAdminReason,
   isAdminReasonComplete,
 } from '@client/app/components/admin/shared/adminReason';
-import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
+import type { AdminUserListItem } from '@bike4mind/server-utils/app/utils/adminUserProjection';
 import type { CreditChange } from '../types';
 
 interface CreditAdjustmentModalProps {

@@ -13,6 +13,10 @@ export const legacyPackageName = (credits: number, storageMb: number | null) =>
  * and users are not touched, so a pending signup grant releases exactly as before. The packages are
  * marked legacy, so register.ts keeps the pre-package rules for these codes. Idempotent: an
  * invite that already has a grantPackageId is skipped and packages are upserted by name.
+ *
+ * Deploy note: renumbered from 20260921237500 (then 20260921238300). An environment that ran it
+ * under an old id will skip the migration that now owns that id; delete the stale `20260921237500`
+ * or `20260921238300` row from the migrations collection.
  */
 const migration: MigrationFile = {
   id: 20260921238400,

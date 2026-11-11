@@ -22,7 +22,7 @@ import SortIcon from '@mui/icons-material/Sort';
 import CreditCardIcon from '@mui/icons-material/CreditCard';
 import SharedPaginationControls from '@client/app/components/admin/Subscriptions/components/PaginationControls';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
-import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
+import type { AdminUserListItem } from '@bike4mind/server-utils/app/utils/adminUserProjection';
 import { useUserCreditsManager } from '../hooks/useUserCreditsManager';
 import ViewUserProfile from './ViewUserProfile';
 import { CreditAdjustmentModal } from './CreditAdjustmentModal';

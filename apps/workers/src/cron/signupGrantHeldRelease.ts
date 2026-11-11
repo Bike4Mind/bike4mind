@@ -16,7 +16,7 @@ import { alertForReleasedReferralRewards } from '@bike4mind/server-utils/referra
 import {
   sweepRiskReviewAutoApprovals,
   type RiskReviewAutoApprovalSweepResult,
-} from '@server/security/riskReviewAutoApproval';
+} from '@bike4mind/server-utils/security/riskReviewAutoApproval';
 
 const logger = new Logger({ metadata: { service: 'signupGrantHeldRelease' } });
 const MAX_USERS_PER_RUN = 500;

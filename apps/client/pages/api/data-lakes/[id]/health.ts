@@ -11,7 +11,7 @@ import {
   memoryLedgerRepository,
 } from '@bike4mind/database';
 import { Request } from 'express';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 
 /**
  * GET /api/data-lakes/:id/health - derived, report-only lake health (#1666).

@@ -56,8 +56,8 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getPublishedArtifactsStorage: () => ({ download: vi.fn() }),
 }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('@server/services/publish/invalidatePublishCdn', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/services/publish/invalidatePublishCdn')>()),
+vi.mock('@bike4mind/server-utils/services/publish/invalidatePublishCdn', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/services/publish/invalidatePublishCdn')>()),
   invalidatePublishCdn: vi.fn().mockResolvedValue(undefined),
   invalidatePublishCdnMany: vi.fn().mockResolvedValue(undefined),
 }));

@@ -10,7 +10,7 @@ import {
   AdminUsersBulkPreviewRequestSchema,
   adminUsersBulkActionPermissions,
   type AdminUsersBulkPreview,
-} from '@client/app/utils/adminUsersBulk';
+} from '@bike4mind/server-utils/app/utils/adminUsersBulk';
 
 const ONE_MINUTE_MS = 60_000;
 export const USERS_BULK_PREVIEW_RATE_LIMIT = 60;

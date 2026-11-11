@@ -52,7 +52,7 @@ vi.mock('@bike4mind/services', () => ({ sessionService: {}, dataLakeService: {},
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@server/managers/sessionOrigin', () => ({ resolveSessionOrigin: vi.fn() }));
 vi.mock('@server/entitlements/surfaceAccess', () => ({ surfaceAccessForRequest: vi.fn() }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: vi.fn() }));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: vi.fn() }));
 
 const { default: handler } = await import('@pages/api/v1/sessions/index');
 

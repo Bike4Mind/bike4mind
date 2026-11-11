@@ -6,7 +6,7 @@ import { dataLakeRepository, dataLakeAccessGrantRepository, lakeSkippedFileRepos
 import type { ILakeSkippedFileDocument, LakeSkippedFileView, LakeSkippedFilesResponse } from '@bike4mind/common';
 import { Request } from 'express';
 import { z } from 'zod';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 
 // Scalar-first coercion so a repeated param is a 400 - see findings/index.ts for the full reasoning.
 const ListQuery = z.object({

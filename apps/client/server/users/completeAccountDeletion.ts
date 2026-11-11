@@ -7,7 +7,7 @@ import { systemAuditActor } from '@bike4mind/server-utils/utils/adminAudit';
 import { sendAccountDeletionCompleteEmail } from './accountDeletionEmail';
 import { classifyOwnedOrganizations, deleteSoleOwnedOrganizations } from './ownedOrganizations';
 import { purgeAccountContent } from './purgeAccountContent';
-import { purgeAccountFiles } from './purgeAccountFiles';
+import { purgeAccountFiles } from '@bike4mind/server-utils/users/purgeAccountFiles';
 
 type DeletionLogger = Pick<Logger, 'info' | 'warn' | 'error'>;
 export type AccountDeletionSkipReason = 'not_due' | 'not_found';

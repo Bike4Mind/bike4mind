@@ -27,7 +27,7 @@ import { truncateIp } from '@bike4mind/server-utils/utils/ip';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
 import { gradeStaleSignupBursts, liveStaleDetectionGradeDeps } from '@server/security/shadowDetectionAutoGrade';
-import { systemAuditWriter } from '@server/utils/systemAuditWriter';
+import { systemAuditWriter } from '@workers/utils/systemAuditWriter';
 
 const AUTO_GRADE_ACTOR = 'shadow-detection-auto-grade';
 const AUTO_GRADE_DEFAULT_DAYS = 7;

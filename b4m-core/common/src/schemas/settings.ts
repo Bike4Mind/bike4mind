@@ -1159,6 +1159,13 @@ export interface BaseSetting {
   clearDeletesRow?: boolean;
   /** What a `clearDeletesRow` setting resolves to while unset, shown by the admin UI in place of a value. */
   unsetLabel?: string;
+  /**
+   * Opt-in: the admin editor badges this field and confirms the before-and-after value instead of
+   * saving on one click. Tag it when a customer's bill or entitlement moves - NOT free grants or
+   * spend caps, which change only platform cost.
+   * Must stay in sync with the "Changes customer price" column of docs/pricing-settings-inventory.md.
+   */
+  changesCustomerPrice?: boolean;
 }
 
 /** Default of the `lowCreditsThreshold` setting - the credit balance below which the UI warns. */
@@ -1256,7 +1263,7 @@ export const PENDING_UPLOAD_LIMIT = 250;
 
 /**
  * Default daily uploaded-image moderation allowances, in detector calls. The free one is also the
- * floor that apps/client/server/s3/imageModerationBudget.ts applies when the setting cannot be read.
+ * floor that packages/server-utils/src/s3/imageModerationBudget.ts applies when the setting cannot be read.
  */
 export const IMAGE_MODERATION_LIMIT_FREE_PER_DAY = 200;
 export const IMAGE_MODERATION_LIMIT_PAID_PER_DAY = 2000;
@@ -1618,7 +1625,7 @@ export const AUTO_CONTAINMENT_MODES = ['off', 'shadow', 'enforce'] as const;
 export type AutoContainmentMode = (typeof AUTO_CONTAINMENT_MODES)[number];
 
 /**
- * Automated containment from abuse assessments (apps/client/server/security/autoContainment). Acts
+ * Automated containment from abuse assessments (apps/workers/src/security/autoContainment). Acts
  * only on an `abuse` judgment at or above minConfidence, through the admin bulk Contain path.
  */
 export const AutoContainmentConfigSchema = z.object({
@@ -1655,7 +1662,7 @@ export type AutoContainmentConfig = z.infer<typeof AutoContainmentConfigSchema>;
 
 /**
  * Operator limits for the advisory assessment of young-domain signup holds
- * (apps/client/server/security/signupDomainHoldAssessment). Every default spends nothing: no model and
+ * (apps/workers/src/security/signupDomainHoldAssessment). Every default spends nothing: no model and
  * a zero budget. `signupDomainHoldAssessmentEnabled` gates all provider egress on top of this.
  */
 export const SignupDomainHoldAssessmentConfigSchema = z.object({
@@ -1758,7 +1765,7 @@ export type SignupRiskScoring = z.infer<typeof SignupRiskScoringSchema>;
 
 /**
  * Rules that approve a pending signup risk review without an admin
- * (apps/client/server/security/riskReviewAutoApproval.ts). Both only move pending to approved, which
+ * (packages/server-utils/src/security/riskReviewAutoApproval.ts). Both only move pending to approved, which
  * an admin can reopen; a model verdict never approves.
  */
 export const SignupRiskAutoApprovalSchema = z
@@ -3893,6 +3900,7 @@ export const settingsMap = {
   }),
   pricePerCredit: makeNumberSetting({
     key: 'pricePerCredit',
+    changesCustomerPrice: true,
     userReadable: true,
     name: 'Price Per Credit',
     defaultValue: 50,
@@ -4034,7 +4042,7 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 9,
   }),
-  // Both read by apps/client/server/s3/imageModerationBudget.ts.
+  // Both read by packages/server-utils/src/s3/imageModerationBudget.ts.
   imageModerationLimitFreePerDay: makeNumberSetting({
     key: 'imageModerationLimitFreePerDay',
     name: 'Uploaded Image Moderation Limit - Free (scans/day)',
@@ -4753,7 +4761,8 @@ export const settingsMap = {
     key: 'serverStatus',
     name: 'Server Status',
     defaultValue: ServerStatusEnum.Live,
-    description: 'The current status of the server.',
+    description:
+      'What non-admins see. live: the app. maintenance: the maintenance screen. offline: the coming-soon page with the waitlist form. Admins always get the app.',
     category: 'Admin',
     group: API_SERVICE_GROUPS.ADMIN.id,
     order: 1,
@@ -4761,6 +4770,7 @@ export const settingsMap = {
   }),
   enforceCredits: makeBooleanSetting({
     key: 'enforceCredits',
+    changesCustomerPrice: true,
     userReadable: true,
     name: 'Enforce Credits',
     // Self-host runs on the operator's own LLM keys with no billing stack (Stripe is
@@ -4773,6 +4783,7 @@ export const settingsMap = {
   }),
   billOperationalUsage: makeBooleanSetting({
     key: 'billOperationalUsage',
+    changesCustomerPrice: true,
     name: 'Bill Operational Usage',
     // Default OFF on hosted and self-host alike: free-tier accounts are billed for this spend
     // whenever Enforce Credits is on (isOperationalBillingEnabled), so the toggle only decides
@@ -5782,6 +5793,7 @@ export const settingsMap = {
   }),
   teamPlanMinSeats: makeNumberSetting({
     key: 'teamPlanMinSeats',
+    changesCustomerPrice: true,
     // Read by the create-team and billing UIs for non-admin org owners.
     userReadable: true,
     name: 'Team Plan Minimum Seats',
@@ -5807,6 +5819,7 @@ export const settingsMap = {
   }),
   teamPlanCreditsPerSeat: makeNumberSetting({
     key: 'teamPlanCreditsPerSeat',
+    changesCustomerPrice: true,
     name: 'Team Plan Credits Per Seat',
     defaultValue: ORGANIZATION_SUBSCRIPTION_CREDITS_PER_SEAT,
     int: true,
@@ -6108,16 +6121,18 @@ export const settingsMap = {
     order: 39,
     dependsOn: 'requireThreeDSecureOnFirstPurchase',
   }),
-  // Read by apps/client/server/integrations/stripe/termsConsent.ts at subscription checkout.
+  // Read by apps/client/server/integrations/stripe/termsConsent.ts at checkout and credit purchase.
   requireCheckoutTermsConsent: makeBooleanSetting({
     key: 'requireCheckoutTermsConsent',
     name: 'Require Terms of Service Acceptance at Checkout',
     defaultValue: false,
     description:
-      'Adds a required Terms of Service checkbox to Stripe Checkout for subscriptions, and records the acceptance on the account. Stripe rejects the checkout unless a Terms of Service URL is set in the Stripe dashboard (Settings > Public details), so set that first in every Stripe account this stage uses.',
+      'Adds a required Terms of Service checkbox to Stripe Checkout for subscriptions and before one-time credit purchases (web and desktop), and records the acceptance on the account. Stripe rejects subscription checkout unless a Terms of Service URL is set in the Stripe dashboard (Settings > Public details), so set that first in every Stripe account this stage uses.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.CREDITS.id,
     order: 39.5,
+    // The web credit purchase button reads it to show the checkbox.
+    userReadable: true,
   }),
   signupNetworkAlertsEnabled: makeBooleanSetting({
     key: 'signupNetworkAlertsEnabled',
@@ -7920,6 +7935,7 @@ export const settingsMap = {
   }),
   HardwareComputeCreditsPerUsd: makeNumberSetting({
     key: 'HardwareComputeCreditsPerUsd',
+    changesCustomerPrice: true,
     name: 'Hardware Compute: Credits per USD',
     defaultValue: CREDITS_PER_USD_COST,
     min: 1,
@@ -7994,6 +8010,7 @@ export const settingsMap = {
   }),
   SimulatorComputeCreditsPerRound: makeNumberSetting({
     key: 'SimulatorComputeCreditsPerRound',
+    changesCustomerPrice: true,
     name: 'Simulator Compute: Credits per round',
     defaultValue: 50,
     min: 0,

@@ -37,13 +37,13 @@ import {
   endedLifecycleEvent,
   paymentFailedLifecycleEvent,
   postSubscriptionLifecycleToSlack,
-} from '@server/integrations/slack/subscriptionLifecycle';
+} from '@bike4mind/server-utils/integrations/slack/subscriptionLifecycle';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { creditService, userService } from '@bike4mind/services';
 import { grantCreditPurchase } from '@server/billing/grantCreditPurchase';
 import { unlockSignupGrantFromCreditPurchase } from '@server/credits/creditPurchaseUnlock';
 import { alertStripeRiskEvent, radarRiskLine, screenPaymentOutcome } from '@server/billing/paymentRisk';
-import { autoApproveRiskReviewAfterPayment } from '@server/security/riskReviewAutoApproval';
+import { autoApproveRiskReviewAfterPayment } from '@bike4mind/server-utils/security/riskReviewAutoApproval';
 import {
   forfeitHeldUnlockForFraudWarning,
   forfeitHeldUnlockForRefund,
@@ -52,7 +52,7 @@ import {
 import { clawbackRefundCredits } from '@server/billing/refundClawback';
 import { reversePurchaseStanding } from '@server/billing/purchaseReversal';
 import { respondToEarlyFraudWarning } from '@server/billing/earlyFraudWarning';
-import { propagateAccountRisk } from '@server/billing/linkedAccounts';
+import { propagateAccountRisk } from '@bike4mind/server-utils/billing/linkedAccounts';
 import { disputeFacts, resolveLostUserDispute, resolveWonDispute } from '@server/billing/stripeDisputes';
 import { notifyCanceledForNonPayment, notifyPaymentFailed } from '@server/billing/paymentFailureNotice';
 import { recordBillingEvent, type BillingEventHints } from '@server/billing/billingEventStore';
@@ -67,7 +67,7 @@ import {
   rowTimestamps,
   subscriptionEventUser,
   wholeDaysBetween,
-} from '@server/analytics/billingEventDetails';
+} from '@bike4mind/server-utils/analytics/billingEventDetails';
 import dayjs from 'dayjs';
 import { Resource } from 'sst';
 
@@ -193,6 +193,15 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
           ...trace,
         });
         break;
+      }
+
+      // The version the buyer was shown at start-payment, not the one current now.
+      if (intent.metadata.termsAcceptedVersion) {
+        await userRepository.update({
+          id: user.id,
+          checkoutTermsAcceptedVersion: intent.metadata.termsAcceptedVersion,
+          checkoutTermsAcceptedAt: new Date(event.created * 1000),
+        });
       }
 
       const credits = Number(intent.metadata.credits);

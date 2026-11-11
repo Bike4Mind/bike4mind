@@ -13,7 +13,7 @@ import {
   type McpConnectionSettingsUpdate,
 } from '@bike4mind/common';
 import { RemoteMcpTimeoutError } from '@bike4mind/mcp/remote';
-import type { CustomMcpContext } from '@server/mcpConnections/customMcpAccess';
+import type { CustomMcpContext } from '@bike4mind/server-utils/mcpConnections/customMcpAccess';
 
 /**
  * The four custom MCP connection routes, driven through a real next-connect router and the real
@@ -72,8 +72,8 @@ vi.mock('@server/middlewares/perUserRateLimit', () => ({
   },
 }));
 
-vi.mock('@server/mcpConnections/customMcpAccess', async importOriginal => {
-  const actual = await importOriginal<typeof import('@server/mcpConnections/customMcpAccess')>();
+vi.mock('@bike4mind/server-utils/mcpConnections/customMcpAccess', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/mcpConnections/customMcpAccess')>();
   const { ForbiddenError } = await import('@bike4mind/common');
   return {
     ...actual,
@@ -84,7 +84,7 @@ vi.mock('@server/mcpConnections/customMcpAccess', async importOriginal => {
     }),
   };
 });
-vi.mock('@server/middlewares/featureFlag', () => ({ isFeatureEnabled: vi.fn(async () => true) }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ isFeatureEnabled: vi.fn(async () => true) }));
 vi.mock('@bike4mind/services', () => ({ scopedSettingsService: {} }));
 vi.mock('sst', () => ({ Resource: {} }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({

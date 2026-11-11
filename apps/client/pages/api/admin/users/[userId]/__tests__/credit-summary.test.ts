@@ -43,7 +43,7 @@ vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: async () => ({}),
   getSettingsValue: h.settingValue,
 }));
-vi.mock('@server/utils/userRateTier', () => ({ resolveUserRateTier: h.rateTier }));
+vi.mock('@bike4mind/server-utils/utils/userRateTier', () => ({ resolveUserRateTier: h.rateTier }));
 
 import handler from '../credit-summary';
 

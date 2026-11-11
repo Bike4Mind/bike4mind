@@ -24,7 +24,7 @@ import {
   getSettingsValue,
   resolveSupportedMimeType,
 } from '@bike4mind/utils';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { createFabFile } from '@bike4mind/server-utils/managers/fabFileManager';
 import { consumeFileUploadBudget } from '@server/files/fileUploadBudget';

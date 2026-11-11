@@ -1,4 +1,4 @@
-import type { AdminUsersSummary } from '@client/app/utils/adminUsersFilter';
+import type { AdminUsersSummary } from '@bike4mind/server-utils/app/utils/adminUsersFilter';
 import { matchSavedView, type SavedViewValues } from '../../shared/matchSavedView';
 import {
   CLEARED_FILTER_PARAMS,

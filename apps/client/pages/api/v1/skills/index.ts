@@ -5,7 +5,7 @@ import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { filesFromMap, skillFieldsFromSkillMd } from '@server/skills/skillMdInput';
 import { insertSkill, resolveCreateScope, validateNewSkill } from '@server/skills/skillWrite';
 import { toPublicSkill } from '@server/skills/publicView';
-import { publicAppUrl } from '@server/utils/validators';
+import { publicAppUrl } from '@bike4mind/server-utils/utils/validators';
 
 const handler = nextRouteForContract(createSkillContract).post(async (req, res) => {
   const { skill_md, files, scope } = req.validated;

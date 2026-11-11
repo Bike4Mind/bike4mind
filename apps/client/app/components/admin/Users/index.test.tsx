@@ -321,7 +321,11 @@ describe('UsersTab', () => {
       '/api/admin/users',
       expect.objectContaining({ params: expect.objectContaining({ aiVerdict: 'abuse' }) })
     );
-    expect(await screen.findByTestId('admin-users-ai-advisory-u1')).toHaveTextContent('\u2726 AI');
+    expect(await screen.findByTestId('admin-users-ai-advisory-u1')).toHaveTextContent('\u2726 Confirmed abuse');
+    expect(screen.getByTestId('admin-users-ai-advisory-u1')).toHaveAttribute(
+      'aria-label',
+      expect.stringContaining('on an unreviewed Account campaign detection')
+    );
     expect(screen.queryByTestId('admin-users-ai-advisory-u2')).toBeNull();
 
     fireEvent.click(screen.getByTestId('admin-filter-clear-aiVerdict-btn'));

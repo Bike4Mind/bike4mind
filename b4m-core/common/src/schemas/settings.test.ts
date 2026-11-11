@@ -294,6 +294,8 @@ describe('public settings projection (M2.5 security boundary)', () => {
         // The Desktop app follows these rather than deciding deferral itself.
         'EnableDeferredToolLoading',
         'DeferredToolStartSetMaxTokens',
+        // The credit purchase button gates on it.
+        'requireCheckoutTermsConsent',
       ]) {
         expect(keys.has(k)).toBe(true);
       }
@@ -1668,5 +1670,33 @@ describe('broadcastSafeSettingKeys', () => {
 
   it('never admits a setting name with no definition', () => {
     expect(broadcastSafeSettingKeys()).not.toContain('someRemovedSettingName');
+  });
+});
+
+describe('changesCustomerPrice', () => {
+  // Pinned, not derived: gaining or losing a confirmation step has to be a deliberate edit here.
+  // The admin-setting rows of the "Changes customer price" column in docs/pricing-settings-inventory.md.
+  const EXPECTED = [
+    'HardwareComputeCreditsPerUsd',
+    'SimulatorComputeCreditsPerRound',
+    'billOperationalUsage',
+    'enforceCredits',
+    'pricePerCredit',
+    'teamPlanCreditsPerSeat',
+    'teamPlanMinSeats',
+  ];
+
+  it('tags exactly the admin settings that change what a customer pays', () => {
+    const tagged = Object.values(settingsMap)
+      .filter(definition => definition.changesCustomerPrice)
+      .map(definition => definition.key)
+      .sort();
+    expect(tagged).toEqual(EXPECTED);
+  });
+
+  it('leaves free grants and spend caps untagged, which decide platform cost rather than a bill', () => {
+    expect(settingsMap.freeTierDailySystemCostCapUsd.changesCustomerPrice).toBeUndefined();
+    expect(settingsMap.lowCreditsThreshold.changesCustomerPrice).toBeUndefined();
+    expect(settingsMap.teamPlanMaxSeats.changesCustomerPrice).toBeUndefined();
   });
 });
