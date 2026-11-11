@@ -1,23 +1,23 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@tanstack/react-router', async () => (await import('./__tests__/fakeAdminRouter')).fakeRouterModule);
 
-const { useSearchOrganizationsMock, useAdminOrgGrantsMock, idleMutation } = vi.hoisted(() => ({
+const { useSearchOrganizationsMock, useAdminOrgGrantsMock, useAdjustOrgSeatsMock, idleMutation } = vi.hoisted(() => ({
   useSearchOrganizationsMock: vi.fn(),
   useAdminOrgGrantsMock: vi.fn(),
+  useAdjustOrgSeatsMock: vi.fn(),
   idleMutation: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
 
-vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsMobile: () => false }));
 vi.mock('@client/app/hooks/data/organizations', () => ({
   useSearchOrganizations: useSearchOrganizationsMock,
   useCreateOrganization: idleMutation,
 }));
 vi.mock('@client/app/hooks/data/adminOrganizations', () => ({
-  useAdjustOrgSeats: idleMutation,
+  useAdjustOrgSeats: useAdjustOrgSeatsMock,
   useAdminOrgGrants: useAdminOrgGrantsMock,
   useConvertOrgToPaid: idleMutation,
   useGrantOrganization: idleMutation,
@@ -28,7 +28,6 @@ vi.mock('@client/app/hooks/data/user', () => ({ useGetPendingOrganizationUsers: 
 vi.mock('@client/app/hooks/data/teamPlanSettings', () => ({ useTeamSeatLimits: () => ({ maxSeats: 100 }) }));
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/Member', () => ({ default: () => null }));
-vi.mock('@client/app/components/admin/Subscriptions/components/PaginationControls', () => ({ default: () => null }));
 vi.mock('./OrganizationProfileModal', () => ({ default: () => null }));
 
 import { fakeAdminRouter } from './__tests__/fakeAdminRouter';
@@ -39,6 +38,7 @@ import { AdminCommandPalette } from './shared/AdminCommandPalette';
 import { useSubscriptionsTab } from './Subscriptions/useSubscriptionsTabParams';
 import { CLEARED_FILTER_PARAMS } from './Subscriptions/subscriptionsTabSearch';
 import { ADMIN_SUBSCRIPTIONS_TAB_SLUG } from './Subscriptions/Detail/subscriptionDetailModel';
+import { UndoToastProvider } from './shared/UndoToast';
 
 const ORG_A = 'aaaaaaaaaaaaaaaaaaaaaaaa';
 const ORG_B = 'bbbbbbbbbbbbbbbbbbbbbbbb';
@@ -51,6 +51,7 @@ const organization = (id: string, name: string) => ({
   personal: false,
   users: [],
   userId: 'owner',
+  seats: 4,
   currentCredits: 0,
 });
 
@@ -70,7 +71,9 @@ const mockList = (overrides: Record<string, unknown> = {}) =>
 const renderTab = () =>
   render(
     <CssVarsProvider theme={appTheme}>
-      <OrganizationsTab />
+      <UndoToastProvider>
+        <OrganizationsTab />
+      </UndoToastProvider>
     </CssVarsProvider>
   );
 
@@ -79,6 +82,7 @@ beforeEach(() => {
   useSearchOrganizationsMock.mockReset();
   mockList();
   useAdminOrgGrantsMock.mockReturnValue({ data: [] });
+  useAdjustOrgSeatsMock.mockReturnValue({ mutateAsync: vi.fn().mockResolvedValue({ seats: 6 }), isPending: false });
   act(() => {
     useOrganizationsTab.setState({ params: { ...DEFAULT_ORGANIZATIONS_PARAMS } });
     fakeAdminRouter.reset({ tab: 'organizations', orgsPage: 1 });
@@ -91,7 +95,9 @@ describe('OrganizationsTab', () => {
       <CssVarsProvider theme={appTheme}>
         <div data-admin-surface>
           <AdminCommandPalette />
-          <OrganizationsTab />
+          <UndoToastProvider>
+            <OrganizationsTab />
+          </UndoToastProvider>
         </div>
       </CssVarsProvider>
     );
@@ -111,8 +117,7 @@ describe('OrganizationsTab', () => {
   it('puts the row organization id in the URL when its Edit button is clicked', () => {
     renderTab();
 
-    const row = screen.getByText('Beta Org').closest('tr') as HTMLElement;
-    fireEvent.click(within(row).getByRole('button', { name: /edit/i }));
+    fireEvent.click(screen.getByTestId(`admin-table-row-${ORG_B}`));
 
     expect(fakeAdminRouter.search).toMatchObject({ tab: 'organizations', orgId: ORG_B });
   });
@@ -161,5 +166,87 @@ describe('OrganizationsTab', () => {
 
     expect(useSubscriptionsTab.getState().params).toMatchObject({ ...CLEARED_FILTER_PARAMS, search: 'cus_alpha' });
     expect(fakeAdminRouter.search).toMatchObject({ tab: ADMIN_SUBSCRIPTIONS_TAB_SLUG });
+  });
+
+  it('shows skeletons while loading, then an actionable empty state', () => {
+    mockList({ data: undefined, isLoading: true, isFetching: true });
+    const { rerender } = renderTab();
+    expect(screen.getAllByTestId('admin-table-skeleton-row')).toHaveLength(8);
+
+    mockList({ data: { data: [], totalOrganizations: 0, totalPages: 0 } });
+    rerender(
+      <CssVarsProvider theme={appTheme}>
+        <UndoToastProvider>
+          <OrganizationsTab />
+        </UndoToastProvider>
+      </CssVarsProvider>
+    );
+    expect(screen.getByText('No organizations yet')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('org-empty-action-btn'));
+    expect(screen.getByTestId('org-create-dialog')).toBeInTheDocument();
+  });
+
+  it('shows a retry action instead of stale rows after an error', () => {
+    const refetch = vi.fn();
+    mockList({ isError: true, refetch });
+    renderTab();
+    expect(screen.getByTestId('admin-error-state')).toHaveTextContent('Organizations could not be loaded.');
+    expect(screen.queryByText('Alpha Org')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
+    expect(refetch).toHaveBeenCalledOnce();
+  });
+
+  it('clears a type filter when no organizations match', () => {
+    mockList({ data: { data: [], totalOrganizations: 0, totalPages: 0 } });
+    renderTab();
+    fireEvent.click(screen.getByTestId('admin-filter-org-type'));
+    fireEvent.click(screen.getByTestId('admin-filter-org-type-true'));
+    expect(screen.getByText('No organizations match these filters')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('org-empty-action-btn'));
+    expect(useOrganizationsTab.getState().params.personal).toBeUndefined();
+  });
+
+  it('keeps server sort and direction choices available', () => {
+    renderTab();
+    fireEvent.click(screen.getByTestId('admin-filter-org-sort'));
+    fireEvent.click(screen.getByTestId('admin-filter-org-sort-createdAt'));
+    fireEvent.click(screen.getByTestId('admin-filter-org-direction'));
+    fireEvent.click(screen.getByTestId('admin-filter-org-direction-desc'));
+
+    expect(useOrganizationsTab.getState().params).toMatchObject({ sortBy: 'createdAt', sortDirection: 'desc' });
+    expect(fakeAdminRouter.search).toMatchObject({ orgsSort: 'createdAt', orgsOrder: 'desc' });
+  });
+
+  it('keeps the shared table page size in the URL', () => {
+    renderTab();
+    fireEvent.mouseDown(screen.getByTestId('admin-table-page-size'));
+    fireEvent.click(screen.getByTestId('admin-table-page-size-25'));
+
+    expect(useOrganizationsTab.getState().params.limit).toBe(25);
+    expect(fakeAdminRouter.search).toMatchObject({ orgsLimit: 25, orgsPage: 1 });
+  });
+
+  it('changes granted seats with a reason and offers an audited undo', async () => {
+    useAdminOrgGrantsMock.mockReturnValue({ data: [{ id: 'c'.repeat(24), ownerId: ORG_A }] });
+    const mutateAsync = vi.fn().mockResolvedValue({ seats: 6 });
+    useAdjustOrgSeatsMock.mockReturnValue({ mutateAsync, isPending: false });
+    renderTab();
+    fireEvent.click(screen.getByTestId(`org-actions-${ORG_A}`));
+    fireEvent.click(screen.getByTestId(`adjust-seats-${ORG_A}`));
+    fireEvent.change(screen.getByTestId('seats-native-input'), { target: { value: '6' } });
+    expect(screen.getByTestId('org-seats-preview-after')).toHaveTextContent('6');
+    fireEvent.click(screen.getByTestId('seats-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('seats-submit'));
+    await waitFor(() =>
+      expect(mutateAsync).toHaveBeenCalledWith({ organizationId: ORG_A, seats: 6, reason: 'Customer request' })
+    );
+    fireEvent.click(await screen.findByTestId('undo-toast-undo-btn'));
+    await waitFor(() =>
+      expect(mutateAsync).toHaveBeenLastCalledWith({
+        organizationId: ORG_A,
+        seats: 4,
+        reason: 'Undo: Customer request',
+      })
+    );
   });
 });

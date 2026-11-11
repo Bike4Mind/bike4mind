@@ -30,7 +30,7 @@ export const ORGS_TAB_PARAMS = [...ORGS_VIEW_PARAMS, ORGS_ORG_ID_PARAM] as const
 export const adminOrganizationHref = (orgId: string): string =>
   `/admin?${new URLSearchParams({ tab: ADMIN_ORGANIZATIONS_TAB_SLUG, [ORGS_ORG_ID_PARAM]: orgId })}`;
 
-export const ORGS_PAGE_LIMIT_OPTIONS = [5, 10, 20];
+export const ORGS_PAGE_LIMIT_OPTIONS = [5, 10, 20, 25, 50, 100];
 
 const ORGS_SORT_FIELDS = ['name', 'createdAt', 'updatedAt'] as const;
 const SORT_ORDERS = ['asc', 'desc'] as const;
