@@ -34,7 +34,7 @@ describe('canOpenAdminTab', () => {
     expect(canOpenAdminTab(delegate('users:moderate'), AdminTab.ToolDefinitions)).toBe(false);
   });
 
-  it('opens Models to a support reader, whose list, price and discovery reads it makes, and to no one else', () => {
+  it('opens Models to a delegate holding support:read and to no other delegate', () => {
     expect(canOpenAdminTab(delegate('support:read'), AdminTab.Models)).toBe(true);
     expect(canOpenAdminTab(delegate('support:read', 'settings:manage'), AdminTab.Models)).toBe(true);
     // GET /api/admin/models declares support:read alone, so settings:manage would only reach a 403.

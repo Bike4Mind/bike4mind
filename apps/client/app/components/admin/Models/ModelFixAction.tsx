@@ -2,8 +2,10 @@ import type { ReactElement } from 'react';
 import { Button } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
 import type { AdminModelFixAction } from '@bike4mind/common';
+import { AdminTab } from '../adminSidebarConfig';
 import { ADMIN_SETTINGS_SEARCH_PARAM, ADMIN_SETTINGS_TAB_SLUG } from '../adminTabParams';
 import { useRunDiscoveryWithToasts } from './Discovery/RunDiscoveryButton';
+import { AdminTabAction } from './AdminTabAction';
 import { MODEL_FIX_ACTION_LABEL } from './modelPresentation';
 import { ModelWriteAction } from './ModelWriteAction';
 import { useModelsNavigation } from './modelsNavigation';
@@ -52,12 +54,19 @@ export function ModelFixAction({ action, model, onTurnOn, 'data-testid': testId 
     case 'review-lifecycle':
       return button(() => void openSection('discovery'));
     case 'open-key-settings':
-      return button(
-        () =>
-          void navigate({
-            to: '/admin',
-            search: { tab: ADMIN_SETTINGS_TAB_SLUG, [ADMIN_SETTINGS_SEARCH_PARAM]: model.backend },
-          })
+      return (
+        <AdminTabAction tab={AdminTab.AdminSettings}>
+          {disabled =>
+            button(
+              () =>
+                void navigate({
+                  to: '/admin',
+                  search: { tab: ADMIN_SETTINGS_TAB_SLUG, [ADMIN_SETTINGS_SEARCH_PARAM]: model.backend },
+                }),
+              disabled
+            )
+          }
+        </AdminTabAction>
       );
   }
 }

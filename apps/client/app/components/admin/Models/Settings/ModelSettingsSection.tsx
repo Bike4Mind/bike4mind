@@ -9,7 +9,13 @@ import { AdminGenerationModelsSetting } from '../../AdminGenerationModelsSetting
 import { AdminOperationsModelSetting } from '../../AdminOperationsModelSetting';
 import { AdminRecommendedModelsSetting } from '../../AdminRecommendedModelsSetting';
 import { SettingsDraftProvider } from '../../SettingsDraftProvider';
-import { ErrorState, LoadingState, SettingsSection } from '../../shared';
+import {
+  ErrorState,
+  LoadingState,
+  MissingPermissionState,
+  SettingsSection,
+  useMissingAdminPermission,
+} from '../../shared';
 import { useModelWriteBlock } from '../ModelWriteAction';
 import { ModelSettingChoiceField } from './ModelSettingChoiceField';
 import {
@@ -53,7 +59,17 @@ function Group({
   );
 }
 
+/**
+ * GET /api/settings/fetch returns the model keys only to a settings:manage holder; anyone else would see the compiled
+ * defaults here as if they were the stored values, so the fields are not drawn for them.
+ */
 export function ModelSettingsSection() {
+  const missing = useMissingAdminPermission('settings:manage');
+  if (missing) return <MissingPermissionState requirement="settings:manage" />;
+  return <ModelSettingsFields />;
+}
+
+function ModelSettingsFields() {
   const { data, isLoading, isError, isFetching, refetch } = useSettingsFromServer();
   const blocked = useModelWriteBlock();
 

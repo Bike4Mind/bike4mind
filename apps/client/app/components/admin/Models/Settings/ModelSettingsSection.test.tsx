@@ -10,12 +10,14 @@ const state = vi.hoisted(() => ({
   loading: false,
   error: false,
   shouldBlock: undefined as undefined | ((args: { current: Location; next: Location }) => boolean),
+  fetches: 0,
   mutateAsync: vi.fn(async (_vars: { key: string; value: unknown }) => ({})),
   user: { isAdmin: true, adminPermissions: [] as string[] } as { isAdmin: boolean; adminPermissions?: string[] },
 }));
 
 vi.mock('@client/app/hooks/data/settings', () => ({
   useSettingsFromServer: () => ({
+    ...(state.fetches++, {}),
     data: state.error ? undefined : state.rows,
     isLoading: state.loading,
     isError: state.error,
@@ -62,6 +64,7 @@ beforeEach(() => {
   state.error = false;
   state.user = { isAdmin: true, adminPermissions: [] };
   state.mutateAsync.mockClear();
+  state.fetches = 0;
 });
 
 describe('ModelSettingsSection', () => {
@@ -159,14 +162,14 @@ describe('ModelSettingsSection', () => {
     expect(screen.getByTestId('admin-error-retry-btn')).toBeTruthy();
   });
 
-  it('disables the editors and names the missing permission for a delegate without settings:manage', async () => {
+  it('draws no setting for a delegate without settings:manage, who is only sent compiled defaults', () => {
     state.user = { isAdmin: false, adminPermissions: ['support:read'] };
     renderSection();
 
-    expect(screen.getByTestId('models-settings-blocked')).toHaveTextContent('settings:manage');
-    expect(screen.getByTestId('models-settings-modelDiscoveryMode-write')).toBeDisabled();
-    await userEvent.click(screen.getByTestId('models-settings-modelDiscoveryMode-write'));
-    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
+    expect(screen.getByTestId('admin-missing-permission-state')).toHaveTextContent('settings:manage');
+    expect(screen.queryByTestId('models-settings')).toBeNull();
+    expect(screen.queryByTestId('models-settings-modelDiscoveryMode-write')).toBeNull();
+    expect(state.fetches).toBe(0);
   });
 
   it('blocks a settings:manage delegate who is not a full administrator, whose save would reach PUT /api/settings/update', async () => {

@@ -10,6 +10,8 @@ import { MODEL_METRICS_SEARCH_KEYS } from '../../ModelMetrics/modelMetricsSearch
 import { ModelToggleDialog } from '../Access/ModelAccessDialog';
 import { effectiveAccess } from '../Access/modelAccessChange';
 import { ModelFixAction } from '../ModelFixAction';
+import { AdminTab } from '../../adminSidebarConfig';
+import { AdminTabAction } from '../AdminTabAction';
 import { ModelWriteAction } from '../ModelWriteAction';
 import {
   MODEL_STATUS_LABEL,
@@ -115,24 +117,36 @@ export function ModelDetailView({
               {modelTypeLabel(model.type)} {'\u00b7'} {model.backend}
               {model.releaseDate ? ` \u00b7 Released ${model.releaseDate.slice(0, 10)}` : ''}
             </Typography>
-            <Link
-              component="button"
-              type="button"
-              level="body-sm"
-              onClick={() => void openUsage()}
-              data-testid="model-detail-usage-link"
-            >
-              Usage
-            </Link>
-            <Link
-              component="button"
-              type="button"
-              level="body-sm"
-              onClick={() => void openLogs()}
-              data-testid="model-detail-logs-link"
-            >
-              Logs
-            </Link>
+            <AdminTabAction tab={AdminTab.ModelMetrics}>
+              {disabled => (
+                <Link
+                  component="button"
+                  type="button"
+                  level="body-sm"
+                  disabled={disabled}
+                  aria-disabled={disabled}
+                  onClick={disabled ? undefined : () => void openUsage()}
+                  data-testid="model-detail-usage-link"
+                >
+                  Usage
+                </Link>
+              )}
+            </AdminTabAction>
+            <AdminTabAction tab={AdminTab.ModelLogs}>
+              {disabled => (
+                <Link
+                  component="button"
+                  type="button"
+                  level="body-sm"
+                  disabled={disabled}
+                  aria-disabled={disabled}
+                  onClick={disabled ? undefined : () => void openLogs()}
+                  data-testid="model-detail-logs-link"
+                >
+                  Logs
+                </Link>
+              )}
+            </AdminTabAction>
           </>
         }
         actions={

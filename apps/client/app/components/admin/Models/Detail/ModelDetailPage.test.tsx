@@ -405,6 +405,37 @@ describe('ModelDetailPage', () => {
   });
 });
 
+describe('links from a model page into full-admin tabs', () => {
+  const keyRow = modelRow({
+    id: BEDROCK_ID,
+    status: 'hidden',
+    reasons: [{ code: 'no-credential', message: 'No API key', fixAction: 'open-key-settings' }],
+  });
+  const open = async () => {
+    serve([keyRow]);
+    await renderModelsRoute(`/admin/models/${BEDROCK_ID}`, () => null, { Detail: DetailRoute });
+    return screen.findByTestId('model-detail-fix-btn');
+  };
+
+  it('keeps Open key settings, Usage and Logs working for a full administrator', async () => {
+    const fix = await open();
+
+    expect(fix).toBeEnabled();
+    expect(screen.getByTestId('model-detail-usage-link')).toBeEnabled();
+    expect(screen.getByTestId('model-detail-logs-link')).toBeEnabled();
+  });
+
+  it('disables them, with the reason, for a delegate whose permissions do not open those tabs', async () => {
+    user.current = { isAdmin: false, adminPermissions: ['support:read', 'settings:manage'] };
+    const fix = await open();
+
+    expect(fix).toBeDisabled();
+    expect(screen.getByTestId('model-detail-usage-link')).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByTestId('model-detail-logs-link')).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getAllByTestId('models-tab-blocked-action')).toHaveLength(3);
+  });
+});
+
 describe('ModelDetailPage for a delegate with support:read', () => {
   const requested = () => [...new Set(get.mock.calls.map(([url]) => url as string))];
 
