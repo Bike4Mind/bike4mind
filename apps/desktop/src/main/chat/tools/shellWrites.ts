@@ -798,9 +798,10 @@ function cachedGit(directory: string, label: string, args: readonly string[]): P
   if (listed === undefined) {
     listed = gitLaunch(directory, args).then(launch => launch && gitExec(launch));
     commandListings.set(key, listed);
-    // A timed-out or unstarted query is asked again next time; an exit code is an answer.
+    // Only a success, or git's exit 128 for a listing type it does not know, is kept; any other outcome is asked again.
     void listed.then(result => {
-      if (result === null && commandListings.get(key) === listed) commandListings.delete(key);
+      const kept = result !== null && (result.code === 0 || (result.code === 128 && label === 'deprecated'));
+      if (!kept && commandListings.get(key) === listed) commandListings.delete(key);
     });
   }
   return listed;
@@ -839,6 +840,11 @@ async function shellGitVersion(directory: string): Promise<GitResult | null> {
     });
   }
   return listed;
+}
+
+/** Whether `name` is one of git's own builtins or exec-path commands, which no PATH entry can supply or replace. */
+export async function gitListsBuiltin(directory: string, name: string): Promise<boolean> {
+  return (await gitCommandListing(directory, 'builtins,main'))?.has(name) === true;
 }
 
 /**

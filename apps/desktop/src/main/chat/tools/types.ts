@@ -738,6 +738,7 @@ export interface ApprovalPart {
   pattern: string;
   coverable: boolean;
   words?: string;
+  expanded?: string;
   opaque?: string;
   /**
    * Why this part needs a decision even where commands run unasked: 'auto' asks in auto mode, 'full' in

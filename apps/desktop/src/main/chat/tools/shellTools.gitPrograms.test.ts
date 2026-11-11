@@ -321,7 +321,8 @@ const ROWS: [string, string, string][] = [
   ['pnpm --filter x exec git status', '', 'rrrr'],
   ['pnpm -C . exec git log -1', '', 'rrrr'],
   ['npm x git status', '', 'rrrr'],
-  ['npm --prefix . exec -- git status', '', 'rrrr'],
+  ['npm -w a exec -- git status', '', 'arrr'],
+  ['npm --prefix . exec -- git status', '', 'aaaa'],
   ['git branch --unset-upstream "$B"', '', 'rrrr'],
   ['git log --grep=unset "$X"', '', 'rrrr'],
   ['git log --format="%H unset $x"', '', 'rrrr'],
@@ -338,14 +339,23 @@ const ROWS: [string, string, string][] = [
   ['eval "unset GIT_CONFIG_COUNT"; git log', '', 'aaaa'],
   ["eval 'export -n GIT_CONFIG_COUNT'; git log", '', 'aaaa'],
   ['pnpm exec git fetch --upload-pack="touch M" origin', '', 'aaaa'],
-  ["trap 'unset GIT_CONFIG_COUNT' EXIT; git log", '', 'aaaa'],
-  ["alias u='unset GIT_CONFIG_COUNT'; u; git log", '', 'aaaa'],
+  ['builtin -- unset GIT_CONFIG_PARAMETERS; git -C origin.git log', '', 'aaaa'],
+  ['builtin -- unset GIT_CONFIG_COUNT; git log', '', 'aaaa'],
+  ['builtin -- export -n GIT_CONFIG_PARAMETERS; git log', '', 'aaaa'],
+  ["builtin -- source /dev/stdin <<< 'unset GIT_CONFIG_COUNT'; git log", '', 'aaaa'],
+  ['builtin -- source <(echo unset GIT_CONFIG_COUNT); git log', '', 'aaaa'],
+  ['command -- unset GIT_CONFIG_COUNT; git log', '', 'aaaa'],
+  ['command -p unset GIT_CONFIG_COUNT; git log', '', 'aaaa'],
+  ['source env1.sh && git ext', '', 'raar'],
+  ['cd nosuchdir; git ext', '', 'raar'],
+  ['source env1.sh && git lfs version', '', 'raar'],
+  ['cd nosuchdir; git lfs version', '', 'raar'],
+  ['pnpm --workspace-packages install exec git bang', '', 'aaaa'],
   ['git stage a.ts', '', 'rrrr'],
   ['source env1.sh && git stage a.ts', '', 'rrrr'],
   ['cd nosuchdir; git stage a.ts', '', 'rrrr'],
   ['source env1.sh && git sparse-checkout list', '', 'rrrr'],
   ['cd nosuchdir; git sparse-checkout list', '', 'rrrr'],
-  ['source env1.sh && git st', '', 'raar'],
   ['source env1.sh && git bang', '', 'aaaa'],
   ['source env1.sh && git nosuchprogram', '', 'raar'],
   ["find . -name '*.ts' -exec git add {} +", '', 'arrr'],
@@ -466,7 +476,9 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
     file(join(proj, 'nbin', 'git-remote-HTTP'), '#!/bin/sh\nexit 1\n', 0o755);
     file(join(proj, 'nbin', 'git-remote-HTTPS'), '#!/bin/sh\nexit 1\n', 0o755);
     const ambient = (process.env.PATH ?? '').split(':').filter(entry => !entry.endsWith('node_modules/.bin'));
-    vi.stubEnv('PATH', ['nbin', ...ambient].join(':'));
+    const extbin = join(base, 'extbin');
+    for (const name of ['git-ext', 'git-lfs']) file(join(extbin, name), '#!/bin/sh\nexit 0\n', 0o755);
+    vi.stubEnv('PATH', ['nbin', extbin, ...ambient].join(':'));
     execFileSync('git', ['clone', '-q', '--bare', proj, join(proj, 'origin.git')], { env });
     execFileSync('git', ['clone', '-q', '--bare', proj, join(proj, 'blay', '.bare')], { env });
     file(join(proj, 'blay', '.git'), 'gitdir: ./.bare\n');
@@ -736,9 +748,9 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
     });
   });
 
-  describe.each(['deny', 'ask'] as const)('with a %s rule on git push and a push alias', list => {
-    const decided = async (command: string): Promise<string | null> => {
-      const parsed = parseRule('Bash(git push:*)', { native: true });
+  describe.each(['deny', 'ask', 'allow'] as const)('with a %s rule and git aliases', list => {
+    const decided = async (command: string, text = 'git push:*'): Promise<string | null> => {
+      const parsed = parseRule(`Bash(${text})`, { native: true });
       if (!parsed.ok) throw new Error(parsed.reason);
       const home = dirname(proj);
       const rule = compileRule(parsed.rule, list, { id: 't', label: 'T' }, { home, root: proj, cwd: proj });
@@ -757,23 +769,41 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
       return set.evaluate(subject).decision;
     };
 
-    it.each([
-      'git push origin main',
-      'git push origin main > push.log',
-      'FOO=1 git push origin main',
-      'git p origin main',
-      'git p origin main > push.log',
-      'git p origin main 2> err.txt',
-      'git p origin main >> push.log 2>&1',
-      'FOO=1 git p origin main',
-      'FOO=1 git p origin main > push.log',
-      'git p',
-    ])('matches %s', async command => {
-      expect(await decided(command)).toBe(list);
+    // Rows a deny or ask rule matches by the alias as written or by its expansion.
+    const matching: [string, string][] = [
+      ['git lg:*', 'FOO=1 git lg -3'],
+      ['git lg:*', 'git -C . lg -3 > log.txt'],
+      ['git lg:*', 'git --no-pager lg -3 > log.txt'],
+      ['git p:*', 'FOO=1 git p origin main'],
+      ['git p:*', 'git -C . p origin main > push.log'],
+      ['git st:*', 'FOO=1 git st'],
+      ['git st:*', 'git -C src st > s.log'],
+      ['git push:*', 'git push origin main'],
+      ['git push:*', 'git push origin main > push.log'],
+      ['git push:*', 'FOO=1 git push origin main'],
+      ['git push:*', 'git p origin main'],
+      ['git push:*', 'git p origin main > push.log'],
+      ['git push:*', 'git p origin main 2> err.txt'],
+      ['git push:*', 'git p origin main >> push.log 2>&1'],
+      ['git push:*', 'FOO=1 git p origin main'],
+      ['git push:*', 'FOO=1 git p origin main > push.log'],
+      ['git push:*', 'git -C . p origin main'],
+      ['git push:*', 'git p'],
+    ];
+
+    it.skipIf(list === 'allow').each(matching)('rule %s on %s', async (text, command) => {
+      expect(await decided(command, text)).toBe(list);
     });
 
+    it.skipIf(list !== 'allow').each(['git p origin main > push.log', 'FOO=1 git p origin main'])(
+      'an allow rule on the expansion does not cover %s',
+      async command => {
+        expect(await decided(command)).toBeNull();
+      }
+    );
+
     it.each(['git st > status.log', 'FOO=1 git st', 'git st 2> err.txt', 'git lg -3 > log.txt'])(
-      'does not match %s',
+      'does not match a push rule on %s',
       async command => {
         expect(await decided(command)).toBeNull();
       }

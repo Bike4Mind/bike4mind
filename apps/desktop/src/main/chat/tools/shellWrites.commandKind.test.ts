@@ -121,7 +121,24 @@ describe('gitCommandKind answers kept across scans', () => {
     }
   });
 
-  it('starts no second git for a builtin outside the own list, though git exits 128 for the deprecated listing', async () => {
+  it.each([
+    ['deprecated', ['own', 'deprecated', 'deprecated']],
+    ['builtins,main', ['none', 'own', 'own']],
+  ])('asks again after the %s listing exits 1, and keeps the answer once it succeeds', async (failing, expected) => {
+    const fake = join(base, 'flaky');
+    const marker = join(base, 'failed-once');
+    await mkdir(fake);
+    await writeFile(
+      join(fake, 'git'),
+      `#!/bin/sh\ncase "$*" in\n*--list-cmds=${failing}*) if [ ! -e "${marker}" ]; then : > "${marker}"; exit 1; fi;;\nesac\ncase "$*" in\n*--list-cmds=builtins,main*|*--list-cmds=${failing}*) echo zzz;;\nesac\n`
+    );
+    await chmod(join(fake, 'git'), 0o755);
+    vi.stubEnv('PATH', fake);
+    const kinds = [await kind([], 'zzz'), await kind([], 'zzz'), await kind([], 'zzz')];
+    expect(kinds).toEqual(expected);
+  });
+
+  it('keeps the exit 128 answer for the deprecated listing, so a second lookup starts no second git', async () => {
     const fake = join(base, 'fake');
     const calls = join(base, 'calls.log');
     await mkdir(fake);

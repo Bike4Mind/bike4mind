@@ -39,6 +39,7 @@ import {
   gitAliases,
   gitCommandKind,
   gitDirectories,
+  gitListsBuiltin,
   gitRefusesImplicitBare,
   gitSubcommand,
   gitToplevel,
@@ -58,6 +59,8 @@ import { wslLocation, wslUncPath, wslUserEnvironment } from '../../wsl/wslPath';
 export interface ShellCommand {
   /** The command's tokens with options before the subcommand dropped: what a remembered pattern is matched against. */
   text: string;
+  /** `text` with a git alias read as its expansion, set when it differs; only deny and ask rules consult it. */
+  expanded?: string;
   /** What "always allow" would remember for it, e.g. `git commit *`. */
   always: string;
   /**
@@ -2641,8 +2644,16 @@ function unsetsGitConfig(root: Node, gateText: string): boolean {
     if (node === null) continue;
     const list = (node.type === 'command' ? words(node) : declarationWords(node)).map(wordValue);
     let rest = withoutWrappers(list);
-    while (rest[0] === 'builtin' || rest[0] === 'command') rest = withoutWrappers(rest.slice(1));
+    let prefixed = false;
+    while (rest[0] === 'builtin' || rest[0] === 'command') {
+      prefixed = true;
+      rest = rest.slice(1);
+      while (/^(--|-[pvV]+)$/.test(rest[0] ?? '')) rest = rest.slice(1);
+      rest = withoutWrappers(rest);
+    }
     const [program = '', ...args] = rest;
+    // A program word the parse cannot read as a plain name (`builtin $x ...`, `command -x ...`) may be an unset.
+    readsCode ||= prefixed && !/^[\w.:[][\w.:[-]*$/.test(program);
     const names = args.some(arg => /GIT_CONFIG|[$`]/.test(arg));
     if (program === 'unset' && names) return true;
     if (program === 'export' && names && args.some(arg => /^-[A-Za-z]*n/.test(arg))) return true;
@@ -5341,12 +5352,12 @@ const LAUNCHER_OPTIONS = new Map<string, { flags: ReadonlySet<string>; valued: R
     'pnpm',
     {
       flags: new Set(
-        '-w --workspace-root -r --recursive -s --silent --stream --no-color --color --parallel --ignore-workspace --offline --prefer-offline --if-present --bail --no-bail --sort --no-sort --aggregate-output --fail-if-no-match --report-summary --shell-emulator --use-stderr --workspace-packages'.split(
+        '-w --workspace-root -r --recursive -s --silent --stream --no-color --color --parallel --ignore-workspace --offline --prefer-offline --if-present --sort --no-sort --aggregate-output --fail-if-no-match --report-summary --use-stderr'.split(
           ' '
         )
       ),
       valued: new Set(
-        '-C --dir -F --filter --filter-prod --workspace-concurrency --reporter --loglevel --test-pattern --changed-files-ignore-pattern --resume-from --store-dir --virtual-store-dir --modules-dir --lockfile-dir --registry --userconfig --prefix --cache-dir --state-dir --network-concurrency --fetch-timeout'.split(
+        '-C --dir -F --filter --filter-prod --workspace-concurrency --workspace-packages --reporter --loglevel --test-pattern --changed-files-ignore-pattern --store-dir --virtual-store-dir --modules-dir --lockfile-dir --network-concurrency'.split(
           ' '
         )
       ),
@@ -5356,37 +5367,16 @@ const LAUNCHER_OPTIONS = new Map<string, { flags: ReadonlySet<string>; valued: R
     'npm',
     {
       flags: new Set(
-        '-ws --workspaces --no-workspaces --include-workspace-root -g --global -y --yes -n --no -q --quiet -s --silent -d -dd -ddd --verbose --ignore-scripts --offline --prefer-offline --no-color --color --no-progress --no-audit --no-fund --legacy-peer-deps --force -f'.split(
+        '--workspaces --ws --include-workspace-root -g --global -y --yes --ignore-scripts --no-audit --no-fund --legacy-peer-deps -f --force'.split(
           ' '
         )
       ),
-      valued: new Set(
-        '--prefix -w --workspace --userconfig --globalconfig --cache --registry --loglevel --location --node-options'.split(
-          ' '
-        )
-      ),
+      valued: new Set('-w --workspace'.split(' ')),
     },
   ],
-  [
-    'yarn',
-    {
-      flags: new Set(
-        '-s --silent --verbose --json --offline --prefer-offline --non-interactive --frozen-lockfile --ignore-scripts --no-progress --no-default-rc --disable-pnp'.split(
-          ' '
-        )
-      ),
-      valued: new Set(
-        '--cwd --registry --cache-folder --modules-folder --network-timeout --mutex --use-yarnrc'.split(' ')
-      ),
-    },
-  ],
-  [
-    'bun',
-    {
-      flags: new Set('--bun -b --silent --no-install --no-cache'.split(' ')),
-      valued: new Set('--cwd --config -c --env-file'.split(' ')),
-    },
-  ],
+  // Options the installed help does not confirm are left out, so one before the subcommand reads as unknown.
+  ['yarn', { flags: new Set(), valued: new Set() }],
+  ['bun', { flags: new Set(), valued: new Set() }],
 ]);
 
 /**
@@ -7038,7 +7028,7 @@ export async function scanShell(
             root = dirname(root);
           }
           const kind = await gitCommandKind(root, git.sub);
-          if (kind !== 'own') pathUnplaced = true;
+          if (kind !== 'own' || !(await gitListsBuiltin(root, git.sub))) pathUnplaced = true;
           // An earlier write may have changed the config, which is not checked against a folder the scan lost.
           if (kind === null || configWrites.some(write => write.id !== node.id && mayChangeConfig(write))) return null;
           const alias =
@@ -7489,9 +7479,10 @@ export async function scanShell(
       // Exact rules must name the unsafe syntax too: dropping an assignment or output redirect
       // would let `Bash(git status)` cover `GIT_CONFIG_PARAMETERS=... git status` or a file write.
       const original = node.parent?.type === 'redirected_statement' ? node.parent.text : node.text;
+      const expandedText = expanded === null ? '' : commandTokens(expanded).join(' ');
       const entry: ShellCommand = {
-        // Allow rules match `words` alone for a command that is not coverable; deny and ask also see the alias expansion here.
-        text: (coverable || expanded === null ? normalised : commandTokens(expanded)).join(' '),
+        text: normalised.join(' '),
+        ...(expandedText !== '' && expandedText !== normalised.join(' ') ? { expanded: expandedText } : {}),
         always: `${arityPrefix(normalised).join(' ')} *`,
         coverable,
         // A harmless assignment stays in `words` so a deny or ask rule naming it still matches.
