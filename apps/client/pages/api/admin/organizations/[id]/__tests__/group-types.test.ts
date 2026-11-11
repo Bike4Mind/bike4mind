@@ -13,7 +13,15 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 
 const mockSetGroupTypes = vi.fn();
-const mockTransaction = vi.fn((fn: () => Promise<unknown>) => fn());
+let transactionActive = false;
+const mockTransaction = vi.fn(async (fn: () => Promise<unknown>) => {
+  transactionActive = true;
+  try {
+    return await fn();
+  } finally {
+    transactionActive = false;
+  }
+});
 vi.mock('@bike4mind/services', () => ({
   organizationService: { setOrganizationGroupTypes: (...args: unknown[]) => mockSetGroupTypes(...args) },
 }));
@@ -37,6 +45,10 @@ describe('PUT /api/admin/organizations/[id]/group-types', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockSetGroupTypes.mockResolvedValue({ added: ['team'], removed: [], revokedGroupIds: [] });
+    vi.mocked(recordAdminActionFromRequest).mockImplementation(async () => {
+      expect(transactionActive).toBe(true);
+      return null;
+    });
   });
 
   it('records the reasoned org.group_types.updated inside the transaction', async () => {
