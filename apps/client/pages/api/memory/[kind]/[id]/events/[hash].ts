@@ -3,7 +3,7 @@ import { memoryLedgerRepository, memoryPrincipalKeyRepository } from '@bike4mind
 import { listPrincipalLedger } from '@bike4mind/server-utils/memory/ledgerMemoryStore';
 import { createKeyProvider } from '@bike4mind/server-utils/memory/factCipher';
 
-export default baseApi().get(async (req, res) => {
+export default baseApi({ auth: 'jwtOnly' }).get(async (req, res) => {
   const ownerUserId = req.user?.id;
   if (!ownerUserId) return res.status(401).json({ error: 'Authentication required' });
   if (req.query.kind !== 'user') return res.status(400).json({ error: 'Only user ledger reads are supported.' });
