@@ -997,6 +997,10 @@ SessionSchema.index({ deletedAt: 1, 'users.permissions': 1, 'users.userId': 1 })
 // Optimize global access patterns
 SessionSchema.index({ deletedAt: 1, isGlobalRead: 1 });
 
+// Group-share arm of readAccessArms (the workspace-colleague check in GET /api/users/[id]); without it
+// that $or scans every session.
+SessionSchema.index({ deletedAt: 1, 'groups.groupId': 1 });
+
 // Tag-based search indexes
 SessionSchema.index({ deletedAt: 1, 'tags.name': 1, userId: 1 });
 

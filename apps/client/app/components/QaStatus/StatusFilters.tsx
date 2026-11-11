@@ -2,6 +2,16 @@ import { FC, useState } from 'react';
 import { Button, ButtonGroup, Input, Option, Select, Stack } from '@mui/joy';
 import type { QaFacets, QaStatusSearch } from '@client/app/hooks/data/qaStatus';
 
+/**
+ * Joy's Select clears a value that is not among its options when the options change, so a
+ * URL filter would be dropped while facets load. Keeping the current value listed prevents it.
+ */
+function withCurrent(options: readonly string[] | undefined, current: string | undefined): string[] {
+  const list = [...(options ?? [])];
+  if (current && !list.includes(current)) list.push(current);
+  return list;
+}
+
 interface Props {
   search: QaStatusSearch;
   facets?: QaFacets;
@@ -44,7 +54,7 @@ const StatusFilters: FC<Props> = ({ search, facets, onChange }) => {
         sx={{ minWidth: 140 }}
       >
         <Option value="">All tenants</Option>
-        {(facets?.tenants ?? []).map(t => (
+        {withCurrent(facets?.tenants, search.tenant).map(t => (
           <Option key={t} value={t}>
             {t}
           </Option>
@@ -58,7 +68,7 @@ const StatusFilters: FC<Props> = ({ search, facets, onChange }) => {
         sx={{ minWidth: 140 }}
       >
         <Option value="">All envs</Option>
-        {(facets?.envs ?? []).map(e => (
+        {withCurrent(facets?.envs, search.env).map(e => (
           <Option key={e} value={e}>
             {e}
           </Option>

@@ -31,7 +31,7 @@ import { join, relative } from 'node:path';
  *     through a wrapper, since the scan matches the literal `new ChatCompletionProcess(`.
  *   - whether the resolver, once passed, actually returns anything useful at runtime.
  *
- * `premiumToolsWiring.test.ts` guards the same class of defect for premium tools and still uses a
+ * `premiumToolsWiring.repo.test.ts` guards the same class of defect for premium tools and still uses a
  * whole-file substring check, so it has the first weakness this file just fixed. Worth aligning.
  */
 

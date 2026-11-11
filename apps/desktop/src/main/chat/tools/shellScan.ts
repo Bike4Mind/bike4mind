@@ -34,9 +34,11 @@ import {
   findLinks,
   findOddPaths,
   findSettings,
+  GIT_VALUED_OPTIONS,
   gitToplevel,
   indexListed,
   inPlaceWrites,
+  SPELLED_PROGRAM,
   withGrantedRoots,
   type GitScript,
 } from './shellWrites';
@@ -447,8 +449,12 @@ function globPrefix(text: string): string | null {
   return match.index === 0 ? null : text.slice(0, match.index);
 }
 
-/** One character of a word with its quotes removed, `active` when unquoted so a glob or brace in it is live; or an expansion. */
-type WordPiece = { char: string; active: boolean } | { expansion: string };
+/**
+ * One character of a word with its quotes removed, `active` when unquoted so a glob or brace in it is live; or an
+ * expansion, `unquoted` when it stands outside double quotes. An empty quoted segment is a zero-width inactive
+ * character, so brace alternatives can distinguish a retained empty argument from an unquoted one bash drops.
+ */
+type WordPiece = { char: string; active: boolean } | { expansion: string; unquoted?: true };
 
 /** The index just past the `close` that balances the run starting at `from`, skipping escapes and single quotes. */
 function matchingEnd(word: string, from: number, open: string, close: string): number {
@@ -487,8 +493,11 @@ function expansionEnd(word: string, at: number, quoted: boolean): number {
   return at + 1;
 }
 
-/** A word's characters as bash reads them: quotes removed, backslash escapes applied, and each expansion kept whole. */
-function wordPieces(word: string): WordPiece[] {
+/**
+ * A word's characters as bash reads them: quotes removed, backslash escapes applied, and each expansion kept whole.
+ * `unquotedAt` collects the offset in `word` of each active piece.
+ */
+function wordPieces(word: string, unquotedAt?: number[]): WordPiece[] {
   const pieces: WordPiece[] = [];
   const push = (char: string, active: boolean): void => {
     pieces.push({ char, active });
@@ -496,7 +505,7 @@ function wordPieces(word: string): WordPiece[] {
   const expansion = (at: number, quoted: boolean): number => {
     const end = expansionEnd(word, at, quoted);
     if (end === at + 1) push(word[at] as string, false);
-    else pieces.push({ expansion: word.slice(at, end) });
+    else pieces.push(quoted ? { expansion: word.slice(at, end) } : { expansion: word.slice(at, end), unquoted: true });
     return end - 1;
   };
   for (let at = 0; at < word.length; at++) {
@@ -507,9 +516,11 @@ function wordPieces(word: string): WordPiece[] {
     } else if (char === "'") {
       const end = word.indexOf("'", at + 1);
       const stop = end === -1 ? word.length : end;
+      if (stop === at + 1) push('', false);
       for (let quoted = at + 1; quoted < stop; quoted++) push(word[quoted] as string, false);
       at = stop;
     } else if (char === '"') {
+      if (word[at + 1] === '"') push('', false);
       for (at++; at < word.length && word[at] !== '"'; at++) {
         const inner = word[at] as string;
         if (inner === '\\' && at + 1 < word.length && '$`"\\\n'.includes(word[at + 1] as string)) {
@@ -523,10 +534,95 @@ function wordPieces(word: string): WordPiece[] {
     } else if (char === '$' || char === '`') {
       at = expansion(at, false);
     } else {
+      unquotedAt?.push(at);
       push(char, true);
     }
   }
   return pieces;
+}
+
+/** A `$(`, `$((`, `<(` or `>(` substitution, or a `$'` string, the parser found in a word, and where it ends. */
+interface BraceScanSkip {
+  end: number;
+  kind: 'command' | 'process' | 'ansi';
+}
+
+/**
+ * The offsets of the `{`, `}`, `,` and `.` bash's brace expansion reads as unquoted in `word`, by its own quote
+ * rules (braces.c `brace_gobbler`): within double quotes a backtick or `${` opens no quote, so a `"` inside one
+ * ends the double quote. bash 5 skips a `$(` substitution in or out of double quotes, and a `<(` or `>(` one; bash
+ * 3.2 (macOS `/bin/bash`) skips only a `$(` outside them. Null when a `$'` string sits where that reading is quoted.
+ */
+function braceScanUnquoted(word: string, skips: ReadonlyMap<number, BraceScanSkip>, bash5: boolean): number[] | null {
+  const unquoted: number[] = [];
+  let quote = '';
+  // Depth inside an unquoted `${`, where no brace, comma or `..` counts.
+  let level = 0;
+  for (let at = 0; at < word.length; at++) {
+    const skip = skips.get(at);
+    // The parser turns a `$'` string into a single-quoted one before brace expansion reads the word.
+    if (skip?.kind === 'ansi' && quote !== '') return null;
+    if (
+      skip !== undefined &&
+      (quote === '' ? skip.kind !== 'process' || bash5 : quote === '"' && skip.kind === 'command' && bash5)
+    ) {
+      at = skip.end - 1;
+      continue;
+    }
+    const char = word[at] as string;
+    if (char === '\\' && quote !== "'") {
+      at++;
+    } else if (char === '$' && word[at + 1] === '{' && quote !== "'") {
+      at++;
+      if (quote === '') level++;
+    } else if (quote !== '') {
+      if (char === quote) quote = '';
+    } else if (char === '"' || char === "'" || char === '`') {
+      quote = char;
+    } else if (level > 0) {
+      if (char === '{') level++;
+      else if (char === '}') level--;
+    } else if ('{},.'.includes(char)) {
+      unquoted.push(at);
+    }
+  }
+  return unquoted;
+}
+
+/**
+ * Whether bash 3.2 or 5 may brace-expand a word around a `{`, `}`, `,` or `.` that wordPieces reads as quoted or
+ * inside an expansion: ``"`x "{a,b}"`"`` runs `x "a"` and `x "b"`.
+ */
+function braceScanDiffers(node: Node): boolean {
+  const word = node.text;
+  if (!word.includes('{') || !(word.includes(',') || word.includes('..'))) return false;
+  const skips = new Map<number, BraceScanSkip>();
+  const collect = (inner: Node): void => {
+    const kind =
+      inner.type === 'process_substitution'
+        ? 'process'
+        : inner.type === 'ansi_c_string'
+          ? 'ansi'
+          : /^(command_substitution|arithmetic_expansion)$/.test(inner.type) && inner.text.startsWith('$(')
+            ? 'command'
+            : null;
+    if (kind) skips.set(inner.startIndex - node.startIndex, { end: inner.endIndex - node.startIndex, kind });
+    for (const child of inner.children) if (child) collect(child);
+  };
+  collect(node);
+  const read: number[] = [];
+  wordPieces(word, read);
+  const scanned = new Set(read);
+  return [false, true].some(bash5 => {
+    const found = braceScanUnquoted(word, skips, bash5);
+    if (found === null) return true;
+    const unquoted = new Set(found);
+    const opens = found.some(at => word[at] === '{');
+    const splits = found.some(
+      at => word[at] === ',' || (word[at] === '.' && word[at + 1] === '.' && unquoted.has(at + 1))
+    );
+    return opens && splits && found.some(at => !scanned.has(at));
+  });
 }
 
 const isActive = (piece: WordPiece | undefined, char: string): boolean =>
@@ -538,69 +634,113 @@ const BRACE_LIMIT = 64;
 const BRACE_PIECES = 1024;
 
 /**
- * The words a `{a..e}` or `{1..9..2}` sequence makes, null when it is no sequence, or 'many' past the limit or when
- * the scan cannot tell them. With `portable`, a step or zero padding is 'many': bash 3.2 (macOS `/bin/bash`) leaves
- * `{1..9..2}` as written and drops the padding of `{01..3}`, so only plain sequences mean the same in every bash.
+ * The words a plain `{a..e}` or `{-1..3}` sequence makes, or null for any other amble. Only plain sequences mean the
+ * same in every bash: 3.2 (macOS `/bin/bash`) leaves `{1..9..2}` as written, drops the padding of `{01..3}` and
+ * truncates a bound past 32 bits.
  */
-function braceSequence(inner: readonly WordPiece[], portable: boolean): WordPiece[][] | null | 'many' {
+function braceSequence(inner: readonly WordPiece[]): WordPiece[][] | null {
   if (!inner.every(piece => 'char' in piece && piece.active)) return null;
   const text = inner.map(piece => ('char' in piece ? piece.char : '')).join('');
-  const numeric = /^(-?\d+)\.\.(-?\d+)(?:\.\.(-?\d+))?$/.exec(text);
-  const letters = /^([A-Za-z])\.\.([A-Za-z])(?:\.\.(-?\d+))?$/.exec(text);
+  const numeric = /^(-?(?:0|[1-9]\d*))\.\.(-?(?:0|[1-9]\d*))$/.exec(text);
+  const letters = /^([A-Za-z])\.\.([A-Za-z])$/.exec(text);
   const match = numeric ?? letters;
   if (!match) return null;
   const [from, to] = numeric
     ? [Number(match[1]), Number(match[2])]
     : [(match[1] as string).charCodeAt(0), (match[2] as string).charCodeAt(0)];
-  const step = Math.abs(Number(match[3] ?? 1)) || 1;
-  if (![from, to, step, to - from].every(Number.isSafeInteger)) return 'many';
+  if (![from, to].every(bound => bound >= -0x80000000 && bound <= 0x7fffffff)) return null;
   // Bash reads a `\` or backtick a letter range between `Z` and `a` makes as quoting, not as a letter.
-  if (letters && Math.min(from, to) <= 0x60 && Math.max(from, to) >= 0x5b) return 'many';
-  const count = Math.floor(Math.abs(to - from) / step) + 1;
-  if (count > BRACE_LIMIT) return 'many';
-  const padded = numeric && (/^-?0\d/.test(match[1] as string) || /^-?0\d/.test(match[2] as string));
-  if (portable && (padded || match[3] !== undefined)) return 'many';
-  const size = padded ? Math.max((match[1] as string).length, (match[2] as string).length) : 0;
+  if (letters && Math.min(from, to) <= 0x60 && Math.max(from, to) >= 0x5b) return null;
+  const count = Math.abs(to - from) + 1;
+  if (count > BRACE_LIMIT) return null;
   const words: WordPiece[][] = [];
   for (let index = 0; index < count; index++) {
-    const value = from + (to >= from ? 1 : -1) * index * step;
-    const digits = String(Math.abs(value)).padStart(value < 0 ? Math.max(0, size - 1) : size, '0');
-    const text = numeric ? `${value < 0 ? '-' : ''}${digits}` : String.fromCharCode(value);
+    const value = from + (to >= from ? index : -index);
+    const text = numeric ? String(value) : String.fromCharCode(value);
     words.push([...text].map(char => ({ char, active: false })));
   }
   return words;
 }
 
+const isUnquoted = (piece: WordPiece | undefined, expansion: RegExp): boolean =>
+  piece !== undefined && 'expansion' in piece && piece.unquoted === true && expansion.test(piece.expansion);
+
+/** An unquoted `$name` before a letter, digit or underscore, which bash reads as part of the name. */
+const extendsName = (word: readonly WordPiece[]): boolean =>
+  word.some((piece, at) => {
+    const next = word[at + 1];
+    return isUnquoted(piece, /^\$[A-Za-z_]\w*$/) && next !== undefined && 'char' in next && /\w/.test(next.char);
+  });
+
 /**
- * Bash's brace expansion, which runs before every other: null when it makes more than BRACE_LIMIT words, or with
- * `portable` when it holds a sequence bash versions expand differently (see braceSequence).
+ * Bash's brace expansion, which runs before every other. Null past BRACE_LIMIT words, for a `..` in braces that make
+ * no plain sequence (bash versions read those apart), for a `,` or `..` among braces that do not balance (bash
+ * pairs a `{` with the first `}` past one at its own level), or for a word whose `$name` an option extends.
  */
-function expandBraces(pieces: readonly WordPiece[], portable = false): WordPiece[][] | null {
-  if (pieces.length > BRACE_PIECES && pieces.some(piece => isActive(piece, '{'))) return null;
-  for (let open = 0; open < pieces.length; open++) {
-    if (!isActive(pieces[open], '{')) continue;
-    let depth = 0;
-    let close = -1;
-    const commas: number[] = [];
-    for (let at = open; at < pieces.length && close === -1; at++) {
-      if (isActive(pieces[at], '{')) depth++;
-      else if (isActive(pieces[at], '}') && --depth === 0) close = at;
-      else if (depth === 1 && isActive(pieces[at], ',')) commas.push(at);
+function expandBraces(pieces: readonly WordPiece[]): WordPiece[][] | null {
+  const words = braceAlternatives(pieces);
+  // Bash drops an unquoted empty alternative. Losing an operand can make find act on `.` instead.
+  return words?.some(word => word.length === 0) ? null : words;
+}
+
+/** Brace alternatives before empty unquoted words are removed; recursive parts may legitimately be empty. */
+function braceAlternatives(pieces: readonly WordPiece[]): WordPiece[][] | null {
+  if (!pieces.some(piece => isActive(piece, '{'))) return [[...pieces]];
+  if (pieces.length > BRACE_PIECES) return null;
+  // bash reads `$${` as `$` and a `${` it skips whole, expanding no braces inside.
+  if (pieces.some((piece, at) => isUnquoted(piece, /^\$\$$/) && isActive(pieces[at + 1], '{'))) return null;
+  const dotsAt = (list: readonly WordPiece[], at: number): boolean =>
+    isActive(list[at], '.') && isActive(list[at + 1], '.');
+  const closes = new Map<number, number>();
+  const opens: number[] = [];
+  let balanced = true;
+  pieces.forEach((piece, at) => {
+    if (isActive(piece, '{')) opens.push(at);
+    else if (isActive(piece, '}')) {
+      const open = opens.pop();
+      if (open === undefined) balanced = false;
+      else closes.set(open, at);
     }
-    if (close === -1) continue;
-    const bounds = [open, ...commas, close];
+  });
+  if (!balanced || opens.length > 0) {
+    return pieces.some((piece, at) => isActive(piece, ',') || dotsAt(pieces, at)) ? null : [[...pieces]];
+  }
+  for (const [open, close] of [...closes].sort(([a], [b]) => a - b)) {
+    const inner = pieces.slice(open + 1, close);
+    const commas: number[] = [];
+    let dots = false;
+    let depth = 0;
+    inner.forEach((piece, at) => {
+      if (isActive(piece, '{')) depth++;
+      else if (isActive(piece, '}')) depth--;
+      else if (depth === 0 && isActive(piece, ',')) commas.push(at);
+      else if (depth === 0 && dotsAt(inner, at)) dots = true;
+    });
+    const bounds = [-1, ...commas, inner.length];
     const options =
       commas.length > 0
-        ? bounds.slice(1).map((end, index) => pieces.slice((bounds[index] as number) + 1, end))
-        : braceSequence(pieces.slice(open + 1, close), portable);
-    if (options === null) continue;
-    if (options === 'many') return null;
+        ? bounds.slice(1).map((end, index) => inner.slice((bounds[index] as number) + 1, end))
+        : braceSequence(inner);
+    if (options === null) {
+      if (dots) return null;
+      continue;
+    }
+    // As bash: the text before stays as written, and each option and the rest expand on their own.
+    const tails = braceAlternatives(pieces.slice(close + 1));
+    if (tails === null) return null;
     const words: WordPiece[][] = [];
     for (const option of options) {
-      const expanded = expandBraces([...pieces.slice(0, open), ...option, ...pieces.slice(close + 1)], portable);
-      if (expanded === null) return null;
-      words.push(...expanded);
-      if (words.length > BRACE_LIMIT) return null;
+      const middles = braceAlternatives(option);
+      if (middles === null) return null;
+      for (const middle of middles) {
+        for (const tail of tails) {
+          const word = [...pieces.slice(0, open), ...middle, ...tail];
+          // `$PWD{_,x}` is `$PWD_` and `$PWDx` to bash, which expands braces before variables.
+          if (extendsName(word)) return null;
+          words.push(word);
+          if (words.length > BRACE_LIMIT) return null;
+        }
+      }
     }
     return words;
   }
@@ -762,6 +902,7 @@ function resolveWord(pieces: readonly WordPiece[], scope: WordScope): OperandWor
   }
   for (const piece of pieces.slice(from)) {
     if ('char' in piece) {
+      if (piece.char === '') continue;
       text += piece.char;
       glob.push(piece.active && '*?['.includes(piece.char));
       active.push(piece.active);
@@ -786,7 +927,7 @@ function resolveWord(pieces: readonly WordPiece[], scope: WordScope): OperandWor
   return { text, glob, active, expandAt };
 }
 
-/** Every word one shell word becomes after brace expansion; null when there are too many to read. */
+/** Every word one shell word becomes after brace expansion; null when expandBraces cannot read its braces. */
 function operandWords(raw: string, scope: WordScope): OperandWord[] | null {
   const bound = boundWords(raw, scope.bindings);
   if (bound) {
@@ -1059,7 +1200,7 @@ function xargsReplace(tokens: readonly string[]): string | null {
 
 /** `git config` keys whose value is a program git runs, or a file of more config. Case is ignored, as git does. */
 const GIT_PROGRAM_CONFIG =
-  /^(core\.(fsmonitor|sshcommand|pager|editor|hookspath|gitproxy|askpass|alternaterefscommand)|alias\..+|.+\.textconv|diff\.external|.+\.(cmd|command)|credential\..+|filter\..+|sequence\.editor|gpg(\..+)?\.program|merge\..+\.driver|pager\..+|uploadpack\.packobjectshook|remote\..+\.(uploadpack|receivepack)|include(if\..+)?\.path)$/i;
+  /^(core\.(fsmonitor|sshcommand|pager|editor|hookspath|gitproxy|askpass|alternaterefscommand)|alias\..+|.+\.textconv|diff\.external|.+\.(cmd|command)|(man|browser|difftool|mergetool)\..+\.path|credential\..+|filter\..+|sequence\.editor|gpg(\..+)?\.program|merge\..+\.driver|pager\..+|uploadpack\.packobjectshook|remote\..+\.(uploadpack|receivepack)|include(if\..+)?\.path)$/i;
 
 /** `git config` options whose value is the next word. */
 const GIT_CONFIG_VALUED = new Set(['-f', '--file', '--blob', '--type', '--default', '--comment', '--value']);
@@ -2342,7 +2483,7 @@ function bashOption(word: string): string | null {
   if (expanded === null) return null;
   // An expansion that may be empty (`${X:+}--pre=f`, `$(true)-c`) leaves the dash after it to start the word.
   const option = expanded.some(variant => {
-    const first = variant.find(piece => 'char' in piece);
+    const first = variant.find(piece => 'char' in piece && piece.char !== '');
     return first !== undefined && 'char' in first && first.char === '-';
   });
   return option ? null : wordValue(word);
@@ -2965,7 +3106,7 @@ function shellExpands(raw: string): boolean {
   const live = pieces.some(piece => !('char' in piece) || (piece.active && '*?['.includes(piece.char)));
   if (live || expandsTilde(pieces)) return true;
   // A sequence such as `{1..1}` makes one word, but not the word as written.
-  const words = expandBraces(pieces, true);
+  const words = expandBraces(pieces);
   return words?.length !== 1 || textOf(words[0] as WordPiece[]) !== textOf(pieces);
 }
 
@@ -2984,7 +3125,7 @@ const textOf = (pieces: readonly WordPiece[]): string =>
 function pathspecValues(raw: string): { text: string; glob: boolean }[] | null {
   const pieces = wordPieces(raw);
   if (pieces.some(piece => !('char' in piece))) return null;
-  const words = expandBraces(pieces, true);
+  const words = expandBraces(pieces);
   if (words === null) return null;
   const values: { text: string; glob: boolean }[] = [];
   for (const word of words) {
@@ -3638,9 +3779,6 @@ const STDIN_SCRIPT_ARG = /^(\/(dev|proc\/self)\/fd\/[\d]+|\/dev\/stdin|[<>]\()/;
 /** Programs that resolve a name, so a computed argument can smuggle data into a query. */
 const RESOLVERS = new Set(['dig', 'nslookup', 'host']);
 
-/** Git's global options that take the value in the next argument, which is not a subcommand. */
-const GIT_OPTION_VALUES = /^--(git-dir|work-tree|namespace)(=|$)/;
-
 /**
  * Whether a command's stdin is fed: piped into, a heredoc or here-string, or a `<` redirect. A
  * here-string parses as the command's own child, and `cat <<'EOF' | python3` nests the pipe that
@@ -3762,10 +3900,8 @@ export function outboundReason(raw: readonly string[], stdin = false): string | 
   if (name === 'git') {
     const words: string[] = [];
     for (let i = 0; i < args.length; i++) {
-      if (args[i] === '-C' || args[i] === '-c') i++;
-      else if (GIT_OPTION_VALUES.test(args[i])) {
-        if (!args[i].includes('=')) i++;
-      } else if (!args[i].startsWith('-')) words.push(args[i]);
+      if (GIT_VALUED_OPTIONS.has(args[i])) i++;
+      else if (!args[i].startsWith('-')) words.push(args[i]);
     }
     const [sub, action] = words;
     if (sub === 'push' || sub === 'send-email') return `git ${sub}`;
@@ -3773,6 +3909,14 @@ export function outboundReason(raw: readonly string[], stdin = false): string | 
     return null;
   }
   if (name === 'gh') {
+    // A subcommand bash rewrites (`p''r`, `cre\ate`, `$x`) may be any of the ones below.
+    const [written = '', writtenAction = ''] = raw.slice(start + 1).filter(arg => !unquote(arg).startsWith('-'));
+    if (
+      SPELLED_PROGRAM.test(written) ||
+      (/^(gist|release|issue|pr)$/.test(unquote(written)) && SPELLED_PROGRAM.test(writtenAction))
+    ) {
+      return 'gh with a subcommand bash rewrites';
+    }
     const [sub, action] = args.filter(arg => !arg.startsWith('-'));
     if ((sub === 'gist' && (action === 'create' || action === 'edit')) || (sub === 'release' && action === 'upload')) {
       return `gh ${sub} ${action}`;
@@ -4189,9 +4333,6 @@ function curlFiles(args: readonly string[]): { reads: string[]; writes: string[]
 /** A function name the scan can track. */
 const PLAIN_PROGRAM = /^([\w.+-]+|\[|:)$/;
 
-/** A quote, escape, expansion, glob or brace in a program word, which leaves what runs to bash. */
-const SPELLED_PROGRAM = /['"\\$`*?[{}]/;
-
 /**
  * Whether a command the scan models cannot be followed: a wrapper or program word bash rewrites before it
  * runs, a list of operands read from a file (`--files-from`, `tar -T`), or a curl call `curlModeled` refuses.
@@ -4222,7 +4363,7 @@ function untrackableCommand(raw: readonly string[]): boolean {
     if (extended || /^[A-Za-z]*[TIF]/.test(bashOption(first) ?? '')) return true;
     if (words.some(arg => mayPassOption(arg, valued, tarListsOrRuns, tarNames, true))) return true;
   }
-  if (name === 'git' && gitConfigRunsProgram(words)) return true;
+  if (name === 'git' && (gitConfigRunsProgram(words) || gitSubcommandSpelled(words))) return true;
   // Each of these runs a program the option names.
   const pre = (arg: string): boolean => /^--pre(-glob)?(=|$)/.test(arg);
   if (name === 'rg' && words.some(arg => mayPassOption(arg, '', pre, ['--pre', '--pre-glob'], false))) return true;
@@ -4268,7 +4409,9 @@ function tarListsOrRuns(arg: string): boolean {
 }
 
 /** git's global options other than `-c` and `--config-env` whose value is the next word. */
-const GIT_GLOBAL_VALUED = new Set(['-C', '--git-dir', '--work-tree', '--namespace', '--attr-source']);
+const GIT_GLOBAL_VALUED: ReadonlySet<string> = new Set(
+  [...GIT_VALUED_OPTIONS].filter(option => option !== '-c' && option !== '--config-env')
+);
 
 /**
  * Whether `git -c key=value` or `--config-env key=VAR` before the subcommand sets a key that runs a program, or
@@ -4282,6 +4425,8 @@ function gitConfigRunsProgram(raw: readonly string[]): boolean {
     // `${X:+}-c` may pass `-c` alone, so where its value ends is open.
     if (bashOption(word) === null && fixedOption(word, 'Cc')?.value === null) return true;
     if (!arg.startsWith('-')) return false;
+    // git runs its helper programs (`git-web--browse`, `git-mergetool`) from the folder `--exec-path=` names.
+    if (arg.startsWith('--exec-path=')) return true;
     const valued = arg === '-c' || arg === '--config-env';
     const glued = /^--config-env=(.*)$/s.exec(arg)?.[1];
     const setting = valued
@@ -4294,6 +4439,17 @@ function gitConfigRunsProgram(raw: readonly string[]): boolean {
     const [key] = setting;
     if (key !== undefined && GIT_PROGRAM_CONFIG.test(key.split('=')[0] ?? '')) return true;
     if (GIT_GLOBAL_VALUED.has(arg)) at++;
+  }
+  return false;
+}
+
+/** Whether the word git reads as its subcommand is one bash rewrites (`cle''an`, `c\lean`, `cl$x`), as a program word. */
+function gitSubcommandSpelled(raw: readonly string[]): boolean {
+  for (let at = 0; at < raw.length; at++) {
+    const word = raw[at] as string;
+    const arg = optionStandIn(word, 'Cc');
+    if (arg === null || !arg.startsWith('-')) return SPELLED_PROGRAM.test(word);
+    if (GIT_VALUED_OPTIONS.has(arg)) at++;
   }
   return false;
 }
@@ -4641,6 +4797,59 @@ export function words(node: Node): string[] {
   return out;
 }
 
+/** Expressions in a `[` test, whose leaves are the words the `[` builtin is given. */
+const TEST_EXPRESSIONS = new Set([
+  'binary_expression',
+  'unary_expression',
+  'parenthesized_expression',
+  'ternary_expression',
+  'postfix_expression',
+]);
+
+/**
+ * The words of `node` bash brace-expands: a command's, a declaration's (`local x=...` too), an `unset`'s, a `[`
+ * test's, an array's, a for or select loop's list and a redirect target. Not a plain assignment, a here-string, a
+ * `case` word or pattern, or a `[[` test.
+ */
+function braceExpandedWords(node: Node): Node[] {
+  const named = node.namedChildren.filter((child): child is Node => child !== null && child.type !== 'comment');
+  // Iterative, in source order: a long `! ! ! x` or `-a` chain would overflow the stack if recursed.
+  const leaves = (root: Node): Node[] => {
+    const found: Node[] = [];
+    const pending: Node[] = [root];
+    for (let top = pending.pop(); top !== undefined; top = pending.pop()) {
+      if (!TEST_EXPRESSIONS.has(top.type)) {
+        found.push(top);
+        continue;
+      }
+      const children = top.namedChildren;
+      for (let at = children.length - 1; at >= 0; at--) {
+        const child = children[at];
+        if (child !== null && child !== undefined) pending.push(child);
+      }
+    }
+    return found;
+  };
+  switch (node.type) {
+    case 'command':
+      return named.filter(child => child.type !== 'variable_assignment' && !child.type.endsWith('redirect'));
+    case 'test_command':
+      return node.firstChild?.type === '[' ? named.flatMap(leaves) : [];
+    case 'declaration_command':
+    case 'unset_command':
+    case 'array':
+      return named;
+    case 'for_statement':
+      return node.childrenForFieldName('value').filter((child): child is Node => child !== null);
+    case 'file_redirect': {
+      const target = node.childForFieldName('destination');
+      return target ? [target] : [];
+    }
+    default:
+      return [];
+  }
+}
+
 /** Nodes whose assignments are already accounted for: a command's prefix, or a flagged declaration. */
 const ASSIGNMENT_OWNERS = new Set(['command', 'declaration_command', 'variable_assignments']);
 
@@ -4863,9 +5072,10 @@ export async function scanShell(
       throughProcess(text, wslLocation(cwd)?.linuxPath ?? cwd);
 
     /**
-     * The paths a glob operand expands to through a link, which are checked again as written; null when the
-     * expansion is too large to read, or may be empty under nullglob, where a program given no operand may act on
-     * `.` (find). Empty where the scan does not expand (Windows, a WSL folder) unless nullglob may be on.
+     * The paths a glob operand expands to through a link, which are checked again as written. Null when the expansion
+     * is too large to read, or matches nothing while nullglob, globstar or nocaseglob may be on: bash may then drop the
+     * operand (find given none acts on `.`) or match names the walk does not. Empty where the scan does not expand
+     * (Windows, a WSL folder) unless one of those options may be on.
      */
     const linkMatches = async (word: OperandWord, operand: ReadOperand, cwd: string): Promise<string[] | null> => {
       if (operand.start === null || operand.unread) return [];
@@ -4958,7 +5168,8 @@ export async function scanShell(
         const matched: string[] = [];
         for (const glob of listing.globs ?? []) {
           const names = await globNames(state.cwd, glob, stopped);
-          // A name with a leading `:` reaches git as magic, which can turn every other pathspec into an exclude.
+          // git reads a name with a leading `:` as magic for that name alone (`:/x` from the top, `:!x` an exclude); a
+          // bare `:`, or excludes with no other pathspec, match every path.
           if (names === null || names.some(name => name.startsWith(':'))) return false;
           // git reads a name holding `[`, `]`, `?`, `*` or `\` as a pattern too, so its own git gets it as written.
           matched.push(...names.filter(name => /[[\]?*\\]/.test(name)));
@@ -5506,16 +5717,17 @@ export async function scanShell(
           }
           const value = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : arg;
           if (value.startsWith('-')) continue;
+          const words = operandWords(value, scope());
+          // Braces the scan cannot expand as bash does may make any name, so whatever their shape they are unread.
+          if (words === null) {
+            unreadOperands++;
+            continue;
+          }
           const reach = reachAt(index);
           // An expansion is an unread path where a path is expected: an option's folder or file, a tree
           // operand, or a word with a separator outside the expansion (`"$X"/f`, but not `"$PAT"`).
           const option = PATH_OPTION_VALUE.test(wordValue(arg)) || PATH_OPTIONS.has(wordValue(rest[index - 1] ?? ''));
           const pattern = patterns.has(index - wrapperWordCount);
-          const words = operandWords(value, scope());
-          if (words === null) {
-            if (counts && (option || reach || (!pattern && value.includes('/')))) unreadOperands++;
-            continue;
-          }
           for (const word of words) {
             const pathLike = option || reach !== null || (!pattern && /[\\/]/.test(word.text));
             await checkArgument(word, reach, pathLike, counts);
@@ -5538,7 +5750,9 @@ export async function scanShell(
         const budget = { entries: WALK_ENTRIES };
         const operands = wrappedRest.filter(arg => !unquote(arg).startsWith('-'));
         for (const arg of trees.cwd ? [...operands, '.'] : operands) {
-          for (const word of operandWords(arg, scope()) ?? []) {
+          const words = operandWords(arg, scope());
+          if (words === null) unreadOperands++;
+          for (const word of words ?? []) {
             const operand = readOperand(word, posix.dirname);
             if (operand.unread) continue;
             const links = await linksUnder(
@@ -5555,7 +5769,9 @@ export async function scanShell(
       if (target?.glued) await check(target.value, state.cwd, false, 'program', trees.glued);
       if (UNPACKS.has(name)) {
         for (const tree of inPlace.trees) {
-          for (const word of operandWords(tree, scope()) ?? []) await checkArgument(word, 'write', true);
+          const words = operandWords(tree, scope());
+          if (words === null) unreadOperands++;
+          for (const word of words ?? []) await checkArgument(word, 'write', true);
         }
       }
       if (name === 'ln') await noteLinks(wrappedRest);
@@ -5652,7 +5868,9 @@ export async function scanShell(
       const place = directory ?? (single ? '.' : operands.at(-1));
       if (place === undefined) return;
       const text = (raw: string): string | null => {
-        const [word] = operandWords(raw, scope()) ?? [];
+        const words = operandWords(raw, scope());
+        if (words === null) unreadOperands++;
+        const [word] = words ?? [];
         return word && word.expandAt === null ? word.text : null;
       };
       const at = text(place);
@@ -6082,6 +6300,7 @@ export async function scanShell(
 
     const visit = async (node: Node): Promise<void> => {
       if (expired) return;
+      if (braceExpandedWords(node).some(braceScanDiffers)) unreadOperands++;
       // A loop or function body may run a git call again after a later one in it moved a ref.
       if (REPEATS.has(node.type) && /\bgit\b/.test(node.text)) gitScript.refsMoved = true;
       if (node.type === 'list') {

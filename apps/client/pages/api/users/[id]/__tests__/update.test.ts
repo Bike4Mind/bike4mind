@@ -769,6 +769,38 @@ describe('PUT /api/users/:id/update - ends sessions on credential and account-st
     expect(mockPropagateAccountRisk).not.toHaveBeenCalled();
   });
 
+  it('defers linked-account propagation for a ban that is part of a bulk action, and still bans', async () => {
+    adminEdit(BEFORE, { ...BEFORE, isBanned: true });
+    const { res, promise } = run({
+      user: ADMIN,
+      userId: 'target',
+      body: { isBanned: true, statusChangeReason: 'Abuse / automated signups', deferLinkPropagation: true },
+    });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockPropagateAccountRisk).not.toHaveBeenCalled();
+    expect(res._getJSONData().ignoredFields).toBeUndefined();
+  });
+
+  it('propagates an admin API-key suspension inline even when deferral is requested', async () => {
+    adminEdit(BEFORE, { ...BEFORE, isBanned: true });
+    const { res, promise } = run({
+      user: ADMIN,
+      userId: 'target',
+      body: { isBanned: true, statusChangeReason: 'Abuse / automated signups', deferLinkPropagation: true },
+      apiKeyInfo: { keyId: 'k1', scopes: [ApiKeyScope.ADMIN] },
+    });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockPropagateAccountRisk).toHaveBeenCalledTimes(1);
+    expect(mockPropagateAccountRisk).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceUserId: 'target' }),
+      expect.anything()
+    );
+  });
+
   it('cancels the Stripe subscriptions of an account an admin bans, and audits what Stripe did', async () => {
     adminEdit(BEFORE, { ...BEFORE, isBanned: true });
     mockCancelAccountSubscriptions.mockResolvedValue({
@@ -1185,8 +1217,32 @@ describe('PUT /api/users/:id/update - admin audit trail', () => {
       await promise;
 
       expect(mockGradeDetections).toHaveBeenCalledExactlyOnceWith(
-        { userId: 'other-user', adminId: ADMIN.id, wasSuspended: before, isSuspended: after, reason: STATUS_REASON },
+        {
+          userId: 'other-user',
+          adminId: ADMIN.id,
+          wasSuspended: before,
+          isSuspended: after,
+          reason: STATUS_REASON,
+          undo: false,
+        },
         expect.objectContaining({ writeAudit: expect.any(Function) })
+      );
+    });
+
+    it('marks a reinstatement flagged as an undo so grading removes the suspension grades', async () => {
+      mockUserFindById.mockReturnValue(target({ isBanned: true }));
+      mockAdminUpdateUser.mockResolvedValue({ user: target({ isBanned: false }), creditAdjustment: undefined });
+      const { res, promise } = run({
+        user: ADMIN,
+        userId: 'other-user',
+        body: { isBanned: false, statusChangeReason: STATUS_REASON, undoSuspension: true },
+      });
+      await promise;
+
+      expect(res._getJSONData().ignoredFields).toBeUndefined();
+      expect(mockGradeDetections).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ wasSuspended: true, isSuspended: false, undo: true }),
+        expect.anything()
       );
     });
 

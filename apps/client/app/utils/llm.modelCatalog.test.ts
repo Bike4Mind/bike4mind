@@ -41,3 +41,27 @@ describe('getModelCatalog locked models', () => {
     expect((await getModelCatalog()).lockedModels).toEqual([]);
   });
 });
+
+describe('getModelCatalog model-list revision', () => {
+  beforeEach(() => get.mockReset());
+
+  it('keeps the revision the server built the list under', async () => {
+    get.mockResolvedValue({ data: { models: [model('free')], supersededModels: [], modelListRevision: 'rev-1' } });
+
+    expect((await getModelCatalog()).modelListRevision).toBe('rev-1');
+  });
+
+  it('reads a server that sends no revision as null', async () => {
+    get.mockResolvedValue({ data: { models: [model('free')] } });
+
+    expect((await getModelCatalog()).modelListRevision).toBeNull();
+  });
+
+  it('keeps the flag for a list built without the catalog, and reads its absence as false', async () => {
+    get.mockResolvedValueOnce({ data: { models: [model('free')], catalogUnavailable: true } });
+    expect((await getModelCatalog()).catalogUnavailable).toBe(true);
+
+    get.mockResolvedValueOnce({ data: { models: [model('free')] } });
+    expect((await getModelCatalog()).catalogUnavailable).toBe(false);
+  });
+});

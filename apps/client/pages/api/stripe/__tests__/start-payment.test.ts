@@ -151,6 +151,34 @@ describe('POST /api/stripe/start-payment (pay-as-you-go, no subscription require
     });
   });
 
+  it.each([undefined, true, false])(
+    'honors the requested redirect policy without changing web defaults: %s',
+    async allowRedirects => {
+      const { req, res } = makeReq({
+        transactionType: TransactionType.Package,
+        packageId: CreditPackageId.Usd20,
+        ...(allowRedirects !== undefined && { allowRedirects }),
+      });
+      await (handler as HandlerFn)(req, res);
+      expect(mockPaymentIntentsCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          automatic_payment_methods:
+            allowRedirects === false ? { enabled: true, allow_redirects: 'never' } : { enabled: true },
+        })
+      );
+    }
+  );
+
+  it('rejects a malformed redirect policy before creating an intent', async () => {
+    const { req, res } = makeReq({
+      transactionType: TransactionType.Package,
+      packageId: CreditPackageId.Usd20,
+      allowRedirects: 'false',
+    });
+    await expect((handler as HandlerFn)(req, res)).rejects.toThrow();
+    expect(mockPaymentIntentsCreate).not.toHaveBeenCalled();
+  });
+
   it('records where the payment started, for the payment risk alert', async () => {
     const { req, res } = makeReq({ transactionType: TransactionType.Package, packageId: CreditPackageId.Usd20 });
 

@@ -5,6 +5,9 @@ import { createMocks } from 'node-mocks-http';
 const mocks = vi.hoisted(() => ({
   handler: undefined as undefined | ((request: unknown, response: unknown) => Promise<unknown>),
   findById: vi.fn(),
+  findMembershipOrgIds: vi.fn(),
+  projectExists: vi.fn(),
+  sessionExists: vi.fn(),
 }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => ({
@@ -14,7 +17,13 @@ vi.mock('@server/middlewares/baseApi', () => ({
     },
   }),
 }));
-vi.mock('@bike4mind/database', () => ({ User: { findById: mocks.findById } }));
+vi.mock('@bike4mind/database', () => ({
+  User: { findById: mocks.findById },
+  organizationRepository: { findMembershipOrgIds: mocks.findMembershipOrgIds },
+  Project: { exists: mocks.projectExists },
+  Session: { exists: mocks.sessionExists },
+  readAccessArms: (user: { id: string }) => [{ userId: user.id }],
+}));
 await import('../index');
 
 const assessment = {
@@ -30,6 +39,9 @@ const assessment = {
 describe('GET /api/users/:id signup assessment visibility', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.findMembershipOrgIds.mockResolvedValue([]);
+    mocks.projectExists.mockResolvedValue(null);
+    mocks.sessionExists.mockResolvedValue(null);
     mocks.findById.mockReturnValue({
       populate: () => ({
         select: async () => ({
@@ -59,6 +71,11 @@ describe('GET /api/users/:id signup assessment visibility', () => {
     expect(result.id).toBe('target');
     if (allowed) expect(result.signupGrantAssessment).toEqual(assessment);
     else expect(result).not.toHaveProperty('signupGrantAssessment');
+    if (viewer.id === 'viewer') {
+      expect(result).not.toHaveProperty('isOnline');
+      expect(result).not.toHaveProperty('lastActiveAt');
+      expect(result).not.toHaveProperty('level');
+    }
     if (!allowed) {
       expect(result).not.toHaveProperty('userNotes');
       expect(result).not.toHaveProperty('history');

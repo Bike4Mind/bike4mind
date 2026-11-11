@@ -566,7 +566,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
           firstChunkAt ??= Date.now();
           if (streamEvent.chunk?.bytes) {
             const json = new TextDecoder().decode(streamEvent.chunk.bytes);
-            const { done, chunk } = this.translateStreamChunk(model, JSON.parse(json));
+            const { done, chunk } = this.translateStreamChunk(model, JSON.parse(json), options);
             sawTerminalEvent ||= done;
             if (chunk?.stopReason) stopReason = chunk.stopReason;
 
@@ -938,7 +938,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         }
         if (!response.body) throw new Error('No response body');
         const json = new TextDecoder().decode(response.body);
-        const { chunk } = this.translateChunk(model, JSON.parse(json));
+        const { chunk } = this.translateChunk(model, JSON.parse(json), options);
         if (chunk?.stopReason) stopReason = chunk.stopReason;
         const providerBlocks = chunk?.providerBlocks ?? [];
         const streamedText: string[] = [];
@@ -1183,7 +1183,11 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
    * @param model AI Model being used.
    * @param chunk The stream chunk
    */
-  abstract translateStreamChunk(model: string, chunk: unknown): { done: boolean; chunk?: ICompletionResponseChunk };
+  abstract translateStreamChunk(
+    model: string,
+    chunk: unknown,
+    options?: Partial<ICompletionOptions>
+  ): { done: boolean; chunk?: ICompletionResponseChunk };
 
   /**
    * [NON-STREAM]
@@ -1194,7 +1198,11 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
    * @param model The model ID.
    * @param chunk The response
    */
-  abstract translateChunk(model: string, chunk: unknown): { done: boolean; chunk?: ICompletionResponseChunk };
+  abstract translateChunk(
+    model: string,
+    chunk: unknown,
+    options?: Partial<ICompletionOptions>
+  ): { done: boolean; chunk?: ICompletionResponseChunk };
 
   /**
    * Push the tool messages to the messages array.

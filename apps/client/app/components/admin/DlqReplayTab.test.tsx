@@ -1,24 +1,9 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { CssVarsProvider } from '@mui/joy/styles';
-import { describe, expect, it, vi, beforeEach } from 'vitest';
-
-const mockQueues = [
-  {
-    label: 'quest',
-    displayName: 'Quest queue',
-    application: 'client',
-    approximateMessageCount: 2,
-    approximateNotVisibleCount: 0,
-  },
-];
-const mockMessages = [
-  {
-    messageId: 'm1',
-    body: '{"a":1}',
-    sentTimestamp: '1700000000000',
-    approximateReceiveCount: '14',
-  },
-];
+import userEvent from '@testing-library/user-event';
+import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { getThemeConfig } from '@client/app/utils/themes';
+import DlqReplayTab from './DlqReplayTab';
 
 const state = vi.hoisted(() => ({
   history: [] as Array<{
@@ -34,15 +19,27 @@ const state = vi.hoisted(() => ({
   }>,
 }));
 
+const h = vi.hoisted(() => ({ user: null as null | { isAdmin?: boolean; adminPermissions?: string[] } }));
+
+vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: h.user }) }));
+vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
 vi.mock('@client/app/hooks/data/dlqManagement', () => ({
   useDlqQueues: () => ({
-    data: mockQueues,
+    data: [
+      {
+        label: 'q1',
+        displayName: 'Queue One',
+        application: 'app',
+        approximateMessageCount: 1,
+        approximateNotVisibleCount: 0,
+      },
+    ],
     isLoading: false,
     isError: false,
     refetch: vi.fn(),
   }),
   useDlqMessages: () => ({
-    data: mockMessages,
+    data: [{ messageId: 'm1', body: '{}', sentTimestamp: '1700000000000', approximateReceiveCount: '1' }],
     isLoading: false,
     isError: false,
     refetch: vi.fn(),
@@ -60,18 +57,11 @@ vi.mock('@client/app/hooks/data/dlqManagement', () => ({
   }),
 }));
 
-import DlqReplayTab from './DlqReplayTab';
-
-const selectQueue = () => {
-  const selector = screen.getByTestId('dlq-queue-selector');
-  fireEvent.click(selector);
-  const option = screen.getByTestId('dlq-queue-option-quest');
-  fireEvent.click(option);
-};
+const theme = extendTheme({ ...getThemeConfig() });
 
 function renderTab() {
   const result = render(
-    <CssVarsProvider>
+    <CssVarsProvider theme={theme}>
       <DlqReplayTab />
     </CssVarsProvider>
   );
@@ -79,8 +69,19 @@ function renderTab() {
   return result;
 }
 
+const renderWithQueueSelected = async () => {
+  render(
+    <CssVarsProvider theme={theme}>
+      <DlqReplayTab />
+    </CssVarsProvider>
+  );
+  await userEvent.click(screen.getByRole('combobox'));
+  await userEvent.click(await screen.findByRole('option', { name: /Queue One/ }));
+};
+
 beforeEach(() => {
   state.history = [];
+  h.user = null;
 });
 
 describe('DlqReplayTab history table', () => {
@@ -151,26 +152,34 @@ describe('DlqReplayTab history table', () => {
   });
 });
 
+describe('DlqReplayTab replay permission', () => {
+  it('disables both replay buttons for a support:read viewer', async () => {
+    h.user = { isAdmin: false, adminPermissions: ['support:read'] };
+    await renderWithQueueSelected();
+
+    expect(screen.getByTestId('dlq-replay-all')).toBeDisabled();
+    expect(screen.getByTestId('dlq-replay-single-m1')).toBeDisabled();
+  });
+
+  it('enables both replay buttons for a settings:manage delegate', async () => {
+    h.user = { isAdmin: false, adminPermissions: ['settings:manage'] };
+    await renderWithQueueSelected();
+
+    expect(screen.getByTestId('dlq-replay-all')).toBeEnabled();
+    expect(screen.getByTestId('dlq-replay-single-m1')).toBeEnabled();
+  });
+});
+
 describe('DlqReplayTab messages table', () => {
-  it('labels the SQS receive count accurately after selecting a queue', () => {
-    render(
-      <CssVarsProvider>
-        <DlqReplayTab />
-      </CssVarsProvider>
-    );
-    selectQueue();
+  it('labels the SQS receive count accurately after selecting a queue', async () => {
+    await renderWithQueueSelected();
     const table = screen.getByTestId('dlq-messages-table');
     expect(within(table).getByText('Receives')).toBeInTheDocument();
     expect(within(table).queryByText('Attempts')).toBeNull();
   });
 
-  it('explains that browser views contribute to the receive count', () => {
-    render(
-      <CssVarsProvider>
-        <DlqReplayTab />
-      </CssVarsProvider>
-    );
-    selectQueue();
+  it('explains that browser views contribute to the receive count', async () => {
+    await renderWithQueueSelected();
     const receivesHeader = within(screen.getByTestId('dlq-messages-table')).getByText('Receives');
     const tooltipWrapper = receivesHeader.closest('[aria-label], [title]') ?? receivesHeader.parentElement;
     const titleAttr = tooltipWrapper?.getAttribute('title') ?? tooltipWrapper?.getAttribute('aria-label') ?? '';

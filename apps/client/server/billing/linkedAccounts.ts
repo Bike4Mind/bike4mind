@@ -116,18 +116,41 @@ const describeVia = (account: LinkedAccount) =>
     .join(', ');
 
 export function formatLinkPropagationAlert(input: {
-  sourceUserId: string;
+  /** Several sources are accounts an admin suspended together in one action. */
+  sourceUserId: string | readonly string[];
   trigger: string;
   locked: LinkedAccount[];
   review: LinkedAccount[];
 }): string {
   const line = (account: LinkedAccount) => `\u2022 ${userRef(account.id)} (${describeVia(account)})`;
+  const sources = typeof input.sourceUserId === 'string' ? [input.sourceUserId] : input.sourceUserId;
   return [
     `:link: *Linked accounts: ${input.trigger}*`,
-    `*Source:* ${userRef(input.sourceUserId)}`,
+    ...(sources.length === 1
+      ? [`*Source:* ${userRef(sources[0])}`]
+      : [`*Sources (${sources.length} accounts):*`, ...sources.map(id => `\u2022 ${userRef(id)}`)]),
     ...(input.locked.length > 0 ? ['*Locked (same card):*', ...input.locked.map(line)] : []),
     ...(input.review.length > 0 ? ['*Review (shared network only, not locked):*', ...input.review.map(line)] : []),
   ].join('\n');
+}
+
+/** Every account linked to any source, merged by id, leaving out the sources themselves. */
+async function linkedToAny(sources: { id: string; signupMeta?: { ip?: string | null } | null }[]) {
+  const sourceIds = new Set(sources.map(source => source.id));
+  const merged = new Map<string, LinkedAccount>();
+  for (const source of sources) {
+    for (const account of await findLinkedAccounts(source)) {
+      if (sourceIds.has(account.id)) continue;
+      const seen = merged.get(account.id);
+      const via = [...new Set([...(seen?.via ?? []), ...account.via])];
+      merged.set(account.id, {
+        ...account,
+        via,
+        strength: seen?.strength === 'strong' || account.strength === 'strong' ? 'strong' : 'weak',
+      });
+    }
+  }
+  return [...merged.values()];
 }
 
 /**
@@ -140,33 +163,62 @@ export async function propagateAccountRisk(
   input: { sourceUserId: string; trigger: string; key: string },
   logger: Logger
 ): Promise<LinkPropagation> {
+  return propagateFromSources({ sourceUserIds: [input.sourceUserId], trigger: input.trigger, key: input.key }, logger);
+}
+
+/**
+ * propagateAccountRisk for accounts an admin suspended together: one alert for the whole action, and
+ * the accounts in it are never locked or listed for review, since the admin has just acted on them.
+ */
+export async function propagateBatchAccountRisk(
+  input: { sourceUserIds: string[]; trigger: string; key: string },
+  logger: Logger
+): Promise<LinkPropagation> {
+  return propagateFromSources(input, logger);
+}
+
+async function propagateFromSources(
+  input: { sourceUserIds: string[]; trigger: string; key: string },
+  logger: Logger
+): Promise<LinkPropagation> {
   const none: LinkPropagation = { locked: [], review: [] };
+  const logIds =
+    input.sourceUserIds.length === 1
+      ? { sourceUserId: input.sourceUserIds[0] }
+      : { sourceUserIds: input.sourceUserIds };
   try {
     if (!(await linkedAccountActionsEnabled())) return none;
-    const source = await userRepository.findById(input.sourceUserId);
-    if (!source) return none;
+    const sources = (await Promise.all(input.sourceUserIds.map(id => userRepository.findById(id)))).filter(
+      (source): source is NonNullable<typeof source> => !!source
+    );
+    if (sources.length === 0) return none;
 
-    const linked = await findLinkedAccounts(source);
+    const linked = await linkedToAny(sources);
     const toLock = linked.filter(account => account.strength === 'strong' && !account.blocked);
     const review = linked.filter(account => account.strength === 'weak' && !account.blocked);
     for (const account of toLock) await lockAccountForPaymentRisk(account);
 
     logger.info('[PaymentRisk] propagated account risk to linked accounts', {
-      sourceUserId: input.sourceUserId,
+      ...logIds,
       trigger: input.trigger,
       locked: toLock.map(account => account.id),
       review: review.map(account => account.id),
     });
     if (toLock.length === 0 && review.length === 0) return none;
-    if (await paymentRiskActionRepository.claimStep(input.key, 'linkedAlert', input.sourceUserId)) {
+    if (await paymentRiskActionRepository.claimStep(input.key, 'linkedAlert', sources[0].id)) {
       await postMessageToSlack(
-        formatLinkPropagationAlert({ sourceUserId: input.sourceUserId, trigger: input.trigger, locked: toLock, review })
+        formatLinkPropagationAlert({
+          sourceUserId: sources.length === 1 ? sources[0].id : sources.map(source => source.id),
+          trigger: input.trigger,
+          locked: toLock,
+          review,
+        })
       );
     }
     return { locked: toLock.map(account => account.id), review: review.map(account => account.id) };
   } catch (error) {
     logger.error('[PaymentRisk] linked-account propagation failed', {
-      sourceUserId: input.sourceUserId,
+      ...logIds,
       trigger: input.trigger,
       error: error instanceof Error ? error.message : String(error),
     });

@@ -5,6 +5,7 @@ import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/admi
 import { generateModelPriceSeed, modelPriceRepository, SEED_NOTE, withTransaction } from '@bike4mind/database';
 import { ApiKeyScope, DISCOVERY_PRICE_NOTE_PREFIX, MODEL_PRICE_UNITS, ModelPriceTier } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { bumpModelListRevision } from '@bike4mind/server-utils/modelDiscovery/modelListRevision';
 
 /**
  * Admin surface over the versioned model price catalog. Prices here are
@@ -185,6 +186,15 @@ const RevertBody = z.object({
   action: z.literal('revert-to-seed'),
 });
 
+/** Prices ride on GET /api/models. The row is already in force, so a failed bump must not fail the reprice. */
+async function refreshModelLists(logger: { warn(...args: unknown[]): void }): Promise<void> {
+  await bumpModelListRevision().catch((error: unknown) =>
+    logger.warn('[model-prices] model-list refresh failed', {
+      error: error instanceof Error ? error.message : String(error),
+    })
+  );
+}
+
 const handler = adminApi({
   adminPermissions: { GET: 'support:read', POST: 'settings:manage' },
   requiredScopes: [ApiKeyScope.ADMIN],
@@ -210,6 +220,7 @@ const handler = adminApi({
       if (!entry) {
         throw new BadRequestError(`${modelId} (${unit}) is not seed-managed; nothing to revert to`);
       }
+      let appendedRow = false;
       const row = await withTransaction(async () => {
         const inForce = (await modelPriceRepository.rowsInForce(FAR_FUTURE)).find(
           r => r.modelId === modelId && r.unit === unit
@@ -230,6 +241,7 @@ const handler = adminApi({
           note: SEED_NOTE,
           repricedBy: req.user.id,
         });
+        appendedRow = true;
         await recordReprice(req, {
           modelId,
           unit,
@@ -240,6 +252,7 @@ const handler = adminApi({
         });
         return appended;
       });
+      if (appendedRow) await refreshModelLists(req.logger);
       return res.json({ row });
     }
 
@@ -412,6 +425,7 @@ const handler = adminApi({
       });
       return appended;
     });
+    await refreshModelLists(req.logger);
     return res.json({ row });
   });
 

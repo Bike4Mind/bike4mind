@@ -13,6 +13,7 @@ const signedIn: AuthState = {
   hostedAvailable: true,
   storage: 'available',
   busy: 'idle',
+  user: { id: 'u1' },
 };
 
 describe('the Settings screen', () => {
@@ -73,6 +74,22 @@ describe('the Settings screen', () => {
       expect(html).toContain(`settings-appearance-${mode}-btn`);
     }
   });
+
+  it('keeps Billing outside Settings', () => {
+    expect(html).not.toContain('data-testid="settings-nav-billing-btn"');
+    expect(html).not.toContain('billing-loading');
+  });
+
+  it.each([null, { ...signedIn, status: 'signed-out' as const }, { ...signedIn, user: undefined }])(
+    'keeps Settings independent of account billing',
+    auth => {
+      const html = markup(<SettingsScreen auth={auth} onClose={() => {}} />);
+      expect(html).not.toContain('data-testid="settings-nav-billing-btn"');
+      expect(html).not.toContain('data-testid="settings-page-billing"');
+      expect(html).not.toContain('billing-loading');
+      expect(html).toContain('data-testid="settings-page-general"');
+    }
+  );
 
   it('offers the suggested next prompt preference', () => {
     expect(html).toContain('data-testid="settings-suggestions-switch"');

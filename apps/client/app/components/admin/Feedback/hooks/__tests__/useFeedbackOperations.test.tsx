@@ -102,7 +102,7 @@ describe('useFeedbackOperations isError', () => {
 });
 
 describe('useFeedbackOperations handleStatusChange', () => {
-  it('names the new status by its label in the toast', async () => {
+  it('names the type, reporter and new status label in the toast', async () => {
     mocks.getFeedbackFromServer.mockResolvedValue({ items: [], total: 0, organizations: [] });
     mocks.updateFeedbackOnServer.mockResolvedValue({ ok: true });
     const item: IExtendedFeedbackDocument = {
@@ -126,9 +126,24 @@ describe('useFeedbackOperations handleStatusChange', () => {
     const { result } = renderOperations(listParams(1));
     await act(() => result.current.handleStatusChange(item, FeedbackStatus.InProgress));
 
-    expect(mocks.toastSuccess).toHaveBeenCalledWith(
-      '"Short report" feedback from reporter updated to: In progress',
-      expect.anything()
-    );
+    expect(mocks.toastSuccess).toHaveBeenCalledWith('Feedback from reporter set to In progress', expect.anything());
+  });
+
+  it('names the report by its type rather than quoting its text, which may be empty', async () => {
+    mocks.getFeedbackFromServer.mockResolvedValue({ items: [], total: 0, organizations: [] });
+    mocks.updateFeedbackOnServer.mockResolvedValue({ ok: true });
+    const item = {
+      _id: 'fb-2',
+      userId: 'user-2',
+      status: FeedbackStatus.New,
+      username: 'rater',
+      type: FeedbackType.THUMBS_DOWN,
+      content: '',
+    } as unknown as IExtendedFeedbackDocument;
+
+    const { result } = renderOperations(listParams(1));
+    await act(() => result.current.handleStatusChange(item, FeedbackStatus.Closed));
+
+    expect(mocks.toastSuccess).toHaveBeenCalledWith('Thumbs down from rater set to Closed', expect.anything());
   });
 });

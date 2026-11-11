@@ -65,6 +65,16 @@ import { SreAgentConfigSchema, SRE_SECRET_PLACEHOLDER, type SreAgentConfig } fro
 import { SecopsTriageConfigSchema } from '../types/entities/SecopsTriageTypes';
 import { ReleaseNotesConfigSchema } from './releaseNotes';
 import { SettingScopeLevel, type SettingScopeConfig } from '../types/entities/ScopedSettingTypes';
+import {
+  DEFAULT_CHUNK_SIZE_CHANGE_COOLDOWN_HOURS_DEFAULT,
+  DEFAULT_CHUNK_SIZE_CHANGE_COOLDOWN_HOURS_MAX,
+  FILE_EMBEDDING_USER_BUDGET_PER_WINDOW_USD_DEFAULT,
+  FILE_EMBEDDING_USER_BUDGET_PER_WINDOW_USD_MAX,
+  FILE_EMBEDDING_USER_TOKENS_PER_WINDOW_DEFAULT,
+  FILE_EMBEDDING_USER_TOKENS_PER_WINDOW_MAX,
+  FILE_EMBEDDING_USER_WINDOW_HOURS_DEFAULT,
+  FILE_EMBEDDING_USER_WINDOW_HOURS_MAX,
+} from '../constants/fileEmbeddingLimits';
 
 /**
  * The measured per-space floors, rendered for an admin-facing description (e.g. "75 for
@@ -605,11 +615,20 @@ export const SettingKeySchema = z.enum([
   'dataLakeVectorizeChunkBatchSize',
   'dataLakeEmbeddingTierMultiplierIndividual',
   'dataLakeEmbeddingTierMultiplierOrganization',
+  'dataLakeEmbeddingBudgetPerOwnerPeriodUsd',
+  'dataLakeMaxLakesPerUser',
+  'dataLakeRequirePaidPlan',
 
   // LAKE ACCESS AUDIT SETTINGS
   'LakeAccessAuditRetentionDays',
   'LakeAccessQueryTextRetentionDays',
   'LakeConfigAuditRetentionDays',
+
+  // FILE INDEXING LIMITS (see fileEmbeddingService and claimScopedSettingChange)
+  'fileEmbeddingUserBudgetPerWindowUsd',
+  'fileEmbeddingUserTokensPerWindow',
+  'fileEmbeddingUserWindowHours',
+  'DefaultChunkSizeChangeCooldownHours',
 
   // New MaxContentLength setting
   'MaxContentLength',
@@ -795,6 +814,7 @@ export const SettingKeySchema = z.enum([
   'modelDiscoveryPriceBandPct',
   'modelDiscoveryAutoRemap',
   'modelDiscoveryProbeNewModels',
+  'modelListRevision',
   // PR REPORT GENERATOR
   'prReportRepo',
   'prReportIdentityMap',
@@ -828,6 +848,9 @@ export type IntentClassifierConfig = z.infer<typeof IntentClassifierConfigSchema
 
 export const LOW_CONFIDENCE_COMPLETION_MODES = ['block', 'annotate', 'off'] as const;
 export type LowConfidenceCompletionMode = (typeof LOW_CONFIDENCE_COMPLETION_MODES)[number];
+
+export const CONFIDENCE_GATE_MODES = ['iteration', 'answer', 'both', 'off'] as const;
+export type ConfidenceGateMode = (typeof CONFIDENCE_GATE_MODES)[number];
 
 export const OrchestrationDefaultsSchema = z.object({
   /**
@@ -937,6 +960,23 @@ export const OrchestrationDefaultsSchema = z.object({
    * `off` does neither. Omitted => `annotate`.
    */
   lowConfidenceCompletion: z.enum(LOW_CONFIDENCE_COMPLETION_MODES).optional(),
+  /**
+   * Confidence-gate threshold (0-1). Iterations whose every non-failed tool call scores below
+   * this count toward a pause streak for human review. Default 0.6.
+   */
+  confidenceGateThreshold: z.number().min(0).max(1).default(0.6),
+  /**
+   * Which sites use confidence: `iteration` enables pauses on low-confidence streaks,
+   * `answer` applies the lowConfidenceCompletion policy (annotate or block), `both`
+   * enables both sites, and `off` enables neither. Default `both`.
+   */
+  confidenceGateMode: z.enum(CONFIDENCE_GATE_MODES).default('both'),
+  /**
+   * Whether the executor consumes the agent's confidence scores. The agent still scores its
+   * tool calls; when false the executor drops those scores (and scripted overrides), so no
+   * streak is recorded and neither gate site fires, like `off`. Default true.
+   */
+  confidenceGateSelfReport: z.boolean().default(true),
 });
 
 export type OrchestrationDefaults = z.infer<typeof OrchestrationDefaultsSchema>;
@@ -1263,7 +1303,20 @@ export const DATA_LAKE_EMBEDDING_BUDGET_PER_LAKE_USD_DEFAULT = 100;
 export const DATA_LAKE_EMBEDDING_BUDGET_PER_LAKE_USD_MAX = 10_000;
 export const DATA_LAKE_EMBEDDING_BUDGET_PER_PERIOD_USD_DEFAULT = 50;
 export const DATA_LAKE_EMBEDDING_BUDGET_PER_PERIOD_USD_MAX = 5_000;
+/**
+ * Per-OWNER share of the period window: each lake owner (the organization for an org-owned lake,
+ * otherwise the creating user - see scopeForLake) gets its own fixed window of the same length,
+ * reserved BEFORE the platform window. An owner over its share pauses only its own lakes; the
+ * platform window still bounds the sum. Tiered like the per-run and per-lake budgets. Unlike the
+ * other budgets, 0 turns this window OFF rather than stopping spend (the platform levers already
+ * provide the stop); it ships off and is switched on in Admin Settings.
+ */
+export const DATA_LAKE_EMBEDDING_BUDGET_PER_OWNER_PERIOD_USD_DEFAULT = 0;
+export const DATA_LAKE_EMBEDDING_BUDGET_PER_OWNER_PERIOD_USD_MAX = 5_000;
 export const DATA_LAKE_EMBEDDING_BUDGET_PERIOD_HOURS_DEFAULT = 24;
+/** Most data lakes one user may have created and not deleted. 0 turns the cap off, the default. */
+export const DATA_LAKE_MAX_LAKES_PER_USER_DEFAULT = 0;
+export const DATA_LAKE_MAX_LAKES_PER_USER_MAX = 10_000;
 export const DATA_LAKE_EMBEDDING_BUDGET_PERIOD_HOURS_MAX = 720; // 30 days
 export const DATA_LAKE_EMBEDDING_MAX_CALLS_PER_MINUTE_DEFAULT = 120;
 export const DATA_LAKE_EMBEDDING_MAX_CALLS_PER_MINUTE_MAX = 10_000;
@@ -1304,9 +1357,9 @@ export const DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_MAX = 500;
  * operator tunes over time is literally "the ratio between them" - and so a change to the base
  * budget still moves both tiers together.
  *
- * Only the two per-resource budgets are tiered. The per-period budget and the rate limit meter
- * the whole platform through a single shared window, so they have no owner to tier by; the period
- * length and the chunk batch size are not spend values at all.
+ * The per-run, per-lake and per-owner-period budgets are tiered. The platform per-period budget
+ * and the rate limit meter the whole platform through a single shared window, so they have no
+ * owner to tier by; the period length and the chunk batch size are not spend values at all.
  *
  * Multiplier semantics follow the spend levers they scale: 0 is a valid "this tier spends nothing"
  * and the effective budget is clamped to the same MAX_* rail as the untiered value, so raising a
@@ -2270,7 +2323,7 @@ export const API_SERVICE_GROUPS = {
     description:
       'Spend levers for data-lake embedding work (ingestion, reprocessing, convergence). ' +
       'Budgets are USD; 0 means stop spending, not "use the default". The two tier multipliers ' +
-      'scale the per-run and per-lake budgets by whether a lake is individual- or organization-owned.',
+      'scale the per-run, per-lake and per-owner budgets by whether a lake is individual- or organization-owned.',
     icon: 'Savings',
     settings: [
       { key: 'dataLakeEmbeddingSpendEnabled', order: 1 },
@@ -2283,6 +2336,21 @@ export const API_SERVICE_GROUPS = {
       { key: 'dataLakeVectorizeChunkBatchSize', order: 8 },
       { key: 'dataLakeEmbeddingTierMultiplierIndividual', order: 9 },
       { key: 'dataLakeEmbeddingTierMultiplierOrganization', order: 10 },
+      { key: 'dataLakeEmbeddingBudgetPerOwnerPeriodUsd', order: 11 },
+    ],
+  },
+  FILE_INDEXING_LIMITS: {
+    id: 'fileIndexingLimits',
+    name: 'File Indexing Limits',
+    description:
+      'Per-user limits on embedding files outside a data lake, and the minimum interval between ' +
+      'changes of a scope owner\'s chunk size. Budgets are USD; 0 means stop, not "use the default".',
+    icon: 'Savings',
+    settings: [
+      { key: 'fileEmbeddingUserBudgetPerWindowUsd', order: 1 },
+      { key: 'fileEmbeddingUserTokensPerWindow', order: 2 },
+      { key: 'fileEmbeddingUserWindowHours', order: 3 },
+      { key: 'DefaultChunkSizeChangeCooldownHours', order: 4 },
     ],
   },
   VOICE_SESSION: {
@@ -2833,6 +2901,16 @@ export const API_SERVICE_GROUPS = {
       { key: 'LakeAccessAuditRetentionDays', order: 1 },
       { key: 'LakeAccessQueryTextRetentionDays', order: 2 },
       { key: 'LakeConfigAuditRetentionDays', order: 3 },
+    ],
+  },
+  DATA_LAKE_LIMITS: {
+    id: 'dataLakeLimits',
+    name: 'Data Lake Limits',
+    description: 'Who may create data lakes and connect lake sources, and how many lakes one user may keep',
+    icon: 'Security',
+    settings: [
+      { key: 'dataLakeMaxLakesPerUser', order: 1 },
+      { key: 'dataLakeRequirePaidPlan', order: 2 },
     ],
   },
   USAGE_PATTERN_SIGNALS: {
@@ -3519,6 +3597,61 @@ export const settingsMap = {
       clamp: (value: number) =>
         Math.min(Math.max(Math.floor(value), MIN_PASSAGE_TOKEN_TARGET), OVERSIZED_PASSAGE_TOKEN_THRESHOLD),
     },
+  }),
+  fileEmbeddingUserBudgetPerWindowUsd: makeNumberSetting({
+    key: 'fileEmbeddingUserBudgetPerWindowUsd',
+    name: 'Per-User File Embedding Budget (USD per window)',
+    defaultValue: FILE_EMBEDDING_USER_BUDGET_PER_WINDOW_USD_DEFAULT,
+    min: 0,
+    max: FILE_EMBEDDING_USER_BUDGET_PER_WINDOW_USD_MAX,
+    description:
+      'Most USD one user may spend embedding files outside a data lake per window (see the window-hours ' +
+      'setting), whether or not that work is billed to them. A file that would exceed it fails with a ' +
+      'message naming when the window resets. 0 stops non-lake file embedding.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.FILE_INDEXING_LIMITS.id,
+    order: 1,
+  }),
+  fileEmbeddingUserTokensPerWindow: makeNumberSetting({
+    key: 'fileEmbeddingUserTokensPerWindow',
+    name: 'Per-User File Embedding Tokens (per window)',
+    defaultValue: FILE_EMBEDDING_USER_TOKENS_PER_WINDOW_DEFAULT,
+    min: 0,
+    max: FILE_EMBEDDING_USER_TOKENS_PER_WINDOW_MAX,
+    int: true,
+    description:
+      'Most tokens one user may embed from files outside a data lake per window. Metered beside the USD ' +
+      'budget because an unpriced model meters as free. 0 stops non-lake file embedding.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.FILE_INDEXING_LIMITS.id,
+    order: 2,
+  }),
+  fileEmbeddingUserWindowHours: makeNumberSetting({
+    key: 'fileEmbeddingUserWindowHours',
+    name: 'Per-User File Embedding Window (hours)',
+    defaultValue: FILE_EMBEDDING_USER_WINDOW_HOURS_DEFAULT,
+    min: 1,
+    max: FILE_EMBEDDING_USER_WINDOW_HOURS_MAX,
+    int: true,
+    description:
+      "Length of the per-user file embedding window in hours. The window opens at a user's first " +
+      'embedding after the previous one closed.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.FILE_INDEXING_LIMITS.id,
+    order: 3,
+  }),
+  DefaultChunkSizeChangeCooldownHours: makeNumberSetting({
+    key: 'DefaultChunkSizeChangeCooldownHours',
+    name: 'Chunk Size Change Cooldown (hours)',
+    defaultValue: DEFAULT_CHUNK_SIZE_CHANGE_COOLDOWN_HOURS_DEFAULT,
+    min: 0,
+    max: DEFAULT_CHUNK_SIZE_CHANGE_COOLDOWN_HOURS_MAX,
+    description:
+      'Minimum hours between two changes (set or clear) of one organization or owner Default Chunk Size ' +
+      "override. A new chunk size re-embeds that owner's files. 0 disables the cooldown.",
+    category: 'AI',
+    group: API_SERVICE_GROUPS.FILE_INDEXING_LIMITS.id,
+    order: 4,
   }),
   ModerationEnabled: makeBooleanSetting({
     key: 'ModerationEnabled',
@@ -7140,7 +7273,7 @@ export const settingsMap = {
     min: 0,
     max: DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_MAX,
     description:
-      'Scales the per-run and per-lake embedding budgets for lakes owned by an individual user. ' +
+      'Scales the per-run, per-lake and per-owner embedding budgets for lakes owned by an individual user. ' +
       '1 means those lakes get exactly the configured budgets; 0 stops them spending at all. ' +
       'The effective budget is still capped by the same hard rail as the untiered value.',
     category: 'AI',
@@ -7154,12 +7287,53 @@ export const settingsMap = {
     min: 0,
     max: DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_MAX,
     description:
-      'Scales the per-run and per-lake embedding budgets for lakes owned by an organization, ' +
+      'Scales the per-run, per-lake and per-owner embedding budgets for lakes owned by an organization, ' +
       'which serve a whole team rather than one person. 0 stops org-owned lakes spending at all. ' +
       'The effective budget is still capped by the same hard rail as the untiered value.',
     category: 'AI',
     group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
     order: 10,
+  }),
+  dataLakeEmbeddingBudgetPerOwnerPeriodUsd: makeNumberSetting({
+    key: 'dataLakeEmbeddingBudgetPerOwnerPeriodUsd',
+    name: 'Embedding Budget Per Owner Per Period (USD)',
+    defaultValue: DATA_LAKE_EMBEDDING_BUDGET_PER_OWNER_PERIOD_USD_DEFAULT,
+    min: 0,
+    max: DATA_LAKE_EMBEDDING_BUDGET_PER_OWNER_PERIOD_USD_MAX,
+    description:
+      'Most USD one lake owner (the organization for an org-owned lake, otherwise the user) may spend on ' +
+      "data-lake embedding calls per period (see the period-hours setting), scaled by that owner's cost tier. " +
+      'An owner over it pauses only its own lakes until the window resets; the platform per-period budget still ' +
+      'caps the total. 0 turns the per-owner window off.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
+    order: 11,
+  }),
+  dataLakeMaxLakesPerUser: makeNumberSetting({
+    key: 'dataLakeMaxLakesPerUser',
+    name: 'Max Data Lakes Per User',
+    defaultValue: DATA_LAKE_MAX_LAKES_PER_USER_DEFAULT,
+    min: 0,
+    max: DATA_LAKE_MAX_LAKES_PER_USER_MAX,
+    int: true,
+    description:
+      'Most data lakes one user may have created and not deleted (archived lakes count). Creating one more is ' +
+      'refused with a message asking the user to delete a lake. 0 turns the cap off.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DATA_LAKE_LIMITS.id,
+    order: 1,
+  }),
+  dataLakeRequirePaidPlan: makeBooleanSetting({
+    key: 'dataLakeRequirePaidPlan',
+    name: 'Require a Paid Plan for Data Lakes',
+    defaultValue: false,
+    description:
+      'When on, creating a data lake and connecting Google Drive or GitHub to one need paid standing: an active ' +
+      'paid subscription (an org seat included) or a credit purchase, or an organization on a paid plan for an ' +
+      'org lake. Admins and developers are exempt. Off by default.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DATA_LAKE_LIMITS.id,
+    order: 2,
   }),
   // Analytics Bot (existing production bot - DO NOT CHANGE)
   slackSigningSecret: makeStringSetting({
@@ -8040,6 +8214,14 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.MODEL_DISCOVERY.id,
     order: 7,
+  }),
+  modelListRevision: makeStringSetting({
+    key: 'modelListRevision',
+    name: 'Model List Revision',
+    defaultValue: '',
+    description:
+      'Internal stamp rewritten whenever a catalog or price change alters the model list, so open tabs refetch it. Written by packages/server-utils/src/modelDiscovery/modelListRevision.ts; not user-configurable.',
+    category: 'AI',
   }),
   prReportRepo: makeStringSetting({
     key: 'prReportRepo',

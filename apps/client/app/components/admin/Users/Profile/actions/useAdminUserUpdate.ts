@@ -15,6 +15,8 @@ export type AdminUserUpdate = Omit<Partial<IUser>, 'isAdmin'> & {
   throttleTier?: ThrottleTier;
   throttleReason?: string;
   statusChangeReason?: string;
+  /** Marks a reinstatement as the Undo of this admin's suspend: its detection grades are removed, not flipped to legitimate. */
+  undoSuspension?: boolean;
 };
 
 export const adminUpdateErrorMessage = (error: unknown, fallback: string): string => {
