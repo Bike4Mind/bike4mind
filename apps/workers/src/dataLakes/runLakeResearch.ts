@@ -18,6 +18,7 @@ import { getAvailableModels, type ApiKeyTable } from '@bike4mind/llm-adapters';
 import { fetchAndParseURL } from '@bike4mind/fab-pipeline';
 import { getSettingsByNames } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
+import { normalizeDomainEntry } from '@bike4mind/common';
 import type { ResearchRunTotals, SettleResearchRunInput } from '@bike4mind/common';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
@@ -318,7 +319,8 @@ export async function runLakeResearch(
     judgeProvider = models.find(m => m.id === model)?.backend;
 
     // Re-resolved on every admit: ownership can transfer mid-run, and the rule must act as whoever
-    // owns the lake now. Never throws: any failure leaves the proposal pending for a human.
+    // owns the lake now. A mid-run off switch or removed site stops further admits; turning it on
+    // applies from the next run. Never throws: any failure leaves the proposal pending for a human.
     const autoAdmit: dataLakeResearchService.ResearchRunPorts['autoAdmit'] = async (proposal, rule) => {
       try {
         const grants = await dataLakeService.loadActiveLakeGrants(lake, {
@@ -329,13 +331,26 @@ export async function runLakeResearch(
         if (!ownerUser || aiAccessDeniedMessage(ownerUser)) return 'left_pending';
         const administeredOrgIds = await organizationRepository.findIdsWithAdminRights(ownerUser.id);
         const config = await dataLakeResearchConfigRepository.findByIdInLake(claimed.configId, lake.id);
+        const stopReason = !config ? 'config_missing' : config.autoAdmitTrusted !== true ? 'auto_admit_off' : null;
+        if (!config || stopReason) {
+          logger.info('[lakeResearch] auto-admit stopped by the live config', {
+            runId,
+            proposalId: proposal.id,
+            reason: stopReason,
+          });
+          return 'left_pending';
+        }
+        const liveTrusted = new Set((config.trustedDomains ?? []).map(normalizeDomainEntry));
         const result = await dataLakeService.autoApproveDataLakeProposal(
           proposal.id,
           {
             configId: claimed.configId,
-            configName: config?.name ?? claimed.levers.query,
+            configName: config.name ?? claimed.levers.query,
             owner: { userId: ownerUser.id, isAdmin: false, administeredOrgIds },
-            isTrusted: rule.isTrusted,
+            isTrusted: url => {
+              const entry = rule.isTrusted(url);
+              return entry !== null && liveTrusted.has(normalizeDomainEntry(entry)) ? entry : null;
+            },
           },
           {
             db: {

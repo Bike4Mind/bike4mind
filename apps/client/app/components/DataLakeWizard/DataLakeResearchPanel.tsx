@@ -281,6 +281,24 @@ const validateDraft = (draft: ConfigDraft): DraftErrors => {
   return Object.fromEntries(Object.entries(errors).filter(([, message]) => message)) as DraftErrors;
 };
 
+const STOPS_NOW_NOTICE = 'Saved. Runs in progress stop adding results from removed or disabled sites now.';
+const NEXT_RUN_NOTICE = 'Saved. This applies from the next run.';
+
+/** What a save changes about auto-admit, split by when it takes effect on a run already in progress. */
+const autoAdmitTimingNotice = (before: ConfigDraft, after: ResearchConfigInput): string | null => {
+  const wasOn = before.autoAdmitTrusted && parseList(before.trustedDomains).length > 0;
+  const oldSites = new Set(parseList(before.trustedDomains));
+  const newSites = new Set(after.trustedDomains);
+  const stopsNow = (wasOn && !after.autoAdmitTrusted) || [...oldSites].some(site => !newSites.has(site));
+  const startsLater =
+    (!wasOn && after.autoAdmitTrusted) ||
+    [...newSites].some(site => !oldSites.has(site)) ||
+    (after.autoAdmitTrusted && parseNumber(before.maxAutoAdmits, 0) !== after.maxAutoAdmits);
+  if (stopsNow && startsLater) return `${STOPS_NOW_NOTICE} ${NEXT_RUN_NOTICE.replace('Saved. ', '')}`;
+  if (stopsNow) return STOPS_NOW_NOTICE;
+  return startsLater ? NEXT_RUN_NOTICE : null;
+};
+
 const draftToInput = (draft: ConfigDraft): ResearchConfigInput => ({
   name: draft.name.trim(),
   query: draft.query.trim(),
@@ -573,7 +591,7 @@ const runOutcomeSummary = (run: IDataLakeResearchRunDocument): string => {
   const parts: string[] = [`${totals.searchHits} found`, `${totals.proposed} proposed`];
   // Sub-counts of "proposed", not drops: the rule's own result, shown so a manager sees what it did.
   if (totals.autoAdmitted > 0) parts.push(`${totals.autoAdmitted} added automatically`);
-  if (totals.autoAdmitSkipped > 0) parts.push(`${totals.autoAdmitSkipped} trusted but left for review`);
+  if (totals.autoAdmitSkipped > 0) parts.push(`${totals.autoAdmitSkipped} trusted, not added automatically`);
   for (const [key, label] of Object.entries(DROP_REASON_LABEL)) {
     const count = totals[key as keyof ResearchRunTotals];
     if (count > 0) parts.push(`${count} ${label}`);
@@ -647,6 +665,7 @@ export function DataLakeResearchPanel({
   const [draft, setDraft] = useState<ConfigDraft>(emptyDraft);
   const [draftBaseline, setDraftBaseline] = useState<ConfigDraft>(emptyDraft);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [saveNotice, setSaveNotice] = useState<string | null>(null);
   // Bumped each time the form opens, so a save settling late can tell whether its own session is still
   // the one on screen. `editingId` cannot: every create is '', and re-editing a row reuses its id.
   const formSession = useRef(0);
@@ -683,6 +702,7 @@ export function DataLakeResearchPanel({
   };
 
   const openCreate = () => {
+    setSaveNotice(null);
     setDraft(emptyDraft());
     setDraftBaseline(emptyDraft());
     setAdvancedOpen(false);
@@ -690,6 +710,7 @@ export function DataLakeResearchPanel({
     formSession.current += 1;
   };
   const openEdit = (config: IDataLakeResearchConfigDocument) => {
+    setSaveNotice(null);
     const loaded = draftFromConfig(config);
     setDraft(loaded);
     setDraftBaseline(loaded);
@@ -711,6 +732,7 @@ export function DataLakeResearchPanel({
       // The mutation toasts its own refusal; staying open keeps the draft for a retry.
       return;
     }
+    setSaveNotice(submittedId ? autoAdmitTimingNotice(draftBaseline, input) : null);
     // Only close the form this save came from: it may have been cancelled, or another opened, meanwhile.
     if (formSession.current === session) closeForm();
   };
@@ -753,6 +775,11 @@ export function DataLakeResearchPanel({
 
   return (
     <Stack spacing={2} data-testid="datalake-research-panel">
+      {saveNotice && (
+        <Alert color="success" size="sm" data-testid="datalake-research-save-timing-notice">
+          {saveNotice}
+        </Alert>
+      )}
       <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-research-help">
         A research run searches the web with the settings below and puts what it finds in the Proposals queue. Results
         wait there for your approval, unless a site you list as trusted is set to be added automatically. Nothing is
@@ -1208,6 +1235,10 @@ export function DataLakeResearchPanel({
                   A first-time result from a trusted site joins the lake without your approval. Anything you declined
                   before, and every other site, still waits for review. Pages are checked again after the fetch, and the
                   lake owner is recorded as the owner of the file.
+                </FormHelperText>
+                <FormHelperText data-testid="datalake-research-auto-admit-timing-help">
+                  Turning this off, or removing a trusted site, stops a run already in progress from adding more.
+                  Turning it on, adding sites or changing the limit applies from the next run.
                 </FormHelperText>
               </FormControl>
 

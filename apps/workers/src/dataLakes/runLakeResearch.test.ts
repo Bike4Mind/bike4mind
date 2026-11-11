@@ -132,7 +132,11 @@ beforeEach(() => {
   h.loadActiveLakeGrants.mockResolvedValue([]);
   h.resolveEffectiveOwnerIds.mockReturnValue(['owner-1']);
   h.findIdsWithAdminRights.mockResolvedValue(['org-7']);
-  h.findConfig.mockResolvedValue({ name: 'Weekly filings' });
+  h.findConfig.mockResolvedValue({
+    name: 'Weekly filings',
+    autoAdmitTrusted: true,
+    trustedDomains: ['example.com'],
+  });
   h.autoApprove.mockResolvedValue({ outcome: 'admitted' });
 });
 
@@ -929,7 +933,7 @@ describe('runLakeResearch', () => {
         configName: 'Weekly filings',
         owner: { userId: 'new-owner', isAdmin: false, administeredOrgIds: ['org-7'] },
       });
-      expect(boundRule.isTrusted).toBe(rule.isTrusted);
+      expect(boundRule.isTrusted('https://example.com/a')).toBe('example.com');
     });
 
     it('leaves the proposal pending when the owner cannot be resolved', async () => {
@@ -949,6 +953,67 @@ describe('runLakeResearch', () => {
       expect(result).toBe('left_pending');
       expect(h.settleRun).toHaveBeenCalledWith('run-1', expect.objectContaining({ status: 'completed' }));
       expect(logger.warn).toHaveBeenCalledWith(expect.stringMatching(/auto-admit failed/), expect.anything());
+    });
+
+    it('leaves the proposal pending when the manager turned auto-admit off mid-run', async () => {
+      h.findConfig.mockResolvedValue({
+        name: 'Weekly filings',
+        autoAdmitTrusted: false,
+        trustedDomains: ['example.com'],
+      });
+
+      const { result } = await runWithPort();
+
+      expect(result).toBe('left_pending');
+      expect(h.autoApprove).not.toHaveBeenCalled();
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.stringMatching(/stopped by the live config/),
+        expect.objectContaining({ reason: 'auto_admit_off' })
+      );
+    });
+
+    it('leaves the proposal pending when the config was deleted mid-run', async () => {
+      h.findConfig.mockResolvedValue(null);
+
+      const { result } = await runWithPort();
+
+      expect(result).toBe('left_pending');
+      expect(h.autoApprove).not.toHaveBeenCalled();
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.stringMatching(/stopped by the live config/),
+        expect.objectContaining({ reason: 'config_missing' })
+      );
+    });
+
+    it('rejects a matched entry that was removed from the live trusted list', async () => {
+      h.findConfig.mockResolvedValue({ name: 'Weekly filings', autoAdmitTrusted: true, trustedDomains: ['other.org'] });
+
+      await runWithPort();
+
+      const [, boundRule] = h.autoApprove.mock.calls[0];
+      expect(boundRule.isTrusted('https://example.com/a')).toBeNull();
+    });
+
+    it('treats a legacy config without trustedDomains as an empty list', async () => {
+      h.findConfig.mockResolvedValue({ name: 'Weekly filings', autoAdmitTrusted: true });
+
+      await runWithPort();
+
+      const [, boundRule] = h.autoApprove.mock.calls[0];
+      expect(boundRule.isTrusted('https://example.com/a')).toBeNull();
+    });
+
+    it('matches the live list after normalizing its entries', async () => {
+      h.findConfig.mockResolvedValue({
+        name: 'Weekly filings',
+        autoAdmitTrusted: true,
+        trustedDomains: ['https://www.Example.com/blog'],
+      });
+
+      await runWithPort();
+
+      const [, boundRule] = h.autoApprove.mock.calls[0];
+      expect(boundRule.isTrusted('https://example.com/a')).toBe('example.com');
     });
 
     it('passes autoAdmitted through to the settle', async () => {

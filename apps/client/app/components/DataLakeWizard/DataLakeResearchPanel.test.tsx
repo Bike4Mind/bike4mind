@@ -318,6 +318,51 @@ describe('DataLakeResearchPanel', () => {
         expect(screen.getByTestId('datalake-research-trusted-input')).toHaveValue('example.com');
         expect(screen.getByTestId('datalake-research-auto-admit-cap')).toHaveValue(6);
       });
+
+      it('explains what applies to a run in progress and what waits for the next run', () => {
+        openForm();
+        expect(screen.getByTestId('datalake-research-auto-admit-timing-help').textContent).toMatch(
+          /stops a run already in progress.*applies from the next run/
+        );
+      });
+
+      it('tells the user a save that turned auto-admit off takes effect now', async () => {
+        const onUpdate = vi.fn().mockResolvedValue(undefined);
+        renderPanel({
+          configs: [config({ trustedDomains: ['example.com'], autoAdmitTrusted: true, maxAutoAdmits: 6 })],
+          onUpdate,
+        });
+        fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+        fireEvent.click(screen.getByTestId('datalake-research-advanced-toggle'));
+        fireEvent.click(toggle());
+        fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+
+        const notice = await screen.findByTestId('datalake-research-save-timing-notice');
+        expect(notice.textContent).toBe(
+          'Saved. Runs in progress stop adding results from removed or disabled sites now.'
+        );
+      });
+
+      it('tells the user a save that turned auto-admit on applies from the next run', async () => {
+        renderPanel({ configs: [config({ trustedDomains: ['example.com'], autoAdmitTrusted: false })] });
+        fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+        fireEvent.click(screen.getByTestId('datalake-research-advanced-toggle'));
+        fireEvent.click(toggle());
+        fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+
+        const notice = await screen.findByTestId('datalake-research-save-timing-notice');
+        expect(notice.textContent).toBe('Saved. This applies from the next run.');
+      });
+
+      it('shows no timing notice when the save leaves auto-admit untouched', async () => {
+        const onUpdate = vi.fn().mockResolvedValue(undefined);
+        renderPanel({ configs: [config()], onUpdate });
+        fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+        fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+
+        await waitFor(() => expect(onUpdate).toHaveBeenCalled());
+        expect(screen.queryByTestId('datalake-research-save-timing-notice')).not.toBeInTheDocument();
+      });
     });
 
     // The default state of a new configuration, and the one the wire schema used to reject: the
@@ -610,7 +655,7 @@ describe('DataLakeResearchPanel', () => {
       const summary = screen.getByTestId('datalake-research-run-totals').textContent ?? '';
       expect(summary).toMatch(/4 proposed/);
       expect(summary).toMatch(/3 added automatically/);
-      expect(summary).toMatch(/1 trusted but left for review/);
+      expect(summary).toMatch(/1 trusted, not added automatically/);
     });
 
     it('names the lever that stopped a run early', () => {
