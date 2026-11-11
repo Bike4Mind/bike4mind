@@ -92,6 +92,18 @@ describe('MarginDashboard invoice reconciliation', () => {
     expect(screen.getByTestId('margin-invoice-chip-2026-06-openai')).toHaveTextContent('no invoice');
   });
 
+  it('keeps loaded invoice rows visible when a refresh fails', async () => {
+    renderDashboard();
+    expect(await screen.findByTestId('margin-invoice-enter-2026-06-openai')).toBeEnabled();
+    const respond = mockGet.getMockImplementation()!;
+    mockGet.mockImplementation((url: string) =>
+      url.includes('view=model-day') ? Promise.reject(new Error('Refresh unavailable')) : respond(url)
+    );
+    fireEvent.click(screen.getByTestId('margin-refresh-btn'));
+    expect(await screen.findByTestId('margin-error')).toHaveTextContent('Refresh unavailable');
+    expect(screen.getByTestId('margin-invoice-enter-2026-06-openai')).toBeEnabled();
+  });
+
   it('disables entry for the current (partial) month', async () => {
     setResponses({
       'view=provider-month': { targetCreditsPerUsd: 1200, rows: [providerRow({ month: CURRENT_MONTH })] },

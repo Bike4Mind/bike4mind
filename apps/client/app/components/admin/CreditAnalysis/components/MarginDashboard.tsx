@@ -262,7 +262,13 @@ export const MarginDashboard: React.FC = () => {
         break-even and +20% (typically older pricing), and red chips are below break-even or more than 20% above target.
       </Alert>
 
-      {error && !entryTarget ? (
+      {error && modelDay && (
+        <Alert color="danger" sx={{ mb: 2 }} data-testid="margin-error">
+          {error}
+        </Alert>
+      )}
+
+      {error && !modelDay ? (
         <ErrorState message={error} onRetry={() => void fetchAll()} />
       ) : isLoading && !modelDay ? (
         <LoadingState label="Loading margins" />

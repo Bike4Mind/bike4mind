@@ -67,6 +67,15 @@ describe('ModelPricingCatalog', () => {
     expect(screen.getByTestId('model-pricing-source-gpt-y-per_token')).toHaveTextContent('operator');
   });
 
+  it('keeps the full catalog visible without locally paging away models', async () => {
+    mockGet.mockResolvedValue({
+      data: { rows: Array.from({ length: 30 }, (_, index) => ({ ...ROWS[0], modelId: `model-${index}` })) },
+    });
+    renderCatalog();
+    expect(await screen.findByTestId('model-pricing-row-model-29-per_token')).toBeInTheDocument();
+    expect(screen.getAllByTestId(/^model-pricing-row-/)).toHaveLength(30);
+  });
+
   it('renders discovery rows as their own provenance, named by the feed that priced them', async () => {
     mockGet.mockResolvedValue({ data: { rows: [...ROWS, DISCOVERY_ROW] } });
     renderCatalog();
