@@ -406,7 +406,7 @@ const DlqReplayTab: React.FC = () => {
         return;
       }
       setDiscardConfirm(null);
-      toast.success('Message discarded. Its body is retained server-side for manual recovery.');
+      toast.success('Message discarded. Its body is kept for 30 days for manual recovery.');
     } catch (error) {
       toast.error(`Discard failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -835,7 +835,9 @@ const DlqReplayTab: React.FC = () => {
                     </td>
                     <td>
                       <Typography level="body-xs" noWrap sx={{ maxWidth: 200 }}>
-                        {entry.reason || entry.errorMessage || '-'}
+                        {(entry.status === 'failed'
+                          ? entry.errorMessage || entry.reason
+                          : entry.reason || entry.errorMessage) || '-'}
                       </Typography>
                     </td>
                     <td>
@@ -908,7 +910,7 @@ const DlqReplayTab: React.FC = () => {
         open={!!discardConfirm}
         onClose={() => setDiscardConfirm(null)}
         title="Discard dead letter?"
-        description="This removes the message from the DLQ. It cannot be undone from this page. The message body is kept server-side for manual recovery."
+        description="This removes the message from the DLQ. It cannot be undone from this page. The message body is kept for 30 days for manual recovery."
         reasonPresets={ADMIN_REASON_PRESETS.dlqDiscard}
         confirmLabel="Discard message"
         tone="danger"

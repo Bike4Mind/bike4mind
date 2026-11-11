@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { toast } from 'sonner';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -105,6 +106,7 @@ beforeEach(() => {
   state.retentionSeconds = undefined;
   h.user = null;
   h.discard.mockReset();
+  vi.mocked(toast.error).mockClear();
 });
 
 describe('DlqReplayTab failure metadata', () => {
@@ -261,6 +263,29 @@ describe('DlqReplayTab replay permission', () => {
       reason: 'Job obsolete',
       messages: [{ messageId: 'm1', receiptHandle: 'receipt-1', body: '{}' }],
     });
+  });
+
+  it.each([
+    [
+      'a failed result',
+      () =>
+        h.discard.mockResolvedValue({
+          discarded: 0,
+          failed: 1,
+          results: [{ messageId: 'm1', status: 'failed', reason: 'expired receipt' }],
+        }),
+      'Discard failed: expired receipt',
+    ],
+    ['a rejected request', () => h.discard.mockRejectedValue(new Error('boom')), 'Discard failed: boom'],
+  ])('reports %s and keeps the dialog open', async (_name, arrange, message) => {
+    h.user = { isAdmin: false, adminPermissions: ['settings:manage'] };
+    arrange();
+    await renderWithQueueSelected();
+    await userEvent.click(screen.getByTestId('dlq-discard-single-m1'));
+    await userEvent.click(screen.getByTestId('dlq-discard-dialog-reason-input-preset-1'));
+    await userEvent.click(screen.getByTestId('dlq-discard-dialog-confirm-btn'));
+    expect(toast.error).toHaveBeenCalledWith(message);
+    expect(screen.getByTestId('dlq-discard-dialog-confirm-btn')).toBeTruthy();
   });
 });
 
