@@ -19,7 +19,7 @@ import {
   resolveCreatorNames,
   toOrgApiKeyView,
 } from '@server/organizations/orgApiKeys';
-import { assertApiKeyAccessAllowed } from '@server/utils/apiKeyAccessGate';
+import { assertApiKeyAccessAllowed } from '@bike4mind/server-utils/utils/apiKeyAccessGate';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
 import { z } from 'zod';
 
