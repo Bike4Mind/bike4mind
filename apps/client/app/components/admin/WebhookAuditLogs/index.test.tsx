@@ -245,7 +245,10 @@ describe('WebhookAuditLogsTab page anatomy', () => {
     });
     renderTab();
 
-    expect(screen.getAllByTestId('webhook-logs-stat-skeleton').length).toBeGreaterThan(0);
+    const tiles = within(screen.getByTestId('admin-stat-strip')).getAllByTestId('admin-stat-tile');
+    // Four values plus the P95 line: none of the previous range's numbers stays on screen.
+    expect(screen.getAllByTestId('webhook-logs-stat-skeleton')).toHaveLength(5);
+    expect(tiles.map(tile => tile.textContent)).toEqual(['Total deliveriesLast 7 days', 'Success rate', 'Avg duration', 'Failures']);
   });
 
   it('shows a failed stats load as an error with Try again in place of the strip', () => {

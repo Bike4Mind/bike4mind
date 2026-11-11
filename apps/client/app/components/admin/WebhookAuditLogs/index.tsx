@@ -417,7 +417,7 @@ const WebhookAuditLogsTab: React.FC = () => {
           <StatTile
             label="Avg duration"
             value={statValue(`${Math.round(stats?.avgProcessingDurationMs || 0)}ms`)}
-            comparison={`P95: ${Math.round(stats?.p95ProcessingDurationMs || 0)}ms`}
+            comparison={statValue(`P95: ${Math.round(stats?.p95ProcessingDurationMs || 0)}ms`)}
           />
           <StatTile label="Failures" value={statValue((stats?.failureCount || 0).toLocaleString())} />
         </StatStrip>
