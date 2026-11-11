@@ -35,6 +35,9 @@ export const DELEGATED_ADMIN_TAB_PERMISSIONS: Readonly<Partial<Record<AdminTab, 
   [AdminTab.StripeDisputes]: 'support:read',
   [AdminTab.ShadowDetections]: 'support:read',
 
+  // View-only for support:read; replay actions gate on settings:manage inside the tab.
+  [AdminTab.DlqReplay]: 'support:read',
+
   // Pages whose writes need settings:manage; their GET routes declare the same SETTINGS_PAGE_READ.
   [AdminTab.ToolDefinitions]: SETTINGS_PAGE_READ,
   [AdminTab.ManageGears]: SETTINGS_PAGE_READ,

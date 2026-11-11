@@ -90,6 +90,7 @@ describe('computeAdminActionCounts access gating', () => {
 
     expect(Object.keys(counts).sort()).toEqual([
       'approvals',
+      'deadLetters',
       'publishedPages',
       'signupDomainHolds',
       'signupRiskReview',
@@ -106,7 +107,6 @@ describe('computeAdminActionCounts access gating', () => {
 
     expect(Object.keys(counts).sort()).toEqual(
       [
-        'deadLetters',
         'heldSignupGrants',
         'modelLifecycle',
         'publishedPages',
@@ -199,7 +199,7 @@ describe('approvals count', () => {
 });
 
 describe('dead letters count', () => {
-  const settingsManager = { id: 's', isAdmin: false, adminPermissions: ['settings:manage'] };
+  const settingsManager = { id: 's', isAdmin: false, adminPermissions: ['support:read', 'settings:manage'] };
 
   it('sums visible messages, skipping a queue that failed or reported -1', async () => {
     m.getQueueAttributes
@@ -210,6 +210,18 @@ describe('dead letters count', () => {
     const counts = await computeAdminActionCounts(settingsManager, 's', NOW);
 
     expect(counts.deadLetters).toBe(3);
+  });
+
+  it('counts for a support:read viewer, who can open the tab', async () => {
+    m.getQueueAttributes.mockResolvedValue({ approximateMessageCount: 2, approximateNotVisibleCount: 0 });
+
+    const counts = await computeAdminActionCounts(
+      { id: 'r', isAdmin: false, adminPermissions: ['support:read'] },
+      'r',
+      NOW
+    );
+
+    expect(counts.deadLetters).toBeGreaterThan(0);
   });
 
   it('is null when no queue answers', async () => {
