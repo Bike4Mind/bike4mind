@@ -4,8 +4,7 @@ import { type MigrationFile } from './index';
 
 const BATCH_SIZE = 1000;
 
-// Below the fail-closed OAuth backfill so it deploys independently. Index first, so lookups for
-// users written by the new save hook are indexed while the backfill runs.
+// Index first, so lookups for users written by the new save hook are indexed while the backfill runs.
 const migration: MigrationFile = {
   id: 20260921241030,
   name: 'backfill provider end user id',
