@@ -7,6 +7,7 @@ import { FeedbackModel, adminAuditLogRepository } from '@bike4mind/database';
 import type { RecordAdminActionFromRequestInput } from '@bike4mind/server-utils/utils/adminAudit';
 import {
   createMongoReplSet,
+  settleAutoIndexBuilds,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../../../packages/database/src/__test__/createMongoServer';
 
@@ -44,6 +45,7 @@ let replicaSet: MongoMemoryReplSet;
 beforeAll(async () => {
   replicaSet = await createMongoReplSet();
   await mongoose.connect(replicaSet.getUri());
+  await settleAutoIndexBuilds(mongoose);
 });
 afterAll(async () => {
   await mongoose.disconnect();
