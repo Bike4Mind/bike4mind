@@ -85,7 +85,8 @@ export type RunAdminAiDeps = {
 
 // Bounds every text hold: the meter reserves the worst case for this many output tokens.
 const TEXT_MAX_TOKENS = 800;
-// Longer than a decision call plus its retry, so the claim never lapses mid-call.
+// Covers a decision call plus its retry; if a slow repair or escalation outlives it, a concurrent run
+// can make a duplicate call, but createPending still stores one row per key.
 const IN_FLIGHT_MS = 60_000;
 
 type Answer = {
