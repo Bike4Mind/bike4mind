@@ -3,9 +3,10 @@
  * eagerly. Tabs from later work register here by adding a slug.
  */
 
+import { DEFAULT_BILLING_RANGE, isBillingRange, type BillingRange } from '@client/app/utils/adminBillingOverview';
 import { parseActivitySearch, type ActivitySearch } from './activitySearch';
 
-export const USER_PROFILE_TABS = ['overview', 'activity', 'credits', 'keys', 'signins', 'admin'] as const;
+export const USER_PROFILE_TABS = ['overview', 'activity', 'credits', 'billing', 'keys', 'signins', 'admin'] as const;
 
 export type UserProfileTab = (typeof USER_PROFILE_TABS)[number];
 
@@ -15,12 +16,14 @@ export const USER_PROFILE_TAB_LABELS: Readonly<Record<UserProfileTab, string>> =
   overview: 'Overview',
   activity: 'Activity',
   credits: 'Credits',
+  billing: 'Billing',
   keys: 'API keys',
   signins: 'Sign-ins',
   admin: 'Admin log',
 };
 
-export type UserProfileSearch = { tab?: UserProfileTab } & ActivitySearch;
+/** `range` belongs to the Billing tab; the default window is left out of the URL. */
+export type UserProfileSearch = { tab?: UserProfileTab; range?: BillingRange } & ActivitySearch;
 
 export const isUserProfileTab = (value: unknown): value is UserProfileTab =>
   typeof value === 'string' && (USER_PROFILE_TABS as readonly string[]).includes(value);
@@ -36,7 +39,11 @@ export const parseUserProfileSearch = (search: Record<string, unknown>): UserPro
   // Filters belong to the Activity tab; any other tab drops them explicitly (see above).
   const activity =
     tab === 'activity' ? parseActivitySearch(search) : { types: undefined, from: undefined, to: undefined };
-  return { tab: isUserProfileTab(tab) && tab !== DEFAULT_USER_PROFILE_TAB ? tab : undefined, ...activity };
+  const range =
+    tab === 'billing' && isBillingRange(search.range) && search.range !== DEFAULT_BILLING_RANGE
+      ? search.range
+      : undefined;
+  return { tab: isUserProfileTab(tab) && tab !== DEFAULT_USER_PROFILE_TAB ? tab : undefined, ...activity, range };
 };
 
 /**

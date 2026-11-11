@@ -314,6 +314,8 @@ import PinSignupGrantScheduleKeys from './20260921237480_pin-signup-grant-schedu
 import DropQuestSignupActivity from './20260921237490_drop-quest-signup-activity';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import DropRetiredGrantSettings from './20260921239996_drop-retired-grant-settings';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import EnsurePendingCreditHoldOwnerIndex from './20260921239997_ensure-pending-credit-hold-owner-index';
 import EnsureUserLimitEventIndexes from './20260921240010_ensure-user-limit-event-indexes';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import EncryptOAuthProviderTokens from './20260921240020_encrypt-oauth-provider-tokens';
@@ -552,6 +554,7 @@ const coreMigrations: MigrationFile[] = [
   ConvertLegacyQuestPlansToFiles,
   EnsureUserSignupGrantStageIndex,
   DropRetiredGrantSettings,
+  EnsurePendingCreditHoldOwnerIndex,
   EnsureUserLimitEventIndexes,
   EncryptOAuthProviderTokens,
   EnsureBillingEventIndexes,
