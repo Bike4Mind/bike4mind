@@ -14,7 +14,9 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
 // Stubbed: the card fetches and polls its own endpoint, which would otherwise
 // show up in this file's api.get assertions. Covered by DiscoveryStatusCard.test.tsx.
 vi.mock('./DiscoveryStatusCard', () => ({
-  DiscoveryStatusCard: () => <div data-testid="discovery-status-card" />,
+  DiscoveryStatusCard: ({ onRunFinished }: { onRunFinished?: () => void }) => (
+    <button data-testid="discovery-status-card" onClick={() => onRunFinished?.()} />
+  ),
 }));
 
 import { ModelLifecycleTab } from './ModelLifecycleTab';
@@ -91,6 +93,17 @@ describe('ModelLifecycleTab', () => {
     expect(screen.getByTestId('model-lifecycle-horizon-row-gpt-soon')).toHaveTextContent('in 37d');
     expect(screen.getByTestId('model-lifecycle-stale-row-fallback-chain-gpt-sunset')).toHaveTextContent('deprecated');
     expect(screen.getByTestId('model-lifecycle-stale-row-fallback-default-gpt-ghost')).toHaveTextContent('unknown');
+  });
+
+  it('reloads its table when a run the status card waited on finishes', async () => {
+    renderTab();
+    await screen.findByTestId('model-lifecycle-queue-row-gpt-sunset');
+    expect(mockGet).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByTestId('discovery-status-card'));
+
+    await waitFor(() => expect(mockGet).toHaveBeenCalledTimes(2));
+    expect(mockGet).toHaveBeenLastCalledWith('/api/admin/model-deprecation-status');
   });
 
   it('renders a not-invocable reference as its own readable problem kind', async () => {
