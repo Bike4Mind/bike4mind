@@ -133,8 +133,7 @@ describe('AnthropicBackend - safety-classifier refusal fallback', () => {
     const infos: CompletionInfo[] = [];
 
     await expect(run(backend, model, stream, infos)).resolves.not.toThrow();
-    // Only the streaming path reports the stop reason to the caller.
-    if (stream) expect(infos.some(info => info.stopReason === 'refusal')).toBe(true);
+    expect(infos.some(info => info.stopReason === 'refusal')).toBe(true);
   });
 
   it('replays a refused Fable 5.2 tool round to the Opus 4.8 fallback with its thinking block unchanged', async () => {
@@ -181,7 +180,7 @@ describe('AnthropicBackend - safety-classifier refusal fallback', () => {
     const infos: CompletionInfo[] = [];
 
     await expect(run(backend, model, stream, infos, { settleRefusal: true })).resolves.not.toThrow();
-    if (stream) expect(infos.some(info => info.stopReason === 'refusal')).toBe(true);
+    expect(infos.some(info => info.stopReason === 'refusal')).toBe(true);
   });
 });
 

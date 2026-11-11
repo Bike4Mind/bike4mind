@@ -193,7 +193,7 @@ export interface ICompletionOptions {
    */
   streamText?: boolean;
   /**
-   * Set by a caller with no fallback loop (the completions API): a safety-classifier refusal settles
+   * Set by a caller with no fallback loop (the completions API or ReActAgent): a safety-classifier refusal settles
    * with stopReason 'refusal' even when the model's refusalFallback is on, instead of throwing.
    */
   settleRefusal?: boolean;

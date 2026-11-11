@@ -29,8 +29,8 @@ export const DEGENERATE_FINISH_REASON = 'degenerate_repetition';
 
 /**
  * The model declined the request (Anthropic's native `stop_reason: 'refusal'`). Only reaches a
- * settled turn for models whose refusalFallback resolves false (see resolveApiSurface); for the rest
- * the backend throws so the completion loop falls back instead.
+ * settled turn when refusalFallback resolves false (see resolveApiSurface) or the caller requests
+ * settleRefusal; otherwise the backend throws so the completion loop falls back instead.
  */
 export const REFUSAL_FINISH_REASON = 'refusal';
 

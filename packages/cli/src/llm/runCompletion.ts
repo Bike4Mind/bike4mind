@@ -123,7 +123,7 @@ export async function runCompletion(
         return;
       }
 
-      if (!accumulator.isEmpty()) {
+      if (!accumulator.isEmpty() || isProviderRefusalStopReason(accumulator.finalStopReason)) {
         await accumulator.finalize(callback);
         return; // delivered exactly once
       }

@@ -2948,6 +2948,7 @@ export class AnthropicBackend implements ICompletionBackend {
           });
         }
         await cb(streamedText, {
+          ...(nonStreamStopReason ? { stopReason: nonStreamStopReason } : {}),
           inputTokens: isTerminalTurn ? accumInputTokens + (usage?.input_tokens || 0) : 0,
           outputTokens: isTerminalTurn ? accumOutputTokens + (usage?.output_tokens || 0) : 0,
           toolsUsed: toolsUsed,

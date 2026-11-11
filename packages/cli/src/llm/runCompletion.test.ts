@@ -180,13 +180,27 @@ describe('runCompletion', () => {
     expect(callback).not.toHaveBeenCalled();
   });
 
-  it('does not retry a blank refused turn, and says the model declined', async () => {
-    const refusal: StreamEvent = { type: 'content', text: '', stopReason: 'refusal' };
+  it.each(['refusal', 'content_filter'])('settles a blank %s turn once with its accounting', async stopReason => {
+    const refusal: StreamEvent = {
+      type: 'content',
+      text: '',
+      stopReason,
+      usage: { inputTokens: 10, outputTokens: 0, cacheReadInputTokens: 5, cacheCreationInputTokens: 2 },
+      credits: { used: 3, usdCost: 0.03 },
+    };
     const { transport, callback, promise } = run([[{ emit: content('') }, { emit: refusal }]], retryUpTo(2));
-    await expect(promise).rejects.toThrow('The model declined this request.');
-    await expect(promise).rejects.toBeInstanceOf(NoReplyCompletionError);
+    await expect(promise).resolves.toBeUndefined();
     expect(transport.attempts).toBe(1);
-    expect(callback).not.toHaveBeenCalled();
+    expect(callback).toHaveBeenCalledOnce();
+    expect(callback).toHaveBeenCalledWith([''], {
+      inputTokens: 10,
+      outputTokens: 0,
+      cacheReadInputTokens: 5,
+      cacheCreationInputTokens: 2,
+      creditsUsed: 3,
+      usdCost: 0.03,
+      stopReason,
+    });
   });
 
   it('settles a mid-stream abort without invoking the callback when no text was delivered', async () => {

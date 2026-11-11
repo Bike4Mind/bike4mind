@@ -191,6 +191,7 @@ describe('ReActAgent on a declined turn', () => {
     const result = await agent.run('a request the classifier declines');
 
     expect(complete).toHaveBeenCalledTimes(1);
+    expect(complete.mock.calls[0][2]).toMatchObject({ settleRefusal: true });
     expect(result.finalAnswer).toBe('The model declined this request');
     expect(result.completionInfo.iterations).toBe(1);
     expect(result.completionInfo.reachedMaxIterations).toBe(false);
@@ -205,6 +206,7 @@ describe('ReActAgent on a declined turn', () => {
     const result = await agent.runIteration('a request the classifier declines', { maxHistoryIterations: 0 });
 
     expect(complete).toHaveBeenCalledTimes(1);
+    expect(complete.mock.calls[0][2]).toMatchObject({ settleRefusal: true });
     expect(result.isComplete).toBe(true);
     expect(result.reachedMaxIterations).toBe(false);
     expect(result.step).toMatchObject({ type: 'final_answer', content: 'The model declined this request' });
