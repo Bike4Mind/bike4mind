@@ -19,7 +19,7 @@ describe('assertAccountStateUsable', () => {
   });
 
   it.each([
-    ['banned', 'This account is suspended for a violation of our Terms of Service'],
+    ['banned', 'This account is suspended for violating our Terms of Service.'],
     ['disputePending', 'on hold pending a payment review'],
     ['suspended', 'Your account is suspended'],
   ])('rejects an account blocked for %s', (reason, message) => {

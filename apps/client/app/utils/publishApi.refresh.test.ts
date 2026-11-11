@@ -208,9 +208,11 @@ describe('refreshPublishedFromSource - multi-file react', () => {
     expect(mockPost).not.toHaveBeenCalled();
   });
 
-  it('fails when the entry is no longer linked to a chat session', async () => {
+  it('explains that the source chat may be unavailable or inaccessible', async () => {
     wireMultiFile({ Stopwatch: { id: 'sw-2', content: 'x' } }, '');
-    await expect(refreshPublishedFromSource(multiRow())).rejects.toThrow('no longer linked to a chat');
+    await expect(refreshPublishedFromSource(multiRow())).rejects.toThrow(
+      'The source chat is unavailable or you do not have access to it'
+    );
     expect(mockPost).not.toHaveBeenCalled();
   });
 });
