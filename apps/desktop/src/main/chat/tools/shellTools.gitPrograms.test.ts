@@ -409,7 +409,14 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
   describe.each([
     ['ntools2/bin', ['git clone srcrepo2 ntools2 && git hello', 'git worktree add ntools2 -b q2 && git hello']],
     ['ntools2/bin', ['cp -r srcrepo2 ntools2 && git hello']],
-    ['ntools3/', ['git clone srcrepo ntools3 && git hello', 'cp -r srcrepo ntools3 && git hello']],
+    [
+      'ntools3/',
+      [
+        'git clone srcrepo ntools3 && git hello',
+        'cp -r srcrepo ntools3 && git hello',
+        'mv srcrepo ntools3 && git hello',
+      ],
+    ],
   ])('with PATH holding %s', (entry, commands) => {
     let before: string | undefined;
     beforeAll(() => {
