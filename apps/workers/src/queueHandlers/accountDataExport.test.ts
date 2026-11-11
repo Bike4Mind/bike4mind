@@ -33,6 +33,7 @@ const h = vi.hoisted(() => ({
   exportSubject: vi.fn(),
   recordModels: [] as string[],
   records: vi.fn(),
+  failedReferences: vi.fn(),
   notebooks: [] as Array<{ id: string; name: string; chatHistory?: Array<{ images?: string[] }> }>,
 }));
 
@@ -69,7 +70,12 @@ vi.mock('@server/models/UserSubscription', () => ({}));
 vi.mock('@server/dataSubject/subjectRecordExport', () => ({
   assertEveryModelClassified: h.assertClassified,
   SubjectRecordExport: class {
-    models = h.recordModels;
+    async walkOrder() {
+      return h.recordModels;
+    }
+    failedReferences(model: string) {
+      return h.failedReferences(model) ?? [];
+    }
     constructor(subject: unknown) {
       h.exportSubject(subject);
     }
@@ -146,6 +152,7 @@ const notFound = () => Object.assign(new Error('Not Found'), { name: 'NotFound' 
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.failedReferences.mockReset();
   h.leaseClaim.mockResolvedValue({ email: 'ada@example.com' });
   h.leaseRenew.mockResolvedValue({ matchedCount: 1 });
   h.leaseExists.mockResolvedValue({ _id: USER_ID });
@@ -731,6 +738,23 @@ describe('account data export worker', () => {
         omitted: 'error',
       });
       expect(entries.get('records/Note.ndjson')).toBe('{"_id":"n1"}\n');
+    });
+
+    it('keeps a collection whose reference failed and lists the reference as incomplete', async () => {
+      h.failedReferences.mockImplementation((model: string) =>
+        model === 'Note' ? [{ path: 'editorIds', error: new Error('operation exceeded time limit') }] : []
+      );
+
+      await runForAdmin();
+
+      const entries = await unzip(h.uploaded!);
+      expect(entries.get('records/Note.ndjson')).toBe('{"_id":"n1","body":"mine"}\n{"_id":"n2","body":"also mine"}\n');
+      expect(JSON.parse(entries.get('records/index.json')!).collections).toEqual([
+        { model: 'User', count: 0 },
+        { model: 'Note', count: 2, incompleteReferences: ['editorIds'] },
+        { model: 'Team', count: 0 },
+      ]);
+      expect(entries.get('README.txt')).toContain('incompleteReferences');
     });
 
     it('lists the remaining collections as omitted once the time budget runs low', async () => {

@@ -20,6 +20,8 @@ const h = vi.hoisted(() => ({
   indexModels: vi.fn(),
   indexDelete: vi.fn(),
   findLakes: vi.fn(),
+  lakeFind: vi.fn(),
+  lakeFindOne: vi.fn(),
   pickOwner: vi.fn(),
   deleteObjects: vi.fn(),
   findSessions: vi.fn(),
@@ -60,9 +62,13 @@ vi.mock('@bike4mind/database', () => ({
   },
   fabFileRepository: { hardDeleteWithChunks: h.hardDelete },
   fabFileChunkRepository: { distinctRetrievalIndexModelsByFabFileIds: h.indexModels },
-  DataLakeModel: {},
+  DataLakeModel: {
+    find: (...args: unknown[]) => ({ setOptions: () => h.lakeFind(...args) }),
+    findOne: (...args: unknown[]) => ({ setOptions: () => h.lakeFindOne(...args) }),
+  },
   importHistoryJobRepository: {},
   mongoose: {
+    isObjectIdOrHexString: (id: unknown) => typeof id === 'string' && /^[0-9a-f]{24}$/.test(id),
     model: () => ({ collection: { name: 'importHistoryJobs' } }),
     connection: {
       db: {
@@ -102,11 +108,13 @@ vi.mock('@server/services/cdn/invalidateRouterCdn', async importActual => ({
 }));
 vi.mock('sst', () => ({ Resource: { historyImportBucket: { name: 'imports' } } }));
 
-import { purgeAccountFiles } from './purgeAccountFiles';
+import { findOrganizationFileIds, purgeAccountFiles } from './purgeAccountFiles';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 const assertLease = vi.fn();
 const options = { logger, assertLease };
+const PERSONAL_WORKSPACE = 'cccccccccccccccccccccccc';
+const COMPANY_WORKSPACE = 'dddddddddddddddddddddddd';
 const file = { id: 'f1', userId: 'u1', filePath: 'files/current', versions: [{ filePath: 'files/old' }] };
 
 beforeEach(() => {
@@ -195,14 +203,18 @@ describe('purgeAccountFiles', () => {
 
   it('purges files stamped to the personal workspace but preserves genuine organization files', async () => {
     h.find.mockResolvedValueOnce([
-      { ...file, userId: 'other-uploader', organizationId: 'personal' },
-      { ...file, id: 'org-file', organizationId: 'company' },
+      { ...file, userId: 'other-uploader', organizationId: PERSONAL_WORKSPACE },
+      { ...file, id: 'org-file', organizationId: COMPANY_WORKSPACE },
     ]);
-    h.personalWorkspaces.mockResolvedValue([{ _id: 'personal', deletedAt: new Date() }]);
-    h.personalWorkspace.mockResolvedValueOnce({ _id: 'personal' }).mockResolvedValueOnce(null);
+    // The purge's own workspace lookup and each file's ownership check share this mock.
+    h.personalWorkspaces.mockResolvedValue([{ _id: PERSONAL_WORKSPACE, deletedAt: new Date() }]);
     await purgeAccountFiles('u1', options);
     expect(h.hardDelete).toHaveBeenCalledExactlyOnceWith('f1', 50, assertLease);
-    expect(h.personalWorkspace).toHaveBeenCalledWith({ _id: 'personal', userId: 'u1', personal: true });
+    expect(h.personalWorkspaces).toHaveBeenCalledWith({
+      _id: { $in: [PERSONAL_WORKSPACE] },
+      userId: 'u1',
+      personal: true,
+    });
     expect(h.workspaceOptions).toHaveBeenCalledWith({ includeDeleted: true });
     expect(h.workspaceOptions).toHaveBeenCalledTimes(3);
   });
@@ -275,5 +287,96 @@ describe('purgeAccountFiles', () => {
     await expect(purgeAccountFiles('u1', options)).rejects.toThrow('lease lost');
     expect(h.fileDelete).not.toHaveBeenCalled();
     expect(h.deletePrefix).not.toHaveBeenCalled();
+  });
+});
+
+describe('findOrganizationFileIds', () => {
+  const PERSONAL = 'aaaaaaaaaaaaaaaaaaaaaaaa';
+  const COMPANY = 'bbbbbbbbbbbbbbbbbbbbbbbb';
+  const lake = (fields: Record<string, unknown>) => ({ toObject: () => fields });
+  const asFiles = (files: Record<string, unknown>[]) =>
+    files as unknown as Parameters<typeof findOrganizationFileIds>[0];
+
+  beforeEach(() => {
+    // The member-lake rule itself: each meta tag by name, then the uploader's own lakes.
+    h.findLakes.mockImplementation(
+      async (
+        file: { userId: string; tags?: { name: string }[] },
+        lakes: {
+          findByDatalakeTag: (tag: string) => Promise<unknown>;
+          find: (filter: unknown) => Promise<unknown[]>;
+        }
+      ) => [
+        ...(await Promise.all((file.tags ?? []).map(tag => lakes.findByDatalakeTag(tag.name)))).filter(Boolean),
+        ...((file.tags ?? []).some(tag => tag.name.includes(':'))
+          ? await lakes.find({ createdByUserId: file.userId })
+          : []),
+      ]
+    );
+    h.pickOwner.mockImplementation((lakes: { organizationId?: string }[]) => lakes[0]?.organizationId);
+  });
+
+  it('reads the lakes and workspaces of a whole batch with one query each', async () => {
+    h.lakeFind.mockImplementation(async (filter: Record<string, unknown>) =>
+      'datalakeTag' in filter
+        ? [lake({ id: 'l1', datalakeTag: 'lake:company', organizationId: COMPANY })]
+        : [lake({ id: 'l2', createdByUserId: 'u2', organizationId: PERSONAL })]
+    );
+    h.personalWorkspaces.mockResolvedValue([{ _id: PERSONAL }]);
+
+    const ids = await findOrganizationFileIds(
+      asFiles([
+        { id: 'stamped-company', userId: 'u1', organizationId: COMPANY },
+        { id: 'stamped-personal', userId: 'u1', organizationId: PERSONAL },
+        { id: 'legacy-company', userId: 'u1', tags: [{ name: 'lake:company' }] },
+        { id: 'legacy-personal', userId: 'u2', tags: [{ name: 'other:tag' }] },
+        { id: 'no-lake', userId: 'u1' },
+        { id: 'legacy-id', userId: 'u1', organizationId: 'legacy-org' },
+      ]),
+      'u1'
+    );
+
+    expect([...ids].sort()).toEqual(['legacy-company', 'legacy-id', 'stamped-company']);
+    expect(h.lakeFind).toHaveBeenCalledTimes(2);
+    expect(h.lakeFind).toHaveBeenCalledWith({ datalakeTag: { $in: ['lake:company', 'other:tag'] } });
+    expect(h.lakeFind).toHaveBeenCalledWith({ createdByUserId: { $in: ['u1', 'u2'] } });
+    expect(h.personalWorkspaces).toHaveBeenCalledExactlyOnceWith({
+      _id: { $in: [COMPANY, PERSONAL] },
+      userId: 'u1',
+      personal: true,
+    });
+    expect(h.personalWorkspace).not.toHaveBeenCalled();
+    expect(h.workspaceOptions).toHaveBeenCalledWith({ includeDeleted: true });
+  });
+
+  it('finds a lake by its lowercased meta tag, and reads a tag the batch did not prefetch', async () => {
+    h.lakeFind.mockResolvedValue([lake({ id: 'l1', datalakeTag: 'datalake:companykb', organizationId: COMPANY })]);
+    h.lakeFindOne.mockResolvedValue(lake({ id: 'l3', datalakeTag: 'datalake:derived', organizationId: COMPANY }));
+    h.findLakes.mockImplementation(
+      async (file: { tags: { name: string }[] }, lakes: { findByDatalakeTag: (tag: string) => Promise<unknown> }) =>
+        (
+          await Promise.all([
+            ...file.tags.map(tag => lakes.findByDatalakeTag(tag.name.toLowerCase())),
+            lakes.findByDatalakeTag('datalake:derived'),
+          ])
+        ).filter(Boolean)
+    );
+
+    const ids = await findOrganizationFileIds(
+      asFiles([{ id: 'mixed-case', userId: 'u1', tags: [{ name: 'datalake:CompanyKB' }] }]),
+      'u1'
+    );
+
+    expect([...ids]).toEqual(['mixed-case']);
+    expect(h.lakeFind).toHaveBeenCalledWith({ datalakeTag: { $in: ['datalake:CompanyKB', 'datalake:companykb'] } });
+    expect(h.lakeFindOne).toHaveBeenCalledExactlyOnceWith({ datalakeTag: 'datalake:derived' });
+  });
+
+  it('queries nothing when no file has an owning organization', async () => {
+    const ids = await findOrganizationFileIds(asFiles([{ id: 'f', userId: 'u1' }]), 'u1');
+
+    expect(ids.size).toBe(0);
+    expect(h.lakeFind).not.toHaveBeenCalled();
+    expect(h.personalWorkspaces).not.toHaveBeenCalled();
   });
 });

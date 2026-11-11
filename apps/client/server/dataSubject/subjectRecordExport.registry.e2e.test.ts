@@ -29,8 +29,11 @@ describe('SubjectRecordExport over the real registry', () => {
     const userId = new mongoose.Types.ObjectId().toString();
     const exporter = new SubjectRecordExport({ userId, email: 'subject@example.com' });
 
+    const order = await exporter.walkOrder();
+    expect([...order].sort()).toEqual([...exporter.models].sort());
+
     const failures: string[] = [];
-    for (const model of exporter.models) {
+    for (const model of order) {
       try {
         for await (const _record of exporter.records(model)) void _record;
       } catch (error) {
@@ -40,6 +43,37 @@ describe('SubjectRecordExport over the real registry', () => {
 
     expect(exporter.models.length).toBeGreaterThan(50);
     expect(failures).toEqual([]);
+  });
+
+  it('checks which personal-scope files an organization keeps once per batch, not once per file', async () => {
+    const userId = new mongoose.Types.ObjectId().toString();
+    const personal = new mongoose.Types.ObjectId();
+    const company = new mongoose.Types.ObjectId();
+    await mongoose.model('Organization').collection.insertMany([
+      { _id: personal, name: 'Mine', userId, personal: true },
+      { _id: company, name: 'Company', userId: new mongoose.Types.ObjectId().toString(), personal: false },
+    ]);
+    const files = [
+      ...Array.from({ length: 5 }, () => ({ userId, organizationId: personal.toString(), fileName: 'mine.txt' })),
+      ...Array.from({ length: 5 }, () => ({ userId, organizationId: company.toString(), fileName: 'company.txt' })),
+    ];
+    await mongoose.model('FabFile').collection.insertMany(files);
+    const Organization = mongoose.model('Organization');
+    const exists = vi.spyOn(Organization, 'exists');
+    const find = vi.spyOn(Organization, 'find');
+    try {
+      const records = [];
+      for await (const record of new SubjectRecordExport({ userId, email: null }).records('FabFile')) {
+        records.push(record);
+      }
+
+      expect(records).toHaveLength(10);
+      expect(exists).not.toHaveBeenCalled();
+      expect(find).toHaveBeenCalledTimes(1);
+    } finally {
+      exists.mockRestore();
+      find.mockRestore();
+    }
   });
 
   it("withholds the other people and the abuse scoring on the subject's own User record", async () => {
