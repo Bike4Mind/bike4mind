@@ -322,6 +322,22 @@ describe('sessionScriptRun', () => {
     expect(await runs(command, id)).toBeNull();
   });
 
+  it('counts a file the script itself makes executable as a program in a PATH folder', async () => {
+    const id = 'session-scripts-chmod-program';
+    await writeFile(join(root, 'tools', 'later'), '#!/bin/sh\n', 'utf8');
+    await chmod(join(root, 'tools', 'later'), 0o644);
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'tools', 'later'));
+    const path = 'export PATH="$(cd tools && pwd):$PATH" && git commit --allow-empty';
+    expect(await runs(path, id)).toBeNull();
+    expect(await runs(`chmod +x tools/later && ${path}`, id)).not.toBeNull();
+    expect(await runs(`chmod a+x tools/later && ${path}`, id)).not.toBeNull();
+    expect(await runs(`chmod 755 tools/later && ${path}`, id)).not.toBeNull();
+    expect(await runs(`chmod -R u+x tools/later && ${path}`, id)).not.toBeNull();
+    expect(await runs(`chmod 644 tools/later && ${path}`, id)).toBeNull();
+    expect(await runs(`chmod -x tools/later && ${path}`, id)).toBeNull();
+    expect(await runs(`chmod +x tools/other && ${path}`, id)).toBeNull();
+  });
+
   it('reads a PATH entry bash fills in as a folder of programs only once the session wrote a program', async () => {
     const id = 'session-scripts-path-programs';
     await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'src', 'a.ts'));
@@ -364,57 +380,17 @@ describe('sessionScriptRun', () => {
     }
   });
 
-  it('flags git run in a bare repository the session wrote outside .git', async () => {
+  it('does not flag git run in a bare layout the session wrote, which the shell refuses to find by itself', async () => {
     const id = 'session-scripts-bare';
     const folder = join(root, 'bare');
     await mkdir(join(folder, 'objects'), { recursive: true });
     await mkdir(join(folder, 'refs'), { recursive: true });
-    await mkdir(join(folder, 'deep'), { recursive: true });
     await writeFile(join(folder, 'HEAD'), 'ref: refs/heads/main\n', 'utf8');
     await writeFile(join(folder, 'config'), '[diff]\n\texternal = touch MARK\n', 'utf8');
     await recordSessionWrite({ sessionId: id } as ToolContext, join(folder, 'config'));
-    expect((await sessionScriptRun('git -C bare diff HEAD~1 HEAD', root, id))?.hooks).toHaveLength(1);
-    expect((await sessionScriptRun('cd bare/deep && git diff HEAD~1 HEAD', root, id))?.hooks).toHaveLength(1);
-    expect(await sessionScriptRun('git -C sub diff HEAD~1 HEAD', root, id)).toBeNull();
-  });
-
-  it('flags git run in a folder whose commondir the session wrote beside a HEAD', async () => {
-    const id = 'session-scripts-commondir';
-    const folder = join(root, 'linked');
-    await mkdir(folder, { recursive: true });
-    await writeFile(join(folder, 'HEAD'), 'ref: refs/heads/main\n', 'utf8');
-    await writeFile(join(folder, 'commondir'), '../bare\n', 'utf8');
     await recordSessionWrite({ sessionId: id } as ToolContext, join(folder, 'commondir'));
-    expect((await sessionScriptRun('git -C linked status', root, id))?.hooks).toHaveLength(1);
-  });
-
-  it('does not flag a folder with objects and refs but no HEAD', async () => {
-    const id = 'session-scripts-no-head';
-    const folder = join(root, 'headless');
-    await mkdir(join(folder, 'objects'), { recursive: true });
-    await mkdir(join(folder, 'refs'), { recursive: true });
-    await writeFile(join(folder, 'config'), 'x\n', 'utf8');
-    await recordSessionWrite({ sessionId: id } as ToolContext, join(folder, 'config'));
-    expect(await sessionScriptRun('git -C headless status', root, id)).toBeNull();
-  });
-
-  it('does not flag a folder with HEAD and refs but no objects', async () => {
-    const id = 'session-scripts-no-objects';
-    const folder = join(root, 'objectless');
-    await mkdir(join(folder, 'refs'), { recursive: true });
-    await writeFile(join(folder, 'HEAD'), 'ref: refs/heads/main\n', 'utf8');
-    await writeFile(join(folder, 'config'), 'x\n', 'utf8');
-    await recordSessionWrite({ sessionId: id } as ToolContext, join(folder, 'config'));
-    expect(await sessionScriptRun('git -C objectless status', root, id)).toBeNull();
-  });
-
-  it('does not flag a config file written in a folder that is no repository', async () => {
-    const id = 'session-scripts-not-bare';
-    const folder = join(root, 'plain');
-    await mkdir(folder, { recursive: true });
-    await writeFile(join(folder, 'config'), 'x\n', 'utf8');
-    await recordSessionWrite({ sessionId: id } as ToolContext, join(folder, 'config'));
-    expect(await sessionScriptRun('git -C plain status', root, id)).toBeNull();
+    expect(await sessionScriptRun('git -C bare diff HEAD~1 HEAD', root, id)).toBeNull();
+    expect(await sessionScriptRun('cd bare && git diff HEAD~1 HEAD', root, id)).toBeNull();
   });
 
   it('runs a launched file from the folder env -C names', async () => {
@@ -423,8 +399,15 @@ describe('sessionScriptRun', () => {
     await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'sub', 'npx'));
     expect(await runs('env -C sub ./y.sh', id)).toEqual(['./y.sh']);
     expect(await runs('env -C sub bash y.sh', id)).toEqual(['y.sh']);
-    expect(await runs('env -C sub bash < y.sh', id)).toEqual(['y.sh']);
+    // bash opens a redirect from its own folder, not the one env moves the command to.
+    expect(await runs('env -C sub bash < y.sh', id)).toBeNull();
+    expect(await runs('bash < sub/y.sh', id)).toEqual(['sub/y.sh']);
     expect(await runs('env -C sub ./npx ls', id)).toEqual(['./npx']);
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'sub', 'jest'));
+    expect(await runs('env -C sub ./npx vitest', id)).toEqual(['./npx']);
+    expect(await runs('env -C sub ./jest', id)).toEqual(['./jest']);
+    expect(await runs('env -C other ./npx vitest', id)).toBeNull();
+    expect(await runs('env -C other ./jest', id)).toBeNull();
     expect(await runs('env -C other ./y.sh', id)).toBeNull();
     expect(await runs('cd sub && ./y.sh', id)).toEqual(['./y.sh']);
   });

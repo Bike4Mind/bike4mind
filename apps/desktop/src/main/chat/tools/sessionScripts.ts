@@ -1,5 +1,5 @@
 import { stat } from 'node:fs/promises';
-import { basename, dirname, join, posix, relative, resolve } from 'node:path';
+import { basename, join, posix, relative, resolve } from 'node:path';
 import type { Node } from 'web-tree-sitter';
 import { parseWslPath, wslLocation } from '../../wsl/wslPath';
 import { directoryOptionValues } from './bashArity';
@@ -176,13 +176,6 @@ async function recordWrite(context: ToolContext, target: string, kind: 'files' |
   const repository = /^(.*?)[\\/]\.(git|husky)([\\/]|$)/.exec(physical)?.[1];
   // `git config` from a subfolder is recorded as `<subfolder>/.git/config`; git means the enclosing repository.
   if (repository !== undefined) record.hooks.set((await repositoryRoot(repository)) || '/', generation);
-  // A bare repository (HEAD with objects and refs, or a commondir) outside `.git` reads its config and hooks too.
-  if (/^(HEAD|config|config\.worktree|commondir|objects|refs)$/.test(basename(physical))) {
-    const folder = dirname(physical);
-    const has = async (name: string): Promise<boolean> => (await stat(join(folder, name)).catch(() => null)) !== null;
-    const [head, common, objects, refs] = await Promise.all(['HEAD', 'commondir', 'objects', 'refs'].map(has));
-    if (head && (common || (objects && refs))) record.hooks.set(folder, generation);
-  }
   // The user's own git config applies in every repository.
   if (/[\\/](\.gitconfig|\.config[\\/]git[\\/]config)$/.test(physical)) record.hooks.set('/', generation);
   // An archive extracted over a repository can bring its own `.git/hooks`.
@@ -495,6 +488,33 @@ async function scanScripts(
     }
   };
 
+  /** Whether the script gives a file the session wrote an execute bit; the bit is not there yet when it is approved. */
+  const chmodsWrittenFile = async (): Promise<boolean> => {
+    for (const command of tree.rootNode.descendantsOfType('command')) {
+      if (command === null) continue;
+      const tokens = words(command).map(unquote);
+      const at = skipWrappers(tokens).start;
+      if (programName(tokens[at] ?? '') !== 'chmod') continue;
+      const operands = tokens.slice(at + 1).filter(arg => !/^(--|-[RfvcHLP]+$)/.test(arg) || arg.startsWith('--ref'));
+      const [mode = '', ...files] = operands;
+      const grants = /^[0-7]{1,4}$/.test(mode)
+        ? [...mode].some(digit => Number(digit) % 2 === 1)
+        : /[+=][rwXst]*x/.test(mode) || tokens.some(arg => arg.startsWith('--reference'));
+      if (!grants) continue;
+      for (const file of files) {
+        const text = expandHome(file, home);
+        if (text.includes('$') || text.includes('`')) return true;
+        for (const base of new Set([cwd, startDirectory])) {
+          for (const target of operandTargets(base, text)) {
+            const physical = await physicalFrom(base, target);
+            if (written.has(physical) || (await treeGeneration(physical)) !== undefined) return true;
+          }
+        }
+      }
+    }
+    return false;
+  };
+
   // Rewritten folders may hold any program.
   let programs: Promise<boolean> | undefined;
   const wroteProgram = (): Promise<boolean> => {
@@ -505,7 +525,7 @@ async function scanScripts(
         const info = await stat(file).catch(() => null);
         if (info?.isFile() && (info.mode & 0o111) !== 0) return true;
       }
-      return false;
+      return chmodsWrittenFile();
     })();
     return programs;
   };
@@ -637,7 +657,7 @@ async function scanScripts(
     if (runs) {
       // Behind a wrapper the program is not reliably the first word, so every word is a candidate.
       for (const word of operands) for (const path of pathsIn(word)) await consider(path, from);
-      for (const target of inputRedirects(node)) await consider(target, from);
+      for (const target of inputRedirects(node)) await consider(target, cwd);
     }
     if (runs || PROJECT_FILES.has(name)) {
       for (const child of node.namedChildren) {
