@@ -7,11 +7,13 @@ on:
     paths:
       - 'apps/ios/**'
       - '.github/workflows/ios.yml'
+      - 'scripts/check-no-overlay-literals.sh'
   push:
     branches: [main]
     paths:
       - 'apps/ios/**'
       - '.github/workflows/ios.yml'
+      - 'scripts/check-no-overlay-literals.sh'
 
 permissions:
   contents: read

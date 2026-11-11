@@ -28,6 +28,9 @@ public struct SessionSummary: Identifiable, Hashable, Sendable, Codable {
     self.firstCreated = firstCreated
     self.lastUpdated = lastUpdated
   }
+
+  /// The name to show for the session; a session nobody has named yet reads "Untitled".
+  public var title: String { name.isEmpty ? "Untitled" : name }
 }
 
 /// One turn of a conversation: what was sent, the visible reply, and where the turn stands.

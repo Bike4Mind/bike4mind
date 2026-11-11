@@ -174,12 +174,24 @@ final class AppNavigatorTests: XCTestCase {
     XCTAssertEqual(navigator.sessionPath.count, 1)
   }
 
-  func testDiscardedPendingRouteNeverApplies() {
+  func testResetDiscardsPendingRoute() {
     let navigator = AppNavigator()
     navigator.open(.session(id: "s1"), isShellReady: false)
-    navigator.discardPendingRoute()
+    navigator.reset()
     navigator.releasePendingRoute()
     XCTAssertTrue(navigator.sessionPath.isEmpty)
+  }
+
+  func testResetReturnsToHomeWithNothingPending() {
+    let navigator = AppNavigator()
+    navigator.apply(.compose(ComposeRequest(target: .session(id: "s1"), sessionName: "Old notebook")))
+    navigator.apply(.lakes)
+    navigator.isDrawerOpen = true
+    navigator.reset()
+    XCTAssertTrue(navigator.isShowing(.home))
+    XCTAssertFalse(navigator.isDrawerOpen)
+    XCTAssertNil(navigator.takeComposeRequest(forSession: "s1"))
+    XCTAssertNil(navigator.externalURL)
   }
 
   func testUniversalLinkAndTapShareTheSamePath() {

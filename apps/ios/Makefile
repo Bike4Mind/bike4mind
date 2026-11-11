@@ -46,6 +46,7 @@ clean:
 generate-client:
 	@if [ -n "$(SPEC_REF)" ]; then git show "$(SPEC_REF):$(SPEC_PATH_IN_REPO)" > $(CLIENT_PKG)/openapi.json; \
 	elif [ -n "$(SPEC_FILE)" ]; then cp "$(SPEC_FILE)" $(CLIENT_PKG)/openapi.json; fi
+	python3 -I $(CLIENT_PKG)/Scripts/strip_overlay_literals.py $(CLIENT_PKG)/openapi.json ../../scripts/check-no-overlay-literals.sh
 	swift build --package-path $(GENERATOR_PKG) --product swift-openapi-generator
 	rm -rf $(CLIENT_PKG)/Sources/B4MClient/Generated
 	mkdir -p build

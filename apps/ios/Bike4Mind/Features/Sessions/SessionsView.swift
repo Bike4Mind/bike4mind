@@ -119,7 +119,7 @@ private struct SessionRow: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
-      Text(session.name.isEmpty ? "Untitled" : session.name)
+      Text(session.title)
         .font(.headline)
         .foregroundStyle(Tokens.Palette.primaryText)
         .lineLimit(2)

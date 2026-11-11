@@ -144,7 +144,7 @@ private struct DestinationPicker: View {
       if !model.sessions.isEmpty {
         Section("Notebooks") {
           ForEach(model.sessions) { session in
-            row(.session(id: session.id, name: session.name.isEmpty ? "Untitled" : session.name))
+            row(.session(id: session.id, name: session.title))
           }
         }
       }

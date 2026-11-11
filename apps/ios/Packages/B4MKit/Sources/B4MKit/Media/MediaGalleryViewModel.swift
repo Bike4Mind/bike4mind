@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-/// Drives the Media tab: a newest-first grid of generated files, filterable by kind, paged by number.
+/// Drives the Studio gallery: a newest-first grid of generated files, filterable by kind, paged by number.
 @MainActor
 @Observable
 public final class MediaGalleryViewModel {

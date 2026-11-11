@@ -152,6 +152,6 @@ struct RootView: View {
     // The widgets sit on the Home Screen: they must not keep showing the last account's data.
     let widgets = services.widgets
     Task { await widgets.signOut() }
-    services.navigator.discardPendingRoute()
+    services.navigator.reset()
   }
 }

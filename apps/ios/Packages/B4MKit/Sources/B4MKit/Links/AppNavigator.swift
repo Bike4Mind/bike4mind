@@ -38,8 +38,14 @@ public final class AppNavigator {
     apply(route)
   }
 
-  public func discardPendingRoute() {
+  /// Returns to a signed-out state when a session ends. The navigator outlives sign-out (one per process),
+  /// so without this the next account would land on the previous account's screen.
+  public func reset() {
     pendingRoute = nil
+    sessionPath = []
+    isDrawerOpen = false
+    composeRequest = nil
+    externalURL = nil
   }
 
   public func apply(_ route: Route) {

@@ -57,10 +57,3 @@ public enum StarterChip: String, CaseIterable, Sendable, Identifiable {
     }
   }
 }
-
-extension AccessToken {
-  /// The account's first name for the greeting (see `AccountProfile`).
-  static func firstName(ofJWT jwt: String) -> String? {
-    AccountProfile(jwt: jwt)?.firstName
-  }
-}

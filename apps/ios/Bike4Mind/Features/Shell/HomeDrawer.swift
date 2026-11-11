@@ -87,8 +87,6 @@ private struct DrawerContent: View {
   @State private var recents: SessionsViewModel
   @State private var profile: AccountProfile?
 
-  private static let recentCount = 5
-
   init(api: any B4MAPI, cache: any SessionListCache) {
     _recents = State(initialValue: SessionsViewModel(api: api, cache: cache))
   }
@@ -121,11 +119,11 @@ private struct DrawerContent: View {
         .padding(.horizontal, Tokens.Spacing.s)
         .padding(.top, Tokens.Spacing.m)
         .accessibilityAddTraits(.isHeader)
-      ForEach(recents.sessions.prefix(Self.recentCount)) { session in
+      ForEach(recents.drawerRecents) { session in
         Button {
           services.navigator.openSession(session)
         } label: {
-          Text(session.name.isEmpty ? "Untitled" : session.name)
+          Text(session.title)
             .font(.body)
             .foregroundStyle(Tokens.Palette.primaryText)
             .lineLimit(1)

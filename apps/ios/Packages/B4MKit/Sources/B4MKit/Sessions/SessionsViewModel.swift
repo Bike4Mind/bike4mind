@@ -27,6 +27,10 @@ public final class SessionsViewModel {
 
   public var hasMore: Bool { pages.hasMore }
 
+  /// The newest sessions for the drawer's shortcut list, in list order.
+  public var drawerRecents: ArraySlice<SessionSummary> { sessions.prefix(Self.drawerRecentCount) }
+  static let drawerRecentCount = 5
+
   /// First appearance: paint cached rows immediately, then refresh.
   public func load() async {
     if sessions.isEmpty, let cached = await cache.load(), !cached.isEmpty {

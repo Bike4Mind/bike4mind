@@ -40,15 +40,4 @@ final class NewConversationStartTests: XCTestCase {
     XCTAssertNil(StarterChip.voiceNote.prefill)
     XCTAssertEqual(StarterChip.allCases.count, 4)
   }
-
-  func testFirstNameComesFromGivenNameThenFirstWordOfName() {
-    func jwt(_ claims: [String: Any]) -> String {
-      let payload = Base64URL.encode(try! JSONSerialization.data(withJSONObject: claims))
-      return "e30.\(payload).sig"
-    }
-    XCTAssertEqual(AccessToken.firstName(ofJWT: jwt(["given_name": "Sam", "name": "Pat Doe"])), "Sam")
-    XCTAssertEqual(AccessToken.firstName(ofJWT: jwt(["name": "Pat Doe"])), "Pat")
-    XCTAssertNil(AccessToken.firstName(ofJWT: jwt(["sub": "user-1"])))
-    XCTAssertNil(AccessToken.firstName(ofJWT: "not-a-jwt"))
-  }
 }
