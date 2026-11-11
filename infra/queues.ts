@@ -5,11 +5,7 @@ import {
   publishedArtifactsBucket,
   slackExportBucket,
 } from './buckets';
-import {
-  DEFAULT_LAMBDA_ENVIRONMENT,
-  SINGLE_RECORD_BATCH,
-  TEST_GENERATION_PROVIDER_ENVIRONMENT,
-} from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT, SINGLE_RECORD_BATCH, TEST_GENERATION_PROVIDER_ENVIRONMENT } from './constants';
 import { imageProcessor } from './imageProcessor';
 import {
   buildQueuePair,
@@ -25,7 +21,7 @@ import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
 import { eventBus } from './bus';
 import { mcpHandler } from './mcp';
-import { appUrlForLambdaEnv, cdnUrlForLambdaEnv } from './router';
+import { appUrlForLambdaEnv, cdnUrlForLambdaEnv, router, routerDistributionId } from './router';
 import { searxngUrl } from './searxng';
 
 // Data Lake Taxonomy Analysis Queue - declared before the chunk/vectorize queues below
@@ -1110,6 +1106,37 @@ const githubLakeRevokeQueueSubscription = githubLakeRevokeQueue.subscribe(
   SINGLE_RECORD_BATCH
 );
 
+// Generated media a notebook delete could not purge within its request budget
+// (apps/client/server/sessions/purgeDeletedNotebookMedia.ts) finishes here.
+const generatedMediaPurgeQueueDLQ = new sst.aws.Queue('generatedMediaPurgeQueueDLQ', {});
+const generatedMediaPurgeQueue = new sst.aws.Queue('generatedMediaPurgeQueue', {
+  visibilityTimeout: '6 minutes',
+  dlq: {
+    queue: generatedMediaPurgeQueueDLQ.arn,
+    retry: 3,
+  },
+});
+const generatedMediaPurgeQueueSubscription = generatedMediaPurgeQueue.subscribe(
+  {
+    handler: 'apps/workers/src/queueHandlers/generatedMediaPurge.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '5 minutes',
+    vpc: lambdaVpc,
+    // Links its own queue: a run that hits its deadline re-enqueues what it did not reach.
+    link: [...allSecrets, generatedImagesBucket, routerDistributionId, generatedMediaPurgeQueue],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    permissions: [
+      {
+        actions: ['cloudfront:CreateInvalidation'],
+        resources: [router.nodes.cdn.apply(cdn => cdn.nodes.distribution.arn)],
+      },
+    ],
+  },
+  SINGLE_RECORD_BATCH
+);
+
 // Legacy What's New highlights queue, retained with its consumer until in-flight messages drain.
 // The admin generate-highlights route now sends to whatsNewGenerationQueue; there is no scheduled trigger.
 const whatsNewHighlightsQueueDLQ = new sst.aws.Queue('whatsNewHighlightsQueueDLQ', {
@@ -1776,6 +1803,7 @@ export {
   driveDisconnectPurgeQueue,
   githubLakeIngestQueue,
   githubLakeRevokeQueue,
+  generatedMediaPurgeQueue,
   liveOpsTriageQueue,
   tavernHeartbeatQueue,
   deepAgentWakeQueue,
@@ -1815,6 +1843,7 @@ export {
   driveDisconnectPurgeQueueDLQ,
   githubLakeIngestQueueDLQ,
   githubLakeRevokeQueueDLQ,
+  generatedMediaPurgeQueueDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
   deepAgentWakeQueueDLQ,
@@ -1857,6 +1886,7 @@ export {
   driveDisconnectPurgeQueueSubscription,
   githubLakeIngestQueueSubscription,
   githubLakeRevokeQueueSubscription,
+  generatedMediaPurgeQueueSubscription,
   liveOpsTriageQueueSubscription,
   deepAgentWakeQueueSubscription,
   sreFixQueueSubscription,

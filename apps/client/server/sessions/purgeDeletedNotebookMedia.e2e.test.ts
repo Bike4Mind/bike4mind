@@ -8,11 +8,12 @@ import {
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 
-const effects = vi.hoisted(() => ({ deleteGenerated: vi.fn(), cdnSend: vi.fn() }));
+const effects = vi.hoisted(() => ({ deleteGenerated: vi.fn(), cdnSend: vi.fn(), enqueue: vi.fn() }));
 
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getGeneratedImageStorage: () => ({ delete: effects.deleteGenerated }),
 }));
+vi.mock('./generatedMediaPurgeQueue', () => ({ enqueueGeneratedMediaPurge: effects.enqueue }));
 vi.mock('@aws-sdk/client-cloudfront', () => ({
   CloudFrontClient: class {
     send = effects.cdnSend;
@@ -64,6 +65,7 @@ beforeEach(async () => {
   vi.clearAllMocks();
   effects.deleteGenerated.mockResolvedValue(undefined);
   effects.cdnSend.mockResolvedValue({});
+  effects.enqueue.mockResolvedValue(true);
   for (const modelName of mongoose.modelNames()) await collection(modelName).deleteMany({});
 });
 
@@ -116,6 +118,10 @@ describe('purgeDeletedNotebookMedia', () => {
     expect(deleted.length).toBeLessThan(40);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Time budget spent'));
     expect(invalidatedPaths()).toEqual([deleted.map(key => `/generated/${key}`).sort()]);
+    expect(effects.enqueue).toHaveBeenCalledTimes(1);
+    const [handoff] = effects.enqueue.mock.calls[0];
+    expect(handoff.sessionIds).toEqual([]);
+    expect([...deleted, ...handoff.keys].sort()).toEqual(Array.from({ length: 40 }, (_, i) => `k${i}.png`).sort());
   });
 
   it('invalidates a large purge as exact-path batches, never a /generated wildcard', async () => {
@@ -163,14 +169,14 @@ describe('runGeneratedMediaPurge', () => {
     find.mock.calls.filter(([filter]) => (filter as Record<string, unknown> | undefined)?.sessionId).length;
 
   // Moves the clock past `deadline` once the `afterFinds`-th page lookup starts.
-  function expireAfterFinds(afterFinds: number) {
+  function expireAfterFinds(afterFinds: number, jumpMs = 2_000) {
     const start = Date.now();
     const now = vi.spyOn(Date, 'now').mockReturnValue(start);
     const originalFind = Quest.find.bind(Quest);
     let finds = 0;
     const find = vi.spyOn(Quest, 'find').mockImplementation(((...args: Parameters<typeof Quest.find>) => {
       if ((args[0] as Record<string, unknown> | undefined)?.sessionId && ++finds === afterFinds) {
-        now.mockReturnValue(start + 2_000);
+        now.mockReturnValue(start + jumpMs);
       }
       return originalFind(...args);
     }) as typeof Quest.find);
@@ -212,6 +218,18 @@ describe('runGeneratedMediaPurge', () => {
     expect(leftovers.leftoverKeys).toEqual([]);
     expect(deletedKeys()).toEqual([...ids.slice(0, SESSION_PAGE).map((_, i) => `own${i}.png`), 'shared.png'].sort());
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Time budget spent'));
+  });
+
+  it('hands the notebooks a delete request did not reach to the purge queue', async () => {
+    const ids = await notebooks();
+    const clock = expireAfterFinds(2, PURGE_BUDGET_MS + 1);
+    try {
+      await purgeDeletedNotebookMedia(ids, { logger });
+    } finally {
+      clock.restore();
+    }
+    expect(effects.enqueue).toHaveBeenCalledTimes(1);
+    expect(effects.enqueue).toHaveBeenCalledWith({ sessionIds: ids.slice(SESSION_PAGE), keys: [] }, logger);
   });
 
   it('forwards every notebook with zero queries when the deadline has already passed', async () => {

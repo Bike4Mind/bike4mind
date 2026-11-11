@@ -82,6 +82,7 @@ vi.mock('sst', () => ({
     APNS_TOPIC: { value: 'not-configured' },
     githubLakeIngestQueue: { url: 'https://sqs.test/githubLakeIngestQueue' },
     githubLakeRevokeQueue: { url: 'https://sqs.test/githubLakeRevokeQueue' },
+    generatedMediaPurgeQueue: { url: 'https://sqs.test/generatedMediaPurgeQueue' },
     GITHUB_MCP_CLIENT_ID: { value: 'test-github-mcp-client-id' },
     GITHUB_MCP_CLIENT_SECRET: { value: 'test-github-mcp-client-secret' },
     STRIPE_WEBHOOK_SECRET: { value: 'test-stripe-webhook-secret' },

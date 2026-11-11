@@ -1,6 +1,7 @@
 import { FabFile, Quest, questRepository, sessionRepository } from '@bike4mind/database';
 import { getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { createCdnInvalidationBatch, generatedCdnPath } from '@server/services/cdn/invalidateRouterCdn';
+import { enqueueGeneratedMediaPurge } from '@server/sessions/generatedMediaPurgeQueue';
 import type { MinimalLogger } from '@server/services/publish/minimalLogger';
 
 const errorMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
@@ -151,8 +152,8 @@ export async function runGeneratedMediaPurge(
  * A key is kept while a LIVE notebook (forks, clones and snips copy keys verbatim) or a LIVE file
  * (its `sourceMetadata.generatedCopyKey`) still references it. Unlike purgeAccountContent, dead
  * references do not retain: nothing restores a soft-deleted notebook and only account erasure
- * hard-purges one, so a deleted fork would otherwise pin the bytes until then. Never throws;
- * failures are logged per key.
+ * hard-purges one, so a deleted fork would otherwise pin the bytes until then. What the request
+ * budget does not reach goes to the purge queue. Never throws; failures are logged per key.
  */
 export async function purgeDeletedNotebookMedia(
   sessionIds: string[],
@@ -160,10 +161,11 @@ export async function purgeDeletedNotebookMedia(
 ): Promise<void> {
   if (sessionIds.length === 0) return;
   try {
-    await runGeneratedMediaPurge(
+    const { leftoverSessionIds, leftoverKeys } = await runGeneratedMediaPurge(
       { sessionIds },
       { deadline: Date.now() + PURGE_BUDGET_MS, deletedSessionIds: new Set(sessionIds), logger }
     );
+    await enqueueGeneratedMediaPurge({ sessionIds: leftoverSessionIds, keys: leftoverKeys }, logger);
   } catch (err) {
     logger.warn(`[NOTEBOOK_MEDIA] Generated media storage unavailable: ${errorMessage(err)}`);
   }

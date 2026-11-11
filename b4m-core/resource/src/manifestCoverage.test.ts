@@ -182,6 +182,7 @@ const REGISTERED_WITHOUT_CONSUMER: Record<string, string> = {
   lakeInconsistencyModelQueue: 'optional, behind an off-by-default flag; the route refuses the run with no URL',
   liveOpsTriageQueue: 'admin live-ops trigger route enqueues; handler uses the CloudWatch client',
   sreFixQueue: 'SRE Slack approval path enqueues; decide together with sreJobQueue',
+  generatedMediaPurgeQueue: 'optional; notebook deletes hand it purge leftovers, logged and dropped with no URL',
 };
 
 /**

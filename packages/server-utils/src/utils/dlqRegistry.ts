@@ -277,6 +277,12 @@ const DLQ_REGISTRY = [
     application: 'PublishedArtifacts',
     sourceQueue: 'publishThumbnailQueue',
   },
+  {
+    label: 'generated-media-purge',
+    displayName: 'Generated Media Purge',
+    application: 'Notebooks',
+    sourceQueue: 'generatedMediaPurgeQueue',
+  },
 ] as const satisfies readonly DlqDescriptor[];
 
 type CoreDlqLabel = (typeof DLQ_REGISTRY)[number]['label'];
