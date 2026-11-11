@@ -15,7 +15,7 @@ const handler = baseApi({
     const userId = req.user!.id;
     const { id } = req.query as { id?: string };
 
-    const results = await listQuestFiles(userId, id!);
+    const results = await listQuestFiles(userId, id!, { browser: true });
 
     return res.json(results);
   });

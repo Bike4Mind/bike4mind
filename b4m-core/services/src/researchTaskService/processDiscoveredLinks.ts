@@ -13,7 +13,6 @@ import { NotFoundError, secureParameters, UnprocessableEntityError, FunctionQueu
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
 import { isAiAccessRefusal } from '../userService/accountState';
 import { createSendStatusUpdate } from './utils';
-import axios from 'axios';
 import type mongoose from 'mongoose';
 import { z } from 'zod';
 import plimit from 'p-limit';
@@ -38,6 +37,7 @@ interface IResearchTaskProcessDiscoveredLinksAdapters {
     warn: (message: string) => void;
   };
   llm: ICompletionBackend;
+  storage: { download: (path: string) => Promise<Buffer> };
   jobs: {
     researchTasks: IResearchTaskJobs & {
       sendToClient: (
@@ -67,7 +67,7 @@ export const processDiscoveredLinks = async (
   parameters: IResearchTaskProcessDiscoveredLinks,
   adapters: IResearchTaskProcessDiscoveredLinksAdapters
 ) => {
-  const { db, logger, llm, jobs } = adapters;
+  const { db, logger, llm, jobs, storage } = adapters;
   const { id } = secureParameters(parameters, researchTaskProcessDiscoveredLinksSchema);
 
   const researchTask = await db.researchTasks.findById(id);
@@ -118,18 +118,17 @@ export const processDiscoveredLinks = async (
 
     if (!fabFile)
       throw new NotFoundError(`Research Task Process Discovered Links - Fab File ${researchData.fabFileId} not found`);
-    if (!fabFile.fileUrl)
+    if (!fabFile.filePath)
       throw new UnprocessableEntityError(
-        `Research Task Process Discovered Links - Fab File ${fabFile.id} has no file url`
+        `Research Task Process Discovered Links - Fab File ${fabFile.id} has no file path`
       );
 
     let content: string;
     try {
-      const response = await axios.get(fabFile.fileUrl);
-      content = response.data;
+      content = (await storage.download(fabFile.filePath)).toString('utf8');
     } catch (error) {
       throw new UnprocessableEntityError(
-        `Research Task Process Discovered Links - Failed to get content from Fab File ${fabFile.id} at ${fabFile.fileUrl}`
+        `Research Task Process Discovered Links - Failed to get content from Fab File ${fabFile.id}`
       );
     }
     const { prompt } = researchTask;

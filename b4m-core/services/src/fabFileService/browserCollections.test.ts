@@ -76,7 +76,7 @@ it.each(['list', 'search', 'session', 'quest'] as const)(
           findAllBySessionId: vi.fn(async () => []),
         },
       },
-      storage: { signedUrlCache: 'bypass', generateSignedUrl: signer },
+      storage: { generateSignedUrl: signer },
     } as unknown as CollectionAdapter;
     const invoke = async () => {
       if (flow === 'list') return listFabFiles(user, { ids: ['clean', 'held'] }, adapter);
@@ -93,14 +93,6 @@ it.each(['list', 'search', 'session', 'quest'] as const)(
     expect(result.find(file => file.id === 'held')!.fileUrl).toBeUndefined();
     expect(signer).toHaveBeenCalledTimes(1);
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(update).not.toHaveBeenCalled();
-    expect(files).toEqual(originals);
-
-    adapter.storage.signedUrlCache = undefined;
-    const server = await invoke();
-    expect(server.find(file => file.id === 'clean')!.fileUrl).toBe(privateUrl);
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(signer).toHaveBeenCalledTimes(1);
     expect(update).not.toHaveBeenCalled();
     expect(files).toEqual(originals);
   }

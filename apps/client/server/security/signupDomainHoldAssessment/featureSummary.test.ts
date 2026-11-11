@@ -5,6 +5,7 @@ import {
   ipPrefix,
   mxProviderClass,
   probeSite,
+  siteFlags,
 } from './featureSummary';
 
 const intel = (mxHosts: string[], mxFlags: string[], failed: ('rdap' | 'mx')[] = []) => ({ mxHosts, mxFlags, failed });
@@ -52,7 +53,11 @@ const realText = `<html><body><h1>Acme</h1><p>${'We build tools for teams. '.rep
 describe('probeSite', () => {
   it('fetches https://<domain>/ with a timeout and a small byte cap', async () => {
     const fetchImpl = vi.fn(async () => page(realText));
-    expect(await probeSite('acme.test', fetchImpl)).toEqual({ resolves: true, hasContent: true });
+    expect(await probeSite('acme.test', fetchImpl)).toEqual({
+      resolves: true,
+      hasContent: true,
+      offersDisposableMail: false,
+    });
     const [url, init, options] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit, { maxBodyBytes: number }];
     expect(url).toBe('https://acme.test/');
     expect(init.signal).toBeInstanceOf(AbortSignal);
@@ -67,7 +72,7 @@ describe('probeSite', () => {
         'acme.test',
         vi.fn(async () => page(parked))
       )
-    ).toEqual({ resolves: true, hasContent: false });
+    ).toEqual({ resolves: true, hasContent: false, offersDisposableMail: false });
   });
 
   it('reads a non-2xx answer as resolving without content', async () => {
@@ -79,6 +84,7 @@ describe('probeSite', () => {
     ).toEqual({
       resolves: true,
       hasContent: false,
+      offersDisposableMail: false,
     });
   });
 
@@ -86,15 +92,46 @@ describe('probeSite', () => {
     const fetchImpl = vi.fn(async () => {
       throw new TypeError('fetch failed');
     });
-    expect(await probeSite('acme.test', fetchImpl)).toEqual({ resolves: false, hasContent: false });
+    expect(await probeSite('acme.test', fetchImpl)).toEqual({
+      resolves: false,
+      hasContent: false,
+      offersDisposableMail: false,
+    });
   });
 
   it('never fetches something that is not a hostname', async () => {
     const fetchImpl = vi.fn(async () => page(realText));
     for (const domain of ['acme.test/../x', 'user@acme.test', '127.0.0.1', 'localhost', 'acme.test:8080']) {
-      expect(await probeSite(domain, fetchImpl)).toEqual({ resolves: false, hasContent: false });
+      expect(await probeSite(domain, fetchImpl)).toEqual({
+        resolves: false,
+        hasContent: false,
+        offersDisposableMail: false,
+      });
     }
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+describe('siteFlags', () => {
+  const filler = ' Our team builds dashboards for small clinics and writes about the tools we use.'.repeat(4);
+
+  it.each([
+    'Free temp mail and an AI gateway, invite only.',
+    'Get a disposable email address in one click.',
+    'Your 10 minute mail inbox, no signup.',
+    'Burner inbox for every site you visit.',
+    'Temporary e-mail that self-destructs.',
+    'A captcha solver is coming soon.',
+  ])('flags a site that describes itself as a throwaway mail service: %s', text => {
+    expect(siteFlags(`<html><body><p>${text}${filler}</p></body></html>`)).toEqual({
+      hasContent: true,
+      offersDisposableMail: true,
+    });
+  });
+
+  it('does not flag an ordinary site, or the wording hidden in a script', () => {
+    const html = `<html><head><script>const tag = "temp mail";</script></head><body><p>Contact us by email.${filler}</p></body></html>`;
+    expect(siteFlags(html)).toEqual({ hasContent: true, offersDisposableMail: false });
   });
 });
 
@@ -103,7 +140,7 @@ describe('buildSignupDomainHoldFeatureSummary', () => {
     const summary = buildSignupDomainHoldFeatureSummary({
       signupCount: 5,
       intel: { registeredAt: new Date('2026-10-30T00:00:00Z'), ...intel(['aspmx.l.google.com'], ['google-workspace']) },
-      site: { resolves: false, hasContent: false },
+      site: { resolves: false, hasContent: false, offersDisposableMail: false },
       accounts: [
         {
           createdAt: new Date('2026-11-01T00:00:00Z'),
@@ -124,7 +161,7 @@ describe('buildSignupDomainHoldFeatureSummary', () => {
     expect(summary).toEqual({
       domainAgeDays: 2,
       mxProvider: 'google_workspace',
-      site: { resolves: false, hasContent: false },
+      site: { resolves: false, hasContent: false, offersDisposableMail: false },
       signups: { count: 5, accountsSummarized: 4, spanMinutes: 12, medianGapMinutes: 6 },
       network: {
         accountsWithNetworkData: 3,
@@ -141,7 +178,7 @@ describe('buildSignupDomainHoldFeatureSummary', () => {
     const summary = buildSignupDomainHoldFeatureSummary({
       signupCount: 1,
       intel: null,
-      site: { resolves: true, hasContent: true },
+      site: { resolves: true, hasContent: true, offersDisposableMail: false },
       accounts: [],
       now: new Date(),
     });
