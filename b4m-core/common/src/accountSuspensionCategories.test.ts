@@ -26,6 +26,13 @@ describe('buildSuspensionNotice', () => {
     );
   });
 
+  it('names the policy once when the reason already names it', () => {
+    const notice = buildSuspensionNotice(DEFAULT_SUSPENSION_REASON_CATEGORY, { url: 'https://example.com/support' });
+    expect(notice.message).toBe(
+      'This account is suspended for violating our Terms of Service. If you believe this is a mistake, you can appeal at https://example.com/support.'
+    );
+  });
+
   it('prefers the support email over the appeal URL', () => {
     expect(
       buildSuspensionNotice('automated_misuse', { email: 'support@example.com', url: 'https://example.com/support' })
@@ -42,6 +49,7 @@ describe('buildSuspensionNotice', () => {
 
       expect(message).toMatch(/^[\x20-\x7e]+$/);
       expect(message.toLowerCase()).not.toMatch(/signal|detect|fingerprint|device|ip address/);
+      expect(message.split(SUSPENSION_REASONS[category].policy.name)).toHaveLength(2);
       expect(SUSPENSION_REASONS[category].adminLabel).toBeTruthy();
     }
   });
