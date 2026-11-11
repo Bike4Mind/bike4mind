@@ -45,7 +45,19 @@ const handler = adminApi({
 
   Logger.info(`[DLQ Messages] Peeking at ${queueLabel}`, { adminUserId, maxMessages });
 
-  const messages = await receiveFromQueue(dlqUrl, maxMessages, 0);
+  const received = await receiveFromQueue(dlqUrl, maxMessages, 0);
+
+  // With VisibilityTimeout 0 a single receive can return the same message several times.
+  // Keep one row per message: the copy with the highest receive count is the latest.
+  const receiveCount = (msg: (typeof received)[number]) =>
+    parseInt(msg.Attributes?.ApproximateReceiveCount ?? '0', 10) || 0;
+  const byId = new Map<string, (typeof received)[number]>();
+  for (const msg of received) {
+    if (!msg.MessageId) continue;
+    const existing = byId.get(msg.MessageId);
+    if (!existing || receiveCount(msg) > receiveCount(existing)) byId.set(msg.MessageId, msg);
+  }
+  const messages = [...byId.values()];
 
   // receiptHandle is omitted: with VisibilityTimeout 0 the handle expires immediately,
   // so the frontend uses the messageIds replay path which receives with its own timeout.

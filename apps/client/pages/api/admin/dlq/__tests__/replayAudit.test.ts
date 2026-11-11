@@ -7,6 +7,7 @@ const h = vi.hoisted(() => ({
   receiveFromQueue: vi.fn(),
   sendToQueue: vi.fn(),
   deleteFromQueue: vi.fn(),
+  changeMessageVisibility: vi.fn(),
   countAttempts: vi.fn(),
   logReplay: vi.fn(),
 }));
@@ -42,6 +43,7 @@ vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
   receiveFromQueue: h.receiveFromQueue,
   sendToQueue: h.sendToQueue,
   deleteFromQueue: h.deleteFromQueue,
+  changeMessageVisibility: h.changeMessageVisibility,
 }));
 vi.mock('@bike4mind/database', () => ({
   dlqReplayLogRepository: { countAttempts: h.countAttempts, logReplay: h.logReplay },
@@ -102,5 +104,58 @@ describe('POST /api/admin/dlq/replay admin audit', () => {
     });
     expect(JSON.stringify(h.audit.mock.calls[0][1])).not.toContain('payload');
     expect(h.sendToQueue.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
+  });
+});
+
+describe('POST /api/admin/dlq/replay by message ID', () => {
+  const msg = (id: string) => ({ MessageId: id, ReceiptHandle: `rh-${id}`, Body: '{"a":1}' });
+  const post = async (messageIds: string[]) => {
+    const { req, res } = createMocks({ method: 'POST', body: { queueLabel: 'quest', messageIds } });
+    (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+    await (handler as unknown as Route)(req, res);
+    return res._getJSONData();
+  };
+
+  beforeEach(() => {
+    h.changeMessageVisibility.mockResolvedValue(undefined);
+  });
+
+  it('keeps receiving until the target turns up, then releases the other messages', async () => {
+    h.receiveFromQueue
+      .mockResolvedValueOnce([msg('other-1')])
+      .mockResolvedValueOnce([msg('other-2')])
+      .mockResolvedValueOnce([msg('target')]);
+
+    const body = await post(['target']);
+
+    expect(body).toMatchObject({ replayed: 1, notFound: 0 });
+    expect(h.receiveFromQueue).toHaveBeenCalledTimes(3);
+    expect(h.receiveFromQueue).toHaveBeenCalledWith('dlq-url', 10, 60, 1);
+    expect(h.deleteFromQueue).toHaveBeenCalledWith('dlq-url', 'rh-target');
+    expect(h.sendToQueue).toHaveBeenCalledTimes(1);
+    expect(h.changeMessageVisibility.mock.calls).toEqual([
+      ['dlq-url', 'rh-other-1', 0],
+      ['dlq-url', 'rh-other-2', 0],
+    ]);
+  });
+
+  it('reports not found once the queue has nothing left, and still releases what it received', async () => {
+    h.receiveFromQueue.mockResolvedValueOnce([msg('other-1')]).mockResolvedValue([]);
+
+    const body = await post(['target']);
+
+    expect(body).toMatchObject({ replayed: 0, notFound: 1 });
+    expect(h.receiveFromQueue).toHaveBeenCalledTimes(2);
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+    expect(h.changeMessageVisibility).toHaveBeenCalledWith('dlq-url', 'rh-other-1', 0);
+  });
+
+  it('still replays the target when releasing another message fails', async () => {
+    h.receiveFromQueue.mockResolvedValueOnce([msg('other-1'), msg('target')]);
+    h.changeMessageVisibility.mockRejectedValue(new Error('boom'));
+
+    const body = await post(['target']);
+
+    expect(body).toMatchObject({ replayed: 1, notFound: 0 });
   });
 });

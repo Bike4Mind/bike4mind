@@ -77,6 +77,23 @@ describe('GET /api/admin/dlq/messages', () => {
     }
   });
 
+  it('lists a message once when one receive returns it several times', async () => {
+    h.receiveFromQueue.mockResolvedValue([
+      makeMsg('m1', '11'),
+      makeMsg('m1', '12'),
+      makeMsg('m2', '4'),
+      makeMsg('m1', '10'),
+    ]);
+    const { req, res } = createMocks({ method: 'GET', query: { queue: 'quest' } });
+    (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+
+    await (handler as unknown as Route)(req, res);
+
+    const body = res._getJSONData();
+    expect(body.messages.map((m: { messageId: string }) => m.messageId)).toEqual(['m1', 'm2']);
+    expect(body.messages[0].approximateReceiveCount).toBe('12');
+  });
+
   it('returns messages with their approximate receive count unchanged', async () => {
     h.receiveFromQueue.mockResolvedValue([makeMsg('m1', '14')]);
     const { req, res } = createMocks({ method: 'GET', query: { queue: 'quest' } });
