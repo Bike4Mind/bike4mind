@@ -114,6 +114,7 @@ const AccountCard: React.FC<{ user: AdminUserProfile; onAction: (action: Profile
           Limits how much they can index per window
           <RowAction
             onClick={() => onAction('fileEmbeddingWindowReset')}
+            disabledReason={adminActionBlockedReason(currentUser, user, 'settings:manage')}
             data-testid="user-actions-reset-file-embedding-window"
           >
             Reset

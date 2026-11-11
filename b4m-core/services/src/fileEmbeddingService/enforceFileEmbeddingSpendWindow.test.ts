@@ -34,6 +34,11 @@ function makeFixedWindowCache(clock: { now: number }) {
       windows.delete(key);
       dedup.delete(key);
     }),
+    deleteByKeyAndReturn: vi.fn(async (key: string) => {
+      const entry = dedup.get(key);
+      dedup.delete(key);
+      return entry ? { key, result: entry.data, expiresAt: new Date(entry.expiresAt) } : null;
+    }),
     findByKey: vi.fn(async (key: string) => {
       const window = windows.get(key);
       return window ? { key, result: { count: window.count }, expiresAt: new Date(window.expiresAt) } : null;
@@ -266,6 +271,45 @@ describe('enforceFileEmbeddingSpendWindow', () => {
     // Released work reserves afresh on its next delivery.
     await reserve('u1', 600, 1, 'file-1:abc');
     expect(cache.windows.get(fileEmbeddingWindowCacheKeys('u1').tokens)?.count).toBe(600);
+  });
+
+  it('puts the hold back when a window release fails so a redelivery still reuses it', async () => {
+    vi.useFakeTimers({ toFake: ['Date'], now: T0 });
+    try {
+      const { cache, reserve } = setup({ fileEmbeddingUserTokensPerWindow: '1000' });
+      const grant = await reserve('u1', 600, 1, 'file-1:abc');
+      cache.releaseFromFixedWindow.mockRejectedValueOnce(new Error('cache down'));
+
+      await expect(grant.release()).rejects.toThrow('cache down');
+
+      const before = cache.windows.get(fileEmbeddingWindowCacheKeys('u1').tokens)?.count;
+      await reserve('u1', 600, 1, 'file-1:abc');
+      expect(cache.windows.get(fileEmbeddingWindowCacheKeys('u1').tokens)?.count).toBe(before);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('gives a shared hold back once when the original and a redelivery both release', async () => {
+    const { cache, reserve } = setup({ fileEmbeddingUserTokensPerWindow: '1000' });
+    await reserve('u1', 500, 1, 'other-file:xyz');
+    const original = await reserve('u1', 400, 1, 'file-1:abc');
+    const redelivery = await reserve('u1', 400, 1, 'file-1:abc');
+
+    await original.release();
+    await redelivery.release();
+
+    expect(cache.windows.get(fileEmbeddingWindowCacheKeys('u1').tokens)?.count).toBe(500);
+  });
+
+  it('gives a shared hold back once when the winner and loser of a concurrent claim both release', async () => {
+    const { cache, reserve } = setup({ fileEmbeddingUserTokensPerWindow: '1000' });
+    await reserve('u1', 200, 1, 'other-file:xyz');
+    const grants = await Promise.all([reserve('u1', 300, 1, 'file-1:abc'), reserve('u1', 300, 1, 'file-1:abc')]);
+
+    await Promise.all(grants.map(g => g.release()));
+
+    expect(cache.windows.get(fileEmbeddingWindowCacheKeys('u1').tokens)?.count).toBe(200);
   });
 
   it('keeps only one reservation when two deliveries of the same work race', async () => {

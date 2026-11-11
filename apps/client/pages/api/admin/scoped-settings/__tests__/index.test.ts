@@ -6,6 +6,7 @@ import { ApiKeyScope } from '@bike4mind/common';
 // are the actual ones. Mock only the infra + service + middleware seams.
 const find = vi.fn();
 const writeScopedOverride = vi.fn();
+const assertScopedOverrideWritable = vi.fn();
 const clearScopedOverride = vi.fn();
 const claimScopedSettingChange = vi.fn();
 const claimRelease = vi.fn();
@@ -43,6 +44,7 @@ vi.mock('@bike4mind/services', () => ({
   adminAuditService: { REDACTED_PLACEHOLDER: '[REDACTED]' },
   scopedSettingsService: {
     claimScopedSettingChange: (...args: unknown[]) => claimScopedSettingChange(...args),
+    assertScopedOverrideWritable: (...args: unknown[]) => assertScopedOverrideWritable(...args),
     writeScopedOverride: async (...args: unknown[]) => {
       const result = await writeScopedOverride(...args);
       await (args[4] as { afterWrite?: () => Promise<void> } | undefined)?.afterWrite?.();
@@ -115,6 +117,7 @@ const expectStatus = (method: 'get' | 'put' | 'delete', req: Parameters<typeof i
 beforeEach(() => {
   order.length = 0;
   claimScopedSettingChange.mockReset().mockResolvedValue(null);
+  assertScopedOverrideWritable.mockReset();
   claimRelease.mockReset().mockResolvedValue(undefined);
   findOverrides.mockResolvedValue([]);
   recordAdminActionFromRequest.mockResolvedValue(null);
@@ -247,6 +250,20 @@ describe('admin/scoped-settings service rejection translation', () => {
     writeScopedOverride.mockRejectedValue(new Error(message));
     await expectStatus('put', { body }, 400);
     await expect(invoke('put', { body })).rejects.toThrow(message);
+  });
+
+  it('answers the validation 400 without taking the cooldown claim for an invalid value', async () => {
+    const message = "[scopedSettings] value for 'DefaultChunkSize' failed validation: 0";
+    assertScopedOverrideWritable.mockImplementation(() => {
+      throw new Error(message);
+    });
+    const body = { settingName: 'DefaultChunkSize', scopeLevel: 'organization', scopeId: 'org-1', value: 0 };
+
+    await expectStatus('put', { body }, 400);
+    await expect(invoke('put', { body })).rejects.toThrow(message);
+
+    expect(claimScopedSettingChange).not.toHaveBeenCalled();
+    expect(writeScopedOverride).not.toHaveBeenCalled();
   });
 
   it('leaves a failure that is not a write-service rejection as a server error', async () => {

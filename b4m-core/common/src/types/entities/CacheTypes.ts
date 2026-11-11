@@ -10,6 +10,8 @@ export interface ICacheDocument extends IMongoDocument {
 export interface ICacheRepository extends IBaseRepository<ICacheDocument> {
   findByKey(key: string): Promise<ICacheDocument | null>;
   deleteByKey(key: string): Promise<void>;
+  /** Atomically delete a key and return the document it held, or null when none existed. */
+  deleteByKeyAndReturn(key: string): Promise<ICacheDocument | null>;
   createOrUpdate(data: Omit<ICacheDocument, 'id' | 'updatedAt' | 'createdAt'>): Promise<ICacheDocument>;
   /**
    * Atomically increment a counter stored in cache

@@ -50,7 +50,12 @@ export interface FileEmbeddingWindowDb {
   adminSettings: Pick<IAdminSettingsRepository, 'findBySettingNames' | 'findAll'>;
   cache: Pick<
     ICacheRepository,
-    'tryAddWithinLimitFixedWindow' | 'releaseFromFixedWindow' | 'claimDedup' | 'readDedup' | 'deleteByKey'
+    | 'tryAddWithinLimitFixedWindow'
+    | 'releaseFromFixedWindow'
+    | 'claimDedup'
+    | 'readDedup'
+    | 'deleteByKey'
+    | 'deleteByKeyAndReturn'
   >;
 }
 
@@ -194,24 +199,40 @@ export async function enforceFileEmbeddingSpendWindow(params: {
 
   const keys = fileEmbeddingWindowCacheKeys(userId);
   const holdKey = fileEmbeddingHoldCacheKey(userId, reservationId);
-  const grantFor = (hold: Hold): FileEmbeddingWindowGrant => ({
+  const grantFor = (): FileEmbeddingWindowGrant => ({
     release: async () => {
-      // Both releases are attempted even when one fails; the hold is dropped only when both landed,
-      // so a redelivery after a failed release still reuses it rather than reserving again.
+      // Redeliveries and the loser of a concurrent claim hold a grant over the same hold; taking it
+      // atomically first means only one of them gives the windows back.
+      const taken = await db.cache.deleteByKeyAndReturn(holdKey);
+      if (!taken) return;
+      const parsed = HoldSchema.safeParse(taken.result);
+      if (!parsed.success) return;
+      const hold = parsed.data;
+      // Both releases are attempted even when one fails; on a failure the hold is put back, so a
+      // redelivery after a failed release still reuses it rather than reserving again.
       const results = await Promise.allSettled([
         db.cache.releaseFromFixedWindow(keys.tokens, hold.tokens, hold.tokensWindowExpiresAt),
         db.cache.releaseFromFixedWindow(keys.microUsd, hold.microUsd, hold.microUsdWindowExpiresAt),
       ]);
       const failed = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
-      if (failed) throw failed.reason;
-      await db.cache.deleteByKey(holdKey);
+      if (failed) {
+        const remainingMs = taken.expiresAt.getTime() - Date.now();
+        if (remainingMs > 0) {
+          await db.cache
+            .claimDedup(holdKey, hold, remainingMs)
+            .catch(restoreErr =>
+              logger?.warn?.('file-embedding-window-hold-restore-failed', { userId, error: String(restoreErr) })
+            );
+        }
+        throw failed.reason;
+      }
     },
   });
 
   const prior = HoldSchema.safeParse(await db.cache.readDedup(holdKey));
   if (prior.success) {
     logger?.log?.('file-embedding-window-reused', { userId, reservationId });
-    return grantFor(prior.data);
+    return grantFor();
   }
 
   if (estimatedTokens > limits.tokensPerWindow || estimatedMicroUsd > limits.budgetPerWindowMicroUsd) {
@@ -256,13 +277,13 @@ export async function enforceFileEmbeddingSpendWindow(params: {
     microUsdWindowExpiresAt: spend.expiresAt,
   };
   const claim = await db.cache.claimDedup(holdKey, hold, ttlMs);
-  if (claim.claimed) return grantFor(hold);
+  if (claim.claimed) return grantFor();
 
   // A concurrent delivery of the same work recorded its reservation first: keep that one only.
   await releaseTokens();
   await db.cache.releaseFromFixedWindow(keys.microUsd, estimatedMicroUsd, spend.expiresAt);
   const winner = HoldSchema.safeParse(claim.existingData);
-  return winner.success ? grantFor(winner.data) : { release: async () => db.cache.deleteByKey(holdKey) };
+  return winner.success ? grantFor() : { release: async () => db.cache.deleteByKey(holdKey) };
 }
 
 /**

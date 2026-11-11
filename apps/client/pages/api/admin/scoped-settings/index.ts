@@ -77,6 +77,11 @@ const scopedOverrideWriteDb = {
   },
 };
 
+const asBadRequestIfRejection = (error: unknown): unknown =>
+  error instanceof Error && error.message.startsWith(SERVICE_REJECTION_PREFIX)
+    ? new BadRequestError(error.message)
+    : error;
+
 /**
  * The write service signals a rejection by throwing a plain `Error`, and `errorHandler` maps a plain
  * `Error` to 500 AND logs it at `error` level - which is what the LiveOps CloudWatch filter keys on.
@@ -105,10 +110,7 @@ const runWrite = async (
     await write(claim);
   } catch (error) {
     await claim?.release().catch(() => undefined);
-    if (error instanceof Error && error.message.startsWith(SERVICE_REJECTION_PREFIX)) {
-      throw new BadRequestError(error.message);
-    }
-    throw error;
+    throw asBadRequestIfRejection(error);
   }
 };
 
@@ -145,6 +147,14 @@ const handler = adminApi({
     // The overlay stores the raw string and the resolver re-parses it through the setting's own
     // schema (pickOverride), so String() is the exact round trip for all three scalar types.
     const settingValue = typeof value === 'string' ? value : String(value);
+
+    // Before the cooldown claim in runWrite, so a rejected value never opens a cooldown window and
+    // a value sent during one still gets its validation error.
+    try {
+      scopedSettingsService.assertScopedOverrideWritable(settingName, { scopeLevel, scopeId, ownerType }, settingValue);
+    } catch (error) {
+      throw asBadRequestIfRejection(error);
+    }
 
     // Validate against the setting's own schema BEFORE the floor check, so an out-of-range value
     // (150, 70.5) reports its range error rather than first being refused as above the floor - the

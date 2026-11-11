@@ -116,7 +116,6 @@ export function rateDenialRedeliveryDelaySeconds(retryAfterMs: number | undefine
   return Math.max(FAB_FILE_VECTORIZE_RATE_DENIAL_MIN_REDELIVERY_SEC, windowResetSeconds);
 }
 
-/** Best-effort: a failed release must not mask the error that triggered it. */
 /**
  * Names one embedding job for the per-user window: the file, the model and the exact uncached
  * texts. A redelivery of the same job reuses its reservation; a re-index of changed content or at
@@ -127,6 +126,7 @@ function fileEmbeddingReservationId(fabFileId: string, embeddingModel: string, m
   return `${fabFileId}:${embeddingModel}:${digest}`;
 }
 
+/** Best-effort: a failed release must not mask the error that triggered it. */
 async function releaseFileEmbeddingWindow(
   grant: fileEmbeddingService.FileEmbeddingWindowGrant | null,
   cause: string,

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IScopedSetting, SettingScopeLevel } from '@bike4mind/common';
 import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
 import { resolveScopedSetting } from './resolveScopedSetting';
-import { clearScopedOverride, writeScopedOverride } from './writeScopedOverride';
+import { assertScopedOverrideWritable, clearScopedOverride, writeScopedOverride } from './writeScopedOverride';
 
 const KEY = 'dataLakeSearchMaxFiles'; // registered settableAt [organization, owner], number, min 1
 // No `scope` metadata at all, so the "not settable" refusal fires before the (also true) isSensitive
@@ -109,6 +109,25 @@ describe('writeScopedOverride validation (fails loud, never reaches the db on re
       /only meaningful at the owner scope/
     );
     expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+describe('assertScopedOverrideWritable', () => {
+  it('accepts a valid value at a settable rung without touching a db', () => {
+    expect(() => assertScopedOverrideWritable(KEY, orgRef, '1000')).not.toThrow();
+    expect(() => assertScopedOverrideWritable(KEY, { ...ownerRef, ownerType: 'User' as const }, '1000')).not.toThrow();
+  });
+
+  it.each([
+    ['a key with no settable rungs', NOT_SETTABLE_KEY, orgRef, '1', /not settable at scope level/],
+    ['a rung the key is not settable at', KEY, lakeRef, '1000', /not settable at scope level/],
+    ['an unparseable value', KEY, orgRef, 'not-a-number', /failed validation/],
+    ['a value below the schema minimum', KEY, orgRef, '0', /failed validation/],
+    ['an owner rung with no ownerType', KEY, ownerRef, '1000', /ownerType is required/],
+    ['ownerType on a non-owner rung', KEY, { ...orgRef, ownerType: 'User' as const }, '1000', /only meaningful/],
+  ])('refuses %s with the service prefix', (_label, key, ref, value, message) => {
+    expect(() => assertScopedOverrideWritable(key as typeof KEY, ref, value)).toThrow(message);
+    expect(() => assertScopedOverrideWritable(key as typeof KEY, ref, value)).toThrow(/^\[scopedSettings\]/);
   });
 });
 
