@@ -228,7 +228,7 @@ export class PermissionService {
     }
     if (project && stored.projects[project]) add(stored.projects[project], desktopProject(project), true, project);
     const root = project ? await this.projectRoot(project) : null;
-    if (root && root !== project && stored.projects[root]) add(stored.projects[root], desktopProject(root), true, root);
+    if (root && root !== project && stored.projects[root]) add(stored.projects[root], desktopProject(root), true, project);
     add(stored.user, DESKTOP_USER, true, home);
     return new PermissionRuleSet(rules, protectedRoots, unresolvedProtected);
   }
