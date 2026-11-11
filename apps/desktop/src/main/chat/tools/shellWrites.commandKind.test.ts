@@ -95,4 +95,29 @@ describe('gitCommandKind answers kept across scans', () => {
       expect(await withGrantedRoots([], () => gitRefusesImplicitBare(repo))).toBe(expected);
     }
   });
+
+  it('reads the version of the git the shell runs, which is on its PATH rather than this process PATH', async () => {
+    const old = join(base, 'old');
+    const fresh = join(base, 'fresh');
+    for (const [folder, version] of [
+      [old, '2.30.2'],
+      [fresh, '2.38.0'],
+    ] as const) {
+      await mkdir(folder);
+      await writeFile(join(folder, 'git'), `#!/bin/sh\necho "git version ${version}"\n`);
+      await chmod(join(folder, 'git'), 0o755);
+    }
+    try {
+      vi.stubEnv('PATH', fresh);
+      vi.mocked(resolveUserPath).mockResolvedValue(old);
+      expect(await withGrantedRoots([], () => gitRefusesImplicitBare(repo))).toBe(false);
+      vi.stubEnv('PATH', old);
+      vi.mocked(resolveUserPath).mockResolvedValue(fresh);
+      expect(await withGrantedRoots([], () => gitRefusesImplicitBare(repo))).toBe(true);
+      // A git inside a granted root is never started: the answer is that it does not refuse.
+      expect(await withGrantedRoots([fresh], () => gitRefusesImplicitBare(repo))).toBe(false);
+    } finally {
+      vi.mocked(resolveUserPath).mockImplementation(async () => process.env.PATH ?? '');
+    }
+  });
 });

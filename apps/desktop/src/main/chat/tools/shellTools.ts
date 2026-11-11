@@ -542,6 +542,7 @@ export async function shellApproval(
     !!script ||
     scriptCheckFailed ||
     !!gitProgram ||
+    scan.gitPathUnplaced === true ||
     scan.remoteTree === true ||
     unreachable.length > 0 ||
     touchesProtected ||
@@ -567,6 +568,9 @@ export async function shellApproval(
       ? ['Runs git in a repository whose .git or .husky folder was changed in this session.']
       : []),
     ...(gitProgram ? [`Sets ${gitProgram}, which makes git run a program.`] : []),
+    ...(scan.gitPathUnplaced
+      ? ['Puts a folder on PATH that Desktop cannot place, where git may find a program to run for a git command.']
+      : []),
     ...(scan.remoteTree ? ['Clones a repository from another computer, whose files cannot be checked first.'] : []),
     ...(touchesProtected || secret
       ? ['Reaches a location Desktop protects, such as its own data or permission and hook settings.']

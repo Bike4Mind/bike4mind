@@ -1,5 +1,5 @@
 import { constants as fsConstants } from 'node:fs';
-import { lstat, open, readdir, readlink, realpath, stat } from 'node:fs/promises';
+import { lstat, open, readdir, readFile, readlink, realpath, stat } from 'node:fs/promises';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { basename, dirname, isAbsolute, join, parse, posix, sep, win32 } from 'node:path';
 import type { Node } from 'web-tree-sitter';
@@ -38,6 +38,7 @@ import {
   GIT_VALUED_OPTIONS,
   gitAliases,
   gitCommandKind,
+  gitDirectories,
   gitRefusesImplicitBare,
   gitSubcommand,
   gitToplevel,
@@ -45,6 +46,7 @@ import {
   inPlaceWrites,
   pathHolds,
   PLAIN_GIT_OPTIONS,
+  projectPathFolders,
   SPELLED_PROGRAM,
   splitGitAlias,
   withGrantedRoots,
@@ -129,6 +131,8 @@ export interface ShellScan {
   setsEnvironment?: true;
   /** A `git config` key the script sets that makes git run a program, such as `core.fsmonitor`. */
   gitProgram?: string;
+  /** Set when git looks for a git-<name> program on a PATH entry the script sets that the scan cannot place. */
+  gitPathUnplaced?: true;
   /** Set when a command checks out a tree from another computer, whose files no scan can list beforehand. */
   remoteTree?: true;
 }
@@ -2538,8 +2542,8 @@ function wslRuns(tokens: readonly string[]): WslRun[] {
 const ALIAS_VARIABLE =
   /^(GIT_(DIR|WORK_TREE|COMMON_DIR|EXEC_PATH|CEILING_DIRECTORIES|DISCOVERY_ACROSS_FILESYSTEM|CONFIG\w*)|HOME|XDG_CONFIG_HOME)$/;
 
-/** A script text that unsets or unexports the variables carrying the shell's own git config. */
-const UNSETS_GIT_CONFIG = /\b(unset|export\s+-n)\b[^;&|\n]*GIT_CONFIG/;
+/** A script text that unsets or unexports the variables carrying the shell's own git config, or names them by expansion. */
+const UNSETS_GIT_CONFIG = /\b(unset|export\s+-n)\b[^;&|\n]*(GIT_CONFIG|[$`])/;
 
 /** Programs that run their command with a fresh environment (and so without the shell's git config). */
 const RESETS_ENVIRONMENT = new Set(['sudo', 'doas', 'su', 'pkexec', 'runuser']);
@@ -2549,6 +2553,7 @@ function dropsGitConfig(tokens: readonly string[]): boolean {
   for (let at = 0; at < tokens.length && isWrapper(tokens[at]); at = pastWrapper(tokens, at)) {
     const name = programName(unquote(tokens[at]));
     if (RESETS_ENVIRONMENT.has(name)) return true;
+    if (name === 'exec' && givenOptions(tokens, at).some(given => given.short && given.option === 'c')) return true;
     if (name !== 'env') continue;
     if (wrapperWords('env', tokens, at + 1).options.some(index => unquote(tokens[index]) === '-')) return true;
     for (const given of givenOptions(tokens, at)) {
@@ -4938,7 +4943,8 @@ function writesGitConfig(sub: string, rest: readonly string[]): boolean {
       return named.length === 0 || named.some(word => ALIAS_LOOKUP_KEY.test(word) || /[$`]/.test(word));
     }
     case 'submodule':
-      return action !== undefined && !/^(status|summary)$/.test(action);
+      // init, update and sync write only submodule.* keys.
+      return action !== undefined && !/^(status|summary|init|update|sync)$/.test(action);
     case 'worktree':
       return !/^(list|lock|unlock|prune|remove)$/.test(action ?? '');
     case 'init':
@@ -4994,8 +5000,9 @@ const GIT_TREE_WRITERS: ReadonlySet<string> = new Set([
   'switch',
 ]);
 
-/** Whether `ln` (without `-s`) or `cp` (with `-l`) given `args` makes hard links. */
+/** Whether `ln` (without `-s`), `link` or `cp` (with `-l`) given `args` makes hard links. */
 function linksFiles(program: string, args: readonly string[]): boolean {
+  if (program === 'link') return true;
   const options = args.filter(arg => arg.startsWith('-') && arg !== '-');
   if (program === 'ln') return !options.some(arg => arg === '--symbolic' || (!arg.startsWith('--') && /s/.test(arg)));
   return program === 'cp' && options.some(arg => arg === '--link' || (!arg.startsWith('--') && /l/.test(arg)));
@@ -5096,6 +5103,35 @@ const TOOL_LAUNCHERS = new Map<string, readonly string[]>([
   ['bun', ['x']],
 ]);
 
+const SOURCED_FILE_BYTES = 256 * 1024;
+
+/** What a sourced file would use to move bash, change which repository or config git reads, or run what it is not read for. */
+const SOURCE_MOVES =
+  /(^|[\s;&|({])(cd|pushd|popd|chdir|eval|source|\.|exec|trap|alias|builtin|enable|shopt|command|coproc)(?=\s|$|;)|GIT_|\b(HOME|PWD|OLDPWD|CDPATH|XDG_\w+|BASH_ENV|PROMPT_COMMAND)\b/m;
+
+/** Merge strategies git builds in; any other name runs a git-merge-<name> program from PATH. */
+const MERGE_STRATEGIES: ReadonlySet<string> = new Set(['ort', 'recursive', 'resolve', 'octopus', 'ours', 'subtree']);
+
+/** The commands pnpm and yarn run themselves; any other first word is a tool they launch. */
+const BUILTIN_COMMANDS = new Map<string, ReadonlySet<string>>([
+  [
+    'pnpm',
+    new Set(
+      'add approve-builds audit bin cache completion config create dedupe deploy dlx doctor env exec fetch i import init install install-test it link list ln ls outdated pack patch patch-commit patch-remove prune publish rebuild recursive remove restart rm root run self-update server setup start stop store t test uninstall unlink up update upgrade view why'.split(
+        ' '
+      )
+    ),
+  ],
+  [
+    'yarn',
+    new Set(
+      'add audit autoclean bin cache check config constraints create dedupe dlx exec explain generate-lock-entry global help import info init install licenses link list login logout npm outdated owner pack patch plugin policies prune publish rebuild remove run search set stage start tag team test unlink unplug up upgrade upgrade-interactive version versions view why workspace workspaces'.split(
+        ' '
+      )
+    ),
+  ],
+]);
+
 /**
  * Whether `args`, unquoted, hand `program` code to run inline rather than a script file: an option giving it, or no
  * script operand (or `-`) while `node`'s standard input is fed (a here-string, here-doc or pipe).
@@ -5103,12 +5139,20 @@ const TOOL_LAUNCHERS = new Map<string, readonly string[]>([
 function runsInlineCode(program: string, args: readonly string[], node: Node): boolean {
   const name = program.replace(/[\d.]+$/, '');
   const launcher = TOOL_LAUNCHERS.get(name);
-  if (launcher !== undefined && (launcher.length === 0 || launcher.includes(args[0] ?? ''))) {
+  const first = args[0] ?? '';
+  const builtins = BUILTIN_COMMANDS.get(name);
+  // `pnpm tsx -e` and `yarn node -e` run the tool named, unless the word is one of the manager's own commands.
+  const bare = builtins !== undefined && first !== '' && !first.startsWith('-') && !builtins.has(first);
+  if (launcher !== undefined && (launcher.length === 0 || launcher.includes(first) || bare)) {
+    const from = launcher.length === 0 || (bare && !launcher.includes(first)) ? 0 : 1;
     const at = args.findIndex(
-      (arg, index) =>
-        index >= (launcher.length === 0 ? 0 : 1) && isInlineProgram(programName(arg).replace(/[\d.]+$/, ''))
+      (arg, index) => index >= from && isInlineProgram(programName(arg).replace(/[\d.]+$/, ''))
     );
     return at !== -1 && runsInlineCode(programName(args[at] as string), args.slice(at + 1), node);
+  }
+  if (name === 'deno' && first === 'run') {
+    const operand = args.slice(1).find(arg => arg === '-' || !arg.startsWith('-'));
+    return operand === '-';
   }
   if (STDIN_SHELLS.has(name)) {
     const { operands } = interpreterOptions(name, args);
@@ -5697,6 +5741,11 @@ export async function scanShell(
     // Directory changes seen so far, so a function body that changes directory loses the folder wherever it runs.
     let directoryChanges = 0;
     let gitProgram: string | null = null;
+    // Set when git may run a git-<name> program from a PATH entry the scan cannot place; auto mode asks.
+    let pathUnplaced = false;
+    // A sourced file may have changed PATH, which the scan does not read out of it.
+    let sourcedEnvironment = false;
+    const mkdirIds = new Set<number>();
     const rebound = anyName || REBINDS_HOME.test(gateText);
     const user = loginName();
     const loopBindings = new Map<string, readonly string[]>();
@@ -5737,24 +5786,38 @@ export async function scanShell(
       UNSETS_GIT_CONFIG.test(gateText) ||
       ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR'].some(name => process.env[name] !== undefined) ||
       Object.keys(process.env).some(name => /^GIT_CONFIG/i.test(name));
-    // The folders the script puts on PATH, as host paths; null when one cannot be placed.
-    const scriptPathEntries = (): string[] | null => {
+    // Every folder the scan has been in, which `$PWD` in a PATH entry may name; filled in as commands are read.
+    const visited = new Set<string>([startDirectory]);
+    /**
+     * The folders the script puts on PATH, as host paths, and whether an entry could not be placed (a substitution,
+     * a folder the scan lost track of). `$HOME`, `~` and `$PWD` are read where the scan has been.
+     */
+    const scriptPathEntries = (): { entries: string[]; unplaced: boolean } => {
       const entries: string[] = [];
+      let unplaced = false;
+      const hosted = sep === '/' && wslLocation(state.cwd) === null;
       for (const { name, value } of variables.set) {
         if (!variableNames(/^PATH$/).test(name.replace(/\[[^]*$/, ''))) continue;
         if (value === undefined) continue;
-        if (value === null || name.includes('[')) return null;
+        if (value === null || name.includes('[') || !hosted) {
+          unplaced = true;
+          continue;
+        }
         for (const raw of value.split(':')) {
           if (raw === '$PATH' || raw === '${PATH}') continue;
-          const pwd = /^\$(\{PWD\}|PWD)(?=\/|$)/.exec(raw);
-          const entry = pwd ? (directoryChanges > 0 || state.lost ? null : state.cwd + raw.slice(pwd[0].length)) : raw;
-          if (entry === null || sep !== '/' || wslLocation(state.cwd) !== null || !/^[\w@%+=,./-]*$/.test(entry)) {
-            return null;
+          const pwd = /^(\$(\{PWD\}|PWD)|\$\(\s*pwd\s*\)|`\s*pwd\s*`)(?=\/|$)/.exec(raw);
+          const base = /^(\$(\{HOME\}|HOME)|~)(?=\/|$)/.exec(raw);
+          let candidates: string[] | null = [raw];
+          if (pwd) candidates = state.lost ? null : [...visited].map(folder => folder + raw.slice(pwd[0].length));
+          else if (base) candidates = rebound || !homeKnown ? null : [home + raw.slice(base[0].length)];
+          if (candidates === null || candidates.some(entry => !/^[\w@%+=,./-]*$/.test(entry))) {
+            unplaced = true;
+            continue;
           }
-          entries.push(posix.isAbsolute(entry) ? entry : under(state.cwd, entry));
+          for (const entry of candidates) entries.push(posix.isAbsolute(entry) ? entry : under(state.cwd, entry));
         }
       }
-      return entries;
+      return { entries, unplaced };
     };
     // A command run in the background with `&` or `coproc` may race any other, so an alias read is checked against all.
     const backgrounded =
@@ -5771,6 +5834,10 @@ export async function scanShell(
       alongside: ReadonlySet<number>;
       cwd: string;
       places: readonly string[] | null;
+      /** PATH folders in the project (guard form), where a written git-<name> program would run in place of an alias. */
+      folders: readonly string[];
+      /** Only programs matter: a git-merge-<name> lookup, which reads no config. */
+      programs: boolean;
       legacy: boolean;
     }[] = [];
     // Functions this script defines anywhere, which a loop body may call before the scan reaches the definition.
@@ -5918,26 +5985,55 @@ export async function scanShell(
       return [...named, ...(followed as string[])].map(place => guardForm(place));
     };
 
-    /**
-     * Whether `write` may change a config a git call reads aliases from: a git dir or one of `places` (see aliasPlaces;
-     * null when unknown). `target` is the path written, as named or as its links lead. Bare repositories need no
-     * check: the shell's git refuses one it finds by itself.
-     */
+    /** Whether `write` (to `target`, as named or as its links lead) may change a config git reads aliases from. */
     const configTouchedAt = (
       write: (typeof configWrites)[number],
       target: string,
-      { places }: { places: readonly string[] }
+      { places, folders, dirs, programs, existing }: AliasKnown
     ): boolean => {
       const form = guardForm(target);
       // A git writer rewrites work-tree files, which may include a file a place names.
       if (gitCommands.has(write.id)) {
         return places.some(place => guardFormWithin(form, place) || guardFormWithin(place, form));
       }
+      // A program written into a PATH folder, or a folder there replaced around, may run in place of an alias.
+      if (
+        folders.some(
+          folder =>
+            guardFormWithin(folder, form) ||
+            (write.tree === true && existing.has(folder) && guardFormWithin(form, folder))
+        )
+      ) {
+        return true;
+      }
+      if (programs) return false;
       if (/(^|\/)[^/]*\.git(\/|$)/.test(form)) return true;
       const name = posix.basename(form);
       if (name === '.gitconfig' || name === 'gitconfig') return true;
+      // The git dir and common dir may sit outside any `.git` folder (a `.bare` layout, a linked work tree).
+      if (dirs.some(dir => guardFormWithin(dir, form) || (write.tree === true && guardFormWithin(form, dir))))
+        return true;
       if (write.tree) return places.some(place => guardFormWithin(form, place));
       return places.some(place => guardFormWithin(place, form));
+    };
+
+    interface AliasKnown {
+      cwd: string;
+      places: readonly string[];
+      folders: readonly string[];
+      dirs: readonly string[];
+      programs: boolean;
+      /** The PATH folders (guard form) that exist, the only ones a tree write can replace. */
+      existing: ReadonlySet<string>;
+    }
+
+    const gitDirectoryLists = new Map<string, Promise<string[] | null>>();
+
+    /** The git dir and common dir git reads config from in `cwd`; none outside a repository, null when git could not say. */
+    const gitDirsOf = (cwd: string): Promise<string[] | null> => {
+      let dirs = gitDirectoryLists.get(cwd);
+      if (dirs === undefined) gitDirectoryLists.set(cwd, (dirs = gitDirectories(cwd)));
+      return dirs;
     };
 
     const physicalForms = new Map<string, Promise<string | null>>();
@@ -5945,14 +6041,31 @@ export async function scanShell(
     /** Whether `write` may change that config, by the path it names or the one its links lead to. */
     const aliasConfigTouched = async (
       write: (typeof configWrites)[number],
-      check: { cwd: string; places: readonly string[] | null; legacy: boolean }
+      check: {
+        cwd: string;
+        places: readonly string[] | null;
+        folders: readonly string[];
+        programs: boolean;
+        legacy: boolean;
+      }
     ): Promise<boolean> => {
-      const { cwd, places } = check;
+      const { cwd, places, folders, programs } = check;
       if (places === null || check.legacy || wslLocation(cwd) !== null) return true;
       if (write.path === undefined) {
         return !write.unlisted || places.some(place => granted.some(root => guardFormWithin(root, place)));
       }
-      const known = { cwd, places };
+      const dirs = programs ? [] : await gitDirsOf(cwd);
+      if (dirs === null) return true;
+      const existing = new Set<string>();
+      for (const folder of folders)
+        if (
+          await stat(folder).then(
+            () => true,
+            () => false
+          )
+        )
+          existing.add(folder);
+      const known: AliasKnown = { cwd, places, folders, dirs: dirs.map(dir => guardForm(dir)), programs, existing };
       if (configTouchedAt(write, write.path, known)) return true;
       const path = write.path;
       let physical = physicalForms.get(path);
@@ -5963,7 +6076,7 @@ export async function scanShell(
       const followed = (await physical) ?? path;
       if (followed !== path && configTouchedAt(write, followed, known)) return true;
       // git replaces a work-tree file rather than writing through a link.
-      return !gitCommands.has(write.id) && (await sharesConfigFile(path, check));
+      return !programs && !gitCommands.has(write.id) && (await sharesConfigFile(path, check, dirs));
     };
 
     const configFileIds = new Map<string, Promise<Set<string>>>();
@@ -5971,16 +6084,23 @@ export async function scanShell(
     /** Whether the file at `path` is a hard link to a config file git reads in `cwd` (the repository's, or a place's). */
     const sharesConfigFile = async (
       path: string,
-      { cwd, places }: { cwd: string; places: readonly string[] | null }
+      { cwd, places }: { cwd: string; places: readonly string[] | null },
+      dirs: readonly string[]
     ): Promise<boolean> => {
       const info = await stat(path).catch(() => null);
       if (!info?.isFile() || info.nlink < 2) return false;
       let ids = configFileIds.get(cwd);
       if (ids === undefined) {
         ids = (async () => {
-          const top = await findRepositoryRoot(cwd);
+          const [gitDir, commonDir = gitDir] = dirs;
           const files = [
-            ...(top === null ? [] : ['config', 'config.worktree'].map(name => join(top, '.git', name))),
+            ...(gitDir === undefined
+              ? []
+              : [
+                  join(commonDir as string, 'config'),
+                  join(gitDir, 'config.worktree'),
+                  join(commonDir as string, 'config.worktree'),
+                ]),
             ...(places ?? []).flatMap(place => [place, join(place, 'config')]),
           ];
           const found = new Set<string>();
@@ -6364,36 +6484,100 @@ export async function scanShell(
     };
 
     /**
+     * The folder to read git's config from for a call in `cwd`: itself, or for a folder only a `mkdir` of this script
+     * creates (nothing else writes in or around it), the nearest folder that exists, whose repository it will be in.
+     */
+    const lookupFolder = async (cwd: string): Promise<string> => {
+      const exists = async (path: string): Promise<boolean> =>
+        (await stat(path).catch(() => null))?.isDirectory() === true;
+      if (wslLocation(cwd) !== null || (await exists(cwd))) return cwd;
+      let existing = dirname(cwd);
+      while (!(await exists(existing))) {
+        if (dirname(existing) === existing) return cwd;
+        existing = dirname(existing);
+      }
+      const target = guardForm(cwd);
+      const within = (write: { path?: string }, outer: boolean): boolean => {
+        const form = guardForm(write.path ?? '');
+        return outer ? guardFormWithin(form, target) : guardFormWithin(target, form);
+      };
+      const made = configWrites.some(
+        write => mkdirIds.has(write.id) && write.path !== undefined && within(write, true)
+      );
+      const other = configWrites.some(
+        write => !mkdirIds.has(write.id) && (write.path === undefined || within(write, true) || within(write, false))
+      );
+      return made && !other ? existing : cwd;
+    };
+
+    /**
      * `written` with the git alias it names expanded as git in its folder would, or as written when it names none; null
      * for a shell alias, an autocorrect guess, or config the script may change or the scan's git may not read alike.
      */
     const gitAliasExpansion = async (node: Node, written: string[]): Promise<string[] | null> => {
+      const results: (string[] | null)[] = [];
+      for (const seen of namedFolders(written)) results.push(await expandGitAlias(node, written, seen));
+      const [first] = results;
+      return first !== null && results.every(each => each !== null && each.join(' ') === (first as string[]).join(' '))
+        ? (first as string[])
+        : null;
+    };
+
+    /**
+     * `written` with each `-C` folder of a git call replaced by the folders its words name here (`$PWD/src`, `~/x`, a
+     * `for` variable), one variant per combination; the words as written for a folder the scan cannot name.
+     */
+    const namedFolders = (written: string[]): string[][] => {
+      const start = wrappedStart(written);
+      if (programName(unquote(written[start] ?? '')) !== 'git') return [written];
+      const raw = written.slice(start + 1);
+      const at = gitSubcommandAt(raw);
+      let variants: string[][] = [written];
+      for (let index = 0; index < (typeof at === 'number' ? at : raw.length); index++) {
+        if (unquote(raw[index] ?? '') !== '-C' || raw[index + 1] === undefined) continue;
+        const slot = start + index + 2;
+        const words = operandWords(raw[++index] as string, scope());
+        if (words === null || words.some(word => word.expandAt !== null || word.glob.includes(true))) continue;
+        variants = variants.flatMap(variant =>
+          words.map(word =>
+            variant.map((each, place) => (place === slot ? `'${word.text.replaceAll("'", "'\\''")}'` : each))
+          )
+        );
+        if (variants.length > 8) return [written];
+      }
+      return variants;
+    };
+
+    const expandGitAlias = async (node: Node, written: string[], seenFrom: string[]): Promise<string[] | null> => {
       let tokens = written;
+      let seen = seenFrom;
       let checked = false;
       for (let depth = 0; depth <= GIT_ALIAS_DEPTH; depth++) {
         const start = wrappedStart(tokens);
         if (programName(unquote(tokens[start] ?? '')) !== 'git') return tokens;
-        const git = gitSubcommand(tokens.slice(start + 1).map(unquote), state.cwd);
+        const git = gitSubcommand(seen.slice(start + 1).map(unquote), state.cwd);
         if (git === null || git.unread || GIT_OWN_COMMANDS.has(git.sub) || SPELLED_PROGRAM.test(git.sub)) return tokens;
         if (depth === GIT_ALIAS_DEPTH) return null;
-        const known = await gitCommandKind(git.cwd, git.sub);
+        const folder = await lookupFolder(git.cwd);
+        const known = await gitCommandKind(folder, git.sub);
         if (known === null) return null;
         if (known === 'own') return tokens;
-        const pathEntries = scriptPathEntries();
+        const path = scriptPathEntries();
         if (
           !checked &&
           (gitAliasMoved(tokens.slice(start + 1)) ||
             state.lost ||
             aliasEnvironment ||
-            pathEntries === null ||
             dropsGitConfig(tokens) ||
             unreadOperands > 0)
         ) {
           return null;
         }
-        if (known === 'none' && pathEntries !== null && (await pathHolds(pathEntries, `git-${git.sub}`))) return null;
-        let lists = gitAliasLists.get(git.cwd);
-        if (lists === undefined) gitAliasLists.set(git.cwd, (lists = gitAliases(git.cwd)));
+        // A program named git-<alias> on a PATH entry the scan cannot place may run instead of the alias.
+        if (known === 'none' && (path.unplaced || sourcedEnvironment)) pathUnplaced = true;
+        if (known === 'none' && (await pathHolds(path.entries, `git-${git.sub}`))) return null;
+        let lists = gitAliasLists.get(folder);
+        if (lists === undefined) gitAliasLists.set(folder, (lists = gitAliases(folder)));
         const config = await lists;
         if (config === null) return null;
         if (!checked) {
@@ -6401,9 +6585,14 @@ export async function scanShell(
             own: node.id,
             anywhere: branching > 0 || backgrounded,
             alongside: alongsideOf(node),
-            cwd: git.cwd,
+            cwd: folder,
             places: await aliasPlaces(config.includes),
-            legacy: !(await gitRefusesImplicitBare(git.cwd)),
+            folders:
+              known === 'none'
+                ? [...path.entries, ...(await projectPathFolders(folder))].map(entry => guardForm(entry))
+                : [],
+            programs: false,
+            legacy: !(await gitRefusesImplicitBare(folder)),
           };
           for (const write of configWrites) {
             if (write.id !== node.id && (await aliasConfigTouched(write, check))) return null;
@@ -6418,8 +6607,73 @@ export async function scanShell(
         if (expansion === null || expansion[0] === "''" || expansion.some(word => word === null)) return null;
         const at = tokens.length - git.rest.length - 1;
         tokens = [...tokens.slice(0, at), ...(expansion as string[]), ...tokens.slice(at + 1)];
+        seen = [...seen.slice(0, at), ...(expansion as string[]), ...seen.slice(at + 1)];
       }
       return null;
+    };
+
+    /**
+     * Whether `source FILE` names a file the scan can read that only sets variables and defines functions: no cd, eval,
+     * nested source, alias, trap, or setting of HOME, PWD or a GIT_ variable, so it leaves the folder where it was.
+     */
+    const quietSource = async (rest: string[]): Promise<boolean> => {
+      const [operand] = rest;
+      if (operand === undefined || state.lost || sep !== '/' || wslLocation(state.cwd) !== null) return false;
+      const words = operandWords(operand, scope());
+      const word = words?.length === 1 ? (words[0] as OperandWord) : null;
+      if (word === null || word.expandAt !== null || word.glob.includes(true) || !word.text.includes('/')) return false;
+      const file = posix.isAbsolute(word.text) ? word.text : under(state.cwd, word.text);
+      const info = await stat(file).catch(() => null);
+      if (!info?.isFile() || info.size > SOURCED_FILE_BYTES) return false;
+      const text = await readFile(file, 'utf8').catch(() => null);
+      if (text === null) return false;
+      const code = text
+        .split('\n')
+        .filter(line => !line.trimStart().startsWith('#'))
+        .join('\n');
+      return !SOURCE_MOVES.test(code);
+    };
+
+    /**
+     * `git merge -s NAME` runs a `git-merge-NAME` program found on PATH for a strategy git has not built in: asks when
+     * a project PATH folder already holds one or a write earlier in the script may put one there.
+     */
+    const checkMergeStrategies = async (node: Node, rest: readonly string[], cwd: string): Promise<void> => {
+      const names: string[] = [];
+      for (let index = 0; index < rest.length; index++) {
+        const arg = rest[index] as string;
+        if (arg === '--') break;
+        const long = /^--strategy(=(.*))?$/.exec(arg);
+        const short = /^-[nqvfe]*s(.*)$/.exec(arg);
+        if (long) names.push(long[1] === undefined ? (rest[++index] ?? '') : (long[2] ?? ''));
+        else if (short) names.push(short[1] || (rest[++index] ?? ''));
+      }
+      const custom = names.filter(name => !MERGE_STRATEGIES.has(name));
+      if (custom.length === 0) return;
+      if (custom.some(name => isDynamic(name))) {
+        unreadOperands++;
+        return;
+      }
+      const path = scriptPathEntries();
+      if (path.unplaced) pathUnplaced = true;
+      const folders = [...path.entries, ...(await projectPathFolders(cwd))];
+      for (const name of custom) {
+        if (await pathHolds(folders, `git-merge-${name}`)) unreadOperands++;
+      }
+      const check = {
+        own: node.id,
+        anywhere: branching > 0 || backgrounded,
+        alongside: alongsideOf(node),
+        cwd,
+        places: [],
+        folders: folders.map(folder => guardForm(folder)),
+        programs: true,
+        legacy: false,
+      };
+      for (const write of configWrites) {
+        if (write.id !== node.id && (await aliasConfigTouched(write, check))) unreadOperands++;
+      }
+      aliasChecks.push(check);
     };
 
     const runCommand = async (
@@ -6493,7 +6747,9 @@ export async function scanShell(
           unreadOperands++;
         }
       }
+      if (inner === 'mkdir') mkdirIds.add(node.id);
       if (wrapped !== undefined) noteWrites(wrapped, wrappedRest);
+      if (inner === 'cp' || inner === 'rsync') await noteTemplateCopy(inner, wrappedRest, node.id);
       const inPlace = await inPlaceWrites(withoutWrappers(tokens.map(unquote)), node, state.cwd, {
         script: gitScript,
         env: gitEnvironment,
@@ -6517,6 +6773,7 @@ export async function scanShell(
       if (inner === 'git') {
         gitCommands.add(node.id);
         const git = gitSubcommand(wrappedRest.map(unquote), state.cwd);
+        if (git !== null && !git.unread && git.sub === 'merge') await checkMergeStrategies(node, git.rest, git.cwd);
         if (git !== null && (git.unread || writesGitConfig(git.sub, git.rest))) configWrites.push({ id: node.id });
         else if (git !== null && GIT_TREE_WRITERS.has(git.sub)) {
           configWrites.push({ id: node.id, path: (await findRepositoryRoot(git.cwd)) ?? git.cwd, tree: true });
@@ -6584,10 +6841,12 @@ export async function scanShell(
       }
       // `command cd`, `builtin cd`, `eval` and `source` can move bash without the scan following, and `dirs` edits the stack.
       const builtin = program === 'builtin' ? programName(unquote(rest[0] ?? '')) : '';
+      const quiet = (inner === 'source' || inner === '.') && (await quietSource(wrappedRest));
+      if (quiet) sourcedEnvironment = true;
       if (
         CHANGES_DIRECTORY.has(inner) ||
         CHANGES_DIRECTORY.has(builtin) ||
-        ['eval', 'source', '.'].includes(inner) ||
+        (['eval', 'source', '.'].includes(inner) && !quiet) ||
         ['eval', 'source', '.'].includes(builtin)
       ) {
         directoryChanges++;
@@ -6626,9 +6885,8 @@ export async function scanShell(
       const name = programName(unquote(wrapped ?? ''));
       const findRun = name === 'find' ? findActions(wrappedRest) : null;
       const opaque = [tokens, ...(findRun?.runs ?? [])].map(run => opaqueForm(run)).find(form => form !== null) ?? null;
-      // An alias runs whatever git's config says when it runs, so no remembered pattern covers it.
+      // An alias git reads as plain words stays coverable: rules match the text as written and the expansion's words.
       const coverable =
-        tokens === written &&
         !assigns &&
         !writes &&
         !arithmetic &&
@@ -7212,6 +7470,47 @@ export async function scanShell(
       if (recursive) noteWrite(target, writtenTrees);
     };
 
+    /**
+     * A recursive copy or sync whose source holds a `.git` (or cannot be read) may write `<target>/.git/config`: the
+     * template folders it lays down have no `.git` name of their own to be seen as a write there.
+     */
+    const noteTemplateCopy = async (program: string, rest: string[], id: number): Promise<void> => {
+      const recursive =
+        program === 'rsync' ||
+        rest.some(arg => /^-[a-zA-Z]*[rRa]/.test(arg) || arg === '--recursive' || arg === '--archive');
+      if (!recursive) return;
+      const operands = rest.filter(arg => !arg.startsWith('-'));
+      const target = copyTarget(program, rest)?.value ?? operands.at(-1);
+      if (target === undefined) return;
+      let holdsGit = false;
+      for (const source of operands.filter(operand => operand !== target)) {
+        const path = expand(unquote(source));
+        if (isDynamic(path) || /[?*[{]/.test(path) || (state.lost && !isAbsolutePath(path))) {
+          holdsGit = true;
+          break;
+        }
+        for (const place of operandTargets(state.cwd, path)) {
+          const info = await stat(place).catch(() => null);
+          if (
+            info === null ||
+            (await stat(join(place, '.git')).then(
+              () => true,
+              () => false
+            ))
+          )
+            holdsGit = true;
+        }
+      }
+      if (!holdsGit) return;
+      const text = expand(unquote(target));
+      if (isDynamic(text) || (state.lost && !isAbsolutePath(text))) {
+        configWrites.push({ id });
+        return;
+      }
+      for (const place of operandTargets(state.cwd, text))
+        configWrites.push({ id, path: join(place, '.git', 'config') });
+    };
+
     const redirect = async (node: Node): Promise<void> => {
       const target = node.childForFieldName('destination');
       if (!target || target.type === 'number') return;
@@ -7231,6 +7530,7 @@ export async function scanShell(
     };
 
     const visitNode = async (node: Node): Promise<void> => {
+      if (!state.lost) visited.add(state.cwd);
       if (node.type === 'command') return run(node);
       // `export X=..`, `declare -x X=..` and a statement-level `X=..` set the environment every
       // later command inherits - `GIT_CONFIG_PARAMETERS` runs code through a plain `git status` -
@@ -7441,6 +7741,7 @@ export async function scanShell(
       ...(unreadScript ? { unreadScript: true as const } : {}),
       ...(setsEnvironment ? { setsEnvironment: true as const } : {}),
       ...(gitProgram ? { gitProgram } : {}),
+      ...(pathUnplaced ? { gitPathUnplaced: true as const } : {}),
       ...(remoteTree ? { remoteTree: true as const } : {}),
     };
   }).finally(() => tree.delete());

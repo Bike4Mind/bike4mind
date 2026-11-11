@@ -61,6 +61,7 @@ describe('shell approval in a project with a large node_modules', () => {
   let proj: string;
   let userData: string;
   let rules: PermissionRuleSet;
+  let allowRules: CompiledRule[];
   let permissionRoots: readonly string[];
   const exists = (path: string): Promise<boolean> =>
     stat(path).then(
@@ -304,6 +305,41 @@ describe('shell approval in a project with a large node_modules', () => {
     await symlink(join(xrepo, '.git', 'config'), join(xrepo, 'cfglink'));
     await symlink(join(xrepo, '.git'), join(xrepo, 'gitlink'));
     await symlink(join(xrepo, 'xloop'), join(xrepo, 'xloop'));
+    // frepo has aliases and the folders its scripts copy templates into, link configs from, or put programs in.
+    const frepo = await repository('frepo', { 'src/b.ts': 'b', 'a.ts': 'a' });
+    for (const [name, value] of [
+      ['st', 'status'],
+      ['lg', 'log --oneline'],
+      ['co', 'checkout'],
+      ['p', 'push'],
+    ]) {
+      git(frepo, 'config', `alias.${name}`, value as string);
+    }
+    git(frepo, 'branch', 'other');
+    const tpl = join(frepo, 'tpl');
+    await mkdir(tpl);
+    git(tpl, 'init', '-q', '-b', 'main');
+    git(tpl, 'config', 'alias.st', '!touch MARK');
+    await mkdir(join(frepo, 'tpl2'));
+    await writeFile(join(frepo, 'tpl2', 'f'), 'f');
+    await mkdir(join(frepo, 'nbin'));
+    await writeFile(join(frepo, 'nbin', 'git-merge-foo'), '#!/bin/sh\nexit 1\n');
+    await chmod(join(frepo, 'nbin', 'git-merge-foo'), 0o755);
+    await mkdir(join(frepo, '.venv', 'bin'), { recursive: true });
+    await writeFile(
+      join(frepo, '.venv', 'bin', 'activate'),
+      '# source bin/activate\nVIRTUAL_ENV=/x\nexport VIRTUAL_ENV\nPATH="$VIRTUAL_ENV/bin:$PATH"\nexport PATH\nhash -r 2> /dev/null\n'
+    );
+    await writeFile(join(frepo, '.venv', 'bin', 'moves'), 'cd /\n');
+    // A linked work tree sharing frepo's config by a hard link, a .bare layout, and a separate git dir.
+    git(frepo, 'worktree', 'add', '-q', 'wt', '-b', 'wtb');
+    await link(join(frepo, '.git', 'config'), join(frepo, 'wt', 'hcfg'));
+    execFileSync('git', ['clone', '-q', '--bare', frepo, join(frepo, 'blay', '.bare')], { env });
+    await writeFile(join(frepo, 'blay', '.git'), 'gitdir: ./.bare\n');
+    git(join(frepo, 'blay', '.bare'), 'config', 'alias.st', 'status');
+    git(join(frepo, 'blay', '.bare'), 'worktree', 'add', '-q', '../wt', 'main');
+    execFileSync('git', ['init', '-q', '--separate-git-dir', join(frepo, 'sgdgit'), join(frepo, 'sgd')], { env });
+    git(join(frepo, 'sgd'), 'config', 'alias.st', 'status');
     // dotfiles tracks a gitconfig its branch `evil` changes, which a test links the user gitconfig to.
     const dotfiles = await repository('dotfiles', { gitconfig: '[alias]\n\tdst = status\n' });
     git(dotfiles, 'checkout', '-qb', 'evil');
@@ -350,6 +386,7 @@ describe('shell approval in a project with a large node_modules', () => {
       const rule = compileRule(parsed.rule, 'allow', { id: 'test', label: 'Test' }, { home, root: proj, cwd: proj });
       if (rule) compiled.push(rule);
     }
+    allowRules = compiled;
     rules = new PermissionRuleSet(compiled, () => permissionRoots);
   }, 120_000);
 
@@ -376,6 +413,23 @@ describe('shell approval in a project with a large node_modules', () => {
       full: !prompt.askInFull,
       allowed: subject !== null && rules.evaluate(subject).decision === 'allow',
     };
+  };
+
+  /** The subject a rule is matched against for `command`, as judge builds it. */
+  const subjectOf = async (command: string, folder = '') => {
+    const cwd = join(proj, folder);
+    const context: ToolContext = {
+      roots: [proj],
+      workingDirectory: cwd,
+      signal: new AbortController().signal,
+      protectedPaths: [userData],
+      uncoverablePaths: permissionRoots,
+    };
+    const prompt = await shellApproval('bash_execute', { command, cwd }, context);
+    const subject = await resolveSubject(
+      permissionSubject({ name: 'bash_execute', input: { command } }, prompt, context)
+    );
+    return subject;
   };
 
   const unasked = { auto: true, full: true, allowed: true };
@@ -1587,6 +1641,8 @@ describe('shell approval in a project with a large node_modules', () => {
     'export PATH="$PWD/node_modules/.bin:$PATH"; git st',
     'export PATH="$PWD/tools:$PATH"; git st',
     'PATH=./tools:$PATH git st',
+    'export PATH="$HOME/x:$PATH"; git st',
+    'cd src && export PATH="$PWD/x:$PATH" && git st',
   ])('runs %s (in proj/xrepo) unasked, as nothing it does reaches the config git reads', async command => {
     expect(await judge(command, 'xrepo')).toMatchObject({ auto: true, full: true });
   });
@@ -1628,10 +1684,8 @@ describe('shell approval in a project with a large node_modules', () => {
     'export PATH="${PWD}/bin:$PATH"; git st',
     'export PATH="bin:$PATH"; git st',
     'export PATH="$(pwd)/bin:$PATH"; git st',
-    'export PATH="$HOME/x:$PATH"; git st',
     'cd src && export PATH="$PWD/../bin:$PATH" && git st',
     'GIT_PAGER=./x.sh git lg',
-    'cd src && export PATH="$PWD/x:$PATH"; git st',
     'bash -s -- a && git st',
     'GIT_WORK_TREE=. git st',
     'GIT_COMMON_DIR=.git git st',
@@ -1773,9 +1827,227 @@ describe('shell approval in a project with a large node_modules', () => {
     expect(await judge('git pack-redundant', 'zrepo')).toMatchObject({ auto: true, full: true });
   });
 
-  it('remembers a command as written only where it names no alias', async () => {
+  it('remembers a command as written where git reads its alias as plain words, and not a shell alias', async () => {
     expect(await judge('git status', 'qrepo')).toMatchObject({ auto: true, full: true, allowed: true });
-    expect(await judge('git st', 'qrepo')).toMatchObject({ auto: true, full: true, allowed: false });
+    expect(await judge('git st', 'qrepo')).toMatchObject({ auto: true, full: true, allowed: true });
+    expect(await judge('git bang', 'qrepo')).toMatchObject({ allowed: false });
+    expect(await judge('git nosuch', 'qrepo')).toMatchObject({ allowed: true });
+  });
+
+  it('still applies a deny rule that names the command an alias expands to', async () => {
+    const parsed = parseRule('Bash(git push:*)', { native: true });
+    if (!parsed.ok) throw new Error(parsed.reason);
+    const deny = compileRule(
+      parsed.rule,
+      'deny',
+      { id: 'test', label: 'Test' },
+      { home: join(base, 'home'), root: proj, cwd: proj }
+    );
+    if (!deny) throw new Error('no rule');
+    const guarded = new PermissionRuleSet([deny, ...allowRules], () => permissionRoots);
+    expect(guarded.evaluate(await subjectOf('git p origin main', 'frepo')).decision).toBe('deny');
+    expect(guarded.evaluate(await subjectOf('git st', 'frepo')).decision).toBe('allow');
+  });
+
+  const withPath = async (path: string, run: () => Promise<void>): Promise<void> => {
+    const before = process.env.PATH;
+    vi.stubEnv('PATH', path);
+    try {
+      await run();
+    } finally {
+      vi.stubEnv('PATH', before);
+    }
+  };
+
+  it.each([
+    'git st',
+    'git lg -5',
+    'git co other',
+    'git st && git lg -3',
+    'git -C src st',
+    'git checkout other && git st',
+    'git commit -am x && git lg -1',
+    'git rm a.ts && git st',
+    'git --no-pager lg -5',
+    'git -C "$PWD/src" st',
+    'git -C "$HOME/proj/frepo/src" st',
+    'git -C ~/proj/frepo st',
+  ])('runs %s (in proj/frepo) unasked and lets an allow rule for git cover it', async command => {
+    expect(await judge(command, 'frepo')).toMatchObject({ auto: true, full: true, allowed: true });
+  });
+
+  it('runs an alias in a git -C folder a for variable names, as it does one written out', async () => {
+    expect(await judge('for d in src .; do git -C "$d" st; done', 'frepo')).toMatchObject({ auto: true, full: true });
+  });
+
+  it.each([
+    'export PATH="$HOME/.cargo/bin:$PATH" && git st',
+    'export PATH=$HOME/go/bin:$PATH && git lg',
+    'export PATH="$PATH:$HOME/.local/bin"; git st',
+    'export PATH=~/bin:$PATH && git st',
+    'export PATH="$PWD/node_modules/.bin:$PATH" && cd src && git st',
+    'cd src && export PATH="$PWD/x:$PATH" && git st',
+  ])('runs %s (in proj/frepo) unasked, as every PATH folder it adds is one the scan places', async command => {
+    expect(await judge(command, 'frepo')).toMatchObject({ auto: true, full: true });
+  });
+
+  it.each(['export PATH="$(pnpm bin):$PATH" && git st', 'source .venv/bin/activate && git st'])(
+    'asks in auto only for %s (in proj/frepo), as a PATH folder it adds cannot be placed',
+    async command => {
+      expect(await judge(command, 'frepo')).toMatchObject({ auto: false, full: true });
+    }
+  );
+
+  it('asks in every mode for an alias after a sourced file that moves bash', async () => {
+    expect(await judge('source .venv/bin/moves && git st', 'frepo')).toMatchObject(asks);
+  });
+
+  it.each([
+    'mkdir -p build && cd build && git st',
+    'mkdir -p tmp && cd tmp && git st',
+    'mkdir newdir && cd newdir && git st',
+    'mkdir -p build/a/b && git -C build/a/b st',
+    'git submodule update --init && git st',
+    'git submodule init && git st',
+    'git submodule sync && git st',
+    'cp -r src dist && git st',
+    'rsync -a src/ dist/ && git st',
+    'cp -r tpl2/. src && git st',
+  ])('runs %s (in proj/frepo) unasked, as nothing it does reaches the config git reads', async command => {
+    expect(await judge(command, 'frepo')).toMatchObject({ auto: true, full: true });
+  });
+
+  it.each([
+    'mkdir newdir && git init newdir && cd newdir && git st',
+    'mkdir newdir && cp -r tpl/. newdir && cd newdir && git st',
+    'mkdir newdir && echo x > newdir/y && cd newdir && git st',
+    'git submodule add ./s && git st',
+    'git submodule foreach true && git st',
+    'cp -r tpl/. src && git -C src st',
+    'cp -a tpl/. src/ && cd src && git st',
+    'rsync -a tpl/ src/ && git -C src st',
+    'cp -rT tpl src && git -C src st',
+    'cp -r tpl/.git src/ && git -C src st',
+    'cp -r "$X" src && git st',
+    'cp -r nosuch/. src && git st',
+  ])('asks in every mode for %s (in proj/frepo), which may write the config git reads aliases from', async command => {
+    expect(await judge(command, 'frepo')).toMatchObject(asks);
+  });
+
+  it.each([
+    ["printf '[alias]\\n\\tst = !touch MARK\\n' >> hcfg && git st", 'frepo/wt'],
+    ["printf '[alias]\\n\\tst = !touch MARK\\n' >> ../.bare/config && git st", 'frepo/blay/wt'],
+    ["printf '[alias]\\n\\tst = !touch MARK\\n' >> ../sgdgit/config && git st", 'frepo/sgd'],
+    ["link .git/config h && printf '[alias]\\n\\tst = !touch MARK\\n' >> h && git st", 'frepo'],
+    ["link .git/config h && printf '[alias]\\n\\tst = !touch MARK\\n' >> h && git st", 'frepo/wt'],
+  ])(
+    'asks in every mode for %s (in proj/%s), as it writes a config git reads aliases from',
+    async (command, folder) => {
+      expect(await judge(command, folder)).toMatchObject(asks);
+    }
+  );
+
+  it.each([
+    ['git st', 'frepo/wt'],
+    ['git st', 'frepo/blay/wt'],
+    ['git st', 'frepo/sgd'],
+    ['printf x >> out.txt && git st', 'frepo/wt'],
+    ['printf x >> out.txt && git st', 'frepo/blay/wt'],
+    ['printf x >> out.txt && git st', 'frepo/sgd'],
+  ])(
+    'runs %s (in proj/%s) unasked in a linked work tree, a .bare layout and a separate git dir',
+    async (command, folder) => {
+      expect(await judge(command, folder)).toMatchObject({ auto: true, full: true });
+    }
+  );
+
+  it.each([
+    "printf '#!/bin/sh\\ntouch MARK\\n' > nbin/git-st && chmod +x nbin/git-st && git st",
+    'cp src/b.ts nbin/git-st && git st',
+    'install -m 755 src/b.ts nbin/git-st && git st',
+    'ln src/b.ts nbin/git-lg && git lg',
+    'printf x > nbin/git-merge-bar && git merge -s bar other',
+  ])(
+    'asks in every mode for %s (in proj/frepo) with nbin on PATH, a folder it writes a program into',
+    async command => {
+      await withPath(`nbin:${process.env.PATH}`, async () => {
+        expect(await judge(command, 'frepo')).toMatchObject(asks);
+      });
+      await withPath(`${join(proj, 'frepo', 'nbin')}:${process.env.PATH}`, async () => {
+        expect(await judge(command, 'frepo')).toMatchObject(asks);
+      });
+    }
+  );
+
+  it('runs a program written outside the PATH folders unasked', async () => {
+    await withPath(`nbin:${process.env.PATH}`, async () => {
+      expect(await judge('cp src/b.ts out.sh && git st', 'frepo')).toMatchObject({ auto: true, full: true });
+    });
+  });
+
+  it.each([
+    'git merge -s foo other',
+    'git merge -sfoo other',
+    'git merge --strategy=foo other',
+    'git merge --strategy foo other',
+    'git merge -s ours -s foo other',
+    'git merge -s "$S" other',
+  ])('asks in every mode for %s (in proj/frepo) with a git-merge-foo program on PATH', async command => {
+    await withPath(`nbin:${process.env.PATH}`, async () => {
+      expect(await judge(command, 'frepo')).toMatchObject(asks);
+    });
+  });
+
+  it.each(['ort', 'recursive', 'resolve', 'octopus', 'ours', 'subtree'])(
+    'runs git merge -s %s (in proj/frepo) as it would without a strategy',
+    async name => {
+      await withPath(`nbin:${process.env.PATH}`, async () => {
+        const plain = await judge('git merge other', 'frepo');
+        expect(await judge(`git merge -s ${name} other`, 'frepo')).toMatchObject({
+          auto: plain.auto,
+          full: plain.full,
+        });
+        expect(await judge(`git merge -s${name} other`, 'frepo')).toMatchObject({ auto: plain.auto, full: plain.full });
+      });
+    }
+  );
+
+  it.each([
+    'unset ${!GIT@}; git -C cfgdir3 st',
+    'unset "${!GIT_@}"; git -C cfgdir3 st',
+    'for v in $(compgen -e | grep ^GIT); do unset $v; done; git -C cfgdir3 st',
+    'unset $(compgen -v GIT); git -C cfgdir3 st',
+    'exec -c git -C cfgdir3 st',
+    'exec -c -a x git -C cfgdir3 st',
+    'export -n ${!GIT@}; git -C cfgdir3 st',
+  ])('asks in every mode for %s (in proj/xrepo), as it may drop the setting the shell gives git', async command => {
+    expect(await judge(command, 'xrepo')).toMatchObject(asks);
+  });
+
+  it.each([
+    "pnpm tsx -e 'x' && git st",
+    "yarn tsx -e 'x' && git st",
+    "pnpm node -e 'x' && git st",
+    "yarn node -e 'x' && git st",
+    "deno run - <<< 'x' && git st",
+    "npx node -e 'x' && git st",
+    "pnpm dlx tsx -e 'x' && git st",
+    "npm exec -- node -e 'x' && git st",
+  ])('asks in every mode for %s (in proj/frepo), as it runs code it is given inline', async command => {
+    expect(await judge(command, 'frepo')).toMatchObject(asks);
+  });
+
+  it.each([
+    'pnpm test && git st',
+    'pnpm lint && git st',
+    'pnpm build && git st',
+    'pnpm --filter x test && git st',
+    'yarn install && git st',
+    'yarn run build && git st',
+    'pnpm tsx script.ts && git st',
+    'deno run script.ts && git st',
+  ])('runs %s (in proj/frepo) unasked, as it runs no inline code', async command => {
+    expect(await judge(command, 'frepo')).toMatchObject({ auto: true, full: true });
   });
 
   it('reads a git alias for push as the push it expands to', async () => {

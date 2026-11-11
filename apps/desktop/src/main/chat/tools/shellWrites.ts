@@ -302,38 +302,36 @@ function tarExtraction(
 const LISTED_MEMBERS = 10_000;
 
 /** The granted roots of the scan running now, for the git calls that do not take them, and its PATH lookups. */
-const scanRoots = new AsyncLocalStorage<{
-  roots: readonly string[];
-  paths: Map<string, Promise<string>>;
-  programs: Map<string, Promise<string | null>>;
-}>();
+const scanRoots = new AsyncLocalStorage<{ roots: readonly string[] }>();
 
 /** Runs `scan` with `roots` as the granted roots git is found outside of (see pathOutside). */
 export function withGrantedRoots<T>(roots: readonly string[], scan: () => Promise<T>): Promise<T> {
-  return scanRoots.run({ roots, paths: new Map(), programs: new Map() }, scan);
+  return scanRoots.run({ roots }, scan);
 }
 
-/** pathOutside(roots), read once per scan. */
+/** pathOutside and the programs found on it, by PATH and roots: reading PATH entries is slow over a WSL mount. */
+const outsidePaths = new Map<string, Promise<string>>();
+const foundPrograms = new Map<string, Promise<string | null>>();
+
 function outsidePath(roots: readonly string[]): Promise<string> {
-  const store = scanRoots.getStore();
-  const key = JSON.stringify(roots);
-  let path = store?.paths.get(key);
-  if (path === undefined) {
-    path = pathOutside(roots);
-    store?.paths.set(key, path);
-  }
+  const key = JSON.stringify([process.env.PATH ?? '', roots]);
+  let path = outsidePaths.get(key);
+  if (path === undefined) outsidePaths.set(key, (path = pathOutside(roots)));
   return path;
 }
 
-/** `program` on pathOutside(roots), looked up once per scan: reading PATH entries is slow over a WSL mount. */
+/** `program` on pathOutside(roots). */
 async function scanProgram(program: string, roots: readonly string[]): Promise<{ path: string; file: string } | null> {
-  const store = scanRoots.getStore();
   const outside = await outsidePath(roots);
   const name = `${program}\0${outside}`;
-  let file = store?.programs.get(name);
+  let file = foundPrograms.get(name);
   if (file === undefined) {
     file = findOnPath(program, outside);
-    store?.programs.set(name, file);
+    foundPrograms.set(name, file);
+    // A program not found is looked for again, as it may be installed meanwhile.
+    void file.then(found => {
+      if (found === null && foundPrograms.get(name) === file) foundPrograms.delete(name);
+    });
   }
   const found = await file;
   return found === null ? null : { path: outside, file: found };
@@ -809,9 +807,37 @@ function cachedGit(directory: string, label: string, args: readonly string[]): P
 
 /** Whether the git the shell runs honors `safe.bareRepository` (2.38 and later); false when it could not tell. */
 export async function gitRefusesImplicitBare(directory: string): Promise<boolean> {
-  const result = await cachedGit(directory, 'version', ['--version']);
-  const match = /(\d+)\.(\d+)/.exec(result?.code === 0 ? result.stdout : '');
+  const version =
+    wslLocation(directory) === null
+      ? await shellGitVersion(directory)
+      : await cachedGit(directory, 'version', ['--version']);
+  const match = /(\d+)\.(\d+)/.exec(version?.code === 0 ? version.stdout : '');
   return match !== null && (Number(match[1]) > 2 || (Number(match[1]) === 2 && Number(match[2]) >= 38));
+}
+
+const shellGits = new Map<string, Promise<GitResult | null>>();
+
+/**
+ * `git --version` of the git the shell runs: the first on its PATH (see resolveUserPath). Null when a project folder
+ * on that PATH holds a git, which the scan never starts, or none is found.
+ */
+async function shellGitVersion(directory: string): Promise<GitResult | null> {
+  const userPath = await resolveUserPath();
+  const file = await findOnPath('git', userPath);
+  if (file === null || (await projectPathProgram(directory, 'git'))) return null;
+  const roots = scanRoots.getStore()?.roots ?? [];
+  const real = await realpath(file).catch(() => file);
+  if ([file, real].some(place => roots.some(root => isWithin(root, place)))) return null;
+  let listed = shellGits.get(file);
+  if (listed === undefined) {
+    const outside = await outsidePath(roots);
+    listed = runListing(file, ['--version'], outside).then(stdout => (stdout === null ? null : { code: 0, stdout }));
+    shellGits.set(file, listed);
+    void listed.then(result => {
+      if (result === null && shellGits.get(file) === listed) shellGits.delete(file);
+    });
+  }
+  return listed;
 }
 
 /**
@@ -833,18 +859,59 @@ export async function gitCommandKind(directory: string, name: string): Promise<'
   return (await projectPathProgram(directory, `git-${name}`)) ? null : 'none';
 }
 
-/** Whether `program` is in a PATH entry of the shell (see resolveUserPath) the scan's git does not search: a relative or empty one, or one in a granted root. */
-async function projectPathProgram(directory: string, program: string): Promise<boolean> {
-  if (wslLocation(directory) !== null) return false;
+/** The absolute entries of a PATH within a granted root, by their lexical or real location; by PATH and roots. */
+const rootedEntries = new Map<string, Promise<Set<string>>>();
+
+/** The folders of the shell's PATH (see resolveUserPath) a project controls: relative or empty entries from `directory`, and entries in a granted root. */
+export async function projectPathFolders(directory: string): Promise<string[]> {
+  if (wslLocation(directory) !== null) return [];
   const windows = process.platform === 'win32';
   const separator = windows ? ';' : ':';
-  const outside = new Set((await outsidePath(scanRoots.getStore()?.roots ?? [])).split(separator));
-  const inside = (await resolveUserPath())
-    .split(separator)
-    .map(raw => raw.trim().replace(/^"(.*)"$/, '$1'))
-    .filter(entry => !outside.has(entry))
+  const roots = scanRoots.getStore()?.roots ?? [];
+  const entries = (await resolveUserPath()).split(separator).map(raw => raw.trim().replace(/^"(.*)"$/, '$1'));
+  const key = JSON.stringify([entries, roots]);
+  let rooted = rootedEntries.get(key);
+  if (rooted === undefined) {
+    rooted = (async () => {
+      const realRoots = await Promise.all(roots.map(root => realpath(root).catch(() => root)));
+      const granted = [...roots, ...realRoots];
+      const inside = await Promise.all(
+        entries
+          .filter(entry => (windows ? WINDOWS_ROOTED.test(entry) : isAbsolute(entry)))
+          .map(async entry => {
+            const places = [entry, await realpath(entry).catch(() => entry)];
+            return places.some(place => granted.some(root => isWithin(root, place))) ? entry : null;
+          })
+      );
+      return new Set(inside.filter((entry): entry is string => entry !== null));
+    })();
+    rootedEntries.set(key, rooted);
+  }
+  const inRoots = await rooted;
+  return entries
+    .filter(entry => !(windows ? WINDOWS_ROOTED.test(entry) : isAbsolute(entry)) || inRoots.has(entry))
     .map(entry => ((windows ? WINDOWS_ROOTED.test(entry) : isAbsolute(entry)) ? entry : resolve(directory, entry)));
-  return inside.length > 0 && (await findOnPath(program, inside.join(separator))) !== null;
+}
+
+/** Whether `program` is in a PATH folder a project controls (see projectPathFolders), which the scan's git does not search. */
+export async function projectPathProgram(directory: string, program: string): Promise<boolean> {
+  const folders = await projectPathFolders(directory);
+  return (
+    folders.length > 0 && (await findOnPath(program, folders.join(process.platform === 'win32' ? ';' : ':'))) !== null
+  );
+}
+
+/** The git dir and common dir git reads config from in `directory`, absolute; none outside a repository, null when git could not say. */
+export async function gitDirectories(directory: string): Promise<string[] | null> {
+  const lines = (output: string): string[] => [...new Set(output.split(/\r?\n/).filter(Boolean))];
+  const absolute = await gitRun(directory, ['rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir']);
+  if (absolute === null) return null;
+  if (absolute.code === 0) return lines(absolute.stdout);
+  const plain = await gitRun(directory, ['rev-parse', '--git-dir', '--git-common-dir']);
+  if (plain === null) return null;
+  // git exits 128 outside a repository.
+  if (plain.code !== 0) return plain.code === 128 ? [] : null;
+  return lines(plain.stdout).map(line => resolve(directory, line));
 }
 
 /** Whether `program` is in one of `entries`, folders a script put on PATH, as host paths. */
