@@ -186,6 +186,9 @@ interface Reader<T> {
 interface Writer<T> {
   create(data: T): Promise<{ id: string }>;
 }
+interface ExistingRecords {
+  findOne(query: Query): Promise<unknown | null>;
+}
 
 export interface AgentConfigurationExportAdapters {
   agents: Reader<IAgentDocument>;
@@ -199,14 +202,18 @@ export interface AgentConfigurationExportAdapters {
 }
 
 export interface AgentConfigurationImportAdapters {
-  agents: Writer<Omit<Agent, 'id' | 'projectId'> & { userId: string; projectId?: string }>;
-  skills: Writer<Omit<Skill, 'id'> & { userId: string }>;
-  projects: Writer<Omit<Project, 'id'> & { userId: string }>;
-  prompts: Writer<Omit<Prompt, 'id'> & { userId: string }>;
-  mcpServers: Writer<Pick<IMcpServerDocument, 'name' | 'userId' | 'enabled' | 'envVariables' | 'tools'>>;
-  sessionToolApprovals: Writer<Approval & { userId: string; approvedTools: string[] }>;
-  favorites: Writer<Favorite & { userId: string }>;
-  users: { updateById(id: string, patch: { name: string; preferences: Preferences }): Promise<unknown> };
+  agents: Writer<Omit<Agent, 'id' | 'projectId'> & { userId: string; projectId?: string }> & ExistingRecords;
+  skills: Writer<Omit<Skill, 'id'> & { userId: string }> & ExistingRecords;
+  projects: Writer<Omit<Project, 'id'> & { userId: string }> & ExistingRecords;
+  prompts: Writer<Omit<Prompt, 'id'> & { userId: string }> & ExistingRecords;
+  mcpServers: Writer<Pick<IMcpServerDocument, 'name' | 'userId' | 'enabled' | 'envVariables' | 'tools'>> &
+    ExistingRecords;
+  sessionToolApprovals: Writer<Approval & { userId: string; approvedTools: string[] }> & ExistingRecords;
+  favorites: Writer<Favorite & { userId: string }> & ExistingRecords;
+  users: {
+    /** Apply each defined key via a dotted $set (preferences.key), never replace the preferences subdocument. */
+    updatePreferences(id: string, fields: Preferences): Promise<unknown>;
+  };
 }
 
 const preferencesOf = (value: IUserPreferences | null | undefined): Preferences => {
@@ -259,6 +266,9 @@ const preferencesOf = (value: IUserPreferences | null | undefined): Preferences 
     pushNotifications,
   };
 };
+
+const definedPreferences = (value: Preferences): Preferences =>
+  Object.fromEntries(Object.entries(value).filter(([, field]) => field !== undefined)) as Preferences;
 
 const agentOf = (row: Agent): Agent => ({
   id: row.id,
@@ -379,8 +389,10 @@ export class AgentConfigurationImportError extends Error {
 }
 
 /**
- * Validates the archive shape, then writes it for `userId`. Callers must still run their own caller-context
- * checks (agent validators, model entitlement; see validateAgentUpdate in apps/client/server/utils/agentValidation.ts).
+ * Imports into a fresh account only; a populated target is rejected before any writes.
+ * The caller must serialize concurrent imports and run caller-context checks (agent validators,
+ * model entitlement; see validateAgentUpdate in apps/client/server/utils/agentValidation.ts).
+ * Failed writes can still leave partial progress, reported by AgentConfigurationImportError.
  */
 export async function importAgentConfiguration(
   userId: string,
@@ -389,6 +401,16 @@ export async function importAgentConfiguration(
   references: AgentConfigurationReferenceMap = {}
 ): Promise<AgentConfigurationImportResult> {
   const archive = agentConfigurationArchiveSchema.parse(rawArchive) as AgentConfigurationArchive;
+  const existing = await Promise.all([
+    db.agents.findOne({ userId, deletedAt: null }),
+    db.skills.findOne({ userId, deletedAt: null }),
+    db.projects.findOne({ userId, deletedAt: null }),
+    db.prompts.findOne({ userId, deletedAt: null }),
+    db.mcpServers.findOne({ userId }),
+    db.sessionToolApprovals.findOne({ userId }),
+    db.favorites.findOne({ userId }),
+  ]);
+  if (existing.some(row => row != null)) throw new Error('Agent configuration import requires an empty account');
   const projects = new Map<string, string>();
   const agents = new Map<string, string>();
   const skills = new Map<string, string>();
@@ -453,10 +475,8 @@ export async function importAgentConfiguration(
             : references.files?.get(row.documentId);
       if (documentId) await db.favorites.create({ userId, documentId, documentType: row.documentType });
     }
-    await db.users.updateById(userId, {
-      name: archive.profile.name,
-      preferences: preferencesOf(archive.profile.preferences),
-    });
+    const preferences = definedPreferences(preferencesOf(archive.profile.preferences));
+    if (Object.keys(preferences).length > 0) await db.users.updatePreferences(userId, preferences);
     return { projects, agents, skills, prompts };
   } catch (error) {
     throw new AgentConfigurationImportError({ projects, agents, skills, prompts }, error);

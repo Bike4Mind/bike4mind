@@ -97,15 +97,16 @@ function exportAdapters(): AgentConfigurationExportAdapters {
 
 function importAdapters(): AgentConfigurationImportAdapters {
   const create = (name: string) => vi.fn().mockResolvedValue({ id: `${name}-new` });
+  const collection = (name: string) => ({ create: create(name), findOne: vi.fn().mockResolvedValue(null) });
   return {
-    agents: { create: create('agent') },
-    skills: { create: create('skill') },
-    projects: { create: create('project') },
-    prompts: { create: create('prompt') },
-    mcpServers: { create: create('mcp') },
-    sessionToolApprovals: { create: create('approval') },
-    favorites: { create: create('favorite') },
-    users: { updateById: vi.fn() },
+    agents: collection('agent'),
+    skills: collection('skill'),
+    projects: collection('project'),
+    prompts: collection('prompt'),
+    mcpServers: collection('mcp'),
+    sessionToolApprovals: collection('approval'),
+    favorites: collection('favorite'),
+    users: { updatePreferences: vi.fn() },
   } as unknown as AgentConfigurationImportAdapters;
 }
 
@@ -206,7 +207,7 @@ describe('agent configuration egress', () => {
       documentId: 'project-new',
       documentType: 'projects',
     });
-    expect(db.users.updateById).toHaveBeenCalledWith('target', expect.objectContaining({ name: 'Owner' }));
+    expect(db.users.updatePreferences).toHaveBeenCalledWith('target', { agentModeDefault: 'auto' });
     expect(JSON.stringify(vi.mocked(db.agents.create).mock.calls)).not.toContain('API_KEY');
   });
 
@@ -309,7 +310,7 @@ describe('agent configuration egress', () => {
         importAgentConfiguration('target', bad as unknown as AgentConfigurationArchive, db)
       ).rejects.toThrow();
       for (const writer of Object.values(db)) {
-        expect(Object.values(writer).every(fn => vi.mocked(fn as never).mock.calls.length === 0)).toBe(true);
+        expect(vi.mocked('create' in writer ? writer.create : writer.updatePreferences).mock.calls).toHaveLength(0);
       }
     }
   });
@@ -401,9 +402,41 @@ describe('agent configuration egress', () => {
 
     const importDb = importAdapters();
     await importAgentConfiguration('target', archive, importDb);
-    expect(importDb.users.updateById).toHaveBeenCalledWith(
-      'target',
-      expect.objectContaining({ preferences: expect.objectContaining({ pushNotifications }) })
-    );
+    expect(importDb.users.updatePreferences).toHaveBeenCalledWith('target', { pushNotifications });
+  });
+
+  it.each(['agents', 'skills', 'projects', 'prompts', 'mcpServers', 'sessionToolApprovals', 'favorites'] as const)(
+    'rejects an occupied %s collection before writing anything',
+    async collection => {
+      const archive = await exportAgentConfiguration('source', exportAdapters());
+      const db = importAdapters();
+      vi.mocked(db[collection].findOne).mockResolvedValue({ id: 'existing' });
+
+      await expect(importAgentConfiguration('target', archive, db)).rejects.toThrow('requires an empty account');
+      for (const writer of Object.values(db)) {
+        expect(vi.mocked('create' in writer ? writer.create : writer.updatePreferences).mock.calls).toHaveLength(0);
+      }
+      expect(db[collection].findOne).toHaveBeenCalledWith(expect.objectContaining({ userId: 'target' }));
+    }
+  );
+
+  it('rejects a connected MCP server and same-named skill without shadowing either', async () => {
+    const archive = await exportAgentConfiguration('source', exportAdapters());
+    const db = importAdapters();
+    vi.mocked(db.skills.findOne).mockResolvedValue({ name: 'Search', userId: 'target' });
+    vi.mocked(db.mcpServers.findOne).mockResolvedValue({ name: 'github', userId: 'target', enabled: true });
+
+    await expect(importAgentConfiguration('target', archive, db)).rejects.toThrow('requires an empty account');
+    expect(db.projects.create).not.toHaveBeenCalled();
+    expect(db.mcpServers.create).not.toHaveBeenCalled();
+  });
+
+  it('merges only defined preferences and preserves the target display name', async () => {
+    const archive = await exportAgentConfiguration('source', exportAdapters());
+    const db = importAdapters();
+    await importAgentConfiguration('target', archive, db);
+
+    expect(db.users.updatePreferences).toHaveBeenCalledWith('target', { agentModeDefault: 'auto' });
+    expect(JSON.stringify(vi.mocked(db.users.updatePreferences).mock.calls)).not.toContain('name');
   });
 });
