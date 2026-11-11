@@ -16,7 +16,9 @@ const HEX_RUN = `${HEX_GROUP}(?::${HEX_GROUP}){0,6}`;
 // IPv4-mapped address (`::ffff:192.0.2.1`) arrives as `::ffff:[IP]` and the tail is taken with it.
 // A match may start after one `label:` prefix (`ip:2001:db8::1`), but only when the label has a
 // non-hex character: an all-hex label could itself be a group, so `1:2:3:4:5:6:7:8:9` stays whole.
-const IPV6_START = '(?:(?<![\\w:])|(?<=(?<![\\w:])\\w*[g-z_]\\w*:))';
+// The label is split at its FIRST non-hex character (`[0-9a-f]*` before it, not `\w*`): with two
+// unbounded `\w*` runs every split of a long word is tried, which makes the match quadratic.
+const IPV6_START = '(?:(?<![\\w:])|(?<=(?<![\\w:])[0-9a-f]*[g-z_]\\w*:))';
 const IPV6 = new RegExp(
   `${IPV6_START}(?:(?:${HEX_GROUP}:){7}${HEX_GROUP}|${HEX_RUN}::(?:${HEX_RUN})?|::${HEX_RUN})(?::\\[IP\\])?(?![\\w:])`,
   'gi'

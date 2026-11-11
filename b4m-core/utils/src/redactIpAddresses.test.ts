@@ -34,4 +34,16 @@ describe('redactIpAddresses', () => {
   ])('leaves %j alone', input => {
     expect(redactIpAddresses(input)).toBe(input);
   });
+
+  // A long word after a colon, then a colon: the shape that made the `label:` lookbehind try every
+  // split of the word. A quadratic regex takes over a minute on 200k characters; linear takes ~ms.
+  it.each([
+    ['non-hex word', ':' + 'g'.repeat(200_000) + ':1::'],
+    ['hex word with a non-hex tail', ':' + 'a'.repeat(200_000) + 'g:1::'],
+    ['alternating hex and non-hex', ':' + 'ag'.repeat(100_000) + ':1::'],
+  ])('stays linear on a long %s before a colon', (_shape, input) => {
+    const startedAt = performance.now();
+    redactIpAddresses(input);
+    expect(performance.now() - startedAt).toBeLessThan(1_000);
+  });
 });
