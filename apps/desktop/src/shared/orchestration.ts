@@ -146,20 +146,27 @@ export function renderTaskBrief(contract: TaskContract): string {
           `${name}:\n${Array.isArray(value) ? value.map(item => `- ${item}`).join('\n') || '(none)' : value}`
       )
       .join('\n\n') +
-    '\n\nDecide locally within scope. Filesystem permissions remain authoritative. Report disproven assumptions with evidence using task_report; ask for the smallest missing decision. Do not widen scope or start more agents to bypass a block. A stopped turn is not accepted completion. Report changed paths, verification and unmet criteria. Skills cannot authorize model, permission or spending changes.'
+    '\n\nDecide locally within scope. Filesystem permissions remain authoritative. Report disproven assumptions with evidence using task_report; ask for the smallest missing decision. Do not widen scope or start more agents to bypass a block. A stopped turn is not accepted completion. Report changed paths, verification and unmet criteria. In task_report, give each acceptance criterion a verification entry whose criterion is its exact text above; extra checks such as lint or typecheck count toward no criterion. Skills cannot authorize model, permission or spending changes.'
   );
 }
 
 const verificationSchema = z.strictObject({
-  criterion: text,
+  criterion: text.describe(
+    'The exact text of the acceptance criterion this check evidences. A check labelled any other way, such as lint or typecheck, counts toward no criterion.'
+  ),
   command: text,
   outcome: z.enum(['passed', 'failed', 'not-run']),
   evidence: text,
 });
 const evidenceFields = {
   changedPaths: entries,
-  verification: z.array(verificationSchema).max(32),
-  unmetCriteria: entries,
+  verification: z
+    .array(verificationSchema)
+    .max(32)
+    .describe(
+      "One entry per acceptance criterion, quoting that criterion's exact text, plus any extra checks under their own labels."
+    ),
+  unmetCriteria: entries.describe('Acceptance criteria, quoted exactly, that this attempt did not meet.'),
   handoff: text,
 };
 export const taskReportSchema = z.discriminatedUnion('status', [
@@ -225,17 +232,51 @@ export const taskActionSchema = z.discriminatedUnion('kind', [
 ]);
 export type TaskAction = z.infer<typeof taskActionSchema>;
 
+// Tolerates only case, whitespace and trailing punctuation drift; anything looser could let an
+// unrelated check stand in for a criterion.
+const criterionKey = (value: string): string =>
+  value
+    .replace(/[\s.!?;:,]+$/, '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+
+const quoteList = (items: readonly string[]): string => items.map(item => `\n- "${item}"`).join('');
+
+type CompletedReport = Extract<TaskReport, { status: 'completed' }>;
+
+/** Rejects a completed report that leaves an acceptance criterion with neither a matching check nor an unmet entry. */
+export function assertReportCoversCriteria(contract: TaskContract, report: CompletedReport): void {
+  const covered = new Set(
+    [...report.verification.map(check => check.criterion), ...report.unmetCriteria].map(criterionKey)
+  );
+  const missing = contract.acceptanceCriteria.filter(criterion => !covered.has(criterionKey(criterion)));
+  if (missing.length)
+    throw new Error(
+      `A completed report must give each acceptance criterion a verification entry whose criterion is that criterion's exact text, or list it in unmetCriteria. Checks under other labels count toward no criterion. Not covered:${quoteList(missing)}`
+    );
+}
+
 export function acceptTask(task: WorkerTask, assessment: string): WorkerTask {
   const state = task.state;
-  if (
-    state.status !== 'completed' ||
-    state.unmetCriteria.length ||
-    state.verification.some(check => check.outcome !== 'passed') ||
-    task.contract.acceptanceCriteria.some(
-      criterion => !state.verification.some(check => check.criterion === criterion && check.outcome === 'passed')
-    )
-  ) {
-    throw new Error('Acceptance requires passing evidence for every criterion and no failed checks or unmet criteria.');
+  if (state.status !== 'completed')
+    throw new Error(`Acceptance requires a completed task report; this task is ${state.status}.`);
+  const passed = new Set(
+    state.verification.filter(check => check.outcome === 'passed').map(check => criterionKey(check.criterion))
+  );
+  const missing = task.contract.acceptanceCriteria.filter(criterion => !passed.has(criterionKey(criterion)));
+  const failing = state.verification.filter(check => check.outcome !== 'passed');
+  if (missing.length || failing.length || state.unmetCriteria.length) {
+    const problems = [
+      missing.length &&
+        `No passed verification entry quotes these acceptance criteria:${quoteList(missing)}\nChecks under other labels count toward no criterion.`,
+      failing.length &&
+        `Checks that did not pass:${failing.map(check => `\n- "${check.criterion}" (${check.outcome})`).join('')}`,
+      state.unmetCriteria.length && `Unmet criteria reported:${quoteList(state.unmetCriteria)}`,
+    ].filter(Boolean);
+    throw new Error(
+      `Acceptance requires passing evidence for every criterion and no failed checks or unmet criteria.\n${problems.join('\n')}`
+    );
   }
   return { ...task, state: { ...state, accepted: true, assessment } };
 }

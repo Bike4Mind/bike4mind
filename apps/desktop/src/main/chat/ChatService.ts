@@ -1,5 +1,6 @@
 import {
   acceptTask,
+  assertReportCoversCriteria,
   renderTaskBrief,
   resolveWorkerModel,
   validateWorkerModel,
@@ -1892,6 +1893,7 @@ export class ChatService {
           task.resolvedDecisions.includes(action.report.decisionId)
         )
           return summarizeSession(child);
+        if (action.report.status === 'completed') assertReportCoversCriteria(task.contract, action.report);
         next = {
           ...task,
           state: action.report.status === 'completed' ? { ...action.report, accepted: false } : action.report,

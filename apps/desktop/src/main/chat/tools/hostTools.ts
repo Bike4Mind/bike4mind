@@ -607,7 +607,7 @@ export const taskReport: ToolDefinition = {
   schema: {
     name: 'task_report',
     description:
-      'Report acceptance evidence, a block, or a disproven assumption with the smallest escalation decision. Completion requires parent assessment. Never grants permissions or spending.',
+      "Report acceptance evidence, a block, or a disproven assumption with the smallest escalation decision. A completed report needs, for each acceptance criterion in the brief, a verification entry whose criterion is that criterion's exact text (outcome passed only if it really passed), or the criterion listed in unmetCriteria; otherwise it is rejected. Extra checks such as lint or typecheck may be added under their own labels but count toward no criterion. Completion requires parent assessment. Never grants permissions or spending.",
     parameters: {
       type: 'object',
       properties: { report: z.toJSONSchema(taskReportSchema, { unrepresentable: 'any' }) },
