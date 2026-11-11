@@ -654,6 +654,7 @@ export async function uploadFile(
   try {
     await client.uploadFileBytes(upload.url, bytes, mimeType);
   } catch (err) {
+    await client.deleteFile(fileId).catch(() => {});
     throw new Error(`Upload for file ${fileId} failed: ${err instanceof Error ? err.message : String(err)}`);
   }
   try {

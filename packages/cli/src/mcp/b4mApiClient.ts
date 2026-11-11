@@ -485,6 +485,10 @@ export class B4mApiClient {
     if (!res.ok) throw new Error(`file upload failed (${res.status})`);
   }
 
+  async deleteFile(fileId: string): Promise<void> {
+    await this.client.delete(`/api/files/${encodeURIComponent(fileId)}`);
+  }
+
   async attachFileToNotebook(fileId: string, notebookId: string): Promise<void> {
     await this.client.put(`/api/files/${encodeURIComponent(fileId)}`, { sessionId: writableNotebookId(notebookId) });
   }
