@@ -153,6 +153,26 @@ async function exportAll(exporter: SubjectRecordExport) {
 
 const json = (value: unknown) => JSON.parse(JSON.stringify(value));
 
+/** Makes `model.find` fail with `error` from the cursor whenever the filter names `path`. */
+function failQueriesOn<T>(model: mongoose.Model<T>, path: string, error: Error) {
+  const find = model.find.bind(model);
+  return vi.spyOn(model, 'find').mockImplementation(((filter: Record<string, unknown>) => {
+    if (!(path in filter)) return find(filter);
+    return {
+      setOptions: () => ({
+        maxTimeMS: () => ({
+          lean: () => ({
+            cursor: () => ({ [Symbol.asyncIterator]: () => ({ next: () => Promise.reject(error) }) }),
+          }),
+        }),
+      }),
+    };
+  }) as unknown as typeof model.find);
+}
+
+const maxTimeExpired = () =>
+  new mongoose.mongo.MongoServerError({ message: 'operation exceeded time limit', code: 50 });
+
 describe('SubjectRecordExport', () => {
   it('orders every child after its parent and skips models with no user data', () => {
     const { models } = new SubjectRecordExport(
@@ -162,6 +182,104 @@ describe('SubjectRecordExport', () => {
     expect(models).not.toContain('DsTestRelease');
     expect(models.indexOf('DsTestNote')).toBeLessThan(models.indexOf('DsTestNoteComment'));
     expect(models.indexOf('DsTestAccess')).toBeLessThan(models.indexOf('DsTestAccessQuery'));
+  });
+
+  it('walks the own record first, then holders smallest collection first, and viaParent children last', async () => {
+    await Team.insertMany([{ name: 'a' }, { name: 'b' }, { name: 'c' }]);
+    await Note.create({ body: 'one' });
+    const exporter = new SubjectRecordExport(
+      { userId: new mongoose.Types.ObjectId().toString(), email: null },
+      registry
+    );
+
+    const order = await exporter.walkOrder();
+
+    expect(order).toEqual([
+      'DsTestPerson',
+      'DsTestAccess',
+      'DsTestAuthAudit',
+      'DsTestLedger',
+      'DsTestSession',
+      'DsTestNote',
+      'DsTestTeam',
+      'DsTestAccessQuery',
+      'DsTestNoteComment',
+    ]);
+  });
+
+  it('exports the other references of a model when one reference query fails on the server', async () => {
+    const subject = new mongoose.Types.ObjectId();
+    const owned = await Ledger.create({ ownerId: subject, amount: 1 });
+    const party = await Ledger.create({ partyIds: [subject], amount: 2 });
+    const spy = failQueriesOn(Ledger, 'ownerId', maxTimeExpired());
+    try {
+      const exporter = new SubjectRecordExport({ userId: subject.toString(), email: null }, registry);
+
+      const records = json(await collect(exporter, 'DsTestLedger'));
+
+      expect(records.map((record: ExportedRecord) => record._id)).toEqual([party.id]);
+      expect(records).not.toContainEqual(expect.objectContaining({ _id: owned.id }));
+      expect(exporter.failedReferences('DsTestLedger').map(({ path }) => path)).toEqual(['ownerId']);
+      expect(exporter.failedReferences('DsTestNote')).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('flags the children of a parent whose reference timed out as incomplete too', async () => {
+    const subject = new mongoose.Types.ObjectId();
+    await Note.create({ ownerId: subject, body: 'mine' });
+    const spy = failQueriesOn(Note, 'ownerId', maxTimeExpired());
+    try {
+      const exporter = new SubjectRecordExport({ userId: subject.toString(), email: null }, registry);
+
+      expect(await collect(exporter, 'DsTestNote')).toEqual([]);
+      expect(await collect(exporter, 'DsTestNoteComment')).toEqual([]);
+      expect(exporter.failedReferences('DsTestNote').map(({ path }) => path)).toEqual(['ownerId']);
+      expect(exporter.failedReferences('DsTestNoteComment').map(({ path }) => path)).toEqual(['noteId']);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('fails the whole model on a server error other than running out of time', async () => {
+    const subject = new mongoose.Types.ObjectId();
+    await Ledger.create({ partyIds: [subject] });
+    const spy = failQueriesOn(
+      Ledger,
+      'ownerId',
+      new mongoose.mongo.MongoServerError({ message: 'not primary', code: 10107 })
+    );
+    try {
+      const exporter = new SubjectRecordExport({ userId: subject.toString(), email: null }, registry);
+
+      await expect(collect(exporter, 'DsTestLedger')).rejects.toThrow('not primary');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('still fails the whole model when a reference query fails off the server', async () => {
+    const subject = new mongoose.Types.ObjectId();
+    await Ledger.create({ partyIds: [subject] });
+    const spy = vi.spyOn(Ledger, 'find').mockImplementation((() => {
+      throw new Error('connection reset');
+    }) as unknown as typeof Ledger.find);
+    try {
+      const exporter = new SubjectRecordExport({ userId: subject.toString(), email: null }, registry);
+
+      await expect(collect(exporter, 'DsTestLedger')).rejects.toThrow('connection reset');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('exports a document matched by several references once', async () => {
+    const subject = new mongoose.Types.ObjectId();
+    await Ledger.create({ ownerId: subject, partyIds: [subject], adminId: subject });
+    const exporter = new SubjectRecordExport({ userId: subject.toString(), email: null }, registry);
+
+    expect(await collect(exporter, 'DsTestLedger')).toHaveLength(1);
   });
 
   it('exports only what names the subject, minus secrets, following each action', async () => {

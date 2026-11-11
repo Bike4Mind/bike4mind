@@ -538,7 +538,9 @@ records/           Admin data subject export only: every stored record that name
                    included. Free text (notes, summaries) is exported as written. Records already
                    deleted and only awaiting permanent removal are not included.
                    records/index.json lists every collection searched with its record count; an
-                   "omitted" value of time_limit or error means that collection is not included.
+                   "omitted" value of time_limit or error means that collection is not included,
+                   and "incompleteReferences" lists the fields of a collection whose search ran out
+                   of time, so records found only through them may be missing.
 `;
 
 // An admin export is handed to the person it is about, so the body below still addresses them.
@@ -580,7 +582,12 @@ include artifacts and files attached to them that others shared with you or made
 and images that other participants added to a shared notebook.
 ${includesRecords ? RECORDS_README : ''}`;
 
-type RecordsIndexEntry = { model: string; count: number; omitted?: 'time_limit' | 'error' };
+type RecordsIndexEntry = {
+  model: string;
+  count: number;
+  omitted?: 'time_limit' | 'error';
+  incompleteReferences?: string[];
+};
 
 /**
  * Streams one model's records to a scratch NDJSON file and returns how many there were. Throws
@@ -620,7 +627,7 @@ async function writeRegistryRecords(
   const index: RecordsIndexEntry[] = [];
   const reserveMs = recordsReserveMs(remainingMs());
   const outOfTime = () => remainingMs() < reserveMs;
-  for (const model of exporter.models) {
+  for (const model of await exporter.walkOrder()) {
     if (outOfTime()) {
       index.push({ model, count: 0, omitted: 'time_limit' });
       continue;
@@ -629,7 +636,13 @@ async function writeRegistryRecords(
     try {
       const count = await writeModelRecords(exporter, model, scratchPath, outOfTime);
       if (count > 0) await appendEntry(archive, createReadStream(scratchPath), `records/${model}.ndjson`);
-      index.push({ model, count });
+      const failed = exporter.failedReferences(model);
+      for (const { path: reference, error } of failed) {
+        logger.error('Data subject export: reference omitted', { model, reference, error });
+      }
+      index.push(
+        failed.length > 0 ? { model, count, incompleteReferences: failed.map(({ path }) => path) } : { model, count }
+      );
     } catch (error) {
       if (isTransientError(error)) throw error;
       if (error instanceof RecordsTimeLimit) {
