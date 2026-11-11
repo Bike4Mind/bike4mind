@@ -271,10 +271,10 @@ export const ModelPricingCatalog: React.FC<ModelPricingCatalogProps> = ({
 
   // An id the model list does not know keeps its writes: the server refuses only known types it does not bill by row.
   const canWritePrice = (modelId: string) => {
-    const type = modelIndex.data?.get(modelId)?.type;
+    const type = modelIndex.data?.byId.get(modelId)?.type;
     return type === undefined || PRICE_ROW_BILLED_MODEL_TYPES.has(type);
   };
-  const isVoice = (modelId: string) => modelIndex.data?.get(modelId)?.type === 'realtime-voice';
+  const isVoice = (modelId: string) => modelIndex.data?.byId.get(modelId)?.type === 'realtime-voice';
 
   // Drafts are held in the DISPLAYED unit (per 1M for token rows), so what the
   // editor shows always matches the table it was opened from.

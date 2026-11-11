@@ -46,8 +46,8 @@ type Decision = {
   reasons: string[];
   flags: RunPriceFlag[];
   notSaved: boolean;
-  /** The model list carries it, so it has a page to open. */
-  hasRow: boolean;
+  /** The model list carries it, or a partial list cannot rule out that it has a page to open. */
+  canOpen: boolean;
   /** The first open reason's server fix action, on the model's own row. */
   fix: { action: AdminModelFixAction; row: AdminModelRow } | null;
   /** Flags with no open reason to act on: the price is the decision. */
@@ -59,11 +59,11 @@ const unique = (ids: readonly string[]) => [...new Set(ids)];
 /**
  * One card per model this run touched whose status is Needs review now (docs/admin-models-spec.md section 5.3),
  * plus this run's price flags, which phase 1 does not yet persist on the model. A model the list does not carry (a
- * report-mode run's new model, or a write-mode flag on one) still gets a card, with no model page to open: Open prices
- * when it has price flags, otherwise no action. Without the index (`indexFailed`) only the run's own findings are
- * known, so nothing is claimed about catalog rows.
+ * report-mode run's new model, or a write-mode flag on one) still gets a card, with no model page to open; a write-mode
+ * one with price flags gets Open prices. When the index failed or stopped at its cap (`indexPartial`), a missing row
+ * proves nothing: the card shows the run's own findings, claims nothing about the catalog row, and offers Open model.
  */
-function buildDecisions(run: DiscoveryRun, index: ModelIndex, indexFailed: boolean): Decision[] {
+function buildDecisions(run: DiscoveryRun, index: ModelIndex, indexPartial: boolean): Decision[] {
   const flagsByModel = new Map<string, RunPriceFlag[]>();
   for (const flag of run.priceFlags) flagsByModel.set(flag.modelId, [...(flagsByModel.get(flag.modelId) ?? []), flag]);
   const diffByModel = new Map(run.catalogDiff.map(entry => [entry.modelId, entry]));
@@ -81,16 +81,19 @@ function buildDecisions(run: DiscoveryRun, index: ModelIndex, indexFailed: boole
     const flags = flagsByModel.get(modelId) ?? [];
     if (!row) {
       const blockers =
-        run.mode === 'report' ? (diffByModel.get(modelId)?.blockedBy ?? []).filter(isDecisionBlocker) : [];
+        run.mode === 'report' || indexPartial
+          ? (diffByModel.get(modelId)?.blockedBy ?? []).filter(isDecisionBlocker)
+          : [];
       if (blockers.length === 0 && flags.length === 0) continue;
       decisions.push({
         modelId,
         reasons: blockers.map(blockerCopy),
         flags,
-        notSaved: run.mode === 'report' && !indexFailed,
-        hasRow: false,
+        notSaved: run.mode === 'report' && !indexPartial,
+        canOpen: indexPartial,
         fix: null,
-        openPrices: flags.length > 0,
+        // A report-mode model may never be added, so the price table cannot take a row for it.
+        openPrices: run.mode !== 'report' && flags.length > 0,
       });
       continue;
     }
@@ -103,7 +106,7 @@ function buildDecisions(run: DiscoveryRun, index: ModelIndex, indexFailed: boole
       reasons: open.map(reason => reason.message),
       flags,
       notSaved: false,
-      hasRow: true,
+      canOpen: true,
       fix: fixAction ? { action: fixAction, row } : null,
       openPrices: open.length === 0,
     });
@@ -112,7 +115,7 @@ function buildDecisions(run: DiscoveryRun, index: ModelIndex, indexFailed: boole
 }
 
 function DecisionCard({ decision, index }: { decision: Decision; index: ModelIndex }) {
-  const { modelId, reasons, flags, notSaved, hasRow, fix } = decision;
+  const { modelId, reasons, flags, notSaved, canOpen, fix } = decision;
   const { openModel, openPrices } = useModelsNavigation();
   const actionTestId = `discovery-decision-action-${modelId}`;
   return (
@@ -140,7 +143,7 @@ function DecisionCard({ decision, index }: { decision: Decision; index: ModelInd
           <Typography level="body-xs" fontFamily="code" sx={{ overflowWrap: 'anywhere' }}>
             {modelId}
           </Typography>
-          {hasRow && (
+          {canOpen && (
             <Link
               component="button"
               type="button"
@@ -396,11 +399,12 @@ function Breadcrumb({ current }: { current: string }) {
 
 function RunView({ run }: { run: DiscoveryRun }) {
   const models = useModelIndex();
-  const index: ModelIndex = models.data ?? new Map();
+  const index: ModelIndex = models.data?.byId ?? new Map();
   const indexFailed = models.isError && !models.data;
+  const indexTruncated = !!models.data?.truncated;
   const [showDetails, setShowDetails] = useState(false);
   const result = runResult(run);
-  const decisions = models.isLoading ? [] : buildDecisions(run, index, indexFailed);
+  const decisions = models.isLoading ? [] : buildDecisions(run, index, indexFailed || indexTruncated);
   // The plan is reported identically in both modes, so a write run whose appends all threw looks clean everywhere
   // but here. Write mode only: report mode plans rows and writes none by design.
   const writeGaps =
@@ -451,6 +455,13 @@ function RunView({ run }: { run: DiscoveryRun }) {
         )}
         {indexFailed && (
           <Muted>Could not load each model&apos;s current status, so only this run&apos;s own findings show.</Muted>
+        )}
+        {indexTruncated && (
+          <Box data-testid="discovery-run-index-truncated">
+            <Muted>
+              The model lookup stopped at its cap, so a model past it shows only this run&apos;s own findings.
+            </Muted>
+          </Box>
         )}
       </Stack>
 

@@ -39,6 +39,7 @@ let queryClient = newQueryClient();
 let run: DiscoveryRun | Error | ReturnType<typeof apiError> = RUN;
 let rows: AdminModelRow[] = [];
 let modelsError: ReturnType<typeof apiError> | null = null;
+let modelsTotal: number | null = null;
 
 const runGets = () => m.get.mock.calls.filter(([url, config]) => url === '/api/admin/model-discovery' && config).length;
 
@@ -81,6 +82,7 @@ beforeEach(() => {
   run = RUN;
   rows = [adminRow('gpt-5.6-luna', { name: 'GPT 5.6 Luna' })];
   modelsError = null;
+  modelsTotal = null;
   m.get.mockImplementation(async (url: string, config?: { params?: { runId?: string } }) => {
     if (url === '/api/admin/model-discovery' && config?.params?.runId) {
       if (run instanceof Error || 'response' in run) throw run;
@@ -88,7 +90,7 @@ beforeEach(() => {
     }
     if (url === '/api/admin/models') {
       if (modelsError) throw modelsError;
-      return { data: modelList(rows) };
+      return { data: modelsTotal === null ? modelList(rows) : { ...modelList(rows), total: modelsTotal } };
     }
     throw new Error(`unexpected GET ${url}`);
   });
@@ -272,21 +274,64 @@ describe('DiscoveryRunPage decisions', () => {
     renderPage();
     await screen.findByText(/Could not load each model/);
 
-    fireEvent.click(screen.getByTestId('discovery-decision-action-gpt-5.6-luna'));
-    expect(m.nav.openPrices).toHaveBeenCalledWith('gpt-5.6-luna');
+    expect(screen.queryByTestId('discovery-decision-action-gpt-5.6-luna')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('discovery-decision-open-gpt-5.6-luna'));
+    expect(m.nav.openModel).toHaveBeenCalledWith('gpt-5.6-luna');
     expect(screen.getByTestId('discovery-decision-flag-gpt-5.6-luna')).toHaveTextContent('Sources disagree');
     expect(screen.getByTestId('discovery-decision-reasons-gpt-planned')).toHaveTextContent('No price yet.');
     expect(screen.queryByTestId('discovery-decision-not-saved-gpt-planned')).not.toBeInTheDocument();
     expect(screen.queryByTestId('discovery-decision-not-saved-gpt-5.6-luna')).not.toBeInTheDocument();
   });
 
-  it('keeps a write-mode flag card with Open prices when model status fails to load', async () => {
+  it('keeps a write-mode flag card with Open prices and Open model when model status fails to load', async () => {
     modelsError = apiError(500, { error: 'list down' });
     renderPage();
 
     expect(await screen.findByTestId('discovery-decision-action-gpt-5.6-luna')).toHaveTextContent('Open prices');
+    expect(screen.getByTestId('discovery-decision-open-gpt-5.6-luna')).toBeInTheDocument();
+  });
+
+  it('offers no Open prices on a report-mode card for a model the list does not carry', async () => {
+    run = runWith({ mode: 'report', changes: { ...EMPTY_CHANGES, added: ['gpt-5.6-luna'] } });
+    rows = [];
+    await renderLoaded();
+
+    expect(screen.getByTestId('discovery-decision-flag-gpt-5.6-luna')).toHaveTextContent('Sources disagree');
+    expect(screen.queryByTestId('discovery-decision-action-gpt-5.6-luna')).not.toBeInTheDocument();
     expect(screen.queryByTestId('discovery-decision-open-gpt-5.6-luna')).not.toBeInTheDocument();
   });
+
+  it.each(['write', 'report'] as const)(
+    'claims nothing about a missing row in a %s-mode run when the model lookup stopped at its cap',
+    async mode => {
+      run = runWith({
+        mode,
+        priceFlags: [],
+        changes: { ...EMPTY_CHANGES, added: ['gpt-planned'] },
+        catalogDiff: [
+          {
+            modelId: 'gpt-planned',
+            kind: 'added',
+            ownedGroups: [],
+            changedKeys: [],
+            lifecycleStatus: 'active',
+            promoted: false,
+            blockedBy: ['no-trusted-price'],
+            operatorOwned: false,
+          },
+        ],
+      });
+      rows = [adminRow('gpt-5.6-luna', { name: 'GPT 5.6 Luna' })];
+      modelsTotal = 6000;
+      await renderLoaded();
+
+      expect(screen.getByTestId('discovery-run-index-truncated')).toHaveTextContent('stopped at its cap');
+      expect(screen.getByTestId('discovery-decision-reasons-gpt-planned')).toHaveTextContent('No price yet.');
+      expect(screen.queryByTestId('discovery-decision-not-saved-gpt-planned')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByTestId('discovery-decision-open-gpt-planned'));
+      expect(m.nav.openModel).toHaveBeenCalledWith('gpt-planned');
+    }
+  );
 
   it('skips a touched model that no longer needs a decision', async () => {
     run = runWith({ priceFlags: [], changes: { ...EMPTY_CHANGES, added: ['gpt-new'], promoted: ['gpt-new'] } });

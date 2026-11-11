@@ -400,7 +400,7 @@ export function LifecycleSuggestions() {
   const queryClient = useQueryClient();
   const missing = useMissingAdminPermission('settings:manage');
   const lifecycle = useLifecycleQueue(!missing);
-  const index = useModelIndex().data;
+  const index = useModelIndex().data?.byId;
   const { openModel, openPrices } = useModelsNavigation();
   const [accepting, setAccepting] = useState<LifecycleQueueItem | null>(null);
   const [dismissing, setDismissing] = useState<LifecycleQueueItem | null>(null);

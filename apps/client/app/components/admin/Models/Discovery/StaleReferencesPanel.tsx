@@ -23,7 +23,7 @@ const referenceId = (reference: StaleReference) => `${reference.surface}|${refer
 export function StaleReferencesPanel() {
   const [requested, setRequested] = useState(false);
   const report = useStaleReferences();
-  const index = useModelIndex().data;
+  const index = useModelIndex().data?.byId;
 
   const check = () => {
     setRequested(true);

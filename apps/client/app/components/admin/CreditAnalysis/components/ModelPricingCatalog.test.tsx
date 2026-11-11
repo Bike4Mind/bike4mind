@@ -15,7 +15,7 @@ vi.mock('../../Models/ModelWriteAction', () => ({
 }));
 vi.mock('../../Models/Discovery/useModelIndex', () => ({
   useModelIndex: () => ({
-    data: new Map([...gate.modelTypes].map(([id, type]) => [id, { id, type }])),
+    data: { byId: new Map([...gate.modelTypes].map(([id, type]) => [id, { id, type }])), truncated: false },
   }),
 }));
 
