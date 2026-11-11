@@ -16,8 +16,11 @@ const ImageJobPreview = ({ fileId, prompt }: { fileId: string; prompt: string })
   return <img src={file.data.fileUrl} alt={prompt} loading="lazy" data-testid="image-job-image" />;
 };
 
+// A socket frame marks the row 'succeeded' before the gallery refetch brings its output.
+const isAwaitingOutput = (job: StudioImageJob) => job.state === 'succeeded' && job.output === null;
+
 const JobBody = ({ job }: { job: StudioImageJob }) => {
-  const liveLabel = LIVE_LABELS[job.state];
+  const liveLabel = isAwaitingOutput(job) ? LIVE_LABELS.storing : LIVE_LABELS[job.state];
   if (liveLabel) {
     return (
       <Stack alignItems="center" gap={1} data-testid="image-job-live">

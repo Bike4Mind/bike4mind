@@ -81,6 +81,13 @@ describe('ImageGallery', () => {
     expect(screen.getByTestId('image-job-image-loading')).toBeInTheDocument();
   });
 
+  it('keeps a row the socket marked finished on Saving until its output arrives', () => {
+    h.jobs = [job({ id: 'done', state: 'succeeded', output: null })];
+    render(<ImageGallery />, { wrapper: TestWrapper });
+    expect(screen.getByTestId('image-job-live')).toHaveTextContent('Saving');
+    expect(screen.queryByTestId('image-job-unviewable')).not.toBeInTheDocument();
+  });
+
   it('settles a finished image kept outside Files instead of waiting on it', () => {
     h.jobs = [job({ id: 'done', state: 'succeeded', output: { fileId: null, contentType: 'image/png', bytes: 1 } })];
     render(<ImageGallery />, { wrapper: TestWrapper });
