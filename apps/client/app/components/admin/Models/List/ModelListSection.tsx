@@ -157,6 +157,12 @@ const isExpiredUndo = (error: unknown) => {
   return status === 409 && /expired/i.test(String(data.error ?? data.message ?? ''));
 };
 
+const EMPTY_CELL = (
+  <Box component="span" sx={{ color: 'admin.inkMuted' }} data-testid="models-row-empty">
+    -
+  </Box>
+);
+
 const asSentence = (text: string) => (/[.!?]$/.test(text) ? text : `${text}.`);
 const capitalize = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
@@ -503,10 +509,10 @@ export function ModelListSection() {
       id: 'sunset',
       label: 'Retires',
       sortable: true,
-      width: '9rem',
+      width: '8rem',
       render: row =>
         row.sunsetDate === null || row.sunsetDays === null ? (
-          '-'
+          EMPTY_CELL
         ) : (
           <Stack sx={{ minWidth: 0 }} data-testid="models-row-sunset">
             <Typography level="body-sm">{row.sunsetDate}</Typography>
@@ -539,7 +545,10 @@ export function ModelListSection() {
       id: 'price',
       label: 'Price /1M in/out',
       width: '12rem',
-      render: row => priceSummary(row.price, row.type),
+      render: row => {
+        const price = priceSummary(row.price, row.type);
+        return price === '-' ? EMPTY_CELL : price;
+      },
     },
     {
       id: 'access',
@@ -719,7 +728,6 @@ export function ModelListSection() {
         onRowActivate={row => void openModel(row.id)}
         testId="models-table"
         rowTestId={row => `models-row-${row.id}`}
-        minWidth="85rem"
         selection={selection}
         onSelectionChange={setSelection}
         selectionDisabled={stale}

@@ -229,7 +229,7 @@ describe('ModelListSection views', () => {
         modelRow({ id: 'soon', name: 'Soon', sunsetDate: '2026-12-01', sunsetDays: 20 }),
         modelRow({ id: 'today', name: 'Today', sunsetDate: '2026-11-11', sunsetDays: 0 }),
         modelRow({ id: 'past', name: 'Past', sunsetDate: '2026-10-25', sunsetDays: -17 }),
-        modelRow({ id: 'undated', name: 'Undated' }),
+        modelRow({ id: 'undated', name: 'Undated', price: null }),
       ])
     );
     await renderModelsRoute('/admin?tab=models&modelsView=all', ModelListSection);
@@ -240,6 +240,8 @@ describe('ModelListSection views', () => {
     expect(sunsetOf('today')).toHaveTextContent('2026-11-11today');
     expect(sunsetOf('past')).toHaveTextContent('2026-10-2517 days ago');
     expect(sunsetOf('undated')).not.toBeInTheDocument();
+    expect(within(screen.getByTestId('models-row-undated')).getAllByTestId('models-row-empty')).toHaveLength(2);
+    expect(within(screen.getByTestId('models-row-soon')).queryByTestId('models-row-empty')).not.toBeInTheDocument();
   });
 
   it('opens the Retiring view sorted by sunset, most overdue first', async () => {
