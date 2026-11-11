@@ -35,6 +35,12 @@ const productionCases: Array<{
     detail: { budgetMicroUsd: 50_000_000, periodHours: 24, windowEndsAt: new Date('2026-01-01T00:00:00Z') },
   },
   { kind: 'approaching_cap', scope: 'lake', detail: { spentMicroUsd: 4_000_000, budgetMicroUsd: 5_000_000 } },
+  {
+    kind: 'budget_exhausted',
+    scope: 'owner',
+    detail: { budgetMicroUsd: 5_000_000, periodHours: 24, windowEndsAt: new Date('2026-01-01T00:00:00Z') },
+  },
+  { kind: 'budget_exhausted', scope: 'owner', detail: { budgetMicroUsd: 0, periodHours: 24 } },
 ];
 
 describe('renderSpendNotificationEmail', () => {
@@ -146,10 +152,29 @@ describe('renderSpendNotificationEmail', () => {
     expect(result.html).not.toMatch(/re-index then/i);
   });
 
+  it('tells the owner when its own window resumes, and never promises resumption for a stuck owner denial', () => {
+    const windowed = renderSpendNotificationEmail({
+      kind: 'budget_exhausted',
+      scope: 'owner',
+      lakeName: 'My Lake',
+      detail: { budgetMicroUsd: 5_000_000, periodHours: 24, windowEndsAt: new Date('2026-01-01T00:00:00Z') },
+    });
+    expect(windowed.html).toMatch(/resumes automatically at 2026-01-01T00:00:00.000Z/);
+    expect(windowed.html).toContain('$5.00 per 24h');
+
+    const stuck = renderSpendNotificationEmail({
+      kind: 'budget_exhausted',
+      scope: 'owner',
+      lakeName: 'My Lake',
+      detail: { budgetMicroUsd: 0, periodHours: 24 },
+    });
+    expect(stuck.html).not.toMatch(/resumes automatically/i);
+  });
+
   it('throws on an unhandled kind/scope pair instead of silently rendering the last branch copy', () => {
     expect(() =>
       renderSpendNotificationEmail({
-        // 'stopped'/'lake' is not one of the eight valid pairings this renderer handles.
+        // 'stopped'/'lake' is not one of the valid pairings this renderer handles.
         kind: 'stopped',
         scope: 'lake',
         lakeName: 'My Lake',

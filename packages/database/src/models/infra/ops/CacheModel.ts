@@ -273,6 +273,14 @@ class CacheRepository extends BaseRepository<ICacheDocument> implements ICacheRe
     };
   }
 
+  /** Inverse of `tryAddWithinLimitFixedWindow`: live window only, clamped at 0, no-op otherwise. */
+  async releaseFromFixedWindow(key: string, amount: number): Promise<void> {
+    if (!(amount > 0)) return;
+    await this.model.updateOne({ key, expiresAt: { $gt: new Date() }, 'result.count': { $type: 'number' } }, [
+      { $set: { 'result.count': { $max: [0, { $subtract: ['$result.count', amount] }] } } },
+    ]);
+  }
+
   /**
    * Atomically decrement a counter (used for rollback)
    *

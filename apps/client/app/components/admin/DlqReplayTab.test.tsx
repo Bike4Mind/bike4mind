@@ -1,6 +1,8 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { CssVarsProvider } from '@mui/joy/styles';
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import userEvent from '@testing-library/user-event';
+import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { getThemeConfig } from '@client/app/utils/themes';
 import DlqReplayTab from './DlqReplayTab';
 
 const state = vi.hoisted(() => ({
@@ -17,15 +19,27 @@ const state = vi.hoisted(() => ({
   }>,
 }));
 
+const h = vi.hoisted(() => ({ user: null as null | { isAdmin?: boolean; adminPermissions?: string[] } }));
+
+vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: h.user }) }));
+vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
 vi.mock('@client/app/hooks/data/dlqManagement', () => ({
   useDlqQueues: () => ({
-    data: [],
+    data: [
+      {
+        label: 'q1',
+        displayName: 'Queue One',
+        application: 'app',
+        approximateMessageCount: 1,
+        approximateNotVisibleCount: 0,
+      },
+    ],
     isLoading: false,
     isError: false,
     refetch: vi.fn(),
   }),
   useDlqMessages: () => ({
-    data: [],
+    data: [{ messageId: 'm1', body: '{}', sentTimestamp: '1700000000000', approximateReceiveCount: '1' }],
     isLoading: false,
     isError: false,
     refetch: vi.fn(),
@@ -43,9 +57,11 @@ vi.mock('@client/app/hooks/data/dlqManagement', () => ({
   }),
 }));
 
+const theme = extendTheme({ ...getThemeConfig() });
+
 function renderTab() {
   const result = render(
-    <CssVarsProvider>
+    <CssVarsProvider theme={theme}>
       <DlqReplayTab />
     </CssVarsProvider>
   );
@@ -53,8 +69,19 @@ function renderTab() {
   return result;
 }
 
+const renderWithQueueSelected = async () => {
+  render(
+    <CssVarsProvider theme={theme}>
+      <DlqReplayTab />
+    </CssVarsProvider>
+  );
+  await userEvent.click(screen.getByRole('combobox'));
+  await userEvent.click(await screen.findByRole('option', { name: /Queue One/ }));
+};
+
 beforeEach(() => {
   state.history = [];
+  h.user = null;
 });
 
 describe('DlqReplayTab history table', () => {
@@ -122,5 +149,23 @@ describe('DlqReplayTab history table', () => {
 
     expect(headerTexts).not.toContain('Body');
     expect(headerTexts).not.toContain('Message Body');
+  });
+});
+
+describe('DlqReplayTab replay permission', () => {
+  it('disables both replay buttons for a support:read viewer', async () => {
+    h.user = { isAdmin: false, adminPermissions: ['support:read'] };
+    await renderWithQueueSelected();
+
+    expect(screen.getByTestId('dlq-replay-all')).toBeDisabled();
+    expect(screen.getByTestId('dlq-replay-single-m1')).toBeDisabled();
+  });
+
+  it('enables both replay buttons for a settings:manage delegate', async () => {
+    h.user = { isAdmin: false, adminPermissions: ['settings:manage'] };
+    await renderWithQueueSelected();
+
+    expect(screen.getByTestId('dlq-replay-all')).toBeEnabled();
+    expect(screen.getByTestId('dlq-replay-single-m1')).toBeEnabled();
   });
 });

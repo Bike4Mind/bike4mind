@@ -1,11 +1,11 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { organizationRepository } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { requestApproval } from '@server/admin/approvals/service';
 import { creditGrantNeedsApproval } from '@server/admin/creditGrants/gate';
 import { TopUpSchema, topUpOrg } from '@server/admin/creditGrants/topUpOrg';
-import { baseApi } from '@server/middlewares/baseApi';
+import { assertDelegateCanCreditOrganization } from '@server/admin/creditGrants/delegateTargets';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { parseAdminActionReason } from '@bike4mind/server-utils/utils/adminAudit';
 import type { Request } from 'express';
@@ -14,16 +14,8 @@ interface RequestQuery {
   id: string;
 }
 
-// requiredScopes gates the API-key path only: apiKeyAuth 403s an under-scoped key
-// before req.user is set, so a key issued for a narrow integration can't grant
-// org credits just because its owner is an admin. JWT/browser admins skip that
-// check and still pass the isAdmin gate below.
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
+const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions: { POST: 'credits:adjust' } }).post(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const { id } = req.query as RequestQuery;
     if (!id) throw new BadRequestError('Organization id required');
 
@@ -35,6 +27,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     if (gate.policy) {
       const organization = await organizationRepository.findById(id);
       if (!organization) throw new NotFoundError('Organization not found');
+      await assertDelegateCanCreditOrganization(req.user, organization, 'top up');
       const pending = await requestApproval(
         request,
         {
@@ -43,7 +36,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
           summary: `${kind === 'refund' ? 'Refund' : 'Top up'} ${credits} credits to org ${organization.name}`,
           reason,
           requiredPermission: 'credits:adjust',
-          requiresFullAdmin: true,
+          requiresFullAdmin: false,
         },
         gate.policy
       );

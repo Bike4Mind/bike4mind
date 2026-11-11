@@ -360,7 +360,12 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // Captured for the release-on-failure below: a reservation whose provider call never
       // succeeded must be given back, or provider blips permanently poison the lake's
       // LIFETIME meter (x3 under SQS redelivery, each attempt reserving again).
-      let grantedReservation: { estimatedMicroUsd: number; batchId?: string; dataLakeId?: string } | null = null;
+      let grantedReservation: {
+        estimatedMicroUsd: number;
+        batchId?: string;
+        dataLakeId?: string;
+        owner?: dataLakeService.LakeSpendOwner;
+      } | null = null;
       const spendScope = await dataLakeService.resolveIngestSpendScope(
         existingFabFile,
         { dataLakeBatches: dataLakeBatchRepository, dataLakes: dataLakeRepository },
@@ -372,7 +377,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         const estimatedMicroUsd = Math.ceil(getEmbeddingModelCost(embeddingModel, missTokens) * 1_000_000);
         // The gate resolves the lake's cost tier itself (#1675) - it needs the lake's ownership,
         // which only `dataLakeId` can reach, so passing the id is what enables the tier here.
-        await dataLakeService.enforceEmbeddingSpendGate({
+        const { owner } = await dataLakeService.enforceEmbeddingSpendGate({
           estimatedMicroUsd,
           estimatedTokens: missTokens,
           batchId: spendScope.batchId,
@@ -386,7 +391,12 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           logger,
           notify: makeDataLakeSpendNotifier(logger),
         });
-        grantedReservation = { estimatedMicroUsd, batchId: spendScope.batchId, dataLakeId: spendScope.dataLakeId };
+        grantedReservation = {
+          estimatedMicroUsd,
+          batchId: spendScope.batchId,
+          dataLakeId: spendScope.dataLakeId,
+          owner,
+        };
         logger.log(`[spendGate] granted ~${estimatedMicroUsd} microUSD for ${missTokens} tokens`);
       }
 
@@ -433,13 +443,13 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       } catch (providerErr) {
         await creditReservation?.refund();
         // The provider call failed, so the reserved money was never spent: return it to the
-        // run and lake meters (the period window drains on its own). Scoped to EXACTLY the
+        // run, lake and owner meters (the platform period window drains on its own). Scoped to EXACTLY the
         // provider call - a failure after embeddings succeeded is real spend and stays
         // metered. Best-effort: a release failure must not mask the provider error, and a
         // hard crash before reaching here still leaks (which is why the per-lake meter also
         // has an admin reset).
         if (grantedReservation) {
-          const { estimatedMicroUsd, batchId, dataLakeId } = grantedReservation;
+          const { estimatedMicroUsd, batchId, dataLakeId, owner } = grantedReservation;
           try {
             // batchId is absent for a tag-joined member: there was no run meter to reserve
             // from, so there is none to give back either.
@@ -455,6 +465,17 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
             );
           } catch (releaseErr) {
             logger.error(`[spendGate] failed to release reservation after provider failure: ${releaseErr}`);
+          } finally {
+            // Separate from the run/lake release so a throw there cannot strand the owner window.
+            // releaseOwnerEmbeddingSpend never throws.
+            if (owner) {
+              await dataLakeService.releaseOwnerEmbeddingSpend({
+                owner,
+                estimatedMicroUsd,
+                cache: cacheRepository,
+                logger,
+              });
+            }
           }
         }
         throw providerErr;

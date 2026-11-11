@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import type { OverwatchUtm } from '@bike4mind/common';
-import type { AcquisitionTouches } from '../lib/subscriptions/acquisition';
+import type { AcquisitionTouch, AcquisitionTouches } from '../lib/subscriptions/acquisition';
 import { minorUnitsPerMajor } from '../integrations/stripe/currency';
 import { emitProductEvent, HOST_PRODUCT_ID, ingestKeyFor } from './emitActiveEvent';
 import { pseudonymizeUserId } from './pseudonymize';
@@ -45,7 +45,14 @@ export function stableEventId(...parts: string[]): string {
  */
 const ATTRIBUTION = 'self-reported';
 
-type SourceTouch = { touch: 'first' | 'last' | 'both'; utm: OverwatchUtm };
+type SourceTouch = { touch: 'first' | 'last' | 'both' | 'oauth'; utm: OverwatchUtm };
+
+/**
+ * The campaign touches plus `oauthTouch`: the product of the OAuth client the account was created
+ * to sign in to, which the server that issued the code recorded (oauthSignupCredit.ts in
+ * apps/client). The user record's `acquisition` has this shape.
+ */
+export type CreditTouches = AcquisitionTouches & { oauthTouch?: AcquisitionTouch };
 
 /**
  * The products a conversion is credited to: each distinct touch source that names an Overwatch
@@ -53,8 +60,11 @@ type SourceTouch = { touch: 'first' | 'last' | 'both'; utm: OverwatchUtm };
  * campaign channel (an email, a social network) has no key and is no product. The host product is
  * never one: it counts its own signups from `signup_completed` (funnel.ts), and receives billing
  * events through emitBillingEvent's own host copy, so crediting it here would double both.
+ *
+ * A product that a campaign touch also names keeps that touch's label: `oauth` marks a product
+ * credited by its OAuth client alone.
  */
-function sourceProducts(touches: AcquisitionTouches | undefined): Map<string, SourceTouch> {
+function sourceProducts(touches: CreditTouches | undefined): Map<string, SourceTouch> {
   const byProduct = new Map<string, SourceTouch>();
   const note = (touch: 'first' | 'last', utm: OverwatchUtm | undefined) => {
     const productId = utm?.source;
@@ -64,6 +74,10 @@ function sourceProducts(touches: AcquisitionTouches | undefined): Map<string, So
   };
   note('first', touches?.firstTouch);
   note('last', touches?.lastTouch);
+  const oauth = touches?.oauthTouch;
+  if (oauth?.source && oauth.source !== HOST_PRODUCT_ID && !byProduct.has(oauth.source) && ingestKeyFor(oauth.source)) {
+    byProduct.set(oauth.source, { touch: 'oauth', utm: oauth });
+  }
   return byProduct;
 }
 
@@ -74,12 +88,14 @@ function sourceProducts(touches: AcquisitionTouches | undefined): Map<string, So
  * for why that matters before these counts are trusted.
  *
  * Called once, where an account is created with the new user's own request in hand (their cookies
- * carry the touches). An internal account's credit carries `internal: true` (lane.ts), so the
- * credited product can keep the team's own signups out of its counts; callers skip synthetic
- * accounts before this. The user's pseudonym makes the eventId, since an account signs up once, so a
- * retry sends the same id and the receiver keeps one event. Awaited by the caller but never throws
- * (emitProductEvent fails open and times out on its own), and resolves at once when no touch names
- * a product, which is most signups.
+ * carry the touches), and once more by oauthSignupCredit.ts (apps/client) for a new account's first
+ * authorization code to a client with an Overwatch product. Both key the eventId the same way, so
+ * a product both name is credited once. An internal account's credit carries `internal: true`
+ * (lane.ts), so the credited product can keep the team's own signups out of its counts; callers
+ * skip synthetic accounts before this. The user's pseudonym makes the eventId, since an account
+ * signs up once, so a retry sends the same id and the receiver keeps one event. Awaited by the
+ * caller but never throws (emitProductEvent fails open and times out on its own), and resolves at
+ * once when no touch names a product, which is most signups.
  *
  * Resolves to the products it ATTEMPTED, not the ones that succeeded: each emit swallows its own
  * rejection, so a product whose post failed is still in this list. Do not treat the return value
@@ -87,7 +103,7 @@ function sourceProducts(touches: AcquisitionTouches | undefined): Map<string, So
  */
 export async function emitSignupForSourceProducts(opts: {
   userId: string;
-  touches: AcquisitionTouches | undefined;
+  touches: CreditTouches | undefined;
   /** How the account was created (`otc`, `google`, `github`, ...), for splitting the stage. */
   method: string;
   /** The new account's flags, as recorded at signup: the mark the credit carries. */
@@ -128,7 +144,7 @@ export type PurchaseCreditUser = {
   isSynthetic?: boolean | null;
   isInternal?: boolean | null;
   isAdmin?: boolean | null;
-  acquisition?: AcquisitionTouches | null;
+  acquisition?: CreditTouches | null;
 };
 
 /**

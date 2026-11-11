@@ -256,7 +256,18 @@ describe('the session panel in the shell', () => {
     expect(get('loop-status')).not.toBeNull();
   });
 
-  it('reserves a rail beside the thread of a Code session with a folder', async () => {
+  it('floats in the free margin of a wide pane without moving the conversation', async () => {
+    paneWidth(2400);
+    transcript = [{ id: 'm1', role: 'user', content: 'Hello', createdAt: '2026-10-01T00:00:00.000Z' }];
+    await open('bound');
+
+    expect(get('session-panel').dataset.variant).toBe('docked');
+    expect(get('chat-toggle-session-panel-btn').getAttribute('aria-expanded')).toBe('true');
+    expect(getComputedStyle(get('chat-conversation-column')).getPropertyValue(SESSION_PANEL_SPACE_VAR)).toBe('0px');
+    expect(getComputedStyle(get('chat-thread-region')).paddingRight).toBe('0px');
+  });
+
+  it('reserves a rail beside the thread when the pane has no free margin for it', async () => {
     paneWidth(1100);
     transcript = [{ id: 'm1', role: 'user', content: 'Hello', createdAt: '2026-10-01T00:00:00.000Z' }];
     await open('bound');
@@ -286,7 +297,8 @@ describe('the session panel in the shell', () => {
     const thread = get('chat-thread');
     const composer = get('chat-composer-input');
     await act(async () => get('chat-toggle-session-panel-btn').click());
-    expect(getComputedStyle(get('chat-thread-region')).paddingRight).toBe(`${SESSION_PANEL_SPACE}px`);
+    expect(get('session-panel').dataset.variant).toBe('docked');
+    expect(getComputedStyle(get('chat-thread-region')).paddingRight).toBe('0px');
     expect(get('chat-thread')).toBe(thread);
     expect(get('chat-composer-input')).toBe(composer);
     await act(async () => get('chat-toggle-session-panel-btn').click());
@@ -297,21 +309,32 @@ describe('the session panel in the shell', () => {
     expect(find('session-panel')).toBeNull();
   });
 
-  it('folds into the header button on a narrow pane and opens as a popover that Escape shuts', async () => {
+  it('folds into the header button on a narrow pane and opens as an overlay that Escape shuts', async () => {
     paneWidth(900);
     transcript = [{ id: 'm1', role: 'user', content: 'Hello', createdAt: '2026-10-01T00:00:00.000Z' }];
     await open('bound');
     expect(find('session-panel')).toBeNull();
 
-    await act(async () => get('chat-toggle-session-panel-btn').click());
-    expect(get('session-panel').dataset.variant).toBe('popover');
+    const toggle = get('chat-toggle-session-panel-btn');
+    await act(async () => toggle.click());
+    expect(get('session-panel').dataset.variant).toBe('overlay');
+    expect(find('session-panel-scrim')).not.toBeNull();
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
     expect(getComputedStyle(get('chat-conversation-column')).getPropertyValue(SESSION_PANEL_SPACE_VAR)).toBe('0px');
     expect(getComputedStyle(get('chat-thread-region')).paddingRight).toBe('0px');
 
     await act(async () => document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
     expect(find('session-panel')).toBeNull();
-    // A popover is transient: the docked preference is untouched.
+    expect(find('session-panel-scrim')).toBeNull();
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(document.activeElement).toBe(toggle);
+    // An overlay is transient: the docked preference is untouched.
     expect(window.localStorage.getItem('b4m.sessionPanel.open')).toBeNull();
+
+    await act(async () => toggle.click());
+    await act(async () => get('session-panel-close-btn').click());
+    expect(find('session-panel')).toBeNull();
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
   });
 
   it('centers setup in an empty Code transcript without duplicating it above the composer', async () => {

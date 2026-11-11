@@ -2,6 +2,7 @@ import { slackDevWorkspaceRepository } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { downloadServeableOutput, signOutputUrl } from '@bike4mind/server-utils/generations/signOutputUrl';
 import type { SlackJobDeliveryDeps } from '@bike4mind/server-utils/generationJobs/slackJobDelivery';
+import { buildFileLinkUrl } from '@bike4mind/server-utils/files/fileLinkToken';
 
 export const createSlackJobDeliveryDeps = (logger: Logger): SlackJobDeliveryDeps => ({
   getSlackClient: async workspaceId => {
@@ -28,6 +29,11 @@ export const createSlackJobDeliveryDeps = (logger: Logger): SlackJobDeliveryDeps
   },
   downloadOutput: downloadServeableOutput,
   signOutputUrl,
+  buildOutputLink: (output, userId, ttlSeconds) => {
+    if (output.location === 'generated')
+      return buildFileLinkUrl({ kind: 'generatedKey', key: output.s3Key }, userId, ttlSeconds);
+    return output.fileId ? buildFileLinkUrl({ kind: 'fabFile', fileId: output.fileId }, userId, ttlSeconds) : null;
+  },
   sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
   logger,
 });

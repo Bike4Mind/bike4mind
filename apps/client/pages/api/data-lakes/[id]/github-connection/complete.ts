@@ -1,3 +1,4 @@
+import { assertLakePlanAllowed } from '@server/entitlements/lakePlanGate';
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
@@ -38,6 +39,8 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
       installationId,
       repositoryId,
       logger: req.logger,
+      assertAllowed: owner =>
+        assertLakePlanAllowed(req, owner.kind === 'organization' ? owner.organizationId : undefined),
     });
     clearStateNonce(res, NONCE_SLOT.githubLakeConnect);
     // A connection minted just now has ingested nothing: its first sync is only enqueued.

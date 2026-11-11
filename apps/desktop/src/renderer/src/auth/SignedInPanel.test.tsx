@@ -56,6 +56,19 @@ describe('the account menu', () => {
     expect(noOpener).not.toContain('data-testid="account-settings-btn"');
   });
 
+  it('offers Billing for a signed-in user', () => {
+    const html = markup(<AccountMenu state={signedIn} onBilling={() => {}} onProfile={() => {}} />);
+    expect(html).toContain('data-testid="account-billing-btn"');
+  });
+
+  it.each([
+    { ...signedIn, status: 'signed-out' as const },
+    { ...signedIn, user: undefined },
+  ])('hides Billing without a signed-in user', state => {
+    const html = markup(<AccountMenu state={state} onBilling={() => {}} onProfile={() => {}} />);
+    expect(html).not.toContain('data-testid="account-billing-btn"');
+  });
+
   /** Primary, not danger: a waiting update is not a fault the user has to go and fix. */
   it('draws a waiting update on the Settings row, not as a failure', () => {
     const waiting = markup(

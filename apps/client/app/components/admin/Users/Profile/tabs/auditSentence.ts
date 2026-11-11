@@ -208,6 +208,8 @@ export const auditUndo = (
     patch: {
       ...Object.fromEntries(changes.map(change => [change.field, change.before ?? defaultFor(change.field)])),
       ...(touchesStatus && reason && { statusChangeReason: undoAdminReason(reason) }),
+      // Undoing a suspend entry removes the detection grades that suspend recorded (see SuspendDialog).
+      ...(changes.some(change => change.field === 'isBanned' && change.after === true) && { undoSuspension: true }),
     },
     redo: {
       ...Object.fromEntries(changes.map(change => [change.field, change.after])),

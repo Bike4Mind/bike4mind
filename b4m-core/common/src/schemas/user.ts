@@ -115,20 +115,20 @@ export type SafeUser = z.infer<typeof safeUserResponseSchema>;
 export const safeUsersResponseSchema = z.array(safeUserResponseSchema);
 
 /**
- * Mirrors `toPublicProfile()` (pages/api/users/[id]/index.ts): the fields safe to
- * expose to any authenticated user about ANOTHER user. Deliberately excludes
- * email, isAdmin, financial data, tokens, security questions, and admin notes.
+ * Mirrors `toPublicProfile()` (pages/api/users/[id]/index.ts): identity is visible
+ * to authenticated users; workspace colleagues also see profile and presence details.
+ * Deliberately excludes email, isAdmin, financial data, tokens, security questions, and admin notes.
  */
 export const publicUserProfileResponseSchema = z.object({
   id: z.string(),
   username: z.string(),
   name: z.string(),
   photoUrl: z.string().nullable(),
-  level: z.string(),
-  role: z.string().nullable(),
-  team: z.string().nullable(),
+  level: z.string().optional(),
+  role: z.string().nullable().optional(),
+  team: z.string().nullable().optional(),
   lastActiveAt: z.date().optional(),
-  isOnline: z.boolean(),
+  isOnline: z.boolean().optional(),
 });
 export type PublicUserProfile = z.infer<typeof publicUserProfileResponseSchema>;
 

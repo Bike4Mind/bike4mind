@@ -45,7 +45,7 @@ d312a05b0b11 d3e467aeaff4 d3eaab3ea5bc d62a191ecb73 d6ea87dfd1f3 d72c4c7fb8cb d7
 d8960e4f9824 d935bc3fc33f d9ef50186023 db2f2ec79ba9 db38b5af6ebf dba77c4f75e1 dcb472615f55 decee2b17e42
 e1f44ac43bb5 e23d092bb96b e382e8b70179 e45612c7685b e469c9c36006 e46ab1a21ce4 e50fe3fb8c42
 e57e7baff157 e595cbe31df0 e5b445a66b3b ea1c26f079c0 ea47451367b2 eb064860e4cb eb393164d18a
-eb489128dd54 eb8ffcc904f4 ec21ea5d7155 ed3e6176e5c7 ee1a91584891 efc5836a2d56 f01fbbb5a514
+eb489128dd54 eb8ffcc904f4 ec21ea5d7155 ed3e6176e5c7 ee1a91584891 f01fbbb5a514
 f077a8409874 f2a758fff8dc f2b0a5d37469 f3a75784b4ba f3eaddde86e8 f582657aa6d2
 f6c79f784d66 f7313baf7c87 f7b1abb973f8 f7b767e8d08b f835f59b19c4 f87ac4f79b9c f968e17e377e f9b399174d48
 fab5d2fb8c6e fad1aeec6013 fbb811957a79 fc6ae97a0af2 fe869b6f837a ff38b81ff8b8 ffdd84ef0662
@@ -320,7 +320,6 @@ export const ROUTE_SCOPE_BASELINE: ScopeBaseline = {
     '/api/slack/workspace/[workspaceId]',
     '/api/stripe/portal',
     '/api/stripe/start-payment',
-    '/api/stripe/subscription-plans',
     '/api/subscriptions',
     '/api/subscriptions/[ownerType]/[ownerId]',
     '/api/subscriptions/checkout-session',

@@ -1,16 +1,16 @@
 import {
+  CREDITS_PAGE_READ,
   ADMIN_LEDGER_PAGE_SIZE,
   adminLedgerPageSchema,
   adminLedgerQuerySchema,
   BadRequestError,
   CreditHolderType,
-  ForbiddenError,
   isContiguousLedgerFilter,
   NotFoundError,
 } from '@bike4mind/common';
 import { creditTransactionRepository, userRepository, withTransaction } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import {
   balanceAfterFirstRow,
   buildLedgerRows,
@@ -41,10 +41,8 @@ type LedgerRequestQuery = {
  * adjustments carry the balance recorded when they were written. A usage row whose shortfall was written
  * off shows the charged credits plus writtenOffCredits, so the running balance matches the real one.
  */
-const handler = baseApi({ auth: 'jwtOnly' }).get(
+const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { GET: CREDITS_PAGE_READ } }).get(
   asyncHandler<{}, unknown, unknown, LedgerRequestQuery>(async (req, res) => {
-    if (!req.user?.isAdmin) throw new ForbiddenError('Unauthorized. Admin access required.');
-
     const { userId } = req.query;
     if (typeof userId !== 'string' || !userId) throw new BadRequestError('Invalid user ID');
 

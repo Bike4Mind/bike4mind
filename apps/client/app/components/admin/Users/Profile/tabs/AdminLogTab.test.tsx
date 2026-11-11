@@ -76,7 +76,11 @@ describe('AdminLogTab', () => {
     fireEvent.click(await screen.findByTestId('user-admin-log-undo-btn'));
 
     await waitFor(() =>
-      expect(mocks.update).toHaveBeenCalledWith({ isBanned: false, statusChangeReason: 'Undo: Chargeback' })
+      expect(mocks.update).toHaveBeenCalledWith({
+        isBanned: false,
+        statusChangeReason: 'Undo: Chargeback',
+        undoSuspension: true,
+      })
     );
     expect(await screen.findByText('Undone: Suspended account')).toBeInTheDocument();
   });
@@ -111,7 +115,11 @@ describe('AdminLogTab', () => {
     fireEvent.click(await screen.findByTestId('user-admin-log-undo-btn'));
 
     await waitFor(() =>
-      expect(mocks.update).toHaveBeenCalledWith({ isBanned: false, statusChangeReason: 'Undo: Chargeback' })
+      expect(mocks.update).toHaveBeenCalledWith({
+        isBanned: false,
+        statusChangeReason: 'Undo: Chargeback',
+        undoSuspension: true,
+      })
     );
     await waitFor(() => expect(screen.getByTestId('user-admin-log-undo-btn')).not.toBeDisabled());
     expect(screen.queryByText('Undone: Suspended account')).not.toBeInTheDocument();

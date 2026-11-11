@@ -934,6 +934,13 @@ export interface IUserAcquisition {
   lastTouch?: IUserAcquisitionTouch;
   /** Absent for a signup that followed no verified hop. */
   verifiedTouch?: IUserVerifiedTouch;
+  /**
+   * The product of the OAuth client the account was created to sign in to (apps/client
+   * server/analytics/oauthSignupCredit.ts): `source` is the client's Overwatch product, `medium`
+   * is `oauth` and `content` the client_id. Written once, with consent, by the server that issued
+   * the authorization code, so the browser never names it.
+   */
+  oauthTouch?: IUserAcquisitionTouch;
   /** How the account was created (`otc`, `google`, `github`, ...). */
   signupMethod: string;
   capturedAt: Date;
