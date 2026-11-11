@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // Keep @bike4mind/common real so the sensitive/non-sensitive split comes from the actual
 // settingsMap. Mock only the infra + middleware seams.
 let stored: Record<string, unknown> | null = null;
+let storedRows: { settingName: string; settingValue: unknown }[] = [];
 const findOneAndUpdate = vi.fn();
 const deleteOne = vi.fn();
 const order = vi.hoisted(() => [] as string[]);
@@ -11,6 +12,7 @@ const order = vi.hoisted(() => [] as string[]);
 vi.mock('@bike4mind/database/infra', () => ({
   AdminSettings: {
     findOne: () => ({ lean: () => Promise.resolve(stored) }),
+    find: () => ({ lean: () => Promise.resolve(storedRows) }),
     findOneAndUpdate: (...args: unknown[]) => {
       order.push('findOneAndUpdate');
       return findOneAndUpdate(...args);
@@ -133,6 +135,7 @@ describe('settings/update settings that constrain delegated admins', () => {
         'SlackSecurityAlertsWebhookUrl',
         'enforceMFA',
         'allowTrustedDevices',
+        'signupGrantUnprotectedMaxCredits',
       ])
     );
   });
@@ -673,5 +676,65 @@ describe('settings/update admin audit trail', () => {
     recordAdminActionFromRequest.mockRejectedValue(new Error('audit down'));
 
     await expect(runHandler('tagLineMain', 'Welcome aboard')).rejects.toThrow('audit down');
+  });
+});
+
+describe('settings/update signup grant guard', () => {
+  const enabledPolicy = {
+    enabled: true,
+    version: 'v1',
+    rules: [{ signal: 'datacenter', comparison: 'eq', threshold: 1, weight: 5, missing: 'score', missingWeight: 1 }],
+    reducedAt: 3,
+    reviewAt: 5,
+    reducedFraction: 0.5,
+  };
+
+  beforeEach(() => {
+    findOneAndUpdate.mockReset();
+    recordAdminActionFromRequest.mockReset();
+    vi.clearAllMocks();
+    stored = null;
+    storedRows = [];
+  });
+
+  afterEach(() => {
+    storedRows = [];
+  });
+
+  it('refuses a large initial grant with 422 while the policy is off, before any write', async () => {
+    storedRows = [{ settingName: 'signupGrantRiskPolicy', settingValue: JSON.stringify({ enabled: false }) }];
+    const refusal = runHandler('signupGrantInitialCredits', 5000);
+    await expect(refusal).rejects.toMatchObject({ statusCode: 422 });
+    await expect(refusal).rejects.toThrow(
+      'Signup Grant Initial Credits above 1,000 credits needs a valid, enabled Signup Grant Assessment Policy'
+    );
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('saves a large initial grant while a valid policy is enabled', async () => {
+    storedRows = [{ settingName: 'signupGrantRiskPolicy', settingValue: enabledPolicy }];
+    stageWriteResult('signupGrantInitialCredits', 5000);
+    const result = await runHandler('signupGrantInitialCredits', 5000);
+    expect(result.settingValue).toBe(5000);
+  });
+
+  it('refuses turning the policy off while a grant is above the limit', async () => {
+    storedRows = [{ settingName: 'signupGrantInitialCredits', settingValue: '5000' }];
+    await expect(runHandler('signupGrantRiskPolicy', { enabled: false })).rejects.toMatchObject({ statusCode: 422 });
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('refuses an invalid policy on save', async () => {
+    await expect(runHandler('signupGrantRiskPolicy', { enabled: true })).rejects.toThrow(
+      'Signup Grant Assessment Policy is not valid.'
+    );
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('honours a stored limit', async () => {
+    storedRows = [{ settingName: 'signupGrantUnprotectedMaxCredits', settingValue: 10000 }];
+    stageWriteResult('signupGrantInviteBonusCredits', 5000);
+    const result = await runHandler('signupGrantInviteBonusCredits', 5000);
+    expect(result.settingValue).toBe(5000);
   });
 });
