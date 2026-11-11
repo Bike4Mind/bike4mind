@@ -16,7 +16,7 @@ import { Logger } from '@bike4mind/observability';
  */
 
 /**
- * Runtime registry of all DLQ->source queue pairs.
+ * Runtime registry of DLQs, including queues without an SQS replay destination.
  * Both DLQ and source queue URLs are resolved from sst.Linkable resources
  * (dlqUrls and sourceQueueUrls) stored in resource.enc. Zero IAM overhead.
  *
@@ -277,10 +277,136 @@ const DLQ_REGISTRY = [
     application: 'PublishedArtifacts',
     sourceQueue: 'publishThumbnailQueue',
   },
+  {
+    label: 'young-account-spend-alert',
+    displayName: 'Young Account Spend Alert',
+    application: 'Signup',
+    sourceQueue: null,
+    replay: 'unsafe',
+  },
+  {
+    label: 'api-probe-detector',
+    displayName: 'API Probe Detector',
+    application: 'Security',
+    sourceQueue: null,
+    replay: 'unsafe',
+  },
+  {
+    label: 'image-moderation-review-sweep',
+    displayName: 'Image Moderation Review Sweep',
+    application: 'Moderation',
+    sourceQueue: null,
+    replay: 'unsafe',
+  },
+  {
+    label: 'spend-monitor',
+    displayName: 'Spend Monitor',
+    application: 'Billing',
+    sourceQueue: null,
+    replay: 'unsafe',
+  },
+  {
+    label: 'signup-grant-held-release',
+    displayName: 'Signup Grant Held Release',
+    application: 'Signup',
+    sourceQueue: null,
+    replay: 'unsafe',
+  },
+  {
+    label: 'revenue-snapshot',
+    displayName: 'Revenue Snapshot',
+    application: 'Billing',
+    sourceQueue: null,
+    replay: 'unsafe',
+  },
+  {
+    label: 'subscription-reconciliation',
+    displayName: 'Subscription Reconciliation',
+    application: 'Billing',
+    sourceQueue: null,
+    replay: 'unsafe',
+  },
+  {
+    label: 'account-deletion-sweep',
+    displayName: 'Account Deletion Sweep',
+    application: 'Account',
+    sourceQueue: null,
+    replay: 'unsafe',
+  },
+  {
+    label: 'fab-file-moderation',
+    displayName: 'FabFile Moderation',
+    application: 'FabFileProcessing',
+    sourceQueue: null,
+    replay: 'unsafe',
+  },
+  {
+    label: 'telemetry-alert-rule',
+    displayName: 'Telemetry Alert Rule',
+    application: 'TelemetryAlerts',
+    sourceQueue: null,
+    replay: 'unsafe',
+  },
+  {
+    label: 'session-enrichment',
+    displayName: 'Session Enrichment',
+    application: 'SessionEnrichment',
+    sourceQueue: null,
+    replay: 'unsafe',
+  },
+  {
+    label: 'billing-events',
+    displayName: 'Billing Events',
+    application: 'Billing',
+    sourceQueue: null,
+    replay: 'unsafe',
+  },
+  {
+    label: 'email-events',
+    displayName: 'Email Events',
+    application: 'Email',
+    sourceQueue: null,
+    replay: 'unsafe',
+  },
+  {
+    label: 'push-events',
+    displayName: 'Push Events',
+    application: 'Notifications',
+    sourceQueue: null,
+    replay: 'unsafe',
+  },
+  {
+    label: 'notebook-events',
+    displayName: 'Notebook Events',
+    application: 'NotebookCuration',
+    sourceQueue: null,
+    replay: 'unsafe',
+  },
+  {
+    label: 'completion-events',
+    displayName: 'Completion Events',
+    application: 'Completions',
+    sourceQueue: null,
+    replay: 'unsafe',
+  },
+  {
+    label: 'business-metric-alerts',
+    displayName: 'Business Metric Alerts',
+    application: 'Analytics',
+    sourceQueue: null,
+    replay: 'unsafe',
+  },
+  {
+    label: 'alarm-handler',
+    displayName: 'DLQ Alarm Handler',
+    application: 'AlarmPipeline',
+    sourceQueue: null,
+    replay: 'unsafe',
+  },
 ] as const satisfies readonly DlqDescriptor[];
 
 type CoreDlqLabel = (typeof DLQ_REGISTRY)[number]['label'];
-type CoreSourceQueueName = (typeof DLQ_REGISTRY)[number]['sourceQueue'];
+type CoreSourceQueueName = NonNullable<(typeof DLQ_REGISTRY)[number]['sourceQueue']>;
 
 declare const contributedBrand: unique symbol;
 /** A DLQ label an overlay declared; obtained from contributedDlqLabel, which checks registration. */
@@ -292,8 +418,8 @@ export type DlqLabel = CoreDlqLabel | ContributedDlqLabel;
 /** Valid source queue names: DLQ_REGISTRY's, plus the contributed ones that registered. */
 export type SourceQueueName = CoreSourceQueueName | ContributedSourceQueueName;
 
-/** An entry the registry holds, whose label and source queue are therefore resolvable. */
-export type RegisteredDlqDescriptor = DlqDescriptor & { label: DlqLabel; sourceQueue: SourceQueueName };
+/** An entry the registry holds; a null source queue has no SQS replay destination. */
+export type RegisteredDlqDescriptor = DlqDescriptor & { label: DlqLabel; sourceQueue: SourceQueueName | null };
 
 type LinkableQueues = {
   dlqUrls: Record<string, string>;
@@ -320,7 +446,9 @@ function contributedDescriptors(): DlqDescriptor[] {
   }
   const labels = new Set(reserved.dlqLabels);
   const names = new Set(reserved.resourceNames);
-  const unknown = DLQ_REGISTRY.filter(d => !labels.has(d.label) || !names.has(d.sourceQueue)).map(d => d.label);
+  const unknown = DLQ_REGISTRY.filter(
+    d => !labels.has(d.label) || (d.sourceQueue !== null && !names.has(d.sourceQueue))
+  ).map(d => d.label);
   if (unknown.length > 0) {
     Logger.warn(
       `[dlqRegistry] generated core names miss DLQ_REGISTRY entries (${unknown.join(', ')}); re-run pnpm codegen. ` +
@@ -347,7 +475,7 @@ function getRegistry() {
     const contributed = contributedDescriptors();
     for (const d of contributed) {
       contributedLabels.add(d.label);
-      contributedSourceQueues.add(d.sourceQueue);
+      if (d.sourceQueue !== null) contributedSourceQueues.add(d.sourceQueue);
     }
     registry = createDlqRegistry<readonly DlqDescriptor[]>([...DLQ_REGISTRY, ...contributed], resolvers, {
       dlqErrorContext: 'Check dlqUrls Linkable in infra/web.ts.',

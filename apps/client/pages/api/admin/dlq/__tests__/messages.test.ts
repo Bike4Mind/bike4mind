@@ -17,7 +17,7 @@ vi.mock('@server/middlewares/adminApi', () => ({
   }),
 }));
 vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({
-  getDlqByLabel: (label: string) => ({ label }),
+  getDlqByLabel: (label: string) => ({ label, sourceQueue: null, replay: 'unsafe' }),
   getDlqUrl: () => 'https://sqs.example/dlq',
 }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ receiveFromQueue: h.receiveFromQueue }));
@@ -40,7 +40,7 @@ describe('GET /api/admin/dlq/messages', () => {
     h.receiveFromQueue.mockReset().mockResolvedValue([message]);
   });
 
-  it('holds messages and returns receipt handles for a settings:manage caller', async () => {
+  it('keeps an unsafe queue inspectable for a settings:manage caller', async () => {
     const body = await peek(['settings:manage']);
 
     expect(h.receiveFromQueue).toHaveBeenCalledWith('https://sqs.example/dlq', 10, 120);

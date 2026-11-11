@@ -5,8 +5,9 @@ export interface DlqDescriptor {
   displayName: string;
   /** Value of Application tag for CloudWatch grouping */
   application: string;
-  /** Source queue name (camelCase) used to resolve the source queue URL */
-  sourceQueue: string;
+  /** Null when recovery has no SQS replay destination. */
+  sourceQueue: string | null;
+  replay?: 'safe' | 'side-effects' | 'unsafe';
 }
 
 export interface DlqResolvers {

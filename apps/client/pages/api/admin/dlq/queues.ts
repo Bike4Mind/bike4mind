@@ -29,6 +29,7 @@ const handler = adminApi({
         label: entry.label,
         displayName: entry.displayName,
         application: entry.application,
+        replay: entry.replay,
         approximateMessageCount: attrs.approximateMessageCount,
         approximateNotVisibleCount: attrs.approximateNotVisibleCount,
       };
@@ -46,6 +47,7 @@ const handler = adminApi({
       label: registry[index].label,
       displayName: registry[index].displayName,
       application: registry[index].application,
+      replay: registry[index].replay,
       approximateMessageCount: -1,
       approximateNotVisibleCount: -1,
     };

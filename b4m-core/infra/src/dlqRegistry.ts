@@ -6,7 +6,7 @@ export function createDlqRegistry<const T extends readonly DlqDescriptor[]>(
   options?: CreateDlqRegistryOptions
 ): {
   getDlqUrl(label: T[number]['label']): string;
-  getSourceQueueUrl(name: T[number]['sourceQueue']): string;
+  getSourceQueueUrl(name: NonNullable<T[number]['sourceQueue']>): string;
   getDlqByLabel(label: T[number]['label']): T[number] | undefined;
   getAllDescriptors(): readonly T[number][];
 } {
@@ -27,7 +27,7 @@ export function createDlqRegistry<const T extends readonly DlqDescriptor[]>(
       return url;
     },
 
-    getSourceQueueUrl(name: T[number]['sourceQueue']): string {
+    getSourceQueueUrl(name: NonNullable<T[number]['sourceQueue']>): string {
       const url = resolvers.resolveSourceQueueUrl(name as string);
       if (!url) {
         throw new Error(
