@@ -5,11 +5,7 @@ import {
   publishedArtifactsBucket,
   slackExportBucket,
 } from './buckets';
-import {
-  DEFAULT_LAMBDA_ENVIRONMENT,
-  SINGLE_RECORD_BATCH,
-  TEST_GENERATION_PROVIDER_ENVIRONMENT,
-} from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT, SINGLE_RECORD_BATCH, TEST_GENERATION_PROVIDER_ENVIRONMENT } from './constants';
 import { imageProcessor } from './imageProcessor';
 import {
   buildQueuePair,
@@ -809,7 +805,7 @@ const accountDataExportQueueSubscription = accountDataExportQueue.subscribe(
     // The zip is written to /tmp before upload; sized for MAX_FILE_BYTES in accountDataExport.ts.
     storage: '5 GB',
     vpc: lambdaVpc,
-    link: [...allSecrets, fabFileBucket, generatedImagesBucket, eventBus],
+    link: [...allSecrets, fabFileBucket, generatedImagesBucket, eventBus, websocketApi],
     permissions: [
       {
         actions: ['s3:ListBucketVersions', 's3:DeleteObjectVersion'],

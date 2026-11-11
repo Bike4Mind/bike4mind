@@ -29,6 +29,8 @@ const h = vi.hoisted(() => ({
   agentFind: vi.fn(),
   projectFind: vi.fn(),
   readProfile: vi.fn(),
+  personalOrganizations: vi.fn(),
+  sendToClient: vi.fn(),
   notebooks: [] as Array<{ id: string; name: string; chatHistory?: Array<{ images?: string[] }> }>,
 }));
 
@@ -39,6 +41,7 @@ vi.mock('@bike4mind/utils', () => ({
   secureParameters: (obj: unknown, schema: { parse: (value: unknown) => unknown }) => schema.parse(obj),
 }));
 vi.mock('@bike4mind/database', () => ({
+  mongoose: { model: () => ({ find: () => ({ lean: h.personalOrganizations }) }) },
   userRepository: { findById: h.userFindById },
   User: {
     findOneAndUpdate: (...args: unknown[]) => ({ lean: () => h.leaseClaim(...args) }),
@@ -84,6 +87,16 @@ vi.mock('@bike4mind/server-utils/memory/ledgerMemoryStore', () => ({
   createLedgerMemoryStore: () => ({ readProfile: h.readProfile }),
 }));
 vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publish } } }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: h.sendToClient }));
+vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'https://ws.example.com' } } }));
+vi.mock('./accountDataExportCollections', () => ({
+  accountArchiveAdapters: [
+    {
+      name: 'ToolModel',
+      collect: async () => ({ records: Readable.from(['{"id":"tool-1"}\n']), count: () => 1 }),
+    },
+  ],
+}));
 
 import { ACCOUNT_DATA_EXPORT_TTL_MS } from '@bike4mind/server-utils/utils/accountDataExport';
 import { dispatch, MAX_FILE_BYTES } from './accountDataExport';
@@ -127,6 +140,7 @@ const notFound = () => Object.assign(new Error('Not Found'), { name: 'NotFound' 
 beforeEach(() => {
   vi.clearAllMocks();
   h.leaseClaim.mockResolvedValue({ email: 'ada@example.com' });
+  h.personalOrganizations.mockResolvedValue([]);
   h.leaseRenew.mockResolvedValue({ matchedCount: 1 });
   h.leaseExists.mockResolvedValue({ _id: USER_ID });
   process.env.APP_URL = 'https://app.example.com/';
@@ -204,9 +218,11 @@ describe('account data export worker', () => {
       'agents.json',
       'artifacts/artifact_1-Plan.json',
       'artifacts/index.json',
+      'collections/ToolModel.jsonl',
       'files/f1-notes.txt',
       'files/f2-notes.txt',
       'files/index.json',
+      'manifest.json',
       'memories.json',
       'notebooks/index.json',
       'notebooks/nb-1-Trip_plans.json',
@@ -217,6 +233,15 @@ describe('account data export worker', () => {
     const profile = entries.get('profile.json')!;
     expect(JSON.parse(profile)).toMatchObject({ id: USER_ID, email: 'ada@example.com' });
     expect(profile).not.toContain('must-not-ship');
+    expect(entries.get('collections/ToolModel.jsonl')).toBe('{"id":"tool-1"}\n');
+    const manifest = JSON.parse(entries.get('manifest.json')!);
+    expect(manifest.completeness).toBe('partial');
+    expect(manifest.collections).toContainEqual({
+      name: 'ToolModel',
+      path: 'collections/ToolModel.jsonl',
+      count: 1,
+      representation: 'metadata',
+    });
 
     expect(entries.get('files/f1-notes.txt')).toBe('file-bytes');
     const index = JSON.parse(entries.get('files/index.json')!);
@@ -240,6 +265,10 @@ describe('account data export worker', () => {
         body: expect.stringContaining(`https://app.example.com/account-data-export/${JOB_ID}`),
       })
     );
+    expect(h.sendToClient).toHaveBeenCalledWith(USER_ID, 'https://ws.example.com', {
+      action: 'account_data_export_ready',
+      exportJobId: JOB_ID,
+    });
   });
 
   describe('notebook images', () => {
