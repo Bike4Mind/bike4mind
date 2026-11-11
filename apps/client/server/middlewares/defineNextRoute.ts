@@ -94,7 +94,12 @@ export type ContractRequest<C extends EndpointContract> = Request & {
  */
 export function nextRouteForContract<C extends EndpointContract>(
   contract: C,
-  options: { maxBodySize?: number; exemptReadsFromDailyRateLimit?: boolean; rateLimit?: RequestHandler } = {}
+  options: {
+    maxBodySize?: number;
+    exemptReadsFromDailyRateLimit?: boolean;
+    recordsActivity?: boolean;
+    rateLimit?: RequestHandler;
+  } = {}
 ) {
   type ValidatedReq = ContractRequest<C>;
   type Handler = (req: ValidatedReq, res: Response, next: NextFunction) => unknown;

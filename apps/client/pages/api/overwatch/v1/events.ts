@@ -40,6 +40,9 @@ function reservedEventError(event: string, keyProductId: string): string | undef
 const handler = baseApi({
   maxBodySize: 256 * 1024,
   requiredScopes: [ApiKeyScope.OVERWATCH_INGEST_WRITE],
+  // Machine ingest: a use of the key, never an action by its owner.
+  recordsActivity: false,
+  recordsKeyUse: true,
 }).post(async (req, res) => {
   // FIRST check: must be API-key authenticated. Session-auth/CSRF is explicitly rejected.
   if (!req.apiKeyInfo) {
