@@ -292,4 +292,25 @@ describe('agent configuration egress', () => {
     expect(importDb.agents.create).toHaveBeenCalledTimes(1);
     expect(ids.agents.has('voice-agent')).toBe(false);
   });
+
+  it('rejects a malformed archive before any write', async () => {
+    const archive = await exportAgentConfiguration('source', exportAdapters());
+    const malformed = [
+      { ...archive, favorites: [{ documentId: 'x', documentType: 'bogus' }] },
+      { ...archive, mcpServers: [{ name: 'not-a-server', envVariableKeys: [] }] },
+      { ...archive, skills: [{ ...archive.skills[0], files: [{ path: '../etc/passwd', content: 'x' }] }] },
+      { ...archive, agents: [{ ...archive.agents[0], temperature: 'hot' }] },
+      { ...archive, agents: [{ ...archive.agents[0], allowedTools: 'bash' }] },
+      { ...archive, projects: undefined },
+    ];
+    for (const bad of malformed) {
+      const db = importAdapters();
+      await expect(
+        importAgentConfiguration('target', bad as unknown as AgentConfigurationArchive, db)
+      ).rejects.toThrow();
+      for (const writer of Object.values(db)) {
+        expect(Object.values(writer).every(fn => vi.mocked(fn as never).mock.calls.length === 0)).toBe(true);
+      }
+    }
+  });
 });

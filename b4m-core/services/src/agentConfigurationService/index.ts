@@ -1,3 +1,5 @@
+import { z } from 'zod';
+import { FavoriteDocumentType, McpServerName, checkSkillFiles } from '@bike4mind/common';
 import type {
   IAgentDocument,
   IBriefcasePromptDocument,
@@ -95,6 +97,87 @@ export interface AgentConfigurationArchive {
   favorites: Favorite[];
   profile: { name: string; preferences: Preferences };
 }
+
+const strings = z.array(z.string());
+const looseObject = z.record(z.string(), z.unknown());
+
+const agentSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string().optional(),
+  type: z.enum(['persona', 'voice']).optional(),
+  triggerWords: strings.optional(),
+  capabilities: strings.optional(),
+  systemPrompt: z.string().optional(),
+  allowedTools: strings.optional(),
+  deniedTools: strings.optional(),
+  maxIterations: z.object({ quick: z.number(), medium: z.number(), very_thorough: z.number() }).optional(),
+  defaultThoroughness: z.string().optional(),
+  confidenceGateThreshold: z.number().optional(),
+  confidenceGateMode: z.string().optional(),
+  confidenceGateSelfReport: z.boolean().optional(),
+  exclusiveMcpServers: strings.optional(),
+  fallbackModels: strings.optional(),
+  preferredModel: z.string().optional(),
+  preferredImageModel: z.string().optional(),
+  temperature: z.number().optional(),
+  maxTokens: z.number().optional(),
+  personality: looseObject.optional(),
+  visual: looseObject.optional(),
+  identity: looseObject.optional(),
+  projectId: z.string().optional(),
+});
+
+const skillSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string().optional(),
+  body: z.string(),
+  argumentHint: z.string().optional(),
+  allowedTools: strings.optional(),
+  claudeCodeAllowedTools: strings.optional(),
+  claudeCodeModel: z.string().optional(),
+  disableModelInvocation: z.boolean().optional(),
+  files: z
+    .array(z.object({ path: z.string(), content: z.string() }))
+    .superRefine((files, ctx) => {
+      const check = checkSkillFiles(files);
+      if (!check.ok) ctx.addIssue({ code: 'custom', message: check.error });
+    })
+    .optional(),
+});
+
+const projectSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string().optional(),
+  sessionIds: strings,
+  fileIds: strings,
+  systemPrompts: z.array(z.object({ fileId: z.string(), enabled: z.boolean() })),
+});
+
+const promptSchema = z.object({
+  id: z.string(),
+  type: z.string().optional(),
+  name: z.string(),
+  description: z.string().optional(),
+  promptText: z.string(),
+  tags: strings.optional(),
+  executionMode: z.string().optional(),
+  requiredTools: strings.optional(),
+  schemaVersion: z.number().optional(),
+});
+
+export const agentConfigurationArchiveSchema = z.object({
+  agents: z.array(agentSchema),
+  skills: z.array(skillSchema),
+  projects: z.array(projectSchema),
+  prompts: z.array(promptSchema),
+  mcpServers: z.array(z.object({ name: z.enum(McpServerName), envVariableKeys: strings })),
+  sessionToolApprovals: z.array(z.object({ sessionId: z.string(), deniedTools: strings })),
+  favorites: z.array(z.object({ documentId: z.string(), documentType: z.enum(FavoriteDocumentType) })),
+  profile: z.object({ name: z.string(), preferences: looseObject }),
+});
 
 type Query = Record<string, unknown>;
 interface Reader<T> {
@@ -277,9 +360,13 @@ export interface AgentConfigurationReferenceMap {
   files?: ReadonlyMap<string, string>;
 }
 
+/**
+ * Validates the archive shape, then writes it for `userId`. Callers must still run their own caller-context
+ * checks (agent validators, model entitlement; see validateAgentUpdate in apps/client/server/utils/agentValidation.ts).
+ */
 export async function importAgentConfiguration(
   userId: string,
-  archive: AgentConfigurationArchive,
+  rawArchive: AgentConfigurationArchive,
   db: AgentConfigurationImportAdapters,
   references: AgentConfigurationReferenceMap = {}
 ): Promise<{
@@ -288,6 +375,7 @@ export async function importAgentConfiguration(
   skills: Map<string, string>;
   prompts: Map<string, string>;
 }> {
+  const archive = agentConfigurationArchiveSchema.parse(rawArchive) as AgentConfigurationArchive;
   const projects = new Map<string, string>();
   const agents = new Map<string, string>();
   const skills = new Map<string, string>();
