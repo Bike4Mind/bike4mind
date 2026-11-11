@@ -1015,4 +1015,63 @@ describe('WebSocket live activity settlement', () => {
     );
     expect(endAgentRunLiveActivity).toHaveBeenCalledWith(execution, { status: 'completed' }, noopLogger);
   });
+
+  describe('held low-confidence completion', () => {
+    const pendingCompletion = {
+      answer: 'held answer',
+      replyText: 'held reply',
+      totalTokens: 10,
+      totalIterations: 2,
+      reachedMaxIterations: false,
+      lowConfidence: true,
+      canReconsider: false,
+    };
+    const heldExecution = { ...baseExecution, status: 'paused', pendingCompletion };
+
+    it('ends the activity when the held completion is accepted via Stop', async () => {
+      mockFindById.mockResolvedValue(heldExecution);
+      mockClearPendingGate.mockResolvedValue(true);
+      await handleGateResponse(
+        {
+          accessToken: 'token',
+          action: 'agent_execute',
+          command: 'gate_response',
+          executionId: 'exec-1',
+          decision: 'stop',
+        },
+        'user-1',
+        'conn-1',
+        'https://endpoint',
+        noopLogger as never
+      );
+      expect(endAgentRunLiveActivity).toHaveBeenCalledTimes(1);
+      expect(endAgentRunLiveActivity).toHaveBeenCalledWith(heldExecution, { status: 'completed' }, noopLogger);
+    });
+
+    it('ends the activity when Continue has nothing to reopen and accepts the held completion', async () => {
+      mockFindById.mockResolvedValue(heldExecution);
+      mockClearPendingGate.mockResolvedValue(true);
+      vi.stubEnv('AGENT_EXECUTOR_SERVICE', 'http://agentexecutor:8080');
+      vi.stubEnv('AGENT_EXECUTOR_INTERNAL_SECRET', 'test-secret');
+      try {
+        await handleGateResponse(
+          {
+            accessToken: 'token',
+            action: 'agent_execute',
+            command: 'gate_response',
+            executionId: 'exec-1',
+            decision: 'continue',
+          },
+          'user-1',
+          'conn-1',
+          'https://endpoint',
+          noopLogger as never
+        );
+      } finally {
+        vi.unstubAllEnvs();
+      }
+      expect(endAgentRunLiveActivity).toHaveBeenCalledTimes(1);
+      expect(endAgentRunLiveActivity).toHaveBeenCalledWith(heldExecution, { status: 'completed' }, noopLogger);
+    });
+  });
 });

@@ -899,6 +899,7 @@ async function acceptHeldCompletion(
     reachedMaxIterations: completion.reachedMaxIterations,
     lowConfidence: completion.lowConfidence,
   });
+  await endAgentRunLiveActivity(execution, { status: 'completed' }, logger);
   await persistRunAsQuest(
     execution.id,
     completion.replyText,
