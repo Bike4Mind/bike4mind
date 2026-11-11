@@ -9,6 +9,7 @@
 
     static let api: any B4MAPI = FixtureAPI()
     static let media: any MediaAPI = FixtureMediaAPI()
+    static let studio: any StudioAPI = FixtureStudioAPI()
     static let realtime = FixtureRealtime()
     static let pushTokenAPI: any PushTokenAPI = NoopPushTokenAPI()
     static let agentRunAPI: any AgentRunAPI = FixtureAgentRunAPI()
@@ -25,6 +26,41 @@
 
     static var accountScenario: AccountScenario {
       AccountScenario(rawValue: ProcessInfo.processInfo.environment["B4M_UI_FIXTURE_ACCOUNT"] ?? "") ?? .success
+    }
+
+    /// Every generation runs for a few seconds, then succeeds. No outputs: the gallery fixtures stay as they are.
+    private struct FixtureStudioAPI: StudioAPI {
+      static let runTime: TimeInterval = 4
+
+      func models(for kind: GenerationKind) async throws -> [GenerationModel] {
+        switch kind {
+        case .image: [GenerationModel(id: "gpt-image-2", name: "GPT Image 2"), GenerationModel.regionEditModels[0]]
+        case .video: [GenerationModel(id: "fixture-video", name: "Fixture Video")]
+        case .music: [GenerationModel(id: "fixture-music", name: "Fixture Music")]
+        }
+      }
+
+      func generate(_ request: GenerationRequest) async throws -> GenerationHandle {
+        GenerationHandle(
+          kind: request.kind, id: "fixture-\(UUID().uuidString)", prompt: request.prompt, startedAt: Date())
+      }
+
+      func editImage(_ request: ImageEditRequest) async throws -> GenerationHandle {
+        GenerationHandle(
+          kind: .image, id: "fixture-\(UUID().uuidString)", prompt: request.summaryPrompt, startedAt: Date())
+      }
+
+      func status(of handle: GenerationHandle) async throws -> GenerationStatus {
+        let elapsed = Date().timeIntervalSince(handle.startedAt)
+        guard elapsed >= Self.runTime else {
+          return GenerationStatus(phase: .running(progress: elapsed / Self.runTime))
+        }
+        return GenerationStatus(phase: .succeeded)
+      }
+
+      func cancel(_ handle: GenerationHandle) async throws {}
+
+      func createSession(name: String) async throws -> String { "fixture-session" }
     }
 
     private struct FixtureAccountAPI: AccountAPI {
