@@ -1681,7 +1681,8 @@ const adminAiFeatureLimits = {
   }),
   maxCallsPerDay: z.number().int().min(0).max(10_000).prefault(0).meta({
     title: 'Calls per day',
-    description: 'Provider calls per day for this feature, repairs and escalations included. 0 makes no calls.',
+    description:
+      "Model requests per day for this feature. A repair or an escalation is another request; a decision model's automatic retry counts with the request it retries. 0 makes no calls.",
   }),
 };
 

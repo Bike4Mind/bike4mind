@@ -10,9 +10,10 @@ import {
   type DecisionResponse,
   type ModelInfo,
 } from '@bike4mind/common';
-import { AdminAiSuggestionModel, Cache } from '@bike4mind/database';
+import { AdminAiSuggestionModel, Cache, adminAiSuggestionRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { DecisionProviderError } from '@bike4mind/utils/decisionProviders';
+import { DecisionRequestError } from '@server/decisions/decisionErrors';
 import type { ExecuteDecisionParams, ExecutedDecision } from '@server/decisions/executeDecision';
 import {
   createMongoServer,
@@ -243,6 +244,65 @@ describe('runAdminAi decision path', () => {
     expect(result).toEqual({ ok: false, skip: 'provider_down' });
   });
 
+  it.each([
+    ['model_unavailable', 'no_model'],
+    ['provider_not_configured', 'no_model'],
+    ['invalid_request', 'error'],
+  ] as const)('maps a %s request error to %s', async (code, skip) => {
+    const decide = decideStub(() => {
+      throw new DecisionRequestError(422, code, undefined, 'rejected');
+    });
+    expect(await runAdminAi('abuseAssessment', decisionInput(), decisionDeps(decide))).toEqual({ ok: false, skip });
+  });
+
+  it('skips as in_flight while another run holds the claim, and releases it after', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    let entered!: () => void;
+    const inCall = new Promise<void>(resolve => {
+      entered = resolve;
+    });
+    const decide = decideStub(async () => {
+      entered();
+      await gate;
+      return response(0.9);
+    });
+    const first = runAdminAi('abuseAssessment', decisionInput(), decisionDeps(decide));
+    await inCall;
+    expect(await runAdminAi('abuseAssessment', decisionInput(), decisionDeps(decide))).toEqual({
+      ok: false,
+      skip: 'in_flight',
+    });
+    release();
+    expect((await first).ok).toBe(true);
+    expect(decide).toHaveBeenCalledTimes(1);
+    expect(await Cache.countDocuments({ key: /inflight/ })).toBe(0);
+  });
+
+  it('leaves a lapsed claim alone once another run has taken it', async () => {
+    const decide = decideStub(async () => {
+      await Cache.updateOne({ key: /inflight/ }, { $set: { 'result.owner': 'other-run' } });
+      return response(0.9);
+    });
+    expect((await runAdminAi('abuseAssessment', decisionInput(), decisionDeps(decide))).ok).toBe(true);
+    expect(await Cache.countDocuments({ key: /inflight/, 'result.owner': 'other-run' })).toBe(1);
+  });
+
+  it('answers from a row stored between the lookup and the claim without calling the model', async () => {
+    await runAdminAi('abuseAssessment', decisionInput(), decisionDeps(decideStub()));
+    const spy = vi.spyOn(adminAiSuggestionRepository, 'findByKey').mockResolvedValueOnce(null);
+    const decide = decideStub();
+    try {
+      const result = await runAdminAi('abuseAssessment', decisionInput(), decisionDeps(decide));
+      expect(result).toMatchObject({ ok: true, cached: true });
+      expect(decide).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('reports an unexpected error as error, never a throw', async () => {
     const result = await runAdminAi('abuseAssessment', decisionInput(), {
       ...decisionDeps(decideStub()),
@@ -269,6 +329,27 @@ describe('runAdminAi decision path', () => {
     expect(decide).toHaveBeenCalledTimes(2);
     expect(decide.mock.calls[1][0].model).toBe('jev-latest');
     expect(result.ok && result.suggestion).toMatchObject({ escalated: true, costUsd: 0.004 });
+  });
+
+  it('stores the paid primary answer when the escalation fails', async () => {
+    const replies: (DecisionResponse | Error)[] = [
+      response(0.6),
+      new DecisionProviderError('overloaded', 'provider failed', { status: 503 }),
+    ];
+    const decide = decideStub(() => {
+      const next = replies.shift()!;
+      if (next instanceof Error) throw next;
+      return next;
+    });
+    const cfg = config();
+    cfg.features.abuseAssessment = {
+      ...cfg.features.abuseAssessment,
+      escalationModel: 'jev-latest',
+      confidenceThreshold: 0.8,
+    };
+    const result = await runAdminAi('abuseAssessment', decisionInput(), decisionDeps(decide, cfg));
+    expect(decide).toHaveBeenCalledTimes(2);
+    expect(result.ok && result.suggestion).toMatchObject({ escalated: false, costUsd: 0.002, verdict: 'abuse' });
   });
 
   it('sends a payload with no email, IP, fingerprint or account id', async () => {
@@ -319,6 +400,13 @@ describe('runAdminAi text path', () => {
   it('maps a thrown completion to provider_down without throwing', async () => {
     const { deps } = textDeps([new Error('upstream 500')]);
     expect(await runAdminAi('feedbackTriage', textInput(), deps)).toEqual({ ok: false, skip: 'provider_down' });
+  });
+
+  it('counts a failed provider call against the daily call cap', async () => {
+    const { complete, deps } = textDeps([new Error('upstream 500'), GOOD], config({ feature: { maxCallsPerDay: 1 } }));
+    expect(await runAdminAi('feedbackTriage', textInput(), deps)).toEqual({ ok: false, skip: 'provider_down' });
+    expect(await runAdminAi('feedbackTriage', textInput(), deps)).toEqual({ ok: false, skip: 'call_cap' });
+    expect(complete).toHaveBeenCalledTimes(1);
   });
 
   it('refuses before the provider on a zero budget', async () => {

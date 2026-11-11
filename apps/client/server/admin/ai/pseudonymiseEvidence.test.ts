@@ -116,4 +116,42 @@ describe('pseudonymiseEvidence', () => {
     expect(pseudonymiseEvidence(`from ${IPV4}`, SALT)).toMatch(/^from p_[0-9a-f]{12}$/);
     expect(pseudonymiseEvidence(() => 1, SALT)).toBeNull();
   });
+
+  it('scrubs identifiers used as object keys', () => {
+    const json = JSON.stringify(
+      pseudonymiseEvidence({ attemptsByEmail: { [EMAIL]: 3 }, attemptsByIp: { [IPV4]: 2, [IPV6]: 1 } }, SALT)
+    );
+    expect(leaks(json)).toEqual([]);
+    expect(json).toContain(':3');
+  });
+
+  it('keeps colliding keys apart when they redact to the same marker', () => {
+    const out = pseudonymiseEvidence({ 'a@example.com': 1, 'b@example.com': 2 }, undefined);
+    expect(out).toEqual({ '[redacted-email]': 1, '[redacted-email]#2': 2 });
+  });
+
+  it('tokenises names, usernames and phone numbers', () => {
+    const user = { name: 'Jane Doe', username: 'jdoe', displayName: 'JD', phone: '+15555550100', fileName: 'a.csv' };
+    const out = pseudonymiseEvidence(user, SALT) as Record<string, string>;
+    for (const key of ['name', 'username', 'displayName', 'phone']) expect(out[key]).toMatch(/^p_[0-9a-f]{12}$/);
+    expect(out.fileName).toBe('a.csv');
+    expect(pseudonymiseEvidence({ phone: '+15555550100' }, undefined)).toEqual({ phone: '[redacted-phone]' });
+  });
+
+  it.each([
+    ['trailing colon', 'conn from 2001:db8::1: reset'],
+    ['trailing period', 'last seen at 2001:db8::1.'],
+    ['word prefix', 'from:2001:db8::1 ok'],
+    ['hex word prefix', 'cafe:2001:db8::1'],
+  ])('scrubs an IPv6 address with a %s', (_label, text) => {
+    const out = pseudonymiseEvidence(text, SALT) as string;
+    expect(out).not.toContain('2001:db8');
+    expect(out).toMatch(/p_[0-9a-f]{12}/);
+  });
+
+  it('does not reuse the analytics pseudonym for an id', async () => {
+    const { pseudonymize } = await import('@bike4mind/server-utils/analytics/pseudonymize');
+    const out = pseudonymiseEvidence({ userId: ORG_ID }, SALT) as { userId: string };
+    expect(out.userId).not.toBe(`p_${pseudonymize(ORG_ID, SALT).slice(0, 12)}`);
+  });
 });

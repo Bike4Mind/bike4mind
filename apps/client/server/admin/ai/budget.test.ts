@@ -125,6 +125,13 @@ describe('reserveAdminAiSpend', () => {
     expect(await readAdminAiSpend('feedbackTriage')).toMatchObject({ callsToday: 1, spentTodayUsd: 0.5 });
   });
 
+  it('releaseSpend frees the hold but keeps the call counted, once', async () => {
+    const reservation = await reserve(0.5);
+    await reservation.releaseSpend();
+    await reservation.refund();
+    expect(await readAdminAiSpend('feedbackTriage')).toMatchObject({ callsToday: 1, spentTodayUsd: 0 });
+  });
+
   it('decision accounting settles to the provider cost, reports it, and charges no credits', async () => {
     const costs: number[] = [];
     const accounting = adminAiDecisionAccounting(

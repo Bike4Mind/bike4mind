@@ -1,5 +1,5 @@
+import crypto from 'node:crypto';
 import { isIP } from 'node:net';
-import { pseudonymize } from '@bike4mind/server-utils/analytics/pseudonymize';
 import { Config } from '@bike4mind/server-utils/utils/config';
 
 /**
@@ -12,7 +12,7 @@ import { Config } from '@bike4mind/server-utils/utils/config';
  * Evidence links a consumer needs are kept server-side, never passed through here.
  */
 
-type IdentifierKind = 'email' | 'ip' | 'id';
+type IdentifierKind = 'email' | 'ip' | 'id' | 'name' | 'phone';
 
 const MAX_DEPTH = 8;
 const MAX_ARRAY_ITEMS = 100;
@@ -24,7 +24,12 @@ const REDACTED: Record<IdentifierKind, string> = {
   email: '[redacted-email]',
   ip: '[redacted-ip]',
   id: '[redacted-id]',
+  name: '[redacted-name]',
+  phone: '[redacted-phone]',
 };
+
+// Domain-separates the token key from the analytics pseudonym, which HMACs the same ids with the raw salt.
+const EVIDENCE_KEY_LABEL = 'b4m-admin-ai-evidence-token-v1';
 
 const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
 const UUID_RE = /\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b/g;
@@ -43,6 +48,13 @@ const SENSITIVE_KEY_SUFFIXES: ReadonlyArray<[string, IdentifierKind]> = [
   ['organizationid', 'id'],
   ['stripecustomerid', 'id'],
   ['apikeyid', 'id'],
+  ['username', 'name'],
+  ['displayname', 'name'],
+  ['fullname', 'name'],
+  ['firstname', 'name'],
+  ['lastname', 'name'],
+  ['phone', 'phone'],
+  ['phonenumber', 'phone'],
 ];
 
 /** The kind a key's value is treated as, or null when the key is not identifying. */
@@ -51,6 +63,8 @@ function sensitiveKeyKind(key: string): IdentifierKind | null {
   // would also match words like `ownership`.
   if (/^ip$/i.test(key) || /(?:[a-z0-9]Ip|IP|[_-]ip)$/.test(key)) return 'ip';
   const normalized = key.replace(/[_-]/g, '').toLowerCase();
+  // A bare `name` on user-shaped evidence is the person's display name.
+  if (normalized === 'name') return 'name';
   for (const [suffix, kind] of SENSITIVE_KEY_SUFFIXES) {
     if (normalized.endsWith(suffix)) return kind;
   }
@@ -63,10 +77,38 @@ export function adminAiEvidenceSalt(): string | undefined {
   return salt && salt !== PLACEHOLDER_SALT ? salt : undefined;
 }
 
+let cachedKey: { salt: string; key: Buffer } | undefined;
+
+function evidenceKey(salt: string): Buffer {
+  if (cachedKey?.salt !== salt) {
+    cachedKey = { salt, key: Buffer.from(crypto.hkdfSync('sha256', salt, '', EVIDENCE_KEY_LABEL, 32)) };
+  }
+  return cachedKey.key;
+}
+
 function tokenFor(value: string, kind: IdentifierKind, salt: string | undefined): string {
   if (!salt) return REDACTED[kind];
   const canonical = kind === 'email' ? value.toLowerCase() : value;
-  return `p_${pseudonymize(canonical, salt).slice(0, 12)}`;
+  return `p_${crypto.createHmac('sha256', evidenceKey(salt)).update(canonical).digest('hex').slice(0, 12)}`;
+}
+
+/**
+ * The candidate regex can take a neighbouring `:`/`.` or a leading `word:` into the match, which makes
+ * isIP reject a real address. Retry with the leading segment and/or a trailing `:`/`.` run trimmed.
+ */
+function scrubIpv6Candidate(m: string, salt: string | undefined): string {
+  let trailEnd = m.length;
+  while (trailEnd > 0 && (m[trailEnd - 1] === ':' || m[trailEnd - 1] === '.')) trailEnd--;
+  const firstColon = m.indexOf(':');
+  const starts = firstColon > 0 || (firstColon === 0 && !m.startsWith('::')) ? [0, firstColon + 1] : [0];
+  const ends = [m.length, ...[trailEnd, trailEnd + 1, trailEnd + 2].filter(e => e < m.length)];
+  for (const start of starts) {
+    for (const end of ends) {
+      const core = m.slice(start, end);
+      if (isIP(core) === 6) return m.slice(0, start) + tokenFor(core.toLowerCase(), 'ip', salt) + m.slice(end);
+    }
+  }
+  return m;
 }
 
 function scrubString(raw: string, salt: string | undefined): string {
@@ -75,7 +117,7 @@ function scrubString(raw: string, salt: string | undefined): string {
     .replace(EMAIL_RE, m => tokenFor(m, 'email', salt))
     .replace(UUID_RE, m => tokenFor(m.toLowerCase(), 'id', salt))
     .replace(OBJECT_ID_RE, m => tokenFor(m.toLowerCase(), 'id', salt))
-    .replace(IPV6_CANDIDATE_RE, m => (isIP(m) === 6 ? tokenFor(m.toLowerCase(), 'ip', salt) : m))
+    .replace(IPV6_CANDIDATE_RE, m => scrubIpv6Candidate(m, salt))
     .replace(IPV4_RE, m => (isIP(m) === 4 ? tokenFor(m, 'ip', salt) : m));
 }
 
@@ -120,7 +162,11 @@ function walk(value: unknown, salt: string | undefined, depth: number, keyKind: 
   const out: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value)) {
     const walked = walk(child, salt, depth + 1, keyKind ?? sensitiveKeyKind(key));
-    if (walked !== DROP) out[key] = walked;
+    if (walked === DROP) continue;
+    // Evidence keyed by identifier (per-IP or per-email counts) carries the identifier in the key.
+    let outKey = scrubString(key, salt);
+    for (let n = 2; Object.hasOwn(out, outKey); n++) outKey = `${scrubString(key, salt)}#${n}`;
+    out[outKey] = walked;
   }
   return out;
 }

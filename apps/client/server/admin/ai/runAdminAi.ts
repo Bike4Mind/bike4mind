@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
   ADMIN_AI_FEATURE_ENGINE,
@@ -26,6 +26,7 @@ import { buildApiKeyTable, getAvailableModels, getLlmByModel, type ICompletionBa
 import { Logger } from '@bike4mind/observability';
 import { apiKeyService } from '@bike4mind/services';
 import { meterCompletionBackend } from '@bike4mind/services/billing/completionMeter';
+import { canonicalJson } from '@bike4mind/server-utils/mcpConnections/toolDiscovery';
 import {
   OperationsModelService,
   OperationsModelUnavailableError,
@@ -86,7 +87,8 @@ export type RunAdminAiDeps = {
 // Bounds every text hold: the meter reserves the worst case for this many output tokens.
 const TEXT_MAX_TOKENS = 800;
 // Covers a decision call plus its retry; if a slow repair or escalation outlives it, a concurrent run
-// can make a duplicate call, but createPending still stores one row per key.
+// can make a duplicate call, but createPending still stores one row per key. A run only ever releases
+// its own claim, so a lapsed claim another run has since taken stays held.
 const IN_FLIGHT_MS = 60_000;
 
 type Answer = {
@@ -124,17 +126,6 @@ const defaultTextBackend = async (model: string | null, logger: Logger): Promise
   const llm = getLlmByModel(apiKeyTable, { modelInfo, logger });
   if (!llm) throw new OperationsModelUnavailableError(`No backend for ${model}`);
   return { modelInfo, llm };
-};
-
-const canonicalJson = (value: unknown): string => {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
-  if (value && typeof value === 'object') {
-    const entries = Object.entries(value as Record<string, unknown>)
-      .filter(([, v]) => v !== undefined)
-      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(',')}}`;
-  }
-  return JSON.stringify(value) ?? 'null';
 };
 
 const asDecisionJson = (value: unknown): Record<string, unknown> | unknown[] =>
@@ -196,7 +187,8 @@ const skipFor = (error: unknown, logger: Logger, feature: AdminAiFeature): Admin
   if (error instanceof OperationsModelUnavailableError) return 'provider_down';
   const failure = decisionFailureCode(error);
   if (failure === 'malformed_response' || failure === 'refused') return 'invalid_output';
-  if (failure) return 'provider_down';
+  if (failure === 'model_unavailable' || failure === 'provider_not_configured') return 'no_model';
+  if (failure && failure !== 'invalid_request') return 'provider_down';
   logger.error('admin AI run failed', { feature, errorName: error instanceof Error ? error.name : typeof error });
   return 'error';
 };
@@ -213,7 +205,7 @@ export async function runAdminAi(
 ): Promise<AdminAiRunResult> {
   const logger = deps.logger ?? new Logger({ metadata: { service: 'adminAi', feature } });
   const now = deps.now ?? Date.now;
-  let inflightKey: string | null = null;
+  let inflight: { key: string; owner: string } | null = null;
   try {
     const config = await (deps.loadConfig ?? loadAdminAiConfig)();
     const featureConfig = config.features[feature];
@@ -228,9 +220,14 @@ export async function runAdminAi(
     if (existing) return { ok: true, suggestion: existing, cached: true };
 
     const claimKey = `adminAi:${feature}:inflight:${sha256(canonicalJson(key))}`;
-    const claim = await cacheRepository.claimDedup(claimKey, {}, IN_FLIGHT_MS);
+    const owner = randomUUID();
+    const claim = await cacheRepository.claimDedup(claimKey, { owner }, IN_FLIGHT_MS);
     if (!claim.claimed) return { ok: false, skip: 'in_flight' };
-    inflightKey = claimKey;
+    inflight = { key: claimKey, owner };
+
+    // A run that finished between the lookup above and this claim has already stored the row.
+    const stored = await adminAiSuggestionRepository.findByKey(key);
+    if (stored) return { ok: true, suggestion: stored, cached: true };
 
     const started = now();
     let costUsd = 0;
@@ -316,8 +313,16 @@ export async function runAdminAi(
     let answer = await ask(featureConfig.model);
     let escalated = false;
     if (answer.probability < featureConfig.confidenceThreshold && featureConfig.escalationModel) {
-      answer = await ask(featureConfig.escalationModel);
-      escalated = true;
+      // The primary answer is already paid for; a failed escalation stores it rather than discarding it.
+      try {
+        answer = await ask(featureConfig.escalationModel);
+        escalated = true;
+      } catch (error) {
+        logger.warn('admin AI escalation failed; keeping the primary answer', {
+          feature,
+          skip: skipFor(error, logger, feature),
+        });
+      }
     }
 
     const suggestion = await adminAiSuggestionRepository.createPending({
@@ -336,6 +341,6 @@ export async function runAdminAi(
   } catch (error) {
     return { ok: false, skip: skipFor(error, logger, feature) };
   } finally {
-    if (inflightKey) await cacheRepository.deleteByKey(inflightKey).catch(() => undefined);
+    if (inflight) await cacheRepository.casDeleteDedup(inflight.key, 'owner', inflight.owner).catch(() => undefined);
   }
 }
