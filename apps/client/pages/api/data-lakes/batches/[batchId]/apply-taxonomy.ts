@@ -13,7 +13,7 @@ import { ApplyTaxonomyRequestInput } from '@bike4mind/common';
 import { Request } from 'express';
 import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { recordTaxonomyTagsApplySkipped } from '@bike4mind/server-utils/utils/cloudwatch';
-import { serializeLakeClaim } from '@server/dataLakes/serializeLakeClaim';
+import { serializeLakeClaim } from '@bike4mind/server-utils/dataLakes/serializeLakeClaim';
 
 // The guarded 'ready' -> 'applying' claim already means only one apply per completed
 // analysis can succeed, but a rejected call still costs a batch + lake lookup, and this

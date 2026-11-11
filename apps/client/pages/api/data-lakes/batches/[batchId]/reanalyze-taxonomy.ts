@@ -5,7 +5,7 @@ import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featu
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { isDevelopment } from '@bike4mind/server-utils/utils/config';
 import { analyzeBatchTaxonomy, claimBatchForAnalysis } from '@server/dataLakes/analyzeBatchTaxonomy';
-import { serializeLakeClaim } from '@server/dataLakes/serializeLakeClaim';
+import { serializeLakeClaim } from '@bike4mind/server-utils/dataLakes/serializeLakeClaim';
 import {
   TAXONOMY_DAILY_CAP,
   TAXONOMY_RATE_LIMIT_BUCKET,

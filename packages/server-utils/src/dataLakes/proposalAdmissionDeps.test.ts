@@ -19,7 +19,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/database/auth', () => ({ User: h.users }));
 vi.mock('@bike4mind/database/content', () => ({ FabFile: h.fabFiles }));
 vi.mock('@bike4mind/services', () => ({ fabFilesService: { createFabFileByUrl: h.createFabFileByUrl } }));
-vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
+vi.mock('../utils/storage/index', () => ({
   getFilesStorage: () => ({ upload: vi.fn(), getSignedUrl: vi.fn() }),
 }));
 
