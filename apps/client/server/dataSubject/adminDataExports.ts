@@ -110,12 +110,12 @@ export async function listAdminDataExports(
     recent(ADMIN_DATA_EXPORT_FAILED_ACTION),
   ]);
   // Written by the route when the job could not be queued, or by the worker with a skipReason.
-  const failedJobs = new Map(
-    failed.entries.flatMap(entry => {
-      const exportJobId = exportJobIdOf(entry);
-      return exportJobId ? [[exportJobId, skipReasonOf(entry)] as const] : [];
-    })
-  );
+  // Entries come newest first, so the first one per job holds its current reason.
+  const failedJobs = new Map<string, AdminDataExportSkipReason | undefined>();
+  for (const entry of failed.entries) {
+    const exportJobId = exportJobIdOf(entry);
+    if (exportJobId && !failedJobs.has(exportJobId)) failedJobs.set(exportJobId, skipReasonOf(entry));
+  }
   return Promise.all(
     requested.entries.flatMap(entry => {
       const exportJobId = exportJobIdOf(entry);
