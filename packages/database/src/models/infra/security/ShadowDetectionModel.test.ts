@@ -427,6 +427,17 @@ describe('shadowDetectionRepository', () => {
         expect(await stored(id)).toMatchObject({ verdict: 'confirmed_abuse', revision: 1 });
       });
 
+      it('leaves the grade in place while another account in the burst is still suspended', async () => {
+        await User.collection.insertOne({ _id: new Types.ObjectId(peerId), isBanned: true });
+        const id = await shadowDetectionRepository.record(detection({ userIds: [userId, peerId] }));
+        await suspend();
+
+        expect(await undo()).toEqual([]);
+        const item = await stored(id);
+        expect(item).toMatchObject({ verdict: 'confirmed_abuse', revision: 1 });
+        expect(item.verdicts).toHaveLength(1);
+      });
+
       it('never removes a reviewer verdict', async () => {
         const id = await shadowDetectionRepository.record(detection({ userIds: [userId] }));
         await grade(id, 0, 'confirmed_abuse');

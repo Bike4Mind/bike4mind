@@ -129,10 +129,11 @@ const unlockPhone = (userId: string) =>
   });
 const creditsOf = async (id: string) => (await User.findById(id))?.currentCredits ?? 0;
 const grantOf = async (id: string) => (await User.findById(id))?.toObject().signupGrant;
-const runRelease = () =>
+const HOUR_MS = 3_600_000;
+const runRelease = (now = new Date()) =>
   userService.releaseDueHeldUnlocks(
     { ...adapters, logger, listDueIds: async () => (await User.find({}).lean()).map(u => String(u._id)) },
-    { now: new Date(), maxUsers: 100 }
+    { now, maxUsers: 100 }
   );
 
 describe('account campaign hold on the staged signup grant', () => {
@@ -221,9 +222,30 @@ describe('account campaign hold on the staged signup grant', () => {
     expect(await creditsOf(user.id)).toBe(1000);
 
     await grade(id, 'legitimate_human');
-    expect(await runRelease()).toMatchObject({ released: 1, creditsPaid: 9000 });
+    expect(await runRelease(new Date(Date.now() + 7 * HOUR_MS))).toMatchObject({ released: 1, creditsPaid: 9000 });
     expect(await creditsOf(user.id)).toBe(10000);
     expect(await grantOf(user.id)).toMatchObject({ stage: 'unlocked', unlockedBy: 'subscription' });
     expect(await CreditTransaction.countDocuments({ reason: 'signup_unlock:subscription' })).toBe(1);
+  });
+
+  it('pushes a campaign-held unlock out on each release run, then pays it once graded after the new time', async () => {
+    const user = await createSignupStageUser();
+    const id = await detect([user.id]);
+    await userService.unlockSignupGrant(user.id, 'subscription', {
+      ...adapters,
+      reason: 'Subscribed to a paid plan',
+      validators: { subscription: async u => u.emailVerified },
+    });
+    const now = new Date(Date.now() + HOUR_MS);
+
+    expect(await runRelease(now)).toMatchObject({ released: 0, creditsPaid: 0 });
+    const deferredTo = new Date((await grantOf(user.id))!.heldUnlock!.releaseAt);
+    expect(deferredTo.getTime()).toBeGreaterThan(now.getTime());
+    expect(await creditsOf(user.id)).toBe(1000);
+
+    await grade(id, 'legitimate_human');
+    expect(await runRelease(now)).toMatchObject({ released: 0, creditsPaid: 0 });
+    expect(await runRelease(new Date(deferredTo.getTime() + 1))).toMatchObject({ released: 1, creditsPaid: 9000 });
+    expect(await creditsOf(user.id)).toBe(10000);
   });
 });
