@@ -269,6 +269,30 @@ export const NewAccountSpendCapDialog: React.FC<ProfileDialogProps> = ({ user, o
   );
 };
 
+/** Empties the user's file indexing window; the limit itself is unchanged. A reset cannot be reverted. */
+export const FileEmbeddingWindowResetDialog: React.FC<ProfileDialogProps> = ({ user, onClose }) => {
+  const post = useAdminUserPost(user.id, 'The file indexing window was not reset.');
+
+  const handleConfirm = async (reason: string) => {
+    await post('file-embedding-window', { reason });
+    toast.success('File indexing window reset');
+    onClose();
+  };
+
+  return (
+    <ActionDialog
+      open
+      onClose={onClose}
+      title="Reset file indexing window"
+      description="Empties this user's file indexing window so their files can be indexed again before the window resets. The limit itself is unchanged."
+      reasonPresets={ADMIN_REASON_PRESETS.fileEmbeddingWindowReset}
+      confirmLabel="Reset window"
+      onConfirm={handleConfirm}
+      data-testid="file-embedding-window-reset-dialog"
+    />
+  );
+};
+
 /**
  * Marks the account as the team's own, or stops marking it (`isInternal`): its activity is then left
  * out of customer counts in analytics. An admin counts as internal whatever this says.

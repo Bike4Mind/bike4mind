@@ -26,6 +26,11 @@ export const ADMIN_REASON_PRESETS = {
   profileEdit: ['Customer request', 'Correcting a typo', 'Account recovery, identity verified'],
   apiKeyTrust: ['Known integration', 'Partner access', 'Suspicious usage'],
   newAccountSpendCap: ['Verified customer', 'Known high-volume user', 'Suspicious usage'],
+  fileEmbeddingWindowReset: [
+    'Re-indexing after a support request',
+    'Window spent by a failed import',
+    'Internal testing',
+  ],
   internalAccount: ['Team member', 'Contractor or partner', 'Marked in error'],
   apiKeyRevokeAll: ['Compromised or leaked keys', 'Abuse / automated signups', 'Customer request'],
   apiKeyRotate: ['Compromised or leaked key', 'Customer request', 'Routine rotation'],
