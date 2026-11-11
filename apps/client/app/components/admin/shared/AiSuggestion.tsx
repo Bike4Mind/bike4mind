@@ -195,12 +195,12 @@ export function AiSuggestion({
   const undo = async () => {
     const id = suggestion.id;
     // The ref blocks a second click landing before the loading state renders.
-    if (undoingRef.current === id) return;
+    if (!onUndo || undoingRef.current === id) return;
     undoingRef.current = id;
     setUndoingId(id);
     let reverted = true;
     try {
-      await onUndo?.();
+      await onUndo();
     } catch {
       // The host surfaces its own revert error; a failed revert is not reported as undone.
       reverted = false;

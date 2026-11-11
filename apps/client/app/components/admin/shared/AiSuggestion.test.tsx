@@ -15,7 +15,8 @@ import {
 import { ChangePreview } from './ChangePreview';
 
 const navigate = vi.fn();
-vi.mock('@tanstack/react-router', () => ({ useRouter: () => ({ navigate }) }));
+let routerMounted = true;
+vi.mock('@tanstack/react-router', () => ({ useRouter: () => (routerMounted ? { navigate } : undefined) }));
 
 const theme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: ReactNode }) => (
@@ -271,6 +272,19 @@ describe('AiSuggestion actions', () => {
     fireEvent.click(screen.getByTestId('sug-undo-btn'));
     await waitFor(() => expect(screen.getByTestId('sug-undo-btn')).not.toBeDisabled());
     expect(onDecision).not.toHaveBeenCalled();
+  });
+
+  it('leaves evidence link clicks to the browser when no router is mounted', () => {
+    navigate.mockClear();
+    routerMounted = false;
+    try {
+      renderThemed(<AiSuggestion variant="detail" suggestion={suggestion()} data-testid="sug" />);
+      const link = screen.getByTestId('sug-reason-0').querySelector('a') as HTMLAnchorElement;
+      expect(fireEvent.click(link)).toBe(true);
+      expect(navigate).not.toHaveBeenCalled();
+    } finally {
+      routerMounted = true;
+    }
   });
 
   it('routes a plain click on an in-app evidence link and leaves modified clicks to the browser', () => {
