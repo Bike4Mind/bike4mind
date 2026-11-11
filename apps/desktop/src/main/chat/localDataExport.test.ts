@@ -1,4 +1,5 @@
-import { mkdtemp, mkdir, readFile, readdir, symlink, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdtemp, mkdir, readFile, readdir, rename, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -94,12 +95,25 @@ describe('writeLocalDataExport', () => {
     expect(manifest.collections.knowledge.count).toBe(1);
     expect(manifest.collections.media.count).toBe(1);
     expect(manifest.collections.memory.count).toBe(2);
+    for (const [name, collection] of Object.entries(manifest.collections)) {
+      const entry = collection as { path: string; count: number; bytes: number; sha256: string };
+      expect(entry.path).toBe(`collections/${name}.jsonl`);
+      const bytes = await readFile(join(path, entry.path));
+      expect(bytes.length).toBe(entry.bytes);
+      expect(createHash('sha256').update(bytes).digest('hex')).toBe(entry.sha256);
+      expect(bytes.toString('utf8').trim().split('\n').filter(Boolean)).toHaveLength(entry.count);
+    }
     const entries = await readdir(path);
     expect(entries).toEqual(['collections', 'files', 'manifest.json']);
     const sessionRow = JSON.parse((await readFile(join(path, 'collections/desktop-sessions.jsonl'), 'utf8')).trim());
     expect(sessionRow.session.messages[1].toolCalls[0].input).toEqual({});
     expect(sessionRow.session.messages[1].toolCalls[0].preview).toBeUndefined();
-    for (const file of manifest.files) expect(await readFile(join(path, file.path))).toHaveLength(file.size);
+    expect(sessionRow.session.messages[1].toolCalls[0].media[0].url).toMatch(/^b4m-media:/);
+    for (const file of manifest.files) {
+      const bytes = await readFile(join(path, file.path));
+      expect(bytes).toHaveLength(file.bytes);
+      expect(createHash('sha256').update(bytes).digest('hex')).toBe(file.sha256);
+    }
     const all = [
       JSON.stringify(manifest),
       ...(await Promise.all(
@@ -128,6 +142,18 @@ describe('writeLocalDataExport', () => {
     await expect(writeLocalDataExport(deps.destination, deps)).rejects.toThrow('Choose an account');
     deps.attachments.locate = vi.fn(async () => null);
     await expect(writeLocalDataExport(deps.destination, deps)).rejects.toThrow('Missing attachment');
+    expect(await readdir(deps.destination)).toEqual([]);
+  });
+
+  it('rejects a project memory directory linked outside the instructions root', async () => {
+    const deps = await setup();
+    const outside = join(deps.base, 'outside-memory');
+    await mkdir(outside);
+    await writeFile(join(outside, 'MEMORY.md'), 'OUTSIDE_SECRET');
+    const memory = join(deps.memoryRoot, 'projects', projectSlug(join(deps.base, 'project')), 'memory');
+    await rename(memory, `${memory}.old`);
+    await symlink(outside, memory);
+    await expect(writeLocalDataExport(deps.destination, deps)).rejects.toThrow('outside its folder');
     expect(await readdir(deps.destination)).toEqual([]);
   });
 });

@@ -66,7 +66,13 @@ function safeSession(session: ChatSession): ChatSession {
     ...session,
     messages: session.messages.map(message => ({
       ...message,
-      toolCalls: message.toolCalls?.map(call => ({ id: call.id, name: call.name, status: call.status, input: {} })),
+      toolCalls: message.toolCalls?.map(call => ({
+        id: call.id,
+        name: call.name,
+        status: call.status,
+        input: {},
+        ...(call.media ? { media: call.media } : {}),
+      })),
       rounds: message.rounds?.map(({ sent: _sent, ...round }) => round),
       thinking: undefined,
     })),
@@ -79,6 +85,19 @@ async function memoryFiles(
 ): Promise<Array<{ project: string; name: string; bytes: Buffer }>> {
   if (!session.project) return [];
   const store = await memoryStoreFor(session.project.directory, root);
+  const [physicalRoot, physicalDirectory] = await Promise.all([realpath(root), realpath(store.directory)]).catch(
+    error => {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [null, null] as const;
+      throw error;
+    }
+  );
+  if (!physicalRoot || !physicalDirectory) return [];
+  if (
+    !inside(physicalRoot, physicalDirectory) ||
+    physicalDirectory !== join(physicalRoot, relative(root, store.directory))
+  ) {
+    throw new Error('Project memory resolves outside its folder.');
+  }
   let entries;
   try {
     entries = await readdir(store.directory, { withFileTypes: true });
@@ -152,7 +171,7 @@ export async function writeLocalDataExport(folder: string, deps: LocalDataExport
             mimeType: attachment.mediaType,
             size: bytes.length,
             uploadedAt: message.createdAt,
-            contentUrl: addBlob(bytes),
+            contentPath: addBlob(bytes),
           });
         }
         for (const artifact of message.artifacts ?? [])
@@ -194,7 +213,7 @@ export async function writeLocalDataExport(folder: string, deps: LocalDataExport
       }
     }
     if (deps.sessions.scopeKey() !== scope) throw new Error('Account changed during export.');
-    const collections: Record<string, { path: string; count: number; size: number; sha256: string }> = {};
+    const collections: Record<string, { path: string; count: number; bytes: number; sha256: string }> = {};
     await mkdir(join(bundle, 'collections'));
     await mkdir(join(bundle, 'files'));
     for (const name of COLLECTIONS) {
@@ -203,13 +222,13 @@ export async function writeLocalDataExport(folder: string, deps: LocalDataExport
         rows[name].map(row => JSON.stringify(row)).join('\n') + (rows[name].length ? '\n' : '')
       );
       await writeFile(join(bundle, path), bytes);
-      collections[name] = { path, count: rows[name].length, size: bytes.length, sha256: sha256(bytes) };
+      collections[name] = { path, count: rows[name].length, bytes: bytes.length, sha256: sha256(bytes) };
     }
     const files = [];
     for (const [hash, bytes] of blobs) {
       const path = `files/${hash}`;
       await writeFile(join(bundle, path), bytes);
-      files.push({ path, sha256: hash, size: bytes.length });
+      files.push({ path, sha256: hash, bytes: bytes.length });
     }
     await writeFile(
       join(bundle, 'manifest.json'),
