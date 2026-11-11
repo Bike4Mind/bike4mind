@@ -457,7 +457,8 @@ export async function loadReactSiblingSources(
   sessionId: string | undefined,
   identifiers: readonly string[]
 ): Promise<Record<string, string>> {
-  if (!sessionId) throw new Error('The source artifact is no longer linked to a chat, so its files cannot be found');
+  if (!sessionId)
+    throw new Error('The source chat is unavailable or you do not have access to it, so its files cannot be refreshed');
   const entries = await Promise.all(
     identifiers.map(async identifier => {
       const { data: list } = await api.get<{ artifacts?: { id?: string }[] }>('/api/artifacts', {
