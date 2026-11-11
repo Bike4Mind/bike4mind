@@ -214,6 +214,28 @@ describe('ChatService approvals decided per part', () => {
     expect(card.approvalParts).toBeUndefined();
   });
 
+  it('does not let a Read rule clear a folder outside the shared ones for a part only the mode covers', async () => {
+    await permissions.setRules({ kind: 'user' }, { allow: ['Read(//usr/share/**)'], ask: [], deny: [] });
+    const id = await session('auto');
+    await runCommand(id, 'git status && ls /usr/share');
+    await awaitCall('bash_execute', 'awaiting-approval');
+  });
+
+  it('remembers only the listed parts when "Allow in this chat" answers a narrowed card', async () => {
+    const id = await session('auto');
+    const command = 'git status && printf ok && node -e 1';
+    const first = await runCommand(id, command);
+    const card = await awaitCall('bash_execute', 'awaiting-approval');
+    expect(card.approvalParts?.map(part => part.text)).toEqual(['node -e 1']);
+    approvals.resolve(card.approvalId!, { decision: 'always' });
+    await finishReply(first);
+
+    await service.setApprovalMode(id, 'ask');
+    await runCommand(id, command);
+    const asked = await awaitCall('bash_execute', 'awaiting-approval');
+    expect(asked.approvalParts?.map(part => part.text)).toEqual(['git status', 'printf ok']);
+  });
+
   it('keeps "Allow in this project" for every session of the repository, worktrees and workers included', async () => {
     const asker = await session('ask', worktree);
     const asked = await runCommand(asker, 'printf ok', worktree);

@@ -3545,10 +3545,10 @@ export class ChatService {
       const toolsFor = (granted: readonly string[]) =>
         modelOption?.supportsTools === false ? [] : offeredTools(granted);
       let tools = toolsFor(roots);
+      this.deps.approvals?.setParent(session.id, session.origin?.parentSessionId);
       // A resumed reply replays the interrupted turn's tool results to the model, so untrusted
       // text it had already read is still in front of it: it starts out as tainted as the turn
       // it carries on.
-      this.deps.approvals?.setParent(session.id, session.origin?.parentSessionId);
       const directoryTurn: DirectoryTurn = {
         declined: [],
         granted: [],
@@ -6847,7 +6847,9 @@ export class ChatService {
 
     // A script with no reason to ask that holds for all of it is decided part by part, and asks only
     // about the parts that no rule, "Allow in this chat" or the mode already covers.
-    const byPart = !(prompt.irreversible || prompt.allowOnce || stuck || askedByRule || tainted);
+    // Unlike `tainted`, in every mode: an allowance can cover a sending part here, and 'ask' has no card to fall back on.
+    const taintedParts = (): boolean => sendsOut(call.name) && !prompt.contained && !!directories.untrusted;
+    const byPart = !(prompt.irreversible || prompt.allowOnce || stuck || askedByRule || taintedParts());
     const parts = byPart ? decideParts(prompt, subject, rules, gate, sessionId, mode) : null;
     if (parts && parts.uncovered.length === 0 && parts.directories.length === 0) {
       return {
@@ -6956,9 +6958,8 @@ export class ChatService {
               return covering;
             }
             // A parallel call may have tainted the reply since this card opened.
-            const taintedNow = mode === 'auto' && sendsOut(call.name) && !prompt.contained && !!directories.untrusted;
             const fresher =
-              byPart && !taintedNow ? decideParts(prompt, currentSubject, fresh, gate, sessionId, mode) : null;
+              byPart && !taintedParts() ? decideParts(prompt, currentSubject, fresh, gate, sessionId, mode) : null;
             if (fresher && fresher.uncovered.length === 0 && fresher.directories.length === 0) {
               coveredBy = fresher.decidedBy;
               return { decision: 'once', ...(runnable[0] ? { optionId: runnable[0].id } : {}) };
@@ -6970,6 +6971,7 @@ export class ChatService {
           }
         },
         ...(asked.prompt.always ? { always: asked.prompt.always } : {}),
+        ...(asked.parts ? { partial: true } : {}),
         // Only the options that RUN the call may become standing. The card offers no "always"
         // beside a redirect, and this is the second lock on that door: a redirect is an
         // instruction about one call, never a policy for every later one.
@@ -8726,7 +8728,11 @@ function decideParts(
     else if (partAllowed(allowed, part)) allowance = true;
     else if (!modeCovers(mode, part)) uncovered.push(part);
   });
-  const outside = always.directories.filter(directory => !rules?.coversFolder(directory));
+  // A Read or Edit rule clears a folder only for a call that rules allow whole, as PermissionRuleSet.allowing does.
+  const allByRule = always.commands.every((_, index) => byRule?.[index]);
+  const outside = allByRule
+    ? always.directories.filter(directory => !rules?.coversFolder(directory))
+    : always.directories;
   const directories = gate.uncoveredDirectories(sessionId, outside);
   const decidedBy: ChatApprovalDecidedBy = allowance
     ? { kind: 'chat-allowance' }

@@ -148,6 +148,8 @@ export interface ApprovalRequestOptions {
    * redirect, which is an instruction about one call, from ever becoming a policy.
    */
   rememberable?: readonly string[];
+  /** The card asked about only some of the call's parts: an 'always' keeps their patterns, never the whole call. */
+  partial?: boolean;
   /** A question card, which a new message closes via cancelQuestions rather than leaving live. */
   question?: boolean;
   /** The card said the reply had read untrusted content; recorded on an 'always' as overTaint. */
@@ -227,7 +229,8 @@ export class ApprovalGate {
   }
 
   /**
-   * Whether every sub-command of this script has been allowed before. Over a tainted reply only
+   * Whether every sub-command of this script has been allowed before, here or in a session that spawned
+   * this one. Over a tainted reply only
    * patterns answered over taint count, never an unbounded runner pattern such as `node *` or
    * `pnpm exec -- *`, and never an inline or stdin script.
    */
@@ -317,7 +320,8 @@ export class ApprovalGate {
           answer.decision === 'always' &&
           (!options.rememberable || (!!answer.optionId && options.rememberable.includes(answer.optionId)));
         if (keep) {
-          this.remember(sessionId, standingKey(key, answer.optionId), answer, options.tainted === true);
+          if (!options.partial)
+            this.remember(sessionId, standingKey(key, answer.optionId), answer, options.tainted === true);
           if (options.always) this.rememberShell(sessionId, key, options.always, options.tainted === true);
         }
         if (announced) this.listener?.settled(sessionId);
