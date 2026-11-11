@@ -66,10 +66,15 @@ class DlqReplayLogRepository extends BaseRepository<IDlqReplayLog> {
 
   /**
    * Count all replay attempts (successful and failed) for a given SQS message ID.
-   * Skipped attempts are excluded. Used to enforce the max replay attempt limit.
+   * Skipped attempts and failed discards (which carry a `reason`) are excluded.
+   * Used to enforce the max replay attempt limit.
    */
   async countAttempts(messageId: string): Promise<number> {
-    return this.model.countDocuments({ messageId, status: { $in: ['success', 'failed'] } });
+    return this.model.countDocuments({
+      messageId,
+      status: { $in: ['success', 'failed'] },
+      reason: { $exists: false },
+    });
   }
 
   /**
@@ -105,6 +110,7 @@ class DlqReplayLogRepository extends BaseRepository<IDlqReplayLog> {
       query.$or = [
         { messageId: { $regex: escaped, $options: 'i' } },
         { errorMessage: { $regex: escaped, $options: 'i' } },
+        { reason: { $regex: escaped, $options: 'i' } },
       ];
     }
     const projection = filters.includeBody === false ? { messageBody: 0 } : undefined;

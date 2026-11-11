@@ -95,4 +95,42 @@ describe('DlqReplayLogRepository.findRecent', () => {
     expect(await dlqReplayLogRepository.findRecent({ search: '.*' })).toEqual([]);
     expect(await dlqReplayLogRepository.findRecent({ search: 'msg-(' })).toEqual([]);
   });
+
+  it('keeps a failed discard out of the replay attempt count', async () => {
+    const log = await dlqReplayLogRepository.logReplay({
+      queueLabel: 'quest',
+      messageId: 'msg-discard-failed',
+      messageBody: 'BODY',
+      sourceQueue: 'Quest Export',
+      status: 'discarded',
+      reason: 'Job obsolete',
+      replayedBy: 'admin-1',
+    });
+    await dlqReplayLogRepository.markDiscardFailed(log.id, 'expired receipt');
+
+    const [row] = await dlqReplayLogRepository.findRecent({ search: 'msg-discard-failed' });
+    expect(row).toMatchObject({ status: 'failed', errorMessage: 'expired receipt', reason: 'Job obsolete' });
+    expect(await dlqReplayLogRepository.countAttempts('msg-discard-failed')).toBe(0);
+  });
+
+  it('markDiscardFailed leaves a row that is not a discard untouched', async () => {
+    const [ok] = await dlqReplayLogRepository.findRecent({ search: 'msg-beta-2' });
+    await dlqReplayLogRepository.markDiscardFailed(ok.id, 'nope');
+    const [after] = await dlqReplayLogRepository.findRecent({ search: 'msg-beta-2' });
+    expect(after.status).toBe('success');
+  });
+
+  it('searches the discard reason', async () => {
+    await dlqReplayLogRepository.logReplay({
+      queueLabel: 'quest',
+      messageId: 'msg-reasoned',
+      messageBody: 'BODY',
+      sourceQueue: 'Quest Export',
+      status: 'discarded',
+      reason: 'Obsolete Job',
+      replayedBy: 'admin-1',
+    });
+    const found = await dlqReplayLogRepository.findRecent({ search: 'obsolete' });
+    expect(found.map(r => r.messageId)).toEqual(['msg-reasoned']);
+  });
 });
