@@ -52,7 +52,7 @@ import {
   ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
   TEAM_PLAN_SEATS_HARD_LIMIT,
 } from '../constants/organization';
-import { CHAT_MODELS, ChatModels } from '../models';
+import { CHAT_MODELS, ChatModels, supportedChatModels } from '../models';
 import { DECISION_MODEL_IDS } from '../decisions/catalog';
 import {
   BedrockEmbeddingModel,
@@ -482,6 +482,7 @@ export const SettingKeySchema = z.enum([
   'suspensionNoticeEmailEnabled',
   'abuseAssessmentConfig',
   'autoContainmentConfig',
+  'adminAiConfig',
   'thinkingVisibilityFree',
   'thinkingVisibilityPaid',
   'otcLimitSendPerEmailPerIp',
@@ -1659,6 +1660,92 @@ export const AutoContainmentConfigSchema = z.object({
   }),
 });
 export type AutoContainmentConfig = z.infer<typeof AutoContainmentConfigSchema>;
+
+export const ADMIN_AI_MODES = ['off', 'shadow', 'recommend', 'act'] as const;
+export type AdminAiMode = (typeof ADMIN_AI_MODES)[number];
+
+const adminAiFeatureLimits = {
+  mode: z.enum(ADMIN_AI_MODES).prefault('off').meta({
+    title: 'Mode',
+    description:
+      'off: no calls. shadow: suggest and record, show nothing. recommend: show the suggestion to admins. act: apply it as the system.',
+  }),
+  confidenceThreshold: z.number().min(0).max(1).prefault(0.8).meta({
+    title: 'Confidence threshold',
+    description:
+      'Probability (0-1) below which the escalation model is asked, and below which act mode does not apply.',
+  }),
+  dailyBudgetUsd: z.number().min(0).max(100).prefault(0).meta({
+    title: 'Daily budget (USD)',
+    description: 'Spend per day for this feature. 0 makes no calls.',
+  }),
+  maxCallsPerDay: z.number().int().min(0).max(10_000).prefault(0).meta({
+    title: 'Calls per day',
+    description:
+      "Model requests per day for this feature. A repair or an escalation is another request; a decision model's automatic retry counts with the request it retries. 0 makes no calls.",
+  }),
+};
+
+const decisionFeatureConfig = (title: string) =>
+  z
+    .object({
+      ...adminAiFeatureLimits,
+      model: z.enum(DECISION_MODEL_IDS).nullable().prefault(null).meta({
+        title: 'Model',
+        description: 'Decisions model to ask; it must have a platform key. None makes no calls.',
+      }),
+      escalationModel: z.enum(DECISION_MODEL_IDS).nullable().prefault(null).meta({
+        title: 'Escalation model',
+        description: 'Decisions model asked once more when confidence is below the threshold. None skips escalation.',
+      }),
+    })
+    .prefault({})
+    .meta({ title });
+
+const textFeatureConfig = (title: string) =>
+  z
+    .object({
+      ...adminAiFeatureLimits,
+      model: supportedChatModels.nullable().prefault(null).meta({
+        title: 'Model',
+        description: 'Model id to ask. None uses the operations model.',
+      }),
+      escalationModel: supportedChatModels.nullable().prefault(null).meta({
+        title: 'Escalation model',
+        description: 'Model id asked once more when confidence is below the threshold. None skips escalation.',
+      }),
+    })
+    .prefault({})
+    .meta({ title });
+
+/**
+ * Switches and spend limits for admin AI suggestions (contract in schemas/adminAi.ts). Every default
+ * spends nothing: disabled, a zero monthly cap, and every feature off with a zero budget. Feature keys
+ * are explicit (not a record) so the admin settings form renders each as its own group; they must stay
+ * in sync with ADMIN_AI_FEATURES and ADMIN_AI_FEATURE_ENGINE.
+ */
+export const AdminAiConfigSchema = z.object({
+  enabled: z.boolean().prefault(false).meta({
+    title: 'Enabled',
+    description: 'Master switch for every admin AI feature.',
+  }),
+  monthlyCapUsd: z.number().min(0).max(1000).prefault(0).meta({
+    title: 'Monthly cap (USD)',
+    description: 'Total spend per calendar month across all features. 0 makes no calls.',
+  }),
+  features: z
+    .object({
+      abuseAssessment: decisionFeatureConfig('Abuse assessment'),
+      domainHold: decisionFeatureConfig('Domain hold'),
+      detectionTriage: decisionFeatureConfig('Detection triage'),
+      feedbackTriage: textFeatureConfig('Feedback triage'),
+      dlqTriage: textFeatureConfig('DLQ triage'),
+      morningBrief: textFeatureConfig('Morning brief'),
+    })
+    .prefault({})
+    .meta({ title: 'Features' }),
+});
+export type AdminAiConfig = z.infer<typeof AdminAiConfigSchema>;
 
 /**
  * Operator limits for the advisory assessment of young-domain signup holds
@@ -2971,6 +3058,13 @@ export const API_SERVICE_GROUPS = {
       { key: 'abuseAssessmentConfig', order: 2 },
       { key: 'autoContainmentConfig', order: 3 },
     ],
+  },
+  ADMIN_AI: {
+    id: 'adminAiService',
+    name: 'Admin AI Suggestions',
+    description: 'Model suggestions on admin queues (abuse, domain holds, triage, morning brief), with spend caps',
+    icon: 'Security',
+    settings: [{ key: 'adminAiConfig', order: 1 }],
   },
   API_CLIENTS: {
     id: 'apiClientsService',
@@ -4998,6 +5092,17 @@ export const settingsMap = {
     order: 3,
     dependsOn: 'abuseAssessmentEnabled',
     schema: AutoContainmentConfigSchema,
+  }),
+  adminAiConfig: makeObjectSetting({
+    key: 'adminAiConfig',
+    name: 'Admin AI Suggestions: Modes and Limits',
+    defaultValue: AdminAiConfigSchema.parse({}),
+    description:
+      'Master switch, a monthly USD cap across all features, and per feature: mode (off, shadow, recommend, act), model, escalation model, confidence threshold, daily USD budget and calls per day. The defaults make no calls. For text features (feedback triage, DLQ triage, morning brief) a model of None uses the operations model.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.ADMIN_AI.id,
+    order: 1,
+    schema: AdminAiConfigSchema,
   }),
   // Enforced by createModelAdmission (b4m-core/services/src/llm/modelAdmission.ts) and mirrored in
   // the model picker (apps/client/server/utils/callerModelList.ts).

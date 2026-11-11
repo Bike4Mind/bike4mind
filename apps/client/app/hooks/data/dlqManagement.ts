@@ -24,7 +24,9 @@ export interface DlqQueueInfo {
 }
 
 export interface DlqMessage {
+  failureLookupFailed?: boolean;
   messageId: string;
+  failure?: { errorMessage: string; category: 'refused' | 'timeout' | 'invalid output' | 'bug' | 'unknown' };
   body: string;
   receiptHandle?: string;
   sentTimestamp?: string;

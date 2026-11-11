@@ -1,7 +1,12 @@
 import { ApiKeyScope, meetsAdminPermissionRequirement } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
-import { getDlqByLabel, getDlqUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
+import {
+  getDlqByLabel,
+  getDlqUrl,
+  getSourceQueueUrl,
+  type SourceQueueName,
+} from '@bike4mind/server-utils/utils/dlqRegistry';
 import {
   buildLogsInsightsUrl,
   messageLogWindow,
@@ -10,6 +15,7 @@ import {
 } from '@bike4mind/server-utils/utils/dlqConsumerLogs';
 import { receiveFromQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Logger } from '@bike4mind/observability';
+import { dlqFailureRepository } from '@bike4mind/database';
 import { z } from 'zod';
 
 const QuerySchema = z.object({
@@ -27,6 +33,22 @@ function messageLogsUrl(logs: ConsumerLogs | null, sentTimestamp: string | undef
   if (!logs || !sentTimestamp) return null;
   const window = messageLogWindow(parseInt(sentTimestamp, 10), logs.retryWindowMs);
   return window ? buildLogsInsightsUrl({ region: logs.region, logGroups: logs.logGroups, ...window }) : null;
+}
+
+async function findFailures(queueLabel: string, sourceQueue: SourceQueueName | null, messageIds: string[]) {
+  if (!sourceQueue || !messageIds.length) return { failures: [], lookupFailed: false };
+  try {
+    const sourceQueueName = new URL(getSourceQueueUrl(sourceQueue)).pathname.split('/').pop();
+    if (!sourceQueueName) return { failures: [], lookupFailed: false };
+    const failures = await dlqFailureRepository.findForMessages(sourceQueueName, messageIds);
+    return { failures, lookupFailed: false };
+  } catch (error) {
+    Logger.warn('[DLQ Messages] Failure details unavailable', {
+      queueLabel,
+      errorName: error instanceof Error ? error.name : 'Unknown',
+    });
+    return { failures: [], lookupFailed: true };
+  }
 }
 
 /**
@@ -75,16 +97,27 @@ const handler = adminApi({
     if (!existing || receiveCount(msg) > receiveCount(existing)) byId.set(msg.MessageId, msg);
   }
   const messages = [...byId.values()];
+  const { failures, lookupFailed } = await findFailures(
+    queueLabel,
+    dlqEntry.sourceQueue,
+    messages.map(msg => msg.MessageId!)
+  );
+  const failureById = new Map(failures.map(failure => [failure.messageId, failure]));
 
-  const formatted = messages.map(msg => ({
-    messageId: msg.MessageId,
-    body: msg.Body,
-    receiptHandle: canReplay ? msg.ReceiptHandle : undefined,
-    sentTimestamp: msg.Attributes?.SentTimestamp,
-    approximateReceiveCount: msg.Attributes?.ApproximateReceiveCount,
-    approximateFirstReceiveTimestamp: msg.Attributes?.ApproximateFirstReceiveTimestamp,
-    logsUrl: messageLogsUrl(consumerLogs, msg.Attributes?.SentTimestamp),
-  }));
+  const formatted = messages.map(msg => {
+    const failure = failureById.get(msg.MessageId!);
+    return {
+      messageId: msg.MessageId,
+      body: msg.Body,
+      receiptHandle: canReplay ? msg.ReceiptHandle : undefined,
+      sentTimestamp: msg.Attributes?.SentTimestamp,
+      approximateReceiveCount: msg.Attributes?.ApproximateReceiveCount,
+      approximateFirstReceiveTimestamp: msg.Attributes?.ApproximateFirstReceiveTimestamp,
+      logsUrl: messageLogsUrl(consumerLogs, msg.Attributes?.SentTimestamp),
+      ...(lookupFailed ? { failureLookupFailed: true } : {}),
+      failure: failure ? { errorMessage: failure.errorMessage, category: failure.category } : undefined,
+    };
+  });
 
   Logger.info(`[DLQ Messages] Returned ${formatted.length} messages from ${queueLabel}`, { adminUserId });
 
