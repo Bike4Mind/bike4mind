@@ -269,12 +269,14 @@ const DlqReplayTab: React.FC = () => {
     return queues.filter(q => q.approximateMessageCount > 0).length;
   }, [queues]);
 
+  // A failed background refetch keeps the last good data, so an error must not read as all clear.
   const allClear = useMemo(
     () =>
+      !queuesError &&
       !!queues &&
       queues.length > 0 &&
       queues.every(q => q.approximateMessageCount === 0 && q.approximateNotVisibleCount <= 0),
-    [queues]
+    [queues, queuesError]
   );
 
   const selectedQueueInfo = useMemo(() => {

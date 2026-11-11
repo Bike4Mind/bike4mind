@@ -34,7 +34,7 @@ const queueOne = (counts: Partial<QueueRow> = {}): QueueRow => ({
   approximateNotVisibleCount: 0,
   ...counts,
 });
-const q = vi.hoisted(() => ({ queues: [] as QueueRow[] }));
+const q = vi.hoisted(() => ({ queues: [] as QueueRow[], isError: false }));
 
 // A minimal URL store: navigate writes the search, useSearch re-renders on change.
 const router = vi.hoisted(() => {
@@ -75,7 +75,7 @@ vi.mock('@client/app/hooks/data/dlqManagement', () => ({
     data: q.queues,
     dataUpdatedAt: Date.UTC(2026, 10, 11, 9, 30),
     isLoading: false,
-    isError: false,
+    isError: q.isError,
     refetch: vi.fn(),
   }),
   useDlqMessages: () => ({
@@ -123,6 +123,7 @@ beforeEach(() => {
   state.history = [];
   h.user = null;
   q.queues = [queueOne()];
+  q.isError = false;
   router.set({});
   router.navigate.mockClear();
 });
@@ -156,6 +157,17 @@ describe('DlqReplayTab all-clear state', () => {
 
     expect(screen.queryByTestId('dlq-all-clear')).toBeNull();
     expect(screen.getByTestId('dlq-stats-total')).toBeInTheDocument();
+  });
+});
+
+describe('DlqReplayTab all-clear after a failed refetch', () => {
+  it('shows the load error, not the all-clear card, when the last good read was empty', () => {
+    q.queues = [queueOne({ approximateMessageCount: 0 })];
+    q.isError = true;
+    renderPlain();
+
+    expect(screen.queryByTestId('dlq-all-clear')).toBeNull();
+    expect(screen.getByText('Failed to load DLQ list. Try refreshing.')).toBeInTheDocument();
   });
 });
 
