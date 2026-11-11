@@ -36,7 +36,6 @@ describe('signup grant schedule', () => {
     dailyCredits: 0,
     dripCap: 0,
     unlockCredits: 0,
-    paysFlat: false,
     inviteBonusCredits: 0,
     dripCapSource: 'default',
   };
@@ -55,13 +54,12 @@ describe('signup grant schedule', () => {
       dailyCredits: 300,
       dripCap: 4000,
       unlockCredits: 4000,
-      paysFlat: false,
       inviteBonusCredits: 50,
       dripCapSource: 'setting',
     });
   });
 
-  it('falls back to 0 without paying flat when nothing is stored', async () => {
+  it('falls back to 0 when nothing is stored', async () => {
     expect(await resolveSignupGrantSchedule(settings({}))).toEqual(emptySchedule);
     const config = await resolveSignupGrantSettings(settings({}));
     expect([config.signupCredits, config.unlockCredits]).toEqual([0, 0]);
@@ -84,7 +82,7 @@ describe('signup grant schedule', () => {
     const zero = await resolveSignupGrantSchedule(
       settings({ signupGrantInitialCredits: '0', signupGrantDailyCredits: '0', signupGrantDripCap: 0 })
     );
-    expect(zero).toMatchObject({ initialCredits: 0, dailyCredits: 0, dripCap: 0, unlockCredits: 0, paysFlat: true });
+    expect(zero).toMatchObject({ initialCredits: 0, dailyCredits: 0, dripCap: 0, unlockCredits: 0 });
     expect(zero.dripCapSource).toBe('setting');
   });
 
