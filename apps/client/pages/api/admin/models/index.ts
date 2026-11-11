@@ -5,7 +5,7 @@ import { loadAdminModelRows, parseAdminModelListQuery } from '@server/admin/mode
 
 /**
  * GET /api/admin/models?view=&search=&providers=&types=&sources=&showFoundationIds=&sort=&dir=&page=&pageSize=
- * -> AdminModelListResponse (@bike4mind/common). Spec: docs/admin-models-spec.md sections 4 and 7.1.
+ * -> AdminModelListResponse (@bike4mind/common).
  */
 const handler = adminApi({
   adminPermissions: { GET: 'support:read' },
