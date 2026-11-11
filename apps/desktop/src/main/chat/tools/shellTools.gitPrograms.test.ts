@@ -232,6 +232,7 @@ const ROWS: [string, string, string][] = [
   ['pnpm exec env -i git log', '', 'aaaa'],
   ['find . -maxdepth 0 -exec env -i git log \\;', '', 'aaaa'],
   ['pnpm exec env -i node x.js', '', 'rrrr'],
+  ['cd nosuchdir; git merge-foo', '', 'aaaa'],
 ];
 
 describe('shell approval of git programs, sourced files and fresh folders', () => {
