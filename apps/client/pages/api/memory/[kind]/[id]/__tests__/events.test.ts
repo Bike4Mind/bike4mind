@@ -61,9 +61,12 @@ describe('GET /api/memory/:kind/:id/events', () => {
     await foreign.done;
     const wrongKind = invoke({ method: 'GET', query: { kind: 'lake', id: 'user-1' } });
     await wrongKind.done;
+    const apiKey = invoke({ method: 'GET', apiKeyInfo: { keyId: 'key-1', scopes: [] } });
+    await apiKey.done;
     expect(anonymous.status).toHaveBeenCalledWith(401);
     expect(foreign.status).toHaveBeenCalledWith(403);
     expect(wrongKind.status).toHaveBeenCalledWith(400);
+    expect(apiKey.status).toHaveBeenCalledWith(403);
     expect(h.listPrincipalLedger).not.toHaveBeenCalled();
   });
 
@@ -80,6 +83,12 @@ describe('GET /api/memory/:kind/:id/events', () => {
 });
 
 describe('POST /api/memory/:kind/:id/events', () => {
+  it('preserves API-key append authorization', async () => {
+    const { status, done } = invoke({ apiKeyInfo: { keyId: 'key-1', scopes: [] } });
+    await done;
+    expect(status).toHaveBeenCalledWith(201);
+    expect(h.appendMemoryEvent).toHaveBeenCalledOnce();
+  });
   it("arms the shred fence with the request's arrival, not a handler-local stamp", async () => {
     // A purge landing between arrival and the append - across baseApi's connectDB and auth as well
     // as this handler's own parsing - must refuse the write, not lift its own tombstone.

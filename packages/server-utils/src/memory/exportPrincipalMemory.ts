@@ -6,7 +6,7 @@ import { listPrincipalLedger, type LedgerRepo } from './ledgerMemoryStore';
 const MEMENTO_PAGE_SIZE = 200;
 const MAX_MEMENTO_PAGES = 2_000;
 
-export interface ExportedMemento extends Omit<IMemento, 'metadata'> {
+export interface ExportedMemento extends Omit<IMemento, 'metadata' | 'embedding' | 'embeddingModel'> {
   id: string;
   createdAt?: Date;
   updatedAt?: Date;
@@ -61,8 +61,6 @@ export async function exportPrincipalMemory(deps: {
           weight,
           summary,
           fullContent,
-          embedding,
-          embeddingModel,
           lastAccessedAt,
           isArchived,
           tags,
@@ -79,8 +77,6 @@ export async function exportPrincipalMemory(deps: {
           weight,
           summary,
           fullContent,
-          embedding: embedding ? Array.from(embedding) : undefined,
-          embeddingModel,
           lastAccessedAt,
           isArchived,
           tags: tags ? Array.from(tags) : undefined,

@@ -40,7 +40,7 @@ describe('exportPrincipalMemory', () => {
     await repo.markSubjectShredded('user', 'u1', 'u1', store[1].subject);
     const mementos = {
       findByUserId: vi.fn(async () => [
-        row('a', MementoTier.HOT),
+        { ...row('a', MementoTier.HOT), embedding: Array(1536).fill(0.25), embeddingModel: 'old-model' },
         row('b', MementoTier.WARM),
         row('c', MementoTier.COLD),
       ]),
@@ -60,6 +60,9 @@ describe('exportPrincipalMemory', () => {
     expect(JSON.stringify(exported)).not.toContain('Do not export');
     expect(JSON.stringify(exported)).not.toContain('factCipher');
     expect(exported.mementos.map(m => m.tier)).toEqual(['hot', 'warm', 'cold']);
+    expect(exported.mementos[0]).not.toHaveProperty('embedding');
+    expect(exported.mementos[0]).not.toHaveProperty('embeddingModel');
+    expect(JSON.stringify(exported)).not.toContain('old-model');
     expect(verifyMemoryExport(exported)).toEqual({ ok: true });
     expect(verifyMemoryExport(JSON.parse(JSON.stringify(exported)))).toEqual({ ok: true });
     for (const memento of exported.mementos) expect(memento).not.toHaveProperty('metadata');
