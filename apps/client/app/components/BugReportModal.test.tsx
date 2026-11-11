@@ -1,6 +1,7 @@
 import type { ComponentProps } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import BugReportModal from './BugReportModal';
@@ -26,9 +27,11 @@ const appTheme = extendTheme({ ...getThemeConfig() });
 
 const renderModal = (props: Partial<ComponentProps<typeof BugReportModal>> = {}) =>
   render(
-    <CssVarsProvider theme={appTheme}>
-      <BugReportModal open onClose={vi.fn()} promptMeta={null} {...props} />
-    </CssVarsProvider>
+    <QueryClientProvider client={new QueryClient()}>
+      <CssVarsProvider theme={appTheme}>
+        <BugReportModal open onClose={vi.fn()} promptMeta={null} {...props} />
+      </CssVarsProvider>
+    </QueryClientProvider>
   );
 
 beforeEach(() => {
@@ -117,6 +120,22 @@ describe('BugReportModal', () => {
     await waitFor(() => expect(h.createFeedbackOnServer).toHaveBeenCalledTimes(1));
     expect(h.createFeedbackOnServer).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: 'session-1', questId: 'quest-1' })
+    );
+  });
+
+  it('sends the web client context with the report', async () => {
+    h.createFeedbackOnServer.mockResolvedValue({});
+    renderModal();
+
+    fireEvent.click(screen.getByTestId('bug-report-modal-submit-btn'));
+
+    await waitFor(() => expect(h.createFeedbackOnServer).toHaveBeenCalled());
+    expect(h.createFeedbackOnServer.mock.calls[0][0].clientContext).toEqual(
+      expect.objectContaining({
+        platform: 'web',
+        path: window.location.pathname,
+        viewport: { width: window.innerWidth, height: window.innerHeight },
+      })
     );
   });
 
