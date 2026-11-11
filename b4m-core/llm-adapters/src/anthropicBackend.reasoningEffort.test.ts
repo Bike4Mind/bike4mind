@@ -407,6 +407,67 @@ describe('AnthropicBackend reasoningEffort', () => {
       expect(request.output_config).toBeUndefined();
     });
   });
+
+  describe('thinking toggled off by the caller', () => {
+    const off = { enabled: false, budget_tokens: 16000 };
+
+    it.each([
+      [ChatModels.CLAUDE_5_SONNET, 'simple', 'disabled'],
+      [ChatModels.CLAUDE_5_SONNET, 'complex', 'disabled'],
+      [ChatModels.CLAUDE_5_OPUS, 'simple', 'disabled'],
+      [ChatModels.CLAUDE_5_OPUS, 'complex', 'disabled'],
+      [ChatModels.CLAUDE_5_5_HAIKU, 'simple', 'disabled'],
+      [ChatModels.CLAUDE_5_5_HAIKU, 'complex', 'disabled'],
+      [ChatModels.CLAUDE_5_5_SONNET, 'simple', 'between_tools'],
+      [ChatModels.CLAUDE_5_5_SONNET, 'complex', 'between_tools'],
+    ] as const)('sends the off switch for %s at %s complexity', async (model, complexity, offSwitch) => {
+      const { request, thinkingEnabled } = await run(model, { complexity, thinking: off, maxTokens: 2000 });
+
+      expect(request.thinking).toEqual({ type: offSwitch });
+      expect(request.output_config).toBeUndefined();
+      expect(thinkingEnabled).toBe(false);
+    });
+
+    it('lets an explicit reasoningEffort win over the toggle', async () => {
+      const request = await requestFor(ChatModels.CLAUDE_5_SONNET, {
+        complexity: 'simple',
+        thinking: off,
+        reasoningEffort: 'high',
+        maxTokens: 2000,
+      });
+
+      expect(request.thinking).toEqual({ type: 'adaptive' });
+    });
+
+    it('keeps the off switch under the forced response_format tool', async () => {
+      const request = await requestFor(ChatModels.CLAUDE_5_SONNET, {
+        complexity: 'simple',
+        thinking: off,
+        maxTokens: 2000,
+        responseFormat: jsonSchemaFormat,
+      });
+
+      expect(request.tool_choice).toEqual({ type: 'tool', name: 'answer', disable_parallel_tool_use: true });
+      expect(request.thinking).toEqual({ type: 'disabled' });
+    });
+
+    it('keeps the complexity default on a model with no off switch', async () => {
+      const request = await requestFor(ChatModels.CLAUDE_5_5_OPUS, {
+        complexity: 'simple',
+        thinking: off,
+        maxTokens: 2000,
+      });
+
+      expect(request.thinking).toEqual({ type: 'adaptive' });
+      expect(request.output_config).toEqual({ effort: 'low' });
+    });
+
+    it('keeps the complexity default when thinking is omitted', async () => {
+      const request = await requestFor(ChatModels.CLAUDE_5_SONNET, { complexity: 'simple', maxTokens: 2000 });
+
+      expect(request.thinking).toEqual({ type: 'adaptive' });
+    });
+  });
 });
 
 describe('AnthropicBedrockBackend reasoningEffort', () => {
@@ -476,5 +537,40 @@ describe('AnthropicBedrockBackend reasoningEffort', () => {
 
     expect(body.thinking).toBeUndefined();
     expect(body.output_config).toBeUndefined();
+  });
+
+  describe('thinking toggled off by the caller', () => {
+    const off = { enabled: false, budget_tokens: 16000 };
+
+    it.each([
+      [ChatModels.CLAUDE_5_SONNET_BEDROCK, 'simple', 'disabled'],
+      [ChatModels.CLAUDE_5_SONNET_BEDROCK, 'complex', 'disabled'],
+      [ChatModels.CLAUDE_5_OPUS_BEDROCK, 'simple', 'disabled'],
+      [ChatModels.CLAUDE_5_5_HAIKU_BEDROCK, 'complex', 'disabled'],
+      [ChatModels.CLAUDE_5_5_SONNET_BEDROCK, 'simple', 'between_tools'],
+      [ChatModels.CLAUDE_5_5_SONNET_BEDROCK, 'complex', 'between_tools'],
+    ] as const)('sends the off switch for %s at %s complexity', (model, complexity, offSwitch) => {
+      const body = bodyFor(model, { complexity, thinking: off, maxTokens: 2000 });
+
+      expect(body.thinking).toEqual({ type: offSwitch });
+      expect(body.output_config).toBeUndefined();
+    });
+
+    it('lets an explicit reasoningEffort win over the toggle', () => {
+      const body = bodyFor(ChatModels.CLAUDE_5_SONNET_BEDROCK, {
+        complexity: 'simple',
+        thinking: off,
+        reasoningEffort: 'high',
+        maxTokens: 2000,
+      });
+
+      expect(body.thinking).toEqual({ type: 'adaptive' });
+    });
+
+    it('keeps the complexity default when thinking is omitted', () => {
+      const body = bodyFor(ChatModels.CLAUDE_5_SONNET_BEDROCK, { complexity: 'simple', maxTokens: 2000 });
+
+      expect(body.thinking).toEqual({ type: 'adaptive' });
+    });
   });
 });
