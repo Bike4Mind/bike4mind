@@ -170,8 +170,6 @@ export default function SignupDomainHoldsTab() {
   const [cursors, setCursors] = useState<Record<string, string | undefined>>({});
   // isPending only flips after a re-render, so a double-click would otherwise send two decisions.
   const decisionInFlight = useRef(false);
-  const [releaseTarget, setReleaseTarget] = useState<SignupDomainReview | null>(null);
-  const [showHelp, setShowHelp] = useState(false);
   const queryClient = useQueryClient();
   const query = useQuery({
     queryKey: [...QUERY_KEY, status, reason, includeOlder, page],
