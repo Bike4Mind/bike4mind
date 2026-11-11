@@ -25,9 +25,11 @@ import { denySelfAdminAction, isSelfOrImpersonator } from '@bike4mind/server-uti
  */
 
 // Past the latest a job that waits out another export's lease can still succeed: 30 minutes of re-sends
-// (apps/workers/src/queueHandlers/accountDataExport.ts), every redelivery of the last copy, then one full
-// run. That is 61 minutes on AWS (infra/queues.ts) and 70 on the self-host runner
-// (apps/workers/src/selfhost/registerRedrivenQueue.ts); accountDataExport.test.ts checks the sum.
+// (apps/workers/src/queueHandlers/accountDataExport.ts, which re-sends only a first delivery), every
+// redelivery of one copy, then one full run. That is 61 minutes on AWS (infra/queues.ts); on the self-host
+// runner (apps/workers/src/selfhost/registerRedrivenQueue.ts) it is 70 only while each run keeps to its
+// cooperative budget, so an overrunning run can still be building here when listed as failed.
+// accountDataExport.test.ts checks both sums.
 export const ADMIN_DATA_EXPORT_GIVE_UP_MS = 80 * 60 * 1000;
 const LISTED_EXPORTS = 20;
 
