@@ -4,7 +4,7 @@ import type {
   AgentConfigurationExportAdapters,
   AgentConfigurationImportAdapters,
 } from './index';
-import { exportAgentConfiguration, importAgentConfiguration } from './index';
+import { AgentConfigurationImportError, exportAgentConfiguration, importAgentConfiguration } from './index';
 
 const agent = {
   id: 'agent-old',
@@ -312,5 +312,20 @@ describe('agent configuration egress', () => {
         expect(Object.values(writer).every(fn => vi.mocked(fn as never).mock.calls.length === 0)).toBe(true);
       }
     }
+  });
+
+  it('reports what was created when a write fails partway', async () => {
+    const archive = await exportAgentConfiguration('source', exportAdapters());
+    const db = importAdapters();
+    vi.mocked(db.skills.create).mockRejectedValue(new Error('db down'));
+
+    const error = await importAgentConfiguration('target', archive, db).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(AgentConfigurationImportError);
+    const failure = error as AgentConfigurationImportError;
+    expect(failure.created.projects.get('project-old')).toBe('project-new');
+    expect(failure.created.agents.get('agent-old')).toBe('agent-new');
+    expect(failure.created.skills.size).toBe(0);
+    expect((failure.cause as Error).message).toBe('db down');
+    expect(db.prompts.create).not.toHaveBeenCalled();
   });
 });

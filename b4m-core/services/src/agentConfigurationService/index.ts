@@ -360,6 +360,24 @@ export interface AgentConfigurationReferenceMap {
   files?: ReadonlyMap<string, string>;
 }
 
+export interface AgentConfigurationImportResult {
+  projects: Map<string, string>;
+  agents: Map<string, string>;
+  skills: Map<string, string>;
+  prompts: Map<string, string>;
+}
+
+/** Thrown when a write fails partway; `created` holds the id maps for everything written before the failure. */
+export class AgentConfigurationImportError extends Error {
+  constructor(
+    readonly created: AgentConfigurationImportResult,
+    cause: unknown
+  ) {
+    super(`Agent configuration import failed: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+    this.name = 'AgentConfigurationImportError';
+  }
+}
+
 /**
  * Validates the archive shape, then writes it for `userId`. Callers must still run their own caller-context
  * checks (agent validators, model entitlement; see validateAgentUpdate in apps/client/server/utils/agentValidation.ts).
@@ -369,79 +387,78 @@ export async function importAgentConfiguration(
   rawArchive: AgentConfigurationArchive,
   db: AgentConfigurationImportAdapters,
   references: AgentConfigurationReferenceMap = {}
-): Promise<{
-  projects: Map<string, string>;
-  agents: Map<string, string>;
-  skills: Map<string, string>;
-  prompts: Map<string, string>;
-}> {
+): Promise<AgentConfigurationImportResult> {
   const archive = agentConfigurationArchiveSchema.parse(rawArchive) as AgentConfigurationArchive;
   const projects = new Map<string, string>();
   const agents = new Map<string, string>();
   const skills = new Map<string, string>();
   const prompts = new Map<string, string>();
 
-  for (const row of archive.projects) {
-    const { id, name, description, sessionIds, fileIds, systemPrompts } = row;
-    projects.set(
-      id,
-      (
-        await db.projects.create({
-          name,
-          description,
-          userId,
-          sessionIds: sessionIds.flatMap(sourceId => {
-            const mapped = references.sessions?.get(sourceId);
-            return mapped ? [mapped] : [];
-          }),
-          fileIds: fileIds.flatMap(sourceId => {
-            const mapped = references.files?.get(sourceId);
-            return mapped ? [mapped] : [];
-          }),
-          systemPrompts: systemPrompts.flatMap(prompt => {
-            const fileId = references.files?.get(prompt.fileId);
-            return fileId ? [{ fileId, enabled: prompt.enabled }] : [];
-          }),
-        })
-      ).id
-    );
-  }
-  for (const row of archive.agents) {
-    if (row.type === 'voice') continue;
-    const { id, projectId: sourceProjectId } = row;
-    const { projectId: _projectId, id: _id, ...config } = agentOf(row);
-    const projectId = sourceProjectId ? projects.get(sourceProjectId) : undefined;
-    agents.set(id, (await db.agents.create({ ...config, userId, ...(projectId ? { projectId } : {}) })).id);
-  }
-  for (const row of archive.skills) {
-    const { id: _id, ...config } = skillOf(row);
-    skills.set(row.id, (await db.skills.create({ ...config, userId })).id);
-  }
-  for (const row of archive.prompts) {
-    const { id: _id, ...config } = promptOf(row);
-    prompts.set(row.id, (await db.prompts.create({ ...config, userId })).id);
-  }
-  for (const row of archive.mcpServers) {
-    await db.mcpServers.create({ name: row.name, userId, enabled: false, envVariables: [], tools: [] });
-  }
-  for (const row of archive.sessionToolApprovals) {
-    const sessionId = references.sessions?.get(row.sessionId);
-    if (sessionId) {
-      await db.sessionToolApprovals.create({ userId, sessionId, approvedTools: [], deniedTools: row.deniedTools });
+  try {
+    for (const row of archive.projects) {
+      const { id, name, description, sessionIds, fileIds, systemPrompts } = row;
+      projects.set(
+        id,
+        (
+          await db.projects.create({
+            name,
+            description,
+            userId,
+            sessionIds: sessionIds.flatMap(sourceId => {
+              const mapped = references.sessions?.get(sourceId);
+              return mapped ? [mapped] : [];
+            }),
+            fileIds: fileIds.flatMap(sourceId => {
+              const mapped = references.files?.get(sourceId);
+              return mapped ? [mapped] : [];
+            }),
+            systemPrompts: systemPrompts.flatMap(prompt => {
+              const fileId = references.files?.get(prompt.fileId);
+              return fileId ? [{ fileId, enabled: prompt.enabled }] : [];
+            }),
+          })
+        ).id
+      );
     }
+    for (const row of archive.agents) {
+      if (row.type === 'voice') continue;
+      const { id, projectId: sourceProjectId } = row;
+      const { projectId: _projectId, id: _id, ...config } = agentOf(row);
+      const projectId = sourceProjectId ? projects.get(sourceProjectId) : undefined;
+      agents.set(id, (await db.agents.create({ ...config, userId, ...(projectId ? { projectId } : {}) })).id);
+    }
+    for (const row of archive.skills) {
+      const { id: _id, ...config } = skillOf(row);
+      skills.set(row.id, (await db.skills.create({ ...config, userId })).id);
+    }
+    for (const row of archive.prompts) {
+      const { id: _id, ...config } = promptOf(row);
+      prompts.set(row.id, (await db.prompts.create({ ...config, userId })).id);
+    }
+    for (const row of archive.mcpServers) {
+      await db.mcpServers.create({ name: row.name, userId, enabled: false, envVariables: [], tools: [] });
+    }
+    for (const row of archive.sessionToolApprovals) {
+      const sessionId = references.sessions?.get(row.sessionId);
+      if (sessionId) {
+        await db.sessionToolApprovals.create({ userId, sessionId, approvedTools: [], deniedTools: row.deniedTools });
+      }
+    }
+    for (const row of archive.favorites) {
+      const documentId =
+        row.documentType === 'projects'
+          ? projects.get(row.documentId)
+          : row.documentType === 'sessions'
+            ? references.sessions?.get(row.documentId)
+            : references.files?.get(row.documentId);
+      if (documentId) await db.favorites.create({ userId, documentId, documentType: row.documentType });
+    }
+    await db.users.updateById(userId, {
+      name: archive.profile.name,
+      preferences: preferencesOf(archive.profile.preferences),
+    });
+    return { projects, agents, skills, prompts };
+  } catch (error) {
+    throw new AgentConfigurationImportError({ projects, agents, skills, prompts }, error);
   }
-  for (const row of archive.favorites) {
-    const documentId =
-      row.documentType === 'projects'
-        ? projects.get(row.documentId)
-        : row.documentType === 'sessions'
-          ? references.sessions?.get(row.documentId)
-          : references.files?.get(row.documentId);
-    if (documentId) await db.favorites.create({ userId, documentId, documentType: row.documentType });
-  }
-  await db.users.updateById(userId, {
-    name: archive.profile.name,
-    preferences: preferencesOf(archive.profile.preferences),
-  });
-  return { projects, agents, skills, prompts };
 }
