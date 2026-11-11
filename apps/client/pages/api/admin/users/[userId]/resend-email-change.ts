@@ -1,9 +1,10 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { userRepository } from '@bike4mind/database';
-import { ApiKeyScope, assertCanActOnAdminTarget } from '@bike4mind/common';
+import { ApiKeyScope, ConflictError, assertCanActOnAdminTarget } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
-import { BadRequestError } from '@bike4mind/utils';
+import { BadRequestError, hashEmailToken } from '@bike4mind/utils';
+import { randomUUID } from 'crypto';
 import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { buildEmailChangeMailer, type EmailChangeMessage } from '@server/users/emailChangeMailer';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
@@ -41,12 +42,20 @@ const handler = adminApi({
         throw new BadRequestError('No pending email change found for this user');
       }
 
-      // Auto-cancel if token is expired
-      if (user.pendingEmailExpires && new Date(user.pendingEmailExpires) < new Date()) {
+      const now = new Date();
+      const expiresAt = user.pendingEmailExpires
+        ? new Date(user.pendingEmailExpires)
+        : user.pendingEmailSentAt
+          ? new Date(new Date(user.pendingEmailSentAt).getTime() + userService.EMAIL_VERIFICATION_TOKEN_EXPIRY)
+          : null;
+      if (!expiresAt) throw new BadRequestError('Pending email change has no issue date');
+
+      // Auto-cancel if token is expired.
+      if (expiresAt <= now) {
         // Store the email addresses before cancellation for logging
         const oldEmail = user.email;
         const expiredPendingEmail = user.pendingEmail;
-        const expiredAt = new Date(user.pendingEmailExpires);
+        const expiredAt = expiresAt;
 
         // Cancel the email change
         await userService.cancelEmailChange({ userId: user.id }, { db: { users: userRepository } });
@@ -71,19 +80,21 @@ const handler = adminApi({
         );
       }
 
-      // Resend the email change verification email
+      // Only a hash of the token is stored, so a resend issues a fresh token (keeping the original
+      // expiry); the link in any earlier email stops working.
+      const token = randomUUID();
+      const rotated = await userRepository.rotatePendingEmailToken(user, hashEmailToken(token), expiresAt, now);
+      if (!rotated) throw new ConflictError('The pending email change was updated. Reload before resending.');
+
       const outbox: EmailChangeMessage[] = [];
       await buildEmailChangeMailer(outbox, { adminNote: 'resent' }).sendEmailChangeVerification(
         user,
         user.pendingEmail,
-        user.pendingEmailToken
+        token
       );
       for (const email of outbox) {
         await EmailEvents.Send.publish(email);
       }
-
-      // Update the resent timestamp
-      await userRepository.update({ id: user.id, pendingEmailSentAt: new Date() });
 
       // Log admin action
       await recordAdminActionFromRequest(req, {
