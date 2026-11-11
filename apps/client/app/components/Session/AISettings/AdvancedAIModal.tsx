@@ -333,13 +333,17 @@ const ReasoningEffortSelector: React.FC<{
   // The preference is shared by every model, so a level this one does not offer goes back to 'auto'.
   // Not while previewing: that would rewrite the active model's setting from a model that is not running.
   useEffect(() => {
-    if (!offersCurrent && !readOnly && currentUser) {
-      api
-        .put(`/api/users/${currentUser.id}/update`, { preferredReasoningEffort: 'auto' })
-        .then(response => setCurrentUser(response.data))
-        .catch(err => console.error('Failed to reset reasoning effort:', err));
-    }
-  }, [model]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (offersCurrent || readOnly || !currentUser) return;
+    const resetPreference = async () => {
+      try {
+        const response = await api.put(`/api/users/${currentUser.id}/update`, { preferredReasoningEffort: 'auto' });
+        setCurrentUser(response.data);
+      } catch (error) {
+        console.error('Failed to reset reasoning effort:', error);
+      }
+    };
+    void resetPreference();
+  }, [currentUser, model, offersCurrent, readOnly, setCurrentUser]);
 
   const handleChange = async (_: unknown, newValue: UserReasoningEffort | null) => {
     if (!currentUser || newValue === null) return;

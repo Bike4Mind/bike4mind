@@ -8,10 +8,10 @@ import {
 } from '@bike4mind/common';
 import { chatReasoningEffortsFor } from '@bike4mind/llm-adapters/model-sizing';
 
-export interface ReasoningEffortOption {
+export type ReasoningEffortOption = {
   value: UserReasoningEffort;
   label: string;
-}
+};
 
 const AUTO_OPTION: ReasoningEffortOption = { value: 'auto', label: 'Auto' };
 

@@ -201,6 +201,11 @@ describe('clampReasoningEffort', () => {
   it('is undefined when nothing is listed', () => {
     expect(clampReasoningEffort('low', [])).toBeUndefined();
   });
+
+  it('chooses the nearest accepted level even when callers provide levels out of order', () => {
+    expect(clampReasoningEffort('low', ['high', 'low'])).toBe('low');
+    expect(clampReasoningEffort('xhigh', ['high', 'low'])).toBe('high');
+  });
 });
 
 describe('chatReasoningEffortFor', () => {

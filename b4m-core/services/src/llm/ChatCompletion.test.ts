@@ -86,6 +86,7 @@ import {
   getTurnsCost,
   type IMessage,
   type ModelInfo,
+  type UserReasoningEffort,
 } from '@bike4mind/common';
 import {
   ToolBuilder,
@@ -9426,14 +9427,14 @@ describe('ChatCompletionProcess', () => {
     });
 
     const succeeds = () =>
-      vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+      vi.fn<ICompletionBackend['complete']>().mockImplementation(async (_model, _messages, _opts, cb) => {
         await cb(['Hi!']);
       });
 
     const adaptive = { can_think: true, thinkingStyle: 'adaptive' as const };
 
-    const arrange = (primary: ReturnType<typeof modelInfo>, preferredReasoningEffort = 'high') => {
-      (service as any).user = { ...mockUser, preferredReasoningEffort };
+    const arrange = (primary: ReturnType<typeof modelInfo>, preferredReasoningEffort: UserReasoningEffort = 'high') => {
+      service.user = { ...service.user, preferredReasoningEffort };
       mockQuest.promptMeta.model = { name: primary.id, backend: primary.backend };
       mockedGetAvailableModels.mockResolvedValue([primary]);
       mockedBuildAndSortMessages.mockResolvedValue({
@@ -9481,6 +9482,7 @@ describe('ChatCompletionProcess', () => {
     });
 
     it('lowers a stored Extra High, which GPT-5 rejects, to high', async () => {
+      const usageEventsRecord = recordUsageEvents();
       const complete = succeeds();
       mockedGetLlmByModel.mockReturnValue({
         complete,
@@ -9492,6 +9494,7 @@ describe('ChatCompletionProcess', () => {
       await service.process({ body, logger: mockLogger });
 
       expect(complete.mock.calls[0][2].reasoningEffort).toBe('high');
+      expect(recordedEffort(usageEventsRecord)).toBe('high');
     });
 
     it('keeps a stored Extra High on GPT-5.2, which takes it', async () => {
@@ -9665,6 +9668,41 @@ describe('ChatCompletionProcess', () => {
 
       expect(primaryComplete.mock.calls[0][2].reasoningEffort).toBe('high');
       expect(fallbackComplete.mock.calls[0][2].reasoningEffort).toBe('high');
+    });
+
+    it('lowers Extra High on an OpenAI fallback while keeping it on the adaptive Claude primary', async () => {
+      const usageEventsRecord = recordUsageEvents();
+      mockedShouldTriggerFallback.mockReturnValue(true);
+      mockedIsOverloadedError.mockReturnValue(false);
+      const primaryComplete = vi
+        .fn<ICompletionBackend['complete']>()
+        .mockRejectedValue(new Error('ServiceUnavailableException: primary down'));
+      mockedGetLlmByModel.mockReturnValue({
+        complete: primaryComplete,
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.CLAUDE_5_5_OPUS,
+      });
+      const fallbackComplete = succeeds();
+      mockedGetLlmWithFallback
+        .mockResolvedValueOnce({
+          model: modelInfo(ChatModels.GPT5, ModelBackend.OpenAI),
+          backend: {
+            complete: fallbackComplete,
+            getModelInfo: vi.fn().mockResolvedValue([]),
+            currentModel: ChatModels.GPT5,
+            pushToolMessages: vi.fn(),
+          },
+          attempt: 1,
+        })
+        .mockResolvedValue(null);
+      const body = arrange(modelInfo(ChatModels.CLAUDE_5_5_OPUS, ModelBackend.Anthropic, adaptive), 'xhigh');
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(primaryComplete.mock.calls[0][2].reasoningEffort).toBe('xhigh');
+      expect(fallbackComplete).toHaveBeenCalledTimes(1);
+      expect(fallbackComplete.mock.calls[0][2].reasoningEffort).toBe('high');
+      expect(recordedEffort(usageEventsRecord)).toBe('high');
     });
   });
 

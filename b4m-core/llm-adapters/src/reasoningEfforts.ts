@@ -85,7 +85,8 @@ export function clampReasoningEffort(
   levels: readonly ReasoningEffort[]
 ): ReasoningEffort | undefined {
   const rank = REASONING_EFFORTS.indexOf(effort);
-  return levels.find(level => REASONING_EFFORTS.indexOf(level) >= rank) ?? levels.at(-1);
+  const acceptedLevels = REASONING_EFFORTS.filter(level => levels.includes(level));
+  return acceptedLevels.find(level => REASONING_EFFORTS.indexOf(level) >= rank) ?? acceptedLevels.at(-1);
 }
 
 /**

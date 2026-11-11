@@ -1,6 +1,6 @@
 import React from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { ChatModels, type ModelInfo } from '@bike4mind/common';
 import { getThemeConfig } from '../../../utils/themes';
@@ -111,7 +111,7 @@ const renderDetails = (model: string, activeModel = model) => {
     removeResearchConfiguration: vi.fn(),
     updateResearchConfiguration: vi.fn(),
   };
-  render(
+  const modal = () => (
     <TestWrapper>
       <AdvancedAIModal
         open
@@ -125,7 +125,9 @@ const renderDetails = (model: string, activeModel = model) => {
       />
     </TestWrapper>
   );
+  const rendered = render(modal());
   fireEvent.click(screen.getByTestId('open-details-active'));
+  return () => rendered.rerender(modal());
 };
 
 const useModel = (id: string, extra: { backend?: string; can_think?: boolean; thinkingStyle?: string }) =>
@@ -147,6 +149,11 @@ describe('AdvancedAIModal - Reasoning Effort selector', () => {
     user.current = { id: 'user-1', preferredReasoningEffort: 'auto' };
     apiPut.mockReset().mockResolvedValue({ data: { id: 'user-1', preferredReasoningEffort: 'auto' } });
     setCurrentUser.mockReset();
+    setLLM.mockReset();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it('is shown on an adaptive Claude model with the levels it takes', async () => {
@@ -243,5 +250,21 @@ describe('AdvancedAIModal - Reasoning Effort selector', () => {
 
     expect(screen.getByTestId('reasoning-effort-select')).toBeTruthy();
     expect(apiPut).not.toHaveBeenCalled();
+  });
+
+  it('resets an unsupported preference when the previewed model becomes active', async () => {
+    user.current = { id: 'user-1', preferredReasoningEffort: 'xhigh' };
+    useModel(ChatModels.GPT5, { backend: 'openai' });
+    const refresh = renderDetails(ChatModels.GPT5, ChatModels.CLAUDE_5_5_OPUS);
+    expect(apiPut).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('model-use-btn'));
+    expect(setLLM).toHaveBeenCalledWith(expect.objectContaining({ model: ChatModels.GPT5 }));
+    llmState = { ...llmState, model: ChatModels.GPT5 };
+    refresh();
+
+    await waitFor(() =>
+      expect(apiPut).toHaveBeenCalledWith('/api/users/user-1/update', { preferredReasoningEffort: 'auto' })
+    );
   });
 });
