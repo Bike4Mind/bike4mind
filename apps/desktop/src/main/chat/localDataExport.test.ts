@@ -81,11 +81,11 @@ async function setup() {
     get: vi.fn(async () => session),
     scopeKey: vi.fn((): string | null => 'account'),
   };
-  return { base, userData, destination, memoryRoot, sessions, attachments, media, image };
+  return { base, userData, destination, memoryRoot, sessions, attachments, media, image, session };
 }
 
 describe('writeLocalDataExport', () => {
-  it('writes a manifest last with sessions, attachment, media and project memory, without private files', async () => {
+  it('writes a complete bundle with sessions, attachment, media and project memory, without private files', async () => {
     const deps = await setup();
     const { path } = await writeLocalDataExport(deps.destination, deps);
     const manifest = JSON.parse(await readFile(join(path, 'manifest.json'), 'utf8'));
@@ -166,5 +166,55 @@ describe('writeLocalDataExport', () => {
     names.push(...(await readdir(join(path, 'files'))).map(n => `files/${n}`));
     for (const name of names)
       expect((await readFile(join(path, name))).toString('latin1')).not.toContain('OUTSIDE_SECRET');
+  });
+
+  it('aborts and leaves nothing behind when the account changes mid-export', async () => {
+    const deps = await setup();
+    deps.sessions.scopeKey.mockReturnValueOnce('account').mockReturnValue('other');
+    await expect(writeLocalDataExport(deps.destination, deps)).rejects.toThrow('Account changed during export.');
+    expect(await readdir(deps.destination)).toEqual([]);
+  });
+
+  it('exports message artifacts', async () => {
+    const deps = await setup();
+    Object.assign(deps.session.messages[1], {
+      artifacts: [{ id: 'art-1', type: 'html', title: 'Page', content: '<p>hi</p>', mimeType: 'text/html' }],
+    });
+    const { path } = await writeLocalDataExport(deps.destination, deps);
+    const rows = (await readFile(join(path, 'collections/artifacts.jsonl'), 'utf8')).trim().split('\n');
+    expect(rows).toHaveLength(1);
+    expect(JSON.parse(rows[0])).toMatchObject({
+      notebookId: 'session-1',
+      id: 'art-1',
+      name: 'Page',
+      type: 'html',
+      content: '<p>hi</p>',
+    });
+  });
+
+  it('drops opaque thinking and sent payloads but keeps readable reasoning', async () => {
+    const deps = await setup();
+    Object.assign(deps.session.messages[1], {
+      thinking: [{ type: 'thinking', thinking: 'THINK_SECRET' }],
+      rounds: [
+        {
+          text: 'reply',
+          toolCallIds: ['call-1'],
+          reasoning: 'kept',
+          sent: { text: 'SENT_SECRET', thinking: [{ type: 'thinking', thinking: 'SENT_SECRET' }] },
+        },
+      ],
+    });
+    const { path } = await writeLocalDataExport(deps.destination, deps);
+    const row = JSON.parse((await readFile(join(path, 'collections/desktop-sessions.jsonl'), 'utf8')).trim());
+    const message = row.session.messages[1];
+    expect(message.thinking).toBeUndefined();
+    expect(message.rounds[0].sent).toBeUndefined();
+    expect(message.rounds[0].reasoning).toBe('kept');
+    for (const dir of ['collections', 'files']) {
+      for (const name of await readdir(join(path, dir))) {
+        expect(await readFile(join(path, dir, name), 'utf8')).not.toMatch(/THINK_SECRET|SENT_SECRET/);
+      }
+    }
   });
 });
