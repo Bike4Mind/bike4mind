@@ -9,6 +9,38 @@ import type { DlqDescriptor, DlqResolvers } from '@bike4mind/infra';
 import * as generatedInfraResources from '../premium-generated/infraResources.generated';
 import { Logger } from '@bike4mind/observability';
 
+export const DLQ_REPLAY_SAFETY = ['safe', 'side-effects', 'unsafe'] as const;
+/**
+ * safe: rerunning recomputes or upserts, with no external or billed effect.
+ * side-effects: guarded, but a rerun can spend LLM/image credits or notify once more.
+ * unsafe: the consumer sends something external with no dedup guard; a replay can repeat it.
+ */
+export type DlqReplaySafety = (typeof DLQ_REPLAY_SAFETY)[number];
+
+/** Operator help for a dead-letter queue, shown on the admin Dead letters page. */
+export interface DlqQueueHelp {
+  /** One line: what the consumer does for the user. */
+  description: string;
+  replay: DlqReplaySafety;
+  /** The guard (or its absence) that the replay classification rests on. */
+  replayNote: string;
+  /** An area name, never a person. */
+  owner: string;
+}
+
+export type CoreDlqDescriptor = DlqDescriptor & Partial<DlqQueueHelp>;
+
+/** Names each DlqQueueHelp field that is missing, blank, or (for replay) outside DLQ_REPLAY_SAFETY. */
+export function missingQueueHelp(entry: Partial<Record<keyof DlqQueueHelp, unknown>>): string[] {
+  const missing: string[] = [];
+  for (const key of ['description', 'replayNote', 'owner'] as const) {
+    const value = entry[key];
+    if (typeof value !== 'string' || value.trim() === '') missing.push(key);
+  }
+  if (!(DLQ_REPLAY_SAFETY as readonly unknown[]).includes(entry.replay)) missing.push('replay');
+  return missing;
+}
+
 /**
  * SQS queue URLs are stored via sst.Linkable in resource.enc.
  * This avoids both IAM inline policy bloat (from SST queue links) and
@@ -277,7 +309,7 @@ const DLQ_REGISTRY = [
     application: 'PublishedArtifacts',
     sourceQueue: 'publishThumbnailQueue',
   },
-] as const satisfies readonly DlqDescriptor[];
+] as const satisfies readonly CoreDlqDescriptor[];
 
 type CoreDlqLabel = (typeof DLQ_REGISTRY)[number]['label'];
 type CoreSourceQueueName = (typeof DLQ_REGISTRY)[number]['sourceQueue'];
@@ -293,7 +325,8 @@ export type DlqLabel = CoreDlqLabel | ContributedDlqLabel;
 export type SourceQueueName = CoreSourceQueueName | ContributedSourceQueueName;
 
 /** An entry the registry holds, whose label and source queue are therefore resolvable. */
-export type RegisteredDlqDescriptor = DlqDescriptor & { label: DlqLabel; sourceQueue: SourceQueueName };
+export type RegisteredDlqDescriptor = DlqDescriptor &
+  Partial<DlqQueueHelp> & { label: DlqLabel; sourceQueue: SourceQueueName };
 
 type LinkableQueues = {
   dlqUrls: Record<string, string>;
@@ -369,6 +402,11 @@ export function contributedSourceQueueName(name: string): ContributedSourceQueue
   getRegistry();
   if (!contributedSourceQueues.has(name)) throw new Error(`Contributed source queue not registered: ${name}`);
   return name as ContributedSourceQueueName;
+}
+
+/** The core entries only, without overlay contributions. */
+export function coreDlqDescriptors(): readonly CoreDlqDescriptor[] {
+  return DLQ_REGISTRY;
 }
 
 export function getDlqRegistry(): readonly RegisteredDlqDescriptor[] {

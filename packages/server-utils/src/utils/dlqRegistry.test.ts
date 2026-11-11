@@ -101,7 +101,7 @@ vi.mock('sst', () => ({
   },
 }));
 
-import { getDlqRegistry, getDlqByLabel, getSourceQueueUrl, getDlqUrl } from './dlqRegistry';
+import { getDlqRegistry, getDlqByLabel, getSourceQueueUrl, getDlqUrl, missingQueueHelp } from './dlqRegistry';
 
 describe('dlqRegistry', () => {
   describe('getDlqRegistry', () => {
@@ -184,6 +184,34 @@ describe('dlqRegistry', () => {
       // @ts-expect-error testing runtime behavior with invalid name
       expect(() => getSourceQueueUrl('nonExistentQueue')).toThrow('Missing source queue URL for: nonExistentQueue');
     });
+  });
+});
+
+describe('missingQueueHelp', () => {
+  const valid = { description: 'Does a thing', replay: 'safe', replayNote: 'Upserts by id', owner: 'Platform ops' };
+
+  it('returns nothing for a complete entry', () => {
+    expect(missingQueueHelp(valid)).toEqual([]);
+  });
+
+  it('flags empty and whitespace-only strings', () => {
+    expect(missingQueueHelp({ ...valid, description: '' })).toEqual(['description']);
+    expect(missingQueueHelp({ ...valid, owner: '   ' })).toEqual(['owner']);
+  });
+
+  it('flags a missing key', () => {
+    expect(missingQueueHelp({ description: valid.description, replay: valid.replay, owner: valid.owner })).toEqual([
+      'replayNote',
+    ]);
+  });
+
+  it('flags a replay value outside the enum', () => {
+    expect(missingQueueHelp({ ...valid, replay: 'maybe' })).toEqual(['replay']);
+    expect(missingQueueHelp({ ...valid, replay: undefined })).toEqual(['replay']);
+  });
+
+  it('flags every field of an entry with no help', () => {
+    expect(missingQueueHelp({})).toEqual(['description', 'replayNote', 'owner', 'replay']);
   });
 });
 
