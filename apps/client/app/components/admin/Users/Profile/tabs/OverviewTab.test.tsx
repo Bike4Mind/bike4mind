@@ -18,6 +18,7 @@ vi.mock('../RiskEvidenceCard', () => ({
   RiskEvidenceCard: ({ userId }: { userId: string }) => <div data-testid="risk-evidence-card-stub">{userId}</div>,
 }));
 vi.mock('../actions/useAdminUserUpdate', () => ({ useAdminUserUpdate: () => vi.fn() }));
+vi.mock('../DetectionLinkedAccountsCard', () => ({ DetectionLinkedAccountsCard: () => null }));
 
 import { OverviewTab } from './OverviewTab';
 

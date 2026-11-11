@@ -19,7 +19,7 @@ vi.mock('sst', () => ({ Resource: { App: { name: 'local' }, AppEventBus: { name:
 
 vi.mock('./mailer/index', () => ({ default: { sendEmail: sendEmailMock } }));
 
-const { SessionEvents, EmailEvents, NotebookCurationEvents } = await import('./eventBus');
+const { SessionEvents, EmailEvents, NotebookCurationEvents, StripeEvents } = await import('./eventBus');
 
 const startDetail = { sessionId: 's1', userId: 'u1', curationJobId: 'j1' };
 
@@ -91,6 +91,22 @@ describe('eventBus publishSelfHost', () => {
     process.env.SELF_HOST_EVENT_QUEUE = 'http://sqs/selfHostEventQueue';
     sendToQueueMock.mockRejectedValue(new Error('broker unavailable'));
     await expect(NotebookCurationEvents.Start.publish(startDetail)).resolves.toBeUndefined();
+  });
+
+  it.each([
+    () =>
+      StripeEvents.InvoicePaymentSucceeded.publish(
+        { invoiceId: 'in_1', subscriptionId: 'sub_1' },
+        { requireAcceptance: true }
+      ),
+    () => StripeEvents.CustomerSubscriptionUpdated.publish({ subscriptionId: 'sub_1' }, { requireAcceptance: true }),
+  ])('rejects billing delivery when the queue is missing or unavailable', async publish => {
+    delete process.env.SELF_HOST_EVENT_QUEUE;
+    await expect(publish()).rejects.toThrow('SELF_HOST_EVENT_QUEUE');
+    process.env.SELF_HOST_EVENT_QUEUE = 'http://sqs/selfHostEventQueue';
+    sendToQueueMock.mockRejectedValueOnce(new Error('broker unavailable'));
+    await expect(publish()).rejects.toThrow('broker unavailable');
+    await expect(publish()).resolves.toBeUndefined();
   });
 
   it('keeps other notebook curation events best-effort', async () => {

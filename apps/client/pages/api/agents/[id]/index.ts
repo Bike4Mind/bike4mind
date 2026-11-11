@@ -146,7 +146,7 @@ const updateBodySchema = z.object({
   // update can never flip an agent onto a balance it was not funded with.
   systemPrompt: z.string().optional(),
   lastSystemPromptGeneratedAt: dateParamSchema.optional(),
-  // The seven fields below keep the imperative validators in `agentValidation.ts`, which already
+  // The ten fields below keep the imperative validators in `agentValidation.ts`, which already
   // reject a wrong type with a 400 and additionally bound length and range. `z.unknown()` here
   // means "this key is known, leave it for the validator" rather than "anything goes" -- dropping
   // them from this schema would strip them instead.
@@ -154,6 +154,9 @@ const updateBodySchema = z.object({
   deniedTools: z.unknown().optional(),
   maxIterations: z.unknown().optional(),
   defaultThoroughness: z.unknown().optional(),
+  confidenceGateThreshold: z.unknown().optional(),
+  confidenceGateMode: z.unknown().optional(),
+  confidenceGateSelfReport: z.unknown().optional(),
   defaultVariables: z.unknown().optional(),
   exclusiveMcpServers: z.unknown().optional(),
   fallbackModels: z.unknown().optional(),

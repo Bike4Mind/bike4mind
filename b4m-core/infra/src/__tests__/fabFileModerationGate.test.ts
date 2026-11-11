@@ -135,6 +135,8 @@ const referencesGate = (source: string): boolean => /isImageServeable\s*\(/.test
  * be provably safe, not merely inconvenient to fix.
  */
 const ALLOWLIST: Record<string, string> = {
+  'apps/client/server/tutorials/sheet.ts':
+    'writes a server-authored text/csv tutorial sheet, never an image or user upload',
   // --- The moderation scanner itself: downloads bytes to RUN Rekognition and PRODUCE
   // moderationStatus in the first place. It cannot gate on isImageServeable (that
   // would be circular - the field it's about to set is exactly what the predicate

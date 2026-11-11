@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from 'react';
-import { FeedbackStatus, FeedbackSubject } from '@bike4mind/common';
+import { FeedbackStatus, FeedbackSubject, FeedbackType } from '@bike4mind/common';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { FeedbackFilters, FeedbackListFilterParams, UseFeedbackFiltersReturn } from '../types';
 import { useFeedbackView } from './useFeedbackView';
@@ -23,7 +23,7 @@ import { useFeedbackView } from './useFeedbackView';
 export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
   const { value: searchTerm, debouncedValue: debouncedSearchTerm, setValue: setSearchTermValue } = useDebounceValue('');
   const [view, updateView] = useFeedbackView();
-  const { statusFilters, organizations: selectedOrganizations, subject, sortAscending, page } = view;
+  const { statusFilters, organizations: selectedOrganizations, subject, types, sortAscending, page } = view;
 
   const setSearchTerm = useCallback(
     (term: string) => {
@@ -53,12 +53,14 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
     [updateView]
   );
 
+  const setTypes = useCallback((next: FeedbackType[]) => updateView({ types: next, page: 1 }), [updateView]);
+
   const toggleSortDirection = useCallback(
     () => updateView(current => ({ sortAscending: !current.sortAscending, page: 1 })),
     [updateView]
   );
 
-  const filters: FeedbackFilters = { searchTerm, statusFilters, selectedOrganizations, subject, sortAscending };
+  const filters: FeedbackFilters = { searchTerm, statusFilters, selectedOrganizations, subject, types, sortAscending };
 
   const filterParams = useMemo<FeedbackListFilterParams>(() => {
     const statuses = Object.values(FeedbackStatus).filter(status => statusFilters[status]);
@@ -69,10 +71,11 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
       ...(selectedOrganizations.length > 0 ? { organization: selectedOrganizations } : {}),
       // Single-valued, unlike status/organization: the endpoint takes one subject or none.
       ...(subject ? { subject } : {}),
+      ...(types.length > 0 ? { type: types } : {}),
       ...(debouncedSearchTerm.trim() ? { search: debouncedSearchTerm.trim() } : {}),
       sort: sortAscending ? 'asc' : 'desc',
     };
-  }, [statusFilters, selectedOrganizations, subject, debouncedSearchTerm, sortAscending]);
+  }, [statusFilters, selectedOrganizations, subject, types, debouncedSearchTerm, sortAscending]);
 
   return {
     filters,
@@ -80,6 +83,7 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
     setStatusFilters,
     setSelectedOrganizations,
     setSubject,
+    setTypes,
     toggleSortDirection,
     filterParams,
   };

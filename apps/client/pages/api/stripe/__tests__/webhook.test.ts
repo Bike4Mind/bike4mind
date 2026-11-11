@@ -40,6 +40,7 @@ const mocks = vi.hoisted(() => ({
   resolveWonDispute: vi.fn(),
   recordBillingEvent: vi.fn(),
   publishSubscriptionUpdated: vi.fn(),
+  publishInvoicePayment: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -100,7 +101,10 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetric: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
-  StripeEvents: { CustomerSubscriptionUpdated: { publish: mocks.publishSubscriptionUpdated } },
+  StripeEvents: {
+    CustomerSubscriptionUpdated: { publish: mocks.publishSubscriptionUpdated },
+    InvoicePaymentSucceeded: { publish: mocks.publishInvoicePayment },
+  },
 }));
 vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   CustomerType: {},
@@ -1078,11 +1082,32 @@ describe('BillingEvent recording', () => {
     };
 
     await deliver(updated);
-    expect(mocks.publishSubscriptionUpdated).toHaveBeenCalledWith({ subscriptionId: 'sub_1' });
+    expect(mocks.publishSubscriptionUpdated).toHaveBeenCalledWith(
+      { subscriptionId: 'sub_1' },
+      { requireAcceptance: true }
+    );
     expect(mocks.recordBillingEvent).toHaveBeenCalledExactlyOnceWith(updated, {}, logger);
 
     mocks.publishSubscriptionUpdated.mockRejectedValueOnce(new Error('bus down'));
     await expect(deliver(updated)).rejects.toThrow('bus down');
+    expect(mocks.recordBillingEvent).toHaveBeenCalledOnce();
+  });
+
+  it('requires invoice delivery acceptance before recording success and allows redelivery after failure', async () => {
+    const event = {
+      id: 'evt_invoice_1',
+      type: 'invoice.payment_succeeded',
+      data: { object: { id: 'in_1', parent: { subscription_details: { subscription: 'sub_1' } } } },
+    };
+    mocks.publishInvoicePayment.mockRejectedValueOnce(new Error('broker unavailable'));
+    await expect(deliver(event)).rejects.toThrow('broker unavailable');
+    expect(mocks.recordBillingEvent).not.toHaveBeenCalled();
+    const response = await deliver(event);
+    expect(response._getStatusCode()).toBe(200);
+    expect(mocks.publishInvoicePayment).toHaveBeenCalledWith(
+      { invoiceId: 'in_1', subscriptionId: 'sub_1' },
+      { requireAcceptance: true }
+    );
     expect(mocks.recordBillingEvent).toHaveBeenCalledOnce();
   });
 

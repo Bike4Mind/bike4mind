@@ -208,4 +208,10 @@ export type SignupProtection = {
   grantBudget?: SignupGrantBudget;
   /** Called on every disposable-email refusal so false positives surface per source. Must not throw. */
   recordDisposableRefusal?: (refusal: DisposableRefusal) => Promise<void>;
+  /**
+   * True while an accountCampaign shadow detection names the account and no reviewer has graded it
+   * legitimate. The staged grant holds every release after the first tranche, except an admin's,
+   * until then (stagedSignupGrant.ts).
+   */
+  hasOpenAccountCampaign?: (userId: string) => Promise<boolean>;
 };

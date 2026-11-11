@@ -89,7 +89,9 @@ Irreversible commands add `typedConfirm`; `tone="danger"` styles only the commit
 While `pending` is true, or a promise returned by `onConfirm` has not settled, the
 commit shows loading and Cancel is disabled. Esc, the close button and the backdrop
 still call `onClose`, so a caller that must not close mid-write checks its own
-pending state there. An unaudited dialog built on `AdminDialog` puts its buttons in
+pending state there. A caller whose `onConfirm` stops at `onClose` (a run of
+writes that checks between them) passes `cancelStopsWrite` to keep Cancel enabled.
+An unaudited dialog built on `AdminDialog` puts its buttons in
 `AdminDialogFooter`, the same row `ActionDialog` uses.
 
 ```tsx
