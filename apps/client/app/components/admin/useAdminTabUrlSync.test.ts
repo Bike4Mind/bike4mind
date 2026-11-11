@@ -261,6 +261,16 @@ describe('useAdminTabUrlSync', () => {
     expect(lastNavigation().search({}).tab).toBe('modals');
   });
 
+  it("applies a delegate's deep link when the store default is a tab they cannot render", () => {
+    routerMock.search = { tab: 'modals' };
+    const delegateGate: IsAdminTabRenderable = tab => tab === AdminTab.Modals || tab === AdminTab.LLMDashboard;
+
+    const { result } = renderHook(() => useHarness(AdminTab.Dashboard, delegateGate));
+
+    expect(result.current.activeTab).toBe(AdminTab.Modals);
+    expect(routerMock.navigate).not.toHaveBeenCalled();
+  });
+
   // The gate can resolve after a deep link has already selected the tab.
   it('falls back to Users when the selected tab stops being renderable', () => {
     routerMock.search = { tab: 'live-ops-triage' };

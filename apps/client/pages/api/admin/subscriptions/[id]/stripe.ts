@@ -4,7 +4,7 @@ import { AdminSubscriptionStripeParamsSchema } from '@client/app/utils/adminSubs
 import { getAdminSubscriptionStripe } from '@server/admin/subscriptionStripe/getAdminSubscriptionStripe';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 
 // Every Stripe SDK error (outage, timeout, auth, permission, invalid request) carries a `Stripe*` type. All of
 // them are upstream: answering 502 stops the client retrying a config problem and keeps it in the logs.

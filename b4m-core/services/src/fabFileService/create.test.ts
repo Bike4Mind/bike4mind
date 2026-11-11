@@ -239,7 +239,7 @@ describe('createFabFile (upload moderation gate root cause)', () => {
     expect(persistedData).not.toHaveProperty('fileUrlExpireAt');
   });
 
-  it('still mints and persists a fileUrl for non-image content (unaffected)', async () => {
+  it('returns a signed fileUrl for non-image content without persisting it', async () => {
     const result = await createFabFile(
       mockUserId,
       {
@@ -256,6 +256,10 @@ describe('createFabFile (upload moderation gate root cause)', () => {
     expect(storageGenerateSignedUrl).toHaveBeenCalledWith(expect.any(String), expect.any(Number), 'get');
     expect(result.fileUrl).toBe('https://s3.example.com/signed-url');
     expect(result.fileUrlExpireAt).toBeInstanceOf(Date);
+    const persisted = fabFilesCreate.mock.calls[0][0];
+    expect(persisted).not.toHaveProperty('fileUrl');
+    expect(persisted).not.toHaveProperty('fileUrlExpireAt');
+    expect(persisted).not.toHaveProperty('presignedUrl');
     // Bytes this service wrote itself are not judged by the landed-size gate.
     expect(fabFilesCreate.mock.calls[0][0]).not.toHaveProperty('clientUpload');
   });
@@ -276,6 +280,7 @@ describe('createFabFile (upload moderation gate root cause)', () => {
     expect(storageGenerateSignedUrl).toHaveBeenCalledWith(expect.any(String), 600, 'put', { ContentLength: 2048 });
     expect(result.fileUrl).toBeUndefined();
     expect((result as { presignedUrl?: string }).presignedUrl).toBe('https://s3.example.com/signed-url');
+    expect(fabFilesCreate.mock.calls[0][0]).not.toHaveProperty('presignedUrl');
     // Marks the row for the landed-size gate, which judges only client uploads.
     expect(fabFilesCreate.mock.calls[0][0]).toMatchObject({ clientUpload: true });
   });

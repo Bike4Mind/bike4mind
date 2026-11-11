@@ -34,7 +34,7 @@ import {
 } from '@bike4mind/common';
 import { surfaceAccessForRequest } from '@server/entitlements/surfaceAccess';
 import { projectService } from '@bike4mind/services';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { ActivityType } from '@bike4mind/server-utils/config/activityType';
 import { holdsApiKeyScope } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 import { CreateSessionRequestBody } from '../../../../types/api';
@@ -203,7 +203,7 @@ export const createSessionRouter = nextRouteForContract(createSessionContract).p
       // route. It is only needed when files are actually attached, so paying for it lazily keeps the
       // route's static imports as they were.
       resolveLakeAccess: async () =>
-        (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(req),
+        (await import('@bike4mind/server-utils/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(req),
       // The attachment door's lake arms, so a supplied lake file passes the access check.
       resolveAttachmentLakeAccess: async () =>
         (await import('@server/dataLakes/attachmentLakeAccess')).createAttachmentLakeAccess(req.user, req.logger)(),

@@ -489,7 +489,7 @@ Off by default behind the `abuseAssessmentEnabled` and `abuseAssessmentConfig` a
 
 ## Advisory signup domain hold assessments
 
-Off by default behind the `signupDomainHoldAssessmentEnabled` and `signupDomainHoldAssessmentConfig` admin settings, a scheduled job can ask a Decisions model to judge a signup domain hold placed on a recently registered domain as abuse, legitimate or insufficient evidence. The model receives only a summary computed by the platform: the domain's age in days, a mail-provider class, whether the domain's website answers and has content, signup counts and timing, and counts of distinct networks, network operators and countries across the held signups, with a hosting-network share. It never receives the domain name, an email, an IP, a network number, a user id or any text from the domain's website. Calls use the platform's provider key and a platform budget. A confident abuse judgment can only confirm the hold, which keeps the signups' free credits held; it never releases a hold, and an admin can still release it.
+Off by default behind the `signupDomainHoldAssessmentEnabled` and `signupDomainHoldAssessmentConfig` admin settings, a scheduled job can ask a Decisions model to judge a signup domain hold placed on a recently registered domain as abuse, legitimate or insufficient evidence. The model receives only a summary computed by the platform: the domain's age in days, a mail-provider class, whether the domain's website answers and has content and whether it describes a temporary or disposable mail service (both judged by the platform), signup counts and timing, and counts of distinct networks, network operators and countries across the held signups, with a hosting-network share. It never receives the domain name, an email, an IP, a network number, a user id or any text from the domain's website. Calls use the platform's provider key and a platform budget. A confident abuse judgment confirms the hold, which keeps the signups' free credits held, and an admin can still release it. A confident legitimate judgment releases the hold only when a separate auto-release setting is on and checks computed by the platform also pass; it then pays only the signups it judged, and the domain is re-held on a new risk signal.
 
 | Data       | Storage                                                                                       | Lifetime                  | Purpose                 |
 | ---------- | --------------------------------------------------------------------------------------------- | ------------------------- | ----------------------- |
@@ -543,6 +543,19 @@ A failed refresh stores a short error message (200 characters at most) and a tim
 | ------------------- | ---------------------- | -------------------------- | --------------------------------------------- |
 | Evidence summary    | `riskEvidence.summary` | Account lifetime, replaced | Give admins context when reviewing an account |
 | Refresh diagnostics | `riskEvidence.refresh` | Account lifetime, replaced | Show when and why a refresh failed            |
+
+## Feedback report context
+
+Each feedback report stores where it was written as `clientContext` on the report document, so a bug can be reproduced without asking the reporter. The browser sends the page, app version, platform, window size and selected model. The server validates each field on its own, drops any it cannot accept, and reads the user agent from the request itself rather than from the browser's payload. The page keeps the route only: the query string and hash are dropped, and any long opaque path segment (a reset link or signed URL token) is replaced with `:redacted`. The context is diagnostic only and never used for authorization. Reporters can read it on their own reports, admins on all reports, and it appears in the admin CSV export. Reports from before this was captured have no context.
+
+| Data        | Storage                                                           | Lifetime                      | Purpose                               |
+| ----------- | ----------------------------------------------------------------- | ----------------------------- | ------------------------------------- |
+| Page        | `clientContext.path`, route only, first 200 characters            | Lives with the report; no TTL | Reproduce the report on the same page |
+| App version | `clientContext.appVersion`                                        | Lives with the report; no TTL | Tie the report to a release           |
+| Platform    | `clientContext.platform`: `web` (also accepts `desktop`, `ios`)   | Lives with the report; no TTL | Triage by app surface                 |
+| Window size | `clientContext.viewport`: width and height in pixels              | Lives with the report; no TTL | Reproduce layout issues               |
+| Model       | `clientContext.model`: the model selected in the client           | Lives with the report; no TTL | Reproduce model-specific issues       |
+| User agent  | `clientContext.userAgent`, read server-side, first 300 characters | Lives with the report; no TTL | Identify the browser and OS           |
 
 ## Chat turn timing
 

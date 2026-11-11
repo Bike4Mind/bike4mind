@@ -28,7 +28,7 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeAccessGrantRepository: {},
   dataLakeProposalRepository: { listByLake: h.listByLake },
 }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 
 import handler from '../index';
 

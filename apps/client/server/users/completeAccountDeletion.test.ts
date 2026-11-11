@@ -5,6 +5,8 @@ const h = vi.hoisted(() => ({
   exists: vi.fn(),
   updateOne: vi.fn(),
   organizationExists: vi.fn(),
+  classifyOwned: vi.fn(),
+  deleteSoleOwned: vi.fn(),
   deletePersonalOrganizations: vi.fn(),
   hardDeleteUser: vi.fn(),
   purgeFiles: vi.fn(),
@@ -29,7 +31,11 @@ vi.mock('@bike4mind/services', () => ({
   adminAuditService: { recordAdminAction: h.recordAdminAction },
 }));
 vi.mock('@server/services/hardDeleteUser', () => ({ hardDeleteUser: h.hardDeleteUser }));
-vi.mock('./purgeAccountFiles', () => ({ purgeAccountFiles: h.purgeFiles }));
+vi.mock('./ownedOrganizations', () => ({
+  classifyOwnedOrganizations: h.classifyOwned,
+  deleteSoleOwnedOrganizations: h.deleteSoleOwned,
+}));
+vi.mock('@bike4mind/server-utils/users/purgeAccountFiles', () => ({ purgeAccountFiles: h.purgeFiles }));
 vi.mock('./purgeAccountContent', () => ({ purgeAccountContent: h.purgeContent }));
 vi.mock('./accountDeletionEmail', () => ({ sendAccountDeletionCompleteEmail: h.sendComplete }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
@@ -59,6 +65,11 @@ beforeEach(() => {
   h.exists.mockResolvedValue({ _id: USER_ID });
   h.claimUser.mockResolvedValue({ email: 'leaving@example.com' });
   h.organizationExists.mockResolvedValue(null);
+  h.classifyOwned.mockResolvedValue({ shared: [], solo: [] });
+  h.deleteSoleOwned.mockImplementation(async () => {
+    h.order.push('orgs');
+    return [];
+  });
   h.purgeFiles.mockImplementation(async () => {
     h.order.push('files');
   });
@@ -122,7 +133,7 @@ describe('completeAccountDeletion', () => {
       },
       { new: true, projection: { email: 1 } }
     );
-    expect(h.order).toEqual(['files', 'content', 'realtime', 'delete', 'audit', 'email']);
+    expect(h.order).toEqual(['orgs', 'files', 'content', 'realtime', 'delete', 'audit', 'email']);
     expect(h.deletePersonalOrganizations).toHaveBeenCalledWith(
       { userId: USER_ID, personal: true },
       { hardDelete: true }
@@ -189,22 +200,36 @@ describe('completeAccountDeletion', () => {
     expect(h.sendComplete).not.toHaveBeenCalled();
   });
 
-  it('refuses an organization owner before claiming the purge', async () => {
-    h.organizationExists.mockResolvedValue({ _id: 'organization' });
-    await expect(complete()).rejects.toThrow('still owns an organization');
-    expect(h.organizationExists).toHaveBeenCalledWith({ userId: USER_ID, deletedAt: null, personal: { $ne: true } });
+  it('refuses an owner of an organization with other members before claiming the purge', async () => {
+    h.classifyOwned.mockResolvedValue({ shared: [{ id: 'organization', name: 'Acme' }], solo: [] });
+    await expect(complete()).rejects.toThrow('still owns an organization with other members');
     expect(h.claimUser).not.toHaveBeenCalled();
+    expect(h.deleteSoleOwned).not.toHaveBeenCalled();
+  });
+
+  it('deletes sole-owner organizations after claiming the purge and before removing personal data', async () => {
+    await complete();
+    expect(h.order.slice(0, 3)).toEqual(['orgs', 'files', 'content']);
+    expect(h.deleteSoleOwned).toHaveBeenCalledWith(USER_ID, expect.objectContaining({ logger }));
+  });
+
+  it('keeps the account for a retry when a sole-owner organization cannot be deleted', async () => {
+    h.deleteSoleOwned.mockRejectedValue(new Error('org delete failed'));
+    await expect(complete()).rejects.toThrow('org delete failed');
+    expect(h.purgeFiles).not.toHaveBeenCalled();
+    expect(users.delete).not.toHaveBeenCalled();
+    expect(h.sendComplete).not.toHaveBeenCalled();
   });
 
   it('rechecks ownership in the final delete transaction', async () => {
-    h.organizationExists.mockResolvedValueOnce(null).mockResolvedValueOnce({ _id: 'organization' });
+    h.organizationExists.mockResolvedValue({ _id: 'organization' });
     await expect(complete()).rejects.toThrow('still owns an organization');
     expect(users.delete).not.toHaveBeenCalled();
     expect(h.sendComplete).not.toHaveBeenCalled();
   });
 
   it('fails closed on an ownership lookup error', async () => {
-    h.organizationExists.mockRejectedValue(new Error('ownership unavailable'));
+    h.classifyOwned.mockRejectedValue(new Error('ownership unavailable'));
     await expect(complete()).rejects.toThrow('ownership unavailable');
     expect(h.claimUser).not.toHaveBeenCalled();
   });

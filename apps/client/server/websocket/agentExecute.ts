@@ -20,11 +20,13 @@ import { isAuthInfraFailure } from '@bike4mind/server-utils/auth/apiKeyAuthFailu
 import { adminSettingsRepository, agentExecutionRepository, sessionToolApprovalRepository } from '@bike4mind/database';
 import type { AgentCheckpoint, AgentStep } from '@bike4mind/agents';
 import { buildChildExecutionSnapshots } from '@server/utils/childExecutionSnapshot';
-import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
+import { recordUserActivity } from '@server/users/recordUserActivity';
+import { endAgentRunLiveActivity } from '@server/utils/liveActivityPush';
+import { persistRunAsQuest } from '@bike4mind/server-utils/utils/persistRunAsQuest';
 import { reopenLowConfidenceAnswer } from '@bike4mind/server-utils/utils/reopenLowConfidenceAnswer';
 import { extractFinalAnswer } from '@bike4mind/server-utils/utils/extractFinalAnswer';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
-import { resolveAndPublishMementoCompletion } from '@server/utils/publishMementoCompletion';
+import { resolveAndPublishMementoCompletion } from '@bike4mind/server-utils/utils/publishMementoCompletion';
 import { decideInlineBudgets } from '@server/websocket/reconnectBudget';
 import {
   verifyJwtToken,
@@ -220,11 +222,14 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     return { statusCode: 200 };
   }
 
+  // Re-attaching to a running execution is the client reconnecting, not the user acting.
+  const isUserAction = body.command !== 'reconnect';
+
   // Authenticate
   let userId: string;
   let apiKeyInfo: ApiKeyInfo | undefined;
   try {
-    apiKeyInfo = await verifyApiKey({ authorization: `Bearer ${body.accessToken}` });
+    apiKeyInfo = await verifyApiKey({ authorization: `Bearer ${body.accessToken}` }, { recordUse: isUserAction });
     userId = apiKeyInfo.userId;
     await checkApiKeyRateLimitOrThrow(apiKeyInfo, {
       userId: apiKeyInfo.userId,
@@ -252,6 +257,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   }
 
   logger.updateMetadata({ userId, command: body.command });
+  if (isUserAction) recordUserActivity(userId, logger);
 
   // Route command
   const rawBody = JSON.parse(event.body ?? '');
@@ -388,6 +394,7 @@ async function handleAbort(
     execution.status === 'awaiting_dag_children'
   ) {
     await agentExecutionRepository.markAborted(cmd.executionId);
+    await endAgentRunLiveActivity(execution, { status: 'stopped' }, logger);
   }
 
   // Cascade abort to the synchronous child the parent is waiting on, if any.
@@ -629,6 +636,7 @@ export async function handlePermissionResponse(
     // send: a closed socket makes the send throw, and a retried Deny cannot repair it
     // because the CAS above has already left `awaiting_permission`.
     await persistRunAsQuest(cmd.executionId, denialMessage, logger);
+    await endAgentRunLiveActivity(execution, { status: 'failed', errored: true }, logger);
     await sendAgentEvent(connectionId, endpoint, {
       action: 'failed',
       executionId: cmd.executionId,
@@ -792,6 +800,7 @@ export async function handleGateResponse(
       totalIterations: checkpoint?.iteration ?? 0,
       stoppedByGate: true,
     });
+    await endAgentRunLiveActivity(execution, { status: 'completed' }, logger);
     await sendAgentEvent(connectionId, endpoint, {
       action: 'completed',
       executionId: cmd.executionId,
@@ -895,6 +904,7 @@ async function acceptHeldCompletion(
     reachedMaxIterations: completion.reachedMaxIterations,
     lowConfidence: completion.lowConfidence,
   });
+  await endAgentRunLiveActivity(execution, { status: 'completed' }, logger);
   await persistRunAsQuest(
     execution.id,
     completion.replyText,

@@ -27,6 +27,7 @@ import { useUpdateOrganization } from '@client/app/hooks/data/organizations';
 import OrganizationGroupTypesCard from './OrganizationGroupTypesCard';
 import OrganizationGroupMembersCard from './OrganizationGroupMembersCard';
 import OrganizationStorageLimitField, { parseStorageLimitInput } from './OrganizationStorageLimitField';
+import { OrganizationBillingSection } from './Billing/OrganizationBillingSection';
 import { ReasonPicker } from './shared/ReasonPicker';
 import {
   ADMIN_REASON_PRESETS,
@@ -274,6 +275,7 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
             {children}
           </Grid>
         </Grid>
+        <OrganizationBillingSection orgId={org.id} />
       </Stack>
     </Sheet>
   );

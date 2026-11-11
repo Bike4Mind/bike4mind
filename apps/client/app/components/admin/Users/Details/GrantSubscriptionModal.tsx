@@ -1,4 +1,4 @@
-import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
+import type { AdminUserListItem } from '@bike4mind/server-utils/app/utils/adminUserProjection';
 import { useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
 import { useGetUserSubscriptions, useGrantSubscription } from '@client/app/hooks/data/subscriptions';
 import { SUBSCRIPTION_PLANS } from '@bike4mind/server-utils/lib/userSubscriptions/constants';

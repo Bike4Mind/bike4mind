@@ -404,6 +404,61 @@ export function useSetMemberCreditOverride() {
   );
 }
 
+/** Make one member a manager, or remove them as one (owner or platform admin only). */
+export function useSetOrganizationManager() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({
+      organizationId,
+      userId,
+      isManager,
+    }: {
+      organizationId: string;
+      userId: string;
+      isManager: boolean;
+    }) => {
+      const url = `/api/organizations/${organizationId}/members/${userId}/manager`;
+      const response = isManager
+        ? await api.put<WithId<IOrganizationDocument>>(url)
+        : await api.delete<WithId<IOrganizationDocument>>(url);
+      return response.data;
+    },
+    onSuccess: (organization, { isManager }) => {
+      updateAllQueryData(queryClient, 'organizations', 'write', organization);
+      queryClient.invalidateQueries({ queryKey: ['organizations'] });
+      toast.success(isManager ? 'Member is now a manager' : 'Manager removed');
+    },
+    onError: (error: unknown) => {
+      toast.error(`Failed to update manager: ${getErrorMessage(error)}`);
+    },
+  });
+}
+
+/** Hand the organization's billing ownership to one of its managers. */
+export function useTransferOrganizationOwnership() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ organizationId, newOwnerId }: { organizationId: string; newOwnerId: string }) => {
+      const response = await api.post<{ organizationId: string; ownerId: string }>(
+        `/api/organizations/${organizationId}/transfer-ownership`,
+        { newOwnerId }
+      );
+      return response.data;
+    },
+    onSuccess: () => {
+      // The owner gates every org tab and the roster rows, so refetch rather than patch.
+      queryClient.invalidateQueries({ queryKey: ['organizations'] });
+      queryClient.invalidateQueries({ queryKey: ['users', 'organization'] });
+      toast.success('Ownership transferred');
+    },
+    onError: (error: unknown) => {
+      toast.error(`Failed to transfer ownership: ${getErrorMessage(error)}`);
+    },
+  });
+}
+
 export function useLeaveOrganization() {
   const queryClient = useQueryClient();
 

@@ -15,7 +15,7 @@ import {
   type VerdictEvalReport,
   type VerdictEvalScore,
 } from '@client/app/utils/verdictEval';
-import type { SignupVerdict } from '@server/users/signupClassifier';
+import type { SignupVerdict } from '@bike4mind/server-utils/users/signupClassifier';
 
 /**
  * Grades the automated abuse verdicts against admin labels. Pure; the loader

@@ -2,7 +2,7 @@ import { ABUSE_ASSESSMENT_MAX_ACCOUNTS, type AbuseAssessmentGroupEvidence } from
 import { usageEventRepository, userRepository } from '@bike4mind/database';
 import type { UserSignupLinkFacts } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
-import { findLinkedAccounts, type LinkedAccount } from '@server/billing/linkedAccounts';
+import { findLinkedAccounts, type LinkedAccount } from '@bike4mind/server-utils/billing/linkedAccounts';
 import type { AbuseAssessmentGroupEvidenceSource } from './abuseAssessment';
 
 /**

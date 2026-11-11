@@ -1,6 +1,6 @@
 import { emailDomainOf, isDomainInDomains, normalizeEmailDomain } from '@bike4mind/common';
-import type { AdminUsersBulkEmailDomains } from '@client/app/utils/adminUsersBulk';
-import { isOwnedDomain } from '@server/admin/bulkAbuse/assertOwnedDomain';
+import type { AdminUsersBulkEmailDomains } from '@bike4mind/server-utils/app/utils/adminUsersBulk';
+import { isOwnedDomain } from '@bike4mind/server-utils/admin/bulkAbuse/assertOwnedDomain';
 import type { BulkUser } from './resolve';
 
 const sorted = (domains: Set<string>) => [...domains].sort();

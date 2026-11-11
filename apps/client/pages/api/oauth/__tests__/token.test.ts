@@ -54,7 +54,7 @@ vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
     return () => undefined;
   },
 }));
-vi.mock('@server/utils/ip', () => ({ getClientIp: () => '203.0.113.7' }));
+vi.mock('@bike4mind/server-utils/utils/ip', () => ({ getClientIp: () => '203.0.113.7' }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: h.logAuthAudit }));
 vi.mock('@server/auth/oauthServer', () => ({
   validateClient: h.validateClient,

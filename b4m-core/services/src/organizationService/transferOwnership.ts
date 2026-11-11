@@ -78,6 +78,7 @@ export async function transferOwnership(
   if (newOwner.deletion?.scheduledFor) {
     throw new ConflictError('An account scheduled for deletion cannot own an organization.');
   }
+  if (newOwner.isBanned) throw new ConflictError('A deactivated account cannot own an organization.');
 
   // A platform admin repairing an org whose owner was already deleted lands here with no previous owner.
   const previousOwner = await db.users.findById(organization.userId);

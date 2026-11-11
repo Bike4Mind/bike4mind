@@ -97,7 +97,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
-vi.mock('@server/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: () => 60 }));
+vi.mock('@bike4mind/server-utils/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: () => 60 }));
 vi.mock('@bike4mind/services', () => ({
   artifactService: {
     get: mockGet,
@@ -358,6 +358,20 @@ describe('GET /api/v1/artifacts/{id}', () => {
       expect.anything()
     );
     expect(res.getHeader('Cache-Control')).toBe('private, no-store');
+  });
+
+  it('answers a public stranger from the viewer shape with null session and project ids', async () => {
+    const { userId, permissions, sessionId, projectId, _id, ...viewer } = artifactDoc({ visibility: 'public' });
+    mockGet.mockResolvedValue({ access: 'public', artifact: viewer, content: { content: 'graph TD; A-->B' } });
+    const { req, res } = fire('GET', { query: { id: ARTIFACT_ID } });
+
+    await call(byId, req, res);
+
+    const body = res._getJSONData();
+    expect(ArtifactResourceSchema.safeParse(body).success).toBe(true);
+    expect(body.session_id).toBeNull();
+    expect(body.project_id).toBeNull();
+    expect(JSON.stringify(body)).not.toContain('u1');
   });
 
   it('rethrows a fault that is not an access denial unchanged instead of hiding it as 404', async () => {

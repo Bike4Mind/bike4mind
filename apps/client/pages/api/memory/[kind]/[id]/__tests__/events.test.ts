@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
   appendMemoryEvent: vi.fn(),
+  listPrincipalLedger: vi.fn(),
   createKeyProvider: vi.fn(() => ({})),
 }));
 
@@ -11,12 +12,16 @@ vi.mock('@server/middlewares/baseApi', () => ({
     const chain = Object.assign((req: { method?: string }, res: unknown) => routes[req.method ?? 'POST']?.(req, res), {
       use: () => chain,
       post: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((routes.POST = fns[fns.length - 1]), chain),
+      get: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((routes.GET = fns[fns.length - 1]), chain),
     });
     return chain;
   },
 }));
 vi.mock('@bike4mind/database', () => ({ memoryLedgerRepository: {}, memoryPrincipalKeyRepository: {} }));
-vi.mock('@bike4mind/server-utils/memory/ledgerMemoryStore', () => ({ appendMemoryEvent: h.appendMemoryEvent }));
+vi.mock('@bike4mind/server-utils/memory/ledgerMemoryStore', () => ({
+  appendMemoryEvent: h.appendMemoryEvent,
+  listPrincipalLedger: h.listPrincipalLedger,
+}));
 vi.mock('@bike4mind/server-utils/memory/factCipher', () => ({ createKeyProvider: h.createKeyProvider }));
 
 import handler from '../events';
@@ -24,9 +29,10 @@ import handler from '../events';
 // A fixed PAST instant, so a handler that re-stamps with `new Date()` cannot pass by coincidence.
 const receivedAt = new Date('2026-01-01T00:00:00.000Z');
 
-const invoke = () => {
+const invoke = (overrides: Record<string, unknown> = {}) => {
   const json = vi.fn();
   const status = vi.fn(() => ({ json }));
+  const setHeader = vi.fn();
   const done = (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(
     {
       method: 'POST',
@@ -34,18 +40,55 @@ const invoke = () => {
       body: { kind: 'assert', fact: 'Prefers dark roast coffee' },
       user: { id: 'user-1' },
       receivedAt,
+      ...overrides,
     },
-    { status }
+    { status, setHeader }
   );
-  return { json, status, done };
+  return { json, status, setHeader, done };
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
   h.appendMemoryEvent.mockResolvedValue({ id: 'event-1' });
+  h.listPrincipalLedger.mockResolvedValue([{ hash: 'hash-1' }]);
+});
+
+describe('GET /api/memory/:kind/:id/events', () => {
+  it('denies anonymous, foreign, and non-user reads without querying the ledger', async () => {
+    const anonymous = invoke({ method: 'GET', user: undefined });
+    await anonymous.done;
+    const foreign = invoke({ method: 'GET', query: { kind: 'user', id: 'other' } });
+    await foreign.done;
+    const wrongKind = invoke({ method: 'GET', query: { kind: 'lake', id: 'user-1' } });
+    await wrongKind.done;
+    const apiKey = invoke({ method: 'GET', apiKeyInfo: { keyId: 'key-1', scopes: [] } });
+    await apiKey.done;
+    expect(anonymous.status).toHaveBeenCalledWith(401);
+    expect(foreign.status).toHaveBeenCalledWith(403);
+    expect(wrongKind.status).toHaveBeenCalledWith(400);
+    expect(apiKey.status).toHaveBeenCalledWith(403);
+    expect(h.listPrincipalLedger).not.toHaveBeenCalled();
+  });
+
+  it('returns the complete owner-scoped ledger without caching', async () => {
+    const { json, status, setHeader, done } = invoke({ method: 'GET' });
+    await done;
+    expect(h.listPrincipalLedger).toHaveBeenCalledWith(
+      expect.objectContaining({ principal: { kind: 'user', id: 'user-1' }, ownerUserId: 'user-1' })
+    );
+    expect(status).toHaveBeenCalledWith(200);
+    expect(setHeader).toHaveBeenCalledWith('Cache-Control', 'no-store');
+    expect(json).toHaveBeenCalledWith({ events: [{ hash: 'hash-1' }] });
+  });
 });
 
 describe('POST /api/memory/:kind/:id/events', () => {
+  it('preserves API-key append authorization', async () => {
+    const { status, done } = invoke({ apiKeyInfo: { keyId: 'key-1', scopes: [] } });
+    await done;
+    expect(status).toHaveBeenCalledWith(201);
+    expect(h.appendMemoryEvent).toHaveBeenCalledOnce();
+  });
   it("arms the shred fence with the request's arrival, not a handler-local stamp", async () => {
     // A purge landing between arrival and the append - across baseApi's connectDB and auth as well
     // as this handler's own parsing - must refuse the write, not lift its own tombstone.

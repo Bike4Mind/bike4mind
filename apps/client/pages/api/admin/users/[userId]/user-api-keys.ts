@@ -12,7 +12,7 @@ import { respond } from '@server/utils/respond';
 import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { getApiKeyRateLimitUsage, type RateLimitUsage } from '@bike4mind/server-utils/utils/apiKeyRateLimitCheck';
-import { describeApiKeyAccess } from '@server/utils/apiKeyAccessGate';
+import { describeApiKeyAccess } from '@bike4mind/server-utils/utils/apiKeyAccessGate';
 
 // Hydrated docs only emit schema paths (and drop the key hashes) through toJSON.
 function serializeKey(key: IUserApiKeyDocument): IUserApiKey {

@@ -371,7 +371,7 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
                       <Stack spacing={1}>
                         {log.artifacts.map((artifact, idx: number) => (
                           <Typography key={idx} level="body-sm">
-                            {artifact.type}: {artifact.preview}...
+                            {artifact.type}
                           </Typography>
                         ))}
                       </Stack>

@@ -15,10 +15,10 @@ vi.mock('@server/utils/untrustedCompletionQuota', () => ({
 
 // Real entitlements pull in mongoose models at import time, which the @bike4mind/database mock lacks.
 const mockCheckFreeTierDailySpendCap = vi.hoisted(() => vi.fn());
-vi.mock('@server/billing/freeTierDailyCapGate', () => ({
+vi.mock('@bike4mind/server-utils/billing/freeTierDailyCapGate', () => ({
   checkFreeTierDailySpendCap: mockCheckFreeTierDailySpendCap,
 }));
-vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
 vi.mock('@bike4mind/server-utils/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn() }));
 vi.mock('@bike4mind/services/cliCompletions', () => ({
   executeCompletion: (...args: unknown[]) => mockExecuteCompletion(...args),
@@ -57,6 +57,9 @@ import { checkApiKeyRateLimitOrThrow, checkRateLimit, verifyApiKey, verifyJwtTok
 import { ForbiddenError, TooManyRequestsError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { sendToConnection } from '@bike4mind/server-utils/websocket/utils';
+const mockRecordUserActivity = vi.hoisted(() => vi.fn());
+vi.mock('@server/users/recordUserActivity', () => ({ recordUserActivity: mockRecordUserActivity }));
+
 import { func } from './cliCompletion';
 
 const logger = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), updateMetadata: vi.fn() };
@@ -84,6 +87,14 @@ describe('cliCompletion websocket handler', () => {
     await run();
 
     expect(mockExecuteCompletion).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u1', source: 'cli' }));
+  });
+
+  it('stamps the user active: a completion is an action', async () => {
+    mockRecordUserActivity.mockClear();
+
+    await run();
+
+    expect(mockRecordUserActivity).toHaveBeenCalledWith('u1', expect.anything());
   });
 
   it('resolves thinking visibility for the caller', async () => {

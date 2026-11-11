@@ -3,7 +3,7 @@ import { DATA_LAKE_READ_OR_SHARE_SCOPES, assertDataLakeShareScope } from '@serve
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import { Request } from 'express';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { lakeOwnershipOfferDb } from '@server/dataLakes/lakeOwnershipOfferDb';
 import { sendLakeOwnershipOfferEmail } from '@server/utils/dataLakeOwnershipOfferNotifier';
 

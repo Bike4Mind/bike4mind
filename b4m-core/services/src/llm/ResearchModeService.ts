@@ -12,6 +12,7 @@ import { sentMaxTokensFor } from '@bike4mind/llm-adapters/model-sizing';
 import { Logger } from '@bike4mind/observability';
 import { DEFAULT_OUTPUT_MAX_TOKENS } from '@bike4mind/utils';
 import { z } from 'zod';
+import { chatReasoningOptionsFor } from './chatReasoningOptions';
 
 export interface ResearchModeResult {
   configurationId: string;
@@ -197,6 +198,8 @@ export class ResearchModeService {
         presencePenalty: config.parameters?.presencePenalty ?? baseOptions.presencePenalty,
         frequencyPenalty: config.parameters?.frequencyPenalty ?? baseOptions.frequencyPenalty,
         abortSignal: configAbort.signal,
+        // The preference is the user's, shared by every model; each configuration gets what its model takes.
+        ...chatReasoningOptionsFor(modelInfo, baseOptions.reasoningEffort, baseOptions.thinking),
         ...(modelInfo.id !== requestedModelInfo.id
           ? { modelIdentityId: requestedModelInfo.id, modelDisplayName: requestedModelInfo.name }
           : {}),

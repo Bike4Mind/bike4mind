@@ -177,14 +177,14 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
 vi.mock('@server/auth/stepUp', () => ({ requireStepUp: mockRequireStepUp }));
 // The setting gate and the mail are covered in server/users/suspensionNoticeEmail.test.ts; here only the call.
 vi.mock('@server/users/suspensionNoticeEmail', () => ({ emailSuspensionNoticeIfEnabled: mockEmailSuspensionNotice }));
-vi.mock('@server/billing/linkedAccounts', () => ({ propagateAccountRisk: mockPropagateAccountRisk }));
+vi.mock('@bike4mind/server-utils/billing/linkedAccounts', () => ({ propagateAccountRisk: mockPropagateAccountRisk }));
 // Grading rules are covered in server/admin/shadowDetectionStatusVerdicts.test.ts; here only the call.
 vi.mock('@server/admin/shadowDetectionStatusVerdicts', () => ({
   gradeDetectionsForStatusChange: mockGradeDetections,
 }));
 // The audit-entry builder stays real so the test pins what the admin log records.
-vi.mock('@server/billing/cancelAccountSubscriptions', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/billing/cancelAccountSubscriptions')>()),
+vi.mock('@bike4mind/server-utils/billing/cancelAccountSubscriptions', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/billing/cancelAccountSubscriptions')>()),
   cancelAccountSubscriptions: mockCancelAccountSubscriptions,
 }));
 

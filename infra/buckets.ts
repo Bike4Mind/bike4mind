@@ -1,7 +1,9 @@
 import { allSecrets } from './secrets';
 import { websocketApi } from './websocket';
-import { domain, getAllowedOrigins, router, routePrefix, isSharedRouterConsumer } from './router';
+import { domain, router, routePrefix, isSharedRouterConsumer } from './router';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
+import { getAllowedOrigins } from './allowedOrigins';
+import { BLOCK_ALL_PUBLIC_ACCESS, encryptBucketAtRest } from './bucketSecurity';
 import { lambdaVpc } from './vpc';
 
 // Bucket options:  Named buckets are named, and kept; otherwise, they're auto-deleted.
@@ -67,6 +69,7 @@ const fabFileBucket = new sst.aws.Bucket(
   {
     versioning: process.env.ENABLE_BUCKET_VERSIONING === 'true',
     transform: {
+      publicAccessBlock: BLOCK_ALL_PUBLIC_ACCESS,
       bucket: fabFileBucketName
         ? (args, opts) => {
             args.bucket = fabFileBucketName;
@@ -79,6 +82,7 @@ const fabFileBucket = new sst.aws.Bucket(
     retainOnDelete: fabFileBucketName ? true : false,
   }
 );
+encryptBucketAtRest('fabFileBucket', fabFileBucket);
 
 // Notebook exports (notebookExportService storeExportFile) and account data exports are never deleted
 // by the app. 1 day is S3's minimum expiration; S3 rounds expiry up to the next UTC midnight, so an
@@ -175,12 +179,13 @@ const generatedImagesBucket = new sst.aws.Bucket(
   {
     versioning: process.env.ENABLE_BUCKET_VERSIONING === 'true',
     cors: {
-      allowOrigins: getAllowedOrigins(domain),
+      allowOrigins: getAllowedOrigins(domain, $app.stage),
       allowHeaders: ['*'],
       allowMethods: ['GET', 'PUT', 'POST'],
     },
     access: 'cloudfront',
     transform: {
+      publicAccessBlock: BLOCK_ALL_PUBLIC_ACCESS,
       bucket: generatedImagesBucketName
         ? (args, opts) => {
             args.bucket = generatedImagesBucketName;
@@ -193,6 +198,7 @@ const generatedImagesBucket = new sst.aws.Bucket(
     retainOnDelete: generatedImagesBucketName ? true : false,
   }
 );
+encryptBucketAtRest('generatedImagesBucket', generatedImagesBucket);
 
 const generatedImagesBucketLifecycle = new aws.s3.BucketLifecycleConfigurationV2('generatedImagesBucketLifecycle', {
   bucket: generatedImagesBucket.name,
@@ -225,12 +231,13 @@ const appFilesBucket = new sst.aws.Bucket(
   {
     versioning: process.env.ENABLE_BUCKET_VERSIONING === 'true',
     cors: {
-      allowOrigins: getAllowedOrigins(domain),
+      allowOrigins: getAllowedOrigins(domain, $app.stage),
       allowHeaders: ['*'],
       allowMethods: ['GET', 'PUT', 'POST'],
     },
     access: 'cloudfront',
     transform: {
+      publicAccessBlock: BLOCK_ALL_PUBLIC_ACCESS,
       bucket: appFilesBucketName
         ? (args, opts) => {
             args.bucket = appFilesBucketName;
@@ -243,6 +250,7 @@ const appFilesBucket = new sst.aws.Bucket(
     retainOnDelete: appFilesBucketName ? true : false,
   }
 );
+encryptBucketAtRest('appFilesBucket', appFilesBucket);
 
 // Route publicly accessible directories through CloudFront
 // Only these paths will be accessible via CloudFront URLs
@@ -314,12 +322,14 @@ const appFilesBucketNotification = appFilesBucket.notify({
 
 const historyImportBucket = new sst.aws.Bucket('historyImportBucket', {
   cors: {
-    allowOrigins: getAllowedOrigins(domain),
+    allowOrigins: getAllowedOrigins(domain, $app.stage),
     allowMethods: ['PUT'],
     allowHeaders: ['*'],
   },
   versioning: process.env.ENABLE_BUCKET_VERSIONING === 'true',
+  transform: { publicAccessBlock: BLOCK_ALL_PUBLIC_ACCESS },
 });
+encryptBucketAtRest('historyImportBucket', historyImportBucket);
 
 // Lifecycle policy to automatically delete old import files
 const historyImportBucketLifecycle = new aws.s3.BucketLifecycleConfigurationV2('historyImportBucketLifecycle', {
@@ -479,12 +489,14 @@ const historyImportBucketNotification = historyImportBucket.notify({
  */
 const slackExportBucket = new sst.aws.Bucket('slackExportBucket', {
   cors: {
-    allowOrigins: getAllowedOrigins(domain),
+    allowOrigins: getAllowedOrigins(domain, $app.stage),
     allowMethods: ['GET'],
     allowHeaders: ['*'],
   },
   versioning: false, // No versioning needed for temporary exports
+  transform: { publicAccessBlock: BLOCK_ALL_PUBLIC_ACCESS },
 });
+encryptBucketAtRest('slackExportBucket', slackExportBucket);
 
 // Lifecycle policy to automatically delete old export files
 const slackExportBucketLifecycle = new aws.s3.BucketLifecycleConfigurationV2('slackExportBucketLifecycle', {
@@ -518,11 +530,12 @@ const publishedArtifactsBucket = new sst.aws.Bucket(
   {
     versioning: process.env.ENABLE_BUCKET_VERSIONING === 'true',
     cors: {
-      allowOrigins: getAllowedOrigins(domain),
+      allowOrigins: getAllowedOrigins(domain, $app.stage),
       allowHeaders: ['*'],
       allowMethods: ['GET', 'PUT', 'POST'],
     },
     transform: {
+      publicAccessBlock: BLOCK_ALL_PUBLIC_ACCESS,
       bucket: publishedArtifactsBucketName
         ? (args, opts) => {
             args.bucket = publishedArtifactsBucketName;
@@ -535,6 +548,7 @@ const publishedArtifactsBucket = new sst.aws.Bucket(
     retainOnDelete: publishedArtifactsBucketName ? true : false,
   }
 );
+encryptBucketAtRest('publishedArtifactsBucket', publishedArtifactsBucket);
 
 // Expire stalled drafts (uploaded but never finalized) after 1 day.
 const publishedArtifactsBucketLifecycle = new aws.s3.BucketLifecycleConfigurationV2(
@@ -566,7 +580,10 @@ const publishedArtifactsBucketLifecycle = new aws.s3.BucketLifecycleConfiguratio
  * days; run metadata in Mongo is kept. Keep in sync with QA_MEDIA_RETENTION_DAYS
  * in b4m-core/common/src/schemas/qa.ts.
  */
-const qaArtifactsBucket = new sst.aws.Bucket('qaArtifactsBucket', {});
+const qaArtifactsBucket = new sst.aws.Bucket('qaArtifactsBucket', {
+  transform: { publicAccessBlock: BLOCK_ALL_PUBLIC_ACCESS },
+});
+encryptBucketAtRest('qaArtifactsBucket', qaArtifactsBucket);
 
 const qaArtifactsBucketLifecycle = new aws.s3.BucketLifecycleConfigurationV2('qaArtifactsBucketLifecycle', {
   bucket: qaArtifactsBucket.name,

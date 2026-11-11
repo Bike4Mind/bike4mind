@@ -4,7 +4,7 @@ import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { CreditHolderType } from '@bike4mind/common';
 import { AnalyticsUserDay, CreditTransaction, Organization, UsageEvent, User } from '@bike4mind/database';
 import { Subscription } from '@bike4mind/server-utils/models/Subscription';
-import { USER_FUNNEL_STEP_FILTERS, type UserFunnelStep } from '@client/app/utils/adminUsersFilter';
+import { USER_FUNNEL_STEP_FILTERS, type UserFunnelStep } from '@bike4mind/server-utils/app/utils/adminUsersFilter';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { listAdminUsers } from '../admin/usersList/listAdminUsers';
 import { classifyFunnelCohort, funnelStepUserIds } from './activationFunnel';

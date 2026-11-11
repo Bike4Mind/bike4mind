@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, MODERATION_PAGE_READ, missingAdminPermissionMessage } from '@bike4mind/common';
 
 const mocks = vi.hoisted(() => ({
   findById: vi.fn(),
@@ -10,24 +10,11 @@ const mocks = vi.hoisted(() => ({
   logAuthAudit: vi.fn(),
   record: vi.fn(),
   csrfMiddleware: vi.fn(),
-  used: [] as unknown[],
 }));
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: (config?: unknown) => {
-    const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
-    const chain = Object.assign(
-      (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'GET']?.(req, res),
-      {
-        use: (mw: unknown) => (mocks.used.push(mw), chain),
-        get: (fn: (req: unknown, res: unknown) => unknown) => ((h.GET = fn), chain),
-        delete: (fn: (req: unknown, res: unknown) => unknown) => ((h.DELETE = fn), chain),
-        _config: config,
-      }
-    );
-    return chain;
-  },
-}));
+vi.mock('@server/middlewares/adminApi', async () =>
+  (await import('@server/middlewares/__tests__/adminApiMock')).adminApiMock()
+);
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: () => mocks.csrfMiddleware }));
 vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: (...a: unknown[]) => mocks.findById(...a) },
@@ -91,22 +78,32 @@ beforeEach(() => {
 });
 
 describe('/api/admin/users/[userId]/sessions', () => {
-  it('declares requiredScopes [ApiKeyScope.ADMIN]', () => {
-    expect((handler as unknown as { _config?: { requiredScopes?: string[] } })._config?.requiredScopes).toEqual([
-      ApiKeyScope.ADMIN,
-    ]);
+  it('declares requiredScopes [ApiKeyScope.ADMIN], MODERATION_PAGE_READ for GET and users:moderate for DELETE', () => {
+    const config = (handler as unknown as { _config?: { requiredScopes?: string[]; adminPermissions?: unknown } })
+      ._config;
+    expect(config?.requiredScopes).toEqual([ApiKeyScope.ADMIN]);
+    expect(config?.adminPermissions).toEqual({ GET: MODERATION_PAGE_READ, DELETE: 'users:moderate' });
   });
 
   it('passes the csrf middleware to the chain', () => {
-    expect(mocks.used).toContain(mocks.csrfMiddleware);
+    expect((handler as unknown as { _middlewares: unknown[] })._middlewares).toContain(mocks.csrfMiddleware);
   });
 
   describe('GET', () => {
-    it('rejects a non-admin with 403 before reading anything', async () => {
-      await expect(call('GET', { user: { id: 'u2', isAdmin: false } }).promise).rejects.toMatchObject({
+    it('refuses a delegate without a moderation read permission before reading anything', async () => {
+      const user = { id: 'u2', isAdmin: false, adminPermissions: ['credits:adjust'] };
+      await expect(call('GET', { user }).promise).rejects.toMatchObject({
         statusCode: 403,
+        message: missingAdminPermissionMessage(MODERATION_PAGE_READ),
       });
       expect(mocks.findById).not.toHaveBeenCalled();
+    });
+
+    it.each(['support:read', 'users:moderate'])('admits a delegate holding %s', async permission => {
+      const { res, promise } = call('GET', { user: { id: 'u2', isAdmin: false, adminPermissions: [permission] } });
+      await promise;
+      expect(res._getStatusCode()).toBe(200);
+      expect(mocks.listUserSessions).toHaveBeenCalledTimes(1);
     });
 
     it('rejects a malformed id with 400 and a missing user with 404', async () => {
@@ -146,11 +143,46 @@ describe('/api/admin/users/[userId]/sessions', () => {
     const revoke = (overrides: Parameters<typeof call>[1] = {}) =>
       call('DELETE', { query: { sid: 'sid-1' }, body: { reason: 'Compromised: lost laptop' }, ...overrides });
 
-    it('rejects a non-admin with 403 and revokes nothing', async () => {
-      await expect(revoke({ user: { id: 'u2', isAdmin: false } }).promise).rejects.toMatchObject({
+    const moderator = { id: 'u2', sid: 'mod-sid', isAdmin: false, adminPermissions: ['users:moderate'] };
+
+    it.each([
+      ['no permission', { id: 'u2', isAdmin: false }],
+      ['an unrelated permission', { id: 'u2', isAdmin: false, adminPermissions: ['credits:adjust'] }],
+      ['support:read only', { id: 'u2', isAdmin: false, adminPermissions: ['support:read'] }],
+    ])('refuses a delegate with %s with the users:moderate message and revokes nothing', async (_, user) => {
+      await expect(revoke({ user }).promise).rejects.toMatchObject({
         statusCode: 403,
+        message: missingAdminPermissionMessage('users:moderate'),
+      });
+      expect(mocks.findById).not.toHaveBeenCalled();
+      expect(mocks.revokeSession).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['a full admin', { isAdmin: true }],
+      ['a delegate with admin permissions', { isAdmin: false, adminPermissions: ['support:read'] }],
+    ])('refuses a users:moderate delegate acting on %s and revokes nothing', async (_, target) => {
+      mocks.findById.mockResolvedValue({ id: USER_ID, name: 'Mara Quill', ...target });
+      await expect(revoke({ user: moderator }).promise).rejects.toMatchObject({
+        statusCode: 403,
+        message: 'Only full administrators can sign out a session of users with admin access',
       });
       expect(mocks.revokeSession).not.toHaveBeenCalled();
+      expect(mocks.logAuthAudit).not.toHaveBeenCalled();
+      expect(mocks.record).not.toHaveBeenCalled();
+    });
+
+    it('lets a users:moderate delegate revoke a session of an ordinary user', async () => {
+      const { res, promise } = revoke({ user: moderator });
+      await promise;
+      expect(mocks.revokeSession).toHaveBeenCalledWith('sid-1', expect.anything());
+      expect(res._getJSONData()).toEqual({ message: 'Session revoked', sid: 'sid-1' });
+    });
+
+    it('lets a full admin revoke a session of a user with admin access', async () => {
+      mocks.findById.mockResolvedValue({ id: USER_ID, name: 'Mara Quill', isAdmin: true });
+      await revoke().promise;
+      expect(mocks.revokeSession).toHaveBeenCalledTimes(1);
     });
 
     it('requires a sid and a reason', async () => {

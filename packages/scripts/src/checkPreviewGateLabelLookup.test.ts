@@ -32,6 +32,18 @@ describe('preview gate label lookup', () => {
     expect(result.stdout).not.toContain('Gate satisfied');
   });
 
+  it('accepts the skip-preview label without a deployed preview', () => {
+    const result = runLookup("printf 'skip-preview\\nreview:ongoing\\n'");
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('Gate satisfied without a preview deploy');
+  });
+
+  it('does not accept a label that only contains skip-preview', () => {
+    const result = runLookup("printf 'no-skip-preview\\nskip-preview-later\\n'");
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stdout).not.toContain('Gate satisfied');
+  });
+
   it('preserves label API errors instead of treating them as missing deployment evidence', () => {
     const result = runLookup("printf 'label API unavailable\\n' >&2\nreturn 42");
     expect(result.status).toBe(42);

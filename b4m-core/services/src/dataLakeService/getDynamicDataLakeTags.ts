@@ -25,7 +25,7 @@ import { membershipOrgIdsForTurn } from './membershipOrgIdsForTurn';
 /**
  * The minimal context the data-lake access resolver needs. The knowledge tools
  * (ToolContext), the forced-retrieval feature (ChatCompletionContext), and the app-layer
- * semantic-search route (via server/dataLakes/resolveRetrievalLakeScope) all satisfy this
+ * semantic-search route (via packages/server-utils/src/dataLakes/resolveRetrievalLakeScope) all satisfy this
  * structurally, so this is the ONE shared resolver - no per-call-site duplicate.
  *
  * Non-goal: this resolver has NO admin/developer bypass and must not grow one. A privileged

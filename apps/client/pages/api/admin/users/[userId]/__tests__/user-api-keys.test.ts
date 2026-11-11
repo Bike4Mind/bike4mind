@@ -51,7 +51,7 @@ vi.mock('@bike4mind/database/auth', () => ({
   apiKeyUsageLogRepository: { countRequestsByKeyWindows: (...a: unknown[]) => mockCountRequests(...a) },
 }));
 
-vi.mock('@server/utils/apiKeyAccessGate', () => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyAccessGate', () => ({
   describeApiKeyAccess: (...a: unknown[]) => mockDescribeAccess(...a),
 }));
 

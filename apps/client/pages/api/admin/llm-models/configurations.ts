@@ -6,7 +6,7 @@ import { invalidateSettingsCache } from '@bike4mind/utils';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireAdminPermission } from '@server/middlewares/adminApi';
-import { recordAdminSettingChange } from '@server/utils/adminSettingsAudit';
+import { recordAdminSettingChange } from '@bike4mind/server-utils/utils/adminSettingsAudit';
 import { ForbiddenError, NotFoundError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 // Get LLM Model Configurations (readable by all authenticated users, needed for model selection)

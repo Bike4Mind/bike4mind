@@ -57,7 +57,10 @@ vi.mock('@server/middlewares/perUserRateLimit', () => ({ blockedAtZeroTierLimit:
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown) => undefined,
 }));
-vi.mock('@server/dataLakes', () => ({ resolveAccessibleLakes: mockResolveAccessibleLakes }));
+vi.mock('@server/dataLakes', () => ({
+  adminBypassLakeIds: vi.fn(async () => []),
+  resolveAccessibleLakes: mockResolveAccessibleLakes,
+}));
 // The seam under test: whatever credential the route resolves lands here.
 vi.mock('@server/tavern/rlm/tools', () => ({ buildDataLakeTools: mockBuildDataLakeTools }));
 vi.mock('@server/tavern/rlm/dataLakeReplPrompts', () => ({ REPL_TOOL_SYSTEM_PROMPT: 'repl-prompt' }));

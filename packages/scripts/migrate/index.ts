@@ -2,6 +2,7 @@ import { connectDB } from '@bike4mind/database';
 import yargs from 'yargs';
 import { AvailableMigrations } from './migrations';
 import fs from 'fs';
+import { execFileSync } from 'child_process';
 import { MigrationManager, selectPending } from './migrationManager';
 import { Migration } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
@@ -154,9 +155,15 @@ export default migration;
     const migrationsPath = path.join(currentDirPath, 'migrations', filename);
     console.log(`Creating ./migrations/${filename}...`);
     fs.writeFileSync(migrationsPath, template);
-    console.log(
-      `\nDone.  Next write the up() and down() implementations and add the reference to ./migrations/index.ts`
+    // Registers the new file in migrations/core.generated.ts.
+    execFileSync(
+      process.execPath,
+      [path.join(currentDirPath, '../../../apps/client/scripts/generate-premium-glue.mjs')],
+      {
+        stdio: 'inherit',
+      }
     );
+    console.log(`\nDone.  Next write the up() and down() implementations.`);
   }
 }
 

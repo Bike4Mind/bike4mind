@@ -1,4 +1,4 @@
-import { addBlockedEmailDomains } from '@server/admin/blockedEmailDomains';
+import { addBlockedEmailDomains } from '@bike4mind/server-utils/admin/blockedEmailDomains';
 import { requestAuditWriter } from '@bike4mind/server-utils/utils/adminAudit';
 
 type AuditRequest = Parameters<typeof requestAuditWriter>[0];

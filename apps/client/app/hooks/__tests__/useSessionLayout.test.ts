@@ -590,6 +590,20 @@ describe('useSessionLayout - LRU Cache Functions', () => {
       expect(result[0].fabFile.fileUrlExpireAt).toBeInstanceOf(Date);
     });
 
+    it("uses the server's fileUrlExpireAt instead of stamping now + 1h", () => {
+      const serverExpiry = '2030-01-01T00:30:00.000Z';
+
+      const result = patchPendingMessageFileModerationStatus(
+        [makePendingFile()],
+        'file-1',
+        'clean',
+        'https://example.com/signed-get-url',
+        serverExpiry
+      );
+
+      expect(result[0].fabFile.fileUrlExpireAt).toEqual(new Date(serverExpiry));
+    });
+
     it("leaves fabFile.fileUrl untouched when 'clean' is patched without a fileUrl", () => {
       const files = [
         makePendingFile({

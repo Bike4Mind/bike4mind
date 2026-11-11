@@ -27,7 +27,7 @@ const mockRefs = vi.hoisted(() => ({
 const isApiKeyAccessAllowedMock = vi.hoisted(() =>
   vi.fn(async (_user: unknown, _billing?: unknown, _request?: unknown) => true)
 );
-vi.mock('@server/utils/apiKeyAccessGate', async () => {
+vi.mock('@bike4mind/server-utils/utils/apiKeyAccessGate', async () => {
   const { ForbiddenError } = await import('@bike4mind/server-utils/utils/errors');
   const message = 'API keys require an active paid subscription';
   return {
@@ -88,7 +88,7 @@ vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe }));
 // leaf entitlement source (getUserEntitlements) is stubbed, so these tests
 // exercise the actual OWNER-scoped strip logic through the route (#891).
 const getUserEntitlements = vi.hoisted(() => vi.fn().mockResolvedValue([]));
-vi.mock('@server/entitlements', () => ({ getUserEntitlements }));
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getUserEntitlements }));
 
 // Product-scope access of the minting user; every product on by default so the embed/org cases
 // below are unaffected. The resolver itself is covered in server/entitlements/apiKeyScopeAccess.test.ts.

@@ -243,6 +243,16 @@ export interface IOrganizationRepository
   removeMember(organizationId: string, userId: string): Promise<void>;
 
   /**
+   * Appoint one manager without rewriting the rest of `adminUserIds` (idempotent). Matches only while the
+   * user still holds a `users[]` row, so a concurrent removal cannot leave a manager outside the roster.
+   * Returns false when no such row exists.
+   */
+  addAdmin(organizationId: string, userId: string): Promise<boolean>;
+
+  /** Drop one manager from `adminUserIds` without rewriting the rest (idempotent). */
+  removeAdmin(organizationId: string, userId: string): Promise<void>;
+
+  /**
    * Set one member's monthly credit budget override (`userDetails[].maxCredits`; null inherits the
    * org default). Targeted positional `$set`; returns false when the member has no row to update or is no longer a member (owner, manager or a
    * `users[]` row). The repository's Mongo `$or` must stay in sync with `isCurrentOrgMember`.

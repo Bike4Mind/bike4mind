@@ -114,7 +114,7 @@ vi.mock('@bike4mind/server-utils/premium-generated/premiumApiKeyScopes.generated
 
 const targetAccess = vi.hoisted(() => ({ entitlements: new Set<string>(), bypass: false }));
 const mockResolveTargetAccess = vi.hoisted(() => vi.fn());
-vi.mock('@server/entitlements', () => ({ toEntitlementUser: (user: unknown) => user }));
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ toEntitlementUser: (user: unknown) => user }));
 vi.mock('@server/entitlements/apiKeyScopeAccess', () => ({
   resolveApiKeyScopeAccessForUser: mockResolveTargetAccess.mockImplementation(async () => ({
     bypass: targetAccess.bypass,

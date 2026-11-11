@@ -15,6 +15,10 @@ vi.mock('@client/app/hooks/data/useOrgStorageUsage', () => ({
 }));
 vi.mock('./OrganizationGroupTypesCard', () => ({ default: () => null }));
 vi.mock('./OrganizationGroupMembersCard', () => ({ default: () => null }));
+// Stubbed here because it reads the router.
+vi.mock('./Billing/OrganizationBillingSection', () => ({
+  OrganizationBillingSection: ({ orgId }: { orgId: string }) => <div data-testid="stub-org-billing">{orgId}</div>,
+}));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const Wrapper = ({ children }: { children: ReactNode }) => (
@@ -31,6 +35,13 @@ const setLimit = (value: string) =>
   fireEvent.change(screen.getByTestId('admin-org-storage-limit-input'), { target: { value } });
 
 const sentData = () => mutateAsync.mock.calls[0][0].data;
+
+describe('OrganizationProfileUpdated - billing', () => {
+  it('shows the read-only billing overview for this organization', () => {
+    renderModal(makeOrg());
+    expect(screen.getByTestId('stub-org-billing')).toHaveTextContent('org1');
+  });
+});
 
 describe('OrganizationProfileUpdated - storage limit', () => {
   beforeEach(() => {

@@ -5,7 +5,7 @@ import type {
   AdminUsersFilter,
   AdminUsersListResponse,
   AdminUsersSummary,
-} from '@client/app/utils/adminUsersFilter';
+} from '@bike4mind/server-utils/app/utils/adminUsersFilter';
 import { USERS_FILTER_KEYS, type UsersListParams } from '../usersTabSearch';
 
 const LIST_STALE_MS = 30_000;

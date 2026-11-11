@@ -11,7 +11,7 @@ import {
 import { NotFoundError } from '@bike4mind/utils';
 import { dataLakeService } from '@bike4mind/services';
 import { Request } from 'express';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 
 // A single guarded status write, no AI/OpenAI spend involved (unlike apply/reanalyze) - a
 // generous hourly cap is enough to bound abuse, no shared daily-cap machinery needed.
