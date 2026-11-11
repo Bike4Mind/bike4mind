@@ -10,6 +10,9 @@ const h = vi.hoisted(() => ({
   changeMessageVisibility: vi.fn(),
   countAttempts: vi.fn(),
   logReplay: vi.fn(),
+  getDlqByLabel: vi.fn(),
+  getDlqUrl: vi.fn(() => 'dlq-url'),
+  getSourceQueueUrl: vi.fn(() => 'source-url'),
 }));
 
 type Route = (req: unknown, res: unknown) => unknown;
@@ -35,9 +38,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({
-  getDlqByLabel: () => ({ label: 'quest', displayName: 'Quest queue', sourceQueue: 'questQueue' }),
-  getDlqUrl: () => 'dlq-url',
-  getSourceQueueUrl: () => 'source-url',
+  getDlqByLabel: h.getDlqByLabel,
+  getDlqUrl: h.getDlqUrl,
+  getSourceQueueUrl: h.getSourceQueueUrl,
 }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
   receiveFromQueue: h.receiveFromQueue,
@@ -55,6 +58,7 @@ import handler from '../replay';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.getDlqByLabel.mockReturnValue({ label: 'quest', displayName: 'Quest queue', sourceQueue: 'questQueue' });
   h.audit.mockResolvedValue(null);
   h.sendToQueue.mockResolvedValue(undefined);
   h.deleteFromQueue.mockResolvedValue(undefined);
@@ -63,6 +67,47 @@ beforeEach(() => {
 });
 
 describe('POST /api/admin/dlq/replay admin audit', () => {
+  it.each([
+    { replay: 'safe', sourceQueue: null },
+    { replay: 'side-effects', sourceQueue: null },
+    { replay: 'unsafe', sourceQueue: null },
+    { replay: undefined, sourceQueue: null },
+  ])('rejects a blocked destination %j before SQS operations', async entry => {
+    h.getDlqByLabel.mockReturnValue({ label: 'quest', displayName: 'Quest queue', ...entry });
+    for (const replayBody of [{ batchSize: 1 }, { messages: [{ messageId: 'm1', receiptHandle: 'r1', body: '{}' }] }]) {
+      const { req, res } = createMocks({ method: 'POST', body: { queueLabel: 'quest', ...replayBody } });
+      (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+      await expect((handler as unknown as Route)(req, res)).rejects.toThrow('Replay is not available');
+    }
+    for (const operation of [h.getDlqUrl, h.getSourceQueueUrl, h.receiveFromQueue, h.sendToQueue, h.deleteFromQueue]) {
+      expect(operation).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(['safe', 'side-effects', 'unsafe', undefined])(
+    'keeps non-null destinations replayable with advisory class %s',
+    async replay => {
+      h.getDlqByLabel.mockReturnValue({
+        label: 'quest',
+        displayName: 'Quest queue',
+        sourceQueue: 'questQueue',
+        replay,
+      });
+      h.receiveFromQueue.mockResolvedValue([{ MessageId: 'm1', ReceiptHandle: 'r1', Body: '{}' }]);
+      for (const replayBody of [
+        { batchSize: 1 },
+        { messages: [{ messageId: 'm1', receiptHandle: 'r1', body: '{}' }] },
+      ]) {
+        const { req, res } = createMocks({ method: 'POST', body: { queueLabel: 'quest', ...replayBody } });
+        (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+        await (handler as unknown as Route)(req, res);
+        expect(res._getStatusCode()).toBe(200);
+      }
+      expect(h.sendToQueue).toHaveBeenCalledTimes(2);
+      expect(h.getSourceQueueUrl).toHaveBeenCalledWith('questQueue');
+    }
+  );
+
   it('records ops.dlq.replayed with the queue and count but no message bodies', async () => {
     const { req, res } = createMocks({
       method: 'POST',

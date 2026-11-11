@@ -15,7 +15,7 @@ const REPLAY_ROUTE_ACTIONS = [
 ];
 
 const stageQueueStatements = (source: string) =>
-  [...stripComments(source).matchAll(/\{\s*actions:\s*\[([^\]]*)\],\s*resources:\s*\[stageQueueArns\],?\s*\}/g)].map(
+  [...stripComments(source).matchAll(/\{\s*actions:\s*\[([^\]]*)\],\s*resources:\s*\[stageQueueArns\b/g)].map(
     match => [...match[1].matchAll(/'([^']+)'/g)].map(action => action[1])
   );
 

@@ -322,13 +322,15 @@ const DlqReplayTab: React.FC = () => {
     return queues.find(q => q.label === selectedQueue) ?? null;
   }, [queues, selectedQueue]);
 
+  const hasReplayDestination = selectedQueueInfo !== null && selectedQueueInfo.hasReplayDestination !== false;
+
   const handleReplayAll = () => {
-    if (!selectedQueue) return;
+    if (!selectedQueue || !hasReplayDestination) return;
     setConfirmOpen(true);
   };
 
   const confirmReplay = async () => {
-    if (!selectedQueue) return;
+    if (!selectedQueue || !hasReplayDestination) return;
     setConfirmOpen(false);
     try {
       const result = await replayMutation.mutateAsync({
@@ -354,7 +356,7 @@ const DlqReplayTab: React.FC = () => {
   };
 
   const confirmSingleReplay = async () => {
-    if (!selectedQueue || !singleReplayConfirm) return;
+    if (!selectedQueue || !singleReplayConfirm || !hasReplayDestination) return;
     const { messageId, receiptHandle, body } = singleReplayConfirm;
     setSingleReplayConfirm(null);
     try {
@@ -499,7 +501,9 @@ const DlqReplayTab: React.FC = () => {
                   startDecorator={<ReplayIcon />}
                   onClick={handleReplayAll}
                   loading={replayMutation.isPending}
-                  disabled={permissionDisabled || !selectedQueueInfo || selectedQueueInfo.approximateMessageCount === 0}
+                  disabled={
+                    permissionDisabled || !hasReplayDestination || selectedQueueInfo.approximateMessageCount === 0
+                  }
                   data-testid="dlq-replay-all"
                 >
                   Replay All (up to 100)
@@ -508,6 +512,11 @@ const DlqReplayTab: React.FC = () => {
             </AdminPermissionAction>
           </Stack>
           {selectedQueueInfo.description !== undefined && <QueueHint queue={selectedQueueInfo} />}
+          {!hasReplayDestination && (
+            <Alert color="neutral" sx={{ mt: 1.5 }} data-testid="dlq-replay-unavailable">
+              No replay destination is available for this queue. You can still inspect its messages.
+            </Alert>
+          )}
         </Card>
       )}
 
@@ -647,9 +656,9 @@ const DlqReplayTab: React.FC = () => {
                               color="warning"
                               onClick={e => {
                                 e.stopPropagation();
-                                setSingleReplayConfirm(msg);
+                                if (hasReplayDestination) setSingleReplayConfirm(msg);
                               }}
-                              disabled={permissionDisabled || replayMutation.isPending}
+                              disabled={permissionDisabled || !hasReplayDestination || replayMutation.isPending}
                               data-testid={`dlq-replay-single-${msg.messageId}`}
                             >
                               <ReplayIcon fontSize="small" />
@@ -828,7 +837,12 @@ const DlqReplayTab: React.FC = () => {
             <Button variant="plain" onClick={() => setConfirmOpen(false)} data-testid="dlq-replay-cancel">
               Cancel
             </Button>
-            <Button color="warning" onClick={confirmReplay} data-testid="dlq-replay-confirm">
+            <Button
+              color="warning"
+              disabled={!hasReplayDestination}
+              onClick={confirmReplay}
+              data-testid="dlq-replay-confirm"
+            >
               Replay Messages
             </Button>
           </Stack>
@@ -849,7 +863,12 @@ const DlqReplayTab: React.FC = () => {
             <Button variant="plain" onClick={() => setSingleReplayConfirm(null)} data-testid="dlq-single-replay-cancel">
               Cancel
             </Button>
-            <Button color="warning" onClick={confirmSingleReplay} data-testid="dlq-single-replay-confirm">
+            <Button
+              color="warning"
+              disabled={!hasReplayDestination}
+              onClick={confirmSingleReplay}
+              data-testid="dlq-single-replay-confirm"
+            >
               Replay Message
             </Button>
           </Stack>

@@ -37,7 +37,10 @@ const QUEUE_ONE = {
   approximateNotVisibleCount: 0,
 };
 
-const h = vi.hoisted(() => ({ user: null as null | { isAdmin?: boolean; adminPermissions?: string[] } }));
+const h = vi.hoisted(() => ({
+  replay: vi.fn(),
+  user: null as null | { isAdmin?: boolean; adminPermissions?: string[] },
+}));
 
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: h.user }) }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
@@ -55,7 +58,7 @@ vi.mock('@client/app/hooks/data/dlqManagement', () => ({
     refetch: vi.fn(),
   }),
   useDlqReplay: () => ({
-    mutateAsync: vi.fn(),
+    mutateAsync: h.replay,
     isPending: false,
     data: null,
     reset: vi.fn(),
@@ -85,16 +88,18 @@ const selectQueue = async (name: RegExp) => {
 };
 
 const renderWithQueueSelected = async (name = /Queue One/) => {
-  render(
+  const view = render(
     <CssVarsProvider theme={theme}>
       <DlqReplayTab />
     </CssVarsProvider>
   );
   await selectQueue(name);
+  return view;
 };
 
 beforeEach(() => {
   state.messages = [{ messageId: 'm1', body: '{}', sentTimestamp: '1700000000000', approximateReceiveCount: '1' }];
+  h.replay.mockReset();
   state.history = [];
   state.queues = [QUEUE_ONE];
   state.retentionSeconds = undefined;
@@ -234,6 +239,60 @@ describe('DlqReplayTab messages table', () => {
     const titleAttr = tooltipWrapper?.getAttribute('title') ?? tooltipWrapper?.getAttribute('aria-label') ?? '';
     expect(titleAttr).toContain('including views in this browser');
     expect(titleAttr).toContain('not a count of handler failures');
+  });
+});
+
+describe('DlqReplayTab replay destination', () => {
+  it('keeps inspection and message details available when no replay destination exists', async () => {
+    h.user = { isAdmin: false, adminPermissions: ['settings:manage'] };
+    state.queues = [{ ...QUEUE_ONE, hasReplayDestination: false }];
+    await renderWithQueueSelected();
+    expect(screen.getByTestId('dlq-replay-all')).toBeDisabled();
+    expect(screen.getByTestId('dlq-replay-single-m1')).toBeDisabled();
+    expect(screen.getByTestId('dlq-replay-unavailable')).toHaveTextContent(
+      'No replay destination is available for this queue. You can still inspect its messages.'
+    );
+    await userEvent.click(screen.getByTestId('dlq-view-m1'));
+    expect(screen.getByTestId('dlq-drawer-expiry')).toBeInTheDocument();
+    expect(h.replay).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['dlq-replay-all', 'dlq-replay-confirm'],
+    ['dlq-replay-single-m1', 'dlq-single-replay-confirm'],
+  ])('disables an open confirmation when the destination becomes unavailable: %s', async (openId, confirmId) => {
+    h.user = { isAdmin: false, adminPermissions: ['settings:manage'] };
+    state.queues = [{ ...QUEUE_ONE, hasReplayDestination: true }];
+    const view = await renderWithQueueSelected();
+    await userEvent.click(screen.getByTestId(openId));
+    state.queues = [{ ...QUEUE_ONE, hasReplayDestination: false }];
+    view.rerender(
+      <CssVarsProvider theme={theme}>
+        <DlqReplayTab />
+      </CssVarsProvider>
+    );
+    expect(screen.getByTestId(confirmId)).toBeDisabled();
+    fireEvent.click(screen.getByTestId(confirmId));
+    expect(h.replay).not.toHaveBeenCalled();
+  });
+
+  it('keeps manual replay enabled alongside an unsafe advisory hint', async () => {
+    h.user = { isAdmin: false, adminPermissions: ['settings:manage'] };
+    state.queues = [
+      {
+        ...QUEUE_ONE,
+        hasReplayDestination: true,
+        description: 'Delivers notifications.',
+        replay: 'unsafe',
+        replayNote: 'A replay can deliver again.',
+        owner: 'Notifications',
+      },
+    ];
+    await renderWithQueueSelected();
+    expect(screen.getByTestId('dlq-queue-hint-replay')).toHaveTextContent('Unsafe to replay');
+    expect(screen.getByTestId('dlq-replay-all')).toBeEnabled();
+    expect(screen.getByTestId('dlq-replay-single-m1')).toBeEnabled();
+    expect(screen.queryByTestId('dlq-replay-unavailable')).not.toBeInTheDocument();
   });
 });
 

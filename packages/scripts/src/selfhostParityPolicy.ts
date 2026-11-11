@@ -267,8 +267,8 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'd6b774dc16eed67c0c12733850fb9312a4a06e0bc91c0b16aafe5b53efdd5f55'
   ),
   broker(
-    'queue:infra/dlqAlarms.ts:DlqAlarmHandlerDlq',
-    'a39800cfa48e2ecb2ab17d226bb6fde51c9222a75c61f822abe291e9692d938e'
+    'queue:infra/dlqAlarmHandlerDeadLetter.ts:DlqAlarmHandlerDlq',
+    '1f154dd82d798f8212508c571b43a3326554ae0b9c1946887a067df54d053c17'
   ),
   gapBecause(
     'queue:infra/emailIngestion.ts:emailAnalysisQueue',
@@ -647,7 +647,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'queue:infra/queues.ts:accountDataExportQueue',
-    'f5f23f92c08820d80fb77199661e47a47a95d18737e4e99fcfba773a9bfc738f',
+    'f481512b3ce8a4eaa7f9de9ff23402f5b82ec72e1586b3b2d8350ee52b37b1c1',
     {
       source: 'apps/workers/src/selfhost/accountDataExportQueue.ts',
       symbol: 'registerAccountDataExportQueue',
@@ -1101,7 +1101,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   hostedOnly(
     'schedule:infra/apiProbeDetector.ts:apiProbeDetector',
-    '682a32628cfc9f5754e59149db835eb579e75099131a3cc3c8162091e2c4d6ff',
+    '95c4801e73f0e0e9fb8ad3ecac4b689a6ee94379c4e19462333f49356f587e45',
     'Queries the hosted server function CloudWatch log group; a portable deployment has none.',
     [
       'bedrock:*',
@@ -1208,12 +1208,12 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'snsSubscription:infra/dlqAlarms.ts:DlqAlarmTopic',
-    'a2287099940aa983b266a2cbb1789bbaecd1fe733935bc905d50a9cf34dc4a0a',
+    '6c8fc55925aee2dfb1f39b562506076ed133950a26786b0bc1036ac9410acfa3',
     ['ssm:GetParameter']
   ),
   gap(
     'snsSubscription:infra/dlqAlarms.ts:OobAlarmTopicEmailSub',
-    '7c36bbf7168b43b7f3a0a8f1f51130a9961e41d3cc9badc61efa50b45edd586d'
+    '74a62b4123aa86855c94deee69bae3c79722c4f170f78ff0b06e2a45c43d6644'
   ),
   gap(
     'snsSubscription:infra/serviceHealthAlarms.ts:ServiceHealthAlarmTopic',
