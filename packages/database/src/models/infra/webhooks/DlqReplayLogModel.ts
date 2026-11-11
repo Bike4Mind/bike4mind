@@ -7,8 +7,9 @@ export interface IDlqReplayLog {
   messageId: string;
   messageBody: string;
   sourceQueue: string;
-  status: 'success' | 'failed' | 'skipped';
+  status: 'success' | 'failed' | 'skipped' | 'discarded';
   errorMessage?: string;
+  reason?: string;
   replayedBy: string;
   createdAt: Date;
   updatedAt: Date;
@@ -23,10 +24,11 @@ const DlqReplayLogSchema = new mongoose.Schema(
     sourceQueue: { type: String, required: true },
     status: {
       type: String,
-      enum: ['success', 'failed', 'skipped'],
+      enum: ['success', 'failed', 'skipped', 'discarded'],
       required: true,
     },
     errorMessage: { type: String },
+    reason: { type: String },
     replayedBy: { type: String, required: true },
   },
   {
@@ -47,7 +49,7 @@ DlqReplayLogSchema.index({ createdAt: 1 }, { expireAfterSeconds: 2592000 });
 
 interface DlqReplayLogFilters {
   queueLabel?: string;
-  status?: 'success' | 'failed' | 'skipped';
+  status?: IDlqReplayLog['status'];
   startDate?: Date;
   endDate?: Date;
   search?: string;
@@ -76,6 +78,10 @@ class DlqReplayLogRepository extends BaseRepository<IDlqReplayLog> {
   async logReplay(data: Omit<IDlqReplayLog, 'id' | 'createdAt' | 'updatedAt'>): Promise<IDlqReplayLog> {
     const result = await this.model.create(data);
     return result.toObject();
+  }
+
+  async markDiscardFailed(id: string, errorMessage: string): Promise<void> {
+    await this.model.updateOne({ _id: id, status: 'discarded' }, { $set: { status: 'failed', errorMessage } });
   }
 
   /**

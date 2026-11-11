@@ -24,6 +24,7 @@ import {
 } from '@mui/joy';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import ReplayIcon from '@mui/icons-material/Replay';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import CloseIcon from '@mui/icons-material/Close';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
@@ -38,18 +39,22 @@ import {
   useDlqQueues,
   useDlqMessages,
   useDlqReplay,
+  useDlqDiscard,
   useDlqHistory,
   DlqMessage,
   DlqReplayLogEntry,
   DlqHistoryFilters,
 } from '@client/app/hooks/data/dlqManagement';
 import { AdminPermissionAction } from './shared/MissingPermission';
+import { ActionDialog } from './shared/ActionDialog';
+import { ADMIN_REASON_PRESETS } from './shared/adminReason';
 
-const StatusChip: React.FC<{ status: 'success' | 'failed' | 'skipped' }> = ({ status }) => {
+const StatusChip: React.FC<{ status: 'success' | 'failed' | 'skipped' | 'discarded' }> = ({ status }) => {
   const config = {
     success: { color: 'success' as const, icon: <CheckCircleIcon fontSize="small" /> },
     failed: { color: 'danger' as const, icon: <ErrorIcon fontSize="small" /> },
     skipped: { color: 'warning' as const, icon: <WarningIcon fontSize="small" /> },
+    discarded: { color: 'neutral' as const, icon: <DeleteOutlineIcon fontSize="small" /> },
   };
   const { color, icon } = config[status];
   return (
@@ -180,8 +185,9 @@ const DlqReplayTab: React.FC = () => {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [singleReplayConfirm, setSingleReplayConfirm] = useState<DlqMessage | null>(null);
+  const [discardConfirm, setDiscardConfirm] = useState<DlqMessage | null>(null);
   const [showHistory, setShowHistory] = useState(false);
-  const [historyStatus, setHistoryStatus] = useState<'success' | 'failed' | 'skipped' | ''>('');
+  const [historyStatus, setHistoryStatus] = useState<'success' | 'failed' | 'skipped' | 'discarded' | ''>('');
   const [historyDateRange, setHistoryDateRange] = useState<'24h' | '7d' | '30d' | 'all'>('7d');
   const [historySearch, setHistorySearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -215,6 +221,7 @@ const DlqReplayTab: React.FC = () => {
     refetch: refetchMessages,
   } = useDlqMessages(selectedQueue);
   const replayMutation = useDlqReplay();
+  const discardMutation = useDlqDiscard();
   const {
     data: history,
     isLoading: historyLoading,
@@ -291,6 +298,31 @@ const DlqReplayTab: React.FC = () => {
       }
     } catch (error) {
       toast.error(`Replay failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  };
+
+  const confirmDiscard = async (reason: string) => {
+    if (!selectedQueue || !discardConfirm?.receiptHandle || !discardConfirm.body) return;
+    try {
+      const result = await discardMutation.mutateAsync({
+        queueLabel: selectedQueue,
+        reason,
+        messages: [
+          {
+            messageId: discardConfirm.messageId,
+            receiptHandle: discardConfirm.receiptHandle,
+            body: discardConfirm.body,
+          },
+        ],
+      });
+      if (result.failed) {
+        toast.error(`Discard failed: ${result.results[0]?.reason ?? 'Unknown error'}`);
+        return;
+      }
+      setDiscardConfirm(null);
+      toast.success('Message discarded. Its body is retained server-side for manual recovery.');
+    } catch (error) {
+      toast.error(`Discard failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   };
 
@@ -540,6 +572,26 @@ const DlqReplayTab: React.FC = () => {
                           </Tooltip>
                         )}
                       </AdminPermissionAction>
+                      <AdminPermissionAction requirement="settings:manage">
+                        {permissionDisabled => (
+                          <Tooltip title="Discard this message">
+                            <IconButton
+                              size="sm"
+                              color="danger"
+                              onClick={e => {
+                                e.stopPropagation();
+                                setDiscardConfirm(msg);
+                              }}
+                              disabled={
+                                permissionDisabled || !msg.receiptHandle || !msg.body || discardMutation.isPending
+                              }
+                              data-testid={`dlq-discard-single-${msg.messageId}`}
+                            >
+                              <DeleteOutlineIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        )}
+                      </AdminPermissionAction>
                     </Stack>
                   </td>
                 </tr>
@@ -571,6 +623,7 @@ const DlqReplayTab: React.FC = () => {
                 <Option value="success">Success</Option>
                 <Option value="failed">Failed</Option>
                 <Option value="skipped">Skipped</Option>
+                <Option value="discarded">Discarded</Option>
               </Select>
             </FormControl>
             <FormControl size="sm">
@@ -669,7 +722,7 @@ const DlqReplayTab: React.FC = () => {
                     </td>
                     <td>
                       <Typography level="body-xs" noWrap sx={{ maxWidth: 200 }}>
-                        {entry.errorMessage || '-'}
+                        {entry.reason || entry.errorMessage || '-'}
                       </Typography>
                     </td>
                     <td>
@@ -733,6 +786,18 @@ const DlqReplayTab: React.FC = () => {
           </Stack>
         </ModalDialog>
       </Modal>
+      <ActionDialog
+        open={!!discardConfirm}
+        onClose={() => setDiscardConfirm(null)}
+        title="Discard dead letter?"
+        description="This removes the message from the DLQ. It cannot be undone from this page. The message body is kept server-side for manual recovery."
+        reasonPresets={ADMIN_REASON_PRESETS.dlqDiscard}
+        confirmLabel="Discard message"
+        tone="danger"
+        pending={discardMutation.isPending}
+        onConfirm={confirmDiscard}
+        data-testid="dlq-discard-dialog"
+      />
     </Box>
   );
 };

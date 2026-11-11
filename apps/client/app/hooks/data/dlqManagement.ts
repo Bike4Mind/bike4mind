@@ -36,8 +36,9 @@ export interface DlqReplayLogEntry {
   queueLabel: string;
   messageId: string;
   sourceQueue: string;
-  status: 'success' | 'failed' | 'skipped';
+  status: 'success' | 'failed' | 'skipped' | 'discarded';
   errorMessage?: string;
+  reason?: string;
   replayedBy: string;
   /** Email or username of the admin; falls back to the id when the user no longer exists. */
   replayedByName: string;
@@ -103,9 +104,32 @@ export const useDlqReplay = () => {
   });
 };
 
+export const useDlqDiscard = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: {
+      queueLabel: string;
+      reason: string;
+      messages: Array<{ messageId: string; receiptHandle: string; body: string }>;
+    }) => {
+      const response = await api.post<{
+        discarded: number;
+        failed: number;
+        results: Array<{ messageId: string; status: 'discarded' | 'failed'; reason?: string }>;
+      }>('/api/admin/dlq/discard', params);
+      return response.data;
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['admin', 'dlq', 'queues'] });
+      queryClient.invalidateQueries({ queryKey: ['admin', 'dlq', 'messages', variables.queueLabel] });
+      queryClient.invalidateQueries({ queryKey: ['admin', 'dlq', 'history'] });
+    },
+  });
+};
+
 export interface DlqHistoryFilters {
   queueLabel?: string;
-  status?: 'success' | 'failed' | 'skipped';
+  status?: 'success' | 'failed' | 'skipped' | 'discarded';
   startDate?: string;
   endDate?: string;
   search?: string;

@@ -11,15 +11,19 @@ const state = vi.hoisted(() => ({
     queueLabel: string;
     messageId: string;
     sourceQueue: string;
-    status: 'success' | 'failed' | 'skipped';
+    status: 'success' | 'failed' | 'skipped' | 'discarded';
     errorMessage?: string;
+    reason?: string;
     replayedBy: string;
     replayedByName: string;
     createdAt: string;
   }>,
 }));
 
-const h = vi.hoisted(() => ({ user: null as null | { isAdmin?: boolean; adminPermissions?: string[] } }));
+const h = vi.hoisted(() => ({
+  user: null as null | { isAdmin?: boolean; adminPermissions?: string[] },
+  discard: vi.fn(),
+}));
 
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: h.user }) }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
@@ -39,7 +43,15 @@ vi.mock('@client/app/hooks/data/dlqManagement', () => ({
     refetch: vi.fn(),
   }),
   useDlqMessages: () => ({
-    data: [{ messageId: 'm1', body: '{}', sentTimestamp: '1700000000000', approximateReceiveCount: '1' }],
+    data: [
+      {
+        messageId: 'm1',
+        receiptHandle: 'receipt-1',
+        body: '{}',
+        sentTimestamp: '1700000000000',
+        approximateReceiveCount: '1',
+      },
+    ],
     isLoading: false,
     isError: false,
     refetch: vi.fn(),
@@ -50,6 +62,7 @@ vi.mock('@client/app/hooks/data/dlqManagement', () => ({
     data: null,
     reset: vi.fn(),
   }),
+  useDlqDiscard: () => ({ mutateAsync: h.discard, isPending: false }),
   useDlqHistory: () => ({
     data: state.history,
     isLoading: false,
@@ -82,6 +95,7 @@ const renderWithQueueSelected = async () => {
 beforeEach(() => {
   state.history = [];
   h.user = null;
+  h.discard.mockReset();
 });
 
 describe('DlqReplayTab history table', () => {
@@ -150,6 +164,25 @@ describe('DlqReplayTab history table', () => {
     expect(headerTexts).not.toContain('Body');
     expect(headerTexts).not.toContain('Message Body');
   });
+
+  it('shows discarded history with its reason', () => {
+    state.history = [
+      {
+        id: 'discard-1',
+        queueLabel: 'q1',
+        messageId: 'm1',
+        sourceQueue: 'Queue One',
+        status: 'discarded',
+        reason: 'Job obsolete',
+        replayedBy: 'admin-1',
+        replayedByName: 'admin',
+        createdAt: '2026-11-03T10:00:00.000Z',
+      },
+    ];
+    renderTab();
+    expect(within(screen.getByTestId('dlq-history-row-discard-1')).getByText('discarded')).toBeTruthy();
+    expect(screen.getByText('Job obsolete')).toBeTruthy();
+  });
 });
 
 describe('DlqReplayTab replay permission', () => {
@@ -159,6 +192,7 @@ describe('DlqReplayTab replay permission', () => {
 
     expect(screen.getByTestId('dlq-replay-all')).toBeDisabled();
     expect(screen.getByTestId('dlq-replay-single-m1')).toBeDisabled();
+    expect(screen.getByTestId('dlq-discard-single-m1')).toBeDisabled();
   });
 
   it('enables both replay buttons for a settings:manage delegate', async () => {
@@ -167,5 +201,24 @@ describe('DlqReplayTab replay permission', () => {
 
     expect(screen.getByTestId('dlq-replay-all')).toBeEnabled();
     expect(screen.getByTestId('dlq-replay-single-m1')).toBeEnabled();
+    expect(screen.getByTestId('dlq-discard-single-m1')).toBeEnabled();
+  });
+
+  it('requires a reason and submits the selected message for discard', async () => {
+    h.user = { isAdmin: false, adminPermissions: ['settings:manage'] };
+    h.discard.mockResolvedValue({ discarded: 1, failed: 0, results: [{ messageId: 'm1', status: 'discarded' }] });
+    await renderWithQueueSelected();
+    await userEvent.click(screen.getByTestId('dlq-discard-single-m1'));
+    expect(screen.getByText(/cannot be undone from this page/i)).toBeTruthy();
+    const confirm = screen.getByTestId('dlq-discard-dialog-confirm-btn');
+    expect(confirm).toBeDisabled();
+    await userEvent.click(screen.getByTestId('dlq-discard-dialog-reason-input-preset-1'));
+    expect(confirm).toBeEnabled();
+    await userEvent.click(confirm);
+    expect(h.discard).toHaveBeenCalledWith({
+      queueLabel: 'q1',
+      reason: 'Job obsolete',
+      messages: [{ messageId: 'm1', receiptHandle: 'receipt-1', body: '{}' }],
+    });
   });
 });

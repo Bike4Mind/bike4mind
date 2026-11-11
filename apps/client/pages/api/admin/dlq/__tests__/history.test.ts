@@ -111,4 +111,25 @@ describe('GET /api/admin/dlq/history', () => {
       })
     );
   });
+
+  it('accepts the discarded status filter without returning message bodies', async () => {
+    h.findRecent.mockResolvedValue([
+      {
+        id: 'log-3',
+        queueLabel: 'quest',
+        messageId: 'msg-3',
+        sourceQueue: 'Quest queue',
+        status: 'discarded',
+        reason: 'Job obsolete',
+        replayedBy: 'admin-1',
+        createdAt: new Date('2026-11-03'),
+      },
+    ]);
+    const { req, res } = createMocks({ method: 'GET', query: { status: 'discarded' } });
+    (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+    await h.get!(req, res);
+    expect(h.findRecent).toHaveBeenCalledWith(expect.objectContaining({ status: 'discarded', includeBody: false }));
+    expect(JSON.parse(res._getData()).history[0]).toMatchObject({ status: 'discarded', reason: 'Job obsolete' });
+    expect(JSON.parse(res._getData()).history[0]).not.toHaveProperty('messageBody');
+  });
 });

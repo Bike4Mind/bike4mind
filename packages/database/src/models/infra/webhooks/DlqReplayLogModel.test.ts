@@ -60,6 +60,25 @@ describe('DlqReplayLogRepository.findRecent', () => {
     }
   });
 
+  it('stores discarded bodies and reasons but excludes bodies from discard history', async () => {
+    await dlqReplayLogRepository.logReplay({
+      queueLabel: 'quest',
+      messageId: 'msg-discarded',
+      messageBody: 'RECOVERABLE-BODY',
+      sourceQueue: 'Quest Export',
+      status: 'discarded',
+      reason: 'Job obsolete',
+      replayedBy: 'admin-1',
+    });
+
+    const [stored] = await dlqReplayLogRepository.findRecent({ status: 'discarded' });
+    const [history] = await dlqReplayLogRepository.findRecent({ status: 'discarded', includeBody: false });
+    expect(stored).toMatchObject({ messageBody: 'RECOVERABLE-BODY', reason: 'Job obsolete' });
+    expect(history).toMatchObject({ status: 'discarded', reason: 'Job obsolete' });
+    expect(history).not.toHaveProperty('messageBody');
+    expect(await dlqReplayLogRepository.countAttempts('msg-discarded')).toBe(0);
+  });
+
   it('searches messageId and errorMessage case-insensitively', async () => {
     const byId = await dlqReplayLogRepository.findRecent({ search: 'BETA' });
     const byError = await dlqReplayLogRepository.findRecent({ search: 'timeout' });
