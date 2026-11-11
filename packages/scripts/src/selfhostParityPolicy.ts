@@ -628,7 +628,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'queue:infra/queues.ts:accountDataExportQueue',
-    '83f9304409d24acf226c16c5ead6b6ba487a29bd14b376830576f7c53d69863b',
+    '21a9fc9052d8f6f6f68472e8a84e76f71b3d63986768f3c2ba033b1d15273f9d',
     {
       source: 'apps/workers/src/selfhost/accountDataExportQueue.ts',
       symbol: 'registerAccountDataExportQueue',
