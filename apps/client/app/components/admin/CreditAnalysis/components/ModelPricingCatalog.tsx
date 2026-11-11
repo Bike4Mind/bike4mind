@@ -65,7 +65,7 @@ type Provenance = 'seed' | 'discovery' | 'operator';
 const provenanceOf = (row: PriceRow): Provenance =>
   isSeedRow(row) ? 'seed' : isDiscoveryRow(row) ? 'discovery' : 'operator';
 
-// Where a price came from is not a status, so its chip stays neutral (docs/admin-models-spec.md section 5.8 copy).
+// Where a price came from is not a status, so its chip stays neutral.
 export const PROVENANCE_COPY: Record<Provenance, { label: string; meaning: string }> = {
   seed: { label: 'Default', meaning: 'Value shipped in code or a seed row' },
   discovery: { label: 'Discovered', meaning: 'Value read from a provider feed' },

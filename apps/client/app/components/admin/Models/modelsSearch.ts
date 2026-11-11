@@ -5,8 +5,7 @@ import type { AdminListSearchKeys } from '../shared/useAdminListUrlState';
 /**
  * The Models tab's `/admin` search params and their coercion. Pure and React-free: adminTabParams.ts (and through
  * it router.tsx's eager import) reads it. Every param carries a `models` prefix, except the Prices section's
- * `model`, which the spec names (docs/admin-models-spec.md section 3.2). Model ids and names are not personal data,
- * so the search box is kept in the URL.
+ * `model`. Model ids and names are not personal data, so the search box is kept in the URL.
  */
 
 export const MODELS_TAB_SLUG = 'models';

@@ -8,7 +8,7 @@ import type {
   StaleReferenceProblem,
 } from './discoveryApi';
 
-/** Plain-language copy for the discovery pages (docs/admin-models-spec.md sections 4, 5.3, 5.4 and 5.8). */
+/** Plain-language copy for the discovery pages. */
 
 export const RUN_RETENTION_NOTE = 'Runs are kept for 90 days. Decisions they raised stay on each model.';
 export const RUN_EXPIRED_TITLE = 'This run has expired. Runs are kept for 90 days.';

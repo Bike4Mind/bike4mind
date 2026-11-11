@@ -28,7 +28,7 @@ export const MODEL_SETTINGS_ONLY_KEYS: ReadonlySet<SettingKey> = new Set<Setting
 
 export type ChoiceOption = { value: string; label: string };
 
-/** Plain wording for the enum-valued model settings (docs/admin-models-spec.md sections 5.3 and 5.8). */
+/** Plain wording for the enum-valued model settings. */
 export const MODEL_SETTING_CHOICES = {
   modelDiscoveryMode: [
     { value: 'report', label: 'Report only' },

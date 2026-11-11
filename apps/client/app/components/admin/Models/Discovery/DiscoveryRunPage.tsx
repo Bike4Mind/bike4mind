@@ -57,11 +57,11 @@ type Decision = {
 const unique = (ids: readonly string[]) => [...new Set(ids)];
 
 /**
- * One card per model this run touched whose status is Needs review now (docs/admin-models-spec.md section 5.3),
- * plus this run's price flags, which phase 1 does not yet persist on the model. A model the list does not carry (a
- * report-mode run's new model, or a write-mode flag on one) still gets a card, with no model page to open; a write-mode
- * one with price flags gets Open prices. When the index failed or stopped at its cap (`indexPartial`), a missing row
- * proves nothing: the card shows the run's own findings, claims nothing about the catalog row, and offers Open model.
+ * One card per model this run touched whose status is Needs review now, plus this run's price flags, which are kept
+ * only on the run, not on the model. A model the list does not carry (a report-mode run's new model, or a write-mode
+ * flag on one) still gets a card, with no model page to open; a write-mode one with price flags gets Open prices. When
+ * the index failed or stopped at its cap (`indexPartial`), a missing row proves nothing: the card shows the run's own
+ * findings, claims nothing about the catalog row, and offers Open model.
  */
 function buildDecisions(run: DiscoveryRun, index: ModelIndex, indexPartial: boolean): Decision[] {
   const flagsByModel = new Map<string, RunPriceFlag[]>();
@@ -491,7 +491,7 @@ function RunView({ run }: { run: DiscoveryRun }) {
   );
 }
 
-/** One discovery run at /admin/models/runs/$runId (docs/admin-models-spec.md section 5.3). */
+/** One discovery run at /admin/models/runs/$runId. */
 export function DiscoveryRunPage({ runId }: { runId: string }) {
   const query = useDiscoveryRun(runId);
   const { openSection } = useModelsNavigation();

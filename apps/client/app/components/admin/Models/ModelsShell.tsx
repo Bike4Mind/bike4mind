@@ -27,8 +27,8 @@ const SECTION_LABELS: Record<ModelsSection, string> = {
 const VIEWS = (Object.keys(SECTION_LABELS) as ModelsSection[]).map(id => ({ id, label: SECTION_LABELS[id] }));
 
 /**
- * Admin > AI > Models: the one place for the models users can pick (docs/admin-models-spec.md section 3). The
- * section lives in the URL as `modelsSection`; switching drops the previous section's params.
+ * Admin > AI > Models: the one place for the models users can pick. The section lives in the URL as
+ * `modelsSection`; switching drops the previous section's params.
  */
 export function ModelsShell() {
   const search = useSearch({ strict: false }) as AdminSearch;

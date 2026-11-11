@@ -9,7 +9,7 @@ const formatDate = (value: string | undefined | null) => {
   return Number.isNaN(date.getTime()) ? value : date.toISOString().slice(0, 10);
 };
 
-/** What the server knows about the model, read-only in this phase (docs/admin-models-spec.md 5.2). */
+/** What the server knows about the model, read-only. */
 export function ModelOverviewTab({ model }: { model: AdminModelRow }) {
   const { lifecycle, lifecycleSuggestion: suggestion } = model;
   return (

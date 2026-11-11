@@ -18,7 +18,7 @@ describe('bulk access helpers', () => {
     expect(bulkChangeOf('remove-entitlement', ['pro'])).toEqual({ removeEntitlements: ['pro'] });
   });
 
-  it('summarizes the dry run the way the spec words it', () => {
+  it('summarizes the dry run as how many models change and how many are already as asked', () => {
     expect(bulkDiffSummary('add-tag', ['beta'], counts)).toBe('Add tag beta: 37 change, 3 already have it');
     expect(bulkDiffSummary('turn-off', [], { ...counts, change: 12, unchanged: 5 })).toBe(
       'Turn off: 12 change, 5 already off'

@@ -113,7 +113,7 @@ function StatusLine({ status }: { status: DiscoveryStatus }) {
   );
 }
 
-/** Models > Discovery (docs/admin-models-spec.md section 5.3): status, Run now, run history, lifecycle queue. */
+/** Models > Discovery: status, Run now, run history, lifecycle queue. */
 export function DiscoverySection() {
   const status = useDiscoveryStatus();
   const { runNow, busy, notice, error } = useRunDiscoveryNow();

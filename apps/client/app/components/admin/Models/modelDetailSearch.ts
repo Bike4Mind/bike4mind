@@ -1,6 +1,6 @@
 /**
  * The search params of `/admin/models/$` (the model detail page). Pure and React-free, because router.tsx imports
- * it eagerly. Phase 1 ships Overview, Access and Admin log (docs/admin-models-spec.md section 8).
+ * it eagerly.
  */
 
 export const MODEL_DETAIL_TABS = ['overview', 'access', 'admin'] as const;

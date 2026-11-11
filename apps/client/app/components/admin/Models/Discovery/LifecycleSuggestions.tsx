@@ -394,7 +394,7 @@ function DismissSuggestionDialog({
 
 /**
  * The lifecycle suggestion queue (pendingSuggestions of GET /api/admin/model-deprecation-status) with Accept and
- * Dismiss, until each model's Lifecycle tab carries it (docs/admin-models-spec.md section 5.3).
+ * Dismiss, until each model's Lifecycle tab carries it.
  */
 export function LifecycleSuggestions() {
   const queryClient = useQueryClient();

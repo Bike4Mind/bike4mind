@@ -16,9 +16,9 @@ import { modelName, useModelIndex } from './useModelIndex';
 const referenceId = (reference: StaleReference) => `${reference.surface}|${reference.key}|${reference.referencedId}`;
 
 /**
- * References to unavailable models (docs/admin-models-spec.md section 5.3): model ids that fallback chains and
- * defaults point at. Its own panel, not on model pages, because an unknown id has no model to sit on. Building the
- * report asks every provider, so nothing loads it until "Check references".
+ * References to unavailable models: model ids that fallback chains and defaults point at. Its own panel, not on
+ * model pages, because an unknown id has no model to sit on. Building the report asks every provider, so nothing
+ * loads it until "Check references".
  */
 export function StaleReferencesPanel() {
   const [requested, setRequested] = useState(false);

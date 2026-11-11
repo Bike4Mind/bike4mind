@@ -230,7 +230,7 @@ const toggleEdit = (row: AdminModelRow): AccessEdit => {
   return { target: row, change: { enabled: !on }, title: `${verb} ${row.name}`, confirmLabel: verb };
 };
 
-/** Models > Models: every model the server knows, its status and why (docs/admin-models-spec.md 5.1). */
+/** Models > Models: every model the server knows, its status and why. */
 export function ModelListSection() {
   const [state, update] = useAdminListUrlState(MODELS_LIST_SEARCH_KEYS);
   // The fetch follows the URL's search term, which the list state writes once typing pauses.

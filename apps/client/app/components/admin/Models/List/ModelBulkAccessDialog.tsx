@@ -74,8 +74,8 @@ const selectionProblem = (error: unknown): string | null => {
 };
 
 /**
- * Bulk access (POST /api/admin/models/access/bulk, docs/admin-models-spec.md 5.1 and 7.6): a server dry run with the
- * diff, audience effect and admins-only list, then apply with the dry run's token. A 409 swaps in the fresh dry run.
+ * Bulk access (POST /api/admin/models/access/bulk): a server dry run with the diff, audience effect and admins-only
+ * list, then apply with the dry run's token. A 409 swaps in the fresh dry run.
  */
 export function ModelBulkAccessDialog({
   request,

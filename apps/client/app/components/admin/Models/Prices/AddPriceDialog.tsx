@@ -71,7 +71,10 @@ type AddPriceDialogProps = {
   onAdded: () => void;
 };
 
-/** First per-token price for a model whose price rows bill (text and realtime-voice; see b4m-core/common/src/modelPriceCatalog.ts), with its tiers and the markup preview (docs/admin-models-spec.md 5.4). */
+/**
+ * First per-token price for a model whose price rows bill (text and realtime-voice; see
+ * b4m-core/common/src/modelPriceCatalog.ts), with its tiers and the markup preview.
+ */
 export function AddPriceDialog({ onClose, presetModelId, onAdded }: AddPriceDialogProps) {
   const text = useAdminModelsOfType('text');
   const voice = useAdminModelsOfType('realtime-voice');
