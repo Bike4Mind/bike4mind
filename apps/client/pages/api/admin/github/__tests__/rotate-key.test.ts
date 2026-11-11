@@ -27,7 +27,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({ encryptSecret: () => 'encrypted-blob' }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: 'test-key' } }));
-vi.mock('@server/utils/validators', () => ({ validatePrivateKeyFormat: () => true }));
+vi.mock('@bike4mind/server-utils/utils/validators', () => ({ validatePrivateKeyFormat: () => true }));
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {
     info = vi.fn();

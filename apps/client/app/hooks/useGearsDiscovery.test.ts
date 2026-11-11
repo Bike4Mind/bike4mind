@@ -128,6 +128,7 @@ describe('useGearsDiscovery', () => {
     ['on the gears page', () => (h.pathname = '/gears')],
     ['on the Bob start screen', () => (h.pathname = '/bob')],
     ['inside Bob', () => (h.pathname = '/bob/runs/r1')],
+    ['on the profile page', () => (h.pathname = '/profile')],
     [
       'inside the cooldown',
       () => writeDiscoveryState('u1', { lastShownAt: Date.now() - DAY / 2, dismissed: false, rotation: 0 }),

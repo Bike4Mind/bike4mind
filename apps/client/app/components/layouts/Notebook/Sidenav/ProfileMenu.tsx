@@ -9,6 +9,7 @@ import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { useReferralModal } from '@client/app/components/referrals/ReferralModal';
 import { useBillingView } from '@client/app/components/subscription/BillingDeepLinkModals';
 import { useUser } from '@client/app/contexts/UserContext';
+import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { useGetFriendRequests, useReturnToAdmin, useUserLogout } from '@client/app/hooks/data/user';
@@ -49,7 +50,6 @@ import FeedbackOutlinedIcon from '@mui/icons-material/FeedbackOutlined';
 import PowerOutlinedIcon from '@mui/icons-material/PowerOutlined';
 import DesktopMacOutlinedIcon from '@mui/icons-material/DesktopMacOutlined';
 import ThumbsUpDownOutlinedIcon from '@mui/icons-material/ThumbsUpDownOutlined';
-import AutoAwesomeIcon from '@mui/icons-material/AutoAwesomeOutlined';
 import LocalFireDepartmentOutlinedIcon from '@mui/icons-material/LocalFireDepartmentOutlined';
 import LogoDevIcon from '@mui/icons-material/LogoDev';
 import ApiIcon from '@mui/icons-material/Api';
@@ -266,7 +266,6 @@ const ProfileMenu = () => {
   const { accounts, selectedAccount, setSelectedAccount, showAccountType, refetchOrganizations } = useAccounts();
 
   const { isFeatureEnabled } = useFeatureEnabled();
-  const isQuestMasterEnabled = isFeatureEnabled('enableQuestMaster');
   const isHearthEnabled = isFeatureEnabled('enableHearth');
   // Premium-overlay launch points (codegen glue - empty array in the open-core
   // fork). Visibility semantics (STRICT - no admin/developer bypass, hidden
@@ -278,6 +277,7 @@ const ProfileMenu = () => {
   const isDesktopPromoEnabled = useDesktopPromoEnabled();
   const isPreferenceArenaEnabled = usePreferenceArenaEnabled();
 
+  const { updatePreferences } = useUserSettings();
   const toggleReferralModal = useReferralModal(s => s.toggle);
   const openCookieSettings = useCookieSettings(s => s.open);
   const logEvent = useLogEvent();
@@ -550,6 +550,16 @@ const ProfileMenu = () => {
               }}
             />
           )}
+          <MenuRow
+            testId="profile-menu-send-feedback"
+            icon={<FeedbackOutlinedIcon sx={{ fontSize: '18px' }} />}
+            label={t('feedback.send', 'Send Feedback')}
+            onClick={() => {
+              closeToTrigger();
+              // Set, not toggle: the row must open the form even when it is already showing.
+              updatePreferences({ showHelp: true });
+            }}
+          />
           {modeToggleEnabled && (
             <Box
               role="group"
@@ -709,16 +719,6 @@ const ProfileMenu = () => {
                     openCookieSettings();
                   }}
                 />
-                {isQuestMasterEnabled && (
-                  <MenuRow
-                    testId="profile-more-quests"
-                    icon={<AutoAwesomeIcon sx={{ fontSize: '18px' }} />}
-                    label={t('quests.my_quests', 'My Quests')}
-                    onClick={() => {
-                      navigateFromMenu('/quests', () => navigate({ to: '/quests' }));
-                    }}
-                  />
-                )}
                 {isHearthEnabled && (
                   <MenuRow
                     testId="profile-more-hearth"

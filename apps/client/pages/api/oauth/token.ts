@@ -32,7 +32,7 @@ import { logOAuthError } from '@server/auth/oauthErrorLog';
 import { mintRefreshFamily, refreshFamilyExpiresAt } from '@server/auth/oauthRefreshToken';
 import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
 import { logAuthAudit } from '@server/utils/authAudit';
-import { getClientIp } from '@server/utils/ip';
+import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 
 const MAX_DEVICE_NAME_LENGTH = 64;
 

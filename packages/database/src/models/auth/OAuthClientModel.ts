@@ -78,6 +78,11 @@ export interface IOAuthClientDocument extends IMongoDocument {
   isActive: boolean;
   /** Populated only for Pattern-A federated clients; gates the AI-token exchange. */
   federatedIdp?: IOAuthClientFederatedIdp;
+  /**
+   * The Overwatch product an account created to sign in to this client is credited to, with its
+   * later payments (apps/client server/analytics/oauthSignupCredit.ts). Absent: no credit.
+   */
+  overwatchProductId?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -140,6 +145,7 @@ const OAuthClientSchema = new Schema<IOAuthClientDocument>(
       ),
       required: false,
     },
+    overwatchProductId: { type: String, required: false },
   },
   {
     timestamps: true,

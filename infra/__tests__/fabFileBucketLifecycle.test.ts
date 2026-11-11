@@ -20,7 +20,7 @@ import {
   NOTEBOOK_DOWNLOAD_URL_TTL_SECONDS,
   notebookConvertedDownloadKey,
   notebookZipDownloadKey,
-} from '../../apps/client/server/notebooks/downloadCopyKeys';
+} from '../../packages/server-utils/src/notebooks/downloadCopyKeys';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const read = (file: string) => readFileSync(path.join(REPO_ROOT, file), 'utf8');
@@ -133,5 +133,21 @@ describe('fab-file bucket notebook export lifecycle', () => {
 
     expect(rulePrefix).toBeDefined();
     expect(auditPrefix?.startsWith(rulePrefix ?? '<missing>')).toBe(true);
+  });
+
+  it('reaps shared email files on the prefix they are written under, after their links expire', () => {
+    const rule =
+      LIFECYCLE_BLOCK.split(/(?=\bid:\s*')/).find(r => r.startsWith("id: 'expire-shared-email-files'")) ?? '';
+    const source = read('apps/client/server/utils/mailer/emailAttachments.ts');
+    const prefix = source.match(/export const SHARED_EMAIL_FILES_PREFIX = '([^']+)'/)?.[1];
+    const linkDays = Number(source.match(/export const SHARED_EMAIL_FILE_LINK_TTL_DAYS = (\d+);/)?.[1]);
+    const days = Number(rule.match(/\bexpiration:\s*\{\s*days:\s*(\d+)/)?.[1]);
+
+    expect(rule).toMatch(/status:\s*'Enabled'/);
+    expect(prefix).toBeDefined();
+    expect(rule.match(/prefix:\s*'([^']+)'/)?.[1]).toBe(prefix);
+    expect(source).toContain('`${SHARED_EMAIL_FILES_PREFIX}${userId}/');
+    expect(linkDays).toBeGreaterThan(0);
+    expect(days).toBeGreaterThanOrEqual(linkDays);
   });
 });

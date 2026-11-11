@@ -294,6 +294,8 @@ describe('public settings projection (M2.5 security boundary)', () => {
         // The Desktop app follows these rather than deciding deferral itself.
         'EnableDeferredToolLoading',
         'DeferredToolStartSetMaxTokens',
+        // The credit purchase button gates on it.
+        'requireCheckoutTermsConsent',
       ]) {
         expect(keys.has(k)).toBe(true);
       }
@@ -1661,7 +1663,9 @@ describe('broadcastSafeSettingKeys', () => {
   });
 
   it('keeps the non-sensitive settings clients render live', () => {
-    expect(broadcastSafeSettingKeys()).toEqual(expect.arrayContaining(['EnableQuestMaster', 'EnableArtifacts']));
+    expect(broadcastSafeSettingKeys()).toEqual(
+      expect.arrayContaining(['EnableQuestMaster', 'EnableArtifacts', 'modelListRevision'])
+    );
   });
 
   it('never admits a setting name with no definition', () => {

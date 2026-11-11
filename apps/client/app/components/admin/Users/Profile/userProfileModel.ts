@@ -15,7 +15,7 @@ import {
 } from '@bike4mind/common';
 export { isManagedTag } from '@client/lib/entitlements/managedUserTags';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
-import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
+import type { AdminUserListItem } from '@bike4mind/server-utils/app/utils/adminUserProjection';
 
 type AdminIdentity = Parameters<typeof hasAdminPermission>[0];
 
@@ -136,4 +136,15 @@ export const clientSurfacesSummary = (user: Pick<AdminUserProfile, 'clientUsage'
     surface => CLIENT_SURFACE_LABELS[surface]
   );
   return names.length > 0 ? names.join(' \u00b7 ') : null;
+};
+
+export const ADMIN_PERMISSION_LABELS: Record<AdminPermissionId, { label: string; description: string }> = {
+  'support:read': { label: 'Support read', description: 'View users, organizations, logs and settings.' },
+  'credits:adjust': { label: 'Adjust credits', description: 'Grant or deduct credits.' },
+  'users:moderate': { label: 'Moderate users', description: 'Suspend, restrict and reinstate accounts.' },
+  'users:impersonate': { label: 'Impersonate', description: 'Sign in as another user.' },
+  'keys:revoke': { label: 'Revoke keys', description: 'Revoke API and embed keys.' },
+  'users:delete': { label: 'Delete users', description: 'Schedule and run account deletion.' },
+  'settings:manage': { label: 'Manage settings', description: 'Change admin settings, tags and product access.' },
+  'models:curate': { label: 'Curate models', description: 'Change which models are offered.' },
 };

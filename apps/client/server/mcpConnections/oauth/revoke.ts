@@ -2,9 +2,9 @@ import type { IMcpConnectionDocument } from '@bike4mind/common';
 import { RemoteMcpOAuthError, revokeRemoteMcpToken } from '@bike4mind/mcp/remote';
 import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import type { FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js';
-import type { RemoteMcpNetworkOptions } from '../customMcpAccess';
-import { loadConnectionClient } from './clientIdentity';
-import { withOAuthFetch } from './oauthFetch';
+import type { RemoteMcpNetworkOptions } from '@bike4mind/server-utils/mcpConnections/customMcpAccess';
+import { loadConnectionClient } from '@bike4mind/server-utils/mcpConnections/oauth/clientIdentity';
+import { withOAuthFetch } from '@bike4mind/server-utils/mcpConnections/oauth/oauthFetch';
 
 /** One deadline for the whole revocation: the caller is a request that is about to delete or clear the grant. */
 export const REVOKE_DEADLINE_MS = 5_000;

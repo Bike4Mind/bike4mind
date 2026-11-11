@@ -50,6 +50,24 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
     return Object.fromEntries(rows.map(row => [String(row._id), row.count]));
   }
 
+  /** Unexpired active keys per user, across every pool; users with none are absent. */
+  async countActiveByUserIds(userIds: string[]): Promise<Record<string, number>> {
+    if (userIds.length === 0) return {};
+    const rows = await this.model.aggregate<{ _id: string; count: number }>([
+      {
+        $match: {
+          userId: { $in: userIds },
+          status: ApiKeyStatus.ACTIVE,
+          // aggregate skips the soft-delete filter, so it is repeated here.
+          deletedAt: null,
+          $or: [{ expiresAt: { $gt: new Date() } }, { expiresAt: null }],
+        },
+      },
+      { $group: { _id: '$userId', count: { $sum: 1 } } },
+    ]);
+    return Object.fromEntries(rows.map(row => [String(row._id), row.count]));
+  }
+
   findByUserIdAndId(userId: string, id: string) {
     return this.model.findOne({ _id: id, userId }).exec();
   }

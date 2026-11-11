@@ -25,10 +25,10 @@ import { useUser } from './UserContext';
 import { updateUserToServer } from '../utils/userAPICalls';
 import { useLanguage } from './TranslationProvider';
 import { useSettingsFromServer } from '../hooks/data/settings';
+import { handleModelListRevisionSetting, watchModelListArrivals } from '../hooks/data/modelListRevision';
 
 export type ExperimentalFeature =
   | 'enableQuestMaster'
-  | 'enableQuestMasterV5'
   | 'enableMementos'
   | 'enableMementosV2'
   | 'enableArtifacts'
@@ -96,7 +96,6 @@ const defaultSettings: UserSettings = {
   scrollbarWidth: 10,
   experimentalFeatures: {
     enableQuestMaster: false,
-    enableQuestMasterV5: false,
     enableMementos: false,
     enableMementosV2: false,
     enableArtifacts: false,
@@ -463,6 +462,7 @@ export const UserSettingsProvider: React.FC<PropsWithChildren<{}>> = ({ children
       // remains the source of truth for the real last-4.
       const safe = redactSettingSecretsForBroadcast(data as unknown as AdminSettingDoc) as unknown as IAdminSettings;
       updateAllQueryData(queryClient, 'adminsettings', operation, safe);
+      if (operation === 'write') handleModelListRevisionSetting(queryClient, safe);
     },
     [queryClient]
   );
@@ -472,6 +472,8 @@ export const UserSettingsProvider: React.FC<PropsWithChildren<{}>> = ({ children
     useMemo(() => ({}), []),
     adminSettingsCallback
   );
+
+  useEffect(() => watchModelListArrivals(queryClient), [queryClient]);
 
   const contextValue = useMemo(
     () => ({ settings, updatePreferences, isHydrated, rawExperimentalPreferences }),

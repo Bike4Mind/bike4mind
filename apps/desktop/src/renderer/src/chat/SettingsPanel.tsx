@@ -17,7 +17,7 @@ import type { AuthState } from '@shared/auth';
 import type { PermissionsState } from '@shared/permissions';
 import { updateAttention, updateSummary } from '@shared/update';
 import { EnvironmentPicker } from '../auth/EnvironmentPicker';
-import type { ClaudeImportState } from '@shared/claudeImport';
+import type { ClaudeImportKind, ClaudeImportState } from '@shared/claudeImport';
 import { ClaudeImportSettings, claudeImportSummary, useClaudeImport } from './ClaudeImportSettings';
 import type { LocalContextFit, LocalContextSetting } from '@shared/localContextSetting';
 import { LocalContextSettings, localContextSummary, useLocalContextSetting } from './LocalContextSettings';
@@ -298,14 +298,17 @@ function claudeImportEntry(
   state: ClaudeImportState | null,
   setState: (state: ClaudeImportState) => void,
   loadError: string | null,
-  onRetry: () => void
+  onRetry: () => void,
+  focus?: ClaudeImportKind
 ): ConfigEntry {
   return {
     id: 'claude-import',
     icon: <FolderIcon />,
     label: 'Import from Claude',
     summary: loadError ? 'Could not load import settings' : claudeImportSummary(state),
-    control: <ClaudeImportSettings state={state} onState={setState} loadError={loadError} onRetry={onRetry} />,
+    control: (
+      <ClaudeImportSettings state={state} onState={setState} loadError={loadError} onRetry={onRetry} focus={focus} />
+    ),
   };
 }
 
@@ -403,7 +406,10 @@ const SECTION_ICON: Record<SettingsSection, ReactNode> = {
  * Nothing stays mounted while the page is shut. What an unopened Settings still has to report
  * is one string, which the account strip reads for itself - see `useSettingsAttention`.
  */
-function useSettingsEntries(auth: AuthState | null): Record<SettingsSection, ConfigEntry[]> {
+function useSettingsEntries(
+  auth: AuthState | null,
+  importFocus?: ClaudeImportKind
+): Record<SettingsSection, ConfigEntry[]> {
   const showDollarCosts = useCostDisplayPreference(state => state.showDollarCosts);
   const setShowDollarCosts = useCostDisplayPreference(state => state.setShowDollarCosts);
   const [showTokenRate, toggleTokenRate] = useTokenRateSetting();
@@ -451,7 +457,7 @@ function useSettingsEntries(auth: AuthState | null): Record<SettingsSection, Con
     ],
     servers: [modelServersEntry(modelServers, setModelServers, modelServersError)],
     permissions: [permissionsEntry(permissions, setPermissions, permissionsError, retryPermissions)],
-    import: [claudeImportEntry(claudeImport, setClaudeImport, importError, retryImport)],
+    import: [claudeImportEntry(claudeImport, setClaudeImport, importError, retryImport, importFocus)],
     worktrees: [worktreesEntry()],
   };
 }
@@ -501,15 +507,18 @@ function SectionPage({ section, entries }: { section: SettingsSection; entries: 
 export function SettingsScreen({
   auth,
   section = 'general',
+  importFocus,
   onSection,
   onClose,
 }: {
   auth: AuthState | null;
   section?: SettingsSection;
+  /** Import page only: the source to scroll to, as the sidebar's sync hints ask. */
+  importFocus?: ClaudeImportKind;
   onSection?: (section: SettingsSection) => void;
   onClose: () => void;
 }) {
-  const entries = useSettingsEntries(auth);
+  const entries = useSettingsEntries(auth, section === 'import' ? importFocus : undefined);
 
   return (
     <Stack sx={{ height: '100vh', bgcolor: 'background.body' }} data-testid="settings-panel">

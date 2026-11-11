@@ -26,8 +26,8 @@ import {
   usageEventRepository,
   userRepository,
 } from '@bike4mind/database';
-import { newAccountSpendCapAdaptersWithAlert } from '@server/billing/newAccountSpendCapWithAlert';
-import { recordInsufficientCredits } from '@server/billing/userLimitEvents';
+import { newAccountSpendCapAdaptersWithAlert } from '@bike4mind/server-utils/billing/newAccountSpendCapWithAlert';
+import { recordInsufficientCredits } from '@bike4mind/server-utils/billing/userLimitEvents';
 import { Logger } from '@bike4mind/observability';
 import { modelDiscoveryService } from '@bike4mind/services';
 import { GenerationJobEngine } from '@bike4mind/services/generationJobs';

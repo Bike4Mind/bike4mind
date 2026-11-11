@@ -6,7 +6,7 @@ import {
   isFullAdmin,
 } from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
-import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
+import type { AdminUserListItem } from '@bike4mind/server-utils/app/utils/adminUserProjection';
 import { useAdminGenerateApiKey, AdminCreateUserApiKeyRequest } from '@client/app/hooks/data/userApiKeys';
 import { useGetPreauthorizableDataLakes } from '@client/app/hooks/data/dataLakes';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';

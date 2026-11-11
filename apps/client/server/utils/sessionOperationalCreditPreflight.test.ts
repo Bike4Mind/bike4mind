@@ -28,8 +28,8 @@ vi.mock('@bike4mind/services', async importOriginal => ({
 const activePlanResolver = vi.hoisted(() => ({ hasActivePlan: vi.fn() }));
 vi.mock('@bike4mind/server-utils/entitlements/activeSubscriptions', () => ({ activePlanResolver }));
 const mockDailyCap = vi.hoisted(() => vi.fn(async () => undefined));
-vi.mock('@server/billing/freeTierDailyCapGate', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/billing/freeTierDailyCapGate')>()),
+vi.mock('@bike4mind/server-utils/billing/freeTierDailyCapGate', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/billing/freeTierDailyCapGate')>()),
   checkFreeTierDailySpendCap: mockDailyCap,
 }));
 vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({

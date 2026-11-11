@@ -39,7 +39,7 @@ vi.mock('@server/utils/oauth/deviceAuthHelpers', () => ({
   MAX_LIVE_PENDING_DEVICE_AUTHORIZATIONS: 50,
   LIVE_PENDING_COUNTER_KEY: 'device-auth:live-pending-count',
 }));
-vi.mock('@server/utils/validators', () => ({ isLocalAppUrl: () => false }));
+vi.mock('@bike4mind/server-utils/utils/validators', () => ({ isLocalAppUrl: () => false }));
 
 import handler from '../initiate';
 

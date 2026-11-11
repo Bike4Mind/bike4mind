@@ -19,7 +19,7 @@ import { orgGitHubConnectionRepository, withTransaction } from '@bike4mind/datab
 import { encryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { BadRequestError, InternalServerError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
-import { validatePrivateKeyFormat } from '@server/utils/validators';
+import { validatePrivateKeyFormat } from '@bike4mind/server-utils/utils/validators';
 import { Logger } from '@bike4mind/observability';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';

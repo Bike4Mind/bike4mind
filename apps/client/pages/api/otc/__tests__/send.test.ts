@@ -79,6 +79,9 @@ const cache = vi.hoisted(() => {
   };
 });
 const mockTryIncrement = vi.fn();
+const mockClaimDedup = vi.fn();
+const mockVerifiedTokenId = vi.fn();
+const dedup = new Map<string, Record<string, unknown>>();
 const mockFindByEmail = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { findAll: async () => [], findBySettingNames: async () => [] },
@@ -87,6 +90,7 @@ vi.mock('@bike4mind/database', () => ({
     tryAddWithinLimitFixedWindow: (key: string) => cache.peek(key),
     deleteByKey: async (key: string) => cache.counts.delete(key),
     decrementCounter: (key: string) => cache.decrement(key),
+    claimDedup: (...a: unknown[]) => mockClaimDedup(...a),
   },
   userRepository: { findByEmail: (...a: any[]) => mockFindByEmail(...a) },
   pendingOtcTokenRepository: {
@@ -107,6 +111,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 const mockEvaluateSignals = vi.fn();
 vi.mock('@server/utils/signupBotChecks', () => ({
   evaluateSignupSignals: (...a: unknown[]) => mockEvaluateSignals(...a),
+  verifiedSignupFormTokenId: (...a: unknown[]) => mockVerifiedTokenId(...a),
 }));
 
 const mockSendOTC = vi.fn();
@@ -133,6 +138,13 @@ const resetCache = () => {
   Object.assign(stepUpPolicy, { active: false, siteKey: '', secret: '' });
   cache.counts.clear();
   cache.state.blindPeek = false;
+  dedup.clear();
+  mockVerifiedTokenId.mockReset().mockReturnValue(undefined);
+  mockClaimDedup.mockReset().mockImplementation(async (key: string, data: Record<string, unknown>) => {
+    if (dedup.has(key)) return { claimed: false, existingData: dedup.get(key) };
+    dedup.set(key, data);
+    return { claimed: true };
+  });
   mockTryIncrement.mockImplementation(cache.tryIncrement);
 };
 
@@ -539,11 +551,11 @@ describe('/api/otc/send', () => {
   });
 
   describe('signup signals', () => {
-    const send = async (body: Record<string, unknown> = {}) => {
+    const send = async (body: Record<string, unknown> = {}, email = EMAIL) => {
       mockTryReserveSlot.mockResolvedValue({ allowed: true, reservedAt: new Date('2026-01-01T00:00:00.000Z') });
       mockConfirmReservation.mockResolvedValue(true);
-      const { req, res } = makeReqRes();
-      req.body = { email: EMAIL, ...body };
+      const { req, res } = makeReqRes(email);
+      req.body = { email, ...body };
       await handler(req, res);
       return res;
     };
@@ -585,8 +597,10 @@ describe('/api/otc/send', () => {
     it('records nothing when the kill switch is off', async () => {
       settingsValues.signupBotChecksEnabled = false;
       mockEvaluateSignals.mockReturnValue(['signup_honeypot']);
+      mockVerifiedTokenId.mockReturnValue({ jti: 'j1', expMs: Date.now() + 3_600_000 });
       await send();
       expect(mockEvaluateSignals).not.toHaveBeenCalled();
+      expect(mockClaimDedup).not.toHaveBeenCalled();
       expect(mockConfirmReservation.mock.calls[0][5]).toEqual([]);
     });
 
@@ -621,11 +635,92 @@ describe('/api/otc/send', () => {
       expect(req.logger.warn).toHaveBeenCalled();
     });
 
+    describe('form token reuse', () => {
+      const OTHER = 'other@example.com';
+      const tokenId = (jti: string) => ({ jti, expMs: Date.now() + 3_600_000 });
+      const storedSignals = () => mockConfirmReservation.mock.calls.map(c => c[5]);
+
+      // The fail-open cases above leave a throwing settings read and an unconsumed evaluator throw behind.
+      beforeEach(() => {
+        vi.mocked(getSettingsMap).mockImplementation(async () => ({}));
+        mockEvaluateSignals.mockReset().mockReturnValue([]);
+      });
+
+      it('flags a form token reused for a different email, with an unchanged response', async () => {
+        mockVerifiedTokenId.mockReturnValue(tokenId('j1'));
+        const first = await send({ formToken: 't' });
+        const second = await send({ formToken: 't' }, OTHER);
+        expect(storedSignals()).toEqual([[], ['signup_token_reused']]);
+        expect(second._getStatusCode()).toBe(first._getStatusCode());
+        expect(second._getJSONData()).toEqual(first._getJSONData());
+      });
+
+      it('adds the reuse signal next to the other signals', async () => {
+        mockVerifiedTokenId.mockReturnValue(tokenId('j1'));
+        mockEvaluateSignals.mockReturnValue(['signup_honeypot']);
+        await send({ formToken: 't' });
+        await send({ formToken: 't' }, OTHER);
+        expect(storedSignals()).toEqual([['signup_honeypot'], ['signup_honeypot', 'signup_token_reused']]);
+      });
+
+      it('does not flag the same token resent for the same email, however it is cased', async () => {
+        mockVerifiedTokenId.mockReturnValue(tokenId('j1'));
+        await send({ formToken: 't' });
+        await send({ formToken: 't' });
+        await send({ formToken: 't' }, ' SomeOne@Example.com ');
+        expect(storedSignals()).toEqual([[], [], []]);
+      });
+
+      it('does not flag two tokens used for two emails', async () => {
+        mockVerifiedTokenId.mockReturnValueOnce(tokenId('j1')).mockReturnValueOnce(tokenId('j2'));
+        await send({ formToken: 't1' });
+        await send({ formToken: 't2' }, OTHER);
+        expect(storedSignals()).toEqual([[], []]);
+      });
+
+      it('claims by token id with the email key and the remaining lifetime as ttl', async () => {
+        mockVerifiedTokenId.mockReturnValue(tokenId('j1'));
+        await send({ formToken: 't' });
+        expect(mockClaimDedup).toHaveBeenCalledWith(
+          'signup-form-token:j1',
+          { email: otcEmailKey(EMAIL) },
+          expect.any(Number)
+        );
+        const ttl = mockClaimDedup.mock.calls[0][2];
+        expect(ttl).toBeGreaterThan(0);
+        expect(ttl).toBeLessThanOrEqual(3_600_000);
+      });
+
+      it('does not claim when the token does not verify', async () => {
+        mockEvaluateSignals.mockReturnValue(['signup_token_invalid']);
+        await send({ formToken: 't' });
+        expect(mockClaimDedup).not.toHaveBeenCalled();
+        expect(storedSignals()).toEqual([['signup_token_invalid']]);
+      });
+
+      it('keeps other signals and the uniform response when the claim fails', async () => {
+        mockVerifiedTokenId.mockReturnValue(tokenId('j1'));
+        mockEvaluateSignals.mockReturnValue(['signup_too_fast']);
+        mockClaimDedup.mockRejectedValueOnce(new Error('db down'));
+        mockTryReserveSlot.mockResolvedValue({ allowed: true, reservedAt: new Date('2026-01-01T00:00:00.000Z') });
+        mockConfirmReservation.mockResolvedValue(true);
+        const { req, res } = makeReqRes();
+        req.body = { email: EMAIL, formToken: 't' };
+        await handler(req, res);
+        expect(res._getStatusCode()).toBe(200);
+        expect(res._getJSONData()).toEqual({ pendingToken: 'pending-token' });
+        expect(storedSignals()).toEqual([['signup_too_fast']]);
+        expect(req.logger.warn).toHaveBeenCalled();
+      });
+    });
+
     it('records nothing when E2E is enabled', async () => {
       mockIsE2EEnabled.mockReturnValue(true);
       mockEvaluateSignals.mockReturnValue(['signup_honeypot']);
+      mockVerifiedTokenId.mockReturnValue({ jti: 'j1', expMs: Date.now() + 3_600_000 });
       await send();
       expect(mockEvaluateSignals).not.toHaveBeenCalled();
+      expect(mockClaimDedup).not.toHaveBeenCalled();
       expect(mockConfirmReservation.mock.calls[0][5]).toEqual([]);
     });
   });
@@ -638,6 +733,7 @@ describe('/api/otc/send recipient checks', () => {
     vi.clearAllMocks();
     resetCache();
     mockIsE2EEnabled.mockReturnValue(false);
+    mockEvaluateSignals.mockReturnValue([]);
     mockTryReserveSlot.mockResolvedValue({ allowed: true, reservedAt });
     mockConfirmReservation.mockResolvedValue(true);
     mockSendOTC.mockImplementation(

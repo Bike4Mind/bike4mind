@@ -258,7 +258,7 @@ interface DatabaseAdapters {
   newAccountSpendCap: NewAccountSpendCapAdapters;
   /**
    * Records a refusal or a settlement that left the balance negative, for the admin user timeline
-   * (apps/client/server/billing/userLimitEvents.ts). Required, so a completion path that forgets it fails
+   * (packages/server-utils/src/billing/userLimitEvents.ts). Required, so a completion path that forgets it fails
    * typecheck instead of silently skipping it. Must not throw.
    */
   recordLimitEvent: (event: LimitEventRecord) => Promise<void>;
@@ -561,6 +561,12 @@ export interface IChatCompletionServiceOptions {
    * reply and must not advance the reply-diff baseline.
    */
   onToolPreamble?: (preamble: string, toolName: string) => void;
+  /**
+   * Optional observer of the turn's user-visible status lines ("Searching the web...", ...), fired for
+   * every non-silent, non-null status the turn sends. Out-of-band and best effort: a throw is logged
+   * and never reaches the turn. Hosts use it to mirror progress to surfaces other than the websocket.
+   */
+  onStatusUpdate?: (questId: string, status: string) => void;
   /**
    * The `decide` tool's execution seam, forwarded into every ToolBuilder this service builds.
    * The app tier supplies it from the shared decision runner; absent, the tool refuses.

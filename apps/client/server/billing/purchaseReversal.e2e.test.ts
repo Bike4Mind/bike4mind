@@ -10,9 +10,9 @@ import {
   MONGO_TEST_TIMEOUT_MS,
   settleAutoIndexBuilds,
 } from '../../../../packages/database/src/__test__/createMongoServer';
-import { getUserEntitlements, toEntitlementUser } from '@server/entitlements';
-import { hasPurchasedCredits } from '@server/entitlements/paidStanding';
-import { resolveUserRateTier } from '@server/utils/userRateTier';
+import { getUserEntitlements, toEntitlementUser } from '@bike4mind/server-utils/entitlements/index';
+import { hasPurchasedCredits } from '@bike4mind/server-utils/entitlements/paidStanding';
+import { resolveUserRateTier } from '@bike4mind/server-utils/utils/userRateTier';
 import { grantCreditPurchase } from './grantCreditPurchase';
 import { reversePurchaseStanding } from './purchaseReversal';
 
@@ -20,7 +20,9 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 
 vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: vi.fn() }));
 vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessageToSlack: vi.fn() }));
-vi.mock('@server/integrations/slack/subscriptionLifecycle', () => ({ adminOwnerSlackRef: () => 'user' }));
+vi.mock('@bike4mind/server-utils/integrations/slack/subscriptionLifecycle', () => ({
+  adminOwnerSlackRef: () => 'user',
+}));
 // vitest.setup.ts mocks sst without a websocket resource; extend that mock rather than replace it.
 Object.assign(Resource, { websocket: { managementEndpoint: 'wss://ws.example.com' } });
 vi.mock('@bike4mind/server-utils/lib/userSubscriptions/constants', () => ({

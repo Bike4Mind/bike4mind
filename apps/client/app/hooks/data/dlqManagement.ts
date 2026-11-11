@@ -7,6 +7,8 @@ export interface DlqQueueInfo {
   application: string;
   approximateMessageCount: number;
   approximateNotVisibleCount: number;
+  /** Absent when the queue attributes could not be read. */
+  messageRetentionSeconds?: number;
 }
 
 export interface DlqMessage {

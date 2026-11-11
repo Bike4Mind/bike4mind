@@ -12,6 +12,8 @@ import {
   RESEARCH_RUN_TRIGGERS,
   RESEARCH_SCHEDULE_CADENCES,
   RESEARCH_SCHEDULE_SKIP_REASONS,
+  RESEARCH_UNLISTED_SOURCES,
+  upgradeLegacyResearchLevers,
 } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 
@@ -54,6 +56,11 @@ const DataLakeResearchConfigSchema = new Schema<IDataLakeResearchConfigDocument>
     maxResults: { type: Number, required: true },
     maxProposals: { type: Number, required: true },
     recencyDays: { type: Number, default: null },
+    trustedDomains: { type: [String], default: [] },
+    reviewDomains: { type: [String], default: [] },
+    // No default: its absence is how a document written before the tiers is recognized and upgraded.
+    unlistedSources: { type: String, enum: RESEARCH_UNLISTED_SOURCES },
+    // Derived from the three fields above on every write; kept for readers that predate them.
     allowedDomains: { type: [String], default: [] },
     blockedDomains: { type: [String], default: [] },
     minRelevance: { type: Number, required: true },
@@ -98,14 +105,20 @@ class DataLakeResearchConfigRepository
     super(configModel);
   }
 
+  // Every read goes through the upgrader: self-host never runs the migration, and old code keeps
+  // writing the legacy shape for a release, so stored documents come in both shapes.
+  private toConfig(doc: mongoose.HydratedDocument<IDataLakeResearchConfigDocument>): IDataLakeResearchConfigDocument {
+    return upgradeLegacyResearchLevers(doc.toJSON() as IDataLakeResearchConfigDocument);
+  }
+
   async createConfig(input: CreateDataLakeResearchConfigInput): Promise<IDataLakeResearchConfigDocument> {
     const doc = await this.configModel.create(input);
-    return doc.toJSON() as IDataLakeResearchConfigDocument;
+    return this.toConfig(doc);
   }
 
   async listByLake(dataLakeId: string): Promise<IDataLakeResearchConfigDocument[]> {
     const docs = await this.configModel.find({ dataLakeId }).sort({ createdAt: -1 });
-    return docs.map(d => d.toJSON() as IDataLakeResearchConfigDocument);
+    return docs.map(d => this.toConfig(d));
   }
 
   async findByIdInLake(id: string, dataLakeId: string): Promise<IDataLakeResearchConfigDocument | null> {
@@ -113,7 +126,7 @@ class DataLakeResearchConfigRepository
     // string, so a caller passing a junk id would get a 500 where the honest answer is "no such
     // config". Same shape as assertLakeAccess's by-id lookup.
     const doc = await this.configModel.findOne({ _id: id, dataLakeId }).catch(() => null);
-    return (doc?.toJSON() as IDataLakeResearchConfigDocument) ?? null;
+    return doc ? this.toConfig(doc) : null;
   }
 
   async updateConfig(
@@ -126,7 +139,7 @@ class DataLakeResearchConfigRepository
     const doc = await this.configModel
       .findOneAndUpdate({ _id: id, dataLakeId }, { $set: input }, { new: true })
       .catch(() => null);
-    return (doc?.toJSON() as IDataLakeResearchConfigDocument) ?? null;
+    return doc ? this.toConfig(doc) : null;
   }
 
   async recordRunStarted(id: string, at: Date): Promise<void> {
@@ -144,7 +157,7 @@ class DataLakeResearchConfigRepository
         { sort: { nextRunAt: 1 }, new: false }
       );
       if (!doc) break;
-      claimed.push(doc.toJSON() as IDataLakeResearchConfigDocument);
+      claimed.push(this.toConfig(doc));
     }
     return claimed;
   }

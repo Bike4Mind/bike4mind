@@ -1,4 +1,4 @@
-import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
+import type { AdminUserListItem } from '@bike4mind/server-utils/app/utils/adminUserProjection';
 import { useAdminGetUserApiKeys, useAdminResetApiKeyRateLimit } from '@client/app/hooks/data/userApiKeys';
 import type { ApiKeyRateLimitResetResponse } from '@client/app/hooks/data/userApiKeys';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';

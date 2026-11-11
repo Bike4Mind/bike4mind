@@ -9,10 +9,10 @@ import {
 } from '@client/app/utils/feedbackAPICalls';
 import useToggle from '@client/app/hooks/useToggle';
 import { adminActionCountsQueryKey } from '@client/app/hooks/data/adminActionCounts';
-import { getFeedbackDisplayContent, FeedbackListParams, IExtendedFeedbackDocument } from '../types';
+import { FeedbackListParams, IExtendedFeedbackDocument } from '../types';
 import { UseFeedbackOperationsReturn } from '../types';
 import { FEEDBACK_LIST_QUERY_KEY, FEEDBACK_ORGANIZATIONS_QUERY_KEY, FEEDBACK_RECORD_QUERY_KEY } from '../queryKeys';
-import { FEEDBACK_STATUS_LABELS } from '../constants';
+import { FEEDBACK_STATUS_LABELS, FEEDBACK_TYPE_LABELS, feedbackTypeOf } from '../constants';
 
 const formatReporter = (feedbackItem: IExtendedFeedbackDocument | undefined) => {
   if (!feedbackItem) return 'Unknown user';
@@ -22,6 +22,9 @@ const formatReporter = (feedbackItem: IExtendedFeedbackDocument | undefined) => 
 
   return hasOrganization ? `${user} (${feedbackItem.organization})` : user;
 };
+
+const feedbackTypeLabel = (feedbackItem: IExtendedFeedbackDocument | undefined) =>
+  FEEDBACK_TYPE_LABELS[feedbackTypeOf(feedbackItem?.type)];
 
 const showFeedbackToast = {
   success: (message: string) => toast.success(message, { closeButton: true, position: 'bottom-left' }),
@@ -113,10 +116,8 @@ export const useFeedbackOperations = (params: FeedbackListParams): UseFeedbackOp
           queryClient.invalidateQueries({ queryKey: adminActionCountsQueryKey }),
         ]);
 
-        const content = getFeedbackDisplayContent(feedbackItem, 'No content');
-        const preview = content.length > 50 ? content.substring(0, 50) + '...' : content;
         showFeedbackToast.success(
-          `"${preview}" feedback from ${formatReporter(feedbackItem)} updated to: ${FEEDBACK_STATUS_LABELS[updatedStatus]}`
+          `${feedbackTypeLabel(feedbackItem)} from ${formatReporter(feedbackItem)} set to ${FEEDBACK_STATUS_LABELS[updatedStatus]}`
         );
       } catch (error) {
         console.error('Error updating feedback status:', error);
@@ -142,9 +143,7 @@ export const useFeedbackOperations = (params: FeedbackListParams): UseFeedbackOp
         if (response) {
           await refreshFeedback();
 
-          const deleteContent = getFeedbackDisplayContent(deletedItem, 'No content');
-          const preview = deleteContent.length > 50 ? deleteContent.substring(0, 50) + '...' : deleteContent;
-          showFeedbackToast.success(`"${preview}" feedback from ${formatReporter(deletedItem)} deleted successfully`);
+          showFeedbackToast.success(`${feedbackTypeLabel(deletedItem)} from ${formatReporter(deletedItem)} deleted`);
         }
       } catch (error) {
         console.error('Error deleting feedback:', error);

@@ -27,7 +27,7 @@ vi.mock('@bike4mind/database', () => ({
   // The personal quota check re-reads the uploader (createPresignedUpload.ts).
   userRepository: { findById: vi.fn(async (id: string) => ({ id, isAdmin: false })) },
 }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({
   toAccessContext: vi.fn(async (req: { user: { id: string } }) => ({
     userId: req.user.id,
     isAdmin: false,

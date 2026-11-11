@@ -1,9 +1,13 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { CssVarsProvider } from '@mui/joy/styles';
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import userEvent from '@testing-library/user-event';
+import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { getThemeConfig } from '@client/app/utils/themes';
 import DlqReplayTab from './DlqReplayTab';
 
 const state = vi.hoisted(() => ({
+  retentionSeconds: undefined as number | undefined,
+  sentTimestamp: '1700000000000',
   history: [] as Array<{
     id: string;
     queueLabel: string;
@@ -17,15 +21,28 @@ const state = vi.hoisted(() => ({
   }>,
 }));
 
+const h = vi.hoisted(() => ({ user: null as null | { isAdmin?: boolean; adminPermissions?: string[] } }));
+
+vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: h.user }) }));
+vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
 vi.mock('@client/app/hooks/data/dlqManagement', () => ({
   useDlqQueues: () => ({
-    data: [],
+    data: [
+      {
+        label: 'q1',
+        displayName: 'Queue One',
+        application: 'app',
+        approximateMessageCount: 1,
+        approximateNotVisibleCount: 0,
+        messageRetentionSeconds: state.retentionSeconds,
+      },
+    ],
     isLoading: false,
     isError: false,
     refetch: vi.fn(),
   }),
   useDlqMessages: () => ({
-    data: [],
+    data: [{ messageId: 'm1', body: '{}', sentTimestamp: state.sentTimestamp, approximateReceiveCount: '1' }],
     isLoading: false,
     isError: false,
     refetch: vi.fn(),
@@ -43,9 +60,11 @@ vi.mock('@client/app/hooks/data/dlqManagement', () => ({
   }),
 }));
 
+const theme = extendTheme({ ...getThemeConfig() });
+
 function renderTab() {
   const result = render(
-    <CssVarsProvider>
+    <CssVarsProvider theme={theme}>
       <DlqReplayTab />
     </CssVarsProvider>
   );
@@ -53,8 +72,21 @@ function renderTab() {
   return result;
 }
 
+const renderWithQueueSelected = async () => {
+  render(
+    <CssVarsProvider theme={theme}>
+      <DlqReplayTab />
+    </CssVarsProvider>
+  );
+  await userEvent.click(screen.getByRole('combobox'));
+  await userEvent.click(await screen.findByRole('option', { name: /Queue One/ }));
+};
+
 beforeEach(() => {
   state.history = [];
+  state.retentionSeconds = undefined;
+  state.sentTimestamp = '1700000000000';
+  h.user = null;
 });
 
 describe('DlqReplayTab history table', () => {
@@ -122,5 +154,95 @@ describe('DlqReplayTab history table', () => {
 
     expect(headerTexts).not.toContain('Body');
     expect(headerTexts).not.toContain('Message Body');
+  });
+});
+
+describe('DlqReplayTab replay permission', () => {
+  it('disables both replay buttons for a support:read viewer', async () => {
+    h.user = { isAdmin: false, adminPermissions: ['support:read'] };
+    await renderWithQueueSelected();
+
+    expect(screen.getByTestId('dlq-replay-all')).toBeDisabled();
+    expect(screen.getByTestId('dlq-replay-single-m1')).toBeDisabled();
+  });
+
+  it('enables both replay buttons for a settings:manage delegate', async () => {
+    h.user = { isAdmin: false, adminPermissions: ['settings:manage'] };
+    await renderWithQueueSelected();
+
+    expect(screen.getByTestId('dlq-replay-all')).toBeEnabled();
+    expect(screen.getByTestId('dlq-replay-single-m1')).toBeEnabled();
+  });
+});
+
+describe('DlqReplayTab age and expiry', () => {
+  const HOUR = 3600 * 1000;
+
+  it('shows age and time until expiry per message', async () => {
+    state.retentionSeconds = 14 * 24 * 3600;
+    state.sentTimestamp = String(Date.now() - 10.5 * HOUR);
+
+    await renderWithQueueSelected();
+
+    expect(screen.getByTestId('dlq-age-m1')).toHaveTextContent('10h 30m');
+    expect(screen.getByTestId('dlq-expires-m1')).toHaveTextContent('13d 13h');
+  });
+
+  it('shows a different expiry for a shorter retention', async () => {
+    state.retentionSeconds = 4 * 24 * 3600;
+    state.sentTimestamp = String(Date.now() - 10.5 * HOUR);
+
+    await renderWithQueueSelected();
+
+    expect(screen.getByTestId('dlq-expires-m1')).toHaveTextContent('3d 13h');
+  });
+
+  it('flags a message within 24 hours of expiry', async () => {
+    state.retentionSeconds = 4 * 24 * 3600;
+    state.sentTimestamp = String(Date.now() - 80.5 * HOUR);
+
+    await renderWithQueueSelected();
+
+    const expires = screen.getByTestId('dlq-expires-m1');
+    expect(expires).toHaveTextContent(/^15h \d+m$/);
+    expect(expires).toHaveAttribute('data-warn', 'true');
+  });
+
+  it('does not flag a message with plenty of time left', async () => {
+    state.retentionSeconds = 14 * 24 * 3600;
+    state.sentTimestamp = String(Date.now() - HOUR);
+
+    await renderWithQueueSelected();
+
+    expect(screen.getByTestId('dlq-expires-m1')).toHaveAttribute('data-warn', 'false');
+  });
+
+  it('shows N/A for expiry when retention is unknown', async () => {
+    state.sentTimestamp = String(Date.now() - HOUR);
+
+    await renderWithQueueSelected();
+
+    expect(screen.getByTestId('dlq-expires-m1')).toHaveTextContent('N/A');
+  });
+
+  it('shows age and expiry in the message drawer', async () => {
+    state.retentionSeconds = 4 * 24 * 3600;
+    state.sentTimestamp = String(Date.now() - 10.5 * HOUR);
+
+    await renderWithQueueSelected();
+    await userEvent.click(screen.getByTestId('dlq-view-m1'));
+
+    expect(await screen.findByTestId('dlq-drawer-expiry')).toHaveTextContent('10h 30m old, expires in 3d 13h');
+  });
+
+  it('omits the expiry from the message drawer when retention is unknown', async () => {
+    state.sentTimestamp = String(Date.now() - HOUR);
+
+    await renderWithQueueSelected();
+    await userEvent.click(screen.getByTestId('dlq-view-m1'));
+
+    const drawerExpiry = await screen.findByTestId('dlq-drawer-expiry');
+    expect(drawerExpiry).toHaveTextContent('1h 0m old');
+    expect(drawerExpiry).not.toHaveTextContent('expires');
   });
 });

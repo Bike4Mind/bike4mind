@@ -4,7 +4,7 @@ import { useLogEvent } from '@client/app/hooks/data/analytics';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { CREDIT_PACKAGES } from '@client/lib/credits/constants';
 import { PaymentPayload, TransactionType } from '@client/lib/credits/types';
-import { Button } from '@mui/joy';
+import { Button, Checkbox, DialogActions, DialogContent, DialogTitle, Link, Modal, ModalDialog } from '@mui/joy';
 import { loadStripe, Stripe } from '@stripe/stripe-js';
 import { isAxiosError } from 'axios';
 import { FC, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -13,6 +13,7 @@ import PaymentModal from './PaymentModal';
 import type { ConfirmResult } from './CheckoutForm';
 import { getErrorMessage } from '@client/app/utils/error';
 import { formatCreditAmount } from '@client/app/utils/formatCredits';
+import { CHECKBOX_LABEL_LINK_SX, ExternalLinks } from '@client/app/utils/externalLinks';
 
 interface IPaymentButtonProps {
   /** Called with the credits of the purchase as it was when Buy was clicked, not the current props. */
@@ -27,10 +28,12 @@ interface IPaymentButtonProps {
 
 // The payload is copied at click time so a prop change (e.g. a pack radio switched mid-checkout)
 // can't make the modal title or onPayment name a different purchase than the one posted.
-const snapshotPurchase = (payload: PaymentPayload): PaymentPayload =>
-  payload.transactionType === TransactionType.Package
+const snapshotPurchase = (payload: PaymentPayload, acceptedTerms: boolean): PaymentPayload => ({
+  ...(payload.transactionType === TransactionType.Package
     ? { transactionType: payload.transactionType, packageId: payload.packageId }
-    : { transactionType: payload.transactionType, credits: payload.credits };
+    : { transactionType: payload.transactionType, credits: payload.credits }),
+  ...(acceptedTerms && { acceptedTerms: true }),
+});
 
 const purchasedCredits = (purchase: PaymentPayload): number =>
   purchase.transactionType === TransactionType.Package ? CREDIT_PACKAGES[purchase.packageId].credits : purchase.credits;
@@ -62,6 +65,10 @@ const PaymentButton: FC<IPaymentButtonProps & PaymentPayload> = ({
   const pricePerCredit = useGetSettingsValue('pricePerCredit');
   const hasPricePerCredit = typeof pricePerCredit === 'number';
   const isPricePerCreditSettingRequired = rest.transactionType === TransactionType.PerCredit && !hasPricePerCredit;
+  // Mirrors the server check in start-payment (server/integrations/stripe/termsConsent.ts).
+  const termsConsentRequired = useGetSettingsValue('requireCheckoutTermsConsent') === true;
+  const [termsOpen, setTermsOpen] = useState(false);
+  const [termsChecked, setTermsChecked] = useState(false);
   // One request per Buy click: `inFlightRef` blocks re-entry while a start is pending, and a response
   // whose attempt id is no longer current (the form was closed, or a later attempt began) is ignored.
   const inFlightRef = useRef(false);
@@ -73,18 +80,35 @@ const PaymentButton: FC<IPaymentButtonProps & PaymentPayload> = ({
     return purchase.transactionType === TransactionType.Package ? `${credits} Credits Package` : `${credits} Credits`;
   }, [purchase]);
 
+  const startPurchase = useCallback(
+    (acceptedTerms: boolean) => {
+      const snapshot = snapshotPurchase(rest, acceptedTerms);
+      logEvent({
+        type: CreditPurchaseEvents.CHECKOUT_REQUESTED,
+        metadata: {
+          transactionType: snapshot.transactionType,
+          ...(snapshot.transactionType === TransactionType.Package && { packageId: snapshot.packageId }),
+          ...(snapshot.transactionType === TransactionType.PerCredit && { credits: snapshot.credits }),
+        },
+      });
+      setPurchase(snapshot);
+    },
+    [logEvent, rest]
+  );
+
   const handleStart = useCallback(() => {
-    const snapshot = snapshotPurchase(rest);
-    logEvent({
-      type: CreditPurchaseEvents.CHECKOUT_REQUESTED,
-      metadata: {
-        transactionType: snapshot.transactionType,
-        ...(snapshot.transactionType === TransactionType.Package && { packageId: snapshot.packageId }),
-        ...(snapshot.transactionType === TransactionType.PerCredit && { credits: snapshot.credits }),
-      },
-    });
-    setPurchase(snapshot);
-  }, [logEvent, rest]);
+    if (termsConsentRequired) {
+      setTermsChecked(false);
+      setTermsOpen(true);
+      return;
+    }
+    startPurchase(false);
+  }, [startPurchase, termsConsentRequired]);
+
+  const handleTermsContinue = useCallback(() => {
+    setTermsOpen(false);
+    startPurchase(true);
+  }, [startPurchase]);
 
   const handlePayment = useCallback(() => {
     lastOutcomeRef.current = 'succeeded';
@@ -200,6 +224,47 @@ const PaymentButton: FC<IPaymentButtonProps & PaymentPayload> = ({
       >
         {label ?? 'Purchase'}
       </Button>
+
+      {termsConsentRequired && (
+        <Modal open={termsOpen} onClose={() => setTermsOpen(false)}>
+          <ModalDialog data-testid="credits-terms-dialog" sx={{ maxWidth: 440, zIndex: 1400 }}>
+            <DialogTitle>Before you buy</DialogTitle>
+            <DialogContent>
+              <Checkbox
+                data-testid="credits-terms-checkbox"
+                checked={termsChecked}
+                onChange={e => setTermsChecked(e.target.checked)}
+                label={
+                  <>
+                    I agree to the{' '}
+                    <Link
+                      href={ExternalLinks.terms}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      sx={CHECKBOX_LABEL_LINK_SX}
+                    >
+                      Terms of Service
+                    </Link>
+                  </>
+                }
+              />
+            </DialogContent>
+            <DialogActions>
+              <Button data-testid="credits-terms-continue-btn" disabled={!termsChecked} onClick={handleTermsContinue}>
+                Continue
+              </Button>
+              <Button
+                data-testid="credits-terms-cancel-btn"
+                variant="plain"
+                color="neutral"
+                onClick={() => setTermsOpen(false)}
+              >
+                Cancel
+              </Button>
+            </DialogActions>
+          </ModalDialog>
+        </Modal>
+      )}
 
       {stripePromise && clientSecret && (
         <PaymentModal

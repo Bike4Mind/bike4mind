@@ -222,6 +222,8 @@ describe('GET /api/feedback', () => {
     expect(mockSelect).toHaveBeenCalledWith(FEEDBACK_LIST_FIELDS);
     const selected = mockSelect.mock.calls[0][0] as string;
     expect(selected).not.toContain('promptMeta');
+    // Named here rather than compared to the constant: dropping the field would blank the chips and CSV columns.
+    expect(selected.split(' ')).toContain('clientContext');
   });
 
   it('returns exactly items/total/page/limit, sourced from countDocuments', async () => {
@@ -303,6 +305,30 @@ describe('GET /api/feedback', () => {
     expect(findFilter.$and).toContainEqual({ sessionId: 'session-1' });
     expect(findFilter.$and).toContainEqual({ subject: 'turn' });
     expect(findFilter.$and).toContainEqual({ userId: 'user-1' });
+  });
+
+  it('ANDs the type filter in as an $in over the picked types', async () => {
+    const { req, res } = buildRequest({ type: ['Bug', 'Thumbs Down'] }, adminAbility());
+    await runHandler(req, res);
+
+    const findFilter = mockFind.mock.calls[0][0] as { $and: unknown[] };
+    expect(findFilter.$and).toContainEqual({ type: { $in: ['Bug', 'Thumbs Down'] } });
+  });
+
+  it('lets the Feedback type also match reports that carry no type', async () => {
+    const { req, res } = buildRequest({ type: 'Feedback' }, adminAbility());
+    await runHandler(req, res);
+
+    const findFilter = mockFind.mock.calls[0][0] as { $and: unknown[] };
+    expect(findFilter.$and).toContainEqual({ type: { $in: ['Feedback', null] } });
+  });
+
+  it('rejects a type outside FeedbackType with a 422 before any query runs', async () => {
+    const { req, res } = buildRequest({ type: 'Spam' }, adminAbility());
+    await runHandler(req, res);
+
+    expect(res._getStatusCode()).toBe(422);
+    expect(mockFind).not.toHaveBeenCalled();
   });
 
   it('does NOT narrow to the caller without an explicit userId, even for an admin', async () => {

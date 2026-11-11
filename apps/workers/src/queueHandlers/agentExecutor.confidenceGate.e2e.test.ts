@@ -33,6 +33,9 @@ const h = vi.hoisted(() => ({
   gateThreshold: undefined as number | undefined,
   // Makes the API Gateway send reject for the `completed` frame only.
   failCompletedSend: false,
+  // Profile `confidenceGateMode` / `confidenceGateSelfReport`; undefined keeps the built-in default.
+  gateMode: undefined as 'iteration' | 'answer' | 'both' | 'off' | undefined,
+  selfReport: undefined as boolean | undefined,
 }));
 
 vi.mock('./agentExecutor.orchestrationProfile', async () => {
@@ -45,6 +48,8 @@ vi.mock('./agentExecutor.orchestrationProfile', async () => {
       ...(await actual.resolveTopLevelProfile(args)),
       lowConfidenceCompletion: h.lowConfidenceMode,
       confidenceGateThreshold: h.gateThreshold,
+      confidenceGateMode: h.gateMode,
+      confidenceGateSelfReport: h.selfReport,
     }),
   };
 });
@@ -79,8 +84,10 @@ vi.mock('@server/utils/dispatchAgentExecution', () => ({
   },
 }));
 
-vi.mock('@server/utils/persistRunAsQuest', () => ({ persistRunAsQuest: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('@server/utils/publishMementoCompletion', () => ({
+vi.mock('@bike4mind/server-utils/utils/persistRunAsQuest', () => ({
+  persistRunAsQuest: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock('@bike4mind/server-utils/utils/publishMementoCompletion', () => ({
   resolveAndPublishMementoCompletion: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
@@ -222,6 +229,8 @@ describe('confidence gate, end to end', () => {
     h.lowConfidenceMode = undefined;
     h.gateThreshold = undefined;
     h.failCompletedSend = false;
+    h.gateMode = undefined;
+    h.selfReport = undefined;
   });
 
   it('pauses on a streak of low overrides, resumes through a gate response, and completes', async () => {
@@ -281,9 +290,10 @@ describe('confidence gate, end to end', () => {
   });
 
   describe('a final answer after one low iteration', () => {
-    async function runToAnswer(confidence: number, maxIterations?: number) {
+    async function runToAnswer(confidence: number, maxIterations?: number, turns = 1) {
       const { handler } = await import('./agentExecutor');
-      const run = await seedRun([confidence]);
+      h.probeTurns = turns;
+      const run = await seedRun(Array(turns).fill(confidence));
       await handler(
         {
           executionId: run.executionId,
@@ -331,7 +341,7 @@ describe('confidence gate, end to end', () => {
 
     it('block pauses the run with the finished result held back, and Stop finalizes it in full', async () => {
       h.lowConfidenceMode = 'block';
-      const { persistRunAsQuest } = await import('@server/utils/persistRunAsQuest');
+      const { persistRunAsQuest } = await import('@bike4mind/server-utils/utils/persistRunAsQuest');
       vi.mocked(persistRunAsQuest).mockClear();
       const { executionId, userId, execution } = await runToAnswer(0.1);
 
@@ -375,7 +385,7 @@ describe('confidence gate, end to end', () => {
 
     it('Stop and Continue racing on a held completion produce exactly one outcome', async () => {
       h.lowConfidenceMode = 'block';
-      const { persistRunAsQuest } = await import('@server/utils/persistRunAsQuest');
+      const { persistRunAsQuest } = await import('@bike4mind/server-utils/utils/persistRunAsQuest');
       vi.mocked(persistRunAsQuest).mockClear();
       const { executionId, userId } = await runToAnswer(0.1);
 
@@ -407,7 +417,7 @@ describe('confidence gate, end to end', () => {
 
     it('Stop still writes the Quest and completes when the completed event cannot be delivered', async () => {
       h.lowConfidenceMode = 'block';
-      const { persistRunAsQuest } = await import('@server/utils/persistRunAsQuest');
+      const { persistRunAsQuest } = await import('@bike4mind/server-utils/utils/persistRunAsQuest');
       vi.mocked(persistRunAsQuest).mockClear();
       const { executionId, userId } = await runToAnswer(0.1);
 
@@ -496,7 +506,7 @@ describe('confidence gate, end to end', () => {
 
     it('a repeated Stop finalizes the held answer once', async () => {
       h.lowConfidenceMode = 'block';
-      const { persistRunAsQuest } = await import('@server/utils/persistRunAsQuest');
+      const { persistRunAsQuest } = await import('@bike4mind/server-utils/utils/persistRunAsQuest');
       vi.mocked(persistRunAsQuest).mockClear();
       const { executionId, userId } = await runToAnswer(0.1);
 
@@ -563,6 +573,89 @@ describe('confidence gate, end to end', () => {
 
       expect(execution?.status).toBe('completed');
       expect(actions()).not.toContain('low_confidence_completion');
+    });
+
+    describe('gate mode and self-report', () => {
+      // A streak long enough to pause the iteration site, then a final answer.
+      const streakTurns = LOW_CONFIDENCE_STREAK_TO_PAUSE;
+
+      it('iteration pauses on the streak and skips the answer-site check after the resume', async () => {
+        h.gateMode = 'iteration';
+        const { agentExecutionRepository } = await import('@bike4mind/database');
+        const { handler } = await import('./agentExecutor');
+        const { handleGateResponse } = await import('@server/websocket/agentExecute');
+        const run = await runToAnswer(0.1, undefined, streakTurns + 1);
+        const { executionId, userId } = run;
+
+        expect(run.execution?.status).toBe('paused');
+        expect(run.execution?.confidenceGate).toMatchObject({ mode: 'iteration', selfReport: true });
+        expect(actions()).toContain('confidence_gate');
+
+        await handleGateResponse(
+          {
+            accessToken: 'unused',
+            action: 'agent_execute',
+            command: 'gate_response',
+            executionId,
+            decision: 'continue',
+          },
+          userId,
+          'conn-1',
+          'https://ws.test/stage',
+          logger as never
+        );
+        await handler(h.dispatched[0] as never, lambdaContext);
+
+        const completed = await agentExecutionRepository.findById(executionId);
+        expect(completed?.status).toBe('completed');
+        expect(actions()).not.toContain('low_confidence_completion');
+      });
+
+      it('answer never pauses an iteration but still flags the low-confidence answer', async () => {
+        h.gateMode = 'answer';
+        const { execution } = await runToAnswer(0.1, undefined, streakTurns);
+
+        expect(execution?.status).toBe('completed');
+        expect(actions()).not.toContain('confidence_gate');
+        expect(actions()).toContain('low_confidence_completion');
+        expect(execution?.lowConfidenceStreak).toBeGreaterThan(0);
+      });
+
+      it('answer in block mode parks the run on the low-confidence answer', async () => {
+        h.gateMode = 'answer';
+        h.lowConfidenceMode = 'block';
+        const { execution } = await runToAnswer(0.1, undefined, streakTurns);
+
+        expect(execution?.status).toBe('paused');
+        expect(actions()).toContain('low_confidence_completion');
+      });
+
+      it('off emits no gate events', async () => {
+        h.gateMode = 'off';
+        const { execution } = await runToAnswer(0.1, undefined, streakTurns);
+
+        expect(execution?.status).toBe('completed');
+        expect(actions()).not.toContain('confidence_gate');
+        expect(actions()).not.toContain('low_confidence_completion');
+      });
+
+      it('self-report off records no streak and emits no gate events', async () => {
+        h.selfReport = false;
+        const { execution } = await runToAnswer(0.1, undefined, streakTurns);
+
+        expect(execution?.status).toBe('completed');
+        expect(actions()).not.toContain('confidence_gate');
+        expect(actions()).not.toContain('low_confidence_completion');
+        expect(execution?.lowConfidenceStreak ?? 0).toBe(0);
+      });
+
+      it('a threshold of 0 never pauses', async () => {
+        h.gateThreshold = 0;
+        const { execution } = await runToAnswer(0.1, undefined, streakTurns);
+
+        expect(execution?.status).toBe('completed');
+        expect(actions()).not.toContain('confidence_gate');
+      });
     });
 
     it('emits nothing when the answer lands on the iteration ceiling', async () => {

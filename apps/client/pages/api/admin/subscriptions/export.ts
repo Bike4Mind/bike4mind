@@ -1,5 +1,4 @@
-import { ApiKeyScope } from '@bike4mind/common';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { ApiKeyScope, CREDITS_PAGE_READ } from '@bike4mind/common';
 import { moneyFractionDigits, toMajorUnits } from '@client/app/components/admin/shared/formatMoney';
 import {
   ADMIN_SUBSCRIPTIONS_EXPORT_MAX_ROWS,
@@ -19,8 +18,8 @@ import {
 } from '@server/admin/subscriptionsList/listAdminSubscriptions';
 import { subscriptionPlanCatalog } from '@server/admin/subscriptionsList/adminSubscriptionsQuery';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { adminApi } from '@server/middlewares/adminApi';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import qs from 'qs';
 
 const EXPORT_PAGE_SIZE = 500;
@@ -94,11 +93,14 @@ const toCsvLine = (row: AdminSubscriptionRow): string => {
  * truncated export ends with a `# Truncated at N rows` line, and a search that resolved only some of its
  * owners ends with a line saying so. Same shape as the credit ledger export.
  */
-const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  auth: 'jwtOnly',
+  requiredScopes: [ApiKeyScope.ADMIN],
+  adminPermissions: { GET: CREDITS_PAGE_READ },
+})
   .use(rateLimit({ limit: 6, windowMs: 60_000, bucket: 'admin-subscriptions-export' }))
   .get(
     asyncHandler(async (req, res) => {
-      if (!req.user?.isAdmin) throw new ForbiddenError('Unauthorized. Admin access required.');
       const parsed = AdminSubscriptionsFilterSchema.safeParse(
         qs.parse(req.query as Record<string, string>, { arrayLimit: ADMIN_SUBSCRIPTIONS_LIST_MAX })
       );

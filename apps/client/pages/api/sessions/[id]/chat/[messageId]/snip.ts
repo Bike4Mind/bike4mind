@@ -49,7 +49,9 @@ const handler = baseApi().post(
             // handful of reads inside the transaction this route opens. That is the intended trade - the
             // alternative is persisting an unreachable scope, which is permanent once non-empty.
             resolveLakeAccess: async () =>
-              (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(req),
+              (await import('@bike4mind/server-utils/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(
+                req
+              ),
             resolveSurfaceAccess: copySurfaceAccessForRequest(req),
             workspaceSessionSettings: premiumWorkspaceSessionSettings,
           }

@@ -5,6 +5,7 @@
  * account and model. Slack gets account ids, spend, age, model mix and an admin link; never an
  * email or a name. Every failure degrades to a one-line note so the alarm itself still posts.
  */
+import { Logger } from '@bike4mind/observability';
 
 import type { ResultField } from '@aws-sdk/client-cloudwatch-logs';
 
@@ -255,7 +256,7 @@ export async function youngAccountSpendSection(
       try {
         result = await fetchSpenders(window, { logGroups });
       } catch {
-        console.warn('[youngAccountSpendDetail] catch-up lookup failed; retaining the first result');
+        Logger.warn('[youngAccountSpendDetail] catch-up lookup failed; retaining the first result');
       }
     }
     return formatYoungAccountSpenders(result.spenders, {
@@ -266,7 +267,7 @@ export async function youngAccountSpendSection(
     });
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    console.warn(`[youngAccountSpendDetail] could not list accounts for ${alarm.AlarmName}: ${reason}`);
+    Logger.warn(`[youngAccountSpendDetail] could not list accounts for ${alarm.AlarmName}: ${reason}`);
     return fallback(`Could not be loaded (${reason}). Query the LLM spend log groups for the window instead.`);
   }
 }

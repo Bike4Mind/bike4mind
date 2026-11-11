@@ -113,9 +113,15 @@ describe('gradeVerdicts', () => {
     const report = gradeVerdicts(
       input({
         detections: [
-          { id: 'farm', userIds: ['f1', 'f2'], detectedAt: at('5T15:00:00'), verdict: 'confirmed_abuse' },
-          { id: 'lookalike', userIds: ['g1'], detectedAt: at('5T15:00:00'), verdict: 'legitimate_human' },
-          { id: 'unsure', userIds: ['u1'], detectedAt: at('5T15:00:00'), verdict: 'insufficient_evidence' },
+          { id: 'farm', userIds: ['f1', 'f2'], detectedAt: at('5T15:00:00'), verdict: 'confirmed_abuse', verdicts: [] },
+          { id: 'lookalike', userIds: ['g1'], detectedAt: at('5T15:00:00'), verdict: 'legitimate_human', verdicts: [] },
+          {
+            id: 'unsure',
+            userIds: ['u1'],
+            detectedAt: at('5T15:00:00'),
+            verdict: 'insufficient_evidence',
+            verdicts: [],
+          },
         ],
         assessments: [
           // Superseded by the newer assessment of the same detection and model.
@@ -174,10 +180,10 @@ describe('gradeVerdicts', () => {
     const report = gradeVerdicts(
       input({
         detections: [
-          { id: 'agreed', userIds: ['a', 'b'], detectedAt: at('5T15:00:00'), verdict: null },
-          { id: 'mixed', userIds: ['a', 'c'], detectedAt: at('5T15:00:00'), verdict: null },
+          { id: 'agreed', userIds: ['a', 'b'], detectedAt: at('5T15:00:00'), verdict: null, verdicts: [] },
+          { id: 'mixed', userIds: ['a', 'c'], detectedAt: at('5T15:00:00'), verdict: null, verdicts: [] },
           // Banned by the automation only: no label, so not graded.
-          { id: 'self', userIds: ['d'], detectedAt: at('5T15:00:00'), verdict: null },
+          { id: 'self', userIds: ['d'], detectedAt: at('5T15:00:00'), verdict: null, verdicts: [] },
         ],
         accounts: [
           outcome('a', { adminSuspendedAt: at('5T16:00:00'), blockedNow: true }),
@@ -199,10 +205,36 @@ describe('gradeVerdicts', () => {
     expect(scoreOf(report, 'containment', 'enforce')).toMatchObject({ truePositive: 1, falsePositive: 0 });
   });
 
+  it('labels an automation-graded detection from its members, not as an admin verdict', () => {
+    const automation = { source: 'automation' as const };
+    const report = gradeVerdicts(
+      input({
+        detections: [
+          {
+            id: 'auto',
+            userIds: ['a'],
+            detectedAt: at('5T15:00:00'),
+            verdict: 'insufficient_evidence',
+            verdicts: [automation],
+          },
+        ],
+        accounts: [outcome('a', { reviewState: 'approved' })],
+        decisions: [
+          { detectionId: 'auto', outcome: 'contained', mode: 'enforce', confidence: 0.9, decidedAt: at('5T15:30:00') },
+        ],
+      })
+    );
+
+    expect(report.labelledDetections).toBe(1);
+    expect(scoreOf(report, 'containment', 'enforce')).toMatchObject({ truePositive: 0, falsePositive: 1 });
+  });
+
   it('counts an abstention apart from the confusion matrix', () => {
     const report = gradeVerdicts(
       input({
-        detections: [{ id: 'farm', userIds: ['f1'], detectedAt: at('5T15:00:00'), verdict: 'confirmed_abuse' }],
+        detections: [
+          { id: 'farm', userIds: ['f1'], detectedAt: at('5T15:00:00'), verdict: 'confirmed_abuse', verdicts: [] },
+        ],
         assessments: [
           {
             detectionId: 'farm',

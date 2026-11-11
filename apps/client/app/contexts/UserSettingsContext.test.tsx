@@ -51,9 +51,19 @@ vi.mock('@client/app/utils/userAPICalls', () => ({
   updateUserToServer: vi.fn().mockResolvedValue({}),
 }));
 
+const { mockHandleRevision, mockStopWatching, mockWatchArrivals } = vi.hoisted(() => {
+  const mockStopWatching = vi.fn();
+  return { mockHandleRevision: vi.fn(), mockStopWatching, mockWatchArrivals: vi.fn(() => mockStopWatching) };
+});
+vi.mock('@client/app/hooks/data/modelListRevision', () => ({
+  handleModelListRevisionSetting: mockHandleRevision,
+  watchModelListArrivals: mockWatchArrivals,
+}));
+
 const { useUser } = await import('@client/app/contexts/UserContext');
 const { useLanguage } = await import('@client/app/contexts/TranslationProvider');
 const { updateUserToServer } = await import('@client/app/utils/userAPICalls');
+const { useSubscribeCollection } = await import('@client/app/utils/react-query');
 
 const storedUser = () => useUser.getState().currentUser as MockUser;
 const storedPrefs = () => storedUser().preferences as Record<string, unknown>;
@@ -77,8 +87,7 @@ function cancelError() {
   return Object.assign(new Error('canceled'), { __CANCEL__: true });
 }
 
-function makeWrapper() {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+function makeWrapper(client = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
   function Wrapper({ children }: { children: React.ReactNode }) {
     return (
       <QueryClientProvider client={client}>
@@ -648,5 +657,46 @@ describe('UserSettingsContext - isHydrated', () => {
     useUser.setState({ isHydrated: false });
     const { result } = renderHook(() => useUserSettings(), { wrapper: makeWrapper() });
     expect(result.current.isHydrated).toBe(false);
+  });
+});
+
+describe('UserSettingsContext - model-list revision wiring', () => {
+  beforeEach(() => {
+    resetStores();
+    vi.clearAllMocks();
+  });
+
+  const adminSettingsCallback = () => {
+    const call = vi.mocked(useSubscribeCollection).mock.calls.find(([collection]) => collection === 'adminsettings');
+    return call?.[2] as unknown as (type: string, data: Record<string, unknown>) => void;
+  };
+
+  it('hands every pushed adminsettings write to the model-list revision handler', () => {
+    const client = new QueryClient();
+    renderHook(() => useUserSettings(), { wrapper: makeWrapper(client) });
+
+    act(() => adminSettingsCallback()('update', { settingName: 'modelListRevision', settingValue: 'rev-2' }));
+
+    expect(mockHandleRevision).toHaveBeenCalledWith(
+      client,
+      expect.objectContaining({ settingName: 'modelListRevision', settingValue: 'rev-2' })
+    );
+  });
+
+  it('does not treat a deleted setting row as a new revision', () => {
+    renderHook(() => useUserSettings(), { wrapper: makeWrapper() });
+
+    act(() => adminSettingsCallback()('delete', { settingName: 'modelListRevision', settingValue: 'rev-2' }));
+
+    expect(mockHandleRevision).not.toHaveBeenCalled();
+  });
+
+  it('watches the model list landing for as long as the provider is mounted', () => {
+    const client = new QueryClient();
+    const { unmount } = renderHook(() => useUserSettings(), { wrapper: makeWrapper(client) });
+    expect(mockWatchArrivals).toHaveBeenCalledWith(client);
+
+    unmount();
+    expect(mockStopWatching).toHaveBeenCalledTimes(1);
   });
 });

@@ -10,6 +10,7 @@ import type {
   IDataLakeResearchRunDocument,
   ResearchRunTrigger,
   ResearchScheduleCadence,
+  ResearchUnlistedSources,
   IDataLakeBatchDocument,
   IDataLakeBatchSummary,
   IDataLakeFindingDocument,
@@ -2490,7 +2491,8 @@ export type ResearchConfigInput = {
   maxResults?: number;
   maxProposals?: number;
   recencyDays?: number | null;
-  allowedDomains?: string[];
+  reviewDomains?: string[];
+  unlistedSources?: ResearchUnlistedSources;
   blockedDomains?: string[];
   minRelevance?: number;
   costCeilingMicroUsd?: number;

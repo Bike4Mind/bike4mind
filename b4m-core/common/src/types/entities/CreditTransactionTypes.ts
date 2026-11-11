@@ -456,6 +456,21 @@ export const AI_USAGE_TRANSACTION_TYPES: CreditTransactionType[] = CREDIT_DEDUCT
 );
 
 /**
+ * What the profile ledger counts as "credits used": every deduct type except transfers, so it
+ * includes `generic_deduct` charges that have no usage event. The usage breakdown reconciles to
+ * this set; keep the ledger view and GET /api/usage on it so the two totals cannot drift.
+ */
+export const LEDGER_USAGE_TRANSACTION_TYPES: CreditTransactionType[] = CREDIT_DEDUCT_TRANSACTION_TYPES.filter(
+  t => t !== 'transfer_credit'
+);
+
+/** Ledger spend over a window: credits are the magnitude (usage rows are stored negative). */
+export interface ILedgerUsageTotal {
+  creditsCharged: number;
+  transactions: number;
+}
+
+/**
  * Bucket key for ledger rows carrying no `source`. Not a CompletionSource: it
  * is the residual, and the UI pins it last rather than ranking it against real
  * surfaces. `source` is optional on the write path, so this covers both rows
@@ -641,6 +656,12 @@ export interface ICreditTransactionRepository extends IBaseRepository<ICreditTra
    * last so the buckets still sum to the owner's ledger spend.
    */
   sourceUsageForOwner(ownerId: string, ownerType: CreditHolderType, days?: number): Promise<ISourceUsage[]>;
+
+  /**
+   * An owner's ledger spend over the trailing N days (default 30) across
+   * LEDGER_USAGE_TRANSACTION_TYPES, on the same cutoff as findByOwnerWithFilters.
+   */
+  usageTotalForOwner(ownerId: string, ownerType: CreditHolderType, days?: number): Promise<ILedgerUsageTotal>;
 }
 
 // True only for `any`: `1 & any` collapses to `any`, so `0 extends any` holds.

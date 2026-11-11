@@ -1,30 +1,23 @@
 import { ApiKeyScope } from '@bike4mind/common';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { requestApproval } from '@server/admin/approvals/service';
 import { creditGrantNeedsApproval } from '@server/admin/creditGrants/gate';
 import { GrantOrgSchema, grantOrg, validateGrantOrg } from '@server/admin/creditGrants/grantOrg';
-import { baseApi } from '@server/middlewares/baseApi';
+import { assertDelegateCanCreditUser } from '@server/admin/creditGrants/delegateTargets';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { parseAdminActionReason } from '@bike4mind/server-utils/utils/adminAudit';
 import type { Request } from 'express';
 
-// requiredScopes gates the API-key path only: apiKeyAuth 403s an under-scoped key
-// before req.user is set, so a key issued for a narrow integration can't create
-// an org with an initial credit grant just because its owner is an admin.
-// JWT/browser admins skip that check and still pass the isAdmin gate below.
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
+const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions: { POST: 'credits:adjust' } }).post(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const { name, ownerEmail, seats, initialCredits } = GrantOrgSchema.parse(req.body);
     const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
     const params = { name, ownerEmail, seats, initialCredits, reason };
     const request = req as unknown as Request;
     const gate = await creditGrantNeedsApproval(initialCredits, req.user.id);
     if (gate.policy) {
-      await validateGrantOrg(params);
+      const owner = await validateGrantOrg(params);
+      await assertDelegateCanCreditUser(req.user, owner.id, 'grant an organization to');
       const pending = await requestApproval(
         request,
         {
@@ -33,7 +26,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
           summary: `Grant org ${name} with ${initialCredits} credits`,
           reason,
           requiredPermission: 'credits:adjust',
-          requiresFullAdmin: true,
+          requiresFullAdmin: false,
         },
         gate.policy
       );

@@ -11,14 +11,14 @@ import { ChatModels, ImageModels, ModelBackend, type ImageModelCapabilities } fr
  */
 
 const mockGetEffectiveLLMApiKeys = vi.fn();
-const mockCacheFindOne = vi.fn();
+const mockCacheFind = vi.fn();
 const mockCacheCreateOrUpdate = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
   apiKeyRepository: {},
   adminSettingsRepository: {},
   cacheRepository: {
-    findOne: (...a: unknown[]) => mockCacheFindOne(...a),
+    find: (...a: unknown[]) => mockCacheFind(...a),
     createOrUpdate: (...a: unknown[]) => mockCacheCreateOrUpdate(...a),
   },
 }));
@@ -41,7 +41,7 @@ vi.mock('@bike4mind/services/llm/modelAdmission', async importOriginal => ({
   loadFreeTierAllowedModels: (...a: unknown[]) => mockLoadFreeTierAllowedModels(...a),
 }));
 
-vi.mock('@server/entitlements', () => ({
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({
   getUserEntitlements: vi.fn(async () => []),
   toEntitlementUser: (user: unknown) => user,
 }));
@@ -93,7 +93,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   hangOllama = false;
   mockGetEffectiveLLMApiKeys.mockResolvedValue(noKeys);
-  mockCacheFindOne.mockResolvedValue(null);
+  mockCacheFind.mockResolvedValue([]);
   mockCacheCreateOrUpdate.mockResolvedValue(undefined);
   mockLoadFreeTierAllowedModels.mockResolvedValue(undefined);
   delete process.env.B4M_SELF_HOST;
@@ -140,6 +140,8 @@ async function callRouteBody(userId?: string) {
       image?: ImageModelCapabilities;
     }>;
     lockedModels: Array<{ id: string; access?: { locked: boolean; reason: string } }>;
+    modelListRevision: string | null;
+    catalogUnavailable: boolean;
   };
   return body;
 }
@@ -257,7 +259,9 @@ describe('/api/models cache identity', () => {
   it('caches an authenticated caller under its own user id', async () => {
     await callRoute('user-1');
 
-    expect(mockCacheFindOne).toHaveBeenCalledWith({ key: 'model-list:user-1:credits-off' });
+    expect(mockCacheFind).toHaveBeenCalledWith({
+      key: { $in: ['model-list:user-1:credits-off', 'model-list-revision'] },
+    });
     expect(mockCacheCreateOrUpdate).toHaveBeenCalledWith(
       expect.objectContaining({ key: 'model-list:user-1:credits-off' })
     );
@@ -267,12 +271,28 @@ describe('/api/models cache identity', () => {
     await callRoute();
 
     expect(mockGetEffectiveLLMApiKeys).toHaveBeenCalledWith(null, expect.anything());
-    expect(mockCacheFindOne).toHaveBeenCalledWith({ key: 'model-list:anonymous:credits-off' });
+    expect(mockCacheFind).toHaveBeenCalledWith({
+      key: { $in: ['model-list:anonymous:credits-off', 'model-list-revision'] },
+    });
     expect(mockCacheCreateOrUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ key: 'model-list:system' }));
   });
 
+  it('reports the model-list revision the list was built under', async () => {
+    mockCacheFind.mockResolvedValue([{ key: 'model-list-revision', result: { revision: 'rev-9' } }]);
+
+    const body = await callRouteBody('user-1');
+
+    expect(body.modelListRevision).toBe('rev-9');
+    expect(body.catalogUnavailable).toBe(false);
+    expect(mockCacheCreateOrUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ result: expect.objectContaining({ modelListRevision: 'rev-9' }) })
+    );
+  });
+
   it('serves a cache hit without rebuilding the model list', async () => {
-    mockCacheFindOne.mockResolvedValue({ result: { models: [{ id: 'cached-model' }] } });
+    mockCacheFind.mockResolvedValue([
+      { key: 'model-list:user-1:credits-off', result: { models: [{ id: 'cached-model' }] } },
+    ]);
 
     const models = await callRoute('user-1');
 
@@ -283,9 +303,12 @@ describe('/api/models cache identity', () => {
 
 describe('/api/models locked models', () => {
   it('serves paid-only models in lockedModels, apart from models, for a free caller', async () => {
-    mockCacheFindOne.mockResolvedValue({
-      result: { models: [{ id: 'free-model' }, { id: 'paid-model' }], supersededModels: [] },
-    });
+    mockCacheFind.mockResolvedValue([
+      {
+        key: 'model-list:user-1:credits-off',
+        result: { models: [{ id: 'free-model' }, { id: 'paid-model' }], supersededModels: [] },
+      },
+    ]);
     mockLoadFreeTierAllowedModels.mockResolvedValue(new Set(['free-model']));
 
     const body = await callRouteBody('user-1');

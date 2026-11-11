@@ -45,6 +45,10 @@ View and edit your basic profile:
 
 Connect with other Bike4Mind users.
 
+### Public Profile Visibility
+
+Other signed-in users can see your name, username, and profile photo. People who share an organization, project, or notebook with you can also see your presence, last activity, level, role, and team. Access to a globally readable notebook alone does not make someone a workspace colleague.
+
 ### Friend Requests
 
 - View pending friend requests
@@ -395,6 +399,8 @@ Understand your AI usage patterns.
 - **Total credits used** - Cumulative consumption
 - **Burn rate** - Average daily usage
 - **Days remaining** - Estimated time until credits run out
+
+The spend breakdown follows the period selected above the credit ledger. Charges without a per-call record appear as **Other charges (no per-call detail)**. The daily chart includes only charges with per-call records, so it can show less than the ledger total. The headline uses the posted ledger total. If per-call records exceed it, a note explains the difference instead of replacing the ledger figure. Real charges below one credit display as **`<1`**, rather than zero.
 
 ### Time Periods
 

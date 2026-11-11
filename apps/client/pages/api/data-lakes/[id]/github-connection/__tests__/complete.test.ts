@@ -11,7 +11,10 @@ const h = vi.hoisted(() => ({
   requireGitHubLakeAppConfig: vi.fn(),
   toGitHubLakeConnectionResponse: vi.fn(),
   requireFeatureEnabled: vi.fn(() => () => {}),
+  assertLakePlanAllowed: vi.fn(),
 }));
+
+vi.mock('@server/entitlements/lakePlanGate', () => ({ assertLakePlanAllowed: h.assertLakePlanAllowed }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
@@ -93,7 +96,48 @@ describe('POST /api/data-lakes/[id]/github-connection/complete', () => {
       installationId: 42,
       repositoryId: 100,
       logger,
+      assertAllowed: expect.any(Function),
     });
+  });
+
+  it('gates on the plan for the owning organization once the lake is authorized, before connecting', async () => {
+    h.completeGitHubLakeConnection.mockImplementation(async ({ assertAllowed }) => {
+      await assertAllowed({ kind: 'organization', organizationId: 'orgA' });
+      return { id: 'conn1' };
+    });
+    const req = makeReq(VALID_BODY);
+    await run(req, makeRes().res);
+    expect(h.assertLakePlanAllowed).toHaveBeenCalledWith(req, 'orgA');
+  });
+
+  it('gates a personal lake with no organization id', async () => {
+    h.completeGitHubLakeConnection.mockImplementation(async ({ assertAllowed }) => {
+      await assertAllowed({ kind: 'user' });
+      return { id: 'conn1' };
+    });
+    const req = makeReq(VALID_BODY);
+    await run(req, makeRes().res);
+    expect(h.assertLakePlanAllowed).toHaveBeenCalledWith(req, undefined);
+  });
+
+  it('403s DATA_LAKE_PLAN_REQUIRED and creates no connection when the plan gate refuses', async () => {
+    const created = vi.fn();
+    h.assertLakePlanAllowed.mockRejectedValueOnce(
+      new ForbiddenError('Data lakes need a paid plan', { code: 'DATA_LAKE_PLAN_REQUIRED' })
+    );
+    h.completeGitHubLakeConnection.mockImplementation(async ({ assertAllowed }) => {
+      await assertAllowed({ kind: 'user' });
+      created();
+      return { id: 'conn1' };
+    });
+    const { res, json } = makeRes();
+    await expect(run(makeReq(VALID_BODY), res)).rejects.toMatchObject({
+      statusCode: 403,
+      additionalInfo: { code: 'DATA_LAKE_PLAN_REQUIRED' },
+    });
+    expect(created).not.toHaveBeenCalled();
+    expect(h.clearStateNonce).not.toHaveBeenCalled();
+    expect(json).not.toHaveBeenCalled();
   });
 
   it('201s with the connection on success', async () => {

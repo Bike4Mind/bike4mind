@@ -1,5 +1,5 @@
 import { withTransaction } from '@bike4mind/database';
-import { priceAffectsEntitlements } from '@server/entitlements/paidStanding';
+import { priceAffectsEntitlements } from '@bike4mind/server-utils/entitlements/paidStanding';
 import { StripeSubscriptionMetadataSchema } from '@bike4mind/server-utils/lib/subscriptions/schema';
 import {
   type ISubscription,
@@ -12,19 +12,20 @@ import {
   planDetails,
   rowTimestamps,
   subscriptionEventUser,
-} from '@server/analytics/billingEventDetails';
+} from '@bike4mind/server-utils/analytics/billingEventDetails';
 import type Stripe from 'stripe';
-import { applyStripeSubscriptionState } from '@server/subscriptions/applyStripeSubscriptionState';
+import { applyStripeSubscriptionState } from '@bike4mind/server-utils/subscriptions/applyStripeSubscriptionState';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { StripeEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { voidOpenSubscriptionInvoices } from '@bike4mind/server-utils/integrations/stripe/dunning';
-import { postSubscriptionChangesToSlack } from '@server/integrations/slack/subscriptionLifecycle';
+import { postSubscriptionChangesToSlack } from '@bike4mind/server-utils/integrations/slack/subscriptionLifecycle';
 import { detectSubscriptionChanges } from '@bike4mind/server-utils/lib/subscriptions/subscriptionChanges';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { Resource } from 'sst';
 import { withEventContext } from '@workers/utils/eventContext';
+import { Logger } from '@bike4mind/observability';
 
 export const handler = withEventContext(async (event, logger) => {
   const { subscriptionId } = StripeEvents.CustomerSubscriptionUpdated.schema.parse(event.properties);
@@ -248,6 +249,6 @@ async function emitSubscriptionChangeEvents(before: ISubscription, subscription:
 
     await Promise.all(sends);
   } catch {
-    console.warn('[b4m-analytics] subscription change events failed');
+    Logger.warn('[b4m-analytics] subscription change events failed');
   }
 }

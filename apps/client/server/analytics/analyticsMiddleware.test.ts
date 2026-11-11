@@ -16,7 +16,7 @@ vi.mock('@bike4mind/server-utils/analytics/emitActiveEvent', async importOrigina
 vi.mock('@bike4mind/server-utils/analytics/pseudonymize', () => ({
   pseudonymizeUserId: vi.fn((id: string) => `pseudo:${id}`),
 }));
-vi.mock('./resolveUserType', () => ({
+vi.mock('@bike4mind/server-utils/analytics/resolveUserType', () => ({
   resolveUserType: vi.fn(() => 'free'),
 }));
 

@@ -33,6 +33,7 @@ import { getFeedbackDisplayContent, type IExtendedFeedbackDocument } from './typ
 import { feedbackRecordQueryKey } from './queryKeys';
 import { copyFeedbackRecordLink, feedbackConversationPath } from './feedbackLinks';
 import HelpContextChip from './HelpContextChip';
+import ClientContextChips from './ClientContextChips';
 import { FEEDBACK_STATUS_LABELS, FEEDBACK_STATUS_ORDER, FEEDBACK_SUBJECT_LABELS } from './constants';
 import { summarizePromptMeta } from './promptMetaSummary';
 
@@ -256,6 +257,7 @@ const FeedbackDetailBody = ({
 
       <Stack gap={1}>
         <HelpContextChip feedbackItem={record} />
+        <ClientContextChips feedbackItem={record} />
         {record.contentTruncated && (
           <StatusChip tone="warn" label="Truncated" data-testid="feedback-detail-truncated-badge" />
         )}

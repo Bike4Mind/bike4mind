@@ -1,7 +1,10 @@
 import { z } from 'zod';
 import { ApiKeyStatus, type AdminAuditAction, type AuditChange } from '@bike4mind/common';
 import type { cacheRepository } from '@bike4mind/database';
-import { ADMIN_USERS_BULK_MAX, ADMIN_USERS_BULK_UNDO_WINDOW_MS } from '@client/app/utils/adminUsersBulk';
+import {
+  ADMIN_USERS_BULK_MAX,
+  ADMIN_USERS_BULK_UNDO_WINDOW_MS,
+} from '@bike4mind/server-utils/app/utils/adminUsersBulk';
 import type { BulkUser } from './resolve';
 
 /**

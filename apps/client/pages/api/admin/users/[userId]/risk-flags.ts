@@ -2,7 +2,7 @@ import { adminUserRiskFlagsSchema, ApiKeyScope, CreditHolderType, MODERATION_PAG
 import { creditTransactionRepository, ImageModerationIncident, userRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { adminApi } from '@server/middlewares/adminApi';
-import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { respond } from '@server/utils/respond';
 import { evaluateUserRisk, RISK_RULE_CONFIG, type RiskModerationIncident } from '@server/utils/userRiskFlags';
 import { listUserRiskSignIns } from '@server/utils/userSignIns';

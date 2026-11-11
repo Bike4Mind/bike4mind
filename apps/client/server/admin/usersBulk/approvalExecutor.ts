@@ -1,6 +1,9 @@
 import { ForbiddenError, isFullAdmin } from '@bike4mind/common';
 import { userRepository } from '@bike4mind/database';
-import { AdminUsersBulkExecuteRequestSchema, blocksEmailDomains } from '@client/app/utils/adminUsersBulk';
+import {
+  AdminUsersBulkExecuteRequestSchema,
+  blocksEmailDomains,
+} from '@bike4mind/server-utils/app/utils/adminUsersBulk';
 import { approvalAuditWriter } from '@server/admin/approvals/auditWriter';
 import type { ApprovalExecutor } from '@server/admin/approvals/executors';
 import { selfIdsOf } from './actor';

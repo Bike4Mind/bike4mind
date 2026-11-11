@@ -1,9 +1,18 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import type { AdminSubscriptionDetail } from '@client/app/utils/adminSubscriptionDetail';
 import { SubscriptionDetailHeader } from './SubscriptionDetailHeader';
 import { NO_ACTING_USER_REASON, REMOVE_LIVE_STRIPE_REASON } from './subscriptionDetailModel';
 import { OWNER_ID, STRIPE_ROW, SubscriptionTestWrapper, buildDetail } from './subscriptionDetailTestUtils';
+
+const user = vi.hoisted(() => ({
+  currentUser: { isAdmin: true } as { isAdmin: boolean; adminPermissions?: string[] },
+}));
+vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: user.currentUser }) }));
+
+beforeEach(() => {
+  user.currentUser = { isAdmin: true };
+});
 
 const setup = (detail: AdminSubscriptionDetail) => {
   const onAction = vi.fn();
@@ -18,6 +27,28 @@ const setup = (detail: AdminSubscriptionDetail) => {
 const menuItem = (name: 'credits' | 'remove') => screen.queryByTestId(`subscription-detail-menu-${name}-item`);
 
 describe('SubscriptionDetailHeader', () => {
+  it('disables every action, explained, for a delegate without credits:adjust', () => {
+    user.currentUser = { isAdmin: false, adminPermissions: ['support:read'] };
+    setup(buildDetail());
+
+    expect(screen.getByTestId('subscription-detail-extend-btn')).toBeDisabled();
+    expect(screen.getByTestId('subscription-detail-end-btn')).toBeDisabled();
+    expect(menuItem('credits')).toHaveAttribute('aria-disabled', 'true');
+    expect(menuItem('remove')).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByTestId('subscription-detail-menu-remove-item-reason')).toHaveTextContent(
+      'Missing permission: credits:adjust'
+    );
+  });
+
+  it('enables the actions for a credits:adjust delegate', () => {
+    user.currentUser = { isAdmin: false, adminPermissions: ['credits:adjust'] };
+    const { onAction } = setup(buildDetail());
+
+    fireEvent.click(screen.getByTestId('subscription-detail-extend-btn'));
+    expect(onAction).toHaveBeenLastCalledWith('extend');
+    expect(menuItem('credits')).not.toHaveAttribute('aria-disabled', 'true');
+  });
+
   it('shows a live comp with Extend, End and both menu items', () => {
     const { onAction } = setup(buildDetail());
 

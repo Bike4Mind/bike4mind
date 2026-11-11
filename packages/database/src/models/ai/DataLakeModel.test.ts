@@ -731,6 +731,29 @@ describe('DataLakeRepository.countGateExcludedLakes', () => {
   });
 });
 
+describe('DataLakeRepository.countCountedCreatedBy', () => {
+  setupMongoTest();
+
+  it('counts every lake the user created except those being deleted or already gone', async () => {
+    await dataLakeRepository.create(baseLake({ slug: 'draft', createdByUserId: 'alice', status: 'draft' }));
+    await dataLakeRepository.create(baseLake({ slug: 'active', createdByUserId: 'alice', status: 'active' }));
+    await dataLakeRepository.create(baseLake({ slug: 'archived', createdByUserId: 'alice', status: 'archived' }));
+    await dataLakeRepository.create(baseLake({ slug: 'org', createdByUserId: 'alice', organizationId: 'org-1' }));
+    for (const status of ['deleting', 'deleted', 'purging'] as const) {
+      await dataLakeRepository.create(baseLake({ slug: status, createdByUserId: 'alice', status }));
+    }
+    await dataLakeRepository.create(baseLake({ slug: 'bobs', createdByUserId: 'bob' }));
+
+    expect(await dataLakeRepository.countCountedCreatedBy('alice')).toBe(4);
+    expect(await dataLakeRepository.countCountedCreatedBy('nobody')).toBe(0);
+  });
+
+  it('never counts for a blank caller id', async () => {
+    await DataLakeModel.collection.insertOne({ ...baseLake({ slug: 'orphan' }), createdByUserId: '' });
+    expect(await dataLakeRepository.countCountedCreatedBy('')).toBe(0);
+  });
+});
+
 describe('DataLakeRepository.findIdsCreatedBy', () => {
   setupMongoTest();
 

@@ -4,7 +4,7 @@ import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featu
 import { dataLakeService } from '@bike4mind/services';
 import { dataLakeRepository, dataLakeAccessGrantRepository, adminSettingsRepository } from '@bike4mind/database';
 import { Request } from 'express';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 
 // GET /api/data-lakes/transitional - lakes stranded mid-lifecycle, for whoever can retry them
 // (manage-scoped and cutoff-filtered in the service; see listTransitionalDataLakes).

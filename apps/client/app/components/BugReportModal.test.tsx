@@ -1,10 +1,13 @@
 import type { ComponentProps } from 'react';
+import { z } from 'zod';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import BugReportModal from './BugReportModal';
 import { toast } from 'sonner';
+import { FeedbackType, hasFeedbackComment, isFeedbackTriageNoise } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   createFeedbackOnServer: vi.fn(),
@@ -26,9 +29,11 @@ const appTheme = extendTheme({ ...getThemeConfig() });
 
 const renderModal = (props: Partial<ComponentProps<typeof BugReportModal>> = {}) =>
   render(
-    <CssVarsProvider theme={appTheme}>
-      <BugReportModal open onClose={vi.fn()} promptMeta={null} {...props} />
-    </CssVarsProvider>
+    <QueryClientProvider client={new QueryClient()}>
+      <CssVarsProvider theme={appTheme}>
+        <BugReportModal open onClose={vi.fn()} promptMeta={null} {...props} />
+      </CssVarsProvider>
+    </QueryClientProvider>
   );
 
 beforeEach(() => {
@@ -39,6 +44,23 @@ beforeEach(() => {
 });
 
 describe('BugReportModal', () => {
+  it('sends a bare thumbs-up as an empty comment that the create classifier closes', async () => {
+    h.createFeedbackOnServer.mockResolvedValue({ delivery: { delivered: true, channels: {} } });
+    renderModal();
+    fireEvent.click(screen.getByTestId('bug-report-modal-thumbs-up'));
+    fireEvent.click(screen.getByTestId('bug-report-modal-submit-btn'));
+    await waitFor(() => expect(h.createFeedbackOnServer).toHaveBeenCalledOnce());
+    expect(h.createFeedbackOnServer).toHaveBeenCalledWith(
+      expect.objectContaining({ type: FeedbackType.THUMBS_UP, content: '' })
+    );
+    const submittedReport = z
+      .object({ type: z.string(), content: z.string() })
+      .parse(h.createFeedbackOnServer.mock.calls[0][0]);
+    expect(
+      isFeedbackTriageNoise({ type: submittedReport.type, hasContent: hasFeedbackComment(submittedReport.content) })
+    ).toBe(true);
+  });
+
   it('shows a success toast only after the submission resolves as delivered', async () => {
     let resolveSubmit: (value: unknown) => void = () => {};
     h.createFeedbackOnServer.mockReturnValue(
@@ -117,6 +139,22 @@ describe('BugReportModal', () => {
     await waitFor(() => expect(h.createFeedbackOnServer).toHaveBeenCalledTimes(1));
     expect(h.createFeedbackOnServer).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: 'session-1', questId: 'quest-1' })
+    );
+  });
+
+  it('sends the web client context with the report', async () => {
+    h.createFeedbackOnServer.mockResolvedValue({});
+    renderModal();
+
+    fireEvent.click(screen.getByTestId('bug-report-modal-submit-btn'));
+
+    await waitFor(() => expect(h.createFeedbackOnServer).toHaveBeenCalled());
+    expect(h.createFeedbackOnServer.mock.calls[0][0].clientContext).toEqual(
+      expect.objectContaining({
+        platform: 'web',
+        path: window.location.pathname,
+        viewport: { width: window.innerWidth, height: window.innerHeight },
+      })
     );
   });
 
