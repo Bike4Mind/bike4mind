@@ -239,6 +239,18 @@ describe('BillingOverview', () => {
     expect(screen.getByTestId('billing-payments-coverage')).toHaveTextContent('recorded from 1 Sept 2026 on');
   });
 
+  it('says the coverage date is unknown, not that no events exist, when it could not be read', async () => {
+    const base = overview();
+    if (base.payments.status !== 'ok') throw new Error('fixture payments unavailable');
+    mocks.get.mockResolvedValue({
+      data: overview({ payments: { ...base.payments, eventsRecordedSince: null, eventsCoverageUnknown: true } }),
+    });
+    renderOverview();
+    const note = await screen.findByTestId('billing-payments-coverage');
+    expect(note).toHaveTextContent('could not be loaded');
+    expect(note).not.toHaveTextContent('No Stripe events are recorded yet');
+  });
+
   it('lists own and organization-billed usage apart and links to the activity view', async () => {
     renderOverview();
     const table = await screen.findByTestId('billing-usage-table');

@@ -94,7 +94,7 @@ const Money: React.FC<{ amount: number | null; currency: string | null }> = ({ a
       <Typography level="body-sm" component="span" sx={{ fontVariantNumeric: 'tabular-nums' }}>
         {creditsFormat.format(amount)}{' '}
         <Box component="span" sx={{ color: 'admin.inkMuted' }}>
-          (currency not recorded)
+          (minor units, currency not recorded)
         </Box>
       </Typography>
     );
@@ -268,7 +268,10 @@ const PaymentsCard: React.FC<{ section: BillingOverviewData['payments']; window:
           {formatDay(window.from)} to {formatDay(window.to)}. Each currency is totalled on its own row.
           {windowStartsBefore(window.from, section.eventsRecordedSince) &&
             ` Subscription payments, refunds and disputes are recorded from ${formatDay(section.eventsRecordedSince!)} on; earlier ones are not shown.`}
-          {section.eventsRecordedSince === null &&
+          {section.eventsCoverageUnknown &&
+            ' When Stripe events began to be recorded could not be loaded, so earlier payments may be missing.'}
+          {!section.eventsCoverageUnknown &&
+            section.eventsRecordedSince === null &&
             ' No Stripe events are recorded yet, so only credit purchases are shown.'}
           {section.truncated && ' Only the most recent records are listed.'}
         </CoverageNote>
@@ -501,7 +504,8 @@ const KeyNumbers: React.FC<{ data: BillingOverviewData }> = ({ data }) => {
 
 const OverviewBody: React.FC<BillingOverviewProps> = ({ ownerType, ownerId, range, onRangeChange }) => {
   const query = useAdminBillingOverview(ownerType, ownerId, range);
-  const { data } = query;
+  // keepPreviousData would otherwise show the previous owner's numbers under this owner's header.
+  const data = query.data?.owner.id === ownerId ? query.data : undefined;
 
   const toolbar = (
     <Stack direction="row" gap={1.5} alignItems="center" flexWrap="wrap">

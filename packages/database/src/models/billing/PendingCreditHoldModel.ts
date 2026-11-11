@@ -44,7 +44,7 @@ PendingCreditHoldSchema.index({ expiresAt: 1 });
 PendingCreditHoldSchema.index({ userId: 1, createdAt: -1 });
 // Serves the admin billing overview's outstanding holds per owner (an organization has no userId to
 // filter on). Built by the 20260921239997_ensure-pending-credit-hold-owner-index migration.
-PendingCreditHoldSchema.index({ ownerId: 1, ownerType: 1 });
+PendingCreditHoldSchema.index({ ownerId: 1, ownerType: 1, settledAt: 1 });
 // Only completed settlements have this field: TTL never deletes an outstanding hold.
 PendingCreditHoldSchema.index({ settledAt: 1 }, { expireAfterSeconds: 7 * 24 * 60 * 60 });
 

@@ -6,12 +6,12 @@ import {
   PendingCreditHoldModel,
   UsageEvent,
   User,
-  creditLotRepository,
+  CreditLot,
 } from '@bike4mind/database';
 import { CreditHolderType, NotFoundError } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { Subscription } from '@bike4mind/server-utils/models/Subscription';
-import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
+import { SubscriptionOwnerType, TERMINAL_SUBSCRIPTION_STATUSES } from '@bike4mind/server-utils/lib/subscriptions/types';
 import {
   BILLING_RANGE_DAYS,
   type BillingLink,
@@ -46,7 +46,6 @@ const QUERY_MAX_TIME_MS = 8_000;
 /** Rows one section reads; a window holding more is reported as truncated. */
 const LEDGER_ROW_LIMIT = 500;
 const BILLING_EVENT_LIMIT = 1_000;
-const HOLD_LIMIT = 200;
 const ATTRIBUTION_LIMIT = 20;
 const SUBSCRIPTION_LIMIT = 10;
 
@@ -112,37 +111,51 @@ async function guarded<T>(name: string, logger: Logger, load: () => Promise<T>):
 }
 
 async function loadSubscriptions(owner: Owner) {
-  const docs = await Subscription.find({ ownerType: SUBSCRIPTION_OWNER[owner.type], ownerId: owner.id })
-    .sort({ createdAt: -1 })
-    .limit(SUBSCRIPTION_LIMIT)
-    .maxTimeMS(QUERY_MAX_TIME_MS)
-    .lean<SubscriptionDoc[]>();
+  const base = { ownerType: SUBSCRIPTION_OWNER[owner.type], ownerId: owner.id };
+  // Newest rows alone could all be ended, hiding an older live subscription, so live rows are read apart.
+  const [recent, live] = await Promise.all([
+    Subscription.find(base)
+      .sort({ createdAt: -1 })
+      .limit(SUBSCRIPTION_LIMIT)
+      .maxTimeMS(QUERY_MAX_TIME_MS)
+      .lean<SubscriptionDoc[]>(),
+    Subscription.find({ ...base, status: { $nin: [...TERMINAL_SUBSCRIPTION_STATUSES] } })
+      .sort({ createdAt: -1 })
+      .limit(SUBSCRIPTION_LIMIT)
+      .maxTimeMS(QUERY_MAX_TIME_MS)
+      .lean<SubscriptionDoc[]>(),
+  ]);
+  const seen = new Set(recent.map(doc => String(doc._id)));
+  const docs = [...recent, ...live.filter(doc => !seen.has(String(doc._id)))].sort(
+    (a, b) => (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0)
+  );
   return toAdminSubscriptionRows(docs, subscriptionPlanCatalog());
 }
 
 async function loadCredits(owner: Owner) {
   const holderType = HOLDER_TYPE[owner.type];
   const [lots, holds] = await Promise.all([
-    creditLotRepository.findByOwner(owner.id, holderType),
-    PendingCreditHoldModel.find(
-      {
-        // A user's own holds also carry their userId, which is indexed; an organization's set stays small
-        // because settled holds expire after a week.
-        ...(owner.type === 'user' ? { userId: owner.id } : {}),
-        ownerId: owner.id,
-        ownerType: holderType,
-        settledAt: { $exists: false },
-      },
-      { reservedCredits: 1 }
-    )
-      .limit(HOLD_LIMIT)
+    CreditLot.find({ ownerId: owner.id, ownerType: holderType })
+      .sort({ expiresAt: 1 })
       .maxTimeMS(QUERY_MAX_TIME_MS)
-      .lean<{ reservedCredits: number }[]>(),
+      .lean<Parameters<typeof fundingOfBalance>[0][number][]>(),
+    PendingCreditHoldModel.aggregate<{ held: number; requests: number }>([
+      {
+        $match: {
+          // A user's own holds also carry their userId, which is indexed.
+          ...(owner.type === 'user' ? { userId: owner.id } : {}),
+          ownerId: owner.id,
+          ownerType: holderType,
+          settledAt: { $exists: false },
+        },
+      },
+      { $group: { _id: null, held: { $sum: { $max: [0, '$reservedCredits'] } }, requests: { $sum: 1 } } },
+    ]).option({ maxTimeMS: QUERY_MAX_TIME_MS }),
   ]);
   return {
     available: owner.currentCredits,
-    held: holds.reduce((sum, hold) => sum + Math.max(0, hold.reservedCredits), 0),
-    heldRequests: holds.length,
+    held: holds[0]?.held ?? 0,
+    heldRequests: holds[0]?.requests ?? 0,
     funding: fundingOfBalance(lots, owner.currentCredits),
   };
 }
@@ -189,7 +202,7 @@ async function loadLedger(owner: Owner, from: Date, to: Date) {
       reversalReason: row.reversalReason ?? null,
     }));
   const issuances: IssuanceRow[] = kept
-    .filter(row => row.type !== 'purchase' || row.status === 'completed')
+    .filter(row => row.type !== 'purchase' || (row.status ?? 'completed') === 'completed')
     .map(row => ({
       id: String(row._id),
       createdAt: row.createdAt,
@@ -436,6 +449,7 @@ export async function loadBillingOverview(
           records: paymentRecords.slice(0, PAYMENT_RECORDS_LIMIT),
           truncated: ledger.truncated || events.truncated || paymentRecords.length > PAYMENT_RECORDS_LIMIT,
           eventsRecordedSince: since.status === 'ok' ? since.billingEvents : null,
+          eventsCoverageUnknown: since.status !== 'ok',
         }
       : {
           status: 'unavailable',

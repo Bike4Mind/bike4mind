@@ -172,6 +172,8 @@ export const BillingOverviewSchema = z.object({
     truncated: z.boolean(),
     /** Stripe events are stored from this date on; before it only credit purchases are known. */
     eventsRecordedSince: z.string().nullable(),
+    /** True when the coverage date could not be read, so a null date does not mean no events exist. */
+    eventsCoverageUnknown: z.boolean().optional(),
   }),
   usage: section({
     lastSuccessfulAt: z.string().nullable(),

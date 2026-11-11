@@ -363,4 +363,104 @@ describe('loadBillingOverview', () => {
       )
     ).rejects.toThrow('Organization not found');
   });
+
+  it('reports Stripe events, payments and activity as unavailable when that read fails', async () => {
+    const { userId } = await seed();
+    vi.mocked(logger.error).mockClear();
+    const spy = vi.spyOn(BillingEventModel, 'find').mockImplementation(() => {
+      throw new Error('events down');
+    });
+    try {
+      const overview = await loadBillingOverview({ ownerType: 'user', ownerId: userId, range: '90d' }, logger, NOW);
+      expect(overview.payments.status).toBe('unavailable');
+      expect(overview.activity.status).toBe('unavailable');
+      expect(overview.credits.status).toBe('ok');
+      expect(overview.subscription.status).toBe('ok');
+      expect(overview.usage.status).toBe('ok');
+      expect(logger.error).toHaveBeenCalledWith('[BillingOverview] Stripe events failed', { error: 'events down' });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('reports usage and activity as unavailable when the usage read fails, keeping payments', async () => {
+    const { userId } = await seed();
+    const spy = vi.spyOn(UsageEvent, 'aggregate').mockImplementation(() => {
+      throw new Error('usage down');
+    });
+    try {
+      const overview = await loadBillingOverview({ ownerType: 'user', ownerId: userId, range: '90d' }, logger, NOW);
+      expect(overview.usage.status).toBe('unavailable');
+      expect(overview.activity.status).toBe('unavailable');
+      expect(overview.payments.status).toBe('ok');
+      expect(overview.credits.status).toBe('ok');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('shows an organization its own purchases and Stripe events, and keeps them off the member', async () => {
+    const { userId, orgId } = await seed();
+    await ledger({
+      ownerId: orgId,
+      ownerType: 'Organization',
+      type: 'purchase',
+      credits: 700,
+      amount: 700,
+      status: 'completed',
+      stripePaymentIntentId: 'pi_org',
+      createdAt: daysAgo(6),
+    });
+    await billingEvent({
+      type: 'payment_intent.succeeded',
+      ownerType: 'organization',
+      ownerId: orgId,
+      amount: 700,
+      occurredAt: daysAgo(6),
+      data: { paymentIntentId: 'pi_org' },
+    });
+
+    const org = await loadBillingOverview({ ownerType: 'organization', ownerId: orgId, range: '90d' }, logger, NOW);
+    if (org.payments.status !== 'ok') throw new Error('payments unavailable');
+    expect(org.payments.records.map(record => record.paymentIntentId)).toEqual(['pi_org']);
+    expect(org.payments.totals.map(row => [row.currency, row.creditPurchases])).toEqual([
+      ['usd', { count: 1, amount: 700 }],
+    ]);
+
+    const user = await loadBillingOverview({ ownerType: 'user', ownerId: userId, range: '90d' }, logger, NOW);
+    if (user.payments.status !== 'ok') throw new Error('payments unavailable');
+    expect(user.payments.records.map(record => record.paymentIntentId)).not.toContain('pi_org');
+  });
+
+  it('finds a live subscription older than the ten newest ended ones', async () => {
+    const user = await User.create({ name: 'Cy', username: 'cy', email: 'cy@example.com', currentCredits: 0 });
+    const ownerId = String(user.id);
+    await Subscription.create({
+      subscriptionId: 'sub_live',
+      ownerType: 'User',
+      ownerId,
+      priceId: 'price_test',
+      status: 'active',
+      source: 'stripe',
+      quantity: 1,
+      periodStartsAt: daysAgo(10),
+      periodEndsAt: new Date(NOW.getTime() + 20 * DAY),
+    });
+    // createdAt is stamped on insert, so the ended rows are inserted after and sort newer.
+    for (let i = 0; i < 11; i++) {
+      await Subscription.create({
+        subscriptionId: `sub_ended_${i}`,
+        ownerType: 'User',
+        ownerId,
+        priceId: 'price_test',
+        status: 'canceled',
+        source: 'stripe',
+        quantity: 1,
+        periodStartsAt: daysAgo(100),
+        periodEndsAt: daysAgo(50),
+      });
+    }
+    const overview = await loadBillingOverview({ ownerType: 'user', ownerId, range: '30d' }, logger, NOW);
+    expect(overview.subscription).toMatchObject({ status: 'ok', standing: 'paid' });
+  });
 });

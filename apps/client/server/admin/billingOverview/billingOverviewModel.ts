@@ -181,7 +181,7 @@ export function summarizePayments(
       if (!seen) disputes.set(key, { first: event, latest: event });
       else {
         if (event.occurredAt < seen.first.occurredAt) seen.first = event;
-        if (event.occurredAt >= seen.latest.occurredAt) seen.latest = event;
+        if (event.occurredAt > seen.latest.occurredAt) seen.latest = event;
       }
     }
   }

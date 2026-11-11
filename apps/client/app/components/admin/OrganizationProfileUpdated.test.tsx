@@ -15,7 +15,7 @@ vi.mock('@client/app/hooks/data/useOrgStorageUsage', () => ({
 }));
 vi.mock('./OrganizationGroupTypesCard', () => ({ default: () => null }));
 vi.mock('./OrganizationGroupMembersCard', () => ({ default: () => null }));
-// Covered by Billing/BillingOverview.test.tsx; stubbed here because it reads the router.
+// Stubbed here because it reads the router.
 vi.mock('./Billing/OrganizationBillingSection', () => ({
   OrganizationBillingSection: ({ orgId }: { orgId: string }) => <div data-testid="stub-org-billing">{orgId}</div>,
 }));

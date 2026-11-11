@@ -2,8 +2,8 @@ import { PendingCreditHoldModel } from '@bike4mind/database';
 import { type MigrationFile } from './index';
 
 /**
- * Build PendingCreditHold's { ownerId, ownerType } index, which serves the admin billing overview's
- * read of an organization's outstanding holds (PendingCreditHoldModel.ts).
+ * Build PendingCreditHold's { ownerId, ownerType, settledAt } index, which serves the admin billing
+ * overview's sum of an owner's outstanding holds (PendingCreditHoldModel.ts).
  * `autoIndex` is off in deployed environments, so the schema declaration alone never builds it.
  *
  * Id sits below 20260922000001, which must stay the last core migration (see index.ts).
