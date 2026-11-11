@@ -28,6 +28,7 @@ export async function runMirrorCommand(
       .map(
         destination =>
           `${sanitizeTerminalText(destination.name)}: ${destination.paused ? 'paused' : 'configured'}; ${sanitizeTerminalText(destination.directory)}; ` +
+          `account ${sanitizeTerminalText(destination.accountId)}; ` +
           'lag: unknown (no bootstrap cursor or complete change feed available)'
       )
       .join('\n');
@@ -43,6 +44,15 @@ export async function runMirrorCommand(
     const destination = (await store.list()).find(entry => entry.name === name);
     if (!destination) throw new Error('Destination not found');
     if (destination.paused) throw new Error('Destination is paused');
+    const config = await ctx.configStore.get();
+    const endpoint = resolveApiEndpoint(config.apiConfig);
+    if (
+      destination.accountId !== config.auth?.userId ||
+      endpoint.status !== 'configured' ||
+      destination.apiUrl !== endpoint.url
+    ) {
+      throw new Error('Destination belongs to a different account or service');
+    }
     throw new Error(
       'Pull unavailable: a snapshot-consistent v2 bootstrap cursor and complete account mutation feed are required'
     );

@@ -11,7 +11,7 @@ describe('/mirror', () => {
   } as unknown as Pick<CommandContext, 'configStore'>;
   const store = {
     add: vi.fn(),
-    list: vi.fn(async () => [{ name: 'local', directory: '/tmp/bundle', paused: false }]),
+    list: vi.fn(async () => [{ name: 'local', directory: '/tmp/bundle', paused: false, accountId: 'u1', apiUrl: 'https://example.test' }]),
     pause: vi.fn(),
     revoke: vi.fn(),
   } as unknown as MirrorStore;
@@ -33,7 +33,7 @@ describe('/mirror', () => {
 
   it('strips terminal control sequences from a configured path in status', async () => {
     const hostileStore = {
-      list: vi.fn(async () => [{ name: 'local', directory: '/tmp/\u001b[2Jbundle', paused: false }]),
+      list: vi.fn(async () => [{ name: 'local', directory: '/tmp/\u001b[2Jbundle', paused: false, accountId: 'u1' }]),
     } as unknown as MirrorStore;
     const output = await runMirrorCommand(['status'], ctx, hostileStore);
     expect(output).toContain('/tmp/bundle');
