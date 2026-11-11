@@ -269,6 +269,12 @@ function localHistoryEntry(): ConfigEntry {
   };
 }
 
+function errorText(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  // Electron prefixes a rejected invoke with where it came from; the user needs the reason only.
+  return message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+}
+
 function LocalDataExport() {
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -290,7 +296,7 @@ function LocalDataExport() {
       }
     } catch (error) {
       setFailed(true);
-      setMessage(`Could not export local data: ${error instanceof Error ? error.message : String(error)}`);
+      setMessage(`Could not export local data: ${errorText(error)}`);
     } finally {
       setPending(false);
     }
