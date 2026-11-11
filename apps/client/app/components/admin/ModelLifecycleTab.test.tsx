@@ -114,10 +114,26 @@ describe('ModelLifecycleTab', () => {
     );
   });
 
+  it('prefills the note with an evidence line built from the suggestion', async () => {
+    renderTab();
+    fireEvent.click(await queueAction('accept'));
+
+    const note = screen.getByTestId('model-lifecycle-note-input') as HTMLTextAreaElement;
+    expect(note.value).toContain('developers.openai.com/api/docs/deprecations');
+    expect(note.value).toContain('Deprecated 2026-08-01');
+    expect(note.value).toContain('Signal: anthropic-docs signal.');
+    expect(screen.getByTestId('model-lifecycle-accept-confirm-btn')).not.toHaveAttribute('disabled');
+
+    fireEvent.click(screen.getByTestId('model-lifecycle-note-quickpick-confirmed'));
+    expect(note.value).toMatch(/Signal: anthropic-docs signal\. Confirmed on vendor page\.$/);
+  });
+
   it('accept requires a note, then posts the suggested successor with it', async () => {
     renderTab();
     fireEvent.click(await queueAction('accept'));
 
+    // The prefill is a draft: emptying it blocks the accept, because the note is the audit trail.
+    fireEvent.change(screen.getByTestId('model-lifecycle-note-input'), { target: { value: '  ' } });
     const confirm = screen.getByTestId('model-lifecycle-accept-confirm-btn');
     expect(confirm).toHaveAttribute('disabled');
     expect(mockPost).not.toHaveBeenCalled();
@@ -381,7 +397,7 @@ describe('ModelLifecycleTab page layout', () => {
       'Expired and expiring (2)',
       'Stale references (3)',
     ]);
-    expect(screen.getByTestId('model-lifecycle-queue-table')).toHaveStyle({ minWidth: '62rem' });
+    expect(screen.getByTestId('model-lifecycle-queue-table')).toHaveStyle({ minWidth: '65rem' });
     expect(screen.getByTestId('model-lifecycle-horizon-table')).toHaveStyle({ minWidth: '48rem' });
     expect(screen.getByTestId('model-lifecycle-stale-table')).toHaveStyle({ minWidth: '48rem' });
     expect(screen.getByTestId('model-lifecycle-queue-table-frame')).toBeInTheDocument();
@@ -533,5 +549,107 @@ describe('ModelLifecycleTab page layout', () => {
     const dash = within(row).getAllByText('-')[0];
     expect(dash.tagName).toBe('SPAN');
     expect(dash).toHaveStyle({ color: 'var(--joy-palette-admin-inkMuted)' });
+  });
+
+  describe('bulk settle', () => {
+    const BULK_STATUS = {
+      ...STATUS,
+      queue: [
+        ...STATUS.queue,
+        {
+          modelId: 'anthropic.claude-v2',
+          backend: 'bedrock',
+          suggestion: {
+            status: 'deprecated',
+            deprecationDate: '2026-09-30',
+            retirementDate: '2027-03-30',
+            source: 'litellm',
+            suggestedAt: '2026-11-01T00:00:00.000Z',
+          },
+        },
+      ],
+    };
+
+    const selectRows = async (...modelIds: string[]) => {
+      for (const modelId of modelIds) {
+        // The test id sits on the Joy root; the click has to reach the input inside it.
+        fireEvent.click(within(await screen.findByTestId(`admin-table-select-${modelId}`)).getByRole('checkbox'));
+      }
+    };
+
+    beforeEach(() => {
+      mockGet.mockResolvedValue({ data: BULK_STATUS });
+    });
+
+    it('accepts every selected row with one shared, template-filled note', async () => {
+      renderTab();
+      await selectRows('anthropic.claude-v2');
+      fireEvent.click(screen.getByTestId('model-lifecycle-bulk-accept-btn'));
+
+      const note = screen.getByTestId('model-lifecycle-bulk-note-input') as HTMLTextAreaElement;
+      expect(note.value).toContain('AWS Bedrock legacy page');
+      expect(note.value).toContain('Legacy 2026-09-30, EOL 2027-03-30');
+
+      fireEvent.click(screen.getByTestId('model-lifecycle-bulk-confirm-btn'));
+
+      await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
+      expect(mockPost).toHaveBeenCalledWith('/api/admin/model-deprecation-status', {
+        modelId: 'anthropic.claude-v2',
+        action: 'accept',
+        note: note.value.trim(),
+      });
+      // Everything settled: the dialog closes and the queue reloads.
+      await waitFor(() => expect(screen.queryByTestId('model-lifecycle-bulk-modal')).not.toBeInTheDocument());
+      expect(mockGet).toHaveBeenCalledTimes(2);
+    });
+
+    it('will not bulk accept with an emptied note', async () => {
+      renderTab();
+      await selectRows('gpt-sunset', 'anthropic.claude-v2');
+      fireEvent.click(screen.getByTestId('model-lifecycle-bulk-accept-btn'));
+      fireEvent.change(screen.getByTestId('model-lifecycle-bulk-note-input'), { target: { value: ' ' } });
+
+      expect(screen.getByTestId('model-lifecycle-bulk-confirm-btn')).toHaveAttribute('disabled');
+    });
+
+    it('reports a replacement-blocked row back and hands it to the single-row dialog', async () => {
+      mockPost.mockImplementation(async (_url: string, body: { modelId: string }) => {
+        if (body.modelId !== 'gpt-sunset') return { data: {} };
+        throw Object.assign(new Error('Request failed with status code 409'), {
+          response: { status: 409, data: { code: 'replacement-blocked', details: ['costs more than gpt-sunset'] } },
+        });
+      });
+      renderTab();
+      await selectRows('gpt-sunset', 'anthropic.claude-v2');
+      fireEvent.click(screen.getByTestId('model-lifecycle-bulk-accept-btn'));
+      fireEvent.click(screen.getByTestId('model-lifecycle-bulk-confirm-btn'));
+
+      const result = await screen.findByTestId('model-lifecycle-bulk-result-gpt-sunset');
+      expect(result).toHaveTextContent('costs more than gpt-sunset');
+      expect(screen.getByTestId('model-lifecycle-bulk-summary')).toHaveTextContent('1 of 2 settled');
+      expect(screen.queryByTestId('model-lifecycle-bulk-result-anthropic.claude-v2')).not.toBeInTheDocument();
+      // Never auto-acknowledged: one request per row, none overruling.
+      expect(mockPost).toHaveBeenCalledTimes(2);
+      for (const [, body] of mockPost.mock.calls) expect(body).not.toHaveProperty('acknowledgeBlockers');
+
+      fireEvent.click(screen.getByTestId('model-lifecycle-bulk-review-gpt-sunset'));
+      expect(await screen.findByTestId('model-lifecycle-accept-modal')).toHaveTextContent('gpt-sunset');
+    });
+
+    it('dismisses the selection with an optional note', async () => {
+      renderTab();
+      await selectRows('gpt-sunset', 'anthropic.claude-v2');
+      fireEvent.click(screen.getByTestId('model-lifecycle-bulk-dismiss-btn'));
+
+      expect((screen.getByTestId('model-lifecycle-bulk-note-input') as HTMLTextAreaElement).value).toBe('');
+      expect(screen.getByTestId('model-lifecycle-bulk-confirm-btn')).not.toHaveAttribute('disabled');
+      fireEvent.click(screen.getByTestId('model-lifecycle-bulk-confirm-btn'));
+
+      await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(2));
+      expect(mockPost.mock.calls.map(([, body]) => body)).toEqual([
+        { modelId: 'gpt-sunset', action: 'dismiss' },
+        { modelId: 'anthropic.claude-v2', action: 'dismiss' },
+      ]);
+    });
   });
 });

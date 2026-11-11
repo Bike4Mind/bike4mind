@@ -26,14 +26,18 @@ import { SuccessorCostChip, SuccessorCostPanel } from './SuccessorCostDelta';
 import { AdminTab } from './adminSidebarConfig';
 import { useAdminModal } from './useAdminModal';
 import { useCreditAnalysisStore } from './CreditAnalysis/store';
+import { NOTE_QUICK_PICKS, appendQuickPick, buildBulkLifecycleNote, buildLifecycleNote } from './modelLifecycleNotes';
+import { runBulkResolution, type BulkAction, type BulkRowResult } from './modelLifecycleBulk';
 import {
   AdminDialog,
   AdminPageHeader,
+  BulkActionBar,
   DataTable,
   EmptyState,
   ErrorState,
   StatusChip,
   UpdatingBar,
+  type AdminSelection,
   type DataColumn,
 } from './shared';
 import { ADMIN_REGION_GAP, adminFocus } from './shared/adminStyles';
@@ -41,6 +45,10 @@ import { ADMIN_REGION_GAP, adminFocus } from './shared/adminStyles';
 /** Wire shapes of /api/admin/model-deprecation-status (dates arrive as strings). */
 interface QueueItem {
   modelId: string;
+  /** The serving backend, when the server could resolve it; picks the vendor page for the note. */
+  backend?: string;
+  /** Consecutive misses, sent only for absence-raised suggestions. */
+  missCount?: number;
   suggestion?: {
     status?: string;
     deprecationDate?: string;
@@ -134,6 +142,40 @@ const replacementBlockers = (err: unknown): string[] | null => {
   return res.data.details?.length ? res.data.details : ['the automation refused this successor'];
 };
 
+/**
+ * One-click phrases under a note field. They append, so the prefilled evidence
+ * line stays in the audit trail.
+ */
+const NoteQuickPicks = ({
+  note,
+  onChange,
+  testIdPrefix,
+}: {
+  note: string;
+  onChange: (next: string) => void;
+  testIdPrefix: string;
+}) => (
+  <Stack direction="row" gap={0.5} flexWrap="wrap">
+    {NOTE_QUICK_PICKS.map(pick => (
+      <Button
+        key={pick.id}
+        size="sm"
+        variant="soft"
+        color="neutral"
+        onClick={() => onChange(appendQuickPick(note, pick.text))}
+        data-testid={`${testIdPrefix}-quickpick-${pick.id}`}
+      >
+        {pick.label}
+      </Button>
+    ))}
+  </Stack>
+);
+
+const BULK_OUTCOME_LABEL: Record<Exclude<BulkRowResult['outcome'], 'settled'>, string> = {
+  blocked: 'needs a per-row decision',
+  failed: 'failed',
+};
+
 const formatDays = (days: number | undefined) => {
   if (days === undefined) return '-';
   return days <= 0 ? `${Math.abs(days)}d ago` : `in ${days}d`;
@@ -177,6 +219,14 @@ export const ModelLifecycleTab: React.FC = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [pendingDismissId, setPendingDismissId] = useState<string | null>(null);
 
+  const [selection, setSelection] = useState<AdminSelection>({ mode: 'explicit', ids: [] });
+  // The bulk dialog: which verdict, the one shared note, progress while it runs,
+  // and the rows that did not settle once it has.
+  const [bulkAction, setBulkAction] = useState<BulkAction | null>(null);
+  const [bulkNote, setBulkNote] = useState('');
+  const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number } | null>(null);
+  const [bulkResults, setBulkResults] = useState<BulkRowResult[] | null>(null);
+
   const setAdminTab = useAdminModal(state => state.setActiveTab);
   const setCreditAnalysisTab = useCreditAnalysisStore(state => state.setActiveTab);
 
@@ -198,7 +248,8 @@ export const ModelLifecycleTab: React.FC = () => {
   }, [fetchStatus]);
 
   const openAccept = (item: QueueItem) => {
-    setNote('');
+    // Prefilled, not submitted: the operator still reads the evidence line and edits it.
+    setNote(buildLifecycleNote(item));
     setReplacedBy(item.suggestion?.replacedBy ?? '');
     setModalError(null);
     setBlockers(null);
@@ -262,6 +313,61 @@ export const ModelLifecycleTab: React.FC = () => {
       setPendingDismissId(null);
     }
   };
+
+  const queue = status?.queue ?? [];
+  const selectedItems =
+    selection.mode === 'allMatching' ? queue : queue.filter(item => selection.ids.includes(item.modelId));
+  const clearSelection = () => setSelection({ mode: 'explicit', ids: [] });
+
+  const openBulk = (action: BulkAction) => {
+    // Accept gets the evidence template; a dismiss note is optional and starts empty.
+    setBulkNote(action === 'accept' ? buildBulkLifecycleNote(selectedItems) : '');
+    setBulkProgress(null);
+    setBulkResults(null);
+    setBulkAction(action);
+  };
+
+  const closeBulk = () => {
+    if (bulkProgress && !bulkResults) return; // running: closing would hide rows still in flight
+    setBulkAction(null);
+    setBulkProgress(null);
+    setBulkResults(null);
+  };
+
+  const submitBulk = async () => {
+    if (!bulkAction || selectedItems.length === 0) return;
+    const modelIds = selectedItems.map(item => item.modelId);
+    setBulkProgress({ done: 0, total: modelIds.length });
+    const results = await runBulkResolution({
+      modelIds,
+      action: bulkAction,
+      note: bulkNote,
+      post: body => api.post('/api/admin/model-deprecation-status', body),
+      onProgress: (done, total) => setBulkProgress({ done, total }),
+    });
+    const unsettled = results.filter(result => result.outcome !== 'settled');
+    // Keep what still needs a decision selected, so the next pass starts from it.
+    setSelection({ mode: 'explicit', ids: unsettled.map(result => result.modelId) });
+    await fetchStatus();
+    if (unsettled.length === 0) {
+      setBulkAction(null);
+      setBulkProgress(null);
+      return;
+    }
+    setBulkResults(results);
+  };
+
+  /** A blocked row leaves the bulk path for the single-row dialog, where acknowledging is an explicit choice. */
+  const reviewBlocked = (modelId: string) => {
+    const item = queue.find(candidate => candidate.modelId === modelId);
+    setBulkAction(null);
+    setBulkProgress(null);
+    setBulkResults(null);
+    if (item) openAccept(item);
+  };
+
+  const bulkRunning = bulkProgress !== null && bulkResults === null;
+  const bulkSettledCount = bulkResults?.filter(result => result.outcome === 'settled').length ?? 0;
 
   const horizon = status ? horizonRows(status) : [];
   const rates = status?.perMTokRates ?? {};
@@ -482,11 +588,13 @@ export const ModelLifecycleTab: React.FC = () => {
                 columns={queueColumns}
                 getRowId={item => item.modelId}
                 rowTestId={item => `model-lifecycle-queue-row-${item.modelId}`}
+                selection={selection}
+                onSelectionChange={setSelection}
                 loading={firstLoad}
                 onRetry={fetchStatus}
                 rowActions={queueMenu}
-                // Fixed columns total 44rem plus the 3.5rem actions column; the successor takes the rest.
-                minWidth="62rem"
+                // Fixed columns total 44rem plus the checkbox and 3.5rem actions columns; the successor takes the rest.
+                minWidth="65rem"
                 maxHeight="none"
                 pagination={false}
                 empty={
@@ -499,6 +607,31 @@ export const ModelLifecycleTab: React.FC = () => {
                   </Box>
                 }
               />
+              <BulkActionBar
+                selection={selection}
+                totalMatching={queue.length}
+                onSelectAllMatching={() => setSelection({ mode: 'allMatching' })}
+                selectAllLabel={`Select all ${queue.length} pending`}
+                onClear={clearSelection}
+              >
+                <Button
+                  variant="outlined"
+                  disabled={selectedItems.length === 0}
+                  onClick={() => openBulk('accept')}
+                  data-testid="model-lifecycle-bulk-accept-btn"
+                >
+                  Accept selected
+                </Button>
+                <Button
+                  variant="outlined"
+                  color="danger"
+                  disabled={selectedItems.length === 0}
+                  onClick={() => openBulk('dismiss')}
+                  data-testid="model-lifecycle-bulk-dismiss-btn"
+                >
+                  Dismiss selected
+                </Button>
+              </BulkActionBar>
             </Stack>
 
             <Stack component="section" gap={1}>
@@ -643,6 +776,7 @@ export const ModelLifecycleTab: React.FC = () => {
               slotProps={{ textarea: { 'data-testid': 'model-lifecycle-note-input' } }}
             />
           </FormControl>
+          <NoteQuickPicks note={note} onChange={setNote} testIdPrefix="model-lifecycle-note" />
           <Stack direction="row" gap={1} justifyContent="flex-end" sx={{ mt: 1 }}>
             <Button
               variant="plain"
@@ -702,6 +836,113 @@ export const ModelLifecycleTab: React.FC = () => {
             </Button>
           </Stack>
         </Stack>
+      </AdminDialog>
+
+      <AdminDialog
+        open={bulkAction !== null}
+        onClose={closeBulk}
+        title={
+          bulkResults
+            ? `Bulk ${bulkAction === 'dismiss' ? 'dismiss' : 'accept'} finished`
+            : bulkAction === 'dismiss'
+              ? `Dismiss ${selectedItems.length} suggestions?`
+              : `Accept ${selectedItems.length} lifecycle changes`
+        }
+        role={bulkAction === 'dismiss' ? 'alertdialog' : undefined}
+        width={600}
+        data-testid="model-lifecycle-bulk-modal"
+      >
+        {bulkResults ? (
+          <Stack gap={1}>
+            <Typography level="body-sm" data-testid="model-lifecycle-bulk-summary">
+              {`${bulkSettledCount} of ${bulkResults.length} settled. These still need a decision:`}
+            </Typography>
+            <Box component="ul" sx={{ my: 0, pl: 2.5 }}>
+              {bulkResults.map(result =>
+                result.outcome === 'settled' ? null : (
+                  <li key={result.modelId} data-testid={`model-lifecycle-bulk-result-${result.modelId}`}>
+                    <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
+                      <Typography level="body-sm" sx={{ fontFamily: 'monospace' }}>
+                        {result.modelId}
+                      </Typography>
+                      <StatusChip
+                        tone={result.outcome === 'blocked' ? 'warn' : 'bad'}
+                        label={BULK_OUTCOME_LABEL[result.outcome]}
+                      />
+                      {result.outcome === 'blocked' && (
+                        <Button
+                          size="sm"
+                          variant="plain"
+                          onClick={() => reviewBlocked(result.modelId)}
+                          data-testid={`model-lifecycle-bulk-review-${result.modelId}`}
+                        >
+                          Review
+                        </Button>
+                      )}
+                    </Stack>
+                    <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+                      {result.outcome === 'blocked' ? result.blockers.join('; ') : result.message}
+                    </Typography>
+                  </li>
+                )
+              )}
+            </Box>
+            <Stack direction="row" justifyContent="flex-end" sx={{ mt: 1 }}>
+              <Button variant="plain" color="neutral" onClick={closeBulk} data-testid="model-lifecycle-bulk-close-btn">
+                Close
+              </Button>
+            </Stack>
+          </Stack>
+        ) : (
+          <Stack gap={1}>
+            <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
+              {bulkAction === 'dismiss'
+                ? 'Each suggestion is retired for good and gets its own audit entry. There is no undo.'
+                : 'Each model gets its own operator row and audit entry, with its suggested dates and successor. A row whose successor fails the auto-remap checks is skipped and listed for a per-row decision.'}
+            </Typography>
+            <FormControl required={bulkAction === 'accept'}>
+              <FormLabel>
+                {bulkAction === 'accept'
+                  ? 'Note for every row (audit trail: what confirms these deprecations?)'
+                  : 'Note (optional, recorded in each audit entry)'}
+              </FormLabel>
+              <Textarea
+                minRows={2}
+                value={bulkNote}
+                onChange={e => setBulkNote(e.target.value)}
+                slotProps={{ textarea: { 'data-testid': 'model-lifecycle-bulk-note-input' } }}
+              />
+            </FormControl>
+            <NoteQuickPicks note={bulkNote} onChange={setBulkNote} testIdPrefix="model-lifecycle-bulk-note" />
+            {bulkProgress && (
+              <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }} data-testid="model-lifecycle-bulk-progress">
+                {`${bulkProgress.done} of ${bulkProgress.total} done`}
+              </Typography>
+            )}
+            <Stack direction="row" gap={1} justifyContent="flex-end" sx={{ mt: 1 }}>
+              <Button
+                variant="plain"
+                color="neutral"
+                disabled={bulkRunning}
+                onClick={closeBulk}
+                data-testid="model-lifecycle-bulk-cancel-btn"
+              >
+                Cancel
+              </Button>
+              <Button
+                color={bulkAction === 'dismiss' ? 'danger' : 'primary'}
+                disabled={(bulkAction === 'accept' && bulkNote.trim() === '') || bulkRunning}
+                loading={bulkRunning}
+                onClick={() => void submitBulk()}
+                data-testid="model-lifecycle-bulk-confirm-btn"
+              >
+                {bulkAction === 'dismiss'
+                  ? `Dismiss ${selectedItems.length}`
+                  : `Append ${selectedItems.length} lifecycle rows`}
+              </Button>
+            </Stack>
+          </Stack>
+        )}
       </AdminDialog>
     </Stack>
   );
