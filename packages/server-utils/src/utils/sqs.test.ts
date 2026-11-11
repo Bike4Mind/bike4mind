@@ -143,6 +143,20 @@ describe('sqs utilities', () => {
       });
     });
 
+    it('returns the queue retention in seconds when present', async () => {
+      mockSend.mockResolvedValueOnce({
+        Attributes: {
+          ApproximateNumberOfMessages: '1',
+          ApproximateNumberOfMessagesNotVisible: '0',
+          MessageRetentionPeriod: '1209600',
+        },
+      });
+
+      const result = await getQueueAttributes(TEST_QUEUE_URL);
+
+      expect(result.messageRetentionSeconds).toBe(1209600);
+    });
+
     it('defaults to 0 when attributes are missing', async () => {
       mockSend.mockResolvedValueOnce({ Attributes: undefined });
 

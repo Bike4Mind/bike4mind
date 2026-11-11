@@ -28,14 +28,15 @@ const setup = () => {
 describe('skillMarket hooks', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('keys the listing detail by token so a no-token 404 is not reused for a token fetch', async () => {
-    h.get.mockRejectedValueOnce(new Error('404')).mockResolvedValueOnce({ data: { listing: { id: 'l1' } } });
+  it('fetches by id without sending a token, and by share-token path when only a token is given', async () => {
+    h.get.mockResolvedValue({ data: { listing: { id: 'l1' } } });
     const { wrapper } = setup();
-    const noToken = renderHook(() => useListingDetail({ id: 'l1' }), { wrapper });
-    await waitFor(() => expect(noToken.result.current.isError).toBe(true));
-    const withToken = renderHook(() => useListingDetail({ id: 'l1', token: 'abc' }), { wrapper });
-    await waitFor(() => expect(withToken.result.current.isSuccess).toBe(true));
-    expect(h.get).toHaveBeenLastCalledWith('/api/skills/market/l1?token=abc');
+    const byId = renderHook(() => useListingDetail({ id: 'l1', token: 'abc' }), { wrapper });
+    await waitFor(() => expect(byId.result.current.isSuccess).toBe(true));
+    expect(h.get).toHaveBeenLastCalledWith('/api/skills/market/l1');
+    const byToken = renderHook(() => useListingDetail({ token: 'abc' }), { wrapper });
+    await waitFor(() => expect(byToken.result.current.isSuccess).toBe(true));
+    expect(h.get).toHaveBeenLastCalledWith('/api/skills/market/by-token/abc');
   });
 
   it('invalidates the reports queue and listing detail after a report', async () => {
