@@ -261,7 +261,8 @@ export interface CompletionParams {
   onReady?: () => void | Promise<void>;
   /**
    * Called once after settlement, before the function returns or rethrows an abort. Not called when
-   * the completion failed before settlement or credits were not enforced.
+   * the completion failed before settlement or credits were not enforced. A throw is logged and
+   * swallowed.
    */
   onSettled?: (settlement: CompletionSettlement) => void;
   /** Entitlement resolver for model admission; omitted means tag-only access. */
@@ -1597,13 +1598,21 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   }
 
   // Outside the settlement try, so a throwing callback cannot read as a failed ledger adjustment.
+  // Guarded so a throwing callback cannot skip the embed metering and per-key spend below.
   if (enforceCredits && modelInfo) {
-    params.onSettled?.({
-      requestId,
-      committed: settlementCommitted,
-      creditsCharged: settlementCommitted ? chargedCredits : 0,
-      usdCost: chargedUsdCost,
-    });
+    try {
+      params.onSettled?.({
+        requestId,
+        committed: settlementCommitted,
+        creditsCharged: settlementCommitted ? chargedCredits : 0,
+        usdCost: chargedUsdCost,
+      });
+    } catch (error) {
+      logger?.warn?.('[CLI_CREDITS] onSettled callback threw', {
+        requestId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   // Embed metering fallback: the embed path must record org usage even when the

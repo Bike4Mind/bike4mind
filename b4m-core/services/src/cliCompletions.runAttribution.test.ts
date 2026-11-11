@@ -181,6 +181,20 @@ describe('executeCompletion - run attribution', () => {
     expect(onSettled).toHaveBeenCalledWith(expect.objectContaining({ committed: false, creditsCharged: 0 }));
   });
 
+  it('logs and swallows a throwing settlement callback', async () => {
+    const logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() };
+    const onSettled = vi.fn(() => {
+      throw new Error('listener failed');
+    });
+    await run(buildDb().db, { onSettled, logger: logger as unknown as CompletionParams['logger'] });
+
+    expect(onSettled).toHaveBeenCalledOnce();
+    expect(logger.warn).toHaveBeenCalledWith(
+      '[CLI_CREDITS] onSettled callback threw',
+      expect.objectContaining({ requestId: 'caller-request-id', error: 'listener failed' })
+    );
+  });
+
   it('reports no settlement when credits are not enforced', async () => {
     enforceCredits.value = false;
     const onSettled = vi.fn();
