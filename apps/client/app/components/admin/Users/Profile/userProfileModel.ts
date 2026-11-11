@@ -145,6 +145,7 @@ export const ADMIN_PERMISSION_LABELS: Record<AdminPermissionId, { label: string;
   'users:impersonate': { label: 'Impersonate', description: 'Sign in as another user.' },
   'keys:revoke': { label: 'Revoke keys', description: 'Revoke API and embed keys.' },
   'users:delete': { label: 'Delete users', description: 'Schedule and run account deletion.' },
+  'users:export': { label: 'Export user data', description: "Download a user's data subject export." },
   'settings:manage': { label: 'Manage settings', description: 'Change admin settings, tags and product access.' },
   'models:curate': { label: 'Curate models', description: 'Change which models are offered.' },
 };
