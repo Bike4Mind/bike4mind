@@ -44,6 +44,14 @@ describe('client import graph', () => {
     expect(offenders).toEqual([]);
   });
 
+  it('no file under apps/client/app imports the server-only content or wiring', () => {
+    const guarded = ['content.ts', 'core.ts', 'coreDeps.ts'].map(f => join(SERVER_ROOT, 'tutorials', f));
+    const offenders = sourceFiles(CLIENT_ROOT).filter(file =>
+      [...readFileSync(file, 'utf8').matchAll(SPEC)].some(([, spec]) => guarded.includes(resolveSpec(file, spec) ?? ''))
+    );
+    expect(offenders).toEqual([]);
+  });
+
   it('the resolver recognises every spelling of the registry path', () => {
     const probe = join(CLIENT_ROOT, 'probe.ts');
     for (const spec of [
