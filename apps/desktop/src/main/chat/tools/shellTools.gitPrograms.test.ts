@@ -243,6 +243,25 @@ const ROWS: [string, string, string][] = [
   ['mv src src.old && mv bad src && git -C src st', '', 'aaaa'],
   ['mv a.ts b.ts && git st', '', 'rrrr'],
   ['rm -rf dist && git st', '', 'rrrr'],
+  ['rm -rf build && mkdir build && cd build && git st', '', 'rrrr'],
+  ['rm -rf build && mkdir -p build && git -C build st', '', 'rrrr'],
+  ['rm -rf tmp && mkdir tmp && cd tmp && git st', '', 'rrrr'],
+  ['rm -rf dist && mkdir dist && cd dist && git lg -3', '', 'rrrr'],
+  ['rm -rf cl && git clone origin.git cl && cd cl && git st', '', 'rrrr'],
+  ['rm -rf lib && mv bad lib && git -C lib st', '', 'aaaa'],
+  ['rm -rf lib && mkdir lib && mv bad/.git lib/ && git -C lib st', '', 'aaaa'],
+  ['rm -rf lib && mkdir lib && cp -r bad/. lib && git -C lib st', '', 'aaaa'],
+  ['rm -rf lib && mkdir lib && mv -T bad lib && git -C lib st', '', 'aaaa'],
+  ['rm -rf dist/* && git st', '', 'rrrr'],
+  ['rm -rf *.log && git st', '', 'rrrr'],
+  ['rm -rf {dist,build} && git st', '', 'rrrr'],
+  ['rm -rf **/node_modules && git st', '', 'rrrr'],
+  ['rm -rf **/lib && mv bad d3/x/lib && git -C d3/x/lib st', '', 'rrrr'],
+  ['rm -rf */lib && git st', '', 'rrrr'],
+  ['rmdir -p tmp/x && git st', '', 'arrr'],
+  ['git fetch HTTP::x', '', 'aaaa'],
+  ['git fetch HTTPS::x', '', 'aaaa'],
+  ['git fetch https://github.com/a/b', '', 'rrrr'],
   ['rm -rf node_modules && pnpm i && git st', '', 'rrrr'],
   ['rm -rf dist/* && git st', '', 'rrrr'],
   ['rm -f *.log && git st', '', 'rrrr'],
@@ -253,7 +272,7 @@ const ROWS: [string, string, string][] = [
   ['rm -rf .g* && git st', '', 'aaaa'],
   ['shopt -s dotglob; rm -rf * && git st', '', 'aaaa'],
   ['rm -rf lrepo/* && mv bad/. lrepo && git -C lrepo st', '', 'aaaa'],
-  ['rm -rf * && git st', '', 'aaaa'],
+  ['rm -rf * && git st', '', 'rrrr'],
   ['cp -r vend dist6 && pnpm exec git -C dist6/lib st', '', 'aaaa'],
   ['cp -r vend dist6 && npx git -C dist6/lib st', '', 'aaaa'],
   ['cp -r vend dist6 && npm exec -- git -C dist6/lib st', '', 'aaaa'],
@@ -355,6 +374,8 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
     git(join(proj, 'vend', 'lib'), 'config', 'alias.st', '!touch MARK');
     repository(join(proj, 'bad'), { 'x.ts': 'x' });
     git(join(proj, 'bad'), 'config', 'alias.st', '!touch MARK');
+    repository(join(proj, 'lib'), { 'x.ts': 'x' });
+    repository(join(proj, 'd3', 'x', 'lib'), { 'x.ts': 'x' });
     file(join(proj, 'srcx', 'git-hello'), '#!/bin/sh\n', 0o755);
     mkdirSync(join(proj, 'sub', 'deep'), { recursive: true });
     symlinkSync('sub', join(proj, 'sublink'));
@@ -374,7 +395,10 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
     );
     file(join(proj, 'nbin', 'git-merge-foo'), '#!/bin/sh\nexit 1\n', 0o755);
     file(join(proj, 'nbin', 'git-remote-foo'), '#!/bin/sh\nexit 1\n', 0o755);
-    vi.stubEnv('PATH', `nbin:${process.env.PATH}`);
+    file(join(proj, 'nbin', 'git-remote-HTTP'), '#!/bin/sh\nexit 1\n', 0o755);
+    file(join(proj, 'nbin', 'git-remote-HTTPS'), '#!/bin/sh\nexit 1\n', 0o755);
+    const ambient = (process.env.PATH ?? '').split(':').filter(entry => !entry.endsWith('node_modules/.bin'));
+    vi.stubEnv('PATH', ['nbin', ...ambient].join(':'));
     execFileSync('git', ['clone', '-q', '--bare', proj, join(proj, 'origin.git')], { env });
     execFileSync('git', ['clone', '-q', '--bare', proj, join(proj, 'blay', '.bare')], { env });
     file(join(proj, 'blay', '.git'), 'gitdir: ./.bare\n');
@@ -451,6 +475,42 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
 
   it.each(ROWS)('decides %s (in proj/%s) as %s', async (command, folder, expected) => {
     expect(await cells(command, folder)).toBe(expected);
+  });
+
+  describe('with globstar set in the shell environment', () => {
+    beforeAll(() => {
+      vi.stubEnv('BASHOPTS', 'globstar');
+    });
+    afterAll(() => {
+      vi.stubEnv('BASHOPTS', undefined);
+    });
+
+    it.each(['rm -rf **/lib && mv bad d3/x/lib && git -C d3/x/lib st', 'rm -rf */lib && git st'])(
+      'asks in every mode for %s',
+      async command => {
+        expect(await cells(command, '')).toBe('aaaa');
+      }
+    );
+  });
+
+  describe('with a relative node_modules/.bin folder on PATH', () => {
+    let before: string | undefined;
+    beforeAll(() => {
+      before = process.env.PATH;
+      vi.stubEnv('PATH', `./node_modules/.bin:${before}`);
+    });
+    afterAll(() => {
+      vi.stubEnv('PATH', before);
+    });
+
+    it.each([
+      ['rm -rf node_modules && git st', 'rrrr'],
+      ['rm -rf node_modules && pnpm i && git st', 'rrrr'],
+      ['mv node_modules nm.old && git st', 'rrrr'],
+      ['rm -rf node_modules && mkdir -p node_modules/.bin && cp x node_modules/.bin/git-st && git st', 'aaaa'],
+    ])('decides %s as %s', async (command, expected) => {
+      expect(await cells(command, '')).toBe(expected);
+    });
   });
 
   describe('with a project folder on PATH that the command fills', () => {
