@@ -116,6 +116,8 @@ export interface ShellScan {
    * check across parts, or any part that runs after a directory change the scan lost. No part is then coverable.
    */
   unreadScript?: true;
+  /** Set when the script exports or rebinds an environment variable every later part inherits, so its parts are not decided one by one. */
+  setsEnvironment?: true;
   /** A `git config` key the script sets that makes git run a program, such as `core.fsmonitor`. */
   gitProgram?: string;
   /** Set when a command checks out a tree from another computer, whose files no scan can list beforehand. */
@@ -6421,6 +6423,7 @@ export async function scanShell(
       writtenTrees: [...writtenTrees],
       ...(unreadOperands > 0 ? { unread: true as const } : {}),
       ...(unreadScript ? { unreadScript: true as const } : {}),
+      ...(setsEnvironment ? { setsEnvironment: true as const } : {}),
       ...(gitProgram ? { gitProgram } : {}),
       ...(remoteTree ? { remoteTree: true as const } : {}),
     };

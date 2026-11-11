@@ -104,6 +104,7 @@ describe('shellApproval per part', () => {
     });
 
     it('a cd that CDPATH may redirect before a part it cannot read', async () => {
+      vi.stubEnv('CDPATH', undefined);
       expect((await approve('cd src && rm "$TARGET" && git status')).byPart).toBe(true);
       vi.stubEnv('CDPATH', '/elsewhere');
       whole(await approve('cd src && rm "$TARGET" && git status'));
@@ -121,6 +122,26 @@ describe('shellApproval per part', () => {
 
     it('a write while a protected folder is unresolved', async () => {
       whole(await approve('git status && touch b', { unresolvedProtectedPaths: ['/unresolved'] }));
+    });
+
+    it('an export that every later part inherits', async () => {
+      whole(await approve("export GIT_SSH_COMMAND='sh -c x'; git push origin HEAD"));
+      whole(await approve('GIT_SSH_COMMAND=x; git push origin HEAD'));
+      whole(await approve('for HOME in .; do git status; done; git push origin HEAD'));
+    });
+
+    it('a git setting that makes git run a program', async () => {
+      whole(await approve('git config core.fsmonitor ./x && git status'));
+    });
+
+    it('a clone from another computer', async () => {
+      whole(await approve('git clone https://example.com/r.git && git status'));
+    });
+
+    it('a part that reads a secret store', async () => {
+      const prompt = await approve('git status && cat ~/.ssh/id_rsa');
+      whole(prompt);
+      expect(prompt.askInFull).toBe(true);
     });
 
     it('an .env file read by a redirect no part owns', async () => {

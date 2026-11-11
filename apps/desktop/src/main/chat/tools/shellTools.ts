@@ -550,7 +550,8 @@ export async function shellApproval(
     writesWhileUnresolved;
   const scriptAsksInFull =
     (touchesProtected && !scan.readOnly) || scan.unreadScript === true || secret || writesWhileUnresolved;
-  const byPart = !scriptAsks && !scriptAsksInFull;
+  // A part that sets the environment changes what every later part runs, so none is decided alone.
+  const byPart = !scriptAsks && !scriptAsksInFull && !scan.setsEnvironment;
   const reasons = [
     ...(scriptCheckFailed
       ? ['Could not check whether it runs code written in this session, so it is asked each time.']
