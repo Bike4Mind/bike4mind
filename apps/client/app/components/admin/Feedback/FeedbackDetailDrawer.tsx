@@ -382,7 +382,9 @@ const FeedbackDetailBody = ({
 
 const TurnFacts = ({ turn }: { turn: NonNullable<ReturnType<typeof summarizePromptMeta>> }): ReactNode => {
   const tokens = [
-    turn.inputTokens !== undefined ? `${formatCount(turn.inputTokens)} in` : undefined,
+    turn.inputTokens !== undefined
+      ? `${formatCount(turn.inputTokens)} in${turn.cachedInputTokens ? ` (${formatCount(turn.cachedInputTokens)} cached)` : ''}`
+      : undefined,
     turn.outputTokens !== undefined ? `${formatCount(turn.outputTokens)} out` : undefined,
   ]
     .filter(Boolean)

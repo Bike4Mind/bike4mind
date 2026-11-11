@@ -131,6 +131,27 @@ describe('FeedbackDetailDrawer', () => {
     expect(screen.getByTestId('feedback-detail-drawer')).not.toHaveTextContent('SECRET TOOL OUTPUT');
   });
 
+  it('shows the cached share of a billed prompt', async () => {
+    mocks.getFeedbackByIdFromServer.mockResolvedValue(
+      makeRecord({
+        promptMeta: {
+          tokenUsage: {
+            totalTokens: 7339,
+            actualInputTokens: 2,
+            actualOutputTokens: 152,
+            cacheCreationInputTokens: 7885,
+          },
+        } as PromptMeta,
+      })
+    );
+
+    renderDrawer();
+
+    expect(await screen.findByTestId('feedback-detail-turn-tokens')).toHaveTextContent(
+      '7,887 in (7,885 cached), 152 out (8,039 total)'
+    );
+  });
+
   it('shows the list row while the full record loads', () => {
     mocks.getFeedbackByIdFromServer.mockReturnValue(new Promise(() => {}));
 

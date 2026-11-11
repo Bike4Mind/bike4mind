@@ -7,7 +7,9 @@ export interface PromptMetaSummary {
   tools: string[];
   toolCallCount: number;
   failedToolCallCount: number;
+  /** Includes cached prompt tokens; `cachedInputTokens` is that share. */
   inputTokens?: number;
+  cachedInputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
   retrievalOutcome?: string;
@@ -21,10 +23,36 @@ const RETRIEVAL_OUTCOME_LABELS: Record<string, string> = {
   failed: 'Failed',
 };
 
+type TokenCounts = Pick<PromptMetaSummary, 'inputTokens' | 'cachedInputTokens' | 'outputTokens' | 'totalTokens'>;
+
+/**
+ * All counts come from one basis so they add up: billed (`actual*`) when the provider reported
+ * usage, else the estimate. Billed `actualInputTokens` is only the uncached tail, so cache reads
+ * and writes are added back into "in"; the total is derived because `actualTotalTokens` is not
+ * recorded on every path.
+ */
+function summarizeTokens(usage: PromptMeta['tokenUsage'] | undefined): TokenCounts {
+  if (!usage) return {};
+
+  const billed = usage.actualInputTokens !== undefined || usage.actualOutputTokens !== undefined;
+  if (!billed) {
+    const { inputTokens, outputTokens } = usage;
+    const derivedTotal =
+      inputTokens !== undefined && outputTokens !== undefined ? inputTokens + outputTokens : undefined;
+    return { inputTokens, outputTokens, totalTokens: usage.totalTokens ?? derivedTotal };
+  }
+
+  const cached = (usage.cacheReadInputTokens ?? 0) + (usage.cacheCreationInputTokens ?? 0);
+  const inputTokens = usage.actualInputTokens !== undefined ? usage.actualInputTokens + cached : undefined;
+  const outputTokens = usage.actualOutputTokens;
+  const totalTokens =
+    inputTokens !== undefined && outputTokens !== undefined ? inputTokens + outputTokens : usage.actualTotalTokens;
+  return { inputTokens, cachedInputTokens: cached > 0 ? cached : undefined, outputTokens, totalTokens };
+}
+
 /**
  * The short read of a turn's `promptMeta` a triaging admin needs (model, tools, tokens,
- * retrieval), never the raw object. Billed (`actual*`) token counts win over the estimate when
- * both were recorded. Returns undefined when nothing worth showing was recorded, e.g. a product
+ * retrieval), never the raw object. Returns undefined when nothing worth showing was recorded, e.g. a product
  * report or a list row whose `promptMeta` was not projected.
  */
 export function summarizePromptMeta(promptMeta: Partial<PromptMeta> | null | undefined): PromptMetaSummary | undefined {
@@ -42,9 +70,7 @@ export function summarizePromptMeta(promptMeta: Partial<PromptMeta> | null | und
     tools,
     toolCallCount: calls.length,
     failedToolCallCount: calls.filter(call => call.success === false).length,
-    inputTokens: usage?.actualInputTokens ?? usage?.inputTokens,
-    outputTokens: usage?.actualOutputTokens ?? usage?.outputTokens,
-    totalTokens: usage?.actualTotalTokens ?? usage?.totalTokens,
+    ...summarizeTokens(usage),
     retrievalOutcome: retrieval?.attempted
       ? (RETRIEVAL_OUTCOME_LABELS[retrieval.outcome ?? ''] ?? 'Ran')
       : retrieval
