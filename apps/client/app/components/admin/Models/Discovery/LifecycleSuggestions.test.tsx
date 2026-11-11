@@ -12,7 +12,7 @@ import {
   newQueryClient,
 } from './__tests__/discoveryTestKit';
 import type { AdminModelRow } from '@bike4mind/common';
-import type { LifecycleStatus } from './discoveryApi';
+import { LIFECYCLE_QUEUE_QUERY_KEY, type LifecycleStatus } from './discoveryApi';
 
 const m = vi.hoisted(() => ({
   get: vi.fn(),
@@ -124,6 +124,17 @@ describe('LifecycleSuggestions queue', () => {
     expect(await screen.findByTestId('discovery-suggestions-empty')).toHaveTextContent(
       'No lifecycle suggestions are waiting'
     );
+  });
+
+  it('keeps the loaded queue with a warning when a refresh fails', async () => {
+    renderQueue();
+    await screen.findByTestId('discovery-suggestion-row-gpt-sunset');
+
+    m.get.mockRejectedValueOnce(apiError(500, { error: 'Database unavailable' }));
+    await queryClient.refetchQueries({ queryKey: LIFECYCLE_QUEUE_QUERY_KEY });
+
+    expect(await screen.findByTestId('discovery-suggestions-refresh-error')).toHaveTextContent('Database unavailable');
+    expect(screen.getByTestId('discovery-suggestion-row-gpt-sunset')).toBeInTheDocument();
   });
 
   it('shows the missing permission and fetches nothing without settings:manage', async () => {

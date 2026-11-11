@@ -174,6 +174,12 @@ export function DiscoverySection() {
     <Stack gap={ADMIN_REGION_GAP} data-testid="discovery-section">
       <Stack gap={1}>
         <UpdatingBar active={status.isFetching && !status.isLoading && !!data} testId="discovery-updating" />
+        {status.isError && data && (
+          <Alert color="warning" variant="soft" size="sm" data-testid="discovery-status-refresh-error">
+            Showing the last loaded status; the refresh failed:{' '}
+            {apiErrorMessage(status.error, 'Could not load discovery status')}
+          </Alert>
+        )}
         {statusRegion}
       </Stack>
       {(status.isLoading || data) && (

@@ -442,6 +442,12 @@ export function LifecycleSuggestions() {
       ) : (
         <>
           <UpdatingBar active={lifecycle.isFetching && !lifecycle.isLoading} testId="discovery-suggestions-updating" />
+          {lifecycle.isError && lifecycle.data && (
+            <Alert color="warning" variant="soft" size="sm" data-testid="discovery-suggestions-refresh-error">
+              Showing the last loaded suggestions; the refresh failed:{' '}
+              {apiErrorMessage(lifecycle.error, 'Could not load lifecycle suggestions')}
+            </Alert>
+          )}
           <DataTable
             label="Lifecycle suggestions"
             testId="discovery-suggestions-table"

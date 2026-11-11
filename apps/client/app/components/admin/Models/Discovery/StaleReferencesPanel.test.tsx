@@ -6,6 +6,7 @@ import {
   LIFECYCLE,
   SUPPORT_ONLY,
   adminRow,
+  apiError,
   makeWrapper,
   modelList,
   newQueryClient,
@@ -83,6 +84,18 @@ describe('StaleReferencesPanel', () => {
 
     fireEvent.click(screen.getByTestId('discovery-check-references-btn'));
     await waitFor(() => expect(checks()).toBe(2));
+  });
+
+  it('keeps the last report with a warning when checking again fails', async () => {
+    renderPanel();
+    fireEvent.click(screen.getByTestId('discovery-check-references-btn'));
+    await screen.findByTestId('discovery-references-table');
+
+    m.get.mockRejectedValueOnce(apiError(502, { error: 'Upstream timed out' }));
+    fireEvent.click(screen.getByTestId('discovery-check-references-btn'));
+
+    expect(await screen.findByTestId('discovery-references-refresh-error')).toHaveTextContent('Upstream timed out');
+    expect(screen.getByTestId('discovery-references-table')).toBeInTheDocument();
   });
 
   it('shows the server error text when the reference report failed', async () => {

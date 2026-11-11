@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Box, Button, Stack, Typography } from '@mui/joy';
+import { Alert, Button, Stack, Typography } from '@mui/joy';
 import {
   AdminPermissionAction,
   DataTable,
@@ -68,7 +68,7 @@ export function StaleReferencesPanel() {
     </Typography>
   ) : report.isFetching ? (
     <LoadingState label="Checking references" testId="discovery-references-loading" />
-  ) : report.isError ? (
+  ) : report.isError && !report.data ? (
     <ErrorState
       message={apiErrorMessage(report.error, 'Could not check references')}
       onRetry={check}
@@ -117,7 +117,14 @@ export function StaleReferencesPanel() {
         </AdminPermissionAction>
       }
     >
-      <Box sx={{ px: 2, py: 1.75 }}>{body}</Box>
+      <Stack gap={1} sx={{ px: 2, py: 1.75 }}>
+        {requested && !report.isFetching && report.isError && report.data && (
+          <Alert color="warning" variant="soft" size="sm" data-testid="discovery-references-refresh-error">
+            Showing the last check; checking again failed: {apiErrorMessage(report.error, 'Could not check references')}
+          </Alert>
+        )}
+        {body}
+      </Stack>
     </SectionCard>
   );
 }

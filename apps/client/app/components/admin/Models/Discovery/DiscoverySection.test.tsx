@@ -34,6 +34,7 @@ vi.mock('./StaleReferencesPanel', () => ({ StaleReferencesPanel: () => null }));
 
 import { DiscoverySection } from './DiscoverySection';
 import { POLL_INTERVAL_MS, POLL_TIMEOUT_MS, useRunNowStore } from './runDiscoveryNow';
+import { DISCOVERY_STATUS_QUERY_KEY } from './discoveryApi';
 
 let queryClient = newQueryClient();
 
@@ -146,6 +147,19 @@ describe('DiscoverySection status', () => {
     m.get.mockResolvedValue({ data: STATUS });
     fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
     expect(await screen.findByTestId('discovery-status-line')).toBeInTheDocument();
+  });
+
+  it('keeps the loaded status with a warning when a refresh fails', async () => {
+    renderSection();
+    await screen.findByTestId('discovery-status-line');
+
+    m.get.mockRejectedValueOnce(apiError(500, { error: 'Database unavailable' }));
+    await act(async () => {
+      await queryClient.refetchQueries({ queryKey: DISCOVERY_STATUS_QUERY_KEY });
+    });
+
+    expect(await screen.findByTestId('discovery-status-refresh-error')).toHaveTextContent('Database unavailable');
+    expect(screen.getByTestId('discovery-status-line')).toBeInTheDocument();
   });
 
   it('keeps Run now visible but disabled, with the reason, for an admin who cannot make model writes', async () => {
