@@ -315,6 +315,7 @@ export const infraHolders = {
   // anonymized here. Deleting the person's personal organizations (the `personal` flag, which
   // `purgeAccountContent` filters on) is deferred to the erasure flow.
   // `userDetails.email` and `.name` are removed with the element that `userDetails.id` pulls.
+  // `serviceAccountUserId` names the org's system service account, never a person.
   Organization: {
     kind: 'holder',
     references: [
@@ -323,7 +324,13 @@ export const infraHolders = {
       { path: 'adminUserIds', matchBy: 'userId', action: 'pullFromArray' },
       { path: 'userDetails.id', matchBy: 'userId', action: 'pullFromArray' },
     ],
-    unrelatedPaths: ['userDetails.email', 'maxCreditsPerMember', 'signupGrantUnlockCount', 'signupInviteBonusCount'],
+    unrelatedPaths: [
+      'userDetails.email',
+      'maxCreditsPerMember',
+      'signupGrantUnlockCount',
+      'signupInviteBonusCount',
+      'serviceAccountUserId',
+    ],
   },
   OverwatchProduct: { kind: 'noUserData', note: 'Tracked product catalogue entry.' },
   // The event `userId` is an HMAC of the Bike4Mind user id under a server-side salt (`pseudonymizeUserId`), not the id.

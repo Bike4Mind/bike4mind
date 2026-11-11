@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createHash } from 'crypto';
 import { createUserApiKey } from '../create';
 import { rotateUserApiKey } from '../rotate';
+import { NotFoundError } from '@bike4mind/utils';
 import { validateUserApiKey } from '../validate';
 import { ApiKeyScope, CreditHolderType } from '@bike4mind/common';
 import type { IUserApiKeyDocument } from '@bike4mind/common';
@@ -239,7 +240,7 @@ describe('rotateUserApiKey — round-trip regression guard', () => {
       expect(repo.setCallbackSigningSecret).not.toHaveBeenCalled();
     });
 
-    it('never re-owns an org-owned key: it stays with the org service account', async () => {
+    it('treats an org-owned key as not found without the org routes opt-in', async () => {
       const stored = {
         id: 'key-1',
         name: 'Org-owned key',
@@ -256,6 +257,28 @@ describe('rotateUserApiKey — round-trip regression guard', () => {
       const orgs = { findIdsAdministeredBy: vi.fn().mockResolvedValue(['org-1']) };
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const adapters = { db: { userApiKeys: repo as any, organizations: orgs as any } };
+
+      await expect(rotateUserApiKey('admin-user', { keyId: 'key-1' }, adapters)).rejects.toThrow(NotFoundError);
+      expect(repo.update).not.toHaveBeenCalled();
+    });
+
+    it('never re-owns an org-owned key, even when an opted-in caller is not its holder', async () => {
+      const stored = {
+        id: 'key-1',
+        name: 'Org-owned key',
+        userId: 'org-service-account',
+        keyPrefix: 'b4m_live_orig000',
+        orgOwned: { createdByUserId: 'creator' },
+      } as unknown as IUserApiKeyDocument;
+      const repo = {
+        findByUserIdAndId: vi.fn().mockResolvedValue(null),
+        findByOrganizationIdsAndId: vi.fn().mockResolvedValue(stored),
+        update: vi.fn().mockResolvedValue(undefined),
+        setCallbackSigningSecret: vi.fn().mockResolvedValue(undefined),
+      };
+      const orgs = { findIdsAdministeredBy: vi.fn().mockResolvedValue(['org-1']) };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const adapters = { db: { userApiKeys: repo as any, organizations: orgs as any }, includeOrgOwned: true };
 
       const result = await rotateUserApiKey('admin-user', { keyId: 'key-1' }, adapters);
 

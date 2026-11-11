@@ -1,14 +1,13 @@
 // @vitest-environment node
 /**
- * Org-owned API keys end to end against a real database: the org routes mint, list, rotate and revoke,
- * and the key is then checked the way apiKeyAuth and the org-billing rule check it (validate the
- * secret, load its holder, resolve the billing org). Services run without withTransaction: standalone
- * mongod rejects writes inside a session.
+ * Org-owned API keys end to end against a real replica set: the org routes mint, list, rotate and
+ * revoke (each mutation committing with its audit row), and the key is then checked the way apiKeyAuth
+ * and the org-billing rule check it (validate the secret, load its holder, resolve the billing org).
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import mongoose from 'mongoose';
-import type { MongoMemoryServer } from 'mongodb-memory-server';
+import type { MongoMemoryReplSet } from 'mongodb-memory-server';
 import {
   ApiKeyScope,
   CreditHolderType,
@@ -19,7 +18,8 @@ import {
   type IOrgApiKeyView,
 } from '@bike4mind/common';
 import {
-  createMongoServer,
+  createMongoReplSet,
+  settleAutoIndexBuilds,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../../packages/database/src/__test__/createMongoServer';
 import {
@@ -29,6 +29,7 @@ import {
   dataLakeAccessGrantRepository,
   dataLakeRepository,
   projectRepository,
+  realtimeConnectionRepository,
 } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { userApiKeyRepository, userRepository } from '@bike4mind/database/auth';
@@ -55,17 +56,8 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 const recordAdminActionFromRequest = vi.hoisted(() => vi.fn().mockResolvedValue(null));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
-// The paid-only switch and product-scope entitlements have their own suites; here they always admit.
+// The paid-only switch has its own suite; here it always admits.
 vi.mock('@server/utils/apiKeyAccessGate', () => ({ assertApiKeyAccessAllowed: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('@server/entitlements/apiKeyScopeAccess', () => ({
-  resolveApiKeyScopeAccess: vi.fn().mockResolvedValue({
-    hasOptiAccess: false,
-    hasOverwatchAccess: false,
-    hearthEnabled: false,
-    bypass: false,
-    entitlements: new Set<string>(),
-  }),
-}));
 
 const { default: listHandler } = await import('@pages/api/organizations/[id]/api-keys/index');
 const { default: rotateHandler } = await import('@pages/api/organizations/[id]/api-keys/[keyId]/rotate');
@@ -75,14 +67,15 @@ const { resolveApiKeyBillingOrg } = await import('@server/billing/apiKeyBillingO
 type Route = { routes: Record<string, (req: unknown, res: unknown) => Promise<unknown>> };
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 
-let mongoServer: MongoMemoryServer;
+let replSet: MongoMemoryReplSet;
 beforeAll(async () => {
-  mongoServer = await createMongoServer();
-  await mongoose.connect(mongoServer.getUri());
+  replSet = await createMongoReplSet();
+  await mongoose.connect(replSet.getUri(), { autoIndex: false });
+  await settleAutoIndexBuilds(mongoose);
 });
 afterAll(async () => {
   await mongoose.disconnect();
-  await mongoServer?.stop();
+  await replSet?.stop();
 });
 afterEach(async () => {
   vi.clearAllMocks();
@@ -184,6 +177,8 @@ describe('org-owned API keys', () => {
     expect(before.ok && before.billing).toEqual({ kind: 'org', organizationId: orgId });
     const org = await organizationRepository.findById(orgId);
     expect(organizationSeatUsage(org!).used).toBe(3);
+    // Recorded so the per-member credit cap can exempt it (creditService/memberCreditCap.ts).
+    expect(before.ok && org!.serviceAccountUserId).toBe(before.ok ? before.holder.id : undefined);
 
     // Contrast: a personal org-billed key minted by the same creator, the pre-existing kind.
     const personal = await userApiKeyService.createUserApiKey(
@@ -235,25 +230,82 @@ describe('org-owned API keys', () => {
     const afterRotate = await authenticate(rotated.data.key, orgId);
     expect(afterRotate.ok && isOrgServiceAccountOf(afterRotate.holder, orgId)).toBe(true);
 
-    // The generic personal-key rotate route an org admin can also reach must not re-own it either.
-    const viaGeneric = await userApiKeyService.rotateUserApiKey(
-      owner.id,
-      { keyId },
-      { db: { userApiKeys: userApiKeyRepository, organizations: organizationRepository } }
-    );
-    expect(viaGeneric.previousOwnerUserId).toBeUndefined();
-    const afterGeneric = await authenticate(viaGeneric.key, orgId);
-    expect(afterGeneric.ok && isOrgServiceAccountOf(afterGeneric.holder, orgId)).toBe(true);
+    // Only the org routes manage an org-owned key: the generic services behind the personal routes,
+    // which an org admin also reaches, treat it as not found.
+    const genericAdapters = {
+      db: {
+        userApiKeys: userApiKeyRepository,
+        organizations: organizationRepository,
+        realtimeConnections: realtimeConnectionRepository,
+      },
+    };
+    await expect(userApiKeyService.rotateUserApiKey(owner.id, { keyId }, genericAdapters)).rejects.toMatchObject({
+      statusCode: 404,
+    });
+    await expect(userApiKeyService.revokeUserApiKey(owner.id, { keyId }, genericAdapters)).rejects.toMatchObject({
+      statusCode: 404,
+    });
+    expect((await authenticate(rotated.data.key, orgId)).ok).toBe(true);
 
     const revoked = await call(revokeHandler, 'POST', owner.id, { id: orgId, keyId }, {});
     expect(revoked.statusCode).toBe(200);
-    expect(await authenticate(viaGeneric.key, orgId)).toEqual({ ok: false, reason: expect.any(String) });
+    expect(await authenticate(rotated.data.key, orgId)).toEqual({ ok: false, reason: expect.any(String) });
     const stored = await userApiKeyRepository.findById(keyId);
     expect(stored?.revokedBy).toBe(owner.id);
     expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ action: 'org.api_key.revoked' })
     );
+
+    // A revoked key cannot be rotated back to life, and revoking it again is a no-op; neither audits.
+    recordAdminActionFromRequest.mockClear();
+    expect((await call(rotateHandler, 'POST', owner.id, { id: orgId, keyId })).statusCode).toBe(400);
+    expect((await call(revokeHandler, 'POST', owner.id, { id: orgId, keyId }, {})).statusCode).toBe(200);
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('refuses to rotate an expired key, without an audit row', async () => {
+    const { owner, creator, orgId } = await seedOrg();
+    const created = await call<IOrgApiKeySecretResponse>(
+      listHandler,
+      'POST',
+      creator.id,
+      { id: orgId },
+      { name: 'Svc', scopes: [ApiKeyScope.AI_CHAT] }
+    );
+    const keyId = created.data.apiKey.id;
+    await userApiKeyRepository.update({ id: keyId, expiresAt: new Date(Date.now() - 1000) });
+    recordAdminActionFromRequest.mockClear();
+
+    expect((await call(rotateHandler, 'POST', owner.id, { id: orgId, keyId })).statusCode).toBe(400);
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('commits nothing when the audit row cannot be written', async () => {
+    const { owner, creator, orgId } = await seedOrg();
+    const created = await call<IOrgApiKeySecretResponse>(
+      listHandler,
+      'POST',
+      creator.id,
+      { id: orgId },
+      { name: 'Svc', scopes: [ApiKeyScope.AI_CHAT] }
+    );
+    const keyId = created.data.apiKey.id;
+    const auditDown = () => recordAdminActionFromRequest.mockRejectedValueOnce(new Error('audit store down'));
+
+    auditDown();
+    await expect(
+      call(listHandler, 'POST', creator.id, { id: orgId }, { name: 'Lost', scopes: [ApiKeyScope.AI_CHAT] })
+    ).rejects.toThrow('audit store down');
+    expect((await call<IOrgApiKeyView[]>(listHandler, 'GET', owner.id, { id: orgId })).data).toHaveLength(1);
+
+    auditDown();
+    await expect(call(rotateHandler, 'POST', owner.id, { id: orgId, keyId })).rejects.toThrow('audit store down');
+    expect((await authenticate(created.data.key, orgId)).ok).toBe(true);
+
+    auditDown();
+    await expect(call(revokeHandler, 'POST', owner.id, { id: orgId, keyId }, {})).rejects.toThrow('audit store down');
+    expect((await authenticate(created.data.key, orgId)).ok).toBe(true);
   });
 
   it('refuses a member who does not administer the org, and another org admin', async () => {
@@ -282,15 +334,13 @@ describe('org-owned API keys', () => {
     expect((await authenticate(created.data.key, orgId)).ok).toBe(true);
   });
 
-  it('refuses a dedicated-flow scope', async () => {
+  it.each([
+    ['a dedicated-flow scope', ApiKeyScope.EMBED_CHAT],
+    // Gated on the holder's entitlement at use, and the service account holds none.
+    ['a product scope', ApiKeyScope.OPTIHASHI_READ],
+  ])('refuses %s', async (_label, scope) => {
     const { creator, orgId } = await seedOrg();
-    const refused = await call(
-      listHandler,
-      'POST',
-      creator.id,
-      { id: orgId },
-      { name: 'Svc', scopes: [ApiKeyScope.EMBED_CHAT] }
-    );
+    const refused = await call(listHandler, 'POST', creator.id, { id: orgId }, { name: 'Svc', scopes: [scope] });
     expect(refused.statusCode).toBe(400);
   });
 
