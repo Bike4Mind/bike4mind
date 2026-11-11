@@ -31,8 +31,8 @@ const describeChange = (granted: readonly AdminPermissionId[], revoked: readonly
     .join('; ');
 
 /**
- * Edits a user's delegated `adminPermissions`. Full admins only, and never `isAdmin`: the role stays
- * on the user update route, so this endpoint cannot demote anyone, the last full admin included.
+ * Edits a user's delegated `adminPermissions`. Full admins only, and never `isAdmin`: the role lives
+ * on `./role`, so this endpoint cannot demote anyone, the last full admin included.
  */
 const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PUT: 'settings:manage' } })
   .use(csrfProtection())
