@@ -61,12 +61,10 @@ Not measured here; both need a deployed stage.
 
 "Linked" lists the resources the declaration passes in `link`. `allSecrets` includes `MONGODB_URI`.
 
+The four handlers declared in `infra/queues.ts` whose source is generated outside this repository are not listed. They could not be traced and all stay attached.
+
 | Handler | Declared in | Reaches | VPC required | Justification |
 |---|---|---|---|---|
-| `apps/client/server/premium-generated/bobRunWorker.dispatch` | `infra/queues.ts` | linked: `allSecrets`, `websocketApi`, `appFilesBucket`; unknown | Yes (kept, not audited) | Handler source is generated from a private overlay and is not in this repository, so it could not be traced. Kept. |
-| `apps/client/server/premium-generated/libreoncologyAudioRender.dispatch` | `infra/queues.ts` | linked: `allSecrets`, `fabFileBucket`; unknown | Yes (kept, not audited) | Handler source is generated from a private overlay and is not in this repository, so it could not be traced. Kept. |
-| `apps/client/server/premium-generated/optihashiRunCompletion.dispatch` | `infra/queues.ts` | linked: `allSecrets`, `websocketApi`; unknown | Yes (kept, not audited) | Handler source is generated from a private overlay and is not in this repository, so it could not be traced. Kept. |
-| `apps/client/server/premium-generated/queueHandlers/overwatchAnalytics.dispatch` | `infra/queues.ts` | linked: `allSecrets`, `websocketApi`; unknown | Yes (kept, not audited) | Handler source is generated from a private overlay and is not in this repository, so it could not be traced. Kept. |
 | `apps/client/server/s3/notebookImportComplete.dispatch` | `infra/buckets.ts` | MongoDB; linked: `allSecrets`, `fabFileBucket`, `appFilesBucket`, `generatedImagesBucket`, `historyImportBucket`, `websocketApi` | Yes | Connects to MongoDB. |
 | `apps/client/server/websocket/agentExecute.func` | `infra/agentExecutor.ts` | MongoDB; linked: `allSecrets`, `websocketApi`, `agentExecutor` | Yes | Connects to MongoDB. |
 | `apps/client/server/websocket/ccAgentDisconnect.func` | `infra/websocket.ts` | MongoDB; linked: `allSecrets`, `websocketApi` | Yes | Connects to MongoDB. |
