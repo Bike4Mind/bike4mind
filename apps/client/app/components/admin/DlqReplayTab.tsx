@@ -33,6 +33,7 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import QueueIcon from '@mui/icons-material/Queue';
 import SearchIcon from '@mui/icons-material/Search';
+import ArticleIcon from '@mui/icons-material/Article';
 import { toast } from 'sonner';
 import {
   useDlqQueues,
@@ -134,6 +135,22 @@ const MessageDrawer: React.FC<{
               </Typography>
               <Typography level="body-sm">{new Date(parseInt(message.sentTimestamp, 10)).toLocaleString()}</Typography>
             </Box>
+          )}
+
+          {message.logsUrl && (
+            <Button
+              component="a"
+              href={message.logsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              size="sm"
+              variant="outlined"
+              startDecorator={<ArticleIcon />}
+              sx={{ alignSelf: 'flex-start' }}
+              data-testid="dlq-drawer-logs"
+            >
+              View consumer logs
+            </Button>
           )}
 
           <Box>
@@ -406,20 +423,37 @@ const DlqReplayTab: React.FC = () => {
                   ` (${selectedQueueInfo.approximateNotVisibleCount} in flight)`}
               </Typography>
             </Stack>
-            <AdminPermissionAction requirement="settings:manage">
-              {permissionDisabled => (
+            <Stack direction="row" spacing={1}>
+              {selectedQueueInfo.logsUrl && (
                 <Button
-                  color="warning"
-                  startDecorator={<ReplayIcon />}
-                  onClick={handleReplayAll}
-                  loading={replayMutation.isPending}
-                  disabled={permissionDisabled || !selectedQueueInfo || selectedQueueInfo.approximateMessageCount === 0}
-                  data-testid="dlq-replay-all"
+                  component="a"
+                  href={selectedQueueInfo.logsUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  variant="outlined"
+                  startDecorator={<ArticleIcon />}
+                  data-testid="dlq-queue-logs"
                 >
-                  Replay All (up to 100)
+                  View logs
                 </Button>
               )}
-            </AdminPermissionAction>
+              <AdminPermissionAction requirement="settings:manage">
+                {permissionDisabled => (
+                  <Button
+                    color="warning"
+                    startDecorator={<ReplayIcon />}
+                    onClick={handleReplayAll}
+                    loading={replayMutation.isPending}
+                    disabled={
+                      permissionDisabled || !selectedQueueInfo || selectedQueueInfo.approximateMessageCount === 0
+                    }
+                    data-testid="dlq-replay-all"
+                  >
+                    Replay All (up to 100)
+                  </Button>
+                )}
+              </AdminPermissionAction>
+            </Stack>
           </Stack>
         </Card>
       )}
@@ -522,6 +556,21 @@ const DlqReplayTab: React.FC = () => {
                           <VisibilityIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
+                      {msg.logsUrl && (
+                        <Tooltip title="View consumer logs around the send time">
+                          <IconButton
+                            size="sm"
+                            component="a"
+                            href={msg.logsUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={e => e.stopPropagation()}
+                            data-testid={`dlq-logs-${msg.messageId}`}
+                          >
+                            <ArticleIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      )}
                       <AdminPermissionAction requirement="settings:manage">
                         {permissionDisabled => (
                           <Tooltip title="Replay this message">
