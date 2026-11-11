@@ -20,7 +20,8 @@ function frame(payload: unknown): string {
 }
 
 const git = (cwd: string, ...args: string[]): void => {
-  execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd, stdio: 'ignore' });
+  const config = ['user.name=t', 'user.email=t@example.com', 'commit.gpgsign=false', 'core.hooksPath=/dev/null'];
+  execFileSync('git', [...config.flatMap(entry => ['-c', entry]), ...args], { cwd, stdio: 'ignore' });
 };
 
 /** A chain's sub-commands are decided one by one, and a card asks only about the ones still undecided. */

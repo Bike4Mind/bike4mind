@@ -84,6 +84,16 @@ describe('shellApproval per part', () => {
     expect(covered?.every(rule => rule !== null)).toBe(true);
   });
 
+  it('names an .env read as the ask of the part that reads it', async () => {
+    await writeFile(join(project, '.env'), 'X=1');
+    const prompt = await approve('git status && cat .env');
+    expect(prompt.byPart).toBe(true);
+    expect(parts(prompt)).toEqual([
+      { text: 'git status', coverable: true, kinds: [] },
+      expect.objectContaining({ kinds: ['env'] }),
+    ]);
+  });
+
   it('keeps a substitution in program position opaque to the part that runs it', async () => {
     const prompt = await approve('git status && $(which node) -v');
     expect(parts(prompt)[0]).toEqual({ text: 'git status', coverable: true, kinds: [] });
