@@ -21,11 +21,16 @@ type Field = keyof typeof FIELD_WEIGHTS;
 // steps cannot make a made-up feature look like this one.
 const NAMING_WEIGHT = FIELD_WEIGHTS.keywords;
 
-// Plural and singular count as one word: "holds" finds "hold", "policies" finds "policy".
+// Plural, singular and verb forms count as one word: "holds" finds "hold", "banned" finds "ban",
+// "delegating" finds "delegate". Only needs to be consistent: entries and queries share it.
 const stem = (word: string): string => {
-  if (word.length > 4 && word.endsWith('ies')) return `${word.slice(0, -3)}y`;
-  if (word.length > 3 && word.endsWith('s') && !word.endsWith('ss')) return word.slice(0, -1);
-  return word;
+  let w = word;
+  if (w.length > 4 && w.endsWith('ies')) w = `${w.slice(0, -3)}y`;
+  else if (w.length > 3 && w.endsWith('s') && !w.endsWith('ss')) w = w.slice(0, -1);
+  if (w.length > 5 && w.endsWith('ing')) w = w.slice(0, -3);
+  else if (w.length > 4 && w.endsWith('ed')) w = w.slice(0, -2);
+  w = w.replace(/([^aeiou])\1$/, '$1');
+  return w.length > 4 && w.endsWith('e') ? w.slice(0, -1) : w;
 };
 
 const termsOf = (text: string): string[] =>
