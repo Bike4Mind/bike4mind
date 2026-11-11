@@ -1138,7 +1138,7 @@ const generatedMediaPurgeQueueSubscription = generatedMediaPurgeQueue.subscribe(
     ...SINGLE_RECORD_BATCH,
     // Each run flushes up to 500 exact CDN paths (MAX_DELETES_PER_RUN in purgeDeletedNotebookMedia.ts), so
     // 2 runs hold a third of the in-flight quota publish takedowns share; 2 is the SQS minimum.
-    // Capped at the event source, not reserved, so throttled polls never burn the DLQ retries.
+    // Capped at the event source rather than on the function, so throttled polls never burn the DLQ retries.
     transform: { eventSourceMapping: { scalingConfig: { maximumConcurrency: 2 } } },
   }
 );
