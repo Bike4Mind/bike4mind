@@ -448,7 +448,7 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
     it.each([
       ['an included file holding a ! alias', '[include]\n\tpath = TEMPLATE/inc\n', 'aaaa'],
       ['an included file holding a plain alias', '[include]\n\tpath = TEMPLATE/inc2\n', 'rrrr'],
-      ['a relative include', '[include]\n\tpath = inc\n', 'aaaa'],
+      ['a relative include of a file the template lacks', '[include]\n\tpath = elsewhere\n', 'aaaa'],
     ])('decides a clone then git st with a template config with %s as %s', async (_name, config, expected) => {
       const text = config.replaceAll('TEMPLATE', join(base, 'template-files'));
       const files = { config: text, inc: '[alias]\n\tst = !touch MARK\n', inc2: '[alias]\n\tst = status\n' };
