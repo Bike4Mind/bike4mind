@@ -25,15 +25,17 @@ const setManager = (isManager: boolean) =>
     );
 
     // Same action as the full-replace route, so the org audit trail reads one event family for
-    // "who changed the managers" whichever surface made the change.
-    await recordAdminActionFromRequest(req, {
-      action: 'org.admins.updated',
-      actorScope: 'organization',
-      target: { kind: 'organization', id: organizationId, displayName: change.organization.name },
-      summary: isManager ? 'made a member an organization manager' : 'removed an organization manager',
-      changes: [{ field: 'adminUserIds', before: change.previousAdminUserIds, after: change.adminUserIds }],
-      details: { memberUserId: userId },
-    });
+    // "who changed the managers" whichever surface made the change. A no-op is not audited.
+    if (change.changed) {
+      await recordAdminActionFromRequest(req, {
+        action: 'org.admins.updated',
+        actorScope: 'organization',
+        target: { kind: 'organization', id: organizationId, displayName: change.organization.name },
+        summary: isManager ? 'made a member an organization manager' : 'removed an organization manager',
+        changes: [{ field: 'adminUserIds', before: change.previousAdminUserIds, after: change.adminUserIds }],
+        details: { memberUserId: userId },
+      });
+    }
 
     return res.json(toSafeOrganization(change.organization, { userId: req.user!.id, isAdmin: req.user!.isAdmin }));
   });

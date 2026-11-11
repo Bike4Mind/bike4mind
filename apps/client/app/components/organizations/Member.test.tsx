@@ -430,6 +430,12 @@ describe('OrganizationMembers manager controls', () => {
     expect(screen.getByTestId('member-card-member1').getAttribute('data-manage-managers')).toBe('true');
   });
 
+  it('are withheld in a personal organization', () => {
+    mocks.viewerId = 'owner1';
+    renderMembers({ ...org(), personal: true });
+    expect(screen.getByTestId('member-card-member1').getAttribute('data-manage-managers')).toBe('false');
+  });
+
   it('are withheld from a manager', () => {
     mocks.viewerId = 'admin1';
     renderMembers(org());

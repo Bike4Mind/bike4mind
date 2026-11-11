@@ -26,6 +26,8 @@ export type OrganizationManagerChange = {
   organization: IOrganizationDocument;
   previousAdminUserIds: string[];
   adminUserIds: string[];
+  /** False when the member already held (or already lacked) the role; nothing was written. */
+  changed: boolean;
 };
 
 /**
@@ -71,5 +73,14 @@ export async function setOrganizationManager(
   const updated = await organizations.findById(organizationId);
   if (!updated) throw new NotFoundError('Organization not found');
 
-  return { organization: updated, previousAdminUserIds, adminUserIds: (updated.adminUserIds ?? []).map(String) };
+  // Derived from this write, not the re-read, so a concurrent edit by someone else is not
+  // attributed to this caller in the audit trail.
+  const wasManager = previousAdminUserIds.includes(userId);
+  const adminUserIds = isManager
+    ? wasManager
+      ? previousAdminUserIds
+      : [...previousAdminUserIds, userId]
+    : previousAdminUserIds.filter(id => id !== userId);
+
+  return { organization: updated, previousAdminUserIds, adminUserIds, changed: wasManager !== isManager };
 }

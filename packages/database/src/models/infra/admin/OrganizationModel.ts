@@ -610,10 +610,13 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
    * Pipelines for the same reasons as `removeMember`: a stored `null` breaks `$addToSet`/`$pull`, and ids
    * compare via `$toString` so a legacy ObjectId entry still matches. One targeted write, so two owners'
    * concurrent edits of different managers both survive (the full-replace PUT /admins would drop one).
+   * The filter re-checks that the appointee's row confers membership (MEMBER_PERMISSIONS, as
+   * `orgMembershipFilter`), so a row downgraded after the caller's read refuses the appointment.
    */
   async addAdmin(organizationId: string, userId: string): Promise<boolean> {
     const current = { $ifNull: ['$adminUserIds', []] };
-    const result = await this.organizationModel.updateOne({ _id: organizationId, 'users.userId': userId }, [
+    const filter = { _id: organizationId, users: { $elemMatch: { userId, permissions: { $in: MEMBER_PERMISSIONS } } } };
+    const result = await this.organizationModel.updateOne(filter, [
       {
         $set: {
           adminUserIds: {

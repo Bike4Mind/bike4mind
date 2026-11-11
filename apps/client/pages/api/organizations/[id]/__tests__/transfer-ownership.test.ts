@@ -83,6 +83,7 @@ const post = (body: unknown = { newOwnerId: 'admin1' }) => {
 
 describe('POST /api/organizations/[id]/transfer-ownership', () => {
   beforeEach(() => {
+    vi.stubEnv('APP_URL', 'https://app.example.com');
     vi.clearAllMocks();
     transferOwnership.mockResolvedValue(baseResult);
     customersUpdate.mockResolvedValue({});
@@ -203,7 +204,7 @@ describe('POST /api/organizations/[id]/transfer-ownership', () => {
     expect(sendOwnershipTransferEmails).toHaveBeenCalledWith(
       expect.objectContaining({
         organizationName: 'Acme',
-        organizationUrl: expect.stringMatching(/\/organizations\/org1$/),
+        organizationUrl: 'https://app.example.com/organizations/org1',
         previousOwner: { email: 'owner1@example.com', name: 'Olivia Owner' },
         newOwner: { email: 'admin1@example.com', name: 'Adam Admin' },
       }),

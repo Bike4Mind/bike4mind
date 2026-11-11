@@ -66,14 +66,17 @@ const layout = (brand: string, heading: string, content: string): string => `
     </html>
   `;
 
-/** To the new owner: they now hold billing for the team. */
+/**
+ * To the new owner: they now hold billing for the team. Names no actor: a platform admin may have
+ * made the transfer, and the former owner's account may be gone.
+ */
 export const buildNewOwnerEmail = (input: OwnershipTransferEmailInput): EmailContent => {
   const brand = process.env.APP_NAME || '';
   const team = escapeHtml(input.organizationName);
   const content = `
           <p>Hello,</p>
-          <p>${escapeHtml(displayName(input.previousOwner))} transferred ownership of <strong>${team}</strong> to you.</p>
-          <p>You are now the team's billing owner: the subscription, payment method and invoices are yours to manage, and only you can delete the team or transfer it again.</p>
+          <p>Ownership of <strong>${team}</strong> was transferred to you.</p>
+          <p>You are now the team's billing owner: the subscription, payment method and invoices are yours to manage, and you can delete the team or transfer it again.</p>
           <div style="text-align: center;">
             <a href="${escapeHtml(input.organizationUrl)}" class="cta-button">Open ${team}</a>
           </div>
@@ -109,7 +112,9 @@ export const buildPreviousOwnerEmail = (input: OwnershipTransferEmailInput): Ema
 export async function sendOwnershipTransferEmails(input: OwnershipTransferEmailInput, logger: Logger): Promise<void> {
   const messages: Array<EmailContent & { to: string }> = [];
   if (input.newOwner.email) messages.push({ to: input.newOwner.email, ...buildNewOwnerEmail(input) });
+  else logger.warn('No address for the new owner; skipped their ownership transfer email');
   if (input.previousOwner.email) messages.push({ to: input.previousOwner.email, ...buildPreviousOwnerEmail(input) });
+  else logger.warn('No address for the former owner; skipped their ownership transfer email');
 
   const results = await Promise.allSettled(messages.map(message => EmailEvents.Send.publish(message)));
   results.forEach(result => {

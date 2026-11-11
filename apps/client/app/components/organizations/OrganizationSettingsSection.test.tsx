@@ -9,7 +9,10 @@ import OrganizationSettingsSection from './OrganizationSettingsSection';
 const currentUser = vi.fn();
 const transfer = vi.hoisted(() => vi.fn());
 const navigate = vi.hoisted(() => vi.fn());
-const members = vi.hoisted(() => ({ list: [] as { id: string; name: string; email?: string }[] }));
+const members = vi.hoisted(() => ({
+  list: [] as { id: string; name: string; email?: string; isBanned?: boolean }[],
+  loaded: true,
+}));
 
 vi.mock('@client/app/hooks/data/organizations', () => ({
   useDeleteOrganization: () => ({ mutateAsync: vi.fn(), isPending: false }),
@@ -18,7 +21,7 @@ vi.mock('@client/app/hooks/data/organizations', () => ({
 }));
 
 vi.mock('@client/app/hooks/data/user', () => ({
-  useGetOrganizationUsers: () => ({ data: members.list }),
+  useGetOrganizationUsers: () => (members.loaded ? { data: members.list, isSuccess: true } : { isSuccess: false }),
 }));
 
 vi.mock('@client/app/hooks/useConfirmation', () => ({
@@ -94,6 +97,7 @@ describe('OrganizationSettingsSection - Transfer ownership', () => {
   beforeEach(() => {
     transfer.mockReset().mockResolvedValue({ organizationId: 'org1', ownerId: 'admin1' });
     navigate.mockReset();
+    members.loaded = true;
     members.list = [
       { id: OWNER_ID, name: 'Olivia Owner' },
       { id: 'admin1', name: 'Adam Admin', email: 'adam@example.com' },
@@ -115,6 +119,28 @@ describe('OrganizationSettingsSection - Transfer ownership', () => {
     renderAs({ id: OWNER_ID, isAdmin: false }, org);
     expect((screen.getByTestId('organization-settings-transfer-btn') as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByTestId('organization-settings-transfer-hint')).toBeTruthy();
+  });
+
+  it('shows no hint while the members are still loading', () => {
+    members.loaded = false;
+    renderAs({ id: OWNER_ID, isAdmin: false }, managedOrg);
+    expect(screen.queryByTestId('organization-settings-transfer-hint')).toBeNull();
+  });
+
+  it('does not offer a deactivated manager or one whose row confers no membership', () => {
+    members.list = [
+      { id: 'admin1', name: 'Adam Admin', isBanned: true },
+      { id: 'member1', name: 'Mia Member' },
+    ];
+    renderAs({ id: OWNER_ID, isAdmin: false }, {
+      ...managedOrg,
+      adminUserIds: ['admin1', 'member1'],
+      users: [
+        { userId: 'admin1', permissions: ['read'] },
+        { userId: 'member1', permissions: [] },
+      ],
+    } as unknown as IOrganizationDocument);
+    expect((screen.getByTestId('organization-settings-transfer-btn') as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('offers only managers, shows the billing note, and transfers to the chosen one', async () => {

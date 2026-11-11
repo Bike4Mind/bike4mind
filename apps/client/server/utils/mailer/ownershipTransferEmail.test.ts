@@ -26,10 +26,10 @@ describe('ownershipTransferEmail', () => {
     publish.mockResolvedValue(undefined);
   });
 
-  it('tells the new owner who handed them the team and that billing is now theirs', () => {
+  it('tells the new owner the team and its billing are now theirs', () => {
     const email = buildNewOwnerEmail(input());
     expect(email.subject).toBe('You are now the owner of Acme');
-    expect(email.body).toContain('Olivia transferred ownership of <strong>Acme</strong> to you');
+    expect(email.body).toContain('Ownership of <strong>Acme</strong> was transferred to you');
     expect(email.body).toContain('billing owner');
   });
 
@@ -47,8 +47,8 @@ describe('ownershipTransferEmail', () => {
   });
 
   it('falls back to the email when a party has no name', () => {
-    const email = buildNewOwnerEmail(input({ previousOwner: { email: 'old@example.com', name: '' } }));
-    expect(email.body).toContain('old@example.com transferred ownership');
+    const email = buildPreviousOwnerEmail(input({ newOwner: { email: 'new@example.com', name: '' } }));
+    expect(email.body).toContain('transferred to new@example.com');
   });
 
   it('sends one email to each party', async () => {
@@ -64,6 +64,7 @@ describe('ownershipTransferEmail', () => {
       sendOwnershipTransferEmails(input({ previousOwner: { email: null, name: null } }), logger as never)
     ).resolves.toBeUndefined();
     expect(publish).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('former owner'));
     expect(logger.warn).toHaveBeenCalledWith(expect.any(String), { error: 'bus down' });
   });
 });

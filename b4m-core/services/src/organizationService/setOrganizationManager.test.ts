@@ -54,6 +54,7 @@ describe('organizationService - setOrganizationManager', () => {
     expect(adapters.db.organizations.addAdmin).toHaveBeenCalledWith('org1', 'user2');
     expect(change.previousAdminUserIds).toEqual(['admin1']);
     expect(change.adminUserIds).toEqual(['admin1', 'user2']);
+    expect(change.changed).toBe(true);
   });
 
   it('removes a manager through the targeted write', async () => {
@@ -61,6 +62,13 @@ describe('organizationService - setOrganizationManager', () => {
 
     expect(adapters.db.organizations.removeAdmin).toHaveBeenCalledWith('org1', 'admin1');
     expect(change.adminUserIds).toEqual([]);
+  });
+
+  it('reports no change when the member already holds the role', async () => {
+    const change = await run(owner, 'admin1', true);
+
+    expect(change.adminUserIds).toEqual(['admin1']);
+    expect(change.changed).toBe(false);
   });
 
   it('lets a platform admin act', async () => {

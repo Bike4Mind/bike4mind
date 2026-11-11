@@ -223,6 +223,31 @@ describe('OrganizationUserCard manager role', () => {
     expect(screen.queryByTestId('organization-user-card-make-manager')).toBeNull();
   });
 
+  it('withholds Make manager from a deactivated member', () => {
+    renderCard({ ...member('a', usage), isBanned: true }, false, false, {
+      canManageManagers: true,
+      organization: managedOrg,
+    });
+    expect(screen.queryByTestId('org-user-card-menu-btn')).toBeNull();
+  });
+
+  it('still offers Remove manager on a deactivated manager', async () => {
+    renderCard({ ...member('mgr', usage), isBanned: true }, false, false, {
+      canManageManagers: true,
+      organization: managedOrg,
+    });
+    openMenu();
+    expect(await screen.findByTestId('organization-user-card-remove-manager')).toBeTruthy();
+  });
+
+  it('withholds Make manager from a row whose permissions confer no membership', () => {
+    renderCard({ ...member('a', usage), permissions: [] }, false, false, {
+      canManageManagers: true,
+      organization: managedOrg,
+    });
+    expect(screen.queryByTestId('org-user-card-menu-btn')).toBeNull();
+  });
+
   it('offers no manager action on a pending invite', () => {
     renderCard(member('p', null, 'pending'), false, false, { canManageManagers: true, organization: managedOrg });
     expect(screen.queryByTestId('org-user-card-menu-btn')).toBeNull();

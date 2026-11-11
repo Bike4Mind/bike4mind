@@ -50,6 +50,7 @@ describe('/api/organizations/[id]/members/[userId]/manager', () => {
       organization: { id: 'org1', name: 'Acme', userId: 'owner1', stripeCustomerId: 'cus_secret' },
       previousAdminUserIds: ['a'],
       adminUserIds: ['a', 'member1'],
+      changed: true,
     });
   });
 
@@ -93,6 +94,20 @@ describe('/api/organizations/[id]/members/[userId]/manager', () => {
       expect.anything(),
       expect.objectContaining({ summary: 'removed an organization manager' })
     );
+  });
+
+  it('does not audit a request that changed nothing', async () => {
+    setOrganizationManager.mockResolvedValueOnce({
+      organization: { id: 'org1', name: 'Acme', userId: 'owner1' },
+      previousAdminUserIds: ['a'],
+      adminUserIds: ['a'],
+      changed: false,
+    });
+    const { res, run } = call('DELETE');
+    await run();
+
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+    expect(res._getStatusCode()).toBe(200);
   });
 
   it('does not audit when the service refuses', async () => {

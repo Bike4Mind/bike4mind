@@ -1,4 +1,10 @@
-import { InviteType, IUserDocument, Permission, IOrganizationDocument } from '@bike4mind/common';
+import {
+  InviteType,
+  IUserDocument,
+  Permission,
+  IOrganizationDocument,
+  orgAclRowConfersMembership,
+} from '@bike4mind/common';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
 import { useCancelInvite } from '@client/app/hooks/data/invites';
 import { getAppFileUrl } from '@client/app/utils/s3';
@@ -124,7 +130,11 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
   const canRevoke = canRevokeMembers && user.status === 'accepted';
   const canLeave = user.status === 'accepted' && currentUser?.id === user.id;
   const canCancelInvite = user.status === 'pending' && canInviteMembers;
-  const canToggleManager = canManageManagers && user.status === 'accepted' && !user.isBanned;
+  // Appointing needs an active member row (setOrganizationManager); removal is always allowed.
+  const canToggleManager =
+    canManageManagers &&
+    user.status === 'accepted' &&
+    (isManager || (!user.isBanned && orgAclRowConfersMembership(user)));
   // The owner row is excluded from roster actions but not from budgets: the owner's own spend from
   // the pool is capped like anyone's.
   const hasRosterAction = !isOwner && (canRevoke || canLeave || canCancelInvite || canToggleManager);

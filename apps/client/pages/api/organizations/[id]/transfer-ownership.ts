@@ -1,6 +1,7 @@
 // POST /api/organizations/:id/transfer-ownership
 // Hand billing ownership to an existing org admin. Billing owner or platform admin only.
 
+import { requireEnv } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
@@ -59,7 +60,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
       await sendOwnershipTransferEmails(
         {
           organizationName: result.organizationName,
-          organizationUrl: `${process.env.APP_URL ?? ''}/organizations/${organizationId}`,
+          organizationUrl: `${requireEnv('APP_URL', process.env.APP_URL)}/organizations/${organizationId}`,
           previousOwner: { email: previousOwner?.email, name: previousOwner?.name },
           newOwner: { email: newOwner?.email, name: newOwner?.name },
         },

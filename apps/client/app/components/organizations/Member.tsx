@@ -155,7 +155,8 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
   const canManageCreditBudgets = !!currentUser && canManageMemberCreditBudgets(currentUser, organization);
 
   // Mirrors the owner-only gate on the manager route (organizationService.setOrganizationManager).
-  const canManageManagers = !!currentUser && isOrgOwnerOrPlatformAdmin(currentUser, organization);
+  const canManageManagers =
+    !!currentUser && !organization.personal && isOrgOwnerOrPlatformAdmin(currentUser, organization);
 
   // Owner ID, falling back to the current user.
   const ownerId = useMemo(() => {

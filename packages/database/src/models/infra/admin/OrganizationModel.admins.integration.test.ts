@@ -60,6 +60,16 @@ describe('OrganizationModel.addAdmin / removeAdmin', () => {
     expect(after!.adminUserIds).toEqual([]);
   });
 
+  it('refuses a user whose roster row confers no membership', async () => {
+    const created = await Organization.create({
+      name: 'Org',
+      userId: 'owner',
+      users: [{ userId: 'a', permissions: [] }],
+    });
+
+    expect(await organizationRepository.addAdmin(created.id, 'a')).toBe(false);
+  });
+
   it('keeps both appointments when two are made back to back from the same stale read', async () => {
     const created = await Organization.create({
       name: 'Org',

@@ -1,6 +1,6 @@
 import { FC, useState, useEffect, useMemo } from 'react';
 import { Card, Typography, Box, Button, Stack, Textarea, FormControl, FormLabel, FormHelperText } from '@mui/joy';
-import { IOrganizationDocument } from '@bike4mind/common';
+import { IOrganizationDocument, orgAclRowConfersMembership } from '@bike4mind/common';
 import {
   useDeleteOrganization,
   useTransferOrganizationOwnership,
@@ -29,17 +29,31 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
     return currentUser.isAdmin === true || currentUser.id === organization.userId;
   }, [currentUser, organization.userId]);
 
-  // Same owner tier as the transfer route (organizationService.transferOwnership); a personal org has no successor.
+  // The owner tier of organizationService.transferOwnership (a platform admin reaches it only if the
+  // Settings tab is open to them); a personal org has no successor.
   const canTransferOwnership = canDeleteOrg && !organization.personal;
   const [transferOpen, setTransferOpen] = useState(false);
   const transferOwnership = useTransferOrganizationOwnership();
-  const { data: members } = useGetOrganizationUsers(canTransferOwnership ? organization.id : null);
+  const { data: members, isSuccess: membersLoaded } = useGetOrganizationUsers(
+    canTransferOwnership ? organization.id : null
+  );
   const transferCandidates = useMemo<TransferCandidate[]>(() => {
     const managerIds = new Set((organization.adminUserIds ?? []).map(String));
+    // The same eligibility transferOwnership enforces, so the list never offers a target it refuses.
+    const memberRows = new Map((organization.users ?? []).map(row => [String(row.userId), row]));
     return (members ?? [])
-      .filter(member => member.id !== organization.userId && managerIds.has(member.id))
+      .filter(member => {
+        const row = memberRows.get(member.id);
+        return (
+          member.id !== organization.userId &&
+          managerIds.has(member.id) &&
+          !member.isBanned &&
+          !!row &&
+          orgAclRowConfersMembership(row)
+        );
+      })
       .map(member => ({ id: member.id, name: member.name, email: member.email }));
-  }, [members, organization.adminUserIds, organization.userId]);
+  }, [members, organization.adminUserIds, organization.userId, organization.users]);
 
   const handleTransfer = async (newOwnerId: string) => {
     await transferOwnership.mutateAsync({ organizationId: organization.id, newOwnerId });
@@ -154,7 +168,7 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
                 >
                   Transfer Ownership
                 </Button>
-                {transferCandidates.length === 0 && (
+                {membersLoaded && transferCandidates.length === 0 && (
                   <Typography
                     level="body-xs"
                     sx={{ color: 'text.tertiary' }}

@@ -55,7 +55,7 @@ const TransferOwnershipModal: FC<TransferOwnershipModalProps> = ({
   };
 
   return (
-    <Modal open={open} onClose={close}>
+    <Modal open={open} onClose={transferring ? undefined : close}>
       <ModalDialog role="alertdialog" sx={{ maxWidth: 520 }} data-testid="transfer-ownership-modal">
         <DialogTitle>Transfer ownership of {organizationName}</DialogTitle>
         <DialogContent>
