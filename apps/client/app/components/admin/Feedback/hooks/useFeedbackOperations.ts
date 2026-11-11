@@ -100,10 +100,9 @@ export const useFeedbackOperations = (params: FeedbackListParams): UseFeedbackOp
       const updatedStatus = newValue ?? getNextStatus(feedbackItem.status);
 
       try {
-        // promptMeta is left out: the drawer's record carries it, the route never writes it, and it
-        // can be large enough to matter in a request body.
-        const { promptMeta: _promptMeta, ...statusUpdate } = feedbackItem;
-        const response = await updateFeedbackOnServer(feedbackItem._id, { ...statusUpdate, status: updatedStatus });
+        // Only what a status change needs: sending `content` back would rewrite the report's text.
+        const { userId, username } = feedbackItem;
+        const response = await updateFeedbackOnServer(feedbackItem._id, { userId, username, status: updatedStatus });
         if (!response) throw new Error('Failed to update feedback status');
 
         // Refetch rather than patch in place: the row may no longer match the active status
