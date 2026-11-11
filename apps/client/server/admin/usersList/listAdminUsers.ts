@@ -177,7 +177,9 @@ export async function listAdminUsers(
       const id = String(row._id);
       // withSafeOrganization keeps its input's type, but it has replaced the populated org with the safe shape.
       const { authProviders, ...listed } = row as IUserObject & { authProviders?: { strategy?: string }[] };
-      const user = withSafeOrganization(User.hydrate(listed).toJSON(), viewer) as unknown as AdminUserListItem;
+      const safe = withSafeOrganization(User.hydrate(listed).toJSON(), viewer);
+      // The list is cross-tenant: a delegate is not scoped to their own org, so keep only identity.
+      const user = (viewer.isAdmin ? safe : withOrganizationIdentityOnly(safe)) as unknown as AdminUserListItem;
       return {
         ...user,
         signupMethod: authProviders?.[0]?.strategy ?? 'email',
@@ -189,6 +191,12 @@ export async function listAdminUsers(
     page: params.page,
     totalPages: Math.ceil(totalUsers / params.limit),
   };
+}
+
+function withOrganizationIdentityOnly<T extends { organizationId?: unknown }>(row: T): T {
+  const org = row.organizationId as { id?: unknown; name?: unknown } | null | undefined;
+  if (typeof org !== 'object' || org === null || !('name' in org)) return row;
+  return { ...row, organizationId: { id: org.id, name: org.name } };
 }
 
 /**
