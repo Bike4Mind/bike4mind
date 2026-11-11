@@ -157,6 +157,13 @@ export const EXTERNAL_DATA_STORES: readonly ExternalDataStore[] = [
     locatedBy: 'Not keyed by user',
     erasure: { action: 'noPersonalData', note: 'Recordings of test runs against test accounts' },
   },
+  {
+    kind: 's3',
+    bucket: 'turboCacheBucket',
+    holds: 'Build cache artifacts',
+    locatedBy: 'Not keyed by user',
+    erasure: { action: 'noPersonalData', note: 'Content-hash keyed build outputs; expires after 30 days' },
+  },
 
   {
     kind: 'logs',
