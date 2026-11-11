@@ -52,9 +52,9 @@ function declaredHandlers(): Map<string, { file: string; inVpc: boolean }> {
   return handlers;
 }
 
-describe('Lambda VPC attachments', () => {
-  const handlers = declaredHandlers();
+const handlers = declaredHandlers();
 
+describe('Lambda VPC attachments', () => {
   it('finds the handler declarations it guards', () => {
     expect(handlers.size).toBeGreaterThan(140);
   });
@@ -107,6 +107,6 @@ describe('docs/architecture/lambda-vpc-audit.md', () => {
   );
 
   it('lists every declared handler with its current attachment', () => {
-    expect([...rows].sort()).toEqual([...declaredHandlers()].sort());
+    expect([...rows].sort()).toEqual([...handlers].sort());
   });
 });

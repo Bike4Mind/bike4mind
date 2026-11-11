@@ -18,10 +18,11 @@ export const vpc = vpcId
       },
     });
 
-// Gateway endpoints keep S3 and DynamoDB traffic from in-VPC Lambdas and tasks off the NAT. They
-// carry no hourly or per-GB charge. Only for the VPC provisioned above: a shared VPC (VPC_ID) is
-// owned outside this stack and its route tables take one gateway endpoint per service, so every
-// stage adding its own would collide. See docs/architecture/lambda-vpc-audit.md.
+// Gateway endpoints keep S3 and DynamoDB traffic from in-VPC Lambdas off the NAT, at no hourly or
+// per-GB charge. Private route tables only: cluster services run in the public subnets. Only for
+// the VPC provisioned above: a shared VPC (VPC_ID) is owned outside this stack and its route
+// tables take one gateway endpoint per service, so every stage adding its own would collide.
+// See docs/architecture/lambda-vpc-audit.md.
 export const GATEWAY_ENDPOINT_SERVICES = ['s3', 'dynamodb'] as const;
 export const gatewayEndpoints = vpc
   ? GATEWAY_ENDPOINT_SERVICES.map(
