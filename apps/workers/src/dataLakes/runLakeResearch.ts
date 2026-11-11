@@ -2,8 +2,10 @@ import {
   adminSettingsRepository,
   apiKeyRepository,
   creditTransactionRepository,
+  dataLakeAccessGrantRepository,
   dataLakeProposalRepository,
   dataLakeRepository,
+  dataLakeResearchConfigRepository,
   dataLakeResearchRunRepository,
   fabFileRepository,
   organizationRepository,
@@ -19,6 +21,8 @@ import type { Logger } from '@bike4mind/observability';
 import type { ResearchRunTotals, SettleResearchRunInput } from '@bike4mind/common';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
+import { admitProposedSource } from '@bike4mind/server-utils/dataLakes/proposalAdmissionDeps';
+import { serializeLakeClaim } from '@bike4mind/server-utils/dataLakes/serializeLakeClaim';
 
 /**
  * Binds one queued research run (#1682) to the real world and executes it: the admin-configured
@@ -313,7 +317,58 @@ export async function runLakeResearch(
     }
     judgeProvider = models.find(m => m.id === model)?.backend;
 
+    // Re-resolved on every admit: ownership can transfer mid-run, and the rule must act as whoever
+    // owns the lake now. Never throws: any failure leaves the proposal pending for a human.
+    const autoAdmit: dataLakeResearchService.ResearchRunPorts['autoAdmit'] = async (proposal, rule) => {
+      try {
+        const grants = await dataLakeService.loadActiveLakeGrants(lake, {
+          db: { dataLakeAccessGrants: dataLakeAccessGrantRepository },
+        });
+        const [ownerUserId] = dataLakeService.resolveEffectiveOwnerIds(lake, grants);
+        const ownerUser = ownerUserId ? await userRepository.findById(ownerUserId) : null;
+        if (!ownerUser || aiAccessDeniedMessage(ownerUser)) return 'left_pending';
+        const administeredOrgIds = await organizationRepository.findIdsWithAdminRights(ownerUser.id);
+        const config = await dataLakeResearchConfigRepository.findByIdInLake(claimed.configId, lake.id);
+        const result = await dataLakeService.autoApproveDataLakeProposal(
+          proposal.id,
+          {
+            configId: claimed.configId,
+            configName: config?.name ?? claimed.levers.query,
+            owner: { userId: ownerUser.id, isAdmin: false, administeredOrgIds },
+            isTrusted: rule.isTrusted,
+          },
+          {
+            db: {
+              dataLakeProposals: dataLakeProposalRepository,
+              dataLakes: dataLakeRepository,
+              dataLakeAccessGrants: dataLakeAccessGrantRepository,
+              ...lakeConfigAuditDb,
+            },
+            admitSource: admitProposedSource,
+            serializeClaim: serializeLakeClaim,
+            logger,
+          }
+        );
+        if (result.outcome === 'left_pending') {
+          logger.info('[lakeResearch] auto-admit left the proposal pending', {
+            runId,
+            proposalId: proposal.id,
+            reason: result.reason,
+          });
+        }
+        return result.outcome === 'admitted' ? 'admitted' : 'left_pending';
+      } catch (error) {
+        logger.warn('[lakeResearch] auto-admit failed; proposal left pending', {
+          runId,
+          proposalId: proposal.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return 'left_pending';
+      }
+    };
+
     const ports: dataLakeResearchService.ResearchRunPorts = {
+      ...(claimed.levers.autoAdmitTrusted === true ? { autoAdmit } : {}),
       search: async (query, maxResults, recencyDays) => {
         let outcome: Awaited<ReturnType<typeof searchWithHedge>>;
         try {

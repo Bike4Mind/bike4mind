@@ -1,9 +1,15 @@
-import type { LegacyResearchRunLevers, ResearchRunStopReason, ResearchRunTotals } from '@bike4mind/common';
+import type {
+  IDataLakeProposalDocument,
+  LegacyResearchRunLevers,
+  ResearchRunStopReason,
+  ResearchRunTotals,
+} from '@bike4mind/common';
 import { emptyResearchRunTotals, RESEARCH_RUN_PRODUCER, upgradeLegacyResearchLevers } from '@bike4mind/common';
 import { isPlaceholderTitle } from '@bike4mind/fab-pipeline';
+import { trustedEntryCoversHost } from '@bike4mind/utils/registrableDomain';
 import type { ProposalCandidate, ProposalOutcome } from '../dataLakeService/proposeDataLakeContent';
 import type { RelevanceJudgement } from './RelevanceJudgeService';
-import { classifySource, isQueueableVerdict } from './sourceFilter';
+import { classifySource, isQueueableVerdict, matchSource, sourceHostname } from './sourceFilter';
 
 /**
  * The run loop (#1682): search -> filter by source -> judge -> fetch -> propose, once per candidate,
@@ -21,8 +27,10 @@ import { classifySource, isQueueableVerdict } from './sourceFilter';
  *  4. The proposal limit is checked after each successful proposal, so a run that hits it has
  *     produced exactly `maxProposals` cards and not one more.
  *
- * It never writes a FabFile and never stamps a lake tag: the only write it can cause is a `pending`
- * proposal, and a human approving that is still what admits content.
+ * It never writes a FabFile and never stamps a lake tag itself. The only write it causes is a
+ * `pending` proposal, and a human approving that is what admits content, with one exception: when the
+ * config opted in, a first-time proposal from a trusted-site entry is handed to the `autoAdmit` port.
+ * That decision is by source tier alone, never by score.
  */
 
 /** One normalized search hit. Structurally the search providers' `WebSearchProviderResult`. */
@@ -45,6 +53,11 @@ export interface FetchedSource {
   text?: string;
 }
 
+export interface AutoAdmitRule {
+  /** The trusted-list entry covering `finalUrl` (and not sitting above its registrable domain), else null. */
+  isTrusted(finalUrl: string): string | null;
+}
+
 export interface ResearchRunPorts {
   /** Ask the search provider for up to `maxResults` hits, honoring the recency lever. */
   search(query: string, maxResults: number, recencyDays?: number): Promise<ResearchCandidate[]>;
@@ -63,6 +76,12 @@ export interface ResearchRunPorts {
   fetchSource(url: string): Promise<FetchedSource | null>;
   /** Hand the candidate to `proposeDataLakeContent`. The ONLY write this loop can cause. */
   propose(candidate: ProposalCandidate): Promise<ProposalOutcome>;
+  /**
+   * Admit a just-proposed row on the authority of the trusted-site list. Present only when the
+   * caller can act as the lake's owner; absent, nothing auto-admits. `rule.isTrusted` is the
+   * admit-time check on the page the fetch lands on. Must not throw: a failure is `left_pending`.
+   */
+  autoAdmit?(proposal: IDataLakeProposalDocument, rule: AutoAdmitRule): Promise<'admitted' | 'left_pending'>;
   /** Report progress mid-loop so the panel is not blank while a run works. Best-effort. */
   onProgress?(spentMicroUsd: number, totals: ResearchRunTotals): Promise<void>;
   now(): Date;
@@ -120,6 +139,15 @@ export async function executeResearchRun(
     judgeStepFailed: totals.judgeFailed > 0 && scored === 0,
     judgeError,
   });
+
+  const trustedEntryFor = (url: string): string | null => {
+    const match = matchSource(url, levers);
+    const host = sourceHostname(url);
+    return match.verdict === 'trusted' && match.entry && host && trustedEntryCoversHost(match.entry, host)
+      ? match.entry
+      : null;
+  };
+  const autoAdmitRule: AutoAdmitRule = { isTrusted: trustedEntryFor };
 
   const candidates = await ports.search(levers.query, levers.maxResults, levers.recencyDays);
   totals.searchHits = candidates.length;
@@ -196,9 +224,25 @@ export async function executeResearchRun(
     });
 
     switch (outcome.outcome) {
-      case 'proposed':
+      case 'proposed': {
         totals.proposed += 1;
+        // Only first-time proposals: a row with any prior disposition (declined, approved) goes to a human.
+        const eligible =
+          ports.autoAdmit !== undefined &&
+          levers.autoAdmitTrusted &&
+          verdict === 'trusted' &&
+          outcome.proposal.priorDisposition == null &&
+          totals.autoAdmitted < levers.maxAutoAdmits &&
+          trustedEntryFor(candidate.url) !== null &&
+          trustedEntryFor(fetched.finalUrl) !== null &&
+          !outOfTime();
+        if (eligible) {
+          const result = await ports.autoAdmit!(outcome.proposal, autoAdmitRule);
+          if (result === 'admitted') totals.autoAdmitted += 1;
+          else totals.autoAdmitSkipped += 1;
+        }
         break;
+      }
       case 'duplicate_pending':
         totals.duplicatePending += 1;
         break;

@@ -17,6 +17,11 @@ const h = vi.hoisted(() => ({
   proposeDataLakeContent: vi.fn(),
   recordResearchRunOutcome: vi.fn(),
   recordOperationalUsage: vi.fn(),
+  autoApprove: vi.fn(),
+  loadActiveLakeGrants: vi.fn(),
+  resolveEffectiveOwnerIds: vi.fn(),
+  findIdsWithAdminRights: vi.fn(),
+  findConfig: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -25,11 +30,12 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeProposalRepository: {},
   fabFileRepository: {},
   dataLakeAccessGrantRepository: {},
+  dataLakeResearchConfigRepository: { findByIdInLake: h.findConfig },
   lakeConfigChangeEventRepository: {},
   usageEventRepository: {},
   creditTransactionRepository: {},
   userRepository: { findById: h.findUserById },
-  organizationRepository: { findById: h.findOrgById },
+  organizationRepository: { findById: h.findOrgById, findIdsWithAdminRights: h.findIdsWithAdminRights },
   dataLakeRepository: { findById: h.findLakeById },
   dataLakeResearchRunRepository: {
     claimForExecution: h.claimForExecution,
@@ -39,7 +45,12 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: h.getEffectiveLLMApiKeys },
-  dataLakeService: { proposeDataLakeContent: h.proposeDataLakeContent },
+  dataLakeService: {
+    proposeDataLakeContent: h.proposeDataLakeContent,
+    autoApproveDataLakeProposal: h.autoApprove,
+    loadActiveLakeGrants: h.loadActiveLakeGrants,
+    resolveEffectiveOwnerIds: h.resolveEffectiveOwnerIds,
+  },
   dataLakeResearchService: {
     executeResearchRun: h.executeResearchRun,
     recordResearchRunOutcome: h.recordResearchRunOutcome,
@@ -60,7 +71,13 @@ vi.mock('@bike4mind/llm-adapters', () => ({ getAvailableModels: h.getAvailableMo
 // every caller there, and mocking the wrong module leaves the REAL fetcher in place - which fails
 // closed to null and reads as a broken extraction contract rather than a broken mock.
 vi.mock('@bike4mind/fab-pipeline', () => ({ fetchAndParseURL: h.fetchAndParseURL }));
-vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
+vi.mock('@bike4mind/utils', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils')>()),
+  getSettingsByNames: vi.fn(),
+}));
+
+vi.mock('@bike4mind/server-utils/dataLakes/proposalAdmissionDeps', () => ({ admitProposedSource: vi.fn() }));
+vi.mock('@bike4mind/server-utils/dataLakes/serializeLakeClaim', () => ({ serializeLakeClaim: vi.fn() }));
 
 import { runLakeResearch } from './runLakeResearch';
 
@@ -112,6 +129,11 @@ beforeEach(() => {
   });
   h.recordResearchRunOutcome.mockResolvedValue(undefined);
   h.recordOperationalUsage.mockResolvedValue(undefined);
+  h.loadActiveLakeGrants.mockResolvedValue([]);
+  h.resolveEffectiveOwnerIds.mockReturnValue(['owner-1']);
+  h.findIdsWithAdminRights.mockResolvedValue(['org-7']);
+  h.findConfig.mockResolvedValue({ name: 'Weekly filings' });
+  h.autoApprove.mockResolvedValue({ outcome: 'admitted' });
 });
 
 describe('runLakeResearch', () => {
@@ -864,5 +886,78 @@ describe('runLakeResearch', () => {
     // Logged, not dropped: otherwise "the run card never moved" is indistinguishable from "the
     // progress write never fired".
     expect(logger.warn).toHaveBeenCalledWith(expect.stringMatching(/progress write failed/), expect.anything());
+  });
+
+  describe('auto-admit port', () => {
+    type AutoPorts = {
+      autoAdmit?: (p: { id: string }, r: { isTrusted: (u: string) => string | null }) => Promise<string>;
+    };
+    const rule = { isTrusted: () => 'example.com' };
+    const runWithPort = async (levers_: Record<string, unknown> = { autoAdmitTrusted: true }) => {
+      h.claimForExecution.mockResolvedValue(claimedRun({ levers: levers(levers_) }));
+      let result: string | undefined;
+      let hadPort = false;
+      h.executeResearchRun.mockImplementation(async (_l: unknown, _r: string, ports: AutoPorts) => {
+        hadPort = !!ports.autoAdmit;
+        result = await ports.autoAdmit?.({ id: 'prop-1' }, rule);
+        return {
+          totals: { ...emptyResearchRunTotals(), proposed: 1, autoAdmitted: result === 'admitted' ? 1 : 0 },
+          spentMicroUsd: 0,
+          stopReason: 'exhausted',
+        };
+      });
+      await runLakeResearch('run-1', logger);
+      return { result, hadPort };
+    };
+
+    it('provides no port unless the run snapshot opted in', async () => {
+      const { hadPort } = await runWithPort({});
+      expect(hadPort).toBe(false);
+    });
+
+    it('binds the port to the effective owner after a transfer, with the config id and name', async () => {
+      h.resolveEffectiveOwnerIds.mockReturnValue(['new-owner']);
+      h.findUserById.mockImplementation(async (id: string) => ({ id, organizationId: null }));
+
+      const { result } = await runWithPort();
+
+      expect(result).toBe('admitted');
+      const [proposalId, boundRule] = h.autoApprove.mock.calls[0];
+      expect(proposalId).toBe('prop-1');
+      expect(boundRule).toMatchObject({
+        configId: 'config-1',
+        configName: 'Weekly filings',
+        owner: { userId: 'new-owner', isAdmin: false, administeredOrgIds: ['org-7'] },
+      });
+      expect(boundRule.isTrusted).toBe(rule.isTrusted);
+    });
+
+    it('leaves the proposal pending when the owner cannot be resolved', async () => {
+      h.findUserById.mockResolvedValueOnce({ id: 'owner-1', organizationId: null }).mockResolvedValue(null);
+
+      const { result } = await runWithPort();
+
+      expect(result).toBe('left_pending');
+      expect(h.autoApprove).not.toHaveBeenCalled();
+    });
+
+    it('keeps the run succeeded and reports left_pending when the service throws', async () => {
+      h.autoApprove.mockRejectedValue(new Error('mongo down'));
+
+      const { result } = await runWithPort();
+
+      expect(result).toBe('left_pending');
+      expect(h.settleRun).toHaveBeenCalledWith('run-1', expect.objectContaining({ status: 'completed' }));
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringMatching(/auto-admit failed/), expect.anything());
+    });
+
+    it('passes autoAdmitted through to the settle', async () => {
+      await runWithPort();
+
+      expect(h.settleRun).toHaveBeenCalledWith(
+        'run-1',
+        expect.objectContaining({ totals: expect.objectContaining({ autoAdmitted: 1 }) })
+      );
+    });
   });
 });
