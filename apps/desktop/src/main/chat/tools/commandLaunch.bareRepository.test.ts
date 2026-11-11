@@ -66,7 +66,20 @@ describe.skipIf(process.platform === 'win32' || !refusesImplicitBare)(
       expect(existsSync(join(base, 'MARK'))).toBe(true);
     });
 
-    it('keeps the setting when the script exports an unrelated count entry first', async () => {
+    it('keeps the setting when GIT_CONFIG_PARAMETERS allows implicit bare repositories', async () => {
+      const folder = join(base, 'work', 'planted');
+      vi.stubEnv('GIT_CONFIG_PARAMETERS', "'safe.bareRepository'='all'");
+      const control = await run('git st', folder, false);
+      expect(control.status).toBe(0);
+      expect(existsSync(join(base, 'MARK'))).toBe(true);
+      await rm(join(base, 'MARK'));
+
+      const guarded = await run('git st', folder, true);
+      expect(guarded.status).not.toBe(0);
+      expect(existsSync(join(base, 'MARK'))).toBe(false);
+    });
+
+    it('keeps the setting when the environment already holds an unrelated count entry', async () => {
       const folder = join(base, 'work', 'planted');
       const guarded = await run('git st', folder, true);
       expect(guarded.status).not.toBe(0);

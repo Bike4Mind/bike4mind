@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { COMMAND_TAG_ENV } from './commandTree';
 import { resolveGitBash } from './gitBash';
-import { wslCommand, wslCommandEnv, wslLocation } from '../../wsl/wslPath';
+import { wslCommand, wslCommandEnv, wslEnvNames, wslLocation } from '../../wsl/wslPath';
 import { resolveUserPath } from './userPath';
 import { sandboxAvailable, sandboxCommand, type SandboxedCommand } from './sandbox';
 
@@ -60,33 +60,45 @@ export async function launchCommand(
 export const spawnsDetached = (launch: Pick<SandboxedCommand, 'wslDistro'>): boolean => !launch.wslDistro;
 
 /**
- * `env` with git's `safe.bareRepository=explicit` appended to any GIT_CONFIG_COUNT entries, and the names it
- * set. Command-line scope is protected config: no repository's config can override it, so git refuses a bare
- * repository it would find by walking up from the working directory.
+ * `env` with `safe.bareRepository=explicit` appended to git's GIT_CONFIG_COUNT entries and to a GIT_CONFIG_PARAMETERS
+ * that is set (git reads it last), and the names it set. Command-line scope no repository's config can override.
  */
 export function withExplicitBareRepositories(env: NodeJS.ProcessEnv): { env: NodeJS.ProcessEnv; names: string[] } {
   const count = Number.parseInt(env.GIT_CONFIG_COUNT ?? '', 10);
   const next = Number.isInteger(count) && count > 0 ? count : 0;
   const names = ['GIT_CONFIG_COUNT', `GIT_CONFIG_KEY_${next}`, `GIT_CONFIG_VALUE_${next}`];
-  return {
-    env: {
-      ...env,
-      [names[0] as string]: String(next + 1),
-      [names[1] as string]: 'safe.bareRepository',
-      [names[2] as string]: 'explicit',
-    },
-    names,
+  const out: NodeJS.ProcessEnv = {
+    ...env,
+    [names[0] as string]: String(next + 1),
+    [names[1] as string]: 'safe.bareRepository',
+    [names[2] as string]: 'explicit',
   };
+  if (env.GIT_CONFIG_PARAMETERS !== undefined) {
+    out.GIT_CONFIG_PARAMETERS = [env.GIT_CONFIG_PARAMETERS, "'safe.bareRepository'='explicit'"]
+      .filter(Boolean)
+      .join(' ');
+    names.push('GIT_CONFIG_PARAMETERS');
+  }
+  return { env: out, names };
+}
+
+/** `env` without the variable `name` in any letter case, which a Windows environment treats as one. */
+function withoutName(env: NodeJS.ProcessEnv, name: string): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(env).filter(([key]) => key.toUpperCase() !== name));
 }
 
 /** The user's own environment, with the PATH a terminal would have rather than Finder's. */
 export async function commandEnv(launch: SandboxedCommand, extra: NodeJS.ProcessEnv = {}): Promise<NodeJS.ProcessEnv> {
   if (launch.wslDistro) {
     const crossing: NodeJS.ProcessEnv = { ...process.env, ...extra, [COMMAND_TAG_ENV]: launch.processTag };
-    // Only what WSLENV names reaches Linux, so a Windows-side count that does not cross is not counted on.
-    const counted = /(^|:)GIT_CONFIG_COUNT(\/|:|$)/.test(crossing.WSLENV ?? '')
-      ? crossing
-      : { ...crossing, GIT_CONFIG_COUNT: undefined };
+    // Only what WSLENV names into Linux reaches it, so a Windows-side setting that does not cross is not counted on.
+    const crossed = new Set(wslEnvNames(crossing).map(name => name.toUpperCase()));
+    let counted = crossing;
+    for (const name of ['GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS']) {
+      const value = Object.entries(crossing).find(([key]) => key.toUpperCase() === name)?.[1];
+      counted = withoutName(counted, name);
+      if (crossed.has(name) && value !== undefined) counted[name] = value;
+    }
     const bare = withExplicitBareRepositories(counted);
     return wslCommandEnv(bare.env, launch.wslDistro, [...Object.keys(extra), COMMAND_TAG_ENV, ...bare.names]);
   }
