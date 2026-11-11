@@ -246,7 +246,7 @@ export async function exportAgentConfiguration(
   if (!user) throw new Error('Account not found');
 
   return {
-    agents: agents.filter(row => row.userId === userId && !row.deletedAt).map(agentOf),
+    agents: agents.filter(row => row.userId === userId && !row.deletedAt && row.type !== 'voice').map(agentOf),
     skills: skills.filter(row => row.userId === userId && !row.deletedAt).map(skillOf),
     projects: projects
       .filter(row => row.userId === userId && !row.deletedAt)
@@ -319,6 +319,7 @@ export async function importAgentConfiguration(
     );
   }
   for (const row of archive.agents) {
+    if (row.type === 'voice') continue;
     const { id, projectId: sourceProjectId } = row;
     const { projectId: _projectId, id: _id, ...config } = agentOf(row);
     const projectId = sourceProjectId ? projects.get(sourceProjectId) : undefined;

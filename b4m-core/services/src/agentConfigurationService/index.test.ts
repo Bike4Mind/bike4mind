@@ -273,4 +273,23 @@ describe('agent configuration egress', () => {
     );
     expect(JSON.stringify(vi.mocked(db.agents.create).mock.calls)).not.toContain('temp.example');
   });
+
+  it('leaves voice agents out of export and import', async () => {
+    const db = exportAdapters();
+    vi.mocked(db.agents.find).mockResolvedValue([agent, { ...agent, id: 'voice-agent', type: 'voice' }] as never);
+    const archive = await exportAgentConfiguration('source', db);
+    expect(archive.agents.map(row => row.id)).toEqual(['agent-old']);
+
+    const importDb = importAdapters();
+    const ids = await importAgentConfiguration(
+      'target',
+      {
+        ...archive,
+        agents: [...archive.agents, { ...agent, id: 'voice-agent', type: 'voice' }],
+      } as AgentConfigurationArchive,
+      importDb
+    );
+    expect(importDb.agents.create).toHaveBeenCalledTimes(1);
+    expect(ids.agents.has('voice-agent')).toBe(false);
+  });
 });
